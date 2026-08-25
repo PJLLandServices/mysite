@@ -1247,6 +1247,14 @@ body.sheet-open{overflow:hidden;}
     border:1px solid var(--border-strong);border-radius:8px;
   }
   .visit-notes-label{font-size:8.5pt;}
+  /* One block per note line, each with a hanging indent, so a wrapped line
+     sits under its own text instead of returning flush left and reading as
+     the next bullet. text-indent alone cannot do this — it applies only to a
+     block's first line, not to every soft-wrapped line inside one. */
+  .visit-notes .sched-line{
+    display:block;padding-left:1.05em;text-indent:-1.05em;
+  }
+  .visit-notes .sched-line:empty::after{content:"\00a0";}
   .visit-notes .sched-print{
     display:block !important;
     white-space:pre-wrap;
@@ -1410,7 +1418,7 @@ body.sheet-open{overflow:hidden;}
   <!-- Notes on today's visit -->
   <section class="visit-notes" aria-label="Notes on today's visit">
     <span class="visit-notes-label">Notes on Today&rsquo;s Visit</span>
-    <span class="editable visit-notes-field" contenteditable="true" data-print="visit-notes"
+    <span class="editable visit-notes-field is-multiline" contenteditable="true" data-print="visit-notes"
           data-placeholder="What was checked, adjusted or flagged on site today…"></span>
   </section>
 
@@ -2824,12 +2832,29 @@ body.sheet-open{overflow:hidden;}
   });
 
   // ============ Letterhead / doc-row contenteditable mirrors ============
+  // A field marked .is-multiline (the visit-notes block) mirrors as one
+  // <span class="sched-line"> per line, so print can give each line its own
+  // hanging indent. Single-line fields stay a plain text node.
+  function syncMirror(el, mirror){
+    var txt = el.innerText || '';
+    if (!el.classList.contains('is-multiline')){
+      mirror.textContent = txt;
+      return;
+    }
+    mirror.textContent = '';
+    txt.split('\n').forEach(function(line){
+      var span = document.createElement('span');
+      span.className = 'sched-line';
+      span.textContent = line;
+      mirror.appendChild(span);
+    });
+  }
   document.querySelectorAll('[contenteditable="true"]').forEach(function(el){
     var mirror = document.createElement('span');
     mirror.className = 'sched-print';
-    mirror.textContent = el.innerText;
     el.parentNode.insertBefore(mirror, el.nextSibling);
-    el.addEventListener('input', function(){ mirror.textContent = el.innerText; });
+    syncMirror(el, mirror);
+    el.addEventListener('input', function(){ syncMirror(el, mirror); });
   });
 
   // ============ Print prep ============
@@ -3164,9 +3189,11 @@ body.sheet-open{overflow:hidden;}
       var k = el.dataset.print;
       if (k in map){
         el.textContent = map[k];
-        // Also bump the sibling .sched-print mirror so print reflects loaded value.
+        // Also bump the sibling .sched-print mirror so print reflects loaded
+        // value. Goes through syncMirror so a multi-line field rebuilds its
+        // per-line spans instead of collapsing to one text node.
         var m = el.nextElementSibling;
-        if (m && m.classList.contains('sched-print')) m.textContent = map[k];
+        if (m && m.classList.contains('sched-print')) syncMirror(el, m);
       }
     });
   }
