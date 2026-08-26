@@ -91,6 +91,36 @@ const mailerLog = require("./lib/mailer-log");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
 // alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
+// Geocode an address for PERSISTENCE — the canonical property record and
+// customer-matching. Returns real coordinates, or null. Never a guess.
+//
+// geocode() never returns null and never throws: on EVERY failure path (no
+// API key, ZERO_RESULTS, network error, over-quota) it returns ok:false with
+// coords set to PJL_BASE, Newmarket city centre. That fallback is correct for
+// the availability engine, which needs *some* origin to compute drive time
+// from — but writing it to a property is a silent data corruption. The
+// property is pinned at the depot, so it looks near every other job and gets
+// clustered into any day's route, and because city centre sits in the middle
+// of the service area no distance sanity-check will ever flag it. A missing
+// coordinate is visible and gets fixed; a depot pin is invisible and wrong.
+//
+// Callers that need the availability fallback keep using geocode() directly.
+async function geocodeForRecord(address) {
+  const clean = String(address || "").trim();
+  if (!clean) return null;
+  try {
+    const geo = await geocode(clean);
+    if (geo?.ok !== true || geo.skipped === true) return null;
+    const c = geo.coords;
+    if (!c || c.source === "pjl-base") return null;
+    if (c.lat == null || c.lng == null) return null;
+    return c;
+  } catch (err) {
+    console.warn("[geocode] persist-geocode failed for", clean, "-", err?.message || err);
+    return null;
+  }
+}
+
 function makeWorkOrderId() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let id = "WO-";
@@ -5128,6 +5158,11 @@ async function handleApi(req, res, pathname) {
       // Auto-link a property under this customer (creates a fresh one
       // when no match exists). Same helper /api/quotes uses.
       try {
+        // Geocode the self-intake address so the property lands with real
+        // coordinates. This path passed coords: null unconditionally, so
+        // every new-customer submission created a property the availability
+        // engine could not place — the same gap the xlsx import left.
+        // Non-blocking: a failed lookup leaves coords null, exactly as before.
         const linkResult = await properties.attachLead({
           leadId: lead.id,
           customerId: lead.customerId || null,
@@ -5135,7 +5170,7 @@ async function handleApi(req, res, pathname) {
           name: lead.contact.name,
           phone: lead.contact.phone,
           address: lead.contact.address,
-          coords: null
+          coords: await geocodeForRecord(lead.contact.address)
         });
         if (linkResult && linkResult.property) {
           applyLinkResultToLead(lead, linkResult);
@@ -13653,7 +13688,10 @@ async function handleApi(req, res, pathname) {
               address: knownAddress,
               customerName: customer.name || "Customer",
               customerEmail: custEmail,
-              customerPhone: customer.phone || ""
+              customerPhone: customer.phone || "",
+              // Was omitted, so auto-created properties defaulted to
+              // coords: null and were invisible to proximity routing.
+              coords: await geocodeForRecord(knownAddress)
             });
             autoCreatedProperty = true;
             console.log(`[smart-controller-quote] auto-created property ${property.id} for ${custEmail} from prior service records (${knownAddress})`);
@@ -18179,7 +18217,16 @@ Customer signature captured at ${new Date().toISOString()}.`;
         });
       }
       const geo = await geocode(address);
+      // customerCoords keeps the PJL-base fallback on purpose: the
+      // availability engine needs an origin to compute drive time from, and
+      // approximating an unresolvable address at the depot is the documented
+      // behaviour. resolvedCoords is the same lookup WITHOUT that fallback,
+      // and is the only one allowed near the canonical property record.
       const customerCoords = geo.coords;
+      const resolvedCoords = geo.ok === true && geo.skipped !== true
+        && geo.coords && geo.coords.source !== "pjl-base" && geo.coords.lat != null
+        ? geo.coords
+        : null;
 
       // Admin Custom-time override (Brief A §3.2 + Brief B): the time
       // picker's Custom time block sends source: "admin_custom" for any
@@ -18624,7 +18671,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
         // Same coords the property attach uses below, so the commercial
         // address anchor resolves identically in both (Phase 0.5).
         result.lead.customerId = await resolveCustomerForLead(result.lead, {
-          coords: customerCoords && customerCoords.lat != null ? customerCoords : null
+          coords: resolvedCoords
         });
         const liveLeads = await readLeads();
         const i = liveLeads.findIndex((l) => l.id === result.lead.id);
@@ -18644,7 +18691,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
           name: result.lead.contact?.name,
           phone: result.lead.contact?.phone,
           address: result.lead.contact?.address,
-          coords: customerCoords && customerCoords.lat != null ? customerCoords : null
+          coords: resolvedCoords
         });
         if (linkResult.property) {
           applyLinkResultToLead(result.lead, linkResult);
