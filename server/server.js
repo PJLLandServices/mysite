@@ -106,18 +106,26 @@ const mailerLog = require("./lib/mailer-log");
 //
 // Callers that need the availability fallback keep using geocode() directly.
 async function geocodeForRecord(address) {
+  return (await geocodeForRecordDetailed(address)).coords;
+}
+
+// Same guard, but also reports whether the answer came from the disk cache.
+// The bulk-import path needs that so it only rate-limits real API calls —
+// a re-import of the same spreadsheet is then entirely cache-served and
+// costs no quota and no wall-clock.
+async function geocodeForRecordDetailed(address) {
   const clean = String(address || "").trim();
-  if (!clean) return null;
+  if (!clean) return { coords: null, fromCache: false };
   try {
     const geo = await geocode(clean);
-    if (geo?.ok !== true || geo.skipped === true) return null;
+    if (geo?.ok !== true || geo.skipped === true) return { coords: null, fromCache: false };
     const c = geo.coords;
-    if (!c || c.source === "pjl-base") return null;
-    if (c.lat == null || c.lng == null) return null;
-    return c;
+    if (!c || c.source === "pjl-base") return { coords: null, fromCache: false };
+    if (c.lat == null || c.lng == null) return { coords: null, fromCache: false };
+    return { coords: c, fromCache: geo.fromCache === true };
   } catch (err) {
     console.warn("[geocode] persist-geocode failed for", clean, "-", err?.message || err);
-    return null;
+    return { coords: null, fromCache: false };
   }
 }
 
@@ -6853,12 +6861,56 @@ async function handleApi(req, res, pathname) {
       const records = Array.isArray(payload.records) ? payload.records : [];
       if (!records.length) return sendJson(res, 422, { ok: false, errors: ["No records to import."] });
       if (records.length > 5000) return sendJson(res, 422, { ok: false, errors: ["Too many records (>5000) — split into smaller batches."] });
+
+      // Geocode before upserting. This path historically wrote every
+      // imported property with coords: null, which left it invisible to
+      // the proximity routing the availability engine runs on — the whole
+      // reason ~29 records needed a manual backfill.
+      //
+      // Bounded on purpose: the route accepts up to 5000 rows and a live
+      // lookup costs ~200ms, so geocoding all of them inline could hold the
+      // request open for 15+ minutes and time the browser out. We resolve
+      // up to GEOCODE_BUDGET rows here and report the remainder, which
+      // scripts/backfill-property-coords.js finishes off — it is idempotent
+      // and targets exactly the rows left with empty coords.
+      //
+      // Cache hits don't sleep, so re-importing the same spreadsheet is
+      // effectively free.
+      const GEOCODE_BUDGET = 150;
+      const GEOCODE_SPACING_MS = 200;
+      let geocoded = 0;
+      let geocodeFailed = 0;
+      let geocodeSkipped = 0;
+      for (const record of records) {
+        if (!record || typeof record !== "object") continue;
+        if (!String(record.address || "").trim()) continue;
+        if (geocoded + geocodeFailed >= GEOCODE_BUDGET) { geocodeSkipped += 1; continue; }
+        const { coords, fromCache } = await geocodeForRecordDetailed(record.address);
+        if (coords) {
+          record.coords = coords;
+          geocoded += 1;
+        } else {
+          geocodeFailed += 1;
+        }
+        if (!fromCache) await new Promise((r) => setTimeout(r, GEOCODE_SPACING_MS));
+      }
+
       const summary = await properties.bulkUpsert(records);
+      const needsBackfill = geocodeFailed + geocodeSkipped;
       return sendJson(res, 200, {
         ok: true,
         created: summary.created,
         updated: summary.updated,
         errors: summary.errors,
+        // Coordinate outcome, so the import UI can say plainly how many
+        // rows still need attention rather than reporting a clean import
+        // that quietly left records unroutable.
+        geocoded,
+        geocodeFailed,
+        geocodeSkipped,
+        ...(needsBackfill
+          ? { geocodeNote: `${needsBackfill} record(s) have no coordinates — run scripts/backfill-property-coords.js to finish them.` }
+          : {}),
         // Don't echo the full property records back — keeps the response
         // tight and the UI doesn't need them (it'll refresh the list).
         total: summary.created + summary.updated

@@ -11,6 +11,7 @@
 // Usage:
 //   node scripts/backfill-property-coords.js            (DRY RUN — no API calls, no writes)
 //   node scripts/backfill-property-coords.js --apply
+//   node scripts/backfill-property-coords.js --apply --max=500   (raise the safety ceiling)
 //
 // DRY RUN resolves from the on-disk cache ONLY. It makes no network
 // calls, spends no API quota, and writes nothing — so you can check the
@@ -52,6 +53,19 @@ const properties = require(path.join(ROOT, "server", "lib", "properties"));
 const { geocode, isConfigured } = require(path.join(ROOT, "server", "lib", "geocode"));
 
 const APPLY = process.argv.includes("--apply");
+
+// Refuse to run when the target set is far larger than expected — a wrong
+// selection should stop, not write hundreds of records. The default suited
+// the original one-off cleanup (~29 records). The bulk-import route now
+// geocodes inline but caps that work, so a large import can legitimately
+// leave more than the default behind; raise the ceiling deliberately with
+// --max=N rather than having the script guess.
+const MAX_TARGETS = (() => {
+  const arg = process.argv.find((a) => a.startsWith("--max="));
+  if (!arg) return 40;
+  const n = Number(arg.slice("--max=".length));
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 40;
+})();
 
 // Newmarket. Anything further than TOLERANCE_DEG from here in either
 // axis is rejected unwritten — roughly a 150 km box, comfortably larger
@@ -170,9 +184,11 @@ async function main() {
   console.log(`\n  Live properties (not deleted, not archived): ${all.length}`);
   console.log(`  Targets — address present, coords missing:   ${targets.length}`);
 
-  if (targets.length > 40) {
-    console.error(`\n  ABORT — ${targets.length} targets is far more than the expected ~29.`);
-    console.error("  Something is wrong with the selection or the data. Investigate first.\n");
+  if (targets.length > MAX_TARGETS) {
+    console.error(`\n  ABORT — ${targets.length} targets exceeds the ceiling of ${MAX_TARGETS}.`);
+    console.error("  If that is genuinely expected (e.g. straight after a large xlsx");
+    console.error(`  import), re-run with --max=${targets.length}. Otherwise investigate`);
+    console.error("  the selection before writing anything.\n");
     process.exit(1);
   }
   if (!targets.length) {

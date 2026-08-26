@@ -1258,6 +1258,18 @@ async function bulkUpsert(records) {
           target.address = r.address;
           target.addressNormalized = addrNorm;
         }
+        // Coordinates, when the caller resolved them (the import route
+        // geocodes before calling us). Fill-only: an existing property that
+        // already has coords keeps them, exactly like every other field
+        // here. Import data never overwrites a curated value.
+        if (r.coords && r.coords.lat != null && r.coords.lng != null
+            && (!target.coords || target.coords.lat == null)) {
+          target.coords = {
+            lat: r.coords.lat,
+            lng: r.coords.lng,
+            formattedAddress: r.coords.formattedAddress || target.address || ""
+          };
+        }
         const sysIn = r.system || {};
         target.system = target.system || {};
         if (!target.system.controllerLocation) target.system.controllerLocation = sysIn.controllerLocation || "";
@@ -1285,6 +1297,15 @@ async function bulkUpsert(records) {
         created.customerPhone = r.customerPhone || "";
         created.address = r.address || "";
         created.addressNormalized = addrNorm;
+        // Was always left null here, which is what made every imported
+        // property invisible to proximity routing.
+        created.coords = (r.coords && r.coords.lat != null && r.coords.lng != null)
+          ? {
+              lat: r.coords.lat,
+              lng: r.coords.lng,
+              formattedAddress: r.coords.formattedAddress || created.address || ""
+            }
+          : null;
         const sysIn = r.system || {};
         created.system = {
           ...created.system,
