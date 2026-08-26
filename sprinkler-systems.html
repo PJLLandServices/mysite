@@ -2567,12 +2567,12 @@ a.sprk-comp:focus-visible {
       heading = "Fall Closing Fast Approaching.";
       sub = "Book now before time slots block up. Winterization starts at " + price + ". Same-day repairs across Newmarket and the GTA.";
       ctaPrimary = "Book Fall Closing — From " + price;
-      ctaSecondary = "Book Spring Opening →";
+      ctaSecondary = "Book a Service Call →";
     } else { // fall
       heading = "Fall Closing Season Is Here.";
       sub = "Winter's closing in. Proper winterization starts at " + price + ". Same-day repairs across Newmarket and the GTA.";
       ctaPrimary = "Book Fall Closing — From " + price;
-      ctaSecondary = "Book Spring Opening →";
+      ctaSecondary = "Book a Service Call →";
     }
 
     var h = document.querySelector('[data-season-heading]');
@@ -2584,12 +2584,16 @@ a.sprk-comp:focus-visible {
     var sec = document.querySelector('[data-season-secondary]');
     if (sec) sec.textContent = ctaSecondary;
 
-    // Mid-season is the only phase that retargets the CTAs to the repair
-    // funnel (AI intake + repair pricing). Every other phase keeps its
+    // Mid-season retargets both CTAs to the repair funnel (AI intake +
+    // repair pricing). Fall and pre-fall keep the seasonal primary but point
+    // the secondary at the repair booking form — a service call isn't
+    // something the #seasonal section sells. Every other phase keeps its
     // authored #seasonal anchor, so leave hrefs untouched there.
     if (phase === 'midseason') {
       if (p)   p.setAttribute('href', 'diagnose.html');
       if (sec) sec.setAttribute('href', 'sprinkler-repair.html');
+    } else if (fallMessaging) {
+      if (sec) sec.setAttribute('href', 'book.html?service=sprinkler_repair');
     }
 
     // Hero background video — swap source based on phase. Spring,
