@@ -32,23 +32,24 @@ const properties = require("./properties");
 const bookings = require("./bookings");
 const settings = require("./settings");
 const notify = require("./notify-customer");
+const seasons = require("./seasons");
 const { resolvePublicBaseUrl } = require("./public-base-url");
 
 // ---- Constants (brief §3.6 + §3.7) ---------------------------------
 
-// Hardcoded season windows. Move to settings.json if Patrick ever
-// wants to tweak (e.g. opening spring early in a mild year); for
-// now the constants are simpler than a configurable that nobody
-// edits. Inclusive on both ends. End dates are conservative:
-//   - Spring closes June 30 — captures late openings without
-//     spilling into summer service-call territory.
-//   - Fall closes Dec 15 — captures any late closings without
-//     spilling into the new year's data (Patrick wants 2026:fall
-//     touches to feel like 2026 work).
-const SEASON_WINDOWS = {
-  spring: { startMonth: 3, startDay: 1, endMonth: 6, endDay: 30 },
-  fall:   { startMonth: 9, startDay: 1, endMonth: 12, endDay: 15 }
-};
+// Season windows used to live here as a hardcoded SEASON_WINDOWS
+// constant. They now come from seasons.json via ./seasons, so the
+// seasonal gate planned for availability.js reads the same source
+// instead of carrying a second copy that drifts — when those two
+// drift, outreach nudges customers toward dates the booking
+// calendar refuses to offer.
+//
+// Still inclusive on both ends; still 1-indexed months. What
+// changed with the move: fall 2026 ends Nov 6, not Dec 15. The old
+// constant ran 39 days past safe frost, so "is this customer
+// already booked for fall?" counted appointments on days no truck
+// could roll. Years with no block in seasons.json inherit the
+// original dates unchanged.
 
 // Service-key prefix matching for booking detection. A property
 // counts as "booked for the season" when at least one of its
@@ -114,13 +115,18 @@ function streetAddressOf(address) {
 
 // Is the given ISO timestamp inside the [startMonth/startDay,
 // endMonth/endDay] window for the given year? Uses local-month
-// math because seasons are calendar concepts, not UTC ones.
+// math because seasons are calendar concepts, not UTC ones —
+// honest because server.js pins process.env.TZ = America/Toronto
+// at boot, and scheduledFor is stored as a UTC Z timestamp (an
+// 8 PM Nov 6 appointment is 2026-11-07T01:00:00Z, and must still
+// read as Nov 6). The window itself is per-year now, so a season
+// whose dates move with the frost is judged against its own year.
 // Defensive against legacy bookings whose scheduledFor is null.
 function isInSeasonWindow(iso, season, year) {
   if (!iso) return false;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return false;
-  const win = SEASON_WINDOWS[season];
+  const win = seasons.windowFor(season, year);
   if (!win) return false;
   const targetYear = Number(year);
   if (d.getFullYear() !== targetYear) return false;
@@ -212,31 +218,43 @@ async function deriveBookingState(propertyId, season, year) {
 
 // Which seasonal service should a customer be offered right now?
 // Inside a season window, that season. Outside one — the gap between
-// Jul 1 and Aug 31, and again Dec 16 to Feb 28 — the NEXT window to
-// open, because someone opening their portal in August is thinking
-// about fall, and the fall page itself tells them to book in August.
+// the two windows, and again after fall closes until spring opens —
+// the NEXT window to open, because someone opening their portal in
+// August is thinking about fall, and the fall page itself tells them
+// to book in August.
 //
-// Reads SEASON_WINDOWS so the portal CTA, the outreach candidate list
-// and the season labels can never drift apart on where a season starts.
+// Reads the same seasons.json windows as the outreach candidate list
+// so the portal CTA, the candidate list and the season labels can
+// never drift apart on where a season starts or ends.
+//
+// NOTE — this moved with the fall 2026 correction. The old Dec 15
+// window meant a customer opening the portal on Nov 20 was offered a
+// Fall Closing; past hard frost that is work PJL cannot perform, so
+// they are now offered the coming Spring Opening instead. Decided
+// deliberately (season-config brief, decision A): the alternative was
+// a second fall end date living only in this function, which is the
+// drift the consolidation exists to prevent.
 //
 // `now` is injectable for tests. Returns "spring" | "fall".
 function seasonForBooking(now = new Date()) {
-  const month = now.getMonth() + 1;   // 1-indexed, matching SEASON_WINDOWS
+  const month = now.getMonth() + 1;   // 1-indexed, matching the window shape
   const day = now.getDate();
+  const year = now.getFullYear();     // windows are per-year in seasons.json
+  const springWin = seasons.windowFor("spring", year);
+  const fallWin = seasons.windowFor("fall", year);
   const after = (m, d, win) =>
     m > win.startMonth || (m === win.startMonth && d >= win.startDay);
   const before = (m, d, win) =>
     m < win.endMonth || (m === win.endMonth && d <= win.endDay);
 
-  for (const season of ["spring", "fall"]) {
-    const win = SEASON_WINDOWS[season];
+  for (const [season, win] of [["spring", springWin], ["fall", fallWin]]) {
     if (after(month, day, win) && before(month, day, win)) return season;
   }
-  // Not in either window. Spring opens Mar 1 and fall Sep 1, so the gap
+  // Not in either window. Spring opens before fall does, so the gap
   // before spring belongs to spring and everything after it to fall,
   // wrapping back to spring once fall's window has closed for the year.
-  if (!after(month, day, SEASON_WINDOWS.spring)) return "spring";
-  if (!after(month, day, SEASON_WINDOWS.fall)) return "fall";
+  if (!after(month, day, springWin)) return "spring";
+  if (!after(month, day, fallWin)) return "fall";
   return "spring";
 }
 
@@ -770,7 +788,6 @@ async function sendTest({
 // ---- Module exports -----------------------------------------------
 
 module.exports = {
-  SEASON_WINDOWS,
   SEASONAL_SERVICE_PREFIXES,
   SEASON_LABEL,
   listCandidates,

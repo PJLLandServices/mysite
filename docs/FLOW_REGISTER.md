@@ -29,6 +29,24 @@ is untouched** — no route, payload, or catalog change; the booking step machin
 advances service → zones → address → when, re-verified by scroll measurement at 390x700
 and 1440x900, not by a walked booking. If the PASS stamp is to carry a walked date, that
 walk is still Patrick's to make.
+**2026-08-26 (Season config + fall 2026 dates):** The fall season window was hardcoded in
+`server/lib/outreach.js` as Sep 1 – **Dec 15**; the real fall 2026 season ends **Nov 6**
+(hard frost). The last 39 days were not serviceable, so `deriveBookingState` counted
+Nov 7 – Dec 15 appointments as "booked for fall" and `/admin/outreach` classified its
+Booked / Not-booked rows on them. Dates now live in **`seasons.json`** at the repo root,
+read through **`server/lib/seasons.js`**, so the seasonal gate planned for
+`availability.js` reads one source instead of a second copy that drifts. **Production
+audit before the change: 42 bookings, 0 in the Nov 7 – Dec 15 window — no customer was
+reclassified.** Comparison logic, inclusivity (both ends), eligibility semantics
+(`fallClosing !== false`), copy, and send behaviour are all unchanged; a year with no
+block in `seasons.json` inherits the original pre-2026 dates. **One deliberate behaviour
+change, recorded under FLOW-28 below:** `seasonForBooking()` reads the same window, so
+between Nov 7 and Dec 15 the portal CTA now offers the coming Spring Opening instead of a
+Fall Closing that cannot be performed. **No PASS flow was touched** — no route, payload,
+or catalog change, and the CTA that moved is FLOW-28's (UNMAPPED). `publicBookingThrough`
+(fall 2026: Oct 30) is defined in the config for the future gate and is deliberately
+consumed by nothing, pinned by a source guard. Cover:
+`scripts/test-season-config.mjs` (66 assertions, in `build:check`).
 
 If a flow isn't in here with a status, it is not known to work.
 Update this file, not a chat thread.
@@ -340,7 +358,7 @@ Nothing below has been walked. Assume nothing works until verified.
 
 **Patrick's acceptance test — not yet walked:** (1) go to `/admin/outreach`, pick a candidate whose property has a zone count that is **not** 4, 6, 8 or 15 — 7 or 12 is ideal, since 4/6/8/15 are the only counts the old code got right and prove nothing — and either copy that row's portal link or use **Send test** to mail it to yourself; (2) open the link and confirm the property portal renders with the Book button; (3) tap it and confirm book.html opens on that customer's season showing **only** that season's cards, with the tier matching their zone count pre-selected, not the full 19-service menu; (4) confirm the zone count and address are pre-filled and the flow lands on the time picker, not step 1; (5) repeat for a **commercial** account and confirm a commercial tier is chosen, not the residential one; (6) complete one real booking and confirm the work order carries the tier and price you expected. Mark PASS only after all six.
 
-**Second entry point added 2026-08-19 — customer portal.** The customer portal had no route into booking at all: its `service_complete` state said *"Book again any time."* and the page carried no link to `book.html`, seasonal or generic. It now renders a **Book a service** card with one row per property the customer owns (`portalPayloadForLead` → `bookableProperties`, scoped by `customerId`). A property with a zone count on file, not already booked for the season, gets the seasonal express CTA — the same handoff the outreach email gives; one with no zone count, or already booked, gets a plain link to `book.html` rather than a guessed tier. Season comes from `outreach.seasonForBooking()`, which reads `SEASON_WINDOWS` (inside a window, that season; between windows, the next one to open) so the portal CTA and the outreach candidate list can't disagree about when a season starts.
+**Second entry point added 2026-08-19 — customer portal.** The customer portal had no route into booking at all: its `service_complete` state said *"Book again any time."* and the page carried no link to `book.html`, seasonal or generic. It now renders a **Book a service** card with one row per property the customer owns (`portalPayloadForLead` → `bookableProperties`, scoped by `customerId`). A property with a zone count on file, not already booked for the season, gets the seasonal express CTA — the same handoff the outreach email gives; one with no zone count, or already booked, gets a plain link to `book.html` rather than a guessed tier. Season comes from `outreach.seasonForBooking()` (inside a window, that season; between windows, the next one to open) so the portal CTA and the outreach candidate list can't disagree about when a season starts. **Updated 2026-08-26 (season config):** the window it reads moved from the hardcoded `SEASON_WINDOWS` constant to `seasons.json` via `server/lib/seasons.js`, and fall 2026 now ends Nov 6 rather than Dec 15. That coupling was documented here as intentional and still is — it is what keeps the two surfaces agreeing — but it has a consequence worth stating plainly: **between Nov 7 and Dec 15 both CTAs (property portal and customer portal) now offer the coming Spring Opening rather than a Fall Closing.** Past hard frost a fall closing is work PJL cannot perform, so offering it was the defect, not the fix; taken as a deliberate decision rather than preserving it behind a second fall end date living only in `seasonForBooking()`. Zone-count tier resolution, ownership checks, and the handoff itself are untouched.
 
 `POST /api/portal/:token/begin-booking` now accepts **both** token shapes, resolving lead-first exactly like the GET route: a **property** token works as before (no `propertyId`, outreach path untouched), and a **lead** token requires `?propertyId=` and is checked against the token holder's `customerId`. **The property's own portal token is never sent to the browser** — the customer portal payload carries only `propertyId`, so a portal link can start a booking for that customer's properties and nothing else. An unowned property and a nonexistent one both answer `404 Property not found`, so the route can't be used to probe which ids are real. Both properties are pinned by source guards in `scripts/test-seasonal-handoff.mjs`, each verified to fail the build when the check is removed.
 

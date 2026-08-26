@@ -134,7 +134,11 @@ check(deriveSeasonalKey('not_a_season', 6, false) === null, 'unknown WO type sho
 // 7. seasonForBooking() must always name a season the tier tables can serve,
 //    at every calendar boundary. The portal CTA reads it, so a null or a
 //    stray value would render a button that books nothing.
-const { seasonForBooking, SEASON_WINDOWS } = require(path.join(ROOT, 'server/lib/outreach.js'));
+const { seasonForBooking } = require(path.join(ROOT, 'server/lib/outreach.js'));
+// Season windows moved out of outreach.js into seasons.json (season-config
+// brief). Read them from the same loader the engine reads, so these boundary
+// assertions keep tracking the real dates rather than pinning stale literals.
+const seasonConfig = require(path.join(ROOT, 'server/lib/seasons.js'));
 
 for (let month = 1; month <= 12; month += 1) {
   for (const day of [1, 15, 28]) {
@@ -155,9 +159,10 @@ for (let month = 1; month <= 12; month += 1) {
 //    fall in April.
 check(seasonForBooking(new Date(2026, 3, 15)) === 'spring', 'April should offer spring');
 check(seasonForBooking(new Date(2026, 9, 15)) === 'fall', 'October should offer fall');
-// Boundary days of each window, read straight off SEASON_WINDOWS.
-const springWin = SEASON_WINDOWS.spring;
-const fallWin = SEASON_WINDOWS.fall;
+// Boundary days of each window, read straight off seasons.json for the same
+// year the dates below are built in.
+const springWin = seasonConfig.windowFor('spring', 2026);
+const fallWin = seasonConfig.windowFor('fall', 2026);
 check(
   seasonForBooking(new Date(2026, springWin.startMonth - 1, springWin.startDay)) === 'spring',
   'spring window opening day should offer spring'
