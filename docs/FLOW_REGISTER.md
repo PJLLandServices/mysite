@@ -19,6 +19,16 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-26 (Unwanted page scrolls):** Client-side only. `scrollIntoView({ block:
+"start" | "center" })` moves the page even when the target is already fully visible, so
+`/book.html`'s step advances and both work-order pages' tap-to-jump handlers lurched on
+content that was already on screen — worst on a phone, where the throw is most of a screen
+height. Five call sites now go through a `revealIfOffscreen()` guard (`js/booking.js`,
+`server/work-order.js`, `server/work-order-tech.js`). **FLOW-03 is PASS and its hop chain
+is untouched** — no route, payload, or catalog change; the booking step machine still
+advances service → zones → address → when, re-verified by scroll measurement at 390x700
+and 1440x900, not by a walked booking. If the PASS stamp is to carry a walked date, that
+walk is still Patrick's to make.
 
 If a flow isn't in here with a status, it is not known to work.
 Update this file, not a chat thread.

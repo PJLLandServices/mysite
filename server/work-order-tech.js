@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v48";
+const TECH_BUILD_VERSION = "tech-v51";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -860,6 +860,54 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+// ===== Scroll helpers =====
+// scrollIntoView({ block: "start" | "center" }) moves the page even when the
+// target is already fully visible — it re-aligns it to the top/centre of the
+// viewport. The tap-to-jump targets below are often already in front of the
+// tech — the checklist row they tapped sits right beside the section it
+// points at — so the re-alignment reads as an unprompted lurch. It is worst
+// on a phone: the distance thrown is the element's distance from the top of
+// the viewport, which on a ~700px handset is most of a screen height. Scroll
+// only when the target genuinely is off-screen.
+//
+// pinnedTopBarHeight measures whatever bar is pinned across the TOP of the
+// viewport at call time, so this tracks each page's own responsive
+// breakpoints instead of a hard-coded number that silently drifts.
+function pinnedTopBarHeight() {
+  let height = 0;
+  document.querySelectorAll(".nav, .pjl-app-topbar, .tech-header, header").forEach((el) => {
+    const position = window.getComputedStyle(el).position;
+    // Sticky counts: a pinned sticky bar (the CRM topbar, the tech header)
+    // overlaps scrolled content exactly as a fixed one does.
+    if (position !== "fixed" && position !== "sticky") return;
+    const rect = el.getBoundingClientRect();
+    // Only a bar actually spanning the top edge is overhead. This is what
+    // keeps the CRM's full-height fixed sidebar (.pjl-admin-nav is
+    // top:0;bottom:0) out of the measurement — it is pinned, but it sits
+    // beside the content, not above it, and counting it would report a
+    // viewport-tall "header" and make everything look off-screen.
+    if (rect.top > 4 || rect.bottom <= 0) return;
+    if (rect.height > window.innerHeight * 0.4) return;
+    height = Math.max(height, Math.round(rect.bottom));
+  });
+  return height;
+}
+
+function revealIfOffscreen(el, block) {
+  if (!el || typeof el.getBoundingClientRect !== "function") return;
+  const headerH = pinnedTopBarHeight();
+  const rect = el.getBoundingClientRect();
+  const LOWER_BOUND = window.innerHeight * 0.85;   // "still comfortably in view"
+  if (rect.top >= headerH && rect.top <= LOWER_BOUND) return;
+  // scroll-margin-top keeps block:"start" from parking the target underneath
+  // the pinned bar. Set rather than restored: it is idempotent, and any later
+  // scroll of this element wants the same clearance.
+  el.style.scrollMarginTop = headerH + "px";
+  const reduceMotion = window.matchMedia
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  el.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: block || "start" });
 }
 
 function formatDateTime(value) {
@@ -3146,7 +3194,7 @@ document.getElementById("techPreSignList")?.addEventListener("click", (event) =>
   if (!row) return;
   const target = document.querySelector(row.dataset.jump);
   if (!target) return;
-  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  revealIfOffscreen(target, "center");
   // Optional: focus the input if the target is one. iOS keyboard pops
   // up which is what the tech wants when, e.g., jumping to the name.
   if (target.matches("input, textarea, select")) {
@@ -3476,7 +3524,7 @@ document.getElementById("techGateList")?.addEventListener("click", (event) => {
   if (!sel) return;
   const target = document.querySelector(sel);
   if (!target) return;
-  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  revealIfOffscreen(target, "center");
   if (target.matches("input, textarea, select")) setTimeout(() => target.focus(), 250);
 });
 
