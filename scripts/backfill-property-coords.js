@@ -128,9 +128,14 @@ async function readCache() {
   }
 }
 
+// Backups go INSIDE server/data/ deliberately. On Render only that path
+// is a persistent disk mount — a sibling directory lives on the container
+// filesystem and is destroyed by the next deploy or restart, which is
+// worthless as an undo for a write to live customer data. Two small JSON
+// files against a 1 GB disk is a rounding error.
 async function backup() {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const dir = path.join(ROOT, `server/data-backup-${stamp}-geocode-backfill`);
+  const dir = path.join(DATA, `BACKUP-${stamp}-geocode-backfill`);
   await fs.mkdir(dir, { recursive: true });
   for (const file of ["properties.json", "geocode-cache.json"]) {
     try {
