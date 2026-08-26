@@ -103,14 +103,24 @@ function inOriginalWindow(year, month, day, season) {
 
   ok("an unknown season resolves to nothing", seasons.windowFor("summer", 2026) === null);
 
-  // A year nobody has planned inherits the original dates rather than
-  // silently borrowing 2026's frost date.
+  // A year nobody has planned inherits the frost stop, NOT the Dec 15 the
+  // old hardcoded constant used. Inheriting a safe default beats inheriting
+  // a known-wrong one: fall 2027 must not silently reacquire this bug.
   ok("2026 is explicitly configured", seasons.hasExplicitYear(2026) === true);
   ok("2027 is not yet configured", seasons.hasExplicitYear(2027) === false);
   const fall2027 = seasons.windowFor("fall", 2027);
-  ok("an unplanned year keeps the original fall end date",
-    fall2027.endMonth === 12 && fall2027.endDay === 15,
+  ok("an unplanned year inherits the Nov 6 frost stop, not Dec 15",
+    fall2027.endMonth === 11 && fall2027.endDay === 6,
     JSON.stringify(fall2027));
+  const spring2027 = seasons.windowFor("spring", 2027);
+  ok("an unplanned year keeps spring's long-standing dates",
+    spring2027.startMonth === 3 && spring2027.startDay === 1 &&
+    spring2027.endMonth === 6 && spring2027.endDay === 30,
+    JSON.stringify(spring2027));
+  // No default may promise the public flow a day no truck rolls.
+  const fallDefault = seasons.configFor("fall", 2027);
+  ok("the fall default books no later than it services",
+    fallDefault.publicBookingThrough <= fallDefault.serviceableThrough);
 }
 
 // ---- 2. publicBookingThrough is defined, not wired ------------------
@@ -212,20 +222,33 @@ const outreach = require(path.join(SANDBOX, "server/lib/outreach.js"));
     fallDiffs[0] === "11-7" && fallDiffs[fallDiffs.length - 1] === "12-15",
     fallDiffs.join(","));
 
-  // And a year with no block in seasons.json is untouched end to end.
-  let diffs2027 = 0;
+  // A year with no block in seasons.json inherits the defaults, and the fall
+  // default is the frost stop rather than the old Dec 15. So an unplanned
+  // year is deliberately NOT unchanged: it differs from the old hardcoded
+  // window on the same 39 days 2026 does, and that is the point — 2027 must
+  // not silently reinherit the bug just because nobody has planned it yet.
+  // Spring, which the correction never touched, stays identical.
+  let springDiffs2027 = 0;
+  const fallDiffs2027 = [];
   for (let month = 1; month <= 12; month += 1) {
     const daysInMonth = new Date(2027, month, 0).getDate();
     for (let day = 1; day <= daysInMonth; day += 1) {
       const iso = storedAs(2027, month, day);
-      for (const season of ["spring", "fall"]) {
-        if (outreach.isInSeasonWindow(iso, season, 2027) !== inOriginalWindow(2027, month, day, season)) {
-          diffs2027 += 1;
-        }
+      if (outreach.isInSeasonWindow(iso, "spring", 2027) !== inOriginalWindow(2027, month, day, "spring")) {
+        springDiffs2027 += 1;
+      }
+      if (outreach.isInSeasonWindow(iso, "fall", 2027) !== inOriginalWindow(2027, month, day, "fall")) {
+        fallDiffs2027.push(`${month}-${day}`);
       }
     }
   }
-  ok("an unconfigured year behaves exactly as before", diffs2027 === 0, `${diffs2027} day(s) differ`);
+  ok("spring is unchanged in an unconfigured year", springDiffs2027 === 0,
+    `${springDiffs2027} day(s) differ`);
+  ok("fall in an unconfigured year drops the same 39 unserviceable days",
+    fallDiffs2027.length === 39 &&
+    fallDiffs2027[0] === "11-7" &&
+    fallDiffs2027[fallDiffs2027.length - 1] === "12-15",
+    `${fallDiffs2027.length}: ${fallDiffs2027.join(",")}`);
 }
 
 // ---- 6. seasonForBooking — the portal CTA moves with the frost ------
@@ -247,8 +270,12 @@ const outreach = require(path.join(SANDBOX, "server/lib/outreach.js"));
   ok("April 2026 offers spring", outreach.seasonForBooking(new Date(2026, 3, 15)) === "spring");
   ok("August 2026 looks ahead to fall", outreach.seasonForBooking(new Date(2026, 7, 19)) === "fall");
   ok("January 2026 looks ahead to spring", outreach.seasonForBooking(new Date(2026, 0, 10)) === "spring");
-  ok("an unconfigured year still offers fall in November",
-    outreach.seasonForBooking(new Date(2027, 10, 20)) === "fall");
+  // The default carries the frost stop too, so an unplanned year behaves the
+  // same way rather than offering a fall closing nobody can perform.
+  ok("an unconfigured year offers spring after Nov 6, not a frozen-ground fall",
+    outreach.seasonForBooking(new Date(2027, 10, 20)) === "spring");
+  ok("an unconfigured year still offers fall on Nov 6 itself",
+    outreach.seasonForBooking(new Date(2027, 10, 6)) === "fall");
 }
 
 // ---- 7. deriveBookingState against a real store ---------------------

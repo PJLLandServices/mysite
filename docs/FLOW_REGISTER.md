@@ -38,8 +38,11 @@ read through **`server/lib/seasons.js`**, so the seasonal gate planned for
 `availability.js` reads one source instead of a second copy that drifts. **Production
 audit before the change: 42 bookings, 0 in the Nov 7 – Dec 15 window — no customer was
 reclassified.** Comparison logic, inclusivity (both ends), eligibility semantics
-(`fallClosing !== false`), copy, and send behaviour are all unchanged; a year with no
-block in `seasons.json` inherits the original pre-2026 dates. **One deliberate behaviour
+(`fallClosing !== false`), copy, and send behaviour are all unchanged. A year with no
+block in `seasons.json` inherits year-agnostic defaults, and **those default fall to the
+Nov 6 frost stop, not the old Dec 15** — an unplanned year inherits a safe date rather
+than a known-wrong one, so fall 2027 cannot silently reacquire this defect while waiting
+to be planned. Spring's defaults are its long-standing Mar 1 – Jun 30, unchanged. **One deliberate behaviour
 change, recorded under FLOW-28 below:** `seasonForBooking()` reads the same window, so
 between Nov 7 and Dec 15 the portal CTA now offers the coming Spring Opening instead of a
 Fall Closing that cannot be performed. **No PASS flow was touched** — no route, payload,

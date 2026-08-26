@@ -22,9 +22,11 @@
 //       consumer yet; it is defined for the future availability.js gate.
 //
 // Both resolve a year with an explicit block in seasons.json `years` first,
-// and fall back to the year-agnostic `defaults` otherwise. The defaults carry
-// the original pre-2026 dates, so any year nobody has planned yet behaves
-// exactly as it did before this file existed.
+// and fall back to the year-agnostic `defaults` otherwise. Those defaults are
+// a safe floor rather than a forecast: fall ends on the Nov 6 frost stop, not
+// the Dec 15 the old hardcoded constant used, so a year nobody has planned
+// yet cannot silently reacquire the bug this module was written to fix. A
+// season that genuinely runs later is a season someone plans explicitly.
 //
 // TIMEZONE: these are plain calendar dates in America/Toronto. Callers compare
 // them against local date fields (d.getMonth() + 1, d.getDate()), which is

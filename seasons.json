@@ -11,9 +11,16 @@
     "",
     "SHAPE",
     "  defaults[season]  - year-agnostic fallback, MM-DD. Applies to any year with no",
-    "                      entry under `years`. These carry the ORIGINAL pre-2026 dates",
-    "                      so historical and future years behave exactly as they did",
-    "                      before this file existed.",
+    "                      entry under `years`. Fall defaults to the Nov 6 frost stop,",
+    "                      NOT the Dec 15 the old hardcoded constant used: a year nobody",
+    "                      has planned should inherit a safe date rather than a known-",
+    "                      wrong one. A comment warning that 2027 would reinherit the bug",
+    "                      is not a control; this is. Spring's defaults are its long-",
+    "                      standing Mar 1 - Jun 30 and are unchanged.",
+    "                      A year that runs later than the default is a year someone must",
+    "                      plan explicitly under `years` — erring toward too short means",
+    "                      a late booking reads as unbooked and the customer gets one",
+    "                      more nudge; erring long means offering work past frost.",
     "  years[YYYY][season] - full YYYY-MM-DD dates, overriding the default for that",
     "                      year. Add a new year by adding a block here; no code change.",
     "",
@@ -35,9 +42,10 @@
     "  Consumers compare them against local date fields; server.js pins process.env.TZ",
     "  = America/Toronto at boot so that math is honest. See server/lib/seasons.js.",
     "",
-    "WARNING",
-    "  A year with no block here inherits `defaults`, which still ends fall on Dec 15.",
-    "  Add each year's real frost date as the season is planned."
+    "PLANNING EACH YEAR",
+    "  A year with no block here inherits `defaults`. That is a safe floor, not a",
+    "  forecast — add each season's real dates under `years` as it is planned, and set",
+    "  publicBookingThrough to reserve whatever admin-placement tail that season needs."
   ],
 
   "defaults": {
@@ -48,8 +56,8 @@
     },
     "fall": {
       "serviceableFrom": "09-01",
-      "serviceableThrough": "12-15",
-      "publicBookingThrough": "12-15"
+      "serviceableThrough": "11-06",
+      "publicBookingThrough": "11-06"
     }
   },
 

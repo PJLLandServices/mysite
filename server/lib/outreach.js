@@ -48,8 +48,9 @@ const { resolvePublicBaseUrl } = require("./public-base-url");
 // changed with the move: fall 2026 ends Nov 6, not Dec 15. The old
 // constant ran 39 days past safe frost, so "is this customer
 // already booked for fall?" counted appointments on days no truck
-// could roll. Years with no block in seasons.json inherit the
-// original dates unchanged.
+// could roll. A year with no block in seasons.json inherits
+// defaults that end fall on the frost stop too — an unplanned year
+// should inherit a safe date, not a known-wrong one.
 
 // Service-key prefix matching for booking detection. A property
 // counts as "booked for the season" when at least one of its
