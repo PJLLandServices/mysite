@@ -7044,18 +7044,36 @@ async function handleApi(req, res, pathname) {
       }
     }
     if (req.method === "DELETE") {
-      // Hard-delete. The lib refuses if any entity still references this
-      // customer; the UI shows that response so Patrick can Merge first
-      // when the customer is linked to real bookings/WOs/etc. Test data
-      // and clean duplicates with no references go straight through.
-      const result = await customers.hardDelete(id);
+      // Hard-delete. The lib refuses if any LIVE entity still references
+      // this customer; the UI shows that response so Patrick can Merge
+      // first when the customer is linked to real bookings/WOs/etc. Test
+      // data and clean duplicates with no references go straight through.
+      //
+      // Records already in the Trash are the third case (CRM-16): they
+      // don't block, but they can't be left pointing at a deleted
+      // customer either, so the lib asks for an explicit second confirm
+      // and `?purgeTrashed=1` carries it back. The two 409 shapes are
+      // told apart by `code`, not by which key is present.
+      const deleteUrl = new URL(req.url, baseUrlFromReq(req));
+      const purgeTrashed = deleteUrl.searchParams.get("purgeTrashed") === "1";
+      const result = await customers.hardDelete(id, { purgeTrashed });
       if (!result.ok) {
-        if (result.references) {
-          return sendJson(res, 409, { ok: false, error: result.error, references: result.references });
+        if (result.code === "linked" || result.code === "trashed_only") {
+          return sendJson(res, 409, {
+            ok: false,
+            code: result.code,
+            error: result.error,
+            ...(result.references ? { references: result.references } : {}),
+            ...(result.trashed ? { trashed: result.trashed } : {})
+          });
         }
         return sendJson(res, 404, { ok: false, error: result.error });
       }
-      return sendJson(res, 200, { ok: true, deleted: { id: result.customer.id, name: result.customer.name } });
+      return sendJson(res, 200, {
+        ok: true,
+        deleted: { id: result.customer.id, name: result.customer.name },
+        purged: result.purged || {}
+      });
     }
   }
 
