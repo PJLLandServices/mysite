@@ -89,6 +89,16 @@
 
       <section class="customers-toolbar">
         <input type="search" id="customerSearch" placeholder="Search by name, email, or phone…">
+        <label class="crm-sort">
+          <span>Sort</span>
+          <select id="customerSort">
+            <option value="name-asc">Name A–Z</option>
+            <option value="name-desc">Name Z–A</option>
+            <option value="town-asc">Town A–Z</option>
+            <option value="town-desc">Town Z–A</option>
+            <option value="recent">Recently active</option>
+          </select>
+        </label>
         <span class="customers-count" id="customersCount">—</span>
         <button type="button" class="pjl-btn pjl-btn-primary" id="newCustomerBtn">+ New customer</button>
         <!-- Copies the public /new-customer URL to clipboard. Secondary
@@ -143,6 +153,7 @@
     </div>
   </div>
 
+  <script src="/crm/crm-sort.js"></script>
   <script src="/crm/customers.js"></script>
   <script src="/crm/crm-contact.js" defer></script>
   <script src="/crm/nav-badges.js?v=1"></script>

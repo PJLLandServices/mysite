@@ -53,6 +53,23 @@ refused now says the confirmation didn't reach the server rather than repeating 
 `tech-sw.js` keeps `no-store`; public-site assets keep `max-age=30`; the service worker's
 own versioned precache is untouched.
 
+**2026-08-27 (CRM index sorting):** The customers and properties indexes gained a sort
+control — name/customer A–Z and Z–A, town A–Z and Z–A, plus the customers list's previous
+recently-active order, kept as an option. **Both now default to alphabetical:** the indexes
+are read as directories ("where is Vivian G"), and recency only helps when you already know
+someone was touched lately. The choice is remembered per page in localStorage. Town is
+DERIVED, not stored — properties carry one free-text `address`, so `lib/format.js`
+`townFromAddress()` reads it and `/api/properties` + `/api/customers` decorate their
+payloads (`town`, and `towns` on a customer, whose towns come from their properties since
+a customer has no address of their own — Hard Rule #10). Additive response fields only; no
+existing field changed meaning and no PASS flow is touched. `townFromAddress` splits on
+commas rather than reusing `parseCanadianAddress`'s street-suffix split, which knows "St"
+and "Blvd" but not "Rue", "Gate", "Grove" or "Green" — those addresses came back with no
+town at all. An address it can't read sorts under "no town" rather than guessing. Cover:
+`scripts/test-crm-sorting.mjs` (58 assertions, in `build:check`), plus a headless-Chromium
+walk of both pages (default order, every sort option, persistence across reload, sort with
+an active search, and 390px with no horizontal overflow).
+
 **2026-08-26 (Unwanted page scrolls):** Client-side only. `scrollIntoView({ block:
 "start" | "center" })` moves the page even when the target is already fully visible, so
 `/book.html`'s step advances and both work-order pages' tap-to-jump handlers lurched on

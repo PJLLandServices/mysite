@@ -6837,8 +6837,16 @@ async function handleApi(req, res, pathname) {
   // Each property carries the canonical zone list + controller / shutoff /
   // valve box / blowout location data the technician needs on-site.
   if (req.method === "GET" && pathname === "/api/properties") {
+    const { townFromAddress } = require("./lib/format");
     const all = await properties.list();
-    return sendJson(res, 200, { ok: true, properties: all });
+    // `town` is derived, not stored — properties carry one free-text
+    // address. Deriving it here (not in the page) keeps the town the CRM
+    // sorts on identical to the town the customers index sorts on, and
+    // means a second surface can't grow its own parser.
+    return sendJson(res, 200, {
+      ok: true,
+      properties: all.map((p) => ({ ...p, town: townFromAddress(p.address) }))
+    });
   }
 
   // GET /api/admin/property-link-conflicts — list leads whose intake
@@ -7069,6 +7077,7 @@ async function handleApi(req, res, pathname) {
   // POST   /api/customer/:id/communication — append a manual comm record
 
   if (req.method === "GET" && pathname === "/api/customers") {
+    const { townFromAddress } = require("./lib/format");
     const [allCustomers, allProperties, allWOs, allInvoicesList] = await Promise.all([
       customers.list(),
       properties.list(),
@@ -7089,11 +7098,33 @@ async function handleApi(req, res, pathname) {
     }
     for (const w of allWOs) bump(w.customerId, w.updatedAt || w.createdAt);
     for (const i of allInvoicesList) bump(i.customerId, i.updatedAt || i.createdAt);
-    const decorated = allCustomers.map((c) => ({
-      ...c,
-      propertyCount: propertyCount.get(c.id) || 0,
-      lastActivityAt: lastActivity.get(c.id) || c.updatedAt || c.createdAt
-    }));
+    // Towns a customer is in. A customer has no address of their own —
+    // the towns come from their properties (Hard Rule #10 keeps the two
+    // separate), so a customer with sites in three towns carries all
+    // three. `town` is the one shown on the row and sorted on: the
+    // alphabetically-first, so the sort is stable and doesn't depend on
+    // which property happened to be created first. `towns` carries the
+    // rest for the "+N" marker.
+    const townsByCustomer = new Map();
+    for (const p of allProperties) {
+      if (!p.customerId) continue;
+      const town = townFromAddress(p.address);
+      if (!town) continue;
+      const set = townsByCustomer.get(p.customerId) || new Set();
+      set.add(town);
+      townsByCustomer.set(p.customerId, set);
+    }
+    const decorated = allCustomers.map((c) => {
+      const towns = [...(townsByCustomer.get(c.id) || [])]
+        .sort((a, b) => a.localeCompare(b, "en-CA", { sensitivity: "base" }));
+      return {
+        ...c,
+        propertyCount: propertyCount.get(c.id) || 0,
+        lastActivityAt: lastActivity.get(c.id) || c.updatedAt || c.createdAt,
+        town: towns[0] || "",
+        towns
+      };
+    });
     decorated.sort((a, b) => String(b.lastActivityAt || "").localeCompare(String(a.lastActivityAt || "")));
     return sendJson(res, 200, { ok: true, customers: decorated });
   }

@@ -27,6 +27,7 @@ const grid = document.getElementById("propertiesGrid");
 const empty = document.getElementById("propertiesEmpty");
 const search = document.getElementById("propertySearch");
 const countEl = document.getElementById("propertiesCount");
+const sortEl = document.getElementById("propertySort");
 const logoutButton = document.getElementById("logoutButton");
 
 const selectToggle = document.getElementById("selectToggle");
@@ -47,7 +48,26 @@ const confirmError = document.getElementById("confirmError");
 const confirmCancel = document.getElementById("confirmCancel");
 const confirmAccept = document.getElementById("confirmAccept");
 
+// Sort options, keyed by the <select> values in properties.html.
+// Alphabetical by customer is the default — the grid is read as "whose
+// property is this", and the cards lead with the customer name.
+// `town` is derived server-side from the address (lib/format.js
+// townFromAddress) so it matches the customers index exactly.
+// Every non-name sort breaks ties on customer name, then address, so two
+// properties in one town — or two sites for one customer — hold a stable,
+// readable order instead of falling back to file order.
+const SORTS = {
+  "customer-asc": { keys: ["customerName"], tiebreak: "address" },
+  "customer-desc": { keys: ["customerName"], direction: "desc", tiebreak: "address" },
+  "town-asc": { keys: ["town"], tiebreak: "customerName" },
+  "town-desc": { keys: ["town"], direction: "desc", tiebreak: "customerName" },
+  "address-asc": { keys: ["address"], tiebreak: "customerName" }
+};
+const SORT_STORAGE_KEY = "pjl.properties.sort";
+const DEFAULT_SORT = "customer-asc";
+
 let properties = [];
+let sortKey = PJLSort.readStored(SORT_STORAGE_KEY, Object.keys(SORTS), DEFAULT_SORT);
 let selecting = false;
 const selected = new Set();
 
@@ -73,9 +93,12 @@ function searchableProperty(p) {
 
 function visibleProperties() {
   const query = search.value.trim().toLowerCase();
-  return query
+  const filtered = query
     ? properties.filter((p) => searchableProperty(p).includes(query))
     : properties;
+  // Sorting a copy — `properties` stays the unfiltered source of truth for
+  // the count line and the bulk bar's select-all.
+  return PJLSort.sortRecords(filtered, SORTS[sortKey] || SORTS[DEFAULT_SORT]);
 }
 
 function render() {
@@ -101,10 +124,18 @@ function render() {
     const codeBadge = p.code
       ? `<span class="property-card-code">${escapeHtml(p.code)}</span>`
       : "";
+    // Town is already inside the address line; the chip is what makes a
+    // town-sorted grid scannable — you see the runs without reading each
+    // street address. Blank when the address doesn't parse, rather than an
+    // empty chip.
+    const townChip = p.town
+      ? `<span class="property-card-town">${escapeHtml(p.town)}</span>`
+      : "";
     const inner = `
       <div class="property-card-head">
         <strong>${escapeHtml(p.customerName) || "Unnamed customer"}</strong>
         ${codeBadge}
+        ${townChip}
       </div>
       <span class="property-card-address"${p.address ? ` data-map-address="${escapeHtml(p.address)}"` : ""}>${escapeHtml(p.address) || "(no address on file)"}</span>
       <span class="property-card-email">${escapeHtml(p.customerEmail) || "—"}</span>
@@ -220,6 +251,15 @@ bulkSelectAll.addEventListener("change", () => {
 });
 
 search.addEventListener("input", render);
+
+if (sortEl) {
+  sortEl.value = sortKey;
+  sortEl.addEventListener("change", () => {
+    sortKey = SORTS[sortEl.value] ? sortEl.value : DEFAULT_SORT;
+    PJLSort.writeStored(SORT_STORAGE_KEY, sortKey);
+    render();
+  });
+}
 
 logoutButton.addEventListener("click", async () => {
   await fetch("/api/logout", { method: "POST" });

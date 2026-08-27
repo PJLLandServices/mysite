@@ -299,9 +299,92 @@ function resolveLineDescription(line, partsMap) {
   return `(SKU ${sku})`;
 }
 
+// townFromAddress — the town/city out of a free-text property address,
+// for the CRM's "sort by town" (customers + properties indexes, Aug 2026).
+//
+// Properties store one free-text `address` string; there is no city field
+// and adding one would mean a migration plus every intake path learning to
+// fill it. Deriving it here reuses the parser that already owns Canadian
+// address structure, so the town shown on a card and the town sorted on
+// can never come from two different implementations.
+//
+//   townFromAddress("123 Main St, Newmarket, ON L3X 0A5")   -> "Newmarket"
+//   townFromAddress("17 Elm St, Unit 4, King City, Ontario") -> "King City"
+//   townFromAddress("Newmarket, ON, Canada")                 -> "Newmarket"
+//   townFromAddress("")                                       -> ""
+//
+// Best-effort by construction, exactly like parseCanadianAddress: this
+// drives display and ordering, never a payload or a match. An address the
+// parser can't read sorts under "(no town)" rather than guessing.
+const PROVINCE_NAMES = new Set([
+  "alberta", "british columbia", "manitoba", "new brunswick",
+  "newfoundland and labrador", "northwest territories", "nova scotia",
+  "nunavut", "ontario", "prince edward island", "quebec", "québec",
+  "saskatchewan", "yukon"
+]);
+
+function townFromAddress(raw) {
+  const text = String(raw == null ? "" : raw).replace(/\r\n/g, "\n").trim();
+  if (!text) return "";
+
+  // Strip the parts that are never the town: postal code, country, and the
+  // province in either form. What's left is street + unit + town.
+  let rest = text
+    .replace(CANADA_POSTAL_RE, " ")
+    .replace(/(^|[,\n\s])canada\b/gi, "$1");
+  const segments = rest
+    .split(/[,\n]/)
+    .map((part) => part.trim().replace(/^[,\-\s]+|[,\-\s]+$/g, "").replace(/\s+/g, " "))
+    .filter(Boolean)
+    .filter((part) => !PROVINCE_NAMES.has(part.toLowerCase()) && !PROVINCE_CODES.has(part.toUpperCase()));
+
+  // A comma-formatted address (what the geocoder returns and what gets
+  // typed in practice) puts the town in the last segment. Trusting the
+  // commas rather than parseCanadianAddress's street-suffix split matters:
+  // that list knows "St" and "Blvd" but not "Rue", "Gate", "Grove" or
+  // "Green", and an address ending in one of those would come back with no
+  // town at all.
+  if (segments.length > 1) {
+    const last = segments[segments.length - 1];
+    // "…, Newmarket ON" — province riding on the town segment without a
+    // comma of its own.
+    const trimmed = last.replace(/[\s,]+(?:[A-Za-z]{2})$/, (m) =>
+      PROVINCE_CODES.has(m.trim().toUpperCase()) ? "" : m).trim();
+    return normalizeTownCase(trimmed || last);
+  }
+
+  // No commas to go on: fall back to the shared parser, which splits a
+  // run-on line at the street suffix ("123 Main St Newmarket ON").
+  const parsed = parseCanadianAddress(text);
+  if (parsed.city) {
+    const tail = parsed.city
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .filter((part) => !PROVINCE_NAMES.has(part.toLowerCase()) && !PROVINCE_CODES.has(part.toUpperCase()));
+    if (tail.length) return normalizeTownCase(tail[tail.length - 1]);
+  }
+  // A town-only address ("Newmarket", the shape left after stripping the
+  // province off a geocoder formattedAddress). Take it only when it
+  // doesn't open with a street number, so "12 Main St" with a missing town
+  // stays townless rather than becoming one.
+  const only = segments[0] || "";
+  return /^\d/.test(only) ? "" : normalizeTownCase(only);
+}
+
+// Normalize SHOUTED imports ("NEWMARKET" from an xlsx) so the badge column
+// doesn't read as two different towns. Mixed case is left alone — "King
+// City" and "St. Catharines" are already right, and re-casing them would
+// be the guess.
+function normalizeTownCase(town) {
+  if (!town || town !== town.toUpperCase() || !/[A-Z]/.test(town)) return town;
+  return town.toLowerCase().replace(/(^|[\s\-'])([a-z])/g, (m, sep, ch) => sep + ch.toUpperCase());
+}
+
 module.exports = {
   formatUnit,
   formatVendorAddress,
   parseCanadianAddress,
+  townFromAddress,
   resolveLineDescription
 };
