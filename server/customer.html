@@ -354,7 +354,14 @@
     </div>
   </div>
 
-  <script src="/crm/customer.js"></script>
+  <!-- ?v= is a cache-buster, same convention as nav-badges.js below. CRM JS is
+       served public,max-age=30 with no ETag while the HTML is no-store, so a
+       deploy can pair fresh HTML with a stale script — which is exactly what
+       happened on the CRM-16 delete fix: the new server refused with the new
+       409, and the cached old script, having no branch for it, printed the raw
+       error instead of raising the confirm. Bump this whenever customer.js
+       changes in a way the HTML depends on. -->
+  <script src="/crm/customer.js?v=2"></script>
   <script src="/crm/crm-contact.js" defer></script>
   <!-- Address autocomplete — same library + key as the public booking page.
        The Google script fires initCoverageCheck() on load, which scans

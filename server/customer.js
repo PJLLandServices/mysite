@@ -927,6 +927,17 @@ deleteBtn?.addEventListener("click", async () => {
     }
 
     if (!res.ok || !body.ok) {
+      // The confirmed call coming back with the same refusal means the
+      // confirmation didn't reach the server. Echoing the server's sentence
+      // again would read as "nothing happened" — say what to do instead.
+      if (body?.code === "trashed_only") {
+        deleteErrorEl.textContent =
+          "The confirmation didn't reach the server, so nothing was deleted. "
+          + "Reload the page (Ctrl+Shift+R / Cmd+Shift+R) and try again.";
+        deleteErrorEl.hidden = false;
+        deleteBtn.disabled = false;
+        return;
+      }
       if (body.references) {
         const counts = describeLinks(body.references);
         let msg = `Can't delete — this customer is linked to ${counts}. Use Merge to combine them into another customer first.`;
