@@ -2136,6 +2136,31 @@ function normalizeTranscriptBody(value) {
   return normalizeString(value, 50000);
 }
 
+// Row preview for the AI Chats dashboard. Every transcript opens with the
+// widget's two scripted greetings from the AI, so slicing the head of the
+// string gave all ~240 characters to boilerplate and made every row in the
+// list read identically. Preview the first thing the CUSTOMER actually
+// said — that is what tells the chats apart at a glance. Display only; the
+// stored transcript is untouched.
+const CHAT_PREVIEW_CHARS = 240;
+function chatPreview(transcript) {
+  const text = String(transcript || "").replace(/\r\n?/g, "\n");
+  for (const block of text.split(/\n{2,}/)) {
+    const marker = block.match(/^Customer\s*:\s*/);
+    if (!marker) continue;
+    const body = block.slice(marker[0].length).replace(/\s+/g, " ").trim();
+    if (body) return body.slice(0, CHAT_PREVIEW_CHARS);
+  }
+  // No customer turn yet (chat opened, nothing typed) — fall back to the
+  // opening line, minus its speaker label.
+  const head = text.split(/\n{2,}/).find((block) => block.trim()) || "";
+  return head
+    .replace(/^(?:Customer|Patrick \(AI\)|Assistant|AI|User|Visitor)\s*:\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, CHAT_PREVIEW_CHARS);
+}
+
 // Mark / link a chat to a lead once the customer books. Returns updated chat
 // or null if the sessionId isn't in the store.
 async function linkChatToLead(sessionId, leadId) {
@@ -6015,7 +6040,7 @@ async function handleApi(req, res, pathname) {
           status: c.status,
           messageCount: c.messageCount,
           bookedLeadId: c.bookedLeadId,
-          preview: (c.transcript || "").slice(0, 240)
+          preview: chatPreview(c.transcript)
         }))
     });
   }

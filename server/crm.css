@@ -2520,18 +2520,14 @@ body.crm-drawer-locked { overflow: hidden; }
   object-fit: cover;
   display: block;
 }
+/* Holds the conversation rendered by crm-transcript.js (.pjl-convo).
+   No pre-wrap and no 360px scroll window any more — the drawer scrolls,
+   so a long chat reads straight through instead of through a porthole. */
 .detail-transcript-body {
   background: #faf7ee;
   border: 1px solid rgba(15, 31, 20, 0.08);
   border-radius: 8px;
-  padding: 14px;
-  font-family: "DM Sans", system-ui, sans-serif;
-  font-size: 13px;
-  line-height: 1.55;
-  color: #2a2a2a;
-  white-space: pre-wrap;
-  max-height: 360px;
-  overflow-y: auto;
+  padding: 16px 14px;
 }
 
 /* === Field Work Orders (tech-side per-visit doc) === */

@@ -17,6 +17,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/crm-transcript.css">
   <style>
     /* AI Chats page — uses the existing pjl-crm-* shell classes from crm.css.
        Page-specific styles below are scoped with .chats-* prefixes. */
@@ -94,7 +95,7 @@
       white-space: nowrap; letter-spacing: 0.3px;
     }
     .chat-row-detail {
-      display: none; padding: 18px 22px;
+      display: none; padding: 22px 26px 26px;
       border-top: 1px solid rgba(15, 31, 20, 0.08);
       background: #FAFAF5;
     }
@@ -102,17 +103,22 @@
     .chat-row.is-open .chat-row-toggle { transform: rotate(180deg); }
     .chat-row-toggle { transition: transform .15s; color: rgba(15, 31, 20, 0.5); display: flex; align-items: center; }
 
-    .chat-transcript {
-      background: #fff; border: 1px solid rgba(15, 31, 20, 0.08);
-      border-radius: 8px; padding: 16px;
+    /* The transcript body no longer holds raw pre-wrap text — chats.js
+       renders it through PJLTranscript into .pjl-convo speaker turns
+       (see crm-transcript.css). Deliberately no inner scrollbar: an open
+       row grows and the page scrolls with it, so a long conversation
+       reads top to bottom instead of through a 480px porthole. */
+    .chat-transcript { padding-top: 2px; }
+    .chat-transcript.is-loading,
+    .chat-transcript.is-error {
       font-family: 'DM Sans', system-ui, sans-serif;
-      font-size: 13px; line-height: 1.6;
-      color: #2a2a2a; white-space: pre-wrap;
-      max-height: 480px; overflow-y: auto;
+      font-size: 13px; color: rgba(15, 31, 20, 0.55);
+      padding: 20px 2px;
     }
+    .chat-transcript.is-error { color: #B85C3D; }
     .chat-detail-meta {
       display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 14px; margin-bottom: 14px;
+      gap: 14px; margin-bottom: 18px;
       font-family: 'Outfit', 'DM Sans', system-ui, sans-serif;
       font-size: 11px; color: rgba(15, 31, 20, 0.6);
       letter-spacing: 0.4px;
@@ -222,7 +228,8 @@
     </main>
   </div><!-- /.pjl-app -->
 
-  <script src="/crm/chats.js"></script>
+  <script src="/crm/crm-transcript.js"></script>
+  <script src="/crm/chats.js?v=2"></script>
   <script src="/crm/nav-badges.js?v=1"></script>
 </body>
 </html>

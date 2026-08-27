@@ -17,6 +17,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/crm/crm.css?v=20260721">
+  <link rel="stylesheet" href="/crm/crm-transcript.css">
   <!-- Shared month-calendar time picker — reused by the lead-card
        "Book appointment" action (admin mode, custom-time enabled). -->
   <link rel="stylesheet" href="/js/time-picker.css?v=1">
@@ -561,7 +562,7 @@
 
           <section class="detail-section detail-transcript" id="detailTranscriptSection" hidden>
             <h3>AI chat transcript</h3>
-            <pre id="detailTranscript" class="detail-transcript-body"></pre>
+            <div id="detailTranscript" class="detail-transcript-body"></div>
           </section>
 
           <label class="full-editor">
@@ -682,7 +683,8 @@
   <script src="/crm/bulk-toast.js"></script>
   <script src="/crm/bulk-modal.js"></script>
   <script src="/crm/bulk-selection.js"></script>
-  <script src="/crm/admin.js?v=20260721"></script>
+  <script src="/crm/crm-transcript.js"></script>
+  <script src="/crm/admin.js?v=20260722"></script>
   <script src="/crm/nav-badges.js?v=1"></script>
   <script>
     // Wire the unified bulk-operations floating toolbar for leads.

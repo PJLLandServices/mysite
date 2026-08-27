@@ -38,6 +38,15 @@ const counts = {
 
 let activeStatus = "all";
 let allChats = [];
+// Rows Patrick has expanded. render() runs again on every 60s poll, which
+// used to rebuild the list and snap every open transcript shut mid-read.
+const openChats = new Set();
+// transcript text keyed by `${id}:${lastUpdatedAt}` — a chat that has since
+// grown misses the cache and refetches, a finished one never refetches.
+const transcriptCache = new Map();
+// Signature of the list as last drawn; identical data skips the redraw
+// entirely so a poll can't reflow the page under you while you read.
+let lastSignature = "";
 
 document.getElementById("logoutButton").addEventListener("click", async () => {
   try { await fetch("/api/logout", { method: "POST", credentials: "include" }); }
@@ -70,7 +79,14 @@ function fmtRelative(iso) {
   return new Date(iso).toLocaleDateString("en-CA", { month: "short", day: "numeric" });
 }
 
+function listSignature() {
+  return JSON.stringify(
+    allChats.map((c) => [c.id, c.status, c.messageCount, c.lastUpdatedAt, c.bookedLeadId])
+  ) + `|${activeStatus}`;
+}
+
 function render() {
+  lastSignature = listSignature();
   const filtered = activeStatus === "all"
     ? allChats
     : allChats.filter((c) => c.status === activeStatus);
@@ -96,7 +112,11 @@ function render() {
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
       </span>
     `;
-    summary.querySelector(".chat-preview").textContent = (chat.preview || "").replace(/\s+/g, " ").slice(0, 200) || "(no messages yet)";
+    const previewText = window.PJLTranscript
+      ? window.PJLTranscript.buildPreview(chat.preview || "")
+      : (chat.preview || "");
+    summary.querySelector(".chat-preview").textContent =
+      previewText.replace(/\s+/g, " ").slice(0, 200) || "(no messages yet)";
     row.appendChild(summary);
 
     const detail = document.createElement("div");
@@ -108,30 +128,141 @@ function render() {
         <div>Status<strong>${escapeHtml(chat.status)}</strong></div>
         ${chat.bookedLeadId ? `<div>Booked lead<strong><a href="/admin#${escapeHtml(chat.bookedLeadId)}">View lead →</a></strong></div>` : ""}
       </div>
-      <div class="chat-transcript" data-detail-body>Loading transcript...</div>
+      <div class="chat-transcript is-loading" data-detail-body>Loading transcript…</div>
     `;
     row.appendChild(detail);
 
-    summary.addEventListener("click", async () => {
+    summary.addEventListener("click", () => {
       const wasOpen = row.classList.contains("is-open");
-      row.classList.toggle("is-open");
-      if (!wasOpen && detail.querySelector("[data-detail-body]").textContent === "Loading transcript...") {
-        try {
-          const r = await fetch(`/api/chat-transcripts/${encodeURIComponent(chat.id)}`, { credentials: "include" });
-          const data = await r.json();
-          if (data.ok && data.chat) {
-            detail.querySelector("[data-detail-body]").textContent = data.chat.transcript || "(empty)";
-          } else {
-            detail.querySelector("[data-detail-body]").textContent = "Couldn't load transcript.";
-          }
-        } catch (e) {
-          detail.querySelector("[data-detail-body]").textContent = "Error loading transcript.";
-        }
+      row.classList.toggle("is-open", !wasOpen);
+      if (wasOpen) {
+        openChats.delete(chat.id);
+      } else {
+        openChats.add(chat.id);
+        loadTranscript(chat, detail);
       }
     });
 
+    if (openChats.has(chat.id)) {
+      row.classList.add("is-open");
+      loadTranscript(chat, detail);
+    }
+
     chatList.appendChild(row);
   }
+}
+
+// Fetch (or reuse) a transcript and lay it out as a conversation.
+// The raw string stays available behind the "Plain text" toggle — if the
+// turn parsing ever meets a transcript it can't split, nothing is hidden.
+async function loadTranscript(chat, detail) {
+  const body = detail.querySelector("[data-detail-body]");
+  if (!body || body.dataset.state === "loading" || body.dataset.state === "ready") return;
+
+  const cacheKey = `${chat.id}:${chat.lastUpdatedAt}`;
+  if (transcriptCache.has(cacheKey)) {
+    paintTranscript(body, transcriptCache.get(cacheKey));
+    return;
+  }
+
+  body.dataset.state = "loading";
+  try {
+    const r = await fetch(`/api/chat-transcripts/${encodeURIComponent(chat.id)}`, { credentials: "include" });
+    const data = await r.json();
+    if (data.ok && data.chat) {
+      const text = data.chat.transcript || "";
+      transcriptCache.set(cacheKey, text);
+      paintTranscript(body, text);
+    } else {
+      body.dataset.state = "";
+      body.className = "chat-transcript is-error";
+      body.textContent = "Couldn't load transcript.";
+    }
+  } catch (e) {
+    body.dataset.state = "";
+    body.className = "chat-transcript is-error";
+    body.textContent = "Error loading transcript.";
+  }
+}
+
+function paintTranscript(body, text) {
+  body.dataset.state = "ready";
+  body.className = "chat-transcript";
+  body.textContent = "";
+
+  if (!window.PJLTranscript) {
+    body.className = "chat-transcript";
+    const raw = document.createElement("div");
+    raw.className = "pjl-convo-plain";
+    raw.textContent = text || "(empty)";
+    body.appendChild(raw);
+    return;
+  }
+
+  const parsed = window.PJLTranscript.parse(text);
+  const conversation = window.PJLTranscript.render(text);
+
+  const plain = document.createElement("div");
+  plain.className = "pjl-convo";
+  const plainInner = document.createElement("div");
+  plainInner.className = "pjl-convo-plain";
+  plainInner.textContent = text || "(empty)";
+  plain.appendChild(plainInner);
+  plain.hidden = true;
+
+  body.appendChild(buildToolbar(parsed, text, conversation, plain));
+  body.appendChild(conversation);
+  body.appendChild(plain);
+}
+
+function buildToolbar(parsed, rawText, conversation, plain) {
+  const bar = document.createElement("div");
+  bar.className = "pjl-convo-toolbar";
+
+  const tally = document.createElement("span");
+  tally.className = "pjl-convo-tally";
+  tally.textContent = parsed.recognized
+    ? `${parsed.counts.total} turn${parsed.counts.total === 1 ? "" : "s"} · ${parsed.counts.customer} from the customer`
+    : "Unlabelled transcript";
+  bar.appendChild(tally);
+
+  const spacer = document.createElement("span");
+  spacer.className = "spacer";
+  bar.appendChild(spacer);
+
+  const views = [
+    { key: "convo", label: "Conversation", node: conversation },
+    { key: "plain", label: "Plain text", node: plain }
+  ];
+  const buttons = views.map((view) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "pjl-convo-btn" + (view.key === "convo" ? " is-active" : "");
+    btn.textContent = view.label;
+    btn.addEventListener("click", () => {
+      views.forEach((v) => { v.node.hidden = v.key !== view.key; });
+      buttons.forEach((b, i) => b.classList.toggle("is-active", views[i].key === view.key));
+    });
+    bar.appendChild(btn);
+    return btn;
+  });
+
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "pjl-convo-btn";
+  copy.textContent = "Copy";
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(rawText);
+      copy.textContent = "Copied";
+    } catch (e) {
+      copy.textContent = "Copy failed";
+    }
+    setTimeout(() => { copy.textContent = "Copy"; }, 1600);
+  });
+  bar.appendChild(copy);
+
+  return bar;
 }
 
 function renderSummary(c) {
@@ -157,6 +288,7 @@ async function load() {
     if (!data.ok) throw new Error("Couldn't load chats");
     allChats = data.chats || [];
     renderSummary(data.counts || {});
+    if (listSignature() === lastSignature && chatList.childElementCount) return;
     render();
   } catch (e) {
     console.error(e);

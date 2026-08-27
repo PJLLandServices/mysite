@@ -70,6 +70,30 @@ town at all. An address it can't read sorts under "no town" rather than guessing
 walk of both pages (default order, every sort option, persistence across reload, sort with
 an active search, and 390px with no horizontal overflow).
 
+**2026-08-27 (AI chat transcripts — conversation read-back):** Read-side only. A chat is
+stored by `js/chat-widget.js` `buildTranscript()` as ONE flat string — `Customer: …` /
+`Patrick (AI): …` turns joined by a blank line — and both CRM surfaces printed that string
+straight out (`/admin/chats` into a pre-wrap div capped at 480px, the lead drawer into a
+`<pre>` capped at 360px), so a real conversation came back as one undifferentiated block.
+`server/crm-transcript.js` + `crm-transcript.css` now parse the string back into speaker
+turns and render them as bubbles on both surfaces; the scroll portholes are gone, an open
+transcript reads top to bottom. **The stored format is untouched** — nothing about the POST
+upsert, `normalizeTranscriptBody`, or what the widget writes moves, and a transcript with no
+recognisable labels falls back to its raw text behind a "Plain text" toggle rather than
+being guessed at. The one backend change is the *content* of the dashboard's `preview`
+field: every transcript opens with the widget's two scripted AI greetings, which are longer
+than the 240-char preview budget, so a head-of-string slice gave every row in the list an
+identical, useless line; `chatPreview()` now previews the first thing the **customer** said.
+That field is read by `server/chats.js` and nothing else. Two client-side defects fixed
+alongside: the 60s dashboard poll rebuilt the list and snapped any open transcript shut
+mid-read (open rows are remembered, and an unchanged poll skips the redraw entirely), and
+transcript HTML is escaped with `javascript:` links refused. **No PASS flow was touched** —
+no route, payload shape, or catalog change; FLOW-09 / FLOW-25 (AI diagnostic) are UNMAPPED
+and their hop chain is not involved, since this changes only how an already-stored
+transcript is displayed. Cover: `scripts/test-chat-transcript-view.mjs` (64 assertions, in
+`build:check`), plus a headless-Chromium pass over both surfaces. **Not walked:** Patrick
+has not yet read a live transcript through the new layout.
+
 **2026-08-26 (Unwanted page scrolls):** Client-side only. `scrollIntoView({ block:
 "start" | "center" })` moves the page even when the target is already fully visible, so
 `/book.html`'s step advances and both work-order pages' tap-to-jump handlers lurched on
@@ -425,6 +449,7 @@ Tick items off here as they're confirmed; nothing below blocks new work.
 | VD-1 | ~~Review-request queue check (WO-AZABTKPH / Adam Sorrenti)~~ | **DONE 2026-08-03** — nothing queued, nothing to cancel | ✓ |
 | VD-2 | ~~Submit one test quote through `/quote.html`~~ | **DONE 2026-08-03** — submits, reaches CRM tagged "New Sprinkler Quote"; FLOW-04 → PASS | ✓ |
 | VD-3 | ~~Submit one test through `/estimate.html`~~ | **DONE 2026-08-03** — submits, but routes to an external quotation, NOT the CRM; finding + capability gap on FLOW-05 | ✓ |
+| VD-11 | **AI chat transcript read-back** (2026-08-27) — `/admin/chats` and the CRM lead drawer now render a stored transcript as speaker turns instead of one block. Display only; storage, the POST upsert and the widget are untouched, and an unparseable transcript falls back to raw text. Verified in headless Chromium on both surfaces (turn attribution, escaping, mobile, open-row survives the 60s poll) and by 64 assertions in `build:check`. | Patrick to open one real conversation on `/admin/chats` and confirm it reads the way he wanted — and that the row previews now tell the chats apart. | Small |
 | VD-10 | **Google Ads conversion tracking — confirm live** (2026-08-06, touches FLOW-03 + FLOW-10). Ads conversion tracking was never installed: the site configured GA4 only, no `AW-` line anywhere, so 2 conversions recorded across $1,959 of spend. Now added: `gtag('config','AW-11358637592')` in `_partials/analytics.html` (84 pages via `node build.js`), a booking conversion in `js/booking.js` on the success path only, and a delegated capture-phase phone-click listener. **Verified automatically** in headless Chromium (booking success fires exactly one conversion after the confirm step renders; a failed reserve fires none and leaves the customer on the contact step with a retryable button; runtime-injected `tel:` links are tracked; GA4 config untouched). **Not verifiable in CI:** the outbound ping to Google — `googletagmanager.com` is unreachable from the build sandbox. | Patrick to confirm on the live site: DevTools → Network shows `AW-11358637592`; a phone tap shows `CTBKCOOulN0cEJicnKgq`; a real test booking shows `YtmLCOCulN0cEJicnKgq`. Then, ≤24h later, both conversion actions move Inactive → Active and the "Book appointment" goal Misconfigured → Active. **FLOW-03 stays PASS on its existing walk — this change is additive and guarded, but re-walk one booking to close it out.** |
 
 ## Self-verifying — let normal business tick these off, just record when it happens
