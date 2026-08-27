@@ -21,6 +21,11 @@
    horizontally scrolls if it overflows on narrow phones. */
 .settings-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0 14px; }
 .settings-actions .pjl-btn { flex: 1 1 200px; min-width: 0; }
+/* An <a> styled as a button loses .pjl-btn-outline's green to the more
+   specific `.pjl-crm-body a { color: inherit }` reset, so a link-button
+   and a real <button> sitting in the same row don't match. Restore it.
+   Scoped to .settings-actions — anchor-buttons elsewhere are untouched. */
+.settings-actions a.pjl-btn-outline { color: var(--pjl-green, #1B4D2E); }
 @media (min-width: 640px) {
   .settings-actions .pjl-btn { flex: 0 1 auto; }
 }
