@@ -22,14 +22,54 @@
 (function (global) {
   "use strict";
 
-  // The two labels buildTranscript() writes. The extra aliases cost
-  // nothing and keep older or hand-pasted transcripts readable.
-  var SPEAKERS = [
-    { match: /^Patrick \(AI\)\s*:\s*/, role: "ai", who: "Patrick (AI)" },
-    { match: /^Customer\s*:\s*/, role: "customer", who: "Customer" },
-    { match: /^(?:Assistant|AI)\s*:\s*/, role: "ai", who: "Patrick (AI)" },
-    { match: /^(?:User|Visitor)\s*:\s*/, role: "customer", who: "Customer" }
-  ];
+  // Speaker labels. buildTranscript() writes exactly two: "Customer" and
+  // "Patrick (AI)". The aliases cost nothing and keep an older or
+  // hand-pasted transcript readable.
+  //
+  // CRITICAL — why these are scanned ANYWHERE, not only at a line start:
+  // every transcript is stored through server.js normalizeString(), whose
+  // `.replace(/\s+/g, " ")` collapses ALL whitespace, newlines included. A
+  // transcript stored before that was fixed arrives here as ONE unbroken line:
+  //
+  //   "Patrick (AI): Hey, I'm Patrick… Customer: zone 4 is dead Patrick (AI): …"
+  //
+  // The blank lines buildTranscript() puts between turns do not survive the
+  // write. Splitting on them recovers nothing and returns the whole
+  // conversation as a single turn — exactly the wall of text this module
+  // exists to undo. The labels are the only turn boundary that reaches
+  // storage, so the labels are what we split on.
+  //
+  // The write path now preserves newlines (normalizeTranscriptBody), so new
+  // transcripts keep their paragraph structure — but every transcript stored
+  // before that fix is flat, and those must stay readable. Splitting on
+  // labels handles both: paragraphs within a turn are recovered separately
+  // below, and are simply absent in the flat case.
+  //
+  // Tradeoff: a customer who literally types "Customer: " mid-message gets a
+  // false turn break. Rare, cosmetic, and the "Plain text" toggle always
+  // shows the unmodified string.
+  var CANONICAL_LABELS = "Customer|Patrick \\(AI\\)";
+  var ALIAS_LABELS = "Assistant|AI|User|Visitor";
+
+  function roleFor(label) {
+    return /^(?:Customer|User|Visitor)$/.test(label) ? "customer" : "ai";
+  }
+
+  // Locate every speaker label. `anchored` restricts matches to the start of
+  // a line — used only for the aliases, where a bare "AI:" or "User:"
+  // mid-sentence is likelier to be prose than a real turn.
+  function findTurnStarts(text, labelPattern, anchored) {
+    var prefix = anchored ? "(?:^|\\n)[ \\t]*" : "(?:^|\\s)";
+    var re = new RegExp(prefix + "(" + labelPattern + ")[ \\t]*:[ \\t]*", "g");
+    var hits = [];
+    var m;
+    while ((m = re.exec(text)) !== null) {
+      hits.push({ label: m[1], turnStart: m.index, bodyStart: m.index + m[0].length });
+      // Resume right after the label so two adjacent turns both match.
+      re.lastIndex = m.index + m[0].length;
+    }
+    return hits;
+  }
 
   // "[attached 2 photos] " prefix written by buildTranscript for
   // multimodal customer messages.
@@ -115,46 +155,44 @@
   }
 
   // ---- Parsing -------------------------------------------------
-  // Split on blank lines, then decide per block: does it open with a
-  // speaker label (new turn) or not (a following paragraph of the turn
-  // already in progress)? That second case matters — the AI's replies
-  // routinely contain their own blank lines, and splitting naively on
-  // "\n\n" would shred one reply into several fake turns.
+  // Split the stored string into turns at the speaker labels, then recover
+  // paragraphs inside each turn from any blank lines that survived. See the
+  // note above for why labels — not newlines — are the split.
   function parse(raw) {
     var text = String(raw == null ? "" : raw).replace(/\r\n?/g, "\n").trim();
-    if (!text) return { turns: [], recognized: false, counts: { customer: 0, ai: 0, total: 0 } };
+    var empty = { turns: [], recognized: false, counts: { customer: 0, ai: 0, total: 0 } };
+    if (!text) return empty;
 
-    var blocks = text.split(/\n{2,}/);
+    var hits = findTurnStarts(text, CANONICAL_LABELS, false);
+    if (!hits.length) hits = findTurnStarts(text, ALIAS_LABELS, true);
+    if (!hits.length) return empty;
+
     var turns = [];
-    var recognized = false;
 
-    for (var i = 0; i < blocks.length; i++) {
-      var block = blocks[i];
-      if (!block.trim()) continue;
-      var speaker = null;
-      for (var s = 0; s < SPEAKERS.length; s++) {
-        if (SPEAKERS[s].match.test(block)) { speaker = SPEAKERS[s]; break; }
-      }
-      if (speaker) {
-        recognized = true;
-        turns.push({
-          role: speaker.role,
-          who: speaker.who,
-          attachments: 0,
-          paragraphs: [block.replace(speaker.match, "")]
-        });
-      } else if (turns.length) {
-        turns[turns.length - 1].paragraphs.push(block);
-      } else {
-        // Text before any speaker label — keep it rather than drop it.
-        turns.push({ role: "unknown", who: "Transcript", attachments: 0, paragraphs: [block] });
-      }
+    // Anything before the first label — shouldn't happen, but keep it rather
+    // than silently drop part of the conversation.
+    var preamble = text.slice(0, hits[0].turnStart).trim();
+    if (preamble) {
+      turns.push({ role: "unknown", who: "Transcript", attachments: 0, paragraphs: [preamble] });
+    }
+
+    for (var i = 0; i < hits.length; i++) {
+      var end = (i + 1 < hits.length) ? hits[i + 1].turnStart : text.length;
+      var body = text.slice(hits[i].bodyStart, end).trim();
+      var role = roleFor(hits[i].label);
+      turns.push({
+        role: role,
+        who: role === "customer" ? "Customer" : "Patrick (AI)",
+        attachments: 0,
+        // Blank lines within a turn are real paragraphs when the write path
+        // preserved them; a flat legacy transcript simply yields one.
+        paragraphs: body.split(/\n{2,}/)
+      });
     }
 
     var counts = { customer: 0, ai: 0, total: 0 };
     for (var t = 0; t < turns.length; t++) {
       var turn = turns[t];
-      // Lift the photo marker out of the text into its own chip.
       if (turn.paragraphs.length) {
         var first = turn.paragraphs[0];
         var att = first.match(ATTACHMENT_RE);
@@ -163,14 +201,15 @@
           turn.paragraphs[0] = first.replace(ATTACHMENT_RE, "");
         }
       }
-      turn.paragraphs = turn.paragraphs.filter(function (p) { return p.trim().length > 0; });
+      turn.paragraphs = turn.paragraphs.filter(function (para) { return para.trim().length > 0; });
       if (turn.role === "customer") counts.customer++;
       else if (turn.role === "ai") counts.ai++;
       counts.total++;
     }
 
-    return { turns: turns, recognized: recognized, counts: counts };
+    return { turns: turns, recognized: true, counts: counts };
   }
+
 
   // ---- Rendering -----------------------------------------------
 
@@ -220,19 +259,21 @@
     var wrap = document.createElement("div");
     wrap.className = "pjl-convo";
 
+    // No turns can mean two different things, and conflating them would hide
+    // real text behind an "empty" message: either the transcript is genuinely
+    // empty, or it has content we couldn't find a speaker label in. The second
+    // case must still show every word.
     if (!parsed.turns.length) {
-      var empty = document.createElement("div");
-      empty.className = "pjl-convo-empty";
-      empty.textContent = "(no transcript recorded for this chat)";
-      wrap.appendChild(empty);
-      return wrap;
-    }
-
-    if (!parsed.recognized) {
-      var plain = document.createElement("div");
-      plain.className = "pjl-convo-plain";
-      plain.textContent = String(raw || "");
-      wrap.appendChild(plain);
+      var text = String(raw == null ? "" : raw).trim();
+      var node = document.createElement("div");
+      if (text) {
+        node.className = "pjl-convo-plain";
+        node.textContent = text;
+      } else {
+        node.className = "pjl-convo-empty";
+        node.textContent = "(no transcript recorded for this chat)";
+      }
+      wrap.appendChild(node);
       return wrap;
     }
 
@@ -258,7 +299,10 @@
     if (parsed.turns.length) {
       return parsed.turns[0].paragraphs.join(" ").replace(/\s+/g, " ").trim();
     }
-    return "";
+    // No speaker labels at all. That is the NORMAL case for the list preview:
+    // the server already extracted the customer's line, so it arrives here as
+    // bare text. Return it rather than blanking the row.
+    return String(raw == null ? "" : raw).replace(/\s+/g, " ").trim();
   }
 
   global.PJLTranscript = { parse: parse, render: render, buildPreview: buildPreview };
