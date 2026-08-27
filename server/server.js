@@ -88,6 +88,7 @@ const antiBot = require("./lib/anti-bot");
 const bulkActions = require("./lib/bulk-actions");
 const { sendCustomerLoginLink, sendAdminPasswordResetLink } = require("./lib/notify-customer");
 const mailerLog = require("./lib/mailer-log");
+const territoryExport = require("./lib/territory-export");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
 // alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
@@ -936,6 +937,12 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/admin/trash/")) return "admin";
   // Email-health view (JOB-008) — admin-cookie gated, admin only.
   if (pathname === "/api/admin/email-health") return "admin";
+  // Territory export download — ADMIN ONLY. De-identified, but it is still
+  // customer geography (municipality + 2-decimal coordinates for every live
+  // property). It must never be publicly reachable, and it is not a field
+  // tool, so techs don't get it either. The route also calls requireAdmin
+  // directly — the gate is the fence, the route check is the lock.
+  if (pathname === "/api/admin/territory-export") return "admin";
   // WO unlock / re-lock — ADMIN ONLY, deliberately above the generic
   // "/api/work-orders" → "user" rule further down (first match wins, and
   // that rule would otherwise hand this to techs too). Overriding a
@@ -5816,6 +5823,51 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, ...summary });
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: error?.message || "Email health read failed." });
+    }
+  }
+
+  // GET /api/admin/territory-export — the fall-closing territory export as a
+  // browser download. Same payload the CLI at territory-export-corrected.js
+  // prints; both call server/lib/territory-export.js, so they cannot drift.
+  // Exists because running the CLI needs shell access to the Render instance,
+  // which Patrick doesn't have — this is a link he can tap from his phone.
+  //
+  // READ-ONLY. buildTerritoryExport() only ever readFile()s properties.json
+  // and customers.json; it deliberately avoids lib/properties, whose
+  // readAll() can persist id/code backfills. Nothing here writes to
+  // server/data/.
+  //
+  // ADMIN ONLY, twice over: needsAuth() maps this path to "admin" (above)
+  // and the route re-checks. De-identified is not public — it is still
+  // every live property's municipality and rough location.
+  //
+  // ?year=YYYY selects the season year for the per-season opt-out flag,
+  // matching the CLI's --year. Omitted → current UTC year.
+  if (pathname === "/api/admin/territory-export" && req.method === "GET") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const yearParam = new URL(req.url, baseUrlFromReq(req)).searchParams.get("year");
+      const payload = await territoryExport.buildTerritoryExport({
+        year: yearParam === null || yearParam === "" ? undefined : Number(yearParam)
+      });
+      const body = Buffer.from(JSON.stringify(payload, null, 2) + "\n", "utf8");
+      res.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "content-disposition": `attachment; filename="${territoryExport.exportFilename()}"`,
+        "content-length": body.length,
+        "cache-control": "no-store"
+      });
+      res.end(body);
+      return;
+    } catch (error) {
+      // A missing properties.json is the expected failure on any box that
+      // isn't holding live data — say so plainly rather than "500".
+      console.error("[territory-export] failed:", error?.message || error);
+      return sendJson(res, 500, {
+        ok: false,
+        errors: [error?.message || "Territory export failed."]
+      });
     }
   }
 
