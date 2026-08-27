@@ -82,6 +82,16 @@
 
     <section class="properties-toolbar">
       <input type="search" id="propertySearch" placeholder="Search by customer name, email, or address…">
+      <label class="crm-sort">
+        <span>Sort</span>
+        <select id="propertySort">
+          <option value="customer-asc">Customer A–Z</option>
+          <option value="customer-desc">Customer Z–A</option>
+          <option value="town-asc">Town A–Z</option>
+          <option value="town-desc">Town Z–A</option>
+          <option value="address-asc">Address A–Z</option>
+        </select>
+      </label>
       <span class="properties-count" id="propertiesCount">—</span>
       <button type="button" class="pjl-btn pjl-btn-outline" id="selectToggle" aria-pressed="false">Select</button>
       <a class="pjl-btn pjl-btn-primary" href="/admin/properties/import">Import customers →</a>
@@ -122,6 +132,7 @@
     </div>
   </div>
 
+  <script src="/crm/crm-sort.js"></script>
   <script src="/crm/bulk-toast.js"></script>
   <script src="/crm/bulk-modal.js"></script>
   <script src="/crm/bulk-selection.js"></script>

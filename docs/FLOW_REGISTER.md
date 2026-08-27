@@ -31,6 +31,16 @@ leaves `invoices.json` for the tombstone log, so any invoice reference is live a
 blocks. Cover: `scripts/test-customer-delete-trashed.mjs` (35 assertions, in
 `build:check`).
 
+**2026-08-27 (Territory export as an admin download):** `GET /api/admin/territory-export`
+opened and registered under **INF — Admin data exports** (Part 1). The fall-closing
+territory export existed only as a repo-root CLI, so producing one needed shell access to
+the Render instance. It is now a link on `/admin/settings` as well. **No PASS flow touched**
+— a new path, a new lib and a new card; no existing route, payload or catalog changed, and
+nothing in `stripe.js`, `pay.js` or any payment route moves (FLOW-23's invariant). The
+superseded `territory-export.js` was deleted (its own replacement documents three ways it
+silently miscounts). Cover: `scripts/test-territory-export.mjs` (100 assertions, in
+`build:check`).
+
 **2026-08-27 (Stale CRM assets):** Follow-up to CRM-16, found on Patrick's first live
 attempt. The fix deployed and the delete still refused: CRM **HTML** is `no-store` but
 `/crm/*.js` was `public, max-age=30` with no validators, so the page paired fresh markup
@@ -42,6 +52,23 @@ carries a `?v=2` buster for copies already cached, and a confirmed delete that c
 refused now says the confirmation didn't reach the server rather than repeating it.
 `tech-sw.js` keeps `no-store`; public-site assets keep `max-age=30`; the service worker's
 own versioned precache is untouched.
+
+**2026-08-27 (CRM index sorting):** The customers and properties indexes gained a sort
+control — name/customer A–Z and Z–A, town A–Z and Z–A, plus the customers list's previous
+recently-active order, kept as an option. **Both now default to alphabetical:** the indexes
+are read as directories ("where is Vivian G"), and recency only helps when you already know
+someone was touched lately. The choice is remembered per page in localStorage. Town is
+DERIVED, not stored — properties carry one free-text `address`, so `lib/format.js`
+`townFromAddress()` reads it and `/api/properties` + `/api/customers` decorate their
+payloads (`town`, and `towns` on a customer, whose towns come from their properties since
+a customer has no address of their own — Hard Rule #10). Additive response fields only; no
+existing field changed meaning and no PASS flow is touched. `townFromAddress` splits on
+commas rather than reusing `parseCanadianAddress`'s street-suffix split, which knows "St"
+and "Blvd" but not "Rue", "Gate", "Grove" or "Green" — those addresses came back with no
+town at all. An address it can't read sorts under "no town" rather than guessing. Cover:
+`scripts/test-crm-sorting.mjs` (58 assertions, in `build:check`), plus a headless-Chromium
+walk of both pages (default order, every sort option, persistence across reload, sort with
+an active search, and 390px with no horizontal overflow).
 
 **2026-08-27 (AI chat transcripts — conversation read-back):** Read-side only. A chat is
 stored by `js/chat-widget.js` `buildTranscript()` as ONE flat string — `Customer: …` /
@@ -152,6 +179,56 @@ digest-limited (max one per hour) SMS alert via the existing Twilio plumbing.
 | INF-02 | **High** | **Single point of failure.** All customer email — login links, quote notifications, invoices, receipts — depends on one Workspace mailbox and its app password. Password rotation, 2FA change, revoked app password, or a Google flag stops all customer email at once. **Phase one complete — failures visible (JOB-008, 2026-08-03):** every send attempt lands in the ledger (`server/lib/mailer-log.js` → `server/data/email-log.json`, 90 d / 5 000-entry self-pruning), customer-facing failures page Patrick by SMS (one digest per hour), and Admin → Email health shows 7-day sent/failed by kind, recent failures (masked recipients), and the last-successful-send timestamp overall + per kind — a total outage no longer looks like a quiet day. Controlled-failure acceptance steps 2–4 run **locally with test env vars** per Patrick's 2026-08-03 ruling (no deliberate outage window on production); recorded as locally verified in the JOB-008 file. Stays open until phase two resolves the single-transport risk (INF-01 / send-as alias, transport resilience). |
 | INF-03 | Low | DMARC is `p=NONE` — monitoring only, not enforcing. No spoofing protection. |
 | INF-04 | Low | Workspace SMTP has a daily send cap. Not a constraint now, but a known ceiling before any bulk/seasonal sending. |
+
+## INF — Admin data exports
+
+Read-only, admin-gated surfaces that hand Patrick a file. Not customer-facing: nothing
+here sends, charges, schedules or writes. Listed so a new one is registered rather than
+appearing unannounced.
+
+**Territory export (2026-08-27):** `GET /api/admin/territory-export` — the fall-closing
+territory export as a browser download. Same payload the CLI at
+`territory-export-corrected.js` prints; both call `server/lib/territory-export.js`, so the
+two cannot drift. Opened because running the CLI needs shell access to the Render instance,
+which Patrick does not have. Reachable from **Admin → Settings → Territory export**
+("Download territory export (JSON)"). `?year=YYYY` selects the season year for the
+per-season opt-out flag, matching the CLI's `--year`; omitted, it is the current UTC year.
+
+- **Gate — ADMIN ONLY, twice over.** `needsAuth()` maps the path to `"admin"`, and the
+  route re-checks with `requireAdmin`. Verified against a live local server, not read
+  off the middleware: no cookie → **401**; a forged/tampered cookie → **401**; a signed-in
+  **tech** → **403**; a signed-in admin → **200**. De-identified is not public — the
+  payload is still every live property's municipality and rough location.
+- **Read-only.** `buildTerritoryExport()` only ever `readFile`s `properties.json` and
+  `customers.json`. It deliberately does **not** require `server/lib/properties`, whose
+  `readAll()` calls `ensureFile()` and can persist one-time id/code backfills — a write.
+  Verified by checksumming every file in `server/data/` before and after four exports:
+  byte-identical, nothing created.
+- **The three correctness guards are preserved exactly** — they are the reason the
+  corrected version exists, and each is asserted through the HTTP response, not just in
+  the lib: (1) soft-deleted and archived properties are excluded, matching
+  `properties.list()`; (2) depot pins (`PJL_BASE`, 44.0592 / -79.4613, or
+  `coords.source === "pjl-base"`) are reported as missing coordinates and their
+  "Newmarket, ON, Canada" label suppressed, not counted as a downtown cluster; (3)
+  xlsx-imported string coordinates are coerced, not dropped as missing.
+- **Privacy unchanged from the CLI.** No names, emails, phone numbers or street
+  addresses. Property ids are replaced by a per-run salted pseudonym (so two exports do
+  not line up), and coordinates are rounded to 2 decimals (~1.1 km).
+- **Response.** `Content-Type: application/json; charset=utf-8`,
+  `Content-Disposition: attachment; filename="territory-export-YYYY-MM-DD.json"`,
+  `Cache-Control: no-store`.
+- **Cover:** `scripts/test-territory-export.mjs` (100 assertions, in `build:check`),
+  including source guards that fail the build if the path leaves the admin gate, if the
+  route stops calling `requireAdmin`, if the response stops being an attachment, if the
+  lib acquires a write call, or if the CLI grows its own copy of any guard.
+- **The superseded `territory-export.js` was deleted.** Its own replacement documents
+  three ways it silently produces wrong numbers, and it sat next to the corrected file
+  under the shorter, more obvious name.
+
+**What still needs Patrick — not yet walked:** sign in, go to **Settings**, tap
+**Download territory export (JSON)**, and confirm a file named
+`territory-export-<today>.json` lands on the device and opens as JSON. That is the whole
+acceptance test; nothing here writes, so there is nothing to undo if it misbehaves.
 
 ---
 

@@ -312,6 +312,27 @@
           </table>
         </div>
       </section>
+
+      <!-- Territory export download. Same JSON the CLI at
+           territory-export-corrected.js prints — both go through
+           server/lib/territory-export.js — but reachable from a browser,
+           which the CLI is not without shell access to Render.
+           Admin-only: GET /api/admin/territory-export is gated twice
+           (needsAuth "admin" + requireAdmin in the route). A plain <a>
+           download, matching the "Export CSV" link on /admin. -->
+      <section class="settings-card" id="territoryExportCard">
+        <h2>Territory export</h2>
+        <p class="settings-help">
+          Downloads a de-identified JSON summary of every live property — rough
+          location, municipality, zone count, fall-closing history — for offline
+          territory planning. No names, emails, phone numbers or street
+          addresses; coordinates are rounded to about a kilometre. Read-only:
+          it changes nothing. <strong>Admin only.</strong>
+        </p>
+        <div class="settings-actions">
+          <a class="pjl-btn pjl-btn-outline" id="territoryExportLink" href="/api/admin/territory-export" download>Download territory export (JSON)</a>
+        </div>
+      </section>
     </main>
   </div>
 
