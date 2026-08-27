@@ -38,7 +38,7 @@ the Render instance. It is now a link on `/admin/settings` as well. **No PASS fl
 — a new path, a new lib and a new card; no existing route, payload or catalog changed, and
 nothing in `stripe.js`, `pay.js` or any payment route moves (FLOW-23's invariant). The
 superseded `territory-export.js` was deleted (its own replacement documents three ways it
-silently miscounts). Cover: `scripts/test-territory-export.mjs` (97 assertions, in
+silently miscounts). Cover: `scripts/test-territory-export.mjs` (100 assertions, in
 `build:check`).
 
 **2026-08-27 (Stale CRM assets):** Follow-up to CRM-16, found on Patrick's first live
@@ -193,7 +193,7 @@ per-season opt-out flag, matching the CLI's `--year`; omitted, it is the current
 - **Response.** `Content-Type: application/json; charset=utf-8`,
   `Content-Disposition: attachment; filename="territory-export-YYYY-MM-DD.json"`,
   `Cache-Control: no-store`.
-- **Cover:** `scripts/test-territory-export.mjs` (97 assertions, in `build:check`),
+- **Cover:** `scripts/test-territory-export.mjs` (100 assertions, in `build:check`),
   including source guards that fail the build if the path leaves the admin gate, if the
   route stops calling `requireAdmin`, if the response stops being an attachment, if the
   lib acquires a write call, or if the CLI grows its own copy of any guard.

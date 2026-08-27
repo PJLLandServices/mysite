@@ -258,11 +258,24 @@ ok("everHadFallClosing counts the property once", out.summary.everHadFallClosing
 
 // ---- Privacy ----------------------------------------------------------
 
-const serialized = JSON.stringify(out);
+// Scan the payload with the pseudonyms masked out. A ref is 8 chars of a
+// salted SHA-256, so it is random hex on every run — and a 3-digit street
+// number is three hex digits, which a ref hits by chance often enough to
+// make an unmasked scan flaky (it went green locally and red in CI on the
+// first push). Masking is only sound because a ref cannot itself carry a
+// leak: it is a digest, not a copy of any field. That is asserted first,
+// so the mask can never hide a real one.
+ok("every ref is lowercase hex — a digest, not copied data, so masking it is safe",
+  out.properties.every((r) => /^[0-9a-f]{8}$/.test(r.ref)));
+ok("no ref equals any identifying value",
+  !out.properties.some((r) => Object.values(SECRETS).includes(r.ref)));
+
+const scannable = JSON.stringify(out, (key, value) => (key === "ref" ? "<masked>" : value));
 for (const [label, value] of Object.entries(SECRETS)) {
-  ok(`no ${label} in the output`, !serialized.includes(value));
+  ok(`no ${label} in the output`, !scannable.includes(value));
 }
-ok("no street number from the fixture address in the output", !serialized.includes("417"));
+ok("no street number from the fixture address in the output", !scannable.includes("417"));
+ok("no fixture street name in the output", !scannable.includes("Bayview Ridge"));
 ok("the municipality label survives", out.properties.some((r) => r.municipality === "Aurora"));
 ok("coordinates are rounded to 2 decimals",
   out.properties.every((r) => r.lat === null || Number(r.lat.toFixed(2)) === r.lat));
@@ -270,8 +283,11 @@ ok("no row carries a raw property id",
   !out.properties.some((r) => Object.values(r).some((v) => typeof v === "string" && v.startsWith("p-"))));
 
 const second = await territory.buildTerritoryExport({ dataDir: DATA_DIR, year: 2026 });
+// Compare the whole list, not just row 0: one row matching by chance is a
+// 1-in-4-billion event, but "no row anywhere differs" is not something two
+// independently salted runs can produce.
 ok("the pseudonym salt is per-run — refs differ between two exports",
-  second.properties[0].ref !== out.properties[0].ref);
+  second.properties.some((r, i) => r.ref !== out.properties[i].ref));
 
 // ---- Filename ---------------------------------------------------------
 
