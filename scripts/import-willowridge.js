@@ -4,17 +4,30 @@
 // 14 properties, from Patrick's 2024 site list.
 //
 // Usage:
-//   node scripts/import-willowridge.js            (DRY RUN — no writes, cache-only geocode)
-//   node scripts/import-willowridge.js --apply
+//   node scripts/import-willowridge.js --geocode-only   (PILOT — live geocode, no records)
+//   node scripts/import-willowridge.js                  (DRY RUN — cache only, no network)
+//   node scripts/import-willowridge.js --apply          (creates the records)
 //
-// DRY RUN resolves coordinates from the on-disk geocode cache ONLY. It makes
-// no network calls, spends no API quota, and writes nothing — so the address
-// list and the per-property plan can be checked before committing. Anything
-// not already cached reports as "would call API".
+// THREE MODES, in the order you'd use them:
+//
+// --geocode-only is the PILOT. It runs all 14 addresses through the REAL
+// geocoder — the same geocode() the import and the booking form use — and
+// prints what comes back for each: the coordinates, the address Google
+// resolved them to, and whether the answer was already cached. It creates NO
+// customer and NO properties. Its only side effect is the geocode cache
+// (geocode-cache.json), which is exactly what you want: every address proved
+// here is then free and instant when the real import runs. This is the mode
+// that answers "does the geocoder actually work on these addresses".
+//
+// DRY RUN resolves from the on-disk geocode cache ONLY. No network calls, no
+// API quota, no writes of any kind. Run it AFTER the pilot to see the full
+// per-property plan — every field that would be written — using the
+// coordinates the pilot already proved. Anything not yet cached shows as
+// "not cached" rather than being looked up.
 //
 // --apply backs up customers.json + properties.json + geocode-cache.json to
 //   server/data/BACKUP-<UTC stamp>-willowridge/
-// before touching anything.
+// before touching anything, then creates the customer and the 14 properties.
 //
 // WHY A SCRIPT AND NOT THE XLSX IMPORT UI:
 // properties.bulkUpsert() matches an incoming row to an existing property by
@@ -63,6 +76,11 @@ const properties = require(path.join(ROOT, "server", "lib", "properties"));
 const { geocode, isConfigured, PJL_BASE } = require(path.join(ROOT, "server", "lib", "geocode"));
 
 const APPLY = process.argv.includes("--apply");
+// The pilot: exercise the real geocoder, create nothing.
+const GEOCODE_ONLY = process.argv.includes("--geocode-only");
+// Only these two modes may touch the network. A bare dry run is cache-only,
+// so it can be run freely without spending quota or waiting on the API.
+const LIVE_GEOCODE = APPLY || GEOCODE_ONLY;
 
 const CUSTOMER_NAME = "Willowridge Landscaping Group Homes";
 
@@ -245,6 +263,23 @@ function normalizeAddress(value) {
   return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+// Cache-only lookup for the dry run. geocode() consults its cache first but
+// falls through to a live API call on a miss, so calling it would make the
+// "no network" promise false the moment an address isn't cached. Reading the
+// cache file directly keeps the dry run genuinely offline. Returns a
+// geocode()-shaped object so the caller's handling is identical, or null.
+// The cache key is geocode.js's normalizeKey — the same transform as above.
+function cacheLookup(address) {
+  let cache;
+  try {
+    cache = JSON.parse(fsSync.readFileSync(path.join(DATA, "geocode-cache.json"), "utf8") || "{}");
+  } catch {
+    return null;
+  }
+  const hit = cache[normalizeAddress(address)];
+  return hit ? { ok: true, fromCache: true, coords: hit } : null;
+}
+
 function totalValves(boxes) {
   // null counts are UNKNOWN, not zero — a total that silently treats them as
   // zero would understate the site. Report the known sum and the unknown
@@ -275,10 +310,14 @@ async function backup() {
 // ---- Main ------------------------------------------------------------
 
 async function main() {
-  console.log(`\n  Willowridge import — ${APPLY ? "APPLY (writes)" : "DRY RUN (no writes)"}\n`);
+  const mode = GEOCODE_ONLY
+    ? "GEOCODE PILOT (live lookups, creates nothing)"
+    : APPLY ? "APPLY (writes)" : "DRY RUN (cache only, no network, no writes)";
+  console.log(`\n  Willowridge import — ${mode}\n`);
 
   // ---- Preflight ------------------------------------------------------
-  if (!fsSync.existsSync(PROPERTIES_PATH) || !fsSync.existsSync(CUSTOMERS_PATH)) {
+  // The pilot reads no customer data, so it doesn't need the store to exist.
+  if (!GEOCODE_ONLY && (!fsSync.existsSync(PROPERTIES_PATH) || !fsSync.existsSync(CUSTOMERS_PATH))) {
     console.error(`  ABORT — customers.json / properties.json not found in ${DATA}`);
     console.error("  server/data/* is gitignored; run this where the live data lives.\n");
     process.exit(1);
@@ -287,8 +326,64 @@ async function main() {
   const keyPresent = isConfigured();
   if (!keyPresent) {
     console.warn("  ⚠️  GOOGLE_MAPS_SERVER_KEY is NOT set.");
+    if (GEOCODE_ONLY) {
+      // Without a key geocode() answers PJL_BASE for everything, which would
+      // make the pilot look like a total failure for an environmental reason.
+      // Say so plainly instead of printing 14 misleading rows.
+      console.warn("     The pilot cannot test anything without it — geocode() short-circuits");
+      console.warn("     to the depot fallback for every address. Run this where the key is set.\n");
+      process.exit(1);
+    }
     console.warn("     Nothing resolves except from the existing cache; uncached addresses");
     console.warn("     are written with coords: null rather than the depot pin.\n");
+  }
+
+  // ---- Pilot: prove the geocoder, write nothing ------------------------
+  if (GEOCODE_ONLY) {
+    console.log(`  Running ${SITES.length} addresses through geocode() — no records created.\n`);
+    let good = 0, depot = 0, failed = 0, cached = 0;
+    for (const site of SITES) {
+      let geo = null;
+      try {
+        geo = await geocode(site.address);
+      } catch (err) {
+        console.log(`  ✗  ${site.address}`);
+        console.log(`     threw: ${err?.message || err}\n`);
+        failed += 1;
+        continue;
+      }
+      const fromCache = geo?.fromCache === true;
+      if (fromCache) cached += 1;
+      if (isRealResult(geo)) {
+        const c = geo.coords;
+        const onDepot = nearDepot(c);
+        // A real API answer that still lands on the depot is the dangerous
+        // case — it passes isRealResult but is almost certainly wrong.
+        console.log(`  ${onDepot ? "⚠️ " : "✓ "} ${site.address}`);
+        console.log(`     ${c.lat}, ${c.lng}${fromCache ? "   (from cache)" : ""}`);
+        console.log(`     Google says: ${c.formattedAddress}`);
+        if (onDepot) console.log("     ⚠️  WITHIN 500m OF THE DEPOT PIN — treat as a failed geocode");
+        console.log("");
+        if (onDepot) depot += 1; else good += 1;
+      } else {
+        console.log(`  ✗  ${site.address}`);
+        console.log(`     no usable result (${geo?.reason || "depot fallback"}) — would be written as coords: null\n`);
+        failed += 1;
+      }
+      if (!fromCache) await sleep(RATE_LIMIT_MS);
+    }
+    console.log(`  ${good} resolved · ${depot} on the depot pin · ${failed} failed`);
+    console.log(`  (${cached} of ${SITES.length} were already cached)\n`);
+    if (good === SITES.length) {
+      console.log("  Geocoder is working on all 14. Those answers are now cached, so the");
+      console.log("  real import will reuse them — no second round of API calls.\n");
+      console.log("  Next:  node scripts/import-willowridge.js          (see the full plan)");
+      console.log("         node scripts/import-willowridge.js --apply  (create the records)\n");
+    } else {
+      console.log("  Not all addresses resolved. Nothing was created — paste this output");
+      console.log("  and we can look at the ones that failed before importing anything.\n");
+    }
+    return;
   }
 
   // Existing customer? Reuse rather than creating a second Willowridge.
@@ -332,12 +427,14 @@ async function main() {
   const resolved = [];
   for (const site of planned) {
     let geo = null;
-    if (APPLY || keyPresent) {
+    if (LIVE_GEOCODE) {
       try {
         geo = await geocode(site.address);
       } catch (err) {
         console.warn(`  geocode threw for ${site.address}: ${err?.message || err}`);
       }
+    } else {
+      geo = cacheLookup(site.address);
     }
     const ok = isRealResult(geo);
     const coords = ok
