@@ -20466,6 +20466,20 @@ async function serveStatic(req, res, pathname) {
       // clients know we can serve partial content.
       "accept-ranges": "bytes"
     };
+    // CRM assets revalidate on every load. The HTML pages are no-store, so
+    // a 30-second window where fresh markup can pair with a cached script is
+    // enough to produce a page that looks deployed and behaves like it isn't:
+    // the CRM-16 delete fix landed and the customer page still ran the old
+    // customer.js against the new server's 409, printing the raw error
+    // instead of raising the confirm. The same class is documented up and
+    // down tech-sw.js ("ran old JS against new HTML"). These are a handful of
+    // internal-user files (customer.js 40 KB, crm.css 86 KB) on an office
+    // connection — correctness is worth more than the 30 seconds of caching.
+    // Public-site assets keep max-age=30, untouched.
+    if (pathname.startsWith("/crm/") && (ext === ".js" || ext === ".css")) {
+      headers["cache-control"] = "no-cache";
+    }
+
     // ServiceWorker scope override: tech-sw.js is served from /crm/ but
     // needs to control /admin/work-order/*/tech URLs. The Service-Worker-
     // Allowed header lets it claim a wider scope than its serving path.

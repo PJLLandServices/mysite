@@ -31,6 +31,18 @@ leaves `invoices.json` for the tombstone log, so any invoice reference is live a
 blocks. Cover: `scripts/test-customer-delete-trashed.mjs` (35 assertions, in
 `build:check`).
 
+**2026-08-27 (Stale CRM assets):** Follow-up to CRM-16, found on Patrick's first live
+attempt. The fix deployed and the delete still refused: CRM **HTML** is `no-store` but
+`/crm/*.js` was `public, max-age=30` with no validators, so the page paired fresh markup
+with a cached `customer.js` that had no branch for the new 409 and printed its raw text
+instead of raising the confirm — the "old JS against new HTML" class documented up and down
+`tech-sw.js`, now hit on the desktop CRM. `serveStatic` serves `/crm/*.js` and `/crm/*.css`
+`no-cache` (revalidate every load; ~40–90 KB files, internal users only), `customer.js`
+carries a `?v=2` buster for copies already cached, and a confirmed delete that comes back
+refused now says the confirmation didn't reach the server rather than repeating it.
+`tech-sw.js` keeps `no-store`; public-site assets keep `max-age=30`; the service worker's
+own versioned precache is untouched.
+
 **2026-08-26 (Unwanted page scrolls):** Client-side only. `scrollIntoView({ block:
 "start" | "center" })` moves the page even when the target is already fully visible, so
 `/book.html`'s step advances and both work-order pages' tap-to-jump handlers lurched on
