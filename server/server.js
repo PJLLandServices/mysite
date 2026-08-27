@@ -166,6 +166,15 @@ const PHOTOS_DIR = path.join(DATA_DIR, "photos");
 const WO_PHOTOS_DIR = path.join(DATA_DIR, "wo-photos");
 const MAX_PHOTOS_PER_LEAD = 5;
 const MAX_PHOTOS_PER_WO = 150;
+// Longest-edge cap for a WO photo as it is STORED. A straight-from-camera
+// JPEG runs 4-12 MB at 4000px+; capped at 2400px it lands around 400-700 KB
+// with no visible loss on a phone, a laptop, or a printed report. 2400 sits
+// deliberately above the 1400px report derivative (lib/wo-report-pdf.js) so
+// that derivative is always downscaling and never upscaling, and it stays
+// generous enough to pinch-zoom a controller display or a nozzle in the
+// admin photo viewer.
+const WO_PHOTO_MAX_EDGE = 2400;
+const WO_PHOTO_QUALITY = 82;
 const MAX_PHOTO_BYTES = 1_500_000; // 1.5 MB per photo after client-side resize (lead intake)
 const QUOTE_POST_MAX_BYTES = 12_000_000; // 12 MB cap for the /api/quotes POST (5 photos × ~1.5MB base64 inflated)
 
@@ -1922,6 +1931,52 @@ async function readPhotoFile(leadId, n) {
   return null;
 }
 
+// Downscale a field photo before it lands on the persistent disk.
+//
+// Re-encodes in the SAME format it arrived as, on purpose: the on-disk
+// extension, the stored mediaType, the serve/delete routes and the report
+// derivative lookup all agree on the format already, and quietly turning a
+// PNG into a JPEG would desync them.
+//
+// HEIC, GIF and PDF pass through untouched — pdfkit can't render HEIC
+// anyway (the report renderer placeholders it), and a customer receipt PDF
+// must stay byte-identical as evidence.
+//
+// Returns null whenever the original should be kept as-is. Any failure is
+// non-fatal by design: storing an oversized photo is a cost problem, but
+// losing a tech's only picture of a cracked backflow is a business problem.
+async function compressWoPhoto(photo) {
+  const type = String(photo?.mediaType || "").toLowerCase();
+  if (!/^image\/(jpeg|png|webp)$/.test(type)) return null;
+  if (!photo.buffer || !photo.buffer.length) return null;
+  try {
+    // rotate() with no argument bakes the camera's own EXIF orientation
+    // into the pixels and drops the tag — it never mirrors or crops, so the
+    // photo still LOOKS identical. Safe to do here: takenAt and geo come
+    // off the client payload (see validatePhotos), not out of EXIF, and the
+    // report derivative's own .rotate() becomes a no-op on the result.
+    const pipeline = sharp(photo.buffer, { failOn: "none" })
+      .rotate()
+      .resize({
+        width: WO_PHOTO_MAX_EDGE,
+        height: WO_PHOTO_MAX_EDGE,
+        fit: "inside",
+        withoutEnlargement: true
+      });
+    let out;
+    if (type === "image/png") out = await pipeline.png({ compressionLevel: 9 }).toBuffer();
+    else if (type === "image/webp") out = await pipeline.webp({ quality: WO_PHOTO_QUALITY }).toBuffer();
+    else out = await pipeline.jpeg({ quality: WO_PHOTO_QUALITY, mozjpeg: true }).toBuffer();
+    // An already-small or already-optimised photo can re-encode LARGER.
+    // Keep whichever is smaller so this can never inflate the disk.
+    if (!out || !out.length || out.length >= photo.buffer.length) return null;
+    return out;
+  } catch (err) {
+    console.warn(`[wo-photo] compress failed, storing original: ${err?.message || err}`);
+    return null;
+  }
+}
+
 // WO photo storage — same shape as lead photos but starting from a
 // caller-supplied baseN so multiple uploads append cleanly without
 // renumbering existing files. Files live at WO_PHOTOS_DIR/<woId>/<n>.<ext>.
@@ -1937,7 +1992,10 @@ async function savePhotosForWorkOrder(woId, photos, now, baseN, context = {}) {
     // filename rides on the meta record + serves as the
     // Content-Disposition value when browsers download the image.
     const onDiskFilename = `${n}.${photos[i].ext}`;
-    await fs.writeFile(path.join(dir, onDiskFilename), photos[i].buffer);
+    const originalBytes = photos[i].buffer.length;
+    const compressed = await compressWoPhoto(photos[i]);
+    const storedBuffer = compressed || photos[i].buffer;
+    await fs.writeFile(path.join(dir, onDiskFilename), storedBuffer);
     const filename = generatePhotoFilename({
       takenAt: photos[i].meta.takenAt,
       propertyCode: context.propertyCode,
@@ -1954,7 +2012,11 @@ async function savePhotosForWorkOrder(woId, photos, now, baseN, context = {}) {
       // §5.3). Older WO photos without a `kind` field default to image
       // in the client renderer (all pre-brief uploads were images).
       kind: photos[i].mediaType === "application/pdf" ? "pdf" : "image",
-      bytes: photos[i].buffer.length,
+      // `bytes` is what is actually on disk. `originalBytes` is only set
+      // when compression changed the file, so the admin UI can show "12.4 MB
+      // -> 0.5 MB" and older records (no such field) still read correctly.
+      bytes: storedBuffer.length,
+      ...(compressed ? { originalBytes } : {}),
       addedAt: now,
       filename,
       ...photos[i].meta
@@ -7044,36 +7106,18 @@ async function handleApi(req, res, pathname) {
       }
     }
     if (req.method === "DELETE") {
-      // Hard-delete. The lib refuses if any LIVE entity still references
-      // this customer; the UI shows that response so Patrick can Merge
-      // first when the customer is linked to real bookings/WOs/etc. Test
-      // data and clean duplicates with no references go straight through.
-      //
-      // Records already in the Trash are the third case (CRM-16): they
-      // don't block, but they can't be left pointing at a deleted
-      // customer either, so the lib asks for an explicit second confirm
-      // and `?purgeTrashed=1` carries it back. The two 409 shapes are
-      // told apart by `code`, not by which key is present.
-      const deleteUrl = new URL(req.url, baseUrlFromReq(req));
-      const purgeTrashed = deleteUrl.searchParams.get("purgeTrashed") === "1";
-      const result = await customers.hardDelete(id, { purgeTrashed });
+      // Hard-delete. The lib refuses if any entity still references this
+      // customer; the UI shows that response so Patrick can Merge first
+      // when the customer is linked to real bookings/WOs/etc. Test data
+      // and clean duplicates with no references go straight through.
+      const result = await customers.hardDelete(id);
       if (!result.ok) {
-        if (result.code === "linked" || result.code === "trashed_only") {
-          return sendJson(res, 409, {
-            ok: false,
-            code: result.code,
-            error: result.error,
-            ...(result.references ? { references: result.references } : {}),
-            ...(result.trashed ? { trashed: result.trashed } : {})
-          });
+        if (result.references) {
+          return sendJson(res, 409, { ok: false, error: result.error, references: result.references });
         }
         return sendJson(res, 404, { ok: false, error: result.error });
       }
-      return sendJson(res, 200, {
-        ok: true,
-        deleted: { id: result.customer.id, name: result.customer.name },
-        purged: result.purged || {}
-      });
+      return sendJson(res, 200, { ok: true, deleted: { id: result.customer.id, name: result.customer.name } });
     }
   }
 
