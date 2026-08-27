@@ -1358,7 +1358,7 @@ function validateLead(payload) {
         // AI-diagnose source carries the chat transcript so Patrick can read
         // what the AI told the customer. Capped at 50K chars (typical chat is
         // ~5K). Empty for non-AI sources.
-        transcript: normalizeString(payload && payload.transcript, 50000)
+        transcript: normalizeTranscriptBody(payload && payload.transcript)
       },
       crm: defaultCrm(now),
       portal: defaultPortal(id, now)
@@ -2132,8 +2132,23 @@ async function writeChats(chats) {
   await fs.writeFile(CHATS_FILE, `${JSON.stringify(chats, null, 2)}\n`, "utf8");
 }
 
-function normalizeTranscriptBody(value) {
-  return normalizeString(value, 50000);
+// A transcript is the one stored string whose LINE STRUCTURE carries meaning:
+// the blank line between turns is what separates one speaker from the next.
+// normalizeString() collapses every run of whitespace to a single space, so
+// routing a transcript through it flattened each conversation into one
+// unbroken line at write time — and no amount of CSS downstream could put the
+// turns back. Keep the newlines; normalise everything else exactly as before.
+// (Transcripts stored before this fix are already flat; crm-transcript.js
+// splits those on the speaker labels instead.)
+const TRANSCRIPT_MAX_CHARS = 50000;
+function normalizeTranscriptBody(value, maxLength = TRANSCRIPT_MAX_CHARS) {
+  return String(value || "")
+    .replace(/\r\n?/g, "\n")        // CRLF/CR -> LF
+    .replace(/[^\S\n]+/g, " ")      // collapse spaces + tabs, keep newlines
+    .replace(/ *\n */g, "\n")       // strip trailing/leading space per line
+    .replace(/\n{3,}/g, "\n\n")     // cap runs of blank lines
+    .trim()
+    .slice(0, maxLength);
 }
 
 // Row preview for the AI Chats dashboard. Every transcript opens with the
@@ -2144,21 +2159,28 @@ function normalizeTranscriptBody(value) {
 // stored transcript is untouched.
 const CHAT_PREVIEW_CHARS = 240;
 function chatPreview(transcript) {
-  const text = String(transcript || "").replace(/\r\n?/g, "\n");
-  for (const block of text.split(/\n{2,}/)) {
-    const marker = block.match(/^Customer\s*:\s*/);
-    if (!marker) continue;
-    const body = block.slice(marker[0].length).replace(/\s+/g, " ").trim();
+  const text = String(transcript || "").replace(/\r\n?/g, "\n").trim();
+  if (!text) return "";
+  // Find the first CUSTOMER turn. Split on the label rather than on a blank
+  // line: transcripts stored before normalizeTranscriptBody kept its newlines
+  // are one flat line, so there are no blank lines left to split on.
+  const label = /(?:^|\s)(Customer|Patrick \(AI\))[ \t]*:[ \t]*/g;
+  const hits = [];
+  let m;
+  while ((m = label.exec(text)) !== null) {
+    hits.push({ who: m[1], start: m.index, bodyStart: m.index + m[0].length });
+    label.lastIndex = m.index + m[0].length;
+  }
+  for (let i = 0; i < hits.length; i++) {
+    if (hits[i].who !== "Customer") continue;
+    const end = (i + 1 < hits.length) ? hits[i + 1].start : text.length;
+    const body = text.slice(hits[i].bodyStart, end).replace(/\s+/g, " ").trim();
     if (body) return body.slice(0, CHAT_PREVIEW_CHARS);
   }
   // No customer turn yet (chat opened, nothing typed) — fall back to the
   // opening line, minus its speaker label.
-  const head = text.split(/\n{2,}/).find((block) => block.trim()) || "";
-  return head
-    .replace(/^(?:Customer|Patrick \(AI\)|Assistant|AI|User|Visitor)\s*:\s*/, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, CHAT_PREVIEW_CHARS);
+  const head = hits.length ? text.slice(hits[0].bodyStart) : text;
+  return head.replace(/\s+/g, " ").trim().slice(0, CHAT_PREVIEW_CHARS);
 }
 
 // Mark / link a chat to a lead once the customer books. Returns updated chat

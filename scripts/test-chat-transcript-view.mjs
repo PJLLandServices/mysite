@@ -87,6 +87,48 @@ const { parse, render, buildPreview } = win.PJLTranscript;
 const GREETING_1 = "Patrick (AI): Hey, I'm Patrick from PJL Land Services 👋";
 const GREETING_2 = "Patrick (AI): Tell me what's going on with your sprinkler system — describe it however feels natural, like you'd tell a neighbour. I'll come back with what's likely happening, what you can try yourself, and an honest read on whether you need a tech.";
 
+// ---- 0. THE FLAT FORMAT — what is actually in the store ---------------
+//
+// This is the case the first version of this feature got wrong. Every
+// transcript is written through a normaliser, and normalizeString()'s
+// `.replace(/\s+/g, " ")` collapsed newlines along with everything else, so
+// a stored transcript is ONE unbroken line with no blank lines left to split
+// on. Parsing by blank line returned the entire conversation as a single
+// turn — one giant bubble, indistinguishable from the wall of text this
+// feature was built to fix. Splitting on the speaker LABELS is what makes
+// the transcripts already in the store readable.
+//
+// normalizeTranscriptBody now preserves newlines, so new transcripts keep
+// their paragraphs; both shapes are pinned below.
+{
+  const flat = [GREETING_1, GREETING_2, "Customer: zone 4 won't come on", "Patrick (AI): Sounds like the valve."]
+    .join("\n\n").replace(/\s+/g, " ");   // exactly what normalizeString did
+  ok("the flat fixture really has no newlines", !flat.includes("\n"));
+
+  const p = parse(flat);
+  eq("flat transcript still splits into four turns", p.turns.length, 4);
+  eq("flat roles in order", p.turns.map((x) => x.role).join(","), "ai,ai,customer,ai");
+  eq("flat customer count", p.counts.customer, 1);
+  eq("flat turn body is clean", p.turns[2].paragraphs[0], "zone 4 won't come on");
+  ok("flat transcript is NOT one giant turn", p.turns.length > 1);
+
+  const root = render(flat);
+  eq("flat transcript renders one bubble per turn", root.find("pjl-convo-bubble").length, 4);
+  eq("and does not fall back to plain", root.find("pjl-convo-plain").length, 0);
+
+  eq("flat preview is the customer's line", buildPreview(flat), "zone 4 won't come on");
+}
+{
+  // A flat transcript whose AI reply had bullets: the list markers survive
+  // the flattening as inline text, so the turn split must still be correct.
+  const flat = ("Customer: my water bill doubled\n\nPatrick (AI): Two suspects:\n\n- a stuck valve\n- a cracked lateral\n\nCheck the meter."
+    + "\n\nCustomer: meter spins with everything off").replace(/\s+/g, " ");
+  const p = parse(flat);
+  eq("flat multi-part reply stays three turns", p.turns.length, 3);
+  eq("flat roles stay correct", p.turns.map((x) => x.role).join(","), "customer,ai,customer");
+  eq("no phantom customer turn", p.counts.customer, 2);
+}
+
 // ---- 1. Turn splitting ------------------------------------------------
 {
   const t = [GREETING_1, GREETING_2, "Customer: zone 4 won't come on", "Patrick (AI): Sounds like the valve."].join("\n\n");
@@ -181,6 +223,12 @@ eq("a colon mid-sentence does not open a turn",
 {
   const t = [GREETING_1, GREETING_2, "Customer: sprinkler head is geysering", "Patrick (AI): ok"].join("\n\n");
   eq("client preview skips the scripted greetings", buildPreview(t), "sprinkler head is geysering");
+  // The dashboard feeds this the server's already-extracted line, which has
+  // no speaker label on it. It must pass through, not come back blank.
+  eq("a label-free preview line passes through",
+    buildPreview("hey the back corner has gone brown"), "hey the back corner has gone brown");
+  eq("a label-free preview collapses whitespace",
+    buildPreview("  zone 4   is\n dead "), "zone 4 is dead");
 }
 
 const serverSrc = fs.readFileSync(path.join(ROOT, "server/server.js"), "utf8");
@@ -206,6 +254,10 @@ if (previewBlock) {
   eq("no customer turn yet falls back to the opening",
     chatPreview(GREETING_1), "Hey, I'm Patrick from PJL Land Services 👋");
   eq("empty transcript previews empty", chatPreview(""), "");
+  // The same flattening trap on the server side.
+  const flatServer = t.replace(/\s+/g, " ");
+  eq("server preview works on a FLAT transcript",
+    chatPreview(flatServer), "sprinkler head is geysering");
   eq("null transcript previews empty", chatPreview(null), "");
   ok("preview is capped", chatPreview(`Customer: ${"x".repeat(900)}`).length === 240);
 }
@@ -267,6 +319,20 @@ if (previewBlock) {
     widget.includes('lines.join("\\n\\n")'));
   ok("the POST upsert still stores the transcript verbatim",
     serverSrc.includes("const transcript = normalizeTranscriptBody(payload.transcript);"));
+
+  // The regression that shipped broken: a transcript normaliser that
+  // collapses newlines destroys the turn boundaries before anything can read
+  // them. normalizeTranscriptBody must keep \n, and must not delegate to
+  // normalizeString (which does not).
+  const bodyFn = serverSrc.match(/function normalizeTranscriptBody\(value[\s\S]*?\n\}/);
+  ok("normalizeTranscriptBody exists", Boolean(bodyFn));
+  if (bodyFn) {
+    ok("it does NOT delegate to the whitespace-collapsing normalizeString",
+      !bodyFn[0].includes("normalizeString"), bodyFn[0]);
+    ok("it preserves newlines", bodyFn[0].includes("[^\\S\\n]"), bodyFn[0]);
+  }
+  ok("the AI-diagnostic lead transcript is no longer flattened",
+    serverSrc.includes("transcript: normalizeTranscriptBody(payload && payload.transcript)"));
 }
 
 // ---- Report -----------------------------------------------------------
