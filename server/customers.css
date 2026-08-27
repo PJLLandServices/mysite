@@ -103,10 +103,13 @@
   border: 0;
   border-radius: 0;
   padding: 10px 14px;
-  /* Three-column flow on desktop: name / contact / status. Stat columns
-     intentionally dropped — they ate horizontal real estate and the
-     brief never asked for them. */
-  grid-template-columns: minmax(160px, 1.3fr) minmax(180px, 1.6fr) auto;
+  /* Four-column flow on desktop: name / contact / town / status. Stat
+     columns intentionally dropped — they ate horizontal real estate and
+     the brief never asked for them. The town column is `auto` and the
+     chip is width-capped, so a long town takes what it needs and the two
+     flexible columns absorb the rest; without a track of its own the town
+     wraps the status pill onto a second row and stretches it. */
+  grid-template-columns: minmax(160px, 1.3fr) minmax(180px, 1.6fr) auto auto;
   gap: 14px;
 }
 
@@ -141,6 +144,10 @@
   .customer-row .customer-card .customer-card-name { grid-column: 1; grid-row: 1; min-width: 0; }
   .customer-row .customer-card .customer-status { grid-column: 2; grid-row: 1; justify-self: end; align-self: start; }
   .customer-row .customer-card .customer-card-contact { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
+  /* Town gets its own full-width row under the contact block rather than
+     squeezing beside it — on a phone the address line is what gets
+     truncated first, and the town is the part worth keeping. */
+  .customer-row .customer-card .customer-card-town { grid-column: 1 / -1; grid-row: 3; justify-self: start; max-width: 100%; }
   .customer-row-check { padding: 0 8px; }
   .customer-row-download { padding: 0 12px; min-width: 48px; font-size: 18px; }
 }
@@ -192,6 +199,29 @@
 }
 
 .customer-card-contact span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Town chip. Its own column so a town-sorted list scans down a straight
+   edge; the runs of one town are visible without reading each row. */
+.customer-card-town {
+  font-size: 12px;
+  color: var(--crm-text, #1a1a1a);
+  background: #f2f1ec;
+  border-radius: 999px;
+  padding: 3px 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+/* A lead with no property yet has no town to show. Muted and italic so it
+   reads as "nothing here", not as a town called "no property yet". */
+.customer-card-town.is-empty {
+  background: none;
+  color: var(--crm-muted, #999);
+  font-style: italic;
+  padding-left: 0;
+}
 
 .customer-card-stat {
   font-size: 12px;
