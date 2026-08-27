@@ -26,6 +26,7 @@ const listEl = document.getElementById("customersList");
 const emptyEl = document.getElementById("customersEmpty");
 const searchEl = document.getElementById("customerSearch");
 const countEl = document.getElementById("customersCount");
+const sortEl = document.getElementById("customerSort");
 const filterEls = Array.from(document.querySelectorAll(".customers-filter"));
 const newCustomerBtn = document.getElementById("newCustomerBtn");
 const modalEl = document.getElementById("newCustomerModal");
@@ -39,8 +40,30 @@ const bulkbarSelectAllEl = document.getElementById("customersBulkbarSelectAll");
 const bulkbarClearEl = document.getElementById("customersBulkbarClear");
 const bulkbarDownloadEl = document.getElementById("customersBulkbarDownload");
 
+// Sort options, keyed by the <select> values in customers.html.
+//
+// Alphabetical is the default: the list is a directory first — "where is
+// Vivian G" is the question it gets asked — and recency only helps when
+// you already know the person was touched lately. "Recently active" stays
+// on the menu because that WAS the behaviour, and it's the right lens
+// after a busy day; it just isn't the one you want when you're looking
+// someone up by name.
+//
+// Town sorts break ties on name so a screen of one town still reads
+// alphabetically instead of in whatever order the file happened to hold.
+const SORTS = {
+  "name-asc": { keys: ["name"] },
+  "name-desc": { keys: ["name"], direction: "desc" },
+  "town-asc": { keys: ["town"], tiebreak: "name" },
+  "town-desc": { keys: ["town"], direction: "desc", tiebreak: "name" },
+  "recent": { keys: ["lastActivityAt"], compare: PJLSort.compareRecent, tiebreak: "name" }
+};
+const SORT_STORAGE_KEY = "pjl.customers.sort";
+const DEFAULT_SORT = "name-asc";
+
 let customers = [];
 let statusFilter = "all";
+let sortKey = PJLSort.readStored(SORT_STORAGE_KEY, Object.keys(SORTS), DEFAULT_SORT);
 // Selected customer ids for bulk vCard download. Survives re-renders
 // (filter / search changes) so a selection made while filtered isn't
 // silently dropped when the filter is cleared.
@@ -67,13 +90,29 @@ function searchable(c) {
     .filter(Boolean).join(" ").toLowerCase();
 }
 
+// The town comes from the customer's properties, so it's blank for a lead
+// with nothing on file yet — say so rather than rendering an empty chip
+// that reads as a layout bug. A customer with sites in more than one town
+// shows the first plus a count, with the full list on hover.
+function townLabel(c) {
+  const towns = Array.isArray(c.towns) ? c.towns : [];
+  if (!towns.length) {
+    return '<span class="customer-card-town is-empty">no property yet</span>';
+  }
+  const extra = towns.length > 1 ? ` +${towns.length - 1}` : "";
+  return `<span class="customer-card-town" title="${escapeHtml(towns.join(", "))}">${escapeHtml(towns[0])}${extra}</span>`;
+}
+
 function visibleCustomers() {
   const q = searchEl.value.trim().toLowerCase();
-  return customers.filter((c) => {
+  const filtered = customers.filter((c) => {
     if (statusFilter !== "all" && c.status !== statusFilter) return false;
     if (q && !searchable(c).includes(q)) return false;
     return true;
   });
+  // Sorting the filtered copy, never `customers` itself — that array backs
+  // the total in the count line and the bulk bar's select-all.
+  return PJLSort.sortRecords(filtered, SORTS[sortKey] || SORTS[DEFAULT_SORT]);
 }
 
 function render() {
@@ -117,6 +156,7 @@ function render() {
           <span>${escapeHtml(c.email) || "—"}</span>
           ${c.phone ? `<span data-tel="${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</span>` : "<span>—</span>"}
         </div>
+        ${townLabel(c)}
         <span class="customer-status is-${escapeHtml(c.status || "lead")}">${escapeHtml(c.status || "lead")}</span>
       </a>
       <a class="customer-row-download" href="/api/customer/${encodeURIComponent(c.id)}/vcard" title="Download vCard" aria-label="Download vCard for ${escapeHtml(c.name) || c.id}" download>⬇</a>
@@ -172,6 +212,15 @@ async function load() {
 }
 
 searchEl.addEventListener("input", render);
+
+if (sortEl) {
+  sortEl.value = sortKey;
+  sortEl.addEventListener("change", () => {
+    sortKey = SORTS[sortEl.value] ? sortEl.value : DEFAULT_SORT;
+    PJLSort.writeStored(SORT_STORAGE_KEY, sortKey);
+    render();
+  });
+}
 
 filterEls.forEach((btn) => {
   btn.addEventListener("click", () => {
