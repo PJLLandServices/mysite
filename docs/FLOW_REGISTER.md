@@ -94,6 +94,27 @@ transcript is displayed. Cover: `scripts/test-chat-transcript-view.mjs` (64 asse
 `build:check`), plus a headless-Chromium pass over both surfaces. **Not walked:** Patrick
 has not yet read a live transcript through the new layout.
 
+**2026-08-28 (CRM-17 — pinned summary on a phone):** The customer profile's map pins
+painted on top of the Delete button and through the danger-zone text on mobile.
+`.customer-summary` is `position: sticky` so that on DESKTOP it stays in view beside a long
+tab column. The profile grid collapses to one column at 800px, but the summary stayed
+sticky — and stacked on a phone it is ~1760px tall against an ~840px viewport, so the
+browser pinned a box taller than the screen and everything below it (properties, bookings,
+work orders) scrolled straight through it. The pins were only the visible edge; the whole
+tab column was sliding over the summary card. Un-stuck at the same 800px breakpoint as the
+grid collapse. **The override has to sit AFTER the rule it overrides** — both are plain
+class selectors of equal specificity, so source order decides; the first attempt put it in
+the earlier media block and `position: sticky` simply won, rendering exactly as broken with
+the fix "in". Verified in headless Chromium at 390 / 430 / 768 / 1280: summary and tabs
+stack with no overlap, no address-over-control collision at any scroll position, no
+horizontal overflow, and desktop keeps its sticky sidebar. **A sweep of all 23 CRM pages at
+390px found no other element sticky-and-taller-than-the-viewport** — this was the only one.
+Cover: `scripts/test-crm-mobile-layout.mjs` (7 assertions, in `build:check`) — source-level
+by design, since proving geometry needs a browser and a booted server and `build:check` is
+node-only (same call as CRM-15). It pins the override's existence, its position after the
+base rule, and that its breakpoint equals the grid-collapse breakpoint; mutation-tested
+against all three broken states, including the losing-source-order one.
+
 **2026-08-26 (Unwanted page scrolls):** Client-side only. `scrollIntoView({ block:
 "start" | "center" })` moves the page even when the target is already fully visible, so
 `/book.html`'s step advances and both work-order pages' tap-to-jump handlers lurched on
