@@ -51,136 +51,48 @@
   border-color: #0F1F14;
 }
 
+/* Column template for the customers index. Read by BOTH the header row
+   and every data row (see .crm-table in crm.css), so they cannot drift.
+
+   Widths are content-sized, not `fr`-stretched: the previous list gave the
+   name column 1.3fr and the contact block 1.6fr, so on a 1440px screen the
+   name floated alone on the left and the email sat marooned in the middle
+   with a hand's width of empty space either side. Phone, town and status
+   are fixed because their content has a known maximum; name and email take
+   what's left. */
+.customers-table {
+  --crm-cols: 34px minmax(180px, 1.8fr) minmax(170px, 1.6fr) 132px 116px 78px 40px;
+}
+
 .customers-list {
+  display: block;
+}
+
+/* Identity stacks: name first, the customer number (and spouse, when there
+   is one) muted beneath it. Run inline instead and an 8-digit id reads as
+   part of the name — "Frank Settino 19931884". */
+.customers-name {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-}
-
-/* One row = one visual box. Checkbox sits at the left, card link fills
-   the middle (and is the navigation target), download anchor is a flush
-   right-side cell separated by a hairline. Earlier draft gave each of
-   the three siblings its own border + background, which read as three
-   floating chips per row — Patrick called it out as visually fragmented
-   ("grinds my gears"). Unifying the frame fixes the desktop look and
-   removes the cramped-flanking-boxes problem on iPhone too. */
-.customer-row {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 0;
-  align-items: stretch;
-  background: #fff;
-  border: 1px solid var(--crm-border, #d4d2cb);
-  border-radius: 8px;
-  overflow: hidden;
-  transition: border-color 0.15s;
-}
-
-.customer-row:hover { border-color: #0F1F14; }
-
-.customer-row-check {
-  display: flex;
-  align-items: center;
   justify-content: center;
-  padding: 0 14px;
-  cursor: pointer;
-  user-select: none;
+  gap: 1px;
+  padding: 8px 0;
 }
 
-.customer-row-check input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-  cursor: pointer;
-  accent-color: #0F1F14;
-}
+/* Town reads as plain text, not another pill. The row already carries a
+   status pill; a second chip beside it turned every row into two competing
+   badges and was a large part of why the list felt busy. */
+.customers-town { color: var(--crm-muted, #6b6b63); }
+.customers-town.is-empty { color: #b9b7ae; font-style: italic; }
 
-/* Override the standalone .customer-card frame when it's nested inside
-   a .customer-row — the row wrapper owns the border / background, the
-   card is just flow content. Bookings still uses .customer-card on its
-   own and keeps the boxed look there. */
-.customer-row .customer-card {
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  padding: 10px 14px;
-  /* Four-column flow on desktop: name / contact / town / status. Stat
-     columns intentionally dropped — they ate horizontal real estate and
-     the brief never asked for them. The town column is `auto` and the
-     chip is width-capped, so a long town takes what it needs and the two
-     flexible columns absorb the rest; without a track of its own the town
-     wraps the status pill onto a second row and stretches it. */
-  grid-template-columns: minmax(160px, 1.3fr) minmax(180px, 1.6fr) auto auto;
-  gap: 14px;
-}
-
-.customer-row .customer-card:hover { transform: none; }
-
-.customer-row-download {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 18px;
-  text-decoration: none;
-  color: #0F1F14;
-  font-size: 20px;
-  font-weight: 600;
-  border-left: 1px solid var(--crm-border, #d4d2cb);
-  transition: background 0.15s;
-  min-width: 56px; /* iOS tap target floor */
-}
-
-.customer-row-download:hover { background: #fafaf7; }
-.customer-row-download:active { transform: translateY(1px); }
-
-@media (max-width: 700px) {
-  /* Reflow the nested card into the iPhone-polish 2-row stack: name +
-     status on top, contact full-width below. Stats are gone so the
-     polish's stat-positioning rules become no-ops — no conflict. */
-  .customer-row .customer-card {
-    grid-template-columns: 1fr auto;
-    gap: 4px 12px;
-    padding: 10px 12px;
-  }
-  .customer-row .customer-card .customer-card-name { grid-column: 1; grid-row: 1; min-width: 0; }
-  .customer-row .customer-card .customer-status { grid-column: 2; grid-row: 1; justify-self: end; align-self: start; }
-  .customer-row .customer-card .customer-card-contact { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
-  /* Town gets its own full-width row under the contact block rather than
-     squeezing beside it — on a phone the address line is what gets
-     truncated first, and the town is the part worth keeping. */
-  .customer-row .customer-card .customer-card-town { grid-column: 1 / -1; grid-row: 3; justify-self: start; max-width: 100%; }
-  .customer-row-check { padding: 0 8px; }
-  .customer-row-download { padding: 0 12px; min-width: 48px; font-size: 18px; }
-}
-
-.customer-card {
-  display: grid;
-  grid-template-columns: minmax(180px, 1.4fr) minmax(160px, 1.6fr) auto auto auto;
-  gap: 16px;
-  align-items: center;
-  padding: 14px 18px;
-  background: #fff;
-  border: 1px solid var(--crm-border, #d4d2cb);
-  border-radius: 8px;
-  text-decoration: none;
-  color: var(--crm-text, #1a1a1a);
-  transition: border-color 0.15s, transform 0.05s;
-}
-
-.customer-card:hover {
-  border-color: #0F1F14;
-}
-
-.customer-card:active { transform: translateY(1px); }
-
-.customer-card-name {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.customer-card-name strong {
-  font-size: 15px;
-  font-weight: 600;
+@media (max-width: 800px) {
+  /* Stacked card: name+status share the first line, then email, phone,
+     town. The shared rules in crm.css place the checkbox, status and
+     action; these just order the text cells. */
+  .customers-table .customers-name { grid-row: 1; }
+  .customers-table .customers-email { grid-row: 2; }
+  .customers-table .customers-phone { grid-row: 3; }
+  .customers-table .customers-town { grid-row: 4; }
 }
 
 .customer-card-id {
@@ -189,48 +101,6 @@
   color: var(--crm-muted, #666);
 }
 
-.customer-card-contact {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 13px;
-  color: var(--crm-muted, #555);
-  min-width: 0;
-}
-
-.customer-card-contact span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-/* Town chip. Its own column so a town-sorted list scans down a straight
-   edge; the runs of one town are visible without reading each row. */
-.customer-card-town {
-  font-size: 12px;
-  color: var(--crm-text, #1a1a1a);
-  background: #f2f1ec;
-  border-radius: 999px;
-  padding: 3px 10px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 160px;
-}
-
-/* A lead with no property yet has no town to show. Muted and italic so it
-   reads as "nothing here", not as a town called "no property yet". */
-.customer-card-town.is-empty {
-  background: none;
-  color: var(--crm-muted, #999);
-  font-style: italic;
-  padding-left: 0;
-}
-
-.customer-card-stat {
-  font-size: 12px;
-  color: var(--crm-muted, #666);
-  text-align: center;
-  min-width: 70px;
-}
-
-.customer-card-stat strong { display: block; font-size: 16px; color: var(--crm-text, #1a1a1a); }
 
 .customer-status {
   display: inline-block;
@@ -247,6 +117,21 @@
 .customer-status.is-lead     { background: #1763b3; }
 .customer-status.is-lost     { background: #9b2b2b; }
 .customer-status.is-inactive { background: #666; }
+
+/* Inside the index table the pill is a quiet state marker, not a headline.
+   Solid saturated fills are right on the profile page, where there is ONE
+   of them; twenty stacked down a list turned the status column into the
+   loudest thing on screen. Tinted background + dark text keeps each state
+   distinguishable at a glance while letting the names lead.
+   Contrast checked against the tint, not against white. */
+.crm-table .customer-status {
+  color: #1a1a1a;
+  background: #ece9e1;
+}
+.crm-table .customer-status.is-active   { color: #0a5f2c; background: #e2f0e5; }
+.crm-table .customer-status.is-lead     { color: #124b86; background: #e2ecf7; }
+.crm-table .customer-status.is-lost     { color: #8a2626; background: #f6e4e4; }
+.crm-table .customer-status.is-inactive { color: #5a5a52; background: #ebebe6; }
 
 .customers-empty {
   margin: 32px 0;

@@ -3586,18 +3586,184 @@ body.pjl-bulk-toolbar-busy {
   min-height: 40px; /* iOS tap target floor, matches the search input */
 }
 
-/* Town chip on a property card. Same neutral pill as the customers index
-   so one town reads identically on both screens. Sits inline in the card
-   head beside the property code. */
-.property-card-town {
-  font-family: "Barlow Condensed", sans-serif;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+/* The property row's town is plain text in its own column, matching the
+   customers index. It was a chip when the row was a free-floating card and
+   the town had nowhere else to live; in a table with a TOWN header, a pill
+   is decoration that also truncates ("RICHMOND …") inside a fixed column. */
+
+/* ---- CRM index table ------------------------------------------------
+   One shared primitive behind the Customers and Properties indexes.
+
+   Both were built as a stack of separately-bordered cards with a gap
+   between each: no column headers, so nothing named the fields; columns
+   sized in `fr`, so on a wide screen the name column stretched and left
+   the email stranded mid-row; and every row drawn as its own floating
+   box, which at 20+ records reads as stripes rather than a list. Patrick's
+   words: "this looks so messy".
+
+   This is the data-table pattern the trade CRMs use (BuildOps,
+   ServiceTitan, Jobber): ONE surface, a header row that names the
+   columns, hairline dividers, and content-sized columns so every value
+   starts on the same left edge down the page.
+
+   The column template lives in a single custom property, --crm-cols, set
+   per page. The header and the rows both read it, so they cannot drift
+   apart — the failure mode with hand-matched widths is a header that
+   quietly stops lining up with its own data. */
+
+.crm-table {
+  background: #fff;
+  border: 1px solid var(--crm-border, #d4d2cb);
+  border-radius: 10px;
+  overflow: hidden; /* clips the row dividers to the rounded corners */
+}
+
+.crm-table-head,
+.crm-table-row {
+  display: grid;
+  grid-template-columns: var(--crm-cols);
+  align-items: center;
+  column-gap: 16px;
+}
+
+.crm-table-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 0 14px;
+  min-height: 38px;
+  background: #f7f6f1;
+  border-bottom: 1px solid var(--crm-border, #d4d2cb);
+  font-family: "Barlow Condensed", "DM Sans", sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--pjl-text-muted, #666);
-  background: rgba(15, 31, 20, 0.06);
-  border-radius: 999px;
-  padding: 2px 10px;
+  color: var(--crm-muted, #6b6b63);
+}
+
+.crm-table-row {
+  padding: 0 14px;
+  min-height: 54px;
+  border-bottom: 1px solid #ece9e1;
+  color: var(--crm-text, #1a1a1a);
+  transition: background 0.12s;
+}
+
+.crm-table-row:last-child { border-bottom: 0; }
+.crm-table-row:hover { background: #fafaf7; }
+.crm-table-row.is-selected { background: #f2f6ef; }
+
+/* Every cell clips rather than pushes: one long email must not shove the
+   status column off its edge. min-width:0 is what lets a grid child
+   actually shrink. */
+.crm-cell {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 13px;
+}
+
+.crm-cell-primary {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: normal; /* a long company name wraps rather than truncating */
+}
+
+.crm-cell-sub {
+  font-size: 11px;
+  color: var(--crm-muted, #8a8a80);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crm-cell-muted { color: var(--crm-muted, #6b6b63); }
+
+/* The whole row is the navigation target; the link wraps the text cells
+   so the checkbox and the row action stay outside it. */
+.crm-row-link {
+  display: contents;
+  text-decoration: none;
+  color: inherit;
+}
+
+.crm-row-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px; /* iOS tap floor, even though the box itself is 18px */
+}
+
+.crm-row-check input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #0F1F14;
+}
+
+/* Row action (vCard download). Quiet at rest so 20 of them down the page
+   don't read as the loudest thing on screen — the old list gave each one
+   a boxed cell and a full-height divider. On a touch device there is no
+   hover, so it stays visible there. */
+.crm-row-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 44px;
+  border-radius: 8px;
+  text-decoration: none;
+  font-size: 15px;
+  color: var(--crm-muted, #9a9a90);
+  opacity: 0.55;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+
+.crm-table-row:hover .crm-row-action { opacity: 1; color: #0F1F14; }
+.crm-row-action:hover { background: #ece9e1; }
+.crm-row-action:focus-visible {
+  outline: 2px solid var(--pjl-green, #1B4D2E);
+  outline-offset: 2px;
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .crm-row-action { opacity: 1; }
+}
+
+/* Status pill — compact, so it reads as a state marker rather than a
+   second headline competing with the customer's name. */
+.crm-pill {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* ---- Phone / small screens ------------------------------------------
+   Below 800px the columns collapse into a stacked card: identity and
+   status on the first line, then contact, then town. The header row goes
+   away — column labels only make sense against columns. */
+@media (max-width: 800px) {
+  .crm-table-head { display: none; }
+
+  .crm-table-row {
+    grid-template-columns: auto 1fr auto;
+    column-gap: 12px;
+    row-gap: 2px;
+    align-items: start;
+    padding: 12px 14px;
+    min-height: 0;
+  }
+
+  .crm-row-check { grid-column: 1; grid-row: 1 / span 4; min-height: 0; padding-top: 2px; }
+  .crm-cell { grid-column: 2; white-space: normal; }
+  .crm-cell-status { grid-column: 3; grid-row: 1; justify-self: end; }
+  .crm-row-action { grid-column: 3; grid-row: 2 / span 3; align-self: center; }
 }

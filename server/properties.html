@@ -108,7 +108,20 @@
       <button type="button" class="pjl-btn pjl-btn-danger-outline" id="bulkDeleteAll">Delete ALL customers</button>
     </div>
 
-    <section class="properties-grid" id="propertiesGrid"></section>
+    <!-- Data table. Same primitive as the customers index (.crm-table in
+         crm.css); the column template lives in property.css so the header
+         and the rows read one definition. -->
+    <section class="crm-table properties-table" id="propertiesTable">
+      <div class="crm-table-head" role="row">
+        <span>Customer</span>
+        <span>Address</span>
+        <span>Town</span>
+        <span>Zones</span>
+        <span>Valves</span>
+        <span>Visits</span>
+      </div>
+      <div class="properties-grid" id="propertiesGrid"></div>
+    </section>
 
     <p class="properties-empty" id="propertiesEmpty" hidden>
       No properties yet. They'll appear here automatically as customers book.

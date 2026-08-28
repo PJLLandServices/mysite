@@ -121,42 +121,41 @@ function render() {
     const zoneCount = (p.system?.zones || []).length;
     const valveBoxCount = (p.system?.valveBoxes || []).length;
     const bookingCount = (p.leadIds || []).length;
-    const codeBadge = p.code
-      ? `<span class="property-card-code">${escapeHtml(p.code)}</span>`
-      : "";
-    // Town is already inside the address line; the chip is what makes a
-    // town-sorted grid scannable — you see the runs without reading each
-    // street address. Blank when the address doesn't parse, rather than an
-    // empty chip.
-    const townChip = p.town
-      ? `<span class="property-card-town">${escapeHtml(p.town)}</span>`
+    const isSelected = selected.has(p.id);
+    // The checkbox lives INSIDE the head cell, not as a sibling: the row is
+    // a grid reading --crm-cols, so an extra leading child would shift every
+    // column one place to the right. The bulk-selection toolbar's injected
+    // wrap gets relocated into the same cell below, for the same reason.
+    // In Select mode the address carries NO map affordance: crm-contact.js
+    // would open the "Open in…" chooser on a click meant to tick the row,
+    // and the address is the widest target in it. Selection is the only
+    // thing that mode is for.
+    const legacyCheck = selecting
+      ? `<input type="checkbox" class="property-card-check" aria-label="Select ${escapeHtml(p.customerName) || "property"}"${isSelected ? " checked" : ""}>`
       : "";
     const inner = `
-      <div class="property-card-head">
-        <strong>${escapeHtml(p.customerName) || "Unnamed customer"}</strong>
-        ${codeBadge}
-        ${townChip}
-      </div>
-      <span class="property-card-address"${p.address ? ` data-map-address="${escapeHtml(p.address)}"` : ""}>${escapeHtml(p.address) || "(no address on file)"}</span>
-      <span class="property-card-email">${escapeHtml(p.customerEmail) || "—"}</span>
-      <div class="property-card-stats">
-        <span><strong>${zoneCount}</strong> zone${zoneCount === 1 ? "" : "s"}</span>
-        <span><strong>${valveBoxCount}</strong> valve box${valveBoxCount === 1 ? "" : "es"}</span>
-        <span><strong>${bookingCount}</strong> booking${bookingCount === 1 ? "" : "s"}</span>
-      </div>
+      <span class="crm-cell property-card-head">
+        ${legacyCheck}
+        <span class="property-card-identity">
+          <span class="crm-cell-primary">${escapeHtml(p.customerName) || "Unnamed customer"}</span>
+          ${p.code ? `<span class="crm-cell-sub">${escapeHtml(p.code)}</span>` : ""}
+        </span>
+      </span>
+      <span class="crm-cell property-card-address"${p.address && !selecting ? ` data-map-address="${escapeHtml(p.address)}"` : ""}>${escapeHtml(p.address) || '<span class="crm-cell-muted">(no address on file)</span>'}</span>
+      <span class="crm-cell property-card-town">${p.town ? escapeHtml(p.town) : '<span class="crm-cell-muted">&mdash;</span>'}</span>
+      <span class="crm-cell property-card-stat" data-label="zones">${zoneCount}</span>
+      <span class="crm-cell property-card-stat" data-label="valves">${valveBoxCount}</span>
+      <span class="crm-cell property-card-stat" data-label="visits">${bookingCount}</span>
     `;
 
     if (selecting) {
-      // Render a div + checkbox so clicking the card toggles selection
-      // instead of navigating away.
+      // Render a div so clicking the row toggles selection instead of
+      // navigating away.
       const card = document.createElement("div");
-      card.className = "property-card";
+      card.className = "crm-table-row property-card";
       card.dataset.id = p.id;
-      if (selected.has(p.id)) card.classList.add("is-selected");
-      card.innerHTML = `
-        <input type="checkbox" class="property-card-check" aria-label="Select ${escapeHtml(p.customerName) || "property"}" ${selected.has(p.id) ? "checked" : ""}>
-        ${inner}
-      `;
+      if (isSelected) card.classList.add("is-selected");
+      card.innerHTML = inner;
       const checkbox = card.querySelector(".property-card-check");
       const toggle = (event) => {
         // Avoid double-toggle when click bubbles up from the checkbox itself.
@@ -174,7 +173,7 @@ function render() {
     } else {
       const link = document.createElement("a");
       link.href = `/admin/property/${encodeURIComponent(p.id)}`;
-      link.className = "property-card";
+      link.className = "crm-table-row property-card";
       // Carry data-id on the active-mode row too so the new bulk-selection
       // toolbar (Session 2 brief) can decorate it. The legacy in-page
       // select mode continues to use its own checkbox+selected Set.

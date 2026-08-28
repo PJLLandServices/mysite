@@ -116,7 +116,22 @@
         <button type="button" class="customers-filter" data-status="lost">Lost</button>
       </nav>
 
-      <section class="customers-list" id="customersList"></section>
+      <!-- Data table. The header row names the columns and the body is
+           filled by customers.js; both read the same --crm-cols template
+           from customers.css, so they line up by construction rather than
+           by two hand-matched width lists. -->
+      <section class="crm-table customers-table" id="customersTable">
+        <div class="crm-table-head" role="row">
+          <span></span>
+          <span>Customer</span>
+          <span>Email</span>
+          <span>Phone</span>
+          <span>Town</span>
+          <span>Status</span>
+          <span></span>
+        </div>
+        <div class="customers-list" id="customersList"></div>
+      </section>
 
       <p class="customers-empty" id="customersEmpty" hidden>
         No customers match. Adjust your filters, or click "+ New customer".

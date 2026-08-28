@@ -115,6 +115,30 @@ node-only (same call as CRM-15). It pins the override's existence, its position 
 base rule, and that its breakpoint equals the grid-collapse breakpoint; mutation-tested
 against all three broken states, including the losing-source-order one.
 
+**2026-08-28 (CRM-18 — Customers / Properties index cleanup):** Both indexes were a stack
+of separately-bordered cards with no column headers and `fr`-sized columns, so on a wide
+screen the name column stretched and left the email stranded mid-row; at 20+ records it
+read as stripes rather than a list ("this looks so messy"). Rebuilt on one shared data-table
+primitive — `.crm-table` in `crm.css` — the pattern the trade CRMs use: one surface, a
+header row naming the columns, hairline dividers, content-sized columns. **The header row
+and the data rows are separate grids that read ONE column template** (`--crm-cols`, set per
+page), so they cannot drift; `scripts/test-crm-table.mjs` pins that parity because a
+mismatch shifts every value one column off its heading and reads as a glitch, not a typo.
+Customers: CUSTOMER / EMAIL / PHONE / TOWN / STATUS, email and phone split into their own
+columns. Properties: CUSTOMER / ADDRESS / TOWN / ZONES / VALVES / VISITS, the three counts
+as numeric columns instead of a "0 zones · 0 valve boxes · 0 bookings" sentence per card.
+Town is plain text in both (a chip beside the status pill made every row two competing
+badges) and the status pill is tinted rather than solid inside the table. **Two defects
+found while building it, both fixed:** search didn't cover town, so typing "King" against a
+visible King City column returned nothing; and in the properties Select mode the address's
+map affordance swallowed clicks meant to tick the row. ~150 lines of now-dead card CSS
+removed — stale layout rules are what sent the CRM-17 fix to the wrong place. Verified in
+headless Chromium: 18 interaction checks (header/row alignment on every row, row-click
+navigation, bulk bar, select-all, legacy Select mode, the bulk-selection toolbar's injected
+checkbox, sort, search, maps affordance) plus 1440px and 390px renders of both pages with
+no JS errors and no horizontal overflow. No API, route or payload change — presentation
+only, no PASS flow touched.
+
 **2026-08-26 (Unwanted page scrolls):** Client-side only. `scrollIntoView({ block:
 "start" | "center" })` moves the page even when the target is already fully visible, so
 `/book.html`'s step advances and both work-order pages' tap-to-jump handlers lurched on

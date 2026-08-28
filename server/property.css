@@ -374,28 +374,23 @@
   text-transform: uppercase;
   color: var(--pjl-text-muted);
 }
-/* Vertical list layout — Patrick wants one property per row, not the
-   3-up grid. Wide rows scan faster when you're looking for a specific
-   customer in a list of dozens. */
+/* Column template for the properties index. Read by BOTH the header row
+   and every data row (.crm-table in crm.css), so they line up by
+   construction. Zones / valves / visits are narrow fixed columns —
+   single digits, and as a column of numbers they scan far better than the
+   "0 zones · 0 valve boxes · 0 bookings" sentence each card used to
+   carry. */
+.properties-table {
+  --crm-cols: minmax(170px, 1.5fr) minmax(200px, 2.2fr) 120px 62px 62px 62px;
+}
+
 .properties-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  display: block;
 }
-.property-card {
-  position: relative;
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 6px 24px;
-  padding: 14px 20px;
-  background: #fff;
-  border: 1px solid rgba(27, 77, 46, 0.10);
-  border-radius: 10px;
-  text-decoration: none;
-  color: var(--pjl-text);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
+/* .property-card is now a row inside .crm-table (the class name is kept
+   because bulk-selection.js and properties.js both address rows by it).
+   The row frame, hover and grid all come from .crm-table-row in crm.css —
+   what's left here is only what the old free-floating card added. */
 
 /* bulk-selection.js injects a <label class="pjl-bulk-checkbox-wrap"> as
  * the first child of every row. properties.js then relocates the wrap
@@ -408,20 +403,7 @@
   flex: 0 0 auto;
   align-self: center;
 }
-.property-card:hover {
-  border-color: rgba(27, 77, 46, 0.35);
-  box-shadow: 0 4px 12px rgba(15, 31, 20, 0.05);
-}
-/* Customer name + address stack on the left; stats row sits on the right.
-   Email + stats wrap onto a second row on narrow viewports. */
-.property-card-head { grid-column: 1; }
-.property-card-address { grid-column: 1; }
-.property-card-email { grid-column: 1; }
-.property-card-stats { grid-column: 2; grid-row: 1 / span 3; align-items: center; margin-top: 0; }
-@media (max-width: 600px) {
-  .property-card { grid-template-columns: 1fr; }
-  .property-card-stats { grid-column: 1; grid-row: auto; margin-top: 6px; }
-}
+
 .property-card strong {
   font-family: "Barlow Condensed", sans-serif;
   font-size: 18px;
@@ -434,38 +416,9 @@
   gap: 10px;
   flex-wrap: wrap;
 }
-.property-card-code {
-  font-family: "Barlow Condensed", sans-serif;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  color: var(--pjl-green);
-  background: rgba(74, 140, 92, 0.14);
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
 .property-card-address {
   font-size: 14px;
   color: var(--pjl-text-mid);
-}
-.property-card-email {
-  font-size: 13px;
-  color: var(--pjl-text-muted);
-}
-.property-card-stats {
-  display: flex;
-  gap: 12px;
-  margin-top: 6px;
-  flex-wrap: wrap;
-  font-size: 12px;
-  color: var(--pjl-text-muted);
-}
-.property-card-stats strong {
-  font-family: "DM Sans", sans-serif;
-  font-size: 14px;
-  color: var(--pjl-green);
 }
 
 /* Deferred recommendations panel — read-only listing of items the
@@ -1068,3 +1021,69 @@
 .property-service-record__meta { color: #777; font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 8px; }
 .property-service-record__meta a { color: #1B4D2E; text-decoration: none; font-weight: 600; }
 .property-service-record__meta a:hover { text-decoration: underline; }
+
+
+/* ---- Properties index rows ------------------------------------------ */
+
+/* The head cell holds the injected bulk checkbox (relocated here by
+   properties.js) beside the customer's name, so selection doesn't need a
+   column of its own. */
+.properties-table .property-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.properties-table .property-card-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.properties-table .property-card-check {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  cursor: pointer;
+  accent-color: #0F1F14;
+}
+
+.properties-table .property-card-address { color: var(--crm-text, #1a1a1a); }
+.properties-table .property-card-town { color: var(--crm-muted, #6b6b63); }
+
+/* Counts right-align so the digits stack in a column you can read down. */
+.properties-table .property-card-stat {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--crm-muted, #6b6b63);
+}
+
+.properties-table .crm-table-head span:nth-child(n + 4) { text-align: right; }
+
+@media (max-width: 800px) {
+  /* Stacked card: customer, address, town, then the three counts on one
+     line so they don't eat three rows of height on a phone. */
+  .properties-table .property-card-head { grid-row: 1; grid-column: 1 / -1; }
+  .properties-table .property-card-address { grid-row: 2; grid-column: 1 / -1; white-space: normal; }
+  .properties-table .property-card-town { grid-row: 3; grid-column: 1 / -1; }
+  /* The three counts share one line. nth-CHILD, not nth-of-type: every
+     cell in the row is a <span>, so nth-of-type(1) matches the customer
+     cell and the counts silently pile into one column. */
+  .properties-table .property-card-stat {
+    grid-row: 4;
+    text-align: left;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .properties-table .property-card-stat:nth-child(4) { grid-column: 1; }
+  .properties-table .property-card-stat:nth-child(5) { grid-column: 2; }
+  .properties-table .property-card-stat:nth-child(6) { grid-column: 3; }
+  /* With the header row hidden on a phone, a bare "0 0 0" says nothing —
+     each count carries its own label instead. */
+  .properties-table .property-card-stat::after {
+    content: " " attr(data-label);
+    color: var(--pjl-text-muted, #8a8a80);
+  }
+}

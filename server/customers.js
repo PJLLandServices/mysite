@@ -86,21 +86,25 @@ function formatDate(iso) {
 }
 
 function searchable(c) {
+  // Town is in the list now, so it has to be searchable: typing "King"
+  // against a visible King City column and getting no results reads as a
+  // broken search, not as a field that happens not to be indexed.
   return [c.name, c.spouseName, c.email, c.spouseEmail, c.phone, c.spousePhone, c.id]
+    .concat(Array.isArray(c.towns) ? c.towns : [])
     .filter(Boolean).join(" ").toLowerCase();
 }
 
 // The town comes from the customer's properties, so it's blank for a lead
-// with nothing on file yet — say so rather than rendering an empty chip
-// that reads as a layout bug. A customer with sites in more than one town
-// shows the first plus a count, with the full list on hover.
-function townLabel(c) {
+// with nothing on file yet — say so rather than leaving a hole in the
+// column. A customer with sites in more than one town shows the first plus
+// a count, with the full list on hover.
+function townCell(c) {
   const towns = Array.isArray(c.towns) ? c.towns : [];
   if (!towns.length) {
-    return '<span class="customer-card-town is-empty">no property yet</span>';
+    return '<span class="crm-cell customers-town is-empty">no property</span>';
   }
   const extra = towns.length > 1 ? ` +${towns.length - 1}` : "";
-  return `<span class="customer-card-town" title="${escapeHtml(towns.join(", "))}">${escapeHtml(towns[0])}${extra}</span>`;
+  return `<span class="crm-cell customers-town" title="${escapeHtml(towns.join(", "))}">${escapeHtml(towns[0])}${extra}</span>`;
 }
 
 function visibleCustomers() {
@@ -132,34 +136,33 @@ function render() {
 
   for (const c of filtered) {
     const row = document.createElement("div");
-    row.className = "customer-row";
+    row.className = "crm-table-row";
     const idAttr = escapeHtml(c.id);
     const isChecked = selectedIds.has(c.id);
-    // The card link spans the middle column; checkbox + download anchor
-    // flank it on either side. Plain <a download> is enough for the
-    // per-row download — the server's Content-Disposition: attachment
-    // header turns it into a save dialog without leaving the page.
-    // Stat columns (propertyCount, lastActivity) dropped — they ate
-    // horizontal space on desktop and stacked awkwardly on iPhone, and
-    // the original brief didn't ask for them anyway.
+    if (isChecked) row.classList.add("is-selected");
+    // The <a> uses display:contents so the text cells sit directly in the
+    // row grid — wrapping them in a positioned box instead would put the
+    // name, email and phone in ONE grid cell and undo the column
+    // alignment this table exists for.
     row.innerHTML = `
-      <label class="customer-row-check" title="Select for bulk download">
+      <label class="crm-row-check" title="Select for bulk download">
         <input type="checkbox" data-customer-id="${idAttr}"${isChecked ? " checked" : ""}>
       </label>
-      <a class="customer-card" href="/admin/customer/${encodeURIComponent(c.id)}">
-        <div class="customer-card-name">
-          <strong>${escapeHtml(c.name) || "(unnamed)"}</strong>
-          ${c.spouseName ? `<span class="customer-card-id">+ ${escapeHtml(c.spouseName)}</span>` : ""}
-          <span class="customer-card-id">${idAttr}</span>
-        </div>
-        <div class="customer-card-contact">
-          <span>${escapeHtml(c.email) || "—"}</span>
-          ${c.phone ? `<span data-tel="${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</span>` : "<span>—</span>"}
-        </div>
-        ${townLabel(c)}
-        <span class="customer-status is-${escapeHtml(c.status || "lead")}">${escapeHtml(c.status || "lead")}</span>
+      <a class="crm-row-link" href="/admin/customer/${encodeURIComponent(c.id)}">
+        <span class="crm-cell customers-name">
+          <span class="crm-cell-primary">${escapeHtml(c.name) || "(unnamed)"}</span>
+          <span class="crm-cell-sub">${idAttr}${c.spouseName ? ` &middot; + ${escapeHtml(c.spouseName)}` : ""}</span>
+        </span>
+        <span class="crm-cell customers-email">${escapeHtml(c.email) || "<span class=\"crm-cell-muted\">—</span>"}</span>
+        <span class="crm-cell customers-phone">${
+          c.phone ? `<span data-tel="${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</span>` : '<span class="crm-cell-muted">—</span>'
+        }</span>
+        ${townCell(c)}
+        <span class="crm-cell crm-cell-status">
+          <span class="crm-pill customer-status is-${escapeHtml(c.status || "lead")}">${escapeHtml(c.status || "lead")}</span>
+        </span>
       </a>
-      <a class="customer-row-download" href="/api/customer/${encodeURIComponent(c.id)}/vcard" title="Download vCard" aria-label="Download vCard for ${escapeHtml(c.name) || c.id}" download>⬇</a>
+      <a class="crm-row-action" href="/api/customer/${encodeURIComponent(c.id)}/vcard" title="Download vCard" aria-label="Download vCard for ${escapeHtml(c.name) || c.id}" download>&#11123;</a>
     `;
     listEl.appendChild(row);
   }
@@ -170,6 +173,9 @@ function render() {
       const id = cb.dataset.customerId;
       if (cb.checked) selectedIds.add(id);
       else selectedIds.delete(id);
+      // Tint the row while it's selected — with the per-row borders gone,
+      // the checkbox alone is a thin signal across a wide row.
+      cb.closest(".crm-table-row")?.classList.toggle("is-selected", cb.checked);
       updateBulkbar();
     });
   });
