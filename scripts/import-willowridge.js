@@ -83,6 +83,43 @@ const GEOCODE_ONLY = process.argv.includes("--geocode-only");
 const LIVE_GEOCODE = APPLY || GEOCODE_ONLY;
 
 const CUSTOMER_NAME = "Willowridge Landscaping Group Homes";
+// Contact details, per Patrick 2026-08-27. The phone is a deliberate
+// placeholder — there is no single number for the account — and exists only
+// so the record has a phone-shaped value. Nothing will ever dial it: every
+// outreach channel is opted out below, and outreach is the only thing that
+// auto-sends to these fields.
+const CUSTOMER_EMAIL = "willowridgelandscaping@email.com";
+const CUSTOMER_PHONE = "123-123-1234";
+
+// Willowridge is not billed per service — the work is covered by their
+// arrangement, not quoted per visit. A $0 per-property override is how this
+// schema expresses that: resolveSeasonalPrice() returns it with
+// source "property_override", so spring/fall WOs seed a $0 baseline line
+// instead of a tier price. It also sidesteps the residential-tier defect
+// noted at the bottom of this file, which would otherwise have seeded $90.
+const SEASONAL_PRICING = { springOpeningPrice: 0, fallClosingPrice: 0 };
+
+// Opt out of every outbound channel. These flags are read ONLY by
+// lib/outreach.js (verified: availability.js, schedule-store.js,
+// work-orders.js and bookings.js never reference them), so this suppresses
+// messaging without touching scheduling or routing in any way.
+//
+// NOTE the deliberate split with seasonalEligibility, which is left at its
+// default of TRUE on both seasons:
+//   commPrefs = false          -> the property still appears in the
+//                                 /admin/outreach fall list for planning and
+//                                 routing, but every send skips it as
+//                                 opted_out_sms / opted_out_email.
+//   seasonalEligibility = false -> the property would vanish from that list
+//                                 entirely (outreach.js:280).
+// Patrick asked to navigate fall closings for these AND to stop the
+// messages, so they stay visible and get muted. Flip seasonalEligibility to
+// false here if they should disappear from the list too.
+const COMM_PREFS = {
+  seasonalRemindersSMS: false,
+  seasonalRemindersEmail: false,
+  reviewRequestsEmail: false
+};
 
 // 200ms between live API calls — ample for 14 records, avoids burst throttling.
 const RATE_LIMIT_MS = 200;
@@ -473,6 +510,8 @@ async function main() {
     customer = await customers.create(
       {
         name: CUSTOMER_NAME,
+        email: CUSTOMER_EMAIL,
+        phone: CUSTOMER_PHONE,
         // Commercial drives the 1-4 / 5-8 / 9+ tier table wherever the
         // caller passes the account type through (see the note at the
         // bottom of this file for where it currently does not).
@@ -509,7 +548,11 @@ async function main() {
           valveBoxes: site.valveBoxes,
           notes: site.notes
           // zones and zoneCount deliberately untouched — see header.
-        }
+        },
+        // update() deep-merges commPrefs and preserves optOutTokens, so
+        // muting the channels here can't clobber the unsubscribe secrets.
+        commPrefs: COMM_PREFS,
+        seasonalPricing: SEASONAL_PRICING
       });
       report.push({ site, property: updated, coords, reason });
     } catch (err) {
