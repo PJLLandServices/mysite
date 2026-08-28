@@ -349,6 +349,26 @@
   align-self: start;
 }
 
+/* Un-stick the summary once the two profile columns collapse into one.
+   Same breakpoint as the grid collapse above — and it has to live AFTER the
+   rule it overrides, not in that earlier media block: same specificity, so
+   source order decides, and from up there `position: sticky` simply won.
+
+   Sticky earns its keep on desktop, where the summary sits BESIDE a long tab
+   column and pinning it keeps the customer's details in view while you scroll
+   their work orders. Stacked in one column there is nothing to sit beside,
+   and on a phone this box is ~1760px tall against an ~840px viewport: the
+   browser pins something taller than the screen, and everything below —
+   properties, bookings, work orders — scrolls straight through it. That is
+   what put the address map pins on top of the Delete button and through the
+   danger-zone text. */
+@media (max-width: 800px) {
+  .customer-summary {
+    position: static;
+    top: auto;
+  }
+}
+
 .customer-summary h2 {
   margin: 0 0 4px;
   font-family: "Barlow Condensed", sans-serif;
