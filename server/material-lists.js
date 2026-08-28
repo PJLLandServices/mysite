@@ -132,27 +132,25 @@ function renderLists() {
   els.container.innerHTML = items.map((rec) => {
     const totals = rec.totals || {};
     const customerLine = rec.customerName || rec.customerEmail || "—";
-    const addressLine = rec.address ? ` &middot; ${escapeHtml(rec.address)}` : "";
     return `
-      <li class="ml-card${rec.status === "archived" ? " is-archived" : ""}" data-list-id="${escapeHtml(rec.id)}">
-        <a class="ml-card-link" href="/admin/material-list/${encodeURIComponent(rec.id)}">
-          <div class="ml-card-head">
-            <h3 class="ml-card-name">${escapeHtml(rec.name || "(untitled list)")}</h3>
-            <span class="ml-card-id">${escapeHtml(rec.id)}</span>
-            <span class="ml-status ml-status--${escapeHtml(rec.status)}">${escapeHtml(STATUS_LABELS[rec.status] || rec.status)}</span>
-          </div>
-          <div class="ml-card-meta">
-            <strong>${escapeHtml(customerLine)}</strong>${addressLine}
-            <br>Updated ${escapeHtml(fmtDate(rec.updatedAt))}
-          </div>
-          <div class="proj-card-chips">${renderParentChip(rec)}</div>
-          <div class="ml-card-stats">
-            <span class="ml-stat"><span class="ml-stat-num">${totals.lineCount || 0}</span><span class="ml-stat-label">lines</span></span>
-            <span class="ml-stat"><span class="ml-stat-num ml-stat-num--need">${totals.needCount || 0}</span><span class="ml-stat-label">need</span></span>
-            ${totals.orderedCount ? `<span class="ml-stat"><span class="ml-stat-num ml-stat-num--ordered">${totals.orderedCount}</span><span class="ml-stat-label">ordered</span></span>` : ""}
-            <span class="ml-stat"><span class="ml-stat-num ml-stat-num--have">${totals.haveCount || 0}</span><span class="ml-stat-label">have</span></span>
-            <span class="ml-card-total">${fmtCents(totals.grandSubtotalCents)}</span>
-          </div>
+      <li class="crm-table-row ml-card${rec.status === "archived" ? " is-archived" : ""}" data-list-id="${escapeHtml(rec.id)}">
+        <a class="crm-row-link" href="/admin/material-list/${encodeURIComponent(rec.id)}">
+          <span class="crm-cell ml-card-head">
+            <span class="crm-identity">
+            <span class="crm-cell-primary">${escapeHtml(rec.name || "(untitled list)")}</span>
+            <span class="crm-cell-sub">${escapeHtml(rec.id)} ${renderParentChip(rec)}</span></span>
+          </span>
+          <span class="crm-cell ml-card-customer">
+            <span>${escapeHtml(customerLine)}</span>
+            ${rec.address ? `<span class="crm-cell-sub">${escapeHtml(rec.address)}</span>` : ""}
+          </span>
+          <span class="crm-cell crm-cell-num">${totals.lineCount || 0}</span>
+          <span class="crm-cell crm-cell-num ml-need${(totals.needCount || 0) === 0 ? " is-zero" : ""}">${totals.needCount || 0}</span>
+          <span class="crm-cell crm-cell-num ml-have${(totals.haveCount || 0) === 0 ? " is-zero" : ""}">${totals.haveCount || 0}</span>
+          <span class="crm-cell crm-cell-num ml-value">${fmtCents(totals.grandSubtotalCents)}</span>
+          <span class="crm-cell crm-cell-status">
+            <span class="crm-pill ml-status ml-status--${escapeHtml(rec.status)}">${escapeHtml(STATUS_LABELS[rec.status] || rec.status)}</span>
+          </span>
         </a>
       </li>
     `;

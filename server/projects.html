@@ -117,7 +117,20 @@
       </form>
 
       <p class="suppliers-empty" id="projectsEmpty" hidden>No projects yet. Create one above to start grouping multi-visit work.</p>
-      <ul class="ml-cards" id="projectsContainer" aria-label="Projects"></ul>
+      <!-- Data table, same primitive as the Customers and Properties
+           indexes (.crm-table in crm.css). Header row and data rows read one
+           --crm-cols template, so they cannot drift out of register. -->
+      <section class="crm-table projects-table">
+        <div class="crm-table-head" role="row">
+          <span>Project</span>
+          <span>Customer</span>
+          <span>Updated</span>
+          <span class="is-num">WOs</span>
+          <span class="is-num">Lists</span>
+          <span>Status</span>
+        </div>
+        <ul class="ml-cards" id="projectsContainer" aria-label="Projects"></ul>
+      </section>
     </main>
   </div>
 
