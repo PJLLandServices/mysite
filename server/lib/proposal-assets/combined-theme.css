@@ -50,7 +50,11 @@
   .fact-v { font-family:var(--disp); font-weight:600; font-size:26px; line-height:1.2;
     text-transform:uppercase; letter-spacing:.01em; }
 
-  .sec { padding:clamp(52px,8vw,100px) 0; }
+  /* Vertical padding ONLY — `.sec` is used as `class="sec wrap"` and is
+     declared after `.wrap` at equal specificity, so a `padding` shorthand
+     here wipes `.wrap`'s horizontal gutter and the section runs flush to the
+     screen edge on a phone. See the sprinkler theme for the full note. */
+  .sec { padding-top:clamp(52px,8vw,100px); padding-bottom:clamp(52px,8vw,100px); }
   .sec-h { font-family:var(--disp); font-weight:600; text-transform:uppercase;
     font-size:clamp(28px,4.4vw,48px); line-height:1.02; margin:0 0 14px; letter-spacing:.01em; }
   .sec-lead { color:var(--slate); max-width:62ch; margin:0 0 44px; font-size:18px; }
@@ -166,7 +170,8 @@
   .clause b { color:var(--cream); font-weight:600; }
 
   /* close */
-  .close { padding:clamp(60px,9vw,120px) 0 clamp(50px,7vw,80px); text-align:center; }
+  /* Longhand for the same reason as `.sec` — the close block is `class="close wrap"`. */
+  .close { padding-top:clamp(60px,9vw,120px); padding-bottom:clamp(50px,7vw,80px); text-align:center; }
   .close h2 { font-family:var(--disp); font-weight:700; text-transform:uppercase;
     font-size:clamp(32px,6vw,64px); line-height:1; margin:0 0 18px; }
   .close p { color:var(--slate); max-width:54ch; margin:0 auto 34px; }
