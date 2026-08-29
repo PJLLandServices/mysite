@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0F1F14">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Purchase orders — PJL</title>
+  <title>Warranty claims — PJL</title>
   <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260518" />
   <link rel="shortcut icon" href="/favicon.ico?v=20260518" />
@@ -17,11 +17,9 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/crm/crm.css">
-  <link rel="stylesheet" href="/crm/suppliers.css">
-  <link rel="stylesheet" href="/crm/material-lists.css">
-  <link rel="stylesheet" href="/crm/purchase-orders.css">
+  <link rel="stylesheet" href="/crm/warranty-claims.css">
 </head>
-<body class="pjl-crm-body suppliers-body">
+<body class="pjl-crm-body">
   <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
     <header class="pjl-side-brand">
       <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
@@ -42,8 +40,8 @@
       <a href="/admin/work-orders">Work orders</a>
       <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
       <a href="/admin/invoices">Invoices</a>
-      <a href="/admin/warranty-claims">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
-      <a href="/admin/material-lists" class="is-active">Materials</a>
+      <a href="/admin/warranty-claims" class="is-active">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
+      <a href="/admin/material-lists">Materials</a>
       <a href="/admin/chats">AI Chats</a>
       <a href="/admin/trash">Trash</a>
       <a href="/admin/users">Users</a>
@@ -62,66 +60,77 @@
         <span class="pjl-nav-toggle-bar"></span>
         <span class="pjl-nav-toggle-bar"></span>
       </button>
-      <span class="pjl-app-title">Purchase orders</span>
+      <span class="pjl-app-title">Warranty claims</span>
       <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
     </header>
 
-    <main class="suppliers-shell">
-      <nav class="suppliers-subnav" aria-label="Materials sub-section">
-        <div class="suppliers-subnav-strip">
-          <a href="/admin/material-lists">Material lists</a>
-          <a href="/admin/quote-requests">Quote requests</a>
-          <a href="/admin/purchase-orders" class="is-active" aria-current="page">Purchase orders</a>
-          <a href="/admin/suppliers">Suppliers</a>
-          <a href="/admin/parts-suppliers">Catalog</a>
-        </div>
-        <details class="suppliers-subnav-dropdown">
-          <summary class="suppliers-subnav-trigger">
-            <span class="suppliers-subnav-trigger-eyebrow">Materials</span>
-            <span class="suppliers-subnav-trigger-current">Purchase orders</span>
-            <span class="suppliers-subnav-trigger-chevron" aria-hidden="true"></span>
-          </summary>
-          <div class="suppliers-subnav-menu">
-            <a href="/admin/material-lists">Material lists</a>
-            <a href="/admin/quote-requests">Quote requests</a>
-            <a href="/admin/purchase-orders" class="is-active" aria-current="page">Purchase orders</a>
-            <a href="/admin/suppliers">Suppliers</a>
-            <a href="/admin/parts-suppliers">Catalog</a>
-          </div>
-        </details>
-      </nav>
-
-      <section class="suppliers-explainer">
-        <p>Generated from a material list, one PO per supplier. Draft → send (emails the PDF, locks lines as <em>ordered</em>) → receive (lines flip to <em>have</em>).</p>
+    <main class="wcq-shell">
+      <section class="wcq-explainer">
+        <p>
+          Every warranty claim filed from <a href="/warranty-claim.html" target="_blank" rel="noopener">warranty-claim.html</a>
+          lands here. A claim is <strong>outstanding</strong> until it is resolved or denied — and a claim that
+          hasn't moved in 24 hours is flagged, because that is what we promised the customer.
+          Every status change emails them automatically.
+        </p>
       </section>
 
-      <section class="suppliers-toolbar">
-        <input type="search" id="poSearch" class="ml-search" placeholder="Search by id, supplier, list">
-        <label class="suppliers-toggle">
-          <input type="checkbox" id="poShowClosed"> Show closed POs (received + cancelled)
+      <!-- Needs-an-update band. The pull half of "constantly be reminded":
+           always on, above the queue, and gone the moment nothing is stale. -->
+      <section class="wcq-reminder" id="wcqReminder" hidden>
+        <div class="wcq-reminder-head">
+          <span class="wcq-reminder-icon" aria-hidden="true">⏰</span>
+          <h2 id="wcqReminderTitle">Claims needing a status update</h2>
+        </div>
+        <ul class="wcq-reminder-list" id="wcqReminderList"></ul>
+      </section>
+
+      <section class="wcq-stats" id="wcqStats"></section>
+
+      <section class="wcq-toolbar">
+        <input type="search" id="wcqSearch" class="wcq-search"
+               placeholder="Search claim number, name, email, phone or invoice">
+        <label class="wcq-toggle">
+          <input type="checkbox" id="wcqShowClosed"> Show closed claims (resolved + denied)
         </label>
       </section>
 
-      <section class="ml-filters" aria-label="Status filter">
-        <button type="button" data-status-filter="" class="is-active">All</button>
-        <button type="button" data-status-filter="draft">Draft</button>
-        <button type="button" data-status-filter="sent">Sent</button>
-        <button type="button" data-status-filter="partially_received">Partial</button>
+      <section class="wcq-filters" aria-label="Status filter" id="wcqFilters">
+        <button type="button" data-status-filter="" class="is-active">All open</button>
         <button type="button" data-status-filter="received">Received</button>
-        <button type="button" data-status-filter="cancelled">Cancelled</button>
+        <button type="button" data-status-filter="under_review">Under review</button>
+        <button type="button" data-status-filter="info_requested">Info requested</button>
+        <button type="button" data-status-filter="contact_customer">Contacting</button>
+        <button type="button" data-status-filter="service_booked">Booked</button>
+        <button type="button" data-status-filter="disputed">Disputed</button>
+        <button type="button" data-status-filter="resolved">Resolved</button>
+        <button type="button" data-status-filter="denied">Denied</button>
       </section>
 
-      <p class="suppliers-empty" id="poEmpty" hidden>No purchase orders yet. Generate one from a material list.</p>
-      <ul class="ml-cards" id="poContainer" aria-label="Purchase orders"></ul>
+      <section class="wcq-list-wrap">
+        <div class="wcq-empty" id="wcqEmpty" hidden>
+          <p id="wcqEmptyText">No warranty claims yet.</p>
+        </div>
+        <div class="wcq-table-scroll">
+          <table class="wcq-table" id="wcqTable" hidden>
+            <thead>
+              <tr>
+                <th scope="col">Claim</th>
+                <th scope="col">Customer</th>
+                <th scope="col">Invoice ref</th>
+                <th scope="col">Cross-check</th>
+                <th scope="col">Status</th>
+                <th scope="col">Waiting</th>
+              </tr>
+            </thead>
+            <tbody id="wcqBody"></tbody>
+          </table>
+        </div>
+      </section>
     </main>
   </div>
 
   <script src="/crm/crm-nav.js"></script>
-  <script src="/crm/bulk-toast.js"></script>
-  <script src="/crm/bulk-modal.js"></script>
-  <script src="/crm/bulk-selection.js"></script>
-  <script src="/crm/bulk-wiring.js"></script>
-  <script src="/crm/purchase-orders.js"></script>
-  <script src="/crm/nav-badges.js?v=1"></script>
+  <script src="/crm/nav-badges.js"></script>
+  <script src="/crm/warranty-claims.js"></script>
 </body>
 </html>

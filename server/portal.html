@@ -114,6 +114,28 @@
       </article>
     </section>
 
+    <!-- Warranty claims filed under this customer's email. Rendered by
+         renderPortalWarrantyClaims() in portal.js on BOTH portal shapes
+         (lead token and property token) — the acknowledgement email tells
+         customers their claim status lives here, so it has to appear
+         whichever door they came in through. Each row links to that
+         claim's own token-gated status page rather than re-implementing
+         the status view here. -->
+    <section class="portal-warranty" id="portalWarrantySection" hidden aria-label="Warranty claims">
+      <article class="portal-card portal-warranty-card">
+        <header class="portal-warranty-head">
+          <span class="portal-warranty-eyebrow">Warranty</span>
+          <h2>Your warranty claims</h2>
+          <p class="portal-warranty-sub">Tap a claim to see its current status and history.</p>
+        </header>
+        <ul class="portal-warranty-list" id="portalWarrantyList"></ul>
+        <p class="portal-warranty-note">
+          Need to file a new claim? <a href="/warranty-claim.html">Start a warranty claim →</a>
+          Urgent? Call <a href="tel:+19059600181">(905) 960-0181</a>.
+        </p>
+      </article>
+    </section>
+
     <section class="portal-timeline" id="portalTimeline" hidden aria-label="Project status">
       <ol class="timeline-track">
         <li data-step="received"><span class="timeline-dot"></span><span class="timeline-label">Request received</span></li>

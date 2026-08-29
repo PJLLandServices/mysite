@@ -89,6 +89,9 @@ const bulkActions = require("./lib/bulk-actions");
 const { sendCustomerLoginLink, sendAdminPasswordResetLink } = require("./lib/notify-customer");
 const mailerLog = require("./lib/mailer-log");
 const territoryExport = require("./lib/territory-export");
+const warrantyClaims = require("./lib/warranty-claims");
+const warrantyClaimLink = require("./lib/warranty-claim-link");
+const notifyWarranty = require("./lib/notify-warranty");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
 // alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
@@ -165,6 +168,9 @@ const MAX_CHAT_BODY = 80_000; // ~50K-ish transcript + a few KB of metadata
 // If the booking is abandoned, no photo is ever persisted.
 const PHOTOS_DIR = path.join(DATA_DIR, "photos");
 const WO_PHOTOS_DIR = path.join(DATA_DIR, "wo-photos");
+// Customer-uploaded warranty-claim files (the invoice copy + evidence).
+// Same split as lead photos: bytes on disk, metadata on the record.
+const WARRANTY_FILES_DIR = path.join(DATA_DIR, "warranty-claim-files");
 const MAX_PHOTOS_PER_LEAD = 5;
 const MAX_PHOTOS_PER_WO = 150;
 // Longest-edge cap for a WO photo as it is STORED. A straight-from-camera
@@ -1042,6 +1048,15 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/part-suppliers")) return "user";
   if (pathname.startsWith("/api/purchase-orders")) return "user";
   if (pathname.startsWith("/api/quote-requests")) return "user";
+  // Warranty claims. The CRM surface is admin/tech; the PUBLIC intake
+  // (POST /api/warranty-claims) and the customer's own token-gated
+  // status/dispute/file routes under /api/warranty-claim/* are not —
+  // the statusToken in the query string is the credential there, the
+  // same model as /api/outreach/unsubscribe above.
+  if (pathname === "/api/warranty-claims" && method === "POST") return null;
+  if (pathname === "/api/warranty-claims" || pathname.startsWith("/api/warranty-claims/")) return "user";
+  if (pathname === "/admin/warranty-claims" || pathname === "/admin/warranty-claims/") return "user";
+  if (/^\/admin\/warranty-claim\/[^/]+\/?$/.test(pathname)) return "user";
   // Per-lead property link/dismiss/attach + tech actions are admin-only.
   if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion|attach-property|notify-on-route|open-wo)$/.test(pathname)) return "user";
   // Bulk property import is admin-only.
@@ -3329,6 +3344,44 @@ async function customerPortalSections(lead) {
   return { serviceHistory, projects: projectCards, derivedFacts, nextVisit, bookableProperties };
 }
 
+// Warranty claims belonging to one customer email, for the portal's
+// "Your warranty claims" card. Matched on the email the claim was FILED
+// with — that is the address the customer proved control of by receiving
+// the acknowledgement, and it is the same key the CRM cross-check starts
+// from.
+//
+// Each row carries its own statusToken in the URL: the portal token gets
+// the customer INTO the portal, but each claim link still authorizes
+// itself, so a claim link copied out of the portal keeps working and
+// nothing here widens what a portal token can read.
+async function warrantyClaimsForCustomerEmail(email) {
+  const target = String(email || "").trim().toLowerCase();
+  if (!target) return [];
+  try {
+    const all = await warrantyClaims.list();
+    const now = Date.now();
+    return all
+      .filter((c) => c.claimant?.email === target)
+      .map((c) => {
+        const d = warrantyClaims.decorate(c, now);
+        return {
+          id: d.id,
+          status: d.status,
+          statusLabel: d.statusLabel,
+          statusText: warrantyClaims.STATUS_CUSTOMER_TEXT[d.status] || "",
+          open: d.open,
+          createdAt: d.createdAt,
+          lastStatusAt: d.lastStatusAt,
+          invoiceRef: d.invoiceRef,
+          url: `/warranty-claim-status.html?c=${encodeURIComponent(d.id)}&t=${encodeURIComponent(d.statusToken)}`
+        };
+      });
+  } catch (err) {
+    console.warn("[warranty-claim] portal lookup failed:", err?.message || err);
+    return [];
+  }
+}
+
 async function portalPayloadForLead(lead, req) {
   const contact = contactRecordForLead(lead, req);
   // Pull the linked property so the customer can see their system profile
@@ -3407,8 +3460,14 @@ async function portalPayloadForLead(lead, req) {
       && !facts.projectUnderway && status !== "lost"
   };
 
+  // Warranty claims filed under this customer's email. Read-only here —
+  // the portal links out to each claim's own status page rather than
+  // duplicating the status UI in two places.
+  const portalWarrantyClaims = await warrantyClaimsForCustomerEmail(contact.email || lead.contact?.email);
+
   return {
     viewerIsAdmin,
+    warrantyClaims: portalWarrantyClaims,
     customer: {
       name: contact.fullName || lead.contact?.name || "PJL Customer",
       firstName: contact.firstName,
@@ -4506,6 +4565,561 @@ async function renderAndStoreProposalPage(q, { templateKey, session } = {}) {
   return { meta, previewUrl: `/approve/${encodeURIComponent(q.id)}`, quote: updated };
 }
 
+// ===================================================================
+// Warranty claims (feature-warranty-claim-brief, 2026-08-29).
+//
+// Public intake at POST /api/warranty-claims, a token-gated customer
+// status view, and the admin queue Patrick works it from. The store is
+// lib/warranty-claims.js; the CRM cross-check is lib/warranty-claim-
+// link.js; the email is lib/notify-warranty.js. This section is only
+// the HTTP surface.
+//
+// Two credentials, never mixed:
+//   - the CRM routes (/api/warranty-claims*) are admin/tech, gated in
+//     needsAuth() like every other /admin surface;
+//   - the customer routes (/api/warranty-claim/*) carry the claim's
+//     statusToken in the query string, which is the credential — the
+//     same model as /portal/<token> and the iCal feed. The claim NUMBER
+//     is sequential and therefore guessable, so it never authorizes on
+//     its own.
+// ===================================================================
+
+// Uploads: the invoice copy plus evidence photos/PDFs. Reuses the work-
+// order media validator (`mode: "wo"`), which is the one that already
+// accepts PDF alongside images AND magic-byte-checks the decoded buffer
+// — a warranty claim is evidence, so a file that lies about its type is
+// exactly what we don't want on disk.
+const MAX_WARRANTY_FILES = 12;
+// 12 files × 25 MB would be 300 MB of base64; in practice a claim is a
+// phone photo or two and a PDF invoice. 40 MB is generous for that and
+// bounded enough that the parse can't be used as a memory attack.
+const WARRANTY_POST_MAX_BYTES = 40_000_000;
+
+// Files live at WARRANTY_FILES_DIR/<claimNumber>/<n>.<ext>. The claim
+// number is validated against warrantyClaims.CLAIM_NUMBER_RE before it
+// ever reaches path.join — it is user-facing and appears in URLs, so it
+// is treated as untrusted input at every filesystem boundary.
+async function saveWarrantyClaimFiles(claimId, files, now) {
+  if (!files.length) return [];
+  if (!warrantyClaims.isValidClaimNumber(claimId)) throw new Error("Invalid claim number.");
+  const dir = path.join(WARRANTY_FILES_DIR, claimId);
+  await fs.mkdir(dir, { recursive: true });
+  const meta = [];
+  for (let i = 0; i < files.length; i++) {
+    const n = i + 1;
+    await fs.writeFile(path.join(dir, `${n}.${files[i].ext}`), files[i].buffer);
+    meta.push({
+      n,
+      kind: files[i].kind,
+      filename: files[i].filename || `${claimId}-${n}.${files[i].ext}`,
+      mediaType: files[i].mediaType,
+      ext: files[i].ext,
+      bytes: files[i].buffer.length,
+      addedAt: now
+    });
+  }
+  return meta;
+}
+
+async function readWarrantyClaimFile(claimId, n) {
+  if (!warrantyClaims.isValidClaimNumber(claimId)) return null;
+  const num = Number(n);
+  if (!Number.isFinite(num) || num < 1 || num > MAX_WARRANTY_FILES) return null;
+  const dir = path.join(WARRANTY_FILES_DIR, claimId);
+  for (const ext of ["pdf", "jpg", "png", "webp", "heic", "heif", "gif"]) {
+    try {
+      const data = await fs.readFile(path.join(dir, `${Math.floor(num)}.${ext}`));
+      return { data, ext };
+    } catch {}
+  }
+  return null;
+}
+
+// Read a claim's files back off disk as nodemailer attachments for the
+// team email. Best-effort per file: a missing file costs an attachment,
+// never the alert.
+async function warrantyAttachmentsForEmail(claim) {
+  const out = [];
+  for (const att of claim.attachments || []) {
+    try {
+      const file = await readWarrantyClaimFile(claim.id, att.n);
+      if (!file) continue;
+      out.push({
+        filename: att.filename || `${claim.id}-${att.n}.${att.ext}`,
+        content: file.data,
+        contentType: att.mediaType
+      });
+    } catch (_) { /* skip this attachment */ }
+  }
+  return out;
+}
+
+// Run the cross-check and persist it. Isolated so both the intake and the
+// admin "re-run" button share one code path, and so a cross-check throw
+// can never take a claim down with it.
+async function runWarrantyCrossCheck(claim) {
+  try {
+    const { link, context } = await warrantyClaimLink.crossCheck(claim);
+    const saved = await warrantyClaims.setLink(claim.id, link);
+    return { link, context, claim: saved.ok ? saved.claim : claim };
+  } catch (err) {
+    console.error("[warranty-claim] cross-check persist failed:", err?.message || err);
+    return { link: null, context: { error: err?.message || String(err) }, claim };
+  }
+}
+
+// The customer-safe projection. The status page must never leak the CRM
+// cross-check (which customer we think they are, which invoices they
+// have, what the warranty maths said) — only their own claim as they
+// filed it, its status, and what we've told them.
+function publicWarrantyClaim(claim) {
+  return {
+    id: claim.id,
+    status: claim.status,
+    statusLabel: warrantyClaims.STATUS_LABELS[claim.status] || claim.status,
+    statusText: warrantyClaims.STATUS_CUSTOMER_TEXT[claim.status] || "",
+    open: warrantyClaims.isOpen(claim),
+    createdAt: claim.createdAt,
+    lastStatusAt: claim.lastStatusAt,
+    claimant: {
+      name: claim.claimant.name,
+      firstName: claim.claimant.firstName,
+      email: claim.claimant.email,
+      phone: claim.claimant.phone,
+      address: claim.claimant.address
+    },
+    invoiceRef: claim.invoiceRef,
+    description: claim.description,
+    attachments: (claim.attachments || []).map((a) => ({
+      n: a.n, kind: a.kind, filename: a.filename, mediaType: a.mediaType, bytes: a.bytes
+    })),
+    denial: claim.denial ? { reason: claim.denial.reason, at: claim.denial.at } : null,
+    dispute: claim.dispute ? { raisedAt: claim.dispute.raisedAt, reason: claim.dispute.reason } : null,
+    canDispute: claim.status === "denied",
+    // Every status transition on the customer's OWN claim. Visibility is
+    // deliberately NOT gated on whether the notification email went out:
+    // Patrick can untick "email the customer", and a send can simply
+    // fail, and in both cases this page would otherwise show a stale
+    // history beside a current status badge — the denial reason and the
+    // dispute button would be on screen with nothing in the timeline
+    // explaining them. The customer is entitled to the status history of
+    // their own claim regardless of which channel carried it.
+    //
+    // What stays private is the NOTE, not the transition: internal notes
+    // are stripped below, and only the two notes written FOR the customer
+    // (the questions on info_requested, the explanation on denied) are
+    // passed through.
+    updates: (claim.history || [])
+      .filter((h) => h.to)
+      .map((h) => ({
+        ts: h.ts,
+        status: h.to,
+        label: warrantyClaims.STATUS_LABELS[h.to] || h.to,
+        text: warrantyClaims.STATUS_CUSTOMER_TEXT[h.to] || "",
+        // The note is shown only where it was written FOR the customer —
+        // the questions on info_requested and the denial explanation.
+        note: (h.to === "info_requested" || h.to === "denied" || h.by === "customer") ? h.note : ""
+      }))
+  };
+}
+
+async function handleWarrantyClaimsApi(req, res, pathname) {
+  // ---- Public intake --------------------------------------------------
+  if (req.method === "POST" && pathname === "/api/warranty-claims") {
+    try {
+      const payload = await parseRequestBody(req, { maxBytes: WARRANTY_POST_MAX_BYTES });
+
+      // Anti-bot before any disk write or send, same order as /api/quotes.
+      const verdict = await antiBot.checkSubmission({
+        body: payload,
+        ip: callerIp(req),
+        userAgent: req.headers["user-agent"] || ""
+      });
+      if (!verdict.ok) return sendJson(res, verdict.status, verdict.responseBody);
+
+      // Every field is mandatory — Patrick's rule is that a warranty claim
+      // is only accepted on complete, accurate information, so the server
+      // enforces it rather than trusting the form's `required`.
+      const firstName = normalizeString(payload?.firstName, 80);
+      const lastName = normalizeString(payload?.lastName, 80);
+      const email = normalizeString(payload?.email, 200);
+      const phone = normalizeString(payload?.phone, 40);
+      const invoiceRef = normalizeString(payload?.invoiceRef, 120);
+      const description = normalizeString(payload?.description, 8000);
+      const address = normalizeString(payload?.address, 300);
+
+      const errors = [];
+      if (!firstName) errors.push("First name is required.");
+      if (!lastName) errors.push("Last name is required.");
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push("A valid email address is required.");
+      // 10 digits — a North American number with or without the country
+      // code. Matches the leniency of the rest of the intake surface.
+      if (!phone || (phone.replace(/\D/g, "").length < 10)) errors.push("A valid phone number is required.");
+      if (!invoiceRef) errors.push("The invoice reference for the work you're claiming against is required.");
+      if (description.length < 20) errors.push("Please describe the issue in a little more detail (at least 20 characters).");
+      if (errors.length) return sendJson(res, 422, { ok: false, errors });
+
+      // Files. The invoice copy is required — it is the document the claim
+      // is assessed against — and is sent as its own field so the CRM can
+      // tell it apart from the fault photos without guessing.
+      let invoiceFiles = [];
+      let evidenceFiles = [];
+      try {
+        invoiceFiles = validatePhotos(payload?.invoiceFiles, 4, { mode: "wo" })
+          .map((f, i) => ({ ...f, kind: "invoice", filename: normalizeString(payload?.invoiceFiles?.[i]?.filename, 200) }));
+        evidenceFiles = validatePhotos(payload?.evidenceFiles, MAX_WARRANTY_FILES - 4, { mode: "wo" })
+          .map((f, i) => ({ ...f, kind: "evidence", filename: normalizeString(payload?.evidenceFiles?.[i]?.filename, 200) }));
+      } catch (fileErr) {
+        return sendJson(res, 422, { ok: false, errors: [fileErr.message] });
+      }
+      if (!invoiceFiles.length) {
+        return sendJson(res, 422, { ok: false, errors: ["A copy of the invoice you're claiming against is required (PDF, PNG or JPEG)."] });
+      }
+
+      // Create first, then write files under the claim number, then attach
+      // the metadata. A file write that fails leaves a claim with no
+      // attachments rather than losing the claim — the customer's words
+      // are the part we can't reconstruct.
+      const claim = await warrantyClaims.create({
+        firstName, lastName, email, phone, address, invoiceRef, description
+      });
+
+      let attachments = [];
+      try {
+        attachments = await saveWarrantyClaimFiles(claim.id, [...invoiceFiles, ...evidenceFiles], claim.createdAt);
+        await warrantyClaims.setAttachments(claim.id, attachments);
+      } catch (fileErr) {
+        console.error("[warranty-claim] file save failed:", fileErr?.message || fileErr);
+      }
+
+      // Cross-check, then notify. Both are awaited far enough to get the
+      // saved record, but the SENDS are fire-and-forget: the customer sees
+      // their claim number immediately and a slow Gmail handshake never
+      // holds up the response.
+      const fresh = (await warrantyClaims.get(claim.id)) || claim;
+      const { context } = await runWarrantyCrossCheck(fresh);
+      const stored = (await warrantyClaims.get(claim.id)) || fresh;
+
+      warrantyAttachmentsForEmail(stored).then((files) => Promise.allSettled([
+        notifyWarranty.sendClaimAck(stored),
+        notifyWarranty.sendClaimToTeam(stored, { context, files })
+      ])).then((results) => {
+        (results || []).forEach((r, i) => {
+          if (r.status === "rejected") {
+            console.error(`[warranty-claim] ${i === 0 ? "customer ack" : "team alert"} threw:`, r.reason?.message || r.reason);
+          }
+        });
+        // Mark the filing entry as notified only if the customer email
+        // actually went out — the status page reads this to decide what it
+        // may show as "we told you".
+        if (results?.[0]?.status === "fulfilled" && results[0].value?.ok) {
+          warrantyClaims.markNotified(stored.id, { historyIndex: 0 }).catch(() => {});
+        }
+      }).catch((err) => console.error("[warranty-claim] notify fan-out threw:", err?.message || err));
+
+      return sendJson(res, 201, {
+        ok: true,
+        claim: {
+          id: stored.id,
+          status: stored.status,
+          createdAt: stored.createdAt,
+          statusUrl: notifyWarranty.statusUrl(stored)
+        }
+      });
+    } catch (err) {
+      console.error("[warranty-claim] intake failed:", err?.message || err);
+      const tooBig = /too large/i.test(String(err?.message || ""));
+      return sendJson(res, tooBig ? 413 : 500, {
+        ok: false,
+        errors: [tooBig
+          ? "Those files are too large to upload together. Try fewer or smaller files, or email them to info@pjllandservices.com."
+          : "We couldn't file your warranty claim. Please try again, or call (905) 960-0181 and we'll take it over the phone."]
+      });
+    }
+  }
+
+  // ---- Customer status view (token-gated) -----------------------------
+  const publicClaimMatch = pathname.match(/^\/api\/warranty-claim\/([^/]+)$/);
+  if (publicClaimMatch && req.method === "GET") {
+    const id = decodeURIComponent(publicClaimMatch[1]);
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const token = String(url.searchParams.get("t") || "").trim();
+    const claim = await warrantyClaims.getByStatusToken(token);
+    // The token must resolve AND belong to the claim number in the path.
+    // Checking both means a valid token for claim A can't read claim B.
+    if (!claim || claim.id !== id) {
+      return sendJson(res, 404, { ok: false, errors: ["That warranty claim link isn't valid. Check the link in your email, or call (905) 960-0181."] });
+    }
+    return sendJson(res, 200, { ok: true, claim: publicWarrantyClaim(claim) });
+  }
+
+  // ---- Customer dispute of a denial ------------------------------------
+  const disputeMatch = pathname.match(/^\/api\/warranty-claim\/([^/]+)\/dispute$/);
+  if (disputeMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(disputeMatch[1]);
+      const payload = await parseRequestBody(req);
+      const token = String(payload?.t || "").trim();
+      const claim = await warrantyClaims.getByStatusToken(token);
+      if (!claim || claim.id !== id) {
+        return sendJson(res, 404, { ok: false, errors: ["That warranty claim link isn't valid."] });
+      }
+      const result = await warrantyClaims.raiseDispute(id, {
+        reason: normalizeString(payload?.reason, 4000),
+        feeAccepted: payload?.feeAccepted === true
+      });
+      if (!result.ok) return sendJson(res, 422, { ok: false, errors: [result.error] });
+
+      Promise.allSettled([
+        notifyWarranty.sendDisputeAck(result.claim),
+        notifyWarranty.sendDisputeAlert(result.claim)
+      ]).then((results) => {
+        if (results?.[0]?.status === "fulfilled" && results[0].value?.ok) {
+          warrantyClaims.markNotified(result.claim.id).catch(() => {});
+        }
+      }).catch(() => {});
+
+      return sendJson(res, 200, { ok: true, claim: publicWarrantyClaim(result.claim) });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: ["Couldn't record your dispute. Please call (905) 960-0181."] });
+    }
+  }
+
+  // ---- Customer's own file download (token-gated) ----------------------
+  const publicFileMatch = pathname.match(/^\/api\/warranty-claim\/([^/]+)\/file\/(\d+)$/);
+  if (publicFileMatch && req.method === "GET") {
+    const id = decodeURIComponent(publicFileMatch[1]);
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const claim = await warrantyClaims.getByStatusToken(String(url.searchParams.get("t") || "").trim());
+    if (!claim || claim.id !== id) {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      return res.end("Not found");
+    }
+    return serveWarrantyClaimFile(res, claim, publicFileMatch[2]);
+  }
+
+  // ---- Admin: list -----------------------------------------------------
+  if (req.method === "GET" && pathname === "/api/warranty-claims") {
+    const all = await warrantyClaims.list();
+    const now = Date.now();
+    return sendJson(res, 200, {
+      ok: true,
+      claims: all.map((c) => {
+        const d = warrantyClaims.decorate(c, now);
+        return {
+          id: d.id,
+          status: d.status,
+          statusLabel: d.statusLabel,
+          open: d.open,
+          stale: d.stale,
+          hoursSinceStatus: d.hoursSinceStatus,
+          claimant: d.claimant,
+          invoiceRef: d.invoiceRef,
+          // The queue row shows the opening of the description so Patrick
+          // can triage without opening every claim.
+          descriptionPreview: d.description.slice(0, 180),
+          attachmentCount: d.attachments.length,
+          link: d.link,
+          createdAt: d.createdAt,
+          lastStatusAt: d.lastStatusAt
+        };
+      }),
+      summary: await warrantyClaims.outstandingSummary(now)
+    });
+  }
+
+  // ---- Admin: outstanding count (nav badge) ----------------------------
+  if (req.method === "GET" && pathname === "/api/warranty-claims/outstanding") {
+    const summary = await warrantyClaims.outstandingSummary();
+    // `count` is the badge number: open claims, because an open claim is
+    // work owed to a customer whether or not the 24h clock has run out.
+    return sendJson(res, 200, { ok: true, count: summary.open, ...summary });
+  }
+
+  // ---- Admin: detail ----------------------------------------------------
+  const adminClaimMatch = pathname.match(/^\/api\/warranty-claims\/([^/]+)$/);
+  if (adminClaimMatch && req.method === "GET") {
+    const id = decodeURIComponent(adminClaimMatch[1]);
+    const claim = await warrantyClaims.get(id);
+    if (!claim) return sendJson(res, 404, { ok: false, errors: ["Claim not found."] });
+    // Context is rebuilt on every read rather than stored — a customer or
+    // invoice edited since the claim was filed must show its CURRENT state
+    // on the page Patrick is deciding from.
+    const { context } = await warrantyClaimLink.crossCheck(claim);
+    return sendJson(res, 200, {
+      ok: true,
+      claim: warrantyClaims.decorate(claim),
+      context,
+      statusUrl: notifyWarranty.statusUrl(claim),
+      statuses: warrantyClaims.STATUSES.map((s) => ({
+        key: s,
+        label: warrantyClaims.STATUS_LABELS[s],
+        noteRequired: warrantyClaims.NOTE_REQUIRED_STATUSES.has(s)
+      }))
+    });
+  }
+
+  // ---- Admin: status change --------------------------------------------
+  const patchMatch = pathname.match(/^\/api\/warranty-claims\/([^/]+)$/);
+  if (patchMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(patchMatch[1]);
+      const payload = await parseRequestBody(req);
+      const session = await readSession(req);
+      const by = session?.uid || "admin";
+      const nextStatus = normalizeString(payload?.status, 40);
+      const note = normalizeString(payload?.note, 4000);
+      // notifyCustomer defaults TRUE. Patrick asked that the customer be
+      // emailed on every status change; opting out is the deliberate act.
+      const shouldNotify = payload?.notifyCustomer !== false;
+
+      const before = await warrantyClaims.get(id);
+      if (!before) return sendJson(res, 404, { ok: false, errors: ["Claim not found."] });
+
+      const result = await warrantyClaims.setStatus(id, nextStatus, { note, by });
+      if (!result.ok) return sendJson(res, 422, { ok: false, errors: [result.error] });
+
+      let emailed = null;
+      if (shouldNotify) {
+        // Awaited, unlike the intake fan-out: Patrick just pressed a button
+        // and the UI must be able to tell him whether the customer was
+        // actually emailed. A failure here does NOT roll back the status —
+        // the claim moved, and the page offers a resend.
+        try {
+          const sent = await notifyWarranty.sendStatusUpdate(result.claim, { note, previousStatus: before.status });
+          emailed = sent;
+          if (sent.ok) await warrantyClaims.markNotified(id);
+        } catch (err) {
+          emailed = { ok: false, error: err?.message || String(err) };
+        }
+      }
+
+      const after = await warrantyClaims.get(id);
+      return sendJson(res, 200, {
+        ok: true,
+        claim: warrantyClaims.decorate(after),
+        emailed
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err?.message || "Couldn't update the claim."] });
+    }
+  }
+
+  // ---- Admin: re-run the cross-check ------------------------------------
+  const recheckMatch = pathname.match(/^\/api\/warranty-claims\/([^/]+)\/recheck$/);
+  if (recheckMatch && req.method === "POST") {
+    const id = decodeURIComponent(recheckMatch[1]);
+    const claim = await warrantyClaims.get(id);
+    if (!claim) return sendJson(res, 404, { ok: false, errors: ["Claim not found."] });
+    const { context, claim: updated } = await runWarrantyCrossCheck(claim);
+    return sendJson(res, 200, { ok: true, claim: warrantyClaims.decorate(updated), context });
+  }
+
+  // ---- Admin: book a warranty service call ------------------------------
+  //
+  // Mints a booking session pre-loaded with the claimant's details and
+  // tagged `warranty_claim`, emails the customer the link, and moves the
+  // claim to service_booked. Deliberately reuses the existing booking
+  // flow rather than growing a second scheduler: the customer picks a
+  // real slot against real availability, and the resulting lead / booking
+  // / work order are ordinary records the rest of the CRM already knows
+  // how to handle.
+  const bookMatch = pathname.match(/^\/api\/warranty-claims\/([^/]+)\/book$/);
+  if (bookMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(bookMatch[1]);
+      const payload = await parseRequestBody(req);
+      const session = await readSession(req);
+      const claim = await warrantyClaims.get(id);
+      if (!claim) return sendJson(res, 404, { ok: false, errors: ["Claim not found."] });
+
+      const note = normalizeString(payload?.note, 4000);
+      const bookingSession = await bookingSessions.createSession({
+        source: "warranty_claim",
+        diagnosis: claim.description,
+        diagnosisSummary: `Warranty claim ${claim.id}`,
+        suggestedService: normalizeString(payload?.serviceKey, 60) || "sprinkler_repair",
+        customerHints: {
+          firstName: claim.claimant.firstName,
+          lastName: claim.claimant.lastName,
+          email: claim.claimant.email,
+          phone: claim.claimant.phone,
+          address: claim.claimant.address,
+          // The claim number rides into the lead's notes so the work order
+          // the tech opens on site says which warranty claim it settles.
+          notes: `Warranty claim ${claim.id}${note ? ` — ${note}` : ""}`
+        }
+      });
+      const bookingUrl = joinUrl(resolvePublicBaseUrl(), "/book.html", { session: bookingSession.token });
+
+      const result = await warrantyClaims.setStatus(id, "service_booked", {
+        note: note || `Booking link sent to the customer.`,
+        by: session?.uid || "admin",
+        action: "service_call_booked",
+        extra: { bookingSessionToken: bookingSession.token }
+      });
+      if (!result.ok) return sendJson(res, 422, { ok: false, errors: [result.error] });
+
+      let emailed = null;
+      if (payload?.notifyCustomer !== false) {
+        try {
+          emailed = await notifyWarranty.sendStatusUpdate(result.claim, {
+            note: `${note ? `${note}\n\n` : ""}Please choose a time that suits you: ${bookingUrl}`,
+            previousStatus: claim.status
+          });
+          if (emailed.ok) await warrantyClaims.markNotified(id);
+        } catch (err) {
+          emailed = { ok: false, error: err?.message || String(err) };
+        }
+      }
+
+      return sendJson(res, 200, {
+        ok: true,
+        claim: warrantyClaims.decorate((await warrantyClaims.get(id)) || result.claim),
+        bookingUrl,
+        emailed
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err?.message || "Couldn't create the booking link."] });
+    }
+  }
+
+  // ---- Admin: file download ---------------------------------------------
+  const adminFileMatch = pathname.match(/^\/api\/warranty-claims\/([^/]+)\/file\/(\d+)$/);
+  if (adminFileMatch && req.method === "GET") {
+    const id = decodeURIComponent(adminFileMatch[1]);
+    const claim = await warrantyClaims.get(id);
+    if (!claim) {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      return res.end("Not found");
+    }
+    return serveWarrantyClaimFile(res, claim, adminFileMatch[2]);
+  }
+
+  return false;
+}
+
+// Shared by the admin and token-gated file routes — both have already
+// established that the caller may read THIS claim, so the only remaining
+// job is to find the bytes and send them with an honest content type.
+async function serveWarrantyClaimFile(res, claim, rawN) {
+  const meta = (claim.attachments || []).find((a) => a.n === Number(rawN));
+  const file = await readWarrantyClaimFile(claim.id, rawN);
+  if (!file) {
+    res.writeHead(404, { "Content-Type": "text/plain" });
+    return res.end("Not found");
+  }
+  res.writeHead(200, {
+    "Content-Type": meta?.mediaType || "application/octet-stream",
+    "Content-Length": file.data.length,
+    // inline so a photo previews in the browser tab; the filename is the
+    // descriptive one so a saved copy is identifiable on disk.
+    "Content-Disposition": `inline; filename="${(meta?.filename || `${claim.id}-${rawN}.${file.ext}`).replace(/["\\]/g, "")}"`,
+    "Cache-Control": "private, no-store"
+  });
+  return res.end(file.data);
+}
+
 async function handleApi(req, res, pathname) {
   // Identity + access flows — admin user management, password reset,
   // customer magic-link. Each helper returns false when it didn't handle
@@ -4516,6 +5130,12 @@ async function handleApi(req, res, pathname) {
   if (resetHandled !== false) return;
   const portalLoginHandled = await handlePortalLoginApi(req, res, pathname);
   if (portalLoginHandled !== false) return;
+
+  // Warranty claims — public intake, the token-gated customer status
+  // view, and the admin queue. Returns false when the path isn't one of
+  // its own, same contract as the handlers above.
+  const warrantyHandled = await handleWarrantyClaimsApi(req, res, pathname);
+  if (warrantyHandled !== false) return;
 
   // ===================================================================
   // Twilio call-forward voicemail (additive — does NOT touch the SMS
@@ -5475,9 +6095,11 @@ async function handleApi(req, res, pathname) {
             description: String(sp.additionalFallBlowoutDescription || "").trim() || "Additional plumbing"
           }
         : null;
+      const propertyWarrantyClaims = await warrantyClaimsForCustomerEmail(property.customerEmail);
       return sendJson(res, 200, {
         ok: true,
         propertyPortal: {
+          warrantyClaims: propertyWarrantyClaims,
           customerName: fullName,
           firstName,
           address: String(property.address || "").trim(),
@@ -20228,6 +20850,14 @@ function resolveStaticTarget(pathname) {
   if (pathname === "/admin/quote-folder" || pathname === "/admin/quote-folder/") {
     return { dir: SERVER_DIR, relative: "/quote-folder.html" };
   }
+  // Warranty claim queue + per-claim detail. Both admin-only, gated in
+  // needsAuth above.
+  if (pathname === "/admin/warranty-claims" || pathname === "/admin/warranty-claims/") {
+    return { dir: SERVER_DIR, relative: "/warranty-claims.html" };
+  }
+  if (/^\/admin\/warranty-claim\/[^/]+\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/warranty-claim.html" };
+  }
   // Project-proposal builder (Brief 1, May 2026). Per-quote editor with
   // section nav, line-items picker, attachments. Admin-only.
   if (/^\/admin\/quote\/[^/]+\/proposal\/?$/.test(pathname)) {
@@ -21070,4 +21700,32 @@ server.listen(PORT, HOST, () => {
   // server was down. After that, every 24 hours.
   sweepTrash();
   setInterval(sweepTrash, 24 * 60 * 60 * 1000);
+
+  // Outstanding warranty-claim reminder. The brief asks to "constantly be
+  // reminded of outstanding warranty claims" — this is the push half of
+  // that; the pull half is the nav badge + the queue's "needs an update"
+  // section, which are always on.
+  //
+  // Sends ONLY when something is actually stale (open and untouched for
+  // more than 24h). A digest that arrives every day saying "0 outstanding"
+  // is a digest you stop reading, so an all-clear sends nothing at all.
+  //
+  // Deliberately NOT run on boot: a restart during a deploy would fire a
+  // duplicate digest for claims that were already chased this morning.
+  const sweepWarrantyClaims = async () => {
+    try {
+      const all = await warrantyClaims.list();
+      const now = Date.now();
+      const stale = all
+        .filter((c) => warrantyClaims.isStale(c, now))
+        .map((c) => warrantyClaims.decorate(c, now))
+        .sort((a, b) => Date.parse(a.lastStatusAt) - Date.parse(b.lastStatusAt));
+      if (!stale.length) return;
+      await notifyWarranty.sendOutstandingDigest(stale);
+      console.log(`[warranty-claim] reminder digest sent for ${stale.length} outstanding claim(s).`);
+    } catch (err) {
+      console.warn("[warranty-claim] reminder sweep failed:", err?.message);
+    }
+  };
+  setInterval(sweepWarrantyClaims, 12 * 60 * 60 * 1000);
 });

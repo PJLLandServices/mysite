@@ -41,6 +41,23 @@ superseded `territory-export.js` was deleted (its own replacement documents thre
 silently miscounts). Cover: `scripts/test-territory-export.mjs` (100 assertions, in
 `build:check`).
 
+**2026-08-29 (FLOW-30 — Warranty claims):** The "File a warranty claim" button on
+`warranty.html` pointed at `contact.html`, which is the general contact form — a warranty claim
+arrived as an ordinary lead with no invoice reference, no evidence, no claim number and no queue.
+FLOW-30 opened: a dedicated intake (`warranty-claim.html`), a claim store with Patrick's
+`YYYY-MM-DD-000YYYYNNNN` numbering, a customer status page, a CRM queue and per-claim tool, and
+the deny → dispute round trip. **UNMAPPED — needs a walked acceptance** (see FLOW-30 in Part 4
+for exactly what is unproven: every send in this flow has been exercised against builders and
+routes but never against live Gmail). **No PASS flow was touched** — all new paths, new libs and
+new pages; no existing route, payload shape or catalog changed, and nothing in `stripe.js`,
+`pay.js` or any payment route moves (FLOW-23's invariant). The one edit to an existing customer
+surface is additive: `portalPayloadForLead()` and the property-portal payload each gained a
+`warrantyClaims` array, and `nav-badges.js` gained a third badge fetch. `lib/warranty.js` (the
+warranty POLICY) is **read-only** here — the claim flow consumes `warrantyForWorkOrder()` and
+never redefines a term. Cover: `scripts/test-warranty-claims.mjs` (138 assertions, in
+`build:check`, mutation-tested against four broken states), plus a headless-Chromium pass over
+all four new pages at 1280px and 390px and a 101-assertion live-server walk of the HTTP surface.
+
 **2026-08-27 (Stale CRM assets):** Follow-up to CRM-16, found on Patrick's first live
 attempt. The fix deployed and the delete still refused: CRM **HTML** is `no-store` but
 `/crm/*.js` was `public, max-age=30` with no validators, so the page paired fresh markup
@@ -444,6 +461,10 @@ Previously logged as a change order; **closed, already built.**
 | `spring_opening` | 1 year |
 | `fall_closing` | 1 year |
 
+**The CLAIM against this policy is FLOW-30 (Part 4), added 2026-08-29.** This section stays the
+single source of the policy; `lib/warranty-claims.js` is the claim record and never restates a
+term. `warrantyForWorkOrder()` is read-only to the claim flow.
+
 Installations carry 3 years; everything else 1 year. Hydrawise controller retrofits are
 **service**, not installation — their `service_visit` typing is correct and must not be changed.
 Parts replaced during a service call inherit the service warranty; warranty attaches to the work
@@ -516,6 +537,69 @@ Tick items off here as they're confirmed; nothing below blocks new work.
 ---
 
 # Part 4 — Unmapped
+
+## FLOW-30 — Warranty claim intake → CRM queue → resolution — **UNMAPPED** (opened 2026-08-29)
+
+**Hop chain (as built):**
+
+1. Customer taps *File a warranty claim* on `warranty.html` → `warranty-claim.html`.
+2. Form POSTs JSON to `POST /api/warranty-claims` (**public**; anti-bot gate first — honeypot,
+   `_ts` time-trap, per-IP 5/10min, Turnstile). Files ride as base64 and are magic-byte verified
+   by `validatePhotos(..., { mode: "wo" })` — the validator that already accepts PDF alongside
+   images. Every field is mandatory server-side; the invoice copy is mandatory.
+3. `warrantyClaims.create()` allocates the claim number inside the same read-modify-write as the
+   append, so two simultaneous submissions cannot collide. Files land at
+   `server/data/warranty-claim-files/<claimNumber>/<n>.<ext>`.
+4. `warrantyClaimLink.crossCheck()` resolves customer (email → phone) → their invoices → the
+   invoice named → property → work order → warranty window via `lib/warranty.js`. Result stored
+   on the claim as `link`; the fuller read-side `context` is rebuilt on every CRM read so an
+   edited customer record never shows stale on the page Patrick decides from.
+5. Fan-out: customer acknowledgement + team alert to `info@` with the customer's files attached.
+6. Patrick works it at `/admin/warranty-claims` → `/admin/warranty-claim/<number>`. Six actions:
+   under review, contact customer, return email with questions, book for service call, resolved,
+   denied. Each emails the customer, subject `RE: Warranty Claim File Number — <number>`.
+7. Denied → the customer's status page offers a dispute gated on accepting the service-call-fee
+   condition → claim re-opens as `disputed` and the team is alerted.
+
+**Numbering:** `YYYY-MM-DD-000YYYYNNNN` — filed date, then `000` + year + a four-digit per-year
+sequence that resets each January. e.g. `2026-08-29-00020260001`. The sequence is derived from
+the max already issued in the store, not from a counter file, so a restored backup cannot
+re-issue a number. The number is the record id and the on-disk directory name, and is validated
+against `CLAIM_NUMBER_RE` at every filesystem and route boundary.
+
+**Two credentials, never mixed:** the CRM API is admin/tech-gated in `needsAuth()`; the
+customer's routes carry the claim's own 32-hex `statusToken` in the query string, checked
+against the claim number in the path so one claim's token cannot open another. The claim number
+is sequential and therefore guessable — it identifies, it does not authorize.
+
+**Reminders:** open claims drive a nav badge on every admin page; open-and-untouched-for-24h
+claims drive a band at the top of the queue and a 12-hourly digest to the team. The digest sends
+NOTHING when nothing is stale, and does not run on boot (a deploy would re-send it).
+
+**What is verified:** 138 node assertions in `build:check` (mutation-tested); a 101-assertion
+live-server walk covering validation, magic-byte rejection, anti-bot, numbering and sequence,
+token scoping, cross-claim token isolation, path traversal, admin gating, the deny → dispute →
+book → resolve cycle, and the cross-check against seeded customer/property/WO/invoice records;
+headless Chromium over all four new pages at 1280px and 390px (no console errors, no horizontal
+overflow).
+
+**What is NOT verified — the walked acceptance still owed:**
+
+- **No email has been sent through live Gmail.** Every template is asserted at the builder
+  level and every route's send path is exercised, but `getTransporter()` returns null without
+  `GMAIL_USER` / `GMAIL_APP_PASSWORD`, so no message has actually left the box. Send one real
+  claim end to end and read all four emails (acknowledgement, team alert with attachments,
+  a status update, a denial) in a real inbox before trusting this.
+- Turnstile is exercised only in its test-key configuration.
+- The booking hand-off mints a session and the session resolves with the claim's context, but
+  no one has walked it through to a confirmed booking and an opened work order.
+- The 24h reminder digest has not been observed firing on a real clock.
+
+**Status:** UNMAPPED until the above is walked. The flow is complete and defensible in code; it
+has not been proven against live third parties.
+
+---
+
 
 Nothing below has been walked. Assume nothing works until verified.
 
