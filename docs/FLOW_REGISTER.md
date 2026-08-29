@@ -41,6 +41,58 @@ superseded `territory-export.js` was deleted (its own replacement documents thre
 silently miscounts). Cover: `scripts/test-territory-export.mjs` (100 assertions, in
 `build:check`).
 
+**2026-08-29 (CRM-21 — the record history now names the operator):** The other half of CRM-20,
+and the gap that entry left open. Seventeen write paths in `server.js` stamped a hardcoded
+`by: "admin"` into the `history[]` they appended, so a customer edit, an ownership transfer, a
+work-order patch, a fee waiver and a verbal quote acceptance all recorded the literal string
+"admin" rather than the person. Every one of the seventeen is inside an authenticated request
+handler acting on a real operator's request — none was a system path — so in every case the
+information was available and thrown away.
+
+They now stamp `actorLabel(req)`.
+
+- **The value is a DISPLAY NAME, not a uid**, because `by` is rendered straight to the screen:
+  eight surfaces do `by ${h.by || "system"}`, and `work-order.js` passes it through
+  `HISTORY_ACTOR_LABELS[raw] || raw` — an identity fallback, so a real name renders verbatim
+  and an unknown key can't blank the row. A uid here would put `usr_a1b2c3` in front of
+  Patrick. The machine-stable half — uid, route, timestamp, outcome — is the action log's job
+  (CRM-20); the two are designed to be read together, and the tests assert both halves exist.
+- **`actorLabel()` cannot throw, and falls back to the exact literal it replaced.** The worst
+  case of this whole change is therefore today's behaviour: a history entry that says "admin".
+  That property is what makes changing seventeen live write paths in one go reasonable, and it
+  is pinned by test — every early exit returns the fallback, and the one resolving return is
+  itself `|| fallback` guarded so an empty name can't reach a record.
+- **Genuinely automated cascades still say `"system"`** (the deposit hook, the quote-accepted
+  cascade). Attributing a background job to whoever happened to trigger it would be a lie, not
+  an improvement.
+- **Tradeoff, recorded deliberately:** a display name is a snapshot of what someone was called
+  at the time, so renaming a user does not rewrite old history. That is the correct behaviour
+  for an audit trail, and there is a test that renames a user and asserts the old entries keep
+  the old name.
+
+**No PASS flow touched.** All seventeen sites are admin/tech CRM routes; none is in the
+customer portal (FLOW-01 / FLOW-02) or on a payment route (FLOW-23's invariant — nothing in
+`stripe.js`, `pay.js` or any payment route moves). No route's behaviour, status code or payload
+changes; the only difference is the string written into a history entry, and no consumer
+branches on that value (the one `.by ===` comparison in the codebase tests for `"customer"`).
+
+Cover: `scripts/test-actor-attribution.mjs` (21 assertions, in `build:check`) — source guards
+that fail the build if any `by: "admin"` literal returns, if the helper loses its try/catch or
+its fallback, if the resolution order stops preferring a name, or if the renderer it depends on
+stops passing an unmapped actor through. Plus a **live-server walk** (13 assertions) with two
+seeded operators: a customer created by an admin records `"Dana Okonkwo"`, the same record
+edited by a tech records `"Sam Whitfield"`, **two operators on one record are distinguishable
+afterwards** — which is the entire point — the action log carries the admin's uid for the same
+event, and a rename leaves existing history untouched.
+
+**Still open — a different and larger defect than this one.** Roughly fifty OTHER call sites
+stamp a raw `session.uid` into the same `by` field (`by: session?.uid || "admin"`), so those
+histories attribute correctly but render an unreadable id. They are not the CRM-21 defect —
+attribution is present, it is legibility that is missing — and several sit on money paths
+(`invoices.voidInvoice`, `invoices.remove`, `deposits.onQuoteAccepted`). Converting them to
+`actorLabel(req)` is mechanical and would make `by` a display name everywhere, but it is a
+fifty-site change through invoice code and wants its own reviewed pass, not a ride on this one.
+
 **2026-08-29 (CRM-20 — the admin action log):** The app had **no request log at all** — the
 same gap the FLOW-21 entry names ("no `viewedAt` field, no open tracking, no app-level request
 log"), which is true generally and not just for quote views. Per-record `history[]` arrays
@@ -574,10 +626,15 @@ Cover: `scripts/test-admin-actions.mjs` (71 assertions, in `build:check`), inclu
 guards that fail the build if the hook leaves the auth gate, if the log write becomes awaited,
 if ip/user-agent stop being captured synchronously, or if the read route loses its admin gate.
 
-**Known gap:** this records the REQUEST. It does not fix the 17 hardcoded `by: "admin"` stamps
-inside per-record `history[]` arrays — those still say "admin" rather than naming the operator.
-Closing that means threading the acting user through existing write paths, which touches PASS
-flows and needs its own change.
+**Its other half is the record history itself** (CRM-21): the seventeen write paths that used
+to stamp `by: "admin"` now stamp the operator's display NAME via `actorLabel(req)`. Name in the
+record for reading, uid in this ledger for auditing — the two are meant to be used together,
+and neither is sufficient alone. If this ledger is ever removed, the naming change needs
+revisiting, because a display name is not stable across a user rename.
+
+**Known gap:** roughly fifty further call sites stamp a raw `session.uid` into `by`, which
+attributes correctly but renders an unreadable id. Converting those to `actorLabel(req)` is
+mechanical but crosses invoice and deposit code, so it needs its own reviewed pass.
 
 ---
 

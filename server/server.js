@@ -614,6 +614,37 @@ async function requireAdmin(req) {
   return session;
 }
 
+// The name to stamp into a record's `history[]` for whoever made this
+// request. Replaces the hardcoded `by: "admin"` that used to go into every
+// admin-initiated history entry — with more than one operator on the
+// account (a second tech, or an agent acting from the field) "admin" says
+// nothing about who actually did it.
+//
+// Returns a DISPLAY NAME, not an id, because `by` is rendered straight to
+// the screen in nine surfaces (`by ${h.by || "system"}`) and work-order.js
+// passes it through HISTORY_ACTOR_LABELS with an identity fallback. A uid
+// here would put "usr_a1b2c3" in front of Patrick. The machine-stable
+// attribution — uid, route, timestamp, outcome — is the action log's job
+// (lib/admin-actions.js); the two are meant to be read together.
+//
+// NEVER throws, and falls back to the exact literal it replaced. The worst
+// case for this whole change is therefore today's behaviour: a history
+// entry that says "admin". That property is what makes it safe to apply
+// across seventeen live write paths at once.
+async function actorLabel(req, fallback = "admin") {
+  try {
+    const session = await requireUser(req);
+    if (!session || !session.uid) return fallback;
+    const user = await users.get(session.uid);
+    if (!user) return fallback;
+    // Same 80-char cap the receiving libs apply, so what's stamped here is
+    // what gets stored rather than a silently truncated version of it.
+    return String(user.name || user.email || session.uid).slice(0, 80) || fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
 async function requireCustomer(req) {
   const session = await readSession(req);
   if (!session) return null;
@@ -7961,7 +7992,7 @@ async function handleApi(req, res, pathname) {
       }
       const updated = await properties.transferOwner(propertyId, {
         newCustomerId,
-        by: "admin",
+        by: await actorLabel(req),
         note: String(payload?.note || "").slice(0, 400)
       });
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
@@ -8182,7 +8213,7 @@ async function handleApi(req, res, pathname) {
       if (!payload || !String(payload.name || "").trim()) {
         return sendJson(res, 422, { ok: false, errors: ["Customer name is required."] });
       }
-      const created = await customers.create(payload, { by: "admin", note: "Created from admin UI" });
+      const created = await customers.create(payload, { by: await actorLabel(req), note: "Created from admin UI" });
       // Non-blocking dedup warning (commercial matching, Phase 0.5). If the
       // address the admin typed already belongs to an existing account,
       // say so — creating a second customer for a building PJL already
@@ -8225,7 +8256,7 @@ async function handleApi(req, res, pathname) {
     if (req.method === "PATCH") {
       try {
         const payload = await parseRequestBody(req);
-        const updated = await customers.update(id, payload, { by: "admin", note: "Edit from /admin/customer" });
+        const updated = await customers.update(id, payload, { by: await actorLabel(req), note: "Edit from /admin/customer" });
         if (!updated) return sendJson(res, 404, { ok: false, error: "Customer not found." });
         return sendJson(res, 200, { ok: true, customer: updated });
       } catch (err) {
@@ -8282,7 +8313,7 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 422, { ok: false, errors: ["secondaryId is required."] });
       }
       const result = await customers.mergeCustomers(primaryId, secondaryId, {
-        by: "admin",
+        by: await actorLabel(req),
         note: String(payload?.note || "").slice(0, 400)
       });
       return sendJson(res, 200, { ok: true, ...result });
@@ -8858,7 +8889,7 @@ async function handleApi(req, res, pathname) {
           ? `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${q.approval.token}`
           : null,
         returnEmail: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"
-      }, { by: "admin" });
+      }, { by: await actorLabel(req) });
       return;
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate PDF."] });
@@ -9200,7 +9231,7 @@ async function handleApi(req, res, pathname) {
         await invoices.update(invId, patch);
         updated = await invoices.appendHistory(invId, {
           action: "resent",
-          by: "admin",
+          by: await actorLabel(req),
           note: `Re-emailed to ${inv.customerEmail}.`
         });
       }
@@ -11244,7 +11275,7 @@ async function handleApi(req, res, pathname) {
         serviceKey,
         serviceLabel: service.label,
         durationMinutes: newMinutes,
-        by: "admin"
+        by: await actorLabel(req)
       });
 
       // Mirror onto the lead.booking read-cache + WO envelope + lead status.
@@ -12012,7 +12043,7 @@ async function handleApi(req, res, pathname) {
           source: forcedByAdmin ? "admin_custom" : "slot",
           createdAt: now,
           updatedAt: now,
-          history: [{ ts: now, action: "created_followup", by: "admin", note: `Follow-up to ${parent.id}${forcedByAdmin ? " (custom time)" : ""}` }]
+          history: [{ ts: now, action: "created_followup", by: await actorLabel(req), note: `Follow-up to ${parent.id}${forcedByAdmin ? " (custom time)" : ""}` }]
         };
         const allWithNew = [newBooking, ...allRec];
         try {
@@ -12236,7 +12267,7 @@ async function handleApi(req, res, pathname) {
       try {
         await workOrders.appendHistory(id, {
           action: "invoice_drafted",
-          by: "admin",
+          by: await actorLabel(req),
           note: `Manual: ${inv.id} ($${Number(inv.total).toFixed(2)})`
         });
       } catch (err) { console.warn("[wo-history] manual invoice entry failed:", err?.message); }
@@ -12347,7 +12378,7 @@ async function handleApi(req, res, pathname) {
         : "manual";
       const quoteId = triggerType === "quote_send" ? (payload?.quoteId || null) : null;
       const record = await woReportSnapshot.createSnapshot({
-        woId, triggerType, quoteId, by: "admin"
+        woId, triggerType, quoteId, by: await actorLabel(req)
       });
       return sendJson(res, 201, { ok: true, snapshot: record });
     } catch (err) {
@@ -15861,7 +15892,7 @@ async function handleApi(req, res, pathname) {
         // Project_proposal quotes get the full enrichment.
         proj = await projects.createFromProposal(quote, {
           customerName, customerEmail, customerPhone, address, propertyId,
-          by: "admin"
+          by: await actorLabel(req)
         });
       } else {
         // Auto-generate a project name from the customer + quote id. Patrick
@@ -16940,7 +16971,7 @@ async function handleApi(req, res, pathname) {
       // payload up front so an incomplete waiver (checked with no reason,
       // or "other" with no note) 422s before we write a WO. Normalizes to
       // { waived, reason, notes, waivedBy, waivedAt } or null when off.
-      const waiverResult = normalizeServiceFeeWaiver(payload.serviceFeeWaiver, { by: "admin" });
+      const waiverResult = normalizeServiceFeeWaiver(payload.serviceFeeWaiver, { by: await actorLabel(req) });
       if (waiverResult.error) {
         return sendJson(res, 422, { ok: false, errors: [waiverResult.error] });
       }
@@ -17110,7 +17141,7 @@ async function handleApi(req, res, pathname) {
         if (lead?.booking?.start) sourceParts.push(`booking @ ${lead.booking.start}`);
         await workOrders.appendHistory(wo.id, {
           action: "created",
-          by: "admin",
+          by: await actorLabel(req),
           note: `${workOrders.TEMPLATES[type].label}${sourceParts.length ? ` from ${sourceParts.join(", ")}` : ""}`
         });
       } catch (err) { console.warn("[wo-history] create entry failed:", err?.message); }
@@ -17480,7 +17511,7 @@ async function handleApi(req, res, pathname) {
         try {
           await workOrders.appendHistory(id, {
             action: "patch",
-            by: "admin",
+            by: await actorLabel(req),
             note: `Updated: ${summary}`
           });
         } catch (err) { console.warn("[wo-history] patch entry failed:", err?.message); }
@@ -17869,7 +17900,7 @@ async function handleApi(req, res, pathname) {
       try {
         await workOrders.appendHistory(id, {
           action: "photo_delete",
-          by: "admin",
+          by: await actorLabel(req),
           note: `Removed photo #${n} (${photoMeta.category || "general"})`
         });
       } catch (err) { console.warn("[wo-history] photo delete entry failed:", err?.message); }
@@ -18403,7 +18434,7 @@ async function handleApi(req, res, pathname) {
       if (waiving) {
         const norm = normalizeServiceFeeWaiver(
           { waived: true, reason: payload.reason, notes: payload.notes },
-          { by: "admin" }
+          { by: await actorLabel(req) }
         );
         if (norm.error) return sendJson(res, 422, { ok: false, errors: [norm.error] });
         waiver = norm.waiver;
@@ -19862,7 +19893,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
             await quotes.accept(lead.quoteId, {
               leadId: lead.id,
               bookingId: canonicalBooking ? canonicalBooking.id : null,
-              by: "admin",
+              by: await actorLabel(req),
               note: "Verbal acceptance recorded by admin at booking (phone)."
             });
             const acceptedLeads = await readLeads();
