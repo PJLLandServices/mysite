@@ -207,6 +207,87 @@ function customerDocNoun(quote) {
   };
 }
 
+// ---- Branch labels + work nature (2026-08-29) ------------------------
+//
+// PROPOSAL_BRANCH_LABELS is the ONE canonical label map. The browser
+// surfaces (quote folder card, project page, proposal-builder <select>)
+// each carry their own copy because they cannot require() a server module —
+// `scripts/test-branch-labels.mjs` pins every copy to this map, so adding or
+// rewording a label here fails the build until each surface matches. Same
+// arrangement the line-item order uses between the PDF and the browser
+// builder.
+//
+// "Residential Install" (was plain "Residential", 2026-08-29): the branch
+// names a NEW residential sprinkler system installation, and "Residential"
+// alone read as a customer category rather than the kind of work — easy to
+// confuse with residential_repair sitting two rows below it.
+const PROPOSAL_BRANCH_LABELS = {
+  gc_subcontract: "GC Subcontract",
+  direct_residential: "Residential Install",
+  lighting_design: "Lighting Design",
+  renovation_coordination: "Renovation Coordination",
+  change_order: "Change Order",
+  residential_repair: "Residential Repair",
+  lighting_repair: "Landscape Lighting Repairs"
+};
+
+// The branches whose work FIXES a system that already exists. Everything
+// else a project_proposal can be is installation / design-build work.
+// Declared as the exception list, not the inclusion list, deliberately: a
+// NEW branch is far more likely to be install-side, and if someone adds one
+// and forgets this set, they get the installation treatment (a confirmation
+// email the customer can act on) rather than silence.
+const REPAIR_BRANCHES = new Set(["residential_repair", "lighting_repair"]);
+
+function branchLabel(branch) {
+  return PROPOSAL_BRANCH_LABELS[branch] || branch || "";
+}
+
+// Is this quote for INSTALLATION work, as opposed to repair?
+//
+// Drives (a) whether the customer gets an acceptance-confirmation email
+// promising we'll be in touch to schedule, and (b) the wording of the
+// /approve page title + link preview.
+//
+// ai_repair_quote and on_site_quote are repair work by construction — the
+// on-site quote is a tech finding faults on a visit, and the AI quote prices
+// a repair from the diagnostic chat. Only a project_proposal can be an
+// installation, and then only on a non-repair branch.
+//
+// NOTE (Patrick's call, flagged 2026-08-29): the smart-controller upgrade
+// rides ai_repair_quote (narrativeKey "smart-controller") and is arguably an
+// installation. It is deliberately EXCLUDED here so this change does not
+// alter what an existing repair-side flow sends to customers. Move it by
+// adding a narrativeKey check, not by loosening the type test.
+function isInstallationQuote(quote) {
+  if (!quote || quote.type !== "project_proposal") return false;
+  return !REPAIR_BRANCHES.has(quote.branch);
+}
+
+// Customer-facing title for the /approve page and its link preview.
+//
+// This is what shows up as the description on a texted link. It said
+// "Approve repair quote" for every quote type, because the approval page was
+// built for the repair side of the business before proposals existed — so a
+// homeowner being sent a $20k sprinkler installation proposal got a text
+// preview calling it a repair quote.
+//
+// Carries the WORK TYPE and the document noun and nothing else: no customer
+// name, address, or price. Link previews are fetched by Apple/Google/Meta
+// servers and cached by them, so nothing here may be private.
+function approvePageTitle(quote) {
+  if (!quote) return "Approve your quote";
+  if (quote.type === "project_proposal") {
+    const noun = customerDocNoun(quote).lower; // "proposal" | "estimate"
+    return isInstallationQuote(quote)
+      ? `Approve your installation ${noun}`
+      : `Approve your repair ${noun}`;
+  }
+  // ai_repair_quote / on_site_quote — unchanged wording, it was correct for
+  // these all along.
+  return "Approve your repair quote";
+}
+
 // pdfOptions.lineItems enum (Brief D). An enum, not two booleans, so the
 // nonsense state "no descriptions AND no pricing" is unrepresentable.
 const PDF_LINE_ITEM_MODES = ["itemized", "descriptions_only", "summary"];
@@ -2797,6 +2878,11 @@ module.exports = {
   resolveBranchDefaults,
   deliveryModeForBranch,
   customerDocNoun,
+  PROPOSAL_BRANCH_LABELS,
+  REPAIR_BRANCHES: [...REPAIR_BRANCHES],
+  branchLabel,
+  isInstallationQuote,
+  approvePageTitle,
   PROPOSAL_SECTION_KINDS,
   ATTACHMENT_KINDS,
   ATTACHMENT_MIME_WHITELIST,

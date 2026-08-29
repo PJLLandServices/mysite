@@ -13,11 +13,16 @@ const TYPE_LABELS = {
   project_proposal: "Project proposal"
 };
 
+// Browser copy of PROPOSAL_BRANCH_LABELS in server/lib/quotes.js — this file
+// runs in the page and can't require() a server module. Pinned to the
+// canonical map by scripts/test-branch-labels.mjs, so drift fails the build.
+// ("Renovation" here vs "Renovation Coordination" everywhere else was
+// exactly that drift, found when the map was centralized.)
 const BRANCH_LABELS = {
   gc_subcontract: "GC Subcontract",
-  direct_residential: "Residential",
+  direct_residential: "Residential Install",
   lighting_design: "Lighting Design",
-  renovation_coordination: "Renovation",
+  renovation_coordination: "Renovation Coordination",
   change_order: "Change Order",
   residential_repair: "Residential Repair",
   lighting_repair: "Landscape Lighting Repairs"

@@ -199,9 +199,11 @@
     }
   }
 
+  // Browser copy of PROPOSAL_BRANCH_LABELS in server/lib/quotes.js — pinned
+  // by scripts/test-branch-labels.mjs.
   const BRANCH_LABELS = {
     gc_subcontract: "GC Subcontract",
-    direct_residential: "Residential",
+    direct_residential: "Residential Install",
     lighting_design: "Lighting Design",
     renovation_coordination: "Renovation Coordination",
     change_order: "Change Order",

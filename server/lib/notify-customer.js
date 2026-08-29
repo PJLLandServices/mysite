@@ -828,6 +828,92 @@ async function sendCustomerLoginLink(lead, magicLink) {
   }
 }
 
+// Quote-accepted confirmation — INSTALLATION work only (2026-08-29).
+//
+// When a customer accepts an installation proposal we now write back to
+// them: their approval landed, and we will be in touch to schedule. Before
+// this, accepting a proposal sent the customer NOTHING (only Patrick got the
+// alert, and only a deposit-enabled quote produced a customer email at all),
+// so a homeowner who had just committed to a five-figure installation got
+// silence and had no confirmation anything had registered.
+//
+// Repair work is deliberately excluded — the caller gates on
+// quotes.isInstallationQuote(). A repair quote accepted on site is followed
+// by the tech doing the work, not by a scheduling conversation, and Patrick
+// does not want an approval email going out on that path.
+//
+// Best-effort like every other notification on the acceptance path: the
+// caller wraps it, and a failure here must never disturb the acceptance
+// record the customer just created.
+async function sendQuoteAcceptedConfirmation(quote, {
+  toEmail = "",
+  customerName = "",
+  approveUrl = "",
+  depositAmountText = ""
+} = {}) {
+  const transporter = getTransporter();
+  const to = String(toEmail || quote?.customerEmail || "").trim();
+  if (!to) return { ok: false, skipped: true, reason: "no customer email" };
+  if (!transporter) {
+    console.warn(`[quote-accepted] Skipped (no Gmail config) — quoteId=${quote?.id}`);
+    await logSend({ kind: "stage_notice", to, ok: false, error: "no Gmail config", refId: quote?.id });
+    return { ok: false, skipped: true };
+  }
+
+  const rawName = String(customerName || "").trim().split(" ")[0];
+  const firstName = rawName || "there";
+  const displayId = (quote?.quoteNumberDisplay && String(quote.quoteNumberDisplay).trim()) || quote?.id || "";
+  // "proposal" / "estimate" — the same noun the document itself used, so the
+  // email doesn't rename the thing they just signed.
+  const noun = quote?.branch === "residential_repair" ? "estimate" : "proposal";
+
+  const depositHtml = depositAmountText
+    ? `<p style="margin: 0 0 12px;">A deposit invoice for <strong>${escapeHtml(depositAmountText)}</strong> is on its way in a separate email — the installation is scheduled once that's settled.</p>`
+    : "";
+  const depositText = depositAmountText
+    ? `A deposit invoice for ${depositAmountText} is on its way in a separate email — the installation is scheduled once that's settled.`
+    : "";
+
+  const { html, text } = brandedEmail({
+    headline: "Your approval is in — thank you",
+    bodyHtml: `
+      <p style="margin: 0 0 12px;">Hi ${escapeHtml(firstName)},</p>
+      <p style="margin: 0 0 12px;">We've received your signed approval for ${escapeHtml(noun)} <strong>${escapeHtml(displayId)}</strong>. It's on file and your installation is now in our queue.</p>
+      ${depositHtml}
+      <p style="margin: 0 0 12px;"><strong>What happens next:</strong> we'll be in touch shortly to book your installation dates and walk you through how the work will run on site. Nothing further is needed from you right now.</p>
+    `,
+    bodyText: [
+      `Hi ${firstName},`,
+      "",
+      `We've received your signed approval for ${noun} ${displayId}. It's on file and your installation is now in our queue.`,
+      depositText,
+      "",
+      "What happens next: we'll be in touch shortly to book your installation dates and walk you through how the work will run on site. Nothing further is needed from you right now."
+    ].filter(Boolean).join("\n"),
+    ctaLabel: "View your approved " + noun,
+    ctaUrl: approveUrl || resolvePublicBaseUrl(),
+    footerNote: `Questions before we start? Call us at <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a> or just reply to this email.`
+  });
+
+  try {
+    const info = await transporter.sendMail({
+      from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
+      to,
+      replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
+      subject: `Approval received — ${displayId} · we'll be in touch to schedule`,
+      html,
+      text
+    });
+    await logSend({ kind: "stage_notice", to, ok: true, refId: quote?.id });
+    console.log(`[quote-accepted] sent quoteId=${quote?.id} to=${to} id=${info.messageId}`);
+    return { ok: true, messageId: info.messageId };
+  } catch (error) {
+    await logSend({ kind: "stage_notice", to, ok: false, error: error.message, refId: quote?.id });
+    console.error(`[quote-accepted] failed quoteId=${quote?.id}:`, error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
 // Admin/tech password-reset email. Triggered from
 // POST /api/users/:id/reset-password. `user` is the public-shape user
 // record from lib/users.js; `magicLink` already embeds the token.
@@ -2100,6 +2186,7 @@ module.exports = {
   sendInvoiceToCustomer,
   sendPaymentReceipt,
   sendCustomerLoginLink,
+  sendQuoteAcceptedConfirmation,
   sendAdminPasswordResetLink,
   sendOutreachEmail,
   sendOutreachSms,
