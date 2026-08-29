@@ -485,6 +485,42 @@ ok("a failed claim write-back is surfaced to the admin",
 // nobody can read it, making it look like a dead button.
 ok("the generic waiver Remove is hidden on a live warranty WO",
   woJs.includes("removeBtn.hidden = locked || liveWarranty"));
+
+// ---- The fee waiver is ADMIN ONLY (Patrick's ruling, 2026-08-29) ------
+// Waiving or restoring the $95 changes what the customer pays, and on a
+// warranty WO it decides whether the claim was honoured. A tech who finds
+// a claim doesn't stack up reaches out to the office.
+ok("the waiver route is gated to admin",
+  server.includes('if (/^\\/api\\/work-orders\\/[^/]+\\/service-fee-waiver$/.test(pathname)) return "admin";'));
+// needsAuth returns on FIRST match, so the specific rule is only load-
+// bearing while it sits above the generic /api/work-orders "user" rule.
+// Swap the two lines and every tech silently regains the control.
+ok("and that rule sits ABOVE the generic work-orders rule",
+  server.indexOf('service-fee-waiver$/.test(pathname)) return "admin"') <
+  server.indexOf('if (pathname.startsWith("/api/work-orders")) return "user";'));
+// Server is the source of truth; the UI gating below is convenience.
+ok("waiving is hidden from a non-admin", woJs.includes("offer.hidden = !viewerIsAdmin"));
+ok("removing is hidden from a non-admin", woJs.includes("|| !viewerIsAdmin"));
+ok("converting requires admin in the UI too", woJs.includes("const canConvert = viewerIsAdmin"));
+ok("a non-admin is told to contact the office instead",
+  woJs.includes("woWarrantyAdminOnly"));
+ok("and that note names the office", /contact the office/i.test(woHtml));
+// The role resolves asynchronously AFTER the WO renders, so without a
+// re-render the controls would keep whatever state they loaded with.
+// They default hidden (fail closed), so this is what reveals them.
+ok("the money controls re-render once the role resolves",
+  /renderUnlockControls\(loadedWorkOrder\);[\s\S]{0,400}renderServiceFeeWaiver\(loadedWorkOrder\);[\s\S]{0,120}renderWorkOrderWarranty\(loadedWorkOrder\);/.test(woJs));
+// A tech must keep the rest of their job — this is a scalpel, not a
+// lockout of the work-order API. Exactly two work-order routes are
+// admin-gated: unlock/relock (pre-existing, the same class of decision)
+// and the fee waiver. Anything else appearing here means the lock was
+// widened past what Patrick asked for.
+const adminWoRoutes = (server.match(/^\s*if \(\/\^\\\/api[^\n]*work-orders[^\n]*return "admin";/gm) || []);
+eq("exactly two work-order routes are admin-only", adminWoRoutes.length, 2);
+ok("one of them is the pre-existing unlock/relock",
+  adminWoRoutes.some((l) => l.includes("unlock|relock")), adminWoRoutes);
+ok("the other is the fee waiver",
+  adminWoRoutes.some((l) => l.includes("service-fee-waiver")), adminWoRoutes);
 ok("a warranty WO is 'live' only until it is converted",
   /liveWarranty = [^;]*!wo\.warrantyClaim\.converted/.test(woJs));
 // An error written into a hidden panel is worse than no error.

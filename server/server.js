@@ -1033,6 +1033,16 @@ function needsAuth(method, pathname) {
   // Work orders (tech-side per-visit records) are admin-only for now.
   // Phase 4 will add a customer-portal "approve quote" subset that's
   // public via a token, but that doesn't exist yet.
+  // Service-call fee waiver — ADMIN ONLY (Patrick's ruling, 2026-08-29).
+  // Waiving or restoring the $95 changes what the customer pays, and on a
+  // warranty work order it also decides whether a claim was honoured. A
+  // tech who finds a claim doesn't stack up reaches out to the office
+  // rather than changing the money at the door. Techs get a 403 here even
+  // though no tech surface offers the control — the server is the source
+  // of truth, the UI gating is convenience (same call as the bulk/Trash
+  // routes above). MUST stay ABOVE the generic /api/work-orders rule:
+  // needsAuth returns on first match.
+  if (/^\/api\/work-orders\/[^/]+\/service-fee-waiver$/.test(pathname)) return "admin";
   if (pathname.startsWith("/api/work-orders")) return "user";
   if (pathname.startsWith("/api/invoices")) return "user";
   if (pathname.startsWith("/api/settings")) return "user";

@@ -41,6 +41,34 @@ superseded `territory-export.js` was deleted (its own replacement documents thre
 silently miscounts). Cover: `scripts/test-territory-export.mjs` (100 assertions, in
 `build:check`).
 
+**2026-08-29 (FLOW-30c — the fee waiver is ADMIN ONLY):** Patrick's ruling: *"Techs will have to
+reach out to admin in order to alleviate a warranty claim for free."* Waiving or restoring the
+$95 changes what the customer pays, and on a warranty work order it also decides whether a claim
+was honoured — so it is now an admin decision at the SERVER, not just a hidden button.
+
+`POST /api/work-orders/:id/service-fee-waiver` returns `"admin"` from `needsAuth()`. **The rule
+must stay ABOVE the generic `/api/work-orders` → `"user"` line — `needsAuth` returns on first
+match, so swapping the two silently hands every tech the control back.** A test pins the order
+(mutation-tested: moving it below fails the build). Same class of decision as `unlock`/`relock`,
+which were already admin-only — this makes the two consistent.
+
+Scalpel, not a lockout: a tech still reads the WO, patches notes/zones/photos, builds the on-site
+quote and takes the signature. Verified against a real tech account — GET, PATCH and
+`on-site-quote/build` all still 200; only the two waiver calls 403.
+
+UI follows the server rather than replacing it. A tech on the admin WO page still SEES the
+"Service call fee waived" banner and the whole warranty panel — they need to know the visit is
+free and what prior work it honours — but the waive offer, the Remove button and the convert
+control are hidden, replaced by a line telling them to contact the office. The role resolves
+async from `/api/session` AFTER the WO renders, so the controls default hidden (fail closed) and
+`resolveViewerRole()` re-renders them; without that re-render an admin would lose their own
+buttons.
+
+Cover: `scripts/test-warranty-claims.mjs` now 220 assertions, plus a 19-assertion live walk with
+separate admin and tech logins (including that a refused attempt leaves the waiver, the WO and
+the claim completely untouched — no phantom conversion) and a 10-assertion browser pass over both
+roles' views of the same work order.
+
 **2026-08-29 (FLOW-30b — Approved claim → repair work order → the warranty escape hatch):**
 Follow-up to FLOW-30. Approving a claim now RAISES the repair work order in the same action, and
 a warranty visit that turns out not to be covered can be converted to a chargeable service call

@@ -1139,9 +1139,12 @@ function renderServiceFeeWaiver(wo) {
     // which only the convert control collects. Leaving this button would
     // give two paths to the same money change, one of which always 422s.
     const liveWarranty = !!(wo && wo.warrantyClaim && wo.warrantyClaim.claimId && !wo.warrantyClaim.converted);
-    if (removeBtn) removeBtn.hidden = locked || liveWarranty;
+    if (removeBtn) removeBtn.hidden = locked || liveWarranty || !viewerIsAdmin;
   } else {
-    if (offer) offer.hidden = false;
+    // Waiving is admin-only (server returns 403 for a tech). Hide the
+    // offer rather than showing a button that fails on click — the tech
+    // can still READ the banner above when a waiver is already on.
+    if (offer) offer.hidden = !viewerIsAdmin;
     if (banner) banner.hidden = true;
   }
 }
@@ -1218,8 +1221,14 @@ function renderWorkOrderWarranty(wo) {
   // The convert control is offered only while there is a live waiver to
   // lift, and only on an unlocked WO.
   const stillWaived = !!(wo.serviceFeeWaiver && wo.serviceFeeWaiver.waived === true);
-  if (convertControl) convertControl.hidden = converted || locked || !stillWaived;
-  if (lockedNote) lockedNote.hidden = !(locked && !converted);
+  // Converting changes what the customer pays, so it is admin-only and the
+  // server 403s a tech regardless. A tech sees the banner (they need to
+  // know the visit is free) and a line telling them to call the office.
+  const canConvert = viewerIsAdmin && !converted && !locked && stillWaived;
+  if (convertControl) convertControl.hidden = !canConvert;
+  const adminOnlyNote = document.getElementById("woWarrantyAdminOnly");
+  if (adminOnlyNote) adminOnlyNote.hidden = !(!viewerIsAdmin && !converted && stillWaived);
+  if (lockedNote) lockedNote.hidden = !(viewerIsAdmin && locked && !converted);
 }
 
 (function wireWarrantyConvert() {
@@ -2784,6 +2793,12 @@ async function resolveViewerRole() {
   // The WO usually loads before this resolves; re-render so the buttons
   // appear once the role is known. Harmless no-op if it hasn't loaded yet.
   renderUnlockControls(loadedWorkOrder);
+  // Same for the money controls — they default to hidden (fail closed),
+  // so this is what reveals them for an admin.
+  if (loadedWorkOrder) {
+    renderServiceFeeWaiver(loadedWorkOrder);
+    renderWorkOrderWarranty(loadedWorkOrder);
+  }
 }
 
 function renderUnlockControls(wo) {
