@@ -41,6 +41,64 @@ superseded `territory-export.js` was deleted (its own replacement documents thre
 silently miscounts). Cover: `scripts/test-territory-export.mjs` (100 assertions, in
 `build:check`).
 
+**2026-08-29 (CRM-19 — merging a duplicate property):** A customer ended up with two
+property records for one address — a Dispatch-created invoice minted a second property
+because the address string it carried didn't match the one on file and there was no
+geocode hit within 50m (`properties.attachLead`, which is doing what spec §3.1 tells it
+to: *do NOT auto-merge*). The CRM had no way to undo that. `DELETE /api/properties/:id`
+clears `propertyId` on linked **leads and nothing else**, so deleting the duplicate by
+hand would leave its invoice, work order, quote, booking, project, review request and
+warranty claim all pointing at an id that no longer exists — and the invoice is the whole
+reason you'd want the property. `POST /api/leads/:id/link-property` moves one lead, not
+the money records.
+
+`scripts/merge-properties.mjs` re-points every reference to the duplicate, folds its
+property record into the keeper, then deletes it. Modelled on `customers.mergeCustomers()`
+— the same operation one level up — including its direct-JSON re-point pass, which is the
+right shape for a bulk cross-store id rewrite rather than a granular per-entity patch.
+
+- **Dry run by default.** Nothing is written without `--apply`; the plan names every
+  record that moves. `--apply` copies each file it touches to
+  `server/data/_merge-backups/<timestamp>/` before writing, and prints the restore path.
+  Nothing in the app scans that directory (no `readdir` over the data dir anywhere), so
+  the backups are inert.
+- **The re-point walks nested references.** Warranty claims carry theirs at
+  `link.propertyId`, not at the top level; a top-level-only rewrite would have silently
+  orphaned them. A mutation test pins this.
+- **Issued invoices are not retro-edited.** An invoice's `address` and `billTo` are the
+  envelope it was ISSUED with (Hard Rules 2 & 10; `invoices.update()` refuses a `billTo`
+  patch once `status !== "draft"`). The merge changes which property an invoice hangs off,
+  never what the customer already received. `--align-draft-invoice-addresses` rewrites the
+  service address on DRAFT invoices only, and only when asked. Append-only stores —
+  `deleted-invoices.json` (the void tombstone log) and `email-log.json` — are reported and
+  left exactly as they are: they describe what already happened.
+- **Consent survives the merge.** A `false` on EITHER record wins for
+  `seasonalEligibility` and `commPrefs` — merging must never re-subscribe someone who
+  opted out on the record being deleted (the OUTREACH-01/02 class of defect). An
+  unsubscribe token is adopted from the duplicate when the keeper has none, so a link
+  already in a customer's inbox keeps resolving; where both records have one the
+  duplicate's dies with it, and the tool says so rather than letting it be discovered.
+- **The walked system record is never invented.** Two non-empty `system.zones` or
+  `valveBoxes` lists are a CONFLICT reported for a human, not concatenated — concatenating
+  two versions of one physical system would manufacture hardware that isn't there.
+- **Refusals:** unknown property, a record merged into itself, a keeper that is in the
+  Trash or archived (merging into one would hide everything you just moved), and two
+  properties on different customers (that is a CUSTOMER merge first —
+  `--allow-different-customer` is an override, not a shortcut). None of them writes. A
+  TRASHED duplicate still merges — its linked records point at it either way.
+
+**No PASS flow touched, and by construction none can be** — this is a new script under
+`scripts/`, no route, payload, catalog or lib changed, and nothing in `stripe.js`, `pay.js`
+or any payment route moves (FLOW-23's invariant). Cover:
+`scripts/test-merge-properties.mjs` (110 assertions, in `build:check`), mutation-tested
+against five broken states — a top-level-only walk, a dropped opt-out, a rewritten
+tombstone log, concatenated zone lists, and a dry run that writes.
+
+**What still needs Patrick — not yet walked:** the tool has never been run against
+`server/data` on the live instance. Run it once without `--apply`, read the plan, then
+re-run with `--apply` while nothing else is touching the CRM (these are flat files with no
+lock; a concurrent request would be read-modify-write against the same JSON).
+
 **2026-08-29 (FLOW-30c — the fee waiver is ADMIN ONLY):** Patrick's ruling: *"Techs will have to
 reach out to admin in order to alleviate a warranty claim for free."* Waiving or restoring the
 $95 changes what the customer pays, and on a warranty work order it also decides whether a claim
@@ -425,6 +483,39 @@ per-season opt-out flag, matching the CLI's `--year`; omitted, it is the current
 **Download territory export (JSON)**, and confirm a file named
 `territory-export-<today>.json` lands on the device and opens as JSON. That is the whole
 acceptance test; nothing here writes, so there is nothing to undo if it misbehaves.
+
+## INF — Data repair CLIs
+
+Tools that WRITE to `server/data` outside the app. Listed so a destructive one is
+registered rather than appearing unannounced. Every tool here is dry-run by default and
+backs up what it touches before writing.
+
+**Property merge (2026-08-29, CRM-19):** `scripts/merge-properties.mjs` — folds a
+duplicate property into the one that survives and deletes it.
+
+```
+node scripts/merge-properties.mjs --keep P-2026-0040 --delete P-2026-0056           # plan
+node scripts/merge-properties.mjs --keep P-2026-0040 --delete P-2026-0056 --apply   # write
+```
+
+Accepts a `P-YYYY-NNNN` code or a raw id for either side. Standing invariants, each pinned
+by `scripts/test-merge-properties.mjs`:
+
+- Re-points every `propertyId` in `server/data/*.json`, at any depth (warranty claims carry
+  theirs at `link.propertyId`). Re-points are written BEFORE the duplicate is removed, so an
+  interruption leaves records pointing at a property that still exists.
+- Never rewrites an issued invoice's `address` or `billTo`, and never touches an
+  append-only store (`deleted-invoices.json`, `email-log.json`).
+- An opt-out on either record wins; unsubscribe tokens are preserved where they can be.
+- Two non-empty zone or valve-box lists conflict for a human instead of concatenating.
+- Refuses two properties on different customers unless explicitly overridden — that case
+  is a customer merge (`customers.mergeCustomers`) first — and refuses a keeper that is in
+  the Trash or archived.
+- `--apply` copies every file it touches to `server/data/_merge-backups/<timestamp>/`
+  first. To undo: copy them back and restart the service.
+
+Run it when nothing else is touching the CRM. These are flat files with no lock, so a
+concurrent request is a read-modify-write against the same JSON.
 
 ---
 
