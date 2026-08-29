@@ -85,6 +85,7 @@ const proposalHtml = require("./lib/proposal-html");
 const proposalData = require("./lib/proposal-data");
 const proposalTemplates = require("./lib/proposal-templates");
 const rateLimit = require("./lib/rate-limit");
+const adminActions = require("./lib/admin-actions");
 const antiBot = require("./lib/anti-bot");
 const bulkActions = require("./lib/bulk-actions");
 const { sendCustomerLoginLink, sendAdminPasswordResetLink } = require("./lib/notify-customer");
@@ -611,6 +612,37 @@ async function requireAdmin(req) {
   const user = await users.get(session.uid);
   if (!user || user.disabled) return null;
   return session;
+}
+
+// The name to stamp into a record's `history[]` for whoever made this
+// request. Replaces the hardcoded `by: "admin"` that used to go into every
+// admin-initiated history entry — with more than one operator on the
+// account (a second tech, or an agent acting from the field) "admin" says
+// nothing about who actually did it.
+//
+// Returns a DISPLAY NAME, not an id, because `by` is rendered straight to
+// the screen in nine surfaces (`by ${h.by || "system"}`) and work-order.js
+// passes it through HISTORY_ACTOR_LABELS with an identity fallback. A uid
+// here would put "usr_a1b2c3" in front of Patrick. The machine-stable
+// attribution — uid, route, timestamp, outcome — is the action log's job
+// (lib/admin-actions.js); the two are meant to be read together.
+//
+// NEVER throws, and falls back to the exact literal it replaced. The worst
+// case for this whole change is therefore today's behaviour: a history
+// entry that says "admin". That property is what makes it safe to apply
+// across seventeen live write paths at once.
+async function actorLabel(req, fallback = "admin") {
+  try {
+    const session = await requireUser(req);
+    if (!session || !session.uid) return fallback;
+    const user = await users.get(session.uid);
+    if (!user) return fallback;
+    // Same 80-char cap the receiving libs apply, so what's stamped here is
+    // what gets stored rather than a silently truncated version of it.
+    return String(user.name || user.email || session.uid).slice(0, 80) || fallback;
+  } catch (_) {
+    return fallback;
+  }
 }
 
 async function requireCustomer(req) {
@@ -1193,6 +1225,9 @@ function needsAuth(method, pathname) {
   // Schedule management is admin-only.
   if (pathname.startsWith("/api/schedule/")) return "user";
   // Manual handoff (admin sends booking link to customer) is admin-only.
+  // Admin action log — who changed what. ADMIN ONLY: it names every
+  // operator's activity, which is not a tech's business to read.
+  if (pathname === "/api/admin/action-log") return "admin";
   if (pathname === "/api/admin/send-booking-link") return "user";
   if (pathname === "/api/admin/features") return "user";
   // Customers (the people PJL serves) — admin-only.
@@ -7581,6 +7616,45 @@ async function handleApi(req, res, pathname) {
   // Cap: 200 candidates per call. If more, returns first 200 + truncated:
   // true. Operator re-runs to continue.
   //
+  // GET /api/admin/action-log — read the admin action log.
+  //
+  // Answers "who changed this, and when" across every operator on the
+  // account. Query params: ?limit= (default 200, max 2000), ?months=
+  // (how far back to look, default 3), ?uid=, ?ref= (a record id, e.g.
+  // I-2026-0093), ?path= (substring).
+  //
+  // Actors are stored as a uid; the join to a name happens HERE rather
+  // than in the log, so the ledger itself carries no contact data. A uid
+  // whose user record is gone renders as the raw uid instead of vanishing
+  // — a deleted account must not erase what it did.
+  //
+  // Admin-gated twice: needsAuth() maps this path to "admin", and the
+  // route re-checks. Same pattern as the territory export.
+  if (req.method === "GET" && pathname === "/api/admin/action-log") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const logUrl = new URL(req.url, baseUrlFromReq(req));
+      const entries = await adminActions.list({
+        limit: Number(logUrl.searchParams.get("limit")) || 200,
+        months: Number(logUrl.searchParams.get("months")) || 3,
+        uid: logUrl.searchParams.get("uid") || null,
+        ref: logUrl.searchParams.get("ref") || null,
+        pathContains: logUrl.searchParams.get("path") || null
+      });
+      const allUsers = await users.list().catch(() => []);
+      const byId = new Map(allUsers.map((u) => [u.id, u]));
+      const decorated = entries.map((e) => {
+        const u = e.uid ? byId.get(e.uid) : null;
+        return { ...e, actorName: u ? (u.name || u.email) : (e.uid || "unknown") };
+      });
+      return sendJson(res, 200, { ok: true, entries: decorated, count: decorated.length });
+    } catch (err) {
+      console.error("[admin-action-log] read failed:", err?.message || err);
+      return sendJson(res, 500, { ok: false, errors: ["Couldn't read the action log."] });
+    }
+  }
+
   // Admin-gated via explicit requireAdmin call.
   if (req.method === "POST" && pathname === "/api/admin/backfill-customers") {
     const session = await requireAdmin(req);
@@ -7918,7 +7992,7 @@ async function handleApi(req, res, pathname) {
       }
       const updated = await properties.transferOwner(propertyId, {
         newCustomerId,
-        by: "admin",
+        by: await actorLabel(req),
         note: String(payload?.note || "").slice(0, 400)
       });
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
@@ -8139,7 +8213,7 @@ async function handleApi(req, res, pathname) {
       if (!payload || !String(payload.name || "").trim()) {
         return sendJson(res, 422, { ok: false, errors: ["Customer name is required."] });
       }
-      const created = await customers.create(payload, { by: "admin", note: "Created from admin UI" });
+      const created = await customers.create(payload, { by: await actorLabel(req), note: "Created from admin UI" });
       // Non-blocking dedup warning (commercial matching, Phase 0.5). If the
       // address the admin typed already belongs to an existing account,
       // say so — creating a second customer for a building PJL already
@@ -8182,7 +8256,7 @@ async function handleApi(req, res, pathname) {
     if (req.method === "PATCH") {
       try {
         const payload = await parseRequestBody(req);
-        const updated = await customers.update(id, payload, { by: "admin", note: "Edit from /admin/customer" });
+        const updated = await customers.update(id, payload, { by: await actorLabel(req), note: "Edit from /admin/customer" });
         if (!updated) return sendJson(res, 404, { ok: false, error: "Customer not found." });
         return sendJson(res, 200, { ok: true, customer: updated });
       } catch (err) {
@@ -8239,7 +8313,7 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 422, { ok: false, errors: ["secondaryId is required."] });
       }
       const result = await customers.mergeCustomers(primaryId, secondaryId, {
-        by: "admin",
+        by: await actorLabel(req),
         note: String(payload?.note || "").slice(0, 400)
       });
       return sendJson(res, 200, { ok: true, ...result });
@@ -8815,7 +8889,7 @@ async function handleApi(req, res, pathname) {
           ? `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${q.approval.token}`
           : null,
         returnEmail: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"
-      }, { by: "admin" });
+      }, { by: await actorLabel(req) });
       return;
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate PDF."] });
@@ -9157,7 +9231,7 @@ async function handleApi(req, res, pathname) {
         await invoices.update(invId, patch);
         updated = await invoices.appendHistory(invId, {
           action: "resent",
-          by: "admin",
+          by: await actorLabel(req),
           note: `Re-emailed to ${inv.customerEmail}.`
         });
       }
@@ -11201,7 +11275,7 @@ async function handleApi(req, res, pathname) {
         serviceKey,
         serviceLabel: service.label,
         durationMinutes: newMinutes,
-        by: "admin"
+        by: await actorLabel(req)
       });
 
       // Mirror onto the lead.booking read-cache + WO envelope + lead status.
@@ -11969,7 +12043,7 @@ async function handleApi(req, res, pathname) {
           source: forcedByAdmin ? "admin_custom" : "slot",
           createdAt: now,
           updatedAt: now,
-          history: [{ ts: now, action: "created_followup", by: "admin", note: `Follow-up to ${parent.id}${forcedByAdmin ? " (custom time)" : ""}` }]
+          history: [{ ts: now, action: "created_followup", by: await actorLabel(req), note: `Follow-up to ${parent.id}${forcedByAdmin ? " (custom time)" : ""}` }]
         };
         const allWithNew = [newBooking, ...allRec];
         try {
@@ -12193,7 +12267,7 @@ async function handleApi(req, res, pathname) {
       try {
         await workOrders.appendHistory(id, {
           action: "invoice_drafted",
-          by: "admin",
+          by: await actorLabel(req),
           note: `Manual: ${inv.id} ($${Number(inv.total).toFixed(2)})`
         });
       } catch (err) { console.warn("[wo-history] manual invoice entry failed:", err?.message); }
@@ -12304,7 +12378,7 @@ async function handleApi(req, res, pathname) {
         : "manual";
       const quoteId = triggerType === "quote_send" ? (payload?.quoteId || null) : null;
       const record = await woReportSnapshot.createSnapshot({
-        woId, triggerType, quoteId, by: "admin"
+        woId, triggerType, quoteId, by: await actorLabel(req)
       });
       return sendJson(res, 201, { ok: true, snapshot: record });
     } catch (err) {
@@ -15818,7 +15892,7 @@ async function handleApi(req, res, pathname) {
         // Project_proposal quotes get the full enrichment.
         proj = await projects.createFromProposal(quote, {
           customerName, customerEmail, customerPhone, address, propertyId,
-          by: "admin"
+          by: await actorLabel(req)
         });
       } else {
         // Auto-generate a project name from the customer + quote id. Patrick
@@ -16897,7 +16971,7 @@ async function handleApi(req, res, pathname) {
       // payload up front so an incomplete waiver (checked with no reason,
       // or "other" with no note) 422s before we write a WO. Normalizes to
       // { waived, reason, notes, waivedBy, waivedAt } or null when off.
-      const waiverResult = normalizeServiceFeeWaiver(payload.serviceFeeWaiver, { by: "admin" });
+      const waiverResult = normalizeServiceFeeWaiver(payload.serviceFeeWaiver, { by: await actorLabel(req) });
       if (waiverResult.error) {
         return sendJson(res, 422, { ok: false, errors: [waiverResult.error] });
       }
@@ -17067,7 +17141,7 @@ async function handleApi(req, res, pathname) {
         if (lead?.booking?.start) sourceParts.push(`booking @ ${lead.booking.start}`);
         await workOrders.appendHistory(wo.id, {
           action: "created",
-          by: "admin",
+          by: await actorLabel(req),
           note: `${workOrders.TEMPLATES[type].label}${sourceParts.length ? ` from ${sourceParts.join(", ")}` : ""}`
         });
       } catch (err) { console.warn("[wo-history] create entry failed:", err?.message); }
@@ -17437,7 +17511,7 @@ async function handleApi(req, res, pathname) {
         try {
           await workOrders.appendHistory(id, {
             action: "patch",
-            by: "admin",
+            by: await actorLabel(req),
             note: `Updated: ${summary}`
           });
         } catch (err) { console.warn("[wo-history] patch entry failed:", err?.message); }
@@ -17826,7 +17900,7 @@ async function handleApi(req, res, pathname) {
       try {
         await workOrders.appendHistory(id, {
           action: "photo_delete",
-          by: "admin",
+          by: await actorLabel(req),
           note: `Removed photo #${n} (${photoMeta.category || "general"})`
         });
       } catch (err) { console.warn("[wo-history] photo delete entry failed:", err?.message); }
@@ -18360,7 +18434,7 @@ async function handleApi(req, res, pathname) {
       if (waiving) {
         const norm = normalizeServiceFeeWaiver(
           { waived: true, reason: payload.reason, notes: payload.notes },
-          { by: "admin" }
+          { by: await actorLabel(req) }
         );
         if (norm.error) return sendJson(res, 422, { ok: false, errors: [norm.error] });
         waiver = norm.waiver;
@@ -19819,7 +19893,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
             await quotes.accept(lead.quoteId, {
               leadId: lead.id,
               bookingId: canonicalBooking ? canonicalBooking.id : null,
-              by: "admin",
+              by: await actorLabel(req),
               note: "Verbal acceptance recorded by admin at booking (phone)."
             });
             const acceptedLeads = await readLeads();
@@ -21933,6 +22007,28 @@ const server = http.createServer(async (req, res) => {
           // techs see a helpful 403 instead of being bounced to /login.
           const anyUser = await requireUser(req);
           if (anyUser) {
+            // A signed-in operator REFUSED an admin-only action. This is
+            // the most audit-relevant event the gate produces, and it is
+            // the one the success path below can never see — the request
+            // is rejected here and never reaches it. Logged with the real
+            // actor, since we have one.
+            //
+            // Deliberately NOT logging the 401 case underneath: an
+            // unauthenticated request carries no actor to attribute, and
+            // an open endpoint being probed would fill the ledger with
+            // rows that name nobody.
+            if (adminActions.isMutating(req.method)) {
+              adminActions.record({
+                uid: anyUser.uid || null,
+                role: anyUser.role || null,
+                method: req.method,
+                pathname,
+                status: 403,
+                ms: 0,
+                ip: callerIp(req),
+                userAgent: req.headers["user-agent"] || null
+              });
+            }
             if (pathname.startsWith("/api/")) {
               return sendJson(res, 403, { ok: false, errors: ["Admin access is required for this action."] });
             }
@@ -21945,6 +22041,38 @@ const server = http.createServer(async (req, res) => {
           return sendJson(res, 401, { ok: false, errors: ["CRM login required."] });
         }
         return redirect(res, `/login?next=${encodeURIComponent(pathname)}`);
+      }
+
+      // Admin action log. This gate is the ONE place every guarded request
+      // passes through with its session already resolved, which is why the
+      // hook lives here rather than being sprinkled across ~200 routes
+      // (where it would be forgotten on the next one added).
+      //
+      // Records state-changing requests only, on response finish so the
+      // status code is real rather than assumed. Best-effort and
+      // fire-and-forget: a log failure must never affect the response, so
+      // nothing here is awaited and admin-actions.record() swallows its
+      // own errors. Reads ip + user-agent synchronously, before the
+      // listener can outlive the socket — the same trap recordQuoteView()
+      // documents, where a fire-and-forget call ends up logging a blank IP.
+      if (adminActions.isMutating(req.method)) {
+        const startedAt = Date.now();
+        const actorUid = session.uid || null;
+        const actorRole = session.role || null;
+        const actorIp = callerIp(req);
+        const actorUa = req.headers["user-agent"] || null;
+        res.once("finish", () => {
+          adminActions.record({
+            uid: actorUid,
+            role: actorRole,
+            method: req.method,
+            pathname,
+            status: res.statusCode,
+            ms: Date.now() - startedAt,
+            ip: actorIp,
+            userAgent: actorUa
+          });
+        });
       }
     }
 

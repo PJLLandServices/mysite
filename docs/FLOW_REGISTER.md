@@ -41,6 +41,182 @@ superseded `territory-export.js` was deleted (its own replacement documents thre
 silently miscounts). Cover: `scripts/test-territory-export.mjs` (100 assertions, in
 `build:check`).
 
+**2026-08-29 (CRM-21 — the record history now names the operator):** The other half of CRM-20,
+and the gap that entry left open. Seventeen write paths in `server.js` stamped a hardcoded
+`by: "admin"` into the `history[]` they appended, so a customer edit, an ownership transfer, a
+work-order patch, a fee waiver and a verbal quote acceptance all recorded the literal string
+"admin" rather than the person. Every one of the seventeen is inside an authenticated request
+handler acting on a real operator's request — none was a system path — so in every case the
+information was available and thrown away.
+
+They now stamp `actorLabel(req)`.
+
+- **The value is a DISPLAY NAME, not a uid**, because `by` is rendered straight to the screen:
+  eight surfaces do `by ${h.by || "system"}`, and `work-order.js` passes it through
+  `HISTORY_ACTOR_LABELS[raw] || raw` — an identity fallback, so a real name renders verbatim
+  and an unknown key can't blank the row. A uid here would put `usr_a1b2c3` in front of
+  Patrick. The machine-stable half — uid, route, timestamp, outcome — is the action log's job
+  (CRM-20); the two are designed to be read together, and the tests assert both halves exist.
+- **`actorLabel()` cannot throw, and falls back to the exact literal it replaced.** The worst
+  case of this whole change is therefore today's behaviour: a history entry that says "admin".
+  That property is what makes changing seventeen live write paths in one go reasonable, and it
+  is pinned by test — every early exit returns the fallback, and the one resolving return is
+  itself `|| fallback` guarded so an empty name can't reach a record.
+- **Genuinely automated cascades still say `"system"`** (the deposit hook, the quote-accepted
+  cascade). Attributing a background job to whoever happened to trigger it would be a lie, not
+  an improvement.
+- **Tradeoff, recorded deliberately:** a display name is a snapshot of what someone was called
+  at the time, so renaming a user does not rewrite old history. That is the correct behaviour
+  for an audit trail, and there is a test that renames a user and asserts the old entries keep
+  the old name.
+
+**No PASS flow touched.** All seventeen sites are admin/tech CRM routes; none is in the
+customer portal (FLOW-01 / FLOW-02) or on a payment route (FLOW-23's invariant — nothing in
+`stripe.js`, `pay.js` or any payment route moves). No route's behaviour, status code or payload
+changes; the only difference is the string written into a history entry, and no consumer
+branches on that value (the one `.by ===` comparison in the codebase tests for `"customer"`).
+
+Cover: `scripts/test-actor-attribution.mjs` (21 assertions, in `build:check`) — source guards
+that fail the build if any `by: "admin"` literal returns, if the helper loses its try/catch or
+its fallback, if the resolution order stops preferring a name, or if the renderer it depends on
+stops passing an unmapped actor through. Plus a **live-server walk** (13 assertions) with two
+seeded operators: a customer created by an admin records `"Dana Okonkwo"`, the same record
+edited by a tech records `"Sam Whitfield"`, **two operators on one record are distinguishable
+afterwards** — which is the entire point — the action log carries the admin's uid for the same
+event, and a rename leaves existing history untouched.
+
+**Still open — a different and larger defect than this one.** Roughly fifty OTHER call sites
+stamp a raw `session.uid` into the same `by` field (`by: session?.uid || "admin"`), so those
+histories attribute correctly but render an unreadable id. They are not the CRM-21 defect —
+attribution is present, it is legibility that is missing — and several sit on money paths
+(`invoices.voidInvoice`, `invoices.remove`, `deposits.onQuoteAccepted`). Converting them to
+`actorLabel(req)` is mechanical and would make `by` a display name everywhere, but it is a
+fifty-site change through invoice code and wants its own reviewed pass, not a ride on this one.
+
+**2026-08-29 (CRM-20 — the admin action log):** The app had **no request log at all** — the
+same gap the FLOW-21 entry names ("no `viewedAt` field, no open tracking, no app-level request
+log"), which is true generally and not just for quote views. Per-record `history[]` arrays
+exist, but **17 call sites in `server.js` stamp a hardcoded `by: "admin"`** rather than the
+account that made the change. With one person on the CRM that is invisible. It stops being
+invisible the moment a second operator writes to the same account — a second tech, or an agent
+acting on Patrick's behalf from a job site — because then the records genuinely cannot say who
+did a thing. Opened when exactly that came up: standing agent access to the admin portal was
+proposed on the grounds that it would be "completely trackable", and it would not have been.
+
+`server/lib/admin-actions.js` is an append-only ledger of every state-changing request made by
+a signed-in staff account. It does **not** replace the per-record history — that stays the
+business-readable trail; this is the system-wide ledger underneath it.
+
+- **The hook lives in the auth gate**, which is the ONE place every guarded request passes
+  through with its session already resolved. Putting it there rather than in ~200 routes is
+  what stops it being forgotten on route 201. Fires on response `finish`, so the status code
+  is the real one; fire-and-forget, so a log write is never on the critical path; ip and
+  user-agent are read SYNCHRONOUSLY before the listener, the same trap `recordQuoteView()`
+  documents (a fire-and-forget call can outlive the socket and record a blank IP).
+- **JSONL, appended — not a JSON array read-modify-written.** Every other store here is a
+  whole-file read-modify-write with no lock, and `quote-views.js` already documents why a
+  high-frequency write must not live in one: interleaving a frequent write with a rare
+  important one can drop the important one. A request log is the highest-frequency write in
+  the system, so it gets one `appendFile` per entry — O(1), no read, nothing to interleave. A
+  torn line costs one entry and cannot corrupt an earlier one (asserted).
+- **It records what was called, never the payload.** Request bodies here carry names,
+  addresses, phone numbers, signature images and on some routes passwords; a log holding them
+  would be a second copy of the customer database with none of the handling the first copy
+  gets. Query strings are stripped (they carry status tokens and search terms). The actor is a
+  `uid` — the read API joins to users.json to render a name, so the ledger itself holds no
+  contact data. Identifying strings are seeded into the test fixtures so the privacy
+  assertions have something real to catch.
+- **A refused admin-only action is logged too**, with the actor who attempted it. That event
+  never reaches the success-path hook — the gate rejects first — so it has its own call. It is
+  also the single most audit-relevant thing the gate produces. The 401 case is deliberately
+  NOT logged: an unauthenticated request carries no actor to attribute, and logging it would
+  fill the ledger with rows naming nobody.
+- **Read via `GET /api/admin/action-log`** — ADMIN ONLY, twice over (`needsAuth()` maps the
+  path to `"admin"` and the route re-checks with `requireAdmin`), because it names every
+  operator's activity, which is not a tech's business. Filters: `?limit=` (default 200, max
+  2000), `?months=`, `?uid=`, `?ref=` (a record id), `?path=`.
+- **Monthly files** keep any one file bounded without ever rewriting or truncating history.
+  The module exports no delete, update, clear or truncate — asserted, because an audit log
+  with an edit path is not one.
+
+**No PASS flow touched.** The hook is additive inside the gate and changes no route's
+behaviour, status code or payload; nothing in `stripe.js`, `pay.js` or any payment route moves
+(FLOW-23's invariant). Cover: `scripts/test-admin-actions.mjs` (71 assertions, in
+`build:check`), mutation-tested against three broken states — query strings kept, an awaited
+log write, and the read route downgraded from admin to user — plus a **live-server walk** (28
+assertions) with separate seeded admin and tech logins: a real property POST logged against the
+real admin uid (not a hardcoded string) with a non-blank IP and no customer name, email or
+address in the line; a GET adding nothing; a tech's refused fee-waiver logged as 403 against
+the tech's own uid; and the read route 401 anonymous / 403 tech / 200 admin.
+
+**What still needs Patrick — not yet walked in production:** nothing here is customer-facing
+and nothing writes to a business record, so the risk is low, but the ledger has only ever run
+against a dev checkout. First deploy should be followed by opening
+`/api/admin/action-log?limit=20` and confirming real activity appears with real names.
+
+**The other half is still missing.** This says WHO made a request. It does not fix the 17
+hardcoded `by: "admin"` stamps inside the record histories — that means threading the acting
+user through existing write paths, which DOES touch flows that are currently PASS, so it wants
+to be its own reviewed change rather than being smuggled in here.
+
+**2026-08-29 (CRM-19 — merging a duplicate property):** A customer ended up with two
+property records for one address — a Dispatch-created invoice minted a second property
+because the address string it carried didn't match the one on file and there was no
+geocode hit within 50m (`properties.attachLead`, which is doing what spec §3.1 tells it
+to: *do NOT auto-merge*). The CRM had no way to undo that. `DELETE /api/properties/:id`
+clears `propertyId` on linked **leads and nothing else**, so deleting the duplicate by
+hand would leave its invoice, work order, quote, booking, project, review request and
+warranty claim all pointing at an id that no longer exists — and the invoice is the whole
+reason you'd want the property. `POST /api/leads/:id/link-property` moves one lead, not
+the money records.
+
+`scripts/merge-properties.mjs` re-points every reference to the duplicate, folds its
+property record into the keeper, then deletes it. Modelled on `customers.mergeCustomers()`
+— the same operation one level up — including its direct-JSON re-point pass, which is the
+right shape for a bulk cross-store id rewrite rather than a granular per-entity patch.
+
+- **Dry run by default.** Nothing is written without `--apply`; the plan names every
+  record that moves. `--apply` copies each file it touches to
+  `server/data/_merge-backups/<timestamp>/` before writing, and prints the restore path.
+  Nothing in the app scans that directory (no `readdir` over the data dir anywhere), so
+  the backups are inert.
+- **The re-point walks nested references.** Warranty claims carry theirs at
+  `link.propertyId`, not at the top level; a top-level-only rewrite would have silently
+  orphaned them. A mutation test pins this.
+- **Issued invoices are not retro-edited.** An invoice's `address` and `billTo` are the
+  envelope it was ISSUED with (Hard Rules 2 & 10; `invoices.update()` refuses a `billTo`
+  patch once `status !== "draft"`). The merge changes which property an invoice hangs off,
+  never what the customer already received. `--align-draft-invoice-addresses` rewrites the
+  service address on DRAFT invoices only, and only when asked. Append-only stores —
+  `deleted-invoices.json` (the void tombstone log) and `email-log.json` — are reported and
+  left exactly as they are: they describe what already happened.
+- **Consent survives the merge.** A `false` on EITHER record wins for
+  `seasonalEligibility` and `commPrefs` — merging must never re-subscribe someone who
+  opted out on the record being deleted (the OUTREACH-01/02 class of defect). An
+  unsubscribe token is adopted from the duplicate when the keeper has none, so a link
+  already in a customer's inbox keeps resolving; where both records have one the
+  duplicate's dies with it, and the tool says so rather than letting it be discovered.
+- **The walked system record is never invented.** Two non-empty `system.zones` or
+  `valveBoxes` lists are a CONFLICT reported for a human, not concatenated — concatenating
+  two versions of one physical system would manufacture hardware that isn't there.
+- **Refusals:** unknown property, a record merged into itself, a keeper that is in the
+  Trash or archived (merging into one would hide everything you just moved), and two
+  properties on different customers (that is a CUSTOMER merge first —
+  `--allow-different-customer` is an override, not a shortcut). None of them writes. A
+  TRASHED duplicate still merges — its linked records point at it either way.
+
+**No PASS flow touched, and by construction none can be** — this is a new script under
+`scripts/`, no route, payload, catalog or lib changed, and nothing in `stripe.js`, `pay.js`
+or any payment route moves (FLOW-23's invariant). Cover:
+`scripts/test-merge-properties.mjs` (110 assertions, in `build:check`), mutation-tested
+against five broken states — a top-level-only walk, a dropped opt-out, a rewritten
+tombstone log, concatenated zone lists, and a dry run that writes.
+
+**What still needs Patrick — not yet walked:** the tool has never been run against
+`server/data` on the live instance. Run it once without `--apply`, read the plan, then
+re-run with `--apply` while nothing else is touching the CRM (these are flat files with no
+lock; a concurrent request would be read-modify-write against the same JSON).
+
 **2026-08-29 (FLOW-30c — the fee waiver is ADMIN ONLY):** Patrick's ruling: *"Techs will have to
 reach out to admin in order to alleviate a warranty claim for free."* Waiving or restoring the
 $95 changes what the customer pays, and on a warranty work order it also decides whether a claim
@@ -425,6 +601,75 @@ per-season opt-out flag, matching the CLI's `--year`; omitted, it is the current
 **Download territory export (JSON)**, and confirm a file named
 `territory-export-<today>.json` lands on the device and opens as JSON. That is the whole
 acceptance test; nothing here writes, so there is nothing to undo if it misbehaves.
+
+## INF — Admin action log
+
+**Who did what, when.** `server/data/admin-actions-YYYY-MM.jsonl`, written by
+`server/lib/admin-actions.js` from a hook inside the auth gate in `server.js`. Append-only;
+the module exposes no way to edit or delete an entry.
+
+Records every **state-changing** request (POST / PATCH / PUT / DELETE) by a signed-in staff
+account, plus any admin-only action a signed-in operator was REFUSED. Reads are not recorded.
+Each line: `{ ts, uid, role, method, path, ref, status, ok, ms, ip, ua }` — `ref` is the record
+id lifted from the path (`P-2026-0040`, `I-2026-0093`, a uuid), which is what makes
+"everything that happened to this invoice" answerable.
+
+**It holds no customer data by construction** — no request bodies, no query strings, no
+emails. The actor is a uid; names are joined in at read time. Treat that as an invariant: the
+moment this file holds contact data it becomes a second customer database with none of the
+handling the first one gets.
+
+Read it at **`GET /api/admin/action-log`** — admin only, twice over. Filters: `?limit=`
+(default 200, max 2000), `?months=` (default 3), `?uid=`, `?ref=`, `?path=`.
+
+Cover: `scripts/test-admin-actions.mjs` (71 assertions, in `build:check`), including source
+guards that fail the build if the hook leaves the auth gate, if the log write becomes awaited,
+if ip/user-agent stop being captured synchronously, or if the read route loses its admin gate.
+
+**Its other half is the record history itself** (CRM-21): the seventeen write paths that used
+to stamp `by: "admin"` now stamp the operator's display NAME via `actorLabel(req)`. Name in the
+record for reading, uid in this ledger for auditing — the two are meant to be used together,
+and neither is sufficient alone. If this ledger is ever removed, the naming change needs
+revisiting, because a display name is not stable across a user rename.
+
+**Known gap:** roughly fifty further call sites stamp a raw `session.uid` into `by`, which
+attributes correctly but renders an unreadable id. Converting those to `actorLabel(req)` is
+mechanical but crosses invoice and deposit code, so it needs its own reviewed pass.
+
+---
+
+## INF — Data repair CLIs
+
+Tools that WRITE to `server/data` outside the app. Listed so a destructive one is
+registered rather than appearing unannounced. Every tool here is dry-run by default and
+backs up what it touches before writing.
+
+**Property merge (2026-08-29, CRM-19):** `scripts/merge-properties.mjs` — folds a
+duplicate property into the one that survives and deletes it.
+
+```
+node scripts/merge-properties.mjs --keep P-2026-0040 --delete P-2026-0056           # plan
+node scripts/merge-properties.mjs --keep P-2026-0040 --delete P-2026-0056 --apply   # write
+```
+
+Accepts a `P-YYYY-NNNN` code or a raw id for either side. Standing invariants, each pinned
+by `scripts/test-merge-properties.mjs`:
+
+- Re-points every `propertyId` in `server/data/*.json`, at any depth (warranty claims carry
+  theirs at `link.propertyId`). Re-points are written BEFORE the duplicate is removed, so an
+  interruption leaves records pointing at a property that still exists.
+- Never rewrites an issued invoice's `address` or `billTo`, and never touches an
+  append-only store (`deleted-invoices.json`, `email-log.json`).
+- An opt-out on either record wins; unsubscribe tokens are preserved where they can be.
+- Two non-empty zone or valve-box lists conflict for a human instead of concatenating.
+- Refuses two properties on different customers unless explicitly overridden — that case
+  is a customer merge (`customers.mergeCustomers`) first — and refuses a keeper that is in
+  the Trash or archived.
+- `--apply` copies every file it touches to `server/data/_merge-backups/<timestamp>/`
+  first. To undo: copy them back and restart the service.
+
+Run it when nothing else is touching the CRM. These are flat files with no lock, so a
+concurrent request is a read-modify-write against the same JSON.
 
 ---
 
