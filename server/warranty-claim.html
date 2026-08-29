@@ -137,6 +137,10 @@
               </p>
 
               <div class="wcd-action-picker" id="wcdActionPicker">
+                <button type="button" class="wcd-action wcd-action--approve" data-action="approved">
+                  <strong>Approve claim &amp; raise work order</strong>
+                  <span>Accepts the claim and creates a service visit with the call-out fee waived under warranty.</span>
+                </button>
                 <button type="button" class="wcd-action" data-action="under_review">
                   <strong>Warranty claim under review</strong>
                   <span>Tell them we're assessing it against the original job.</span>
@@ -183,6 +187,14 @@
               </div>
 
               <div class="wcd-result" id="wcdResult" hidden></div>
+            </section>
+
+            <!-- The repair work order raised by approving this claim. -->
+            <section class="wcd-card wcd-card--wo" id="wcdWorkOrderCard" hidden>
+              <h2>Repair work order</h2>
+              <p class="wcd-note-line" id="wcdWorkOrderMeta"></p>
+              <div class="wcd-wo-waiver" id="wcdWoWaiver"></div>
+              <a class="wcd-status-link" id="wcdWorkOrderLink" href="#">Open the work order →</a>
             </section>
 
             <section class="wcd-card">

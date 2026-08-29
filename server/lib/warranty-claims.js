@@ -72,9 +72,11 @@ const STATUSES = [
   "info_requested",
   "contact_customer",
   "service_booked",
+  "approved",
   "resolved",
   "denied",
-  "disputed"
+  "disputed",
+  "converted"
 ];
 
 const STATUS_LABELS = {
@@ -83,9 +85,11 @@ const STATUS_LABELS = {
   info_requested: "Info requested",
   contact_customer: "Contacting customer",
   service_booked: "Service call booked",
+  approved: "Approved — work order raised",
   resolved: "Resolved",
   denied: "Denied",
-  disputed: "Disputed"
+  disputed: "Disputed",
+  converted: "Converted to paid service call"
 };
 
 // What the CUSTOMER is told each status means. Kept here rather than in
@@ -99,18 +103,32 @@ const STATUS_CUSTOMER_TEXT = {
   service_booked: "Your warranty service call is booked. You'll get the appointment details separately.",
   resolved: "This warranty claim has been resolved. Thank you for giving us the chance to make it right.",
   denied: "This warranty claim was not approved. The explanation is in the email we sent you — if you disagree, you can dispute it.",
-  disputed: "Your dispute has been received and your claim has been re-opened for review."
+  disputed: "Your dispute has been received and your claim has been re-opened for review.",
+  approved: "Your warranty claim has been approved. We've raised a work order to carry out the repair at no charge under your warranty.",
+  // Reached only when a tech attended an APPROVED warranty visit and found
+  // the fault was not what the claim described. The customer authorised
+  // and signed for the chargeable work on site, so this is worded as a
+  // record of what they already agreed to, not as a fresh refusal.
+  converted: "On attending, the fault was found to be outside what your warranty covers. The work was carried out as a regular service call, which you authorised and signed for on site."
 };
 
 // Terminal-ish states. Everything else counts as outstanding and shows up
 // in the reminder badge + the CRM's "needs an update" list.
-const CLOSED_STATUSES = new Set(["resolved", "denied"]);
+// `approved` is deliberately OPEN: the claim is accepted but the repair
+// has not happened yet, and it still owes the customer a visit. It leaves
+// the queue at `resolved` (we fixed it) or `converted` (it turned out not
+// to be covered and they paid for it on site).
+const CLOSED_STATUSES = new Set(["resolved", "denied", "converted"]);
 
 // Statuses that REQUIRE a written note before the transition is allowed.
 // Denial is the one Patrick called out explicitly ("email required to
 // explain"); info_requested is the same shape — an email the customer will
 // read, so it cannot go out empty.
-const NOTE_REQUIRED_STATUSES = new Set(["denied", "info_requested"]);
+// `converted` joins the list for the same reason denial is on it: telling
+// a customer that the visit they were promised free is now chargeable is
+// the single most contested thing this system can do, so it can never
+// happen without someone writing down why.
+const NOTE_REQUIRED_STATUSES = new Set(["denied", "info_requested", "converted"]);
 const MIN_NOTE_LEN = 10;
 
 // How long a claim may sit untouched before the queue nags. Patrick's
@@ -364,12 +382,20 @@ function canTransition(claim, nextStatus, { note = "" } = {}) {
   if (nextStatus === "disputed" && claim.status !== "denied") {
     return { ok: false, error: "Only a denied claim can be disputed." };
   }
+  // A conversion is a statement about a VISIT — the tech attended and the
+  // fault wasn't covered. With no work order there was no visit, so there
+  // is nothing to convert and the honest outcome is a plain denial.
+  if (nextStatus === "converted" && !claim.workOrderId) {
+    return { ok: false, error: "Only a claim with a work order can be converted to a paid service call. Deny the claim instead." };
+  }
   if (NOTE_REQUIRED_STATUSES.has(nextStatus)) {
     const trimmed = String(note || "").trim();
     if (trimmed.length < MIN_NOTE_LEN) {
       const what = nextStatus === "denied"
         ? "Denying a claim needs a written explanation for the customer"
-        : "Asking the customer for more information needs a written message";
+        : nextStatus === "converted"
+          ? "Converting a warranty visit to a chargeable service call needs a written reason — it goes to the customer and stays on the claim"
+          : "Asking the customer for more information needs a written message";
       return { ok: false, error: `${what} (at least ${MIN_NOTE_LEN} characters).` };
     }
   }

@@ -1134,18 +1134,147 @@ function renderServiceFeeWaiver(wo) {
     if (offer) offer.hidden = true;
     if (banner) banner.hidden = false;
     if (meta) meta.textContent = `(${woWaiverFriendlyReason(w)})`;
-    if (removeBtn) removeBtn.hidden = locked; // can't un-waive a signed WO
+    // Hidden on a signed WO (can't un-waive) AND on a live warranty WO:
+    // there, lifting the waiver has to capture a reason for the customer,
+    // which only the convert control collects. Leaving this button would
+    // give two paths to the same money change, one of which always 422s.
+    const liveWarranty = !!(wo && wo.warrantyClaim && wo.warrantyClaim.claimId && !wo.warrantyClaim.converted);
+    if (removeBtn) removeBtn.hidden = locked || liveWarranty;
   } else {
     if (offer) offer.hidden = false;
     if (banner) banner.hidden = true;
   }
 }
 
+// Warranty provenance panel (FLOW-30). Only rendered on a WO raised by
+// approving a warranty claim. Three states:
+//   * waived        — the normal warranty visit; offers the convert control
+//   * converted     — the escape hatch was used; shows who, when and why
+//   * locked        — signed, so nothing can change without an unlock
+function renderWorkOrderWarranty(wo) {
+  const panel = document.getElementById("woWarrantyPanel");
+  if (!panel) return;
+  const wc = wo && wo.warrantyClaim;
+  if (!wc || !wc.claimId) { panel.hidden = true; return; }
+  panel.hidden = false;
+
+  const claimEl = document.getElementById("woWarrantyClaim");
+  if (claimEl) {
+    claimEl.textContent = "";
+    const a = document.createElement("a");
+    a.href = "/admin/warranty-claim/" + encodeURIComponent(wc.claimId);
+    a.textContent = wc.claimId;
+    claimEl.appendChild(document.createTextNode("Claim "));
+    claimEl.appendChild(a);
+  }
+
+  const prior = document.getElementById("woWarrantyPrior");
+  if (prior) {
+    prior.textContent = "";
+    const bits = [];
+    if (wc.claimedInvoiceId) bits.push(["invoice", wc.claimedInvoiceId, "/admin/invoice/"]);
+    if (wc.claimedWorkOrderId) bits.push(["work order", wc.claimedWorkOrderId, "/admin/work-order/"]);
+    if (!bits.length) {
+      prior.textContent = "Not matched to a prior invoice — check the claim.";
+    } else {
+      bits.forEach(function (b, i) {
+        if (i) prior.appendChild(document.createTextNode(" · "));
+        prior.appendChild(document.createTextNode(b[0] + " "));
+        const link = document.createElement("a");
+        link.href = b[2] + encodeURIComponent(b[1]);
+        link.textContent = b[1];
+        prior.appendChild(link);
+      });
+    }
+  }
+
+  const summary = document.getElementById("woWarrantySummary");
+  if (summary) summary.textContent = wc.summary || "—";
+
+  // wo.locked alone, matching renderServiceFeeWaiver() — an unlocked WO
+  // must expose the convert control again or an admin can unlock and
+  // still not be able to make the visit chargeable.
+  const locked = wo.locked === true;
+  const converted = !!wc.converted;
+
+  const convertedBox = document.getElementById("woWarrantyConverted");
+  const convertControl = document.getElementById("woWarrantyConvertControl");
+  const lockedNote = document.getElementById("woWarrantyLocked");
+  const form = document.getElementById("woWarrantyConvertForm");
+  if (form) form.hidden = true;
+
+  if (convertedBox) convertedBox.hidden = !converted;
+  if (converted) {
+    const meta = document.getElementById("woWarrantyConvertedMeta");
+    if (meta) {
+      const at = wc.converted.at ? new Date(wc.converted.at) : null;
+      meta.textContent = (at && !isNaN(at.getTime()) ? at.toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" }) : "") +
+        (wc.converted.by ? " · by " + wc.converted.by : "");
+    }
+    const reason = document.getElementById("woWarrantyConvertedReason");
+    if (reason) reason.textContent = wc.converted.reason || "";
+  }
+
+  // The convert control is offered only while there is a live waiver to
+  // lift, and only on an unlocked WO.
+  const stillWaived = !!(wo.serviceFeeWaiver && wo.serviceFeeWaiver.waived === true);
+  if (convertControl) convertControl.hidden = converted || locked || !stillWaived;
+  if (lockedNote) lockedNote.hidden = !(locked && !converted);
+}
+
+(function wireWarrantyConvert() {
+  const openBtn = document.getElementById("woWarrantyConvertOpenBtn");
+  const form = document.getElementById("woWarrantyConvertForm");
+  const cancelBtn = document.getElementById("woWarrantyConvertCancelBtn");
+  const confirmBtn = document.getElementById("woWarrantyConvertConfirmBtn");
+  const reasonEl = document.getElementById("woWarrantyConvertReason");
+  const errEl = document.getElementById("woWarrantyConvertErr");
+  if (!openBtn || !form || !confirmBtn) return;
+
+  openBtn.addEventListener("click", function () {
+    form.hidden = false;
+    if (errEl) errEl.hidden = true;
+    if (reasonEl) reasonEl.focus();
+  });
+  if (cancelBtn) cancelBtn.addEventListener("click", function () { form.hidden = true; });
+
+  confirmBtn.addEventListener("click", async function () {
+    const reason = (reasonEl && reasonEl.value ? reasonEl.value : "").trim();
+    // Mirrors the server's 10-char floor so the tech isn't made to wait on
+    // a round trip to be told the box is empty. The server re-checks.
+    if (reason.length < 10) {
+      if (errEl) {
+        errEl.textContent = "Give the reason this isn't covered — the customer reads it (at least 10 characters).";
+        errEl.hidden = false;
+      }
+      return;
+    }
+    if (!window.confirm(
+      "Convert this warranty visit to a chargeable service call?\n\n" +
+      "The $95 call-out is restored, the warranty claim is closed as converted, and the " +
+      "customer is emailed your reason. They must still sign for the work."
+    )) return;
+
+    confirmBtn.disabled = true;
+    const original = confirmBtn.textContent;
+    confirmBtn.textContent = "Converting…";
+    // Same route as every other fee change — one code path for the money.
+    await postServiceFeeWaiver({ waived: false, reason: reason });
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = original;
+  });
+})();
+
 // POST a waiver change and refresh the waiver control + on-site quote.
 async function postServiceFeeWaiver(body) {
   const id = getWorkOrderId();
   if (!id) return;
-  const errEl = document.getElementById("woWaiverFormErr");
+  // A conversion carries `reason`; surface its errors in the convert form
+  // the user is actually looking at, not the collapsed waiver form.
+  const convertErr = document.getElementById("woWarrantyConvertErr");
+  const errEl = (body && body.reason && convertErr)
+    ? convertErr
+    : document.getElementById("woWaiverFormErr");
   try {
     const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/service-fee-waiver`, {
       method: "POST",
@@ -1155,13 +1284,29 @@ async function postServiceFeeWaiver(body) {
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
       const msg = (data.errors && data.errors[0]) || `Couldn't update the waiver (HTTP ${r.status}).`;
-      if (errEl) { errEl.textContent = msg; errEl.hidden = false; }
-      else alert(msg);
+      // Un-hide FIRST, then test whether it actually became visible:
+      // offsetParent is null while any ANCESTOR is still hidden, and the
+      // waiver form collapses on every render. Checking before un-hiding
+      // would always read as invisible. Falling back to an alert stops a
+      // refused fee change from looking like a dead button.
+      if (errEl) {
+        errEl.textContent = msg;
+        errEl.hidden = false;
+      }
+      if (!errEl || errEl.offsetParent === null) alert(msg);
       return;
     }
     loadedWorkOrder = data.workOrder;
     renderServiceFeeWaiver(loadedWorkOrder);
+    renderWorkOrderWarranty(loadedWorkOrder);
     renderOnSiteQuote(loadedWorkOrder);
+    // The claim write-back is best-effort server-side; if it failed the
+    // money already changed, so say so rather than letting the claim sit
+    // at "approved — free repair" unnoticed.
+    if (data.claimConversion && data.claimConversion.ok === false) {
+      alert("The fee was restored on this work order, but the warranty claim could not be updated. " +
+            "Open the claim and set it to converted manually.");
+    }
   } catch (err) {
     if (errEl) { errEl.textContent = err.message; errEl.hidden = false; }
     else alert(err.message);
@@ -1318,6 +1463,7 @@ function populateForm(wo) {
   renderDiagnosis(wo);
   renderIntakeGuarantee(wo);
   renderServiceFeeWaiver(wo);
+  renderWorkOrderWarranty(wo);
   renderServiceChecklist(wo);
   renderWoPhotos(wo);
   renderSignoff(wo);

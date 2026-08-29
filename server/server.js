@@ -4946,6 +4946,31 @@ async function handleWarrantyClaimsApi(req, res, pathname) {
     // invoice edited since the claim was filed must show its CURRENT state
     // on the page Patrick is deciding from.
     const { context } = await warrantyClaimLink.crossCheck(claim);
+    // The repair WO raised by approving this claim, read live so the card
+    // shows the CURRENT waiver state — if a tech lifted the waiver on
+    // site, the claim page must say so rather than still reading "free".
+    if (claim.workOrderId) {
+      try {
+        const wo = await workOrders.get(claim.workOrderId);
+        if (wo) {
+          context.workOrder = {
+            id: wo.id,
+            type: wo.type,
+            status: wo.status,
+            address: wo.address || "",
+            scheduledFor: wo.scheduledFor || null,
+            locked: wo.locked === true,
+            feeWaived: !!(wo.serviceFeeWaiver && wo.serviceFeeWaiver.waived === true),
+            waiverReason: wo.serviceFeeWaiver?.reason || null,
+            converted: wo.warrantyClaim?.converted || null
+          };
+        } else {
+          // The WO was deleted out from under the claim. Say so plainly —
+          // silently showing nothing would read as "never raised".
+          context.workOrderMissing = claim.workOrderId;
+        }
+      } catch (_) { /* leave the card hidden */ }
+    }
     return sendJson(res, 200, {
       ok: true,
       claim: warrantyClaims.decorate(claim),
@@ -5013,6 +5038,136 @@ async function handleWarrantyClaimsApi(req, res, pathname) {
     if (!claim) return sendJson(res, 404, { ok: false, errors: ["Claim not found."] });
     const { context, claim: updated } = await runWarrantyCrossCheck(claim);
     return sendJson(res, 200, { ok: true, claim: warrantyClaims.decorate(updated), context });
+  }
+
+  // ---- Admin: approve the claim and raise the repair work order --------
+  //
+  // The warranty decision and the work order are ONE action on purpose. A
+  // claim approved without a WO is a promise with nothing behind it, and a
+  // warranty WO raised without a claim is a free visit nobody can explain
+  // on site — so this route either produces both or neither.
+  //
+  // The WO is a service_visit carrying:
+  //   - serviceFeeWaiver { reason: "warranty" }, which makes the pricing
+  //     rollup emit a $0 "Service call fee — WAIVED (Warranty visit)" line
+  //     instead of the $95 mobilization (lib/issue-rollup.js), so the
+  //     customer sees the credit rather than the fee silently vanishing;
+  //   - warrantyClaim provenance naming the claim, the invoice claimed
+  //     against and the WO behind it, so the tech on site knows exactly
+  //     which prior work is being honoured.
+  //
+  // A property is REQUIRED: workOrders.create() needs a lead or property,
+  // and a warranty visit with no address is not dispatchable. The
+  // cross-check usually supplies it; where it matched several properties
+  // (or none) the CRM asks Patrick to pick one and passes propertyId.
+  const approveMatch = pathname.match(/^\/api\/warranty-claims\/([^/]+)\/approve$/);
+  if (approveMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(approveMatch[1]);
+      const payload = await parseRequestBody(req);
+      const session = await readSession(req);
+      const by = session?.uid || "admin";
+
+      const claim = await warrantyClaims.get(id);
+      if (!claim) return sendJson(res, 404, { ok: false, errors: ["Claim not found."] });
+      if (claim.workOrderId) {
+        return sendJson(res, 409, {
+          ok: false,
+          errors: [`This claim already has work order ${claim.workOrderId}. Open that work order rather than raising a second one.`]
+        });
+      }
+
+      // Property: explicit choice wins over the cross-check's guess.
+      const propertyId = normalizeString(payload?.propertyId, 60) || claim.link?.propertyId || null;
+      if (!propertyId) {
+        return sendJson(res, 422, {
+          ok: false,
+          errors: ["This claim isn't linked to a property yet, so there's no address to send a tech to. Link a property first, then approve."]
+        });
+      }
+      const property = await properties.get(propertyId);
+      if (!property) return sendJson(res, 422, { ok: false, errors: ["That property no longer exists."] });
+
+      const note = normalizeString(payload?.note, 4000);
+      const now = new Date().toISOString();
+
+      // Waiver goes through the shared normalizer so the reason vocabulary
+      // and the customer-facing label can never drift from the rest of the
+      // system (lib/service-fee-waiver.js).
+      const waiverResult = normalizeServiceFeeWaiver(
+        { waived: true, reason: "warranty", notes: `Warranty claim ${claim.id}` },
+        { by, at: now }
+      );
+      if (waiverResult.error) {
+        return sendJson(res, 500, { ok: false, errors: [waiverResult.error] });
+      }
+
+      let wo;
+      try {
+        wo = await workOrders.create({
+          type: "service_visit",
+          property,
+          serviceFeeWaiver: waiverResult.waiver,
+          warrantyClaim: {
+            claimId: claim.id,
+            claimedInvoiceId: claim.link?.invoiceId || null,
+            claimedWorkOrderId: claim.link?.workOrderId || null,
+            summary: claim.description,
+            approvedBy: by,
+            approvedAt: now,
+            converted: null
+          }
+        });
+      } catch (err) {
+        return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't create the work order."] });
+      }
+
+      // Seed the diagnosis from the customer's own words so the tech opens
+      // the WO already knowing what they were told is wrong.
+      try {
+        await workOrders.update(wo.id, {
+          diagnosis: `Warranty claim ${claim.id}: ${claim.description}`.slice(0, 4000)
+        });
+        await workOrders.appendHistory(wo.id, {
+          action: "warranty_claim_approved",
+          by,
+          note: `Raised from warranty claim ${claim.id}. Service call fee waived (warranty).` +
+                (claim.link?.invoiceId ? ` Claimed against invoice ${claim.link.invoiceId}.` : "")
+        });
+      } catch (err) {
+        console.warn("[warranty-claim] WO seed failed:", err?.message || err);
+      }
+
+      const result = await warrantyClaims.setStatus(id, "approved", {
+        note: note || `Approved. Work order ${wo.id} raised — service call fee waived under warranty.`,
+        by,
+        action: "warranty_approved",
+        extra: { workOrderId: wo.id }
+      });
+      if (!result.ok) return sendJson(res, 422, { ok: false, errors: [result.error] });
+
+      let emailed = null;
+      if (payload?.notifyCustomer !== false) {
+        try {
+          emailed = await notifyWarranty.sendStatusUpdate(result.claim, {
+            note,
+            previousStatus: claim.status
+          });
+          if (emailed.ok) await warrantyClaims.markNotified(id);
+        } catch (err) {
+          emailed = { ok: false, error: err?.message || String(err) };
+        }
+      }
+
+      return sendJson(res, 200, {
+        ok: true,
+        claim: warrantyClaims.decorate((await warrantyClaims.get(id)) || result.claim),
+        workOrder: { id: wo.id, type: wo.type, status: wo.status, address: wo.address },
+        emailed
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err?.message || "Couldn't approve the claim."] });
+    }
   }
 
   // ---- Admin: book a warranty service call ------------------------------
@@ -17931,6 +18086,43 @@ async function handleApi(req, res, pathname) {
       }
 
       const waiving = payload?.waived === true;
+
+      // ---- The warranty escape hatch (FLOW-30) -------------------------
+      // A WO raised from an approved warranty claim promised the customer
+      // a free visit. Lifting that waiver on site — because the fault
+      // turned out not to be what the claim described — is the single most
+      // contested thing this system can do, so it is the one waiver change
+      // that cannot happen silently:
+      //
+      //   * a written reason is REQUIRED (it reaches the customer and
+      //     stays on both the WO and the claim);
+      //   * the claim is moved to `converted` so it can never sit at
+      //     "approved — free repair" while we invoice for the visit;
+      //   * the customer is emailed the reason.
+      //
+      // It stays a normal pre-signature edit: wo.locked already 409s above,
+      // so once the customer has signed, converting means an explicit
+      // unlock first — exactly like any other post-signature scope change.
+      const warrantyProvenance = (wo.warrantyClaim && wo.warrantyClaim.claimId) ? wo.warrantyClaim : null;
+      const isWarrantyConversion = Boolean(
+        !waiving &&
+        warrantyProvenance &&
+        !warrantyProvenance.converted &&
+        wo.serviceFeeWaiver &&
+        wo.serviceFeeWaiver.waived === true
+      );
+      const conversionReason = normalizeString(payload?.reason, 2000);
+      if (isWarrantyConversion && conversionReason.length < 10) {
+        return sendJson(res, 422, {
+          ok: false,
+          errors: [
+            `Work order ${wo.id} was raised free of charge under warranty claim ${warrantyProvenance.claimId}. ` +
+            "To charge for this visit instead, give the reason the warranty doesn't cover it — " +
+            "at least 10 characters. It goes to the customer and stays on the claim."
+          ]
+        });
+      }
+
       let waiver = null;
       if (waiving) {
         const norm = normalizeServiceFeeWaiver(
@@ -17974,20 +18166,76 @@ async function handleApi(req, res, pathname) {
         }
       }
       const totals = issueRollup.recomputeTotals(lines);
-      const updated = await workOrders.update(id, {
+      const session = await readSession(req);
+      const actor = session?.uid || "admin";
+      const woPatch = {
         serviceFeeWaiver: waiver,
         onSiteQuote: { ...wo.onSiteQuote, builderLineItems: lines }
-      });
+      };
+      if (isWarrantyConversion) {
+        // `converted` is ADDED to the provenance, never replacing it: the
+        // pair "approved under claim X, then converted for reason Y" is
+        // the audit trail. Losing the approval half would leave a
+        // chargeable WO with no record it was ever a warranty visit.
+        woPatch.warrantyClaim = {
+          ...warrantyProvenance,
+          converted: { at: new Date().toISOString(), by: actor, reason: conversionReason }
+        };
+      }
+      const updated = await workOrders.update(id, woPatch);
       try {
         await workOrders.appendHistory(id, {
-          action: waiving ? "service_fee_waived" : "service_fee_waiver_removed",
-          by: "admin",
+          action: waiving
+            ? "service_fee_waived"
+            : (isWarrantyConversion ? "warranty_converted_to_chargeable" : "service_fee_waiver_removed"),
+          by: actor,
           note: waiving
             ? `Service call fee waived — ${friendlyWaiverReason(waiver)}${waiver.notes ? ` (${waiver.notes})` : ""}`
-            : "Service call fee waiver removed — fee restored"
+            : isWarrantyConversion
+              // Named in full: read back in a year, this line has to explain
+              // on its own why a visit promised free was invoiced.
+              ? `Warranty visit converted to a chargeable service call. Claim ${warrantyProvenance.claimId} was approved free of charge; on attending, the fault was found not to be covered. Service call fee restored. Reason: ${conversionReason}`
+              : "Service call fee waiver removed — fee restored"
         });
       } catch (err) { console.warn("[wo-history] waiver entry failed:", err?.message); }
-      return sendJson(res, 200, { ok: true, workOrder: updated, lineItems: lines, ...totals });
+
+      // Write the conversion back to the claim. Done AFTER the WO update
+      // so the money change is already durable: if this half fails, the
+      // customer is correctly charged and the claim is merely stale, which
+      // the queue surfaces. The reverse order could show a converted claim
+      // against a WO still marked free.
+      let claimConversion = null;
+      if (isWarrantyConversion) {
+        try {
+          const conv = await warrantyClaims.setStatus(warrantyProvenance.claimId, "converted", {
+            note: conversionReason,
+            by: actor,
+            action: "converted_to_paid_service_call"
+          });
+          if (conv.ok) {
+            claimConversion = { ok: true, claimId: warrantyProvenance.claimId };
+            try {
+              const sent = await notifyWarranty.sendStatusUpdate(conv.claim, {
+                note: conversionReason,
+                previousStatus: "approved"
+              });
+              if (sent.ok) await warrantyClaims.markNotified(warrantyProvenance.claimId);
+              claimConversion.emailed = sent;
+            } catch (mailErr) {
+              claimConversion.emailed = { ok: false, error: mailErr?.message || String(mailErr) };
+            }
+          } else {
+            claimConversion = { ok: false, error: conv.error };
+          }
+        } catch (err) {
+          claimConversion = { ok: false, error: err?.message || String(err) };
+        }
+        if (!claimConversion.ok) {
+          console.error(`[warranty-claim] WO ${id} converted to chargeable but claim ${warrantyProvenance.claimId} was NOT updated:`, claimConversion.error);
+        }
+      }
+
+      return sendJson(res, 200, { ok: true, workOrder: updated, lineItems: lines, ...totals, claimConversion });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update the fee waiver."] });
     }

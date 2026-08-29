@@ -41,6 +41,70 @@ superseded `territory-export.js` was deleted (its own replacement documents thre
 silently miscounts). Cover: `scripts/test-territory-export.mjs` (100 assertions, in
 `build:check`).
 
+**2026-08-29 (FLOW-30b — Approved claim → repair work order → the warranty escape hatch):**
+Follow-up to FLOW-30. Approving a claim now RAISES the repair work order in the same action, and
+a warranty visit that turns out not to be covered can be converted to a chargeable service call
+on site. Two claim statuses added (`approved`, `converted`), taking the enum to ten.
+
+**Confirmation of the pre-existing workflow (asked for explicitly, checked before building).**
+The transition was already supported by the work-order model; nothing about it had to be
+redesigned:
+
+- `serviceFeeWaiver` with reason `warranty` already existed (`lib/service-fee-waiver.js`) and
+  already rendered to the customer as "Service call fee — WAIVED (Warranty visit)" via
+  `lib/issue-rollup.js` — a $0 line, so the credit is VISIBLE rather than the fee silently
+  vanishing.
+- `POST /api/work-orders/:id/service-fee-waiver` with `{ waived: false }` already restored the
+  $95 line from `pricing.json`, recomputed totals and appended WO history.
+- `serviceFeeWaiver` was already in `SCOPE_PROTECTED_FIELDS`, so it freezes at signature
+  (`wo.locked`) and is freely changeable before it — which IS the on-site window the conversion
+  needs. After signature the documented route back is `unlockWorkOrder()` (reason required,
+  signature record preserved).
+- The customer signature was already required independently: `POST /on-site-quote/accept`
+  refuses without customerName + a drawn image + acknowledgement, so converted (now chargeable)
+  work cannot be accepted unsigned.
+
+**What was missing, and is now built:** there was no way to raise a WO from a claim at all; a WO
+carried no warranty provenance, so a tech on site could not see which prior job was being
+honoured; lifting a waiver required NO reason and told the claim NOTHING — a claim would have sat
+at "approved, free repair" while the visit was invoiced. That last one was the audit hole.
+
+- `wo.warrantyClaim` added — `{ claimId, claimedInvoiceId, claimedWorkOrderId, summary,
+  approvedBy, approvedAt, converted }`. In `blank()`, `hydrate()`, `create()`, `update()` and
+  `SCOPE_PROTECTED_FIELDS`. `converted` is ADDED alongside the approval, never replacing it: the
+  pair is the audit trail.
+- `POST /api/warranty-claims/:id/approve` — creates the `service_visit` with the warranty waiver
+  and provenance, seeds the diagnosis from the customer's own words, links the WO to the claim,
+  and emails the customer. Refuses a second WO (409) and refuses with no linked property (422).
+- The conversion rides the EXISTING fee-waiver route rather than a parallel one, so there is one
+  code path for the money. On a WO with live warranty provenance, removing the waiver requires a
+  ≥10-char reason, stamps `converted`, moves the claim to `converted`, and emails the customer
+  the reason. The claim write-back happens AFTER the WO update so the money change is durable
+  first; a failed write-back is logged loudly and surfaced in the admin UI.
+- `converted` is terminal and NOT disputable — the customer authorised and signed on site.
+  `approved` is deliberately OPEN, so an accepted-but-unrepaired claim stays in the queue and the
+  reminder counts.
+- Surfaces: green "Warranty repair — no charge" panel on the admin WO (with the convert control)
+  and on the tech UI (read-only — lifting a customer's waiver is a desk decision against the full
+  claim, not a tap in a driveway; the tech is told to call the office). Both flip amber once
+  converted, and the tech's copy then says the customer must sign.
+- One UI defect found and fixed while walking it: the pre-existing "Remove" button on the waiver
+  banner gave a SECOND path to lifting the waiver, and on a warranty WO it would 422 and print
+  its error into the collapsed waiver form — an invisible error that reads as a dead button. It
+  is now hidden on a live warranty WO, and a refused fee change falls back to an alert when its
+  panel isn't visible.
+
+**No PASS flow touched.** Additive fields and new routes only. `lib/warranty.js` (the policy)
+stays read-only to the claim flow, and nothing in `stripe.js`, `pay.js` or any payment route
+moves (FLOW-23's invariant). Cover: `scripts/test-warranty-claims.mjs` now 209 assertions
+(mutation-tested against nine broken states), plus a live-server walk of the approve → quote →
+convert → sign → lock → unlock cycle (63 assertions across two phases, including that the
+subtotal rises by exactly the restored $95 and the repair lines are left untouched) and an
+18-assertion headless-Chromium pass over the admin and tech surfaces.
+
+**Still UNMAPPED, same reason as FLOW-30:** no email in this flow has been sent through live
+Gmail, and no one has walked a real warranty visit end to end on a phone in the field.
+
 **2026-08-29 (FLOW-30 — Warranty claims):** The "File a warranty claim" button on
 `warranty.html` pointed at `contact.html`, which is the general contact form — a warranty claim
 arrived as an ordinary lead with no invoice reference, no evidence, no claim number and no queue.
@@ -560,6 +624,19 @@ Tick items off here as they're confirmed; nothing below blocks new work.
    denied. Each emails the customer, subject `RE: Warranty Claim File Number — <number>`.
 7. Denied → the customer's status page offers a dispute gated on accepting the service-call-fee
    condition → claim re-opens as `disputed` and the team is alerted.
+8. **Approved** (FLOW-30b) → `POST /api/warranty-claims/:id/approve` raises a `service_visit` at
+   the linked property carrying `serviceFeeWaiver { reason: "warranty" }` and `wo.warrantyClaim`
+   provenance. Claim goes to `approved` (still OPEN — the repair is owed) and the customer is
+   emailed that there is no charge.
+9. Tech attends. The WO shows a green "Warranty repair — no charge" banner naming the claim and
+   the prior invoice / work order being honoured.
+10. **The escape hatch.** If the fault isn't what the claim described, removing the waiver via
+    the existing `POST /api/work-orders/:id/service-fee-waiver` requires a written reason,
+    restores the $95 service call, stamps `wo.warrantyClaim.converted`, moves the claim to
+    `converted` (terminal, not disputable — they signed on site) and emails the customer the
+    reason. `POST /on-site-quote/accept` still demands a drawn signature + acknowledgement, so
+    the now-chargeable work cannot be accepted unsigned. After the completion signature the WO
+    locks and any further change needs `unlockWorkOrder()`.
 
 **Numbering:** `YYYY-MM-DD-000YYYYNNNN` — filed date, then `000` + year + a four-digit per-year
 sequence that resets each January. e.g. `2026-08-29-00020260001`. The sequence is derived from

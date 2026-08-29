@@ -2572,3 +2572,70 @@ body[data-locked="true"] .wo-zone-location {
   line-height: 1.5;
 }
 
+
+/* ---- Warranty provenance panel (FLOW-30) ---------------------------
+   Shown on a work order raised by approving a warranty claim. Sits above
+   the fee-waiver control it explains: the waiver says "no charge", this
+   says WHY and against WHAT. */
+.wo-warranty {
+  margin: 0 0 16px;
+  padding: 16px 18px;
+  background: #eef6f0;
+  border: 1px solid #bcd9c6;
+  border-left: 4px solid #1b5e20;
+  border-radius: 10px;
+}
+.wo-warranty-head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
+.wo-warranty-icon { font-size: 22px; line-height: 1.2; }
+.wo-warranty-title { display: block; font-size: 16px; color: #14501c; }
+.wo-warranty-claim { display: block; margin-top: 2px; font-size: 13px; color: #3f5a47; }
+.wo-warranty-claim a { color: #1f4f6e; font-weight: 600; }
+.wo-warranty-grid { display: grid; gap: 10px; margin: 0 0 14px; }
+.wo-warranty-grid div {
+  display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 12px; align-items: start;
+}
+@media (max-width: 700px) {
+  .wo-warranty-grid div { grid-template-columns: 1fr; gap: 2px; }
+}
+.wo-warranty-grid dt {
+  font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #5a7563;
+}
+.wo-warranty-grid dd {
+  margin: 0; font-size: 14px; color: #22322a; line-height: 1.55; white-space: pre-wrap;
+}
+.wo-warranty-grid dd a { color: #1f4f6e; font-weight: 600; }
+
+.wo-warranty-convert-lede {
+  margin: 0 0 10px; font-size: 13px; color: #4a5e51; line-height: 1.55;
+}
+.wo-warranty-convert-open { font-size: 13px; }
+.wo-warranty-convert-form { margin-top: 12px; }
+.wo-warranty-field { display: block; margin-bottom: 10px; }
+.wo-warranty-field > span {
+  display: block; margin-bottom: 5px; font-size: 13px; font-weight: 600; color: #22322a;
+}
+.wo-warranty-field textarea {
+  width: 100%; box-sizing: border-box; padding: 10px 12px;
+  border: 1px solid #b9ccc0; border-radius: 7px; font: inherit; font-size: 14px;
+  line-height: 1.5; resize: vertical;
+}
+.wo-warranty-field textarea:focus { outline: 2px solid #1b5e20; outline-offset: 1px; }
+
+/* Converted: the panel flips from green (free) to amber (money changed).
+   Reading a WO back later, the colour alone has to tell you which one
+   this visit ended up being. */
+.wo-warranty-converted {
+  display: grid; gap: 4px;
+  padding: 12px 15px; margin-bottom: 12px;
+  background: #fff6ed; border-left: 3px solid #d98324; border-radius: 7px;
+  color: #7a4a10; font-size: 14px; line-height: 1.5;
+}
+.wo-warranty-converted strong { color: #8a5100; }
+.wo-warranty-reason {
+  margin-top: 4px; padding: 9px 12px; background: #fff; border-radius: 5px;
+  color: #33332c; white-space: pre-wrap;
+}
+.wo-warranty-locked {
+  margin: 0; padding: 10px 13px; background: #eef0ee; border-radius: 6px;
+  font-size: 13px; color: #4a534c; line-height: 1.5;
+}

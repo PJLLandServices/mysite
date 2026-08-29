@@ -349,3 +349,38 @@
   border-radius: 7px; text-decoration: none; font-weight: 600; font-size: 14px;
 }
 .wcd-status-link:hover { background: #16394f; }
+
+/* ---- Approve action + the raised work order (FLOW-30) ----------------
+   Approve is the accept, so it reads as the affirmative counterpart to
+   the red deny button rather than as one more neutral tile. */
+.wcd-action--approve:hover { border-color: #1b5e20; background: #f2f9f4; }
+.wcd-action--approve.is-selected { border-color: #1b5e20; background: #e7f3ea; }
+.wcd-action--approve strong { color: #14501c; }
+
+.wcd-card--wo { border-left: 4px solid #1f4f6e; }
+.wcd-wo-waiver { margin: 0 0 16px; }
+.wcd-wo-waived {
+  padding: 11px 14px; background: #e7f3ea; border-left: 3px solid #1b5e20;
+  border-radius: 6px; color: #14501c; font-weight: 600; font-size: 14px; line-height: 1.5;
+}
+/* The conversion is the loudest thing on this card on purpose: a visit
+   promised free is now being invoiced, and that must never be easy to
+   miss when reading the claim back. */
+.wcd-wo-converted {
+  display: grid; gap: 4px;
+  padding: 12px 15px; background: #fff6ed; border-left: 3px solid #d98324;
+  border-radius: 6px; color: #7a4a10; font-size: 14px; line-height: 1.5;
+}
+.wcd-wo-converted strong { color: #8a5100; }
+.wcd-wo-reason {
+  margin-top: 4px; padding: 9px 12px; background: #fff; border-radius: 5px;
+  color: #33332c; white-space: pre-wrap;
+}
+
+/* Queue + detail badges for the two statuses added with the work-order
+   hand-off. Kept in the same vocabulary as the rest: green = settled in
+   the customer's favour, amber = needs attention / money changed. */
+.wcq-badge[data-status="approved"],
+.wcd-badge[data-status="approved"]  { background: #e7f3ea; color: #1b5e20; }
+.wcq-badge[data-status="converted"],
+.wcd-badge[data-status="converted"] { background: #fff3e0; color: #8a5100; }

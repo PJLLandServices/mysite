@@ -333,6 +333,33 @@ function buildStatusEmail(claim, { note = "", previousStatus = null } = {}) {
   <p style="margin:0 0 8px;"><strong>If you disagree with this decision, you can dispute it.</strong></p>
   <p style="margin:0 0 8px; font-size:14px; color:#555;">Please note: by disputing, you accept that a service-call fee applies in the event the warranty claim is not accurate for the repairs provided previously, compared to what is being claimed for.</p>
 ${CTA(statusUrl(claim), "Review or dispute this decision →")}`;
+  } else if (claim.status === "approved") {
+    extra = `
+  <p style="margin:16px 0 0; padding:12px 16px; background:#e7f3ea; border-left:3px solid #1b5e20; border-radius:4px;">
+    <strong>There is no charge for this repair.</strong><br>
+    We've raised a work order to carry out the work under your warranty — parts and labour included,
+    and no service-call fee. We'll be in touch to arrange a time that suits you.
+  </p>
+  ${note ? `<h3 style="margin:24px 0 8px; font-size:15px;">Message from our warranty department</h3>
+  <blockquote style="margin:0; padding:12px 16px; background:#f7f7f5; border-radius:6px;">${nl2br(note)}</blockquote>` : ""}`;
+  } else if (claim.status === "converted") {
+    // The customer authorised and signed for this work on site, so the
+    // tone is a record of what they already agreed to — not a fresh
+    // refusal. Saying otherwise would read as a bait-and-switch on a
+    // visit they were promised free.
+    extra = `
+  <h3 style="margin:24px 0 8px; font-size:15px;">What we found on site</h3>
+  <blockquote style="margin:0 0 18px; padding:12px 16px; background:#fff8ec; border-left:3px solid #d98324; border-radius:4px;">${nl2br(note || "")}</blockquote>
+  <p style="margin:0 0 8px;">
+    Because the fault wasn't what the warranty covers, the visit was carried out as a regular
+    service call. Our technician went through this with you on site and you signed to authorise
+    the work before it was done — that signed work order is the record of what was agreed, and
+    your invoice will match it.
+  </p>
+  <p style="margin:16px 0 0; font-size:14px; color:#555;">
+    If you believe this is wrong, call us on <a href="tel:+19059600181" style="color:#1f4f6e;">(905) 960-0181</a>
+    and ask for the warranty department — quote your file number above.
+  </p>`;
   } else if (claim.status === "contact_customer") {
     extra = `
   <p style="margin:16px 0 0; padding:12px 16px; background:#eef4f8; border-left:3px solid #1f4f6e; border-radius:4px;">

@@ -14,11 +14,15 @@
     info_requested: "Info requested",
     contact_customer: "Contacting customer",
     service_booked: "Service call booked",
+    approved: "Approved — work order raised",
     resolved: "Resolved",
     denied: "Denied",
-    disputed: "Disputed"
+    disputed: "Disputed",
+    converted: "Converted to paid service call"
   };
-  var CLOSED = { resolved: true, denied: true };
+  // Mirrors CLOSED_STATUSES in lib/warranty-claims.js. `approved` is NOT
+  // closed — the repair still has to happen.
+  var CLOSED = { resolved: true, denied: true, converted: true };
 
   var all = [];
   var summary = { open: 0, stale: 0 };

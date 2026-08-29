@@ -202,6 +202,61 @@ const techId = document.getElementById("techId");
 const techType = document.getElementById("techType");
 const techCustomer = document.getElementById("techCustomer");
 const techAddress = document.getElementById("techAddress");
+
+// Warranty banner (FLOW-30). A WO raised by approving a warranty claim
+// was promised to the customer free of charge; the tech needs to know
+// that at the door, and needs to know WHICH prior job is being honoured.
+//
+// Read-only by design. Converting the visit to a chargeable service call
+// is a desk decision made against the full claim (admin work-order page),
+// not a tap on a phone in someone's driveway — so this surface tells the
+// tech to call the office rather than offering the control.
+function renderTechWarranty(wo) {
+  const panel = document.getElementById("techWarranty");
+  if (!panel) return;
+  const wc = wo && wo.warrantyClaim;
+  if (!wc || !wc.claimId) { panel.hidden = true; return; }
+
+  const converted = !!wc.converted;
+  panel.hidden = false;
+  panel.classList.toggle("is-converted", converted);
+
+  const title = document.getElementById("techWarrantyTitle");
+  if (title) {
+    title.textContent = converted
+      ? "Was a warranty repair — now chargeable"
+      : "Warranty repair — no charge";
+  }
+
+  const claimEl = document.getElementById("techWarrantyClaim");
+  if (claimEl) claimEl.textContent = "Claim " + wc.claimId;
+
+  const prior = document.getElementById("techWarrantyPrior");
+  if (prior) {
+    const bits = [];
+    if (wc.claimedInvoiceId) bits.push("invoice " + wc.claimedInvoiceId);
+    if (wc.claimedWorkOrderId) bits.push("work order " + wc.claimedWorkOrderId);
+    if (bits.length) {
+      prior.textContent = "Honouring " + bits.join(" · ");
+      prior.hidden = false;
+    } else {
+      prior.hidden = true;
+    }
+  }
+
+  const summary = document.getElementById("techWarrantySummary");
+  if (summary) summary.textContent = wc.summary || "—";
+
+  const note = document.getElementById("techWarrantyNote");
+  if (note) note.hidden = converted;
+
+  const convBox = document.getElementById("techWarrantyConverted");
+  if (convBox) convBox.hidden = !converted;
+  if (converted) {
+    const reason = document.getElementById("techWarrantyConvertedReason");
+    if (reason) reason.textContent = wc.converted.reason || "";
+  }
+}
 const techMeta = document.getElementById("techMeta");
 const techRunStatus = document.getElementById("techRunStatus");
 const techDiagnosis = document.getElementById("techDiagnosis");
@@ -4932,6 +4987,7 @@ async function init() {
     if (wo.address) techAddress.setAttribute("data-map-address", wo.address);
     else techAddress.removeAttribute("data-map-address");
     techMeta.textContent = `Updated ${formatDateTime(wo.updatedAt)}`;
+    renderTechWarranty(wo);
     techNotes.value = state.techNotes;
     if (techCustomerNotes) techCustomerNotes.value = state.customerNotes;
 

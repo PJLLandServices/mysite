@@ -1,10 +1,15 @@
 // Warranty claim detail — the tool Patrick works a claim from.
 //
-// The six buttons in the action picker are the ones the brief names:
-// under review, contact customer, return email with questions, book for
-// service call, resolved, denied. Picking one opens a confirm panel
-// rather than firing immediately: every one of these sends the customer
-// an email, and two of them (deny, questions) require writing to them.
+// The action picker carries the outcomes the brief names: approve (which
+// also raises the repair work order), under review, contact customer,
+// return email with questions, book for service call, resolved, denied.
+// Picking one opens a confirm panel rather than firing immediately: every
+// one of these emails the customer, and two of them (deny, questions)
+// require writing to them.
+//
+// The eighth outcome, `converted`, is deliberately NOT a button here. A
+// warranty visit becomes chargeable on the WORK ORDER, by the person who
+// attended and can say why — this page only reports it.
 //
 // Deny and info_requested REQUIRE a note; the server enforces the same
 // rule, so this is a courtesy check, not the control.
@@ -15,9 +20,11 @@
     info_requested: "Info requested",
     contact_customer: "Contacting customer",
     service_booked: "Service call booked",
+    approved: "Approved — work order raised",
     resolved: "Resolved",
     denied: "Denied",
-    disputed: "Disputed"
+    disputed: "Disputed",
+    converted: "Converted to paid service call"
   };
 
   // Per-action copy for the confirm panel. `noteRequired` mirrors the
@@ -25,6 +32,12 @@
   // for, because "note" means something different on a denial (the
   // customer reads it verbatim) than on a review flip.
   var ACTIONS = {
+    approved: {
+      title: "Approve claim & raise work order",
+      help: "Accepts the claim and creates a service visit at the linked property with the call-out fee waived under warranty. The work order carries this claim number and the prior job it's honouring, so the tech on site knows what they're fixing free of charge.",
+      noteLabel: "Optional message to the customer",
+      noteRequired: false
+    },
     under_review: {
       title: "Mark under review",
       help: "The customer is told their claim is being reviewed against the original work order and invoice.",
@@ -188,6 +201,59 @@
     }
   }
 
+  // The repair work order raised by approving this claim, with its LIVE
+  // waiver state. If a tech lifted the waiver on site this card is where
+  // Patrick sees the visit is now chargeable.
+  function renderWorkOrder(claim, context) {
+    var card = $("wcdWorkOrderCard");
+    var wo = context && context.workOrder;
+    if (!wo) {
+      if (context && context.workOrderMissing) {
+        $("wcdWorkOrderMeta").textContent =
+          "Work order " + context.workOrderMissing + " was raised for this claim but no longer exists.";
+        $("wcdWoWaiver").textContent = "";
+        $("wcdWorkOrderLink").hidden = true;
+        card.hidden = false;
+        return;
+      }
+      card.hidden = true;
+      return;
+    }
+
+    $("wcdWorkOrderMeta").textContent = [
+      wo.id,
+      (wo.status || "").replace(/_/g, " "),
+      wo.address,
+      wo.scheduledFor ? "scheduled " + fmtDateTime(wo.scheduledFor) : "",
+      wo.locked ? "signed & locked" : ""
+    ].filter(Boolean).join(" · ");
+
+    var box = $("wcdWoWaiver");
+    box.textContent = "";
+    if (wo.converted) {
+      var conv = el("div", "wcd-wo-converted");
+      conv.appendChild(el("strong", null, "Converted to a chargeable service call"));
+      conv.appendChild(el("span", "wcd-sub",
+        fmtDateTime(wo.converted.at) + " · by " + (wo.converted.by || "—")));
+      conv.appendChild(el("span", "wcd-wo-reason", wo.converted.reason || ""));
+      box.appendChild(conv);
+    } else if (wo.feeWaived) {
+      box.appendChild(el("div", "wcd-wo-waived",
+        "Call-out fee waived under warranty — this visit is free of charge."));
+    } else {
+      // Waiver gone with no conversion record: only reachable by editing
+      // the WO's waiver directly on a claim-raised WO. Flag it rather
+      // than rendering a blank space.
+      box.appendChild(el("div", "wcd-wo-converted",
+        "The warranty waiver is no longer on this work order, but no conversion reason was recorded. Check the work order history."));
+    }
+
+    var linkEl = $("wcdWorkOrderLink");
+    linkEl.hidden = false;
+    linkEl.href = "/admin/work-order/" + encodeURIComponent(wo.id);
+    card.hidden = false;
+  }
+
   function renderDispute(claim) {
     var card = $("wcdDisputeCard");
     if (!claim.dispute) { card.hidden = true; return; }
@@ -330,6 +396,7 @@
     renderClaimBody(payload.claim);
     renderDispute(payload.claim);
     renderHistory(payload.claim);
+    renderWorkOrder(payload.claim, payload.context);
     renderCrossCheck(payload.claim, payload.context);
     renderWarranty(payload.claim);
     renderSideLists(payload.context);
@@ -339,6 +406,12 @@
       statusLink.href = payload.statusUrl;
       statusLink.hidden = false;
     }
+
+    // One claim, one repair work order. Once it exists, approving again
+    // would 409 server-side — hide the button rather than offering an
+    // action that cannot succeed.
+    var approveBtn = document.querySelector('[data-action="approved"]');
+    if (approveBtn) approveBtn.hidden = Boolean(payload.claim.workOrderId);
 
     loadingEl.hidden = true;
     contentEl.hidden = false;
@@ -409,11 +482,17 @@
       // "Book for service call" has its own route: it mints a booking
       // session before moving the status, so it can't be expressed as a
       // plain PATCH.
-      var url = action === "service_booked"
-        ? "/api/warranty-claims/" + encodeURIComponent(claimId) + "/book"
+      // Two actions do more than flip a status and so have their own
+      // routes: booking mints a session, and approving creates the repair
+      // work order. Everything else is a plain PATCH.
+      var ownRoute = action === "service_booked" ? "book"
+                   : action === "approved" ? "approve"
+                   : null;
+      var url = ownRoute
+        ? "/api/warranty-claims/" + encodeURIComponent(claimId) + "/" + ownRoute
         : "/api/warranty-claims/" + encodeURIComponent(claimId);
-      var method = action === "service_booked" ? "POST" : "PATCH";
-      var body = action === "service_booked"
+      var method = ownRoute ? "POST" : "PATCH";
+      var body = ownRoute
         ? { note: note, notifyCustomer: notify }
         : { status: action, note: note, notifyCustomer: notify };
 
@@ -435,6 +514,9 @@
       await load({ silent: true });
 
       var msg = spec.title + " — done.";
+      if (data.workOrder && data.workOrder.id) {
+        msg += " Work order " + data.workOrder.id + " raised, call-out fee waived under warranty.";
+      }
       if (data.bookingUrl) msg += " Booking link: " + data.bookingUrl;
       if (notify) {
         // The server reports the send result separately from the status

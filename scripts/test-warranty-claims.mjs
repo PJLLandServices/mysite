@@ -141,7 +141,7 @@ ok("statuses with no note requirement pass note-free",
 
 // Every status must be reachable and labelled — an unlabelled status
 // would render as a raw enum key in a customer's inbox.
-eq("eight statuses defined", wc.STATUSES.length, 8);
+eq("ten statuses defined", wc.STATUSES.length, 10);
 for (const s of wc.STATUSES) {
   ok(`${s} has an admin label`, typeof wc.STATUS_LABELS[s] === "string" && wc.STATUS_LABELS[s].length > 0);
   ok(`${s} has customer-facing wording`, typeof wc.STATUS_CUSTOMER_TEXT[s] === "string" && wc.STATUS_CUSTOMER_TEXT[s].length > 20);
@@ -342,9 +342,177 @@ ok("deny is marked note-required in the UI too",
   /denied:\s*\{[^}]*noteRequired:\s*true/s.test(detailJs));
 ok("info_requested is marked note-required in the UI too",
   /info_requested:\s*\{[^}]*noteRequired:\s*true/s.test(detailJs));
-ok("booking uses its own route, not a plain PATCH", detailJs.includes("/book"));
+// Booking and approve both do more than flip a status (one mints a
+// session, the other creates a work order), so both leave the PATCH path.
+ok("booking uses its own route, not a plain PATCH",
+  detailJs.includes('action === "service_booked" ? "book"'));
 ok("the nav badge reads the outstanding count", navBadges.includes("/api/warranty-claims/outstanding"));
 ok("the badge span exists on the admin pages", queueHtml.includes("data-warranty-badge"));
+
+// ---------------------------------------------------------------------
+// 11. Approve → work order → on-site conversion (the warranty escape hatch)
+// ---------------------------------------------------------------------
+const workOrders = require(path.join(ROOT, "server/lib/work-orders.js"));
+const feeWaiver = require(path.join(ROOT, "server/lib/service-fee-waiver.js"));
+
+// The two states added with the work-order hand-off.
+ok("approved is a status", wc.STATUSES.includes("approved"));
+ok("converted is a status", wc.STATUSES.includes("converted"));
+// `approved` must stay OPEN: the claim is accepted but the repair has not
+// happened, so it still owes the customer a visit and must stay in the
+// queue and the reminder counts.
+ok("approved is OPEN — the repair still has to happen", wc.isOpen({ status: "approved" }));
+ok("converted is closed", !wc.isOpen({ status: "converted" }));
+ok("an approved claim goes stale like any other open one",
+  wc.isStale({ status: "approved", lastStatusAt: at(30) }, now));
+
+// A conversion is a statement about a visit that happened. With no work
+// order there was no visit, and the honest outcome is a plain denial.
+ok("cannot convert a claim with no work order",
+  wc.canTransition({ status: "approved" }, "converted", { note: "a long enough reason" }).ok === false);
+ok("the refusal points at denial instead",
+  /deny the claim instead/i.test(wc.canTransition({ status: "approved" }, "converted", { note: "a long enough reason" }).error));
+ok("can convert a claim that has one",
+  wc.canTransition({ status: "approved", workOrderId: "WO-1" }, "converted", { note: "a long enough reason" }).ok === true);
+
+// Telling a customer that a visit promised free is now chargeable is the
+// most contested thing this system does — it can never happen silently.
+ok("converting requires a written reason",
+  wc.canTransition({ status: "approved", workOrderId: "WO-1" }, "converted", { note: "" }).ok === false);
+ok("the reason requirement is worded for a conversion, not a denial",
+  /chargeable service call/i.test(wc.canTransition({ status: "approved", workOrderId: "WO-1" }, "converted", { note: "" }).error));
+
+// The waiver reason the approve route stamps has to exist in the shared
+// vocabulary, or the customer-facing label silently degrades to "No charge".
+ok("'warranty' is a valid waiver reason", feeWaiver.WAIVER_REASONS.includes("warranty"));
+eq("and reads as 'Warranty visit' to the customer",
+  feeWaiver.friendlyWaiverReason({ waived: true, reason: "warranty" }), "Warranty visit");
+
+// warrantyClaim must survive hydrate(). hydrate() rebuilds a WO key by key
+// and readAll() writes the result back, so a field it forgets is DELETED
+// on the next read — the trap documented at properties.js commPrefs.
+ok("warrantyClaim is scope-protected (freezes at signature)",
+  workOrders.SCOPE_PROTECTED_FIELDS.includes("warrantyClaim"));
+ok("serviceFeeWaiver is scope-protected too",
+  workOrders.SCOPE_PROTECTED_FIELDS.includes("serviceFeeWaiver"));
+ok("a scope-protected change is detected on a locked WO",
+  workOrders.findProtectedFieldTouched({ warrantyClaim: { claimId: "x" } }) === "warrantyClaim");
+ok("a locked WO reports its scope frozen", workOrders.isScopeFrozen({ locked: true }) === true);
+ok("an unlocked WO does not — this is the on-site window the conversion uses",
+  workOrders.isScopeFrozen({ locked: false }) === false);
+
+// Source-level: the WO model and the routes.
+const woLib = readFileSync(path.join(ROOT, "server/lib/work-orders.js"), "utf8");
+ok("blank() declares warrantyClaim", /\n\s*warrantyClaim: null,/.test(woLib));
+ok("hydrate() rebuilds warrantyClaim (or it is erased on read)",
+  woLib.includes("warrantyClaim: (w?.warrantyClaim && typeof w.warrantyClaim === \"object\" && w.warrantyClaim.claimId)"));
+ok("create() accepts warrantyClaim", /async function create\(\{[^}]*warrantyClaim = null/s.test(woLib));
+ok("update() persists warrantyClaim",
+  woLib.includes('Object.prototype.hasOwnProperty.call(patch, "warrantyClaim")'));
+// The pair "approved under claim X, then converted for reason Y" is the
+// audit trail; dropping the approval half would leave a chargeable WO with
+// no record it was ever a warranty visit.
+ok("hydrate keeps `converted` alongside the original approval",
+  /warrantyClaim[\s\S]{0,900}converted: \(w\.warrantyClaim\.converted/.test(woLib));
+
+ok("the approve route exists", server.includes('/^\\/api\\/warranty-claims\\/([^/]+)\\/approve$/'));
+ok("approve refuses to raise a second work order", server.includes("This claim already has work order"));
+ok("approve waives the fee through the shared normalizer",
+  /normalizeServiceFeeWaiver\(\s*\{ waived: true, reason: "warranty"/.test(server));
+ok("approve requires a property to send a tech to",
+  server.includes("there's no address to send a tech to"));
+ok("approve stamps the claim, invoice and prior WO onto the work order",
+  /warrantyClaim: \{[\s\S]{0,400}claimedInvoiceId: claim\.link\?\.invoiceId/.test(server));
+
+// The conversion gate.
+ok("the conversion is detected on the fee-waiver route", server.includes("isWarrantyConversion"));
+ok("it fires only when a warranty waiver is actually being lifted",
+  /isWarrantyConversion = Boolean\(\s*\n\s*!waiving &&/.test(server));
+ok("it will not re-fire on an already-converted WO",
+  /!warrantyProvenance\.converted/.test(server));
+ok("a conversion demands a written reason", server.includes("conversionReason.length < 10"));
+ok("the refusal names the claim and the work order",
+  server.includes("was raised free of charge under warranty claim"));
+ok("the conversion writes back to the claim", server.includes('warrantyClaims.setStatus(warrantyProvenance.claimId, "converted"'));
+ok("and emails the customer the reason",
+  /claimConversion[\s\S]{0,600}notifyWarranty\.sendStatusUpdate/.test(server));
+// Ordering matters: the money change must be durable first. The reverse
+// would risk a converted claim pointing at a WO still marked free.
+ok("the claim write-back happens after the work-order update",
+  server.indexOf("const updated = await workOrders.update(woPatch") === -1 &&
+  server.indexOf("woPatch.warrantyClaim") < server.indexOf('warrantyClaims.setStatus(warrantyProvenance.claimId, "converted"'));
+ok("a failed write-back is logged loudly rather than swallowed",
+  server.includes("converted to chargeable but claim"));
+// The pre-existing lock guard is what forces an unlock after signature.
+ok("the fee-waiver route still refuses a signed work order",
+  server.includes("Work order is signed and locked — the waiver can't change."));
+
+// Customer wording for the two new states.
+const approvedEmail = notify.buildStatusEmail({ ...sampleClaim, status: "approved", denial: null }, {});
+ok("the approval email says there is no charge", /no charge/i.test(approvedEmail.html));
+ok("and that a work order was raised", /work order/i.test(approvedEmail.html));
+const convertedEmail = notify.buildStatusEmail({ ...sampleClaim, status: "converted", denial: null },
+  { note: "Impact damage from a lawnmower, not our valve work." });
+ok("the conversion email carries the reason", convertedEmail.html.includes("Impact damage from a lawnmower"));
+// They authorised and signed on site — the email is a record of what they
+// already agreed to, not a fresh refusal.
+ok("the conversion email points at the signature they gave on site", /signed/i.test(convertedEmail.html));
+ok("its plain-text half says so too", /signed/i.test(convertedEmail.text));
+ok("a converted claim is never offered a dispute",
+  wc.canTransition({ status: "converted", workOrderId: "WO-1" }, "disputed").ok === false);
+
+// UI surfaces.
+const woHtml = readFileSync(path.join(ROOT, "server/work-order.html"), "utf8");
+const woJs = readFileSync(path.join(ROOT, "server/work-order.js"), "utf8");
+const techHtml = readFileSync(path.join(ROOT, "server/work-order-tech.html"), "utf8");
+const techJs = readFileSync(path.join(ROOT, "server/work-order-tech.js"), "utf8");
+
+ok("the admin WO page shows the warranty panel", woHtml.includes('id="woWarrantyPanel"'));
+ok("it names the prior work being honoured", woHtml.includes('id="woWarrantyPrior"'));
+ok("it offers the convert control", woHtml.includes('id="woWarrantyConvertOpenBtn"'));
+ok("the convert control demands a reason", woHtml.includes('id="woWarrantyConvertReason"'));
+ok("and warns that the customer reads it", /customer reads this/i.test(woHtml));
+ok("the admin page renders the panel", woJs.includes("renderWorkOrderWarranty"));
+ok("the convert control posts through the same fee route (one code path for the money)",
+  /postServiceFeeWaiver\(\{ waived: false, reason: reason \}\)/.test(woJs));
+ok("the panel re-renders after a waiver change",
+  /renderServiceFeeWaiver\(loadedWorkOrder\);\s*\n\s*renderWorkOrderWarranty\(loadedWorkOrder\);/.test(woJs));
+ok("a failed claim write-back is surfaced to the admin",
+  woJs.includes("could not be updated"));
+// ONE path to lifting a warranty waiver. The generic "Remove" button on
+// the waiver banner posts with no reason, so on a warranty WO it would
+// always 422 — and its error lands in the collapsed waiver form where
+// nobody can read it, making it look like a dead button.
+ok("the generic waiver Remove is hidden on a live warranty WO",
+  woJs.includes("removeBtn.hidden = locked || liveWarranty"));
+ok("a warranty WO is 'live' only until it is converted",
+  /liveWarranty = [^;]*!wo\.warrantyClaim\.converted/.test(woJs));
+// An error written into a hidden panel is worse than no error.
+ok("a refused fee change falls back to an alert when its panel is hidden",
+  woJs.includes("errEl.offsetParent === null) alert(msg)"));
+
+ok("the tech UI shows the warranty banner", techHtml.includes('id="techWarranty"'));
+ok("the tech banner names the claim", techHtml.includes('id="techWarrantyClaim"'));
+ok("the tech is told to call the office rather than converting on a phone",
+  /call the office/i.test(techHtml));
+ok("the tech UI renders it", techJs.includes("renderTechWarranty"));
+// Lifting a customer's waiver is a desk decision made against the full
+// claim, not a tap in a driveway — the tech surface must stay read-only.
+ok("the tech UI offers NO convert control", !techHtml.includes("woWarrantyConvertOpenBtn"));
+ok("the tech banner flips to a chargeable warning once converted",
+  techHtml.includes('id="techWarrantyConverted"'));
+ok("and reminds the tech a signature is needed",
+  /must sign for the work/i.test(techHtml));
+
+const claimDetailHtml = readFileSync(path.join(ROOT, "server/warranty-claim.html"), "utf8");
+ok("the claim page offers approve", claimDetailHtml.includes('data-action="approved"'));
+ok("the claim page shows the raised work order", claimDetailHtml.includes('id="wcdWorkOrderCard"'));
+ok("approve posts to its own route", detailJs.includes('action === "approved" ? "approve"'));
+ok("approve is hidden once a work order exists",
+  detailJs.includes("approveBtn.hidden = Boolean(payload.claim.workOrderId)"));
+// Converting is a decision made by whoever attended, on the work order.
+ok("the claim page does NOT offer convert as a button",
+  !claimDetailHtml.includes('data-action="converted"'));
 
 // ---------------------------------------------------------------------
 console.log(`\ntest-warranty-claims: ${passed} assertions passed, ${failures.length} failed.`);
