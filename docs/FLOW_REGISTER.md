@@ -41,6 +41,72 @@ superseded `territory-export.js` was deleted (its own replacement documents thre
 silently miscounts). Cover: `scripts/test-territory-export.mjs` (100 assertions, in
 `build:check`).
 
+**2026-08-29 (CRM-20 — the admin action log):** The app had **no request log at all** — the
+same gap the FLOW-21 entry names ("no `viewedAt` field, no open tracking, no app-level request
+log"), which is true generally and not just for quote views. Per-record `history[]` arrays
+exist, but **17 call sites in `server.js` stamp a hardcoded `by: "admin"`** rather than the
+account that made the change. With one person on the CRM that is invisible. It stops being
+invisible the moment a second operator writes to the same account — a second tech, or an agent
+acting on Patrick's behalf from a job site — because then the records genuinely cannot say who
+did a thing. Opened when exactly that came up: standing agent access to the admin portal was
+proposed on the grounds that it would be "completely trackable", and it would not have been.
+
+`server/lib/admin-actions.js` is an append-only ledger of every state-changing request made by
+a signed-in staff account. It does **not** replace the per-record history — that stays the
+business-readable trail; this is the system-wide ledger underneath it.
+
+- **The hook lives in the auth gate**, which is the ONE place every guarded request passes
+  through with its session already resolved. Putting it there rather than in ~200 routes is
+  what stops it being forgotten on route 201. Fires on response `finish`, so the status code
+  is the real one; fire-and-forget, so a log write is never on the critical path; ip and
+  user-agent are read SYNCHRONOUSLY before the listener, the same trap `recordQuoteView()`
+  documents (a fire-and-forget call can outlive the socket and record a blank IP).
+- **JSONL, appended — not a JSON array read-modify-written.** Every other store here is a
+  whole-file read-modify-write with no lock, and `quote-views.js` already documents why a
+  high-frequency write must not live in one: interleaving a frequent write with a rare
+  important one can drop the important one. A request log is the highest-frequency write in
+  the system, so it gets one `appendFile` per entry — O(1), no read, nothing to interleave. A
+  torn line costs one entry and cannot corrupt an earlier one (asserted).
+- **It records what was called, never the payload.** Request bodies here carry names,
+  addresses, phone numbers, signature images and on some routes passwords; a log holding them
+  would be a second copy of the customer database with none of the handling the first copy
+  gets. Query strings are stripped (they carry status tokens and search terms). The actor is a
+  `uid` — the read API joins to users.json to render a name, so the ledger itself holds no
+  contact data. Identifying strings are seeded into the test fixtures so the privacy
+  assertions have something real to catch.
+- **A refused admin-only action is logged too**, with the actor who attempted it. That event
+  never reaches the success-path hook — the gate rejects first — so it has its own call. It is
+  also the single most audit-relevant thing the gate produces. The 401 case is deliberately
+  NOT logged: an unauthenticated request carries no actor to attribute, and logging it would
+  fill the ledger with rows naming nobody.
+- **Read via `GET /api/admin/action-log`** — ADMIN ONLY, twice over (`needsAuth()` maps the
+  path to `"admin"` and the route re-checks with `requireAdmin`), because it names every
+  operator's activity, which is not a tech's business. Filters: `?limit=` (default 200, max
+  2000), `?months=`, `?uid=`, `?ref=` (a record id), `?path=`.
+- **Monthly files** keep any one file bounded without ever rewriting or truncating history.
+  The module exports no delete, update, clear or truncate — asserted, because an audit log
+  with an edit path is not one.
+
+**No PASS flow touched.** The hook is additive inside the gate and changes no route's
+behaviour, status code or payload; nothing in `stripe.js`, `pay.js` or any payment route moves
+(FLOW-23's invariant). Cover: `scripts/test-admin-actions.mjs` (71 assertions, in
+`build:check`), mutation-tested against three broken states — query strings kept, an awaited
+log write, and the read route downgraded from admin to user — plus a **live-server walk** (28
+assertions) with separate seeded admin and tech logins: a real property POST logged against the
+real admin uid (not a hardcoded string) with a non-blank IP and no customer name, email or
+address in the line; a GET adding nothing; a tech's refused fee-waiver logged as 403 against
+the tech's own uid; and the read route 401 anonymous / 403 tech / 200 admin.
+
+**What still needs Patrick — not yet walked in production:** nothing here is customer-facing
+and nothing writes to a business record, so the risk is low, but the ledger has only ever run
+against a dev checkout. First deploy should be followed by opening
+`/api/admin/action-log?limit=20` and confirming real activity appears with real names.
+
+**The other half is still missing.** This says WHO made a request. It does not fix the 17
+hardcoded `by: "admin"` stamps inside the record histories — that means threading the acting
+user through existing write paths, which DOES touch flows that are currently PASS, so it wants
+to be its own reviewed change rather than being smuggled in here.
+
 **2026-08-29 (CRM-19 — merging a duplicate property):** A customer ended up with two
 property records for one address — a Dispatch-created invoice minted a second property
 because the address string it carried didn't match the one on file and there was no
@@ -483,6 +549,37 @@ per-season opt-out flag, matching the CLI's `--year`; omitted, it is the current
 **Download territory export (JSON)**, and confirm a file named
 `territory-export-<today>.json` lands on the device and opens as JSON. That is the whole
 acceptance test; nothing here writes, so there is nothing to undo if it misbehaves.
+
+## INF — Admin action log
+
+**Who did what, when.** `server/data/admin-actions-YYYY-MM.jsonl`, written by
+`server/lib/admin-actions.js` from a hook inside the auth gate in `server.js`. Append-only;
+the module exposes no way to edit or delete an entry.
+
+Records every **state-changing** request (POST / PATCH / PUT / DELETE) by a signed-in staff
+account, plus any admin-only action a signed-in operator was REFUSED. Reads are not recorded.
+Each line: `{ ts, uid, role, method, path, ref, status, ok, ms, ip, ua }` — `ref` is the record
+id lifted from the path (`P-2026-0040`, `I-2026-0093`, a uuid), which is what makes
+"everything that happened to this invoice" answerable.
+
+**It holds no customer data by construction** — no request bodies, no query strings, no
+emails. The actor is a uid; names are joined in at read time. Treat that as an invariant: the
+moment this file holds contact data it becomes a second customer database with none of the
+handling the first one gets.
+
+Read it at **`GET /api/admin/action-log`** — admin only, twice over. Filters: `?limit=`
+(default 200, max 2000), `?months=` (default 3), `?uid=`, `?ref=`, `?path=`.
+
+Cover: `scripts/test-admin-actions.mjs` (71 assertions, in `build:check`), including source
+guards that fail the build if the hook leaves the auth gate, if the log write becomes awaited,
+if ip/user-agent stop being captured synchronously, or if the read route loses its admin gate.
+
+**Known gap:** this records the REQUEST. It does not fix the 17 hardcoded `by: "admin"` stamps
+inside per-record `history[]` arrays — those still say "admin" rather than naming the operator.
+Closing that means threading the acting user through existing write paths, which touches PASS
+flows and needs its own change.
+
+---
 
 ## INF — Data repair CLIs
 

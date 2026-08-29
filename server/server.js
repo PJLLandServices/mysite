@@ -85,6 +85,7 @@ const proposalHtml = require("./lib/proposal-html");
 const proposalData = require("./lib/proposal-data");
 const proposalTemplates = require("./lib/proposal-templates");
 const rateLimit = require("./lib/rate-limit");
+const adminActions = require("./lib/admin-actions");
 const antiBot = require("./lib/anti-bot");
 const bulkActions = require("./lib/bulk-actions");
 const { sendCustomerLoginLink, sendAdminPasswordResetLink } = require("./lib/notify-customer");
@@ -1193,6 +1194,9 @@ function needsAuth(method, pathname) {
   // Schedule management is admin-only.
   if (pathname.startsWith("/api/schedule/")) return "user";
   // Manual handoff (admin sends booking link to customer) is admin-only.
+  // Admin action log — who changed what. ADMIN ONLY: it names every
+  // operator's activity, which is not a tech's business to read.
+  if (pathname === "/api/admin/action-log") return "admin";
   if (pathname === "/api/admin/send-booking-link") return "user";
   if (pathname === "/api/admin/features") return "user";
   // Customers (the people PJL serves) — admin-only.
@@ -7581,6 +7585,45 @@ async function handleApi(req, res, pathname) {
   // Cap: 200 candidates per call. If more, returns first 200 + truncated:
   // true. Operator re-runs to continue.
   //
+  // GET /api/admin/action-log — read the admin action log.
+  //
+  // Answers "who changed this, and when" across every operator on the
+  // account. Query params: ?limit= (default 200, max 2000), ?months=
+  // (how far back to look, default 3), ?uid=, ?ref= (a record id, e.g.
+  // I-2026-0093), ?path= (substring).
+  //
+  // Actors are stored as a uid; the join to a name happens HERE rather
+  // than in the log, so the ledger itself carries no contact data. A uid
+  // whose user record is gone renders as the raw uid instead of vanishing
+  // — a deleted account must not erase what it did.
+  //
+  // Admin-gated twice: needsAuth() maps this path to "admin", and the
+  // route re-checks. Same pattern as the territory export.
+  if (req.method === "GET" && pathname === "/api/admin/action-log") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const logUrl = new URL(req.url, baseUrlFromReq(req));
+      const entries = await adminActions.list({
+        limit: Number(logUrl.searchParams.get("limit")) || 200,
+        months: Number(logUrl.searchParams.get("months")) || 3,
+        uid: logUrl.searchParams.get("uid") || null,
+        ref: logUrl.searchParams.get("ref") || null,
+        pathContains: logUrl.searchParams.get("path") || null
+      });
+      const allUsers = await users.list().catch(() => []);
+      const byId = new Map(allUsers.map((u) => [u.id, u]));
+      const decorated = entries.map((e) => {
+        const u = e.uid ? byId.get(e.uid) : null;
+        return { ...e, actorName: u ? (u.name || u.email) : (e.uid || "unknown") };
+      });
+      return sendJson(res, 200, { ok: true, entries: decorated, count: decorated.length });
+    } catch (err) {
+      console.error("[admin-action-log] read failed:", err?.message || err);
+      return sendJson(res, 500, { ok: false, errors: ["Couldn't read the action log."] });
+    }
+  }
+
   // Admin-gated via explicit requireAdmin call.
   if (req.method === "POST" && pathname === "/api/admin/backfill-customers") {
     const session = await requireAdmin(req);
@@ -21933,6 +21976,28 @@ const server = http.createServer(async (req, res) => {
           // techs see a helpful 403 instead of being bounced to /login.
           const anyUser = await requireUser(req);
           if (anyUser) {
+            // A signed-in operator REFUSED an admin-only action. This is
+            // the most audit-relevant event the gate produces, and it is
+            // the one the success path below can never see — the request
+            // is rejected here and never reaches it. Logged with the real
+            // actor, since we have one.
+            //
+            // Deliberately NOT logging the 401 case underneath: an
+            // unauthenticated request carries no actor to attribute, and
+            // an open endpoint being probed would fill the ledger with
+            // rows that name nobody.
+            if (adminActions.isMutating(req.method)) {
+              adminActions.record({
+                uid: anyUser.uid || null,
+                role: anyUser.role || null,
+                method: req.method,
+                pathname,
+                status: 403,
+                ms: 0,
+                ip: callerIp(req),
+                userAgent: req.headers["user-agent"] || null
+              });
+            }
             if (pathname.startsWith("/api/")) {
               return sendJson(res, 403, { ok: false, errors: ["Admin access is required for this action."] });
             }
@@ -21945,6 +22010,38 @@ const server = http.createServer(async (req, res) => {
           return sendJson(res, 401, { ok: false, errors: ["CRM login required."] });
         }
         return redirect(res, `/login?next=${encodeURIComponent(pathname)}`);
+      }
+
+      // Admin action log. This gate is the ONE place every guarded request
+      // passes through with its session already resolved, which is why the
+      // hook lives here rather than being sprinkled across ~200 routes
+      // (where it would be forgotten on the next one added).
+      //
+      // Records state-changing requests only, on response finish so the
+      // status code is real rather than assumed. Best-effort and
+      // fire-and-forget: a log failure must never affect the response, so
+      // nothing here is awaited and admin-actions.record() swallows its
+      // own errors. Reads ip + user-agent synchronously, before the
+      // listener can outlive the socket — the same trap recordQuoteView()
+      // documents, where a fire-and-forget call ends up logging a blank IP.
+      if (adminActions.isMutating(req.method)) {
+        const startedAt = Date.now();
+        const actorUid = session.uid || null;
+        const actorRole = session.role || null;
+        const actorIp = callerIp(req);
+        const actorUa = req.headers["user-agent"] || null;
+        res.once("finish", () => {
+          adminActions.record({
+            uid: actorUid,
+            role: actorRole,
+            method: req.method,
+            pathname,
+            status: res.statusCode,
+            ms: Date.now() - startedAt,
+            ip: actorIp,
+            userAgent: actorUa
+          });
+        });
       }
     }
 
