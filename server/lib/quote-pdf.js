@@ -463,15 +463,10 @@ function generateQuotePdf(quote, opts = {}) {
 //            lines for ink-sign + email-back. Both methods presented.
 //   Footer — small print, contact info.
 
-const BRANCH_LABELS = {
-  gc_subcontract: "GC Subcontract",
-  direct_residential: "Residential",
-  lighting_design: "Lighting Design",
-  renovation_coordination: "Renovation Coordination",
-  change_order: "Change Order",
-  residential_repair: "Residential Repair",
-  lighting_repair: "Landscape Lighting Repairs"
-};
+// Sourced from lib/quotes.js rather than copied — this is a server module,
+// so it can just require the canonical map. The browser surfaces are the
+// only ones that still need their own copy.
+const { PROPOSAL_BRANCH_LABELS: BRANCH_LABELS } = require("./quotes");
 
 function renderProjectProposalPdf(quote, opts = {}) {
   const customer = opts.customer || {};

@@ -38,7 +38,7 @@ const sharp = require("sharp");
 
 const { sendNewLeadEmail, sendVoicemailEmail } = require("./lib/notify-email");
 const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms } = require("./lib/notify-sms");
-const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer } = require("./lib/notify-customer");
+const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
 const voicemailStore = require("./lib/voicemail-store");
 const { geocode, PJL_BASE } = require("./lib/geocode");
@@ -885,6 +885,142 @@ function injectProposalAcceptFooter(html, q, url) {
 </div>`;
   const idx = html.toLowerCase().lastIndexOf("</body>");
   return idx === -1 ? html + footer : html.slice(0, idx) + footer + html.slice(idx);
+}
+
+// ---- /approve link preview + page title (2026-08-29) -----------------
+//
+// approve.html shipped with a hardcoded `<title>Approve repair quote</title>`
+// because the approval page predates proposals — the whole quote system was
+// built for the repair side of the business first. The consequence was
+// customer-visible and embarrassing: text a homeowner a link to their
+// residential sprinkler INSTALLATION proposal and iMessage previewed it as
+// "Approve repair quote".
+//
+// This serves approve.html with the title rewritten from the quote's own
+// type + branch (quotes.approvePageTitle), plus the Open Graph tags the page
+// never had, so the preview card is right in Messages, WhatsApp and email.
+//
+// PRIVACY: the title and description carry the WORK TYPE and nothing else —
+// no customer name, address, or price. Link previews are fetched and cached
+// by Apple/Google/Meta servers, so nothing private may go in them. This also
+// does not weaken the phone gate: the gate protects the document body, which
+// is still fetched separately through the gated API.
+//
+// Falls back to the untouched static file (returning false) whenever the
+// quote can't be resolved, so a bad or missing token reveals nothing and
+// still renders the normal "Approval link not found" page.
+async function renderApproveWithOg(req, res, quoteId, url) {
+  try {
+    const token = url.searchParams.get("t") || "";
+    let q = null;
+    if (token) {
+      try { q = await quotes.getByApprovalToken(quoteId, token); } catch (_) { q = null; }
+    }
+    if (!q) {
+      // Staff previewing without a token still get the accurate title.
+      if (await requireUser(req)) {
+        try { q = await quotes.get(quoteId); } catch (_) { q = null; }
+      }
+    }
+    if (!q) return false; // unknown/!bad token — serve the static page as-is
+
+    const titleText = `${quotes.approvePageTitle(q)} — PJL Land Services`;
+    const description = "Review the scope and pricing, then approve and sign online. Takes about a minute on any device.";
+    const canonical = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}`;
+    const ogImage = `${resolvePublicBaseUrl()}/web-app-manifest-512x512.png`;
+
+    let html;
+    try { html = await fs.readFile(path.join(SERVER_DIR, "approve.html"), "utf8"); }
+    catch (_) { return false; }
+
+    const head = [
+      `<title>${escapeHtmlServer(titleText)}</title>`,
+      `<meta name="description" content="${escapeHtmlServer(description)}">`,
+      // Keep this page out of search results — it is a per-customer document
+      // behind a token, not a public page.
+      `<meta name="robots" content="noindex, nofollow">`,
+      `<meta property="og:type" content="website">`,
+      `<meta property="og:site_name" content="PJL Land Services">`,
+      `<meta property="og:title" content="${escapeHtmlServer(titleText)}">`,
+      `<meta property="og:description" content="${escapeHtmlServer(description)}">`,
+      `<meta property="og:url" content="${escapeHtmlServer(canonical)}">`,
+      `<meta property="og:image" content="${escapeHtmlServer(ogImage)}">`,
+      `<meta name="twitter:card" content="summary">`,
+      `<meta name="twitter:title" content="${escapeHtmlServer(titleText)}">`,
+      `<meta name="twitter:description" content="${escapeHtmlServer(description)}">`
+    ].join("\n  ");
+
+    // Replace the static <title> outright rather than appending a second one:
+    // scrapers differ on which of two titles wins, so leaving both is how you
+    // get the old wording back on someone's phone.
+    const replaced = html.replace(/<title>[\s\S]*?<\/title>/i, head);
+    if (replaced === html) return false; // template changed shape — don't guess
+
+    const body = Buffer.from(replaced, "utf8");
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "content-length": body.length,
+      // Per-customer + token-dependent; never let a shared cache hold it.
+      "cache-control": "no-store"
+    });
+    res.end(body);
+    return true;
+  } catch (err) {
+    console.warn("[approve-og] render failed:", err?.message);
+    return false; // always safe to fall through to the static page
+  }
+}
+
+// ---- Acceptance confirmation to the customer (2026-08-29) ------------
+//
+// Fires after an INSTALLATION quote is accepted, on either acceptance path
+// (portal e-sign and the returned-signed-PDF attestation), telling the
+// customer their approval landed and we'll be in touch to schedule.
+//
+// Repair work gets nothing — quotes.isInstallationQuote() is the gate, so an
+// on-site repair quote or an AI repair quote accepted by a customer keeps
+// behaving exactly as it did before this shipped.
+//
+// Best-effort by design, same contract as the deposit hook beside it: the
+// signature is already durably written by the time this runs, and an email
+// failure must never unwind it. Failures land in the send ledger (kind
+// "stage_notice", which is customer-facing, so a silent outage still pages
+// Patrick through the existing digest).
+async function maybeSendAcceptanceConfirmation(quote, { signerName = "" } = {}) {
+  try {
+    if (!quotes.isInstallationQuote(quote)) return null;
+
+    const toEmail = String(quote.approval?.sentToEmail || quote.customerEmail || "").trim();
+    if (!toEmail) return { skipped: "no_customer_email" };
+
+    // Greet the account holder where we can resolve them; the signer's name
+    // is the fallback (and is the right name anyway on a residential job
+    // where the homeowner signs for themselves).
+    let customerName = signerName;
+    try {
+      const parties = await quoteRenderParties(quote);
+      if (parties?.customer?.name) customerName = parties.customer.name;
+    } catch (_) { /* fall back to the signer's name */ }
+
+    const token = quote.approval?.token || "";
+    const approveUrl = token
+      ? `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(quote.id)}?t=${encodeURIComponent(token)}`
+      : resolvePublicBaseUrl();
+
+    // Mentioned only when the offer actually carries a deposit, so the two
+    // emails the customer receives explain each other instead of competing.
+    const depositAmount = Number(quote.deposit?.amount);
+    const depositAmountText = quote.deposit?.enabled === true && Number.isFinite(depositAmount) && depositAmount > 0
+      ? `$${moneyCad(depositAmount)}`
+      : "";
+
+    return await sendQuoteAcceptedConfirmation(quote, {
+      toEmail, customerName, approveUrl, depositAmountText
+    });
+  } catch (err) {
+    console.warn(`[quote-accepted] confirmation failed for ${quote?.id}:`, err?.message);
+    return { ok: false, error: err?.message };
+  }
 }
 
 // ---- Customer view tracking (Quote View Tracker, 2026-08-29) ---------
@@ -10702,6 +10838,11 @@ async function handleApi(req, res, pathname) {
         console.warn(`[approval-sign] deposit flow failed for ${updated.id}:`, depErr?.message);
       }
 
+      // Tell the customer their approval landed — installation work only.
+      // Awaited rather than fired-and-forgotten so a hard failure reaches
+      // the ledger before the response returns; it cannot throw.
+      await maybeSendAcceptanceConfirmation(updated, { signerName: customerName });
+
       // Find the WO this quote was attached to and flip its onSiteQuote
       // status so the tech UI shows "Customer approved at HH:MM."
       const woIds = Array.isArray(updated?.workOrderIds) ? updated.workOrderIds : [];
@@ -15590,6 +15731,11 @@ async function handleApi(req, res, pathname) {
         depositWarning = depErr?.message || "Deposit invoice creation failed.";
         console.warn(`[confirm-pdf] deposit flow failed for ${id}:`, depErr?.message);
       }
+      // Attestation IS the acceptance on this path, so the customer
+      // confirmation fires here too — same installation-only gate.
+      await maybeSendAcceptanceConfirmation(updated, {
+        signerName: updated.acceptanceEvidence?.customerPrintedName || ""
+      });
       return sendJson(res, 200, { ok: true, quote: updated, depositWarning });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't confirm PDF acceptance."] });
@@ -21900,6 +22046,11 @@ const server = http.createServer(async (req, res) => {
             }
           } catch (_) { /* fall through to approve.html */ }
         }
+        // Generic approve.html — serve it with the title + OG tags rewritten
+        // from this quote's type and branch. Returns false (and falls through
+        // to the untouched static file) if the quote can't be resolved.
+        const titled = await renderApproveWithOg(req, res, decodeURIComponent(approvePageMatch[1]), url);
+        if (titled) return;
       }
     }
 

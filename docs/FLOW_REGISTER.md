@@ -69,6 +69,37 @@ separate admin and tech logins (including that a refused attempt leaves the waiv
 the claim completely untouched — no phantom conversion) and a 10-assertion browser pass over both
 roles' views of the same work order.
 
+**2026-08-29 (FLOW-21b — Acceptance confirmation + the "repair quote" mislabel):** Three
+related fixes on the install side of the money path, all keyed off one new predicate,
+`quotes.isInstallationQuote()` — a project_proposal on any branch except `residential_repair`
+and `lighting_repair`. **(1) The customer now hears back when they accept.** Accepting a
+proposal previously sent the customer NOTHING — only Patrick got the alert, and only a
+deposit-enabled quote produced any customer email at all — so a homeowner who had just
+committed to a five-figure installation got silence. An installation acceptance now sends a
+confirmation naming the document, noting the deposit invoice when there is one, and saying
+we'll be in touch to schedule. Fires on BOTH acceptance paths (portal e-sign and the
+returned-signed-PDF attestation) and is best-effort, exactly like the deposit hook beside it:
+the signature is already durably written when it runs, and a send failure lands in the ledger
+as a customer-facing `stage_notice` rather than disturbing the acceptance. **Repair work is
+deliberately excluded** per Patrick — an on-site or AI repair quote is followed by the tech
+doing the work, not a scheduling conversation. **(2) The link preview said "Approve repair
+quote" for every quote type**, because `approve.html` predates proposals and carried a
+hardcoded title from when the whole quote system was the repair side of the business. Observed
+on a real send: a residential installation proposal texted to a customer previewed as a repair
+quote. The page is now served with its title rewritten from the quote's own type and branch,
+plus the Open Graph tags it never had; the static title is neutralized so even the bad-token
+fallback names no work type. Title and description carry the work type and nothing else — no
+name, address or price — because link previews are fetched and cached by Apple/Google/Meta.
+**(3) `direct_residential` is labelled "Residential Install"** (was bare "Residential", which
+read as a customer category rather than the kind of work, one row above "Residential Repair").
+The label map is now declared ONCE in `lib/quotes.js`; `quote-pdf.js` requires it and the three
+browser surfaces are pinned to it by test. Centralizing it immediately found real drift — the
+quote folder said "Renovation" where every other surface said "Renovation Coordination".
+Covered by `scripts/test-branch-labels.mjs` (61 assertions, in `build:check`) plus a live walk:
+an installation proposal and a repair proposal signed back to back produced exactly one
+confirmation attempt, for the installation, with the repair quote producing no ledger entry at
+all. **UNMAPPED — needs a walked acceptance.** No PASS flow was touched.
+
 **2026-08-29 (FLOW-21 — Quote View Tracker):** FLOW-21 is "Quote viewed → accepted" and the
 **viewed** half did not exist: nothing anywhere recorded that a customer had OPENED a quote.
 There was no `viewedAt` on the record, no open tracking, and no request log in the app — the
