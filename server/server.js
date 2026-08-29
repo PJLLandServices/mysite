@@ -51,6 +51,7 @@ const properties = require("./lib/properties");
 const customers = require("./lib/customers");
 const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
+const quoteViews = require("./lib/quote-views");
 const invoices = require("./lib/invoices");
 const deposits = require("./lib/deposits");
 const completionCascade = require("./lib/completion-cascade");
@@ -886,6 +887,37 @@ function injectProposalAcceptFooter(html, q, url) {
   return idx === -1 ? html + footer : html.slice(0, idx) + footer + html.slice(idx);
 }
 
+// ---- Customer view tracking (Quote View Tracker, 2026-08-29) ---------
+//
+// Records that a CUSTOMER opened one of a quote's approval surfaces, so
+// "they say they signed and we have nothing" is answerable from the CRM
+// instead of from Render's HTTP logs. Feeds FLOW-21's "viewed" half.
+//
+// Two rules make this trustworthy:
+//   1. Staff are NEVER recorded. Patrick previewing his own proposal is
+//      not a customer view, and a tracker that counts his own opens is
+//      worse than no tracker at all.
+//   2. It is fire-and-forget into a SEPARATE ledger file (lib/quote-views
+//      → data/quote-views.json), never a field on the quote. A view can
+//      therefore never race, delay, or clobber the acceptance record, and
+//      a ledger failure never changes what the customer sees.
+async function recordQuoteView(req, quoteId, kind) {
+  try {
+    if (!quoteId) return;
+    // Read the request identity SYNCHRONOUSLY, before the first await.
+    // These calls are fire-and-forget, so by the time an awaited
+    // requireUser() resolves the response may already be sent and the
+    // socket detached — and callerIp()'s `req.socket.remoteAddress`
+    // fallback then yields "". Behind a proxy x-forwarded-for usually
+    // hides that; locally and on a direct connection it does not, and a
+    // blank IP costs us the "same device as the signature?" check.
+    const ip = callerIp(req);
+    const userAgent = req.headers["user-agent"] || "";
+    if (await requireUser(req)) return; // admin or tech — not a customer view
+    await quoteViews.logView({ quoteId, kind, ip, userAgent });
+  } catch (_) { /* tracking must never break a customer-facing page */ }
+}
+
 // If this /approve/<id> page request is for a project_proposal that HAS a
 // custom document AND the caller has passed the gate, serve the document
 // and return true. Otherwise return false so the caller falls through to
@@ -911,6 +943,8 @@ async function serveProposalDocIfUnlocked(req, res, quoteId, url) {
   if ((await resolveProposalGate(req, q)) !== "allow") return false;
   let html;
   try { html = await fs.readFile(proposalDocPath(q.id), "utf8"); } catch (_) { return false; }
+  // They passed the gate and the designed document is going out to them.
+  void recordQuoteView(req, q.id, "document");
   const body = Buffer.from(injectProposalAcceptFooter(html, q, url), "utf8");
   res.writeHead(200, {
     "content-type": "text/html; charset=utf-8",
@@ -8710,6 +8744,7 @@ async function handleApi(req, res, pathname) {
       // to be, provably, what we sent them (Brief B §3.5). serveQuotePdf
       // serves the snapshot from disk; the live resolution below only
       // feeds a draft preview or a legacy backfill render.
+      void recordQuoteView(req, q.id, "pdf");
       const parties = await quoteRenderParties(q);
       await serveQuotePdf(res, q, {
         customer: parties.customer,
@@ -8818,6 +8853,7 @@ async function handleApi(req, res, pathname) {
       // re-fetches and renders. renders + PDF are separate requests that
       // ride the same cookie, so they don't re-challenge.
       await setProposalUnlockCookie(req, res, q.id);
+      void recordQuoteView(req, q.id, "gate_unlocked");
       return sendJson(res, 200, { ok: true });
     } catch (err) {
       console.warn("[proposal-unlock] error", { ip, msg: err?.message });
@@ -9860,6 +9896,39 @@ async function handleApi(req, res, pathname) {
   // Distinct from the legacy /api/quotes (which lists leads-as-quotes).
   // Reads from quotes.json — the canonical Quote folder per spec §4.1.
 
+  // GET /api/admin/quote-folder/views — { quoteId: summary } for every
+  // quote a CUSTOMER has opened. One file read serves the whole folder
+  // listing rather than a fetch per row. Staff-gated by the existing
+  // "/api/admin/quote-folder/" prefix rule in needsAuth().
+  //
+  // Declared BEFORE the :id routes below: "views" is not a valid Q- id, and
+  // the sibling :id routes all carry a /pdf or /confirm-pdf-acceptance
+  // suffix, so there is no shadowing either way — but order makes it
+  // obvious rather than incidental.
+  if (req.method === "GET" && pathname === "/api/admin/quote-folder/views") {
+    try {
+      return sendJson(res, 200, { ok: true, views: await quoteViews.summaryMap() });
+    } catch (err) {
+      // A tracking failure must never take the quote folder down with it —
+      // the folder renders "no view data" and every other column still works.
+      console.warn("[quote-views] summary map failed:", err?.message);
+      return sendJson(res, 200, { ok: true, views: {} });
+    }
+  }
+
+  // GET /api/admin/quote-folder/:id/views — one quote's summary plus its
+  // raw event list (newest first) for the detail read: what was opened,
+  // when, how many times, from which IP and user-agent.
+  const quoteViewsMatch = pathname.match(/^\/api\/admin\/quote-folder\/([^/]+)\/views$/);
+  if (quoteViewsMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(quoteViewsMatch[1]);
+      return sendJson(res, 200, { ok: true, views: await quoteViews.summaryFor(id) });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err?.message || "Couldn't read view history."] });
+    }
+  }
+
   if (req.method === "GET" && pathname === "/api/admin/quote-folder") {
     const url = new URL(req.url, baseUrlFromReq(req));
     const status = url.searchParams.get("status");
@@ -10417,7 +10486,13 @@ async function handleApi(req, res, pathname) {
         // Valid token, no session/cookie → tell the page to show the phone
         // form. No quote data crosses the wire yet. `locked:true` reveals
         // nothing the token holder didn't already have.
-        if (gate === "challenge") return sendJson(res, 200, { ok: true, locked: true });
+        if (gate === "challenge") {
+          // They opened the link but have not passed the gate. Recording
+          // this is the whole point of the tracker: a quote stuck here is
+          // "the customer could not get in", not "the customer ignored us".
+          void recordQuoteView(req, q.id, "gate_challenge");
+          return sendJson(res, 200, { ok: true, locked: true });
+        }
       }
       // Bypass safety — if the WO this quote belongs to has been
       // admin-bypassed or locked, the visit is complete and this link
@@ -10447,6 +10522,8 @@ async function handleApi(req, res, pathname) {
           accountHolderName = (parties.customer && parties.customer.name) || q.customerEmail || "";
         } catch (_) { accountHolderName = q.customerEmail || ""; }
       }
+      // Past every gate — the signable page is rendering for them.
+      void recordQuoteView(req, q.id, "sign_page");
       const safe = {
         id: q.id,
         type: q.type,

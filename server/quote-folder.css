@@ -107,6 +107,21 @@
 }
 .qf-card__materials a:hover { text-decoration: underline; }
 
+/* Quote View Tracker — whether the CUSTOMER opened the approval link.
+ * Three states, colour-coded by how much they need Patrick's attention:
+ * seen (neutral, informational), not opened (muted — nothing has gone
+ * wrong yet), blocked at the phone gate (orange — the customer tried and
+ * could not get in, which is the one that needs action). */
+.qf-card__viewed {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.qf-card__viewed--seen { color: #4A6741; font-weight: 500; }
+.qf-card__viewed--none { color: #9A9A92; }
+.qf-card__viewed--stuck { color: #C2610F; font-weight: 600; }
+
 .qf-card__actions {
   display: flex;
   flex-wrap: wrap;
