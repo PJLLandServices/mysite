@@ -41,6 +41,115 @@ superseded `territory-export.js` was deleted (its own replacement documents thre
 silently miscounts). Cover: `scripts/test-territory-export.mjs` (100 assertions, in
 `build:check`).
 
+**2026-08-29 (FLOW-30c — the fee waiver is ADMIN ONLY):** Patrick's ruling: *"Techs will have to
+reach out to admin in order to alleviate a warranty claim for free."* Waiving or restoring the
+$95 changes what the customer pays, and on a warranty work order it also decides whether a claim
+was honoured — so it is now an admin decision at the SERVER, not just a hidden button.
+
+`POST /api/work-orders/:id/service-fee-waiver` returns `"admin"` from `needsAuth()`. **The rule
+must stay ABOVE the generic `/api/work-orders` → `"user"` line — `needsAuth` returns on first
+match, so swapping the two silently hands every tech the control back.** A test pins the order
+(mutation-tested: moving it below fails the build). Same class of decision as `unlock`/`relock`,
+which were already admin-only — this makes the two consistent.
+
+Scalpel, not a lockout: a tech still reads the WO, patches notes/zones/photos, builds the on-site
+quote and takes the signature. Verified against a real tech account — GET, PATCH and
+`on-site-quote/build` all still 200; only the two waiver calls 403.
+
+UI follows the server rather than replacing it. A tech on the admin WO page still SEES the
+"Service call fee waived" banner and the whole warranty panel — they need to know the visit is
+free and what prior work it honours — but the waive offer, the Remove button and the convert
+control are hidden, replaced by a line telling them to contact the office. The role resolves
+async from `/api/session` AFTER the WO renders, so the controls default hidden (fail closed) and
+`resolveViewerRole()` re-renders them; without that re-render an admin would lose their own
+buttons.
+
+Cover: `scripts/test-warranty-claims.mjs` now 220 assertions, plus a 19-assertion live walk with
+separate admin and tech logins (including that a refused attempt leaves the waiver, the WO and
+the claim completely untouched — no phantom conversion) and a 10-assertion browser pass over both
+roles' views of the same work order.
+
+**2026-08-29 (FLOW-30b — Approved claim → repair work order → the warranty escape hatch):**
+Follow-up to FLOW-30. Approving a claim now RAISES the repair work order in the same action, and
+a warranty visit that turns out not to be covered can be converted to a chargeable service call
+on site. Two claim statuses added (`approved`, `converted`), taking the enum to ten.
+
+**Confirmation of the pre-existing workflow (asked for explicitly, checked before building).**
+The transition was already supported by the work-order model; nothing about it had to be
+redesigned:
+
+- `serviceFeeWaiver` with reason `warranty` already existed (`lib/service-fee-waiver.js`) and
+  already rendered to the customer as "Service call fee — WAIVED (Warranty visit)" via
+  `lib/issue-rollup.js` — a $0 line, so the credit is VISIBLE rather than the fee silently
+  vanishing.
+- `POST /api/work-orders/:id/service-fee-waiver` with `{ waived: false }` already restored the
+  $95 line from `pricing.json`, recomputed totals and appended WO history.
+- `serviceFeeWaiver` was already in `SCOPE_PROTECTED_FIELDS`, so it freezes at signature
+  (`wo.locked`) and is freely changeable before it — which IS the on-site window the conversion
+  needs. After signature the documented route back is `unlockWorkOrder()` (reason required,
+  signature record preserved).
+- The customer signature was already required independently: `POST /on-site-quote/accept`
+  refuses without customerName + a drawn image + acknowledgement, so converted (now chargeable)
+  work cannot be accepted unsigned.
+
+**What was missing, and is now built:** there was no way to raise a WO from a claim at all; a WO
+carried no warranty provenance, so a tech on site could not see which prior job was being
+honoured; lifting a waiver required NO reason and told the claim NOTHING — a claim would have sat
+at "approved, free repair" while the visit was invoiced. That last one was the audit hole.
+
+- `wo.warrantyClaim` added — `{ claimId, claimedInvoiceId, claimedWorkOrderId, summary,
+  approvedBy, approvedAt, converted }`. In `blank()`, `hydrate()`, `create()`, `update()` and
+  `SCOPE_PROTECTED_FIELDS`. `converted` is ADDED alongside the approval, never replacing it: the
+  pair is the audit trail.
+- `POST /api/warranty-claims/:id/approve` — creates the `service_visit` with the warranty waiver
+  and provenance, seeds the diagnosis from the customer's own words, links the WO to the claim,
+  and emails the customer. Refuses a second WO (409) and refuses with no linked property (422).
+- The conversion rides the EXISTING fee-waiver route rather than a parallel one, so there is one
+  code path for the money. On a WO with live warranty provenance, removing the waiver requires a
+  ≥10-char reason, stamps `converted`, moves the claim to `converted`, and emails the customer
+  the reason. The claim write-back happens AFTER the WO update so the money change is durable
+  first; a failed write-back is logged loudly and surfaced in the admin UI.
+- `converted` is terminal and NOT disputable — the customer authorised and signed on site.
+  `approved` is deliberately OPEN, so an accepted-but-unrepaired claim stays in the queue and the
+  reminder counts.
+- Surfaces: green "Warranty repair — no charge" panel on the admin WO (with the convert control)
+  and on the tech UI (read-only — lifting a customer's waiver is a desk decision against the full
+  claim, not a tap in a driveway; the tech is told to call the office). Both flip amber once
+  converted, and the tech's copy then says the customer must sign.
+- One UI defect found and fixed while walking it: the pre-existing "Remove" button on the waiver
+  banner gave a SECOND path to lifting the waiver, and on a warranty WO it would 422 and print
+  its error into the collapsed waiver form — an invisible error that reads as a dead button. It
+  is now hidden on a live warranty WO, and a refused fee change falls back to an alert when its
+  panel isn't visible.
+
+**No PASS flow touched.** Additive fields and new routes only. `lib/warranty.js` (the policy)
+stays read-only to the claim flow, and nothing in `stripe.js`, `pay.js` or any payment route
+moves (FLOW-23's invariant). Cover: `scripts/test-warranty-claims.mjs` now 209 assertions
+(mutation-tested against nine broken states), plus a live-server walk of the approve → quote →
+convert → sign → lock → unlock cycle (63 assertions across two phases, including that the
+subtotal rises by exactly the restored $95 and the repair lines are left untouched) and an
+18-assertion headless-Chromium pass over the admin and tech surfaces.
+
+**Still UNMAPPED, same reason as FLOW-30:** no email in this flow has been sent through live
+Gmail, and no one has walked a real warranty visit end to end on a phone in the field.
+
+**2026-08-29 (FLOW-30 — Warranty claims):** The "File a warranty claim" button on
+`warranty.html` pointed at `contact.html`, which is the general contact form — a warranty claim
+arrived as an ordinary lead with no invoice reference, no evidence, no claim number and no queue.
+FLOW-30 opened: a dedicated intake (`warranty-claim.html`), a claim store with Patrick's
+`YYYY-MM-DD-000YYYYNNNN` numbering, a customer status page, a CRM queue and per-claim tool, and
+the deny → dispute round trip. **UNMAPPED — needs a walked acceptance** (see FLOW-30 in Part 4
+for exactly what is unproven: every send in this flow has been exercised against builders and
+routes but never against live Gmail). **No PASS flow was touched** — all new paths, new libs and
+new pages; no existing route, payload shape or catalog changed, and nothing in `stripe.js`,
+`pay.js` or any payment route moves (FLOW-23's invariant). The one edit to an existing customer
+surface is additive: `portalPayloadForLead()` and the property-portal payload each gained a
+`warrantyClaims` array, and `nav-badges.js` gained a third badge fetch. `lib/warranty.js` (the
+warranty POLICY) is **read-only** here — the claim flow consumes `warrantyForWorkOrder()` and
+never redefines a term. Cover: `scripts/test-warranty-claims.mjs` (138 assertions, in
+`build:check`, mutation-tested against four broken states), plus a headless-Chromium pass over
+all four new pages at 1280px and 390px and a 101-assertion live-server walk of the HTTP surface.
+
 **2026-08-27 (Stale CRM assets):** Follow-up to CRM-16, found on Patrick's first live
 attempt. The fix deployed and the delete still refused: CRM **HTML** is `no-store` but
 `/crm/*.js` was `public, max-age=30` with no validators, so the page paired fresh markup
@@ -444,6 +553,10 @@ Previously logged as a change order; **closed, already built.**
 | `spring_opening` | 1 year |
 | `fall_closing` | 1 year |
 
+**The CLAIM against this policy is FLOW-30 (Part 4), added 2026-08-29.** This section stays the
+single source of the policy; `lib/warranty-claims.js` is the claim record and never restates a
+term. `warrantyForWorkOrder()` is read-only to the claim flow.
+
 Installations carry 3 years; everything else 1 year. Hydrawise controller retrofits are
 **service**, not installation — their `service_visit` typing is correct and must not be changed.
 Parts replaced during a service call inherit the service warranty; warranty attaches to the work
@@ -516,6 +629,82 @@ Tick items off here as they're confirmed; nothing below blocks new work.
 ---
 
 # Part 4 — Unmapped
+
+## FLOW-30 — Warranty claim intake → CRM queue → resolution — **UNMAPPED** (opened 2026-08-29)
+
+**Hop chain (as built):**
+
+1. Customer taps *File a warranty claim* on `warranty.html` → `warranty-claim.html`.
+2. Form POSTs JSON to `POST /api/warranty-claims` (**public**; anti-bot gate first — honeypot,
+   `_ts` time-trap, per-IP 5/10min, Turnstile). Files ride as base64 and are magic-byte verified
+   by `validatePhotos(..., { mode: "wo" })` — the validator that already accepts PDF alongside
+   images. Every field is mandatory server-side; the invoice copy is mandatory.
+3. `warrantyClaims.create()` allocates the claim number inside the same read-modify-write as the
+   append, so two simultaneous submissions cannot collide. Files land at
+   `server/data/warranty-claim-files/<claimNumber>/<n>.<ext>`.
+4. `warrantyClaimLink.crossCheck()` resolves customer (email → phone) → their invoices → the
+   invoice named → property → work order → warranty window via `lib/warranty.js`. Result stored
+   on the claim as `link`; the fuller read-side `context` is rebuilt on every CRM read so an
+   edited customer record never shows stale on the page Patrick decides from.
+5. Fan-out: customer acknowledgement + team alert to `info@` with the customer's files attached.
+6. Patrick works it at `/admin/warranty-claims` → `/admin/warranty-claim/<number>`. Six actions:
+   under review, contact customer, return email with questions, book for service call, resolved,
+   denied. Each emails the customer, subject `RE: Warranty Claim File Number — <number>`.
+7. Denied → the customer's status page offers a dispute gated on accepting the service-call-fee
+   condition → claim re-opens as `disputed` and the team is alerted.
+8. **Approved** (FLOW-30b) → `POST /api/warranty-claims/:id/approve` raises a `service_visit` at
+   the linked property carrying `serviceFeeWaiver { reason: "warranty" }` and `wo.warrantyClaim`
+   provenance. Claim goes to `approved` (still OPEN — the repair is owed) and the customer is
+   emailed that there is no charge.
+9. Tech attends. The WO shows a green "Warranty repair — no charge" banner naming the claim and
+   the prior invoice / work order being honoured.
+10. **The escape hatch.** If the fault isn't what the claim described, removing the waiver via
+    the existing `POST /api/work-orders/:id/service-fee-waiver` requires a written reason,
+    restores the $95 service call, stamps `wo.warrantyClaim.converted`, moves the claim to
+    `converted` (terminal, not disputable — they signed on site) and emails the customer the
+    reason. `POST /on-site-quote/accept` still demands a drawn signature + acknowledgement, so
+    the now-chargeable work cannot be accepted unsigned. After the completion signature the WO
+    locks and any further change needs `unlockWorkOrder()`.
+
+**Numbering:** `YYYY-MM-DD-000YYYYNNNN` — filed date, then `000` + year + a four-digit per-year
+sequence that resets each January. e.g. `2026-08-29-00020260001`. The sequence is derived from
+the max already issued in the store, not from a counter file, so a restored backup cannot
+re-issue a number. The number is the record id and the on-disk directory name, and is validated
+against `CLAIM_NUMBER_RE` at every filesystem and route boundary.
+
+**Two credentials, never mixed:** the CRM API is admin/tech-gated in `needsAuth()`; the
+customer's routes carry the claim's own 32-hex `statusToken` in the query string, checked
+against the claim number in the path so one claim's token cannot open another. The claim number
+is sequential and therefore guessable — it identifies, it does not authorize.
+
+**Reminders:** open claims drive a nav badge on every admin page; open-and-untouched-for-24h
+claims drive a band at the top of the queue and a 12-hourly digest to the team. The digest sends
+NOTHING when nothing is stale, and does not run on boot (a deploy would re-send it).
+
+**What is verified:** 138 node assertions in `build:check` (mutation-tested); a 101-assertion
+live-server walk covering validation, magic-byte rejection, anti-bot, numbering and sequence,
+token scoping, cross-claim token isolation, path traversal, admin gating, the deny → dispute →
+book → resolve cycle, and the cross-check against seeded customer/property/WO/invoice records;
+headless Chromium over all four new pages at 1280px and 390px (no console errors, no horizontal
+overflow).
+
+**What is NOT verified — the walked acceptance still owed:**
+
+- **No email has been sent through live Gmail.** Every template is asserted at the builder
+  level and every route's send path is exercised, but `getTransporter()` returns null without
+  `GMAIL_USER` / `GMAIL_APP_PASSWORD`, so no message has actually left the box. Send one real
+  claim end to end and read all four emails (acknowledgement, team alert with attachments,
+  a status update, a denial) in a real inbox before trusting this.
+- Turnstile is exercised only in its test-key configuration.
+- The booking hand-off mints a session and the session resolves with the claim's context, but
+  no one has walked it through to a confirmed booking and an opened work order.
+- The 24h reminder digest has not been observed firing on a real clock.
+
+**Status:** UNMAPPED until the above is walked. The flow is complete and defensible in code; it
+has not been proven against live third parties.
+
+---
+
 
 Nothing below has been walked. Assume nothing works until verified.
 

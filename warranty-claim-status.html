@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Track the status of your PJL Land Services warranty claim.">
+<!-- noindex: every URL of this page carries a private claim token in the
+     query string. Indexing it would publish live claim links. -->
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="shortcut icon" href="/favicon.ico" />
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+<meta name="apple-mobile-web-app-title" content="PJL" />
+<link rel="manifest" href="/site.webmanifest" />
+<title>Your Warranty Claim | PJL Land Services</title>
+<link rel="stylesheet" href="style.css?v=cov3">
+<style>
+/* Warranty claim status — page-scoped. Deliberately plain: this page is
+   read on a phone, often by someone who is annoyed that something broke.
+   One column, big status, no marketing. */
+.wcs-hero {
+  background: linear-gradient(160deg, #14301f 0%, #1b4d2e 100%);
+  color: #fff;
+  /* padding-top uses --hero-nav-clearance per memory/hero_nav_clearance.md
+     so the headline always clears the two-tier fixed nav. */
+  padding: var(--hero-nav-clearance) 0 36px;
+}
+.wcs-hero h1 { margin: 0 0 8px; color: #fff; font-size: 27px; }
+.wcs-hero p { margin: 0; color: rgba(255,255,255,.85); }
+.wcs-main { padding: 34px 0 64px; background: #f7f7f4; }
+.wcs-wrap { max-width: 700px; margin: 0 auto; }
+.wcs-card {
+  background: #fff; border: 1px solid #e4e4de; border-radius: 12px;
+  padding: 26px; margin-bottom: 18px;
+}
+.wcs-number { margin-bottom: 20px; }
+.wcs-number span {
+  display: block; font-size: 11px; letter-spacing: .1em;
+  text-transform: uppercase; color: #6b6b62; margin-bottom: 5px;
+}
+.wcs-number strong { font-size: 19px; color: #14301f; overflow-wrap: anywhere; }
+.wcs-status-badge {
+  display: inline-block; padding: 6px 15px; border-radius: 999px;
+  font-size: 13px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; background: #eef4f8; color: #1f4f6e;
+}
+.wcs-status-badge[data-status="resolved"] { background: #e7f3ea; color: #1b5e20; }
+.wcs-status-badge[data-status="denied"]   { background: #fdecea; color: #8a1c1c; }
+.wcs-status-badge[data-status="disputed"] { background: #fff3e0; color: #8a5100; }
+.wcs-status-text { margin: 14px 0 0; font-size: 16px; line-height: 1.65; color: #33332c; }
+.wcs-meta { margin: 16px 0 0; font-size: 14px; color: #6b6b62; line-height: 1.6; }
+.wcs-card h2 { margin: 0 0 14px; font-size: 18px; }
+.wcs-timeline { list-style: none; margin: 0; padding: 0; }
+.wcs-timeline li {
+  position: relative; padding: 0 0 20px 26px; border-left: 2px solid #dfe6e1;
+}
+.wcs-timeline li:last-child { border-left-color: transparent; padding-bottom: 0; }
+.wcs-timeline li::before {
+  content: ''; position: absolute; left: -7px; top: 3px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #1b4d2e; border: 2px solid #fff; box-shadow: 0 0 0 2px #dfe6e1;
+}
+.wcs-timeline .wcs-t-label { display: block; font-weight: 700; color: #1a1a16; }
+.wcs-timeline .wcs-t-date  { display: block; font-size: 13px; color: #8a8a80; margin-top: 2px; }
+.wcs-timeline .wcs-t-text  { display: block; margin-top: 6px; color: #4a4a42; line-height: 1.55; font-size: 14.5px; }
+.wcs-timeline .wcs-t-note  {
+  display: block; margin-top: 8px; padding: 10px 13px; background: #f7f7f5;
+  border-radius: 6px; color: #33332c; line-height: 1.55; font-size: 14.5px;
+  white-space: pre-wrap;
+}
+.wcs-denial {
+  padding: 16px 18px; background: #fdecea; border-left: 3px solid #b3261e;
+  border-radius: 6px; margin: 0 0 18px; line-height: 1.6; white-space: pre-wrap;
+}
+.wcs-fee-warning {
+  padding: 14px 17px; background: #fff8ec; border-left: 3px solid #d98324;
+  border-radius: 6px; margin: 0 0 18px; font-size: 14.5px; line-height: 1.6; color: #4a3a20;
+}
+.wcs-field { display: flex; flex-direction: column; margin-bottom: 16px; }
+.wcs-field label { margin-bottom: 6px; font-weight: 600; font-size: 14px; }
+.wcs-field textarea {
+  padding: 11px 13px; border: 1px solid #d5d5cd; border-radius: 7px;
+  font: inherit; font-size: 15px; min-height: 120px; resize: vertical; line-height: 1.55;
+}
+.wcs-check { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 18px; font-size: 14.5px; line-height: 1.55; }
+.wcs-check input { margin-top: 3px; flex-shrink: 0; width: 18px; height: 18px; }
+.wcs-detail dt { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #6b6b62; margin-top: 14px; }
+.wcs-detail dd { margin: 4px 0 0; color: #33332c; line-height: 1.6; white-space: pre-wrap; }
+.wcs-files { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+.wcs-files a {
+  display: block; padding: 9px 12px; background: #f2f7f3; border: 1px solid #d8e4dc;
+  border-radius: 7px; color: #1b4d2e; text-decoration: none; font-size: 14px; overflow-wrap: anywhere;
+}
+.wcs-files a:hover { background: #e7f0ea; }
+.wcs-urgent {
+  padding: 14px 17px; background: #14301f; color: #fff; border-radius: 10px;
+  line-height: 1.6; font-size: 14.5px;
+}
+.wcs-urgent a { color: #f0b45f; font-weight: 700; }
+.wcs-errors {
+  padding: 13px 16px; background: #fdecea; border-left: 3px solid #b3261e;
+  border-radius: 6px; color: #7a1c16; margin-bottom: 16px; line-height: 1.55;
+}
+.wcs-loading, .wcs-invalid { text-align: center; padding: 44px 20px; color: #5a5a52; line-height: 1.7; }
+</style>
+<!-- @@PJL:analytics-START -->
+<!-- Google Analytics 4 + Google Ads conversion tracking -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1B5RJLKKBR"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-1B5RJLKKBR');
+  // Google Ads conversion ID. Coexists with the GA4 property on the same
+  // tag — both IDs are configured on one gtag() setup, GA4 is unaffected.
+  gtag('config', 'AW-11358637592');
+
+  // ── "Website Phone Click" conversion ──
+  // Delegated on document (capture phase) instead of binding to
+  // a[href^="tel:"] at DOMContentLoaded, because not every phone link
+  // exists at load: coverage-checker.js writes call CTAs into its result
+  // panel, and the chat widget can emit tel: links in a reply. A one-time
+  // querySelectorAll pass would silently miss those.
+  // Never preventDefault or delay — the dial must start instantly.
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!t || typeof t.closest !== 'function') return;
+    if (!t.closest('a[href^="tel:"]')) return;
+    if (typeof gtag === 'function') {
+      gtag('event', 'conversion', {
+        'send_to': 'AW-11358637592/CTBKCOOulN0cEJicnKgq'
+      });
+    }
+  }, true);
+</script>
+<!-- @@PJL:analytics-END -->
+</head>
+<body>
+
+<!-- @@PJL:nav-START {"loc": "Newmarket &amp; GTA", "status": "Same-day repair available", "badge": "Same-day repair · Newmarket &amp; GTA"} -->
+<nav class="nav nav-v2 nav-solid">
+  <div class="nav-utility-strip"><div class="nav-utility-strip__inner"><span class="nav-utility-strip__location"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 14.5s5.5-5 5.5-9a5.5 5.5 0 1 0-11 0c0 4 5.5 9 5.5 9Z"/><circle cx="8" cy="5.5" r="2"/></svg></span>Newmarket &amp; GTA</span><span class="nav-utility-strip__same-day"><span class="nav-utility-strip__pulse" aria-hidden="true"></span>Same-day repair available</span><a href="tel:+19059600181" class="nav-utility-strip__phone"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="currentColor"><path d="M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.6 17.6 0 0 0 4.168 6.608 17.6 17.6 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.68.68 0 0 0-.58-.122l-2.19.547a1.75 1.75 0 0 1-1.657-.459L5.482 8.062a1.75 1.75 0 0 1-.46-1.657l.548-2.19a.68.68 0 0 0-.122-.58L3.654 1.328Z"/></svg></span><span>(905) 960-0181</span></a><a href="/portal/login" class="nav-utility-strip__login"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="6" r="2.5"/><path d="M3 13.5c0-2.485 2.239-4.5 5-4.5s5 2.015 5 4.5"/></svg></span><span>Customer Login</span></a><a href="/login" class="nav-utility-strip__login"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="10" height="7" rx="1.2"/><path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7"/></svg></span><span>PJL Login</span></a></div></div>
+  <div class="nav-inner"><a href="index.html" class="nav-logo"><img src="logo.svg" alt="PJL Land Services"></a><div class="nav-main"><ul class="nav-links"><li><a href="index.html">Home</a></li><li><a href="sprinkler-systems.html">Sprinklers</a></li><li><a href="landscape-lighting.html">Lighting</a></li><li><a href="about.html">About</a></li><li><a href="blog.html">Blog</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact</a></li></ul><a href="book.html" class="nav-cta nav-cta--quote"><span>Get a Free Estimate</span><span class="nav-cta-arrow" aria-hidden="true">→</span></a></div><div class="nav-hamburger" role="button" tabindex="0" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="nav-mobile"><span></span><span></span><span></span></div></div>
+</nav>
+<div class="nav-mobile" id="nav-mobile">
+  <div class="nav-mobile__badge"><span class="nav-mobile__badge-pulse" aria-hidden="true"></span>Same-day repair · Newmarket &amp; GTA</div>
+  <nav class="nav-mobile__nav"><a href="index.html" class="nav-mobile__link">Home</a><a href="sprinkler-systems.html" class="nav-mobile__link">Sprinklers</a><a href="landscape-lighting.html" class="nav-mobile__link">Lighting</a><a href="about.html" class="nav-mobile__link">About</a><a href="blog.html" class="nav-mobile__link">Blog</a><a href="faq.html" class="nav-mobile__link">FAQ</a><a href="contact.html" class="nav-mobile__link">Contact</a><a href="/portal/login" class="nav-mobile__link nav-mobile__link--login">Customer Login</a><a href="/login" class="nav-mobile__link nav-mobile__link--login">PJL Login</a></nav>
+  <div class="nav-mobile__actions"><a href="tel:+19059600181" class="nav-mobile__action nav-mobile__action--call">Call</a><a href="book.html" class="nav-mobile__action nav-mobile__action--quote"><span>Get a Free Estimate</span></a></div>
+</div>
+<!-- @@PJL:nav-END -->
+
+<section class="wcs-hero">
+  <div class="container">
+    <h1>Your warranty claim</h1>
+    <p id="wcsHeroSub">Loading your claim…</p>
+  </div>
+</section>
+
+<section class="wcs-main">
+  <div class="container">
+    <div class="wcs-wrap">
+
+      <div class="wcs-loading" id="wcsLoading">Loading your warranty claim…</div>
+
+      <div class="wcs-invalid" id="wcsInvalid" hidden>
+        <div class="wcs-card">
+          <h2>We couldn't open that claim</h2>
+          <p id="wcsInvalidMsg">That warranty claim link isn't valid or has expired.</p>
+          <p>Check the link in your confirmation email, or call us at
+             <a href="tel:+19059600181">(905) 960-0181</a> and we'll look it up by name.</p>
+        </div>
+      </div>
+
+      <div id="wcsContent" hidden>
+        <div class="wcs-card">
+          <div class="wcs-number">
+            <span>Warranty claim file number</span>
+            <strong id="wcsNumber">—</strong>
+          </div>
+          <span class="wcs-status-badge" id="wcsBadge">—</span>
+          <p class="wcs-status-text" id="wcsStatusText"></p>
+          <p class="wcs-meta" id="wcsMeta"></p>
+        </div>
+
+        <!-- Denial + dispute. Shown only when the claim was refused. -->
+        <div class="wcs-card" id="wcsDenialCard" hidden>
+          <h2>Why this claim was not approved</h2>
+          <div class="wcs-denial" id="wcsDenialReason"></div>
+
+          <div id="wcsDisputeOpen">
+            <h2>Disagree with this decision?</h2>
+            <div class="wcs-fee-warning">
+              <strong>Before you dispute, please read this.</strong><br>
+              By disputing this decision you accept that <strong>a service-call fee applies in the event
+              the warranty claim is not accurate for the repairs provided previously, compared to what you
+              are claiming for</strong>. If your claim is upheld on review, no fee applies.
+            </div>
+            <div class="wcs-errors" id="wcsDisputeErrors" hidden></div>
+            <form id="wcsDisputeForm">
+              <div class="wcs-field">
+                <label for="wcs-dispute-reason">Tell us why you disagree</label>
+                <textarea id="wcs-dispute-reason" name="reason"
+                  placeholder="Explain what you believe was covered, and anything we may have missed."></textarea>
+              </div>
+              <label class="wcs-check">
+                <input type="checkbox" id="wcs-fee-accept" name="feeAccepted">
+                <span>I understand and accept that a service-call fee applies if the warranty claim is not
+                      accurate for the repairs provided previously, compared to what I am claiming for.</span>
+              </label>
+              <button type="submit" class="btn btn-green" id="wcsDisputeSubmit">Dispute this warranty claim →</button>
+            </form>
+          </div>
+
+          <div id="wcsDisputeDone" hidden>
+            <h2>Your dispute has been received</h2>
+            <p>We've re-opened this claim for review and a member of our team will be in contact with you.</p>
+          </div>
+        </div>
+
+        <div class="wcs-card">
+          <h2>Claim history</h2>
+          <ul class="wcs-timeline" id="wcsTimeline"></ul>
+        </div>
+
+        <div class="wcs-card">
+          <h2>What you filed</h2>
+          <dl class="wcs-detail">
+            <dt>Invoice reference</dt><dd id="wcsInvoiceRef">—</dd>
+            <dt>Description</dt><dd id="wcsDescription">—</dd>
+          </dl>
+          <div id="wcsFilesWrap" hidden>
+            <dt style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#6b6b62;margin-top:14px;">Your attachments</dt>
+            <ul class="wcs-files" id="wcsFiles"></ul>
+          </div>
+        </div>
+
+        <div class="wcs-urgent">
+          <strong>Need immediate assistance?</strong><br>
+          If this is urgent — an active leak, water damage, or a system you can't shut off — call us
+          directly at <a href="tel:+19059600181">(905) 960-0181</a> rather than waiting on the claim.
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- @@PJL:footer-START -->
+<footer class="footer"><div class="container"><div class="footer-grid"><div class="footer-brand"><img src="logo.svg" alt="PJL Land Services"><p>Newmarket's trusted lawn sprinkler and landscape lighting experts. Serving Newmarket and the GTA with honest service, smart technology, and a 3-year warranty.</p><div class="footer-social"><a href="https://www.facebook.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Facebook" rel="noopener">f</a><a href="https://www.instagram.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Instagram" rel="noopener">in</a></div></div><div class="footer-col"><h5>Services</h5><ul><li><a href="sprinkler-spring-opening.html">Spring Openings</a></li><li><a href="sprinkler-fall-winterization.html">Fall Closings</a></li><li><a href="sprinkler-repair.html">Sprinkler Repair</a></li><li><a href="sprinkler-installation.html">New Installations</a></li><li><a href="sprinkler-hydrawise.html">Hydrawise Smart Controller</a></li><li><a href="water-cost-calculator.html">Water Cost Calculator</a></li><li><a href="drip-irrigation.html">Drip Irrigation</a></li><li><a href="commercial-irrigation.html">Commercial Irrigation</a></li><li><a href="warranty.html">Warranty</a></li><li><a href="water-promise.html">Our Water Promise</a></li><li><a href="process.html">How It Works</a></li><li><a href="pricing.html">Pricing</a></li><li><a href="coverage-map.html">Coverage Area</a></li><li><a href="landscape-lighting.html">Landscape Lighting</a></li></ul></div><div class="footer-col"><h5>Service Areas</h5><ul><li><a href="sprinkler-service-newmarket.html">Newmarket</a></li><li><a href="sprinkler-service-aurora.html">Aurora</a></li><li><a href="sprinkler-service-king-city.html">King City</a></li><li><a href="sprinkler-service-richmond-hill.html">Richmond Hill</a></li><li><a href="sprinkler-service-vaughan.html">Vaughan</a></li><li><a href="sprinkler-service-markham.html">Markham</a></li><li><a href="sprinkler-service-stouffville.html">Stouffville</a></li><li><a href="sprinkler-service-east-gwillimbury.html">East Gwillimbury</a></li><li><a href="sprinkler-service-thornhill.html">Thornhill</a></li><li><a href="sprinkler-service-toronto.html">Toronto</a></li><li><a href="sprinkler-service-north-york.html">North York</a></li><li><a href="sprinkler-service-lawrence-park.html">Lawrence Park</a></li><li><a href="sprinkler-service-forest-hill.html">Forest Hill</a></li><li><a href="sprinkler-service-bolton.html">Bolton</a></li><li><a href="sprinkler-service-orangeville.html">Orangeville</a></li><li><a href="sprinkler-service-erin.html">Erin</a></li><li><a href="sprinkler-service-acton.html">Acton</a></li><li><a href="sprinkler-service-innisfil.html">Innisfil</a></li><li><a href="coverage-map.html">All coverage</a></li></ul></div><div class="footer-col"><h5>Company</h5><ul><li><a href="index.html">Home</a></li><li><a href="about.html">About</a></li><li><a href="reviews.html">Reviews</a></li><li><a href="blog.html">Blog</a></li><li><a href="book.html">Get an Estimate</a></li><li><a href="book.html">Book Online</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact Us</a></li><li><a href="sitemap.html">Sitemap</a></li></ul></div><div class="footer-col"><h5>Contact</h5><div class="footer-contact-item"><span>📞</span><a href="tel:+19059600181" style="color:rgba(255,255,255,0.65)">(905) 960-0181</a></div><div class="footer-contact-item"><span>✉️</span><a href="mailto:info@pjllandservices.com" style="color:rgba(255,255,255,0.65)">info@pjllandservices.com</a></div><div class="footer-contact-item"><span>📍</span><span>Newmarket, Ontario</span></div></div></div><div class="footer-bottom"><p>© 2026 PJL Land Services. All rights reserved.</p><div class="footer-bottom-links"><a href="privacy-policy.html">Privacy Policy</a><a href="terms-of-service.html">Terms of Service</a><a href="accessibility-statement.html">Accessibility</a></div></div></div></footer>
+<!-- @@PJL:footer-END -->
+
+<script src="nav.js?v=2"></script>
+<script>
+/* Warranty claim status page. The claim number and its status token both
+   come from the query string; the token is the credential and the server
+   checks that it belongs to the claim number in the path, so a token for
+   one claim can never open another. */
+(function () {
+  var params  = new URLSearchParams(window.location.search);
+  var claimId = params.get('c') || '';
+  var token   = params.get('t') || '';
+
+  var loading = document.getElementById('wcsLoading');
+  var invalid = document.getElementById('wcsInvalid');
+  var content = document.getElementById('wcsContent');
+
+  function showInvalid(message) {
+    loading.hidden = true;
+    content.hidden = true;
+    if (message) document.getElementById('wcsInvalidMsg').textContent = message;
+    invalid.hidden = false;
+    document.getElementById('wcsHeroSub').textContent = 'Claim not found';
+  }
+
+  function fmtDate(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
+  }
+
+  function render(claim) {
+    document.getElementById('wcsNumber').textContent = claim.id;
+    document.getElementById('wcsHeroSub').textContent = claim.statusLabel;
+
+    var badge = document.getElementById('wcsBadge');
+    badge.textContent = claim.statusLabel;
+    badge.dataset.status = claim.status;
+
+    document.getElementById('wcsStatusText').textContent = claim.statusText || '';
+    document.getElementById('wcsMeta').textContent =
+      'Filed ' + fmtDate(claim.createdAt) + ' · Last updated ' + fmtDate(claim.lastStatusAt);
+
+    document.getElementById('wcsInvoiceRef').textContent = claim.invoiceRef || '—';
+    document.getElementById('wcsDescription').textContent = claim.description || '—';
+
+    // Attachments — links built from the claim id + token so the customer
+    // can re-read what they sent us.
+    var filesWrap = document.getElementById('wcsFilesWrap');
+    var filesList = document.getElementById('wcsFiles');
+    filesList.textContent = '';
+    if (claim.attachments && claim.attachments.length) {
+      claim.attachments.forEach(function (att) {
+        var li = document.createElement('li');
+        var a  = document.createElement('a');
+        a.href = '/api/warranty-claim/' + encodeURIComponent(claim.id) +
+                 '/file/' + encodeURIComponent(att.n) + '?t=' + encodeURIComponent(token);
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.textContent = (att.kind === 'invoice' ? '📄 Invoice — ' : '📷 ') + (att.filename || ('File ' + att.n));
+        li.appendChild(a);
+        filesList.appendChild(li);
+      });
+      filesWrap.hidden = false;
+    } else {
+      filesWrap.hidden = true;
+    }
+
+    // Timeline — server has already stripped internal notes; everything
+    // here is something we told the customer.
+    var timeline = document.getElementById('wcsTimeline');
+    timeline.textContent = '';
+    (claim.updates || []).slice().reverse().forEach(function (u) {
+      var li = document.createElement('li');
+
+      var label = document.createElement('span');
+      label.className = 'wcs-t-label';
+      label.textContent = u.label;
+      li.appendChild(label);
+
+      var date = document.createElement('span');
+      date.className = 'wcs-t-date';
+      date.textContent = fmtDate(u.ts);
+      li.appendChild(date);
+
+      if (u.text) {
+        var text = document.createElement('span');
+        text.className = 'wcs-t-text';
+        text.textContent = u.text;
+        li.appendChild(text);
+      }
+      if (u.note) {
+        var note = document.createElement('span');
+        note.className = 'wcs-t-note';
+        note.textContent = u.note;
+        li.appendChild(note);
+      }
+      timeline.appendChild(li);
+    });
+
+    // Denial + dispute card.
+    var denialCard = document.getElementById('wcsDenialCard');
+    if (claim.denial && (claim.status === 'denied' || claim.status === 'disputed')) {
+      document.getElementById('wcsDenialReason').textContent = claim.denial.reason || '';
+      // canDispute is false once a dispute has been raised, so the form
+      // is replaced by the "received" panel rather than inviting a second.
+      document.getElementById('wcsDisputeOpen').hidden = !claim.canDispute;
+      document.getElementById('wcsDisputeDone').hidden = claim.canDispute;
+      denialCard.hidden = false;
+    } else {
+      denialCard.hidden = true;
+    }
+
+    loading.hidden = true;
+    content.hidden = false;
+  }
+
+  async function load() {
+    if (!claimId || !token) { showInvalid('That link is missing its claim details.'); return; }
+    try {
+      var res = await fetch('/api/warranty-claim/' + encodeURIComponent(claimId) +
+                            '?t=' + encodeURIComponent(token), { cache: 'no-store' });
+      var body = await res.json().catch(function () { return {}; });
+      if (!res.ok || !body.ok) {
+        showInvalid((body.errors && body.errors[0]) || null);
+        return;
+      }
+      render(body.claim);
+    } catch (err) {
+      showInvalid('We couldn’t reach the server. Please try again in a moment.');
+    }
+  }
+
+  var disputeForm = document.getElementById('wcsDisputeForm');
+  if (disputeForm) {
+    disputeForm.addEventListener('submit', async function (e) {
+      e.preventDefault();
+      var errors = document.getElementById('wcsDisputeErrors');
+      var submit = document.getElementById('wcsDisputeSubmit');
+      var accepted = document.getElementById('wcs-fee-accept').checked;
+      errors.hidden = true;
+
+      if (!accepted) {
+        errors.textContent = 'Please tick the box to confirm you accept the service-call fee condition before disputing.';
+        errors.hidden = false;
+        return;
+      }
+
+      submit.disabled = true;
+      var original = submit.textContent;
+      submit.textContent = 'Submitting…';
+
+      try {
+        var res = await fetch('/api/warranty-claim/' + encodeURIComponent(claimId) + '/dispute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({
+            t: token,
+            feeAccepted: true,
+            reason: document.getElementById('wcs-dispute-reason').value.trim()
+          })
+        });
+        var body = await res.json().catch(function () { return {}; });
+        if (!res.ok || !body.ok) {
+          throw new Error((body.errors && body.errors[0]) || 'Could not record your dispute.');
+        }
+        render(body.claim);
+        document.getElementById('wcsDenialCard').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch (err) {
+        errors.textContent = String(err && err.message ? err.message : 'Something went wrong.') +
+          ' You can also call (905) 960-0181.';
+        errors.hidden = false;
+        submit.disabled = false;
+        submit.textContent = original;
+      }
+    });
+  }
+
+  load();
+})();
+</script>
+</body>
+</html>

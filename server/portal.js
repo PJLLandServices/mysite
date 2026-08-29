@@ -787,7 +787,69 @@ function renderPortal(data) {
   // pre-authorize. Async; reveals the card when ready, hidden until then.
   loadRecommendations().catch((err) => console.warn("[recommendations]", err?.message));
 
+  renderPortalWarrantyClaims(data.warrantyClaims);
+
   portalContent.hidden = false;
+}
+
+
+// Warranty claims card. Fed by portal.warrantyClaims / propertyPortal.
+// warrantyClaims — the same array shape from both, so one renderer serves
+// both portal shapes. Hidden entirely when the customer has never filed a
+// claim; an empty "no claims" card is noise on a page about their project.
+function renderPortalWarrantyClaims(claims) {
+  const section = document.getElementById("portalWarrantySection");
+  const list = document.getElementById("portalWarrantyList");
+  if (!section || !list) return;
+  const rows = Array.isArray(claims) ? claims : [];
+  if (!rows.length) {
+    section.hidden = true;
+    return;
+  }
+  list.textContent = "";
+  rows.forEach((claim) => {
+    const li = document.createElement("li");
+    li.className = "portal-warranty-item" + (claim.open ? " is-open" : " is-closed");
+
+    const link = document.createElement("a");
+    // Server-built URL that already carries the claim's own status token.
+    // Assigned via .href on an element we created, so nothing from the
+    // payload is ever parsed as markup.
+    link.href = claim.url || "#";
+    link.className = "portal-warranty-link";
+
+    const num = document.createElement("strong");
+    num.className = "portal-warranty-number";
+    num.textContent = claim.id || "";
+    link.appendChild(num);
+
+    const badge = document.createElement("span");
+    badge.className = "portal-warranty-badge";
+    badge.dataset.status = claim.status || "";
+    badge.textContent = claim.statusLabel || claim.status || "";
+    link.appendChild(badge);
+
+    const meta = document.createElement("span");
+    meta.className = "portal-warranty-meta";
+    const filed = claim.createdAt ? new Date(claim.createdAt) : null;
+    const filedText = filed && !Number.isNaN(filed.getTime())
+      ? filed.toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" })
+      : "";
+    meta.textContent = [filedText ? `Filed ${filedText}` : "", claim.invoiceRef ? `Invoice ${claim.invoiceRef}` : ""]
+      .filter(Boolean).join(" \u00b7 ");
+    link.appendChild(meta);
+
+    if (claim.statusText) {
+      const text = document.createElement("span");
+      text.className = "portal-warranty-status-text";
+      text.textContent = claim.statusText;
+      link.appendChild(text);
+    }
+
+    li.appendChild(link);
+    list.appendChild(li);
+  });
+  section.hidden = false;
 }
 
 async function loadPortal() {
@@ -1016,6 +1078,8 @@ function renderPropertyPortal(payload) {
       alert("Sorry, the booking page didn't load. Please call (905) 960-0181.");
     }
   };
+
+  renderPortalWarrantyClaims(payload.warrantyClaims);
 
   document.getElementById("portalPropertySection").hidden = false;
 }

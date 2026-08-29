@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Warranty claim — PJL</title>
+  <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260518" />
+  <link rel="shortcut icon" href="/favicon.ico?v=20260518" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=20260518" />
+  <meta name="apple-mobile-web-app-title" content="PJL" />
+  <link rel="manifest" href="/site.webmanifest?v=20260518" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/warranty-claims.css">
+</head>
+<body class="pjl-crm-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/outreach">Outreach</a>
+      <a href="/admin/review-requests">Reviews</a>
+      <a href="/admin/bookings">Bookings</a>
+      <a href="/admin/customers">Customers</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
+      <a href="/admin/sitebuilder">System Builder</a>
+      <a href="/admin/work-orders">Work orders</a>
+      <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/warranty-claims" class="is-active">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
+      <a href="/admin/material-lists">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/trash">Trash</a>
+      <a href="/admin/users">Users</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Warranty claim</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="wcd-shell">
+      <p class="wcd-back"><a href="/admin/warranty-claims">← All warranty claims</a></p>
+
+      <div class="wcd-loading" id="wcdLoading">Loading claim…</div>
+      <div class="wcd-error" id="wcdError" hidden></div>
+
+      <div id="wcdContent" hidden>
+
+        <!-- Header: the claim number, its status, and the clock -->
+        <header class="wcd-head">
+          <div class="wcd-head-main">
+            <span class="wcd-eyebrow">Warranty claim file number</span>
+            <h1 id="wcdNumber">—</h1>
+            <p class="wcd-head-meta" id="wcdHeadMeta"></p>
+          </div>
+          <div class="wcd-head-side">
+            <span class="wcd-badge" id="wcdBadge">—</span>
+            <span class="wcd-wait" id="wcdWait"></span>
+          </div>
+        </header>
+
+        <div class="wcd-stale-banner" id="wcdStaleBanner" hidden>
+          ⏰ <strong>This claim needs a status update.</strong>
+          <span id="wcdStaleText"></span>
+        </div>
+
+        <div class="wcd-grid">
+          <!-- ================= LEFT: the claim itself ================= -->
+          <div class="wcd-col-main">
+
+            <section class="wcd-card">
+              <h2>The customer</h2>
+              <dl class="wcd-dl">
+                <div><dt>Name</dt><dd id="wcdName">—</dd></div>
+                <div><dt>Phone</dt><dd id="wcdPhone">—</dd></div>
+                <div><dt>Email</dt><dd id="wcdEmail">—</dd></div>
+                <div><dt>Property given</dt><dd id="wcdAddress">—</dd></div>
+                <div><dt>Invoice ref given</dt><dd id="wcdInvoiceRef">—</dd></div>
+              </dl>
+            </section>
+
+            <section class="wcd-card">
+              <h2>What they're claiming</h2>
+              <blockquote class="wcd-description" id="wcdDescription"></blockquote>
+              <div id="wcdFilesWrap" hidden>
+                <h3 class="wcd-subhead">Attachments</h3>
+                <ul class="wcd-files" id="wcdFiles"></ul>
+              </div>
+            </section>
+
+            <!-- Dispute, when one has been raised -->
+            <section class="wcd-card wcd-card--alert" id="wcdDisputeCard" hidden>
+              <h2>⚠️ The customer disputed our denial</h2>
+              <p class="wcd-note-line" id="wcdDisputeMeta"></p>
+              <h3 class="wcd-subhead">Our denial reason</h3>
+              <blockquote class="wcd-description" id="wcdDenialReason"></blockquote>
+              <h3 class="wcd-subhead">Their dispute</h3>
+              <blockquote class="wcd-description" id="wcdDisputeReason"></blockquote>
+              <p class="wcd-fee-note">
+                They accepted that a service-call fee applies if the claim isn't accurate for the
+                repairs provided previously, compared to what they're claiming for.
+              </p>
+            </section>
+
+            <!-- ============ THE TOOL: what Patrick does next ============ -->
+            <section class="wcd-card wcd-actions" id="wcdActionsCard">
+              <h2>Move this claim</h2>
+              <p class="wcd-actions-help">
+                Pick an action. The customer is emailed automatically unless you turn that off —
+                every email is subject-lined <em>RE: Warranty Claim File Number</em> so their reply threads.
+              </p>
+
+              <div class="wcd-action-picker" id="wcdActionPicker">
+                <button type="button" class="wcd-action wcd-action--approve" data-action="approved">
+                  <strong>Approve claim &amp; raise work order</strong>
+                  <span>Accepts the claim and creates a service visit with the call-out fee waived under warranty.</span>
+                </button>
+                <button type="button" class="wcd-action" data-action="under_review">
+                  <strong>Warranty claim under review</strong>
+                  <span>Tell them we're assessing it against the original job.</span>
+                </button>
+                <button type="button" class="wcd-action" data-action="contact_customer">
+                  <strong>Contact customer</strong>
+                  <span>Alerts them that PJL will contact them at the first available time.</span>
+                </button>
+                <button type="button" class="wcd-action" data-action="info_requested">
+                  <strong>Return email with questions</strong>
+                  <span>Sends your follow-up questions. A message is required.</span>
+                </button>
+                <button type="button" class="wcd-action" data-action="service_booked">
+                  <strong>Book for service call</strong>
+                  <span>Sends a warranty booking link tagged to this claim.</span>
+                </button>
+                <button type="button" class="wcd-action" data-action="resolved">
+                  <strong>Mark resolved</strong>
+                  <span>Closes the claim — we made it right.</span>
+                </button>
+                <button type="button" class="wcd-action wcd-action--danger" data-action="denied">
+                  <strong>Deny warranty claim</strong>
+                  <span>A written explanation is required. They get a dispute option.</span>
+                </button>
+              </div>
+
+              <!-- Confirmation panel, revealed once an action is picked -->
+              <div class="wcd-confirm" id="wcdConfirm" hidden>
+                <h3 class="wcd-subhead" id="wcdConfirmTitle">—</h3>
+                <p class="wcd-confirm-help" id="wcdConfirmHelp"></p>
+                <div class="wcd-errors" id="wcdActionErrors" hidden></div>
+                <label class="wcd-field">
+                  <span id="wcdNoteLabel">Message to the customer</span>
+                  <textarea id="wcdNote" rows="5"></textarea>
+                </label>
+                <label class="wcd-check">
+                  <input type="checkbox" id="wcdNotify" checked>
+                  <span>Email the customer about this change</span>
+                </label>
+                <div class="wcd-confirm-actions">
+                  <button type="button" class="wcd-btn wcd-btn--primary" id="wcdConfirmBtn">Confirm</button>
+                  <button type="button" class="wcd-btn" id="wcdCancelBtn">Cancel</button>
+                </div>
+              </div>
+
+              <div class="wcd-result" id="wcdResult" hidden></div>
+            </section>
+
+            <!-- The repair work order raised by approving this claim. -->
+            <section class="wcd-card wcd-card--wo" id="wcdWorkOrderCard" hidden>
+              <h2>Repair work order</h2>
+              <p class="wcd-note-line" id="wcdWorkOrderMeta"></p>
+              <div class="wcd-wo-waiver" id="wcdWoWaiver"></div>
+              <a class="wcd-status-link" id="wcdWorkOrderLink" href="#">Open the work order →</a>
+            </section>
+
+            <section class="wcd-card">
+              <h2>History</h2>
+              <ul class="wcd-history" id="wcdHistory"></ul>
+            </section>
+          </div>
+
+          <!-- ================= RIGHT: the CRM cross-check ================= -->
+          <aside class="wcd-col-side">
+            <section class="wcd-card wcd-crosscheck">
+              <div class="wcd-crosscheck-head">
+                <h2>CRM cross-check</h2>
+                <button type="button" class="wcd-btn wcd-btn--small" id="wcdRecheckBtn">Re-run</button>
+              </div>
+              <p class="wcd-crosscheck-conf" id="wcdConfidence">—</p>
+              <div class="wcd-warning" id="wcdUnverified" hidden>
+                <strong>Check this.</strong> The invoice number given belongs to an invoice that is
+                <em>not</em> on the customer record we matched. Confirm they're entitled to claim against it.
+              </div>
+              <dl class="wcd-dl wcd-dl--tight">
+                <div><dt>Customer</dt><dd id="wcdMatchCustomer">—</dd></div>
+                <div><dt>Property</dt><dd id="wcdMatchProperty">—</dd></div>
+                <div><dt>Invoice</dt><dd id="wcdMatchInvoice">—</dd></div>
+                <div><dt>Matched by</dt><dd id="wcdMatchedBy">—</dd></div>
+              </dl>
+            </section>
+
+            <section class="wcd-card wcd-warranty-card">
+              <h2>Warranty position</h2>
+              <div id="wcdWarranty"></div>
+              <p class="wcd-warranty-caveat">
+                Computed from the work order behind the matched invoice. It is a research aid,
+                not a decision — back-dated completions and jobs invoiced under another property
+                can read as "outside the window" when they aren't.
+              </p>
+            </section>
+
+            <section class="wcd-card" id="wcdHistoryCard" hidden>
+              <h2>Past service at this property</h2>
+              <ul class="wcd-service-records" id="wcdServiceRecords"></ul>
+            </section>
+
+            <section class="wcd-card" id="wcdOtherInvoicesCard" hidden>
+              <h2>Their other invoices</h2>
+              <p class="wcd-note-line">In case they quoted the wrong number.</p>
+              <ul class="wcd-invoice-list" id="wcdOtherInvoices"></ul>
+            </section>
+
+            <section class="wcd-card">
+              <h2>Customer's status link</h2>
+              <p class="wcd-note-line">What the customer sees. Safe to text or read out.</p>
+              <a class="wcd-status-link" id="wcdStatusLink" href="#" target="_blank" rel="noopener">Open status page →</a>
+            </section>
+          </aside>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/crm/crm-nav.js"></script>
+  <script src="/crm/nav-badges.js"></script>
+  <script src="/crm/warranty-claim.js"></script>
+</body>
+</html>
