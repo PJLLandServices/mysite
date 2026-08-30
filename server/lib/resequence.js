@@ -41,6 +41,7 @@
 
 const { travelMinutes, travelMinutesRaw, haversineKm, MIN_TRAVEL_MINUTES } = require("./distance");
 const { PJL_BASE } = require("./geocode");
+const { routeOrigin } = require("./route-origin");
 const { BOOKABLE_SERVICES, BOOKING_BUCKETS, parseHHmmToMinutes, minutesToHHmm } = require("./availability");
 const { deriveSeasonalKey } = require("./pricing");
 
@@ -267,7 +268,12 @@ function bestOrder(matrix, from, indices, to) {
 // estimates (admin-facing only — customers never see a minute) and any
 // flags the plan screen should show.
 async function sequenceDay(day, opts = {}) {
-  const { propertiesByCode, season = "fall", base = PJL_BASE, travel = travelMinutes } = opts;
+  const { propertiesByCode, season = "fall", travel = travelMinutes } = opts;
+  // The yard, not the geocode fallback. PJL_BASE means "we do not know
+  // where this is"; anchoring a route to it pointed every day at the
+  // middle of Newmarket. Callers may still pass an explicit base — tests
+  // do, so their fixtures stay exact.
+  const base = opts.base || await routeOrigin();
   // A test that injects a travel function gets the same function for the
   // ordering clock unless it says otherwise, so its fixtures stay exact.
   const travelRaw = opts.travelRaw || (opts.travel ? opts.travel : travelMinutesRaw);

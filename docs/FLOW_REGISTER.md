@@ -41,8 +41,22 @@ filter accepts or refuses customers on — so it is wrong for all 11 route days,
 **Fix requires an input only Patrick has** (the real yard address) and should also SPLIT the two
 jobs this constant is doing: a real address for routing, and a deliberately vague town point for
 "we do not know where this is", so correcting the yard cannot change how unresolved addresses behave.
-SEQ-04 is built and tested but aims the day at this anchor, so it is committed and NOT recommended
-for merge until SEQ-05 is answered.
+**SEQ-05 CLOSED 2026-08-30.** Patrick supplied the yard: **1118 Cenotaph Blvd, Newmarket, ON L3X
+0A5** — the same L3X pocket as Creebridge and Ivsbridge, which is why he said Prospect St was the
+far end of town while the centroid maths called it the nearest stop at 0.67 km. New
+`server/lib/route-origin.js` holds the yard and keeps it strictly separate from `PJL_BASE`, which is
+unchanged and still means "we cannot resolve this address". **Configured as a street address, not
+coordinates**, and resolved through the same geocoder as everything else: a latitude nobody can check
+by eye is how a town centroid survived this long, whereas a wrong address is obvious on sight.
+Overridable via `PJL_ROUTE_ORIGIN` without a deploy. Fails soft and loudly — an unlocatable yard
+degrades to the centroid, but carries `resolved: false`, and the plan screen then says in red that
+routes are anchored to a guess. The anchor is now printed on the screen in every case, because a
+route pointed at the wrong start looks exactly like one pointed at the right start; silence is how
+this lasted eleven route days. Effect on R1's afternoon: 991 Creebridge → 970 → Ivsbridge → Prospect
+becomes **Prospect → Ivsbridge → 991 → 970 Creebridge**, finishing in the yard's own pocket.
+`scripts/test-route-origin.mjs`, 10 assertions, including one that fixes the anchor at two different
+points and asserts the day ends at a different stop each time — the property that makes a wrong
+anchor a correctness bug rather than a cosmetic one.
 
 **2026-08-30 (SEQ-01 reopened, and SEQ-03):** the SEQ-01 fix shipped and did not work — Patrick's
 screenshot still showed `100 Lavery → Morrish → 106 Lavery`. Two reasons, both mine.

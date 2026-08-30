@@ -51,6 +51,7 @@ const properties = require("./lib/properties");
 const seasonPlans = require("./lib/season-plans");
 const geoFilter = require("./lib/geo-filter");
 const resequence = require("./lib/resequence");
+const routeOriginLib = require("./lib/route-origin");
 const customers = require("./lib/customers");
 const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
@@ -21314,6 +21315,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
       source: plan.source || "",
       bucketCap: plan.bucketCap,
       dayCap: plan.dayCap,
+      // Every route day starts and ends here. Shown on the screen because
+      // this value being wrong is invisible in the output — a route
+      // anchored to the wrong point still looks like a route — and it was
+      // wrong for eleven days before anyone noticed.
+      routeOrigin: await routeOriginLib.routeOrigin(),
       totalStops: days.reduce((t, d) => t + d.counts.total, 0),
       driveMinutes: days.reduce((t, d) => t + (d.driveMinutes || 0), 0),
       days,

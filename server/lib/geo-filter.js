@@ -42,6 +42,7 @@
 
 const { travelMinutes, estimateMinutes } = require("./distance");
 const { PJL_BASE } = require("./geocode");
+const { routeOrigin } = require("./route-origin");
 
 // Two points this close are the same stop for routing purposes. Same
 // rounding the distance cache uses (~11 m), so a planned property and
@@ -145,8 +146,13 @@ function localDateKey(d) {
 // Returns { minutes, position, positions } — or null when the candidate
 // has no usable coordinates, which callers must read as "skip the filter"
 // rather than "refuse".
-async function addedDriveMinutes(candidate, points, { base = PJL_BASE, exact = false } = {}) {
+async function addedDriveMinutes(candidate, points, opts = {}) {
+  const { exact = false } = opts;
   if (!usable(candidate)) return null;
+  // The day is a round trip from the yard. Measuring it from the geocode
+  // fallback instead shifts every insertion cost by however far the yard
+  // is from the middle of town.
+  const base = opts.base || await routeOrigin();
   const stops = (points || []).filter(usable);
   if (!stops.length) return { minutes: 0, position: 0, positions: 0, emptyDay: true };
 
