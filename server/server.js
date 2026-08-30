@@ -1233,6 +1233,15 @@ function needsAuth(method, pathname) {
   // Customers (the people PJL serves) — admin-only.
   if (pathname.startsWith("/api/customers")) return "user";
   if (pathname.startsWith("/api/customer/") || pathname === "/api/customer") return "user";
+  // Property merge — ADMIN ONLY. It deletes a property record and rewrites
+  // which property every linked invoice, work order and booking belongs to.
+  // Same class of decision as the service-fee waiver: it moves money
+  // records around, so it is a desk decision, not a tap in a driveway.
+  // **MUST stay ABOVE the generic /api/properties line below — needsAuth
+  // returns on FIRST match, so putting it after silently hands every tech
+  // the ability to delete a property.** A test pins the order; it was
+  // written below at first and the test caught it.
+  if (/^\/api\/properties\/[^/]+\/merge-into$/.test(pathname)) return "admin";
   // Properties (customer system profiles) are admin-only.
   if (pathname.startsWith("/api/properties")) return "user";
   // Work orders (tech-side per-visit records) are admin-only for now.
@@ -7999,6 +8008,72 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, property: updated });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't transfer ownership."] });
+    }
+  }
+
+  // POST /api/properties/:id/merge-into — fold a duplicate property into
+  // this one, then delete the duplicate. The :id in the path is the KEEPER;
+  // the duplicate is named in the body. That ordering matches the CRM (you
+  // are on the record you intend to keep) and makes an accidental swap
+  // impossible to express as a URL alone.
+  //
+  // Body: { duplicateId, apply?, confirm?, allowDifferentCustomer?,
+  //         alignDraftInvoiceAddresses? }
+  //
+  // Dry run unless `apply === true`, and an apply additionally requires
+  // `confirm: "MERGE"` — the same second-factor pattern as the bulk-delete
+  // routes, re-checked here so a stray fetch from a forgotten tab can't
+  // delete a property.
+  //
+  // ADMIN ONLY, twice over: needsAuth() maps the path to "admin" and this
+  // route re-checks with requireAdmin. The work itself runs through
+  // server/lib/property-merge.js — the same implementation the CLI calls.
+  const propertyMergeMatch = pathname.match(/^\/api\/properties\/([^/]+)\/merge-into$/);
+  if (propertyMergeMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const keepId = decodeURIComponent(propertyMergeMatch[1]);
+      const payload = await parseRequestBody(req);
+      const duplicateId = normalizeString(payload?.duplicateId, 80);
+      if (!duplicateId) {
+        return sendJson(res, 422, { ok: false, errors: ["duplicateId is required."] });
+      }
+      const apply = payload?.apply === true;
+      if (apply && String(payload?.confirm || "") !== "MERGE") {
+        return sendJson(res, 422, {
+          ok: false,
+          errors: ['Type MERGE to confirm — an applied merge deletes a property record.']
+        });
+      }
+
+      const propertyMerge = require("./lib/property-merge");
+      const result = propertyMerge.mergeProperties({
+        keep: keepId,
+        remove: duplicateId,
+        apply,
+        allowDifferentCustomer: payload?.allowDifferentCustomer === true,
+        alignDraftInvoiceAddresses: payload?.alignDraftInvoiceAddresses === true,
+        by: await actorLabel(req)
+      });
+
+      if (!result.ok) {
+        // The lib's refusals are deliberate guards, not failures to route
+        // around — 422 so the caller sees them as "you asked for something
+        // that isn't safe", not as a server fault.
+        return sendJson(res, 422, { ok: false, errors: result.problems });
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        applied: result.applied,
+        plan: result.plan,
+        conflicts: result.conflicts,
+        notes: result.notes,
+        ...(result.applied ? { backupDir: result.backupDir, backedUp: result.backedUp } : {})
+      });
+    } catch (err) {
+      console.error("[property-merge] failed:", err?.message || err);
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't merge properties."] });
     }
   }
 

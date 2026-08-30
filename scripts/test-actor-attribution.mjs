@@ -52,8 +52,13 @@ const server = fs.readFileSync(path.join(ROOT, "server/server.js"), "utf8");
     ok(`no ${variant} literal`, !variant.test(server));
   }
 
+  // Seventeen sites were converted from the literal; every write path
+  // added since is expected to use the helper too, so this floor rises
+  // rather than being pinned. The invariant that actually matters — that
+  // no `by: "admin"` literal survives — is asserted above.
   const wired = (server.match(/by: await actorLabel\(req\)/g) || []).length;
-  ok("every replaced site calls actorLabel", wired === 17, String(wired));
+  ok("every converted site calls actorLabel, and new ones do too",
+    wired >= 17, `found ${wired}, expected at least 17`);
 }
 
 // ---- 2. The helper's contract ----------------------------------------

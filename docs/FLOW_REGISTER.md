@@ -41,6 +41,63 @@ superseded `territory-export.js` was deleted (its own replacement documents thre
 silently miscounts). Cover: `scripts/test-territory-export.mjs` (100 assertions, in
 `build:check`).
 
+**2026-08-30 (CRM-22 — the property merge becomes a route, and what the live records actually
+said):** CRM-19 shipped the merge as a CLI. That was the wrong shape: running it needs shell
+access to the Render instance, which Patrick does not have — the same problem the territory
+export hit on 2026-08-27 and solved the same way. `POST /api/properties/:id/merge-into` now
+does it from the CRM. The `:id` in the path is the KEEPER and the duplicate is named in the
+body, so an accidental swap can't be expressed as a URL alone.
+
+**What the live data actually said, which changed the job.** Reading the two records before
+touching them overturned the plan they were merged under:
+
+- The two properties do **not** have different addresses. Both read `21 Hill Country Dr,
+  Whitchurch-Stouffville, ON L4A 3T2, Canada`. The "different address" is on the INVOICE:
+  I-2026-0034 says **"21 Phil Country Drive, Stouffville, ON"** — *Phil* for *Hill*. That typo
+  is what failed the address match and the 50m geocode check, so `attachLead` minted a second
+  property exactly as spec §3.1 says it should. The property was corrected later; the paid
+  invoice keeps its frozen snapshot, correctly.
+- **The record we were told to keep was the weaker one.** P-2026-0040 carries 3 zones, two of
+  them `pendingReview` stubs literally named "Zone 3" and "Zone 5", and its work order
+  WO-PT79MEGF **404s — it has been deleted**. P-2026-0056 carries a 6-zone walked survey
+  ("Backyard open area rotors", "Left side backyard and large flower garden…"), a live work
+  order, the larger invoice, and **three live unsubscribe tokens** whose links are in the
+  customer's inbox.
+- **Zone count is money.** `resolveSeasonalPrice` tiers off documented zones; the server
+  returns $90 (`spring_open_4z`, zoneCount 3) for P-2026-0040 and $105 (`spring_open_6z`,
+  zoneCount 6) for P-2026-0056. Keeping the 3-zone record would have quietly billed Randy the
+  1-4 zone tier for both spring opening and fall closing — $30/year under, indefinitely — and
+  the merge would NOT have rescued it, because two non-empty zone lists are a conflict and the
+  keeper wins. **Direction reversed on that evidence: keep P-2026-0056, delete P-2026-0040.**
+
+**The route.** ADMIN ONLY, twice over: `needsAuth()` maps the path to `"admin"` and the route
+re-checks with `requireAdmin`. **The rule MUST sit above the generic `/api/properties` →
+`"user"` line** — `needsAuth` returns on first match. It was written below it at first, which
+would have let any tech delete a property; the source guard caught it before it shipped, and
+now pins the order (mutation: move it below, the build fails). Dry run is the default; an
+apply additionally requires `confirm: "MERGE"`, the same typed second factor as the bulk-delete
+routes. The lib's refusals surface as **422**, not 500 — they are guards, not faults. The merge
+is attributed via `actorLabel(req)` (CRM-21) and the request lands in the action log (CRM-20),
+including a refused attempt.
+
+**One implementation, two callers.** The merge core moved to `server/lib/property-merge.js`;
+`scripts/merge-properties.mjs` is now a thin CLI over it, and the route calls the same
+function — the arrangement `backfill-booking-customers.js` and `territory-export.js` already
+use. A test asserts neither caller holds a copy of the internals. The port was proved faithful
+by pointing the existing 110-assertion suite (mutation-tested against five broken states) at
+the new lib unchanged.
+
+**No PASS flow touched.** A new route and a file move; no existing route, payload or catalog
+changes, and nothing in `stripe.js`, `pay.js` or any payment route moves (FLOW-23's invariant).
+Cover: `scripts/test-property-merge-route.mjs` (31 assertions, in `build:check`) plus a
+21-assertion live-server walk with seeded admin and tech logins — anonymous 401, **tech 403**,
+apply-without-confirm 422, dry run writing nothing, a **paid** invoice re-pointed while keeping
+its issued address, the merge attributed to the admin's name, and both the success and the
+tech's refusal appearing in the action log.
+
+**Still outstanding:** the merge has not been run on the live records yet. When it is, this
+entry wants the real plan output recorded against it.
+
 **2026-08-29 (CRM-21 — the record history now names the operator):** The other half of CRM-20,
 and the gap that entry left open. Seventeen write paths in `server.js` stamped a hardcoded
 `by: "admin"` into the `history[]` they appended, so a customer edit, an ownership transfer, a
