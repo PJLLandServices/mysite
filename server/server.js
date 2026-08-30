@@ -21424,15 +21424,23 @@ Customer signature captured at ${new Date().toISOString()}.`;
       }
 
       const image = await routeMap.routeMapImage(origin, stops);
-      if (!image) {
-        return sendJson(res, 503, {
-          ok: false, code: "maps_unavailable",
-          errors: ["Route maps need GOOGLE_MAPS_SERVER_KEY set on the server."]
+      if (!image || !image.buffer) {
+        // Say WHY. A picture that silently fails to appear is a bug
+        // report with no information in it, and the page has no other way
+        // to learn what Google objected to.
+        return sendJson(res, 502, {
+          ok: false,
+          code: "map_unavailable",
+          errors: [(image && image.error) || "Could not draw this route."],
+          detail: (image && image.detail) || null
         });
       }
       res.writeHead(200, {
         "Content-Type": image.contentType,
         "Content-Length": image.buffer.length,
+        // Present only when the road path could not be fetched and the
+        // line is straight hops between stops.
+        ...(image.roadsError ? { "X-Route-Roads-Error": encodeURIComponent(image.roadsError) } : {}),
         ETag: etag,
         // The ETag carries the route, so revalidation is cheap and a
         // re-sequenced day can never serve yesterday's picture.

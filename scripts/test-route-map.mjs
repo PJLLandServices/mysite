@@ -73,10 +73,22 @@ const hadKey = process.env.GOOGLE_MAPS_SERVER_KEY;
 delete process.env.GOOGLE_MAPS_SERVER_KEY;
 ok("without a Maps key the module reports itself unavailable",
   routeMap.isConfigured() === false);
-ok("...and asking for an image returns nothing rather than throwing",
-  (await routeMap.routeMapImage(origin, [A, B, C])) === null);
-ok("...and an empty day returns nothing even when configured",
-  (await routeMap.routeMapImage(origin, [])) === null);
+// It returns a REASON rather than null. "Route map unavailable" with no
+// explanation is a bug report containing no information — the first live
+// failure could not be diagnosed from the screen at all, only guessed at.
+const noKey = await routeMap.routeMapImage(origin, [A, B, C]);
+ok("...and asking for an image returns a reason rather than throwing",
+  noKey && !noKey.buffer && typeof noKey.error === "string", JSON.stringify(noKey));
+ok("...and the reason names the missing key, so it is actionable",
+  /GOOGLE_MAPS_SERVER_KEY/.test(noKey.error), noKey.error);
+
+// Configured, but nothing to draw. A dummy key is enough: the no-stops
+// branch returns before any network call, so this never reaches Google.
+process.env.GOOGLE_MAPS_SERVER_KEY = "test-key-not-used";
+const noStops = await routeMap.routeMapImage(origin, []);
+ok("an empty day explains itself rather than failing silently",
+  noStops && !noStops.buffer && /no stops/i.test(noStops.error || ""), JSON.stringify(noStops));
+delete process.env.GOOGLE_MAPS_SERVER_KEY;
 if (hadKey) process.env.GOOGLE_MAPS_SERVER_KEY = hadKey;
 
 // ---- The image cache lives in runtime data, not the repo -------------

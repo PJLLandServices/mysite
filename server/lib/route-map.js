@@ -65,13 +65,17 @@ async function roadPolyline(origin, stops) {
     const response = await fetch(url.toString());
     const data = await response.json();
     if (data.status !== "OK") {
-      console.warn("[route-map] directions returned", data.status, "— drawing straight hops");
-      return null;
+      // Google's own words, kept. "REQUEST_DENIED / This API project is not
+      // authorized to use this API" is the whole diagnosis, and throwing it
+      // away is what turned a five-second fix into a guess.
+      const detail = [data.status, data.error_message].filter(Boolean).join(" — ");
+      console.warn("[route-map] directions:", detail, "— drawing straight hops");
+      return { error: detail };
     }
-    return data.routes?.[0]?.overview_polyline?.points || null;
+    return { points: data.routes?.[0]?.overview_polyline?.points || null };
   } catch (err) {
     console.warn("[route-map] directions failed:", err?.message);
-    return null;
+    return { error: err?.message || "Directions request failed." };
   }
 }
 
@@ -119,7 +123,8 @@ function markerParams(origin, stops) {
 // configured. Never throws — a missing map is a missing picture, not a
 // broken plan screen.
 async function routeMapImage(origin, stops) {
-  if (!isConfigured() || !stops.length) return null;
+  if (!isConfigured()) return { error: "GOOGLE_MAPS_SERVER_KEY is not set on the server." };
+  if (!stops.length) return { error: "This day has no stops with coordinates." };
   const key = cacheKey(origin, stops);
   const file = path.join(CACHE_DIR, `${key}.png`);
   try {
@@ -128,12 +133,16 @@ async function routeMapImage(origin, stops) {
     }
   } catch { /* fall through and re-fetch */ }
 
-  const encoded = await roadPolyline(origin, stops)
-    || encodePath([
-      ...(origin && origin.lat != null ? [origin] : []),
-      ...stops.map((s) => s.coords),
-      ...(origin && origin.lat != null ? [origin] : [])
-    ]);
+  const road = await roadPolyline(origin, stops);
+  const encoded = (road && road.points) || encodePath([
+    ...(origin && origin.lat != null ? [origin] : []),
+    ...stops.map((s) => s.coords),
+    ...(origin && origin.lat != null ? [origin] : [])
+  ]);
+  // A straight-hop fallback is a usable map, so it is not an error — but
+  // the reason travels with the result so the screen can say the lines
+  // are not roads, and why.
+  const roadsError = road && road.error ? road.error : null;
 
   const url = new URL("https://maps.googleapis.com/maps/api/staticmap");
   url.searchParams.set("size", SIZE);
@@ -146,8 +155,17 @@ async function routeMapImage(origin, stops) {
   try {
     const response = await fetch(url.toString());
     if (!response.ok) {
-      console.warn("[route-map] static map returned", response.status);
-      return null;
+      // Static Maps answers a rejection with a plain-text explanation.
+      // That text names the enabled-API or key-restriction problem
+      // outright, so it is passed straight through to the operator.
+      let detail = "";
+      try { detail = (await response.text()).trim().slice(0, 300); } catch { /* body optional */ }
+      console.warn("[route-map] static map", response.status, detail);
+      return {
+        error: `Google refused the map request (HTTP ${response.status}).`,
+        detail: detail || null,
+        roadsError
+      };
     }
     const buffer = Buffer.from(await response.arrayBuffer());
     try {
@@ -156,10 +174,10 @@ async function routeMapImage(origin, stops) {
     } catch (err) {
       console.warn("[route-map] could not cache image:", err?.message);
     }
-    return { buffer, contentType: "image/png", cached: false };
+    return { buffer, contentType: "image/png", cached: false, roadsError };
   } catch (err) {
     console.warn("[route-map] static map fetch failed:", err?.message);
-    return null;
+    return { error: err?.message || "Static map request failed." };
   }
 }
 
