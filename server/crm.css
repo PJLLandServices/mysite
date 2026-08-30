@@ -3615,7 +3615,13 @@ body.pjl-bulk-toolbar-busy {
   background: #fff;
   border: 1px solid var(--crm-border, #d4d2cb);
   border-radius: 10px;
-  overflow: hidden; /* clips the row dividers to the rounded corners */
+  /* Scroll, never clip. `overflow: hidden` rounds the row dividers to the
+     corners, but on a table whose fixed tracks are wider than the window
+     it silently cuts the last column in half — the status pill reading
+     "SCHEDU…" with no indication anything is missing. Auto keeps the
+     rounding and gives back a scrollbar when the columns genuinely don't
+     fit. */
+  overflow: auto hidden;
 }
 
 .crm-table-head,
@@ -3623,7 +3629,12 @@ body.pjl-bulk-toolbar-busy {
   display: grid;
   grid-template-columns: var(--crm-cols);
   align-items: center;
-  column-gap: 16px;
+  column-gap: var(--crm-gap, 16px);
+  /* Optional floor, set per table. Applied to the header AND the rows so
+     both grids resolve their tracks against the same width — that is what
+     lets a table scroll sideways without the header sliding out of
+     register with its own columns. */
+  min-width: var(--crm-min, 0);
 }
 
 .crm-table-head {
@@ -3753,6 +3764,13 @@ body.pjl-bulk-toolbar-busy {
 @media (max-width: 800px) {
   .crm-table-head { display: none; }
 
+  /* No floor on a phone — the rows stack, so there is nothing to hold
+     open and a 1010px minimum would scroll the whole list sideways. */
+  .crm-table-row,
+  .crm-table .ml-card,
+  .crm-table .bk-card,
+  .crm-table .supplier-card { min-width: 0; }
+
   .crm-table-row {
     grid-template-columns: auto 1fr auto;
     column-gap: 12px;
@@ -3766,4 +3784,257 @@ body.pjl-bulk-toolbar-busy {
   .crm-cell { grid-column: 2; white-space: normal; }
   .crm-cell-status { grid-column: 3; grid-row: 1; justify-self: end; }
   .crm-row-action { grid-column: 3; grid-row: 2 / span 3; align-self: center; }
+}
+
+/* ---- Shared numeric + identity cells --------------------------------
+   Used by every index that carries counts (projects, material lists,
+   work orders, properties). Right-aligned with tabular figures so the
+   digits stack in a column you can read down rather than a ragged edge. */
+
+.crm-cell-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--crm-text, #1a1a1a);
+}
+
+/* A zero is real information here — "no work orders yet" — but it is not
+   the thing to look at, so it recedes rather than reading as a value. */
+.crm-cell-num.is-zero { color: #b9b7ae; }
+
+/* Identity and two-line cells stack; single-line cells stay centred by
+   the row's align-items. */
+.crm-cell-stack,
+.crm-table-row .crm-cell:has(> .crm-cell-sub) {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  padding: 8px 0;
+}
+
+/* Column headings for numeric columns align with their digits. */
+.crm-table-head .is-num { text-align: right; }
+
+/* ---- Per-page column templates --------------------------------------
+   Each index sets its own track list; .crm-table-head and .crm-table-row
+   both read it (see the primitive above), so a column added to one is a
+   column added to both. */
+
+.bookings-table {
+  --crm-cols: minmax(170px, 1.6fr) minmax(150px, 1.3fr) minmax(180px, 1.8fr) 150px 124px;
+}
+
+.projects-table {
+  --crm-cols: minmax(180px, 1.8fr) minmax(170px, 1.6fr) 110px 56px 56px 112px;
+}
+
+.mllists-table {
+  --crm-cols: minmax(170px, 1.7fr) minmax(160px, 1.5fr) 56px 56px 56px 96px 112px;
+}
+
+.suppliers-table {
+  --crm-cols: minmax(140px, 1.5fr) minmax(130px, 1.2fr) 120px minmax(120px, 1.2fr) 168px;
+}
+
+.wo-table {
+  /* STATUS is 152px because "Awaiting approval" renders at 149px and this
+     column must never cut a status in half.
+
+     It is a FIXED width on purpose. minmax(112px, max-content) looks
+     tempting — only the lists containing that label would pay for it —
+     but the header and the rows are separate grids, so each resolves
+     max-content against its OWN contents: the header sizes to the word
+     "STATUS" and the rows to "Awaiting approval", and the two stop
+     lining up. Content-based tracks are incompatible with the shared
+     template; only fixed and fr tracks resolve identically in both. */
+  --crm-gap: 14px;
+  /* The recovery action only exists on the Stuck / Needs-invoice filters,
+     so its track is `auto`: it collapses to nothing the rest of the time
+     instead of reserving 118px that pushed the status column past the
+     table's right edge on a laptop. */
+  --crm-cols: minmax(140px, 1.6fr) minmax(130px, 1.4fr) 116px 44px 152px 116px;
+  /* The action column is a FIXED 116px, not `auto`. Auto collapses to
+     nothing while the recovery filters are off — which is what you want —
+     but the moment those filters render a button, the rows' auto track
+     grows and the header's (still empty) does not, and all seven columns
+     slide out of register by up to 73px. Same trap as max-content: any
+     content-sized track resolves differently in the two grids. */
+  --crm-min: 800px;
+}
+
+/* Suppliers keep their inline row actions; they are the only index whose
+   rows act on the record in place rather than opening it. */
+/* The originals stack the two buttons in a column at 44px each, which is
+   right on a card and 100px of row height in a table. Side by side, sized
+   to the text. */
+.suppliers-table .supplier-card-actions {
+  display: flex;
+  flex-direction: row;
+  gap: 6px;
+  justify-content: flex-end;
+  align-items: center;
+  overflow: visible;
+}
+
+.suppliers-table .supplier-card-actions button {
+  min-height: 0;
+  min-width: 0;
+  border-radius: 6px;
+}
+
+.suppliers-table .supplier-card-actions button {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  border: 1px solid var(--pjl-border, #E2E0D4);
+  background: #fff;
+  color: var(--pjl-green, #1B4D2E);
+  cursor: pointer;
+}
+
+.suppliers-table .supplier-card-actions button:hover { background: #f3f2ea; }
+.suppliers-table .supplier-card-actions button.is-danger { color: #9b2b2b; }
+
+.wo-table .wo-cell-action { justify-content: flex-end; display: flex; }
+.wo-table .wo-cell-action .pjl-btn { font-size: 12px; padding: 6px 10px; min-height: 0; }
+
+/* Archived rows recede without disappearing — they are still findable,
+   just not competing with live work. */
+.crm-table-row.is-archived { opacity: 0.6; }
+
+/* Recovery rows (stuck completions / needs invoice) carry a warning edge
+   in the gutter: the row still reads normally, but the run of them is
+   visible as you scroll. */
+/* The recovery marker is an inset shadow, not a border: work-orders-index
+   .css marks these rows with `border-left: 3px`, which inside a grid row
+   moves every cell 3px right and pulls the whole row out of register with
+   the header. A shadow paints in the same place and costs no layout. */
+.crm-table .ml-card.is-stuck { border-left: 0; }
+.crm-table-row.is-stuck { box-shadow: inset 3px 0 0 var(--pjl-amber, #E07B24); }
+
+@media (max-width: 800px) {
+  /* Every index stacks the same way on a phone: identity first, status
+     top-right, everything else in source order beneath. */
+  .bookings-table .crm-table-row,
+  .projects-table .crm-table-row,
+  .mllists-table .crm-table-row,
+  .suppliers-table .crm-table-row,
+  .wo-table .crm-table-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .bookings-table .crm-cell,
+  .projects-table .crm-cell,
+  .mllists-table .crm-cell,
+  .suppliers-table .crm-cell,
+  .wo-table .crm-cell {
+    grid-column: 1;
+  }
+
+  .bookings-table .crm-cell-status,
+  .projects-table .crm-cell-status,
+  .mllists-table .crm-cell-status,
+  .suppliers-table .crm-cell-status,
+  .wo-table .crm-cell-status {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+  }
+
+  /* Counts read as a labelled strip rather than three bare numbers with
+     no header above them to say what they count. */
+  .projects-table .crm-cell-num,
+  .mllists-table .crm-cell-num,
+  .wo-table .crm-cell-num {
+    text-align: left;
+    font-size: 12px;
+    color: var(--crm-muted, #6b6b63);
+  }
+}
+
+/* ---- Neutralising the old card frames --------------------------------
+   .ml-card, .bk-card and .supplier-card each still carry their own
+   border, radius, padding and background from when every row was a
+   free-floating card. Inside a .crm-table the row frame belongs to
+   .crm-table-row, and leaving both sets active draws a boxed card inside
+   every table row — the exact stripes this rebuild removed.
+
+   Reset here rather than deleting the originals: .ml-card is also used
+   by purchase-orders and quote-folder, which are still card grids, so the
+   rules have live callers elsewhere. Scoping the reset to .crm-table is
+   what lets both layouts coexist. */
+
+.crm-table .ml-card,
+.crm-table .bk-card,
+.crm-table .supplier-card {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0 14px;
+  margin: 0;
+  position: static;
+  display: grid;
+  grid-template-columns: var(--crm-cols);
+  align-items: center;
+  column-gap: var(--crm-gap, 16px);
+  min-width: var(--crm-min, 0);
+  min-height: 54px;
+  border-bottom: 1px solid #ece9e1;
+}
+
+.crm-table .ml-card:last-child,
+.crm-table .bk-card:last-child,
+.crm-table .supplier-card:last-child { border-bottom: 0; }
+
+/* The old cards set their own type scale on the name and meta lines;
+   inside the table those come from .crm-cell-primary / .crm-cell-sub. */
+/* The head cell is a ROW — the bulk-selection checkbox is relocated into
+   it and has to sit beside the name, not above it. The name and its
+   sub-line stack inside .crm-identity. */
+.crm-table .ml-card-head,
+.crm-table .supplier-card-name,
+.crm-table .bk-card__service {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  /* The originals wrap; inside a fixed-width cell that drops the checkbox
+     onto its own line the moment a customer name is long, so rows with
+     short names and long names indent differently. */
+  flex-wrap: nowrap;
+  margin: 0;
+  padding: 8px 0;
+  font: inherit;
+}
+
+.crm-identity {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+}
+
+.crm-table .ml-card-head > .pjl-bulk-checkbox-wrap,
+.crm-table .supplier-card-name > .pjl-bulk-checkbox-wrap {
+  margin: 0;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
+.crm-table .ml-card-name,
+.crm-table .supplier-card-name,
+.crm-table .bk-card__service { font-size: inherit; font-weight: inherit; }
+
+/* The list container itself was a card grid; in a table it is just the
+   body of rows. */
+.crm-table .ml-cards,
+.crm-table .suppliers-list,
+.crm-table .customers-list {
+  display: block;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  gap: 0;
 }

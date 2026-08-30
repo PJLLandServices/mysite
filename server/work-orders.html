@@ -91,7 +91,20 @@
       </section>
 
       <p class="suppliers-empty" id="woEmpty" hidden>No work orders match the current filter.</p>
-      <ul class="ml-cards" id="woContainer" aria-label="Work orders"></ul>
+      <!-- Data table, same primitive as the Customers and Properties
+           indexes (.crm-table in crm.css). Header row and data rows read one
+           --crm-cols template, so they cannot drift out of register. -->
+      <section class="crm-table wo-table">
+        <div class="crm-table-head" role="row">
+          <span>Work order</span>
+          <span>Type</span>
+          <span>Scheduled</span>
+          <span class="is-num">Zones</span>
+          <span>Status</span>
+          <span></span>
+        </div>
+        <ul class="ml-cards" id="woContainer" aria-label="Work orders"></ul>
+      </section>
     </main>
   </div>
 

@@ -61,7 +61,17 @@ const PAGES = [
     tableClass: "properties-table",
     listId: "propertiesGrid",
     blankColumns: 0
-  }
+  },
+  // The rest of the CRM's record lists, whose templates live in crm.css
+  // alongside the primitive itself.
+  { label: "bookings",   css: "crm.css", html: "bookings.html",       tableClass: "bookings-table",  listId: "bookingsList",      blankColumns: 0 },
+  { label: "projects",   css: "crm.css", html: "projects.html",       tableClass: "projects-table",  listId: "projectsContainer", blankColumns: 0 },
+  { label: "materials",  css: "crm.css", html: "material-lists.html", tableClass: "mllists-table",   listId: "listsContainer",    blankColumns: 0 },
+  // Suppliers act on the record in place; work orders carry a recovery
+  // action on two of their filters. Both keep one deliberately unlabelled
+  // action column.
+  { label: "suppliers",  css: "crm.css", html: "suppliers.html",      tableClass: "suppliers-table", listId: "suppliersList",     blankColumns: 1 },
+  { label: "workorders", css: "crm.css", html: "work-orders.html",    tableClass: "wo-table",        listId: "woContainer",       blankColumns: 1 }
 ];
 
 for (const page of PAGES) {

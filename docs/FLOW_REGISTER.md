@@ -523,6 +523,26 @@ checkbox, sort, search, maps affordance) plus 1440px and 390px renders of both p
 no JS errors and no horizontal overflow. No API, route or payload change — presentation
 only, no PASS flow touched.
 
+**2026-08-28 (CRM-19 — the rest of the record lists):** Bookings, Work orders, Projects,
+Material lists and Suppliers rebuilt on the same `.crm-table` primitive as CRM-18. Invoices
+was already a real table and is untouched. Each page sets its own `--crm-cols`; the guard in
+`scripts/test-crm-table.mjs` now covers all seven (58 assertions). **Three alignment traps
+found and fixed, all the same shape — the header and the rows are SEPARATE grids, so any
+track whose width depends on content resolves differently in each:** `max-content` on the
+status column sized the header to the word "STATUS" and the rows to "Awaiting approval";
+`auto` on the work-order action column collapsed in the header while expanding in the rows
+the moment a recovery filter rendered a button, shifting all seven columns by up to 73px;
+and `border-left: 3px` on `.ml-card.is-stuck` moved every cell in a stuck row 3px right.
+Only fixed and `fr` tracks resolve identically in both grids — recorded in the CSS. Where a
+table genuinely cannot fit, both grids take the same `--crm-min` floor so it scrolls in
+lockstep rather than clipping. **One deliberate information change:** the work-order list
+drops its Address column and its truncated diagnosis line; the address moves under the type,
+which is the more useful of the two for identifying a job in a list, and the full diagnosis
+stays on the detail page. Verified in headless Chromium: column alignment measured on every
+row of every list including both recovery filters, row-click navigation, Select mode, the
+bulk-selection checkbox, in-place supplier actions, and 390px with no horizontal overflow on
+any of the five. No API, route or payload change; no PASS flow touched.
+
 **2026-08-26 (Unwanted page scrolls):** Client-side only. `scrollIntoView({ block:
 "start" | "center" })` moves the page even when the target is already fully visible, so
 `/book.html`'s step advances and both work-order pages' tap-to-jump handlers lurched on
