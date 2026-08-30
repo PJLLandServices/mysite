@@ -261,27 +261,53 @@
     if (current.routeMapsAvailable && day.counts.total > 0) {
       const figure = document.createElement("figure");
       figure.className = "sp-map-figure";
-      const img = document.createElement("img");
-      img.className = "sp-map-img";
-      img.loading = "lazy";              // eleven days, only what is on screen
-      img.decoding = "async";
-      img.alt = `Route map for ${day.label || day.date}: `
-        + (day.timeline || []).map((t) => `${t.stopNumber} ${t.address.split(",")[0]}`).join(", ");
-      img.src = `/api/season-plans/${seasonSelect.value}/${yearSelect.value}`
-        + `/route-map/${day.date}`;
-      img.addEventListener("error", () => {
-        figure.innerHTML = "";
-        const note = document.createElement("figcaption");
-        note.className = "sp-map-fail";
-        note.textContent = "Route map unavailable for this day.";
-        figure.appendChild(note);
-      });
-      figure.appendChild(img);
       const caption = document.createElement("figcaption");
       caption.className = "sp-map-caption";
-      caption.textContent = "H is the yard. Numbers are stops in driving order.";
+      caption.textContent = "Loading route map…";
       figure.appendChild(caption);
       card.appendChild(figure);
+
+      // FETCHED, NOT src=. An <img> that fails gives you onerror and
+      // nothing else — which is exactly how "Route map unavailable for
+      // this day" ended up being the only thing anyone could see. Fetching
+      // lets the server's explanation reach the screen.
+      (async () => {
+        const url = `/api/season-plans/${seasonSelect.value}/${yearSelect.value}`
+          + `/route-map/${day.date}`;
+        try {
+          const response = await fetch(url, { cache: "no-store" });
+          if (!response.ok) {
+            let message = `Route map unavailable (HTTP ${response.status}).`;
+            let detail = "";
+            try {
+              const body = await response.json();
+              message = (body.errors || [message]).join(" ");
+              detail = body.detail || "";
+            } catch { /* non-JSON body */ }
+            caption.className = "sp-map-fail";
+            caption.textContent = detail ? `${message} ${detail}` : message;
+            return;
+          }
+          const blob = await response.blob();
+          const img = document.createElement("img");
+          img.className = "sp-map-img";
+          img.decoding = "async";
+          img.alt = `Route map for ${day.label || day.date}: `
+            + (day.timeline || []).map((t) => `${t.stopNumber} ${t.address.split(",")[0]}`).join(", ");
+          img.src = URL.createObjectURL(blob);
+          img.addEventListener("load", () => URL.revokeObjectURL(img.src), { once: true });
+          figure.insertBefore(img, caption);
+          const roads = response.headers.get("X-Route-Roads-Error");
+          caption.className = roads ? "sp-map-fail" : "sp-map-caption";
+          caption.textContent = roads
+            ? "H is the yard, numbers are stops in driving order — but the lines are straight "
+              + `hops, not roads: ${decodeURIComponent(roads)}`
+            : "H is the yard. Numbers are stops in driving order.";
+        } catch (error) {
+          caption.className = "sp-map-fail";
+          caption.textContent = `Route map unavailable — ${error.message}`;
+        }
+      })();
     }
 
     const buckets = document.createElement("div");
