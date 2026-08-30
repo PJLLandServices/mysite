@@ -19,6 +19,33 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-30 (Season-plan day maps move to Leaflet):** the plan screen's day maps were flat
+Google Static Maps images stretched to the full card width, so one day filled the window and
+eleven were unreadable; and all eleven fired their map request in the same tick, which is two
+Google calls each — twenty-two at once — so the ones that lost the rate-limit race came back
+refused and the page finished half-drawn. Replaced with **Leaflet on CARTO Positron tiles**
+(no key, no per-load charge, free to 5M tiles/month with attribution), in the Layout A shape:
+the map is the card body at a **fixed 400px** that never grows with the window, and the stops
+float over it in a scrollable panel. Maps are built by `IntersectionObserver` when the card
+scrolls into view, one day at a time, so the burst cannot happen. Our own numbered pins also
+retire a real limit — Google's static markers take a SINGLE character, so on a nine-stop day
+the later stops silently lost their number.
+**The road line comes from OSRM (`server/lib/route-geometry.js`), and the LINE ONLY — never
+the minutes.** Every time on this screen comes from Google Distance Matrix and is what the
+customer was told; a second router printing its own drive times beside them would put two
+different figures for the same leg on one screen with no way to tell which one the booking page
+believed. Cached on the ordered stops exactly as `route-map.js` is, so a re-sequence refetches
+and a refresh is free. Fails soft to straight hops that are **labelled** as straight hops with
+the router's own error text, because a silent straight line is a claim about a drive.
+`PJL_OSRM_URL` moves off the public demo box without a deploy. `scripts/test-route-geometry.mjs`,
+31 assertions, in `npm run build:check` — including the lng,lat flip (getting it backwards draws
+the day in the Indian Ocean) and that a reordered day misses the cache. One bug found by those
+tests and fixed: `Number(null)` is `0`, so a missing coordinate passed an `isFinite` check and
+would have routed the day through Null Island. **No PASS flow touched** — this is the admin
+screen only; FLOW-03 (`/book.html`) does not read these maps. The Static Maps endpoint and
+`server/lib/route-map.js` are left in place and still tested; nothing calls them now, and a
+printable PNG is the reason to keep them.
+
 **2026-08-30 (SEQ-04 finish-nearest-home, and SEQ-05 — the route anchor is a town centroid):**
 **SEQ-04.** On a tight cluster, total driving decides nothing: every order of R1's four
 south-Newmarket stops came out within **0.1 km** of every other, so "fewest kilometres" was choosing

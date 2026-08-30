@@ -52,6 +52,7 @@
   function stopRow(stop, date, bucket, arrival) {
     const li = document.createElement("li");
     li.className = `sp-stop${stop.resolved ? "" : " is-unresolved"}`;
+    li.dataset.code = stop.code;
 
     // Stop number and arrival estimate. Both admin-facing only — the
     // customer is told a bucket and never a minute, which is what makes
@@ -76,22 +77,28 @@
     }
     if (lead.childNodes.length) li.appendChild(lead);
 
+    // Street line first, the rest underneath. The panel is 360px wide, so a
+    // full "90 Oriole Drive, East Gwillimbury, ON, Canada" on one line wraps
+    // to three and a seven-stop day stops being scannable. One customer can
+    // hold many properties (Willowridge has 14), so the address still leads —
+    // it is the identifying fact, not the name.
     const main = document.createElement("div");
     main.className = "sp-stop-main";
-    const code = document.createElement("span");
-    code.className = "sp-stop-code";
-    code.textContent = stop.code;
-    main.appendChild(code);
+    const parts = String(stop.address || "").split(",").map((x) => x.trim()).filter(Boolean);
+    const street = document.createElement("span");
+    street.className = "sp-stop-who";
+    street.textContent = stop.resolved ? (parts[0] || "no address") : stop.problem;
+    street.title = stop.resolved ? stop.address : stop.problem;
+    main.appendChild(street);
 
-    const who = document.createElement("span");
-    who.className = "sp-stop-who";
-    // Address first, name second. One customer can hold many properties
-    // (Willowridge has 14) so the address is the identifying fact — the
-    // same reason the assignment message has to name the address.
-    who.textContent = stop.resolved
-      ? `${stop.address || "no address"}${stop.customerName ? ` — ${stop.customerName}` : ""}`
-      : stop.problem;
-    main.appendChild(who);
+    const sub = document.createElement("span");
+    sub.className = "sp-stop-sub";
+    // The property code goes in the tooltip, not the line: at this width it
+    // was being ellipsised away mid-name anyway, and the name is what tells
+    // you at a glance whose driveway this is.
+    sub.textContent = [parts[1], stop.customerName].filter(Boolean).join(" · ");
+    sub.title = [stop.code, stop.address].filter(Boolean).join(" — ");
+    main.appendChild(sub);
     li.appendChild(main);
 
     const meta = document.createElement("div");
@@ -255,67 +262,241 @@
     }
 
     // The route, drawn on the day itself. Not behind a button and not in
-    // another tab: the whole point is seeing eleven days' shape by
-    // scrolling the page. Rendered server-side as an image, so this costs
-    // one lazy <img> rather than a map widget per day.
-    if (current.routeMapsAvailable && day.counts.total > 0) {
-      const figure = document.createElement("figure");
-      figure.className = "sp-map-figure";
-      const caption = document.createElement("figcaption");
-      caption.className = "sp-map-caption";
-      caption.textContent = "Loading route map…";
-      figure.appendChild(caption);
-      card.appendChild(figure);
+    // another tab: the point is seeing eleven days' shape by scrolling.
+    //
+    // The map is the card and the stops float over it. It is a Leaflet map
+    // on CARTO tiles, so it pans and zooms, costs nothing per load, and
+    // carries OUR numbered pins — Google's static markers take a single
+    // character, which is why stops past nine used to lose their number.
+    const body = document.createElement("div");
+    body.className = "sp-daybody";
 
-      // FETCHED, NOT src=. An <img> that fails gives you onerror and
-      // nothing else — which is exactly how "Route map unavailable for
-      // this day" ended up being the only thing anyone could see. Fetching
-      // lets the server's explanation reach the screen.
-      (async () => {
-        const url = `/api/season-plans/${seasonSelect.value}/${yearSelect.value}`
-          + `/route-map/${day.date}`;
-        try {
-          const response = await fetch(url, { cache: "no-store" });
-          if (!response.ok) {
-            let message = `Route map unavailable (HTTP ${response.status}).`;
-            let detail = "";
-            try {
-              const body = await response.json();
-              message = (body.errors || [message]).join(" ");
-              detail = body.detail || "";
-            } catch { /* non-JSON body */ }
-            caption.className = "sp-map-fail";
-            caption.textContent = detail ? `${message} ${detail}` : message;
-            return;
-          }
-          const blob = await response.blob();
-          const img = document.createElement("img");
-          img.className = "sp-map-img";
-          img.decoding = "async";
-          img.alt = `Route map for ${day.label || day.date}: `
-            + (day.timeline || []).map((t) => `${t.stopNumber} ${t.address.split(",")[0]}`).join(", ");
-          img.src = URL.createObjectURL(blob);
-          img.addEventListener("load", () => URL.revokeObjectURL(img.src), { once: true });
-          figure.insertBefore(img, caption);
-          const roads = response.headers.get("X-Route-Roads-Error");
-          caption.className = roads ? "sp-map-fail" : "sp-map-caption";
-          caption.textContent = roads
-            ? "H is the yard, numbers are stops in driving order — but the lines are straight "
-              + `hops, not roads: ${decodeURIComponent(roads)}`
-            : "H is the yard. Numbers are stops in driving order.";
-        } catch (error) {
-          caption.className = "sp-map-fail";
-          caption.textContent = `Route map unavailable — ${error.message}`;
-        }
-      })();
+    const mapBox = document.createElement("div");
+    mapBox.className = "sp-map";
+    body.appendChild(mapBox);
+
+    const panel = document.createElement("div");
+    panel.className = "sp-stoppanel";
+
+    const panelHead = document.createElement("div");
+    panelHead.className = "sp-stoppanel-head";
+    const panelTitle = document.createElement("div");
+    const h4 = document.createElement("h4");
+    h4.textContent = `${day.counts.total} stop${day.counts.total === 1 ? "" : "s"}`;
+    panelTitle.appendChild(h4);
+    const when = document.createElement("p");
+    when.className = "sp-stoppanel-when";
+    const firstArrival = (day.timeline || [])[0];
+    when.textContent = firstArrival && day.homeAt
+      ? `${firstArrival.arriveAt} – ${day.homeAt}`
+      : "not sequenced";
+    panelTitle.appendChild(when);
+    panelHead.appendChild(panelTitle);
+
+    // Turn-by-turn handoff. The Maps URL API is free and needs no key, so
+    // the day goes to a phone without us building anything.
+    const openRoute = googleMapsLink(day);
+    if (openRoute) {
+      const link = document.createElement("a");
+      link.className = "sp-open-route";
+      link.href = openRoute;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = "Open route";
+      panelHead.appendChild(link);
+    }
+    panel.appendChild(panelHead);
+
+    const scroll = document.createElement("div");
+    scroll.className = "sp-stoppanel-scroll";
+    scroll.appendChild(bucketBlock(day, "morning"));
+    scroll.appendChild(bucketBlock(day, "afternoon"));
+    panel.appendChild(scroll);
+    body.appendChild(panel);
+    card.appendChild(body);
+
+    // BUILT ON SCROLL, NOT ON LOAD. Eleven days rendering at once fired
+    // eleven route requests in the same tick; the ones that lost that race
+    // came back refused and the page finished half-drawn. One day at a
+    // time, and only the days actually looked at.
+    whenVisible(mapBox, () => drawDayMap(mapBox, scroll, day));
+
+    return card;
+  }
+
+  // ---- Map ---------------------------------------------------------
+
+  const CARTO_TILES = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
+  const CARTO_ATTRIBUTION =
+    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, '
+    + '&copy; <a href="https://carto.com/attributions">CARTO</a>';
+
+  function whenVisible(el, run) {
+    if (typeof IntersectionObserver !== "function") { run(); return; }
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        observer.disconnect();
+        run();
+      }
+    }, { rootMargin: "200px" });
+    observer.observe(el);
+  }
+
+  // Stops in driving order that we can actually put a pin on. A stop with
+  // no coordinates still belongs in the list — it is a real job — but it
+  // cannot be drawn, and pretending otherwise would move the route.
+  function mappableStops(day) {
+    const byCode = new Map();
+    for (const bucket of ["morning", "afternoon"]) {
+      for (const stop of day[bucket] || []) byCode.set(stop.code, { stop, bucket });
+    }
+    return (day.timeline || []).map((t) => {
+      const found = byCode.get(t.propertyCode);
+      if (!found || !found.stop.coords || found.stop.coords.lat == null) return null;
+      return {
+        code: t.propertyCode,
+        number: t.stopNumber,
+        bucket: found.bucket,
+        arriveAt: t.arriveAt,
+        address: found.stop.address || t.address || "",
+        customerName: found.stop.customerName || "",
+        coords: found.stop.coords
+      };
+    }).filter(Boolean);
+  }
+
+  function googleMapsLink(day) {
+    const stops = mappableStops(day);
+    if (!stops.length) return null;
+    const origin = current && current.routeOrigin;
+    if (!origin || origin.lat == null) return null;
+    const at = (c) => `${c.lat},${c.lng}`;
+    const url = new URL("https://www.google.com/maps/dir/");
+    url.searchParams.set("api", "1");
+    url.searchParams.set("origin", at(origin));
+    url.searchParams.set("destination", at(origin));
+    // The Maps URL API takes at most nine waypoints. Our longest day is
+    // nine stops, so this is at the limit rather than past it — but a
+    // silently truncated route would be worse than a short one, so the
+    // note says when it has been cut.
+    url.searchParams.set("waypoints", stops.slice(0, 9).map((s) => at(s.coords)).join("|"));
+    url.searchParams.set("travelmode", "driving");
+    return url.toString();
+  }
+
+  function pinIcon(stop) {
+    return L.divIcon({
+      className: "",
+      html: `<span class="sp-pin is-${stop.bucket === "morning" ? "am" : "pm"}">${stop.number}</span>`,
+      iconSize: [26, 26],
+      iconAnchor: [13, 13]
+    });
+  }
+
+  function drawDayMap(mapBox, listRoot, day) {
+    if (typeof L === "undefined") {
+      note(mapBox, "Map library did not load — check the connection and refresh.", true);
+      return;
+    }
+    const stops = mappableStops(day);
+    if (!stops.length) { note(mapBox, "No stop on this day has coordinates to draw.", true); return; }
+
+    const map = L.map(mapBox, { scrollWheelZoom: false, zoomControl: true });
+    L.tileLayer(CARTO_TILES, { attribution: CARTO_ATTRIBUTION, subdomains: "abcd", maxZoom: 19 })
+      .addTo(map);
+
+    const origin = current && current.routeOrigin;
+    const points = [];
+    if (origin && origin.lat != null) {
+      L.marker([origin.lat, origin.lng], {
+        icon: L.divIcon({ className: "", html: '<span class="sp-yard">Y</span>', iconSize: [22, 22], iconAnchor: [11, 11] }),
+        title: `Yard — ${origin.formattedAddress || origin.address || ""}`
+      }).addTo(map);
+      points.push([origin.lat, origin.lng]);
     }
 
-    const buckets = document.createElement("div");
-    buckets.className = "sp-buckets";
-    buckets.appendChild(bucketBlock(day, "morning"));
-    buckets.appendChild(bucketBlock(day, "afternoon"));
-    card.appendChild(buckets);
-    return card;
+    const markers = new Map();
+    for (const stop of stops) {
+      const marker = L.marker([stop.coords.lat, stop.coords.lng], {
+        icon: pinIcon(stop),
+        title: `Stop ${stop.number} · ${stop.arriveAt || ""} · ${stop.address}`
+      }).addTo(map);
+      marker.bindPopup(
+        `<strong>Stop ${stop.number}${stop.arriveAt ? ` · ${stop.arriveAt}` : ""}</strong><br>`
+        + `${escapeHtml(stop.address)}${stop.customerName ? `<br>${escapeHtml(stop.customerName)}` : ""}`
+      );
+      markers.set(stop.code, marker);
+      points.push([stop.coords.lat, stop.coords.lng]);
+    }
+    map.fitBounds(L.latLngBounds(points), { padding: [46, 46] });
+
+    linkRowsToPins(listRoot, markers);
+    drawRoadLine(map, day, mapBox);
+  }
+
+  // Hovering a row lights its pin and the other way round. Without it the
+  // panel and the map are two lists that happen to share a card.
+  function linkRowsToPins(listRoot, markers) {
+    listRoot.querySelectorAll(".sp-stop").forEach((row) => {
+      const marker = markers.get(row.dataset.code);
+      if (!marker) return;
+      const el = () => marker.getElement() && marker.getElement().querySelector(".sp-pin");
+      const set = (on) => {
+        row.classList.toggle("is-hot", on);
+        const pin = el();
+        if (pin) pin.classList.toggle("is-hot", on);
+      };
+      row.addEventListener("mouseenter", () => set(true));
+      row.addEventListener("mouseleave", () => set(false));
+      row.addEventListener("click", () => { marker.openPopup(); });
+      marker.on("mouseover", () => set(true));
+      marker.on("mouseout", () => set(false));
+    });
+  }
+
+  async function drawRoadLine(map, day, mapBox) {
+    const url = `/api/season-plans/${seasonSelect.value}/${yearSelect.value}/route-line/${day.date}`;
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok || !data.ok || !Array.isArray(data.coords) || data.coords.length < 2) {
+        note(mapBox, (data.errors || ["Could not draw the drive for this day."]).join(" "), true);
+        return;
+      }
+      const straight = data.source !== "osrm";
+      L.polyline(data.coords, {
+        color: straight ? "#7A7A72" : "#1B4D2E",
+        weight: straight ? 2 : 4,
+        opacity: straight ? 0.7 : 0.8,
+        dashArray: straight ? "6 6" : null,
+        lineJoin: "round"
+      }).addTo(map);
+      // A straight line between stops is not a drive, and a map that shows
+      // one without saying so is making a claim it cannot support.
+      note(mapBox, straight
+        ? `Straight hops, not roads: ${data.error || "the router did not answer."}`
+        : "Y is the yard. Numbers are stops in driving order.", straight);
+    } catch (error) {
+      note(mapBox, `Could not draw the drive — ${error.message}`, true);
+    }
+  }
+
+  function note(mapBox, text, bad) {
+    let el = mapBox.parentElement.querySelector(".sp-map-note");
+    if (!el) {
+      el = document.createElement("p");
+      el.className = "sp-map-note";
+      mapBox.parentElement.appendChild(el);
+    }
+    el.className = bad ? "sp-map-note is-bad" : "sp-map-note";
+    el.textContent = text;
+  }
+
+  function escapeHtml(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
   }
 
   function render(plan) {
