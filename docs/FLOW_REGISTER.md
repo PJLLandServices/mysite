@@ -23,8 +23,13 @@ property record's `commPrefs`.
 Google Static Maps images stretched to the full card width, so one day filled the window and
 eleven were unreadable; and all eleven fired their map request in the same tick, which is two
 Google calls each — twenty-two at once — so the ones that lost the rate-limit race came back
-refused and the page finished half-drawn. Replaced with **Leaflet on CARTO Positron tiles**
-(no key, no per-load charge, free to 5M tiles/month with attribution), in the Layout A shape:
+refused and the page finished half-drawn. Replaced with **Leaflet on OpenStreetMap tiles**
+(no key, no per-load charge), desaturated in CSS on the tile pane only so the route line stays
+the one strong colour. **CARTO Positron was shipped first and had to be pulled the same day:**
+CARTO now requires an API key for raster basemaps and watermarks unauthenticated tiles with
+"API KEY REQUIRED" across the whole map — and is retiring raster basemaps outright, so getting a
+key would have bought a service already on its way out. Recorded because the pre-build research
+said no key was needed and the deployed map said otherwise; the map was right. In the Layout A shape:
 the map is the card body at a **fixed 400px** that never grows with the window, and the stops
 float over it in a scrollable panel. Maps are built by `IntersectionObserver` when the card
 scrolls into view, one day at a time, so the burst cannot happen. Our own numbered pins also
