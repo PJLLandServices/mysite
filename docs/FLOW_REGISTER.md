@@ -95,8 +95,44 @@ apply-without-confirm 422, dry run writing nothing, a **paid** invoice re-pointe
 its issued address, the merge attributed to the admin's name, and both the success and the
 tech's refusal appearing in the action log.
 
-**Still outstanding:** the merge has not been run on the live records yet. When it is, this
-entry wants the real plan output recorded against it.
+**WALKED LIVE 2026-08-30T00:38:01Z — the merge ran on production.** Dry run first, read, then
+applied with `confirm: "MERGE"`. Kept **P-2026-0056**, deleted **P-2026-0040**.
+
+**The dry run found a reference nobody knew about.** Reconnaissance over the HTTP API had
+counted three links to P-2026-0040; the tool found **four**, the extra being **Q-2026-0009**, an
+*accepted* `on_site_quote`. The API scan had missed it because `GET /api/quotes` returns LEADS,
+not quotes — so the manual check was reading the wrong payload, while the tool walks the data
+directory itself. Under a plain `DELETE /api/properties/:id` that accepted quote would have been
+silently orphaned. This is the case the tool exists for, and it did not come from a test fixture.
+
+Applied result, verified by independent re-read rather than from the response body:
+
+- 4 references re-pointed: `BK-2026-0010`, `I-2026-0008` (paid, $339), lead `d7ef10bb…`,
+  `Q-2026-0009` (accepted).
+- Properties 84 → 83. `GET` on the deleted id now 404s.
+- **Both invoices now hang off one property, each keeping the address it was ISSUED with** —
+  I-2026-0008 correct, I-2026-0034 still reading "21 Phil Country Drive, Stouffville, ON". That
+  typo is the original cause and it stays on the issued document, which is the correct outcome.
+- Zones: the conflict fired as designed — keeper 6, duplicate 3, keeper's kept. **Seasonal price
+  on the survivor resolves to $105 (`spring_open_6z`)**, not the $90 the 3-zone record produced.
+  That is the $30/year of silent underbilling avoided by reversing the direction.
+- `serviceRecords` 1 → 2, `leadIds` carried over.
+- History on the survivor: `property_merged … by Claude Admin` — CRM-21 attribution working on a
+  real record — plus the `mergedFrom` provenance block.
+- Backup written to `/opt/render/project/src/server/data/_merge-backups/2026-08-30T00-38-01-204Z`
+  (properties, bookings, invoices, leads, quotes). That is the undo.
+
+**One deliberate follow-up.** P-2026-0040's zone 5 carried a real finding — *"Inspect for non
+operational sprinkler head"* — on a stub zone that lost the conflict. Patrick chose to preserve
+it, so it was re-added to the survivor's zone 5 by PATCH immediately after the merge, tagged with
+where it came from. The lesson generalises: **when the zone conflict fires, the losing list can
+still hold findings**, and the tool's "NEEDS A LOOK AFTERWARDS" line is the prompt to go read it
+before the backup is the only copy.
+
+**FLOW-30-style caveat retired for CRM-20:** this walk is also the action log's first production
+exercise. `GET /api/admin/action-log` returned the whole sequence with real names — the 404 before
+deploy, the 422 probe, the dry run, the apply, the follow-up PATCH, all as `Claude Admin`, and
+`Patrick Lalande | POST 201 | /api/users` creating that account beforehand.
 
 **2026-08-29 (CRM-21 — the record history now names the operator):** The other half of CRM-20,
 and the gap that entry left open. Seventeen write paths in `server.js` stamped a hardcoded
@@ -206,10 +242,12 @@ real admin uid (not a hardcoded string) with a non-blank IP and no customer name
 address in the line; a GET adding nothing; a tech's refused fee-waiver logged as 403 against
 the tech's own uid; and the read route 401 anonymous / 403 tech / 200 admin.
 
-**What still needs Patrick — not yet walked in production:** nothing here is customer-facing
-and nothing writes to a business record, so the risk is low, but the ledger has only ever run
-against a dev checkout. First deploy should be followed by opening
-`/api/admin/action-log?limit=20` and confirming real activity appears with real names.
+**WALKED IN PRODUCTION 2026-08-30** (during the CRM-22 merge, see that entry).
+`GET /api/admin/action-log?limit=15` returned the real sequence with real names: the property
+merge dry run, the apply, the follow-up PATCH and two refused/early attempts, all attributed to
+`Claude Admin`, plus `Patrick Lalande | POST 201 | /api/users` creating that account beforehand.
+Reads did not appear, `ref` resolved the property id on every row, and no customer name, email or
+address appeared in any line. Nothing further outstanding on this entry.
 
 **The other half is still missing.** This says WHO made a request. It does not fix the 17
 hardcoded `by: "admin"` stamps inside the record histories — that means threading the acting
