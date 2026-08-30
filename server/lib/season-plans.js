@@ -151,6 +151,11 @@ function validate(input) {
       afternoon: []
     };
     if (typeof src.territory === "string" && src.territory) day.territory = src.territory.slice(0, 120);
+    // Hand-ordered days keep their order. validate() rebuilds each day from
+    // scratch, so anything not copied here is silently dropped on the next
+    // save — and a manual order that survives one save and vanishes on the
+    // next is worse than one that never worked.
+    if (src.manualOrder === true) day.manualOrder = true;
     if (typeof src.frost === "string" && src.frost) day.frost = src.frost.slice(0, 40);
 
     for (const bucket of BUCKETS) {
@@ -264,6 +269,149 @@ async function moveStop(season, year, { propertyCode, toDate, toBucket }, { acto
   return { plan: revalidated, warnings, moved: { propertyCode: code, from, to: { date: toDate, bucket: toBucket } } };
 }
 
+// Move one stop up or down inside its own bucket.
+//
+// The optimiser is very good at the thing it can see — driving minutes —
+// and blind to everything it cannot: who is not home before ten, which gate
+// is locked until nine, which north-facing slope is better done before the
+// frost comes off. This is how that knowledge gets in.
+//
+// A HAND-ORDERED DAY STOPS BEING OPTIMISED. `manualOrder` is set on the day
+// and the sequencer then walks the stored order rather than searching for a
+// better one. That is the honest behaviour: an order Patrick set, which the
+// next re-sequence silently reverted, would be worse than no feature.
+//
+// AND IT CHANGES WHO CAN BOOK THAT DAY. geo-filter.js builds the day's
+// shape from the stops IN STORED ORDER, and the booking page's added-drive
+// test measures the gaps between consecutive stops. Reordering moves those
+// gaps, so an address that was a cheap insert may stop being one. That is
+// not a bug — the filter is measuring the route that will actually be
+// driven — but it is a consequence, and the screen says so.
+async function reorderStop(season, year, { date, bucket, propertyCode, direction }, { actor = "admin" } = {}) {
+  const key = planKey(season, year);
+  const code = String(propertyCode || "").trim();
+  if (!isRealDate(String(date || ""))) throw new Error(`Not a calendar date: "${date}".`);
+  if (!BUCKETS.includes(bucket)) throw new Error(`Bucket must be one of: ${BUCKETS.join(", ")}.`);
+  if (direction !== "up" && direction !== "down") throw new Error('Direction must be "up" or "down".');
+  if (!code) throw new Error("propertyCode is required.");
+
+  const all = await read();
+  const plan = all[key];
+  if (!plan) throw new Error(`No ${key} plan to edit.`);
+  const day = plan.days[date];
+  if (!day) throw new Error(`${date} is not a route day in this plan.`);
+
+  const list = day[bucket] || [];
+  const from = list.indexOf(code);
+  if (from < 0) throw new Error(`${code} is not in the ${bucket} of ${date}.`);
+  const to = direction === "up" ? from - 1 : from + 1;
+  if (to < 0 || to >= list.length) {
+    throw new Error(`${code} is already ${direction === "up" ? "first" : "last"} in the ${bucket}.`);
+  }
+
+  list.splice(from, 1);
+  list.splice(to, 0, code);
+  day.manualOrder = true;
+
+  const { plan: revalidated, warnings } = validate(plan);
+  revalidated.updatedAt = new Date().toISOString();
+  revalidated.updatedBy = String(actor || "admin").slice(0, 80);
+  all[key] = revalidated;
+  await writeAll(all);
+  return { plan: revalidated, warnings, reordered: { date, bucket, propertyCode: code, from, to } };
+}
+
+// Hand the day back to the optimiser. The order it currently holds is kept
+// until the next re-sequence recomputes it, so nothing jumps on the click.
+async function clearManualOrder(season, year, { date }, { actor = "admin" } = {}) {
+  const key = planKey(season, year);
+  if (!isRealDate(String(date || ""))) throw new Error(`Not a calendar date: "${date}".`);
+  const all = await read();
+  const plan = all[key];
+  if (!plan) throw new Error(`No ${key} plan to edit.`);
+  const day = plan.days[date];
+  if (!day) throw new Error(`${date} is not a route day in this plan.`);
+  if (!day.manualOrder) throw new Error(`${day.label || date} is already optimised automatically.`);
+
+  delete day.manualOrder;
+  const { plan: revalidated, warnings } = validate(plan);
+  revalidated.updatedAt = new Date().toISOString();
+  revalidated.updatedBy = String(actor || "admin").slice(0, 80);
+  all[key] = revalidated;
+  await writeAll(all);
+  return { plan: revalidated, warnings };
+}
+
+// Re-date one route day, leaving every other day where it is.
+//
+// The case this exists for: the weather stays too warm to close systems
+// down, so a day cannot run and has to slide. Only that day moves — the
+// rest of the season keeps its dates, because a warm Monday does not
+// necessarily mean a warm Friday.
+//
+// THE LABEL TRAVELS WITH THE DAY, NOT WITH THE DATE. R1 is the name of a
+// set of properties in a territory, and Patrick talks about days that way
+// ("R5 is the long-haul west"). Renumbering on a move would make
+// yesterday's sentence about R5 refer to somewhere else, so the label
+// stays put and the screen sorts by date.
+//
+// A DAY WITH REAL BOOKINGS ON IT IS REFUSED. Today no booking can exist
+// against a planned day — the assignment writer does not exist yet, so no
+// customer has ever been told a date. The moment it does, moving a day is
+// a promise broken and a batch of emails, and the check has to already be
+// here rather than be remembered afterwards. The caller supplies the
+// count; this module does not read bookings.
+async function moveDay(season, year, { fromDate, toDate, bookedCount = 0 }, { actor = "admin" } = {}) {
+  const key = planKey(season, year);
+  const from = String(fromDate || "").trim();
+  const to = String(toDate || "").trim();
+  if (!isRealDate(from)) throw new Error(`Not a calendar date: "${fromDate}".`);
+  if (!isRealDate(to)) throw new Error(`Not a calendar date: "${toDate}".`);
+  if (from === to) throw new Error("That day is already on that date.");
+
+  const all = await read();
+  const plan = all[key];
+  if (!plan) throw new Error(`No ${key} plan to edit.`);
+  const day = plan.days[from];
+  if (!day) throw new Error(`${from} is not a route day in this plan.`);
+
+  if (plan.days[to]) {
+    const other = plan.days[to].label || to;
+    throw new Error(`${to} already holds ${other}. Move that day first, or pick a free date.`);
+  }
+
+  const booked = Number(bookedCount) || 0;
+  if (booked > 0) {
+    throw new Error(
+      `${day.label || from} has ${booked} real booking${booked === 1 ? "" : "s"} on it. `
+      + "Moving the day would break a date a customer was already given — reschedule those bookings first."
+    );
+  }
+
+  delete plan.days[from];
+  plan.days[to] = day;
+
+  const { plan: revalidated, warnings } = validate(plan);
+  revalidated.updatedAt = new Date().toISOString();
+  revalidated.updatedBy = String(actor || "admin").slice(0, 80);
+  all[key] = revalidated;
+  await writeAll(all);
+  return {
+    plan: revalidated,
+    warnings,
+    moved: { label: day.label || null, from, to, weekend: isWeekend(to) }
+  };
+}
+
+// Saturdays and Sundays are not blocked — Patrick may choose one — but the
+// screen says so, because landing on a weekend by arithmetic accident is
+// different from landing on one on purpose.
+function isWeekend(dateKey) {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const dow = new Date(y, m - 1, d).getDay();
+  return dow === 0 || dow === 6;
+}
+
 // Flat "which property codes are planned on which date" view, which is
 // all the day-shape builder needs.
 function codesByDate(plan) {
@@ -276,6 +424,9 @@ function codesByDate(plan) {
 }
 
 module.exports = {
+  moveDay,
+  reorderStop,
+  clearManualOrder,
   FILE,
   BUCKETS,
   DEFAULT_BUCKET_CAP,

@@ -71,6 +71,45 @@
 }
 .sp-day-head h3 { margin: 0; font-size: 1.02rem; }
 .sp-day-territory { margin: 3px 0 0; font-size: 0.84rem; color: var(--pjl-text-muted); }
+
+/* Re-dating a day. Tucked under the title rather than in the stats row —
+   the stats are facts about the day, this is an action on it. */
+.sp-reschedule { margin-top: 4px; }
+.sp-manual { display: flex; align-items: center; gap: 8px; margin: 5px 0 0; }
+.sp-manual-clear {
+  font: inherit; font-size: 0.74rem; color: var(--pjl-text-mid);
+  background: none; border: 1px solid var(--pjl-border);
+  border-radius: 6px; padding: 2px 8px; cursor: pointer;
+}
+.sp-manual-clear:hover { border-color: var(--pjl-green); color: var(--pjl-green); }
+.sp-manual-clear:disabled { opacity: 0.5; cursor: default; }
+
+/* Up/down inside the bucket. Small, because the day's order is usually the
+   optimiser's job — these are for the cases only Patrick knows about. */
+.sp-nudge { display: inline-flex; gap: 2px; }
+.sp-nudge-btn {
+  font: inherit; font-size: 0.72rem; line-height: 1;
+  width: 20px; height: 20px; padding: 0; cursor: pointer;
+  border: 1px solid var(--pjl-border); border-radius: 5px;
+  background: #fff; color: var(--pjl-text-mid);
+}
+.sp-nudge-btn:hover { border-color: var(--pjl-green); color: var(--pjl-green); }
+.sp-nudge-btn:disabled { opacity: 0.4; cursor: default; }
+.sp-reschedule-open,
+.sp-reschedule-cancel {
+  font: inherit; font-size: 0.76rem; color: var(--pjl-text-mid);
+  background: none; border: 1px solid var(--pjl-border);
+  border-radius: 6px; padding: 2px 8px; cursor: pointer;
+}
+.sp-reschedule-open:hover,
+.sp-reschedule-cancel:hover { border-color: var(--pjl-green); color: var(--pjl-green); }
+.sp-reschedule-form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.sp-reschedule-form[hidden] { display: none; }
+.sp-reschedule-form input[type="date"] {
+  font: inherit; font-size: 0.8rem; padding: 3px 6px;
+  border: 1px solid var(--pjl-border); border-radius: 6px; background: #fff;
+}
+.sp-reschedule-go { font-size: 0.76rem; padding: 3px 10px; }
 .sp-day-stats { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
 .sp-bucket { padding: 8px 10px 10px; }
@@ -100,7 +139,7 @@
   font-size: 0.75rem; color: var(--pjl-text-muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.sp-stop-meta { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; justify-content: flex-end; max-width: 120px; }
+.sp-stop-meta { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; justify-content: flex-end; max-width: 132px; }
 
 .sp-tag {
   font-size: 0.72rem; padding: 2px 8px; border-radius: 999px;
@@ -157,6 +196,7 @@
   font-size: 0.9rem; max-width: 380px;
 }
 .sp-toast.is-bad { background: #A32020; }
+.sp-toast.is-warn { background: var(--pjl-amber); }
 .sp-toast[hidden] { display: none; }
 
 .sp-probe-note {

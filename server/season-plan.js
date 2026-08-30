@@ -120,10 +120,47 @@
         geo.textContent = "no coordinates";
         meta.appendChild(geo);
       }
+      meta.appendChild(nudgeControl(stop, date, bucket, arrival));
       meta.appendChild(moveControl(stop, date, bucket));
     }
     li.appendChild(meta);
     return li;
+  }
+
+  // Up/down inside the bucket. The first click hands the day to Patrick:
+  // from then on the optimiser leaves it alone, because an order he set
+  // that the next re-sequence quietly reverted would be worse than nothing.
+  function nudgeControl(stop, date, bucket, arrival) {
+    const wrap = document.createElement("span");
+    wrap.className = "sp-nudge";
+    for (const direction of ["up", "down"]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "sp-nudge-btn";
+      button.textContent = direction === "up" ? "↑" : "↓";
+      button.title = `Move ${stop.code} ${direction === "up" ? "earlier" : "later"} in the ${bucket}`;
+      button.setAttribute("aria-label", button.title);
+      button.addEventListener("click", async () => {
+        wrap.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+        try {
+          const response = await fetch(`${base()}/stop-order`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ date, bucket, propertyCode: stop.code, direction })
+          });
+          const data = await response.json();
+          if (!response.ok || !data.ok) throw new Error((data.errors || ["Reorder failed."]).join(" "));
+          render(data.plan);
+          showToast(`${stop.code} moved ${direction === "up" ? "earlier" : "later"}.`);
+        } catch (error) {
+          showToast(error.message, "bad");
+          wrap.querySelectorAll("button").forEach((b) => { b.disabled = false; });
+        }
+      });
+      wrap.appendChild(button);
+    }
+    void arrival;
+    return wrap;
   }
 
   function moveControl(stop, fromDate, fromBucket) {
@@ -203,7 +240,12 @@
     const head = document.createElement("header");
     head.className = "sp-day-head";
     const title = document.createElement("div");
-    title.innerHTML = `<h3>${day.label || "—"} · ${day.weekday}</h3>`;
+    // The DATE, not just the weekday. It was missing, which was survivable
+    // when a day could not move and is not now: you cannot reschedule a day
+    // you cannot see the date of.
+    title.innerHTML = `<h3>${day.label || "—"} · ${day.weekday}, ${prettyDate(day.date)}</h3>`;
+    title.appendChild(rescheduleControl(day));
+    if (day.manualOrder) title.appendChild(manualOrderNotice(day));
     if (day.territory) {
       const t = document.createElement("p");
       t.className = "sp-day-territory";
@@ -320,6 +362,113 @@
     whenVisible(mapBox, () => drawDayMap(mapBox, scroll, day));
 
     return card;
+  }
+
+  // A hand-ordered day has to LOOK hand-ordered. Silently unoptimised is
+  // how a day nobody remembers touching ends up driving badly all season.
+  function manualOrderNotice(day) {
+    const wrap = document.createElement("p");
+    wrap.className = "sp-manual";
+    const tag = document.createElement("span");
+    tag.className = "sp-tag is-warn";
+    tag.textContent = "ordered by hand";
+    wrap.appendChild(tag);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "sp-manual-clear";
+    button.textContent = "Back to automatic";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        const response = await fetch(`${base()}/auto-order`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ date: day.date })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error((data.errors || ["Failed."]).join(" "));
+        render(data.plan);
+        showToast(`${day.label || day.date} re-optimised.`);
+      } catch (error) {
+        showToast(error.message, "bad");
+        button.disabled = false;
+      }
+    });
+    wrap.appendChild(button);
+    return wrap;
+  }
+
+  function prettyDate(date) {
+    const [y, m, d] = String(date || "").split("-").map(Number);
+    if (!y || !m || !d) return date || "—";
+    return new Date(y, m - 1, d).toLocaleDateString("en-CA", { month: "short", day: "numeric" });
+  }
+
+  // Re-dating a day. Only this day moves — the rest of the season keeps its
+  // dates, because a warm Monday does not mean a warm Friday.
+  function rescheduleControl(day) {
+    const wrap = document.createElement("div");
+    wrap.className = "sp-reschedule";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "sp-reschedule-open";
+    button.textContent = "Reschedule";
+
+    const form = document.createElement("form");
+    form.className = "sp-reschedule-form";
+    form.hidden = true;
+    const input = document.createElement("input");
+    input.type = "date";
+    input.value = day.date;
+    input.required = true;
+    const go = document.createElement("button");
+    go.type = "submit";
+    go.className = "pjl-btn pjl-btn-primary sp-reschedule-go";
+    go.textContent = "Move";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "sp-reschedule-cancel";
+    cancel.textContent = "Cancel";
+    form.appendChild(input); form.appendChild(go); form.appendChild(cancel);
+
+    button.addEventListener("click", () => {
+      form.hidden = false; button.hidden = true; input.focus();
+    });
+    cancel.addEventListener("click", () => {
+      form.hidden = true; button.hidden = false; input.value = day.date;
+    });
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const toDate = input.value;
+      if (!toDate || toDate === day.date) { cancel.click(); return; }
+      go.disabled = true;
+      try {
+        const response = await fetch(`${base()}/day`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fromDate: day.date, toDate })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error((data.errors || ["Move failed."]).join(" "));
+        render(data.plan);
+        const moved = data.moved || {};
+        // Saturdays and Sundays are allowed but said out loud, because
+        // landing on one by accident reads exactly like landing on one on
+        // purpose until somebody drives out on a Sunday.
+        showToast(`${moved.label || "Day"} moved to ${prettyDate(toDate)}.`
+          + (moved.weekend ? " That is a weekend." : ""), moved.weekend ? "warn" : "ok");
+      } catch (error) {
+        showToast(error.message, "bad");
+        go.disabled = false;
+      }
+    });
+
+    wrap.appendChild(button);
+    wrap.appendChild(form);
+    return wrap;
   }
 
   // ---- Map ---------------------------------------------------------

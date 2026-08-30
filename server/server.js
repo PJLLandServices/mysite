@@ -21514,6 +21514,92 @@ Customer signature captured at ${new Date().toISOString()}.`;
     }
   }
 
+  // Hand ordering inside a bucket. Deliberately does NOT re-sequence for
+  // storage afterwards: re-running the optimiser over an order Patrick just
+  // set by hand is exactly the thing this feature exists to stop.
+  const seasonPlanOrderMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/stop-order$/);
+  if (seasonPlanOrderMatch && req.method === "PATCH") {
+    try {
+      const session = await requireUser(req);
+      const body = await parseRequestBody(req);
+      const result = await seasonPlans.reorderStop(
+        seasonPlanOrderMatch[1], Number(seasonPlanOrderMatch[2]),
+        {
+          date: normalizeString(body.date, 10),
+          bucket: normalizeString(body.bucket, 10),
+          propertyCode: normalizeString(body.propertyCode, 40),
+          direction: normalizeString(body.direction, 4)
+        },
+        { actor: session?.email || session?.name || "admin" }
+      );
+      const plan = await resolveSeasonPlan(
+        seasonPlanOrderMatch[1], Number(seasonPlanOrderMatch[2]));
+      return sendJson(res, 200, { ok: true, plan, warnings: result.warnings, reordered: result.reordered });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't reorder that stop."] });
+    }
+  }
+
+  // Hand the day back to the optimiser.
+  const seasonPlanAutoMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/auto-order$/);
+  if (seasonPlanAutoMatch && req.method === "PATCH") {
+    try {
+      const session = await requireUser(req);
+      const season = seasonPlanAutoMatch[1];
+      const year = Number(seasonPlanAutoMatch[2]);
+      const body = await parseRequestBody(req);
+      const actor = session?.email || session?.name || "admin";
+      await seasonPlans.clearManualOrder(season, year,
+        { date: normalizeString(body.date, 10) }, { actor });
+      // Now that the day is optimisable again, actually optimise it —
+      // otherwise "back to automatic" would leave the hand-set order in
+      // place and look like it had done nothing.
+      const stored = await seasonPlans.getPlan(season, year);
+      if (stored) {
+        await seasonPlans.savePlan(season, year,
+          await resequencePlanForStorage(stored, season), { actor });
+      }
+      const plan = await resolveSeasonPlan(season, year);
+      return sendJson(res, 200, { ok: true, plan });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't re-optimise that day."] });
+    }
+  }
+
+  // Re-date one route day. The weather stays warm, the day cannot run, it
+  // slides — and only it slides.
+  const seasonPlanDayMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/day$/);
+  if (seasonPlanDayMatch && req.method === "PATCH") {
+    try {
+      const session = await requireUser(req);
+      const season = seasonPlanDayMatch[1];
+      const year = Number(seasonPlanDayMatch[2]);
+      const body = await parseRequestBody(req);
+      const fromDate = normalizeString(body.fromDate, 10);
+      const toDate = normalizeString(body.toDate, 10);
+
+      // Count REAL bookings sitting on the day being moved. A planned stop
+      // is not a booking and must not block anything; a booking is a date a
+      // customer was actually given. The store refuses the move if any
+      // exist, so the count is gathered here where bookings are readable.
+      const booked = (await activeBookings()).filter(
+        (b) => String(b.start || "").slice(0, 10) === fromDate
+      ).length;
+
+      const result = await seasonPlans.moveDay(
+        season, year,
+        { fromDate, toDate, bookedCount: booked },
+        { actor: session?.email || session?.name || "admin" }
+      );
+      const plan = await resolveSeasonPlan(season, year);
+      return sendJson(res, 200, {
+        ok: true, plan, warnings: result.warnings, moved: result.moved
+      });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't move that day."] });
+    }
+  }
+
   const seasonPlanMoveMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/move$/);
   if (seasonPlanMoveMatch && req.method === "PATCH") {
     try {
