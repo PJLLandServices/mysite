@@ -347,8 +347,12 @@
         window[callback] = () => { delete window[callback]; resolve(); };
         const script = document.createElement("script");
         script.async = true;
+        // `places` is for the probe's address autocomplete. Libraries cannot
+        // be added after the fact, and this is the only script load on the
+        // page, so it has to be asked for here.
         script.src = "https://maps.googleapis.com/maps/api/js"
-          + `?key=${encodeURIComponent(config.key)}&v=weekly&callback=${callback}`;
+          + `?key=${encodeURIComponent(config.key)}&libraries=places`
+          + `&v=weekly&callback=${callback}`;
         // A referrer-restricted key fails here and nowhere else, so the
         // message names that first — it is the likeliest cause by far.
         script.onerror = () => reject(new Error(
@@ -356,6 +360,16 @@
           + "restriction allows this domain, and that Maps JavaScript API is on its API list."));
         document.head.appendChild(script);
       });
+      // coverage-checker.js drives every other address box on the site.
+      // Reusing it means this field behaves identically to the ten others
+      // rather than becoming a second implementation to keep in step. It
+      // skips its full-checker half when that markup is absent, which it is
+      // here, and wires any input.js-address-autocomplete.
+      if (typeof window.initCoverageCheck === "function") {
+        try { window.initCoverageCheck(); } catch (err) {
+          console.warn("[season-plan] address autocomplete:", err && err.message);
+        }
+      }
     })();
     return mapsPromise;
   }
@@ -642,6 +656,14 @@
       render(null);
     }
   }
+
+  // The probe is above the day cards, so it would otherwise have no
+  // autocomplete until a map scrolled into view. mapsReady() is memoised —
+  // this is the same single script load, just started sooner. Loading the
+  // library is not a billable map load; only `new google.maps.Map` is.
+  mapsReady().catch((err) => {
+    console.warn("[season-plan] maps unavailable, probe autocomplete off:", err && err.message);
+  });
 
   // ---- Probe -------------------------------------------------------
 
