@@ -264,10 +264,8 @@
     // The route, drawn on the day itself. Not behind a button and not in
     // another tab: the point is seeing eleven days' shape by scrolling.
     //
-    // The map is the card and the stops float over it. It is a Leaflet map
-    // on OpenStreetMap tiles, so it pans and zooms, costs nothing per load,
-    // and carries OUR numbered pins — Google's static markers take a single
-    // character, which is why stops past nine used to lose their number.
+    // The map is the card and the stops float over it — a live Google map,
+    // so it pans and zooms and reads like the map everyone already knows.
     const body = document.createElement("div");
     body.className = "sp-daybody";
 
@@ -325,17 +323,42 @@
   }
 
   // ---- Map ---------------------------------------------------------
+  //
+  // Google Maps JavaScript API. The basemap, the labels and the road styling
+  // are Google's, which is the point — this screen is read at a glance and a
+  // desaturated substitute made it harder, not cleaner.
+  //
+  // The browser key comes from /api/maps-config rather than the HTML, and the
+  // ROAD LINE is fetched from our own server, already cached: that keeps the
+  // server key server-side and costs one Directions call per route change
+  // instead of one per page view.
 
-  // OpenStreetMap's own tiles. CARTO's Positron was the first choice and is
-  // the better-looking basemap, but CARTO now requires an API key for raster
-  // tiles and watermarks unauthenticated requests — and is retiring raster
-  // basemaps altogether, so a key would buy a service on its way out.
-  // OSM is keyless, canonical, and not going anywhere. It is also busier and
-  // greener than Positron, so the tiles are desaturated in CSS: the route
-  // line has to be the only strong colour on the map or it does not read.
-  const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
-  const TILE_ATTRIBUTION =
-    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+  let mapsPromise = null;
+  function mapsReady() {
+    if (mapsPromise) return mapsPromise;
+    mapsPromise = (async () => {
+      const response = await fetch("/api/maps-config", { cache: "no-store" });
+      const config = await response.json();
+      if (!config.ok || !config.available) {
+        throw new Error(config.reason || "No Maps browser key is configured.");
+      }
+      await new Promise((resolve, reject) => {
+        const callback = "__pjlMapsReady";
+        window[callback] = () => { delete window[callback]; resolve(); };
+        const script = document.createElement("script");
+        script.async = true;
+        script.src = "https://maps.googleapis.com/maps/api/js"
+          + `?key=${encodeURIComponent(config.key)}&v=weekly&callback=${callback}`;
+        // A referrer-restricted key fails here and nowhere else, so the
+        // message names that first — it is the likeliest cause by far.
+        script.onerror = () => reject(new Error(
+          "Google Maps did not load. Check the browser key's HTTP-referrer "
+          + "restriction allows this domain, and that Maps JavaScript API is on its API list."));
+        document.head.appendChild(script);
+      });
+    })();
+    return mapsPromise;
+  }
 
   function whenVisible(el, run) {
     if (typeof IntersectionObserver !== "function") { run(); return; }
@@ -349,9 +372,9 @@
     observer.observe(el);
   }
 
-  // Stops in driving order that we can actually put a pin on. A stop with
-  // no coordinates still belongs in the list — it is a real job — but it
-  // cannot be drawn, and pretending otherwise would move the route.
+  // Stops in driving order that we can actually put a pin on. A stop with no
+  // coordinates still belongs in the list — it is a real job — but it cannot
+  // be drawn, and pretending otherwise would move the route.
   function mappableStops(day) {
     const byCode = new Map();
     for (const bucket of ["morning", "afternoon"]) {
@@ -367,7 +390,7 @@
         arriveAt: t.arriveAt,
         address: found.stop.address || t.address || "",
         customerName: found.stop.customerName || "",
-        coords: found.stop.coords
+        coords: { lat: Number(found.stop.coords.lat), lng: Number(found.stop.coords.lng) }
       };
     }).filter(Boolean);
   }
@@ -382,59 +405,95 @@
     url.searchParams.set("api", "1");
     url.searchParams.set("origin", at(origin));
     url.searchParams.set("destination", at(origin));
-    // The Maps URL API takes at most nine waypoints. Our longest day is
-    // nine stops, so this is at the limit rather than past it — but a
-    // silently truncated route would be worse than a short one, so the
-    // note says when it has been cut.
+    // The Maps URL API takes at most nine waypoints. Our longest day is nine
+    // stops, so this sits at the limit rather than past it.
     url.searchParams.set("waypoints", stops.slice(0, 9).map((s) => at(s.coords)).join("|"));
     url.searchParams.set("travelmode", "driving");
     return url.toString();
   }
 
-  function pinIcon(stop) {
-    return L.divIcon({
-      className: "",
-      html: `<span class="sp-pin is-${stop.bucket === "morning" ? "am" : "pm"}">${stop.number}</span>`,
-      iconSize: [26, 26],
-      iconAnchor: [13, 13]
-    });
+  const AM_GREEN = "#1B4D2E";
+  const PM_GREEN = "#4A8C5C";
+  const HOT_AMBER = "#E07B24";
+
+  function pinIcon(stop, hot) {
+    return {
+      path: google.maps.SymbolPath.CIRCLE,
+      scale: hot ? 15 : 13,
+      fillColor: stop.bucket === "morning" ? AM_GREEN : PM_GREEN,
+      fillOpacity: 1,
+      strokeColor: hot ? HOT_AMBER : "#ffffff",
+      strokeWeight: hot ? 3 : 2
+    };
   }
 
-  function drawDayMap(mapBox, listRoot, day) {
-    if (typeof L === "undefined") {
-      note(mapBox, "Map library did not load — check the connection and refresh.", true);
-      return;
-    }
+  function yardIcon() {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26">'
+      + '<rect x="3" y="3" width="20" height="20" rx="5" fill="#0F1F14" stroke="#ffffff" stroke-width="2"/></svg>';
+    return {
+      url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
+      anchor: new google.maps.Point(13, 13),
+      labelOrigin: new google.maps.Point(13, 13)
+    };
+  }
+
+  async function drawDayMap(mapBox, listRoot, day) {
     const stops = mappableStops(day);
     if (!stops.length) { note(mapBox, "No stop on this day has coordinates to draw.", true); return; }
 
-    const map = L.map(mapBox, { scrollWheelZoom: false, zoomControl: true });
-    L.tileLayer(TILE_URL, { attribution: TILE_ATTRIBUTION, maxZoom: 19 }).addTo(map);
+    try {
+      await mapsReady();
+    } catch (error) {
+      note(mapBox, error.message, true);
+      return;
+    }
 
+    const map = new google.maps.Map(mapBox, {
+      mapTypeControl: false,
+      streetViewControl: false,
+      fullscreenControl: true,
+      // The page scrolls past eleven of these. Without cooperative gestures a
+      // scroll over a map zooms it instead of moving the page.
+      gestureHandling: "cooperative",
+      zoom: 10,
+      center: stops[0].coords
+    });
+
+    const bounds = new google.maps.LatLngBounds();
+    const info = new google.maps.InfoWindow();
     const origin = current && current.routeOrigin;
-    const points = [];
     if (origin && origin.lat != null) {
-      L.marker([origin.lat, origin.lng], {
-        icon: L.divIcon({ className: "", html: '<span class="sp-yard">Y</span>', iconSize: [22, 22], iconAnchor: [11, 11] }),
+      const yard = { lat: Number(origin.lat), lng: Number(origin.lng) };
+      new google.maps.Marker({
+        position: yard, map, icon: yardIcon(), zIndex: 1,
+        label: { text: "Y", color: "#FAFAF5", fontSize: "11px", fontWeight: "700" },
         title: `Yard — ${origin.formattedAddress || origin.address || ""}`
-      }).addTo(map);
-      points.push([origin.lat, origin.lng]);
+      });
+      bounds.extend(yard);
     }
 
     const markers = new Map();
     for (const stop of stops) {
-      const marker = L.marker([stop.coords.lat, stop.coords.lng], {
-        icon: pinIcon(stop),
+      const marker = new google.maps.Marker({
+        position: stop.coords, map, icon: pinIcon(stop, false), zIndex: 2,
+        // Two digits fit here. Google's STATIC map markers take a single
+        // character, which is why stops past nine used to lose their number.
+        label: { text: String(stop.number), color: "#ffffff", fontSize: "12px", fontWeight: "700" },
         title: `Stop ${stop.number} · ${stop.arriveAt || ""} · ${stop.address}`
-      }).addTo(map);
-      marker.bindPopup(
-        `<strong>Stop ${stop.number}${stop.arriveAt ? ` · ${stop.arriveAt}` : ""}</strong><br>`
-        + `${escapeHtml(stop.address)}${stop.customerName ? `<br>${escapeHtml(stop.customerName)}` : ""}`
-      );
-      markers.set(stop.code, marker);
-      points.push([stop.coords.lat, stop.coords.lng]);
+      });
+      marker.addListener("click", () => {
+        info.setContent(
+          `<div style="font:13px/1.45 system-ui,sans-serif;max-width:230px">`
+          + `<strong>Stop ${stop.number}${stop.arriveAt ? ` · ${stop.arriveAt}` : ""}</strong><br>`
+          + `${escapeHtml(stop.address)}`
+          + `${stop.customerName ? `<br>${escapeHtml(stop.customerName)}` : ""}</div>`
+        );
+        info.open({ map, anchor: marker });
+      });
+      markers.set(stop.code, { marker, stop });
+      bounds.extend(stop.coords);
     }
-    map.fitBounds(L.latLngBounds(points), { padding: [46, 46] });
+    map.fitBounds(bounds, 48);
 
     linkRowsToPins(listRoot, markers);
     drawRoadLine(map, day, mapBox);
@@ -444,19 +503,18 @@
   // panel and the map are two lists that happen to share a card.
   function linkRowsToPins(listRoot, markers) {
     listRoot.querySelectorAll(".sp-stop").forEach((row) => {
-      const marker = markers.get(row.dataset.code);
-      if (!marker) return;
-      const el = () => marker.getElement() && marker.getElement().querySelector(".sp-pin");
+      const entry = markers.get(row.dataset.code);
+      if (!entry) return;
       const set = (on) => {
         row.classList.toggle("is-hot", on);
-        const pin = el();
-        if (pin) pin.classList.toggle("is-hot", on);
+        entry.marker.setIcon(pinIcon(entry.stop, on));
+        entry.marker.setZIndex(on ? 5 : 2);
       };
       row.addEventListener("mouseenter", () => set(true));
       row.addEventListener("mouseleave", () => set(false));
-      row.addEventListener("click", () => { marker.openPopup(); });
-      marker.on("mouseover", () => set(true));
-      marker.on("mouseout", () => set(false));
+      row.addEventListener("click", () => google.maps.event.trigger(entry.marker, "click"));
+      entry.marker.addListener("mouseover", () => set(true));
+      entry.marker.addListener("mouseout", () => set(false));
     });
   }
 
@@ -469,18 +527,25 @@
         note(mapBox, (data.errors || ["Could not draw the drive for this day."]).join(" "), true);
         return;
       }
-      const straight = data.source !== "osrm";
-      L.polyline(data.coords, {
-        color: straight ? "#7A7A72" : "#1B4D2E",
-        weight: straight ? 2 : 4,
-        opacity: straight ? 0.7 : 0.8,
-        dashArray: straight ? "6 6" : null,
-        lineJoin: "round"
-      }).addTo(map);
-      // A straight line between stops is not a drive, and a map that shows
-      // one without saying so is making a claim it cannot support.
+      const straight = data.source !== "google" && data.source !== "osrm";
+      const path = data.coords.map(([lat, lng]) => ({ lat, lng }));
+      new google.maps.Polyline({
+        map, path,
+        strokeColor: straight ? "#7A7A72" : AM_GREEN,
+        strokeOpacity: straight ? 0 : 0.85,
+        strokeWeight: straight ? 2 : 4,
+        // Dashes are drawn as repeated symbols; a solid line with opacity 0
+        // plus dot symbols is how the Maps API does a dashed path.
+        icons: straight ? [{
+          icon: { path: "M 0,-1 0,1", strokeOpacity: 0.8, strokeWeight: 2, scale: 3 },
+          offset: "0", repeat: "12px"
+        }] : undefined,
+        zIndex: 1
+      });
+      // A straight line between stops is not a drive, and a map that shows one
+      // without saying so is making a claim it cannot support.
       note(mapBox, straight
-        ? `Straight hops, not roads: ${data.error || "the router did not answer."}`
+        ? `Straight hops, not roads — ${data.error || "no router answered."}`
         : "Y is the yard. Numbers are stops in driving order.", straight);
     } catch (error) {
       note(mapBox, `Could not draw the drive — ${error.message}`, true);

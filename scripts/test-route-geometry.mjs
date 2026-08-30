@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const geo = require(path.join(ROOT, "server/lib/route-geometry.js"));
+const routeMap = require(path.join(ROOT, "server/lib/route-map.js"));
 
 let pass = 0;
 const failures = [];
@@ -87,6 +88,81 @@ const OSRM_OK = {
   routes: [{ geometry: { coordinates: [[-79.4820, 44.0350], [-79.5006, 44.1084]] } }]
 };
 
+// ---- The polyline decoder --------------------------------------------
+//
+// Google hands back its geometry encoded. route-map.js's encoder is checked
+// against the example in Google's own published documentation, so asserting
+// the round trip pins the decoder to the spec rather than to itself.
+
+const REFERENCE = [
+  { lat: 38.5, lng: -120.2 }, { lat: 40.7, lng: -120.95 }, { lat: 43.252, lng: -126.453 }
+];
+const decoded = geo.decodePolyline("_p~iF~ps|U_ulLnnqC_mqNvxq`@");
+ok("the decoder reverses Google's published reference polyline",
+  JSON.stringify(decoded) === JSON.stringify(REFERENCE.map((p) => [p.lat, p.lng])),
+  JSON.stringify(decoded));
+ok("encode -> decode is a round trip",
+  JSON.stringify(geo.decodePolyline(routeMap.encodePath(REFERENCE)))
+    === JSON.stringify(REFERENCE.map((p) => [p.lat, p.lng])));
+ok("an empty polyline decodes to nothing, not to [0,0]",
+  geo.decodePolyline("").length === 0);
+
+// ---- Google Directions, which is tried first --------------------------
+
+const GOOGLE_OK = {
+  status: "OK",
+  routes: [{ overview_polyline: { points: routeMap.encodePath(REFERENCE) } }]
+};
+
+const hadKey = process.env.GOOGLE_MAPS_SERVER_KEY;
+process.env.GOOGLE_MAPS_SERVER_KEY = "test-key";
+
+stubFetch(async () => jsonResponse(GOOGLE_OK));
+const viaGoogle = await geo.roadLine(YARD, [A, B], { noCache: true });
+ok("with a key set, Google Directions is asked first",
+  /maps\.googleapis\.com\/maps\/api\/directions/.test(seenUrl), seenUrl);
+ok("a Google answer is labelled google, not osrm", viaGoogle.source === "google", viaGoogle.source);
+ok("Google's encoded geometry is decoded into lat,lng pairs",
+  viaGoogle.coords[0][0] === 38.5 && viaGoogle.coords[0][1] === -120.2,
+  JSON.stringify(viaGoogle.coords[0]));
+ok("the yard is origin AND destination — the day is a closed tour",
+  /origin=44\.035%2C-79\.482/.test(seenUrl) && /destination=44\.035%2C-79\.482/.test(seenUrl), seenUrl);
+ok("the stops travel as waypoints, in order", /waypoints=/.test(seenUrl), seenUrl);
+ok("OPTIMIZE IS NEVER SENT — the sequencer owns the order, not Google",
+  !/optimize/.test(seenUrl), seenUrl);
+
+// A refused key must not take the map down: OSRM is the second try.
+let seq = 0;
+stubFetch(async (url) => {
+  seq += 1;
+  if (String(url).includes("googleapis")) {
+    return jsonResponse({ status: "REQUEST_DENIED", error_message: "not authorized to use this API" });
+  }
+  return jsonResponse(OSRM_OK);
+});
+const fellBack = await geo.roadLine(YARD, [A], { noCache: true });
+ok("A REFUSED DIRECTIONS KEY FALLS THROUGH TO OSRM RATHER THAN TO STRAIGHT LINES",
+  fellBack.source === "osrm", fellBack.source);
+ok("...and it took two attempts to get there", seq === 2, `${seq} calls`);
+
+// Both down -> straight, carrying BOTH reasons.
+stubFetch(async (url) => {
+  if (String(url).includes("googleapis")) {
+    return jsonResponse({ status: "REQUEST_DENIED", error_message: "not authorized to use this API" });
+  }
+  throw new Error("connect ECONNREFUSED");
+});
+const bothDown = await geo.roadLine(YARD, [A], { noCache: true });
+ok("with every router down the line is straight", bothDown.source === "straight", bothDown.source);
+ok("...and BOTH routers' reasons survive, so neither failure hides the other",
+  /REQUEST_DENIED/.test(bothDown.error || "") && /ECONNREFUSED/.test(bothDown.error || ""),
+  bothDown.error);
+
+if (hadKey === undefined) delete process.env.GOOGLE_MAPS_SERVER_KEY;
+else process.env.GOOGLE_MAPS_SERVER_KEY = hadKey;
+
+ok("with no key, Google is not attempted at all", geo.googleConfigured() === false);
+
 // ---- A router that answers -------------------------------------------
 
 stubFetch(async () => jsonResponse(OSRM_OK));
@@ -148,13 +224,26 @@ try {
   const file = path.join(geo.CACHE_DIR, `${geo.cacheKey(YARD, stops)}.json`);
   fs.mkdirSync(geo.CACHE_DIR, { recursive: true });
   const planted = [[44.1, -79.5], [44.2, -79.6]];
-  fs.writeFileSync(file, JSON.stringify(planted));
+  fs.writeFileSync(file, JSON.stringify({ source: "google", coords: planted }));
 
   stubFetch(async () => { throw new Error("the cache should have answered this"); });
   const hit = await geo.roadLine(YARD, stops);
   ok("a cached line is served without touching the router", calls === 0, `${calls} calls`);
   ok("...and it is the cached geometry", JSON.stringify(hit.coords) === JSON.stringify(planted));
-  ok("...and it is reported as roads, not as a fallback", hit.source === "osrm" && hit.cached === true);
+  ok("...and it is reported with the router that produced it, not a guess",
+    hit.source === "google" && hit.cached === true, hit.source);
+
+  // The earlier format — a bare array — is still on the deployed disk from
+  // the OSRM-only version. It must read, not be silently refetched.
+  const legacyStops = [B, C];
+  const legacyFile = path.join(geo.CACHE_DIR, `${geo.cacheKey(YARD, legacyStops)}.json`);
+  fs.writeFileSync(legacyFile, JSON.stringify(planted));
+  stubFetch(async () => { throw new Error("the legacy cache should have answered this"); });
+  const legacy = await geo.roadLine(YARD, legacyStops);
+  ok("a cache file in the OLD bare-array format still reads",
+    calls === 0 && JSON.stringify(legacy.coords) === JSON.stringify(planted), `${calls} calls`);
+  ok("...and is labelled osrm, which is what wrote it", legacy.source === "osrm", legacy.source);
+  fs.rmSync(legacyFile, { force: true });
 
   // The property that matters: the SAME stops in a different order must
   // not read that file.

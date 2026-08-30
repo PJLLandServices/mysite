@@ -19,37 +19,54 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
-**2026-08-30 (Season-plan day maps move to Leaflet):** the plan screen's day maps were flat
-Google Static Maps images stretched to the full card width, so one day filled the window and
-eleven were unreadable; and all eleven fired their map request in the same tick, which is two
-Google calls each — twenty-two at once — so the ones that lost the rate-limit race came back
-refused and the page finished half-drawn. Replaced with **Leaflet on OpenStreetMap tiles**
-(no key, no per-load charge), desaturated in CSS on the tile pane only so the route line stays
-the one strong colour. **CARTO Positron was shipped first and had to be pulled the same day:**
-CARTO now requires an API key for raster basemaps and watermarks unauthenticated tiles with
-"API KEY REQUIRED" across the whole map — and is retiring raster basemaps outright, so getting a
-key would have bought a service already on its way out. Recorded because the pre-build research
-said no key was needed and the deployed map said otherwise; the map was right. In the Layout A shape:
-the map is the card body at a **fixed 400px** that never grows with the window, and the stops
-float over it in a scrollable panel. Maps are built by `IntersectionObserver` when the card
-scrolls into view, one day at a time, so the burst cannot happen. Our own numbered pins also
-retire a real limit — Google's static markers take a SINGLE character, so on a nine-stop day
-the later stops silently lost their number.
-**The road line comes from OSRM (`server/lib/route-geometry.js`), and the LINE ONLY — never
-the minutes.** Every time on this screen comes from Google Distance Matrix and is what the
-customer was told; a second router printing its own drive times beside them would put two
-different figures for the same leg on one screen with no way to tell which one the booking page
-believed. Cached on the ordered stops exactly as `route-map.js` is, so a re-sequence refetches
-and a refresh is free. Fails soft to straight hops that are **labelled** as straight hops with
-the router's own error text, because a silent straight line is a claim about a drive.
-`PJL_OSRM_URL` moves off the public demo box without a deploy. `scripts/test-route-geometry.mjs`,
-31 assertions, in `npm run build:check` — including the lng,lat flip (getting it backwards draws
-the day in the Indian Ocean) and that a reordered day misses the cache. One bug found by those
-tests and fixed: `Number(null)` is `0`, so a missing coordinate passed an `isFinite` check and
-would have routed the day through Null Island. **No PASS flow touched** — this is the admin
-screen only; FLOW-03 (`/book.html`) does not read these maps. The Static Maps endpoint and
-`server/lib/route-map.js` are left in place and still tested; nothing calls them now, and a
-printable PNG is the reason to keep them.
+**2026-08-30 (Season-plan day maps become live Google maps):** the day maps were flat Google
+Static Maps images stretched to the full card width, so one day filled the window and eleven were
+unreadable; and all eleven fired their map request in the same tick — two Google calls each,
+twenty-two at once — so the ones that lost the rate-limit race came back refused and the page
+finished half-drawn. Now a **live Maps JavaScript API map per day** in the Layout A shape: the map
+is the card body at a **fixed 400px** that never grows with the window, and the stops float over it
+in a scrollable panel. Maps are built by `IntersectionObserver` as a card scrolls into view, one at
+a time, so the burst cannot happen and days never looked at cost nothing.
+**Two intermediate versions were built and discarded the same day, both recorded because the
+research that justified them was wrong and the deployed page was what corrected it.** (1) Leaflet on
+CARTO Positron tiles — CARTO now requires an API key for raster basemaps, watermarks unauthenticated
+tiles "API KEY REQUIRED" across the whole map, and is retiring raster outright. (2) Leaflet on
+OpenStreetMap tiles desaturated in CSS — worked and cost nothing, but Patrick reads this screen at a
+glance and a muted substitute basemap made that harder. Google's own basemap is the product being
+paid for; use it.
+**Cost, checked rather than assumed:** Dynamic Maps bills $7/1,000 map loads with 10,000 free a
+month. Lazy building means a page open costs one load per day actually scrolled to, not eleven. At
+Patrick's usage (single figures of page opens a day) this is comfortably inside the free tier; it
+would take roughly 30 opens a day, every day, to leave it.
+**The road line is fetched SERVER-side and cached, never by the browser** (`server/lib/route-geometry.js`)
+— that keeps `GOOGLE_MAPS_SERVER_KEY` off the page and costs one Directions call per route CHANGE
+rather than one per page view. Google Directions first, OSRM second, straight hops last, and every
+router's own error text is carried so a failure names its own fix. `optimize` is never sent: the
+re-sequencer owns the order, and letting Google reshuffle would draw a route that disagrees with the
+arrival times the customer was told. **And the LINE ONLY, never the minutes** — every time on this
+screen comes from Google Distance Matrix and is what the customer was told; a second router printing
+its own drive times beside them would put two figures for one leg on one screen with no way to tell
+which the booking page believed. Cached on the ordered stops as `route-map.js` is, so a re-sequence
+refetches and a refresh is free; the reader also accepts the earlier bare-array cache format still
+on the deployed disk.
+`GOOGLE_MAPS_BROWSER_KEY` is served to signed-in admins by `GET /api/maps-config` rather than baked
+into the HTML — a browser key is visible to whoever loads the map by design, so the protection is an
+HTTP-referrer restriction on the key, not secrecy, but there is no reason to hand it to anonymous
+visitors too. Both failure paths were walked in a browser and name the actual fix: an unset variable
+says so by name; a referrer-rejected key says to check the referrer restriction and the key's API
+list. The stop list stays usable in both.
+Drawing our own markers also retires a real limit — Google's STATIC map markers take a SINGLE
+character, so on a nine-stop day the later stops silently lost their number.
+`scripts/test-route-geometry.mjs`, 47 assertions, in `npm run build:check` — including the polyline
+decoder checked against Google's published reference and round-tripped against `route-map.js`'s
+encoder, that a refused Directions key falls through to OSRM rather than to straight lines, that
+both routers' reasons survive when neither answers, that `optimize` is never sent, and that a
+reordered day misses the cache. Two bugs found by those tests and fixed: `Number(null)` is `0`, so a
+missing coordinate passed an `isFinite` check and would have routed a day through Null Island; and
+the cache write format changed without the reader, which would have silently refetched every day.
+**No PASS flow touched** — this is the admin screen only; FLOW-03 (`/book.html`) does not read these
+maps. `server/lib/route-map.js` and its Static Maps endpoint are left in place and still tested;
+nothing calls them now, and a printable PNG is the reason to keep them.
 
 **2026-08-30 (SEQ-04 finish-nearest-home, and SEQ-05 — the route anchor is a town centroid):**
 **SEQ-04.** On a tight cluster, total driving decides nothing: every order of R1's four

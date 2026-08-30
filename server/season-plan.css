@@ -203,11 +203,6 @@
    holds a whole day above the fold at 100% zoom and stays put. */
 .sp-daybody { position: relative; height: 400px; }
 .sp-map { position: absolute; inset: 0; background: var(--pjl-cream); z-index: 0; }
-/* The TILE PANE only, never the whole map: the route line and the pins live
-   in the overlay and marker panes, and greying those out would defeat the
-   point. OSM's basemap is busy and green — parks compete with the route —
-   so it is desaturated back to something Positron-like. */
-.sp-map .leaflet-tile-pane { filter: grayscale(1) brightness(1.06) contrast(0.92); }
 .sp-map-note {
   position: absolute; left: 10px; bottom: 8px; z-index: 500;
   font-size: 0.72rem; color: var(--pjl-text-muted);
@@ -238,21 +233,6 @@
 .sp-open-route:hover { border-color: var(--pjl-green); }
 .sp-stoppanel-scroll { overflow-y: auto; padding-bottom: 4px; }
 
-/* Marker pins. Drawn by us, which is the point: Google's static markers take
-   a SINGLE character, so stop 10 onward silently lost its number. */
-.sp-pin {
-  width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
-  font-size: 0.76rem; font-weight: 700; color: #fff; border: 2px solid #fff;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.35); font-variant-numeric: tabular-nums;
-}
-.sp-pin.is-am { background: var(--pjl-green); }
-.sp-pin.is-pm { background: var(--pjl-green-light); }
-.sp-pin.is-hot { border-color: var(--pjl-amber); transform: scale(1.18); }
-.sp-yard {
-  width: 22px; height: 22px; border-radius: 5px; display: grid; place-items: center;
-  font-size: 0.7rem; font-weight: 700; color: #fff; background: var(--pjl-dark);
-  border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.35);
-}
 
 @media (max-width: 900px) {
   .sp-daybody { height: auto; }
