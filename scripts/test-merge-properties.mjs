@@ -32,9 +32,15 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const { mergeProperties } = await import(path.join(ROOT, "scripts/merge-properties.mjs"));
+// The merge core lives in server/lib so the CLI and the admin route share
+// ONE implementation and cannot drift. This suite tests the lib directly;
+// scripts/test-property-merge-route.mjs pins that the CLI and the route
+// both go through it.
+const require = createRequire(import.meta.url);
+const { mergeProperties } = require(path.join(ROOT, "server/lib/property-merge.js"));
 
 let pass = 0;
 const failures = [];
