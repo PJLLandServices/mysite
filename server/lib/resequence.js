@@ -39,7 +39,7 @@
 // applies its cushion to anyone booking INTO the day, which is where the
 // margin is actually wanted.
 
-const { travelMinutes, MIN_TRAVEL_MINUTES } = require("./distance");
+const { travelMinutes, travelMinutesRaw, haversineKm, MIN_TRAVEL_MINUTES } = require("./distance");
 const { PJL_BASE } = require("./geocode");
 const { BOOKABLE_SERVICES, BOOKING_BUCKETS, parseHHmmToMinutes, minutesToHHmm } = require("./availability");
 const { deriveSeasonalKey } = require("./pricing");
@@ -52,37 +52,26 @@ const BUCKETS = ["morning", "afternoon"];
 // cap is 5, so the exact path is what actually runs.
 const EXACT_SEARCH_LIMIT = 7;
 
-// THE TIE PROBLEM, AND WHY DISTANCE BREAKS IT.
+// TWO CLOCKS, ON PURPOSE.
 //
-// distance.js floors every trip at MIN_TRAVEL_MINUTES (5) — including
-// real Google Distance Matrix answers, which are wrapped in a Math.max.
-// That floor is right for scheduling: five minutes is parking, unloading
-// and knocking on a door, and no visit is shorter than that in practice.
+// distance.js floors every trip at MIN_TRAVEL_MINUTES because no visit is
+// really shorter than five minutes: parking, unloading, a door. That is
+// right for building a schedule and wrong for choosing a route. Under the
+// floor, 100 and 106 Lavery Trail (40 m apart) and 748 Morrish Rd (1 km)
+// all cost "5 minutes" — so the optimiser cannot see the difference, and
+// the flooring shifts whole candidate orders against each other by whole
+// minutes. Live, that put Morrish between two neighbours.
 //
-// For ORDERING it is fatal. 100 and 106 Lavery Trail are 40 m apart and
-// 748 Morrish Rd is 1 km away; all three legs come back as "5 minutes",
-// so every arrangement of them costs the same and the search picks an
-// arbitrary winner among the ties. Live, that produced
-// 100 Lavery -> Morrish -> 106 Lavery: a detour between two neighbours.
+// A first attempt added a vanishing distance weight to break ties. It was
+// not enough and the arithmetic says why: across a day's route the weight
+// is worth about 0.004 of a minute, so it can settle an exact tie and
+// nothing more. The distortion it needed to beat is measured in minutes.
 //
-// So the ordering cost adds a vanishing amount of straight-line distance
-// on top of the travel time. Within a tie it decides; against a genuine
-// difference it cannot compete. A whole day's route is well under 200 km,
-// which at this weight contributes under 0.2 of a minute — far below the
-// one-minute granularity travelMinutes reports. The clock the operator
-// sees is still built from unmodified travel times; this weight exists
-// only inside the comparison.
+// So ordering runs on travelMinutesRaw() — the unfloored road time — and
+// the clock the operator reads is built from travelMinutes(), floored.
+// The distance weight stays, now doing only the job it can actually do:
+// separating two orders whose raw times are genuinely identical.
 const DISTANCE_TIEBREAK_PER_KM = 0.001;
-
-function haversineKm(a, b) {
-  const toRad = (deg) => (deg * Math.PI) / 180;
-  const R = 6371;
-  const dLat = toRad(b.lat - a.lat);
-  const dLng = toRad(b.lng - a.lng);
-  const h = Math.sin(dLat / 2) ** 2
-    + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(h));
-}
 
 function bucketWindow(key) {
   const b = BOOKING_BUCKETS.find((x) => x.key === key);
@@ -115,7 +104,7 @@ function onSiteMinutes(property, season) {
 //            candidate orders
 // Keeping them apart means the tiebreak can never leak into a displayed
 // arrival time.
-async function buildMatrix(points, travel) {
+async function buildMatrix(points, travel, travelRaw) {
   const n = points.length;
   const minutes = Array.from({ length: n }, () => new Array(n).fill(0));
   const cost = Array.from({ length: n }, () => new Array(n).fill(0));
@@ -123,14 +112,45 @@ async function buildMatrix(points, travel) {
   for (let i = 0; i < n; i++) {
     for (let j = 0; j < n; j++) {
       if (i === j) continue;
-      jobs.push(travel(points[i], points[j]).then((v) => {
-        minutes[i][j] = v;
+      jobs.push(travel(points[i], points[j]).then((v) => { minutes[i][j] = v; }));
+      jobs.push(travelRaw(points[i], points[j]).then((v) => {
         cost[i][j] = v + haversineKm(points[i], points[j]) * DISTANCE_TIEBREAK_PER_KM;
       }));
     }
   }
   await Promise.all(jobs);
   return { minutes, cost };
+}
+
+// Cheapest whole day: base -> morning in order -> afternoon in order ->
+// base, searched JOINTLY.
+//
+// It used to optimise the morning first, open-ended, then the afternoon
+// from wherever the morning happened to finish. That is greedy in the
+// worst place: a morning free to end anywhere ends wherever its own last
+// leg is cheapest, with no idea it must hand off to the afternoon. Live,
+// R10's morning ran out to Pickering and the afternoon came back west to
+// Scarborough — a round trip bolted onto the end of the day.
+//
+// At a bucket cap of 5 the joint search is 5! x 5! = 14,400 orders of
+// pure arithmetic over a precomputed matrix, so there is no reason to be
+// greedy about it. The two-stage path stays for buckets too large to
+// enumerate, which the cap does not currently allow.
+function bestDayOrder(cost, morningIdx, afternoonIdx) {
+  if (morningIdx.length <= EXACT_SEARCH_LIMIT && afternoonIdx.length <= EXACT_SEARCH_LIMIT) {
+    let best = { morning: morningIdx, afternoon: afternoonIdx };
+    let bestCost = Infinity;
+    for (const m of permutations(morningIdx)) {
+      for (const a of permutations(afternoonIdx)) {
+        const c = pathCost(cost, 0, [...m, ...a], 0);
+        if (c < bestCost) { bestCost = c; best = { morning: m, afternoon: a }; }
+      }
+    }
+    return best;
+  }
+  const morning = bestOrder(cost, 0, morningIdx, null);
+  const exit = morning.length ? morning[morning.length - 1] : 0;
+  return { morning, afternoon: bestOrder(cost, exit, afternoonIdx, 0) };
 }
 
 function permutations(items) {
@@ -204,7 +224,11 @@ function bestOrder(matrix, from, indices, to) {
 // Returns the day with each bucket reordered, plus a timeline of arrival
 // estimates (admin-facing only — customers never see a minute) and any
 // flags the plan screen should show.
-async function sequenceDay(day, { propertiesByCode, season = "fall", base = PJL_BASE, travel = travelMinutes } = {}) {
+async function sequenceDay(day, opts = {}) {
+  const { propertiesByCode, season = "fall", base = PJL_BASE, travel = travelMinutes } = opts;
+  // A test that injects a travel function gets the same function for the
+  // ordering clock unless it says otherwise, so its fixtures stay exact.
+  const travelRaw = opts.travelRaw || (opts.travel ? opts.travel : travelMinutesRaw);
   const byCode = propertiesByCode instanceof Map ? propertiesByCode : new Map(Object.entries(propertiesByCode || {}));
   const flags = [];
 
@@ -231,19 +255,14 @@ async function sequenceDay(day, { propertiesByCode, season = "fall", base = PJL_
 
   const stops = [...routable.morning, ...routable.afternoon];
   const points = [base, ...stops.map((s) => s.property.coords)];
-  const { minutes: matrix, cost } = await buildMatrix(points, travel);
+  const { minutes: matrix, cost } = await buildMatrix(points, travel, travelRaw);
   const indexOf = new Map(stops.map((s, i) => [s.code, i + 1]));   // +1: base is 0
 
   const morningIdx = routable.morning.map((s) => indexOf.get(s.code));
   const afternoonIdx = routable.afternoon.map((s) => indexOf.get(s.code));
 
-  // Morning first, entering from base. Its exit point is left open — the
-  // afternoon is then optimised from wherever the morning actually ended,
-  // which is what chains the two halves instead of treating them as two
-  // unrelated trips.
-  const morningOrder = bestOrder(cost, 0, morningIdx, null);
-  const morningExit = morningOrder.length ? morningOrder[morningOrder.length - 1] : 0;
-  const afternoonOrder = bestOrder(cost, morningExit, afternoonIdx, 0);
+  const { morning: morningOrder, afternoon: afternoonOrder } =
+    bestDayOrder(cost, morningIdx, afternoonIdx);
 
   // Walk the clock. Each bucket starts no earlier than its own window.
   const timeline = [];
