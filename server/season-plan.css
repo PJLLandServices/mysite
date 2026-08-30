@@ -191,3 +191,8 @@
   border-radius: 50%; background: var(--pjl-green); color: #fff;
   font-size: 0.82rem; font-weight: 700; font-variant-numeric: tabular-nums;
 }
+
+/* The route anchor, stated on the page — silence here is how a town
+   centroid anchored eleven route days without anyone noticing. */
+.sp-anchor { margin: 4px 0 0; font-size: 0.85rem; color: var(--pjl-text-muted); }
+.sp-anchor.is-bad { color: #A32020; font-weight: 600; }

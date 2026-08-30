@@ -19,6 +19,45 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-30 (SEQ-04 finish-nearest-home, and SEQ-05 — the route anchor is a town centroid):**
+**SEQ-04.** On a tight cluster, total driving decides nothing: every order of R1's four
+south-Newmarket stops came out within **0.1 km** of every other, so "fewest kilometres" was choosing
+between them on rounding noise and the day ended wherever that noise landed. Patrick's stated rule —
+when the driving is a wash, finish nearest home — is now encoded as a lexicographic second objective:
+take the cheapest total, then among every order within `FINISH_NEAR_BASE_TOLERANCE_MINUTES` (3) of it,
+prefer the one whose last stop is closest to base. A property worth recording: a day is a closed
+tour, and a tour and its reverse cost the same, so whichever end is nearer base can almost always be
+made the finish for free — the tolerance rarely binds. The test asserts the guarantee that matters
+(never worse than optimal by more than the tolerance) rather than a contrived fixture, because
+reversal symmetry makes a "finishing near home costs real driving" case nearly unconstructible.
+**SEQ-05 — OPEN, and it invalidates every route number.** `PJL_BASE` in `server/lib/geocode.js` is
+not the yard. It is Newmarket town centre — `formattedAddress: "Newmarket, ON, Canada"`, a dot in the
+middle of town, carried since it was written as the geocode FALLBACK for addresses that will not
+resolve. The route optimiser then adopted it as the start-and-end anchor without anyone asking
+whether it was an address. Patrick: "Prospect Street would be furthest from home"; measured from the
+centroid it is the **nearest** stop at 0.67 km, against 3.5 km for the Creebridge pair. The anchor
+decides which stop opens each day, which closes it, and part of the added-drive figure the geography
+filter accepts or refuses customers on — so it is wrong for all 11 route days, not one.
+**Fix requires an input only Patrick has** (the real yard address) and should also SPLIT the two
+jobs this constant is doing: a real address for routing, and a deliberately vague town point for
+"we do not know where this is", so correcting the yard cannot change how unresolved addresses behave.
+**SEQ-05 CLOSED 2026-08-30.** Patrick supplied the yard: **1118 Cenotaph Blvd, Newmarket, ON L3X
+0A5** — the same L3X pocket as Creebridge and Ivsbridge, which is why he said Prospect St was the
+far end of town while the centroid maths called it the nearest stop at 0.67 km. New
+`server/lib/route-origin.js` holds the yard and keeps it strictly separate from `PJL_BASE`, which is
+unchanged and still means "we cannot resolve this address". **Configured as a street address, not
+coordinates**, and resolved through the same geocoder as everything else: a latitude nobody can check
+by eye is how a town centroid survived this long, whereas a wrong address is obvious on sight.
+Overridable via `PJL_ROUTE_ORIGIN` without a deploy. Fails soft and loudly — an unlocatable yard
+degrades to the centroid, but carries `resolved: false`, and the plan screen then says in red that
+routes are anchored to a guess. The anchor is now printed on the screen in every case, because a
+route pointed at the wrong start looks exactly like one pointed at the right start; silence is how
+this lasted eleven route days. Effect on R1's afternoon: 991 Creebridge → 970 → Ivsbridge → Prospect
+becomes **Prospect → Ivsbridge → 991 → 970 Creebridge**, finishing in the yard's own pocket.
+`scripts/test-route-origin.mjs`, 10 assertions, including one that fixes the anchor at two different
+points and asserts the day ends at a different stop each time — the property that makes a wrong
+anchor a correctness bug rather than a cosmetic one.
+
 **2026-08-30 (SEQ-01 reopened, and SEQ-03):** the SEQ-01 fix shipped and did not work — Patrick's
 screenshot still showed `100 Lavery → Morrish → 106 Lavery`. Two reasons, both mine.
 **SEQ-01 (reopened).** The distance tiebreak was the wrong instrument. Across a day's route it is

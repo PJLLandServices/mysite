@@ -286,6 +286,26 @@
       `${plan.totalStops} stops across ${plan.days.length} route days${drive}${overrun} · updated ${when}`
       + (plan.updatedBy ? ` by ${plan.updatedBy}` : "");
 
+    // The anchor, stated. A route pointed at the wrong start looks exactly
+    // like a route pointed at the right one, so the only defence is saying
+    // out loud where every day begins and ends.
+    const origin = plan.routeOrigin;
+    let anchor = document.getElementById("routeAnchor");
+    if (!anchor) {
+      anchor = document.createElement("p");
+      anchor.id = "routeAnchor";
+      anchor.className = "sp-anchor";
+      planMeta.insertAdjacentElement("afterend", anchor);
+    }
+    if (origin && origin.resolved) {
+      anchor.className = "sp-anchor";
+      anchor.textContent = `Every day starts and ends at ${origin.formattedAddress || origin.address}.`;
+    } else if (origin) {
+      anchor.className = "sp-anchor is-bad";
+      anchor.textContent = `Could not locate ${origin.address} — routes are anchored to the `
+        + "Newmarket town centre instead, so the order of stops may be wrong. Check the address.";
+    }
+
     problemsList.innerHTML = "";
     if (plan.problems && plan.problems.length) {
       problemsPanel.hidden = false;

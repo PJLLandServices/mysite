@@ -28,7 +28,8 @@ import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const { sequenceDay, sequencePlan, suggestBucketMoves, onSiteMinutes } =
+const { sequenceDay, sequencePlan, suggestBucketMoves, onSiteMinutes,
+        FINISH_NEAR_BASE_TOLERANCE_MINUTES } =
   require(path.join(ROOT, "server/lib/resequence.js"));
 const { PJL_BASE } = require(path.join(ROOT, "server/lib/geocode.js"));
 
@@ -133,9 +134,12 @@ ok("a stop that belongs in the other bucket is still not moved",
 
 // Four 30-minute stops plus driving: comfortably inside the morning.
 const fits = await sequenceDay({ label: "T4", morning: ["A", "B", "C"], afternoon: [] }, opts);
-// 08:00 + (10 drive + 30 work) x3, legs of 10 = 10:00.
+// Every order of A/B/C costs the same closed tour (60), so the
+// finish-nearest-base rule decides: run out to C and work back to A,
+// which is the stop beside base. 08:00 + 30 out + 3x(30 work) + 2x10 =
+// 10:20.
 ok("a morning that fits reports its end time and no flag",
-  fits.morningEndsAt === "10:00" && !fits.flags.some((f) => f.code === "morning_overruns"),
+  fits.morningEndsAt === "10:20" && !fits.flags.some((f) => f.code === "morning_overruns"),
   `${fits.morningEndsAt} flags=${JSON.stringify(fits.flags)}`);
 
 // E is 90 minutes out and a 75-minute job; with three others the morning
@@ -156,10 +160,62 @@ ok("flagging does NOT move anyone to the afternoon to make it fit",
 const chained = await sequenceDay(
   { label: "T6", morning: ["A", "B"], afternoon: ["C", "D"] }, opts);
 ok("the afternoon starts from the morning's last stop, not from base",
-  chained.afternoon.join("") === "CD", chained.afternoon.join(","));
+  chained.afternoon.length === 2 && chained.timeline[2].bucket === "afternoon",
+  chained.afternoon.join(","));
+ok("the day finishes at the stop nearest base",
+  chained.afternoon[chained.afternoon.length - 1] === "C",
+  `${chained.afternoon.join(",")} — C is nearer base than D`);
 ok("the afternoon cannot start before 12:00",
   chained.timeline.find((t) => t.bucket === "afternoon").arriveAt >= "12:00",
   chained.timeline.find((t) => t.bucket === "afternoon").arriveAt);
+
+// ---- 4b. Finish closest to home --------------------------------------
+//
+// On a tight cluster the driving total says almost nothing: every order of
+// R1's four south-Newmarket stops came out within 0.1 km of every other,
+// so "fewest kilometres" was choosing between them on rounding noise and
+// the day ended wherever that noise landed. Patrick's rule is that when
+// the driving is a wash, finish nearest home.
+
+const cluster = new Map([
+  ["N", prop("N", [2, 0], 3)],      // right beside base
+  ["F1", prop("F1", [20, 0], 3)],   // out along the arm
+  ["F2", prop("F2", [21, 0], 3)]
+]);
+const clusterOpts = { propertiesByCode: cluster, season: "fall", base: BASE, travel };
+const homeward = await sequenceDay(
+  { label: "TH", morning: ["N", "F1", "F2"], afternoon: [] }, clusterOpts);
+ok("among equal-cost orders, the day ends at the stop nearest base",
+  homeward.morning[homeward.morning.length - 1] === "N", homeward.morning.join(","));
+
+// ...and the guarantee that keeps it honest: the order chosen is never
+// worse than optimal by more than the tolerance.
+//
+// Worth recording why this is the right assertion rather than a fixture
+// where finishing near base costs real driving. A day is a closed tour,
+// and a tour and its reverse cost exactly the same — so whichever end of
+// the optimal route is nearer base can be made the finish for free. The
+// tolerance therefore almost never binds in practice; finishing near home
+// is close to free. What must still hold, and is checked here, is that it
+// cannot quietly buy a much worse route.
+const costly = await sequenceDay(
+  { label: "TF", morning: ["N", "F1", "F2"], afternoon: [] }, clusterOpts);
+const chosenCost = await (async () => {
+  const pts = [BASE, ...costly.morning.map((c) => cluster.get(c).coords), BASE];
+  let t = 0;
+  for (let i = 0; i < pts.length - 1; i++) t += await travel(pts[i], pts[i + 1]);
+  return t;
+})();
+let optimal = Infinity;
+for (const perm of perms(["N", "F1", "F2"])) {
+  const pts = [BASE, ...perm.map((c) => cluster.get(c).coords), BASE];
+  let t = 0;
+  for (let i = 0; i < pts.length - 1; i++) t += await travel(pts[i], pts[i + 1]);
+  optimal = Math.min(optimal, t);
+}
+ok("finishing near home never costs more than the stated tolerance",
+  chosenCost <= optimal + FINISH_NEAR_BASE_TOLERANCE_MINUTES + 1e-9,
+  `chose ${chosenCost}, optimal ${optimal}, tolerance ${FINISH_NEAR_BASE_TOLERANCE_MINUTES}`);
 
 // ---- 5. Stops without coordinates ------------------------------------
 

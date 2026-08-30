@@ -41,6 +41,7 @@
 
 const { travelMinutes, travelMinutesRaw, haversineKm, MIN_TRAVEL_MINUTES } = require("./distance");
 const { PJL_BASE } = require("./geocode");
+const { routeOrigin } = require("./route-origin");
 const { BOOKABLE_SERVICES, BOOKING_BUCKETS, parseHHmmToMinutes, minutesToHHmm } = require("./availability");
 const { deriveSeasonalKey } = require("./pricing");
 
@@ -136,14 +137,56 @@ async function buildMatrix(points, travel, travelRaw) {
 // pure arithmetic over a precomputed matrix, so there is no reason to be
 // greedy about it. The two-stage path stays for buckets too large to
 // enumerate, which the cap does not currently allow.
+//
+// FINISH CLOSEST TO HOME — the second objective, and why it is needed.
+//
+// On a tight cluster the first objective says almost nothing. Every order
+// of R1's four south-Newmarket stops came out within 0.1 km of every
+// other, so "fewest kilometres" was choosing between them on rounding
+// noise, and the day ended wherever that noise landed. Total driving is
+// simply not a fine enough instrument to shape a day like that.
+//
+// Patrick's rule, asked and answered: when the driving is a wash, finish
+// nearest home. So the search is lexicographic with a tolerance — take
+// the cheapest total, then among every order within TOLERANCE of it,
+// prefer the one whose last stop is closest to base. Inside the tolerance
+// the choice becomes deliberate instead of arbitrary; outside it, a
+// genuinely shorter route still wins and the truck takes the longer
+// drive home.
+const FINISH_NEAR_BASE_TOLERANCE_MINUTES = 3;
+
 function bestDayOrder(cost, morningIdx, afternoonIdx) {
   if (morningIdx.length <= EXACT_SEARCH_LIMIT && afternoonIdx.length <= EXACT_SEARCH_LIMIT) {
-    let best = { morning: morningIdx, afternoon: afternoonIdx };
-    let bestCost = Infinity;
-    for (const m of permutations(morningIdx)) {
-      for (const a of permutations(afternoonIdx)) {
+    const mornings = permutations(morningIdx);
+    const afternoons = permutations(afternoonIdx);
+
+    let minCost = Infinity;
+    for (const m of mornings) {
+      for (const a of afternoons) {
         const c = pathCost(cost, 0, [...m, ...a], 0);
-        if (c < bestCost) { bestCost = c; best = { morning: m, afternoon: a }; }
+        if (c < minCost) minCost = c;
+      }
+    }
+
+    const ceiling = minCost + FINISH_NEAR_BASE_TOLERANCE_MINUTES;
+    let best = { morning: morningIdx, afternoon: afternoonIdx };
+    let bestFinalLeg = Infinity;
+    let bestCost = Infinity;
+    for (const m of mornings) {
+      for (const a of afternoons) {
+        const seq = [...m, ...a];
+        const c = pathCost(cost, 0, seq, 0);
+        if (c > ceiling) continue;
+        const finalLeg = seq.length ? cost[seq[seq.length - 1]][0] : 0;
+        // Nearest finish wins; a tie on that falls back to the cheaper
+        // total, so the result is fully determined rather than order-of-
+        // enumeration dependent.
+        if (finalLeg < bestFinalLeg - 1e-9
+          || (Math.abs(finalLeg - bestFinalLeg) < 1e-9 && c < bestCost)) {
+          bestFinalLeg = finalLeg;
+          bestCost = c;
+          best = { morning: m, afternoon: a };
+        }
       }
     }
     return best;
@@ -225,7 +268,12 @@ function bestOrder(matrix, from, indices, to) {
 // estimates (admin-facing only — customers never see a minute) and any
 // flags the plan screen should show.
 async function sequenceDay(day, opts = {}) {
-  const { propertiesByCode, season = "fall", base = PJL_BASE, travel = travelMinutes } = opts;
+  const { propertiesByCode, season = "fall", travel = travelMinutes } = opts;
+  // The yard, not the geocode fallback. PJL_BASE means "we do not know
+  // where this is"; anchoring a route to it pointed every day at the
+  // middle of Newmarket. Callers may still pass an explicit base — tests
+  // do, so their fixtures stay exact.
+  const base = opts.base || await routeOrigin();
   // A test that injects a travel function gets the same function for the
   // ordering clock unless it says otherwise, so its fixtures stay exact.
   const travelRaw = opts.travelRaw || (opts.travel ? opts.travel : travelMinutesRaw);
@@ -420,4 +468,5 @@ async function suggestBucketMoves(day, opts = {}) {
   return suggestions;
 }
 
-module.exports = { sequenceDay, sequencePlan, suggestBucketMoves, onSiteMinutes, EXACT_SEARCH_LIMIT };
+module.exports = { sequenceDay, sequencePlan, suggestBucketMoves, onSiteMinutes,
+  EXACT_SEARCH_LIMIT, FINISH_NEAR_BASE_TOLERANCE_MINUTES };
