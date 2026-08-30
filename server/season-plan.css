@@ -203,6 +203,11 @@
    holds a whole day above the fold at 100% zoom and stays put. */
 .sp-daybody { position: relative; height: 400px; }
 .sp-map { position: absolute; inset: 0; background: var(--pjl-cream); z-index: 0; }
+/* The TILE PANE only, never the whole map: the route line and the pins live
+   in the overlay and marker panes, and greying those out would defeat the
+   point. OSM's basemap is busy and green — parks compete with the route —
+   so it is desaturated back to something Positron-like. */
+.sp-map .leaflet-tile-pane { filter: grayscale(1) brightness(1.06) contrast(0.92); }
 .sp-map-note {
   position: absolute; left: 10px; bottom: 8px; z-index: 500;
   font-size: 0.72rem; color: var(--pjl-text-muted);

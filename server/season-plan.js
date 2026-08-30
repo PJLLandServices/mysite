@@ -265,8 +265,8 @@
     // another tab: the point is seeing eleven days' shape by scrolling.
     //
     // The map is the card and the stops float over it. It is a Leaflet map
-    // on CARTO tiles, so it pans and zooms, costs nothing per load, and
-    // carries OUR numbered pins — Google's static markers take a single
+    // on OpenStreetMap tiles, so it pans and zooms, costs nothing per load,
+    // and carries OUR numbered pins — Google's static markers take a single
     // character, which is why stops past nine used to lose their number.
     const body = document.createElement("div");
     body.className = "sp-daybody";
@@ -326,10 +326,16 @@
 
   // ---- Map ---------------------------------------------------------
 
-  const CARTO_TILES = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
-  const CARTO_ATTRIBUTION =
-    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, '
-    + '&copy; <a href="https://carto.com/attributions">CARTO</a>';
+  // OpenStreetMap's own tiles. CARTO's Positron was the first choice and is
+  // the better-looking basemap, but CARTO now requires an API key for raster
+  // tiles and watermarks unauthenticated requests — and is retiring raster
+  // basemaps altogether, so a key would buy a service on its way out.
+  // OSM is keyless, canonical, and not going anywhere. It is also busier and
+  // greener than Positron, so the tiles are desaturated in CSS: the route
+  // line has to be the only strong colour on the map or it does not read.
+  const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+  const TILE_ATTRIBUTION =
+    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
   function whenVisible(el, run) {
     if (typeof IntersectionObserver !== "function") { run(); return; }
@@ -403,8 +409,7 @@
     if (!stops.length) { note(mapBox, "No stop on this day has coordinates to draw.", true); return; }
 
     const map = L.map(mapBox, { scrollWheelZoom: false, zoomControl: true });
-    L.tileLayer(CARTO_TILES, { attribution: CARTO_ATTRIBUTION, subdomains: "abcd", maxZoom: 19 })
-      .addTo(map);
+    L.tileLayer(TILE_URL, { attribution: TILE_ATTRIBUTION, maxZoom: 19 }).addTo(map);
 
     const origin = current && current.routeOrigin;
     const points = [];
