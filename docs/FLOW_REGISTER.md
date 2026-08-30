@@ -19,6 +19,31 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-30 (SEQ-01 reopened, and SEQ-03):** the SEQ-01 fix shipped and did not work — Patrick's
+screenshot still showed `100 Lavery → Morrish → 106 Lavery`. Two reasons, both mine.
+**SEQ-01 (reopened).** The distance tiebreak was the wrong instrument. Across a day's route it is
+worth about **0.004 of a minute**, so it can settle an exact tie and nothing else; the floor's
+distortion is measured in whole minutes, and a 5-minute floor over a 1-minute leg shifts whole
+candidate orders against each other. Properly fixed by ordering on **unfloored** road time:
+`distance.js` gains `travelMinutesRaw()` (own cache file — the existing cache holds already-floored
+values that cannot be un-floored after the fact), and the re-sequencer now keeps two clocks: raw for
+choosing the route, floored for the schedule the operator reads. `travelMinutes()` and its cache are
+untouched, so nothing the booking engine depends on moves.
+**SEQ-03 — the day was optimised in two greedy halves.** The morning was solved first as an
+open-ended path, then the afternoon from wherever it happened to end. A morning free to finish
+anywhere finishes where its own last leg is cheapest, knowing nothing about the hand-off: live, R10's
+morning ran out to Pickering and the afternoon came back west to Scarborough. The search is now
+**joint** over the whole day — base → morning → afternoon → base — which at a bucket cap of 5 is
+5!×5! = 14,400 orders of arithmetic over a precomputed matrix. The two-stage path remains for buckets
+too large to enumerate.
+**Test fixtures were also wrong, and passing for it.** They were collinear, and on a line every
+closed tour through the same points costs the same — so they could not distinguish a good route from
+a bad one, and the tie fixture injected only the floored clock, never exercising the fix at all. Now
+two-dimensional, with assertions that the fixture *reproduces the failure* (under the floor the split
+really is cheaper) before asserting the fix corrects it. 33 → 36 assertions.
+R10 now reads Cerise Manor → Nature Pathway → 106 Lavery → 100 Lavery → Morrish → Glenthorne.
+Season-wide: no pair of stops within **300 m** separated in any day's route; driving 25h 8m.
+
 **2026-08-30 (Two route-ordering defects found on the live screen):** the re-sequencer shipped and
 Patrick immediately spotted both on R10.
 **SEQ-01 — the five-minute floor decided the order.** `distance.js` wraps every answer in

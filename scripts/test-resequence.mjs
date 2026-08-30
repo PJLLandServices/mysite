@@ -78,12 +78,36 @@ const gy = (c) => Math.round((c.lng + 79.5) * 1000);
 const travel = async (a, b) => Math.round(Math.hypot(gx(a) - gx(b), gy(a) - gy(b)));
 const opts = { propertiesByCode: props, season: "fall", base: BASE, travel };
 
+// A DAY IS A CLOSED TOUR, so its reverse costs exactly the same. Asserting
+// an exact sequence would therefore be asserting a coin flip. These helpers
+// check the two things that are actually well-defined: that the chosen
+// order is optimal, and that particular stops end up adjacent.
+const perms = (a) => (a.length < 2 ? [a] : a.flatMap((x, i) => {
+  const r = [...a]; r.splice(i, 1); return perms(r).map((p) => [x, ...p]);
+}));
+async function tourCost(order, fn = travel) {
+  const pts = [BASE, ...order.map((c) => props.get(c).coords), BASE];
+  let t = 0;
+  for (let i = 0; i < pts.length - 1; i++) t += await fn(pts[i], pts[i + 1]);
+  return t;
+}
+async function isOptimalTour(order, fn = travel) {
+  const mine = await tourCost(order, fn);
+  let best = Infinity;
+  for (const p of perms([...order])) best = Math.min(best, await tourCost(p, fn));
+  return Math.abs(mine - best) < 1e-9;
+}
+const adjacent = (list, a, b) => Math.abs(list.indexOf(a) - list.indexOf(b)) === 1;
+
 // ---- 1. It actually orders --------------------------------------------
 
 const scrambled = await sequenceDay(
   { label: "T1", morning: ["C", "A", "D", "B"], afternoon: [] }, opts);
-ok("a scrambled bucket comes back in driving order",
-  scrambled.morning.join("") === "ABCD", scrambled.morning.join(","));
+ok("a scrambled bucket comes back in an optimal driving order",
+  await isOptimalTour(scrambled.morning), scrambled.morning.join(","));
+ok("neighbouring stops end up adjacent in the route",
+  adjacent(scrambled.morning, "A", "B") && adjacent(scrambled.morning, "C", "D"),
+  scrambled.morning.join(","));
 ok("driving is the sum of the legs plus the run home",
   scrambled.driveMinutes === 80, String(scrambled.driveMinutes));   // 0->40 out, 40 home
 
@@ -144,7 +168,7 @@ const missing = await sequenceDay(
 ok("an unroutable stop is kept, not dropped",
   missing.morning.includes("NOGEO") && missing.morning.length === 3, missing.morning.join(","));
 ok("the routable stops around it are still ordered",
-  missing.morning.indexOf("A") < missing.morning.indexOf("C"), missing.morning.join(","));
+  await isOptimalTour(missing.morning.filter((c) => c !== "NOGEO")), missing.morning.join(","));
 ok("the unroutable stop is flagged",
   missing.flags.some((f) => f.code === "unroutable_stop" && f.propertyCode === "NOGEO"));
 
@@ -194,19 +218,46 @@ const FLOOR = 5;
 const flooredTravel = async (a, b) =>
   Math.max(FLOOR, Math.round(Math.hypot(gx(a) - gx(b), gy(a) - gy(b))));
 
+// NOT COLLINEAR. On a line every closed tour through the same points
+// costs the same, so a 1-D fixture cannot tell a good route from a bad
+// one — the first version of this test was collinear and passed while
+// production was broken. These sit as the real ones do: two neighbours
+// and a third off to the side.
 const neighbourProps = new Map([
-  ["L1", prop("L1", [20, 0], 3)],       // 100 Lavery
-  ["L2", prop("L2", [20.5, 0], 3)],     // 106 Lavery — next door
-  ["M", prop("M", [23, 0], 3)]          // Morrish — 1 km off
+  ["L1", prop("L1", [20, 0], 3)],        // 100 Lavery
+  ["L2", prop("L2", [20.5, 0.3], 3)],    // 106 Lavery — next door
+  ["M", prop("M", [22, 3], 3)]           // Morrish — off the line
 ]);
+// Production shape exactly: travel is floored (what the operator's clock
+// is built from), travelRaw is not (what the route is chosen on). Passing
+// only the floored one — as this test first did — never exercises the fix.
+const exactTravel = async (a, b) => Math.hypot(gx(a) - gx(b), gy(a) - gy(b));
 const flooredOpts = {
-  propertiesByCode: neighbourProps, season: "fall", base: BASE, travel: flooredTravel
+  propertiesByCode: neighbourProps, season: "fall", base: BASE,
+  travel: flooredTravel, travelRaw: exactTravel
 };
 
 ok("every leg between the three really does tie under the floor",
   (await flooredTravel(at([20, 0]), at([20.5, 0]))) === FLOOR
     && (await flooredTravel(at([20, 0]), at([23, 0]))) === FLOOR,
   "the fixture does not reproduce the tie, so the next assertion proves nothing");
+ok("the unfloored clock can tell those same legs apart",
+  (await exactTravel(at([20, 0]), at([20.5, 0.3])))
+    < (await exactTravel(at([20, 0]), at([22, 3]))),
+  "the raw clock is floored too, so the fix is not under test");
+
+// The fixture must reproduce the production failure, or the assertion
+// below passes for the wrong reason: under the floor the SPLIT order is
+// genuinely the cheaper one, which is exactly why the optimiser chose it.
+const tourF = async (order) => {
+  const pts = [BASE, ...order.map((c) => neighbourProps.get(c).coords), BASE];
+  let t = 0;
+  for (let i = 0; i < pts.length - 1; i++) t += await flooredTravel(pts[i], pts[i + 1]);
+  return t;
+};
+ok("under the floor, splitting the neighbours really does look cheaper",
+  (await tourF(["L1", "M", "L2"])) < (await tourF(["L1", "L2", "M"])),
+  `split ${await tourF(["L1", "M", "L2"])} vs together ${await tourF(["L1", "L2", "M"])}`);
 
 const neighbours = await sequenceDay(
   { label: "TB", morning: ["L1", "M", "L2"], afternoon: [] }, flooredOpts);
@@ -236,11 +287,32 @@ ok("arrival times increase with stop number",
   numbered.timeline.every((t, i, a) => i === 0 || a[i - 1].arriveAt < t.arriveAt),
   numbered.timeline.map((t) => `${t.stopNumber}:${t.arriveAt}`).join(" "));
 
-// The tiebreak decides ties and must never outweigh a real minute.
+// The tiebreak decides ties and must never outweigh a real minute. Tested
+// with a travel function where one leg is far quicker than its distance
+// suggests — a highway — so time and distance disagree and only one of
+// them can be driving the choice.
+const HIGHWAY = new Set(["A|E", "E|A"]);
+const travelHighway = async (a, b) => {
+  const nameOf = (c) => (["A", "B", "E"].find((k) => {
+    const p = props.get(k); return p.coords.lat === c.lat && p.coords.lng === c.lng;
+  }) || "?");
+  if (HIGHWAY.has(`${nameOf(a)}|${nameOf(b)}`)) return 1;
+  return Math.hypot(gx(a) - gx(b), gy(a) - gy(b));
+};
 const realDifference = await sequenceDay(
-  { label: "TD", morning: ["A", "E"], afternoon: [] }, opts);
+  { label: "TD", morning: ["A", "B", "E"], afternoon: [] },
+  { ...opts, travel: travelHighway, travelRaw: travelHighway });
+const hwCost = async (order) => {
+  const pts = [BASE, ...order.map((c) => props.get(c).coords), BASE];
+  let t = 0;
+  for (let i = 0; i < pts.length - 1; i++) t += await travelHighway(pts[i], pts[i + 1]);
+  return t;
+};
+let hwBest = Infinity;
+for (const p of perms(["A", "B", "E"])) hwBest = Math.min(hwBest, await hwCost(p));
 ok("a genuine travel-time difference still wins over the distance tiebreak",
-  realDifference.morning.join(",") === "A,E", realDifference.morning.join(","));
+  Math.abs((await hwCost(realDifference.morning)) - hwBest) < 0.5,
+  `${realDifference.morning.join(",")} costs ${await hwCost(realDifference.morning)}, best is ${hwBest}`);
 
 // ---- 8. Whole-plan pass ----------------------------------------------
 
