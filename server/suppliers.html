@@ -139,7 +139,19 @@
       </form>
 
       <p class="suppliers-empty" id="suppliersEmpty" hidden>No suppliers yet. Add the yards / distributors PJL buys parts from.</p>
-      <ul class="suppliers-list" id="suppliersList" aria-label="Suppliers"></ul>
+      <!-- Data table, same primitive as the Customers and Properties
+           indexes (.crm-table in crm.css). Header row and data rows read one
+           --crm-cols template, so they cannot drift out of register. -->
+      <section class="crm-table suppliers-table">
+        <div class="crm-table-head" role="row">
+          <span>Supplier</span>
+          <span>Contact</span>
+          <span>Phone</span>
+          <span>Address</span>
+          <span></span>
+        </div>
+        <ul class="suppliers-list" id="suppliersList" aria-label="Suppliers"></ul>
+      </section>
     </main>
   </div>
 

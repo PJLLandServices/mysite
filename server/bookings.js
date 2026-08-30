@@ -98,19 +98,23 @@ function render() {
       ? `${lifecycleLabel(status)} · ${woCount} work order${woCount === 1 ? "" : "s"}`
       : lifecycleLabel(status);
     const card = document.createElement("a");
-    card.className = "bk-card";
+    card.className = "crm-table-row bk-card";
     card.href = `/admin/booking/${encodeURIComponent(b.id)}`;
     card.dataset.bookingId = b.id;
+    // Service leads the identity cell — it's what you're scanning for —
+    // with the booking id and the work-order count beneath it.
     card.innerHTML = `
-      <header class="bk-card__head">
-        <span class="bk-card__id">${esc(b.id)}</span>
-        <span class="bk-card__status bk-card__status--${esc(status)}">${esc(statusBadgeLabel(status))}</span>
-      </header>
-      <p class="bk-card__service">${esc(b.serviceLabel || b.serviceKey || "—")}</p>
-      <p class="bk-card__customer">${esc(b.customerName) || "(no customer)"}</p>
-      <p class="bk-card__address"${b.address ? ` data-map-address="${esc(b.address)}"` : ""}>${esc(b.address) || "—"}</p>
-      <p class="bk-card__datetime">${esc(formatDateTime(b.scheduledFor))}</p>
-      <p class="bk-card__state">${esc(stateText)}</p>
+      <span class="crm-cell bk-card__service">
+        <span class="crm-identity">
+        <span class="crm-cell-primary">${esc(b.serviceLabel || b.serviceKey || "—")}</span>
+        <span class="crm-cell-sub">${esc(b.id)}${woCount ? ` &middot; ${woCount} WO${woCount === 1 ? "" : "s"}` : ""}</span></span>
+      </span>
+      <span class="crm-cell bk-card__customer">${esc(b.customerName) || '<span class="crm-cell-muted">(no customer)</span>'}</span>
+      <span class="crm-cell bk-card__address"${b.address ? ` data-map-address="${esc(b.address)}"` : ""}>${esc(b.address) || '<span class="crm-cell-muted">—</span>'}</span>
+      <span class="crm-cell bk-card__datetime">${esc(formatDateTime(b.scheduledFor))}</span>
+      <span class="crm-cell crm-cell-status">
+        <span class="crm-pill bk-card__status bk-card__status--${esc(status)}">${esc(statusBadgeLabel(status))}</span>
+      </span>
     `;
     listEl.appendChild(card);
   }
