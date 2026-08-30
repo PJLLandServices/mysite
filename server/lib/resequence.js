@@ -309,8 +309,31 @@ async function sequenceDay(day, opts = {}) {
   const morningIdx = routable.morning.map((s) => indexOf.get(s.code));
   const afternoonIdx = routable.afternoon.map((s) => indexOf.get(s.code));
 
-  const { morning: morningOrder, afternoon: afternoonOrder } =
-    bestDayOrder(cost, morningIdx, afternoonIdx);
+  // MANUAL ORDER. Patrick knows things the optimiser cannot: who is not
+  // home before ten, which gate is locked until nine, which north slope is
+  // better done before the frost comes off. When he has hand-ordered a day
+  // the stored order IS the route, so the search is skipped entirely and
+  // the clock is walked over the order as written.
+  //
+  // It is skipped, not overridden afterwards, because re-optimising and
+  // then reapplying his order would compute the timings against a
+  // different sequence from the one printed.
+  //
+  // Everything else still runs: the day is still timed, the noon rule is
+  // still checked, and an overrun is still flagged. A manual day is not an
+  // unchecked day — it is an unoptimised one.
+  const manual = Boolean(day.manualOrder);
+  const { morning: morningOrder, afternoon: afternoonOrder } = manual
+    ? { morning: morningIdx, afternoon: afternoonIdx }
+    : bestDayOrder(cost, morningIdx, afternoonIdx);
+
+  if (manual) {
+    flags.push({
+      code: "manual_order",
+      message: "Ordered by hand — the optimiser is not touching this day. "
+        + "This also decides which addresses the booking page can cheaply add to it."
+    });
+  }
 
   // Walk the clock. Each bucket starts no earlier than its own window.
   const timeline = [];

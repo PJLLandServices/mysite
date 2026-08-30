@@ -195,6 +195,106 @@ const toThursday = await plans.moveDay("fall", 2026,
   { fromDate: "2026-09-28", toDate: "2026-10-01" });   // Thursday
 ok("a weekday is not flagged", toThursday.moved.weekend === false);
 
+// ---- Hand ordering inside a bucket -----------------------------------
+//
+// The optimiser cannot know who is not home before ten. This is how that
+// gets in — and the property that makes it worth having is that it STICKS.
+
+const resequence = require(path.join(ROOT, "server/lib/resequence.js"));
+
+await reseed();
+const nudged = await plans.reorderStop("fall", 2026, {
+  date: "2026-09-28", bucket: "morning", propertyCode: "P-2026-0074", direction: "up"
+}, { actor: "patrick" });
+
+ok("the stop moved up inside its bucket",
+  JSON.stringify(nudged.plan.days["2026-09-28"].morning) === JSON.stringify(["P-2026-0074", "P-2026-0071"]),
+  JSON.stringify(nudged.plan.days["2026-09-28"].morning));
+ok("THE DAY IS MARKED HAND-ORDERED — otherwise the next re-sequence reverts it",
+  nudged.plan.days["2026-09-28"].manualOrder === true);
+ok("the other bucket is untouched",
+  JSON.stringify(nudged.plan.days["2026-09-28"].afternoon) === JSON.stringify(["P-2026-0107"]));
+ok("the other day is untouched and still automatic",
+  !nudged.plan.days["2026-09-29"].manualOrder);
+ok("the reorder is reported with both positions",
+  nudged.reordered.from === 1 && nudged.reordered.to === 0, JSON.stringify(nudged.reordered));
+
+// validate() rebuilds every day from scratch on save. A manualOrder that
+// survived one write and vanished on the next would be worse than one that
+// never worked at all.
+await plans.savePlan("fall", 2026, await plans.getPlan("fall", 2026), { actor: "test" });
+const afterSave = await plans.getPlan("fall", 2026);
+ok("MANUAL ORDER SURVIVES A SAVE — validate() rebuilds days and must copy it",
+  afterSave.days["2026-09-28"].manualOrder === true);
+ok("...and so does the hand-set order",
+  JSON.stringify(afterSave.days["2026-09-28"].morning) === JSON.stringify(["P-2026-0074", "P-2026-0071"]));
+
+await throws("nudging past the top is refused rather than being a silent no-op",
+  () => plans.reorderStop("fall", 2026,
+    { date: "2026-09-28", bucket: "morning", propertyCode: "P-2026-0074", direction: "up" }),
+  /already first/);
+await throws("a stop that is not in that bucket is refused",
+  () => plans.reorderStop("fall", 2026,
+    { date: "2026-09-28", bucket: "afternoon", propertyCode: "P-2026-0074", direction: "up" }),
+  /not in the afternoon/);
+await throws("a bad direction is refused",
+  () => plans.reorderStop("fall", 2026,
+    { date: "2026-09-28", bucket: "morning", propertyCode: "P-2026-0071", direction: "sideways" }),
+  /up.*down|down.*up/);
+
+// ---- The sequencer must honour it ------------------------------------
+//
+// This is the assertion the whole feature rests on: a hand-ordered day is
+// walked in the order as written, and an automatic day is not.
+
+const COORDS = {
+  "P-2026-0071": { lat: 44.1084804, lng: -79.5006803 },
+  "P-2026-0074": { lat: 44.1098484, lng: -79.4846980 },
+  "P-2026-0107": { lat: 44.0351649, lng: -79.4318712 }
+};
+const byCode = new Map(Object.entries(COORDS).map(([code, coords]) =>
+  [code, { code, coords, zoneCount: 4 }]));
+const BASE = { lat: 44.0350, lng: -79.4820 };
+// A travel function that makes the reversed order clearly worse, so an
+// optimiser that is still running would visibly undo the hand order.
+const travel = async (a, b) => Math.round(
+  Math.abs(a.lat - b.lat) * 1000 + Math.abs(a.lng - b.lng) * 1000);
+
+const manualDay = {
+  label: "R1", manualOrder: true,
+  morning: ["P-2026-0074", "P-2026-0071"], afternoon: ["P-2026-0107"]
+};
+const seqManual = await resequence.sequenceDay(manualDay,
+  { propertiesByCode: byCode, base: BASE, travel });
+ok("A HAND-ORDERED DAY IS WALKED IN THE ORDER AS WRITTEN",
+  JSON.stringify(seqManual.morning) === JSON.stringify(["P-2026-0074", "P-2026-0071"]),
+  JSON.stringify(seqManual.morning));
+ok("...and it says so, in a flag the screen can show",
+  (seqManual.flags || []).some((f) => f.code === "manual_order"));
+ok("...and it is still TIMED — a manual day is unoptimised, not unchecked",
+  Array.isArray(seqManual.timeline) && seqManual.timeline.length === 3
+  && Boolean(seqManual.morningEndsAt));
+
+const autoDay = { label: "R1", morning: ["P-2026-0074", "P-2026-0071"], afternoon: ["P-2026-0107"] };
+const seqAuto = await resequence.sequenceDay(autoDay,
+  { propertiesByCode: byCode, base: BASE, travel });
+ok("THE SAME DAY WITHOUT THE FLAG IS REORDERED — proving the fixture would move",
+  JSON.stringify(seqAuto.morning) !== JSON.stringify(seqManual.morning),
+  `auto ${JSON.stringify(seqAuto.morning)} vs manual ${JSON.stringify(seqManual.morning)}`);
+ok("...and an automatic day carries no manual flag",
+  !(seqAuto.flags || []).some((f) => f.code === "manual_order"));
+
+// ---- Handing it back --------------------------------------------------
+
+await reseed();
+await plans.reorderStop("fall", 2026,
+  { date: "2026-09-28", bucket: "morning", propertyCode: "P-2026-0074", direction: "up" });
+const cleared = await plans.clearManualOrder("fall", 2026, { date: "2026-09-28" }, { actor: "patrick" });
+ok("the day goes back to automatic", !cleared.plan.days["2026-09-28"].manualOrder);
+await throws("clearing a day that is already automatic is refused rather than pretending",
+  () => plans.clearManualOrder("fall", 2026, { date: "2026-09-29" }),
+  /already optimised/);
+
 if (failures.length) {
   console.error(`\n✗ test-day-reschedule: ${failures.length} failed, ${pass} passed\n`);
   failures.forEach((f) => console.error(`  ✗ ${f}`));

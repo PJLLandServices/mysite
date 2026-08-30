@@ -19,6 +19,35 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-30 (Hand ordering inside a bucket):** the optimiser is very good at the only thing it can
+see — driving minutes — and blind to everything it cannot: who is not home before ten, which gate is
+locked until nine, which north slope is better done before the frost comes off. There was nowhere to
+put that knowledge. Each stop now has up/down arrows within its bucket.
+**The first nudge sets `manualOrder` on the day and the sequencer then stops optimising it** — it
+walks the stored order and times it rather than searching for a better one. That is the only honest
+behaviour: an order Patrick set which the next re-sequence silently reverted would be worse than no
+feature at all. The day says "ordered by hand" on the card and offers "Back to automatic", which
+clears the flag AND re-optimises, so handing it back visibly does something.
+A manual day is unoptimised, not unchecked: it is still timed, the noon rule is still applied and an
+overrun is still flagged.
+**FLOW-03 CONSEQUENCE, and it is not display-only.** `geo-filter.js:buildDayShapes()` reads
+`day.morning`/`day.afternoon` IN STORED ORDER, and `addedDriveMinutes()` measures the gaps between
+consecutive stops — so **reordering a day changes which addresses the booking page can cheaply add
+to it**. That is not a defect: the filter is measuring the route that will actually be driven. But
+it means an operator action on the admin screen now moves what FLOW-03 offers, so the flag's message
+says so out loud. No FLOW-03 CODE was touched — `availability.js` and `/book.html` are unchanged —
+and the flow stays PASS; what is new is a way for the data it reads to be changed on purpose.
+Two traps handled: `validate()` rebuilds every day from scratch on save, so `manualOrder` had to be
+explicitly copied or it would have survived one write and vanished on the next; and the reorder
+endpoint deliberately does NOT call `resequencePlanForStorage()` afterwards, because re-running the
+optimiser over an order just set by hand is precisely what this exists to stop.
+`scripts/test-day-reschedule.mjs` grows to 41 assertions. The one the feature rests on: the same
+fixture WITHOUT the manual flag comes back reordered, so the manual assertion cannot pass for the
+wrong reason — the trap that produced two false-passing fixtures earlier in this work.
+**Constraints ("not before 10:00", "do this one first") are NOT in this change and are next.** They
+modify the search and the cost model rather than bypassing them, and `resequence.js` has produced
+three bugs already; it gets its own pass.
+
 **2026-08-30 (A route day can be re-dated):** the weather stays too warm to close systems down,
 a day cannot run, and it has to slide. `seasonPlans.moveDay()` re-keys one day to a new date and
 **only that day moves** — Patrick's call, on the grounds that a warm Monday does not mean a warm
