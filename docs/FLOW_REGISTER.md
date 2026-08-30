@@ -19,6 +19,29 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-30 (Two route-ordering defects found on the live screen):** the re-sequencer shipped and
+Patrick immediately spotted both on R10.
+**SEQ-01 — the five-minute floor decided the order.** `distance.js` wraps every answer in
+`Math.max(MIN_TRAVEL_MINUTES, …)`, real Google Distance Matrix results included. 100 and 106 Lavery
+Trail are **40 m** apart and 748 Morrish Rd is 1 km away; all three legs report "5 minutes", so every
+arrangement ties and the search picked arbitrarily among them — live, `100 Lavery → Morrish → 106
+Lavery`, a detour between two neighbours. The floor is correct for scheduling (parking, unloading, a
+door) and fatal for ordering. Fixed by comparing candidate orders on travel time **plus** a vanishing
+weight of straight-line distance (0.001 min/km): inside a tie the distance decides, against a genuine
+minute it cannot compete. The matrix now carries `minutes` (shown to the operator, unmodified) and
+`cost` (comparison only) separately, so the weight can never leak into a displayed arrival time.
+**SEQ-02 — the screen rendered the stored order against sequenced times.** `resolveSeasonPlan` drew
+rows from the stored bucket arrays while arrival times came from the sequencer, so any plan whose
+stored order was not already optimal displayed correct times in the wrong order: R10 read 11:18,
+10:30, 08:40, 09:55, 09:20 down the page. Both now come from the sequencer, and each stop carries a
+`stopNumber` (1..n, continuous across buckets — it is one drive, not two) generated there rather than
+counted from row position, which makes the mismatch unrepresentable instead of merely unlikely.
+**Note on the numbers:** season driving reads 25h 13m before and after SEQ-01. That is the floor
+again — the route genuinely improved, but every shortened hop still reports its five-minute minimum,
+so the saving is real on the road and invisible in the system's own units. Season-wide check after
+the fix: no pair of stops within 200 m is separated in any day's route. Tests extended to 33
+assertions, including a fixture that reproduces the floor so the tie is real rather than assumed.
+
 **2026-08-30 (Re-sequencer, SPEC §6):** `server/lib/resequence.js` — a route day's stop order is
 now recomputed whenever its stop set changes, on import and on every move, instead of being left
 wherever the last edit happened to put it. Hand-placing produced an R1 that drove to one corner of

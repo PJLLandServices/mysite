@@ -21264,10 +21264,21 @@ Customer signature captured at ${new Date().toISOString()}.`;
     const days = [];
     for (const date of Object.keys(plan.days).sort()) {
       const day = plan.days[date];
-      const morning = (day.morning || []).map(resolveStop);
-      const afternoon = (day.afternoon || []).map(resolveStop);
-      const minutes = [...morning, ...afternoon].reduce((t, st) => t + (st.minutes || 0), 0);
       const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode, season });
+
+      // RENDER THE SEQUENCED ORDER, NOT THE STORED ONE. These used to be
+      // allowed to differ: the rows came from the stored arrays and the
+      // arrival times from the sequencer, so any plan whose stored order
+      // was not already optimal — one imported before the re-sequencer
+      // existed, say — displayed correct times against rows in the wrong
+      // order. Live, R10 showed 11:18, 10:30, 08:40, 09:55, 09:20 down
+      // the page. Reading both from the sequencer makes the mismatch
+      // unrepresentable rather than merely unlikely.
+      const stopNumbers = new Map((sequenced.timeline || []).map((t) => [t.propertyCode, t.stopNumber]));
+      const withNumber = (code) => ({ ...resolveStop(code), stopNumber: stopNumbers.get(code) || null });
+      const morning = (sequenced.morning || []).map(withNumber);
+      const afternoon = (sequenced.afternoon || []).map(withNumber);
+      const minutes = [...morning, ...afternoon].reduce((t, st) => t + (st.minutes || 0), 0);
       const suggestions = await resequence.suggestBucketMoves(day, {
         propertiesByCode: byCode, season, bucketCap: plan.bucketCap
       });
