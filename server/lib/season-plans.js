@@ -264,6 +264,76 @@ async function moveStop(season, year, { propertyCode, toDate, toBucket }, { acto
   return { plan: revalidated, warnings, moved: { propertyCode: code, from, to: { date: toDate, bucket: toBucket } } };
 }
 
+// Re-date one route day, leaving every other day where it is.
+//
+// The case this exists for: the weather stays too warm to close systems
+// down, so a day cannot run and has to slide. Only that day moves — the
+// rest of the season keeps its dates, because a warm Monday does not
+// necessarily mean a warm Friday.
+//
+// THE LABEL TRAVELS WITH THE DAY, NOT WITH THE DATE. R1 is the name of a
+// set of properties in a territory, and Patrick talks about days that way
+// ("R5 is the long-haul west"). Renumbering on a move would make
+// yesterday's sentence about R5 refer to somewhere else, so the label
+// stays put and the screen sorts by date.
+//
+// A DAY WITH REAL BOOKINGS ON IT IS REFUSED. Today no booking can exist
+// against a planned day — the assignment writer does not exist yet, so no
+// customer has ever been told a date. The moment it does, moving a day is
+// a promise broken and a batch of emails, and the check has to already be
+// here rather than be remembered afterwards. The caller supplies the
+// count; this module does not read bookings.
+async function moveDay(season, year, { fromDate, toDate, bookedCount = 0 }, { actor = "admin" } = {}) {
+  const key = planKey(season, year);
+  const from = String(fromDate || "").trim();
+  const to = String(toDate || "").trim();
+  if (!isRealDate(from)) throw new Error(`Not a calendar date: "${fromDate}".`);
+  if (!isRealDate(to)) throw new Error(`Not a calendar date: "${toDate}".`);
+  if (from === to) throw new Error("That day is already on that date.");
+
+  const all = await read();
+  const plan = all[key];
+  if (!plan) throw new Error(`No ${key} plan to edit.`);
+  const day = plan.days[from];
+  if (!day) throw new Error(`${from} is not a route day in this plan.`);
+
+  if (plan.days[to]) {
+    const other = plan.days[to].label || to;
+    throw new Error(`${to} already holds ${other}. Move that day first, or pick a free date.`);
+  }
+
+  const booked = Number(bookedCount) || 0;
+  if (booked > 0) {
+    throw new Error(
+      `${day.label || from} has ${booked} real booking${booked === 1 ? "" : "s"} on it. `
+      + "Moving the day would break a date a customer was already given — reschedule those bookings first."
+    );
+  }
+
+  delete plan.days[from];
+  plan.days[to] = day;
+
+  const { plan: revalidated, warnings } = validate(plan);
+  revalidated.updatedAt = new Date().toISOString();
+  revalidated.updatedBy = String(actor || "admin").slice(0, 80);
+  all[key] = revalidated;
+  await writeAll(all);
+  return {
+    plan: revalidated,
+    warnings,
+    moved: { label: day.label || null, from, to, weekend: isWeekend(to) }
+  };
+}
+
+// Saturdays and Sundays are not blocked — Patrick may choose one — but the
+// screen says so, because landing on a weekend by arithmetic accident is
+// different from landing on one on purpose.
+function isWeekend(dateKey) {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const dow = new Date(y, m - 1, d).getDay();
+  return dow === 0 || dow === 6;
+}
+
 // Flat "which property codes are planned on which date" view, which is
 // all the day-shape builder needs.
 function codesByDate(plan) {
@@ -276,6 +346,7 @@ function codesByDate(plan) {
 }
 
 module.exports = {
+  moveDay,
   FILE,
   BUCKETS,
   DEFAULT_BUCKET_CAP,

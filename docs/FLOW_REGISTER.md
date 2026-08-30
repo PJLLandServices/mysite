@@ -19,6 +19,29 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-30 (A route day can be re-dated):** the weather stays too warm to close systems down,
+a day cannot run, and it has to slide. `seasonPlans.moveDay()` re-keys one day to a new date and
+**only that day moves** — Patrick's call, on the grounds that a warm Monday does not mean a warm
+Friday. **The label travels with the day, not with the date:** R1 is the name of a set of properties
+in a territory and he talks about days that way, so renumbering on a move would make yesterday's
+sentence about R5 point somewhere else; the screen sorts by date instead. The day header now prints
+the date, which it never did — survivable when a day could not move, not now.
+Three guards, each asserted: a move onto an occupied date is refused and **names the day in the
+way**, because the operator's next decision is what to do with that day; a non-date or a Feb 31 is
+refused rather than rolled into March; and **a day carrying real bookings is refused outright**.
+That last one cannot fire today — nothing tells a customer their date yet — and is in now precisely
+because the moment the assignment writer lands, moving a day is a promise broken and a batch of
+emails. A planned stop is not a booking and never blocks a move; the endpoint counts real bookings
+from `activeBookings()` and hands the count in, so the store never reads bookings itself.
+Weekends are allowed but reported, because landing on a Saturday by arithmetic accident reads
+exactly like choosing one until somebody drives out on a Saturday.
+`scripts/test-day-reschedule.mjs`, 24 assertions, in `npm run build:check`. **Worth recording about
+the test itself:** `season-plans.js` resolves its file path at require time with no injectable
+location, so the first version of this test silently overwrote the real `season-plans.json`. It now
+snapshots and restores that file, and the restore is proven by planting a known file and checking it
+byte-for-byte afterwards. `build:check` is not part of the deploy build, so production was never at
+risk — but it is run locally against real data. No PASS flow touched.
+
 **2026-08-30 (Probe field gets address autocomplete):** the season-plan probe — "test an address
 against this plan" — was a bare text box, so a mistyped or half-written address reached the geocoder
 and came back as a miss the operator had to interpret. It now carries `js-address-autocomplete`, the

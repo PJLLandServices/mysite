@@ -71,6 +71,25 @@
 }
 .sp-day-head h3 { margin: 0; font-size: 1.02rem; }
 .sp-day-territory { margin: 3px 0 0; font-size: 0.84rem; color: var(--pjl-text-muted); }
+
+/* Re-dating a day. Tucked under the title rather than in the stats row —
+   the stats are facts about the day, this is an action on it. */
+.sp-reschedule { margin-top: 4px; }
+.sp-reschedule-open,
+.sp-reschedule-cancel {
+  font: inherit; font-size: 0.76rem; color: var(--pjl-text-mid);
+  background: none; border: 1px solid var(--pjl-border);
+  border-radius: 6px; padding: 2px 8px; cursor: pointer;
+}
+.sp-reschedule-open:hover,
+.sp-reschedule-cancel:hover { border-color: var(--pjl-green); color: var(--pjl-green); }
+.sp-reschedule-form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.sp-reschedule-form[hidden] { display: none; }
+.sp-reschedule-form input[type="date"] {
+  font: inherit; font-size: 0.8rem; padding: 3px 6px;
+  border: 1px solid var(--pjl-border); border-radius: 6px; background: #fff;
+}
+.sp-reschedule-go { font-size: 0.76rem; padding: 3px 10px; }
 .sp-day-stats { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
 .sp-bucket { padding: 8px 10px 10px; }
@@ -157,6 +176,7 @@
   font-size: 0.9rem; max-width: 380px;
 }
 .sp-toast.is-bad { background: #A32020; }
+.sp-toast.is-warn { background: var(--pjl-amber); }
 .sp-toast[hidden] { display: none; }
 
 .sp-probe-note {

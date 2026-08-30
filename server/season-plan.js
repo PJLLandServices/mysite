@@ -203,7 +203,11 @@
     const head = document.createElement("header");
     head.className = "sp-day-head";
     const title = document.createElement("div");
-    title.innerHTML = `<h3>${day.label || "—"} · ${day.weekday}</h3>`;
+    // The DATE, not just the weekday. It was missing, which was survivable
+    // when a day could not move and is not now: you cannot reschedule a day
+    // you cannot see the date of.
+    title.innerHTML = `<h3>${day.label || "—"} · ${day.weekday}, ${prettyDate(day.date)}</h3>`;
+    title.appendChild(rescheduleControl(day));
     if (day.territory) {
       const t = document.createElement("p");
       t.className = "sp-day-territory";
@@ -320,6 +324,78 @@
     whenVisible(mapBox, () => drawDayMap(mapBox, scroll, day));
 
     return card;
+  }
+
+  function prettyDate(date) {
+    const [y, m, d] = String(date || "").split("-").map(Number);
+    if (!y || !m || !d) return date || "—";
+    return new Date(y, m - 1, d).toLocaleDateString("en-CA", { month: "short", day: "numeric" });
+  }
+
+  // Re-dating a day. Only this day moves — the rest of the season keeps its
+  // dates, because a warm Monday does not mean a warm Friday.
+  function rescheduleControl(day) {
+    const wrap = document.createElement("div");
+    wrap.className = "sp-reschedule";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "sp-reschedule-open";
+    button.textContent = "Reschedule";
+
+    const form = document.createElement("form");
+    form.className = "sp-reschedule-form";
+    form.hidden = true;
+    const input = document.createElement("input");
+    input.type = "date";
+    input.value = day.date;
+    input.required = true;
+    const go = document.createElement("button");
+    go.type = "submit";
+    go.className = "pjl-btn pjl-btn-primary sp-reschedule-go";
+    go.textContent = "Move";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "sp-reschedule-cancel";
+    cancel.textContent = "Cancel";
+    form.appendChild(input); form.appendChild(go); form.appendChild(cancel);
+
+    button.addEventListener("click", () => {
+      form.hidden = false; button.hidden = true; input.focus();
+    });
+    cancel.addEventListener("click", () => {
+      form.hidden = true; button.hidden = false; input.value = day.date;
+    });
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const toDate = input.value;
+      if (!toDate || toDate === day.date) { cancel.click(); return; }
+      go.disabled = true;
+      try {
+        const response = await fetch(`${base()}/day`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fromDate: day.date, toDate })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error((data.errors || ["Move failed."]).join(" "));
+        render(data.plan);
+        const moved = data.moved || {};
+        // Saturdays and Sundays are allowed but said out loud, because
+        // landing on one by accident reads exactly like landing on one on
+        // purpose until somebody drives out on a Sunday.
+        showToast(`${moved.label || "Day"} moved to ${prettyDate(toDate)}.`
+          + (moved.weekend ? " That is a weekend." : ""), moved.weekend ? "warn" : "ok");
+      } catch (error) {
+        showToast(error.message, "bad");
+        go.disabled = false;
+      }
+    });
+
+    wrap.appendChild(button);
+    wrap.appendChild(form);
+    return wrap;
   }
 
   // ---- Map ---------------------------------------------------------
