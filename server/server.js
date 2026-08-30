@@ -50,6 +50,7 @@ const bookingSessions = require("./lib/booking-sessions");
 const properties = require("./lib/properties");
 const seasonPlans = require("./lib/season-plans");
 const geoFilter = require("./lib/geo-filter");
+const resequence = require("./lib/resequence");
 const customers = require("./lib/customers");
 const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
@@ -3985,6 +3986,25 @@ function horizonToReach(target, now = new Date()) {
   if (Number.isNaN(when.getTime())) return 30;
   const days = Math.ceil((when.getTime() - now.getTime()) / 86400000) + 1;
   return Math.min(120, Math.max(1, days));
+}
+
+// Reorder every bucket in a plan into driving order, ready to store.
+// Only the order changes: no stop moves day or bucket, so nothing a
+// customer has been told can be invalidated by this. Degrades to the
+// plan unchanged if properties cannot be read — a plan stored in a
+// slightly worse order beats an import that fails.
+async function resequencePlanForStorage(plan, season) {
+  try {
+    const all = await properties.list();
+    const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+    // sequencePlan's `days` is already storage-shaped: order only, no
+    // derived timing.
+    const { days } = await resequence.sequencePlan(plan, { propertiesByCode: byCode, season });
+    return { ...plan, days };
+  } catch (err) {
+    console.warn("[season-plan] re-sequence skipped:", err?.message);
+    return plan;
+  }
 }
 
 // ---- Season plan → day shapes ---------------------------------------
@@ -21238,12 +21258,20 @@ Customer signature captured at ${new Date().toISOString()}.`;
       };
     };
 
-    const days = Object.keys(plan.days).sort().map((date) => {
+    // Arrival estimates, drive time and the noon check are recomputed on
+    // every read rather than stored: zone counts change, and a stored
+    // timeline would go quietly stale against them.
+    const days = [];
+    for (const date of Object.keys(plan.days).sort()) {
       const day = plan.days[date];
       const morning = (day.morning || []).map(resolveStop);
       const afternoon = (day.afternoon || []).map(resolveStop);
       const minutes = [...morning, ...afternoon].reduce((t, st) => t + (st.minutes || 0), 0);
-      return {
+      const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode, season });
+      const suggestions = await resequence.suggestBucketMoves(day, {
+        propertiesByCode: byCode, season, bucketCap: plan.bucketCap
+      });
+      days.push({
         date,
         label: day.label || "",
         territory: day.territory || "",
@@ -21252,9 +21280,16 @@ Customer signature captured at ${new Date().toISOString()}.`;
         morning,
         afternoon,
         counts: { morning: morning.length, afternoon: afternoon.length, total: morning.length + afternoon.length },
-        onSiteMinutes: minutes
-      };
-    });
+        onSiteMinutes: minutes,
+        timeline: sequenced.timeline,
+        morningEndsAt: sequenced.morningEndsAt,
+        dayEndsAt: sequenced.dayEndsAt,
+        homeAt: sequenced.homeAt,
+        driveMinutes: sequenced.driveMinutes,
+        flags: sequenced.flags,
+        suggestions
+      });
+    }
 
     const problems = days.flatMap((d) => [...d.morning, ...d.afternoon]
       .filter((st) => st.problem)
@@ -21269,8 +21304,14 @@ Customer signature captured at ${new Date().toISOString()}.`;
       bucketCap: plan.bucketCap,
       dayCap: plan.dayCap,
       totalStops: days.reduce((t, d) => t + d.counts.total, 0),
+      driveMinutes: days.reduce((t, d) => t + (d.driveMinutes || 0), 0),
       days,
-      problems
+      problems,
+      // Days whose morning cannot finish by 12:00 in any order. Rule 2:
+      // flag rather than silently overrun, because the fix is a bucket or
+      // day change and only Patrick makes those.
+      overrunDays: days.filter((d) => (d.flags || []).some((f) => f.code === "morning_overruns"))
+        .map((d) => ({ date: d.date, label: d.label, endsAt: d.morningEndsAt }))
     };
   }
 
@@ -21305,7 +21346,12 @@ Customer signature captured at ${new Date().toISOString()}.`;
           errors: [`Couldn't find a plan in that JSON. Expected a "days" object, or a "${wrapperKey}" wrapper around one.`]
         });
       }
-      const { warnings } = await seasonPlans.savePlan(season, year, incoming, {
+      // Sequence before storing so the plan file always holds the order
+      // Patrick would actually drive. Ordering inside a bucket is never
+      // communicated to anyone, so this is free to do on his behalf; the
+      // bucket each customer sits in is untouched.
+      const sequencedIn = await resequencePlanForStorage(incoming, season);
+      const { warnings } = await seasonPlans.savePlan(season, year, sequencedIn, {
         actor: session?.email || session?.name || "admin"
       });
       const resolved = await resolveSeasonPlan(season, year);
@@ -21327,6 +21373,15 @@ Customer signature captured at ${new Date().toISOString()}.`;
         toDate: normalizeString(body.toDate, 10),
         toBucket: normalizeString(body.toBucket, 10)
       }, { actor: session?.email || session?.name || "admin" });
+      // A move changes a day's stop set, which is exactly when the order
+      // has to be recomputed — otherwise the new stop simply lands at the
+      // end of whichever bucket it was dropped into.
+      const stored = await seasonPlans.getPlan(season, year);
+      if (stored) {
+        await seasonPlans.savePlan(season, year, await resequencePlanForStorage(stored, season), {
+          actor: session?.email || session?.name || "admin"
+        });
+      }
       const resolved = await resolveSeasonPlan(season, year);
       return sendJson(res, 200, { ok: true, plan: resolved, warnings, moved });
     } catch (err) {
@@ -21383,6 +21438,14 @@ Customer signature captured at ${new Date().toISOString()}.`;
             || (added && added.minutes <= threshold)
         });
       }
+      // THE NUMBER THAT IS EASY TO MISREAD. This list covers ROUTE days
+      // only. Every other open day in the season has no planned shape,
+      // so the filter has no opinion and offers it to everybody. A
+      // Toronto address showing ten red rows here is not "shut out" —
+      // it still sees roughly forty bookable days. Report the route-day
+      // count and say what the rest do, so the screen cannot be read as
+      // the whole answer.
+      const offeredCount = days.filter((d) => d.offered).length;
       return sendJson(res, 200, {
         ok: true,
         address: geo.coords?.formattedAddress || address,
@@ -21392,6 +21455,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
         // column of zeroes that looks like a perfect match.
         filterSkipped: !resolvedAddress,
         thresholdMinutes: threshold,
+        routeDaysOffered: offeredCount,
+        routeDaysTotal: days.length,
         days
       });
     } catch (err) {

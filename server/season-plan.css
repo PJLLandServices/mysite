@@ -160,3 +160,25 @@
   .sp-buckets { grid-template-columns: 1fr; }
   .sp-bucket + .sp-bucket { border-left: 0; border-top: 1px solid var(--pjl-border); }
 }
+
+.sp-probe-note {
+  margin: 0 0 12px; font-size: 0.84rem; line-height: 1.5;
+  color: var(--pjl-text-muted); max-width: 70ch;
+}
+
+/* Arrival estimates and the re-sequencer's notes. */
+.sp-stop-time {
+  font-variant-numeric: tabular-nums; font-weight: 700; font-size: 0.82rem;
+  color: var(--pjl-green); background: var(--pjl-green-pale);
+  padding: 3px 7px; border-radius: 6px; white-space: nowrap;
+}
+.sp-day-notes {
+  list-style: none; margin: 0; padding: 10px 20px 0;
+  display: grid; gap: 6px;
+}
+.sp-day-notes li {
+  font-size: 0.84rem; line-height: 1.45; color: var(--pjl-text-mid);
+  padding-left: 12px; border-left: 3px solid var(--pjl-border);
+}
+.sp-day-notes li.is-bad { border-left-color: #A32020; color: #A32020; }
+.sp-day-notes li.is-suggestion { border-left-color: var(--pjl-amber); }
