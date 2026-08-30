@@ -237,6 +237,32 @@
       am.textContent = `morning ends ${day.morningEndsAt}`;
       stats.appendChild(am);
     }
+    // Route preview + the drive-it link. The list cannot be checked by
+    // eye; a map can, which is how the last two routing defects were
+    // actually found.
+    const actions = document.createElement("div");
+    actions.className = "sp-day-actions";
+    const mapBtn = document.createElement("button");
+    mapBtn.type = "button";
+    mapBtn.className = "pjl-btn pjl-btn-outline sp-map-btn";
+    mapBtn.textContent = "Preview route";
+    mapBtn.addEventListener("click", () => window.PJLSeasonPlanMap.openMap(day, current));
+    actions.appendChild(mapBtn);
+
+    // Needs no API key, so it is offered even when the preview cannot be.
+    const url = window.PJLSeasonPlanMap.directionsUrl(
+      window.PJLSeasonPlanMap.stopsFor(day), current.routeOrigin);
+    if (url) {
+      const drive = document.createElement("a");
+      drive.className = "pjl-btn pjl-btn-outline sp-map-btn";
+      drive.href = url;
+      drive.target = "_blank";
+      drive.rel = "noopener";
+      drive.textContent = "Open in Google Maps";
+      actions.appendChild(drive);
+    }
+    stats.appendChild(actions);
+
     head.appendChild(stats);
     card.appendChild(head);
 

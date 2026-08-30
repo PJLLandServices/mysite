@@ -58,6 +58,25 @@ becomes **Prospect → Ivsbridge → 991 → 970 Creebridge**, finishing in the 
 points and asserts the day ends at a different stop each time — the property that makes a wrong
 anchor a correctness bug rather than a cosmetic one.
 
+**2026-08-30 (Route preview on /admin/season-plan):** the re-sequencer's output is a list of
+addresses and times, and a list cannot be checked. Both routing defects found this session — a
+detour between two neighbours 40 m apart, and a morning that ran to Pickering before the afternoon
+came back west — were found by Patrick cross-referencing a day against a real map in another tool.
+Neither was visible in the list. So the plan screen gains two surfaces: **Preview route**, an in-page
+map with numbered stops in driving order, and **Open in Google Maps**, a plain directions URL that
+needs no API key, no billing, and opens in the phone's Maps app with turn-by-turn — the one that gets
+used in a truck, and the one that keeps working when the preview cannot. The Maps script loads
+lazily on first preview, so a page view that never opens a map is never billed for one. Marker order
+is read from the **timeline**, the same source the cards use, because two sources for one sequence is
+how they drift (that was SEQ-02). Road geometry comes from the Directions service and degrades to
+straight hops with a visible note when it cannot — straight lines still answer "is the order sane?",
+which is what the preview is for, and saying so beats letting them look like roads.
+`optimizeWaypoints` is explicitly **false**: the sequencer decides the order and the map only draws
+it, so Google reordering the stops would silently disagree with the schedule the customer was told.
+The browser key comes from `GOOGLE_MAPS_BROWSER_KEY` only — unset simply hides the preview button —
+rather than becoming a fourth hardcoded copy of the key already in the public HTML. **No PASS flow
+touched:** display only, no booking route, no engine call, no stored field.
+
 **2026-08-30 (SEQ-01 reopened, and SEQ-03):** the SEQ-01 fix shipped and did not work — Patrick's
 screenshot still showed `100 Lavery → Morrish → 106 Lavery`. Two reasons, both mine.
 **SEQ-01 (reopened).** The distance tiebreak was the wrong instrument. Across a day's route it is
