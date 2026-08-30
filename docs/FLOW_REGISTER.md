@@ -19,6 +19,19 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-30 (Probe field gets address autocomplete):** the season-plan probe — "test an address
+against this plan" — was a bare text box, so a mistyped or half-written address reached the geocoder
+and came back as a miss the operator had to interpret. It now carries `js-address-autocomplete`, the
+same class the other ten admin address boxes use, driven by the same `coverage-checker.js` that has
+been in production on them; it was reused rather than rewritten so this field cannot drift from the
+rest. The page's single Maps JS load now asks for `libraries=places` (libraries cannot be added after
+load), and `initCoverageCheck()` is called once the API is ready — it skips its full-checker half
+when that markup is absent, which it is here. `mapsReady()` is also kicked off at page load rather
+than waiting for a day card to scroll into view, because the probe sits above the cards; that is the
+same memoised script load, started sooner, and loading the library is not a billable map load —
+only `new google.maps.Map` is. **Needs `Places API` added to `GOOGLE_MAPS_BROWSER_KEY`'s API
+restrictions**, alongside Maps JavaScript API. Display only, no PASS flow touched.
+
 **2026-08-30 (Season-plan day maps become live Google maps):** the day maps were flat Google
 Static Maps images stretched to the full card width, so one day filled the window and eleven were
 unreadable; and all eleven fired their map request in the same tick — two Google calls each,

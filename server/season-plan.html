@@ -105,7 +105,7 @@
       <section class="sp-panel">
         <h2 class="sp-panel-title">Test an address against this plan</h2>
         <form class="sp-probe" id="probeForm">
-          <input type="text" id="probeAddress" placeholder="e.g. 4482 Grassland Crescent, Mississauga" autocomplete="off">
+          <input type="text" id="probeAddress" class="js-address-autocomplete" placeholder="e.g. 4482 Grassland Crescent, Mississauga" autocomplete="off">
           <button type="submit" class="pjl-btn pjl-btn-primary">Check</button>
         </form>
         <div class="sp-probe-out" id="probeOut" hidden></div>
@@ -141,6 +141,7 @@
 
   <div class="sp-toast" id="toast" hidden role="status"></div>
 
+  <script src="/coverage-checker.js"></script>
   <script src="/crm/season-plan.js"></script>
   <script src="/crm/nav-badges.js?v=1"></script>
 </body>
