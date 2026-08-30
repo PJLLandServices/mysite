@@ -19,6 +19,25 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-30 (Re-sequencer, SPEC §6):** `server/lib/resequence.js` — a route day's stop order is
+now recomputed whenever its stop set changes, on import and on every move, instead of being left
+wherever the last edit happened to put it. Hand-placing produced an R1 that drove to one corner of
+Newmarket in the morning and returned to the same corner in the afternoon, 0.7 km from where it had
+already been. Two rules are enforced and tested (`scripts/test-resequence.mjs`, 27 assertions, in
+`npm run build:check`): **order changes only WITHIN a bucket, never across** — a customer told
+"morning" stays in the morning, and the re-sequencer will not satisfy the noon rule by breaking this
+one — and **a morning that cannot finish by 12:00 in any order is FLAGGED**, not silently handed
+back as an overrun. What it may not fix, it reports: `suggestBucketMoves()` returns bucket changes
+that would save driving, as advice for Patrick, and mutates nothing. **Real drive times, not
+estimates:** the ordering search runs off a `travelMinutes()` matrix, because the straight-line
+estimator floors every trip at `MIN_TRAVEL_MINUTES` and reads a 0.7 km hop the same as a 3 km one —
+blind at exactly the neighbourhood scale this exists to get right. It runs at plan time only, never
+on a customer's booking request. **No PASS flow touched:** `availability.js` is not called, no
+booking route changes, and the plan file gains no new field — derived timing (arrival estimates,
+drive totals, the noon check) is recomputed on read and never stored, so it cannot drift against the
+zone counts it is calculated from. Against the live fall-2026 plan: 25h 13m of driving across 11
+days, one flagged morning (R10 at 12:03, 3 min over) and 7 bucket-move suggestions.
+
 **2026-08-30 (Geography-aware availability, FLOW-03 re-verified):** the booking engine now
 measures a customer against the day's *planned route* before offering it. New:
 `server/lib/season-plans.js` (the route seed, `server/data/season-plans.json`, keyed

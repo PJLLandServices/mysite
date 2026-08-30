@@ -49,9 +49,19 @@
 
   // ---- Render ------------------------------------------------------
 
-  function stopRow(stop, date, bucket) {
+  function stopRow(stop, date, bucket, arrival) {
     const li = document.createElement("li");
     li.className = `sp-stop${stop.resolved ? "" : " is-unresolved"}`;
+
+    // Arrival estimate. Admin-facing only — the customer is told a bucket
+    // and never a minute, which is what makes reordering free.
+    if (arrival) {
+      const when = document.createElement("span");
+      when.className = "sp-stop-time";
+      when.textContent = arrival.arriveAt;
+      when.title = `${arrival.driveMinutes} min drive, ${arrival.onSiteMinutes} min on site`;
+      li.appendChild(when);
+    }
 
     const main = document.createElement("div");
     main.className = "sp-stop-main";
@@ -160,7 +170,8 @@
     }
     const list = document.createElement("ul");
     list.className = "sp-stops";
-    stops.forEach((stop) => list.appendChild(stopRow(stop, day.date, bucket)));
+    const arrivals = new Map((day.timeline || []).map((t) => [t.propertyCode, t]));
+    stops.forEach((stop) => list.appendChild(stopRow(stop, day.date, bucket, arrivals.get(stop.code))));
     wrap.appendChild(list);
     return wrap;
   }
@@ -193,8 +204,42 @@
     const m = day.onSiteMinutes % 60;
     hours.textContent = `${h}h ${String(m).padStart(2, "0")}m on site`;
     stats.appendChild(hours);
+    if (day.driveMinutes != null) {
+      const drive = document.createElement("span");
+      drive.className = "sp-tag";
+      drive.textContent = `${day.driveMinutes} min driving`;
+      stats.appendChild(drive);
+    }
+    if (day.homeAt) {
+      const home = document.createElement("span");
+      home.className = "sp-tag";
+      home.textContent = `home ${day.homeAt}`;
+      stats.appendChild(home);
+    }
+    // The noon rule, shown as a fact rather than buried in a warning list.
+    if (day.morningEndsAt) {
+      const overruns = (day.flags || []).some((f) => f.code === "morning_overruns");
+      const am = document.createElement("span");
+      am.className = overruns ? "sp-tag is-bad" : "sp-tag";
+      am.textContent = `morning ends ${day.morningEndsAt}`;
+      stats.appendChild(am);
+    }
     head.appendChild(stats);
     card.appendChild(head);
+
+    const notes = [...(day.flags || []), ...(day.suggestions || [])];
+    if (notes.length) {
+      const strip = document.createElement("ul");
+      strip.className = "sp-day-notes";
+      for (const n of notes) {
+        const li = document.createElement("li");
+        li.className = n.code === "morning_overruns" ? "is-bad"
+          : n.code === "bucket_move_suggested" ? "is-suggestion" : "";
+        li.textContent = n.message;
+        strip.appendChild(li);
+      }
+      card.appendChild(strip);
+    }
 
     const buckets = document.createElement("div");
     buckets.className = "sp-buckets";
@@ -218,8 +263,14 @@
 
     const stamp = plan.updatedAt || plan.generatedAt;
     const when = stamp ? new Date(stamp).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" }) : "unknown";
+    const drive = plan.driveMinutes
+      ? ` · ${Math.round(plan.driveMinutes / 60)}h ${plan.driveMinutes % 60}m driving across the season`
+      : "";
+    const overrun = (plan.overrunDays || []).length
+      ? ` · ${plan.overrunDays.length} day${plan.overrunDays.length === 1 ? "" : "s"} overrun the morning`
+      : "";
     planMeta.textContent =
-      `${plan.totalStops} stops across ${plan.days.length} route days · last updated ${when}`
+      `${plan.totalStops} stops across ${plan.days.length} route days${drive}${overrun} · updated ${when}`
       + (plan.updatedBy ? ` by ${plan.updatedBy}` : "");
 
     problemsList.innerHTML = "";
