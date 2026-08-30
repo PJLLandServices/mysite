@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>PJL — Season Plan</title>
+  <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260518" />
+  <link rel="shortcut icon" href="/favicon.ico?v=20260518" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=20260518" />
+  <meta name="apple-mobile-web-app-title" content="PJL" />
+  <link rel="manifest" href="/site.webmanifest?v=20260518" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/season-plan.css">
+</head>
+<body class="pjl-crm-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/season-plan" class="is-active">Season plan</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/outreach">Outreach</a>
+      <a href="/admin/review-requests">Reviews</a>
+      <a href="/admin/bookings">Bookings</a>
+      <a href="/admin/customers">Customers</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
+      <a href="/admin/sitebuilder">System Builder</a>
+      <a href="/admin/work-orders">Work orders</a>
+      <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/warranty-claims">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
+      <a href="/admin/material-lists">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/users">Users</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Season plan</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="pjl-crm-shell">
+      <header class="sp-head">
+        <div>
+          <p class="pjl-page-eyebrow">Route seed</p>
+          <h1>Season plan</h1>
+          <p class="sp-sub" id="planMeta">Loading…</p>
+        </div>
+        <div class="sp-head-controls">
+          <label class="sp-control">
+            <span>Season</span>
+            <select id="seasonSelect">
+              <option value="fall">Fall closing</option>
+              <option value="spring">Spring opening</option>
+            </select>
+          </label>
+          <label class="sp-control">
+            <span>Year</span>
+            <select id="yearSelect"></select>
+          </label>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="importBtn">Import plan</button>
+        </div>
+      </header>
+
+      <!-- What the plan is FOR, stated on the page. Without this the
+           screen reads like a calendar; it is not one. -->
+      <p class="sp-explainer">
+        These are the days you intend to drive, before anyone books. The booking page measures
+        every new customer against these routes and only offers a day their address is cheap to
+        insert into. Nothing here is a booking &mdash; no work orders, no capacity used.
+      </p>
+
+      <section class="sp-panel" id="problemsPanel" hidden>
+        <h2 class="sp-panel-title">Needs attention</h2>
+        <ul class="sp-problems" id="problemsList"></ul>
+      </section>
+
+      <!-- Probe. The acceptance tool: type an address, see the actual
+           arithmetic the booking page will do for that person. -->
+      <section class="sp-panel">
+        <h2 class="sp-panel-title">Test an address against this plan</h2>
+        <form class="sp-probe" id="probeForm">
+          <input type="text" id="probeAddress" placeholder="e.g. 4482 Grassland Crescent, Mississauga" autocomplete="off">
+          <button type="submit" class="pjl-btn pjl-btn-primary">Check</button>
+        </form>
+        <div class="sp-probe-out" id="probeOut" hidden></div>
+      </section>
+
+      <div class="sp-days" id="dayList"></div>
+      <p class="sp-empty" id="emptyState" hidden></p>
+    </main>
+  </div>
+
+  <!-- Import dialog. Paste or upload; the server validates and reports
+       what it could not resolve rather than accepting silently. -->
+  <div class="sp-modal" id="importModal" hidden>
+    <div class="sp-modal-card" role="dialog" aria-modal="true" aria-labelledby="importTitle">
+      <header class="sp-modal-head">
+        <h2 id="importTitle">Import season plan</h2>
+        <button type="button" class="sp-modal-close" id="importClose" aria-label="Close">&times;</button>
+      </header>
+      <p class="sp-modal-hint">
+        Paste the plan JSON, or choose the file. Either the bare plan or the
+        <code>{"season-year": {…}}</code> wrapper works. This replaces the plan for the
+        selected season.
+      </p>
+      <input type="file" id="importFile" accept="application/json,.json">
+      <textarea id="importText" rows="12" spellcheck="false" placeholder='{ "fall-2026": { "days": { … } } }'></textarea>
+      <p class="sp-modal-error" id="importError" hidden></p>
+      <footer class="sp-modal-foot">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="importCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="importSave">Import</button>
+      </footer>
+    </div>
+  </div>
+
+  <div class="sp-toast" id="toast" hidden role="status"></div>
+
+  <script src="/crm/season-plan.js"></script>
+  <script src="/crm/nav-badges.js?v=1"></script>
+</body>
+</html>

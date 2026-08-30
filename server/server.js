@@ -48,6 +48,8 @@ const { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice } = require("./
 const { normalizeServiceFeeWaiver, friendlyWaiverReason } = require("./lib/service-fee-waiver");
 const bookingSessions = require("./lib/booking-sessions");
 const properties = require("./lib/properties");
+const seasonPlans = require("./lib/season-plans");
+const geoFilter = require("./lib/geo-filter");
 const customers = require("./lib/customers");
 const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
@@ -1164,6 +1166,10 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin" || pathname === "/admin/") return "user";
   if (pathname === "/admin/today" || pathname === "/admin/today/") return "user";
   if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") return "user";
+  // Season plan — the route seed the geography filter measures against.
+  // Admin/tech only: it decides which customers get offered which days.
+  if (pathname === "/admin/season-plan" || pathname === "/admin/season-plan/") return "user";
+  if (pathname.startsWith("/api/season-plans")) return "user";
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") return "user";
   if (pathname === "/admin/outreach" || pathname === "/admin/outreach/") return "user";
   if (pathname === "/admin/review-requests" || pathname === "/admin/review-requests/") return "user";
@@ -3911,8 +3917,31 @@ async function activeBookings() {
   // bookings.json — those need to count against the calendar too. Match
   // is by exact start time + leadId; anything in bookings.json with a
   // different start than its lead's lead.booking adds to the schedule.
+  //
+  // COORDINATES. These records used to be stamped with PJL_BASE, which
+  // told the availability engine that every booking without a lead
+  // happens at the shop. That made the corridor math wrong in the
+  // customer's favour (any slot looks reachable from the depot) and would
+  // have made the geography filter inert for exactly the records the
+  // season assignment writer is going to create — property-first bookings
+  // with no lead behind them. The booking record carries propertyId, and
+  // the property carries real coordinates, so resolve through it and keep
+  // the depot only as the last resort it was meant to be.
   try {
     const bookingRecs = await bookings.list();
+    const needed = bookingRecs.some((b) => b && b.scheduledFor && b.propertyId);
+    let coordsByPropertyId = new Map();
+    if (needed) {
+      try {
+        const all = await properties.list();
+        coordsByPropertyId = new Map(
+          all.filter((p) => p && p.id && p.coords && p.coords.lat != null)
+             .map((p) => [p.id, p.coords])
+        );
+      } catch (err) {
+        console.warn("[activeBookings] property coords unavailable:", err?.message);
+      }
+    }
     for (const b of bookingRecs) {
       if (!b.scheduledFor) continue;
       if (b.status === "cancelled" || b.status === "completed" || b.status === "no_show") continue;
@@ -3923,8 +3952,10 @@ async function activeBookings() {
       fromLeads.push({
         start: startD.toISOString(),
         end: endD.toISOString(),
-        coords: PJL_BASE,
+        coords: (b.propertyId && coordsByPropertyId.get(b.propertyId)) || PJL_BASE,
         leadId: b.leadId,
+        bookingId: b.id,
+        propertyId: b.propertyId || null,
         serviceKey: b.serviceKey,
         serviceLabel: b.serviceLabel
       });
@@ -3933,6 +3964,64 @@ async function activeBookings() {
     console.warn("[activeBookings] bookings.json union skipped:", err?.message);
   }
   return fromLeads;
+}
+
+// How many days the engine must scan to reach a specific slot.
+//
+// THE BUG THIS REPLACES. The three re-validation call sites each carried
+// their own hardcoded horizon — 30, 60, 30 — while the availability READ
+// scans up to 120 days (the picker sends its visible range). A slot
+// legitimately offered 40 days out therefore passed availability and
+// failed re-validation, and the customer was told "that slot was just
+// taken" about a slot nobody had taken. The geography filter makes that
+// bite hard rather than occasionally: filtering to the days we are
+// actually in a customer's area is exactly what pushes their only
+// offered dates past 30 days.
+//
+// Scanning to the requested slot and no further is both correct and
+// cheaper than any constant.
+function horizonToReach(target, now = new Date()) {
+  const when = target instanceof Date ? target : new Date(target);
+  if (Number.isNaN(when.getTime())) return 30;
+  const days = Math.ceil((when.getTime() - now.getTime()) / 86400000) + 1;
+  return Math.min(120, Math.max(1, days));
+}
+
+// ---- Season plan → day shapes ---------------------------------------
+//
+// The geography filter needs to know what each route day is SHAPED like
+// before anyone books it. This resolves the current season's plan into
+// the point sets availability.js measures against.
+//
+// Everything here degrades to null, which the engine reads as "no plan,
+// behave exactly as before". No plan loaded, an unreadable plan file, a
+// season with no entry — all of them mean unfiltered availability, never
+// a refusal. Invariant 5.
+async function dayShapesForSeason({ bookings: activeList, season, year, now = new Date() } = {}) {
+  try {
+    const resolvedSeason = season || outreach.seasonForBooking(now);
+    // seasonForBooking wraps: in December it already answers "spring",
+    // meaning NEXT spring. Rather than restate that date logic here,
+    // look for this year's plan and fall forward one year if the season
+    // has already wrapped past it.
+    let resolvedYear = year || now.getFullYear();
+    let plan = await seasonPlans.getPlan(resolvedSeason, resolvedYear);
+    if (!plan && !year) {
+      resolvedYear += 1;
+      plan = await seasonPlans.getPlan(resolvedSeason, resolvedYear);
+    }
+    if (!plan) return null;
+    const all = await properties.list();
+    const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+    return geoFilter.buildDayShapes({
+      plan,
+      propertiesByCode: byCode,
+      bookings: activeList || []
+    });
+  } catch (err) {
+    console.warn("[dayShapes] season plan unavailable, availability unfiltered:", err?.message);
+    return null;
+  }
 }
 
 // Sync property.address (+ customer name/phone) into every lead and
@@ -4041,6 +4130,8 @@ async function rescheduleAvailability(bookingId, { from, to } = {}) {
   if (toDate) {
     daysAhead = Math.min(120, Math.max(1, Math.ceil((toDate.getTime() - now.getTime()) / 86400000) + 1));
   }
+  const dayShapes = await dayShapesForSeason({ bookings: otherBookings, now });
+  const diagnostics = { geoSuppressed: [] };
   const slots = await listAvailableSlots({
     serviceKey,
     customerCoords: geo.coords,
@@ -4048,10 +4139,12 @@ async function rescheduleAvailability(bookingId, { from, to } = {}) {
     blocks: scheduleData.blocks,
     daysAhead,
     hours: mergedHours,
-    settings: mergedSettings
+    settings: mergedSettings,
+    dayShapes,
+    diagnostics
   });
   const days = (fromDate && toDate)
-    ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now })
+    ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now, geoSuppressed: diagnostics.geoSuppressed })
     : groupByDay(slots);
   return {
     ok: true,
@@ -4174,9 +4267,10 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
       customerCoords: geo.coords,
       bookings: otherBookings,
       blocks: scheduleData.blocks,
-      daysAhead: 60,
+      daysAhead: horizonToReach(startDate),
       hours: mergedHours,
-      settings: mergedSettings
+      settings: mergedSettings,
+      dayShapes: await dayShapesForSeason({ bookings: otherBookings })
     });
     matched = candidateSlots.find((s) => s.start === startDate.toISOString());
     if (!matched) {
@@ -12007,9 +12101,10 @@ async function handleApi(req, res, pathname) {
             customerCoords: geo.coords,
             bookings: allActive,
             blocks: scheduleData.blocks,
-            daysAhead: 30,
+            daysAhead: horizonToReach(startDate),
             hours: mergedHours,
-            settings: mergedSettings
+            settings: mergedSettings,
+            dayShapes: await dayShapesForSeason({ bookings: allActive })
           });
           validatedSlot = candidates.find((s) => s.start === startDate.toISOString());
           if (!validatedSlot) {
@@ -19631,6 +19726,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
       const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
 
+      const dayShapes = await dayShapesForSeason({ bookings, now });
+      const diagnostics = { geoSuppressed: [] };
       const slots = await listAvailableSlots({
         serviceKey,
         customerCoords,
@@ -19638,11 +19735,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
         blocks: scheduleData.blocks,
         daysAhead,
         hours: mergedHours,
-        settings: mergedSettings
+        settings: mergedSettings,
+        dayShapes,
+        diagnostics
       });
 
       const days = (fromDate && toDate)
-        ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now })
+        ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now, geoSuppressed: diagnostics.geoSuppressed })
         : groupByDay(slots);
 
       return sendJson(res, 200, {
@@ -19834,9 +19933,10 @@ Customer signature captured at ${new Date().toISOString()}.`;
           customerCoords,
           bookings,
           blocks: scheduleData.blocks,
-          daysAhead: 30,
+          daysAhead: horizonToReach(startDate),
           hours: mergedHours,
-          settings: mergedSettings
+          settings: mergedSettings,
+          dayShapes: await dayShapesForSeason({ bookings })
         });
         matched = stillAvailable.find((s) => s.start === startDate.toISOString());
         if (!matched) {
@@ -21089,6 +21189,216 @@ Customer signature captured at ${new Date().toISOString()}.`;
     }
   }
 
+  // ---- Season plan (SPEC_seasonal_scheduling §3.1 / §10.1) ----------
+  //
+  // The plan is the seed the geography filter measures against: the route
+  // Patrick intends to drive, before anyone has booked it. These routes
+  // are the "plan review" surface — import it, see what it resolves to,
+  // move a stop that landed on the wrong day, and probe an address
+  // against it to see the filter's actual arithmetic.
+  //
+  // Admin/tech only (path-auth "user", registered above).
+
+  // Resolve the stored plan's property codes into live records. Anything
+  // that does not resolve is REPORTED, never dropped — a code with no
+  // property behind it is how a merged-away duplicate shows itself, and
+  // silently shrinking the day would hide exactly the problem this screen
+  // exists to catch.
+  async function resolveSeasonPlan(season, year) {
+    const plan = await seasonPlans.getPlan(season, year);
+    if (!plan) return null;
+    const all = await properties.list();
+    const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+    const woType = season === "spring" ? "spring_opening" : "fall_closing";
+
+    const resolveStop = (code) => {
+      const property = byCode.get(code);
+      if (!property) {
+        return { code, resolved: false, problem: "No property with this code — merged away or deleted." };
+      }
+      const zones = Array.isArray(property.system?.zones) ? property.system.zones.length : 0;
+      const commercial = property.billingEntity?.accountType === "commercial";
+      const serviceKey = deriveSeasonalKey(woType, zones, commercial);
+      const service = serviceKey ? BOOKABLE_SERVICES[serviceKey] : null;
+      const hasCoords = Boolean(property.coords && property.coords.lat != null);
+      return {
+        code,
+        resolved: true,
+        propertyId: property.id,
+        customerName: property.customerName || "",
+        address: property.address || "",
+        town: property.town || "",
+        zones: zones || null,
+        zonesEstimated: zones === 0,
+        serviceKey,
+        serviceLabel: service ? service.label : "",
+        minutes: service ? service.minutes : null,
+        hasCoords,
+        problem: hasCoords ? null : "No coordinates — contributes nothing to the day's shape."
+      };
+    };
+
+    const days = Object.keys(plan.days).sort().map((date) => {
+      const day = plan.days[date];
+      const morning = (day.morning || []).map(resolveStop);
+      const afternoon = (day.afternoon || []).map(resolveStop);
+      const minutes = [...morning, ...afternoon].reduce((t, st) => t + (st.minutes || 0), 0);
+      return {
+        date,
+        label: day.label || "",
+        territory: day.territory || "",
+        frost: day.frost || "",
+        weekday: new Date(`${date}T12:00:00`).toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" }),
+        morning,
+        afternoon,
+        counts: { morning: morning.length, afternoon: afternoon.length, total: morning.length + afternoon.length },
+        onSiteMinutes: minutes
+      };
+    });
+
+    const problems = days.flatMap((d) => [...d.morning, ...d.afternoon]
+      .filter((st) => st.problem)
+      .map((st) => ({ date: d.date, label: d.label, code: st.code, problem: st.problem })));
+
+    return {
+      season, year,
+      generatedAt: plan.generatedAt || null,
+      updatedAt: plan.updatedAt || null,
+      updatedBy: plan.updatedBy || null,
+      source: plan.source || "",
+      bucketCap: plan.bucketCap,
+      dayCap: plan.dayCap,
+      totalStops: days.reduce((t, d) => t + d.counts.total, 0),
+      days,
+      problems
+    };
+  }
+
+  const seasonPlanMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})$/);
+  if (seasonPlanMatch && req.method === "GET") {
+    try {
+      const resolved = await resolveSeasonPlan(seasonPlanMatch[1], Number(seasonPlanMatch[2]));
+      if (!resolved) return sendJson(res, 404, { ok: false, code: "no_plan", errors: ["No plan loaded for that season."] });
+      return sendJson(res, 200, { ok: true, plan: resolved });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read the plan."] });
+    }
+  }
+
+  // Import / replace. Accepts either the bare plan object or the seed
+  // file's outer wrapper ({ "fall-2026": { ... } }) so the file that
+  // comes off the route planner can be pasted in without editing.
+  if (seasonPlanMatch && req.method === "PUT") {
+    try {
+      const session = await requireUser(req);
+      const season = seasonPlanMatch[1];
+      const year = Number(seasonPlanMatch[2]);
+      const body = await parseRequestBody(req);
+      const wrapperKey = seasonPlans.planKey(season, year);
+      const incoming = (body && body.days) ? body
+        : (body && body[wrapperKey] && body[wrapperKey].days) ? body[wrapperKey]
+        : (body && body.plan && body.plan.days) ? body.plan
+        : null;
+      if (!incoming) {
+        return sendJson(res, 422, {
+          ok: false,
+          errors: [`Couldn't find a plan in that JSON. Expected a "days" object, or a "${wrapperKey}" wrapper around one.`]
+        });
+      }
+      const { warnings } = await seasonPlans.savePlan(season, year, incoming, {
+        actor: session?.email || session?.name || "admin"
+      });
+      const resolved = await resolveSeasonPlan(season, year);
+      return sendJson(res, 200, { ok: true, plan: resolved, warnings });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't save the plan."] });
+    }
+  }
+
+  const seasonPlanMoveMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/move$/);
+  if (seasonPlanMoveMatch && req.method === "PATCH") {
+    try {
+      const session = await requireUser(req);
+      const season = seasonPlanMoveMatch[1];
+      const year = Number(seasonPlanMoveMatch[2]);
+      const body = await parseRequestBody(req);
+      const { warnings, moved } = await seasonPlans.moveStop(season, year, {
+        propertyCode: normalizeString(body.propertyCode, 40),
+        toDate: normalizeString(body.toDate, 10),
+        toBucket: normalizeString(body.toBucket, 10)
+      }, { actor: session?.email || session?.name || "admin" });
+      const resolved = await resolveSeasonPlan(season, year);
+      return sendJson(res, 200, { ok: true, plan: resolved, warnings, moved });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't move that stop."] });
+    }
+  }
+
+  // Probe — "what would the filter say about this address?"
+  //
+  // Answers, for every route day, the cheapest-insertion added drive and
+  // whether the day would be offered. This is the acceptance tool: a
+  // Mississauga address should read a couple of minutes against the
+  // Etobicoke–Mississauga day and over an hour against everything else.
+  // It runs the same geo-filter code path the booking page runs, so a
+  // green probe is evidence about the real engine, not about a mock.
+  const seasonPlanProbeMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/probe$/);
+  if (seasonPlanProbeMatch && req.method === "POST") {
+    try {
+      const season = seasonPlanProbeMatch[1];
+      const year = Number(seasonPlanProbeMatch[2]);
+      const body = await parseRequestBody(req);
+      const address = normalizeString(body.address, 320);
+      if (!address) return sendJson(res, 422, { ok: false, errors: ["Enter an address to test."] });
+
+      const plan = await seasonPlans.getPlan(season, year);
+      if (!plan) return sendJson(res, 404, { ok: false, code: "no_plan", errors: ["No plan loaded for that season."] });
+
+      const geo = await geocode(address);
+      const scheduleData = await scheduleStore.read();
+      const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
+      const threshold = Number(mergedSettings.geoMaxAddedDriveMinutes);
+
+      const active = await activeBookings();
+      const all = await properties.list();
+      const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+      const shapes = geoFilter.buildDayShapes({ plan, propertiesByCode: byCode, bookings: active });
+
+      const resolvedAddress = geoFilter.coordsAreResolved(geo.coords);
+      const days = [];
+      for (const date of Object.keys(shapes).sort()) {
+        const shape = shapes[date];
+        const added = resolvedAddress
+          ? await geoFilter.addedDriveMinutes(geo.coords, shape.points)
+          : null;
+        days.push({
+          date,
+          label: shape.label,
+          points: shape.points.length,
+          plannedCount: shape.plannedCount,
+          bookedCount: shape.bookedCount,
+          addedDriveMinutes: added ? added.minutes : null,
+          offered: !resolvedAddress || !shape.points.length
+            || !Number.isFinite(threshold) || threshold <= 0
+            || (added && added.minutes <= threshold)
+        });
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        address: geo.coords?.formattedAddress || address,
+        geocodeOk: geo.ok === true,
+        // An address we could not geocode skips the filter entirely and
+        // is offered every day — say so plainly rather than showing a
+        // column of zeroes that looks like a perfect match.
+        filterSkipped: !resolvedAddress,
+        thresholdMinutes: threshold,
+        days
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Probe failed."] });
+    }
+  }
+
   // ---- Seasonal outreach (feature-seasonal-outreach-brief.md) ----
   //
   // Bulk booking-nudge engine. Patrick visits /admin/outreach a few
@@ -21432,6 +21742,9 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") {
     return { dir: SERVER_DIR, relative: "/schedule.html" };
+  }
+  if (pathname === "/admin/season-plan" || pathname === "/admin/season-plan/") {
+    return { dir: SERVER_DIR, relative: "/season-plan.html" };
   }
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") {
     return { dir: SERVER_DIR, relative: "/handoff.html" };

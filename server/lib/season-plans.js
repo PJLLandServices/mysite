@@ -1,0 +1,292 @@
+// Season plans — the route seed the geography filter measures against.
+//
+// WHY THIS EXISTS. server/lib/availability.js has always done
+// reachable-from-previous / reachable-to-next travel math against the
+// bookings already on a day. That math is correct and it was inert:
+// on an empty day everything is reachable, so the first customer to
+// click set the day's anchor wherever they happened to live, and every
+// later caller was measured against that accident. Availability for an
+// address in Nobleton and an address in Scarborough returned identical
+// slots.
+//
+// The fix is not more math. It is giving each day a shape BEFORE anyone
+// books it. That shape is the season plan: the route Patrick intends to
+// drive, expressed as property codes per day and bucket.
+//
+// A PLANNED PROPERTY IS NOT A BOOKING. It contributes its coordinates to
+// the day's shape and nothing else — it does not consume capacity, does
+// not appear on /admin/today, does not create a work order. When the
+// planned customer actually books, the booking joins the shape alongside
+// the planned entry; the entry itself stays, so a cancellation does not
+// erase the day's geography.
+//
+// STORAGE. server/data/season-plans.json, on the Render disk, keyed
+// "<season>-<year>" to match the ROUTE_PLAN seed file:
+//
+//   {
+//     "fall-2026": {
+//       "generatedAt": "2026-08-30T00:00:00Z",
+//       "source": "free text — how this plan was generated",
+//       "bucketCap": 5,
+//       "dayCap": 10,
+//       "days": {
+//         "2026-09-28": {
+//           "label": "R1",
+//           "territory": "North home turf",   // optional, display only
+//           "frost": "first",                  // optional, display only
+//           "morning":   ["P-2026-0003", ...],
+//           "afternoon": ["P-2026-0074", ...]
+//         }
+//       }
+//     }
+//   }
+//
+// PROPERTY CODES, NOT IDS. The plan is keyed on the human-facing
+// `code` ("P-2026-0003") rather than the uuid `id`, because the plan is
+// generated, reviewed and hand-edited by a person against the route
+// sheet. The reader resolves codes to live property records and reports
+// what it could not resolve rather than dropping it silently — that is
+// how the merged-away duplicate P-2026-0040 surfaces as a visible
+// warning instead of a stop that quietly stops existing.
+//
+// CAPS ARE WARNINGS, NOT ERRORS. bucketCap / dayCap describe the plan
+// Patrick intends. Exceeding one is worth showing on the review screen;
+// it is not a reason to refuse an import, because he is allowed to
+// decide a day holds six.
+
+const fs = require("node:fs/promises");
+const fsSync = require("node:fs");
+const path = require("node:path");
+
+const FILE = path.join(__dirname, "..", "data", "season-plans.json");
+
+const SEASONS = new Set(["spring", "fall"]);
+const BUCKETS = ["morning", "afternoon"];
+const DEFAULT_BUCKET_CAP = 5;
+const DEFAULT_DAY_CAP = 10;
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function planKey(season, year) {
+  const s = String(season || "").toLowerCase();
+  if (!SEASONS.has(s)) throw new Error(`Unknown season: ${season}`);
+  const y = Number(year);
+  if (!Number.isInteger(y) || y < 2000 || y > 2100) throw new Error(`Invalid year: ${year}`);
+  return `${s}-${y}`;
+}
+
+// "YYYY-MM-DD" -> true only if it is a real calendar date. new Date()
+// happily accepts 2026-02-31 and rolls it into March, which would put a
+// route day on a date the operator never typed.
+function isRealDate(key) {
+  if (!DATE_RE.test(key)) return false;
+  const [y, m, d] = key.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
+}
+
+async function ensureFile() {
+  await fs.mkdir(path.dirname(FILE), { recursive: true });
+  if (!fsSync.existsSync(FILE)) await fs.writeFile(FILE, "{}\n", "utf8");
+}
+
+async function read() {
+  await ensureFile();
+  try {
+    const raw = await fs.readFile(FILE, "utf8");
+    const parsed = JSON.parse(raw || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    // A corrupt plan file must not take the booking engine down with it.
+    // An unreadable plan means "no shape for any day", which degrades to
+    // today's behaviour (offer normal availability) rather than to a
+    // refusal. Invariant 5: a failure never blocks a booking.
+    return {};
+  }
+}
+
+async function writeAll(all) {
+  await ensureFile();
+  await fs.writeFile(FILE, `${JSON.stringify(all, null, 2)}\n`, "utf8");
+}
+
+// Normalize + check an incoming plan. Throws on anything that would make
+// the plan unreadable; collects everything else as a warning so the
+// review screen can show it without blocking the import.
+//
+// Returns { plan, warnings }.
+function validate(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("Plan must be a JSON object.");
+  }
+  const warnings = [];
+  const days = input.days;
+  if (!days || typeof days !== "object" || Array.isArray(days)) {
+    throw new Error("Plan is missing a `days` object.");
+  }
+
+  const bucketCap = Number.isFinite(Number(input.bucketCap)) ? Number(input.bucketCap) : DEFAULT_BUCKET_CAP;
+  const dayCap = Number.isFinite(Number(input.dayCap)) ? Number(input.dayCap) : DEFAULT_DAY_CAP;
+
+  const plan = {
+    generatedAt: typeof input.generatedAt === "string" ? input.generatedAt : new Date().toISOString(),
+    source: typeof input.source === "string" ? input.source.slice(0, 500) : "",
+    bucketCap,
+    dayCap,
+    days: {}
+  };
+
+  const seen = new Map();   // property code -> "YYYY-MM-DD bucket"
+  const dateKeys = Object.keys(days).sort();
+  if (!dateKeys.length) throw new Error("Plan has no route days.");
+
+  for (const dateKey of dateKeys) {
+    if (!isRealDate(dateKey)) throw new Error(`Not a calendar date: "${dateKey}". Expected YYYY-MM-DD.`);
+    const src = days[dateKey];
+    if (!src || typeof src !== "object") throw new Error(`Day ${dateKey} is not an object.`);
+
+    const day = {
+      label: typeof src.label === "string" ? src.label.slice(0, 40) : "",
+      morning: [],
+      afternoon: []
+    };
+    if (typeof src.territory === "string" && src.territory) day.territory = src.territory.slice(0, 120);
+    if (typeof src.frost === "string" && src.frost) day.frost = src.frost.slice(0, 40);
+
+    for (const bucket of BUCKETS) {
+      const list = src[bucket];
+      if (list == null) continue;
+      if (!Array.isArray(list)) throw new Error(`Day ${dateKey} ${bucket} must be an array.`);
+      for (const raw of list) {
+        const code = String(raw || "").trim();
+        if (!code) continue;
+        // A property on two stops is the duplicate-record failure mode
+        // (P-2026-0040 / P-2026-0056 before the merge). Keep the first
+        // and warn — dropping both would lose a real stop, and throwing
+        // would block an import over something the operator can see and
+        // fix on the review screen.
+        if (seen.has(code)) {
+          warnings.push({
+            code: "duplicate_stop",
+            propertyCode: code,
+            message: `${code} appears twice — kept at ${seen.get(code)}, dropped from ${dateKey} ${bucket}.`
+          });
+          continue;
+        }
+        seen.set(code, `${dateKey} ${bucket}`);
+        day[bucket].push(code);
+      }
+    }
+
+    if (day.morning.length > bucketCap) {
+      warnings.push({ code: "bucket_over_cap", date: dateKey, bucket: "morning",
+        message: `${dateKey} morning holds ${day.morning.length} stops, over the cap of ${bucketCap}.` });
+    }
+    if (day.afternoon.length > bucketCap) {
+      warnings.push({ code: "bucket_over_cap", date: dateKey, bucket: "afternoon",
+        message: `${dateKey} afternoon holds ${day.afternoon.length} stops, over the cap of ${bucketCap}.` });
+    }
+    const total = day.morning.length + day.afternoon.length;
+    if (total > dayCap) {
+      warnings.push({ code: "day_over_cap", date: dateKey,
+        message: `${dateKey} holds ${total} stops, over the day cap of ${dayCap}.` });
+    }
+
+    plan.days[dateKey] = day;
+  }
+
+  return { plan, warnings };
+}
+
+async function getPlan(season, year) {
+  const all = await read();
+  return all[planKey(season, year)] || null;
+}
+
+// Replace the plan for one season+year. `actor` is recorded on the
+// stored plan so the review screen can say who last imported it.
+async function savePlan(season, year, input, { actor = "admin" } = {}) {
+  const key = planKey(season, year);
+  const { plan, warnings } = validate(input);
+  plan.updatedAt = new Date().toISOString();
+  plan.updatedBy = String(actor || "admin").slice(0, 80);
+  const all = await read();
+  all[key] = plan;
+  await writeAll(all);
+  return { plan, warnings };
+}
+
+async function removePlan(season, year) {
+  const key = planKey(season, year);
+  const all = await read();
+  if (!all[key]) return false;
+  delete all[key];
+  await writeAll(all);
+  return true;
+}
+
+// Move one stop to a different day and/or bucket. This is the only
+// mutation the review screen needs before assignment goes out, and it
+// is deliberately the only one: the plan is regenerated each season, so
+// an editor beyond "this house is on the wrong day" is not worth
+// building or maintaining.
+//
+// Returns { plan, warnings, moved: { propertyCode, from, to } }.
+async function moveStop(season, year, { propertyCode, toDate, toBucket }, { actor = "admin" } = {}) {
+  const key = planKey(season, year);
+  const code = String(propertyCode || "").trim();
+  if (!code) throw new Error("propertyCode is required.");
+  if (!isRealDate(String(toDate || ""))) throw new Error(`Not a calendar date: "${toDate}".`);
+  if (!BUCKETS.includes(toBucket)) throw new Error(`Bucket must be one of: ${BUCKETS.join(", ")}.`);
+
+  const all = await read();
+  const plan = all[key];
+  if (!plan) throw new Error(`No ${key} plan to edit.`);
+  if (!plan.days[toDate]) throw new Error(`${toDate} is not a route day in this plan.`);
+
+  let from = null;
+  for (const [dateKey, day] of Object.entries(plan.days)) {
+    for (const bucket of BUCKETS) {
+      const i = (day[bucket] || []).indexOf(code);
+      if (i > -1) { day[bucket].splice(i, 1); from = { date: dateKey, bucket }; }
+    }
+  }
+  if (!from) throw new Error(`${code} is not in the ${key} plan.`);
+
+  plan.days[toDate][toBucket] = plan.days[toDate][toBucket] || [];
+  plan.days[toDate][toBucket].push(code);
+
+  const { plan: revalidated, warnings } = validate(plan);
+  revalidated.updatedAt = new Date().toISOString();
+  revalidated.updatedBy = String(actor || "admin").slice(0, 80);
+  all[key] = revalidated;
+  await writeAll(all);
+  return { plan: revalidated, warnings, moved: { propertyCode: code, from, to: { date: toDate, bucket: toBucket } } };
+}
+
+// Flat "which property codes are planned on which date" view, which is
+// all the day-shape builder needs.
+function codesByDate(plan) {
+  const out = new Map();
+  if (!plan || !plan.days) return out;
+  for (const [dateKey, day] of Object.entries(plan.days)) {
+    out.set(dateKey, [...(day.morning || []), ...(day.afternoon || [])]);
+  }
+  return out;
+}
+
+module.exports = {
+  FILE,
+  BUCKETS,
+  DEFAULT_BUCKET_CAP,
+  DEFAULT_DAY_CAP,
+  planKey,
+  isRealDate,
+  read,
+  validate,
+  getPlan,
+  savePlan,
+  removePlan,
+  moveStop,
+  codesByDate
+};
