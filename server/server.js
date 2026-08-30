@@ -21255,6 +21255,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
         serviceLabel: service ? service.label : "",
         minutes: service ? service.minutes : null,
         hasCoords,
+        coords: hasCoords ? { lat: property.coords.lat, lng: property.coords.lng } : null,
         problem: hasCoords ? null : "No coordinates — contributes nothing to the day's shape."
       };
     };
@@ -21320,6 +21321,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // anchored to the wrong point still looks like a route — and it was
       // wrong for eleven days before anyone noticed.
       routeOrigin: await routeOriginLib.routeOrigin(),
+      // Browser-side Maps key for the route preview, from the environment
+      // only. Browser keys are public by design — protected by an HTTP
+      // referrer restriction rather than by secrecy — but there is already
+      // one copied into several public HTML files, and adding a fourth
+      // hardcoded copy is how a key becomes impossible to rotate. Unset
+      // means the preview button simply does not render.
+      mapsBrowserKey: process.env.GOOGLE_MAPS_BROWSER_KEY || null,
       totalStops: days.reduce((t, d) => t + d.counts.total, 0),
       driveMinutes: days.reduce((t, d) => t + (d.driveMinutes || 0), 0),
       days,

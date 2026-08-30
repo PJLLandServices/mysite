@@ -196,3 +196,28 @@
    centroid anchored eleven route days without anyone noticing. */
 .sp-anchor { margin: 4px 0 0; font-size: 0.85rem; color: var(--pjl-text-muted); }
 .sp-anchor.is-bad { color: #A32020; font-weight: 600; }
+
+/* Route preview */
+.sp-day-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.sp-map-btn { font-size: 0.8rem; padding: 5px 12px; text-decoration: none; }
+.sp-map-card { width: min(920px, 100%); }
+.sp-map { width: 100%; height: min(56vh, 460px); border-radius: 10px; background: var(--pjl-cream); }
+.sp-map-note { margin: 10px 0 0; font-size: 0.85rem; color: var(--pjl-text-mid); }
+.sp-map-legend {
+  list-style: none; margin: 12px 0 0; padding: 0;
+  display: grid; gap: 6px; max-height: 190px; overflow: auto;
+}
+.sp-map-legend li {
+  display: flex; gap: 10px; align-items: center;
+  font-size: 0.86rem; color: var(--pjl-text);
+}
+.sp-map-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 22px; height: 22px; border-radius: 50%;
+  background: var(--pjl-green); color: #fff;
+  font-size: 0.74rem; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.sp-map-when {
+  font-variant-numeric: tabular-nums; color: var(--pjl-text-muted);
+  min-width: 44px;
+}
