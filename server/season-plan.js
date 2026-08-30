@@ -281,8 +281,20 @@
     head.className = "sp-probe-head";
     head.textContent = data.filterSkipped
       ? `${data.address} — could not be geocoded, so the filter is skipped and every day is offered.`
-      : `${data.address} — offered on a day when the extra driving is ${data.thresholdMinutes} min or less.`;
+      : `${data.address} — offered on ${data.routeDaysOffered} of ${data.routeDaysTotal} route days, `
+        + `where inserting them costs ${data.thresholdMinutes} min of extra driving or less.`;
     out.appendChild(head);
+
+    // Without this line the table reads as the whole answer, and a row of
+    // "no" looks like the customer has been shut out of the season. They
+    // have not: the filter only has an opinion about days that carry a
+    // planned route.
+    const rest = document.createElement("p");
+    rest.className = "sp-probe-note";
+    rest.textContent = "This table covers route days only. Every other open day in the season "
+      + "has no planned route, so it is offered to this address as normal — a customer with no "
+      + "route day still sees most of the calendar.";
+    out.appendChild(rest);
 
     const table = document.createElement("table");
     table.className = "sp-probe-table";

@@ -21383,6 +21383,14 @@ Customer signature captured at ${new Date().toISOString()}.`;
             || (added && added.minutes <= threshold)
         });
       }
+      // THE NUMBER THAT IS EASY TO MISREAD. This list covers ROUTE days
+      // only. Every other open day in the season has no planned shape,
+      // so the filter has no opinion and offers it to everybody. A
+      // Toronto address showing ten red rows here is not "shut out" —
+      // it still sees roughly forty bookable days. Report the route-day
+      // count and say what the rest do, so the screen cannot be read as
+      // the whole answer.
+      const offeredCount = days.filter((d) => d.offered).length;
       return sendJson(res, 200, {
         ok: true,
         address: geo.coords?.formattedAddress || address,
@@ -21392,6 +21400,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
         // column of zeroes that looks like a perfect match.
         filterSkipped: !resolvedAddress,
         thresholdMinutes: threshold,
+        routeDaysOffered: offeredCount,
+        routeDaysTotal: days.length,
         days
       });
     } catch (err) {
