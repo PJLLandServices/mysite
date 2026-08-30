@@ -58,24 +58,30 @@ becomes **Prospect → Ivsbridge → 991 → 970 Creebridge**, finishing in the 
 points and asserts the day ends at a different stop each time — the property that makes a wrong
 anchor a correctness bug rather than a cosmetic one.
 
-**2026-08-30 (Route preview on /admin/season-plan):** the re-sequencer's output is a list of
-addresses and times, and a list cannot be checked. Both routing defects found this session — a
-detour between two neighbours 40 m apart, and a morning that ran to Pickering before the afternoon
-came back west — were found by Patrick cross-referencing a day against a real map in another tool.
-Neither was visible in the list. So the plan screen gains two surfaces: **Preview route**, an in-page
-map with numbered stops in driving order, and **Open in Google Maps**, a plain directions URL that
-needs no API key, no billing, and opens in the phone's Maps app with turn-by-turn — the one that gets
-used in a truck, and the one that keeps working when the preview cannot. The Maps script loads
-lazily on first preview, so a page view that never opens a map is never billed for one. Marker order
-is read from the **timeline**, the same source the cards use, because two sources for one sequence is
-how they drift (that was SEQ-02). Road geometry comes from the Directions service and degrades to
-straight hops with a visible note when it cannot — straight lines still answer "is the order sane?",
-which is what the preview is for, and saying so beats letting them look like roads.
-`optimizeWaypoints` is explicitly **false**: the sequencer decides the order and the map only draws
-it, so Google reordering the stops would silently disagree with the schedule the customer was told.
-The browser key comes from `GOOGLE_MAPS_BROWSER_KEY` only — unset simply hides the preview button —
-rather than becoming a fourth hardcoded copy of the key already in the public HTML. **No PASS flow
-touched:** display only, no booking route, no engine call, no stored field.
+**2026-08-30 (Route maps, inline on every day):** the re-sequencer's output is a list of addresses
+and times, and a list cannot be checked. Both routing defects found this session — a detour between
+two neighbours 40 m apart, and a morning that ran to Pickering before the afternoon came back west —
+were found by cross-referencing a day against a real map in another tool. Neither was visible in the
+list. Each route day on `/admin/season-plan` now carries its own map, in the card, no click:
+numbered markers in driving order, the yard marked `H`, and the road path between them.
+**Rendered server-side as a PNG** (`server/lib/route-map.js` + `GET /api/season-plans/:season/:year/
+route-map/:date`). A first attempt put an interactive widget behind a button; Patrick's answer was
+that a map you have to open is not a map in front of you. Eleven live map widgets on one page is
+eleven billable map loads per refresh, so the server draws images instead — one Directions call for
+the road geometry, one Static Maps render, both cached on disk. The page pays for one lazy `<img>`
+per day and nothing at all for days scrolled past. **No browser key**: the existing
+`GOOGLE_MAPS_SERVER_KEY` does this, and the key never reaches the browser.
+**The cache is keyed on the ROUTE, not the date** — a hash of the ordered stop coordinates plus the
+yard — so a re-sequence draws a new picture and a refresh costs nothing. A stale map showing the old
+order would be worse than no map, because it would look like confirmation. Stop order is read from
+the timeline, the same source the cards and stop numbers read (SEQ-02's lesson). Directions is asked
+for the path **without** `optimize`, so Google cannot reshuffle the stops and put the picture at odds
+with the time a customer was told; if Directions fails the polyline degrades to straight hops.
+Static Maps labels are one character, so stops past nine get an unlabelled dot rather than a marker
+reading "1" when it is stop 10 — no day in the fall plan reaches ten.
+`scripts/test-route-map.mjs`, 11 assertions, including the polyline encoder checked against Google's
+published reference and the cache key proven to change on a reorder. **No PASS flow touched:**
+display only, no booking route, no engine call, no stored field.
 
 **2026-08-30 (SEQ-01 reopened, and SEQ-03):** the SEQ-01 fix shipped and did not work — Patrick's
 screenshot still showed `100 Lavery → Morrish → 106 Lavery`. Two reasons, both mine.
