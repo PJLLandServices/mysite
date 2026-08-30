@@ -123,16 +123,29 @@ function inOriginalWindow(year, month, day, season) {
     fallDefault.publicBookingThrough <= fallDefault.serviceableThrough);
 }
 
-// ---- 2. publicBookingThrough is defined, not wired ------------------
+// ---- 2. publicBookingThrough is wired, and only where it should be ---
 //
-// The brief defines the field for the future availability.js gate and
-// says nothing may consume it yet. Pin that: if a later change starts
-// reading it, this fails and whoever did it has to say so deliberately.
+// UPDATED 2026-08-30. This section used to pin that the field had NO
+// consumer, and said "if a later change starts reading it, this fails and
+// whoever did it has to say so deliberately." That change has now happened
+// and this is the deliberate saying-so: server/lib/public-booking-window.js
+// is the seasonal gate the field was defined for, and it now holds the
+// public booking flow to publicBookingThrough. See FLOW-03 in the register.
+//
+// The pin is inverted rather than deleted. It still does the same job — no
+// file may read this date without declaring itself here — and it now also
+// fails if the gate ever stops reading it, which would silently reopen the
+// window it was built to close.
 {
   const allowed = new Set([
     "seasons.json",
     "server/lib/seasons.js",
-    "scripts/test-season-config.mjs"
+    "scripts/test-season-config.mjs",
+    // The gate itself, its test, and the comment in server.js explaining
+    // which surfaces it applies to.
+    "server/lib/public-booking-window.js",
+    "scripts/test-public-booking-window.mjs",
+    "server/server.js"
   ]);
   const searched = [
     "seasons.json",
@@ -150,7 +163,16 @@ function inOriginalWindow(year, month, day, season) {
     if (!fs.existsSync(abs) || fs.statSync(abs).isDirectory()) return false;
     return fs.readFileSync(abs, "utf8").includes("publicBookingThrough") && !allowed.has(rel);
   });
-  ok("publicBookingThrough has no consumer yet", consumers.length === 0, consumers.join(", "));
+  ok("publicBookingThrough is read only by files that declare themselves here",
+    consumers.length === 0, consumers.join(", "));
+  // And it must still be read at all — a gate that stops consulting the date
+  // is a gate that offers work past the frost stop again.
+  const gateSrc = fs.readFileSync(path.join(ROOT, "server/lib/public-booking-window.js"), "utf8");
+  ok("the seasonal gate still reads publicBookingThrough",
+    gateSrc.includes("cfg.publicBookingThrough"));
+  ok("the seasonal gate cuts at the PUBLIC date, not serviceableThrough",
+    !/<=\s*cfg\.serviceableThrough/.test(gateSrc),
+    "the Nov 1-6 tail is reserved for admin placement");
 }
 
 // ---- 3. Window boundaries — inclusive on both ends ------------------

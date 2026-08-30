@@ -322,6 +322,101 @@ or catalog change, and the CTA that moved is FLOW-28's (UNMAPPED). `publicBookin
 consumed by nothing, pinned by a source guard. Cover:
 `scripts/test-season-config.mjs` (66 assertions, in `build:check`).
 
+**2026-08-30 (FLOW-03 — the seasonal gate, and the reserve window that hid it):**
+`publicBookingThrough` now has a consumer. **This touches FLOW-03, which is PASS** — a
+route's response and one refusal code change, so its PASS stamp is re-verified below in
+everything that can be verified without a walked booking, and Patrick's walk is named.
+
+**Defect 1 — the booking page sold work past the frost stop.** `listAvailableSlots()`
+scans forward from "now" and has never known which season a service belongs to, so every
+bookable service was offered on every open day inside the scan. Measured against a booted
+server on 2026-08-30: a customer could pick a **fall closing on 2026-12-26**, fifty days
+past the Nov 6 frost stop, and a **spring opening in December**. This is the same class of
+defect the 2026-08-26 season-config change fixed one layer up — `seasons.json` was created
+because a hardcoded fall window offered unserviceable dates — and it survived there because
+the booking engine read none of it.
+
+**Defect 2, found while wiring the first, and the reason the first was survivable.**
+`/api/booking/reserve` re-validated the chosen slot against a flat **30-day** scan while
+the picker offers whatever the visible month holds (to the route's 120-day cap). A slot
+further out than 30 days was never in the re-validation list, so **every attempt to book
+one answered `409 slot_taken` — "That slot was just taken. Please pick another time." —
+for a slot nobody had taken and that could not be booked at any time.** So the December
+fall closings were visible and clickable but not actually bookable; the live symptom was a
+misleading error on roughly everything past a month out, not a calendar full of
+unperformable work. Both are fixed here because the gate is meaningless while the reserve
+path refuses the dates it is supposed to be gating.
+
+**What changed.** New `server/lib/public-booking-window.js` holds the public flow to the
+season's `publicBookingThrough` (fall 2026: **Oct 30**), reading `seasons.json` through
+`server/lib/seasons.js` and taking its service-key prefixes from `outreach.js`'s existing
+`SEASONAL_SERVICE_PREFIXES`, so the gate and the outreach candidate list cannot disagree
+about which keys are seasonal and there is no second copy of the dates. Applied at three
+public surfaces — `/api/booking/availability` (offer), `/api/booking/reserve` (write), and
+`/api/portal/:token/reschedule-availability` (customer reschedule). The reserve path also
+now scans far enough to reach the slot being booked, same 120-day ceiling as the
+availability route, so the offer and the write agree.
+
+**Staff keep the full window, deliberately.** `/api/booking/availability` serves both the
+customer booking page and the three staff pickers (`admin.js`, `schedule.js`,
+`crm-followup.js`), so `requireUser()` decides whether the gate applies; `requireUser()`
+returns null for anonymous, so the customer path is the default and the gate fails safe.
+Patrick placing a job in November is deliberate advance scheduling; a customer doing it is
+work that cannot be performed. That asymmetry is exactly why `publicBookingThrough`
+(Oct 30) is a separate date from `serviceableThrough` (Nov 6) — the tail is reserved for
+admin placement. **Year-round services are not gated at all:** `sprinkler_repair`,
+`hydrawise_retrofit` and `site_visit` book in any month, verified by a control that books
+a repair on the same December date a fall closing is refused.
+
+**Fails closed.** If `seasons.json` is unreadable, `seasons.js` throws from every accessor
+and the gate lets that reach the route as a visible booking error rather than skipping the
+filter. Skipping it would silently restore the defect: a booking outage gets a phone call
+within the hour, unperformable work sold in December is not discovered until November. A
+source guard fails the build if a `try/catch` is ever added to the gate.
+
+**A customer refused past the season now hears why.** `code: "out_of_season"` with "That
+date is outside the season we can service. Please pick an earlier date, or call
+(905) 960-0181" — the old `slot_taken` text told them to pick another time, which for an
+out-of-season date is advice that cannot succeed.
+
+**Verified against a booted local server, both identities and both directions.** Same
+request, anonymous vs. an admin cookie: November grid **0 bookable vs. 36**, December grid
+**0 vs. 24**. Boundary exact — last public fall date **2026-10-30**, zero past it, while
+September is untouched at 35 bookable days, so in-season booking is not narrowed. Write
+boundary: a hand-crafted POST for a fall closing on 2026-12-08 is refused `out_of_season`,
+while `sprinkler_repair` on that same date books. Defect 2 shown both ways — with the flat
+30-day scan restored, an in-season slot 53 days out is refused `slot_taken`; with the fix,
+the same shape books.
+
+**Cover:** `scripts/test-public-booking-window.mjs` (71 assertions, in `build:check`),
+walking every bookable key in the catalog rather than a sample so a new tier with a
+mistyped prefix cannot be silently ungated, and pinning the boundary to the day, the
+UTC-Z-timestamp case (an 8 PM Oct 30 slot stored as `2026-10-31T00:00:00Z` must still read
+as Oct 30), and per-day year resolution (a spring service in March **2027** resolves
+against 2027, not the current year). Seven source guards pin the wiring in `server.js`;
+**all five behavioural ones were mutation-tested — each fails the suite when the line it
+pins is broken.** `scripts/test-season-config.mjs`'s "`publicBookingThrough` has no
+consumer yet" pin was written as a tripwire for exactly this change and is **inverted, not
+deleted**: it still refuses any undeclared file reading the date, and now also fails if the
+gate stops reading it.
+
+**FOUND, NOT FIXED — same defect, staff surface.** `POST /api/work-orders/:id/followup`
+(`server/server.js:11867`) re-validates against the same flat `daysAhead: 30` while
+`crm-followup.js` drives the same picker, so booking a follow-up more than ~30 days out
+answers `slot_taken` for a free slot. Staff-facing and lower harm, and fixing it means
+touching a second flow beyond this change's remit. Patrick decides whether it earns a job.
+
+**What still needs Patrick — the PASS stamp is not re-walked until this is done:** (1) from
+a **private window** (previewing `/book.html` while logged into the CRM exercises the STAFF
+path and shows ungated dates — the same footgun FLOW-21's view tracker has), open the
+booking page for a fall closing and confirm the calendar stops at **Oct 30** and November
+is greyed; (2) complete **one real booking** in September or October and confirm it lands
+in the CRM with the right tier and price, which is the hop this change could plausibly
+break; (3) confirm from the CRM that you can still place a job in **November** on the same
+service; (4) confirm a **sprinkler repair** still books in November; (5) on a real
+customer's portal, confirm reschedule offers no date past Oct 30. Mark PASS re-walked only
+after all five.
+
 If a flow isn't in here with a status, it is not known to work.
 Update this file, not a chat thread.
 
@@ -554,7 +649,7 @@ Previously logged as a change order; **closed, already built.**
 | FLOW-07 | **PASS** | Self-intake walked end to end. Existing email → existing record updated, no duplicate, alert says "existing record updated". Unknown email → new lead tagged Customer Self Intake, alert says "new record". Commercial variant (`/commercial-new-customer`, FLOW-08) same behaviour, Commercial tag retained. |
 | FLOW-04 | **PASS** — walked 2026-08-03 | Quote-builder flow walked end to end: `/quote.html` submits successfully and the lead **reaches the CRM tagged "New Sprinkler Quote."** (Page live + CTA repointed to `/book.html` verified 2026-08-02.) |
 | FLOW-05 | **PARTIAL** — submission walked 2026-08-03 | Page live, footer link repointed to `/book.html` (2026-08-02). **Submission walked 2026-08-03: `/estimate.html` submits successfully but routes to an external quotation combination rather than the CRM** — leads from this path never appear in the CRM, which explains the "no identifiable records" evidence from the JOB-001 export. It is an old form-builder flow. **Capability gap noted:** it produces a generated quotation the portal's own quote-request flow doesn't have. For future consideration; deliberately no job scoped (2026-08-03). |
-| FLOW-03 | **PASS** (re-verified) | Real booking completed through `/book.html` after the CTA change: $105 Spring Opening, work order WO-ZDQL272C, correct source tag and dollar value in CRM, phone + email notifications fired. |
+| FLOW-03 | **PASS** (re-verified) | Real booking completed through `/book.html` after the CTA change: $105 Spring Opening, work order WO-ZDQL272C, correct source tag and dollar value in CRM, phone + email notifications fired. **2026-08-30 — seasonal gate added; PASS stands on this walk but the re-walk is outstanding.** The public booking flow is now held to `seasons.json`'s `publicBookingThrough` (fall 2026: Oct 30), and `/api/booking/reserve` no longer refuses a free slot more than 30 days out with `slot_taken`. Staff keep the full window. See the 2026-08-30 entry in Part 1 for the verification and the five-step walk Patrick still owes. |
 
 ## Evidence — CRM export, 56 records, 2026-04-30 to 2026-07-29
 

@@ -58,6 +58,7 @@ const completionCascade = require("./lib/completion-cascade");
 const customLineItems = require("./lib/custom-line-items");
 const settings = require("./lib/settings");
 const outreach = require("./lib/outreach");
+const publicBookingWindow = require("./lib/public-booking-window");
 const reviewRequests = require("./lib/review-requests");
 const { generateIcsForToken } = require("./lib/ical-feed");
 const issueRollup = require("./lib/issue-rollup");
@@ -3970,7 +3971,7 @@ async function cascadePropertyToLinkedRecords(property) {
 // Same contract as /api/booking/availability but service + address come
 // from the booking record (not query params), and the booking's own
 // current slot is removed from the conflict math.
-async function rescheduleAvailability(bookingId, { from, to } = {}) {
+async function rescheduleAvailability(bookingId, { from, to, publicOnly = false } = {}) {
   const bookingRec = await bookings.get(bookingId);
   if (!bookingRec) return { ok: false, status: 404, errors: ["Booking not found."] };
   const serviceKey = bookingRec.serviceKey;
@@ -4006,9 +4007,14 @@ async function rescheduleAvailability(bookingId, { from, to } = {}) {
     hours: mergedHours,
     settings: mergedSettings
   });
-  const days = (fromDate && toDate)
-    ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now })
-    : groupByDay(slots);
+  // Seasonal gate — customer reschedule only. A customer must not be able to
+  // move a fall closing past the frost stop; Patrick rescheduling the same
+  // booking into the admin-reserved tail is deliberate placement.
+  const gatedSlots = publicOnly ? publicBookingWindow.filterSlots(slots, serviceKey) : slots;
+  let days = (fromDate && toDate)
+    ? expandDaysToRange(gatedSlots, { from: fromDate, to: toDate, hours: mergedHours, now })
+    : groupByDay(gatedSlots);
+  if (publicOnly) days = publicBookingWindow.annotateDays(days, serviceKey);
   return {
     ok: true,
     data: {
@@ -4017,7 +4023,7 @@ async function rescheduleAvailability(bookingId, { from, to } = {}) {
       address: geo.coords?.formattedAddress || address,
       range: (fromDate && toDate) ? { from, to } : null,
       days,
-      totalSlots: slots.length
+      totalSlots: gatedSlots.length
     }
   };
 }
@@ -12519,7 +12525,10 @@ async function handleApi(req, res, pathname) {
       const result = bookingRec
         ? await rescheduleAvailability(bookingRec.id, {
             from: url.searchParams.get("from"),
-            to: url.searchParams.get("to")
+            to: url.searchParams.get("to"),
+            // Customer-facing surface: the token is the credential, never a
+            // staff session. Always gated.
+            publicOnly: true
           })
         : { ok: false, errors: ["No booking."] };
       if (!result.ok) return sendJson(res, result.status || 400, { ok: false, errors: result.errors });
@@ -19492,9 +19501,25 @@ Customer signature captured at ${new Date().toISOString()}.`;
         settings: mergedSettings
       });
 
-      const days = (fromDate && toDate)
-        ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now })
-        : groupByDay(slots);
+      // Seasonal gate (server/lib/public-booking-window.js). This one route
+      // serves BOTH the customer booking page and the three staff pickers
+      // (admin.js, schedule.js, crm-followup.js), so who is asking decides
+      // whether the gate applies. A staff session keeps the full scan window
+      // for advance placement; everyone else is held to the season's
+      // publicBookingThrough. requireUser() returns null for anonymous, so
+      // the customer path is the default and the gate fails safe.
+      //
+      // NOTE FOR TESTING: previewing /book.html while logged into the CRM in
+      // the same browser exercises the STAFF path and shows ungated dates.
+      // Check the customer view from a private window.
+      const staffSession = await requireUser(req);
+      const isPublic = !staffSession;
+      const visibleSlots = isPublic ? publicBookingWindow.filterSlots(slots, serviceKey) : slots;
+
+      let days = (fromDate && toDate)
+        ? expandDaysToRange(visibleSlots, { from: fromDate, to: toDate, hours: mergedHours, now })
+        : groupByDay(visibleSlots);
+      if (isPublic) days = publicBookingWindow.annotateDays(days, serviceKey);
 
       return sendJson(res, 200, {
         ok: true,
@@ -19503,7 +19528,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
         geocodeOk: geo.ok === true,
         range: (fromDate && toDate) ? { from: fromParam, to: toParam } : null,
         days,
-        totalSlots: slots.length
+        totalSlots: visibleSlots.length
       });
     } catch (error) {
       return sendJson(res, 500, { ok: false, errors: [error.message || "Availability lookup failed."] });
@@ -19680,17 +19705,46 @@ Customer signature captured at ${new Date().toISOString()}.`;
         const [bookings, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
         const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
         const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
+        // Scan far enough to REACH the slot being reserved. This was a flat
+        // 30 days while the picker offers whatever the visible month holds
+        // (up to the route's 120-day cap), so a slot further out than 30 days
+        // was never in `stillAvailable` and every attempt to book one answered
+        // 409 "That slot was just taken" — for a slot nobody had taken and
+        // that could not be booked at any time. Same 120-day ceiling as
+        // /api/booking/availability so the offer and the write agree.
+        const reserveDaysAhead = Math.min(
+          120,
+          Math.max(1, Math.ceil((startDate.getTime() - Date.now()) / 86400000) + 1)
+        );
         const stillAvailable = await listAvailableSlots({
           serviceKey,
           customerCoords,
           bookings,
           blocks: scheduleData.blocks,
-          daysAhead: 30,
+          daysAhead: reserveDaysAhead,
           hours: mergedHours,
           settings: mergedSettings
         });
-        matched = stillAvailable.find((s) => s.start === startDate.toISOString());
+        // Seasonal gate at the WRITE boundary, not just the offer. Filtering
+        // the picker alone would leave a hand-crafted POST able to book a
+        // fall closing in December; a customer must clear the same window
+        // the booking page showed them. Staff keep the full range.
+        const reservableSlots = isAdmin
+          ? stillAvailable
+          : publicBookingWindow.filterSlots(stillAvailable, serviceKey);
+        matched = reservableSlots.find((s) => s.start === startDate.toISOString());
         if (!matched) {
+          // Distinguish "past the season" from "someone beat you to it" —
+          // the old message told a customer to pick another time, which for
+          // an out-of-season date is advice that cannot succeed.
+          if (!isAdmin && !publicBookingWindow.isPubliclyBookableOn(serviceKey, startDate)) {
+            return sendJson(res, 409, {
+              ok: false,
+              code: "out_of_season",
+              message: "Requested date is outside the bookable season.",
+              errors: ["That date is outside the season we can service. Please pick an earlier date, or call (905) 960-0181."]
+            });
+          }
           return sendJson(res, 409, {
             ok: false,
             code: "slot_taken",
