@@ -1174,6 +1174,7 @@ function needsAuth(method, pathname) {
   // Admin/tech only: it decides which customers get offered which days.
   if (pathname === "/admin/season-plan" || pathname === "/admin/season-plan/") return "user";
   if (pathname.startsWith("/api/season-plans")) return "user";
+  if (pathname === "/api/maps-config") return "user";
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") return "user";
   if (pathname === "/admin/outreach" || pathname === "/admin/outreach/") return "user";
   if (pathname === "/admin/review-requests" || pathname === "/admin/review-requests/") return "user";
@@ -21338,6 +21339,23 @@ Customer signature captured at ${new Date().toISOString()}.`;
       overrunDays: days.filter((d) => (d.flags || []).some((f) => f.code === "morning_overruns"))
         .map((d) => ({ date: d.date, label: d.label, endsAt: d.morningEndsAt }))
     };
+  }
+
+  // The browser key for the Maps JavaScript API. It is served to signed-in
+  // admins rather than baked into the HTML: the key is necessarily visible to
+  // anyone who loads the map, but there is no reason to hand it to anonymous
+  // visitors as well. The real protection is an HTTP-referrer restriction on
+  // the key itself, not secrecy.
+  if (pathname === "/api/maps-config" && req.method === "GET") {
+    const key = process.env.GOOGLE_MAPS_BROWSER_KEY || "";
+    return sendJson(res, 200, {
+      ok: true,
+      key,
+      available: Boolean(key),
+      // Said out loud so the screen can name the missing variable instead of
+      // showing an empty grey box the operator has to guess at.
+      reason: key ? null : "GOOGLE_MAPS_BROWSER_KEY is not set on the server."
+    });
   }
 
   const seasonPlanMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})$/);

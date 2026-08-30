@@ -1,11 +1,14 @@
 // Road geometry for a route day — the shape of the drive, nothing else.
 //
-// The map on /admin/season-plan is Leaflet with CARTO tiles: no key, no
-// per-load charge, and OUR numbered pins on top. Google's static markers
-// take a SINGLE character, so on a nine-stop day the later stops silently
-// lose their number; drawing the markers ourselves removes that limit
-// along with the per-map billing. All we still need from a router is the
-// line between the stops.
+// The map on /admin/season-plan is the Google Maps JavaScript API. The
+// geometry, though, is fetched HERE and cached, not asked for by the
+// browser: that keeps GOOGLE_MAPS_SERVER_KEY on the server and costs one
+// Directions call per route CHANGE rather than one per page view.
+//
+// Google Directions first, OSRM as the fallback. Directions is what the
+// rest of the system already pays for and its geometry matches the basemap
+// the line is drawn on; OSRM is kept because it needs no key and covers a
+// refused or throttled Directions call without the day losing its shape.
 //
 // THE LINE ONLY. NEVER THE MINUTES.
 //
@@ -38,6 +41,10 @@ const CACHE_DIR = path.join(__dirname, "..", "data", "route-lines");
 // the same escape hatch PJL_ROUTE_ORIGIN gives the yard.
 const DEFAULT_OSRM_BASE = "https://router.project-osrm.org";
 const REQUEST_TIMEOUT_MS = 8000;
+
+function googleConfigured() {
+  return Boolean(process.env.GOOGLE_MAPS_SERVER_KEY);
+}
 
 function osrmBase() {
   return (process.env.PJL_OSRM_URL || DEFAULT_OSRM_BASE).replace(/\/+$/, "");
@@ -103,11 +110,78 @@ async function fetchOsrm(points) {
   return line.map(([lng, lat]) => [lat, lng]);
 }
 
+// Google returns its geometry as an encoded polyline. This is the inverse of
+// route-map.js's encodePath, which is itself checked against the example in
+// Google's published documentation — so the pair is verified against the spec
+// and the round trip is asserted in the tests.
+function decodePolyline(encoded) {
+  const out = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < encoded.length) {
+    let shift = 0, result = 0, byte;
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20);
+    lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+
+    shift = 0; result = 0;
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20);
+    lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+
+    out.push([lat / 1e5, lng / 1e5]);
+  }
+  return out;
+}
+
+// `optimize` is deliberately absent. The re-sequencer decides the order and
+// this only draws it; letting Google reshuffle would produce a picture that
+// disagrees with the arrival times the customer was told.
+async function fetchGoogleDirections(points) {
+  const at = (p) => `${p.lat},${p.lng}`;
+  const url = new URL("https://maps.googleapis.com/maps/api/directions/json");
+  url.searchParams.set("origin", at(points[0]));
+  url.searchParams.set("destination", at(points[points.length - 1]));
+  if (points.length > 2) {
+    url.searchParams.set("waypoints", points.slice(1, -1).map(at).join("|"));
+  }
+  url.searchParams.set("mode", "driving");
+  url.searchParams.set("key", process.env.GOOGLE_MAPS_SERVER_KEY);
+
+  const response = await fetch(url.toString(), { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  const data = await response.json();
+  if (data.status !== "OK") {
+    // Google names the fix in its own words — "REQUEST_DENIED / This API
+    // project is not authorized" is the whole diagnosis. Throwing that away
+    // is what turned a five-minute key fix into a day of guessing.
+    throw new Error([data.status, data.error_message].filter(Boolean).join(" — "));
+  }
+  const encoded = data.routes && data.routes[0] && data.routes[0].overview_polyline
+    && data.routes[0].overview_polyline.points;
+  if (!encoded) throw new Error("Directions returned no geometry.");
+  const line = decodePolyline(encoded);
+  if (line.length < 2) throw new Error("Directions returned no geometry.");
+  return line;
+}
+
+// Cache entries are { source, coords }. A bare array is the earlier format,
+// still sitting on the deployed disk from the OSRM-only version — read it
+// rather than refetching every one of them, and label it as what wrote it.
 async function readCache(file) {
   try {
-    const raw = await fs.readFile(file, "utf8");
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length >= 2 ? parsed : null;
+    const parsed = JSON.parse(await fs.readFile(file, "utf8"));
+    if (Array.isArray(parsed)) {
+      return parsed.length >= 2 ? { source: "osrm", coords: parsed } : null;
+    }
+    if (parsed && Array.isArray(parsed.coords) && parsed.coords.length >= 2) {
+      return { source: parsed.source === "google" ? "google" : "osrm", coords: parsed.coords };
+    }
+    return null;
   } catch {
     return null;
   }
@@ -125,28 +199,47 @@ async function roadLine(origin, stops, opts = {}) {
   const file = path.join(CACHE_DIR, `${cacheKey(origin, clean)}.json`);
   if (!opts.noCache) {
     const hit = await readCache(file);
-    if (hit) return { coords: hit, source: "osrm", error: null, cached: true };
+    if (hit) return { coords: hit.coords, source: hit.source, error: null, cached: true };
   }
 
-  try {
-    const coords = await fetchOsrm(points);
+  const reasons = [];
+  for (const attempt of routers(opts)) {
     try {
-      await fs.mkdir(CACHE_DIR, { recursive: true });
-      await fs.writeFile(file, JSON.stringify(coords));
+      const coords = await attempt.run(points);
+      try {
+        await fs.mkdir(CACHE_DIR, { recursive: true });
+        await fs.writeFile(file, JSON.stringify({ source: attempt.name, coords }));
+      } catch (err) {
+        console.warn("[route-geometry] could not cache line:", err?.message);
+      }
+      return { coords, source: attempt.name, error: null, cached: false };
     } catch (err) {
-      console.warn("[route-geometry] could not cache line:", err?.message);
+      // Each router's own words, kept and carried. "REQUEST_DENIED" and
+      // "connect ECONNREFUSED" are different problems with different fixes,
+      // and collapsing them into "unavailable" is what turned the last map
+      // failure into a guess.
+      const detail = err?.name === "TimeoutError"
+        ? `did not answer within ${REQUEST_TIMEOUT_MS / 1000}s`
+        : (err?.message || "request failed");
+      console.warn(`[route-geometry] ${attempt.name}:`, detail);
+      reasons.push(`${attempt.name}: ${detail}`);
     }
-    return { coords, source: "osrm", error: null, cached: false };
-  } catch (err) {
-    // The router's own words, kept. "connect ECONNREFUSED" and "NoRoute"
-    // are different problems with different fixes, and collapsing them
-    // into "unavailable" is what turned the last map failure into a guess.
-    const detail = err?.name === "TimeoutError"
-      ? `Router did not answer within ${REQUEST_TIMEOUT_MS / 1000}s.`
-      : (err?.message || "Router request failed.");
-    console.warn("[route-geometry] osrm:", detail, "— drawing straight hops");
-    return { ...fallback, error: detail, cached: false };
   }
+  console.warn("[route-geometry] no router answered — drawing straight hops");
+  return { ...fallback, error: reasons.join("; ") || "No router configured.", cached: false };
 }
 
-module.exports = { roadLine, cacheKey, tourPoints, straightLine, CACHE_DIR, DEFAULT_OSRM_BASE };
+// Google first: it is what the rest of the system already pays for, and its
+// geometry matches the basemap the line is drawn on. OSRM covers a refused or
+// throttled Directions call without the day losing its shape.
+function routers(opts = {}) {
+  const list = [];
+  if (googleConfigured() && !opts.skipGoogle) list.push({ name: "google", run: fetchGoogleDirections });
+  if (!opts.skipOsrm) list.push({ name: "osrm", run: fetchOsrm });
+  return list;
+}
+
+module.exports = {
+  roadLine, cacheKey, tourPoints, straightLine, decodePolyline,
+  googleConfigured, CACHE_DIR, DEFAULT_OSRM_BASE
+};
