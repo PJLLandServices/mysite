@@ -237,32 +237,6 @@
       am.textContent = `morning ends ${day.morningEndsAt}`;
       stats.appendChild(am);
     }
-    // Route preview + the drive-it link. The list cannot be checked by
-    // eye; a map can, which is how the last two routing defects were
-    // actually found.
-    const actions = document.createElement("div");
-    actions.className = "sp-day-actions";
-    const mapBtn = document.createElement("button");
-    mapBtn.type = "button";
-    mapBtn.className = "pjl-btn pjl-btn-outline sp-map-btn";
-    mapBtn.textContent = "Preview route";
-    mapBtn.addEventListener("click", () => window.PJLSeasonPlanMap.openMap(day, current));
-    actions.appendChild(mapBtn);
-
-    // Needs no API key, so it is offered even when the preview cannot be.
-    const url = window.PJLSeasonPlanMap.directionsUrl(
-      window.PJLSeasonPlanMap.stopsFor(day), current.routeOrigin);
-    if (url) {
-      const drive = document.createElement("a");
-      drive.className = "pjl-btn pjl-btn-outline sp-map-btn";
-      drive.href = url;
-      drive.target = "_blank";
-      drive.rel = "noopener";
-      drive.textContent = "Open in Google Maps";
-      actions.appendChild(drive);
-    }
-    stats.appendChild(actions);
-
     head.appendChild(stats);
     card.appendChild(head);
 
@@ -278,6 +252,36 @@
         strip.appendChild(li);
       }
       card.appendChild(strip);
+    }
+
+    // The route, drawn on the day itself. Not behind a button and not in
+    // another tab: the whole point is seeing eleven days' shape by
+    // scrolling the page. Rendered server-side as an image, so this costs
+    // one lazy <img> rather than a map widget per day.
+    if (current.routeMapsAvailable && day.counts.total > 0) {
+      const figure = document.createElement("figure");
+      figure.className = "sp-map-figure";
+      const img = document.createElement("img");
+      img.className = "sp-map-img";
+      img.loading = "lazy";              // eleven days, only what is on screen
+      img.decoding = "async";
+      img.alt = `Route map for ${day.label || day.date}: `
+        + (day.timeline || []).map((t) => `${t.stopNumber} ${t.address.split(",")[0]}`).join(", ");
+      img.src = `/api/season-plans/${seasonSelect.value}/${yearSelect.value}`
+        + `/route-map/${day.date}`;
+      img.addEventListener("error", () => {
+        figure.innerHTML = "";
+        const note = document.createElement("figcaption");
+        note.className = "sp-map-fail";
+        note.textContent = "Route map unavailable for this day.";
+        figure.appendChild(note);
+      });
+      figure.appendChild(img);
+      const caption = document.createElement("figcaption");
+      caption.className = "sp-map-caption";
+      caption.textContent = "H is the yard. Numbers are stops in driving order.";
+      figure.appendChild(caption);
+      card.appendChild(figure);
     }
 
     const buckets = document.createElement("div");

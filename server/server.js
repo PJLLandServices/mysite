@@ -52,6 +52,7 @@ const seasonPlans = require("./lib/season-plans");
 const geoFilter = require("./lib/geo-filter");
 const resequence = require("./lib/resequence");
 const routeOriginLib = require("./lib/route-origin");
+const routeMap = require("./lib/route-map");
 const customers = require("./lib/customers");
 const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
@@ -21321,13 +21322,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // anchored to the wrong point still looks like a route — and it was
       // wrong for eleven days before anyone noticed.
       routeOrigin: await routeOriginLib.routeOrigin(),
-      // Browser-side Maps key for the route preview, from the environment
-      // only. Browser keys are public by design — protected by an HTTP
-      // referrer restriction rather than by secrecy — but there is already
-      // one copied into several public HTML files, and adding a fourth
-      // hardcoded copy is how a key becomes impossible to rotate. Unset
-      // means the preview button simply does not render.
-      mapsBrowserKey: process.env.GOOGLE_MAPS_BROWSER_KEY || null,
+      // Maps are rendered server-side as images, so no browser key is
+      // needed and none is sent. This says whether the server can draw
+      // them at all, so the page can explain a missing map rather than
+      // showing a broken picture.
+      routeMapsAvailable: routeMap.isConfigured(),
       totalStops: days.reduce((t, d) => t + d.counts.total, 0),
       driveMinutes: days.reduce((t, d) => t + (d.driveMinutes || 0), 0),
       days,
@@ -21383,6 +21382,65 @@ Customer signature captured at ${new Date().toISOString()}.`;
       return sendJson(res, 200, { ok: true, plan: resolved, warnings });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't save the plan."] });
+    }
+  }
+
+  // Route map for one day, as a PNG.
+  //
+  // Rendered server-side so the Maps key stays here, and so the plan page
+  // can show every day's route inline without instantiating eleven
+  // interactive map widgets. The image is cached on disk against the
+  // ordered stops, so a re-sequence produces a new picture and a page
+  // refresh costs nothing.
+  const seasonPlanMapMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/route-map\/(\d{4}-\d{2}-\d{2})$/);
+  if (seasonPlanMapMatch && req.method === "GET") {
+    try {
+      const season = seasonPlanMapMatch[1];
+      const year = Number(seasonPlanMapMatch[2]);
+      const date = seasonPlanMapMatch[3];
+      const plan = await seasonPlans.getPlan(season, year);
+      const day = plan && plan.days ? plan.days[date] : null;
+      if (!day) return sendJson(res, 404, { ok: false, errors: ["No such route day."] });
+
+      const all = await properties.list();
+      const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+      const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode, season });
+      const origin = await routeOriginLib.routeOrigin();
+
+      // Stops in DRIVING order, from the timeline — the same source the
+      // cards and the stop numbers read.
+      const stops = (sequenced.timeline || []).map((t) => {
+        const property = byCode.get(t.propertyCode);
+        if (!property || !property.coords || property.coords.lat == null) return null;
+        return { number: t.stopNumber, coords: { lat: property.coords.lat, lng: property.coords.lng } };
+      }).filter(Boolean);
+
+      if (!stops.length) return sendJson(res, 404, { ok: false, errors: ["Nothing to draw on this day."] });
+
+      const etag = `"${routeMap.cacheKey(origin, stops)}"`;
+      if (req.headers["if-none-match"] === etag) {
+        res.writeHead(304, { ETag: etag });
+        return res.end();
+      }
+
+      const image = await routeMap.routeMapImage(origin, stops);
+      if (!image) {
+        return sendJson(res, 503, {
+          ok: false, code: "maps_unavailable",
+          errors: ["Route maps need GOOGLE_MAPS_SERVER_KEY set on the server."]
+        });
+      }
+      res.writeHead(200, {
+        "Content-Type": image.contentType,
+        "Content-Length": image.buffer.length,
+        ETag: etag,
+        // The ETag carries the route, so revalidation is cheap and a
+        // re-sequenced day can never serve yesterday's picture.
+        "Cache-Control": "private, max-age=0, must-revalidate"
+      });
+      return res.end(image.buffer);
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't draw that route."] });
     }
   }
 
