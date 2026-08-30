@@ -119,4 +119,16 @@ async function travelMinutes(origin, dest) {
   }
 }
 
-module.exports = { travelMinutes, MIN_TRAVEL_MINUTES, isConfigured };
+// Straight-line estimate, no API call and no cache write. The geography
+// filter uses this to RANK candidate insertion positions cheaply, then
+// confirms only the winning position with travelMinutes() above. Ranking
+// 8 positions with Google would bill 24 elements per route day per
+// address; ranking them with this bills none, and the winner is the same
+// one because the ordering of "which gap does this house fit in" is a
+// far coarser judgement than the minutes themselves.
+function estimateMinutes(origin, dest) {
+  if (!origin || !dest || origin.lat == null || dest.lat == null) return MIN_TRAVEL_MINUTES;
+  return fallbackMinutes(origin, dest);
+}
+
+module.exports = { travelMinutes, estimateMinutes, MIN_TRAVEL_MINUTES, isConfigured };

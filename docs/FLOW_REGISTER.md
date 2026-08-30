@@ -19,6 +19,36 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-30 (Geography-aware availability, FLOW-03 re-verified):** the booking engine now
+measures a customer against the day's *planned route* before offering it. New:
+`server/lib/season-plans.js` (the route seed, `server/data/season-plans.json`, keyed
+`<season>-<year>`), `server/lib/geo-filter.js` (day shapes + cheapest-insertion added drive),
+and `/admin/season-plan` (import, review, move a stop, probe an address).
+**FLOW-03 IS A PASS FLOW AND WAS TOUCHED** — `listAvailableSlots()` gained the filter, so it
+is re-verified below rather than assumed. Three defects were found and fixed on the way in,
+each of which would have made the filter useless or actively wrong:
+(1) **AVAIL-01** — `activeBookings()` stamped `coords: PJL_BASE` on every booking that lives
+only in `bookings.json`, telling the engine those appointments happen at the shop. That made
+the corridor math wrong in the customer's favour and would have made the geography filter
+inert for exactly the records the season assignment writer is going to create. Coordinates
+now resolve through `propertyId` → the property record, with the depot kept as the last
+resort it was meant to be.
+(2) **AVAIL-02** — the three slot *re-validation* call sites carried hardcoded horizons
+(30 / 60 / 30 days) while the availability *read* scans up to 120. A slot offered 40 days out
+therefore passed availability and failed reserve with "that slot was just taken" about a slot
+nobody had taken. All three now scan exactly far enough to reach the requested slot
+(`horizonToReach()`). The geography filter turns this from an edge case into the normal case,
+because filtering to the days we are actually in a customer's area is what pushes their only
+offered dates past 30 days.
+(3) **AVAIL-03** — a day suppressed by geography was indistinguishable from a day that is
+full. `expandDaysToRange()` now reports `reason: "outside_route_area"` so the booking page can
+say "we're in your area on these dates" instead of showing a bare empty calendar, which
+customers read as "they have no availability".
+**Invariants held:** admin force-book (`source: "admin_custom"`) never reaches
+`listAvailableSlots()` and is unaffected; an address that fails to geocode skips the filter
+entirely and gets normal availability; a season with no plan, an empty plan, or an unreadable
+plan file all degrade to the previous unfiltered behaviour — never to a refusal.
+
 **2026-08-27 (Customer delete vs. the Trash):** CRM-16 opened and fixed — `customers.js
 hardDelete()`'s referential guard counted soft-deleted records, so a quote deleted from the
 quote folder kept blocking its customer's deletion for the whole 30-day Trash retention
@@ -555,6 +585,7 @@ Previously logged as a change order; **closed, already built.**
 | FLOW-04 | **PASS** — walked 2026-08-03 | Quote-builder flow walked end to end: `/quote.html` submits successfully and the lead **reaches the CRM tagged "New Sprinkler Quote."** (Page live + CTA repointed to `/book.html` verified 2026-08-02.) |
 | FLOW-05 | **PARTIAL** — submission walked 2026-08-03 | Page live, footer link repointed to `/book.html` (2026-08-02). **Submission walked 2026-08-03: `/estimate.html` submits successfully but routes to an external quotation combination rather than the CRM** — leads from this path never appear in the CRM, which explains the "no identifiable records" evidence from the JOB-001 export. It is an old form-builder flow. **Capability gap noted:** it produces a generated quotation the portal's own quote-request flow doesn't have. For future consideration; deliberately no job scoped (2026-08-03). |
 | FLOW-03 | **PASS** (re-verified) | Real booking completed through `/book.html` after the CTA change: $105 Spring Opening, work order WO-ZDQL272C, correct source tag and dollar value in CRM, phone + email notifications fired. |
+| FLOW-03 | **PASS — engine re-verified 2026-08-30, awaiting a walked booking** | Geography filter added to `listAvailableSlots()`. Automated acceptance in `scripts/test-geo-availability.mjs` (27 assertions, in `npm run build:check`): a Mississauga address is offered the Etobicoke–Mississauga route day and not the Newmarket one; a day with no planned route is untouched; a failed geocode is offered every day; the filter's off switch works; and with no `dayShapes` the engine returns byte-identical results to before, with every pre-existing slot field intact. Verified against the **real** fall-2026 plan and live property coordinates: all 11 route days resolve with zero unresolved stops, and each test address matches exactly one day — Mississauga R5 (+1 min, next best +66), Scarborough R10 (+5, next +33), Orangeville R3 (+3, next +34). **Known and accepted:** a Newmarket address is cheap on every day, because every route begins and ends at the Newmarket base, so a home-turf customer is genuinely reachable on any of them. Geography does not constrain home turf; capacity does, and bucket-capacity enforcement is not in this change. **Still owed:** a real booking walked through `/book.html` on production against a loaded plan. |
 
 ## Evidence — CRM export, 56 records, 2026-04-30 to 2026-07-29
 
