@@ -159,7 +159,10 @@ async function routeMapImage(origin, stops) {
       // That text names the enabled-API or key-restriction problem
       // outright, so it is passed straight through to the operator.
       let detail = "";
-      try { detail = (await response.text()).trim().slice(0, 300); } catch { /* body optional */ }
+      // Google's rejection text names the fix in its last clause ("...the
+      // list of APIs"), so a tight cap truncates exactly the actionable
+      // half. Room for the whole sentence.
+      try { detail = (await response.text()).trim().slice(0, 600); } catch { /* body optional */ }
       console.warn("[route-map] static map", response.status, detail);
       return {
         error: `Google refused the map request (HTTP ${response.status}).`,

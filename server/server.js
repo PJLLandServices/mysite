@@ -53,6 +53,7 @@ const geoFilter = require("./lib/geo-filter");
 const resequence = require("./lib/resequence");
 const routeOriginLib = require("./lib/route-origin");
 const routeMap = require("./lib/route-map");
+const routeGeometry = require("./lib/route-geometry");
 const customers = require("./lib/customers");
 const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
@@ -21447,6 +21448,49 @@ Customer signature captured at ${new Date().toISOString()}.`;
         "Cache-Control": "private, max-age=0, must-revalidate"
       });
       return res.end(image.buffer);
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't draw that route."] });
+    }
+  }
+
+  // Road geometry for one day, for the Leaflet map. Shape only — every
+  // minute the screen prints comes from Google, and a second router's
+  // times sitting beside them would be two answers to one question.
+  const seasonPlanLineMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/route-line\/(\d{4}-\d{2}-\d{2})$/);
+  if (seasonPlanLineMatch && req.method === "GET") {
+    try {
+      const season = seasonPlanLineMatch[1];
+      const year = Number(seasonPlanLineMatch[2]);
+      const date = seasonPlanLineMatch[3];
+      const plan = await seasonPlans.getPlan(season, year);
+      const day = plan && plan.days ? plan.days[date] : null;
+      if (!day) return sendJson(res, 404, { ok: false, errors: ["No such route day."] });
+
+      const all = await properties.list();
+      const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+      const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode, season });
+      const origin = await routeOriginLib.routeOrigin();
+
+      // Driving order, from the timeline — the same source the cards and
+      // the stop numbers read, so the line can never disagree with them.
+      const stops = (sequenced.timeline || []).map((t) => {
+        const property = byCode.get(t.propertyCode);
+        if (!property || !property.coords || property.coords.lat == null) return null;
+        return { number: t.stopNumber, coords: { lat: property.coords.lat, lng: property.coords.lng } };
+      }).filter(Boolean);
+
+      if (!stops.length) return sendJson(res, 404, { ok: false, errors: ["Nothing to draw on this day."] });
+
+      const line = await routeGeometry.roadLine(origin, stops);
+      return sendJson(res, 200, {
+        ok: true,
+        coords: line.coords,
+        // "straight" is not an error the screen can ignore: it means the
+        // lines are hops, not roads, and it has to say so.
+        source: line.source,
+        error: line.error || null,
+        origin: origin && origin.lat != null ? { lat: origin.lat, lng: origin.lng } : null
+      });
     } catch (err) {
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't draw that route."] });
     }
