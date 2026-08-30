@@ -53,15 +53,28 @@
     const li = document.createElement("li");
     li.className = `sp-stop${stop.resolved ? "" : " is-unresolved"}`;
 
-    // Arrival estimate. Admin-facing only — the customer is told a bucket
-    // and never a minute, which is what makes reordering free.
+    // Stop number and arrival estimate. Both admin-facing only — the
+    // customer is told a bucket and never a minute, which is what makes
+    // reordering free. The number comes from the sequencer, not from the
+    // row's position, so it stays true even if this list were ever
+    // rendered in another order.
+    const lead = document.createElement("div");
+    lead.className = "sp-stop-lead";
+    if (stop.stopNumber) {
+      const n = document.createElement("span");
+      n.className = "sp-stop-num";
+      n.textContent = stop.stopNumber;
+      n.setAttribute("aria-label", `Stop ${stop.stopNumber}`);
+      lead.appendChild(n);
+    }
     if (arrival) {
       const when = document.createElement("span");
       when.className = "sp-stop-time";
       when.textContent = arrival.arriveAt;
       when.title = `${arrival.driveMinutes} min drive, ${arrival.onSiteMinutes} min on site`;
-      li.appendChild(when);
+      lead.appendChild(when);
     }
+    if (lead.childNodes.length) li.appendChild(lead);
 
     const main = document.createElement("div");
     main.className = "sp-stop-main";

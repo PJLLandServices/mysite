@@ -182,3 +182,12 @@
 }
 .sp-day-notes li.is-bad { border-left-color: #A32020; color: #A32020; }
 .sp-day-notes li.is-suggestion { border-left-color: var(--pjl-amber); }
+
+/* Stop number + arrival, stacked so a long address never squeezes them. */
+.sp-stop-lead { display: flex; flex-direction: column; gap: 4px; align-items: center; }
+.sp-stop-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 26px; height: 26px; padding: 0 6px;
+  border-radius: 50%; background: var(--pjl-green); color: #fff;
+  font-size: 0.82rem; font-weight: 700; font-variant-numeric: tabular-nums;
+}

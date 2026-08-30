@@ -179,6 +179,69 @@ ok("a full target bucket produces no suggestion into it",
   (await suggestBucketMoves({ label: "TA", morning: ["A"], afternoon: ["B", "C", "D"] },
     { ...opts, bucketCap: 3 })).every((x) => x.to !== "afternoon"));
 
+// ---- 7b. The five-minute floor must not decide the order -------------
+//
+// distance.js floors every trip at MIN_TRAVEL_MINUTES, real Google
+// answers included. Two houses 40 m apart and a third 1 km away then all
+// report "5 minutes", every arrangement of them ties, and the search
+// picks arbitrarily. Live that produced 100 Lavery Trail -> 748 Morrish
+// Rd -> 106 Lavery Trail: a detour between two neighbours.
+//
+// This travel function reproduces the floor exactly, so the tie is real
+// here and the assertion is about the fix rather than about a fixture
+// that never had the problem.
+const FLOOR = 5;
+const flooredTravel = async (a, b) =>
+  Math.max(FLOOR, Math.round(Math.hypot(gx(a) - gx(b), gy(a) - gy(b))));
+
+const neighbourProps = new Map([
+  ["L1", prop("L1", [20, 0], 3)],       // 100 Lavery
+  ["L2", prop("L2", [20.5, 0], 3)],     // 106 Lavery — next door
+  ["M", prop("M", [23, 0], 3)]          // Morrish — 1 km off
+]);
+const flooredOpts = {
+  propertiesByCode: neighbourProps, season: "fall", base: BASE, travel: flooredTravel
+};
+
+ok("every leg between the three really does tie under the floor",
+  (await flooredTravel(at([20, 0]), at([20.5, 0]))) === FLOOR
+    && (await flooredTravel(at([20, 0]), at([23, 0]))) === FLOOR,
+  "the fixture does not reproduce the tie, so the next assertion proves nothing");
+
+const neighbours = await sequenceDay(
+  { label: "TB", morning: ["L1", "M", "L2"], afternoon: [] }, flooredOpts);
+const li1 = neighbours.morning.indexOf("L1");
+const li2 = neighbours.morning.indexOf("L2");
+ok("two neighbours are visited consecutively despite the tie",
+  Math.abs(li1 - li2) === 1, neighbours.morning.join(" -> "));
+
+// ---- 7c. Stop numbers, and the order the screen renders --------------
+//
+// The screen used to draw rows from the STORED arrays and arrival times
+// from the sequencer, so a plan whose stored order was not already
+// optimal displayed correct times against rows in the wrong order — live,
+// R10 read 11:18, 10:30, 08:40, 09:55, 09:20 down the page. The stop
+// number therefore comes from the sequencer, and the returned bucket
+// arrays are the sequenced order, so the two cannot disagree.
+const numbered = await sequenceDay(
+  { label: "TN", morning: ["C", "A"], afternoon: ["D", "B"] }, opts);
+ok("stop numbers run 1..n across the whole day, not per bucket",
+  numbered.timeline.map((t) => t.stopNumber).join(",") === "1,2,3,4",
+  numbered.timeline.map((t) => t.stopNumber).join(","));
+ok("the timeline order matches the returned bucket arrays",
+  numbered.timeline.map((t) => t.propertyCode).join(",")
+    === [...numbered.morning, ...numbered.afternoon].join(","),
+  `${numbered.timeline.map((t) => t.propertyCode).join(",")} vs ${[...numbered.morning, ...numbered.afternoon].join(",")}`);
+ok("arrival times increase with stop number",
+  numbered.timeline.every((t, i, a) => i === 0 || a[i - 1].arriveAt < t.arriveAt),
+  numbered.timeline.map((t) => `${t.stopNumber}:${t.arriveAt}`).join(" "));
+
+// The tiebreak decides ties and must never outweigh a real minute.
+const realDifference = await sequenceDay(
+  { label: "TD", morning: ["A", "E"], afternoon: [] }, opts);
+ok("a genuine travel-time difference still wins over the distance tiebreak",
+  realDifference.morning.join(",") === "A,E", realDifference.morning.join(","));
+
 // ---- 8. Whole-plan pass ----------------------------------------------
 
 const { days, timings, flags } = await sequencePlan({
