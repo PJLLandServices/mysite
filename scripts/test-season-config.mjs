@@ -147,7 +147,8 @@ function inOriginalWindow(year, month, day, season) {
     "server/lib/seasons.js",
     "scripts/test-season-config.mjs",
     "server/lib/availability.js",       // the season gate itself
-    "scripts/test-booking-guards.mjs"   // the gate's acceptance test
+    "scripts/test-booking-guards.mjs",  // the gate's acceptance test
+    "server/server.js"                  // the booking-window editor endpoint
   ]);
   const searched = [
     "seasons.json",
@@ -172,6 +173,97 @@ function inOriginalWindow(year, month, day, season) {
     reads("server/lib/availability.js"));
   ok("the gate's acceptance test actually reads the public booking bounds",
     reads("scripts/test-booking-guards.mjs"));
+}
+
+// ---- 2b. The booking-window editor (admin overrides) -----------------
+//
+// The dates Patrick actually turns — booking opens / booking closes —
+// are editable from /admin/season-plan. Overrides live in
+// server/data/season-windows.json (the sandbox's own data dir here) and
+// layer over seasons.json; the SERVICEABLE window is not editable and is
+// the fence every override must fit inside.
+{
+  const OVERRIDES_PATH = path.join(SANDBOX, "server/data/season-windows.json");
+
+  // Set just the opening date; the closing date stays the file default.
+  const one = seasons.setPublicBookingWindow("fall", 2026, { publicBookingFrom: "2026-09-20" }, { actor: "test" });
+  ok("an override moves the effective opening date",
+    one.effective.publicBookingFrom === "2026-09-20", one.effective.publicBookingFrom);
+  ok("...without touching the closing date",
+    one.effective.publicBookingThrough === "2026-10-30", one.effective.publicBookingThrough);
+  ok("...and configFor serves the merged record — the availability gate sees the edit",
+    seasons.configFor("fall", 2026).publicBookingFrom === "2026-09-20");
+  ok("the defaults ride along unchanged, so the screen can show what reset restores",
+    one.defaults.publicBookingFrom === "2026-09-28");
+  ok("the override is written to disk with its author",
+    fs.existsSync(OVERRIDES_PATH)
+      && JSON.parse(fs.readFileSync(OVERRIDES_PATH, "utf8"))["fall-2026"].actor === "test");
+
+  // Both bounds.
+  seasons.setPublicBookingWindow("fall", 2026,
+    { publicBookingFrom: "2026-10-01", publicBookingThrough: "2026-10-15" });
+  const both = seasons.configFor("fall", 2026);
+  ok("both bounds can be set together",
+    both.publicBookingFrom === "2026-10-01" && both.publicBookingThrough === "2026-10-15");
+
+  // The serviceable window is the fence.
+  const refuses = (label, input) => {
+    let threw = false;
+    try { seasons.setPublicBookingWindow("fall", 2026, input); } catch { threw = true; }
+    ok(`the editor refuses ${label}`, threw);
+  };
+  refuses("opening before the serviceable season", { publicBookingFrom: "2026-08-15" });
+  refuses("closing after the frost stop", { publicBookingThrough: "2026-11-20" });
+  refuses("a window that would be empty",
+    { publicBookingFrom: "2026-10-20", publicBookingThrough: "2026-10-10" });
+  refuses("a garbled date", { publicBookingFrom: "October 1st" });
+  refuses("a date from the wrong year", { publicBookingFrom: "2027-10-01" });
+  let unknownThrew = false;
+  try { seasons.setPublicBookingWindow("summer", 2026, { publicBookingFrom: "2026-07-01" }); }
+  catch { unknownThrew = true; }
+  ok("the editor refuses an unknown season", unknownThrew);
+  ok("a refused edit changes nothing",
+    seasons.configFor("fall", 2026).publicBookingFrom === "2026-10-01");
+
+  // The serviceable window itself is not editable and not affected.
+  const win = seasons.windowFor("fall", 2026);
+  ok("overrides never move the serviceable window outreach classifies against",
+    win.startMonth === 9 && win.startDay === 1 && win.endMonth === 11 && win.endDay === 6);
+
+  // A year with no explicit block works too — next season needs no code.
+  seasons.setPublicBookingWindow("fall", 2027, { publicBookingFrom: "2027-09-25" });
+  ok("an unplanned year takes an override on top of the defaults",
+    seasons.configFor("fall", 2027).publicBookingFrom === "2027-09-25");
+
+  // Clearing both bounds returns to the file.
+  seasons.setPublicBookingWindow("fall", 2026, { publicBookingFrom: "", publicBookingThrough: "" });
+  const cleared = seasons.publicWindowFor("fall", 2026);
+  ok("clearing both bounds restores the seasons.json dates",
+    cleared.effective.publicBookingFrom === "2026-09-28"
+      && cleared.effective.publicBookingThrough === "2026-10-30"
+      && cleared.override === null,
+    JSON.stringify(cleared.effective));
+
+  // Persistence: a fresh process (second sandbox) with a planted store
+  // picks the override up at require time.
+  const SANDBOX2 = fs.mkdtempSync(path.join(os.tmpdir(), "pjl-seasons2-"));
+  fs.mkdirSync(path.join(SANDBOX2, "server"), { recursive: true });
+  fs.cpSync(path.join(ROOT, "server/lib"), path.join(SANDBOX2, "server/lib"), { recursive: true });
+  for (const file of ["seasons.json", "pricing.json", "parts.json"]) {
+    fs.cpSync(path.join(ROOT, file), path.join(SANDBOX2, file));
+  }
+  fs.mkdirSync(path.join(SANDBOX2, "server/data"), { recursive: true });
+  fs.writeFileSync(path.join(SANDBOX2, "server/data/season-windows.json"), JSON.stringify({
+    "fall-2026": { publicBookingFrom: "2026-09-21", updatedAt: "2026-08-31T12:00:00Z", actor: "test" },
+    "spring-2026": { publicBookingThrough: "2026-12-01" }   // invalid: past spring's frost stop
+  }, null, 2));
+  const seasons2 = require(path.join(SANDBOX2, "server/lib/seasons.js"));
+  ok("a stored override survives a restart",
+    seasons2.configFor("fall", 2026).publicBookingFrom === "2026-09-21",
+    seasons2.configFor("fall", 2026).publicBookingFrom);
+  ok("a stored override that violates the serviceable window is IGNORED, not obeyed",
+    seasons2.configFor("spring", 2026).publicBookingThrough === "2026-06-30",
+    seasons2.configFor("spring", 2026).publicBookingThrough);
 }
 
 // ---- 3. Window boundaries — inclusive on both ends ------------------

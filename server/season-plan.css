@@ -58,6 +58,17 @@
 .sp-probe-table tr.is-offered { background: var(--pjl-green-pale); }
 .sp-probe-table tr.is-offered td:last-child { font-weight: 700; color: var(--pjl-green); }
 
+/* Public booking window — the season gate's dates, edited in place.
+   44px date inputs: this gets used from a phone in a truck. */
+.sp-bwindow { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+.sp-bwindow[hidden] { display: none; }
+.sp-bwindow .sp-control input[type="date"] {
+  padding: 10px 12px; font: inherit; min-height: 44px; min-width: 160px;
+  border: 1px solid var(--pjl-border); border-radius: 8px; background: #fff;
+}
+.sp-bwindow-actions { display: flex; gap: 10px; }
+.sp-bwindow-status { margin: 10px 0 0; font-size: 0.85rem; color: var(--pjl-text-muted); }
+
 .sp-days { display: grid; gap: 16px; }
 .sp-day {
   background: #fff; border: 1px solid var(--pjl-border);

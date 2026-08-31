@@ -19,6 +19,23 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-31 (Booking window editable from the season-plan screen):** Patrick, the same day the
+gate shipped: "every time we update these dates I need to go into code." The public booking window
+(opens / closes) is now edited on /admin/season-plan. Edits are stored per season+year in
+`server/data/season-windows.json` — the persistent data disk, so deploys never reset them — and
+layered over `seasons.json` by `seasons.configFor()`, which is what the availability season gate
+already reads, so a saved date is live on the booking page immediately with no deploy.
+**The serviceable window is deliberately NOT editable.** It is the fence: the editor refuses an
+opening before `serviceableFrom`, a close past the frost stop, an empty window, a garbled or
+wrong-year date. `windowFor()` — what outreach classifies "already booked?" against — never sees
+overrides. A stored override is re-validated on every read, so a hand-edited store file or a
+later-shortened season degrades to `seasons.json` with a warning rather than offering days no truck
+rolls. Works for unplanned years too (fall 2027 can be set from the screen — no code for next
+season). New `GET/PATCH /api/seasons/:season/:year/booking-window` (admin/tech-gated like the rest
+of the plan screen). 18 new assertions in `test-season-config.mjs` (93 total), including a planted
+store surviving a fresh require and an invalid stored override being ignored. FLOW-03 unaffected in
+behaviour — the gate reads the same `configFor()`; only where the dates come from gained a layer.
+
 **2026-08-31 (Assignment writer stage 1 — bucket capacity + season gate, FLOW-03 re-verified):**
 `listAvailableSlots()` gained two refusals. **Bucket capacity:** the season plan's `bucketCap`
 (default 5) is now enforced at booking time — a bucket's load is its planned stops (unresolved codes

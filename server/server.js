@@ -55,6 +55,7 @@ const routeOriginLib = require("./lib/route-origin");
 const routeMap = require("./lib/route-map");
 const routeGeometry = require("./lib/route-geometry");
 const assignments = require("./lib/assignments");
+const seasonsLib = require("./lib/seasons");
 const customers = require("./lib/customers");
 const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
@@ -1177,6 +1178,8 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/season-plans")) return "user";
   if (pathname === "/api/maps-config") return "user";
   if (pathname.startsWith("/api/assignments")) return "user";
+  // Season booking-window editor — it moves what the public can book.
+  if (pathname.startsWith("/api/seasons")) return "user";
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") return "user";
   if (pathname === "/admin/outreach" || pathname === "/admin/outreach/") return "user";
   if (pathname === "/admin/review-requests" || pathname === "/admin/review-requests/") return "user";
@@ -21540,6 +21543,39 @@ Customer signature captured at ${new Date().toISOString()}.`;
       return sendJson(res, 200, { ...result, outcomes: assignments.PREFLIGHT_OUTCOMES });
     } catch (err) {
       return sendJson(res, 500, { ok: false, errors: [err.message || "Preflight failed."] });
+    }
+  }
+
+  // The public booking window for a season — editable from the season-plan
+  // screen so opening/closing dates stop being a code change. Overrides
+  // live on the data disk (server/data/season-windows.json) and layer over
+  // seasons.json; the availability season gate reads the merged result.
+  const seasonWindowMatch = pathname.match(/^\/api\/seasons\/(spring|fall)\/(\d{4})\/booking-window$/);
+  if (seasonWindowMatch && req.method === "GET") {
+    try {
+      await requireUser(req);
+      const record = seasonsLib.publicWindowFor(seasonWindowMatch[1], Number(seasonWindowMatch[2]));
+      if (!record) return sendJson(res, 404, { ok: false, errors: ["Unknown season."] });
+      return sendJson(res, 200, { ok: true, ...record });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't read the booking window."] });
+    }
+  }
+  if (seasonWindowMatch && req.method === "PATCH") {
+    try {
+      const session = await requireUser(req);
+      const body = await parseRequestBody(req);
+      const record = seasonsLib.setPublicBookingWindow(
+        seasonWindowMatch[1], Number(seasonWindowMatch[2]),
+        {
+          publicBookingFrom: normalizeString(body.publicBookingFrom, 10),
+          publicBookingThrough: normalizeString(body.publicBookingThrough, 10)
+        },
+        { actor: session?.email || session?.name || "admin" }
+      );
+      return sendJson(res, 200, { ok: true, ...record });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't set the booking window."] });
     }
   }
 

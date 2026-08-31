@@ -921,6 +921,93 @@
     console.warn("[season-plan] maps unavailable, probe autocomplete off:", err && err.message);
   });
 
+  // ---- Public booking window ---------------------------------------
+  //
+  // The season gate's opening/closing dates, editable in place. Saved
+  // values live on the server's data disk and override seasons.json;
+  // "Back to defaults" clears them. The two bounds are independent —
+  // clearing one date and saving reverts just that bound.
+
+  const windowForm = el("bookingWindowForm");
+  const windowNote = el("bookingWindowNote");
+  const windowStatus = el("bookingWindowStatus");
+  const windowFrom = el("bookingWindowFrom");
+  const windowThrough = el("bookingWindowThrough");
+
+  function prettyYmd(ymd) {
+    const [y, m, d] = String(ymd || "").split("-").map(Number);
+    if (!y) return ymd;
+    return new Date(y, m - 1, d).toLocaleDateString("en-CA", { month: "short", day: "numeric" });
+  }
+
+  async function loadBookingWindow() {
+    windowNote.textContent = "Loading…";
+    windowForm.hidden = true;
+    windowStatus.hidden = true;
+    try {
+      const response = await fetch(`/api/seasons/${seasonSelect.value}/${yearSelect.value}/booking-window`,
+        { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't load the booking window."]).join(" "));
+      renderBookingWindow(data);
+    } catch (error) {
+      windowNote.textContent = error.message;
+    }
+  }
+
+  function renderBookingWindow(data) {
+    const eff = data.effective;
+    const custom = Boolean(data.override);
+    windowNote.textContent =
+      `Customers can book ${prettyYmd(eff.publicBookingFrom)} – ${prettyYmd(eff.publicBookingThrough)}. `
+      + `Days outside this window are hidden from the booking page. Trucks are serviceable `
+      + `${prettyYmd(data.defaults.serviceableFrom)} – ${prettyYmd(data.defaults.serviceableThrough)}, `
+      + `so the window has to stay inside that.`;
+    windowFrom.value = eff.publicBookingFrom;
+    windowThrough.value = eff.publicBookingThrough;
+    windowFrom.min = data.defaults.serviceableFrom;
+    windowFrom.max = data.defaults.serviceableThrough;
+    windowThrough.min = data.defaults.serviceableFrom;
+    windowThrough.max = data.defaults.serviceableThrough;
+    windowForm.hidden = false;
+    windowStatus.hidden = false;
+    windowStatus.textContent = custom
+      ? `Set here${data.override.updatedAt ? ` on ${prettyYmd(data.override.updatedAt.slice(0, 10))}` : ""} — `
+        + `defaults would be ${prettyYmd(data.defaults.publicBookingFrom)} – ${prettyYmd(data.defaults.publicBookingThrough)}.`
+      : "Using the defaults.";
+  }
+
+  async function saveBookingWindow(body) {
+    const buttons = [el("bookingWindowSave"), el("bookingWindowReset")];
+    buttons.forEach((b) => { b.disabled = true; });
+    try {
+      const response = await fetch(`/api/seasons/${seasonSelect.value}/${yearSelect.value}/booking-window`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't save."]).join(" "));
+      renderBookingWindow(data);
+      showToast("Booking window saved.");
+    } catch (error) {
+      showToast(error.message, "bad");
+    } finally {
+      buttons.forEach((b) => { b.disabled = false; });
+    }
+  }
+
+  windowForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveBookingWindow({
+      publicBookingFrom: windowFrom.value || "",
+      publicBookingThrough: windowThrough.value || ""
+    });
+  });
+  el("bookingWindowReset").addEventListener("click", () => {
+    saveBookingWindow({ publicBookingFrom: "", publicBookingThrough: "" });
+  });
+
   // ---- Assignment preflight (stage 0, read-only) -------------------
 
   el("preflightBtn").addEventListener("click", async () => {
@@ -1123,7 +1210,8 @@
     }
   });
 
-  seasonSelect.addEventListener("change", load);
-  yearSelect.addEventListener("change", load);
-  load();
+  const loadAll = () => { load(); loadBookingWindow(); };
+  seasonSelect.addEventListener("change", loadAll);
+  yearSelect.addEventListener("change", loadAll);
+  loadAll();
 })();

@@ -47,6 +47,19 @@
 // offers a plain booking link rather than a seasonal one. What must never
 // happen is a silent fallback window: guessing dates here would answer "this
 // customer is not booked" for people who are, and mail them.
+//
+// ADMIN OVERRIDES (2026-08-31): the PUBLIC BOOKING window - and only it -
+// is editable from /admin/season-plan without touching this repo. Edits
+// are stored per season+year in server/data/season-windows.json (the
+// Render persistent disk, same place bookings live, so deploys never
+// reset them) and layered over seasons.json by configFor(). The
+// SERVICEABLE window stays file-only on purpose: the frost stop is a
+// planning decision with outreach consequences (windowFor() feeds
+// "is this customer already booked?"), not a dial to nudge from a phone.
+// An override that violates the serviceable window - hand-edited file,
+// or a serviceable season later shortened under it - is IGNORED with a
+// warning, so a bad override degrades to seasons.json rather than
+// offering days no truck rolls.
 
 const path = require("path");
 const fs = require("fs");
@@ -187,6 +200,60 @@ function normalizeSeason(record, where, expectedYear) {
   }
 }());
 
+// ---- Admin overrides for the public booking window -------------------
+//
+// { "fall-2026": { publicBookingFrom?, publicBookingThrough?,
+//                  updatedAt, actor } }
+// Values are full YYYY-MM-DD strings matching the key's year. Loaded
+// synchronously at require (configFor must stay synchronous — the
+// availability season gate calls it inside a hot loop) and kept in
+// memory; setPublicBookingWindow writes the file and updates memory in
+// one step. Single-process server, so that is the whole story.
+
+const OVERRIDES_FILE = path.resolve(__dirname, "..", "data", "season-windows.json");
+let OVERRIDES = {};
+
+(function loadOverrides() {
+  try {
+    if (fs.existsSync(OVERRIDES_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(OVERRIDES_FILE, "utf8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) OVERRIDES = parsed;
+    }
+  } catch (err) {
+    console.warn(`[server/lib/seasons.js] could not read season-windows.json — using seasons.json only: ${err?.message}`);
+  }
+}());
+
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function overrideKey(season, year) { return `${season}-${year}`; }
+
+// The override merged over a base configFor record, or null when there is
+// no override or it is invalid against the base. Validity is re-checked
+// on every read, not just at write time, because the file can be edited
+// by hand and the serviceable window can change underneath a stored
+// override.
+function usableOverride(season, year, base) {
+  const o = OVERRIDES[overrideKey(season, year)];
+  if (!o || typeof o !== "object") return null;
+  const from = typeof o.publicBookingFrom === "string" && YMD_RE.test(o.publicBookingFrom)
+    ? o.publicBookingFrom : null;
+  const through = typeof o.publicBookingThrough === "string" && YMD_RE.test(o.publicBookingThrough)
+    ? o.publicBookingThrough : null;
+  if (!from && !through) return null;
+  const effFrom = from || base.publicBookingFrom;
+  const effThrough = through || base.publicBookingThrough;
+  // YYYY-MM-DD compares correctly as strings.
+  if (effFrom < base.serviceableFrom || effThrough > base.serviceableThrough || effFrom > effThrough) {
+    console.warn(
+      `[server/lib/seasons.js] ignoring invalid ${overrideKey(season, year)} booking-window override ` +
+      `(${effFrom}..${effThrough} vs serviceable ${base.serviceableFrom}..${base.serviceableThrough})`
+    );
+    return null;
+  }
+  return { publicBookingFrom: from, publicBookingThrough: through };
+}
+
 // Resolve the record for a season+year — explicit year block first, then the
 // year-agnostic defaults. Unknown season returns null (the caller decides);
 // an unloadable config throws, because a guessed window is worse than none.
@@ -211,9 +278,11 @@ function windowFor(season, year) {
   };
 }
 
-// The full season record as written, with dates normalized to YYYY-MM-DD for
-// the requested year (a defaults record carries no year of its own).
-function configFor(season, year) {
+// The season record from seasons.json alone, with dates normalized to
+// YYYY-MM-DD for the requested year (a defaults record carries no year of
+// its own). No admin override applied — see configFor for the effective
+// record.
+function baseConfigFor(season, year) {
   const record = resolve(season, year);
   if (!record) return null;
   const y = Number(year);
@@ -234,6 +303,87 @@ function configFor(season, year) {
   };
 }
 
+// The EFFECTIVE season record: seasons.json with any valid admin override
+// of the public booking window merged in. This is what the availability
+// season gate consumes.
+function configFor(season, year) {
+  const base = baseConfigFor(season, year);
+  if (!base) return null;
+  const y = Number(year);
+  if (!Number.isFinite(y)) return base;   // raw MM-DD form — no per-year override
+  const o = usableOverride(season, y, base);
+  if (!o) return base;
+  return {
+    ...base,
+    publicBookingFrom: o.publicBookingFrom || base.publicBookingFrom,
+    publicBookingThrough: o.publicBookingThrough || base.publicBookingThrough
+  };
+}
+
+// Everything the booking-window editor needs in one read: the effective
+// window, what seasons.json alone would say, and the stored override (as
+// stored, even the halves currently invalid — the screen should show what
+// is set, not silently pretend it isn't).
+function publicWindowFor(season, year) {
+  const defaults = baseConfigFor(season, year);
+  if (!defaults) return null;
+  const stored = OVERRIDES[overrideKey(season, Number(year))] || null;
+  return {
+    effective: configFor(season, year),
+    defaults,
+    override: stored ? { ...stored } : null
+  };
+}
+
+// Set (or clear) the public booking window for one season+year from the
+// admin UI. Each bound is a full YYYY-MM-DD string, or ""/null to fall
+// back to seasons.json for that bound. Throws with an operator-readable
+// message on anything invalid; on success writes the store and returns
+// the fresh publicWindowFor record.
+function setPublicBookingWindow(season, year, { publicBookingFrom, publicBookingThrough } = {}, opts = {}) {
+  const y = Number(year);
+  if (!Number.isFinite(y)) throw new Error("A four-digit year is required.");
+  const base = baseConfigFor(season, y);
+  if (!base) throw new Error(`Unknown season "${season}".`);
+
+  const clean = (value, name) => {
+    const text = String(value == null ? "" : value).trim();
+    if (!text) return null;
+    if (!YMD_RE.test(text)) throw new Error(`${name} must be a YYYY-MM-DD date (got "${text}").`);
+    if (!text.startsWith(`${y}-`)) throw new Error(`${name} must fall in ${y} (got "${text}").`);
+    return text;
+  };
+  const from = clean(publicBookingFrom, "The opening date");
+  const through = clean(publicBookingThrough, "The closing date");
+
+  const effFrom = from || base.publicBookingFrom;
+  const effThrough = through || base.publicBookingThrough;
+  if (effFrom < base.serviceableFrom) {
+    throw new Error(`The season isn't serviceable before ${base.serviceableFrom} — booking can't open earlier than that.`);
+  }
+  if (effThrough > base.serviceableThrough) {
+    throw new Error(`The serviceable season ends ${base.serviceableThrough} — booking can't stay open past it. (Extending the season itself is a seasons.json change.)`);
+  }
+  if (effFrom > effThrough) {
+    throw new Error(`Booking would open ${effFrom} but close ${effThrough} — the window would be empty.`);
+  }
+
+  const key = overrideKey(season, y);
+  if (!from && !through) {
+    delete OVERRIDES[key];
+  } else {
+    OVERRIDES[key] = {
+      ...(from ? { publicBookingFrom: from } : {}),
+      ...(through ? { publicBookingThrough: through } : {}),
+      updatedAt: new Date().toISOString(),
+      actor: String(opts.actor || "admin").slice(0, 120)
+    };
+  }
+  fs.mkdirSync(path.dirname(OVERRIDES_FILE), { recursive: true });
+  fs.writeFileSync(OVERRIDES_FILE, JSON.stringify(OVERRIDES, null, 2) + "\n", "utf8");
+  return publicWindowFor(season, y);
+}
+
 // True when this year has its own block rather than inheriting the defaults.
 // Lets a caller tell "planned" from "nobody has set this year's frost date".
 function hasExplicitYear(year) {
@@ -246,6 +396,8 @@ module.exports = {
   SEASONS,
   windowFor,
   configFor,
+  publicWindowFor,
+  setPublicBookingWindow,
   hasExplicitYear,
   // Test/diagnostic surface.
   loadError: () => LOAD_ERROR
