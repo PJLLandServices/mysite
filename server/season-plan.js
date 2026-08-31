@@ -120,11 +120,77 @@
         geo.textContent = "no coordinates";
         meta.appendChild(geo);
       }
+      meta.appendChild(windowControl(stop, date, arrival));
       meta.appendChild(nudgeControl(stop, date, bucket, arrival));
       meta.appendChild(moveControl(stop, date, bucket));
     }
     li.appendChild(meta);
     return li;
+  }
+
+  // "Not before" / "not after" on one stop. A locked gate, a customer out
+  // until one, a promise already made — things the optimiser cannot see.
+  function windowControl(stop, date, arrival) {
+    const wrap = document.createElement("span");
+    wrap.className = "sp-window";
+
+    const has = Boolean(stop.notBefore || stop.notAfter);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = has ? "sp-window-btn is-set" : "sp-window-btn";
+    button.textContent = has
+      ? `${stop.notBefore ? `after ${stop.notBefore}` : ""}${stop.notBefore && stop.notAfter ? " · " : ""}${stop.notAfter ? `by ${stop.notAfter}` : ""}`
+      : "Time window";
+    button.title = "Set when this stop can be done";
+
+    const form = document.createElement("form");
+    form.className = "sp-window-form";
+    form.hidden = true;
+    const from = document.createElement("input");
+    from.type = "time"; from.value = stop.notBefore || ""; from.title = "Not before";
+    from.setAttribute("aria-label", `Not before, ${stop.code}`);
+    const to = document.createElement("input");
+    to.type = "time"; to.value = stop.notAfter || ""; to.title = "Not after";
+    to.setAttribute("aria-label", `Not after, ${stop.code}`);
+    const save = document.createElement("button");
+    save.type = "submit"; save.className = "sp-window-save"; save.textContent = "Set";
+    const cancel = document.createElement("button");
+    cancel.type = "button"; cancel.className = "sp-window-cancel"; cancel.textContent = "×";
+    cancel.title = "Cancel";
+    form.appendChild(from); form.appendChild(to); form.appendChild(save); form.appendChild(cancel);
+
+    button.addEventListener("click", () => { form.hidden = false; button.hidden = true; from.focus(); });
+    cancel.addEventListener("click", () => {
+      form.hidden = true; button.hidden = false;
+      from.value = stop.notBefore || ""; to.value = stop.notAfter || "";
+    });
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      save.disabled = true;
+      try {
+        const response = await fetch(`${base()}/stop-window`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ date, propertyCode: stop.code, notBefore: from.value, notAfter: to.value })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error((data.errors || ["Failed."]).join(" "));
+        render(data.plan);
+        showToast(from.value || to.value
+          ? `${stop.code}: ${from.value ? `not before ${from.value}` : ""}`
+            + `${from.value && to.value ? ", " : ""}${to.value ? `not after ${to.value}` : ""}.`
+          : `${stop.code}: time window cleared.`);
+      } catch (error) {
+        showToast(error.message, "bad");
+        save.disabled = false;
+      }
+    });
+
+    wrap.appendChild(button);
+    wrap.appendChild(form);
+    void arrival;
+    return wrap;
   }
 
   // Up/down inside the bucket. The first click hands the day to Patrick:

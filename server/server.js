@@ -21280,7 +21280,15 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // the page. Reading both from the sequencer makes the mismatch
       // unrepresentable rather than merely unlikely.
       const stopNumbers = new Map((sequenced.timeline || []).map((t) => [t.propertyCode, t.stopNumber]));
-      const withNumber = (code) => ({ ...resolveStop(code), stopNumber: stopNumbers.get(code) || null });
+      // The stop's time window travels with the row, so the control that
+      // sets it and the sequencer that honours it read the same value.
+      const windows = (day && day.constraints) || {};
+      const withNumber = (code) => ({
+        ...resolveStop(code),
+        stopNumber: stopNumbers.get(code) || null,
+        notBefore: (windows[code] && windows[code].notBefore) || null,
+        notAfter: (windows[code] && windows[code].notAfter) || null
+      });
       const morning = (sequenced.morning || []).map(withNumber);
       const afternoon = (sequenced.afternoon || []).map(withNumber);
       const minutes = [...morning, ...afternoon].reduce((t, st) => t + (st.minutes || 0), 0);
@@ -21511,6 +21519,28 @@ Customer signature captured at ${new Date().toISOString()}.`;
       });
     } catch (err) {
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't draw that route."] });
+    }
+  }
+
+  // A stop's time window: "not before", "not after". Both optional; sending
+  // both empty clears it.
+  const seasonPlanWindowMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/stop-window$/);
+  if (seasonPlanWindowMatch && req.method === "PATCH") {
+    try {
+      const session = await requireUser(req);
+      const season = seasonPlanWindowMatch[1];
+      const year = Number(seasonPlanWindowMatch[2]);
+      const body = await parseRequestBody(req);
+      const result = await seasonPlans.setStopWindow(season, year, {
+        date: normalizeString(body.date, 10),
+        propertyCode: normalizeString(body.propertyCode, 40),
+        notBefore: normalizeString(body.notBefore, 5),
+        notAfter: normalizeString(body.notAfter, 5)
+      }, { actor: session?.email || session?.name || "admin" });
+      const plan = await resolveSeasonPlan(season, year);
+      return sendJson(res, 200, { ok: true, plan, warnings: result.warnings, window: result.window });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't set that window."] });
     }
   }
 
