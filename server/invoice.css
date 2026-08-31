@@ -651,3 +651,44 @@
   .invoice-letter-head { flex-direction: column; }
   .invoice-letter-body { min-height: 200px; }
 }
+
+/* ---- Work-order report attachment -----------------------------------
+   Shares the accompanying letter's frame (.invoice-letter) because they
+   are the same kind of thing to the operator: an optional second document
+   that rides along with the invoice. Only the picker is new. */
+
+.invoice-woreport-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 14px 0 0;
+}
+
+.invoice-woreport-label {
+  font-family: "Barlow Condensed", "DM Sans", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pjl-text-muted, #7A7A72);
+}
+
+.invoice-woreport-select {
+  font: inherit;
+  font-size: 14px;
+  padding: 9px 12px;
+  border: 1px solid var(--pjl-border, #E2E0D4);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--pjl-text, #1A1A1A);
+  max-width: 520px;
+}
+
+/* Why there is nothing to attach — a manual invoice, or a visit whose
+   report has not been generated yet. Stated rather than left as an empty
+   control the operator has to interpret. */
+.invoice-woreport-empty {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--pjl-text-muted, #7A7A72);
+}

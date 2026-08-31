@@ -69,6 +69,38 @@ function normalizeLetter(raw) {
   };
 }
 
+// Work-order report attachment (Aug 2026). The customer already receives
+// this PDF when the visit completes; this is the option to send it AGAIN
+// alongside the invoice, for the case where the invoice is the thing they
+// actually open.
+//
+// Same `enabled` discipline as the letter: choosing which report and
+// deciding to attach it are two separate acts, so a selection can sit on
+// the record without being sent. Off unless ticked — an invoice never
+// grows an attachment on its own.
+//
+// woId + snapshotId together name ONE frozen render. Storing the snapshot
+// id rather than "the latest" is deliberate: what gets attached must be
+// the copy that was chosen, not whatever the work order has re-rendered
+// since.
+function normalizeWoReport(raw) {
+  if (!raw || typeof raw !== "object") {
+    return { enabled: false, woId: null, snapshotId: null, updatedAt: null, updatedBy: null };
+  }
+  const woId = String(raw.woId || "").trim() || null;
+  const snapshotId = String(raw.snapshotId || "").trim() || null;
+  return {
+    // Enabled is only meaningful with something to attach — a tick with no
+    // snapshot behind it would send an invoice that silently lost its
+    // report.
+    enabled: raw.enabled === true && Boolean(woId) && Boolean(snapshotId),
+    woId,
+    snapshotId,
+    updatedAt: raw.updatedAt || null,
+    updatedBy: raw.updatedBy || null
+  };
+}
+
 function normalizePayment(raw) {
   if (!raw || typeof raw !== "object") return null;
   const amount = round2(raw.amount);
@@ -257,6 +289,9 @@ function hydrate(inv) {
     // line items, totals, tax or the QuickBooks push, and an invoice
     // without one behaves exactly as before.
     letter: normalizeLetter(inv?.letter),
+    // Optional second attachment: the frozen work-order report. See
+    // normalizeWoReport — off unless deliberately ticked.
+    woReport: normalizeWoReport(inv?.woReport),
     lineItems: Array.isArray(inv?.lineItems) ? inv.lineItems : [],
     subtotal: Number(inv?.subtotal) || 0,
     hst: Number(inv?.hst) || 0,
@@ -579,6 +614,20 @@ async function update(id, patch) {
       ...incoming,
       updatedAt: new Date().toISOString(),
       updatedBy: patch.letterBy || "admin"
+    };
+  }
+  // The report attachment follows the letter's rule: it is not part of the
+  // issued financial document, so it does not lock at send — Patrick can
+  // decide to attach the report on a resend. Void still blocks, because a
+  // void invoice sends nothing.
+  if (patch && Object.prototype.hasOwnProperty.call(patch, "woReport")) {
+    if (current.status === "void") {
+      throw new Error("Can't change the report attachment on a void invoice.");
+    }
+    next.woReport = {
+      ...normalizeWoReport(patch.woReport),
+      updatedAt: new Date().toISOString(),
+      updatedBy: patch.woReportBy || "admin"
     };
   }
   if (patch && Array.isArray(patch.lineItems)) {

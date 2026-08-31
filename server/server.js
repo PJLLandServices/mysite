@@ -9390,6 +9390,7 @@ async function handleApi(req, res, pathname) {
       // here so a failure is caught before the email goes out rather than
       // half-way through it. Best-effort: a letter that fails to render
       // must not stop the invoice itself from reaching the customer.
+      let reportWarning = null;
       let letterAttachment = null;
       if (invoiceHasLetter(renderInv)) {
         try {
@@ -9404,8 +9405,44 @@ async function handleApi(req, res, pathname) {
         }
       }
 
+      // Work-order report (Aug 2026) — only when Patrick ticked it on this
+      // invoice. The CUSTOMER render, never the internal one: the internal
+      // copy carries notes that were never meant to leave the office.
+      //
+      // The frozen snapshot is served as-is rather than re-rendered, so
+      // what lands in this email is byte-identical to the report the
+      // customer already received at completion. Two copies of one visit
+      // that disagree is worse than no second copy.
+      let reportAttachment = null;
+      if (renderInv?.woReport?.enabled) {
+        try {
+          const snap = await woReportSnapshot.readSnapshot({
+            woId: renderInv.woReport.woId,
+            snapshotId: renderInv.woReport.snapshotId,
+            audience: "customer"
+          });
+          if (snap && snap.buffer) {
+            reportAttachment = {
+              filename: snap.record?.filename || `${renderInv.woReport.woId}-report.pdf`,
+              content: snap.buffer,
+              contentType: "application/pdf"
+            };
+          } else {
+            // A ticked report whose snapshot has gone missing is a fact
+            // worth surfacing — silently sending without it is how the
+            // customer ends up asking for a report Patrick believes he sent.
+            reportWarning = `The invoice was sent, but the work-order report could not be found and was NOT attached (${renderInv.woReport.woId}).`;
+          }
+        } catch (reportErr) {
+          console.warn(`[invoice-${action}] report attach failed for ${invId}:`, reportErr?.message);
+          reportWarning = `The invoice was sent, but its work-order report failed to attach: ${reportErr.message}`;
+        }
+      }
+
       await sendInvoiceToCustomer(renderInv, pdfBuffer, {
-        extraAttachments: letterAttachment ? [letterAttachment] : [],
+        // Order is deliberate and is Patrick's: invoice, report, letter.
+        // sendInvoiceToCustomer always puts the invoice PDF first.
+        extraAttachments: [reportAttachment, letterAttachment].filter(Boolean),
         resend: action === "resend",
         viewLink,
         includeSpouse
@@ -9470,8 +9507,9 @@ async function handleApi(req, res, pathname) {
         action,
         qbAction,
         qbInvoiceId,
-        warning: [qbWarning, letterWarning].filter(Boolean).join(" ") || null,
-        letterAttached: Boolean(letterAttachment)
+        warning: [qbWarning, letterWarning, reportWarning].filter(Boolean).join(" ") || null,
+        letterAttached: Boolean(letterAttachment),
+        reportAttached: Boolean(reportAttachment)
       });
     } catch (err) {
       console.error(`[invoice-${action}] failed for ${invId}:`, err.message);
@@ -10254,6 +10292,54 @@ async function handleApi(req, res, pathname) {
   //
   // Auth: gated by isAdminPath() above (/api/invoices is admin-only).
   // Layout: server/lib/invoice-pdf.js, modeled on _design/invoice-pdf-preview.html.
+  // ---------- Work-order reports available to this invoice ------------
+  // GET /api/invoices/:id/wo-reports — what the invoice page offers in its
+  // "Attach work-order report" block: the frozen report snapshots on the
+  // work order this invoice came from.
+  //
+  // Reads the record, never re-renders: the point of the block is to
+  // choose among copies the customer has already been given.
+  const invoiceWoReportsMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/wo-reports$/);
+  if (invoiceWoReportsMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(invoiceWoReportsMatch[1]);
+      const inv = await invoices.get(id);
+      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      if (!inv.woId) {
+        // Not an error — a manual invoice legitimately has no work order.
+        // The page says so rather than showing an empty picker.
+        return sendJson(res, 200, { ok: true, woId: null, reason: "no_work_order", snapshots: [] });
+      }
+      const wo = await workOrders.get(inv.woId);
+      if (!wo) {
+        return sendJson(res, 200, { ok: true, woId: inv.woId, reason: "work_order_missing", snapshots: [] });
+      }
+      // documentDate is the date ON the report — the visit — not `ts`, which
+      // is when the copy happened to be frozen. Those differ whenever a
+      // snapshot is taken after the fact, and the visit date is the one
+      // Patrick is choosing by. Derived the same way lib/wo-report-pdf.js
+      // derives it for the filename, so the picker and the PDF agree.
+      const visitIso = wo.arrivedAt || wo.scheduledFor || wo.createdAt || null;
+      const snapshots = (wo.reportSnapshots || []).map((snap) => ({
+        snapshotId: snap.snapshotId,
+        triggerType: snap.triggerType,
+        frozenAt: snap.ts || null,
+        documentDate: visitIso,
+        mode: snap.mode,
+        filename: snap.filename
+      }));
+      return sendJson(res, 200, {
+        ok: true,
+        woId: inv.woId,
+        woStatus: wo.status,
+        reason: snapshots.length ? null : "no_report_yet",
+        snapshots
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't read work-order reports."] });
+    }
+  }
+
   // ---------- Accompanying letter PDF (admin-gated) -------------------
   // GET /api/invoices/:id/letter.pdf — render the invoice's accompanying
   // letter so the admin can read exactly what the customer will receive
@@ -12564,7 +12650,15 @@ async function handleApi(req, res, pathname) {
     try {
       const woId = decodeURIComponent(woReportSnapshotGetMatch[1]);
       const snapshotId = decodeURIComponent(woReportSnapshotGetMatch[2]);
-      const found = await woReportSnapshot.readSnapshot({ woId, snapshotId });
+      // ?audience=customer serves the customer render instead of the
+      // internal one. Added for the invoice page's "preview the customer's
+      // copy" link: previewing the internal copy before attaching the
+      // customer copy would show Patrick a document nobody is going to
+      // receive. Defaults to internal, so every existing caller is
+      // unchanged.
+      const snapUrl = new URL(req.url, baseUrlFromReq(req));
+      const audience = snapUrl.searchParams.get("audience") === "customer" ? "customer" : "internal";
+      const found = await woReportSnapshot.readSnapshot({ woId, snapshotId, audience });
       if (!found) return sendJson(res, 404, { ok: false, errors: ["Snapshot not found."] });
       res.writeHead(200, {
         "content-type": "application/pdf",
