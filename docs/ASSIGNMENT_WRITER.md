@@ -114,6 +114,15 @@ Full rationale in the build-plan artifact; this is the working checklist.
 
 Newest first. Every stage PR adds its entry.
 
+- *2026-08-31 — TIME SYNC BECOMES A SWEEP. The sequenced-arrival revision
+  deployed but live records still read 8:00/12:00 — the re-anchor needed
+  a trigger (Assign press post-deploy, or a plan edit) that never fired.
+  `syncAssignedTimes` now runs as the server's sixth sweep (boot + every
+  10 min, both current-year seasons), so times converge with NO operator
+  action; steady state writes nothing. LESSON, spec rule 9 vindicated:
+  anything that must reach a state should be swept there, not left to a
+  human-triggered code path — the cadence engine (stage 4) was already
+  specified this way and now has a sixth precedent.*
 - *2026-08-31 — STAGE 2 REVISION, from Patrick's third live find: the
   calendar said every afternoon stop ran at 12:00 while the plan's route
   sequenced them 12:53 / 13:33 / 14:13 — and same-start ties drew in

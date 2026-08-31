@@ -23173,6 +23173,32 @@ server.listen(PORT, HOST, () => {
   sweepReviewRequests();
   setInterval(sweepReviewRequests, 5 * 60 * 1000);
 
+  // Assignment time sync sweep. Assigned bookings mirror the season
+  // plan's sequenced arrival times, and the plan's clock moves — a
+  // reorder, a time window, a zone-count edit, a travel-time change all
+  // shift arrivals. The plan-edit endpoints re-anchor inline, but this
+  // sweep is the guarantee: pristine assignment records converge on the
+  // route within minutes of ANY drift, including records created before
+  // the sequenced-time change ever deployed (no operator action needed).
+  // Cheap at steady state: sequenceDay reads the cached travel matrix,
+  // and updated=0 writes nothing. Covers both seasons of the current
+  // year — the only plans the writer ever assigns.
+  const sweepAssignedTimes = async () => {
+    try {
+      const y = new Date().getFullYear();
+      for (const season of ["spring", "fall"]) {
+        const result = await assignments.syncAssignedTimes(season, y);
+        if (result?.updated) {
+          console.log(`[assignments] time sweep re-anchored ${result.updated}/${result.checked} ${season} ${y} bookings`);
+        }
+      }
+    } catch (err) {
+      console.warn("[assignments] time sweep failed:", err?.message);
+    }
+  };
+  sweepAssignedTimes();
+  setInterval(sweepAssignedTimes, 10 * 60 * 1000);
+
   // Trash purge sweep (Session 2 brief). Hard-deletes records soft-deleted
   // more than 30 days ago. Runs at startup AND every 24 hours so the
   // operator never has to think about it. Audit log captures each purge.
