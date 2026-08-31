@@ -19,6 +19,23 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-30 (Time window control — closed on touch, and read as a range):** reported from an
+iPhone: tapping "Time window" opened the picker and it closed immediately. Cause was not the picker.
+`linkRowsToPins()` bound a click handler to the WHOLE stop row that opened the marker's info window,
+so a tap on the time input — or the up/down arrows, or the Move select — also opened a Google info
+window behind the panel and panned the map. On iOS the native time picker is a modal sheet and that
+focus steal dismissed it instantly. The handler now ignores taps that land on a button, select,
+input, anchor, label or form; a tap on bare row text still selects the pin. Verified on a 390x844
+touch viewport by spying on `google.maps.event.trigger`: bare text fires it once, and the time
+input, the window button and an arrow each fire it zero further times.
+**The control also read wrong.** Two bare time inputs side by side looked like one range picker and
+implied both halves were required, when "after 10:00" and "before 12:00" are independent things a
+customer says and either can stand alone. Rebuilt as two labelled rows — AFTER and BEFORE — each
+with its own Clear, in a full-width row beneath the stop rather than inside the 168px meta column
+(an absolutely positioned popover would have been clipped by the panel's own scrolling). Inputs are
+40px+ so a thumb can hit them; the old 20px controls were a desktop assumption on a screen that gets
+read on a phone. No data-model change — the stored shape and the API are unchanged.
+
 **2026-08-30 (Time windows on a stop):** "not before 10:00" is a locked gate or a customer out
 until then; "not after 12:30" is a promise already made. Neither is visible to an optimiser that can
 only see driving minutes. Each stop now carries an optional window, set from the plan screen and
