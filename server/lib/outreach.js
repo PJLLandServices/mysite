@@ -445,6 +445,75 @@ async function saveTemplate(season, patch, opts) {
 // Returns { batchId, sent, skipped[], errors[] }. Per-recipient
 // errors don't abort the batch — partial-failure reporting lets
 // Patrick retry just the failures.
+// ---------------------------------------------------------------------
+// Shared eligibility — ONE implementation for every path that decides
+// whether a property may be messaged about a season.
+//
+// sendBulk ran these checks inline. The assignment writer needs the same
+// verdicts for its preflight ("who WOULD be told, who would be skipped and
+// why"), and a preflight that re-implements the rules is a preflight that
+// drifts from the send it claims to predict. So the rules moved here and
+// both callers use them.
+//
+// assessEligibility is the gauntlet in sendBulk's original order, with the
+// original reason strings — those strings are API to the outreach screen's
+// skip report. bookingState is injectable so tests need no bookings file.
+async function assessEligibility(property, { season, year, bookingState } = {}) {
+  if (!property) return { ok: false, reason: "not_found" };
+  if (property.deletedAt || property.archivedAt) return { ok: false, reason: "inactive" };
+
+  const eligibilityKey = season === "spring" ? "springOpening" : "fallClosing";
+  if (property.seasonalEligibility?.[eligibilityKey] === false) {
+    return { ok: false, reason: "not_eligible" };
+  }
+
+  const customerName = String(property.customerName || "").trim();
+  if (!customerName) return { ok: false, reason: "missing_name" };
+
+  const seasonKey = properties.seasonKey(year, season);
+  if (property.seasonalOutreach?.[seasonKey]?.optOutThisSeason === true) {
+    return { ok: false, reason: "season_opt_out" };
+  }
+
+  const state = bookingState !== undefined
+    ? bookingState
+    : await deriveBookingState(property.id, season, year);
+  if (state?.hasBooking) {
+    return { ok: false, reason: "already_booked", bookingId: state.bookingId };
+  }
+
+  const portalToken = resolvePortalToken(property);
+  if (!portalToken) return { ok: false, reason: "no_property_id" };
+
+  return { ok: true, customerName, portalToken };
+}
+
+// Which channels COULD deliver, and for each dead one, why — in the same
+// reason strings sendBulk has always reported. Pure: reads the property,
+// touches nothing.
+function channelCapability(property) {
+  const phone = String(property?.customerPhone || "").trim();
+  const email = String(property?.customerEmail || "").trim();
+  const smsPossible = Boolean(phone) && property?.commPrefs?.seasonalRemindersSMS !== false;
+  const emailPossible = Boolean(email) && property?.commPrefs?.seasonalRemindersEmail !== false;
+  return {
+    phone,
+    email,
+    sms: {
+      possible: smsPossible,
+      reason: smsPossible ? null
+        : (!phone ? "no_phone"
+          : (property?.commPrefs?.seasonalRemindersSMS === false ? "opted_out_sms" : "sms_unavailable"))
+    },
+    emailChannel: {
+      possible: emailPossible,
+      reason: emailPossible ? null
+        : (!email ? "no_email"
+          : (property?.commPrefs?.seasonalRemindersEmail === false ? "opted_out_email" : "email_unavailable"))
+    }
+  };
+}
+
 async function sendBulk({
   propertyIds,
   season,
@@ -496,49 +565,19 @@ async function sendBulk({
         continue;
       }
 
-      // Eligibility check — defense in depth. The candidates
-      // list already filters but a direct API call could pass
-      // an ineligible id.
-      const eligibilityKey = season === "spring" ? "springOpening" : "fallClosing";
-      if (property.seasonalEligibility?.[eligibilityKey] === false) {
-        result.skipped.push({ propertyId, reason: "not_eligible" });
+      // Eligibility — the shared gauntlet (assessEligibility above), same
+      // checks in the same order with the same reason strings as when they
+      // lived inline here. The assignment preflight runs the identical
+      // function, which is what stops it drifting from this send.
+      const verdict = await assessEligibility(property, { season, year });
+      if (!verdict.ok) {
+        const skip = { propertyId, reason: verdict.reason };
+        if (verdict.bookingId) skip.bookingId = verdict.bookingId;
+        result.skipped.push(skip);
         continue;
       }
-
-      // Name invariant — outreach refuses any property without
-      // a name, so the OG card never reads "Hey there,".
-      const customerName = String(property.customerName || "").trim();
-      if (!customerName) {
-        result.skipped.push({ propertyId, reason: "missing_name" });
-        continue;
-      }
-
-      // Per-season opt-out.
-      const seasonKey = properties.seasonKey(year, season);
-      if (property.seasonalOutreach?.[seasonKey]?.optOutThisSeason === true) {
-        result.skipped.push({ propertyId, reason: "season_opt_out" });
-        continue;
-      }
-
-      // Already booked → don't pester. The candidates list
-      // already excludes by default, but a stale UI could send
-      // a request anyway; honour the booking either way.
-      const bookingState = await deriveBookingState(property.id, season, year);
-      if (bookingState?.hasBooking) {
-        result.skipped.push({ propertyId, reason: "already_booked", bookingId: bookingState.bookingId });
-        continue;
-      }
-
-      // Portal token — deterministic SHA-256 of property.id. Every
-      // property has a usable token the moment it's created, so a
-      // missing token here would mean a corrupted property record.
-      const portalToken = resolvePortalToken(property);
-      if (!portalToken) {
-        // Defensive — would only fire on a property with no id,
-        // which shouldn't be possible through the lib.
-        result.skipped.push({ propertyId, reason: "no_property_id" });
-        continue;
-      }
+      const customerName = verdict.customerName;
+      const portalToken = verdict.portalToken;
 
       // Mint opt-out tokens lazily — first send against this
       // property creates them, subsequent sends reuse.
@@ -551,14 +590,14 @@ async function sendBulk({
       // dispatch the channels that CAN go through and record the
       // others as skips. That matches the brief's per-channel
       // skip-reason behaviour.
-      const phone = String(property.customerPhone || "").trim();
-      const email = String(property.customerEmail || "").trim();
-      const smsAllowed = wantsSms
-        && phone
-        && (propertyWithTokens.commPrefs?.seasonalRemindersSMS !== false);
-      const emailAllowed = wantsEmail
-        && email
-        && (propertyWithTokens.commPrefs?.seasonalRemindersEmail !== false);
+      // Channel capability from the shared helper. Assessed on the
+      // token-minted record for exactness, though minting only writes
+      // optOutTokens and cannot change a commPref or a contact field.
+      const capability = channelCapability(propertyWithTokens);
+      const phone = capability.phone;
+      const email = capability.email;
+      const smsAllowed = wantsSms && capability.sms.possible;
+      const emailAllowed = wantsEmail && capability.emailChannel.possible;
 
       // Per-channel record-keeping. If neither channel can fire,
       // we record one composite skip with the most specific
@@ -567,14 +606,10 @@ async function sendBulk({
       // (kept inline in result.skipped).
       const channelSkips = [];
       if (wantsSms && !smsAllowed) {
-        const why = !phone ? "no_phone"
-                    : (propertyWithTokens.commPrefs?.seasonalRemindersSMS === false ? "opted_out_sms" : "sms_unavailable");
-        channelSkips.push({ propertyId, channel: "sms", reason: why });
+        channelSkips.push({ propertyId, channel: "sms", reason: capability.sms.reason });
       }
       if (wantsEmail && !emailAllowed) {
-        const why = !email ? "no_email"
-                    : (propertyWithTokens.commPrefs?.seasonalRemindersEmail === false ? "opted_out_email" : "email_unavailable");
-        channelSkips.push({ propertyId, channel: "email", reason: why });
+        channelSkips.push({ propertyId, channel: "email", reason: capability.emailChannel.reason });
       }
       if (!smsAllowed && !emailAllowed) {
         // No channel will deliver — record one consolidated
@@ -789,6 +824,8 @@ async function sendTest({
 // ---- Module exports -----------------------------------------------
 
 module.exports = {
+  assessEligibility,
+  channelCapability,
   SEASONAL_SERVICE_PREFIXES,
   SEASON_LABEL,
   listCandidates,

@@ -111,6 +111,18 @@
         <div class="sp-probe-out" id="probeOut" hidden></div>
       </section>
 
+      <!-- Assignment preflight — stage 0 of docs/ASSIGNMENT_WRITER.md.
+           Read-only: nothing is created or sent from here. -->
+      <section class="sp-panel">
+        <h2 class="sp-panel-title">Assignment preflight</h2>
+        <p class="sp-probe-note">
+          If this plan were assigned today, who would be told and who would be skipped?
+          Runs the same eligibility checks the real send will use. Nothing is created or sent.
+        </p>
+        <button type="button" class="pjl-btn pjl-btn-outline" id="preflightBtn">Run preflight</button>
+        <div class="sp-preflight-out" id="preflightOut" hidden></div>
+      </section>
+
       <div class="sp-days" id="dayList"></div>
       <p class="sp-empty" id="emptyState" hidden></p>
     </main>

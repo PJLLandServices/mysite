@@ -54,6 +54,7 @@ const resequence = require("./lib/resequence");
 const routeOriginLib = require("./lib/route-origin");
 const routeMap = require("./lib/route-map");
 const routeGeometry = require("./lib/route-geometry");
+const assignments = require("./lib/assignments");
 const customers = require("./lib/customers");
 const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
@@ -1175,6 +1176,7 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/season-plan" || pathname === "/admin/season-plan/") return "user";
   if (pathname.startsWith("/api/season-plans")) return "user";
   if (pathname === "/api/maps-config") return "user";
+  if (pathname.startsWith("/api/assignments")) return "user";
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") return "user";
   if (pathname === "/admin/outreach" || pathname === "/admin/outreach/") return "user";
   if (pathname === "/admin/review-requests" || pathname === "/admin/review-requests/") return "user";
@@ -21519,6 +21521,25 @@ Customer signature captured at ${new Date().toISOString()}.`;
       });
     } catch (err) {
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't draw that route."] });
+    }
+  }
+
+  // Assignment preflight — stage 0 of docs/ASSIGNMENT_WRITER.md. Read-only:
+  // who would be told, who would be skipped and why. Creates nothing.
+  const assignPreflightMatch = pathname.match(/^\/api\/assignments\/(spring|fall)\/(\d{4})\/preflight$/);
+  if (assignPreflightMatch && req.method === "GET") {
+    try {
+      await requireUser(req);
+      const result = await assignments.preflight(
+        assignPreflightMatch[1], Number(assignPreflightMatch[2]));
+      if (!result.ok) {
+        return sendJson(res, 404, { ok: false, errors: ["No plan loaded for that season — nothing to preflight."] });
+      }
+      // The reason sentences ride along so the screen renders words, not
+      // snake_case — and so client and server can never disagree on them.
+      return sendJson(res, 200, { ...result, outcomes: assignments.PREFLIGHT_OUTCOMES });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Preflight failed."] });
     }
   }
 

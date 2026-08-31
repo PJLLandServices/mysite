@@ -921,6 +921,98 @@
     console.warn("[season-plan] maps unavailable, probe autocomplete off:", err && err.message);
   });
 
+  // ---- Assignment preflight (stage 0, read-only) -------------------
+
+  el("preflightBtn").addEventListener("click", async () => {
+    const button = el("preflightBtn");
+    const out = el("preflightOut");
+    button.disabled = true;
+    out.hidden = false;
+    out.textContent = "Checking every planned stop…";
+    try {
+      const response = await fetch(`/api/assignments/${seasonSelect.value}/${yearSelect.value}/preflight`,
+        { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error((data.errors || ["Preflight failed."]).join(" "));
+      renderPreflight(out, data);
+    } catch (error) {
+      out.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "sp-preflight-bad";
+      p.textContent = error.message;
+      out.appendChild(p);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  function renderPreflight(out, data) {
+    out.innerHTML = "";
+    const s = data.summary;
+    const words = data.outcomes || {};
+
+    const head = document.createElement("p");
+    head.className = "sp-preflight-summary";
+    head.textContent =
+      `${s.stops} planned stops · ${s.ready} would be sent`
+      + (s.readyPartial ? ` (${s.readyPartial} on one channel only)` : "")
+      + (s.settled ? ` · ${s.settled} already booked themselves` : "")
+      + ` · ${s.skipped} would be skipped`;
+    out.appendChild(head);
+
+    const rows = data.days.flatMap((d) => d.stops);
+    const problems = rows.filter((r) => r.outcome === "skipped");
+    const partials = rows.filter((r) => r.outcome === "ready" && r.partial);
+
+    // Skips first — they are the action list. Ready rows are the happy
+    // majority and listing them all would bury the seven that need a fix.
+    if (problems.length) {
+      out.appendChild(preflightHeading("Would be skipped — fix or accept before sending"));
+      const ul = document.createElement("ul");
+      ul.className = "sp-preflight-list";
+      for (const r of problems) {
+        const li = document.createElement("li");
+        li.className = "is-skip";
+        li.innerHTML = `<strong>${r.label || r.date} · ${prettyDate(r.date)}</strong> — `
+          + `${escapeHtml(r.address ? r.address.split(",")[0] : r.code)}`
+          + `${r.customerName ? ` (${escapeHtml(r.customerName)})` : ""} — `
+          + `${escapeHtml(words[r.reason] || r.reason)}`;
+        ul.appendChild(li);
+      }
+      out.appendChild(ul);
+    }
+
+    if (partials.length) {
+      out.appendChild(preflightHeading("Deliverable on one channel only"));
+      const ul = document.createElement("ul");
+      ul.className = "sp-preflight-list";
+      for (const r of partials) {
+        const li = document.createElement("li");
+        li.className = "is-partial";
+        li.innerHTML = `<strong>${r.label || r.date}</strong> — `
+          + `${escapeHtml(r.address ? r.address.split(",")[0] : r.code)} — `
+          + `${r.channels[0] === "email" ? "email only" : "text only"}: `
+          + `${escapeHtml(words[r.partial] || r.partial)}`;
+        ul.appendChild(li);
+      }
+      out.appendChild(ul);
+    }
+
+    if (!problems.length && !partials.length) {
+      const p = document.createElement("p");
+      p.className = "sp-preflight-clean";
+      p.textContent = "Every planned stop is reachable on both channels. Nothing to fix.";
+      out.appendChild(p);
+    }
+  }
+
+  function preflightHeading(text) {
+    const h = document.createElement("h3");
+    h.className = "sp-preflight-h";
+    h.textContent = text;
+    return h;
+  }
+
   // ---- Probe -------------------------------------------------------
 
   el("probeForm").addEventListener("submit", async (event) => {
