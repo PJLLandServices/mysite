@@ -19,6 +19,24 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-31 (Assignment writer stage 5 — the appointment page; the send interlock opens):**
+`/a/<token>` is live: the public, token-addressed page (token = credential, like /portal and /rr)
+where an assigned customer confirms, picks a different day, or cancels — the one-link decision made
+real. Confirm records the response (first answer kept); cancel is 24-hour-gated, keeps the reason,
+and stops the whole cadence; reschedule reuses the shared `rescheduleBooking` /
+`rescheduleAvailability` helpers, so a customer's move runs the SAME `listAvailableSlots` +
+dayShapes validation as every other path — geography filter, season window and bucket capacity all
+compose by construction — is capped at one move, and re-anchors the cadence automatically.
+`APPOINTMENT_PAGE_READY` flipped to true in this same commit (the stage-4 contract); test-sends for
+real bookings now mint real tokens so the whole journey is walkable from a [TEST] text.
+**Latent bug fixed in the shared reschedule path:** the self-exclusion filter
+(`b.leadId !== bookingRec.leadId`) dropped EVERY assignment booking from the conflict math when the
+rescheduling booking was lead-less (null === null) — both call sites now match lead-less bookings by
+canonical id; lead-backed behaviour byte-identical. Patrick is now paged on customer-driven
+reschedules of lead-less bookings too. 21 assertions in `scripts/test-appointment-page.mjs`
+(in build:check) with the confirm/cancel cadence effects proven through the real engine, plus a
+Playwright smoke of the page. The page and API are PUBLIC by token; no admin surface changed.
+
 **2026-08-31 (Assignment writer stage 4 — the blast + cadence engine):** the sends exist. The
 blast (admin, two-press) fires step 1 to every live assignment booking that has never received it;
 the seventh server sweep (5-minute cadence) dispatches steps 2–6 — each at most once ever, only on
