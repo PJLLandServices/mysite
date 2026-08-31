@@ -81,19 +81,27 @@ function summarize(booking, { now = new Date() } = {}) {
     : outreach.respondedAt ? "responded"
     : "open";
 
+  const live = state === "open" || state === "responded";
   return {
     state,
     respondedVia: outreach.responseVia || null,
+    // Full name, per Patrick's review: this is a private per-customer
+    // link, not a public page.
+    name: String(booking.customerName || "").trim() || "there",
     firstName: String(booking.customerName || "").trim().split(/\s+/)[0] || "there",
     serviceLabel: booking.serviceLabel || "Your appointment",
     dateLabel: start.toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" }),
     bucketLabel: bucketLabelOf(booking),
     street: String(booking.address || "").split(/[\n,]+/)[0].trim(),
-    canConfirm: state === "open" || state === "responded",
-    canReschedule: (state === "open" || state === "responded")
-      && !insideCutoff
-      && (Number(booking.rescheduleCount) || 0) < 1,
-    canCancel: (state === "open" || state === "responded") && !insideCutoff,
+    freeBucket: Boolean(booking.flexBucket),
+    requestedWindow: booking.requestedWindow
+      ? { notBefore: booking.requestedWindow.notBefore || null, notAfter: booking.requestedWindow.notAfter || null }
+      : null,
+    canConfirm: live,
+    canReschedule: live && !insideCutoff && (Number(booking.rescheduleCount) || 0) < 1 && !booking.flexBucket,
+    canCancel: live && !insideCutoff,
+    canFreeBucket: live && !insideCutoff && !booking.flexBucket,
+    canSetWindow: live && !insideCutoff && !booking.flexBucket,
     insideCutoff
   };
 }
@@ -136,11 +144,55 @@ async function cancel(token, { reason = "", listBookings, cancelBooking = bookin
   return { ok: true, booking: result.booking, summary: summarize(result.booking, { now }) };
 }
 
+// THE FREE BUCKET — Patrick's flexible pool. The customer is normally
+// home (or can be on short notice); the job runs whenever the crew is
+// in the area and the tech calls ahead with an ETA. It counts as a
+// response, and it takes the booking out of self-serve rescheduling —
+// from here on Patrick places it.
+async function freeBucket(token, { listBookings, setFlex = bookings.setFreeBucket, markResponded = bookings.markAssignmentResponded, now = new Date() } = {}) {
+  const booking = await findByToken(token, { listBookings });
+  if (!booking) return { ok: false, status: 404, errors: ["That link doesn't match an appointment."] };
+  const summary = summarize(booking, { now });
+  if (!summary.canFreeBucket) {
+    return { ok: false, status: 409, errors: ["This appointment can't switch to the free bucket from here — call us at (905) 960-0181."] };
+  }
+  await markResponded(booking.id, { via: "free_bucket", by: "customer" });
+  const updated = await setFlex(booking.id, { by: "customer" });
+  return { ok: true, booking: updated, summary: summarize(updated, { now }) };
+}
+
+// The customer's own "after X / before Y" for their day. Stored on the
+// booking; the sequencer's requestedWindows seam (built and tested in
+// the time-windows PR, waiting for exactly this caller) merges it OVER
+// the plan's standing constraint — the customer's ask wins. Setting a
+// window counts as a response: they're planning around the day.
+async function setWindow(token, { notBefore, notAfter, listBookings, setRequestedWindow = bookings.setRequestedWindow, markResponded = bookings.markAssignmentResponded, now = new Date() } = {}) {
+  const booking = await findByToken(token, { listBookings });
+  if (!booking) return { ok: false, status: 404, errors: ["That link doesn't match an appointment."] };
+  const summary = summarize(booking, { now });
+  if (!summary.canSetWindow) {
+    return { ok: false, status: 409, errors: ["Timing preferences can't be changed from here right now — call us at (905) 960-0181."] };
+  }
+  let updated;
+  try {
+    updated = await setRequestedWindow(booking.id, { notBefore, notAfter, by: "customer" });
+  } catch (err) {
+    return { ok: false, status: 422, errors: [err.message] };
+  }
+  if (updated.requestedWindow) {
+    await markResponded(booking.id, { via: "window", by: "customer" });
+  }
+  const fresh = await findByToken(token, { listBookings });
+  return { ok: true, booking: fresh, summary: summarize(fresh, { now }) };
+}
+
 module.exports = {
   CHANGE_CUTOFF_HOURS,
   findByToken,
   ensureToken,
   summarize,
   confirm,
-  cancel
+  cancel,
+  freeBucket,
+  setWindow
 };

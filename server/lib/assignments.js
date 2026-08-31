@@ -232,13 +232,36 @@ function scheduledStartFor(dateKey, bucketKey, arriveAt, serviceMinutes) {
   return new Date(y, m - 1, d, Math.floor(startMin / 60), startMin % 60, 0, 0);
 }
 
+// The customers' own "after X / before Y" asks, keyed by plan code —
+// the requestedWindows seam's food. Built from live assignment bookings
+// so the sequencer honours what customers set on their appointment
+// pages, and the customer's ask wins over the plan's standing guess
+// (the seam's own documented rule).
+async function requestedWindowsFor(season, year, listBookings = bookings.list) {
+  const out = {};
+  try {
+    for (const b of await listBookings()) {
+      if (!b || b.source !== "assignment" || !b.assignment) continue;
+      if (b.assignment.season !== season || Number(b.assignment.year) !== Number(year)) continue;
+      if (b.status !== "confirmed") continue;
+      const w = b.requestedWindow;
+      if (w && (w.notBefore || w.notAfter)) {
+        out[b.assignment.code] = { notBefore: w.notBefore || null, notAfter: w.notAfter || null };
+      }
+    }
+  } catch (err) {
+    console.warn("[assignments] requested windows unavailable:", err?.message);
+  }
+  return out;
+}
+
 // The sequenced arrival time for every stop of one plan day, as a
 // Map code -> "HH:MM". Fails soft to an empty map: a day that cannot be
 // sequenced books at bucket opens rather than not at all.
-async function arrivalsFor(day, byCode, season, seq) {
+async function arrivalsFor(day, byCode, season, seq, requestedWindows = {}) {
   const etaByCode = new Map();
   try {
-    const sequenced = await seq(day, { propertiesByCode: byCode, season });
+    const sequenced = await seq(day, { propertiesByCode: byCode, season, requestedWindows });
     for (const t of sequenced.timeline || []) etaByCode.set(t.propertyCode, t.arriveAt);
   } catch (err) {
     console.warn("[assignments] sequencing unavailable — bucket-open times used:", err?.message);
@@ -296,9 +319,10 @@ async function assign(season, year, deps = {}) {
   const count = (reason) => { summary.byReason[reason] = (summary.byReason[reason] || 0) + 1; };
   const assignedPropertyIds = new Set();
 
+  const customerWindows = await requestedWindowsFor(season, year, listBookings);
   for (const flightDay of flight.days) {
     const rows = [];
-    const etaByCode = await arrivalsFor(plan.days[flightDay.date] || {}, byCode, season, seq);
+    const etaByCode = await arrivalsFor(plan.days[flightDay.date] || {}, byCode, season, seq, customerWindows);
     for (const verdict of flightDay.stops) {
       summary.stops += 1;
       const row = { ...verdict };
@@ -450,8 +474,9 @@ async function syncAssignedTimes(season, year, deps = {}) {
 
   let checked = 0;
   let updated = 0;
+  const customerWindows = await requestedWindowsFor(season, year, listBookings);
   for (const [date, records] of byDate) {
-    const etaByCode = await arrivalsFor(plan.days[date], byCode, season, seq);
+    const etaByCode = await arrivalsFor(plan.days[date], byCode, season, seq, customerWindows);
     for (const b of records) {
       checked += 1;
       const want = scheduledStartFor(
@@ -509,4 +534,4 @@ async function unassign(season, year, deps = {}) {
   return { ok: true, season, year: Number(year), summary, removed, kept };
 }
 
-module.exports = { preflight, assign, unassign, syncAssignedTimes, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };
+module.exports = { preflight, assign, unassign, syncAssignedTimes, requestedWindowsFor, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };

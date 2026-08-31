@@ -1461,6 +1461,38 @@ async function openBookingActionPanel({ leadId, bookingId, scheduledFor, booking
       }
     }).catch(() => {});
   }
+  // Assignment bookings carry response state — surface it here, so
+  // "where does a customer's confirm go?" has a visible answer: it
+  // lands on the booking, and this panel reads it back.
+  if (bookingId && !leadId) {
+    fetch(`/api/bookings/${encodeURIComponent(bookingId)}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data.ok || !pendingAction || pendingAction.bookingId !== bookingId) return;
+        const b = data.booking;
+        const o = b.assignment?.outreach || {};
+        let line;
+        if (b.flexBucket) {
+          line = "FREE BUCKET — run when in the area; the technician calls with an ETA.";
+        } else if (o.respondedAt) {
+          const via = { confirm: "confirmed via their link", reschedule: "rescheduled themselves",
+            cancel: "cancelled", manual: "confirmed by phone/text", window: "set a time window",
+            free_bucket: "chose the free bucket" }[o.responseVia] || o.responseVia;
+          line = `Customer ${via} on ${new Date(o.respondedAt).toLocaleDateString("en-CA", { month: "short", day: "numeric" })}.`;
+        } else if (o.steps && o.steps["1"]) {
+          line = "Messaged — no response yet.";
+        } else {
+          line = "Assigned — not yet messaged.";
+        }
+        if (b.requestedWindow && (b.requestedWindow.notBefore || b.requestedWindow.notAfter)) {
+          line += ` Window: ${[b.requestedWindow.notBefore ? `after ${b.requestedWindow.notBefore}` : "",
+            b.requestedWindow.notAfter ? `before ${b.requestedWindow.notAfter}` : ""].filter(Boolean).join(", ")}.`;
+        }
+        actionStatus.textContent = line;
+        if (actionMarkRespondedBtn && o.respondedAt) actionMarkRespondedBtn.hidden = true;
+      })
+      .catch(() => {});
+  }
 }
 
 actionClose?.addEventListener("click", () => closeDialog(actionDialog));

@@ -38,28 +38,59 @@
     }
 
     el("details").hidden = false;
-    el("hello").textContent = `Hi ${a.firstName},`;
+    el("hello").textContent = `Hi ${a.name},`;
     el("service").textContent = a.serviceLabel;
     el("dateLabel").textContent = a.dateLabel;
-    el("bucketLabel").textContent = a.bucketLabel;
+    el("bucketLabel").textContent = a.freeBucket
+      ? "Free bucket — we'll call with an arrival time"
+      : a.bucketLabel;
     el("street").textContent = a.street;
+    el("priceRow").hidden = !a.priceLabel;
+    el("priceLabel").textContent = a.priceLabel || "";
 
     const badge = el("badge");
     if (a.state === "responded") {
       badge.hidden = false;
-      badge.textContent = a.respondedVia === "reschedule"
-        ? "Rescheduled — you're all set"
+      badge.textContent = a.freeBucket || a.respondedVia === "free_bucket"
+        ? "Free bucket — our technician will call with a time"
+        : a.respondedVia === "reschedule" ? "Rescheduled — you're all set"
+        : a.respondedVia === "window" ? "Timing saved — you're all set"
         : "Confirmed — you're all set";
-      el("confirmBtn").hidden = true;
+      el("confirmBtn").hidden = true;   // already answered
     } else {
       badge.hidden = true;
       el("confirmBtn").hidden = !a.canConfirm;
     }
     el("rescheduleBtn").hidden = !a.canReschedule;
     el("cancelBtn").hidden = !a.canCancel;
+    el("windowBtn").hidden = !a.canSetWindow;
+    fillWindowSelects(a.requestedWindow);
     el("reschedulePanel").hidden = true;
     el("cancelPanel").hidden = true;
+    el("windowPanel").hidden = true;
     el("actions").hidden = false;
+  }
+
+  // Half-hour choices from 8:00 AM to 5:00 PM for the after/before rows.
+  function fillWindowSelects(current) {
+    const after = el("windowAfter");
+    const before = el("windowBefore");
+    if (after.options.length <= 1) {
+      for (let m = 8 * 60; m <= 17 * 60; m += 30) {
+        const hh = String(Math.floor(m / 60)).padStart(2, "0");
+        const mm = String(m % 60).padStart(2, "0");
+        const d = new Date(2000, 0, 1, Math.floor(m / 60), m % 60);
+        const label = d.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
+        for (const sel of [after, before]) {
+          const opt = document.createElement("option");
+          opt.value = `${hh}:${mm}`;
+          opt.textContent = label;
+          sel.appendChild(opt);
+        }
+      }
+    }
+    after.value = current?.notBefore || "";
+    before.value = current?.notAfter || "";
   }
 
   async function load() {
@@ -136,6 +167,42 @@
   el("rescheduleBack").addEventListener("click", () => {
     el("reschedulePanel").hidden = true;
     el("actions").hidden = false;
+  });
+
+  // ---- Free bucket -------------------------------------------------
+
+  el("freeBucketBtn").addEventListener("click", async () => {
+    if (!window.confirm("Join the Free Bucket? We'll fit your visit in when our crew is in your area, and our technician will call you with an approximate arrival time.")) return;
+    el("freeBucketBtn").disabled = true;
+    try {
+      const data = await post("/free-bucket");
+      render(data.appointment);
+    } catch (error) { fail(error.message); }
+    finally { el("freeBucketBtn").disabled = false; }
+  });
+
+  // ---- Timing window (after / before) ------------------------------
+
+  el("windowBtn").addEventListener("click", () => {
+    el("actions").hidden = true;
+    el("reschedulePanel").hidden = true;
+    el("cancelPanel").hidden = true;
+    el("windowPanel").hidden = false;
+  });
+  el("windowBack").addEventListener("click", () => {
+    el("windowPanel").hidden = true;
+    el("actions").hidden = false;
+  });
+  el("windowSave").addEventListener("click", async () => {
+    el("windowSave").disabled = true;
+    try {
+      const data = await post("/time-window", {
+        notBefore: el("windowAfter").value || "",
+        notAfter: el("windowBefore").value || ""
+      });
+      render(data.appointment);
+    } catch (error) { fail(error.message); }
+    finally { el("windowSave").disabled = false; }
   });
 
   // ---- Cancel ------------------------------------------------------
