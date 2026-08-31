@@ -19,6 +19,24 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-31 (Appointment page live-review batch — eight changes from Patrick's walk of a real
+page):** full customer name (private link); price on the page and in the email (`{price}` merge
+field; `resolveSeasonalPrice` — profile override first); Patrick's routing-efficiency pitch as the
+email default AND on the page itself; customer reschedules now see EVERY day with room (geography
+filter off for customer moves — an off-route stop is an end-of-day addition), afternoon-only
+(12–5), through the season's end (capacity, conflicts and the season gate still apply — the
+`settingsOverride` seam on `rescheduleAvailability` carries the geo-off, so admin paths are
+untouched); the FREE BUCKET (flexible pool: booking keeps its anchor date and capacity seat,
+self-serve moves end, Patrick places it, tech calls an ETA, counts as a response, Patrick paged);
+customer AFTER/BEFORE time windows on the page, stored on the booking and fed into the sequencer's
+requestedWindows seam at every clock — assign, the time sweep, the plan screen, the map, the route
+line and stored-order resequencing all honour it (the seam from the time-windows PR finally has its
+intended caller; the customer's ask wins over the plan's standing guess, per that PR's contract);
+customer cancels and free-bucket choices now PAGE PATRICK (same alias path as customer
+reschedules); and response state is READ BACK on the schedule's manage panel ("confirmed via their
+link", "FREE BUCKET", "messaged — no response yet", the window) — the visible answer to "where does
+a confirm go?". Suites: appointment 31, writer 42, messages 64; both Playwright smokes green.
+
 **2026-08-31 (Assignment writer stage 5 — the appointment page; the send interlock opens):**
 `/a/<token>` is live: the public, token-addressed page (token = credential, like /portal and /rr)
 where an assigned customer confirms, picks a different day, or cancels — the one-link decision made

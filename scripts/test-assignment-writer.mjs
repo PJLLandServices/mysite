@@ -233,6 +233,20 @@ ok("...to its new sequenced arrival",
 const syncAgain = await assignments.syncAssignedTimes(SEASON, YEAR, deps);
 ok("re-syncing with nothing changed touches nothing", syncAgain.updated === 0, JSON.stringify(syncAgain));
 
+// The customer time-window seam: a window stored on a booking reaches
+// the sequencer as requestedWindows keyed by the plan code, so the
+// customer's ask joins the clock every surface prints.
+{
+  const a1Booking = (await bookings.list()).find((b) => b.propertyId === "P-A1");
+  await bookings.setRequestedWindow(a1Booking.id, { notBefore: "10:00", by: "customer" });
+  let seen = null;
+  const spyDeps = { ...deps, sequenceDay: async (day, opts) => { seen = opts.requestedWindows; return { timeline: STUB_TIMELINES[day.label] || [] }; } };
+  await assignments.syncAssignedTimes(SEASON, YEAR, spyDeps);
+  ok("a customer's stored window reaches the sequencer, keyed by their plan code",
+    seen && seen["P-A1"] && seen["P-A1"].notBefore === "10:00", JSON.stringify(seen));
+  await bookings.setRequestedWindow(a1Booking.id, { notBefore: "", notAfter: "" });
+}
+
 // ---- 3. SENDS NOTHING -------------------------------------------------
 
 const source = fs.readFileSync(path.join(SANDBOX, "server/lib/assignments.js"), "utf8");

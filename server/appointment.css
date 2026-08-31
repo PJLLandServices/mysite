@@ -49,6 +49,29 @@ body {
 }
 .ap-facts dd { margin: 0; font-weight: 600; }
 
+.ap-intro {
+  margin: 0 0 18px; padding: 12px 14px; border-radius: 10px;
+  background: #FAFAF5; border: 1px solid #E3E1D5;
+  font-size: 0.92rem; color: #55604F;
+}
+.ap-intro a { color: #1B4D2E; font-weight: 600; }
+
+.ap-freebucket {
+  margin: 0 0 14px; padding: 12px 14px; border-radius: 10px;
+  background: #FDF4EA; border: 1px solid #EED9BC;
+}
+.ap-freebucket h3 {
+  margin: 0 0 4px; font-family: "Barlow Condensed", sans-serif;
+  font-size: 1.05rem; color: #A05A12;
+}
+
+.ap-window-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.ap-window-rows select {
+  display: block; width: 100%; margin-top: 6px; padding: 10px 12px;
+  font: inherit; border: 1px solid #E3E1D5; border-radius: 8px; background: #fff;
+  min-height: 44px;
+}
+
 .ap-actions { display: grid; gap: 10px; }
 .ap-btn {
   display: block; width: 100%; padding: 14px 18px; border-radius: 10px;

@@ -482,6 +482,69 @@ async function setAssignmentOutreach(id, patch, { action = "cadence", by = "syst
   return next;
 }
 
+// The customer chose the FREE BUCKET: they're normally home (or can be
+// on short notice), so the job runs whenever PJL is in the area and the
+// tech calls ahead with an ETA. The booking KEEPS its current date as
+// the tentative anchor — it still counts against that day's capacity
+// (conservative: never overbooks) and still gets its 24-hour reminder —
+// and Patrick moves it freely when a nearby day has room.
+async function setFreeBucket(id, { by = "customer" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const now = new Date().toISOString();
+  const next = {
+    ...records[idx],
+    flexBucket: { at: now, by: String(by).slice(0, 120) },
+    updatedAt: now,
+    history: [...(records[idx].history || []), {
+      ts: now, action: "free_bucket", by,
+      note: "Customer chose the free bucket — run when in the area, tech calls with an ETA."
+    }]
+  };
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// The customer's own timing constraint for their day: "not before" /
+// "not after", HH:MM or null. Feeds the sequencer's requestedWindows
+// seam, where a customer's ask wins over the plan's standing guess.
+const WINDOW_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+async function setRequestedWindow(id, { notBefore, notAfter, by = "customer" } = {}) {
+  const clean = (v) => {
+    const text = String(v == null ? "" : v).trim();
+    if (!text) return null;
+    if (!WINDOW_RE.test(text)) throw new Error(`"${text}" is not a valid HH:MM time.`);
+    return text;
+  };
+  const before = clean(notBefore);
+  const after = clean(notAfter);
+  if (before && after && before >= after) {
+    throw new Error("The \"after\" time has to come before the \"before\" time.");
+  }
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const now = new Date().toISOString();
+  const next = {
+    ...records[idx],
+    requestedWindow: (before || after)
+      ? { notBefore: before, notAfter: after, at: now, by: String(by).slice(0, 120) }
+      : null,
+    updatedAt: now,
+    history: [...(records[idx].history || []), {
+      ts: now, action: "requested_window", by,
+      note: (before || after)
+        ? [before ? `not before ${before}` : "", after ? `not after ${after}` : ""].filter(Boolean).join(", ")
+        : "cleared"
+    }]
+  };
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
 // The customer (or Patrick, marking a phone call) answered. First answer
 // wins — a later confirm doesn't overwrite how they first responded.
 async function markAssignmentResponded(id, { via = "manual", by = "admin" } = {}) {
@@ -537,6 +600,8 @@ module.exports = {
   createDirect,
   setAssignmentOutreach,
   markAssignmentResponded,
+  setFreeBucket,
+  setRequestedWindow,
   update,
   reschedule,
   cancel,

@@ -4014,13 +4014,15 @@ function horizonToReach(target, now = new Date()) {
 // customer has been told can be invalidated by this. Degrades to the
 // plan unchanged if properties cannot be read — a plan stored in a
 // slightly worse order beats an import that fails.
-async function resequencePlanForStorage(plan, season) {
+async function resequencePlanForStorage(plan, season, year) {
   try {
     const all = await properties.list();
     const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
     // sequencePlan's `days` is already storage-shaped: order only, no
-    // derived timing.
-    const { days } = await resequence.sequencePlan(plan, { propertiesByCode: byCode, season });
+    // derived timing. Customer time windows join the ordering clock so
+    // the stored order honours what customers asked on their pages.
+    const requestedWindows = await assignments.requestedWindowsFor(season, year);
+    const { days } = await resequence.sequencePlan(plan, { propertiesByCode: byCode, season, requestedWindows });
     return { ...plan, days };
   } catch (err) {
     console.warn("[season-plan] re-sequence skipped:", err?.message);
@@ -4144,7 +4146,7 @@ async function cascadePropertyToLinkedRecords(property) {
 // Same contract as /api/booking/availability but service + address come
 // from the booking record (not query params), and the booking's own
 // current slot is removed from the conflict math.
-async function rescheduleAvailability(bookingId, { from, to } = {}) {
+async function rescheduleAvailability(bookingId, { from, to, settingsOverride } = {}) {
   const bookingRec = await bookings.get(bookingId);
   if (!bookingRec) return { ok: false, status: 404, errors: ["Booking not found."] };
   const serviceKey = bookingRec.serviceKey;
@@ -4166,7 +4168,11 @@ async function rescheduleAvailability(bookingId, { from, to } = {}) {
     bookingRec.leadId ? b.leadId !== bookingRec.leadId : b.bookingId !== bookingRec.id);
   const scheduleData = await scheduleStore.read();
   const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
-  const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
+  // settingsOverride wins last: the appointment page's reschedule picker
+  // switches the geography filter off (Patrick's call — a rescheduling
+  // customer may pick ANY day with room; an off-route stop is an
+  // end-of-day addition).
+  const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}), ...(settingsOverride || {}) };
   // When the picker supplies an explicit visible range, scan far enough to
   // reach the latest day in view. Otherwise fall back to the legacy 30-day
   // window the old reschedule modal used.
@@ -21447,9 +21453,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
     // every read rather than stored: zone counts change, and a stored
     // timeline would go quietly stale against them.
     const days = [];
+    // Customers' own "after X / before Y" asks from their appointment
+    // pages ride into the same clock the plan screen prints — the
+    // requestedWindows seam, finally fed by its intended caller.
+    const customerWindows = await assignments.requestedWindowsFor(season, year);
     for (const date of Object.keys(plan.days).sort()) {
       const day = plan.days[date];
-      const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode, season });
+      const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode, season, requestedWindows: customerWindows });
 
       // RENDER THE SEQUENCED ORDER, NOT THE STORED ONE. These used to be
       // allowed to differ: the rows came from the stored arrays and the
@@ -21581,7 +21591,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // Patrick would actually drive. Ordering inside a bucket is never
       // communicated to anyone, so this is free to do on his behalf; the
       // bucket each customer sits in is untouched.
-      const sequencedIn = await resequencePlanForStorage(incoming, season);
+      const sequencedIn = await resequencePlanForStorage(incoming, season, year);
       const { warnings } = await seasonPlans.savePlan(season, year, sequencedIn, {
         actor: session?.email || session?.name || "admin"
       });
@@ -21611,7 +21621,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
 
       const all = await properties.list();
       const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
-      const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode, season });
+      const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode, season, requestedWindows: await assignments.requestedWindowsFor(season, year) });
       const origin = await routeOriginLib.routeOrigin();
 
       // Stops in DRIVING order, from the timeline — the same source the
@@ -21674,7 +21684,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
 
       const all = await properties.list();
       const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
-      const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode, season });
+      const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode, season, requestedWindows: await assignments.requestedWindowsFor(season, year) });
       const origin = await routeOriginLib.routeOrigin();
 
       // Driving order, from the timeline — the same source the cards and
@@ -21798,25 +21808,86 @@ Customer signature captured at ${new Date().toISOString()}.`;
   // Assignment writer stage 5 — the customer's appointment page API.
   // PUBLIC: the token is the credential, exactly like /portal/<token>.
   // It addresses one booking and grants three actions on it.
-  const apptMatch = pathname.match(/^\/api\/appointment\/([A-Za-z0-9_-]{16,64})(?:\/(confirm|cancel|availability|reschedule))?$/);
+  const apptMatch = pathname.match(/^\/api\/appointment\/([A-Za-z0-9_-]{16,64})(?:\/(confirm|cancel|availability|reschedule|free-bucket|time-window))?$/);
   if (apptMatch) {
     const token = apptMatch[1];
     const action = apptMatch[2] || null;
+    // The customer's price rides on the summary: their profile override
+    // when set, the tier price otherwise. Private link — full detail.
+    const priceFor = async (booking) => {
+      try {
+        const property = booking.propertyId ? await properties.get(booking.propertyId) : null;
+        const family = String(booking.serviceKey || "").startsWith("spring") ? "spring_opening" : "fall_closing";
+        return resolveSeasonalPrice(property, family)?.label || null;
+      } catch { return null; }
+    };
     try {
       if (!action && req.method === "GET") {
         const booking = await appointmentActions.findByToken(token);
         if (!booking) return sendJson(res, 404, { ok: false, errors: ["That link doesn't match an appointment."] });
-        return sendJson(res, 200, { ok: true, appointment: appointmentActions.summarize(booking) });
+        return sendJson(res, 200, {
+          ok: true,
+          appointment: { ...appointmentActions.summarize(booking), priceLabel: await priceFor(booking) }
+        });
       }
       if (action === "confirm" && req.method === "POST") {
         const result = await appointmentActions.confirm(token);
         if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors });
-        return sendJson(res, 200, { ok: true, appointment: result.summary });
+        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel: await priceFor(result.booking) } });
+      }
+      if (action === "free-bucket" && req.method === "POST") {
+        const result = await appointmentActions.freeBucket(token);
+        if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors });
+        // Patrick hears about it — a free-bucket customer is a routing
+        // opportunity he places by hand.
+        const b = result.booking;
+        Promise.allSettled([
+          sendNewLeadEmail({
+            id: b.id, sourceLabel: "Customer chose the FREE BUCKET",
+            contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "",
+              notes: `Anchored ${b.scheduledFor} — run whenever the crew is in the area; tech calls with an ETA.` }
+          }, { baseUrl: baseUrlFromReq(req) }),
+          sendNewLeadSms({
+            id: b.id, sourceLabel: "Customer chose the FREE BUCKET",
+            contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "", notes: "" }
+          }, { baseUrl: baseUrlFromReq(req) })
+        ]).catch(() => {});
+        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel: await priceFor(result.booking) } });
+      }
+      if (action === "time-window" && req.method === "POST") {
+        const body = await parseRequestBody(req);
+        const result = await appointmentActions.setWindow(token, {
+          notBefore: normalizeString(body.notBefore, 5),
+          notAfter: normalizeString(body.notAfter, 5)
+        });
+        if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors });
+        // The window moves the day's clock — re-anchor the sequenced
+        // times in the background so the plan and calendar follow.
+        if (result.booking?.assignment) {
+          assignments.syncAssignedTimes(result.booking.assignment.season, result.booking.assignment.year)
+            .catch((e) => console.warn("[appointment] time sync after window failed:", e?.message));
+        }
+        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel: await priceFor(result.booking) } });
       }
       if (action === "cancel" && req.method === "POST") {
         const body = await parseRequestBody(req);
-        const result = await appointmentActions.cancel(token, { reason: normalizeString(body.reason, 300) });
+        const reason = normalizeString(body.reason, 300);
+        const result = await appointmentActions.cancel(token, { reason });
         if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors });
+        // Patrick's review question: "what happens to this, are we
+        // notified?" — now yes, same paging as a customer reschedule.
+        const b = result.booking;
+        Promise.allSettled([
+          sendNewLeadEmail({
+            id: b.id, sourceLabel: "Customer CANCELLED their assigned appointment",
+            contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "",
+              notes: `Was ${b.scheduledFor}.${reason ? ` Reason: ${reason}` : ""}` }
+          }, { baseUrl: baseUrlFromReq(req) }),
+          sendNewLeadSms({
+            id: b.id, sourceLabel: "Customer CANCELLED their assigned appointment",
+            contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "", notes: "" }
+          }, { baseUrl: baseUrlFromReq(req) })
+        ]).catch(() => {});
         return sendJson(res, 200, { ok: true, appointment: result.summary });
       }
       if (action === "availability" && req.method === "GET") {
@@ -21826,12 +21897,30 @@ Customer signature captured at ${new Date().toISOString()}.`;
         if (!summary.canReschedule) {
           return sendJson(res, 409, { ok: false, errors: ["This appointment can't be rescheduled from this page — call us at (905) 960-0181."] });
         }
-        const url = new URL(req.url, baseUrlFromReq(req));
+        // Patrick's stage-5 review rules for customer moves:
+        //   - EVERY day with room, not just on-route days: geography
+        //     filter off (an off-route stop is an end-of-day addition);
+        //     capacity and physical conflicts still apply.
+        //   - AFTERNOON ONLY (12–5): a moved stop runs at the end of the
+        //     day before the crew heads home.
+        //   - The horizon is the whole remaining season, not 30 days —
+        //     the engine's own season gate caps it at publicBookingThrough.
+        const now = new Date();
+        const seasonName = String(booking.serviceKey || "").startsWith("spring") ? "spring" : "fall";
+        let to = null;
+        try {
+          to = seasonsLib.configFor(seasonName, new Date(booking.scheduledFor).getFullYear())?.publicBookingThrough || null;
+        } catch { /* season gate inside the engine still governs */ }
+        const fromKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
         const result = await rescheduleAvailability(booking.id, {
-          from: url.searchParams.get("from"),
-          to: url.searchParams.get("to")
+          from: fromKey,
+          to,
+          settingsOverride: { geoMaxAddedDriveMinutes: 0 }
         });
         if (!result.ok) return sendJson(res, result.status || 422, { ok: false, errors: result.errors });
+        for (const day of result.data?.days || []) {
+          day.slots = (day.slots || []).filter((s) => s.bucketKey === "afternoon");
+        }
         return sendJson(res, 200, result);
       }
       if (action === "reschedule" && req.method === "PATCH") {
@@ -22137,7 +22226,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const stored = await seasonPlans.getPlan(season, year);
       if (stored) {
         await seasonPlans.savePlan(season, year,
-          await resequencePlanForStorage(stored, season), { actor });
+          await resequencePlanForStorage(stored, season, year), { actor });
       }
       const plan = await resolveSeasonPlan(season, year);
       assignments.syncAssignedTimes(season, year)
@@ -22199,7 +22288,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // end of whichever bucket it was dropped into.
       const stored = await seasonPlans.getPlan(season, year);
       if (stored) {
-        await seasonPlans.savePlan(season, year, await resequencePlanForStorage(stored, season), {
+        await seasonPlans.savePlan(season, year, await resequencePlanForStorage(stored, season, year), {
           actor: session?.email || session?.name || "admin"
         });
       }

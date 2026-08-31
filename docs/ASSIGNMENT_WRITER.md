@@ -114,6 +114,35 @@ Full rationale in the build-plan artifact; this is the working checklist.
 
 Newest first. Every stage PR adds its entry.
 
+- *2026-08-31 — THE LIVE-REVIEW BATCH (Patrick walked Nishka's page).
+  Eight changes, all his: (1) the page addresses the customer by FULL
+  NAME — it's a private link; (2) the customer's PRICE shows on the page
+  and rides into the email as a new {price} merge field —
+  `resolveSeasonalPrice`: profile override first, tier price otherwise;
+  (3) the assignment email default is now HIS routing-efficiency pitch
+  (dedicated routes, same service without raising prices, move only if
+  no one can be home), and the SAME pitch sits on the page so a
+  text-first customer gets the story too; (4) RESCHEDULE POLICY:
+  geography filter OFF for customer moves (an off-route stop is an
+  end-of-day addition), AFTERNOON (12–5) ONLY, horizon = the whole
+  remaining season (capacity + conflicts still gate); (5) THE FREE
+  BUCKET: a customer who's normally home joins the flexible pool — the
+  booking keeps its anchor date (still counts against capacity;
+  conservative), self-serve moves end, Patrick places it and the tech
+  calls with an ETA; counts as a response; Patrick is paged; (6)
+  CUSTOMER TIME WINDOWS: after/before on the page, stored on the
+  booking, fed into the sequencer's requestedWindows seam at EVERY
+  clock (assign, time sync, plan screen, map, route line, stored-order
+  resequence) — the seam built in the windows PR finally has its
+  intended caller; counts as a response and re-anchors times; (7)
+  CANCEL AND FREE-BUCKET NOTIFY PATRICK (his review question "are we
+  notified?" — now yes, same paging as reschedules); (8) RESPONSE STATE
+  IS VISIBLE: the schedule's manage panel reads the booking back —
+  "confirmed via their link Sept 3", "FREE BUCKET", "messaged — no
+  response yet", the customer's window — which is the concrete answer
+  to "when the customer confirms, where does this information go?".
+  Suites: appointment 31, writer 42 (seam pass-through proven),
+  messages 64; both page smokes re-run green.*
 - *2026-08-31 — STAGE 5 SHIPPED, AND THE INTERLOCK IS OPEN. /a/<token>
   is live: one public, token-addressed page (`server/appointment.html`,
   actions in `server/lib/appointment-actions.js`) with the one-link

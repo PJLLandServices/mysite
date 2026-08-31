@@ -37,6 +37,7 @@
 const fs = require("fs");
 const path = require("path");
 const { BOOKING_BUCKETS } = require("./availability");
+const { priceForBooking } = require("./pricing");
 
 const STORE_FILE = path.resolve(__dirname, "..", "data", "assignment-templates.json");
 
@@ -50,6 +51,7 @@ const MERGE_FIELDS = Object.freeze({
   date: "The appointment date (\"Monday, September 28\")",
   bucket: "The window (\"Morning (8 AM – 12 PM)\")",
   appointmentLink: "Their appointment page — confirm, reschedule, or cancel in one place (built at send time)",
+  price: "The customer's price for the service (their profile override, or the tier price)",
   phone: "The PJL phone number"
 });
 
@@ -65,21 +67,32 @@ const TEMPLATE_KEYS = Object.freeze({
 });
 
 const DEFAULT_TEMPLATES = Object.freeze({
+  // Patrick's wording from the stage-5 live review, lightly tidied. The
+  // routing-efficiency pitch is his; keep his meaning when editing.
   assignment_email: {
     subject: "Your fall sprinkler winterization is booked — {date}",
     body: [
       "Hi {firstName},",
       "",
-      "We've scheduled your fall sprinkler winterization:",
+      "PJL Land Services has conveniently scheduled your fall closing:",
       "",
       "{date} — {bucket}",
       "{street}",
+      "Your price: {price}",
       "",
-      "Please confirm — or pick a different day — on your appointment page:",
+      "In our effort to increase day-to-day efficiency, we've created dedicated",
+      "routes for our service trucks, so nearby homes are completed together",
+      "rather than jumping between towns through our busy season. We trust that",
+      "working this way lets us keep providing the same great service without",
+      "raising our prices.",
+      "",
+      "Please confirm — or make any changes — on your appointment page:",
       "{appointmentLink}",
       "",
-      "If we don't hear from you, no problem — we'll still arrive as scheduled.",
-      "Questions? Call or text us at {phone}.",
+      "Please only choose a different day if no one can be home. We've tried to",
+      "account for the requirements customers have shared with us before — if",
+      "you have any others, or any restrictions beyond the available options,",
+      "call or text us at {phone}.",
       "",
       "— PJL Land Services"
     ].join("\n")
@@ -281,6 +294,10 @@ function contextForBooking(booking, extra = {}) {
     bucket: bucketLabelOf(booking?.assignment?.bucket
       || (new Date(booking?.scheduledFor).getHours() < 12 ? "morning" : "afternoon")),
     appointmentLink: "[appointment-link]",
+    // The tier price for the booking's service. Callers holding the
+    // PROPERTY pass extra.price from resolveSeasonalPrice() so a
+    // per-customer override wins; this is the always-defined fallback.
+    price: priceForBooking(booking?.serviceKey || "").label || "Quoted on-site",
     phone: PJL_PHONE,
     ...extra
   };

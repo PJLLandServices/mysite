@@ -87,6 +87,20 @@ for (const key of ["assignment_email", "assignment_sms", "followup_email", "foll
 ok("the 24-hour reminder needs no link — it goes to everyone, answered or not",
   !messages.DEFAULT_TEMPLATES.reminder24_sms.body.includes("{appointmentLink}"));
 
+// Patrick's live-review additions: the assignment email carries the
+// customer's PRICE and his routing-efficiency pitch, and asks customers
+// to move only when no one can be home.
+ok("the assignment email shows the customer their price",
+  messages.DEFAULT_TEMPLATES.assignment_email.body.includes("{price}"));
+ok("the assignment email carries Patrick's dedicated-routes pitch",
+  /dedicated\s+routes/i.test(messages.DEFAULT_TEMPLATES.assignment_email.body)
+  && /without\s+raising/i.test(messages.DEFAULT_TEMPLATES.assignment_email.body));
+ok("...and asks customers to move only if no one can be home",
+  /only choose a different day if no one can be home/i.test(messages.DEFAULT_TEMPLATES.assignment_email.body));
+ok("{price} is a real merge field with a real fallback",
+  "price" in messages.MERGE_FIELDS
+  && messages.contextForBooking({ serviceKey: "fall_close_4z" }).price.startsWith("$"));
+
 // The segment budget behind the one-link decision: rendered with a
 // realistic link, every SMS fits in at most TWO segments (306 chars
 // concatenated), so no step arrives as a pile of split texts.

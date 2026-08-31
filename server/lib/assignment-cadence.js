@@ -52,6 +52,7 @@ const properties = require("./properties");
 const outreach = require("./outreach");
 const notify = require("./notify-customer");
 const assignmentMessages = require("./assignment-messages");
+const { resolveSeasonalPrice } = require("./pricing");
 const { resolvePublicBaseUrl } = require("./public-base-url");
 
 const STEPS = Object.freeze([
@@ -112,9 +113,10 @@ function cadenceGates(property, season, year) {
 // Render one step's messages for a booking, with the REAL link. Refuses
 // to hand back anything still carrying a bracketed placeholder — the
 // stage-3 rule this engine is bound by.
-function renderStep(booking, step, token) {
+function renderStep(booking, step, token, extra = {}) {
   const context = assignmentMessages.contextForBooking(booking, {
-    appointmentLink: appointmentLinkFor(token)
+    appointmentLink: appointmentLinkFor(token),
+    ...extra
   });
   const out = {};
   for (const channel of step.channels) {
@@ -145,7 +147,15 @@ async function sendStepForBooking(booking, step, { season, year, deps = {}, by =
   if (!gate.ok) return { skipped: true, reason: gate.reason };
 
   const token = booking.assignment.outreach?.token || mintToken();
-  const messages = renderStep(booking, step, token);
+  // The customer's own price rides into the message: their profile
+  // override when one is set, the tier price otherwise.
+  let priceExtra = {};
+  try {
+    const family = season === "spring" ? "spring_opening" : "fall_closing";
+    const resolved = resolveSeasonalPrice(property, family);
+    if (resolved?.label) priceExtra = { price: resolved.label };
+  } catch { /* contextForBooking's tier fallback stands */ }
+  const messages = renderStep(booking, step, token, priceExtra);
   const capability = gate.capability;
 
   const wants = {

@@ -163,6 +163,53 @@ ok("a cancelled appointment offers nothing",
 const pastView = appointment.summarize(await bookings.get(b1.id), { now: new Date(2026, 9, 20, 10, 0) });
 ok("a past appointment offers nothing", pastView.state === "past" && !pastView.canConfirm);
 
+// ---- 7. Patrick's live-review batch: full name, window, free bucket ----
+
+ok("the page addresses the customer by FULL name — this is a private link",
+  appointment.summarize(await bookings.get(b1.id), { now: NOW }).name === "Kristen Holmes");
+
+// A fresh booking for the window + free-bucket flows.
+const b3 = await mk("P-1", new Date(2026, 9, 13, 8, 0).toISOString());
+const token3 = await appointment.ensureToken(b3.id);
+
+// The customer says "not before 10, not after 15:00".
+const winBad = await appointment.setWindow(token3, { notBefore: "3pm", now: NOW });
+ok("a garbled time is refused at the page", !winBad.ok && /not a valid/.test(winBad.errors[0]));
+const winInverted = await appointment.setWindow(token3, { notBefore: "15:00", notAfter: "10:00", now: NOW });
+ok("an inverted window is refused", !winInverted.ok);
+
+const winOk = await appointment.setWindow(token3, { notBefore: "10:00", notAfter: "15:00", now: NOW });
+ok("the customer's after/before is stored and counts as a response",
+  winOk.ok && winOk.summary.requestedWindow.notBefore === "10:00"
+  && winOk.summary.requestedWindow.notAfter === "15:00"
+  && winOk.summary.state === "responded" && winOk.summary.respondedVia === "window");
+
+// The seam's food: requestedWindowsFor keys the ask by plan code, so
+// the sequencer plans the stop around it (customer wins over the plan).
+const assignments = require(path.join(SANDBOX, "server/lib/assignments.js"));
+const windowMap = await assignments.requestedWindowsFor("fall", 2026);
+ok("the sequencer's requestedWindows seam receives the customer's ask, keyed by code",
+  windowMap["P-1"] && windowMap["P-1"].notBefore === "10:00" && windowMap["P-1"].notAfter === "15:00",
+  JSON.stringify(windowMap));
+
+const winCleared = await appointment.setWindow(token3, { notBefore: "", notAfter: "", now: NOW });
+ok("clearing both rows removes the window", winCleared.ok && winCleared.summary.requestedWindow === null);
+
+// The free bucket: an answer, a flag, and the end of self-serve moves.
+const fb = await appointment.freeBucket(token3, { now: NOW });
+ok("the free bucket is recorded as the customer's answer",
+  fb.ok && fb.summary.freeBucket === true && fb.summary.respondedVia === "window",
+  JSON.stringify(fb.summary));
+const b3After = await bookings.get(b3.id);
+ok("the booking carries the flag with its history",
+  Boolean(b3After.flexBucket) && b3After.history.some((h) => h.action === "free_bucket"));
+ok("a free-bucket booking keeps its anchor date but leaves self-serve rescheduling",
+  b3After.scheduledFor === b3.scheduledFor
+  && !appointment.summarize(b3After, { now: NOW }).canReschedule
+  && !appointment.summarize(b3After, { now: NOW }).canFreeBucket);
+const fbAgain = await appointment.freeBucket(token3, { now: NOW });
+ok("choosing the free bucket twice is refused politely", !fbAgain.ok);
+
 // ---- Report ----------------------------------------------------------
 
 if (failures.length) {

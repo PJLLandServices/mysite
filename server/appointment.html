@@ -30,18 +30,61 @@
           <div><dt>Date</dt><dd id="dateLabel"></dd></div>
           <div><dt>Arrival window</dt><dd id="bucketLabel"></dd></div>
           <div><dt>Address</dt><dd id="street"></dd></div>
+          <div id="priceRow" hidden><dt>Your price</dt><dd id="priceLabel"></dd></div>
         </dl>
+
+        <p class="ap-intro">
+          In our effort to increase day-to-day efficiency, we've created dedicated routes for
+          our service trucks, so nearby homes are completed together rather than jumping
+          between towns through our busy season. Working this way lets us keep providing the
+          same great service without raising our prices. <strong>Please only choose a
+          different day if no one can be home.</strong> Any restrictions beyond the options
+          below? Call or text us at <a href="tel:+19059600181">(905)&nbsp;960-0181</a>.
+        </p>
 
         <div class="ap-actions" id="actions">
           <button type="button" class="ap-btn ap-btn-primary" id="confirmBtn">Confirm this appointment</button>
+          <button type="button" class="ap-btn ap-btn-outline" id="windowBtn">Set timing for my day (after / before)</button>
           <button type="button" class="ap-btn ap-btn-outline" id="rescheduleBtn">Pick a different day</button>
           <button type="button" class="ap-btn ap-btn-quiet" id="cancelBtn">I no longer need this</button>
         </div>
 
+        <div class="ap-panel" id="windowPanel" hidden>
+          <h2>Timing for your day</h2>
+          <p class="ap-note">
+            Keep your day, but tell us when works. We'll plan your stop around it.
+          </p>
+          <div class="ap-window-rows">
+            <label class="ap-label">Not before
+              <select id="windowAfter"><option value="">No preference</option></select>
+            </label>
+            <label class="ap-label">Not after
+              <select id="windowBefore"><option value="">No preference</option></select>
+            </label>
+          </div>
+          <div class="ap-actions">
+            <button type="button" class="ap-btn ap-btn-primary" id="windowSave">Save my timing</button>
+            <button type="button" class="ap-btn ap-btn-quiet" id="windowBack">Back</button>
+          </div>
+        </div>
+
         <div class="ap-panel" id="reschedulePanel" hidden>
           <h2>Pick a new day</h2>
-          <p class="ap-note">These are the days our crew is already in your area with room left.</p>
-          <div class="ap-slots" id="slotList"><p class="ap-loading">Finding days near you…</p></div>
+          <p class="ap-note">
+            Afternoon windows (12 PM – 5 PM) on any day with room left, right through the
+            end of the season.
+          </p>
+          <div class="ap-freebucket">
+            <h3>Or choose the Free Bucket</h3>
+            <p class="ap-note">
+              Our crews are in nearby towns regularly, and we use the free bucket to fill our
+              days when we're in your area. Choose it if you're normally home, or can be home
+              on short notice — our technician will contact you with an approximate time of
+              arrival.
+            </p>
+            <button type="button" class="ap-btn ap-btn-outline" id="freeBucketBtn">Put me in the Free Bucket</button>
+          </div>
+          <div class="ap-slots" id="slotList"><p class="ap-loading">Finding days with room…</p></div>
           <button type="button" class="ap-btn ap-btn-quiet" id="rescheduleBack">Never mind — keep my day</button>
         </div>
 
