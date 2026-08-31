@@ -57,13 +57,13 @@ const routeGeometry = require("./lib/route-geometry");
 const assignments = require("./lib/assignments");
 const assignmentMessages = require("./lib/assignment-messages");
 const assignmentCadence = require("./lib/assignment-cadence");
+const appointmentActions = require("./lib/appointment-actions");
 
-// THE STAGE-5 INTERLOCK. Every cadence message links to /a/<token> —
-// the customer's appointment page. Until that route exists, a blast
-// would text 60 customers a dead URL, so the cadence refuses to send
-// while this is false. Stage 5 builds the page and flips it to true in
-// the same commit. Do not flip it by hand.
-const APPOINTMENT_PAGE_READY = false;
+// THE STAGE-5 INTERLOCK, now open. Stage 4 refused to send while the
+// appointment page didn't exist; stage 5 built /a/<token> (page +
+// confirm/reschedule/cancel API below) and flips this in the same
+// commit, per the contract. Cadence messages may now carry live links.
+const APPOINTMENT_PAGE_READY = true;
 const seasonsLib = require("./lib/seasons");
 const customers = require("./lib/customers");
 const workOrders = require("./lib/work-orders");
@@ -4157,7 +4157,13 @@ async function rescheduleAvailability(bookingId, { from, to } = {}) {
   if (!address) return { ok: false, status: 422, errors: ["Address missing on the booking."] };
   const geo = await geocode(address);
   const allActive = await activeBookings();
-  const otherBookings = allActive.filter((b) => b.leadId !== bookingRec.leadId);
+  // Exclude the booking's OWN slot from the conflict math. Lead-backed
+  // bookings match by leadId (unchanged); a lead-less assignment booking
+  // has leadId null, and matching on that would silently drop EVERY
+  // other assignment booking from the conflicts — so those match by
+  // their canonical booking id instead.
+  const otherBookings = allActive.filter((b) =>
+    bookingRec.leadId ? b.leadId !== bookingRec.leadId : b.bookingId !== bookingRec.id);
   const scheduleData = await scheduleStore.read();
   const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
   const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
@@ -4299,7 +4305,10 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
     if (!address) return { ok: false, status: 422, errors: ["Address missing on the booking — can't compute drive times."] };
     const geo = await geocode(address);
     const allActive = await activeBookings();
-    const otherBookings = allActive.filter((b) => b.leadId !== bookingRec.leadId);
+    // Same self-exclusion rule as rescheduleAvailability: leadId for
+    // lead-backed bookings, canonical id for lead-less ones.
+    const otherBookings = allActive.filter((b) =>
+      bookingRec.leadId ? b.leadId !== bookingRec.leadId : b.bookingId !== bookingRec.id);
     const scheduleData = await scheduleStore.read();
     const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
     const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
@@ -4372,16 +4381,19 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
     notifyCustomer("rescheduled", aliasLead, { baseUrl }).catch(() => {});
   }
 
-  // 5) Page Patrick when the customer drove the change.
-  if (actor === "customer" && lead) {
+  // 5) Page Patrick when the customer drove the change. A lead-less
+  //    assignment booking builds the page from the booking record itself
+  //    — an assigned customer moving their day is exactly the change
+  //    Patrick needs to hear about.
+  if (actor === "customer") {
     const aliasLead = {
-      id: lead.id,
+      id: lead ? lead.id : bookingRec.id,
       sourceLabel: "Customer rescheduled their appointment",
       contact: {
-        name: lead.contact?.name || "(unknown)",
-        phone: lead.contact?.phone || "",
-        email: lead.contact?.email || "",
-        address: lead.contact?.address || "",
+        name: lead?.contact?.name || bookingRec.customerName || "(unknown)",
+        phone: lead?.contact?.phone || bookingRec.customerPhone || "",
+        email: lead?.contact?.email || bookingRec.customerEmail || "",
+        address: lead?.contact?.address || bookingRec.address || "",
         notes: `Was: ${bookingRec.scheduledFor || "(unscheduled)"}. Now: ${startDate.toISOString()}.${reason ? " Reason: " + reason : ""}`
       }
     };
@@ -21783,6 +21795,80 @@ Customer signature captured at ${new Date().toISOString()}.`;
     }
   }
 
+  // Assignment writer stage 5 — the customer's appointment page API.
+  // PUBLIC: the token is the credential, exactly like /portal/<token>.
+  // It addresses one booking and grants three actions on it.
+  const apptMatch = pathname.match(/^\/api\/appointment\/([A-Za-z0-9_-]{16,64})(?:\/(confirm|cancel|availability|reschedule))?$/);
+  if (apptMatch) {
+    const token = apptMatch[1];
+    const action = apptMatch[2] || null;
+    try {
+      if (!action && req.method === "GET") {
+        const booking = await appointmentActions.findByToken(token);
+        if (!booking) return sendJson(res, 404, { ok: false, errors: ["That link doesn't match an appointment."] });
+        return sendJson(res, 200, { ok: true, appointment: appointmentActions.summarize(booking) });
+      }
+      if (action === "confirm" && req.method === "POST") {
+        const result = await appointmentActions.confirm(token);
+        if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors });
+        return sendJson(res, 200, { ok: true, appointment: result.summary });
+      }
+      if (action === "cancel" && req.method === "POST") {
+        const body = await parseRequestBody(req);
+        const result = await appointmentActions.cancel(token, { reason: normalizeString(body.reason, 300) });
+        if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors });
+        return sendJson(res, 200, { ok: true, appointment: result.summary });
+      }
+      if (action === "availability" && req.method === "GET") {
+        const booking = await appointmentActions.findByToken(token);
+        if (!booking) return sendJson(res, 404, { ok: false, errors: ["That link doesn't match an appointment."] });
+        const summary = appointmentActions.summarize(booking);
+        if (!summary.canReschedule) {
+          return sendJson(res, 409, { ok: false, errors: ["This appointment can't be rescheduled from this page — call us at (905) 960-0181."] });
+        }
+        const url = new URL(req.url, baseUrlFromReq(req));
+        const result = await rescheduleAvailability(booking.id, {
+          from: url.searchParams.get("from"),
+          to: url.searchParams.get("to")
+        });
+        if (!result.ok) return sendJson(res, result.status || 422, { ok: false, errors: result.errors });
+        return sendJson(res, 200, result);
+      }
+      if (action === "reschedule" && req.method === "PATCH") {
+        const booking = await appointmentActions.findByToken(token);
+        if (!booking) return sendJson(res, 404, { ok: false, errors: ["That link doesn't match an appointment."] });
+        const summary = appointmentActions.summarize(booking);
+        if (!summary.canReschedule) {
+          return sendJson(res, 409, { ok: false, errors: [summary.insideCutoff
+            ? "Your appointment is less than 24 hours away — please call us at (905) 960-0181 to change it."
+            : "This appointment can't be rescheduled from this page — call us at (905) 960-0181."] });
+        }
+        const body = await parseRequestBody(req);
+        // The shared helper does the real work: slot re-validation
+        // through listAvailableSlots (geography filter, season window,
+        // bucket capacity all compose), the customer's one-move cap,
+        // WO locks, mirrors, and paging Patrick. Rule 4's re-anchoring
+        // is automatic — the cadence reads scheduledFor live.
+        const result = await rescheduleBooking({
+          bookingId: booking.id,
+          slotStart: String(body.start || ""),
+          actor: "customer",
+          actorName: booking.customerName || "",
+          reason: "moved from the appointment page",
+          req
+        });
+        if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors, code: result.code });
+        await bookings.markAssignmentResponded(booking.id, { via: "reschedule", by: "customer" });
+        const fresh = await bookings.get(booking.id);
+        return sendJson(res, 200, { ok: true, appointment: appointmentActions.summarize(fresh) });
+      }
+      return sendJson(res, 405, { ok: false, errors: ["Unsupported."] });
+    } catch (err) {
+      console.error("[appointment] action failed:", err?.message);
+      return sendJson(res, 500, { ok: false, errors: ["Something went wrong — call us at (905) 960-0181."] });
+    }
+  }
+
   // Assignment writer stage 4 — the blast, the cadence status, the
   // manual response mark, and the template test-send.
 
@@ -21862,7 +21948,16 @@ Customer signature captured at ${new Date().toISOString()}.`;
           assignment: { bucket: "morning" }
         };
       }
-      const rendered = assignmentMessages.render(key, assignmentMessages.contextForBooking(booking));
+      // A REAL booking gets its REAL appointment link (minted now if it
+      // doesn't have one), so Patrick can tap the link in his own test
+      // text and walk the whole journey. The synthetic sample keeps the
+      // loud placeholder — there is no page behind it.
+      let extra = {};
+      if (booking.id && booking.source === "assignment") {
+        const token = await appointmentActions.ensureToken(booking.id);
+        if (token) extra = { appointmentLink: assignmentCadence.appointmentLinkFor(token) };
+      }
+      const rendered = assignmentMessages.render(key, assignmentMessages.contextForBooking(booking, extra));
       const result = { ok: true, sentTo: {}, channels: {} };
       if (meta.channel === "email") {
         const to = String(process.env.NOTIFY_TO_EMAIL || process.env.GMAIL_USER || "").trim();
@@ -22542,6 +22637,11 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin/assignment-messages" || pathname === "/admin/assignment-messages/") {
     return { dir: SERVER_DIR, relative: "/assignment-messages.html" };
+  }
+  // The customer's appointment page — public, token in the path; the
+  // page's own JS reads the token and talks to /api/appointment/<token>.
+  if (/^\/a\/[A-Za-z0-9_-]{16,64}\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/appointment.html" };
   }
   // Seasonal outreach (feature-seasonal-outreach-brief.md). Property-
   // driven bulk send page for the spring + fall booking nudge.

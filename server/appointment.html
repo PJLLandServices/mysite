@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1B4D2E">
+  <meta name="robots" content="noindex">
+  <title>Your appointment — PJL Land Services</title>
+  <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260518" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/appointment.css">
+</head>
+<body>
+  <main class="ap-shell">
+    <header class="ap-brand">
+      <img src="/crm/pjl-logo.svg" alt="PJL Land Services">
+    </header>
+
+    <section class="ap-card" id="card">
+      <p class="ap-loading" id="loading">Loading your appointment…</p>
+
+      <div id="details" hidden>
+        <p class="ap-hello" id="hello"></p>
+        <span class="ap-badge" id="badge" hidden></span>
+        <h1 class="ap-service" id="service"></h1>
+        <dl class="ap-facts">
+          <div><dt>Date</dt><dd id="dateLabel"></dd></div>
+          <div><dt>Arrival window</dt><dd id="bucketLabel"></dd></div>
+          <div><dt>Address</dt><dd id="street"></dd></div>
+        </dl>
+
+        <div class="ap-actions" id="actions">
+          <button type="button" class="ap-btn ap-btn-primary" id="confirmBtn">Confirm this appointment</button>
+          <button type="button" class="ap-btn ap-btn-outline" id="rescheduleBtn">Pick a different day</button>
+          <button type="button" class="ap-btn ap-btn-quiet" id="cancelBtn">I no longer need this</button>
+        </div>
+
+        <div class="ap-panel" id="reschedulePanel" hidden>
+          <h2>Pick a new day</h2>
+          <p class="ap-note">These are the days our crew is already in your area with room left.</p>
+          <div class="ap-slots" id="slotList"><p class="ap-loading">Finding days near you…</p></div>
+          <button type="button" class="ap-btn ap-btn-quiet" id="rescheduleBack">Never mind — keep my day</button>
+        </div>
+
+        <div class="ap-panel" id="cancelPanel" hidden>
+          <h2>Cancel this appointment?</h2>
+          <p class="ap-note">If your plans have just shifted, picking a different day keeps your spot on our route.</p>
+          <label class="ap-label">Anything we should know? (optional)
+            <textarea id="cancelReason" rows="2" maxlength="300"></textarea>
+          </label>
+          <div class="ap-actions">
+            <button type="button" class="ap-btn ap-btn-danger" id="cancelConfirm">Yes, cancel it</button>
+            <button type="button" class="ap-btn ap-btn-quiet" id="cancelBack">Keep my appointment</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="terminal" hidden>
+        <h1 class="ap-terminal-title" id="terminalTitle"></h1>
+        <p class="ap-terminal-body" id="terminalBody"></p>
+      </div>
+
+      <p class="ap-error" id="error" hidden></p>
+    </section>
+
+    <footer class="ap-foot">
+      Questions? Call or text <a href="tel:+19059600181">(905) 960-0181</a><br>
+      PJL Land Services · Newmarket, Ontario
+    </footer>
+  </main>
+  <script src="/crm/appointment.js"></script>
+</body>
+</html>

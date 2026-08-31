@@ -93,7 +93,7 @@ Full rationale in the build-plan artifact; this is the working checklist.
 | 2 | **The assignment record.** Planned stop → `confirmed` booking, `source: "assignment"`. Idempotent, reversible. Sends nothing. | **done** |
 | 3 | **The messages.** Templates for steps 1, 2, 3–5, 6. Preview per customer. Patrick edits. | **done** |
 | 4 | **The blast + the cadence engine.** `sendBulk` reuse, `type` on touches, the sweep, the response tracking, the manual mark. Test send first. | **done** |
-| 5 | **The reply path.** Confirm link (magic token → records response). Reschedule via portal already exists — verify it composes with the geography filter and re-anchoring. | |
+| 5 | **The reply path.** Confirm link (magic token → records response). Reschedule via portal already exists — verify it composes with the geography filter and re-anchoring. | **done** |
 | 6 | **Day-move re-notify.** Replaces the hard refusal from PR #87 with move + re-notify + response reset. | |
 
 ## Part 5 — Known traps (verified in code, not hypothetical)
@@ -114,6 +114,31 @@ Full rationale in the build-plan artifact; this is the working checklist.
 
 Newest first. Every stage PR adds its entry.
 
+- *2026-08-31 — STAGE 5 SHIPPED, AND THE INTERLOCK IS OPEN. /a/<token>
+  is live: one public, token-addressed page (`server/appointment.html`,
+  actions in `server/lib/appointment-actions.js`) with the one-link
+  decision's three choices — CONFIRM (records the response, idempotent,
+  first answer kept), PICK A DIFFERENT DAY, and CANCEL. Reschedule
+  reuses the shared `rescheduleBooking`/`rescheduleAvailability` helpers
+  — the same `listAvailableSlots` + dayShapes path the portal uses — so
+  a customer's move COMPOSES with the geography filter, the season
+  window and the bucket-capacity gate by construction, and re-anchors
+  the cadence automatically (rule 4 reads scheduledFor live). Gates,
+  portal parity: changes blocked inside 24 hours (phone number offered
+  instead), one customer reschedule ever, cancel keeps the reason and
+  stops everything. `APPOINTMENT_PAGE_READY` flipped true in the same
+  commit, per the stage-4 contract; test-sends for a real booking now
+  mint the real token so Patrick can tap through his own [TEST] text.*
+  *FIXED IN PASSING, register-recorded: the reschedule self-exclusion
+  filter matched on leadId, and for a lead-less booking (leadId null)
+  that silently dropped EVERY assignment booking from the conflict
+  math — lead-less bookings now match by canonical id. Patrick is paged
+  on customer-driven reschedules of lead-less bookings too (the alias
+  builds from the booking record). 21 assertions in
+  `scripts/test-appointment-page.mjs` — including confirm-stops-2-to-5 /
+  nothing-stops-6 / cancel-stops-all proven THROUGH the real cadence
+  engine — plus a 5-assertion Playwright smoke of the page at iPhone
+  size. Stage 6 (day-move re-notify) is the one stage left.*
 - *2026-08-31 — STAGE 4 SHIPPED. `server/lib/assignment-cadence.js`:
   blast (admin button, two-press) + the seventh server sweep (5 min)
   dispatching steps 2–6. All nine Part-2 rules implemented literally
