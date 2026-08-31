@@ -23140,6 +23140,10 @@ async function serveStatic(req, res, pathname) {
   }
 }
 
+// Auth and admin surfaces that must never appear in a search index. Matched
+// as exact path or path-segment prefix ("/login", "/login/x" — not "/loginy").
+const NOINDEX_PATH_PREFIXES = ["/login", "/portal/login", "/admin", "/quote-legacy"];
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
   // Normalize the pathname before route matching. If the URL came in with
@@ -23188,6 +23192,17 @@ const server = http.createServer(async (req, res) => {
         } catch { /* no flat target — fall through to the normal 404 */ }
       }
     }
+  }
+  // Never index auth or admin surfaces (brief: seo/login-deindex). Set via
+  // setHeader so it merges into every later writeHead on this response —
+  // the static file, an auth redirect, or the 404 all carry it.
+  // /quote-legacy.html is listed explicitly: it is served with its extension,
+  // so the prefix rule's exact/segment match would miss it.
+  if (
+    NOINDEX_PATH_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/")) ||
+    pathname === "/quote-legacy.html"
+  ) {
+    res.setHeader("X-Robots-Tag", "noindex, nofollow");
   }
   try {
     // CORS: applied early so preflights and cross-origin POSTs to /api/quotes
