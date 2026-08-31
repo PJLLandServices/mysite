@@ -90,7 +90,7 @@ Full rationale in the build-plan artifact; this is the working checklist.
 |-------|-----------|-------|
 | 0 | **Preflight.** Read-only: for every planned stop, "would be told X" or "skipped because Y". Sends nothing, creates nothing. | **done** |
 | 1 | **Capacity + season gate.** Bucket caps enforced at booking time; `publicBookingThrough` wired. Touches FLOW-03 (PASS) — re-verify. | **done** |
-| 2 | **The assignment record.** Planned stop → `confirmed` booking, `source: "assignment"`. Idempotent, reversible. Sends nothing. | |
+| 2 | **The assignment record.** Planned stop → `confirmed` booking, `source: "assignment"`. Idempotent, reversible. Sends nothing. | **done** |
 | 3 | **The messages.** Templates for steps 1, 2, 3–5, 6. Preview per customer. Patrick edits. | |
 | 4 | **The blast + the cadence engine.** `sendBulk` reuse, `type` on touches, the sweep, the response tracking, the manual mark. Test send first. | |
 | 5 | **The reply path.** Confirm link (magic token → records response). Reschedule via portal already exists — verify it composes with the geography filter and re-anchoring. | |
@@ -114,6 +114,42 @@ Full rationale in the build-plan artifact; this is the working checklist.
 
 Newest first. Every stage PR adds its entry.
 
+- *2026-08-31 — STAGE 2 SHIPPED. `assign()` / `unassign()` in
+  `server/lib/assignments.js`, `POST /api/assignments/:season/:year/assign`
+  + `/unassign` (ADMIN only — techs can preflight, not assign), and
+  two-press-armed Assign / Undo buttons on the season-plan panel.
+  THE VERDICTS ARE STILL THE PREFLIGHT'S: assign() runs preflight() first
+  and books only rows it called ready, so the screen Patrick reviewed is
+  by construction what the button does. Bookings are property-first
+  canonical records (`bookings.createDirect`) — `source: "assignment"`,
+  propertyId-linked, NO lead — the path `activeBookings()` and the iCal
+  feed were already prepared for. SENDS NOTHING (asserted: the module
+  requires no notify/mailer/sms and never calls sendBulk).*
+  *DECIDED HERE, PER THE CONTRACT: (a) `scheduledFor` is the BUCKET OPEN
+  (08:00 / 12:00 local) and `durationMinutes` is the SERVICE minutes, not
+  the bucket span — a full-bucket record would physically close assigned
+  days to the new customers the geography filter exists to admit; the
+  plan screen stays the timeline of record and customers only ever see
+  the bucket label. (b) Only preflight-READY stops book: an unreachable
+  (no-contact) customer is NOT booked — a truck must never surprise a
+  house. (c) Service tier = `deriveSeasonalKey(zones, accountType)`;
+  documented zones win over the manual count; NO zone count → skip
+  `no_zone_count` (decision D: Patrick fills them, then re-runs — a
+  re-run only picks up the newly fillable stops). (d) ONCE EVER per
+  property per season: a property with ANY prior assignment booking —
+  including a CANCELLED one — is never auto-booked again
+  (`assignment_declined`); a cancellation is a customer's answer and a
+  re-run must not overrule it. (e) `unassign` hard-deletes only pristine
+  records (confirmed, never rescheduled, no work order); anything a
+  human or customer touched is kept and listed. (f) A property planned
+  on two days books once (`duplicate_in_plan`).*
+  *THE PART-5 BUFFER TRAP, PROVEN: a fully-assigned day's `buildDayShapes`
+  points and bucket loads are byte-identical before/after assignment
+  (pointKey dedup), a below-cap assigned bucket still offers slots to new
+  customers, and an at-cap bucket is closed. 34 assertions in
+  `scripts/test-assignment-writer.mjs`, sandbox-copied modules so the
+  REAL `createDirect` → REAL `deriveBookingState` loop proves idempotency
+  end to end (second run creates zero) with no data file touched.*
 - *2026-08-31 — STAGE 1 SHIPPED. Bucket capacity + season gate, both inside
   `availability.js listAvailableSlots()` — the engine every submission path
   re-validates through, so gating it gates submission (admin custom-time

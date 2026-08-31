@@ -238,6 +238,59 @@ async function upsertFromLead(lead) {
   return next;
 }
 
+// Create a canonical booking record directly — the property-first path.
+// Everything before the assignment writer entered bookings.json through
+// upsertFromLead (a lead books, the record mirrors); an assigned booking
+// has no lead behind it, only a property, so it is born canonical here.
+// activeBookings() in server.js already resolves coordinates for
+// lead-less records through propertyId, and the iCal feed reads this
+// store — nothing downstream needs a lead to exist.
+//
+// The caller supplies every field; this function only stamps identity
+// (id, timestamps, history) and refuses records that would be invisible
+// or unattributable. NOTHING here sends anything.
+async function createDirect(fields, { by = "system", note = "" } = {}) {
+  if (!fields || typeof fields !== "object") throw new Error("Booking fields are required.");
+  if (!fields.scheduledFor || Number.isNaN(Date.parse(fields.scheduledFor))) {
+    throw new Error("A valid scheduledFor is required.");
+  }
+  if (!fields.serviceKey) throw new Error("A serviceKey is required.");
+  if (!fields.propertyId && !fields.leadId) {
+    throw new Error("A booking needs a propertyId or a leadId to belong to someone.");
+  }
+  if (fields.status && !STATUSES.has(fields.status)) {
+    throw new Error(`Unknown booking status: ${fields.status}`);
+  }
+  const records = await readAll();
+  const next = blank();
+  next.id = await nextBookingId(new Date().getUTCFullYear());
+  next.customerId = fields.customerId || null;
+  next.customerEmail = String(fields.customerEmail || "").toLowerCase();
+  next.customerName = fields.customerName || "";
+  next.customerPhone = fields.customerPhone || "";
+  next.propertyId = fields.propertyId || null;
+  next.leadId = fields.leadId || null;
+  next.scheduledFor = new Date(fields.scheduledFor).toISOString();
+  next.durationMinutes = Number(fields.durationMinutes) || 0;
+  next.serviceKey = fields.serviceKey;
+  next.serviceLabel = fields.serviceLabel || "";
+  next.zoneCount = (fields.zoneCount != null) ? fields.zoneCount : null;
+  next.address = fields.address || "";
+  next.status = fields.status || "confirmed";
+  next.prepNotes = fields.prepNotes || "";
+  // Provenance — how this record came to exist. "assignment" marks the
+  // season writer's records; the assignment block carries what it needs
+  // to be reversed and audited (season, year, plan date, bucket, code).
+  if (fields.source) next.source = fields.source;
+  if (fields.assignment && typeof fields.assignment === "object") {
+    next.assignment = { ...fields.assignment };
+  }
+  next.history = [{ ts: next.createdAt, action: "created", by, note }];
+  records.unshift(next);
+  await writeAll(records);
+  return next;
+}
+
 // Update a booking record. Allowed fields are explicit so we don't
 // accept arbitrary patches (e.g., changing leadId would break the
 // back-reference).
@@ -420,6 +473,7 @@ module.exports = {
   listByLead,
   listByProperty,
   upsertFromLead,
+  createDirect,
   update,
   reschedule,
   cancel,
