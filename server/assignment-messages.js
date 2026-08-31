@@ -72,7 +72,7 @@
     el("previewNote").textContent = data.sample
       ? "No assigned bookings yet for this season — previewing with a sample customer."
       : `Previewing as ${data.context.name}, ${data.context.street}, ${data.context.date} (${data.context.bucket}). `
-        + "Links show as [confirm-link] / [reschedule-link] until the send step builds real ones.";
+        + "The link shows as [appointment-link] until the send step builds each customer's real one.";
     updatePreviews();
   }
 

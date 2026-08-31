@@ -74,19 +74,34 @@ for (const key of EXPECTED_KEYS) {
     fields.filter((f) => !(f in messages.MERGE_FIELDS)).join(", "));
 }
 
-// Steps 1–2 must hand the customer both links (decision F: a response is
-// a confirm click or a reschedule). The nudge must carry the confirm
-// link — it exists to convert silence into an answer.
-for (const key of ["assignment_email", "assignment_sms", "followup_email", "followup_sms"]) {
-  ok(`${key} carries both the confirm and reschedule links`,
-    messages.DEFAULT_TEMPLATES[key].body.includes("{confirmLink}")
-    && messages.DEFAULT_TEMPLATES[key].body.includes("{rescheduleLink}"));
+// ONE LINK PER MESSAGE — Patrick's stage-3 review call. Every message
+// that asks for an answer carries exactly one {appointmentLink}, where
+// the customer decides (confirm / reschedule / cancel). Two links
+// doubled the URLs and split each SMS into extra segments.
+for (const key of ["assignment_email", "assignment_sms", "followup_email", "followup_sms", "nudge_email", "nudge_sms"]) {
+  const links = [...messages.DEFAULT_TEMPLATES[key].body.matchAll(/\{appointmentLink\}/g)].length;
+  ok(`${key} carries exactly ONE appointment link`, links === 1, `${links} links`);
+  ok(`${key} carries no legacy split links`,
+    !/\{(confirmLink|rescheduleLink)\}/.test(messages.DEFAULT_TEMPLATES[key].body));
 }
-ok("the nudge carries the confirm link",
-  messages.DEFAULT_TEMPLATES.nudge_sms.body.includes("{confirmLink}")
-  && messages.DEFAULT_TEMPLATES.nudge_email.body.includes("{confirmLink}"));
-ok("the 24-hour reminder needs no links — it goes to everyone, answered or not",
-  !messages.DEFAULT_TEMPLATES.reminder24_sms.body.includes("{confirmLink}"));
+ok("the 24-hour reminder needs no link — it goes to everyone, answered or not",
+  !messages.DEFAULT_TEMPLATES.reminder24_sms.body.includes("{appointmentLink}"));
+
+// The segment budget behind the one-link decision: rendered with a
+// realistic link, every SMS fits in at most TWO segments (306 chars
+// concatenated), so no step arrives as a pile of split texts.
+{
+  const sample = messages.contextForBooking({
+    customerName: "Kristen Holmes",
+    address: "90 Oriole Drive, East Gwillimbury, ON",
+    scheduledFor: new Date(2026, 8, 28, 8, 13).toISOString(),
+    assignment: { bucket: "morning" }
+  }, { appointmentLink: "https://pjllandservices.com/a/AbCdEf123456" });
+  for (const key of ["assignment_sms", "followup_sms", "nudge_sms", "reminder24_sms"]) {
+    const len = messages.render(key, sample).body.length;
+    ok(`${key} fits in two SMS segments with a real link (${len} chars)`, len <= 306, String(len));
+  }
+}
 
 // ---- 2. Patrick's nudge intent survives the copy-edit -----------------
 
@@ -125,13 +140,13 @@ for (const key of EXPECTED_KEYS) {
 ok("a rendered message names the customer's day and window",
   all.assignment_sms.body.includes("Monday, September 28")
   && all.assignment_sms.body.includes("Morning (8 AM – 12 PM)"));
-ok("links render as LOUD placeholders until the send step builds real ones",
-  all.assignment_sms.body.includes("[confirm-link]"),
+ok("the link renders as a LOUD placeholder until the send step builds real ones",
+  all.assignment_sms.body.includes("[appointment-link]"),
   all.assignment_sms.body);
 ok("a supplied real link replaces the placeholder",
   messages.render("assignment_sms",
-    messages.contextForBooking(BOOKING, { confirmLink: "https://pjl.example/c/tok" })
-  ).body.includes("https://pjl.example/c/tok"));
+    messages.contextForBooking(BOOKING, { appointmentLink: "https://pjl.example/a/tok" })
+  ).body.includes("https://pjl.example/a/tok"));
 ok("a nameless record still greets politely, not blankly",
   messages.contextForBooking({ ...BOOKING, customerName: "" }).firstName === "there");
 

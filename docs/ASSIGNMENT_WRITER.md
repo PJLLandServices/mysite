@@ -24,7 +24,7 @@ Decided with Patrick, 2026-08-31. Unlisted recommendations were accepted as deci
 | C | Channels | **Email AND SMS**, on the initial send and on every follow-up. |
 | D | The 18 stops without zone counts | **Patrick fills them before the send.** Their durations — and their days' shapes — are guesses until then. |
 | E | One blast or per-day | **One blast, at the start of the season (target Sept 10).** Patrick's call, overriding the per-day recommendation. The mitigation for a weather shift is day-move + re-notify (stage 6), not staggered sending. |
-| F | What counts as "responded" | **A confirm-link click, a portal reschedule/cancel, or a one-tap manual mark in the CRM** (for phone calls and text replies, which the system cannot see — there is no inbound SMS handling and none is being built now). |
+| F | What counts as "responded" | **A confirm on their appointment page, a reschedule/cancel there, or a one-tap manual mark in the CRM** (for phone calls and text replies, which the system cannot see — there is no inbound SMS handling and none is being built now). *Refined 2026-08-31 on Patrick's stage-3 review: every message carries ONE `{appointmentLink}` to a single appointment page where the customer decides — confirm, reschedule, or cancel — instead of separate confirm/reschedule links. Two URLs per SMS split each text into extra segments the customer receives as multiple messages.* |
 | G | Early-day compression | **Send exactly on schedule.** R1 (Sept 28) non-responders get six messages in 17 days — Sept 10, 13, 18, 21, 23, 27. Patrick chose this over a spacing rule, knowingly. |
 
 ## Part 2 — The cadence
@@ -114,6 +114,18 @@ Full rationale in the build-plan artifact; this is the working checklist.
 
 Newest first. Every stage PR adds its entry.
 
+- *2026-08-31 — ONE LINK, Patrick's stage-3 review call: "should all link
+  to one thing (their portal?) and in that portal they then decide."
+  `{confirmLink}`/`{rescheduleLink}` are replaced by a single
+  `{appointmentLink}`; every asking message carries exactly one, the
+  24-hour reminder carries none, and the suite now asserts a SEGMENT
+  BUDGET — every SMS rendered with a realistic URL fits in at most two
+  segments, so no step arrives as a pile of split texts. Decision F
+  refined accordingly. STAGE 5 SIMPLIFIES: instead of a separate
+  confirm endpoint composing with the existing reschedule flow, it
+  builds one token-addressed appointment page with Confirm / Reschedule
+  / Cancel in one place — confirm records the response; reschedule and
+  cancel run the existing portal machinery. Suite: 59 assertions.*
 - *2026-08-31 — STAGE 3 SHIPPED. `server/lib/assignment-messages.js` +
   /admin/assignment-messages (linked from the season-plan Assignment
   panel). Seven templates — email+SMS for the assignment, the follow-up
@@ -127,12 +139,12 @@ Newest first. Every stage PR adds its entry.
   to reach you). SENDS NOTHING — asserted like the writer.*
   *RULES THE SEND STEP INHERITS: (a) merge fields are a CLOSED set and a
   template referencing an unknown {field} is refused at save, so a typo
-  can never render literally in a customer's text; (b) {confirmLink} /
-  {rescheduleLink} render as loud [confirm-link]/[reschedule-link]
-  placeholders until stages 4–5 supply real URLs, and STAGE 4 MUST
-  REFUSE to send any message still containing a bracketed placeholder;
-  (c) steps 1–2 carry both links, the nudge carries the confirm link,
-  the 24-hour reminder carries none (it goes to everyone). 48 assertions
+  can never render literally in a customer's text; (b) {appointmentLink}
+  renders as a loud [appointment-link] placeholder until stages 4–5
+  supply real URLs, and STAGE 4 MUST REFUSE to send any message still
+  containing a bracketed placeholder; (c) every asking message carries
+  exactly one link, the 24-hour reminder carries none (it goes to
+  everyone) — see the one-link entry above. 48 assertions
   in `scripts/test-assignment-messages.mjs` + an 8-assertion Playwright
   smoke of the editor page (editors render, legend complete, preview
   fills, save round-trips).*
