@@ -114,6 +114,16 @@ Full rationale in the build-plan artifact; this is the working checklist.
 
 Newest first. Every stage PR adds its entry.
 
+- *2026-08-31 — STAGE 2 DEFECT #2, also found by Patrick live: same-start
+  bookings drew as one pile on the schedule calendar — only the first
+  morning and first afternoon card visible, because every stop in a
+  bucket carries the bucket-open time and the grid positioned purely by
+  time. The day/week grid now lays out as a waterfall (cards anchor to
+  their time, never overlap). The two live finds together sharpen the
+  stage-2 lesson: bucket-time bookings break TWO assumptions in
+  lead-era surfaces — "every appointment has a lead" and "no two
+  appointments share a start time." Both are now register-recorded
+  checks for every future surface.*
 - *2026-08-31 — STAGE 2 DEFECT, found by Patrick on the live run: assigned
   bookings appeared on /admin/bookings but not on the /admin/schedule
   calendar or the tech day sheet — both surfaces predate property-first

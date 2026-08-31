@@ -380,16 +380,33 @@ function layoutEvents(host, days) {
     }
   }
 
-  // Bookings.
-  for (const b of bookings) {
-    const start = new Date(b.start);
-    const end = new Date(b.end);
-    for (const day of days) {
-      if (!isSameDate(start, day)) continue;
+  // Bookings — a per-day WATERFALL, not pure time positioning. The grid
+  // was built when one customer held a whole bucket; assignment bookings
+  // broke that assumption, because every stop in a bucket carries the
+  // bucket-open time (five morning stops all say 8:00) and time-pure
+  // top/height stacked them in one pile with only the top card visible.
+  // Cards still anchor to their start time (1px = 1 minute), but each
+  // one is pushed below the previous card's bottom edge when they would
+  // overlap. The card prints its true time, so nothing lies — the pile
+  // just unrolls down the day the way the crew will actually run it.
+  for (const day of days) {
+    const col = dayByKey.get(dateKey(day));
+    if (!col) continue;
+    const dayEvents = bookings
+      .filter((b) => isSameDate(new Date(b.start), day))
+      .sort((a, b2) => Date.parse(a.start) - Date.parse(b2.start));
+    let waterline = 0;
+    for (const b of dayEvents) {
+      const start = new Date(b.start);
+      const end = new Date(b.end);
       const { top, height } = clipToGrid(start, end, day);
       if (height <= 0) continue;
-      const col = dayByKey.get(dateKey(day));
-      if (!col) continue;
+      // Bumped the minimum height from 22 to 84 so the 4 lines of detail
+      // (service / customer / address / phone) all fit even on the
+      // tightest bucket slot.
+      const drawnHeight = Math.max(height, 84);
+      const drawnTop = Math.max(top, waterline);
+      waterline = drawnTop + drawnHeight + 2;
       const isCancelled = b.bookingStatus === "cancelled";
       const colorClass = eventColorClass(b.serviceKey);
       // <div role="button"> instead of a real <button> so we can legally
@@ -399,11 +416,8 @@ function layoutEvents(host, days) {
       evtEl.setAttribute("role", "button");
       evtEl.setAttribute("tabindex", "0");
       evtEl.className = `cal-event${isCancelled ? " is-cancelled" : ""}${colorClass ? " " + colorClass : ""}`;
-      evtEl.style.top = `${top}px`;
-      // Bumped the minimum height from 22 to 84 so the 4 lines of detail
-      // (service / customer / address / phone) all fit even on the
-      // tightest 45-min bucket slot.
-      evtEl.style.height = `${Math.max(height, 84)}px`;
+      evtEl.style.top = `${drawnTop}px`;
+      evtEl.style.height = `${drawnHeight}px`;
       evtEl.dataset.leadId = b.id;
       if (b.bookingId) evtEl.dataset.bookingId = b.bookingId;
       evtEl.dataset.start = b.start;
@@ -415,7 +429,7 @@ function layoutEvents(host, days) {
       const shortAddr = shortAddress(b.address);
       const phoneTel = b.phone ? telHref(b.phone) : "";
       // Phone is rendered as a real <a tel:> so iOS hands the tap off
-      // to the dialer. event.stopPropagation on the link keeps the
+      // to the dialer. event.stopPropagation on the link stops the
       // outer "open action panel" click from also firing.
       const phoneHtml = phoneTel
         ? `<a class="cal-event-phone" href="${escapeHtml(phoneTel)}" onclick="event.stopPropagation()">${escapeHtml(b.phone)}</a>`
