@@ -19,6 +19,22 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-31 (Assignment bookings carry the route's sequenced arrivals — Patrick's third live
+find):** the calendar showed every afternoon stop at 12:00 while the plan's route panel sequenced
+them 12:53 / 13:33 / 14:13 — and ties drew in reverse run order (bookings.json is newest-first).
+Assignment records now store the stop's sequenced arrival (`resequence.sequenceDay` timeline, the
+same walk the plan screen prints — SEQ-02's one-clock rule extended to a third surface), clamped
+inside the stop's bucket so an overrun morning can't shift a record into afternoon capacity
+attribution, with bucket-open as the fail-soft when a day can't sequence. New
+`assignments.syncAssignedTimes()` re-anchors pristine records (confirmed, unrescheduled, no WO,
+date still planned) after the three order-affecting plan edits (`/stop-order`, `/auto-order`,
+`/stop-window` — fire-and-forget after the store op) and at the end of every `assign()` run, so
+re-pressing Assign repairs times while creating nothing; a record a human or customer moved is
+never dragged back to the route. The calendar's waterfall now lays days out in true run order with
+real times. `test-assignment-writer.mjs` grows to 41 assertions (sequenced / fallback / clamped
+starts; re-anchor; no-op re-sync; rescheduled record untouched). The iCal feed inherits the real
+times for free.
+
 **2026-08-31 (Schedule calendar: same-start bookings drew as one pile — found by Patrick live):**
 with the union fix deployed, the calendar showed only "the first appointment for the morning, and
 first for the afternoon". All 18 bookings were present (the week counter said so); the day/week

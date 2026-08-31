@@ -1167,7 +1167,8 @@
     head.className = "sp-preflight-summary";
     head.textContent =
       `${s.created} appointments booked · ${s.settled} already had their own booking`
-      + ` · ${s.skipped} skipped — and no messages were sent.`;
+      + ` · ${s.skipped} skipped — and no messages were sent.`
+      + (data.timesSynced ? ` ${data.timesSynced} existing appointment times re-anchored to the route.` : "");
     out.appendChild(head);
 
     const rows = data.days.flatMap((d) => d.stops);

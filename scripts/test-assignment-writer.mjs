@@ -98,10 +98,25 @@ const PLAN = {
   }
 };
 
+// Sequenced arrivals, injected per day label so the test is exact and
+// offline. P-A2 is deliberately ABSENT — its booking must fall back to
+// the bucket open. P-DUP's 12:40 is a morning stop sequenced past noon
+// (an overrun day) — its record must be CLAMPED inside the morning so
+// bucket capacity attribution can't leak into the afternoon.
+const STUB_TIMELINES = {
+  R1: [
+    { propertyCode: "P-A1", bucket: "morning", arriveAt: "08:13" },
+    { propertyCode: "P-DUP", bucket: "morning", arriveAt: "12:40" },
+    { propertyCode: "P-C1", bucket: "afternoon", arriveAt: "14:00" }
+  ],
+  R2: []
+};
+
 const deps = {
   getPlan: async () => PLAN,
   listProperties: async () => Object.values(FIXTURES),
   getCustomer: async (id) => (id === "cus_commercial" ? { accountType: "commercial" } : { accountType: "residential" }),
+  sequenceDay: async (day) => ({ timeline: STUB_TIMELINES[day.label] || [] }),
   actor: "test"
 };
 
@@ -143,20 +158,29 @@ ok("the assignment block carries what reversal and audit need",
   && a1.assignment.date === DAY1 && a1.assignment.bucket === "morning"
   && a1.assignment.code === "P-A1" && a1.assignment.batchId === first.batchId);
 ok("4 documented zones book the 4z tier", a1.serviceKey === "fall_close_4z", a1.serviceKey);
-ok("a MORNING stop is scheduled at the bucket's open, 8 AM local",
-  new Date(a1.scheduledFor).getHours() === 8, a1.scheduledFor);
+ok("a stop is scheduled at its SEQUENCED ARRIVAL, not the bucket open",
+  new Date(a1.scheduledFor).getHours() === 8 && new Date(a1.scheduledFor).getMinutes() === 13,
+  a1.scheduledFor);
 ok("duration is the SERVICE minutes, not the bucket length — the bucket must stay open",
   a1.durationMinutes === 30, String(a1.durationMinutes));
 
 const a2 = byProperty.get("P-A2");
 ok("a manual zone count (no documented zones) still resolves the tier",
   a2 && a2.serviceKey === "fall_close_6z", a2?.serviceKey);
+ok("a stop the sequencer has no arrival for falls back to the bucket open",
+  new Date(a2.scheduledFor).getHours() === 8 && new Date(a2.scheduledFor).getMinutes() === 0,
+  a2.scheduledFor);
+
+const dup1 = byProperty.get("P-DUP");
+ok("a morning stop sequenced past noon is CLAMPED inside its bucket — capacity attribution must not leak",
+  new Date(dup1.scheduledFor).getHours() === 11 && new Date(dup1.scheduledFor).getMinutes() === 30,
+  dup1.scheduledFor);
 
 const c1 = byProperty.get("P-C1");
 ok("a commercial account books the commercial tier table",
   c1 && c1.serviceKey.startsWith("fall_close_commercial"), c1?.serviceKey);
-ok("an AFTERNOON stop is scheduled at noon local",
-  new Date(c1.scheduledFor).getHours() === 12, c1.scheduledFor);
+ok("an AFTERNOON stop carries its sequenced arrival too",
+  new Date(c1.scheduledFor).getHours() === 14, c1.scheduledFor);
 
 // -- skips --
 ok("no zone count -> skipped, named, not booked",
@@ -192,6 +216,22 @@ ok("the first run's bookings now read as settled through the REAL booking-state 
   second.summary.settled === 6, JSON.stringify(second.summary));
 ok("the store still holds exactly the first run's records",
   (await bookings.list()).filter((b) => b.source === "assignment").length === 4);
+
+// ---- 2b. Re-anchoring: booking times follow the route -----------------
+//
+// Patrick reorders the day; the sequenced arrivals move; pristine
+// assignment records must move with them — the calendar and the plan
+// screen are two views of ONE day, never two different days.
+
+STUB_TIMELINES.R1[0] = { propertyCode: "P-A1", bucket: "morning", arriveAt: "08:45" };
+const sync = await assignments.syncAssignedTimes(SEASON, YEAR, deps);
+ok("a plan edit re-anchors the moved stop", sync.updated === 1, JSON.stringify(sync));
+const a1After = (await bookings.list()).find((b) => b.propertyId === "P-A1");
+ok("...to its new sequenced arrival",
+  new Date(a1After.scheduledFor).getHours() === 8 && new Date(a1After.scheduledFor).getMinutes() === 45,
+  a1After.scheduledFor);
+const syncAgain = await assignments.syncAssignedTimes(SEASON, YEAR, deps);
+ok("re-syncing with nothing changed touches nothing", syncAgain.updated === 0, JSON.stringify(syncAgain));
 
 // ---- 3. SENDS NOTHING -------------------------------------------------
 
@@ -263,6 +303,14 @@ const dupBooking = (await bookings.list()).find((b) => b.propertyId === "P-DUP")
 await bookings.reschedule(dupBooking.id, { scheduledFor: new Date(2026, 9, 7, 8, 0).toISOString(), by: "customer" });
 const c1Booking = (await bookings.list()).find((b) => b.propertyId === "P-C1");
 await bookings.cancel(c1Booking.id, { by: "customer", reason: "sold the house" });
+
+// A rescheduled record has left the plan's steering — the time sync must
+// never drag it back to the route.
+const syncAfterTouch = await assignments.syncAssignedTimes(SEASON, YEAR, deps);
+const dupAfterSync = await bookings.get(dupBooking.id);
+ok("the time sync leaves a rescheduled booking exactly where the customer put it",
+  new Date(dupAfterSync.scheduledFor).getDate() === 7, dupAfterSync.scheduledFor);
+ok("...and reports nothing to update", syncAfterTouch.updated === 0, JSON.stringify(syncAfterTouch));
 
 const undo = await assignments.unassign(SEASON, YEAR, deps);
 ok("unassign finds exactly the assignment records", undo.summary.found === 4, JSON.stringify(undo.summary));
