@@ -21683,6 +21683,10 @@ Customer signature captured at ${new Date().toISOString()}.`;
         notAfter: normalizeString(body.notAfter, 5)
       }, { actor: session?.email || session?.name || "admin" });
       const plan = await resolveSeasonPlan(season, year);
+      // A time window changes the sequencing clock; re-anchor assigned
+      // bookings to the new arrivals in the background.
+      assignments.syncAssignedTimes(season, year)
+        .catch((e) => console.warn("[assignments] time sync after window change failed:", e?.message));
       return sendJson(res, 200, { ok: true, plan, warnings: result.warnings, window: result.window });
     } catch (err) {
       return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't set that window."] });
@@ -21709,6 +21713,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
       );
       const plan = await resolveSeasonPlan(
         seasonPlanOrderMatch[1], Number(seasonPlanOrderMatch[2]));
+      // Assigned bookings mirror the route's sequenced arrivals; a
+      // reorder moved them, so re-anchor in the background. Best-effort:
+      // the reorder itself is already committed either way.
+      assignments.syncAssignedTimes(seasonPlanOrderMatch[1], Number(seasonPlanOrderMatch[2]))
+        .catch((e) => console.warn("[assignments] time sync after reorder failed:", e?.message));
       return sendJson(res, 200, { ok: true, plan, warnings: result.warnings, reordered: result.reordered });
     } catch (err) {
       return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't reorder that stop."] });
@@ -21735,6 +21744,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
           await resequencePlanForStorage(stored, season), { actor });
       }
       const plan = await resolveSeasonPlan(season, year);
+      assignments.syncAssignedTimes(season, year)
+        .catch((e) => console.warn("[assignments] time sync after auto-order failed:", e?.message));
       return sendJson(res, 200, { ok: true, plan });
     } catch (err) {
       return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't re-optimise that day."] });

@@ -29,6 +29,7 @@ const properties = require("./properties");
 const outreach = require("./outreach");
 const bookings = require("./bookings");
 const customers = require("./customers");
+const resequence = require("./resequence");
 const { deriveSeasonalKey } = require("./pricing");
 const { BOOKABLE_SERVICES, BOOKING_BUCKETS } = require("./availability");
 
@@ -175,9 +176,17 @@ async function preflight(season, year, deps = {}) {
 // Running assign twice is one assignment.
 //
 // SCHEDULING SHAPE, decided here and recorded in the build log:
-//   scheduledFor    = the bucket's opening time (08:00 / 12:00 local).
-//                     The plan screen stays the timeline of record; the
-//                     customer only ever sees the bucket label.
+//   scheduledFor    = the stop's SEQUENCED ARRIVAL from the route
+//                     (resequence.sequenceDay's timeline), clamped inside
+//                     its bucket, falling back to the bucket's open when
+//                     the day can't be sequenced. Patrick's calendar and
+//                     iCal then mirror the route — five stops at 8:00 in
+//                     a pile taught us bucket-open times were wrong for
+//                     every admin surface. The customer still only ever
+//                     sees the bucket label. Because sequencing moves
+//                     when Patrick reorders a day, syncAssignedTimes()
+//                     re-anchors pristine records after order-affecting
+//                     plan edits (and at the end of every assign run).
 //   durationMinutes = the SERVICE minutes for the tier, not the bucket
 //                     length. A full-bucket span would physically close
 //                     the bucket to everyone; service-length records
@@ -197,13 +206,44 @@ const ASSIGN_OUTCOMES = Object.freeze({
   create_failed: "The booking could not be written — see the server log."
 });
 
-// Bucket opening times and lengths come from the availability engine's
-// own table so the two can't disagree on when a morning starts.
-function bucketStartFor(dateKey, bucketKey) {
+function hhmmToMinutes(text) {
+  const [h, m] = String(text || "").split(":").map(Number);
+  return (Number.isFinite(h) ? h * 60 : 0) + (Number.isFinite(m) ? m : 0);
+}
+
+// Where a stop's booking record sits in its day. The sequenced arrival
+// wins; no arrival (unroutable stop, sequencing failed) falls back to
+// the bucket's open. Bucket boundaries come from the availability
+// engine's own table so the two can't disagree on when a morning starts.
+//
+// CLAMPED INSIDE THE BUCKET on purpose: a morning that overruns can
+// sequence a stop past noon, and a record stored at 12:10 would count
+// against the AFTERNOON's capacity in the stage-1 gate (bucket
+// attribution reads the stored time). The plan screen still shows the
+// true overrun; the record stays a morning record.
+function scheduledStartFor(dateKey, bucketKey, arriveAt, serviceMinutes) {
   const bucket = BOOKING_BUCKETS.find((b) => b.key === bucketKey);
+  const fromMin = hhmmToMinutes(bucket?.from || "08:00");
+  const toMin = hhmmToMinutes(bucket?.to || "17:00");
+  const latestStart = Math.max(fromMin, toMin - Math.max(1, Number(serviceMinutes) || 30));
+  let startMin = arriveAt ? hhmmToMinutes(arriveAt) : fromMin;
+  startMin = Math.min(Math.max(startMin, fromMin), latestStart);
   const [y, m, d] = dateKey.split("-").map(Number);
-  const [hh, mm] = String(bucket?.from || "08:00").split(":").map(Number);
-  return new Date(y, m - 1, d, hh, mm, 0, 0);
+  return new Date(y, m - 1, d, Math.floor(startMin / 60), startMin % 60, 0, 0);
+}
+
+// The sequenced arrival time for every stop of one plan day, as a
+// Map code -> "HH:MM". Fails soft to an empty map: a day that cannot be
+// sequenced books at bucket opens rather than not at all.
+async function arrivalsFor(day, byCode, season, seq) {
+  const etaByCode = new Map();
+  try {
+    const sequenced = await seq(day, { propertiesByCode: byCode, season });
+    for (const t of sequenced.timeline || []) etaByCode.set(t.propertyCode, t.arriveAt);
+  } catch (err) {
+    console.warn("[assignments] sequencing unavailable — bucket-open times used:", err?.message);
+  }
+  return etaByCode;
 }
 
 // Effective zone count: documented zones win over the manual count —
@@ -223,9 +263,13 @@ async function assign(season, year, deps = {}) {
     || ((id) => customers.get(id, { withProperties: false }));
   const actor = deps.actor || "admin";
 
+  const getPlan = deps.getPlan || seasonPlans.getPlan;
+  const seq = deps.sequenceDay || resequence.sequenceDay;
+
   const flight = await preflight(season, year, deps);
   if (!flight.ok) return flight;
 
+  const plan = await getPlan(season, year);
   const all = await listProperties();
   const byCode = new Map((all || []).filter((p) => p && p.code).map((p) => [p.code, p]));
 
@@ -254,6 +298,7 @@ async function assign(season, year, deps = {}) {
 
   for (const flightDay of flight.days) {
     const rows = [];
+    const etaByCode = await arrivalsFor(plan.days[flightDay.date] || {}, byCode, season, seq);
     for (const verdict of flightDay.stops) {
       summary.stops += 1;
       const row = { ...verdict };
@@ -323,7 +368,9 @@ async function assign(season, year, deps = {}) {
           zoneCount,
           serviceKey,
           serviceLabel: service.label,
-          scheduledFor: bucketStartFor(verdict.date, verdict.bucket).toISOString(),
+          scheduledFor: scheduledStartFor(
+            verdict.date, verdict.bucket, etaByCode.get(verdict.code), service.minutes
+          ).toISOString(),
           durationMinutes: service.minutes,
           status: "confirmed",
           source: "assignment",
@@ -348,7 +395,74 @@ async function assign(season, year, deps = {}) {
     days.push({ ...flightDay, stops: rows });
   }
 
-  return { ok: true, batchId, assignedAt, season, year: Number(year), days, summary };
+  // Records from EARLIER runs re-anchor to today's sequencing. This is
+  // what lets "press Assign again" repair times after a plan edit — the
+  // run creates nothing for settled stops but still trues them up.
+  let timesSynced = 0;
+  try {
+    const sync = await syncAssignedTimes(season, year, deps);
+    timesSynced = sync.updated;
+  } catch (err) {
+    console.warn("[assignments] time sync after assign failed:", err?.message);
+  }
+
+  return { ok: true, batchId, assignedAt, season, year: Number(year), days, summary, timesSynced };
+}
+
+// Re-anchor pristine assignment bookings to the plan's CURRENT sequenced
+// arrivals. Runs after order-affecting plan edits (reorder, back-to-
+// automatic, time windows) and at the end of every assign — the plan
+// screen is the timeline of record, and a stored time that drifts from
+// it puts two different days in front of Patrick.
+//
+// PRISTINE ONLY: status confirmed, never rescheduled, no work order. A
+// record a human or customer moved is theirs now; the plan stops
+// steering it. A record whose assignment.date is no longer in the plan
+// is left where it is too — day moves are stage 6's business.
+async function syncAssignedTimes(season, year, deps = {}) {
+  const getPlan = deps.getPlan || seasonPlans.getPlan;
+  const listProperties = deps.listProperties || properties.list;
+  const listBookings = deps.listBookings || bookings.list;
+  const updateBooking = deps.updateBooking || bookings.update;
+  const seq = deps.sequenceDay || resequence.sequenceDay;
+
+  const plan = await getPlan(season, year);
+  if (!plan || !plan.days) return { ok: true, checked: 0, updated: 0 };
+
+  const mine = (await listBookings()).filter((b) =>
+    b && b.source === "assignment"
+    && b.assignment && b.assignment.season === season
+    && Number(b.assignment.year) === Number(year)
+    && b.status === "confirmed"
+    && (Number(b.rescheduleCount) || 0) === 0
+    && !(Array.isArray(b.workOrderIds) && b.workOrderIds.length)
+    && plan.days[b.assignment.date]);
+  if (!mine.length) return { ok: true, checked: 0, updated: 0 };
+
+  const all = await listProperties();
+  const byCode = new Map((all || []).filter((p) => p && p.code).map((p) => [p.code, p]));
+
+  const byDate = new Map();
+  for (const b of mine) {
+    if (!byDate.has(b.assignment.date)) byDate.set(b.assignment.date, []);
+    byDate.get(b.assignment.date).push(b);
+  }
+
+  let checked = 0;
+  let updated = 0;
+  for (const [date, records] of byDate) {
+    const etaByCode = await arrivalsFor(plan.days[date], byCode, season, seq);
+    for (const b of records) {
+      checked += 1;
+      const want = scheduledStartFor(
+        date, b.assignment.bucket, etaByCode.get(b.assignment.code), b.durationMinutes
+      ).toISOString();
+      if (b.scheduledFor === want) continue;
+      await updateBooking(b.id, { scheduledFor: want });
+      updated += 1;
+    }
+  }
+  return { ok: true, checked, updated };
 }
 
 // Reverse an assignment: remove the bookings assign() created for this
@@ -395,4 +509,4 @@ async function unassign(season, year, deps = {}) {
   return { ok: true, season, year: Number(year), summary, removed, kept };
 }
 
-module.exports = { preflight, assign, unassign, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };
+module.exports = { preflight, assign, unassign, syncAssignedTimes, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };

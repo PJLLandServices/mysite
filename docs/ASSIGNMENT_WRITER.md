@@ -114,6 +114,24 @@ Full rationale in the build-plan artifact; this is the working checklist.
 
 Newest first. Every stage PR adds its entry.
 
+- *2026-08-31 — STAGE 2 REVISION, from Patrick's third live find: the
+  calendar said every afternoon stop ran at 12:00 while the plan's route
+  sequenced them 12:53 / 13:33 / 14:13 — and same-start ties drew in
+  REVERSE run order (the booking store is newest-first). The bucket-open
+  decision in the original stage-2 log is SUPERSEDED: `scheduledFor` is
+  now the stop's SEQUENCED ARRIVAL from `resequence.sequenceDay`
+  (clamped inside its bucket so an overrun morning stop can't leak into
+  afternoon capacity attribution; bucket-open fallback when a day can't
+  sequence). Because arrivals move when the plan changes,
+  `syncAssignedTimes()` re-anchors PRISTINE records (confirmed, never
+  rescheduled, no WO, date still in the plan) after every reorder /
+  back-to-automatic / time-window edit, and at the end of every assign
+  run — so pressing Assign again repairs times without creating
+  anything. A record a human touched is never dragged back to the route.
+  Customers still only ever see the bucket label. Suite grows to 41
+  assertions: sequenced/fallback/clamped starts, re-anchor on plan edit,
+  no-op re-sync, and a rescheduled booking left where the customer put
+  it.*
 - *2026-08-31 — STAGE 2 DEFECT #2, also found by Patrick live: same-start
   bookings drew as one pile on the schedule calendar — only the first
   morning and first afternoon card visible, because every stop in a
