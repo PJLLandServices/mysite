@@ -329,6 +329,40 @@
 
            Carries NO financial content: it never touches line items,
            totals, tax, the payment ledger or the QuickBooks push. -->
+      <!-- Work-order report attachment (Aug 2026). Sits above the letter
+           because that is the order the customer receives them in:
+           invoice, report, letter. Hidden entirely on invoices with no
+           work order behind them. -->
+      <section class="invoice-letter invoice-woreport" id="invoiceWoReportCard" hidden>
+        <header class="invoice-letter-head">
+          <div>
+            <h2 class="invoice-letter-title">Work-order report</h2>
+            <p class="invoice-letter-sub">
+              The service report from the visit this invoice came from — the same
+              PDF the customer received at completion. Attach it here when the
+              invoice is the thing they will actually open.
+            </p>
+          </div>
+          <label class="invoice-letter-switch">
+            <input type="checkbox" id="invoiceWoReportEnabled">
+            <span>Attach to this invoice</span>
+          </label>
+        </header>
+
+        <div class="invoice-woreport-pick">
+          <label class="invoice-woreport-label" for="invoiceWoReportSelect">Which report</label>
+          <select id="invoiceWoReportSelect" class="invoice-woreport-select"></select>
+        </div>
+
+        <p class="invoice-woreport-empty" id="invoiceWoReportEmpty" hidden></p>
+
+        <footer class="invoice-letter-foot">
+          <button type="button" id="invoiceWoReportSave" class="invoice-action-btn">Save selection</button>
+          <a class="invoice-action-btn" id="invoiceWoReportPreview" href="#" target="_blank" rel="noopener">📄 Preview the customer's copy</a>
+          <p class="invoice-action-status" id="invoiceWoReportStatus"></p>
+        </footer>
+      </section>
+
       <section class="invoice-letter" id="invoiceLetterCard" hidden>
         <header class="invoice-letter-head">
           <div>

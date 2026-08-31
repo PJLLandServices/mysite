@@ -1065,6 +1065,30 @@ row of every list including both recovery filters, row-click navigation, Select 
 bulk-selection checkbox, in-place supplier actions, and 390px with no horizontal overflow on
 any of the five. No API, route or payload change; no PASS flow touched.
 
+**2026-08-31 (Work-order report on the invoice email):** The invoice can now carry the
+visit's service/inspection report as a third attachment, alongside the accompanying letter.
+Built on the letter's architecture because Patrick asked for it by that comparison:
+`invoice.woReport = { enabled, woId, snapshotId }`, a card above the letter on
+`/admin/invoice/:id`, and one more entry in `extraAttachments`. **Send order is invoice →
+report → letter**, Patrick's call. **Off unless ticked**, and a tick with no snapshot behind
+it does not count as on — that pairing would send an invoice believed to carry a report that
+carries nothing. **The CUSTOMER render is attached, never the internal one** (the internal
+copy carries notes that were never meant to leave the office), and it is the FROZEN snapshot
+rather than a fresh render, so the copy on the invoice email is byte-identical to the one the
+customer received at completion. A ticked report whose snapshot has gone missing warns rather
+than sending silently short. The picker labels each copy by the date ON the report — the
+visit — not by when the snapshot was frozen; those differ whenever a snapshot is taken after
+the fact. `GET /api/invoices/:id/wo-reports` lists the candidates; the existing admin
+snapshot route gained `?audience=customer` so "preview the customer's copy" shows what will
+actually be sent (default unchanged, so every existing caller is untouched). A manual invoice
+with no work order says so instead of showing a dead control. Attachment does not lock at
+send — a resend can carry a report the first send didn't — but void refuses, matching the
+letter. Cover: `scripts/test-invoice-wo-report.mjs` (21 assertions, in `build:check`) plus a
+headless-Chromium walk: off by default, tick saves itself, the record holds it, the preview
+serves a real customer-render PDF, untick remembers the choice, and the manual-invoice case.
+No PASS flow touched — FLOW-23's payment path is untouched and the invoice PDF itself is
+unchanged.
+
 **2026-08-26 (Unwanted page scrolls):** Client-side only. `scrollIntoView({ block:
 "start" | "center" })` moves the page even when the target is already fully visible, so
 `/book.html`'s step advances and both work-order pages' tap-to-jump handlers lurched on
