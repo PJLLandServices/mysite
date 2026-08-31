@@ -16,10 +16,19 @@
 //                     which is what every caller did before the season
 //                     plan existed, and what any caller still gets when no
 //                     plan is loaded for the season.
-//   diagnostics     — optional object; populated with { geoSuppressed: [
-//                     { date, addedDriveMinutes } ] } so the caller can
-//                     tell "we are not in your area that day" apart from
-//                     "that day is full"
+//   diagnostics     — optional object; each array the caller provides is
+//                     populated:
+//                       geoSuppressed: [{ date, label, addedDriveMinutes }]
+//                         — "we are not in your area that day"
+//                       seasonClosed:  [{ date, publicBookingThrough }]
+//                         — the day falls after the season's public
+//                           booking cutoff
+//                       bucketFull:    [{ date, bucket, planned, booked, cap }]
+//                         — the bucket's planned stops + unplanned
+//                           bookings already fill its capacity
+//   seasonWindows   — optional (season, year) => { publicBookingThrough }
+//                     override for testing; defaults to
+//                     seasons.configFor. See the season gate below.
 //   now             — optional Date override for testing
 //
 // Output: ordered array of slot objects { start, end, durationMinutes,
@@ -34,6 +43,10 @@
 //   8. ≥ leadTimeHours from now
 //   9. Cheap to insert into that day's planned route — added drive time
 //      ≤ settings.geoMaxAddedDriveMinutes. See dayShapes below.
+//  10. Inside the season's public booking window (seasons.json
+//      publicBookingThrough), for seasonal services only
+//  11. In a bucket with capacity left, when the day's shape carries a
+//      bucketCap from the season plan
 //
 // Single source of truth for service durations and working hours. To change a
 // number, edit the constants at the top. Patrick can override settings via the
@@ -42,6 +55,7 @@
 const { travelMinutes } = require("./distance");
 const { PJL_BASE } = require("./geocode");
 const geoFilter = require("./geo-filter");
+const seasons = require("./seasons");
 
 // =============== TUNABLE CONFIG (top of file = single source of truth) ===============
 
@@ -285,6 +299,7 @@ async function listAvailableSlots(opts = {}) {
     settings,
     dayShapes = null,
     diagnostics = null,
+    seasonWindows = null,
     now = new Date()
   } = opts;
 
@@ -317,6 +332,35 @@ async function listAvailableSlots(opts = {}) {
 
   const results = [];
 
+  // ---- Season gate setup ---------------------------------------------
+  // Seasonal services stop being publicly bookable after the season's
+  // publicBookingThrough date (seasons.json — the frost-stop discipline).
+  // Only the two seasonal families are gated; repairs, retrofits and site
+  // visits book year-round. The lookup FAILS SOFT: a broken seasons.json
+  // must degrade to ungated availability, never take the booking page
+  // down — the same posture dayShapesForSeason takes when the season plan
+  // won't load. (serviceableFrom is deliberately NOT gated here; the spec
+  // wires publicBookingThrough only.)
+  const seasonName = service.family === "fall_closing" ? "fall"
+    : service.family === "spring_opening" ? "spring"
+    : null;
+  const seasonWindowsFn = seasonWindows || seasons.configFor;
+  const publicThroughByYear = new Map();
+  const publicBookingThroughFor = (year) => {
+    if (!seasonName) return null;
+    if (!publicThroughByYear.has(year)) {
+      let through = null;
+      try {
+        const cfgSeason = seasonWindowsFn(seasonName, year);
+        if (cfgSeason && cfgSeason.publicBookingThrough) through = cfgSeason.publicBookingThrough;
+      } catch (err) {
+        console.warn("[availability] season window unavailable, no season gate:", err?.message);
+      }
+      publicThroughByYear.set(year, through);
+    }
+    return publicThroughByYear.get(year);
+  };
+
   let dayAddedDrive = null;
   for (let offset = 0; offset < scanDays; offset++) {
     const day = new Date(now);
@@ -326,6 +370,17 @@ async function listAvailableSlots(opts = {}) {
     const dow = day.getDay();
     const window = dayHours[dow];
     if (!window) continue;
+
+    // ---- Season gate --------------------------------------------------
+    // YYYY-MM-DD strings compare correctly as strings. A gated day emits
+    // no buckets at all; the geography filter below never runs for it.
+    const publicThrough = publicBookingThroughFor(day.getFullYear());
+    if (publicThrough && dateKey(day) > publicThrough) {
+      if (diagnostics && Array.isArray(diagnostics.seasonClosed)) {
+        diagnostics.seasonClosed.push({ date: dateKey(day), publicBookingThrough: publicThrough });
+      }
+      continue;
+    }
 
     // ---- Geography filter -------------------------------------------
     // Runs before any slot work: if the customer does not belong on this
@@ -393,6 +448,51 @@ async function listAvailableSlots(opts = {}) {
       // Bucket must fit fully inside the day's open/close window.
       if (bucketFromMin < openMin) continue;
       if (bucketToMin > closeMin) continue;
+
+      // ---- Bucket capacity (stage 1, docs/ASSIGNMENT_WRITER.md) ------
+      // The season plan says how many jobs a bucket holds (bucketCap,
+      // default 5) and which stops are already planned into it. The
+      // bucket's load is those planned stops PLUS any real booking in the
+      // bucket's half of the day that is NOT one of them — a planned
+      // customer who books themselves converts their planned stop into a
+      // booking, so counting both would charge one house twice. The same
+      // rule exempts the requesting customer: if their rounded coordinate
+      // is a planned stop of this bucket, their booking adds no load.
+      // No shape / no cap / no buckets on the shape → no gate, exactly
+      // the pre-stage-1 behaviour.
+      if (shape && shape.bucketCap && shape.buckets && shape.buckets[bucket.key]) {
+        const planned = shape.buckets[bucket.key];
+        const plannedKeys = new Set(planned.keys || []);
+        // A booking belongs to the morning bucket when it starts before
+        // the afternoon bucket opens, else the afternoon — every same-day
+        // booking lands in exactly one bucket, including admin-custom
+        // times outside either window.
+        const splitMin = parseHHmmToMinutes(BOOKING_BUCKETS[BOOKING_BUCKETS.length - 1].from);
+        let extraBooked = 0;
+        for (const b of dayBookings) {
+          const startMin = (b.start.getHours() * 60) + b.start.getMinutes();
+          const bucketOf = startMin < splitMin
+            ? BOOKING_BUCKETS[0].key
+            : BOOKING_BUCKETS[BOOKING_BUCKETS.length - 1].key;
+          if (bucketOf !== bucket.key) continue;
+          if (plannedKeys.has(geoFilter.pointKey(b.coords))) continue;
+          extraBooked += 1;
+        }
+        const incoming = geoFilter.coordsAreResolved(customerCoords)
+          && plannedKeys.has(geoFilter.pointKey(customerCoords)) ? 0 : 1;
+        if (planned.count + extraBooked + incoming > shape.bucketCap) {
+          if (diagnostics && Array.isArray(diagnostics.bucketFull)) {
+            diagnostics.bucketFull.push({
+              date: dateKey(day),
+              bucket: bucket.key,
+              planned: planned.count,
+              booked: extraBooked,
+              cap: shape.bucketCap
+            });
+          }
+          continue;
+        }
+      }
 
       let emitted = false;
       for (let m = bucketFromMin; m + slotDuration <= bucketToMin && !emitted; m += incrementMin) {
@@ -499,16 +599,20 @@ function dateKey(d) {
 //                               very differently from a bare empty
 //                               calendar, which customers read as "they
 //                               have no availability".
+//   reason: "season_closed"   — the day falls after the season's
+//                               publicBookingThrough cutoff. "The season
+//                               has wrapped up" copy, not "we're full".
 //
 // The picker just needs an empty slots array to render a day as unavailable;
 // the reason is purely informational (tooltip / future use).
-function expandDaysToRange(slots, { from, to, hours, now, geoSuppressed = [] } = {}) {
+function expandDaysToRange(slots, { from, to, hours, now, geoSuppressed = [], seasonClosed = [] } = {}) {
   if (!(from instanceof Date) || !(to instanceof Date)) {
     // Defensive — fall back to the old (slot-bearing-only) shape.
     return groupByDay(slots);
   }
   const daysWithSlots = groupByDayMap(slots);
   const suppressed = new Map((geoSuppressed || []).map((g) => [g.date, g]));
+  const closedSeason = new Map((seasonClosed || []).map((g) => [g.date, g]));
   const today = new Date(now || Date.now());
   today.setHours(0, 0, 0, 0);
   const dayHours = hours || DEFAULT_HOURS;
@@ -526,6 +630,7 @@ function expandDaysToRange(slots, { from, to, hours, now, geoSuppressed = [] } =
       let reason = "no_availability";
       if (cursor.getTime() < today.getTime()) reason = "past";
       else if (!dayHours[cursor.getDay()]) reason = "closed";
+      else if (closedSeason.has(key)) reason = "season_closed";
       else if (suppressed.has(key)) reason = "outside_route_area";
       out.push({
         date: key,

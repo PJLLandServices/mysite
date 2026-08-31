@@ -123,16 +123,21 @@ function inOriginalWindow(year, month, day, season) {
     fallDefault.publicBookingThrough <= fallDefault.serviceableThrough);
 }
 
-// ---- 2. publicBookingThrough is defined, not wired ------------------
+// ---- 2. publicBookingThrough has exactly its intended consumers -----
 //
-// The brief defines the field for the future availability.js gate and
-// says nothing may consume it yet. Pin that: if a later change starts
-// reading it, this fails and whoever did it has to say so deliberately.
+// The field was defined ahead of the availability.js season gate, and
+// this block originally pinned "no consumer yet". Stage 1 of
+// docs/ASSIGNMENT_WRITER.md (2026-08-31) wired the gate — deliberately,
+// which is what this sentinel was for. The pin now runs the other way:
+// the gate and its test must read the field, and nobody else may start
+// to without saying so here.
 {
   const allowed = new Set([
     "seasons.json",
     "server/lib/seasons.js",
-    "scripts/test-season-config.mjs"
+    "scripts/test-season-config.mjs",
+    "server/lib/availability.js",       // the season gate itself
+    "scripts/test-booking-guards.mjs"   // the gate's acceptance test
   ]);
   const searched = [
     "seasons.json",
@@ -145,12 +150,18 @@ function inOriginalWindow(year, month, day, season) {
     "server/lib/availability.js",
     "book.html"
   ];
-  const consumers = searched.filter((rel) => {
+  const reads = (rel) => {
     const abs = path.join(ROOT, rel);
     if (!fs.existsSync(abs) || fs.statSync(abs).isDirectory()) return false;
-    return fs.readFileSync(abs, "utf8").includes("publicBookingThrough") && !allowed.has(rel);
-  });
-  ok("publicBookingThrough has no consumer yet", consumers.length === 0, consumers.join(", "));
+    return fs.readFileSync(abs, "utf8").includes("publicBookingThrough");
+  };
+  const unexpected = [...new Set(searched)].filter((rel) => reads(rel) && !allowed.has(rel));
+  ok("no consumer of publicBookingThrough beyond the season gate and its test",
+    unexpected.length === 0, unexpected.join(", "));
+  ok("the season gate actually reads publicBookingThrough",
+    reads("server/lib/availability.js"));
+  ok("the gate's acceptance test actually reads publicBookingThrough",
+    reads("scripts/test-booking-guards.mjs"));
 }
 
 // ---- 3. Window boundaries — inclusive on both ends ------------------

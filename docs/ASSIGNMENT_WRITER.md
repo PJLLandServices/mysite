@@ -89,7 +89,7 @@ Full rationale in the build-plan artifact; this is the working checklist.
 | Stage | What ships | State |
 |-------|-----------|-------|
 | 0 | **Preflight.** Read-only: for every planned stop, "would be told X" or "skipped because Y". Sends nothing, creates nothing. | **done** |
-| 1 | **Capacity + season gate.** Bucket caps enforced at booking time; `publicBookingThrough` wired. Touches FLOW-03 (PASS) — re-verify. | |
+| 1 | **Capacity + season gate.** Bucket caps enforced at booking time; `publicBookingThrough` wired. Touches FLOW-03 (PASS) — re-verify. | **done** |
 | 2 | **The assignment record.** Planned stop → `confirmed` booking, `source: "assignment"`. Idempotent, reversible. Sends nothing. | |
 | 3 | **The messages.** Templates for steps 1, 2, 3–5, 6. Preview per customer. Patrick edits. | |
 | 4 | **The blast + the cadence engine.** `sendBulk` reuse, `type` on touches, the sweep, the response tracking, the manual mark. Test send first. | |
@@ -114,6 +114,31 @@ Full rationale in the build-plan artifact; this is the working checklist.
 
 Newest first. Every stage PR adds its entry.
 
+- *2026-08-31 — STAGE 1 SHIPPED. Bucket capacity + season gate, both inside
+  `availability.js listAvailableSlots()` — the engine every submission path
+  re-validates through, so gating it gates submission (admin custom-time
+  bypasses by design). `geo-filter.buildDayShapes()` now emits per-bucket
+  load (`buckets.morning/afternoon = { count, keys }`): `count` is EVERY
+  planned code, unresolved included — an unresolved stop is still a job —
+  and `keys` are the resolved stops' rounded coordinates so a planned
+  customer's own booking, or their own booking attempt, is never charged
+  twice. The season gate reads `seasons.configFor().publicBookingThrough`
+  (fall 2026: Oct 30) for the two seasonal families only, and FAILS SOFT —
+  a broken seasons.json degrades to ungated availability rather than taking
+  the booking page down. Both gates switch off by the data's absence:
+  byte-identical slots with no shape / no cap / a pre-stage-1 shape,
+  asserted against a baseline in `scripts/test-booking-guards.mjs` (25
+  assertions). FLOW-03 re-verified (register row dated 2026-08-31);
+  `test-geo-availability.mjs`'s 27 assertions unchanged.*
+  *DECIDED HERE, PER THE CONTRACT: (a) `serviceableFrom` does NOT gate the
+  front of the season — the spec names `publicBookingThrough` only; if early
+  days should also be held, that is a new decision for Patrick. (b) A
+  booking is assigned to the morning bucket when it starts before the
+  afternoon bucket opens (noon), else the afternoon — so an admin-custom
+  7 AM job still consumes morning capacity. (c) Suppressed days surface as
+  `diagnostics.bucketFull` / `diagnostics.seasonClosed`, and a season-gated
+  day carries day reason `season_closed` (informational, like
+  `outside_route_area` — no customer copy consumes it yet).*
 - *2026-08-31 — STAGE 0 SHIPPED. `server/lib/assignments.js` preflight +
   `GET /api/assignments/:season/:year/preflight` + a panel on /admin/season-plan.
   The eligibility gauntlet was EXTRACTED from `outreach.sendBulk` into shared

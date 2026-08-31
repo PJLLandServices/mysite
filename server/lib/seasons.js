@@ -18,8 +18,9 @@
 //
 //   configFor(season, year)  -> { serviceableFrom, serviceableThrough,
 //                                 publicBookingThrough }
-//       The full record as YYYY-MM-DD strings. publicBookingThrough has no
-//       consumer yet; it is defined for the future availability.js gate.
+//       The full record as YYYY-MM-DD strings. publicBookingThrough is
+//       consumed by the season gate in server/lib/availability.js: days
+//       after it emit no public slots for seasonal services.
 //
 // Both resolve a year with an explicit block in seasons.json `years` first,
 // and fall back to the year-agnostic `defaults` otherwise. Those defaults are
