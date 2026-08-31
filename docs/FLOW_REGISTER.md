@@ -19,6 +19,16 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-31 (Assignment time sync becomes a sweep):** the sequenced-arrival fix shipped but the
+live records still read 8:00/12:00 — re-anchoring required an operator trigger (an Assign press
+after the deploy, or a plan edit) that never fired. The sync is now the sixth server sweep:
+`syncAssignedTimes` for both current-year seasons on boot and every 10 minutes, so pristine
+assignment bookings converge on the route within minutes of ANY drift — plan edits, zone-count
+changes, travel-time changes, or code deploys — with no operator action. Steady state is free
+(cached travel matrix; zero writes when nothing moved). Reproduced end-to-end with real modules:
+three planted bucket-open records healed to 8:05 / 12:05 / 12:45 by the exact call the sweep makes.
+The inline endpoint hooks stay (instant on edit); the sweep is the guarantee behind them.
+
 **2026-08-31 (Assignment bookings carry the route's sequenced arrivals — Patrick's third live
 find):** the calendar showed every afternoon stop at 12:00 while the plan's route panel sequenced
 them 12:53 / 13:33 / 14:13 — and ties drew in reverse run order (bookings.json is newest-first).
