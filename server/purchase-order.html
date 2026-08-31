@@ -150,7 +150,7 @@
   <!-- Sticky savebar for draft autosave -->
   <div class="proj-savebar" id="poSavebar" hidden>
     <div class="proj-savebar-inner">
-      <span style="font-size:12px;color:#7A7A72" id="poSaveContext">Editable while in draft</span>
+      <span style="font-size:12px;color:#6B6B63" id="poSaveContext">Editable while in draft</span>
       <span class="proj-savebar-state" id="poSaveState">Saved</span>
     </div>
   </div>
@@ -162,7 +162,7 @@
       <p style="margin:0 0 12px;color:#4A4A44;font-size:13px">Enter the quantity that arrived this delivery (defaults to whatever's still outstanding). Lines fully received flip the source material-list line from <em>ordered</em> to <em>have</em>; partial lines stay <em>ordered</em> until the rest arrives.</p>
       <div id="poReceiveLines" class="po-receive-lines"></div>
       <label style="display:block;margin-top:10px">
-        <span style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#7A7A72;display:block;margin-bottom:4px">Note (optional)</span>
+        <span style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#6B6B63;display:block;margin-bottom:4px">Note (optional)</span>
         <input type="text" id="poReceiveNote" maxlength="200" style="width:100%;padding:10px 12px;border:1px solid #D8D5C5;border-radius:8px;background:#FCFBF4;font:inherit;min-height:44px" placeholder="e.g. Delivered Tuesday by Vermeer driver">
       </label>
       <p class="supplier-form-error" id="poReceiveError" role="alert" hidden></p>
@@ -180,15 +180,15 @@
       <h3>Send purchase order</h3>
       <p style="margin:0 0 12px;color:#4A4A44;font-size:13px">PJL will email a branded PDF to the supplier and lock this PO. Source material-list lines flip from <em>need</em> to <em>ordered</em>.</p>
       <label style="display:block;margin-bottom:10px">
-        <span style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#7A7A72;display:block;margin-bottom:4px">Recipient email</span>
+        <span style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#6B6B63;display:block;margin-bottom:4px">Recipient email</span>
         <input type="email" id="poSendTo" style="width:100%;padding:10px 12px;border:1px solid #D8D5C5;border-radius:8px;background:#FCFBF4;font:inherit;min-height:44px">
       </label>
       <label style="display:block;margin-bottom:10px">
-        <span style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#7A7A72;display:block;margin-bottom:4px">Subject</span>
+        <span style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#6B6B63;display:block;margin-bottom:4px">Subject</span>
         <input type="text" id="poSendSubject" maxlength="200" style="width:100%;padding:10px 12px;border:1px solid #D8D5C5;border-radius:8px;background:#FCFBF4;font:inherit;min-height:44px">
       </label>
       <label style="display:block;margin-bottom:10px">
-        <span style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#7A7A72;display:block;margin-bottom:4px">Custom note (optional)</span>
+        <span style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#6B6B63;display:block;margin-bottom:4px">Custom note (optional)</span>
         <textarea id="poSendBody" rows="3" style="width:100%;padding:10px 12px;border:1px solid #D8D5C5;border-radius:8px;background:#FCFBF4;font:inherit" placeholder="Anything beyond the standard 'please confirm receipt' wording."></textarea>
       </label>
       <p class="supplier-form-error" id="poSendError" role="alert" hidden></p>

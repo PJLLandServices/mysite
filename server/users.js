@@ -51,7 +51,7 @@ function rowHtml(user) {
   return `
     <tr data-id="${escapeHtml(user.id)}" style="border-top:1px solid #ECEAE0;">
       <td style="padding:12px; font-family:monospace; font-size:13px;">${escapeHtml(user.id)}</td>
-      <td style="padding:12px;">${escapeHtml(user.name)}${isSelf ? ' <span style="font-size:11px; color:#888;">(you)</span>' : ""}</td>
+      <td style="padding:12px;">${escapeHtml(user.name)}${isSelf ? ' <span style="font-size:11px; color:#6B6B63;">(you)</span>' : ""}</td>
       <td style="padding:12px;">${escapeHtml(user.email)}</td>
       <td style="padding:12px;">${roleBadge}</td>
       <td style="padding:12px; font-size:13px; color:#555;">${escapeHtml(fmtDate(user.lastLoginAt))}</td>

@@ -47,9 +47,13 @@
   word-break: break-word; color: var(--pjl-text);
 }
 
-.am-toast {
+/* The toast is a <p>, so crm.css's blanket `.pjl-crm-body p` (0,1,1)
+   outranks a bare `.am-toast` (0,1,0) and repainted the text #4A4A4A on
+   the green pill — 1.10:1, the "Test sent to ..." confirmation was
+   unreadable. Scoping to the body class takes it to (0,2,0) and wins. */
+.pjl-crm-body .am-toast {
   position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
   padding: 10px 18px; border-radius: 999px; background: var(--pjl-green); color: #fff;
   font-size: 0.9rem; z-index: 50;
 }
-.am-toast.is-bad { background: #A33; }
+.pjl-crm-body .am-toast.is-bad { background: #A33; }

@@ -371,7 +371,7 @@
 .customer-tab-header .count {
   font-weight: 400;
   margin-left: 6px;
-  color: var(--crm-muted, #888);
+  color: var(--crm-muted, #6B6B63);
 }
 
 .customer-tab-panel {
@@ -391,7 +391,7 @@
 
 .customer-tab-empty {
   text-align: center;
-  color: var(--crm-muted, #888);
+  color: var(--crm-muted, #6B6B63);
   font-style: italic;
   padding: 24px;
 }
@@ -425,7 +425,7 @@
 
 .customer-comm-ts {
   font-size: 11px;
-  color: var(--crm-muted, #888);
+  color: var(--crm-muted, #6B6B63);
   font-family: ui-monospace, monospace;
   white-space: nowrap;
 }
@@ -453,9 +453,9 @@
   border-bottom: 1px solid #f0eee8;
   font-size: 12px;
 }
-.customer-history-row .ts { color: var(--crm-muted, #888); font-family: ui-monospace, monospace; white-space: nowrap; }
+.customer-history-row .ts { color: var(--crm-muted, #6B6B63); font-family: ui-monospace, monospace; white-space: nowrap; }
 .customer-history-row .action { font-weight: 600; }
-.customer-history-row .by { color: var(--crm-muted, #888); }
+.customer-history-row .by { color: var(--crm-muted, #6B6B63); }
 
 /* ---- vCard download history (detail page) ---------------------- */
 
@@ -470,7 +470,7 @@
 }
 .customer-vcf-row .ts {
   font-family: ui-monospace, monospace;
-  color: var(--crm-muted, #888);
+  color: var(--crm-muted, #6B6B63);
   font-size: 11px;
   white-space: nowrap;
 }
@@ -488,7 +488,7 @@
 .customer-vcf-row .batch {
   font-family: ui-monospace, monospace;
   font-size: 11px;
-  color: var(--crm-muted, #888);
+  color: var(--crm-muted, #6B6B63);
 }
 
 .customer-download-btn {

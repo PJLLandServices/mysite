@@ -105,7 +105,7 @@
 .wcq-stat-value { display: block; font-size: 27px; line-height: 1.1; color: #14301f; }
 .wcq-stat-label {
   display: block; margin-top: 4px; font-size: 12px; letter-spacing: .06em;
-  text-transform: uppercase; color: #6b756e;
+  text-transform: uppercase; color: #616D64;
 }
 .wcq-stat--warn { border-left: 4px solid #d98324; }
 .wcq-stat--bad  { border-left: 4px solid #b3261e; }
@@ -141,7 +141,7 @@
 .wcq-table th {
   text-align: left; padding: 12px 14px; background: #f4f6f4;
   font-size: 11px; letter-spacing: .07em; text-transform: uppercase;
-  color: #6b756e; border-bottom: 1px solid #e2e5e2; font-weight: 700;
+  color: #616D64; border-bottom: 1px solid #e2e5e2; font-weight: 700;
 }
 .wcq-table td { padding: 14px; border-bottom: 1px solid #eef0ee; vertical-align: top; font-size: 14px; }
 .wcq-table tr:last-child td { border-bottom: 0; }
@@ -151,7 +151,7 @@
 
 .wcq-id-link { font-weight: 700; color: #1f4f6e; text-decoration: none; overflow-wrap: anywhere; }
 .wcq-id-link:hover { text-decoration: underline; }
-.wcq-cell-id span, .wcq-sub { display: block; font-size: 12px; color: #6b756e; margin-top: 3px; }
+.wcq-cell-id span, .wcq-sub { display: block; font-size: 12px; color: #616D64; margin-top: 3px; }
 .wcq-invref { font-weight: 600; color: #2a332d; overflow-wrap: anywhere; }
 .wcq-cell-who strong { display: block; color: #14301f; }
 
@@ -170,7 +170,7 @@
 .wcq-wait { font-weight: 600; color: #3a4640; }
 .wcq-wait.is-stale { color: #8a1c1c; }
 
-.wcq-empty { padding: 46px 20px; text-align: center; color: #6b756e; }
+.wcq-empty { padding: 46px 20px; text-align: center; color: #616D64; }
 
 /* ========================= DETAIL PAGE ========================= */
 .wcd-shell { padding: 22px 24px 60px; max-width: 1240px; }
@@ -180,7 +180,7 @@
 .wcd-back a { color: #1f4f6e; text-decoration: none; font-weight: 600; font-size: 14px; }
 .wcd-back a:hover { text-decoration: underline; }
 
-.wcd-loading, .wcd-error { padding: 40px 20px; text-align: center; color: #6b756e; }
+.wcd-loading, .wcd-error { padding: 40px 20px; text-align: center; color: #616D64; }
 .wcd-error { color: #8a1c1c; }
 
 .wcd-head {
@@ -190,12 +190,12 @@
 }
 .wcd-eyebrow {
   display: block; font-size: 11px; letter-spacing: .09em;
-  text-transform: uppercase; color: #6b756e; margin-bottom: 4px;
+  text-transform: uppercase; color: #616D64; margin-bottom: 4px;
 }
 .wcd-head h1 { margin: 0 0 6px; font-size: 24px; color: #14301f; overflow-wrap: anywhere; }
-.wcd-head-meta { margin: 0; font-size: 13px; color: #6b756e; }
+.wcd-head-meta { margin: 0; font-size: 13px; color: #616D64; }
 .wcd-head-side { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
-.wcd-wait { font-size: 13px; color: #6b756e; font-weight: 600; }
+.wcd-wait { font-size: 13px; color: #616D64; font-weight: 600; }
 
 .wcd-stale-banner {
   padding: 14px 18px; background: #fff6ed; border: 1px solid #f0c99a;
@@ -211,15 +211,15 @@
   background: #fff; border: 1px solid #e2e5e2; border-radius: 10px; padding: 20px 22px;
 }
 .wcd-card h2 { margin: 0 0 14px; font-size: 16px; color: #14301f; }
-.wcd-subhead { margin: 18px 0 8px; font-size: 12px; letter-spacing: .07em; text-transform: uppercase; color: #6b756e; }
+.wcd-subhead { margin: 18px 0 8px; font-size: 12px; letter-spacing: .07em; text-transform: uppercase; color: #616D64; }
 .wcd-card--alert { border-color: #f0b9b3; border-left: 4px solid #b3261e; background: #fffaf9; }
-.wcd-note-line { margin: 0 0 10px; font-size: 13px; color: #6b756e; }
+.wcd-note-line { margin: 0 0 10px; font-size: 13px; color: #616D64; }
 
 .wcd-dl { display: grid; gap: 12px; margin: 0; }
 .wcd-dl--tight { gap: 9px; }
 .wcd-dl div { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 12px; align-items: start; }
 @media (max-width: 620px) { .wcd-dl div { grid-template-columns: 1fr; gap: 2px; } }
-.wcd-dl dt { font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: #6b756e; }
+.wcd-dl dt { font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: #616D64; }
 .wcd-dl dd { margin: 0; color: #2a332d; font-size: 14px; overflow-wrap: anywhere; }
 .wcd-dl dd a { color: #1f4f6e; font-weight: 600; }
 
@@ -240,7 +240,7 @@
 }
 .wcd-file a { color: #1b4d2e; text-decoration: none; font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
 .wcd-file a:hover { text-decoration: underline; }
-.wcd-file-size { font-size: 12px; color: #6b756e; white-space: nowrap; }
+.wcd-file-size { font-size: 12px; color: #616D64; white-space: nowrap; }
 
 /* ---- The action tool ---- */
 .wcd-actions { border-left: 4px solid #1b4d2e; }
@@ -254,7 +254,7 @@
 .wcd-action:hover { border-color: #1b4d2e; background: #f7faf8; }
 .wcd-action.is-selected { border-color: #1b4d2e; border-width: 2px; background: #f2f7f3; }
 .wcd-action strong { font-size: 14.5px; color: #14301f; }
-.wcd-action span { font-size: 13px; color: #6b756e; line-height: 1.45; }
+.wcd-action span { font-size: 13px; color: #616D64; line-height: 1.45; }
 .wcd-action--danger:hover { border-color: #b3261e; background: #fffaf9; }
 .wcd-action--danger.is-selected { border-color: #b3261e; background: #fdecea; }
 .wcd-action--danger strong { color: #8a1c1c; }
@@ -303,7 +303,7 @@
   padding-left: 15px; border-left: 2px solid #dfe4e0; display: grid; gap: 3px;
 }
 .wcd-history-label { font-weight: 700; font-size: 14px; color: #14301f; }
-.wcd-history-meta { font-size: 12px; color: #6b756e; }
+.wcd-history-meta { font-size: 12px; color: #616D64; }
 .wcd-history-note {
   margin-top: 5px; padding: 9px 12px; background: #f7f8f7; border-radius: 6px;
   font-size: 13.5px; color: #2a332d; line-height: 1.5; white-space: pre-wrap;
@@ -333,18 +333,20 @@
 .wcd-warranty-state--out     { background: #fdecea; color: #8a1c1c; }
 .wcd-warranty-state--unknown { background: #eef0ee; color: #4a534c; }
 .wcd-warranty-caveat {
-  margin: 14px 0 0; font-size: 12.5px; color: #6b756e; line-height: 1.5; font-style: italic;
+  margin: 14px 0 0; font-size: 12.5px; color: #616D64; line-height: 1.5; font-style: italic;
 }
 
 .wcd-service-records, .wcd-invoice-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 11px; }
 .wcd-service-record { display: grid; gap: 2px; padding-bottom: 11px; border-bottom: 1px solid #eef0ee; }
 .wcd-service-record:last-child { border-bottom: 0; padding-bottom: 0; }
 .wcd-service-record strong { font-size: 13.5px; color: #14301f; }
-.wcd-sub { font-size: 12.5px; color: #6b756e; line-height: 1.45; }
+.wcd-sub { font-size: 12.5px; color: #616D64; line-height: 1.45; }
 .wcd-invoice-list a { color: #1f4f6e; text-decoration: none; font-size: 13.5px; font-weight: 600; }
 .wcd-invoice-list a:hover { text-decoration: underline; }
 
-.wcd-status-link {
+/* Scoped to the body class so crm.css's blanket `.pjl-crm-body a`
+   doesn't repaint this link #1A1A1A on its blue pill (1.99:1). */
+.pjl-crm-body .wcd-status-link {
   display: inline-block; padding: 9px 16px; background: #1f4f6e; color: #fff;
   border-radius: 7px; text-decoration: none; font-weight: 600; font-size: 14px;
 }

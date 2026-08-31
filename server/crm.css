@@ -14,7 +14,7 @@
   --pjl-dark: #0F1F14;
   --pjl-text: #1A1A1A;
   --pjl-text-mid: #4A4A4A;
-  --pjl-text-muted: #7A7A72;
+  --pjl-text-muted: #6B6B63;
   --pjl-border: #E2E0D4;
   --pjl-shadow: 0 4px 32px rgba(27,77,46,0.12);
   --pjl-shadow-lg: 0 12px 48px rgba(27,77,46,0.18);
@@ -3684,7 +3684,7 @@ body.pjl-bulk-toolbar-busy {
 
 .crm-cell-sub {
   font-size: 11px;
-  color: var(--crm-muted, #8a8a80);
+  color: var(--crm-muted, #6B6B63);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3727,7 +3727,7 @@ body.pjl-bulk-toolbar-busy {
   border-radius: 8px;
   text-decoration: none;
   font-size: 15px;
-  color: var(--crm-muted, #9a9a90);
+  color: var(--crm-muted, #6B6B63);
   opacity: 0.55;
   transition: opacity 0.12s, background 0.12s, color 0.12s;
 }

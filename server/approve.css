@@ -37,7 +37,7 @@
 
 .approve-loading {
   text-align: center;
-  color: #777;
+  color: #6B6B63;
   font-style: italic;
   padding: 60px 20px;
 }
@@ -162,7 +162,7 @@
   line-height: 1.5;
   font-style: italic;
 }
-.approve-line-qty { color: #777; font-size: 13px; font-variant-numeric: tabular-nums; }
+.approve-line-qty { color: #6B6B63; font-size: 13px; font-variant-numeric: tabular-nums; }
 .approve-line-amount { color: #1F2A22; font-weight: 600; font-variant-numeric: tabular-nums; }
 
 .approve-totals {
@@ -287,7 +287,7 @@
 }
 .approve-success h2 { font-family: "Barlow Condensed", sans-serif; color: #1B4D2E; margin: 0 0 12px; font-size: 30px; }
 .approve-success p { margin: 0 0 8px; color: #1F2A22; line-height: 1.5; }
-.approve-success-meta { color: #777 !important; font-size: 13px; }
+.approve-success-meta { color: #6B6B63 !important; font-size: 13px; }
 
 .approve-pdf-link {
   margin: 0 0 14px;
@@ -471,7 +471,7 @@
 .approve-gate-help {
   margin: 20px 0 0;
   font-size: 13px;
-  color: #777;
+  color: #6B6B63;
   line-height: 1.5;
 }
 .approve-gate-help a { color: #1B4D2E; font-weight: 600; }

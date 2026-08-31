@@ -45,7 +45,7 @@
   border: none;
   font-size: 28px;
   line-height: 1;
-  color: #7A7A72;
+  color: #6B6B63;
   cursor: pointer;
   width: 44px;
   height: 44px;
@@ -81,7 +81,7 @@
 .crm-followup-section-help {
   margin: 0 0 10px;
   font-size: 13px;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 
 /* Slot picker — date-first list. Tap a date row, time buckets expand
@@ -122,7 +122,7 @@
   font-size: 12px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .crm-followup-times {
   display: flex;
@@ -195,7 +195,7 @@
 .crm-followup-parts-cat summary::after {
   content: "▾";
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
   transition: transform 160ms ease;
 }
 .crm-followup-parts-cat[open] summary::after { transform: rotate(180deg); }
@@ -205,7 +205,7 @@
   font-weight: 500;
   letter-spacing: normal;
   text-transform: none;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .crm-followup-parts-list {
   display: flex;
@@ -235,7 +235,7 @@
 }
 .crm-followup-part-meta {
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 
 /* Notes */

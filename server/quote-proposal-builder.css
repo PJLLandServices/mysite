@@ -201,7 +201,7 @@
   font-size: 9px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #9A9A90;
+  color: #6B6B63;
   padding: 2px 6px;
   border: 1px solid #E5E5DD;
   border-radius: 4px;
@@ -241,7 +241,7 @@
 .pb-add-section:disabled { opacity: 0.5; cursor: not-allowed; }
 .pb-rail-hint {
   font-size: 11px;
-  color: #9A9A90;
+  color: #6B6B63;
   margin-top: 10px;
 }
 /* Touch devices — bump controls to the 44pt iOS minimum. */
@@ -272,7 +272,7 @@
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #9A9A90;
+  color: #6B6B63;
 }
 /* ---- Formatting toolbar (Brief C2) ---- */
 .pb-toolbar {
@@ -300,7 +300,7 @@
 .pb-tb-btn:hover { background: #F5F4EE; }
 .pb-tb-btn:active { background: #EAF3DE; }
 .pb-tb-sep { width: 1px; height: 22px; background: #E5E5DD; margin: 0 4px; }
-.pb-tb-hint { font-size: 11px; color: #9A9A90; margin-left: auto; }
+.pb-tb-hint { font-size: 11px; color: #6B6B63; margin-left: auto; }
 @media (pointer: coarse) {
   .pb-tb-btn { min-width: 44px; height: 44px; font-size: 16px; }
   .pb-tb-hint { display: none; }
@@ -360,7 +360,7 @@
 .pb-section-tip {
   margin-top: 10px;
   font-size: 11px;
-  color: #9A9A90;
+  color: #6B6B63;
 }
 
 /* ---- Right sidebar ---- */
@@ -378,7 +378,7 @@
 .pb-upload-btn:hover { background: #EAF3DE; }
 .pb-side-hint {
   font-size: 11px;
-  color: #9A9A90;
+  color: #6B6B63;
   margin: 6px 0 10px;
 }
 .pb-attach-list {
@@ -601,7 +601,7 @@
 .pb-lines-empty {
   text-align: center;
   font-size: 13px;
-  color: #9A9A90;
+  color: #6B6B63;
   font-style: italic;
   padding: 18px;
 }
@@ -654,7 +654,7 @@
     font-size: 10px;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: #9A9A90;
+    color: #6B6B63;
     margin-bottom: 2px;
     font-weight: 600;
   }
@@ -841,7 +841,7 @@
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #9A9A90;
+  color: #6B6B63;
   padding: 0;
   margin-bottom: 6px;
 }
@@ -880,7 +880,7 @@
   cursor: pointer;
 }
 .pb-section-include input { width: 18px; height: 18px; accent-color: #1B4D2E; }
-.pb-section-include.is-structural { color: #9A9A90; cursor: not-allowed; }
+.pb-section-include.is-structural { color: #6B6B63; cursor: not-allowed; }
 .pb-section-list li.is-excluded .pb-sec-name { opacity: 0.55; }
 .pb-sec-hidden {
   font-size: 9px;
