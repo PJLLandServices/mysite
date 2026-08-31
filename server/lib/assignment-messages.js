@@ -21,10 +21,18 @@
 // MERGE FIELDS are a closed set. A template that references a field not
 // in MERGE_FIELDS is REFUSED at save — a typo like {frstName} must fail
 // in Patrick's face at edit time, never render literally in a
-// customer's text at send time. The link fields render as loud
-// [confirm-link] / [reschedule-link] placeholders until stages 4–5
-// supply real URLs; stage 4 must refuse to send any message that still
-// contains a bracketed placeholder.
+// customer's text at send time.
+//
+// ONE LINK, decided by Patrick on stage-3 review: every message carries
+// a single {appointmentLink} to the customer's appointment page, where
+// THEY decide — confirm, reschedule, or cancel in one place. Two
+// separate links doubled the URLs in every SMS (splitting each text
+// into extra segments the customer receives as multiple messages) and
+// made the customer pick an action before seeing their appointment.
+// The link renders as a loud [appointment-link] placeholder until
+// stage 5 builds the page and stage 4 supplies real URLs; stage 4 must
+// refuse to send any message that still contains a bracketed
+// placeholder.
 
 const fs = require("fs");
 const path = require("path");
@@ -41,8 +49,7 @@ const MERGE_FIELDS = Object.freeze({
   street: "The street address, without town (\"90 Oriole Drive\")",
   date: "The appointment date (\"Monday, September 28\")",
   bucket: "The window (\"Morning (8 AM – 12 PM)\")",
-  confirmLink: "One-tap confirmation link (built at send time)",
-  rescheduleLink: "Self-serve reschedule link (built at send time)",
+  appointmentLink: "Their appointment page — confirm, reschedule, or cancel in one place (built at send time)",
   phone: "The PJL phone number"
 });
 
@@ -68,9 +75,8 @@ const DEFAULT_TEMPLATES = Object.freeze({
       "{date} — {bucket}",
       "{street}",
       "",
-      "Please confirm your appointment here: {confirmLink}",
-      "",
-      "Need a different day? You can reschedule yourself here: {rescheduleLink}",
+      "Please confirm — or pick a different day — on your appointment page:",
+      "{appointmentLink}",
       "",
       "If we don't hear from you, no problem — we'll still arrive as scheduled.",
       "Questions? Call or text us at {phone}.",
@@ -80,7 +86,7 @@ const DEFAULT_TEMPLATES = Object.freeze({
   },
   assignment_sms: {
     body: "PJL Land Services: your fall sprinkler winterization is booked for {date} ({bucket}) at {street}. "
-      + "Confirm: {confirmLink} · Reschedule: {rescheduleLink} · Questions? {phone}"
+      + "Confirm or make changes: {appointmentLink} Questions? {phone}"
   },
   followup_email: {
     subject: "Please confirm — winterization on {date}",
@@ -90,8 +96,8 @@ const DEFAULT_TEMPLATES = Object.freeze({
       "A quick reminder: your fall sprinkler winterization is scheduled for",
       "{date} ({bucket}) at {street}, and we haven't heard a confirmation from you yet.",
       "",
-      "Confirm here: {confirmLink}",
-      "Need to change it? {rescheduleLink}",
+      "Confirm — or make any changes — on your appointment page:",
+      "{appointmentLink}",
       "",
       "If nothing changes on your end, we'll still be there as planned.",
       "Call or text {phone} any time.",
@@ -101,8 +107,7 @@ const DEFAULT_TEMPLATES = Object.freeze({
   },
   followup_sms: {
     body: "PJL Land Services: reminder — winterization {date} ({bucket}) at {street}. "
-      + "Please confirm: {confirmLink} or reschedule: {rescheduleLink}. "
-      + "We'll come as planned unless we hear otherwise. {phone}"
+      + "Please confirm or make changes: {appointmentLink} We'll come as planned unless we hear otherwise."
   },
   // Patrick's Part-3 escalation wording, copy-edited but keeping his
   // meaning: we will keep reminding; if your needs changed, tell the
@@ -120,16 +125,16 @@ const DEFAULT_TEMPLATES = Object.freeze({
       "please make sure you've let our booking team know at {phone} — otherwise we",
       "will continue to make every effort to reach you.",
       "",
-      "Confirm your appointment here: {confirmLink}",
-      "Or pick a different day: {rescheduleLink}",
+      "Confirm, reschedule, or cancel on your appointment page:",
+      "{appointmentLink}",
       "",
       "— PJL Land Services"
     ].join("\n")
   },
   nudge_sms: {
-    body: "PJL Land Services: we've reached out several times about your winterization on {date} ({bucket}) "
-      + "at {street} with no confirmation, and we'll keep sending reminders. If you no longer require our "
-      + "services, please let our booking team know at {phone}. Otherwise, confirm here: {confirmLink}"
+    body: "PJL Land Services: we've tried several times to confirm your winterization on {date} at {street}, "
+      + "and we'll keep sending reminders. If you no longer need our services, please tell our booking team "
+      + "at {phone}. Otherwise: {appointmentLink}"
   },
   reminder24_sms: {
     body: "PJL Land Services: a reminder that your fall sprinkler winterization is tomorrow — "
@@ -174,11 +179,21 @@ function assertKnownPlaceholders(text, where) {
 }
 
 // The effective template for a key: Patrick's override or the default.
+// An override referencing a merge field that no longer exists (saved
+// before a field was renamed — {confirmLink} before the one-link change)
+// is IGNORED with a warning: rendering it would put literal braces in a
+// customer's message, and the default is always safe.
 function templateFor(key) {
   if (!TEMPLATE_KEYS[key]) return null;
   const custom = OVERRIDES[key];
   const base = DEFAULT_TEMPLATES[key];
   if (!custom) return { ...base, source: "default" };
+  const unknown = [...placeholdersIn(custom.subject), ...placeholdersIn(custom.body)]
+    .filter((f) => !Object.prototype.hasOwnProperty.call(MERGE_FIELDS, f));
+  if (unknown.length) {
+    console.warn(`[assignment-messages] ignoring saved ${key} — it references retired field(s) {${unknown.join("} {")}}; using the default until it is re-saved`);
+    return { ...base, source: "default", staleOverride: true };
+  }
   return {
     subject: TEMPLATE_KEYS[key].hasSubject ? (custom.subject || base.subject) : undefined,
     body: custom.body || base.body,
@@ -254,9 +269,9 @@ function dateLabelOf(scheduledFor) {
   return d.toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" });
 }
 
-// Build the merge context from an assignment booking record. Links
-// default to LOUD placeholders — stage 4 must supply real URLs and must
-// refuse to send anything still carrying a bracketed placeholder.
+// Build the merge context from an assignment booking record. The link
+// defaults to a LOUD placeholder — stage 4 must supply the real URL and
+// must refuse to send anything still carrying a bracketed placeholder.
 function contextForBooking(booking, extra = {}) {
   return {
     firstName: firstNameOf(booking?.customerName),
@@ -265,8 +280,7 @@ function contextForBooking(booking, extra = {}) {
     date: dateLabelOf(booking?.scheduledFor),
     bucket: bucketLabelOf(booking?.assignment?.bucket
       || (new Date(booking?.scheduledFor).getHours() < 12 ? "morning" : "afternoon")),
-    confirmLink: "[confirm-link]",
-    rescheduleLink: "[reschedule-link]",
+    appointmentLink: "[appointment-link]",
     phone: PJL_PHONE,
     ...extra
   };
