@@ -179,11 +179,21 @@ function assertKnownPlaceholders(text, where) {
 }
 
 // The effective template for a key: Patrick's override or the default.
+// An override referencing a merge field that no longer exists (saved
+// before a field was renamed — {confirmLink} before the one-link change)
+// is IGNORED with a warning: rendering it would put literal braces in a
+// customer's message, and the default is always safe.
 function templateFor(key) {
   if (!TEMPLATE_KEYS[key]) return null;
   const custom = OVERRIDES[key];
   const base = DEFAULT_TEMPLATES[key];
   if (!custom) return { ...base, source: "default" };
+  const unknown = [...placeholdersIn(custom.subject), ...placeholdersIn(custom.body)]
+    .filter((f) => !Object.prototype.hasOwnProperty.call(MERGE_FIELDS, f));
+  if (unknown.length) {
+    console.warn(`[assignment-messages] ignoring saved ${key} — it references retired field(s) {${unknown.join("} {")}}; using the default until it is re-saved`);
+    return { ...base, source: "default", staleOverride: true };
+  }
   return {
     subject: TEMPLATE_KEYS[key].hasSubject ? (custom.subject || base.subject) : undefined,
     body: custom.body || base.body,

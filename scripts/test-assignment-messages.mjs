@@ -198,6 +198,30 @@ ok("clearing the fields restores the default",
   resetTo.source === "default"
   && resetTo.body === messages.DEFAULT_TEMPLATES.reminder24_sms.body);
 
+// A stored override that references a RETIRED field (saved before a
+// rename, like {confirmLink} before the one-link change) must fall back
+// to the default at read time — rendering it would put literal braces
+// in a customer's message.
+{
+  fs.writeFileSync(STORE, JSON.stringify({
+    assignment_sms: { body: "Old wording with {confirmLink}", updatedAt: "2026-08-31T00:00:00Z", actor: "patrick" }
+  }, null, 2));
+  const SANDBOX3 = fs.mkdtempSync(path.join(os.tmpdir(), "pjl-messages3-"));
+  fs.mkdirSync(path.join(SANDBOX3, "server"), { recursive: true });
+  fs.cpSync(path.join(ROOT, "server/lib"), path.join(SANDBOX3, "server/lib"), { recursive: true });
+  for (const f of ["seasons.json", "pricing.json", "parts.json"]) {
+    fs.cpSync(path.join(ROOT, f), path.join(SANDBOX3, f));
+  }
+  fs.mkdirSync(path.join(SANDBOX3, "server/data"), { recursive: true });
+  fs.cpSync(STORE, path.join(SANDBOX3, "server/data/assignment-templates.json"));
+  const messages3 = require(path.join(SANDBOX3, "server/lib/assignment-messages.js"));
+  const t = messages3.templateFor("assignment_sms");
+  ok("an override with a retired field is ignored — the safe default renders instead",
+    t.source === "default" && t.staleOverride === true
+    && !messages3.render("assignment_sms", messages3.contextForBooking(BOOKING)).body.includes("{confirmLink}"),
+    JSON.stringify(t));
+}
+
 // ---- 6. This module cannot send ---------------------------------------
 
 const source = fs.readFileSync(path.join(SANDBOX, "server/lib/assignment-messages.js"), "utf8");
