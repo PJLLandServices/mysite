@@ -56,6 +56,14 @@ const routeMap = require("./lib/route-map");
 const routeGeometry = require("./lib/route-geometry");
 const assignments = require("./lib/assignments");
 const assignmentMessages = require("./lib/assignment-messages");
+const assignmentCadence = require("./lib/assignment-cadence");
+
+// THE STAGE-5 INTERLOCK. Every cadence message links to /a/<token> —
+// the customer's appointment page. Until that route exists, a blast
+// would text 60 customers a dead URL, so the cadence refuses to send
+// while this is false. Stage 5 builds the page and flips it to true in
+// the same commit. Do not flip it by hand.
+const APPOINTMENT_PAGE_READY = false;
 const seasonsLib = require("./lib/seasons");
 const customers = require("./lib/customers");
 const workOrders = require("./lib/work-orders");
@@ -21775,6 +21783,127 @@ Customer signature captured at ${new Date().toISOString()}.`;
     }
   }
 
+  // Assignment writer stage 4 — the blast, the cadence status, the
+  // manual response mark, and the template test-send.
+
+  // The blast: step 1 to every live assignment booking that has never
+  // received it. ADMIN only, and interlocked until stage 5's page is
+  // live. The sweep in the boot section handles steps 2–6.
+  const blastMatch = pathname.match(/^\/api\/assignments\/(spring|fall)\/(\d{4})\/blast$/);
+  if (blastMatch && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) {
+        return sendJson(res, 403, { ok: false, errors: ["Sending the blast needs an admin login."] });
+      }
+      const result = await assignmentCadence.blast(blastMatch[1], Number(blastMatch[2]), {
+        by: session?.email || session?.name || "admin",
+        appointmentPageReady: APPOINTMENT_PAGE_READY
+      });
+      return sendJson(res, 200, result);
+    } catch (err) {
+      return sendJson(res, err?.code === "SEND_LOCKED" ? 409 : 422,
+        { ok: false, errors: [err.message || "The blast failed."] });
+    }
+  }
+
+  const cadenceStatusMatch = pathname.match(/^\/api\/assignments\/(spring|fall)\/(\d{4})\/cadence-status$/);
+  if (cadenceStatusMatch && req.method === "GET") {
+    try {
+      await requireUser(req);
+      const result = await assignmentCadence.status(cadenceStatusMatch[1], Number(cadenceStatusMatch[2]));
+      return sendJson(res, 200, { ...result, appointmentPageReady: APPOINTMENT_PAGE_READY });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't read the cadence."] });
+    }
+  }
+
+  // The one-tap manual mark (decision F): Patrick or a tech answered the
+  // phone; the customer said "yes, that works." Stops steps 2–5.
+  const markRespondedMatch = pathname.match(/^\/api\/assignments\/bookings\/([^/]+)\/mark-responded$/);
+  if (markRespondedMatch && req.method === "POST") {
+    try {
+      const session = await requireUser(req);
+      const id = decodeURIComponent(markRespondedMatch[1]);
+      const existing = await bookings.get(id);
+      if (!existing) return sendJson(res, 404, { ok: false, errors: ["Booking not found."] });
+      if (existing.source !== "assignment") {
+        return sendJson(res, 422, { ok: false, errors: ["Only assignment bookings carry a response state."] });
+      }
+      const updated = await bookings.markAssignmentResponded(id, {
+        via: "manual",
+        by: session?.email || session?.name || "admin"
+      });
+      return sendJson(res, 200, { ok: true, booking: updated });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't mark that."] });
+    }
+  }
+
+  // Test-send: one template, rendered for a chosen (or sample) customer,
+  // delivered to the ADMIN's own inbox/phone (NOTIFY_TO_EMAIL /
+  // NOTIFY_TO_PHONE — the same env the outreach test uses), stamped
+  // [TEST]. No touch is recorded, no state changes, placeholder links
+  // are allowed — it goes to Patrick, not a customer.
+  if (pathname === "/api/assignment-messages/test" && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Test sends need an admin login."] });
+      const body = await parseRequestBody(req);
+      const key = String(body.templateKey || "");
+      const meta = assignmentMessages.TEMPLATE_KEYS[key];
+      if (!meta) return sendJson(res, 422, { ok: false, errors: ["Unknown template."] });
+      let booking = body.bookingId ? await bookings.get(String(body.bookingId)) : null;
+      if (!booking) {
+        booking = {
+          customerName: "Sample Customer",
+          address: "90 Oriole Drive, East Gwillimbury, ON",
+          scheduledFor: new Date(new Date().getFullYear(), 8, 28, 8, 0).toISOString(),
+          assignment: { bucket: "morning" }
+        };
+      }
+      const rendered = assignmentMessages.render(key, assignmentMessages.contextForBooking(booking));
+      const result = { ok: true, sentTo: {}, channels: {} };
+      if (meta.channel === "email") {
+        const to = String(process.env.NOTIFY_TO_EMAIL || process.env.GMAIL_USER || "").trim();
+        if (!to) result.channels.email = { skipped: true, reason: "no_notify_email_env" };
+        else {
+          const emailResult = await require("./lib/notify-customer").sendOutreachEmail({
+            to,
+            firstName: "Patrick",
+            propertyAddress: "",
+            seasonName: "",
+            portalLink: "",
+            subject: `[TEST] ${rendered.subject || key}`.slice(0, 250),
+            emailBody: rendered.body,
+            unsubscribeUrlEmail: "",
+            unsubscribeUrlAll: ""
+          });
+          result.channels.email = emailResult;
+          if (emailResult.ok) result.sentTo.email = to;
+        }
+      } else {
+        const to = String(process.env.NOTIFY_TO_PHONE || "").trim();
+        if (!to) result.channels.sms = { skipped: true, reason: "no_notify_phone_env" };
+        else {
+          const smsResult = await require("./lib/notify-customer").sendOutreachSms({
+            to,
+            firstName: "Patrick",
+            propertyAddress: "",
+            seasonName: "",
+            portalLink: "",
+            smsBody: `[TEST] ${rendered.body}`
+          });
+          result.channels.sms = smsResult;
+          if (smsResult.ok) result.sentTo.phone = to;
+        }
+      }
+      return sendJson(res, 200, result);
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Test send failed."] });
+    }
+  }
+
   // Assignment writer stage 2 — turn the plan into confirmed bookings.
   // ADMIN ONLY (not tech): this writes real appointments onto real
   // customers in one press. Sends nothing — messaging is stage 4.
@@ -23373,6 +23502,31 @@ server.listen(PORT, HOST, () => {
   };
   sweepAssignedTimes();
   setInterval(sweepAssignedTimes, 10 * 60 * 1000);
+
+  // Assignment cadence sweep (stage 4) — dispatches steps 2–6 of the
+  // follow-up cadence for blasted bookings, each step at most once,
+  // only on its own day, only inside the 09:00–18:00 send window (the
+  // engine enforces all three; outside them this is a cheap no-op).
+  // 5-minute cadence like the review-request sweep, so a step lands
+  // minutes after 9 AM on its day. Interlocked until stage 5's
+  // appointment page is live — see APPOINTMENT_PAGE_READY.
+  const sweepAssignmentCadence = async () => {
+    try {
+      const y = new Date().getFullYear();
+      for (const season of ["spring", "fall"]) {
+        const result = await assignmentCadence.sweepDue(season, y, {
+          appointmentPageReady: APPOINTMENT_PAGE_READY
+        });
+        if (result?.sent || result?.errors) {
+          console.log(`[assignment-cadence] ${season} ${y}: sent ${result.sent}, skipped ${result.skipped}, errors ${result.errors}`);
+        }
+      }
+    } catch (err) {
+      console.warn("[assignment-cadence] sweep failed:", err?.message);
+    }
+  };
+  sweepAssignmentCadence();
+  setInterval(sweepAssignmentCadence, 5 * 60 * 1000);
 
   // Trash purge sweep (Session 2 brief). Hard-deletes records soft-deleted
   // more than 30 days ago. Runs at startup AND every 24 hours so the

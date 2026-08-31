@@ -1159,6 +1159,61 @@
   armTwice(el("unassignBtn"), "Press again to remove untouched assignment bookings",
     () => runAssignAction("unassign", "Removing untouched assignment bookings…"));
 
+  // ---- The blast + cadence status (stage 4) ------------------------
+  //
+  // The blast REALLY SENDS. Two-press armed like assign/undo, admin-only
+  // server-side, and interlocked until the appointment page (stage 5)
+  // is live — the server refuses with a plain sentence until then.
+
+  armTwice(el("blastBtn"), "Press again to MESSAGE every assigned customer", async () => {
+    const out = el("preflightOut");
+    const button = el("blastBtn");
+    button.disabled = true;
+    out.hidden = false;
+    out.textContent = "Sending the assignment blast…";
+    try {
+      const response = await fetch(`/api/assignments/${seasonSelect.value}/${yearSelect.value}/blast`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error((data.errors || ["The blast failed."]).join(" "));
+      out.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "sp-preflight-summary";
+      p.textContent = `${data.blasted} customers messaged · ${data.alreadyBlasted} were already messaged`
+        + ` · ${data.skipped.length} skipped · ${data.errors.length} errors.`;
+      out.appendChild(p);
+      loadCadenceStatus();
+    } catch (error) {
+      out.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "sp-preflight-bad";
+      p.textContent = error.message;
+      out.appendChild(p);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  async function loadCadenceStatus() {
+    const line = el("cadenceStatus");
+    try {
+      const response = await fetch(`/api/assignments/${seasonSelect.value}/${yearSelect.value}/cadence-status`,
+        { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) { line.hidden = true; return; }
+      const s = data.summary;
+      line.hidden = false;
+      if (!s.bookings) {
+        line.textContent = "No assignment bookings yet — nothing to message.";
+      } else {
+        line.textContent =
+          `${s.bookings} assigned · ${s.blasted} messaged · ${s.responded} responded`
+          + (data.appointmentPageReady ? "" : " · sending locked until the appointment page is live");
+      }
+    } catch { line.hidden = true; }
+  }
+  loadCadenceStatus();
+
   function renderAssignResult(out, data) {
     out.innerHTML = "";
     const s = data.summary;

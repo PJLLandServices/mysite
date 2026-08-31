@@ -92,7 +92,7 @@ Full rationale in the build-plan artifact; this is the working checklist.
 | 1 | **Capacity + season gate.** Bucket caps enforced at booking time; `publicBookingThrough` wired. Touches FLOW-03 (PASS) — re-verify. | **done** |
 | 2 | **The assignment record.** Planned stop → `confirmed` booking, `source: "assignment"`. Idempotent, reversible. Sends nothing. | **done** |
 | 3 | **The messages.** Templates for steps 1, 2, 3–5, 6. Preview per customer. Patrick edits. | **done** |
-| 4 | **The blast + the cadence engine.** `sendBulk` reuse, `type` on touches, the sweep, the response tracking, the manual mark. Test send first. | |
+| 4 | **The blast + the cadence engine.** `sendBulk` reuse, `type` on touches, the sweep, the response tracking, the manual mark. Test send first. | **done** |
 | 5 | **The reply path.** Confirm link (magic token → records response). Reschedule via portal already exists — verify it composes with the geography filter and re-anchoring. | |
 | 6 | **Day-move re-notify.** Replaces the hard refusal from PR #87 with move + re-notify + response reset. | |
 
@@ -114,6 +114,32 @@ Full rationale in the build-plan artifact; this is the working checklist.
 
 Newest first. Every stage PR adds its entry.
 
+- *2026-08-31 — STAGE 4 SHIPPED. `server/lib/assignment-cadence.js`:
+  blast (admin button, two-press) + the seventh server sweep (5 min)
+  dispatching steps 2–6. All nine Part-2 rules implemented literally
+  and asserted BY NAME in `scripts/test-assignment-cadence.mjs` (29
+  assertions, real stores, only the wire injected). Touches now carry
+  `type: "assignment"` + `step` (the stage-4 field; additive — the
+  consent suite passes unchanged). Response state lives on
+  `booking.assignment.outreach` (token, blastAt, steps, respondedAt);
+  the one-tap manual mark is on the schedule's manage panel; per-
+  template [TEST] sends go to NOTIFY_TO_EMAIL/PHONE from the messages
+  page (saved wording only). Channel senders are notify-customer's own
+  outreach paths (branded email + Twilio SMS with the STOP line).*
+  *DECIDED HERE, PER THE CONTRACT: (a) THE STAGE-5 INTERLOCK — every
+  message links /a/<token>; until that page exists a blast would text
+  dead URLs, so blast and sweep refuse while server.js's
+  APPOINTMENT_PAGE_READY is false; stage 5 flips it in the same commit
+  that builds the page. (b) MARK BEFORE SEND: a step is recorded fired
+  before dispatch — a crash or wire failure loses at most one message
+  (recorded on the step, visible, retryable by hand) and can never
+  repeat one; the spec's worst bug is structurally impossible. (c)
+  STEP-6 EMAIL FALLBACK: a customer with no usable SMS gets the 24-hour
+  reminder by email — a reminder they can't receive helps nobody. (d) A
+  re-pressed blast reaches only never-blasted bookings, so stops
+  assigned after the blast get their step 1 on the next press. (e)
+  Opt-outs re-checked at EVERY step through the shared capability
+  checks — an opt-out placed mid-cadence stops everything after it.*
 - *2026-08-31 — ONE LINK, Patrick's stage-3 review call: "should all link
   to one thing (their portal?) and in that portal they then decide."
   `{confirmLink}`/`{rescheduleLink}` are replaced by a single
