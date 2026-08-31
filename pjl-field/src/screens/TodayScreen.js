@@ -226,14 +226,38 @@ export default function TodayScreen({ onOpenWorkOrder }) {
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.brand} />}
     >
       <View style={styles.week}>
+        {/* Today lives with the other date controls, not down beside the
+            job count where the first version put it — that is where you
+            look for it. It stays visible even when it has nothing to do,
+            so its position never moves; a control that appears and
+            disappears is a control you have to hunt for. */}
         <View style={styles.weekBar}>
-          <Pressable onPress={() => goTo(ymd(addDays(anchor, -7)))} hitSlop={10} style={styles.step}>
-            <Text style={styles.stepText}>‹</Text>
+          <Pressable
+            onPress={() => goTo(serverToday)}
+            disabled={!serverToday || selected === serverToday}
+            style={({ pressed }) => [
+              styles.todayBtn,
+              (!serverToday || selected === serverToday) && styles.todayBtnOff,
+              pressed && styles.todayBtnPressed,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Jump to today"
+          >
+            <Text style={[
+              styles.todayBtnText,
+              (!serverToday || selected === serverToday) && styles.todayBtnTextOff,
+            ]}>Today</Text>
           </Pressable>
-          <Text style={styles.weekLabel}>{weekLabel}</Text>
-          <Pressable onPress={() => goTo(ymd(addDays(anchor, 7)))} hitSlop={10} style={styles.step}>
-            <Text style={styles.stepText}>›</Text>
-          </Pressable>
+
+          <View style={styles.stepper}>
+            <Pressable onPress={() => goTo(ymd(addDays(anchor, -7)))} hitSlop={10} style={styles.step}>
+              <Text style={styles.stepText}>‹</Text>
+            </Pressable>
+            <Text style={styles.weekLabel}>{weekLabel}</Text>
+            <Pressable onPress={() => goTo(ymd(addDays(anchor, 7)))} hitSlop={10} style={styles.step}>
+              <Text style={styles.stepText}>›</Text>
+            </Pressable>
+          </View>
         </View>
         <View style={styles.days}>
           {weekDays.map((d, i) => {
@@ -264,16 +288,9 @@ export default function TodayScreen({ onOpenWorkOrder }) {
 
       <View style={styles.head}>
         <Text style={styles.date}>{longDate(payload?.date)}</Text>
-        <View style={styles.headRow}>
-          <Text style={styles.count}>
-            {bookings.length ? `${bookings.length} ${bookings.length === 1 ? 'job' : 'jobs'}` : 'Nothing booked'}
-          </Text>
-          {serverToday && selected !== serverToday ? (
-            <Pressable onPress={() => goTo(serverToday)} style={styles.todayBtn}>
-              <Text style={styles.todayBtnText}>Today</Text>
-            </Pressable>
-          ) : null}
-        </View>
+        <Text style={styles.count}>
+          {bookings.length ? `${bookings.length} ${bookings.length === 1 ? 'job' : 'jobs'}` : 'Nothing booked'}
+        </Text>
       </View>
 
       {bookings.length === 0 ? (
@@ -381,9 +398,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: space.lg,
+    paddingLeft: space.md,
+    paddingRight: space.sm,
     paddingBottom: space.sm,
   },
+  stepper: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
   step: { width: 34, alignItems: 'center' },
   stepText: { fontSize: 24, color: colors.brand, marginTop: -4 },
   weekLabel: { ...type.label, fontWeight: '600', color: colors.text },
@@ -401,14 +420,16 @@ const styles = StyleSheet.create({
   todayDotOn: { backgroundColor: colors.brand },
 
   head: { paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.md },
-  headRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.md },
   todayBtn: {
     backgroundColor: colors.brandTint,
     paddingHorizontal: space.md,
     paddingVertical: 6,
     borderRadius: radius.pill,
   },
+  todayBtnOff: { backgroundColor: 'transparent' },
+  todayBtnPressed: { opacity: 0.6 },
   todayBtnText: { color: colors.brand, fontWeight: '600', fontSize: 13 },
+  todayBtnTextOff: { color: colors.textFaint },
   date: { ...type.hero },
   count: { ...type.label, marginTop: 2 },
 
