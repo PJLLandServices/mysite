@@ -47,3 +47,35 @@ export function listProperties() {
 export function getProperty(id) {
   return getJson(`/api/properties/${encodeURIComponent(id)}`).then((d) => d.property || d);
 }
+
+export function getToday(dateISO) {
+  const q = dateISO ? `?date=${encodeURIComponent(dateISO)}` : '';
+  return getJson(`/api/schedule/today${q}`);
+}
+
+async function postJson(path) {
+  const res = await fetch(`${HOST}${path}`, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    credentials: 'include',
+    body: '{}',
+  });
+  if (res.status === 401 || res.status === 403) throw new AuthRequiredError();
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { throw new AuthRequiredError(); }
+  if (!res.ok) throw new Error((data && data.errors && data.errors[0]) || `Request failed (${res.status})`);
+  return data;
+}
+
+// Sends the customer the on-route SMS + email and stamps
+// lead.onRouteNotifiedAt. A real message to a real customer — the screen
+// confirms first and disables the button once it has fired.
+export const notifyOnRoute = (leadId) =>
+  postJson(`/api/leads/${encodeURIComponent(leadId)}/notify-on-route`);
+
+// Returns the lead's existing work order, or CREATES one when it has
+// none. The caller knows which case it is from the row's `workOrder`
+// field, and confirms before the creating case.
+export const openWorkOrder = (leadId) =>
+  postJson(`/api/leads/${encodeURIComponent(leadId)}/open-wo`);

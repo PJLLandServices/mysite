@@ -70,3 +70,39 @@ export function zoneMeta(zone) {
   const cover = (zone?.coverage || []).map((v) => COVERAGE_LABELS[v] || v);
   return [kit.join(', '), cover.join(', ')].filter(Boolean).join('  ·  ');
 }
+
+// The towns PJL actually serves, taken from the service-area pages at the
+// site root (sprinkler-service-*.html). Used only as a last-resort match
+// when an address has no parseable comma structure.
+const SERVICE_TOWNS = [
+  'Acton', 'Aurora', 'Bolton', 'East Gwillimbury', 'Erin', 'Forest Hill',
+  'Innisfil', 'King City', 'Lawrence Park', 'Markham', 'Newmarket',
+  'North York', 'Orangeville', 'Richmond Hill', 'Stouffville', 'Thornhill',
+  'Toronto', 'Vaughan',
+];
+
+// Second comma segment, minus the province and any postal code. This is
+// the convention the server already uses to pull a town out of a
+// free-text address (lib/notify-sms.js, lib/notify-email.js), so the app
+// groups properties the same way the customer's texts are worded.
+function townFromSegments(value) {
+  const parts = String(value || '').split(',');
+  if (parts.length < 2) return '';
+  return parts[1]
+    .replace(/\b(ON|Ontario|Canada)\b.*/i, '')
+    .replace(/\b[A-Z]\d[A-Z]\s*\d[A-Z]\d\b/i, '')
+    .trim();
+}
+
+// Properties carry no town of their own — unlike leads, which have an
+// explicit contact.town. So it is derived: the geocoder's formatted
+// address first (most reliable when geocoding ran), then the raw address,
+// then a known-town match anywhere in the string.
+export function townOf(property) {
+  const parsed =
+    townFromSegments(property?.coords?.formattedAddress) ||
+    townFromSegments(property?.address);
+  if (parsed) return parsed;
+  const haystack = String(property?.address || '').toLowerCase();
+  return SERVICE_TOWNS.find((t) => haystack.includes(t.toLowerCase())) || '';
+}

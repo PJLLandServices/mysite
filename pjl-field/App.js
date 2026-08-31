@@ -16,14 +16,18 @@ import { useCallback, useState } from 'react';
 import { Pressable, SafeAreaView, StatusBar as RNStatusBar, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import PropertiesScreen from './src/screens/PropertiesScreen';
+import TodayScreen from './src/screens/TodayScreen';
 import PropertyProfileScreen from './src/screens/PropertyProfileScreen';
 import WebScreen from './src/screens/WebScreen';
 import { colors, space } from './src/theme';
 
+// Where the Work tab sits when nothing has sent it somewhere specific.
+const WORK_LIST = '/admin/work-orders';
+
 const TABS = [
-  { key: 'today',      label: 'Today',      glyph: '◷', path: '/admin/today' },
+  { key: 'today',      label: 'Today',      glyph: '◷' },
   { key: 'properties', label: 'Properties', glyph: '⌂' },
-  { key: 'work',       label: 'Work',       glyph: '✓', path: '/admin/work-orders' },
+  { key: 'work',       label: 'Work',       glyph: '✓', path: WORK_LIST },
   { key: 'invoices',   label: 'Invoices',   glyph: '$', path: '/admin/invoices' },
   { key: 'messages',   label: 'Messages',   glyph: '✉', path: '/admin/messages' },
 ];
@@ -34,6 +38,10 @@ export default function App() {
   // one keeps its scroll position and its session.
   const [visited, setVisited] = useState({ today: true });
   const [openPropertyId, setOpenPropertyId] = useState(null);
+  // Today hands a work order to the Work tab rather than opening its own
+  // WebView, so there is only ever one tech-mode page alive and the tab
+  // bar keeps telling the truth about where you are.
+  const [workUrl, setWorkUrl] = useState(WORK_LIST);
 
   const select = useCallback((key) => {
     setActive(key);
@@ -56,7 +64,11 @@ export default function App() {
                 pointerEvents={isActive ? 'auto' : 'none'}
                 accessibilityElementsHidden={!isActive}
               >
-                {tab.key === 'properties' ? (
+                {tab.key === 'today' ? (
+                  <TodayScreen
+                    onOpenWorkOrder={(url) => { setWorkUrl(url); select('work'); }}
+                  />
+                ) : tab.key === 'properties' ? (
                   openPropertyId ? (
                     <PropertyProfileScreen
                       propertyId={openPropertyId}
@@ -66,7 +78,7 @@ export default function App() {
                     <PropertiesScreen onOpen={setOpenPropertyId} />
                   )
                 ) : (
-                  <WebScreen path={tab.path} />
+                  <WebScreen path={tab.key === 'work' ? workUrl : tab.path} />
                 )}
               </View>
             );
