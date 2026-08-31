@@ -115,6 +115,20 @@ Full rationale in the build-plan artifact; this is the working checklist.
 
 Newest first. Every stage PR adds its entry.
 
+- *2026-08-31 — THE PREFLIGHT NOW NAMES THE NO-ZONE STOPS (decision D's
+  blind spot). Patrick asked "what properties are on this
+  no_zone_count??" — and the answer wasn't on any screen: only assign()
+  checked zone counts, so Check-the-plan called those stops ready and
+  the skip happened later, out of sight. `preflight()` now runs the
+  same `zoneCountFor` gate and lists each affected stop under "Would be
+  skipped — fix or accept before sending", with the address LINKED to
+  the property record (`/admin/property/<id>`) where the count is
+  filled in — the skip list in the assign result links the same way
+  (rows now carry `propertyId`). assign() keeps its own check as the
+  belt-and-suspenders (a count could vanish between the two reads).
+  Writer suite 45 (+3: preflight flags no_zone_count, rows carry
+  propertyId, a declared count still preflights ready).*
+
 - *2026-08-31 — DECISION H: the customer's real zone count, from their
   page. Patrick's ask after the launch review: profiles often hold only
   the booking class for the customer's category, so the appointment page

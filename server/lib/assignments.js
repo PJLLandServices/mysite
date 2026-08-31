@@ -46,6 +46,7 @@ const PREFLIGHT_OUTCOMES = Object.freeze({
   not_eligible: "Not eligible for this season's service.",
   missing_name: "No customer name on the property — outreach refuses nameless sends.",
   season_opt_out: "Opted out of this season's outreach.",
+  no_zone_count: "No zone count on the property — assign would refuse this stop. Open the property and fill it in.",
   no_property_id: "Corrupted property record — no id to build a portal link from.",
   no_contact: "No phone and no email that can be used.",
   no_phone: "No usable phone (email would still deliver).",
@@ -85,6 +86,7 @@ async function preflight(season, year, deps = {}) {
           date,
           bucket,
           label: day.label || null,
+          propertyId: property?.id || null,
           customerName: property?.customerName || "",
           address: property?.address || "",
           town: property?.town || ""
@@ -112,6 +114,22 @@ async function preflight(season, year, deps = {}) {
             summary.skipped += 1;
             count(verdict.reason);
           }
+          rows.push(row);
+          continue;
+        }
+
+        // Decision D's blind spot, closed on Patrick's ask ("what
+        // properties are on this no_zone_count??"): assign() refuses a
+        // stop without a zone count, so the preflight must say WHICH
+        // stops those are — a "ready" here that assign() would then
+        // skip breaks stage 0's promise. assign() keeps its own check
+        // (a count could vanish between the two reads); this one is
+        // the fix-it list.
+        if (!zoneCountFor(property)) {
+          row.outcome = "skipped";
+          row.reason = "no_zone_count";
+          summary.skipped += 1;
+          count(row.reason);
           rows.push(row);
           continue;
         }
