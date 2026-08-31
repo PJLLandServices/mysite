@@ -19,6 +19,19 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-31 (Schedule calendar: same-start bookings drew as one pile — found by Patrick live):**
+with the union fix deployed, the calendar showed only "the first appointment for the morning, and
+first for the afternoon". All 18 bookings were present (the week counter said so); the day/week
+grid positions cards purely by time (1px = 1 minute), and every assignment booking in a bucket
+carries the bucket-open time — five 8:00 cards rendered at the same top in one perfect pile, only
+the top card visible. The grid was built in the one-customer-per-bucket era and had never drawn two
+events at the same instant. `layoutEvents()` now lays each day out as a WATERFALL: cards anchor to
+their start time but are pushed below the previous card's bottom edge when they would overlap, so a
+bucket's stops unroll down the day in run order while each card still prints its true time.
+Verified in the Playwright harness (9 assertions now): three same-start bookings render as three
+distinct, non-overlapping cards in start order; the earlier union/dedup/manage-panel assertions
+unchanged. Month view was already correct (pills + "+N more").
+
 **2026-08-31 (Assignment bookings reach the schedule — stage-2 defect, found by Patrick live):**
 after assigning the real plan, the new bookings showed on /admin/bookings but NOT on the
 /admin/schedule calendar or the tech day sheet. Cause: both surfaces mapped ONLY `lead.booking`
