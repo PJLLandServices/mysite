@@ -19,6 +19,24 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-31 (Assignment bookings reach the schedule — stage-2 defect, found by Patrick live):**
+after assigning the real plan, the new bookings showed on /admin/bookings but NOT on the
+/admin/schedule calendar or the tech day sheet. Cause: both surfaces mapped ONLY `lead.booking`
+(the calendar from `/api/quotes`, the day sheet inside `/api/schedule/today`) — assignment records
+are lead-less by design, so the surfaces that predate property-first bookings never saw them.
+Fix mirrors `activeBookings()`'s union rule in both places: canonical `bookings.json` records join
+the lead-mapped set, deduped by leadId + exact start so a lead's mirrored record never renders as a
+second appointment. Calendar events from canonical records carry `data-booking-id`; the manage
+panel works off that id directly (no lead lookup), with **Reschedule hidden** for lead-less
+bookings — the CRM reschedule modal is lead-keyed, and moving an assigned stop belongs to the
+season plan's day-move flow. Cancel/Delete/Change-type all operate on the canonical id and the
+cancel endpoint was verified lead-safe. Verified in a Playwright harness against the real
+schedule.js with stubbed data: two events render (the lead-mirror deduped), the assignment event
+carries its canonical id with no lead id, the panel opens, Reschedule hidden, Cancel available
+(7 assertions). The day sheet's canonical rows carry `leadId: ""` so today.js's lead-keyed taps
+(notify-on-route, open-WO) no-op instead of erroring — those actions become meaningful for
+assignment bookings in later stages.
+
 **2026-08-31 (Assignment writer stage 2 — the assignment record):** `assign()` turns a season
 plan's ready stops into real `confirmed` bookings — `source: "assignment"`, property-first canonical
 records with NO lead (the path `activeBookings()` was pre-wired for: coords resolve through

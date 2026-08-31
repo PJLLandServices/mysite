@@ -20426,7 +20426,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
     const allWos = await workOrders.list();
     const woByLeadId = new Map(allWos.map((w) => [w.leadId, w]));
 
-    const bookings = allLeads
+    const dayBookings = allLeads
       .filter((lead) => {
         if (lead.archived) return false;
         const start = lead.booking?.start ? new Date(lead.booking.start).getTime() : null;
@@ -20473,11 +20473,68 @@ Customer signature captured at ${new Date().toISOString()}.`;
         };
       });
 
+    // Union canonical bookings.json records with no lead behind them —
+    // the assignment writer's records above all. Without this a fully
+    // assigned route day hands the tech an empty day sheet. Same dedup
+    // rule as activeBookings(): leadId + exact start means the lead row
+    // above already represents the record.
+    try {
+      const bookingRecs = await bookings.list();
+      const extras = bookingRecs.filter((b) => {
+        if (!b || !b.scheduledFor) return false;
+        if (b.status === "cancelled" || b.status === "completed" || b.status === "no_show") return false;
+        const t = new Date(b.scheduledFor).getTime();
+        if (Number.isNaN(t) || t < dayStart || t >= dayEnd) return false;
+        const iso = new Date(b.scheduledFor).toISOString();
+        return !dayBookings.some((row) => b.leadId && row.leadId === b.leadId && row.start === iso);
+      });
+      if (extras.length) {
+        let propsById = new Map();
+        try {
+          const allProps = await properties.list();
+          propsById = new Map(allProps.filter((p) => p && p.id).map((p) => [p.id, p]));
+        } catch (e) {
+          console.warn("[schedule/today] property lookup failed:", e?.message);
+        }
+        for (const b of extras) {
+          const p = b.propertyId ? propsById.get(b.propertyId) : null;
+          const start = new Date(b.scheduledFor);
+          const end = new Date(start.getTime() + (Number(b.durationMinutes) || 60) * 60 * 1000);
+          dayBookings.push({
+            leadId: b.leadId || "",
+            bookingId: b.id,
+            source: b.source || null,
+            customerName: b.customerName || "",
+            customerPhone: b.customerPhone || "",
+            customerEmail: b.customerEmail || "",
+            address: b.address || p?.address || "",
+            town: p?.town || "",
+            coords: p?.coords || null,
+            serviceKey: b.serviceKey,
+            serviceLabel: b.serviceLabel || "Appointment",
+            start: start.toISOString(),
+            end: end.toISOString(),
+            startLabel: start.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }),
+            endLabel: end.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }),
+            customerNotes: "",
+            internalNotes: b.prepNotes || "",
+            stage: b.status || "confirmed",
+            propertyId: b.propertyId || null,
+            workOrder: null,
+            onRouteNotifiedAt: null
+          });
+        }
+        dayBookings.sort((a, b) => new Date(a.start) - new Date(b.start));
+      }
+    } catch (err) {
+      console.warn("[schedule/today] bookings.json union skipped:", err?.message);
+    }
+
     return sendJson(res, 200, {
       ok: true,
       date: new Date(dayStart).toISOString().slice(0, 10),
-      bookings,
-      count: bookings.length
+      bookings: dayBookings,
+      count: dayBookings.length
     });
   }
 
