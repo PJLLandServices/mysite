@@ -48,6 +48,29 @@ const timeOf = (iso) => {
   return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 };
 
+// All date maths is done on LOCAL dates anchored at noon. Building a
+// YYYY-MM-DD out of toISOString() would use UTC, which in Toronto is
+// four or five hours ahead — enough to ask the server for tomorrow's
+// schedule any evening after 8pm. Noon keeps a day safe from DST too.
+const ymd = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+const fromYmd = (s) => {
+  const [y, m, d] = String(s).split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1, 12, 0, 0);
+};
+
+const addDays = (date, n) => {
+  const c = new Date(date);
+  c.setDate(c.getDate() + n);
+  return c;
+};
+
+// Weeks run Monday to Sunday — a work week, not a calendar-app week.
+const startOfWeek = (date) => addDays(date, -((date.getDay() + 6) % 7));
+
+const WEEKDAY_INITIALS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+
 const longDate = (ymd) => {
   const d = ymd ? new Date(`${ymd}T12:00:00`) : new Date();
   if (Number.isNaN(d.getTime())) return 'Today';
@@ -56,28 +79,46 @@ const longDate = (ymd) => {
 
 export default function TodayScreen({ onOpenWorkOrder }) {
   const [payload, setPayload] = useState(null);
+  // The server's idea of today, learned from the first response rather
+  // than assumed from the phone's clock — the schedule belongs to the
+  // server's day.
+  const [serverToday, setServerToday] = useState(null);
+  const [selected, setSelected] = useState(null); // null until the first load answers
   const [state, setState] = useState('loading');
   const [error, setError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [busyId, setBusyId] = useState(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (date) => {
     try {
-      setPayload(await getToday());
+      const data = await getToday(date || undefined);
+      setPayload(data);
+      if (!date && data?.date) {
+        setServerToday(data.date);
+        setSelected(data.date);
+      }
       setState('ready');
     } catch (err) {
       if (err instanceof AuthRequiredError) setState('auth');
-      else { setError(err?.message || "Couldn't load today's schedule."); setState('error'); }
+      else { setError(err?.message || "Couldn't load the schedule."); setState('error'); }
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(null); }, [load]);
+
+  // Any day other than the first one is fetched explicitly.
+  const goTo = useCallback((date) => {
+    if (!date || date === selected) return;
+    setSelected(date);
+    setState('loading');
+    load(date);
+  }, [load, selected]);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
-    await load();
+    await load(selected);
     setRefreshing(false);
-  }, [load]);
+  }, [load, selected]);
 
   const open = (url) => Linking.openURL(url).catch(() => {});
 
@@ -152,7 +193,7 @@ export default function TodayScreen({ onOpenWorkOrder }) {
         <Text style={styles.centreBody}>
           Open any other tab and sign in to PJL — this screen shares that session.
         </Text>
-        <Pressable onPress={load} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable>
+        <Pressable onPress={() => load(selected)} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable>
       </View>
     );
   }
@@ -161,13 +202,22 @@ export default function TodayScreen({ onOpenWorkOrder }) {
       <View style={styles.centre}>
         <Text style={styles.centreTitle}>Couldn't load</Text>
         <Text style={styles.centreBody}>{error}</Text>
-        <Pressable onPress={load} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable>
+        <Pressable onPress={() => load(selected)} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable>
       </View>
     );
   }
 
   const bookings = payload?.bookings || [];
   const versionLabel = runningVersionLabel();
+  const anchor = fromYmd(selected || payload?.date || ymd(new Date()));
+  const weekStart = startOfWeek(anchor);
+  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+  const weekEnd = weekDays[6];
+  // "Sep 1 – 7" when a week sits in one month, "Aug 25 – Sep 7" when it
+  // straddles two.
+  const weekLabel = weekStart.getMonth() === weekEnd.getMonth()
+    ? `${weekStart.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${weekEnd.getDate()}`
+    : `${weekStart.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${weekEnd.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
 
   return (
     <ScrollView
@@ -175,17 +225,61 @@ export default function TodayScreen({ onOpenWorkOrder }) {
       contentContainerStyle={styles.content}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.brand} />}
     >
+      <View style={styles.week}>
+        <View style={styles.weekBar}>
+          <Pressable onPress={() => goTo(ymd(addDays(anchor, -7)))} hitSlop={10} style={styles.step}>
+            <Text style={styles.stepText}>‹</Text>
+          </Pressable>
+          <Text style={styles.weekLabel}>{weekLabel}</Text>
+          <Pressable onPress={() => goTo(ymd(addDays(anchor, 7)))} hitSlop={10} style={styles.step}>
+            <Text style={styles.stepText}>›</Text>
+          </Pressable>
+        </View>
+        <View style={styles.days}>
+          {weekDays.map((d, i) => {
+            const key = ymd(d);
+            const isSelected = key === selected;
+            const isToday = key === serverToday;
+            return (
+              <Pressable
+                key={key}
+                onPress={() => goTo(key)}
+                style={styles.day}
+                accessibilityRole="button"
+                accessibilityState={{ selected: isSelected }}
+                accessibilityLabel={d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
+              >
+                <Text style={[styles.dayInitial, isSelected && styles.daySelectedText]}>
+                  {WEEKDAY_INITIALS[i]}
+                </Text>
+                <View style={[styles.dayPill, isSelected && styles.dayPillSelected]}>
+                  <Text style={[styles.dayNum, isSelected && styles.daySelectedText]}>{d.getDate()}</Text>
+                </View>
+                <View style={[styles.todayDot, isToday && !isSelected && styles.todayDotOn]} />
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+
       <View style={styles.head}>
         <Text style={styles.date}>{longDate(payload?.date)}</Text>
-        <Text style={styles.count}>
-          {bookings.length ? `${bookings.length} ${bookings.length === 1 ? 'job' : 'jobs'}` : 'Nothing booked'}
-        </Text>
+        <View style={styles.headRow}>
+          <Text style={styles.count}>
+            {bookings.length ? `${bookings.length} ${bookings.length === 1 ? 'job' : 'jobs'}` : 'Nothing booked'}
+          </Text>
+          {serverToday && selected !== serverToday ? (
+            <Pressable onPress={() => goTo(serverToday)} style={styles.todayBtn}>
+              <Text style={styles.todayBtnText}>Today</Text>
+            </Pressable>
+          ) : null}
+        </View>
       </View>
 
       {bookings.length === 0 ? (
         <View style={styles.emptyCard}>
           <Text style={styles.emptyTitle}>Clear day</Text>
-          <Text style={styles.emptyBody}>Nothing is booked for today. Pull down to check again.</Text>
+          <Text style={styles.emptyBody}>Nothing is booked for this day. Pull down to check again.</Text>
         </View>
       ) : null}
 
@@ -276,7 +370,45 @@ const styles = StyleSheet.create({
   },
   retryText: { color: '#fff', fontWeight: '600' },
 
+  week: {
+    backgroundColor: colors.card,
+    paddingTop: space.sm,
+    paddingBottom: space.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.separator,
+  },
+  weekBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: space.lg,
+    paddingBottom: space.sm,
+  },
+  step: { width: 34, alignItems: 'center' },
+  stepText: { fontSize: 24, color: colors.brand, marginTop: -4 },
+  weekLabel: { ...type.label, fontWeight: '600', color: colors.text },
+  days: { flexDirection: 'row', paddingHorizontal: space.sm },
+  day: { flex: 1, alignItems: 'center', gap: 4, paddingVertical: 2 },
+  dayInitial: { fontSize: 11, fontWeight: '600', color: colors.textFaint },
+  dayPill: {
+    width: 34, height: 34, borderRadius: radius.pill,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  dayPillSelected: { backgroundColor: colors.brand },
+  dayNum: { fontSize: 16, fontWeight: '600', color: colors.text, fontVariant: ['tabular-nums'] },
+  daySelectedText: { color: '#fff' },
+  todayDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: 'transparent' },
+  todayDotOn: { backgroundColor: colors.brand },
+
   head: { paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.md },
+  headRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.md },
+  todayBtn: {
+    backgroundColor: colors.brandTint,
+    paddingHorizontal: space.md,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+  },
+  todayBtnText: { color: colors.brand, fontWeight: '600', fontSize: 13 },
   date: { ...type.hero },
   count: { ...type.label, marginTop: 2 },
 
