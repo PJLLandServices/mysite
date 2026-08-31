@@ -25,7 +25,10 @@
 
 const crypto = require("node:crypto");
 const bookings = require("./bookings");
-const { BOOKING_BUCKETS } = require("./availability");
+const properties = require("./properties");
+const customers = require("./customers");
+const { BOOKING_BUCKETS, BOOKABLE_SERVICES } = require("./availability");
+const { deriveSeasonalKey, effectiveZoneCount } = require("./pricing");
 
 const CHANGE_CUTOFF_HOURS = 24;
 
@@ -186,13 +189,102 @@ async function setWindow(token, { notBefore, notAfter, listBookings, setRequeste
   return { ok: true, booking: fresh, summary: summarize(fresh, { now }) };
 }
 
+// What the page should say about the customer's system. Three shapes:
+//   documented — the techs mapped the zones; the count is ground truth
+//                and the page shows it read-only.
+//   declared   — we only have a number someone typed (their booking, a
+//                past correction, Patrick's manual entry); editable.
+//   none       — nothing on file at all; the page asks outright.
+// canUpdate mirrors the setZones gate so the page never offers an edit
+// the endpoint would refuse.
+function zonesInfo(property, summary) {
+  const documented = Array.isArray(property?.system?.zones) ? property.system.zones.length : 0;
+  const count = effectiveZoneCount(property);
+  const live = summary && (summary.state === "open" || summary.state === "responded");
+  return {
+    count: count || null,
+    source: documented > 0 ? "documented" : count > 0 ? "declared" : "none",
+    canUpdate: Boolean(live) && documented === 0
+  };
+}
+
+// "Here's how many zones I actually have." Patrick's follow-up to the
+// launch review: many profiles carry only the booking class for the
+// customer's category — a tier bracket, not their real system — so the
+// page lets the customer set the record straight. The count lands on
+// the PROPERTY (system.zoneCount, the same field Patrick fills by
+// hand); documented zones always win and make this read-only. The
+// booking's tier follows the real number — serviceKey, label, price
+// bracket and on-site minutes — through the same deriveSeasonalKey the
+// assignment writer booked with. It is NOT a response (nothing was
+// said about the date) and it works even inside the 24-hour cutoff:
+// it's information, not a move.
+async function setZones(token, {
+  zoneCount,
+  listBookings,
+  getProperty = properties.get,
+  updateProperty = properties.update,
+  getCustomer = (id) => customers.get(id, { withProperties: false }),
+  setDeclared = bookings.setDeclaredZones,
+  now = new Date()
+} = {}) {
+  const booking = await findByToken(token, { listBookings });
+  if (!booking) return { ok: false, status: 404, errors: ["That link doesn't match an appointment."] };
+  const summary = summarize(booking, { now });
+  if (summary.state !== "open" && summary.state !== "responded") {
+    return { ok: false, status: 409, errors: ["This appointment can't be updated from this page — call us at (905) 960-0181."] };
+  }
+  const zones = Math.floor(Number(zoneCount) || 0);
+  if (!Number.isFinite(Number(zoneCount)) || zones < 1 || zones > 50) {
+    return { ok: false, status: 422, errors: ["Please enter a whole number of zones between 1 and 50."] };
+  }
+  const property = booking.propertyId ? await getProperty(booking.propertyId) : null;
+  if (!property) {
+    return { ok: false, status: 409, errors: ["We couldn't find your property record — call us at (905) 960-0181 and we'll fix it together."] };
+  }
+  const documented = Array.isArray(property.system?.zones) ? property.system.zones.length : 0;
+  if (documented > 0) {
+    return { ok: false, status: 409, errors: [
+      `Our technicians have already mapped your system (${documented} zone${documented === 1 ? "" : "s"} on file). If that looks wrong, call or text us at (905) 960-0181.`
+    ] };
+  }
+
+  // The property is the record of truth — the same field Patrick edits.
+  await updateProperty(property.id, { system: { zoneCount: zones } });
+
+  // Re-derive the tier from the real count, the same way assign() did
+  // from the old one: accountType decides the table.
+  let commercial = false;
+  if (property.customerId) {
+    try {
+      const owner = await getCustomer(property.customerId);
+      commercial = owner?.accountType === "commercial";
+    } catch { /* unresolvable customer — residential, like assign() */ }
+  }
+  const woType = String(booking.serviceKey || "").startsWith("spring") ? "spring_opening" : "fall_closing";
+  const newKey = deriveSeasonalKey(woType, zones, commercial);
+  const service = newKey ? BOOKABLE_SERVICES[newKey] : null;
+  const tierChanged = Boolean(service) && newKey !== booking.serviceKey;
+
+  const updated = await setDeclared(booking.id, {
+    zoneCount: zones,
+    serviceKey: service ? newKey : undefined,
+    serviceLabel: service ? service.label : undefined,
+    durationMinutes: service ? service.minutes : undefined,
+    by: "customer"
+  });
+  return { ok: true, booking: updated, summary: summarize(updated, { now }), tierChanged };
+}
+
 module.exports = {
   CHANGE_CUTOFF_HOURS,
   findByToken,
   ensureToken,
   summarize,
+  zonesInfo,
   confirm,
   cancel,
   freeBucket,
-  setWindow
+  setWindow,
+  setZones
 };

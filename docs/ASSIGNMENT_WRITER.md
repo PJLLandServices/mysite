@@ -26,6 +26,7 @@ Decided with Patrick, 2026-08-31. Unlisted recommendations were accepted as deci
 | E | One blast or per-day | **One blast, at the start of the season (target Sept 10).** Patrick's call, overriding the per-day recommendation. The mitigation for a weather shift is day-move + re-notify (stage 6), not staggered sending. |
 | F | What counts as "responded" | **A confirm on their appointment page, a reschedule/cancel there, or a one-tap manual mark in the CRM** (for phone calls and text replies, which the system cannot see — there is no inbound SMS handling and none is being built now). *Refined 2026-08-31 on Patrick's stage-3 review: every message carries ONE `{appointmentLink}` to a single appointment page where the customer decides — confirm, reschedule, or cancel — instead of separate confirm/reschedule links. Two URLs per SMS split each text into extra segments the customer receives as multiple messages.* |
 | G | Early-day compression | **Send exactly on schedule.** R1 (Sept 28) non-responders get six messages in 17 days — Sept 10, 13, 18, 21, 23, 27. Patrick chose this over a spacing rule, knowingly. |
+| H | The customer's real zone count | *Added 2026-08-31, Patrick's post-launch-review ask: many profiles carry only the booking class for the customer's category, not their actual system.* **The appointment page lets the customer enter their real zone count.** It saves to the property (`system.zoneCount` — the same field Patrick fills by hand); tech-DOCUMENTED zones always win and make the row read-only. The booking's tier follows the real number (serviceKey, label, price bracket, on-site minutes — one shared rule, `pricing.effectiveZoneCount`, now feeds the writer, the shown price AND the sequencer). It is **not** a response — nothing was said about the date — and it never bumps `rescheduleCount`. Patrick is paged only when the count moves the price bracket. |
 
 ## Part 2 — The cadence
 
@@ -113,6 +114,29 @@ Full rationale in the build-plan artifact; this is the working checklist.
 ## Part 6 — Build log
 
 Newest first. Every stage PR adds its entry.
+
+- *2026-08-31 — DECISION H: the customer's real zone count, from their
+  page. Patrick's ask after the launch review: profiles often hold only
+  the booking class for the customer's category, so the appointment page
+  grew a "Your system" row — the count we hold, and (while no zones are
+  tech-documented) an "Update my zone count" door: a 1–50 select, saved
+  by `POST /api/appointment/:token/zones` → `appointmentActions.setZones`.
+  The count lands on the PROPERTY (`system.zoneCount`); the booking's
+  tier re-derives through the same `deriveSeasonalKey` the writer booked
+  with (key, label, durationMinutes), the sequenced times re-anchor in
+  the background when the bracket moved, and Patrick is paged on a
+  bracket move only. NOT a response; no `rescheduleCount` bump;
+  documented zones refuse the edit outright. UNDERLYING FIX shipped with
+  it: the zone-count precedence (documented wins, declared fills in) now
+  lives ONCE in `pricing.effectiveZoneCount` — `resolveSeasonalPrice`
+  (the shown price, the {price} merge field) and
+  `resequence.onSiteMinutes` (planned on-site time) previously counted
+  ONLY documented zones, so a declared count booked the right tier but
+  showed the lowest-bracket price and was sequenced at the smallest
+  service minutes. All three consumers now read the same number.
+  `test-appointment-page.mjs` grows to 44 assertions; the page smoke to
+  9; pricing 195, resequence 39, writer 42, day-reschedule 59 all pass
+  unchanged.*
 
 - *2026-08-31 — STAGE 6 SHIPPED. THE CONTRACT IS COMPLETE. Moving a
   route day now takes its assignment bookings with it:

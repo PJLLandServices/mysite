@@ -30,7 +30,7 @@ const outreach = require("./outreach");
 const bookings = require("./bookings");
 const customers = require("./customers");
 const resequence = require("./resequence");
-const { deriveSeasonalKey } = require("./pricing");
+const { deriveSeasonalKey, effectiveZoneCount } = require("./pricing");
 const { BOOKABLE_SERVICES, BOOKING_BUCKETS } = require("./availability");
 
 const BUCKETS = ["morning", "afternoon"];
@@ -269,13 +269,11 @@ async function arrivalsFor(day, byCode, season, seq, requestedWindows = {}) {
   return etaByCode;
 }
 
-// Effective zone count: documented zones win over the manual count —
-// the same precedence the property record documents.
+// Effective zone count: documented zones win over the declared count —
+// the shared rule now lives in pricing.effectiveZoneCount so booking
+// tier, shown price, and sequenced minutes all read the same number.
 function zoneCountFor(property) {
-  const documented = Array.isArray(property?.system?.zones) ? property.system.zones.length : 0;
-  if (documented > 0) return documented;
-  const manual = Number(property?.system?.zoneCount);
-  return Number.isFinite(manual) && manual > 0 ? manual : 0;
+  return effectiveZoneCount(property);
 }
 
 async function assign(season, year, deps = {}) {

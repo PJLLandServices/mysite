@@ -599,6 +599,43 @@ async function setRequestedWindow(id, { notBefore, notAfter, by = "customer" } =
   return next;
 }
 
+// The customer told us how many zones their system actually has (their
+// appointment page's "update your zone count"). The booking's tier
+// fields follow the real number — serviceKey/serviceLabel so the page
+// and day sheet name the right bracket, durationMinutes so the
+// sequencer plans the right amount of on-site time. Deliberately NOT a
+// response (they haven't answered about the date) and deliberately no
+// rescheduleCount bump — correcting our records costs the customer
+// nothing.
+async function setDeclaredZones(id, { zoneCount, serviceKey, serviceLabel, durationMinutes, by = "customer" } = {}) {
+  const zones = Math.floor(Number(zoneCount) || 0);
+  if (zones < 1 || zones > 50) throw new Error("Zone count must be a whole number from 1 to 50.");
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const current = records[idx];
+  if (!current.assignment) throw new Error(`${id} is not an assignment booking.`);
+  const now = new Date().toISOString();
+  const tierChanged = Boolean(serviceKey) && serviceKey !== current.serviceKey;
+  const next = {
+    ...current,
+    zoneCount: zones,
+    ...(tierChanged ? {
+      serviceKey,
+      serviceLabel: serviceLabel || current.serviceLabel,
+      durationMinutes: Number(durationMinutes) > 0 ? Number(durationMinutes) : current.durationMinutes
+    } : {}),
+    updatedAt: now,
+    history: [...(current.history || []), {
+      ts: now, action: "zones_declared", by,
+      note: `${zones} zones${tierChanged ? ` — service tier ${current.serviceKey} → ${serviceKey}` : ""}`
+    }]
+  };
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
 // The customer (or Patrick, marking a phone call) answered. First answer
 // wins — a later confirm doesn't overwrite how they first responded.
 async function markAssignmentResponded(id, { via = "manual", by = "admin" } = {}) {
@@ -657,6 +694,7 @@ module.exports = {
   moveAssignmentDay,
   setFreeBucket,
   setRequestedWindow,
+  setDeclaredZones,
   update,
   reschedule,
   cancel,

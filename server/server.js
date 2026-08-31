@@ -21808,7 +21808,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
   // Assignment writer stage 5 — the customer's appointment page API.
   // PUBLIC: the token is the credential, exactly like /portal/<token>.
   // It addresses one booking and grants three actions on it.
-  const apptMatch = pathname.match(/^\/api\/appointment\/([A-Za-z0-9_-]{16,64})(?:\/(confirm|cancel|availability|reschedule|free-bucket|time-window))?$/);
+  const apptMatch = pathname.match(/^\/api\/appointment\/([A-Za-z0-9_-]{16,64})(?:\/(confirm|cancel|availability|reschedule|free-bucket|time-window|zones))?$/);
   if (apptMatch) {
     const token = apptMatch[1];
     const action = apptMatch[2] || null;
@@ -21821,19 +21821,59 @@ Customer signature captured at ${new Date().toISOString()}.`;
         return resolveSeasonalPrice(property, family)?.label || null;
       } catch { return null; }
     };
+    // What we hold about their system — count, whether the techs mapped
+    // it (read-only) or it's just a declared number (editable). Rides on
+    // every summary so the page can offer the zone-count correction.
+    const zonesFor = async (booking, summary) => {
+      try {
+        const property = booking.propertyId ? await properties.get(booking.propertyId) : null;
+        return appointmentActions.zonesInfo(property, summary);
+      } catch { return null; }
+    };
     try {
       if (!action && req.method === "GET") {
         const booking = await appointmentActions.findByToken(token);
         if (!booking) return sendJson(res, 404, { ok: false, errors: ["That link doesn't match an appointment."] });
+        const summary = appointmentActions.summarize(booking);
         return sendJson(res, 200, {
           ok: true,
-          appointment: { ...appointmentActions.summarize(booking), priceLabel: await priceFor(booking) }
+          appointment: { ...summary, priceLabel: await priceFor(booking), zones: await zonesFor(booking, summary) }
         });
       }
       if (action === "confirm" && req.method === "POST") {
         const result = await appointmentActions.confirm(token);
         if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors });
-        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel: await priceFor(result.booking) } });
+        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel: await priceFor(result.booking), zones: await zonesFor(result.booking, result.summary) } });
+      }
+      if (action === "zones" && req.method === "POST") {
+        const body = await parseRequestBody(req);
+        const result = await appointmentActions.setZones(token, { zoneCount: body.zoneCount });
+        if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors });
+        const priceLabel = await priceFor(result.booking);
+        if (result.tierChanged) {
+          // The real count moved the price bracket — new service minutes
+          // too, so re-anchor the day's sequenced times in the background
+          // (same follow-through as a time-window save)…
+          if (result.booking?.assignment) {
+            assignments.syncAssignedTimes(result.booking.assignment.season, result.booking.assignment.year)
+              .catch((e) => console.warn("[appointment] time sync after zone update failed:", e?.message));
+          }
+          // …and Patrick hears about it — the price on the profile is not
+          // what the customer was originally told.
+          const b = result.booking;
+          Promise.allSettled([
+            sendNewLeadEmail({
+              id: b.id, sourceLabel: "Customer updated their ZONE COUNT — price tier changed",
+              contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "",
+                notes: `Now ${b.zoneCount} zones — ${b.serviceLabel}${priceLabel ? ` (${priceLabel})` : ""}. Appointment ${b.scheduledFor}.` }
+            }, { baseUrl: baseUrlFromReq(req) }),
+            sendNewLeadSms({
+              id: b.id, sourceLabel: "Customer updated their ZONE COUNT — price tier changed",
+              contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "", notes: "" }
+            }, { baseUrl: baseUrlFromReq(req) })
+          ]).catch(() => {});
+        }
+        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel, zones: await zonesFor(result.booking, result.summary) } });
       }
       if (action === "free-bucket" && req.method === "POST") {
         const result = await appointmentActions.freeBucket(token);
@@ -21852,7 +21892,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
             contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "", notes: "" }
           }, { baseUrl: baseUrlFromReq(req) })
         ]).catch(() => {});
-        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel: await priceFor(result.booking) } });
+        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel: await priceFor(result.booking), zones: await zonesFor(result.booking, result.summary) } });
       }
       if (action === "time-window" && req.method === "POST") {
         const body = await parseRequestBody(req);
@@ -21867,7 +21907,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
           assignments.syncAssignedTimes(result.booking.assignment.season, result.booking.assignment.year)
             .catch((e) => console.warn("[appointment] time sync after window failed:", e?.message));
         }
-        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel: await priceFor(result.booking) } });
+        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel: await priceFor(result.booking), zones: await zonesFor(result.booking, result.summary) } });
       }
       if (action === "cancel" && req.method === "POST") {
         const body = await parseRequestBody(req);

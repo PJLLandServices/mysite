@@ -65,10 +65,43 @@
     el("cancelBtn").hidden = !a.canCancel;
     el("windowBtn").hidden = !a.canSetWindow;
     fillWindowSelects(a.requestedWindow);
+    renderZones(a.zones);
     el("reschedulePanel").hidden = true;
     el("cancelPanel").hidden = true;
     el("windowPanel").hidden = true;
+    el("zonesPanel").hidden = true;
     el("actions").hidden = false;
+  }
+
+  // "Your system" row: what we hold, and — when the techs haven't
+  // mapped the zones yet — the door to correct it. A response that
+  // doesn't carry zone info (e.g. after a reschedule) leaves the row
+  // exactly as it was.
+  function renderZones(z) {
+    if (z === undefined) return;
+    const row = el("zonesRow");
+    if (!z || (!z.count && !z.canUpdate)) { row.hidden = true; return; }
+    row.hidden = false;
+    el("zonesText").textContent = z.count
+      ? `${z.count} zone${z.count === 1 ? "" : "s"}${z.source === "documented" ? " on file" : ""}`
+      : "We don't have your zone count yet.";
+    const btn = el("zonesBtn");
+    btn.hidden = !z.canUpdate;
+    btn.textContent = z.count ? "Update my zone count" : "Tell us your zone count";
+    fillZonesSelect(z.count);
+  }
+
+  function fillZonesSelect(current) {
+    const sel = el("zonesSelect");
+    if (sel.options.length <= 1) {
+      for (let n = 1; n <= 50; n++) {
+        const opt = document.createElement("option");
+        opt.value = String(n);
+        opt.textContent = n === 1 ? "1 zone" : `${n} zones`;
+        sel.appendChild(opt);
+      }
+    }
+    if (current) sel.value = String(current);
   }
 
   // Half-hour choices from 8:00 AM to 5:00 PM for the after/before rows.
@@ -203,6 +236,30 @@
       render(data.appointment);
     } catch (error) { fail(error.message); }
     finally { el("windowSave").disabled = false; }
+  });
+
+  // ---- Zone count --------------------------------------------------
+
+  el("zonesBtn").addEventListener("click", () => {
+    el("actions").hidden = true;
+    el("reschedulePanel").hidden = true;
+    el("cancelPanel").hidden = true;
+    el("windowPanel").hidden = true;
+    el("zonesPanel").hidden = false;
+  });
+  el("zonesBack").addEventListener("click", () => {
+    el("zonesPanel").hidden = true;
+    el("actions").hidden = false;
+  });
+  el("zonesSave").addEventListener("click", async () => {
+    const picked = el("zonesSelect").value;
+    if (!picked) return;
+    el("zonesSave").disabled = true;
+    try {
+      const data = await post("/zones", { zoneCount: Number(picked) });
+      render(data.appointment);
+    } catch (error) { fail(error.message); }
+    finally { el("zonesSave").disabled = false; }
   });
 
   // ---- Cancel ------------------------------------------------------
