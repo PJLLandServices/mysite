@@ -1100,6 +1100,123 @@
     return h;
   }
 
+  // ---- Assign / undo (stage 2) -------------------------------------
+  //
+  // Both buttons are two-press: the first press arms and renames the
+  // button, the second within 8 seconds fires. A single stray tap on a
+  // phone must never book (or delete) a season's appointments.
+
+  function armTwice(button, armedLabel, run) {
+    const original = button.textContent;
+    let armed = null;
+    button.addEventListener("click", async () => {
+      if (!armed) {
+        button.textContent = armedLabel;
+        button.classList.add("is-armed");
+        armed = setTimeout(() => {
+          button.textContent = original;
+          button.classList.remove("is-armed");
+          armed = null;
+        }, 8000);
+        return;
+      }
+      clearTimeout(armed);
+      armed = null;
+      button.textContent = original;
+      button.classList.remove("is-armed");
+      await run();
+    });
+  }
+
+  async function runAssignAction(action, busyText) {
+    const out = el("preflightOut");
+    const buttons = [el("preflightBtn"), el("assignBtn"), el("unassignBtn")];
+    buttons.forEach((b) => { b.disabled = true; });
+    out.hidden = false;
+    out.textContent = busyText;
+    try {
+      const response = await fetch(
+        `/api/assignments/${seasonSelect.value}/${yearSelect.value}/${action}`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error((data.errors || [`Couldn't ${action}.`]).join(" "));
+      if (action === "assign") renderAssignResult(out, data);
+      else renderUnassignResult(out, data);
+      load();   // day cards show booked state
+    } catch (error) {
+      out.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "sp-preflight-bad";
+      p.textContent = error.message;
+      out.appendChild(p);
+    } finally {
+      buttons.forEach((b) => { b.disabled = false; });
+    }
+  }
+
+  armTwice(el("assignBtn"), "Press again to book every ready stop",
+    () => runAssignAction("assign", "Creating bookings… nothing is being sent."));
+  armTwice(el("unassignBtn"), "Press again to remove untouched assignment bookings",
+    () => runAssignAction("unassign", "Removing untouched assignment bookings…"));
+
+  function renderAssignResult(out, data) {
+    out.innerHTML = "";
+    const s = data.summary;
+    const words = data.outcomes || {};
+    const head = document.createElement("p");
+    head.className = "sp-preflight-summary";
+    head.textContent =
+      `${s.created} appointments booked · ${s.settled} already had their own booking`
+      + ` · ${s.skipped} skipped — and no messages were sent.`;
+    out.appendChild(head);
+
+    const rows = data.days.flatMap((d) => d.stops);
+    const problems = rows.filter((r) => r.outcome === "skipped");
+    if (problems.length) {
+      out.appendChild(preflightHeading("Skipped — not booked"));
+      const ul = document.createElement("ul");
+      ul.className = "sp-preflight-list";
+      for (const r of problems) {
+        const li = document.createElement("li");
+        li.className = "is-skip";
+        li.innerHTML = `<strong>${r.label || r.date} · ${prettyDate(r.date)}</strong> — `
+          + `${escapeHtml(r.address ? r.address.split(",")[0] : r.code)}`
+          + `${r.customerName ? ` (${escapeHtml(r.customerName)})` : ""} — `
+          + `${escapeHtml(words[r.reason] || r.reason)}`;
+        ul.appendChild(li);
+      }
+      out.appendChild(ul);
+    } else {
+      const p = document.createElement("p");
+      p.className = "sp-preflight-clean";
+      p.textContent = "Every eligible stop is now a confirmed appointment.";
+      out.appendChild(p);
+    }
+  }
+
+  function renderUnassignResult(out, data) {
+    out.innerHTML = "";
+    const s = data.summary;
+    const head = document.createElement("p");
+    head.className = "sp-preflight-summary";
+    head.textContent = s.found === 0
+      ? "No assignment bookings exist for this season — nothing to undo."
+      : `${s.removed} assignment bookings removed · ${s.kept} kept because someone has touched them.`;
+    out.appendChild(head);
+    if (data.kept && data.kept.length) {
+      out.appendChild(preflightHeading("Kept — changed since assignment"));
+      const ul = document.createElement("ul");
+      ul.className = "sp-preflight-list";
+      for (const k of data.kept) {
+        const li = document.createElement("li");
+        li.className = "is-partial";
+        li.textContent = `${k.bookingId} (${k.code}, ${prettyDate(k.date)}) — ${k.reason.replace(/_/g, " ")}`;
+        ul.appendChild(li);
+      }
+      out.appendChild(ul);
+    }
+  }
+
   // ---- Probe -------------------------------------------------------
 
   el("probeForm").addEventListener("submit", async (event) => {

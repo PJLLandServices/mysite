@@ -133,15 +133,22 @@
         <p class="sp-bwindow-status" id="bookingWindowStatus" hidden></p>
       </section>
 
-      <!-- Assignment preflight — stage 0 of docs/ASSIGNMENT_WRITER.md.
-           Read-only: nothing is created or sent from here. -->
+      <!-- The assignment writer — stages 0 and 2 of docs/ASSIGNMENT_WRITER.md.
+           Preflight is read-only; Assign creates confirmed bookings and
+           SENDS NOTHING (messages are a later stage). -->
       <section class="sp-panel">
-        <h2 class="sp-panel-title">Assignment preflight</h2>
+        <h2 class="sp-panel-title">Assignment</h2>
         <p class="sp-probe-note">
-          If this plan were assigned today, who would be told and who would be skipped?
-          Runs the same eligibility checks the real send will use. Nothing is created or sent.
+          Preflight shows who would be booked and who would be skipped — it changes nothing.
+          Assign creates a confirmed appointment for every ready stop. <strong>No messages are
+          sent</strong> — customers are told in a later step, after you've approved the wording.
+          Undo removes only assignment bookings nobody has touched since.
         </p>
-        <button type="button" class="pjl-btn pjl-btn-outline" id="preflightBtn">Run preflight</button>
+        <div class="sp-assign-actions">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="preflightBtn">Run preflight</button>
+          <button type="button" class="pjl-btn pjl-btn-primary" id="assignBtn">Assign this plan</button>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="unassignBtn">Undo assignment</button>
+        </div>
         <div class="sp-preflight-out" id="preflightOut" hidden></div>
       </section>
 

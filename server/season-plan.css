@@ -58,6 +58,13 @@
 .sp-probe-table tr.is-offered { background: var(--pjl-green-pale); }
 .sp-probe-table tr.is-offered td:last-child { font-weight: 700; color: var(--pjl-green); }
 
+/* Assignment actions — two-press arming so one stray thumb tap can't
+   book (or delete) a season. */
+.sp-assign-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.sp-assign-actions .pjl-btn.is-armed {
+  background: var(--pjl-amber); border-color: var(--pjl-amber); color: #fff;
+}
+
 /* Public booking window — the season gate's dates, edited in place.
    44px date inputs: this gets used from a phone in a truck. */
 .sp-bwindow { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }

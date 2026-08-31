@@ -19,6 +19,26 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-31 (Assignment writer stage 2 — the assignment record):** `assign()` turns a season
+plan's ready stops into real `confirmed` bookings — `source: "assignment"`, property-first canonical
+records with NO lead (the path `activeBookings()` was pre-wired for: coords resolve through
+propertyId, the iCal feed reads bookings.json). Verdicts are the preflight's own (assign runs it
+first and books only "ready"), so review-then-press cannot drift. **Sends nothing** — asserted in
+the suite: no notify/mailer/sms require, no sendBulk. Idempotent through the real modules: a created
+booking makes `deriveBookingState` report the property booked, so a second run creates zero. ONCE
+EVER per property per season: even a CANCELLED assignment booking blocks re-assignment
+(`assignment_declined`) — a cancellation is an answer. `unassign` reverses cleanly but only removes
+pristine records; anything rescheduled/cancelled/completed or carrying a WO is kept and listed.
+Admin-only endpoints (`POST /api/assignments/:season/:year/assign|unassign`); the season-plan panel
+gained two-press-armed Assign / Undo buttons. Scheduling shape: bucket-open start (08:00/12:00),
+SERVICE-minutes duration — deliberately not the bucket span, so a below-cap assigned day stays open
+to new customers (proven in the suite; an at-cap bucket closes via the stage-1 gate). The Part-5
+buffer trap is proven: day shapes and bucket loads byte-identical before/after a full assignment.
+34 assertions in `scripts/test-assignment-writer.mjs` (in build:check), sandbox-copied modules, no
+data file touched. **FLOW-03 code untouched this change** — the engine only sees the new records as
+ordinary bookings, which the stage-1 rows already covered; moveDay's bookedCount guard now correctly
+refuses moving an assigned day until stage 6 ships move+re-notify.
+
 **2026-08-31 (Booking window editable from the season-plan screen):** Patrick, the same day the
 gate shipped: "every time we update these dates I need to go into code." The public booking window
 (opens / closes) is now edited on /admin/season-plan. Edits are stored per season+year in

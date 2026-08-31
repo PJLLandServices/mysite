@@ -21546,6 +21546,37 @@ Customer signature captured at ${new Date().toISOString()}.`;
     }
   }
 
+  // Assignment writer stage 2 — turn the plan into confirmed bookings.
+  // ADMIN ONLY (not tech): this writes real appointments onto real
+  // customers in one press. Sends nothing — messaging is stage 4.
+  // Idempotent: a created booking preflights as "settled" next run.
+  const assignRunMatch = pathname.match(/^\/api\/assignments\/(spring|fall)\/(\d{4})\/(assign|unassign)$/);
+  if (assignRunMatch && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) {
+        return sendJson(res, 403, { ok: false, errors: ["Assigning a season needs an admin login — techs can run the preflight but not the assignment."] });
+      }
+      const actor = session?.email || session?.name || "admin";
+      const season = assignRunMatch[1];
+      const year = Number(assignRunMatch[2]);
+      if (assignRunMatch[3] === "assign") {
+        const result = await assignments.assign(season, year, { actor });
+        if (!result.ok) {
+          return sendJson(res, 404, { ok: false, errors: ["No plan loaded for that season — nothing to assign."] });
+        }
+        return sendJson(res, 200, {
+          ...result,
+          outcomes: { ...assignments.PREFLIGHT_OUTCOMES, ...assignments.ASSIGN_OUTCOMES }
+        });
+      }
+      const result = await assignments.unassign(season, year, { actor });
+      return sendJson(res, 200, result);
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Assignment failed."] });
+    }
+  }
+
   // The public booking window for a season — editable from the season-plan
   // screen so opening/closing dates stop being a code change. Overrides
   // live on the data disk (server/data/season-windows.json) and layer over
