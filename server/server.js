@@ -22249,22 +22249,43 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const fromDate = normalizeString(body.fromDate, 10);
       const toDate = normalizeString(body.toDate, 10);
 
-      // Count REAL bookings sitting on the day being moved. A planned stop
-      // is not a booking and must not block anything; a booking is a date a
-      // customer was actually given. The store refuses the move if any
-      // exist, so the count is gathered here where bookings are readable.
-      const booked = (await activeBookings()).filter(
-        (b) => String(b.start || "").slice(0, 10) === fromDate
+      // STAGE 6 changed what blocks a move. Assignment bookings ride
+      // along — moved, response-reset, re-notified (cadence rule 6) —
+      // so they no longer refuse the day. What still refuses is any
+      // OTHER booking on the day (a lead-backed appointment a customer
+      // made themselves): the writer has no standing to move those, so
+      // Patrick reschedules them from the calendar (which notifies)
+      // before the day can slide.
+      const actor = session?.email || session?.name || "admin";
+      // Same UTC-date slice the row filter below uses, so the two sets
+      // can never disagree about which day a booking sits on.
+      const assignmentIdsOnDay = new Set((await bookings.list())
+        .filter((b) => b && b.source === "assignment" && b.status === "confirmed"
+          && String(b.scheduledFor || "").slice(0, 10) === fromDate)
+        .map((b) => b.id));
+      const blocking = (await activeBookings()).filter((b) =>
+        String(b.start || "").slice(0, 10) === fromDate
+        && !(b.bookingId && assignmentIdsOnDay.has(b.bookingId))
       ).length;
 
       const result = await seasonPlans.moveDay(
         season, year,
-        { fromDate, toDate, bookedCount: booked },
-        { actor: session?.email || session?.name || "admin" }
+        { fromDate, toDate, bookedCount: blocking },
+        { actor }
       );
+      // The plan moved — now its bookings ride along: new sequenced
+      // times on the new date, response state reset, notices queued for
+      // the sweep to send inside the window.
+      let dayMove = null;
+      try {
+        dayMove = await assignments.moveDayBookings(season, year, { from: fromDate, to: toDate }, { actor });
+      } catch (err) {
+        console.error("[season-plan] day-move booking ride-along failed:", err?.message);
+        dayMove = { ok: false, errors: [err?.message] };
+      }
       const plan = await resolveSeasonPlan(season, year);
       return sendJson(res, 200, {
-        ok: true, plan, warnings: result.warnings, moved: result.moved
+        ok: true, plan, warnings: result.warnings, moved: result.moved, dayMove
       });
     } catch (err) {
       return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't move that day."] });

@@ -52,6 +52,7 @@ const MERGE_FIELDS = Object.freeze({
   bucket: "The window (\"Morning (8 AM – 12 PM)\")",
   appointmentLink: "Their appointment page — confirm, reschedule, or cancel in one place (built at send time)",
   price: "The customer's price for the service (their profile override, or the tier price)",
+  oldDate: "The PREVIOUS date, when a whole route day was moved (\"Monday, September 28\")",
   phone: "The PJL phone number"
 });
 
@@ -63,7 +64,9 @@ const TEMPLATE_KEYS = Object.freeze({
   followup_sms: { label: "Step 2 — Follow-up (text)", channel: "sms", hasSubject: false },
   nudge_email: { label: "Steps 3–5 — The nudge (email)", channel: "email", hasSubject: true },
   nudge_sms: { label: "Steps 3–5 — The nudge (text)", channel: "sms", hasSubject: false },
-  reminder24_sms: { label: "Step 6 — 24-hour reminder (text)", channel: "sms", hasSubject: false }
+  reminder24_sms: { label: "Step 6 — 24-hour reminder (text)", channel: "sms", hasSubject: false },
+  daymove_email: { label: "Day moved — re-notify (email)", channel: "email", hasSubject: true },
+  daymove_sms: { label: "Day moved — re-notify (text)", channel: "sms", hasSubject: false }
 });
 
 const DEFAULT_TEMPLATES = Object.freeze({
@@ -152,6 +155,33 @@ const DEFAULT_TEMPLATES = Object.freeze({
   reminder24_sms: {
     body: "PJL Land Services: a reminder that your fall sprinkler winterization is tomorrow — "
       + "{date}, {bucket}, at {street}. Questions or changes? Call or text {phone}."
+  },
+  // Cadence rule 6: the re-notify NAMES THE CHANGE ("was X, now Y")
+  // rather than restating the new date as if it were always so.
+  daymove_email: {
+    subject: "Your appointment has moved — now {date}",
+    body: [
+      "Hi {firstName},",
+      "",
+      "Weather and routing sometimes move one of our whole service days, and",
+      "yours has moved:",
+      "",
+      "Was: {oldDate}",
+      "Now: {date} — {bucket}",
+      "{street}",
+      "",
+      "Everything else stays the same — same service, same price ({price}).",
+      "Please confirm the new day — or make any changes — on your appointment page:",
+      "{appointmentLink}",
+      "",
+      "Questions? Call or text us at {phone}.",
+      "",
+      "— PJL Land Services"
+    ].join("\n")
+  },
+  daymove_sms: {
+    body: "PJL Land Services: your winterization day has MOVED — was {oldDate}, now {date} ({bucket}) "
+      + "at {street}. Please confirm the new day: {appointmentLink} Questions? {phone}"
   }
 });
 
@@ -298,6 +328,8 @@ function contextForBooking(booking, extra = {}) {
     // PROPERTY pass extra.price from resolveSeasonalPrice() so a
     // per-customer override wins; this is the always-defined fallback.
     price: priceForBooking(booking?.serviceKey || "").label || "Quoted on-site",
+    // Only meaningful on a day-move send, where the caller supplies it.
+    oldDate: "",
     phone: PJL_PHONE,
     ...extra
   };

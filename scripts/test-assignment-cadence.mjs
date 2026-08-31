@@ -240,7 +240,89 @@ ok("a rendered message still carrying a bracketed placeholder REFUSES to send",
   /placeholder/i.test(threw || ""), threw);
 messages.setTemplate("followup_sms", { body: "" });   // back to default
 
-// ---- 10. The engine's shape -------------------------------------------
+// ---- 10. Stage 6: a moved day rides its bookings along ---------------
+//
+// Patrick slides a whole route day. Assignment bookings move with it,
+// responses reset (the old confirmation was for the old date — rule 6),
+// a notice naming the change queues for messaged customers, and the
+// sweep dispatches it once, inside the window. Free-bucket customers
+// said "any day works": they move silently and keep their answer.
+
+const assignmentsLib = require(path.join(SANDBOX, "server/lib/assignments.js"));
+
+const bmA = await mk("P-1", { date: "2026-10-26", scheduledFor: D(26, 8, 0) });
+const bmB = await mk("P-2", { date: "2026-10-26", bucket: "afternoon", scheduledFor: D(26, 12, 0) });
+const bmC = await mk("P-3", { date: "2026-10-26", scheduledFor: D(26, 8, 30) });
+// A and B were messaged; A confirmed by phone; B chose the free bucket.
+await bookings.setAssignmentOutreach(bmA.id, { token: "tokA-1234567890123456", steps: { "1": { at: "x", sent: ["email", "sms"] } } });
+await bookings.setAssignmentOutreach(bmB.id, { token: "tokB-1234567890123456", steps: { "1": { at: "x", sent: ["email", "sms"] } } });
+await bookings.markAssignmentResponded(bmA.id, { via: "manual", by: "patrick" });
+await bookings.markAssignmentResponded(bmB.id, { via: "free_bucket", by: "customer" });
+await bookings.setFreeBucket(bmB.id, { by: "customer" });
+// C was assigned after the blast — never messaged.
+
+const moveResult = await assignmentsLib.moveDayBookings("fall", 2026, { from: "2026-10-26", to: "2026-10-28" }, {
+  getPlan: async () => ({ days: { "2026-10-28": { label: "R9", morning: ["P-1", "P-3"], afternoon: ["P-2"] } } }),
+  listProperties: async () => JSON.parse(fs.readFileSync(path.join(SANDBOX, "server/data/properties.json"), "utf8")),
+  sequenceDay: async () => ({ timeline: [
+    { propertyCode: "P-1", arriveAt: "08:20" },
+    { propertyCode: "P-3", arriveAt: "09:10" },
+    { propertyCode: "P-2", arriveAt: "13:05" }
+  ] }),
+  actor: "patrick"
+});
+ok("all three bookings ride the day move", moveResult.moved === 3, JSON.stringify(moveResult));
+ok("one notice queued (messaged, not flexible), one flexible moved silently, one unmessaged owes nothing",
+  moveResult.noticesQueued === 1 && moveResult.flexibleMoved === 1, JSON.stringify(moveResult));
+
+const movedA = await bookings.get(bmA.id);
+ok("the booking lands on the new date at its new sequenced arrival",
+  movedA.assignment.date === "2026-10-28"
+  && new Date(movedA.scheduledFor).getDate() === 28
+  && new Date(movedA.scheduledFor).getHours() === 8 && new Date(movedA.scheduledFor).getMinutes() === 20,
+  movedA.scheduledFor);
+ok("rule 6: the phone confirmation is RESET — a moved day is a new promise",
+  !movedA.assignment.outreach.respondedAt
+  && movedA.history.some((h) => h.action === "response_reset"));
+ok("...and the reset never bumps the customer's one self-serve move",
+  (Number(movedA.rescheduleCount) || 0) === 0);
+ok("the queued notice keeps the ORIGINAL date to name",
+  movedA.assignment.outreach.pendingDayMove?.oldDate === "2026-10-26");
+
+const movedB = await bookings.get(bmB.id);
+ok("a free-bucket customer moves silently and keeps their answer",
+  movedB.assignment.date === "2026-10-28"
+  && movedB.assignment.outreach.respondedAt
+  && !movedB.assignment.outreach.pendingDayMove);
+const movedC = await bookings.get(bmC.id);
+ok("an unmessaged booking moves with no notice — no promise was broken",
+  movedC.assignment.date === "2026-10-28" && !movedC.assignment.outreach.pendingDayMove);
+
+// The sweep dispatches the notice — once, naming the change.
+wire.emails.length = 0; wire.smses.length = 0;
+await cadence.sweepDue("fall", 2026, { deps, now: at(10, 26, 10), appointmentPageReady: true });
+ok("the day-move notice went out on both channels",
+  wire.smses.some((s) => /MOVED — was Monday, October 26, now Wednesday, October 28/.test(s.smsBody))
+  && wire.emails.some((e) => /Was: Monday, October 26/.test(e.emailBody)),
+  wire.smses.map((s) => s.smsBody).join(" | "));
+const afterNotice = await bookings.get(bmA.id);
+ok("the pending flag is consumed and the notice recorded",
+  !afterNotice.assignment.outreach.pendingDayMove
+  && afterNotice.assignment.outreach.dayMoveNotice?.sent?.length === 2);
+const noticeSms = wire.smses.length;
+await cadence.sweepDue("fall", 2026, { deps, now: at(10, 26, 14), appointmentPageReady: true });
+ok("the notice fires once, ever",
+  wire.smses.length === noticeSms
+  || !wire.smses.slice(noticeSms).some((s) => /MOVED/.test(s.smsBody)));
+
+// The cadence re-anchors: D−1 for the NEW date (Oct 27) fires step 6.
+await cadence.sweepDue("fall", 2026, { deps, now: at(10, 27, 10), appointmentPageReady: true });
+ok("the 24-hour reminder fires on the moved day's new D−1",
+  Boolean((await bookings.get(bmA.id)).assignment.outreach.steps["6"]));
+ok("...but never for the unmessaged booking",
+  !(await bookings.get(bmC.id)).assignment.outreach?.steps?.["6"]);
+
+// ---- 11. The engine's shape -------------------------------------------
 
 ok("the cadence table is the spec's: blast, D−15, D−10, D−7, D−5, D−1",
   JSON.stringify(cadence.STEPS.map((s) => s.daysBefore ?? "B")) === JSON.stringify(["B", 15, 10, 7, 5, 1]));

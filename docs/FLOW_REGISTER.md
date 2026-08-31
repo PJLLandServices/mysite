@@ -19,6 +19,21 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-31 (Assignment writer stage 6 — day-move re-notify; THE CONTRACT IS COMPLETE):** moving
+a route day no longer refuses when assignment bookings sit on it — they ride along. After
+`seasonPlans.moveDay` (STORE UNTOUCHED — its guard still takes the caller's count, and
+`test-day-reschedule`'s 59 assertions pass unchanged), `assignments.moveDayBookings` re-dates each
+assignment booking to its new sequenced arrival, resets response state per cadence rule 6 (old
+answer stashed in history), and queues a notice naming the change ("was Sept 28, now Oct 1" — new
+`daymove_email`/`daymove_sms` templates, Patrick-editable). The cadence sweep dispatches each
+notice once, in the send window, mark-before-send. Deliberate edges: no rescheduleCount bump (plan
+steering, not a booking touch); free-bucket customers move silently and keep their answer;
+unmessaged bookings get no notice; customer-self-moved bookings are untouched; a NON-assignment
+booking on the day still refuses the move (Patrick reschedules those from the calendar, which
+notifies, before the day slides). The day-move UI toast now reports "N bookings moved, M customers
+will be re-notified, K confirmations reset". Cadence suite 42 assertions, messages 77, day-reschedule
+59 unchanged; all six stages of docs/ASSIGNMENT_WRITER.md are done.
+
 **2026-08-31 (Appointment page live-review batch — eight changes from Patrick's walk of a real
 page):** full customer name (private link); price on the page and in the email (`{price}` merge
 field; `resolveSeasonalPrice` — profile override first); Patrick's routing-efficiency pitch as the
