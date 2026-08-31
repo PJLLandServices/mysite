@@ -32,6 +32,10 @@
 // placeholder block instead of throwing.
 
 const PDFDocument = require("pdfkit");
+// The checklist definition lives in one place. This file used to carry
+// its own copy of the key lists, which is how a definition and a report
+// drift apart without anyone noticing.
+const { checklistKeysForWorkOrder } = require("./work-orders");
 const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -114,6 +118,9 @@ const SERVICE_CHECKLIST_LABELS = {
   walkthrough_with_customer: "Walk-through with customer (if home)",
   controller_off: "Controller set to off / winter mode",
   water_off: "Water shut off at main",
+  // Retired from the fall-closing definition on 2026-08-31 but still
+  // present on every closing signed before then. The labels stay so those
+  // reports keep reading in English rather than falling back to raw keys.
   compressor_connected: "Compressor connected at blow-out",
   zones_blown_clear: "All zones blown clear",
   compressor_disconnected: "Compressor disconnected",
@@ -636,11 +643,12 @@ function generateWoReportPdf({ wo, property = {}, customer = {}, mode, audience 
 
   // ---- Service-specific checklist (service_report only) -------------
   if (mode === "service_report") {
-    const checklistDef = wo.type === "spring_opening"
-      ? ["water_on", "controller_programmed", "walkthrough_with_customer"]
-      : wo.type === "fall_closing"
-        ? ["controller_off", "water_off", "compressor_connected", "zones_blown_clear", "compressor_disconnected", "system_winterized"]
-        : [];
+    // Definition keys for this type, plus anything this particular work
+    // order actually stored. A closing signed against the old six-step
+    // list must still print those six lines when its report is
+    // regenerated years later for a warranty claim — the customer signed
+    // the document that said them.
+    const checklistDef = checklistKeysForWorkOrder(wo);
     if (checklistDef.length) {
       sectionHeading(doc, "Service Checklist");
       const sc = wo.serviceChecklist || {};
@@ -655,6 +663,24 @@ function generateWoReportPdf({ wo, property = {}, customer = {}, mode, audience 
         doc.text(SERVICE_CHECKLIST_LABELS[key] || key, 84, labelY,
           { width: doc.page.width - 60 - 84 });
         doc.moveDown(0.15);
+      });
+
+      // Back-flush and who closed the water are answers, not ticks, so
+      // they render as statements. Omitted entirely when unanswered
+      // rather than printed as blanks — a report should not raise a
+      // question it doesn't answer.
+      const answers = [];
+      if (wo.waterShutoffBy === "customer") answers.push("Water shut off by the customer before arrival");
+      if (wo.waterShutoffBy === "tech") answers.push("Water shut off at the main by PJL");
+      if (wo.backFlush === "yes") answers.push("Back-flush performed");
+      if (wo.backFlush === "no") answers.push("Back-flush not required at this property");
+      answers.forEach((line) => {
+        ensureSpace(doc, 16);
+        doc.font(fontHeading()).fontSize(11).fillColor(PJL_GREEN);
+        doc.text("\u2713", 60, doc.y, { width: 18, continued: false });
+        const y = doc.y - 13;
+        doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
+        doc.text(line, 84, y, { width: doc.page.width - 60 - 84 });
       });
       doc.moveDown(0.4);
     }

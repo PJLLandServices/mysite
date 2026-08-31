@@ -82,7 +82,11 @@ const ZONE_CHECK_KEYS = ["operated", "pressureGood", "coverageGood", "noLeaks", 
 // pricing.json item categories: head_replacement, manifold rebuilds,
 // wire diagnostic / wire run, pipe break repair. "other" is the escape
 // hatch for anything that doesn't fit (custom on-site quote).
-const ZONE_ISSUE_TYPES = ["broken_head", "leak", "valve", "wire", "pipe", "controller", "other"];
+// zone_revamp added 2026-08-31 (fall-closing field flow). A zone that
+// needs redoing wholesale is a different job from replacing a part in it,
+// and next spring it should read as a zone-level job rather than hide
+// under "other" where it can't be counted or filtered.
+const ZONE_ISSUE_TYPES = ["broken_head", "leak", "valve", "wire", "pipe", "controller", "zone_revamp", "other"];
 
 // Photo categories per spec §4.3.2. Photos can be attached at the WO
 // level (pre/in/post-work documentation) or to a specific issue inside
@@ -118,11 +122,21 @@ const SERVICE_CHECKLISTS = {
     { key: "controller_programmed",     label: "Controller programmed for season" },
     { key: "walkthrough_with_customer", label: "Walk-through with customer (if home)" }
   ],
+  // Revised 2026-08-31 to match the close-out Patrick actually performs.
+  // `compressor_connected` and `zones_blown_clear` are gone from the
+  // definition: the field flow now records the blow-out per zone, so a
+  // single "all zones blown clear" tick was a claim about work the zone
+  // pages evidence individually. Back-flush and who shut the water off
+  // are NOT here — they are three-state answers, not ticks, and live as
+  // `backFlush` and `waterShutoffBy` on the work order.
+  //
+  // Removing keys from this list does NOT erase them from work orders
+  // that stored them; serviceChecklist is a free-form map. Anything
+  // rendering a checklist must use checklistKeysForWorkOrder() below so
+  // historical closings keep the lines they were signed against.
   fall_closing: [
     { key: "controller_off",            label: "Controller set to off / winter mode" },
     { key: "water_off",                 label: "Water shut off at main" },
-    { key: "compressor_connected",      label: "Compressor connected at blow-out" },
-    { key: "zones_blown_clear",         label: "All zones blown clear" },
     { key: "compressor_disconnected",   label: "Compressor disconnected" },
     { key: "system_winterized",         label: "System winterized" }
   ],
@@ -131,6 +145,23 @@ const SERVICE_CHECKLISTS = {
   // notes block + task checklist drive the narrative instead.
   build: []
 };
+
+// The checklist keys to RENDER for a given work order: the current
+// definition for its type, followed by any key the work order actually
+// stored that the definition no longer carries.
+//
+// This exists because the definition changes over time and completed work
+// orders do not. A fall closing signed in 2025 recorded
+// `zones_blown_clear`; dropping that key from the list above must not
+// quietly delete a line from the customer report if it is regenerated for
+// a warranty claim two years later. Render the union, and the past keeps
+// saying what it said.
+function checklistKeysForWorkOrder(wo) {
+  const defined = (SERVICE_CHECKLISTS[wo?.type] || []).map((step) => step.key);
+  const stored = Object.keys(wo?.serviceChecklist || {});
+  const extra = stored.filter((key) => !defined.includes(key));
+  return [...defined, ...extra];
+}
 
 // Brief 2 — random 8-char base36 IDs for session / scope-change / etc.
 // Matches the iss_<random8>_<ts> + att_<random8> + sec_<random8> +
@@ -315,6 +346,24 @@ function blankWorkOrder() {
     // anything→completed stamps departedAt.
     arrivedAt: null,
     departedAt: null,
+    // Where the tech was when they tapped Start Service. arrivedAt records
+    // WHEN; without this there is no record of WHERE, which is the half
+    // that matters if a customer ever disputes that the visit happened.
+    // { lat, lng, accuracy, capturedAt } or null when the device refused
+    // or the tech declined the permission — never a blocker.
+    arrivalLocation: null,
+    // Fall closings: who actually shut the water off. One or the other,
+    // never both — a customer who already closed it leaves nothing for
+    // the tech to close, and nothing to photograph either, which is why
+    // the water-off photo is optional.
+    //   "" | "customer" | "tech"
+    waterShutoffBy: "",
+    // Fall closings: back-flush is a question, not a task. Not every
+    // property has one, so "no" is a complete answer and satisfies the
+    // close-out — unlike a checklist tick, where false reads as "not done
+    // yet".
+    //   "" | "yes" | "no"
+    backFlush: "",
     // Completion timestamp (JOB-002 Part A). Server-stamped by update()
     // the moment status transitions into "completed" — on EVERY path,
     // unlike departedAt which only the tech UI supplies. Never patchable
@@ -1384,9 +1433,46 @@ async function update(id, patch) {
   // pointers — those are set at create time and shouldn't be edited from
   // the form.
   const next = { ...current };
-  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt", "followupOfWoId", "paidOnSite", "propertyEditsAppliedAt", "completionReportSnapshotAt", "needsReturnVisit", "labourHours", "parentProjectId", "dailyLog"];
+  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt", "arrivalLocation", "waterShutoffBy", "backFlush", "followupOfWoId", "paidOnSite", "propertyEditsAppliedAt", "completionReportSnapshotAt", "needsReturnVisit", "labourHours", "parentProjectId", "dailyLog"];
   for (const key of allowedTop) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
+  }
+  // The two fall-closing answers are closed sets, enforced here rather
+  // than trusted from the client — the field app is not the only thing
+  // that can PATCH a work order, and a typo that reaches disk becomes a
+  // wrong line on a customer's report.
+  if (Object.prototype.hasOwnProperty.call(patch, "waterShutoffBy")) {
+    const v = patch.waterShutoffBy;
+    if (!["", "customer", "tech"].includes(v)) {
+      throw new Error(`waterShutoffBy must be "customer" or "tech" (got "${v}").`);
+    }
+    next.waterShutoffBy = v;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "backFlush")) {
+    const v = patch.backFlush;
+    if (!["", "yes", "no"].includes(v)) {
+      throw new Error(`backFlush must be "yes" or "no" (got "${v}").`);
+    }
+    next.backFlush = v;
+  }
+  // Coordinates are stored, never trusted: a bad reading should be an
+  // absent stamp, not a work order that claims the tech was at latitude
+  // 900. Refusing the whole PATCH would be worse — it would block a tech
+  // from starting a job because their phone's GPS was confused.
+  if (Object.prototype.hasOwnProperty.call(patch, "arrivalLocation")) {
+    const loc = patch.arrivalLocation;
+    const lat = Number(loc?.lat);
+    const lng = Number(loc?.lng);
+    const usable = loc && Number.isFinite(lat) && Number.isFinite(lng)
+      && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+    next.arrivalLocation = usable
+      ? {
+          lat,
+          lng,
+          accuracy: Number.isFinite(Number(loc.accuracy)) ? Number(loc.accuracy) : null,
+          capturedAt: typeof loc.capturedAt === "string" ? loc.capturedAt : new Date().toISOString()
+        }
+      : null;
   }
   // Status forward-only enforcement (spec §4.3.3 rule #3 + #7). The
   // client UI also blocks the click but the server is authoritative.
@@ -2000,6 +2086,7 @@ module.exports = {
   ZONE_CHECK_KEYS,
   ZONE_ISSUE_TYPES,
   SERVICE_CHECKLISTS,
+  checklistKeysForWorkOrder,
   WO_PHOTO_CATEGORIES,
   PHOTO_REQUIREMENT_BY_TYPE,
   SCOPE_PROTECTED_FIELDS,
