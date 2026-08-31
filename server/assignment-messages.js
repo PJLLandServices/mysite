@@ -125,6 +125,7 @@
       <div class="am-editor-actions">
         <button type="button" class="pjl-btn pjl-btn-primary" data-save="${key}">Save wording</button>
         <button type="button" class="pjl-btn pjl-btn-outline" data-reset="${key}">Back to default</button>
+        <button type="button" class="pjl-btn pjl-btn-outline" data-test="${key}">Send me a test</button>
       </div>
       <details class="am-preview">
         <summary>Preview for the selected customer</summary>
@@ -141,6 +142,31 @@
 
     wrap.querySelector(`[data-save="${key}"]`).addEventListener("click", () => save(key, wrap, false));
     wrap.querySelector(`[data-reset="${key}"]`).addEventListener("click", () => save(key, wrap, true));
+    // Test-send: the SAVED wording, rendered for the selected preview
+    // customer, delivered to Patrick's own inbox/phone marked [TEST].
+    // Unsaved edits in the box are not sent — save first.
+    wrap.querySelector(`[data-test="${key}"]`).addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        const r = await fetch("/api/assignment-messages/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ templateKey: key, bookingId: customerSelect.value || "" })
+        });
+        const data = await r.json();
+        if (!r.ok || !data.ok) throw new Error((data.errors || ["Test send failed."]).join(" "));
+        const to = data.sentTo.email || data.sentTo.phone;
+        const skippedReason = Object.values(data.channels)[0]?.reason;
+        showToast(to
+          ? `Test sent to ${to} — check your ${data.sentTo.email ? "inbox" : "phone"}. Saved wording was used.`
+          : `Not sent: ${skippedReason || "no test recipient configured"}.`, to ? "ok" : "bad");
+      } catch (error) {
+        showToast(error.message, "bad");
+      } finally {
+        button.disabled = false;
+      }
+    });
     return wrap;
   }
 

@@ -1203,7 +1203,11 @@ async function sendOutreachEmail({
   subject,
   emailBody,
   unsubscribeUrlEmail,
-  unsubscribeUrlAll
+  unsubscribeUrlAll,
+  // Button text for the portalLink CTA. Marketing outreach keeps the
+  // long-standing default; the assignment cadence passes "Open your
+  // appointment page" so the button matches where the link goes.
+  ctaLabel = "Open your portal"
 }) {
   const transporter = getTransporter();
   if (!transporter) {
@@ -1259,7 +1263,7 @@ async function sendOutreachEmail({
   </div>
   <div style="padding: 24px 28px; background: #FAFAF5; border: 1px solid #e5e5dd; border-top: none; border-radius: 0 0 8px 8px;">
     ${bodyHtml}
-    ${portalLink ? `<p style="margin: 0 0 18px;"><a href="${escapeHtml(portalLink)}" style="display: inline-block; padding: 11px 20px; background: #E07B24; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600;">Open your portal</a></p>` : ""}
+    ${portalLink ? `<p style="margin: 0 0 18px;"><a href="${escapeHtml(portalLink)}" style="display: inline-block; padding: 11px 20px; background: #E07B24; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600;">${escapeHtml(ctaLabel)}</a></p>` : ""}
     <p style="margin: 24px 0 0; font-size: 13px; color: #777;">
       Questions? Call <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a> or reply to this email.
     </p>

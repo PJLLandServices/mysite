@@ -1291,6 +1291,7 @@ const actionDialog          = document.getElementById("bookingActionDialog");
 const actionClose           = document.getElementById("bookingActionClose");
 const actionSummary         = document.getElementById("bookingActionSummary");
 const actionRescheduleBtn   = document.getElementById("bookingActionReschedule");
+const actionMarkRespondedBtn = document.getElementById("bookingActionMarkResponded");
 const actionCancelBtn       = document.getElementById("bookingActionCancel");
 const actionDeleteBtn       = document.getElementById("bookingActionDelete");
 const actionStatus          = document.getElementById("bookingActionStatus");
@@ -1436,6 +1437,11 @@ async function openBookingActionPanel({ leadId, bookingId, scheduledFor, booking
   actionRescheduleBtn.hidden = cancelled || !leadId;
   actionCancelBtn.hidden = cancelled;
   actionDeleteBtn.hidden = viewerRole !== "admin";
+  // The one-tap manual response mark (assignment cadence, decision F):
+  // the customer phoned or texted "yes" — record it so the follow-up
+  // messages stop. Only assignment bookings carry response state, and
+  // today those are exactly the lead-less canonical events.
+  if (actionMarkRespondedBtn) actionMarkRespondedBtn.hidden = cancelled || !bookingId || Boolean(leadId);
   // Change-appointment-type control — same audience as Reschedule; hidden
   // on cancelled bookings. Populate + preselect the current type.
   if (actionChangeType) {
@@ -1497,6 +1503,24 @@ actionServiceSave?.addEventListener("click", async () => {
     actionStatus.textContent = err.message || "Couldn't change the appointment type.";
   } finally {
     actionServiceSave.disabled = false;
+  }
+});
+
+actionMarkRespondedBtn?.addEventListener("click", async () => {
+  if (!pendingAction?.bookingId) return;
+  actionMarkRespondedBtn.disabled = true;
+  actionStatus.textContent = "Recording the response…";
+  try {
+    const r = await fetch(`/api/assignments/bookings/${encodeURIComponent(pendingAction.bookingId)}/mark-responded`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}"
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors || ["Couldn't record that."]).join(" "));
+    actionStatus.textContent = "Recorded — the reminder messages for this customer stop (the 24-hour text still goes).";
+  } catch (err) {
+    actionStatus.textContent = err.message || "Couldn't record that.";
+  } finally {
+    actionMarkRespondedBtn.disabled = false;
   }
 });
 

@@ -450,6 +450,67 @@ async function remove(id, { by = "admin", isActiveWo = null } = {}) {
   return { ok: true, deletedId: id, deletedBy: by };
 }
 
+// Merge a patch into booking.assignment.outreach — the cadence engine's
+// state block: { token, blastAt, steps: { "1": {...} }, respondedAt,
+// responseVia, responseBy }. Only assignment bookings carry it. update()
+// deliberately can't reach booking.assignment, so cadence state has its
+// own narrow writer with its own audit entry.
+async function setAssignmentOutreach(id, patch, { action = "cadence", by = "system", note = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const current = records[idx];
+  if (!current.assignment) throw new Error(`${id} is not an assignment booking.`);
+  const outreach = { ...(current.assignment.outreach || {}) };
+  for (const [key, value] of Object.entries(patch || {})) {
+    if (key === "steps") {
+      outreach.steps = { ...(outreach.steps || {}), ...value };
+    } else {
+      outreach[key] = value;
+    }
+  }
+  const next = {
+    ...current,
+    assignment: { ...current.assignment, outreach },
+    updatedAt: new Date().toISOString()
+  };
+  next.history = [...(current.history || []), {
+    ts: next.updatedAt, action, by, note
+  }];
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// The customer (or Patrick, marking a phone call) answered. First answer
+// wins — a later confirm doesn't overwrite how they first responded.
+async function markAssignmentResponded(id, { via = "manual", by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const current = records[idx];
+  if (!current.assignment) throw new Error(`${id} is not an assignment booking.`);
+  const outreach = { ...(current.assignment.outreach || {}) };
+  if (outreach.respondedAt) return current;   // already answered — keep the first
+  outreach.respondedAt = new Date().toISOString();
+  outreach.responseVia = String(via).slice(0, 40);
+  outreach.responseBy = String(by).slice(0, 120);
+  const next = {
+    ...current,
+    assignment: { ...current.assignment, outreach },
+    updatedAt: outreach.respondedAt,
+    history: [...(current.history || []), {
+      ts: outreach.respondedAt,
+      action: "assignment_responded",
+      by,
+      note: `via ${outreach.responseVia}`
+    }]
+  };
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
 // Attach a WO id to a booking's workOrderIds[]. Used when techs spin
 // up additional WOs from a single booking (multi-day repairs).
 async function attachWorkOrder(bookingId, woId) {
@@ -474,6 +535,8 @@ module.exports = {
   listByProperty,
   upsertFromLead,
   createDirect,
+  setAssignmentOutreach,
+  markAssignmentResponded,
   update,
   reschedule,
   cancel,

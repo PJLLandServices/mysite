@@ -1684,7 +1684,7 @@ async function findByOptOutToken(token, type) {
 // email, or both), who triggered the send, and the messageBatchId
 // shared by every recipient of a single bulk send. Lazy-initializes
 // the per-season entry on first touch.
-async function recordOutreachTouch(propertyId, { season, year, channels, by, messageBatchId }) {
+async function recordOutreachTouch(propertyId, { season, year, channels, by, messageBatchId, type, step }) {
   const records = await readAll();
   const idx = records.findIndex((p) => p.id === propertyId);
   if (idx === -1) return null;
@@ -1700,7 +1700,13 @@ async function recordOutreachTouch(propertyId, { season, year, channels, by, mes
     ts: new Date().toISOString(),
     channels: Array.isArray(channels) ? channels.slice() : [],
     by: String(by || "patrick"),
-    messageBatchId: messageBatchId || null
+    messageBatchId: messageBatchId || null,
+    // The stage-4 field the assignment writer was blocked on: without a
+    // type, an assignment send is forever indistinguishable from
+    // marketing outreach in the touch history. Optional and additive —
+    // legacy marketing touches (and legacy callers) simply carry null.
+    ...(type ? { type: String(type) } : {}),
+    ...(Number.isFinite(Number(step)) ? { step: Number(step) } : {})
   };
   target.seasonalOutreach[key].touches = [
     ...(target.seasonalOutreach[key].touches || []),
