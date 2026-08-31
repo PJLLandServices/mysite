@@ -107,6 +107,28 @@ function buildDayShapes({ plan, propertiesByCode, bookings = [] } = {}) {
     }
     const plannedCount = points.length;
 
+    // Per-bucket load, for capacity enforcement (stage 1 of
+    // docs/ASSIGNMENT_WRITER.md). Two different numbers on purpose:
+    //
+    //   count — EVERY planned code in the bucket, resolved or not. An
+    //           unresolved stop is still a job Patrick will spend time on;
+    //           capacity is about his day, not about geocoding luck.
+    //   keys  — pointKeys of the RESOLVED stops only, so availability can
+    //           tell "a planned customer's own booking" (same rounded
+    //           coordinate — does not add load) from a new customer's
+    //           booking (does). The same 4-decimal rounding the shape's
+    //           own dedup uses, so the two rules cannot disagree.
+    const buckets = {};
+    for (const bucketName of ["morning", "afternoon"]) {
+      const codes = day[bucketName] || [];
+      const keys = [];
+      for (const code of codes) {
+        const property = byCode.get(code);
+        if (property && usable(property.coords)) keys.push(pointKey(property.coords));
+      }
+      buckets[bucketName] = { count: codes.length, keys };
+    }
+
     // Real bookings already on this date join the same shape. A booking
     // whose coordinates resolve to the depot carries no geography (it is
     // an unresolved address, not a stop at the shop) and is skipped
@@ -127,6 +149,8 @@ function buildDayShapes({ plan, propertiesByCode, bookings = [] } = {}) {
     }
 
     shapes[dateKey] = {
+      bucketCap: Number(plan.bucketCap) > 0 ? Number(plan.bucketCap) : null,
+      buckets,
       label: day.label || "",
       points,
       plannedCount,

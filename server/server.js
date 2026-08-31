@@ -4157,7 +4157,7 @@ async function rescheduleAvailability(bookingId, { from, to } = {}) {
     daysAhead = Math.min(120, Math.max(1, Math.ceil((toDate.getTime() - now.getTime()) / 86400000) + 1));
   }
   const dayShapes = await dayShapesForSeason({ bookings: otherBookings, now });
-  const diagnostics = { geoSuppressed: [] };
+  const diagnostics = { geoSuppressed: [], seasonClosed: [] };
   const slots = await listAvailableSlots({
     serviceKey,
     customerCoords: geo.coords,
@@ -4170,7 +4170,7 @@ async function rescheduleAvailability(bookingId, { from, to } = {}) {
     diagnostics
   });
   const days = (fromDate && toDate)
-    ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now, geoSuppressed: diagnostics.geoSuppressed })
+    ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now, geoSuppressed: diagnostics.geoSuppressed, seasonClosed: diagnostics.seasonClosed })
     : groupByDay(slots);
   return {
     ok: true,
@@ -19753,7 +19753,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
 
       const dayShapes = await dayShapesForSeason({ bookings, now });
-      const diagnostics = { geoSuppressed: [] };
+      const diagnostics = { geoSuppressed: [], seasonClosed: [] };
       const slots = await listAvailableSlots({
         serviceKey,
         customerCoords,
@@ -19767,7 +19767,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
       });
 
       const days = (fromDate && toDate)
-        ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now, geoSuppressed: diagnostics.geoSuppressed })
+        ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now, geoSuppressed: diagnostics.geoSuppressed, seasonClosed: diagnostics.seasonClosed })
         : groupByDay(slots);
 
       return sendJson(res, 200, {
