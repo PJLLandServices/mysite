@@ -210,6 +210,65 @@ ok("a free-bucket booking keeps its anchor date but leaves self-serve rescheduli
 const fbAgain = await appointment.freeBucket(token3, { now: NOW });
 ok("choosing the free bucket twice is refused politely", !fbAgain.ok);
 
+// ---- 8. Patrick's follow-up: the customer's REAL zone count -----------
+// Many profiles carry only the booking class for the customer's
+// category. The page lets the customer set the record straight; the
+// count lands on the PROPERTY, the tier follows, and documented zones
+// stay ground truth.
+
+const b4 = await mk("P-2", new Date(2026, 9, 13, 13, 0).toISOString());
+const token4 = await appointment.ensureToken(b4.id);
+
+const infoNone = appointment.zonesInfo(await propertiesLib.get("P-2"),
+  appointment.summarize(await bookings.get(b4.id), { now: NOW }));
+ok("no count on file: the page may ask",
+  infoNone.source === "none" && infoNone.count === null && infoNone.canUpdate === true,
+  JSON.stringify(infoNone));
+
+const zBad = await appointment.setZones(token4, { zoneCount: 0, now: NOW });
+const zBad2 = await appointment.setZones(token4, { zoneCount: "lots", now: NOW });
+const zBad3 = await appointment.setZones(token4, { zoneCount: 51, now: NOW });
+ok("a zone count outside 1-50 (or garbage) is refused", !zBad.ok && !zBad2.ok && !zBad3.ok);
+
+const zOk = await appointment.setZones(token4, { zoneCount: 7, now: NOW });
+ok("seven zones saves, and the 1-4 booking class becomes the 7-8 tier",
+  zOk.ok && zOk.tierChanged === true, JSON.stringify(zOk.errors || ""));
+ok("the count lands on the PROPERTY — the same field Patrick edits",
+  (await propertiesLib.get("P-2")).system?.zoneCount === 7);
+const b4After = await bookings.get(b4.id);
+ok("the booking's tier follows the real number — key, label, minutes",
+  b4After.zoneCount === 7 && b4After.serviceKey === "fall_close_8z"
+  && /7-8 zones/.test(b4After.serviceLabel) && b4After.durationMinutes === 45,
+  JSON.stringify({ z: b4After.zoneCount, k: b4After.serviceKey, d: b4After.durationMinutes }));
+ok("declaring zones is NOT a response — the cadence still nudges them",
+  !b4After.assignment.outreach?.respondedAt
+  && appointment.summarize(b4After, { now: NOW }).state === "open");
+ok("the history says what happened",
+  b4After.history.some((h) => h.action === "zones_declared" && /7 zones/.test(h.note)));
+
+const zSame = await appointment.setZones(token4, { zoneCount: 8, now: NOW });
+ok("a same-bracket correction saves without a tier change",
+  zSame.ok && zSame.tierChanged === false && (await bookings.get(b4.id)).zoneCount === 8);
+
+const pricing = require(path.join(SANDBOX, "server/lib/pricing.js"));
+ok("the shown price re-resolves from the declared count — page and tier agree",
+  pricing.resolveSeasonalPrice(await propertiesLib.get("P-2"), "fall_closing").key === "fall_close_8z");
+
+// Documented zones are ground truth: they win, and they close the door.
+await propertiesLib.update("P-2", { system: { zones: [{ number: 1 }, { number: 2 }, { number: 3 }] } });
+ok("documented zones win over the declared count",
+  pricing.effectiveZoneCount(await propertiesLib.get("P-2")) === 3);
+const zDoc = await appointment.setZones(token4, { zoneCount: 12, now: NOW });
+ok("with zones mapped, the page refuses the edit and says why",
+  !zDoc.ok && /already mapped/.test(zDoc.errors[0]), JSON.stringify(zDoc.errors));
+const infoDoc = appointment.zonesInfo(await propertiesLib.get("P-2"),
+  appointment.summarize(await bookings.get(b4.id), { now: NOW }));
+ok("the page then shows the mapped count read-only",
+  infoDoc.source === "documented" && infoDoc.count === 3 && infoDoc.canUpdate === false);
+
+const zCancelled = await appointment.setZones(token2, { zoneCount: 5, now: NOW });
+ok("a cancelled appointment refuses a zone update", !zCancelled.ok);
+
 // ---- Report ----------------------------------------------------------
 
 if (failures.length) {

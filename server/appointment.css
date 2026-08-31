@@ -49,6 +49,14 @@ body {
 }
 .ap-facts dd { margin: 0; font-weight: 600; }
 
+/* The zone-count correction: a quiet inline link, not a fifth button. */
+.ap-linklike {
+  border: 0; padding: 0; margin-left: 4px; background: none; cursor: pointer;
+  font: inherit; font-size: 0.88rem; font-weight: 600;
+  color: #1B4D2E; text-decoration: underline; text-underline-offset: 2px;
+}
+.ap-linklike:hover { color: #E07B24; }
+
 .ap-intro {
   margin: 0 0 18px; padding: 12px 14px; border-radius: 10px;
   background: #FAFAF5; border: 1px solid #E3E1D5;
@@ -66,7 +74,8 @@ body {
 }
 
 .ap-window-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
-.ap-window-rows select {
+.ap-window-rows select,
+.ap-label select {
   display: block; width: 100%; margin-top: 6px; padding: 10px 12px;
   font: inherit; border: 1px solid #E3E1D5; border-radius: 8px; background: #fff;
   min-height: 44px;

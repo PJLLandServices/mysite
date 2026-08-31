@@ -31,6 +31,7 @@
           <div><dt>Arrival window</dt><dd id="bucketLabel"></dd></div>
           <div><dt>Address</dt><dd id="street"></dd></div>
           <div id="priceRow" hidden><dt>Your price</dt><dd id="priceLabel"></dd></div>
+          <div id="zonesRow" hidden><dt>Your system</dt><dd id="zonesLabel"><span id="zonesText"></span> <button type="button" class="ap-linklike" id="zonesBtn" hidden>Update my zone count</button></dd></div>
         </dl>
 
         <p class="ap-intro">
@@ -65,6 +66,22 @@
           <div class="ap-actions">
             <button type="button" class="ap-btn ap-btn-primary" id="windowSave">Save my timing</button>
             <button type="button" class="ap-btn ap-btn-quiet" id="windowBack">Back</button>
+          </div>
+        </div>
+
+        <div class="ap-panel" id="zonesPanel" hidden>
+          <h2>How many zones does your system have?</h2>
+          <p class="ap-note">
+            A zone is one section of your sprinkler system that runs at a time — your
+            controller counts them. Knowing the real number lets us plan the right amount
+            of time for your visit, and makes sure your price matches your system.
+          </p>
+          <label class="ap-label">Number of zones
+            <select id="zonesSelect"><option value="" disabled selected>Choose…</option></select>
+          </label>
+          <div class="ap-actions">
+            <button type="button" class="ap-btn ap-btn-primary" id="zonesSave">Save my zone count</button>
+            <button type="button" class="ap-btn ap-btn-quiet" id="zonesBack">Back</button>
           </div>
         </div>
 

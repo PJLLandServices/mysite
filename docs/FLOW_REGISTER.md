@@ -19,6 +19,26 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-31 (Decision H — the customer's real zone count, from their appointment page):**
+Patrick's post-launch-review ask: profiles often hold only the booking class for the customer's
+category, not their actual system. The appointment page grew a "Your system" row and a zone-count
+editor (`POST /api/appointment/:token/zones` → `appointmentActions.setZones`): the count saves to
+the PROPERTY (`system.zoneCount`, the field Patrick fills by hand; `properties.update` merges
+`system` one level deep, so nothing else on the record moves), the booking's tier re-derives
+through the same `deriveSeasonalKey` the assignment writer booked with (serviceKey, label,
+durationMinutes), sequenced times re-anchor in the background when the bracket moved, and Patrick
+is paged only on a bracket move. NOT a response, no `rescheduleCount` bump, and tech-DOCUMENTED
+zones refuse the edit outright — they are ground truth. UNDERLYING FIX: zone-count precedence
+(documented wins, declared fills in) now lives once in `pricing.effectiveZoneCount`;
+`resolveSeasonalPrice` (shown price, `{price}` merge field, admin profile price lines) and
+`resequence.onSiteMinutes` (planned on-site minutes) previously counted ONLY documented zones —
+a declared count booked the right tier but showed the lowest-bracket price and sequenced at the
+smallest service minutes. All three consumers now read the same number. **No PASS flow touched:**
+FLOW-01/02 (portal) and FLOW-23 (payments) don't run through these helpers, and FLOW-03's booking
+path prices by `priceForBooking(serviceKey, zoneCount)` from the lead's own declared count —
+unchanged. Suites: appointment page 44 (+13), pricing 195 unchanged, resequence 39 unchanged,
+writer 42, day-reschedule 59, page smoke 9.
+
 **2026-08-31 (Assignment writer stage 6 — day-move re-notify; THE CONTRACT IS COMPLETE):** moving
 a route day no longer refuses when assignment bookings sit on it — they ride along. After
 `seasonPlans.moveDay` (STORE UNTOUCHED — its guard still takes the caller's count, and

@@ -43,7 +43,7 @@ const { travelMinutes, travelMinutesRaw, haversineKm, MIN_TRAVEL_MINUTES } = req
 const { PJL_BASE } = require("./geocode");
 const { routeOrigin } = require("./route-origin");
 const { BOOKABLE_SERVICES, BOOKING_BUCKETS, parseHHmmToMinutes, minutesToHHmm } = require("./availability");
-const { deriveSeasonalKey } = require("./pricing");
+const { deriveSeasonalKey, effectiveZoneCount } = require("./pricing");
 
 const BUCKETS = ["morning", "afternoon"];
 
@@ -80,12 +80,15 @@ function bucketWindow(key) {
 }
 
 // On-site minutes for a property, from its zone count through the same
-// tier table the booking engine and the pricing module use. A property
-// with no zones on file falls to the lowest tier — which understates a
-// big system, and is why the plan screen marks those stops as estimated.
+// tier table the booking engine and the pricing module use. Documented
+// zones win, a declared count (the customer's own number) fills in when
+// nothing is mapped — pricing.effectiveZoneCount, the same rule the
+// assignment writer books by. A property with no count at all falls to
+// the lowest tier — which understates a big system, and is why the plan
+// screen marks those stops as estimated.
 function onSiteMinutes(property, season) {
   const woType = season === "spring" ? "spring_opening" : "fall_closing";
-  const zones = Array.isArray(property?.system?.zones) ? property.system.zones.length : 0;
+  const zones = effectiveZoneCount(property);
   const commercial = property?.billingEntity?.accountType === "commercial";
   const key = deriveSeasonalKey(woType, zones, commercial);
   const service = key ? BOOKABLE_SERVICES[key] : null;
