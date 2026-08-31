@@ -534,4 +534,65 @@ async function unassign(season, year, deps = {}) {
   return { ok: true, season, year: Number(year), summary, removed, kept };
 }
 
-module.exports = { preflight, assign, unassign, syncAssignedTimes, requestedWindowsFor, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };
+// Stage 6: when Patrick moves a whole route day, its assignment
+// bookings ride along. Called AFTER seasonPlans.moveDay succeeds (the
+// plan already shows the day on its new date). Per cadence rule 6:
+// response state resets — except FREE-BUCKET customers, who said "any
+// day works" and keep both their answer and their silence (no notice:
+// the tech calls them with an ETA regardless). A booking the customer
+// moved off the day themselves is theirs and is not touched. Notices
+// queue only for customers who were actually messaged (blasted) — a
+// pre-blast move breaks no promise.
+async function moveDayBookings(season, year, { from, to }, deps = {}) {
+  const getPlan = deps.getPlan || seasonPlans.getPlan;
+  const listProperties = deps.listProperties || properties.list;
+  const listBookings = deps.listBookings || bookings.list;
+  const moveBooking = deps.moveAssignmentDay || bookings.moveAssignmentDay;
+  const seq = deps.sequenceDay || resequence.sequenceDay;
+  const actor = deps.actor || "admin";
+
+  const plan = await getPlan(season, year);
+  const day = plan?.days?.[to];
+  if (!day) return { ok: false, errors: [`${to} is not a route day in this plan.`] };
+
+  const all = await listProperties();
+  const byCode = new Map((all || []).filter((p) => p && p.code).map((p) => [p.code, p]));
+  const customerWindows = await requestedWindowsFor(season, year, listBookings);
+  const etaByCode = await arrivalsFor(day, byCode, season, seq, customerWindows);
+
+  const localDate = (iso) => {
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+
+  const affected = (await listBookings()).filter((b) =>
+    b && b.source === "assignment" && b.assignment
+    && b.assignment.season === season && Number(b.assignment.year) === Number(year)
+    && b.status === "confirmed"
+    && b.assignment.date === from
+    && localDate(b.scheduledFor) === from);
+
+  const summary = { moved: 0, noticesQueued: 0, responsesReset: 0, flexibleMoved: 0 };
+  for (const b of affected) {
+    const flexible = Boolean(b.flexBucket);
+    const blasted = Boolean(b.assignment.outreach?.steps?.["1"]);
+    const hadResponse = Boolean(b.assignment.outreach?.respondedAt);
+    await moveBooking(b.id, {
+      toDate: to,
+      scheduledFor: scheduledStartFor(to, b.assignment.bucket, etaByCode.get(b.assignment.code), b.durationMinutes).toISOString(),
+      oldDate: from,
+      resetResponse: !flexible,
+      queueNotice: blasted && !flexible,
+      by: actor
+    });
+    summary.moved += 1;
+    if (flexible) summary.flexibleMoved += 1;
+    else {
+      if (blasted) summary.noticesQueued += 1;
+      if (hadResponse) summary.responsesReset += 1;
+    }
+  }
+  return { ok: true, from, to, ...summary };
+}
+
+module.exports = { preflight, assign, unassign, syncAssignedTimes, requestedWindowsFor, moveDayBookings, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };
