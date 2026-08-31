@@ -101,6 +101,7 @@
     main.appendChild(sub);
     li.appendChild(main);
 
+    let windowForm = null;
     const meta = document.createElement("div");
     meta.className = "sp-stop-meta";
     if (stop.resolved) {
@@ -120,77 +121,110 @@
         geo.textContent = "no coordinates";
         meta.appendChild(geo);
       }
-      meta.appendChild(windowControl(stop, date, arrival));
+      const window = windowControl(stop, date);
+      meta.appendChild(window.button);
+      windowForm = window.form;
       meta.appendChild(nudgeControl(stop, date, bucket, arrival));
       meta.appendChild(moveControl(stop, date, bucket));
     }
     li.appendChild(meta);
+    if (windowForm) li.appendChild(windowForm);
     return li;
   }
 
-  // "Not before" / "not after" on one stop. A locked gate, a customer out
-  // until one, a promise already made — things the optimiser cannot see.
-  function windowControl(stop, date, arrival) {
-    const wrap = document.createElement("span");
-    wrap.className = "sp-window";
-
+  // Two SEPARATE choices, not one bracket. "After 10:00" and "Before 12:00"
+  // are independent things a customer says, and either can stand alone —
+  // presenting them as a pair of bare inputs read as a range picker and
+  // implied you had to give both.
+  //
+  // The form opens as its own full-width row rather than inside the meta
+  // column: 168px cannot hold a labelled time field, and an absolutely
+  // positioned popover would be clipped by the panel's own scrolling.
+  function windowControl(stop, date) {
     const has = Boolean(stop.notBefore || stop.notAfter);
+
     const button = document.createElement("button");
     button.type = "button";
     button.className = has ? "sp-window-btn is-set" : "sp-window-btn";
     button.textContent = has
-      ? `${stop.notBefore ? `after ${stop.notBefore}` : ""}${stop.notBefore && stop.notAfter ? " · " : ""}${stop.notAfter ? `by ${stop.notAfter}` : ""}`
+      ? [stop.notBefore ? `after ${stop.notBefore}` : "", stop.notAfter ? `before ${stop.notAfter}` : ""]
+        .filter(Boolean).join(" · ")
       : "Time window";
-    button.title = "Set when this stop can be done";
+    button.title = "When can this stop be done?";
 
     const form = document.createElement("form");
     form.className = "sp-window-form";
     form.hidden = true;
-    const from = document.createElement("input");
-    from.type = "time"; from.value = stop.notBefore || ""; from.title = "Not before";
-    from.setAttribute("aria-label", `Not before, ${stop.code}`);
-    const to = document.createElement("input");
-    to.type = "time"; to.value = stop.notAfter || ""; to.title = "Not after";
-    to.setAttribute("aria-label", `Not after, ${stop.code}`);
-    const save = document.createElement("button");
-    save.type = "submit"; save.className = "sp-window-save"; save.textContent = "Set";
-    const cancel = document.createElement("button");
-    cancel.type = "button"; cancel.className = "sp-window-cancel"; cancel.textContent = "×";
-    cancel.title = "Cancel";
-    form.appendChild(from); form.appendChild(to); form.appendChild(save); form.appendChild(cancel);
 
-    button.addEventListener("click", () => { form.hidden = false; button.hidden = true; from.focus(); });
-    cancel.addEventListener("click", () => {
+    const rows = {};
+    for (const [field, label, hint] of [
+      ["notBefore", "After", "do not arrive before this time"],
+      ["notAfter", "Before", "must be done by this time"]
+    ]) {
+      const line = document.createElement("label");
+      line.className = "sp-window-line";
+      const name = document.createElement("span");
+      name.className = "sp-window-label";
+      name.textContent = label;
+      const input = document.createElement("input");
+      input.type = "time";
+      input.step = 300;
+      input.value = stop[field] || "";
+      input.setAttribute("aria-label", `${label} — ${hint}, ${stop.code}`);
+      const clear = document.createElement("button");
+      clear.type = "button";
+      clear.className = "sp-window-clear";
+      clear.textContent = "Clear";
+      clear.addEventListener("click", () => { input.value = ""; input.focus(); });
+      line.appendChild(name); line.appendChild(input); line.appendChild(clear);
+      rows[field] = input;
+      form.appendChild(line);
+    }
+
+    const foot = document.createElement("div");
+    foot.className = "sp-window-foot";
+    const cancel = document.createElement("button");
+    cancel.type = "button"; cancel.className = "sp-window-cancel"; cancel.textContent = "Cancel";
+    const save = document.createElement("button");
+    save.type = "submit"; save.className = "sp-window-save"; save.textContent = "Save";
+    foot.appendChild(cancel); foot.appendChild(save);
+    form.appendChild(foot);
+
+    const close = () => {
       form.hidden = true; button.hidden = false;
-      from.value = stop.notBefore || ""; to.value = stop.notAfter || "";
+      rows.notBefore.value = stop.notBefore || "";
+      rows.notAfter.value = stop.notAfter || "";
+    };
+    button.addEventListener("click", () => {
+      form.hidden = false; button.hidden = true;
+      rows.notBefore.focus();
     });
+    cancel.addEventListener("click", close);
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
+      const notBefore = rows.notBefore.value;
+      const notAfter = rows.notAfter.value;
       save.disabled = true;
       try {
         const response = await fetch(`${base()}/stop-window`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ date, propertyCode: stop.code, notBefore: from.value, notAfter: to.value })
+          body: JSON.stringify({ date, propertyCode: stop.code, notBefore, notAfter })
         });
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error((data.errors || ["Failed."]).join(" "));
         render(data.plan);
-        showToast(from.value || to.value
-          ? `${stop.code}: ${from.value ? `not before ${from.value}` : ""}`
-            + `${from.value && to.value ? ", " : ""}${to.value ? `not after ${to.value}` : ""}.`
-          : `${stop.code}: time window cleared.`);
+        const said = [notBefore ? `after ${notBefore}` : "", notAfter ? `before ${notAfter}` : ""]
+          .filter(Boolean).join(" and ");
+        showToast(said ? `${stop.code}: ${said}.` : `${stop.code}: time window cleared.`);
       } catch (error) {
         showToast(error.message, "bad");
         save.disabled = false;
       }
     });
 
-    wrap.appendChild(button);
-    wrap.appendChild(form);
-    void arrival;
-    return wrap;
+    return { button, form };
   }
 
   // Up/down inside the bucket. The first click hands the day to Patrick:
@@ -741,7 +775,14 @@
       };
       row.addEventListener("mouseenter", () => set(true));
       row.addEventListener("mouseleave", () => set(false));
-      row.addEventListener("click", () => google.maps.event.trigger(entry.marker, "click"));
+      // A tap ANYWHERE in the row used to open the marker's info window —
+      // including a tap on the time input, the arrows or the Move select.
+      // On iOS that stole focus from the native picker sheet and closed it
+      // the instant it appeared. Only bare parts of the row select the pin.
+      row.addEventListener("click", (event) => {
+        if (event.target.closest("button, select, input, a, label, form")) return;
+        google.maps.event.trigger(entry.marker, "click");
+      });
       entry.marker.addListener("mouseover", () => set(true));
       entry.marker.addListener("mouseout", () => set(false));
     });
