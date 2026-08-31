@@ -44,6 +44,7 @@ const voicemailStore = require("./lib/voicemail-store");
 const { geocode, PJL_BASE } = require("./lib/geocode");
 const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, parseLocalDateKey } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
+const { mergeDaySchedule } = require("./lib/day-schedule");
 const { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice } = require("./lib/pricing");
 const { normalizeServiceFeeWaiver, friendlyWaiverReason } = require("./lib/service-fee-waiver");
 const bookingSessions = require("./lib/booking-sessions");
@@ -18529,6 +18530,10 @@ Customer signature captured at ${new Date().toISOString()}.`;
         const town = lead.contact?.town || lead.contactExport?.address?.town || "";
         return {
           leadId: lead.id,
+          // Where this row came from. Bookings carry a lead (and so can be
+          // notified-on-route); work orders scheduled directly from the
+          // CRM do not.
+          source: "booking",
           customerName: contact.name || lead.contact?.name || "",
           customerPhone: contact.telephone || lead.contact?.phone || "",
           customerEmail: contact.email || lead.contact?.email || "",
@@ -18557,11 +18562,19 @@ Customer signature captured at ${new Date().toISOString()}.`;
         };
       });
 
+    // Lead bookings are only half the day. A work order raised straight
+    // from the CRM has no lead booking at all — its only date is
+    // `scheduledFor` — which is how a management company's properties get
+    // scheduled, and why a whole commercial customer could be booked for
+    // today and appear nowhere on today's schedule (FLOW-29). The merge is
+    // additive: every booking above still renders exactly as before.
+    const merged = mergeDaySchedule(bookings, allWos, dayStart, dayEnd);
+
     return sendJson(res, 200, {
       ok: true,
       date: new Date(dayStart).toISOString().slice(0, 10),
-      bookings,
-      count: bookings.length
+      bookings: merged,
+      count: merged.length
     });
   }
 

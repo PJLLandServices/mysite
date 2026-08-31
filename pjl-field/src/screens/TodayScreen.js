@@ -161,6 +161,12 @@ export default function TodayScreen({ onOpenWorkOrder }) {
   };
 
   const goToWorkOrder = async (b) => {
+    // A row that came from a scheduled work order already has one — there
+    // is no lead to open it from, and nothing to create.
+    if (!b.leadId && b.workOrder) {
+      onOpenWorkOrder(b.workOrder);
+      return;
+    }
     setBusyId(b.leadId);
     try {
       const data = await openWorkOrder(b.leadId);
@@ -303,11 +309,11 @@ export default function TodayScreen({ onOpenWorkOrder }) {
       ) : null}
 
       {bookings.map((b) => {
-        const busy = busyId === b.leadId;
+        const busy = !!b.leadId && busyId === b.leadId;
         const notified = !!b.onRouteNotifiedAt;
         const woLabel = b.workOrder ? (WO_STATUS_LABELS[b.workOrder.status] || b.workOrder.status) : null;
         return (
-          <View key={b.leadId} style={styles.card}>
+          <View key={b.leadId || b.workOrder?.id} style={styles.card}>
             <View style={styles.cardTop}>
               <View style={styles.time}>
                 <Text style={styles.timeStart}>{b.startLabel || timeOf(b.start) || '—'}</Text>
@@ -337,7 +343,7 @@ export default function TodayScreen({ onOpenWorkOrder }) {
               <Action
                 label={notified ? 'Notified' : 'Notify'}
                 onPress={() => confirmNotify(b)}
-                disabled={notified || busy}
+                disabled={notified || busy || !b.leadId}
               />
               <Action
                 label={b.workOrder ? 'Open WO' : 'Start WO'}
