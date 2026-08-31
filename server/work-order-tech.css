@@ -40,6 +40,10 @@
   --tech-green-mid:    #2D6A42;
   --tech-green-light:  #4A8C5C;
   --tech-amber:        #E07B24;
+  /* Amber as TEXT needs to be darker than amber as a fill: the brand
+     #E07B24 reads 2.99:1 on white, under the 4.5:1 floor. Same hue, dark
+     enough to read — used where amber is the ink rather than the ground. */
+  --tech-amber-ink:    #B0611C;
   --tech-red:          #b13a3a;
   --tech-text:         #0F1F14;
   --tech-text-mid:     #2a3b30;
@@ -2802,7 +2806,7 @@ body[data-locked="true"] .tech-finish-bar { opacity: 0.55; pointer-events: none;
   border-radius: 8px;
   border: 1px solid #E07B24;
   background: #FFF4E6;
-  color: #B05D14;
+  color: #AB5A13;
   cursor: pointer;
   min-height: 48px;
 }
@@ -3452,7 +3456,7 @@ body[data-locked="true"] .tech-finish-bar { opacity: 0.55; pointer-events: none;
    primary CTA, with a subtle amber edge so it never looks inert. */
 .tech-signoff-submit[data-blocked="seen"] {
   background: #fff;
-  color: var(--tech-amber, #E07B24);
+  color: var(--tech-amber-ink, #B0611C);
   border: 1px solid rgba(224, 123, 36, 0.55);
 }
 

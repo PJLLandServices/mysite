@@ -831,7 +831,7 @@
 .proj-scope-status--pending_customer_approval { background: #FDF1E6; color: #8A4A12; }
 .proj-scope-status--approved { background: #EAF3DE; color: #1B4D2E; }
 .proj-scope-status--rejected { background: #FFE5E0; color: #842F1B; }
-.proj-scope-status--withdrawn { background: #E5E5DD; color: #6A6A60; }
+.proj-scope-status--withdrawn { background: #E5E5DD; color: #66665C; }
 .proj-scope-status--executed_under_revision { background: #1B4D2E; color: #fff; }
 .proj-scope-revision { color: #1B4D2E; font-size: 12px; font-weight: 600; }
 .proj-scope-description {

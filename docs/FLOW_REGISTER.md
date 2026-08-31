@@ -1159,6 +1159,33 @@ describing them, and its retired-grey guard caught 15 inline `style=` and `<styl
 HTML that the stylesheet pass had missed. CSS/markup only — no API, route, payload or template
 change; no PASS flow touched.
 
+**2026-08-31 (CRM-22 — the components the sweep could not see):** Patrick pushed back that more
+had been missed, and he was right. **The CRM-21 verification had a structural blind spot:** the
+rendered sweep measured only what was on screen at page load and *deliberately skipped `[hidden]`
+elements* — so every toast, modal, status pill, badge, chip and dropdown in the CRM was never
+measured. That is most of the app's state-carrying UI. The earlier claim of "five white-on-amber
+controls" came from that sweep and was wrong; the real number is 22.
+**The check that sees them doesn't render at all:** any rule declaring BOTH a background and a text
+colour carries its own contrast and can be audited from source, visible or not. Over every
+stylesheet and every inline `<style>`, that found **41 components below 4.5:1**. **19 are fixed
+here**, each darkened against *its own* ground with hue preserved so the semantic colour coding
+survives — booked stays green (3.95→4.59), install blue (4.28→4.61), consult purple (4.32→4.61),
+repair amber (2.63→4.61); calendar other-month days were **1.65:1**, chat status pills 2.94 and
+3.73, the portal's danger button 3.79, `.tech-signoff-submit[data-blocked]` 2.99 (amber as INK
+needs to be darker than amber as a FILL — new `--tech-amber-ink: #B0611C` records why).
+**Correction to CRM-21:** that entry called `schedule.css`'s `#7A7A72` "a swatch background with no
+contrast floor to meet." Wrong — it is `.event-cancelled-pill`, which carries white text, and it
+was 4.33:1. Now 4.58:1. **22 white-on-brand-amber buttons are NOT changed** — the fix is a visible
+identity change either way (dark text on the same amber, or a darker amber under white text), so it
+is Patrick's call; the suite allowlists them explicitly, by value, so they stay visible and the
+count can only go down. `scripts/test-crm-contrast.mjs` grows to 32 assertions and now audits the
+whole class rather than named fixtures. **Known residual limit:** the source audit only sees rules
+declaring both colours; text that inherits its ground from an ancestor still needs rendering, and
+rendering still cannot see hidden elements — neither method alone is complete, and the two are
+run together. Method note: an over-broad search-and-replace had to be reverted a third time (it
+caught borders and a pill background), so the fixes here are spliced inside each rule's own braces.
+CSS/markup only — no API, route, payload or template change; no PASS flow touched.
+
 **2026-08-28 (CRM-19 — the rest of the record lists):** Bookings, Work orders, Projects,
 Material lists and Suppliers rebuilt on the same `.crm-table` primitive as CRM-18. Invoices
 was already a real table and is untouched. Each page sets its own `--crm-cols`; the guard in

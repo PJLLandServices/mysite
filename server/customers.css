@@ -484,7 +484,7 @@
   letter-spacing: 0.4px;
 }
 .customer-vcf-row .method.is-individual { background: #e8f1ff; color: #1763b3; }
-.customer-vcf-row .method.is-bulk { background: #fef6e6; color: #a37200; }
+.customer-vcf-row .method.is-bulk { background: #fef6e6; color: #946800; }
 .customer-vcf-row .batch {
   font-family: ui-monospace, monospace;
   font-size: 11px;

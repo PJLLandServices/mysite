@@ -276,5 +276,85 @@ for (const [label, value] of [
   ok(worst >= FLOOR, `${label} (${value}) clears the floor on every light ground (${worst.toFixed(2)}:1)`);
 }
 
+// ---- 5. Self-contained components audit themselves ------------------
+// The gap that let a whole class through: the rendered sweep measured only
+// what was ON SCREEN at page load, and it deliberately skipped [hidden]
+// elements. Every toast, modal, badge, status pill and dropdown in the CRM
+// is hidden at load, so none of them was ever measured — 41 components
+// below the floor, found only once the check stopped depending on
+// rendering.
+//
+// Any rule that sets BOTH a background colour and a text colour carries
+// its own contrast and can be checked from source, visible or not. That is
+// what this does, over every stylesheet and every inline <style>.
+
+const NAMED = { white: "#FFFFFF", black: "#000000" };
+function colourIn(value) {
+  const v = String(value).trim();
+  const named = NAMED[v.toLowerCase()];
+  if (named) return named;
+  const m = v.match(/#[0-9A-Fa-f]{6}\b|#[0-9A-Fa-f]{3}\b/);
+  // Normalise to six-digit upper case, or "#fff" and "#FFFFFF" compare as
+  // different colours and the allowlist silently stops matching.
+  if (m) {
+    const h = m[0].slice(1);
+    return "#" + (h.length === 3 ? [...h].map((c) => c + c).join("") : h).toUpperCase();
+  }
+  const fn = v.match(/rgba?\(([^)]+)\)/);
+  if (fn) {
+    const p = fn[1].split(",").map((x) => parseFloat(x));
+    if (p.length > 3 && p[3] < 0.95) return null;   // translucent: ground unknown
+    return ("#" + p.slice(0, 3).map((n) => Math.round(n).toString(16).padStart(2, "0")).join("")).toUpperCase();
+  }
+  return null;
+}
+function declared(body, prop) {
+  const m = body.match(new RegExp("(?:^|[;{\\s])" + prop + "\\s*:\\s*([^;]+)", "i"));
+  return m ? m[1] : null;
+}
+
+// White-on-brand-amber is a known, deliberate exception pending a design
+// decision — it is the PJL amber on primary buttons across the CRM, the
+// login page and the customer portal. Listed explicitly so it stays
+// visible rather than silently tolerated, and so the count can only go
+// down: any NEW component below the floor fails this suite.
+const AMBER = ["#F8AC65", "#F59B4A", "#E0A85A", "#E07B24", "#C96A2A", "#C4691B"];
+const isKnownAmber = (fg, bg) =>
+  fg.toUpperCase() === "#FFFFFF" && AMBER.includes(bg.toUpperCase());
+
+{
+  const dir = path.join(ROOT, "server");
+  const files = (await fs.readdir(dir)).filter((f) => f.endsWith(".css") || f.endsWith(".html"));
+  const below = [];
+  let audited = 0;
+  for (const file of files) {
+    let text = await fs.readFile(path.join(dir, file), "utf8");
+    if (file.endsWith(".html")) {
+      text = [...text.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]).join("\n");
+      if (!text.trim()) continue;
+    }
+    text = text.replace(/\/\*[\s\S]*?\*\//g, "");
+    for (const m of text.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const sel = m[1].trim();
+      if (sel.startsWith("@") || !sel) continue;
+      const bgRaw = declared(m[2], "background(?:-color)?");
+      const fgRaw = declared(m[2], "color");
+      if (!bgRaw || !fgRaw) continue;
+      // A gradient's first stop stands in for its lightest region.
+      const bg = colourIn(bgRaw), fg = colourIn(fgRaw);
+      if (!bg || !fg) continue;
+      audited += 1;
+      const v = contrast(fg, bg);
+      if (v < 4.5 && !isKnownAmber(fg, bg)) {
+        below.push(`${file} {${sel.replace(/\s+/g, " ").slice(0, 46)}} ${fg} on ${bg} = ${v.toFixed(2)}:1`);
+      }
+    }
+  }
+  ok(audited > 100, `the component audit actually ran (${audited} rules carry both a background and a text colour)`);
+  ok(below.length === 0,
+    `${below.length} component(s) below ${FLOOR}:1 — these are mostly hidden at page load, so only a ` +
+    `source-level check sees them: ${below.slice(0, 4).join(" | ")}`);
+}
+
 console.log(`\ntest-crm-contrast: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -1362,7 +1362,7 @@ body.portal-modal-open { overflow: hidden; }
 /* In-modal Confirm uses the same red palette but solid so destructive
    intent reads clearly against the bordered Keep-appointment button. */
 .portal-resched-actions .portal-btn-danger {
-  background: linear-gradient(135deg, #D26146 0%, #B23A1F 100%);
+  background: linear-gradient(135deg, #BC573F 0%, #B23A1F 100%);
   color: #fff;
   border: none;
   box-shadow: 0 6px 14px rgba(178, 58, 31, 0.22);
