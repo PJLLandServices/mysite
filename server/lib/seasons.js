@@ -17,10 +17,14 @@
 //       is unchanged - only where the numbers come from moved.
 //
 //   configFor(season, year)  -> { serviceableFrom, serviceableThrough,
-//                                 publicBookingThrough }
-//       The full record as YYYY-MM-DD strings. publicBookingThrough is
-//       consumed by the season gate in server/lib/availability.js: days
-//       after it emit no public slots for seasonal services.
+//                                 publicBookingFrom, publicBookingThrough }
+//       The full record as YYYY-MM-DD strings. publicBookingFrom and
+//       publicBookingThrough are consumed by the season gate in
+//       server/lib/availability.js: days outside [from..through] emit no
+//       public slots for seasonal services. publicBookingFrom is OPTIONAL
+//       in seasons.json and defaults to serviceableFrom — fall 2026 sets
+//       it to Sep 28 (the first planned route day) so the public flow
+//       cannot book a September date no truck is scheduled to serve.
 //
 // Both resolve a year with an explicit block in seasons.json `years` first,
 // and fall back to the year-agnostic `defaults` otherwise. Those defaults are
@@ -101,6 +105,22 @@ function normalizeSeason(record, where, expectedYear) {
     }
     parsed[field] = md;
   }
+  // publicBookingFrom is optional: absent means booking opens with the
+  // season (serviceableFrom). Present, it holds the public flow back to a
+  // later start — fall 2026 uses Sep 28, the first planned route day.
+  if (record.publicBookingFrom != null) {
+    const md = parseDate(record.publicBookingFrom, expectedYear);
+    if (!md) {
+      throw new Error(
+        `${where}.publicBookingFrom is not a valid ` +
+        (expectedYear == null ? "MM-DD" : `${expectedYear}-MM-DD`) +
+        ` date (got ${JSON.stringify(record.publicBookingFrom)})`
+      );
+    }
+    parsed.publicBookingFrom = md;
+  } else {
+    parsed.publicBookingFrom = parsed.serviceableFrom;
+  }
   if (ordinal(parsed.serviceableFrom) > ordinal(parsed.serviceableThrough)) {
     throw new Error(`${where}.serviceableThrough falls before serviceableFrom`);
   }
@@ -112,6 +132,15 @@ function normalizeSeason(record, where, expectedYear) {
   }
   if (ordinal(parsed.publicBookingThrough) < ordinal(parsed.serviceableFrom)) {
     throw new Error(`${where}.publicBookingThrough falls before serviceableFrom`);
+  }
+  if (ordinal(parsed.publicBookingFrom) < ordinal(parsed.serviceableFrom)) {
+    throw new Error(`${where}.publicBookingFrom falls before serviceableFrom`);
+  }
+  if (ordinal(parsed.publicBookingFrom) > ordinal(parsed.publicBookingThrough)) {
+    throw new Error(
+      `${where}.publicBookingFrom falls after publicBookingThrough — ` +
+      `the public booking window would be empty`
+    );
   }
   return {
     raw: {
@@ -190,12 +219,17 @@ function configFor(season, year) {
   const y = Number(year);
   const stamp = (field) => {
     const md = record.parsed[field];
-    if (!Number.isFinite(y)) return record.raw[field];
+    if (!Number.isFinite(y)) {
+      // publicBookingFrom may be synthesized from serviceableFrom, so it
+      // has no raw text of its own — render the parsed month/day.
+      return record.raw[field] || `${String(md.month).padStart(2, "0")}-${String(md.day).padStart(2, "0")}`;
+    }
     return `${y}-${String(md.month).padStart(2, "0")}-${String(md.day).padStart(2, "0")}`;
   };
   return {
     serviceableFrom: stamp("serviceableFrom"),
     serviceableThrough: stamp("serviceableThrough"),
+    publicBookingFrom: stamp("publicBookingFrom"),
     publicBookingThrough: stamp("publicBookingThrough")
   };
 }

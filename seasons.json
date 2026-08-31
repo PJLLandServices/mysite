@@ -27,6 +27,11 @@
     "FIELDS (per season)",
     "  serviceableFrom      First day a truck rolls. Inclusive.",
     "  serviceableThrough   Last day a truck rolls. Inclusive. Hard frost stop in fall.",
+    "  publicBookingFrom    OPTIONAL. First day the public flow accepts a self-serve",
+    "                       booking. Defaults to serviceableFrom when absent. Fall 2026",
+    "                       sets Sep 28 — the first planned route day — so a customer",
+    "                       cannot self-book a September date no truck is scheduled to",
+    "                       serve. Consumed by the same availability.js season gate.",
     "  publicBookingThrough Last day the public flow accepts a self-serve booking.",
     "                       Intentionally earlier than serviceableThrough in fall 2026",
     "                       (Oct 30 vs Nov 6), reserving Nov 1-6 for admin placement so",
@@ -70,6 +75,7 @@
       "fall": {
         "serviceableFrom": "2026-09-01",
         "serviceableThrough": "2026-11-06",
+        "publicBookingFrom": "2026-09-28",
         "publicBookingThrough": "2026-10-30"
       }
     }

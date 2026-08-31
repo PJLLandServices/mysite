@@ -95,11 +95,21 @@ function inOriginalWindow(year, month, day, season) {
   ok("fall 2026 reserves an admin tail",
     fall.publicBookingThrough < fall.serviceableThrough);
 
+  // Public booking opens with the first planned route day, not the
+  // serviceable season: Sep 1–27 is truck-less for the public flow.
+  ok("fall 2026 publicBookingFrom is Sep 28 (first route day)",
+    fall.publicBookingFrom === "2026-09-28", fall.publicBookingFrom);
+
   const spring = seasons.configFor("spring", 2026);
   ok("spring 2026 serviceableFrom unchanged (Mar 1)", spring.serviceableFrom === "2026-03-01");
   ok("spring 2026 serviceableThrough unchanged (Jun 30)", spring.serviceableThrough === "2026-06-30");
   ok("spring 2026 reserves no admin tail",
     spring.publicBookingThrough === spring.serviceableThrough);
+  ok("an absent publicBookingFrom defaults to serviceableFrom (spring 2026)",
+    spring.publicBookingFrom === spring.serviceableFrom, spring.publicBookingFrom);
+  ok("...and in an unplanned year's defaults too (fall 2027)",
+    seasons.configFor("fall", 2027).publicBookingFrom === "2027-09-01",
+    seasons.configFor("fall", 2027).publicBookingFrom);
 
   ok("an unknown season resolves to nothing", seasons.windowFor("summer", 2026) === null);
 
@@ -153,14 +163,14 @@ function inOriginalWindow(year, month, day, season) {
   const reads = (rel) => {
     const abs = path.join(ROOT, rel);
     if (!fs.existsSync(abs) || fs.statSync(abs).isDirectory()) return false;
-    return fs.readFileSync(abs, "utf8").includes("publicBookingThrough");
+    return /publicBooking(From|Through)/.test(fs.readFileSync(abs, "utf8"));
   };
   const unexpected = [...new Set(searched)].filter((rel) => reads(rel) && !allowed.has(rel));
-  ok("no consumer of publicBookingThrough beyond the season gate and its test",
+  ok("no consumer of the public booking bounds beyond the season gate and its test",
     unexpected.length === 0, unexpected.join(", "));
-  ok("the season gate actually reads publicBookingThrough",
+  ok("the season gate actually reads the public booking bounds",
     reads("server/lib/availability.js"));
-  ok("the gate's acceptance test actually reads publicBookingThrough",
+  ok("the gate's acceptance test actually reads the public booking bounds",
     reads("scripts/test-booking-guards.mjs"));
 }
 

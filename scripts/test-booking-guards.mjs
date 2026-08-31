@@ -78,7 +78,9 @@ const FREE_DAY = dayKey(plusDays(8));                 // Tue 22 Sep — no plan
 const shapesFor = (plan, bookings = []) =>
   geoFilter.buildDayShapes({ plan, propertiesByCode, bookings });
 
-// Geo filter off: these scenarios test capacity, not geography.
+// Geo filter off and season gate off: these scenarios test capacity,
+// not geography and not the live seasons.json (whose real fall window —
+// Sep 28 onward — would otherwise gate the fixture days).
 const baseArgs = {
   serviceKey: "fall_close_4z",
   bookings: [],
@@ -86,6 +88,7 @@ const baseArgs = {
   daysAhead: 10,
   hours: DEFAULT_HOURS,
   settings: { ...DEFAULT_SETTINGS, geoMaxAddedDriveMinutes: 0 },
+  seasonWindows: () => null,
   now: NOW
 };
 
@@ -254,6 +257,46 @@ const CUTOFF = dayKey(plusDays(4));                    // Fri 18 Sep
   const gatedDay = expanded.find((d) => d.date === DAY);  // Mon 21 Sep, past the cutoff
   ok("a season-gated day reports season_closed, not no_availability",
     gatedDay?.reason === "season_closed", gatedDay?.reason);
+
+  ok("a config without publicBookingFrom leaves the front of the season open",
+    slots.some((s) => dayKey(new Date(s.start)) === dayKey(plusDays(1))),
+    "the day after 'now' should book when only a cutoff is configured");
+}
+
+// ---- 7b. The front of the window: booking opens with the routes ------
+
+{
+  const OPENS = dayKey(plusDays(3));                   // Thu 17 Sep
+  const diagnostics = { seasonClosed: [] };
+  const slots = await listAvailableSlots({
+    ...baseArgs, customerCoords: NEWCOMER, daysAhead: 12, diagnostics,
+    seasonWindows: () => ({ publicBookingFrom: OPENS, publicBookingThrough: CUTOFF })
+  });
+  ok("no slot falls before publicBookingFrom",
+    slots.length > 0 && slots.every((s) => dayKey(new Date(s.start)) >= OPENS),
+    slots.filter((s) => dayKey(new Date(s.start)) < OPENS).map((s) => s.start).join(", "));
+  ok("the window between the two bounds still books",
+    slots.some((s) => {
+      const k = dayKey(new Date(s.start));
+      return k >= OPENS && k <= CUTOFF;
+    }));
+  ok("nothing books past the cutoff when both bounds are set",
+    slots.every((s) => dayKey(new Date(s.start)) <= CUTOFF));
+  ok("a too-early day is reported against the OPENING bound",
+    diagnostics.seasonClosed.some((g) => g.date < OPENS && g.publicBookingFrom === OPENS)
+      && diagnostics.seasonClosed.some((g) => g.date > CUTOFF && g.publicBookingThrough === CUTOFF),
+    JSON.stringify(diagnostics.seasonClosed));
+
+  const expanded = expandDaysToRange(slots, {
+    from: plusDays(0), to: plusDays(11), hours: DEFAULT_HOURS, now: NOW,
+    seasonClosed: diagnostics.seasonClosed
+  });
+  const early = expanded.find((d) => d.date === dayKey(plusDays(1)));  // Tue 15 Sep
+  ok("a not-yet-open day reports season_not_open — different copy from season_closed",
+    early?.reason === "season_not_open", early?.reason);
+  const late = expanded.find((d) => d.date === DAY);                   // Mon 21 Sep
+  ok("...while a past-cutoff day still reports season_closed",
+    late?.reason === "season_closed", late?.reason);
 }
 
 // ---- 8. Non-seasonal services never consult the season ---------------
@@ -288,6 +331,23 @@ const CUTOFF = dayKey(plusDays(4));                    // Fri 18 Sep
   const cfg = seasons.configFor("fall", 2026);
   ok("seasons.json resolves fall 2026 with a publicBookingThrough",
     Boolean(cfg && cfg.publicBookingThrough), JSON.stringify(cfg));
+  ok("fall 2026 opens to the public on Sep 28, the first route day",
+    cfg.publicBookingFrom === "2026-09-28", cfg.publicBookingFrom);
+
+  // Before the season opens: a mid-September caller sees nothing until
+  // Sep 28, even though trucks are serviceable from Sep 1.
+  const earlySlots = await listAvailableSlots({
+    serviceKey: "fall_close_4z", customerCoords: NEWCOMER,
+    bookings: [], blocks: [], daysAhead: 20,
+    hours: DEFAULT_HOURS,
+    settings: { ...DEFAULT_SETTINGS, geoMaxAddedDriveMinutes: 0 },
+    now: NOW                                            // Mon 14 Sep 2026
+  });
+  ok("with no injected override, no slot is offered before the real opening day",
+    earlySlots.length > 0 && earlySlots.every((s) => dayKey(new Date(s.start)) >= cfg.publicBookingFrom),
+    earlySlots.filter((s) => dayKey(new Date(s.start)) < cfg.publicBookingFrom).map((s) => s.start).join(", "));
+  ok("...and days from Sep 28 onward do book",
+    earlySlots.some((s) => dayKey(new Date(s.start)) >= "2026-09-28"));
 
   const [y, m, d] = cfg.publicBookingThrough.split("-").map(Number);
   const nearEnd = new Date(y, m - 1, d, 8, 0, 0);
