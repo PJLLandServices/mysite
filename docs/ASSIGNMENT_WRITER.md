@@ -91,7 +91,7 @@ Full rationale in the build-plan artifact; this is the working checklist.
 | 0 | **Preflight.** Read-only: for every planned stop, "would be told X" or "skipped because Y". Sends nothing, creates nothing. | **done** |
 | 1 | **Capacity + season gate.** Bucket caps enforced at booking time; `publicBookingThrough` wired. Touches FLOW-03 (PASS) — re-verify. | **done** |
 | 2 | **The assignment record.** Planned stop → `confirmed` booking, `source: "assignment"`. Idempotent, reversible. Sends nothing. | **done** |
-| 3 | **The messages.** Templates for steps 1, 2, 3–5, 6. Preview per customer. Patrick edits. | |
+| 3 | **The messages.** Templates for steps 1, 2, 3–5, 6. Preview per customer. Patrick edits. | **done** |
 | 4 | **The blast + the cadence engine.** `sendBulk` reuse, `type` on touches, the sweep, the response tracking, the manual mark. Test send first. | |
 | 5 | **The reply path.** Confirm link (magic token → records response). Reschedule via portal already exists — verify it composes with the geography filter and re-anchoring. | |
 | 6 | **Day-move re-notify.** Replaces the hard refusal from PR #87 with move + re-notify + response reset. | |
@@ -114,6 +114,28 @@ Full rationale in the build-plan artifact; this is the working checklist.
 
 Newest first. Every stage PR adds its entry.
 
+- *2026-08-31 — STAGE 3 SHIPPED. `server/lib/assignment-messages.js` +
+  /admin/assignment-messages (linked from the season-plan Assignment
+  panel). Seven templates — email+SMS for the assignment, the follow-up
+  and the nudge, SMS-only for the 24-hour reminder — with per-customer
+  preview against real assignment bookings. Defaults in code, Patrick's
+  edits layered in `server/data/assignment-templates.json` (persistent
+  disk, survive deploys; clearing falls back to the default), saving is
+  ADMIN-only per decision-table "Patrick has final edit". The nudge
+  default is his Part-3 wording copy-edited with intent preserved
+  (asserted: reminders continue / tell the booking team / every effort
+  to reach you). SENDS NOTHING — asserted like the writer.*
+  *RULES THE SEND STEP INHERITS: (a) merge fields are a CLOSED set and a
+  template referencing an unknown {field} is refused at save, so a typo
+  can never render literally in a customer's text; (b) {confirmLink} /
+  {rescheduleLink} render as loud [confirm-link]/[reschedule-link]
+  placeholders until stages 4–5 supply real URLs, and STAGE 4 MUST
+  REFUSE to send any message still containing a bracketed placeholder;
+  (c) steps 1–2 carry both links, the nudge carries the confirm link,
+  the 24-hour reminder carries none (it goes to everyone). 48 assertions
+  in `scripts/test-assignment-messages.mjs` + an 8-assertion Playwright
+  smoke of the editor page (editors render, legend complete, preview
+  fills, save round-trips).*
 - *2026-08-31 — TIME SYNC BECOMES A SWEEP. The sequenced-arrival revision
   deployed but live records still read 8:00/12:00 — the re-anchor needed
   a trigger (Assign press post-deploy, or a plan edit) that never fired.

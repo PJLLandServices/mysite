@@ -19,6 +19,21 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-31 (Assignment writer stage 3 — the messages):** the cadence's wording exists and is
+Patrick's to edit at /admin/assignment-messages (linked from the season-plan Assignment panel):
+email+SMS templates for the assignment blast, the D−15 follow-up and the D−10/−7/−5 nudge (his
+Part-3 escalation wording as the default, copy-edited with intent asserted in the suite), SMS-only
+for the D−1 reminder. Per-customer preview renders every template against a real assignment
+booking. Defaults live in code; edits layer in `server/data/assignment-templates.json` (persistent
+disk); saving is admin-only. **Two safety rules the send step inherits:** merge fields are a closed
+set — a template with a typo'd `{field}` is refused at save time, never rendered literally to a
+customer — and link fields render as loud bracketed placeholders until stages 4–5 build real URLs,
+with stage 4 required to refuse sending anything still carrying one. **Nothing sends** (asserted:
+no notify/mailer/sms/outreach require, no sendBulk). 48 assertions in
+`scripts/test-assignment-messages.mjs` (in build:check) + an 8-assertion Playwright smoke of the
+editor page. No PASS flow touched — new page, new endpoints (`GET/PUT /api/assignment-messages`,
+preview), nothing existing rewired.
+
 **2026-08-31 (Assignment time sync becomes a sweep):** the sequenced-arrival fix shipped but the
 live records still read 8:00/12:00 — re-anchoring required an operator trigger (an Assign press
 after the deploy, or a plan edit) that never fired. The sync is now the sixth server sweep:

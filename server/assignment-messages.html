@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>PJL — Assignment Messages</title>
+  <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260518" />
+  <link rel="shortcut icon" href="/favicon.ico?v=20260518" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=20260518" />
+  <meta name="apple-mobile-web-app-title" content="PJL" />
+  <link rel="manifest" href="/site.webmanifest?v=20260518" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/assignment-messages.css">
+</head>
+<body class="pjl-crm-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/season-plan" class="is-active">Season plan</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/outreach">Outreach</a>
+      <a href="/admin/review-requests">Reviews</a>
+      <a href="/admin/bookings">Bookings</a>
+      <a href="/admin/customers">Customers</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
+      <a href="/admin/sitebuilder">System Builder</a>
+      <a href="/admin/work-orders">Work orders</a>
+      <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/warranty-claims">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
+      <a href="/admin/material-lists">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/users">Users</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Assignment messages</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="pjl-crm-shell">
+      <header class="am-head">
+        <div>
+          <p class="pjl-page-eyebrow">The assignment writer</p>
+          <h1>The messages customers will receive</h1>
+          <p class="am-sub">
+            Every word here is yours to edit. <strong>Nothing sends from this page</strong> —
+            these are the templates the send step will use once you approve them.
+            Fields in {curly braces} fill in per customer; the preview below shows exactly
+            what each person would read.
+          </p>
+        </div>
+        <a class="pjl-btn pjl-btn-outline" href="/admin/season-plan">← Back to the season plan</a>
+      </header>
+
+      <section class="am-panel">
+        <h2 class="am-panel-title">Fill-in fields</h2>
+        <p class="am-note">Type these anywhere in a message. A field that isn't on this list won't save — that's on purpose, so a typo can never reach a customer.</p>
+        <dl class="am-fields" id="fieldLegend"></dl>
+      </section>
+
+      <section class="am-panel">
+        <h2 class="am-panel-title">Preview as a real customer</h2>
+        <div class="am-preview-controls">
+          <label class="sp-control"><span>Season</span>
+            <select id="seasonSelect">
+              <option value="fall">Fall closing</option>
+              <option value="spring">Spring opening</option>
+            </select>
+          </label>
+          <label class="sp-control"><span>Year</span><select id="yearSelect"></select></label>
+          <label class="sp-control am-preview-customer"><span>Customer</span><select id="customerSelect"></select></label>
+        </div>
+        <p class="am-note" id="previewNote"></p>
+      </section>
+
+      <div id="templateList"></div>
+
+      <p class="am-toast" id="toast" hidden></p>
+    </main>
+  </div>
+
+  <script src="/crm/assignment-messages.js"></script>
+</body>
+</html>
