@@ -19,6 +19,24 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-31 (Assignment writer stage 4 — the blast + cadence engine):** the sends exist. The
+blast (admin, two-press) fires step 1 to every live assignment booking that has never received it;
+the seventh server sweep (5-minute cadence) dispatches steps 2–6 — each at most once ever, only on
+its own day, only 09:00–18:00 Toronto. All nine Part-2 rules implemented literally: missed days
+skipped not backfilled; a response (portal action or the new one-tap mark on the schedule's manage
+panel) stops steps 2–5 and nothing stops step 6; a reschedule re-anchors automatically (due dates
+derive from live `scheduledFor`); cancellation stops all; opt-outs re-checked at every step. Touches
+gained the long-blocked `type` field (`type: "assignment"` + `step`) — additive, consent suite
+unchanged. **The stage-5 interlock**: every message links `/a/<token>` (minted per booking); blast
+and sweep refuse while `APPOINTMENT_PAGE_READY` in server.js is false, so no customer can receive a
+dead link; stage 5 flips it in the commit that builds the page. **Mark-before-send**: a step is
+recorded fired before dispatch, so a wire failure loses at most one message (recorded, visible,
+hand-retryable) and can never repeat one. Step 6 falls back to email for phones-less customers.
+[TEST] sends per template to NOTIFY_TO_EMAIL/PHONE from the messages page. Senders are
+notify-customer's outreach paths (branded email w/ appointment-page CTA, Twilio SMS with STOP line).
+29 assertions in `scripts/test-assignment-cadence.mjs` (in build:check), real stores, wire injected.
+FLOW-29 remains UNMAPPED; no PASS flow touched.
+
 **2026-08-31 (Assignment writer stage 3 — the messages):** the cadence's wording exists and is
 Patrick's to edit at /admin/assignment-messages (linked from the season-plan Assignment panel):
 email+SMS templates for the assignment blast, the D−15 follow-up and the D−10/−7/−5 nudge (his

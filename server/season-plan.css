@@ -65,6 +65,8 @@
   background: var(--pjl-amber); border-color: var(--pjl-amber); color: #fff;
 }
 
+.sp-cadence-status { margin: 10px 0 0; font-size: 0.85rem; color: var(--pjl-text-muted); }
+
 /* Public booking window — the season gate's dates, edited in place.
    44px date inputs: this gets used from a phone in a truck. */
 .sp-bwindow { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
