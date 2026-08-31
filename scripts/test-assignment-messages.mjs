@@ -53,7 +53,8 @@ const EXPECTED_KEYS = [
   "assignment_email", "assignment_sms",
   "followup_email", "followup_sms",
   "nudge_email", "nudge_sms",
-  "reminder24_sms"
+  "reminder24_sms",
+  "daymove_email", "daymove_sms"
 ];
 
 ok("every cadence step has its templates — the universe is exactly the spec's",
@@ -78,7 +79,7 @@ for (const key of EXPECTED_KEYS) {
 // that asks for an answer carries exactly one {appointmentLink}, where
 // the customer decides (confirm / reschedule / cancel). Two links
 // doubled the URLs and split each SMS into extra segments.
-for (const key of ["assignment_email", "assignment_sms", "followup_email", "followup_sms", "nudge_email", "nudge_sms"]) {
+for (const key of ["assignment_email", "assignment_sms", "followup_email", "followup_sms", "nudge_email", "nudge_sms", "daymove_email", "daymove_sms"]) {
   const links = [...messages.DEFAULT_TEMPLATES[key].body.matchAll(/\{appointmentLink\}/g)].length;
   ok(`${key} carries exactly ONE appointment link`, links === 1, `${links} links`);
   ok(`${key} carries no legacy split links`,
@@ -100,6 +101,22 @@ ok("...and asks customers to move only if no one can be home",
 ok("{price} is a real merge field with a real fallback",
   "price" in messages.MERGE_FIELDS
   && messages.contextForBooking({ serviceKey: "fall_close_4z" }).price.startsWith("$"));
+
+// Cadence rule 6: the day-move message NAMES THE CHANGE.
+ok("the day-move templates say 'was {oldDate}' rather than restating the new date as if it were always so",
+  messages.DEFAULT_TEMPLATES.daymove_sms.body.includes("was {oldDate}")
+  && messages.DEFAULT_TEMPLATES.daymove_email.body.includes("Was: {oldDate}")
+  && messages.DEFAULT_TEMPLATES.daymove_email.body.includes("Now: {date}"));
+{
+  const ctx = messages.contextForBooking({
+    customerName: "Kristen Holmes", serviceKey: "fall_close_4z",
+    address: "90 Oriole Drive, East Gwillimbury, ON",
+    scheduledFor: new Date(2026, 9, 3, 8, 0).toISOString(),
+    assignment: { bucket: "morning" }
+  }, { appointmentLink: "https://pjllandservices.com/a/AbCdEf123456", oldDate: "Monday, September 28" });
+  const len = messages.render("daymove_sms", ctx).body.length;
+  ok(`the day-move SMS fits two segments with both dates spelled out (${len} chars)`, len <= 306, String(len));
+}
 
 // The segment budget behind the one-link decision: rendered with a
 // realistic link, every SMS fits in at most TWO segments (306 chars

@@ -482,6 +482,60 @@ async function setAssignmentOutreach(id, patch, { action = "cadence", by = "syst
   return next;
 }
 
+// Patrick moved a WHOLE ROUTE DAY (stage 6): this booking rides along.
+// Deliberately NOT reschedule(): the day move is plan steering, so it
+// does not bump rescheduleCount (the customer keeps their one self-serve
+// move, and the time sweep keeps steering the record). Cadence rule 6:
+// the old confirmation was for the old date — a moved day is a new
+// promise needing a new acknowledgment — so the response state resets
+// (stashed into history, never lost) and, when the customer was already
+// messaged, a day-move notice is queued for the cadence sweep to send
+// inside the send window. A queued notice that hasn't gone out yet keeps
+// its ORIGINAL oldDate through further moves: the customer is told
+// "was Sept 28, now Oct 3", not a chain of intermediate hops.
+async function moveAssignmentDay(id, { toDate, scheduledFor, oldDate, resetResponse = true, queueNotice = false, by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const current = records[idx];
+  if (!current.assignment) throw new Error(`${id} is not an assignment booking.`);
+  const now = new Date().toISOString();
+  const outreach = { ...(current.assignment.outreach || {}) };
+  const history = [...(current.history || [])];
+
+  if (resetResponse && outreach.respondedAt) {
+    history.push({
+      ts: now, action: "response_reset", by,
+      note: `Day moved — previous answer (${outreach.responseVia} at ${outreach.respondedAt}) no longer covers the new date.`
+    });
+    delete outreach.respondedAt;
+    delete outreach.responseVia;
+    delete outreach.responseBy;
+  }
+  if (queueNotice) {
+    outreach.pendingDayMove = {
+      oldDate: outreach.pendingDayMove?.oldDate || oldDate,
+      newDate: toDate,
+      queuedAt: now
+    };
+  }
+  history.push({
+    ts: now, action: "day_moved", by,
+    note: `${oldDate} → ${toDate} (route day moved)`
+  });
+
+  const next = {
+    ...current,
+    scheduledFor: new Date(scheduledFor).toISOString(),
+    assignment: { ...current.assignment, date: toDate, outreach },
+    updatedAt: now,
+    history
+  };
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
 // The customer chose the FREE BUCKET: they're normally home (or can be
 // on short notice), so the job runs whenever PJL is in the area and the
 // tech calls ahead with an ETA. The booking KEEPS its current date as
@@ -600,6 +654,7 @@ module.exports = {
   createDirect,
   setAssignmentOutreach,
   markAssignmentResponded,
+  moveAssignmentDay,
   setFreeBucket,
   setRequestedWindow,
   update,

@@ -90,7 +90,8 @@
     { title: "Step 1 — The assignment (sent to everyone at the blast)", keys: ["assignment_email", "assignment_sms"] },
     { title: "Step 2 — Follow-up, 15 days before (non-responders only)", keys: ["followup_email", "followup_sms"] },
     { title: "Steps 3–5 — Your nudge, at 10 / 7 / 5 days (non-responders only)", keys: ["nudge_email", "nudge_sms"] },
-    { title: "Step 6 — 24-hour reminder (text, sent to everyone)", keys: ["reminder24_sms"] }
+    { title: "Step 6 — 24-hour reminder (text, sent to everyone)", keys: ["reminder24_sms"] },
+    { title: "Day moved — sent when you slide a whole route day", keys: ["daymove_email", "daymove_sms"] }
   ];
 
   function renderEditors() {

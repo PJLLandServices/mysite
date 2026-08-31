@@ -94,7 +94,7 @@ Full rationale in the build-plan artifact; this is the working checklist.
 | 3 | **The messages.** Templates for steps 1, 2, 3–5, 6. Preview per customer. Patrick edits. | **done** |
 | 4 | **The blast + the cadence engine.** `sendBulk` reuse, `type` on touches, the sweep, the response tracking, the manual mark. Test send first. | **done** |
 | 5 | **The reply path.** Confirm link (magic token → records response). Reschedule via portal already exists — verify it composes with the geography filter and re-anchoring. | **done** |
-| 6 | **Day-move re-notify.** Replaces the hard refusal from PR #87 with move + re-notify + response reset. | |
+| 6 | **Day-move re-notify.** Replaces the hard refusal from PR #87 with move + re-notify + response reset. | **done** |
 
 ## Part 5 — Known traps (verified in code, not hypothetical)
 
@@ -114,6 +114,33 @@ Full rationale in the build-plan artifact; this is the working checklist.
 
 Newest first. Every stage PR adds its entry.
 
+- *2026-08-31 — STAGE 6 SHIPPED. THE CONTRACT IS COMPLETE. Moving a
+  route day now takes its assignment bookings with it:
+  `assignments.moveDayBookings` (after `seasonPlans.moveDay`) re-dates
+  each booking to its NEW sequenced arrival, RESETS response state
+  (cadence rule 6 — the old confirmation was for the old date; the old
+  answer is stashed in history, never lost), and queues a day-move
+  notice that NAMES THE CHANGE ("was {oldDate}, now {date}" — new
+  daymove_email/daymove_sms templates, editable like the rest). The
+  cadence sweep dispatches the notice once, inside the send window,
+  mark-before-send like the numbered steps; a notice that hasn't gone
+  out yet keeps its ORIGINAL old date through further moves.*
+  *DECIDED HERE, PER THE CONTRACT: (a) the day move does NOT bump
+  rescheduleCount — it is plan steering, so the customer keeps their one
+  self-serve move and the time sweep keeps steering the record; (b)
+  FREE-BUCKET customers move silently and keep their answer — they said
+  "any day works" and the tech calls them regardless; (c) an UNMESSAGED
+  booking moves with no notice — no promise was broken; (d) a booking
+  the customer moved off the day themselves is theirs and is not
+  touched; (e) what still refuses a move is a NON-assignment booking on
+  the day (a lead-backed appointment the customer made) — the writer has
+  no standing to move those, so Patrick reschedules them from the
+  calendar (which notifies) first. The season-plans STORE is untouched
+  — its guard still takes the caller's count; the caller now counts
+  only non-assignment bookings (test-day-reschedule's 59 unchanged).
+  Cadence suite grows to 42 assertions (the whole move → reset → queue →
+  once-ever dispatch → new-D−1 reminder arc); messages to 77 (rule-6
+  wording pinned, two-segment budget with both dates spelled out).*
 - *2026-08-31 — THE LIVE-REVIEW BATCH (Patrick walked Nishka's page).
   Eight changes, all his: (1) the page addresses the customer by FULL
   NAME — it's a private link; (2) the customer's PRICE shows on the page

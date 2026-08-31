@@ -558,7 +558,12 @@
         // Saturdays and Sundays are allowed but said out loud, because
         // landing on one by accident reads exactly like landing on one on
         // purpose until somebody drives out on a Sunday.
+        const dm = data.dayMove || {};
         showToast(`${moved.label || "Day"} moved to ${prettyDate(toDate)}.`
+          + (dm.moved ? ` ${dm.moved} booking${dm.moved === 1 ? "" : "s"} moved along` : "")
+          + (dm.noticesQueued ? `, ${dm.noticesQueued} customer${dm.noticesQueued === 1 ? "" : "s"} will be re-notified` : "")
+          + (dm.responsesReset ? `, ${dm.responsesReset} confirmation${dm.responsesReset === 1 ? "" : "s"} reset for the new date` : "")
+          + (dm.moved ? "." : "")
           + (moved.weekend ? " That is a weekend." : ""), moved.weekend ? "warn" : "ok");
       } catch (error) {
         showToast(error.message, "bad");

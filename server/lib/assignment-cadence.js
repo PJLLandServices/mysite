@@ -243,6 +243,101 @@ async function sendStepForBooking(booking, step, { season, year, deps = {}, by =
   return { sent, errors };
 }
 
+// The day-move notice (stage 6, cadence rule 6). Fires ONCE per queued
+// move, inside the send window, naming the change ("was X, now Y").
+// Same mark-before-send discipline as the numbered steps: the pending
+// flag is consumed BEFORE the wire is touched, so a crash loses at most
+// one notice and can never repeat one.
+async function sendDayMoveForBooking(booking, { season, year, deps = {}, by = "cadence-sweep" }) {
+  const getProperty = deps.getProperty || properties.get;
+  const sendEmail = deps.sendEmail || notify.sendOutreachEmail;
+  const sendSms = deps.sendSms || notify.sendOutreachSms;
+  const recordTouch = deps.recordTouch || properties.recordOutreachTouch;
+  const setOutreach = deps.setAssignmentOutreach || bookings.setAssignmentOutreach;
+
+  const pending = booking.assignment.outreach?.pendingDayMove;
+  if (!pending) return { skipped: true, reason: "nothing_pending" };
+
+  const property = booking.propertyId ? await getProperty(booking.propertyId) : null;
+  const gate = cadenceGates(property, season, year);
+  if (!gate.ok) {
+    // An opted-out (or vanished) customer can't be told — clear the
+    // flag so the sweep doesn't retry forever, and leave the skip on
+    // the record for the panel to show.
+    await setOutreach(booking.id, { pendingDayMove: null, dayMoveNotice: { ...pending, skipped: gate.reason, at: new Date().toISOString() } },
+      { action: "day_move_notice_skipped", by, note: gate.reason });
+    return { skipped: true, reason: gate.reason };
+  }
+
+  const token = booking.assignment.outreach?.token || mintToken();
+  const [y, m, d] = String(pending.oldDate).split("-").map(Number);
+  const oldDateLabel = new Date(y, m - 1, d).toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" });
+  let priceExtra = {};
+  try {
+    const resolved = resolveSeasonalPrice(property, season === "spring" ? "spring_opening" : "fall_closing");
+    if (resolved?.label) priceExtra = { price: resolved.label };
+  } catch { /* tier fallback stands */ }
+  const step = { n: "daymove", template: "daymove", channels: ["email", "sms"] };
+  const messages = renderStep(booking, step, token, { oldDate: oldDateLabel, ...priceExtra });
+
+  const capability = gate.capability;
+  const attempted = [];
+  if (messages.email && capability.emailChannel.possible) attempted.push("email");
+  if (messages.sms && capability.sms.possible) attempted.push("sms");
+  if (!attempted.length) {
+    await setOutreach(booking.id, { pendingDayMove: null, dayMoveNotice: { ...pending, skipped: "no_deliverable_channel", at: new Date().toISOString() } },
+      { action: "day_move_notice_skipped", by, note: "no_deliverable_channel" });
+    return { skipped: true, reason: "no_deliverable_channel" };
+  }
+
+  // Mark first — consume the pending flag before any send.
+  await setOutreach(booking.id, {
+    token,
+    pendingDayMove: null,
+    dayMoveNotice: { ...pending, at: new Date().toISOString(), attempted }
+  }, { action: "day_move_notice", by, note: `${pending.oldDate} → ${pending.newDate}, ${attempted.join("+")}` });
+
+  const unsubscribe = property.optOutTokens ? outreach.buildUnsubscribeUrls(property) : { email: "", all: "" };
+  const sent = [];
+  const errors = [];
+  if (attempted.includes("email")) {
+    const r = await sendEmail({
+      to: capability.email,
+      firstName: assignmentMessages.contextForBooking(booking).firstName,
+      propertyAddress: "", seasonName: "",
+      portalLink: appointmentLinkFor(token),
+      ctaLabel: "Open your appointment page",
+      subject: messages.email.subject,
+      emailBody: messages.email.body,
+      unsubscribeUrlEmail: unsubscribe.email,
+      unsubscribeUrlAll: unsubscribe.all
+    });
+    if (r.ok) sent.push("email");
+    else errors.push({ channel: "email", error: r.error || r.reason || "failed" });
+  }
+  if (attempted.includes("sms")) {
+    const r = await sendSms({
+      to: capability.phone,
+      firstName: assignmentMessages.contextForBooking(booking).firstName,
+      propertyAddress: "", seasonName: "", portalLink: "",
+      smsBody: messages.sms.body
+    });
+    if (r.ok) sent.push("sms");
+    else errors.push({ channel: "sms", error: r.error || r.reason || "failed" });
+  }
+  await setOutreach(booking.id, {
+    dayMoveNotice: { ...pending, at: new Date().toISOString(), attempted, sent, ...(errors.length ? { errors } : {}) }
+  }, { action: "day_move_notice_result", by, note: `sent ${sent.join("+") || "nothing"}` });
+  if (sent.length) {
+    await recordTouch(property.id, {
+      season, year, channels: sent, by,
+      messageBatchId: booking.assignment.batchId || null,
+      type: "assignment", step: 0
+    });
+  }
+  return { sent, errors };
+}
+
 // Live, sendable assignment bookings for a season.
 async function cadenceBookings(season, year, listBookings) {
   return (await listBookings()).filter((b) =>
@@ -308,6 +403,14 @@ async function sweepDue(season, year, { deps = {}, now = new Date(), appointment
     for (const b of mine) {
       const outreachState = b.assignment.outreach;
       if (!outreachState?.steps?.["1"]) continue;   // never blasted — the cadence hasn't started
+      // Queued day-move notices go out first — "your day changed" beats
+      // any reminder about the day.
+      if (outreachState.pendingDayMove) {
+        const outcome = await sendDayMoveForBooking(b, { season, year, deps });
+        if (outcome.skipped) result.skipped += 1;
+        else if (outcome.sent && outcome.sent.length) result.sent += 1;
+        else result.errors += 1;
+      }
       for (const step of STEPS) {
         if (step.blast) continue;
         if (outreachState.steps[String(step.n)]) continue;               // rule 1
@@ -353,6 +456,7 @@ module.exports = {
   sweepDue,
   status,
   sendStepForBooking,
+  sendDayMoveForBooking,
   renderStep,
   dueDateKeyFor,
   insideSendWindow,
