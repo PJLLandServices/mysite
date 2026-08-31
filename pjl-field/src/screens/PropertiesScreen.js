@@ -6,6 +6,12 @@
 // one town, and section headers so a scroll still tells you where you
 // are.
 //
+// Town is chosen from a dropdown rather than a strip of chips. The chip
+// row was sized for the eighteen towns the service-area pages list;
+// the real book has thirty-odd, alphabetical, so reaching Newmarket
+// meant swiping past twenty of them. A sheet shows the whole list at
+// once, with counts, and the current choice sits in the button.
+//
 // There is no avatar. The first version put a circle on each row showing
 // the first character of the address, which on a street address is the
 // house number — a column of meaningless digits. Nothing else about a
@@ -14,9 +20,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  FlatList,
+  Modal,
   Pressable,
   RefreshControl,
-  ScrollView,
   SectionList,
   StyleSheet,
   Text,
@@ -35,6 +42,7 @@ export default function PropertiesScreen({ onOpen }) {
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [town, setTown] = useState(null); // null = all towns
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
@@ -141,23 +149,18 @@ export default function PropertiesScreen({ onOpen }) {
           clearButtonMode="while-editing"
           returnKeyType="search"
         />
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chips}
-          keyboardShouldPersistTaps="handled"
+        <Pressable
+          onPress={() => setPickerOpen(true)}
+          style={({ pressed }) => [styles.picker, pressed && styles.pickerPressed]}
+          accessibilityRole="button"
+          accessibilityLabel={`Filter by town. Currently ${town || 'all towns'}.`}
         >
-          <Chip label="All" count={decorated.length} active={town === null} onPress={() => setTown(null)} />
-          {towns.map((t) => (
-            <Chip
-              key={t.name}
-              label={t.name}
-              count={t.count}
-              active={town === t.name}
-              onPress={() => setTown(town === t.name ? null : t.name)}
-            />
-          ))}
-        </ScrollView>
+          <Text style={[styles.pickerLabel, town && styles.pickerLabelActive]} numberOfLines={1}>
+            {town || 'All towns'}
+          </Text>
+          <Text style={styles.pickerCount}>{total}</Text>
+          <Text style={styles.pickerChevron}>⌄</Text>
+        </Pressable>
       </View>
 
       <SectionList
@@ -195,21 +198,43 @@ export default function PropertiesScreen({ onOpen }) {
           </Pressable>
         )}
       />
-    </View>
-  );
-}
 
-function Chip({ label, count, active, onPress }) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={[styles.chip, active && styles.chipActive]}
-      accessibilityRole="button"
-      accessibilityState={{ selected: active }}
-    >
-      <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
-      <Text style={[styles.chipCount, active && styles.chipTextActive]}>{count}</Text>
-    </Pressable>
+      <Modal
+        visible={pickerOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setPickerOpen(false)}
+      >
+        <Pressable style={styles.backdrop} onPress={() => setPickerOpen(false)} />
+        <View style={styles.sheet}>
+          <View style={styles.grabber} />
+          <Text style={styles.sheetTitle}>Filter by town</Text>
+          <FlatList
+            data={[{ key: '__all', name: null, label: 'All towns', count: decorated.length }]
+              .concat(towns.map((t) => ({ key: t.name, name: t.name, label: t.name, count: t.count })))}
+            keyExtractor={(item) => item.key}
+            style={styles.sheetList}
+            renderItem={({ item }) => {
+              const selected = town === item.name;
+              return (
+                <Pressable
+                  onPress={() => { setTown(item.name); setPickerOpen(false); }}
+                  style={({ pressed }) => [styles.sheetRow, pressed && styles.rowPressed]}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                >
+                  <Text style={[styles.sheetRowText, selected && styles.sheetRowSelected]} numberOfLines={1}>
+                    {item.label}
+                  </Text>
+                  <Text style={styles.sheetRowCount}>{item.count}</Text>
+                  <Text style={[styles.check, !selected && styles.checkHidden]}>✓</Text>
+                </Pressable>
+              );
+            }}
+          />
+        </View>
+      </Modal>
+    </View>
   );
 }
 
@@ -234,20 +259,54 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.text,
   },
-  chips: { paddingHorizontal: space.md, paddingBottom: space.md, gap: space.sm },
-  chip: {
+  picker: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: space.sm,
     backgroundColor: colors.card,
-    borderRadius: radius.pill,
-    paddingHorizontal: 13,
-    paddingVertical: 7,
+    borderRadius: radius.card,
+    marginHorizontal: space.md,
+    marginBottom: space.md,
+    paddingHorizontal: space.md,
+    paddingVertical: 11,
   },
-  chipActive: { backgroundColor: colors.brand },
-  chipText: { fontSize: 14, fontWeight: '600', color: colors.textMuted },
-  chipCount: { fontSize: 12, color: colors.textFaint, fontVariant: ['tabular-nums'] },
-  chipTextActive: { color: '#fff' },
+  pickerPressed: { opacity: 0.7 },
+  pickerLabel: { flex: 1, fontSize: 16, fontWeight: '600', color: colors.textMuted },
+  pickerLabelActive: { color: colors.brand },
+  pickerCount: { ...type.caption, fontVariant: ['tabular-nums'] },
+  pickerChevron: { color: colors.textFaint, fontSize: 15, marginTop: -3 },
+
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(17,24,28,0.35)' },
+  sheet: {
+    position: 'absolute',
+    left: 0, right: 0, bottom: 0,
+    maxHeight: '72%',
+    backgroundColor: colors.card,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    paddingBottom: space.xl,
+  },
+  grabber: {
+    width: 38, height: 4, borderRadius: 2,
+    backgroundColor: colors.separator,
+    alignSelf: 'center', marginTop: space.sm, marginBottom: space.md,
+  },
+  sheetTitle: { ...type.section, marginHorizontal: space.lg, marginBottom: space.sm },
+  sheetList: { flexGrow: 0 },
+  sheetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    paddingHorizontal: space.lg,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.separator,
+  },
+  sheetRowText: { flex: 1, ...type.body },
+  sheetRowSelected: { color: colors.brand, fontWeight: '600' },
+  sheetRowCount: { ...type.caption, fontVariant: ['tabular-nums'] },
+  check: { color: colors.brand, fontSize: 16, width: 16, textAlign: 'center' },
+  checkHidden: { opacity: 0 },
 
   sectionHeader: {
     flexDirection: 'row',
