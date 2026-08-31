@@ -55,6 +55,7 @@ const routeOriginLib = require("./lib/route-origin");
 const routeMap = require("./lib/route-map");
 const routeGeometry = require("./lib/route-geometry");
 const assignments = require("./lib/assignments");
+const assignmentMessages = require("./lib/assignment-messages");
 const seasonsLib = require("./lib/seasons");
 const customers = require("./lib/customers");
 const workOrders = require("./lib/work-orders");
@@ -1178,6 +1179,9 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/season-plans")) return "user";
   if (pathname === "/api/maps-config") return "user";
   if (pathname.startsWith("/api/assignments")) return "user";
+  // Assignment message templates — reading is staff; saving re-checks admin.
+  if (pathname.startsWith("/api/assignment-messages")) return "user";
+  if (pathname === "/admin/assignment-messages" || pathname === "/admin/assignment-messages/") return "user";
   // Season booking-window editor — it moves what the public can book.
   if (pathname.startsWith("/api/seasons")) return "user";
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") return "user";
@@ -21603,6 +21607,80 @@ Customer signature captured at ${new Date().toISOString()}.`;
     }
   }
 
+  // Assignment writer stage 3 — the message templates. Reading and
+  // previewing are staff-level; SAVING wording that will reach customers
+  // is admin-only (Patrick has final edit, per the spec). Nothing here
+  // sends anything.
+  if (pathname === "/api/assignment-messages" && req.method === "GET") {
+    try {
+      await requireUser(req);
+      return sendJson(res, 200, {
+        ok: true,
+        templates: assignmentMessages.listTemplates(),
+        mergeFields: assignmentMessages.MERGE_FIELDS
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't load the templates."] });
+    }
+  }
+  const messageKeyMatch = pathname.match(/^\/api\/assignment-messages\/([a-z0-9_]+)$/);
+  if (messageKeyMatch && req.method === "PUT") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) {
+        return sendJson(res, 403, { ok: false, errors: ["Editing customer-facing wording needs an admin login."] });
+      }
+      const body = await parseRequestBody(req);
+      const saved = assignmentMessages.setTemplate(messageKeyMatch[1], {
+        subject: body.subject,
+        body: body.body
+      }, { actor: session?.email || session?.name || "admin" });
+      return sendJson(res, 200, { ok: true, template: saved });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't save that template."] });
+    }
+  }
+  // Preview: real assignment bookings for the season, and every message
+  // rendered against the chosen one. With none assigned yet, a sample
+  // customer keeps the screen usable.
+  const messagePreviewMatch = pathname.match(/^\/api\/assignment-messages\/preview\/(spring|fall)\/(\d{4})$/);
+  if (messagePreviewMatch && req.method === "GET") {
+    try {
+      await requireUser(req);
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const season = messagePreviewMatch[1];
+      const year = Number(messagePreviewMatch[2]);
+      const mine = (await bookings.list()).filter((b) =>
+        b && b.source === "assignment" && b.assignment
+        && b.assignment.season === season && Number(b.assignment.year) === year
+        && b.status === "confirmed");
+      mine.sort((a, b) => new Date(a.scheduledFor) - new Date(b.scheduledFor));
+      const wanted = url.searchParams.get("bookingId");
+      const chosen = (wanted && mine.find((b) => b.id === wanted)) || mine[0] || {
+        customerName: "Sample Customer",
+        address: "90 Oriole Drive, East Gwillimbury, ON",
+        scheduledFor: new Date(year, 8, 28, 8, 0).toISOString(),
+        assignment: { bucket: "morning" }
+      };
+      const rendered = assignmentMessages.renderAllForBooking(chosen);
+      return sendJson(res, 200, {
+        ok: true,
+        sample: !chosen.id,
+        chosenId: chosen.id || null,
+        candidates: mine.map((b) => ({
+          id: b.id,
+          customerName: b.customerName,
+          date: b.assignment.date,
+          bucket: b.assignment.bucket,
+          code: b.assignment.code
+        })),
+        ...rendered
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't render the preview."] });
+    }
+  }
+
   // Assignment writer stage 2 — turn the plan into confirmed bookings.
   // ADMIN ONLY (not tech): this writes real appointments onto real
   // customers in one press. Sends nothing — messaging is stage 4.
@@ -22238,6 +22316,9 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") {
     return { dir: SERVER_DIR, relative: "/handoff.html" };
+  }
+  if (pathname === "/admin/assignment-messages" || pathname === "/admin/assignment-messages/") {
+    return { dir: SERVER_DIR, relative: "/assignment-messages.html" };
   }
   // Seasonal outreach (feature-seasonal-outreach-brief.md). Property-
   // driven bulk send page for the spring + fall booking nudge.
