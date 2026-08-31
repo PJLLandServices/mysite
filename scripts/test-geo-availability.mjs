@@ -113,6 +113,11 @@ const baseArgs = {
   daysAhead: 20,
   hours: DEFAULT_HOURS,
   settings: DEFAULT_SETTINGS,
+  // Season gate off: this suite tests GEOGRAPHY in isolation. The real
+  // fall 2026 window (public booking opens Sep 28) would gate the fixture
+  // days below on its own; the gate has its own acceptance suite in
+  // test-booking-guards.mjs, including runs against the live config.
+  seasonWindows: () => null,
   now: NOW
 };
 

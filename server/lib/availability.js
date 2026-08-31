@@ -20,9 +20,11 @@
 //                     populated:
 //                       geoSuppressed: [{ date, label, addedDriveMinutes }]
 //                         — "we are not in your area that day"
-//                       seasonClosed:  [{ date, publicBookingThrough }]
-//                         — the day falls after the season's public
-//                           booking cutoff
+//                       seasonClosed:  [{ date, publicBookingFrom }] or
+//                                      [{ date, publicBookingThrough }]
+//                         — the day falls outside the season's public
+//                           booking window; the entry names the bound it
+//                           hit (before opening vs after the cutoff)
 //                       bucketFull:    [{ date, bucket, planned, booked, cap }]
 //                         — the bucket's planned stops + unplanned
 //                           bookings already fill its capacity
@@ -44,7 +46,8 @@
 //   9. Cheap to insert into that day's planned route — added drive time
 //      ≤ settings.geoMaxAddedDriveMinutes. See dayShapes below.
 //  10. Inside the season's public booking window (seasons.json
-//      publicBookingThrough), for seasonal services only
+//      publicBookingFrom .. publicBookingThrough), for seasonal services
+//      only
 //  11. In a bucket with capacity left, when the day's shape carries a
 //      bucketCap from the season plan
 //
@@ -333,32 +336,39 @@ async function listAvailableSlots(opts = {}) {
   const results = [];
 
   // ---- Season gate setup ---------------------------------------------
-  // Seasonal services stop being publicly bookable after the season's
-  // publicBookingThrough date (seasons.json — the frost-stop discipline).
+  // Seasonal services are publicly bookable only inside the season's
+  // [publicBookingFrom .. publicBookingThrough] window (seasons.json).
+  // The front holds booking until routes actually run — fall 2026 opens
+  // Sep 28, the first planned route day; the back is the frost-stop
+  // discipline (fall 2026: Oct 30, keeping Nov 1–6 for admin placement).
   // Only the two seasonal families are gated; repairs, retrofits and site
   // visits book year-round. The lookup FAILS SOFT: a broken seasons.json
   // must degrade to ungated availability, never take the booking page
   // down — the same posture dayShapesForSeason takes when the season plan
-  // won't load. (serviceableFrom is deliberately NOT gated here; the spec
-  // wires publicBookingThrough only.)
+  // won't load. Either bound may be absent (null) and then does not gate.
   const seasonName = service.family === "fall_closing" ? "fall"
     : service.family === "spring_opening" ? "spring"
     : null;
   const seasonWindowsFn = seasonWindows || seasons.configFor;
-  const publicThroughByYear = new Map();
-  const publicBookingThroughFor = (year) => {
+  const seasonBoundsByYear = new Map();
+  const seasonBoundsFor = (year) => {
     if (!seasonName) return null;
-    if (!publicThroughByYear.has(year)) {
-      let through = null;
+    if (!seasonBoundsByYear.has(year)) {
+      let bounds = null;
       try {
         const cfgSeason = seasonWindowsFn(seasonName, year);
-        if (cfgSeason && cfgSeason.publicBookingThrough) through = cfgSeason.publicBookingThrough;
+        if (cfgSeason && (cfgSeason.publicBookingFrom || cfgSeason.publicBookingThrough)) {
+          bounds = {
+            from: cfgSeason.publicBookingFrom || null,
+            through: cfgSeason.publicBookingThrough || null
+          };
+        }
       } catch (err) {
         console.warn("[availability] season window unavailable, no season gate:", err?.message);
       }
-      publicThroughByYear.set(year, through);
+      seasonBoundsByYear.set(year, bounds);
     }
-    return publicThroughByYear.get(year);
+    return seasonBoundsByYear.get(year);
   };
 
   let dayAddedDrive = null;
@@ -374,10 +384,19 @@ async function listAvailableSlots(opts = {}) {
     // ---- Season gate --------------------------------------------------
     // YYYY-MM-DD strings compare correctly as strings. A gated day emits
     // no buckets at all; the geography filter below never runs for it.
-    const publicThrough = publicBookingThroughFor(day.getFullYear());
-    if (publicThrough && dateKey(day) > publicThrough) {
+    // The diagnostics entry names the bound it hit, so the calendar can
+    // say "booking opens Sep 28" and "the season has wrapped up" as two
+    // different things.
+    const bounds = seasonBoundsFor(day.getFullYear());
+    if (bounds && bounds.from && dateKey(day) < bounds.from) {
       if (diagnostics && Array.isArray(diagnostics.seasonClosed)) {
-        diagnostics.seasonClosed.push({ date: dateKey(day), publicBookingThrough: publicThrough });
+        diagnostics.seasonClosed.push({ date: dateKey(day), publicBookingFrom: bounds.from });
+      }
+      continue;
+    }
+    if (bounds && bounds.through && dateKey(day) > bounds.through) {
+      if (diagnostics && Array.isArray(diagnostics.seasonClosed)) {
+        diagnostics.seasonClosed.push({ date: dateKey(day), publicBookingThrough: bounds.through });
       }
       continue;
     }
@@ -599,6 +618,9 @@ function dateKey(d) {
 //                               very differently from a bare empty
 //                               calendar, which customers read as "they
 //                               have no availability".
+//   reason: "season_not_open" — the day falls before the season's
+//                               publicBookingFrom. "Booking opens Sep 28"
+//                               copy, not "we're full".
 //   reason: "season_closed"   — the day falls after the season's
 //                               publicBookingThrough cutoff. "The season
 //                               has wrapped up" copy, not "we're full".
@@ -630,7 +652,9 @@ function expandDaysToRange(slots, { from, to, hours, now, geoSuppressed = [], se
       let reason = "no_availability";
       if (cursor.getTime() < today.getTime()) reason = "past";
       else if (!dayHours[cursor.getDay()]) reason = "closed";
-      else if (closedSeason.has(key)) reason = "season_closed";
+      else if (closedSeason.has(key)) {
+        reason = closedSeason.get(key).publicBookingFrom ? "season_not_open" : "season_closed";
+      }
       else if (suppressed.has(key)) reason = "outside_route_area";
       out.push({
         date: key,

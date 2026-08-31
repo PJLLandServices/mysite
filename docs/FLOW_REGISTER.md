@@ -26,17 +26,28 @@ included; capacity is about Patrick's day, not geocoding luck) plus any real boo
 the day that is NOT one of them. The accounting never charges one house twice: a planned customer who
 books converts their stop into a booking (same rounded coordinate, the shape's own 4-decimal rule),
 and a planned customer asking for their own bucket adds no load — the plan itself put them there.
-**Season gate:** `seasons.json`'s `publicBookingThrough` finally has its consumer — days after it
-emit no public slots for the two seasonal families (fall 2026: Oct 30, keeping Nov 1–6 for admin
-placement); repairs/retrofits/site visits book year-round and never consult it. A broken
-`seasons.json` fails SOFT to ungated availability, the same posture as `dayShapesForSeason`.
+**Season gate:** the public booking window for seasonal services is now
+`[publicBookingFrom .. publicBookingThrough]` from `seasons.json`. The back is the frost-stop
+discipline (fall 2026: Oct 30, keeping Nov 1–6 for admin placement). The front — added the same day
+at Patrick's ask ("the customer also can't book before September 28th") — holds public booking until
+the routes actually run: fall 2026 opens **Sep 28**, the first planned route day, even though trucks
+are serviceable from Sep 1. `publicBookingFrom` is OPTIONAL in seasons.json and defaults to
+`serviceableFrom`, so spring and the year-agnostic defaults are unchanged; `seasons.js` refuses a
+`from` after the `through` (an empty window) at load. Repairs/retrofits/site visits book year-round
+and never consult any of it. A broken `seasons.json` fails SOFT to ungated availability, the same
+posture as `dayShapesForSeason`.
 Both gates live in the engine that every submission path re-validates through, so they gate
 submission too; admin custom-time bypasses by design. Suppressed days are diagnosable
-(`diagnostics.bucketFull` / `diagnostics.seasonClosed`; day reason `season_closed` beside
-`outside_route_area`). **The off switch is the data's absence** — no shape, no cap, or a pre-stage-1
-shape returns byte-identical slots, asserted against a baseline in `scripts/test-booking-guards.mjs`
-(25 assertions, in build:check); `test-geo-availability.mjs`'s 27 pass unchanged. FLOW-03 is PASS and
-was touched: engine re-verified, see the status row dated 2026-08-31.
+(`diagnostics.bucketFull` / `diagnostics.seasonClosed` naming the bound that was hit; day reasons
+`season_not_open` / `season_closed` beside `outside_route_area` — "booking opens Sep 28" and "the
+season has wrapped up" are different sentences). **The off switch is the data's absence** — no
+shape, no cap, or a pre-stage-1 shape returns byte-identical slots, asserted against a baseline in
+`scripts/test-booking-guards.mjs` (35 assertions, in build:check, including runs against the live
+config on both bounds); `test-geo-availability.mjs`'s 27 pass unchanged, with its fixtures now
+explicitly opting out of the season gate since its September fixture days sit before the real Sep 28
+opening — geography stays tested in isolation. The `test-season-config.mjs` sentinel now pins both
+bounds to exactly their two consumers. FLOW-03 is PASS and was touched: engine re-verified, see the
+status row dated 2026-08-31.
 
 **2026-08-31 (Assignment writer — spec locked, stage 0 shipped):** the assignment writer now has a
 locked spec at `docs/ASSIGNMENT_WRITER.md` — decisions A–G settled with Patrick, including his exact
@@ -1280,7 +1291,7 @@ Previously logged as a change order; **closed, already built.**
 | FLOW-05 | **PARTIAL** — submission walked 2026-08-03 | Page live, footer link repointed to `/book.html` (2026-08-02). **Submission walked 2026-08-03: `/estimate.html` submits successfully but routes to an external quotation combination rather than the CRM** — leads from this path never appear in the CRM, which explains the "no identifiable records" evidence from the JOB-001 export. It is an old form-builder flow. **Capability gap noted:** it produces a generated quotation the portal's own quote-request flow doesn't have. For future consideration; deliberately no job scoped (2026-08-03). |
 | FLOW-03 | **PASS** (re-verified) | Real booking completed through `/book.html` after the CTA change: $105 Spring Opening, work order WO-ZDQL272C, correct source tag and dollar value in CRM, phone + email notifications fired. |
 | FLOW-03 | **PASS — engine re-verified 2026-08-30, awaiting a walked booking** | Geography filter added to `listAvailableSlots()`. Automated acceptance in `scripts/test-geo-availability.mjs` (27 assertions, in `npm run build:check`): a Mississauga address is offered the Etobicoke–Mississauga route day and not the Newmarket one; a day with no planned route is untouched; a failed geocode is offered every day; the filter's off switch works; and with no `dayShapes` the engine returns byte-identical results to before, with every pre-existing slot field intact. Verified against the **real** fall-2026 plan and live property coordinates: all 11 route days resolve with zero unresolved stops, and each test address matches exactly one day — Mississauga R5 (+1 min, next best +66), Scarborough R10 (+5, next +33), Orangeville R3 (+3, next +34). **Known and accepted:** a Newmarket address is cheap on every day, because every route begins and ends at the Newmarket base, so a home-turf customer is genuinely reachable on any of them. Geography does not constrain home turf; capacity does, and bucket-capacity enforcement is not in this change. **Still owed:** a real booking walked through `/book.html` on production against a loaded plan. |
-| FLOW-03 | **PASS — engine re-verified 2026-08-31, awaiting a walked booking** | Bucket capacity + season gate added to `listAvailableSlots()` (assignment writer stage 1 — the capacity enforcement the 2026-08-30 row named as missing). Automated acceptance in `scripts/test-booking-guards.mjs` (25 assertions, in `npm run build:check`): a bucket whose planned stops + unplanned bookings reach `bucketCap` disappears from availability while its neighbour bucket survives; a planned customer is never refused their own bucket, and their own booking is not double-counted against it; an unresolved planned code still holds its space; days after `seasons.json`'s `publicBookingThrough` emit nothing for seasonal services (fall 2026: Oct 30, reserving Nov 1–6 for admin placement) and repairs are never season-gated. **The off switch is the data's absence**: with no `dayShapes`, a plan without `bucketCap`, or a pre-stage-1 shape, the engine returns byte-identical slots — asserted against a baseline run — and `test-geo-availability.mjs`'s 27 assertions pass unchanged. A broken `seasons.json` fails soft to ungated availability. Both gates run inside `listAvailableSlots()`, which every submission path re-validates through with `dayShapes` attached, so gating the engine gates submission; admin custom-time bypasses by design. **Still owed:** the same real walked booking as the row above. |
+| FLOW-03 | **PASS — engine re-verified 2026-08-31, awaiting a walked booking** | Bucket capacity + season gate added to `listAvailableSlots()` (assignment writer stage 1 — the capacity enforcement the 2026-08-30 row named as missing). Automated acceptance in `scripts/test-booking-guards.mjs` (35 assertions, in `npm run build:check`): a bucket whose planned stops + unplanned bookings reach `bucketCap` disappears from availability while its neighbour bucket survives; a planned customer is never refused their own bucket, and their own booking is not double-counted against it; an unresolved planned code still holds its space; days outside `seasons.json`'s public booking window emit nothing for seasonal services — fall 2026 opens **Sep 28** (`publicBookingFrom`, the first route day, added at Patrick's ask) and closes **Oct 30** (`publicBookingThrough`, reserving Nov 1–6 for admin placement) — and repairs are never season-gated. **The off switch is the data's absence**: with no `dayShapes`, a plan without `bucketCap`, or a pre-stage-1 shape, the engine returns byte-identical slots — asserted against a baseline run — and `test-geo-availability.mjs`'s 27 assertions pass unchanged. A broken `seasons.json` fails soft to ungated availability. Both gates run inside `listAvailableSlots()`, which every submission path re-validates through with `dayShapes` attached, so gating the engine gates submission; admin custom-time bypasses by design. **Still owed:** the same real walked booking as the row above. |
 
 ## Evidence — CRM export, 56 records, 2026-04-30 to 2026-07-29
 

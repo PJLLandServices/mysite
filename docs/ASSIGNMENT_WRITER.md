@@ -122,23 +122,31 @@ Newest first. Every stage PR adds its entry.
   planned code, unresolved included — an unresolved stop is still a job —
   and `keys` are the resolved stops' rounded coordinates so a planned
   customer's own booking, or their own booking attempt, is never charged
-  twice. The season gate reads `seasons.configFor().publicBookingThrough`
-  (fall 2026: Oct 30) for the two seasonal families only, and FAILS SOFT —
+  twice. The season gate reads `seasons.configFor()`'s public booking
+  window — `publicBookingFrom` to `publicBookingThrough` (fall 2026:
+  Sep 28 to Oct 30) — for the two seasonal families only, and FAILS SOFT —
   a broken seasons.json degrades to ungated availability rather than taking
   the booking page down. Both gates switch off by the data's absence:
   byte-identical slots with no shape / no cap / a pre-stage-1 shape,
-  asserted against a baseline in `scripts/test-booking-guards.mjs` (25
+  asserted against a baseline in `scripts/test-booking-guards.mjs` (35
   assertions). FLOW-03 re-verified (register row dated 2026-08-31);
   `test-geo-availability.mjs`'s 27 assertions unchanged.*
-  *DECIDED HERE, PER THE CONTRACT: (a) `serviceableFrom` does NOT gate the
-  front of the season — the spec names `publicBookingThrough` only; if early
-  days should also be held, that is a new decision for Patrick. (b) A
-  booking is assigned to the morning bucket when it starts before the
-  afternoon bucket opens (noon), else the afternoon — so an admin-custom
-  7 AM job still consumes morning capacity. (c) Suppressed days surface as
-  `diagnostics.bucketFull` / `diagnostics.seasonClosed`, and a season-gated
-  day carries day reason `season_closed` (informational, like
-  `outside_route_area` — no customer copy consumes it yet).*
+  *DECIDED HERE, PER THE CONTRACT: (a) the front of the season is gated by
+  a new OPTIONAL `publicBookingFrom` in seasons.json — Patrick's ask, same
+  day: "the customer also can't book before September 28th." Fall 2026
+  opens Sep 28 (the first planned route day); absent, the field defaults
+  to `serviceableFrom`, so spring and the defaults are unchanged. (The
+  first build shipped `publicBookingThrough` only, per the spec's letter;
+  Patrick named the front gate on review and it landed in the same PR.)
+  (b) A booking is assigned to the morning bucket when it starts before
+  the afternoon bucket opens (noon), else the afternoon — so an
+  admin-custom 7 AM job still consumes morning capacity. (c) Suppressed
+  days surface as `diagnostics.bucketFull` / `diagnostics.seasonClosed`
+  (naming the bound that was hit), and a season-gated day carries day
+  reason `season_not_open` or `season_closed` (informational, like
+  `outside_route_area` — no customer copy consumes them yet; candidate
+  for the stage-3 wording pass: "booking opens Sep 28" beats an empty
+  calendar).*
 - *2026-08-31 — STAGE 0 SHIPPED. `server/lib/assignments.js` preflight +
   `GET /api/assignments/:season/:year/preflight` + a panel on /admin/season-plan.
   The eligibility gauntlet was EXTRACTED from `outreach.sendBulk` into shared
