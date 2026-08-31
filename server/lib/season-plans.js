@@ -78,6 +78,8 @@ function planKey(season, year) {
 // "YYYY-MM-DD" -> true only if it is a real calendar date. new Date()
 // happily accepts 2026-02-31 and rolls it into March, which would put a
 // route day on a date the operator never typed.
+const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
 function isRealDate(key) {
   if (!DATE_RE.test(key)) return false;
   const [y, m, d] = key.split("-").map(Number);
@@ -156,6 +158,21 @@ function validate(input) {
     // save — and a manual order that survives one save and vanishes on the
     // next is worse than one that never worked.
     if (src.manualOrder === true) day.manualOrder = true;
+    // Time windows, same reason: validate() rebuilds each day from scratch,
+    // so anything not copied here is dropped on the next save. Only "HH:MM"
+    // survives — a half-typed value stored as a constraint is a constraint
+    // nobody can satisfy.
+    if (src.constraints && typeof src.constraints === "object") {
+      const kept = {};
+      for (const [code, raw] of Object.entries(src.constraints)) {
+        if (!raw || typeof raw !== "object") continue;
+        const window = {};
+        if (TIME_RE.test(String(raw.notBefore || ""))) window.notBefore = raw.notBefore;
+        if (TIME_RE.test(String(raw.notAfter || ""))) window.notAfter = raw.notAfter;
+        if (Object.keys(window).length) kept[String(code).slice(0, 40)] = window;
+      }
+      if (Object.keys(kept).length) day.constraints = kept;
+    }
     if (typeof src.frost === "string" && src.frost) day.frost = src.frost.slice(0, 40);
 
     for (const bucket of BUCKETS) {
@@ -267,6 +284,54 @@ async function moveStop(season, year, { propertyCode, toDate, toBucket }, { acto
   all[key] = revalidated;
   await writeAll(all);
   return { plan: revalidated, warnings, moved: { propertyCode: code, from, to: { date: toDate, bucket: toBucket } } };
+}
+
+// Set or clear a stop's time window.
+//
+// "Not before 10:00" is a locked gate or a customer who is out until then;
+// "not after 12:30" is a promise already made. Both are things the optimiser
+// cannot see and Patrick can.
+//
+// Passing null for either half clears it; clearing both removes the stop's
+// entry entirely rather than leaving an empty object behind to be reasoned
+// about later.
+async function setStopWindow(season, year, { date, propertyCode, notBefore, notAfter }, { actor = "admin" } = {}) {
+  const key = planKey(season, year);
+  const code = String(propertyCode || "").trim();
+  if (!isRealDate(String(date || ""))) throw new Error(`Not a calendar date: "${date}".`);
+  if (!code) throw new Error("propertyCode is required.");
+
+  const clean = (value, label) => {
+    if (value === null || value === undefined || value === "") return null;
+    const text = String(value).trim();
+    if (!TIME_RE.test(text)) throw new Error(`"${value}" is not a time — ${label} must look like 09:30.`);
+    return text;
+  };
+  const from = clean(notBefore, "not before");
+  const to = clean(notAfter, "not after");
+  if (from && to && from >= to) {
+    throw new Error(`Not before ${from} and not after ${to} leave no time to arrive in.`);
+  }
+
+  const all = await read();
+  const plan = all[key];
+  if (!plan) throw new Error(`No ${key} plan to edit.`);
+  const day = plan.days[date];
+  if (!day) throw new Error(`${date} is not a route day in this plan.`);
+  const onDay = [...(day.morning || []), ...(day.afternoon || [])].includes(code);
+  if (!onDay) throw new Error(`${code} is not a stop on ${date}.`);
+
+  day.constraints = day.constraints || {};
+  if (!from && !to) delete day.constraints[code];
+  else day.constraints[code] = { ...(from ? { notBefore: from } : {}), ...(to ? { notAfter: to } : {}) };
+  if (!Object.keys(day.constraints).length) delete day.constraints;
+
+  const { plan: revalidated, warnings } = validate(plan);
+  revalidated.updatedAt = new Date().toISOString();
+  revalidated.updatedBy = String(actor || "admin").slice(0, 80);
+  all[key] = revalidated;
+  await writeAll(all);
+  return { plan: revalidated, warnings, window: { date, propertyCode: code, notBefore: from, notAfter: to } };
 }
 
 // Move one stop up or down inside its own bucket.
@@ -425,6 +490,7 @@ function codesByDate(plan) {
 
 module.exports = {
   moveDay,
+  setStopWindow,
   reorderStop,
   clearManualOrder,
   FILE,

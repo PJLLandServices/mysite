@@ -295,6 +295,142 @@ await throws("clearing a day that is already automatic is refused rather than pr
   () => plans.clearManualOrder("fall", 2026, { date: "2026-09-29" }),
   /already optimised/);
 
+// ---- Time windows ----------------------------------------------------
+//
+// "Not before 10:00" is a locked gate; "not after 12:30" is a promise
+// already made. Neither is visible to an optimiser that can only see
+// driving minutes.
+//
+// Four properties carry the risk:
+//   1. A window must actually CHANGE the chosen order, not merely be stored.
+//   2. Waiting must be real — arriving early means sitting in the truck, and
+//      the rest of the day's times have to reflect that.
+//   3. A window that cannot be met is FLAGGED, never silently missed.
+//   4. With no windows anywhere, the old search must run untouched.
+
+ok("parseWindow accepts HH:MM and rejects everything else",
+  resequence.parseWindow("09:30") === 570
+  && resequence.parseWindow("00:00") === 0
+  && resequence.parseWindow("23:59") === 1439
+  && resequence.parseWindow("24:00") === null
+  && resequence.parseWindow("9:30") === null
+  && resequence.parseWindow("") === null
+  && resequence.parseWindow(null) === null);
+
+// Two stops, both trivially close to base, so DRIVING cannot decide the
+// order — only the window can. Without a window the optimiser is free to
+// pick either; with "not before", the constrained one must go second.
+const W = {
+  "P-A": { lat: 44.0360, lng: -79.4820 },
+  "P-B": { lat: 44.0361, lng: -79.4821 }
+};
+const wByCode = new Map(Object.entries(W).map(([code, coords]) =>
+  [code, { code, coords, zoneCount: 1, system: { zones: [1] } }]));
+const flat = async () => 5;
+
+const windowed = await resequence.sequenceDay({
+  label: "R9", morning: ["P-A", "P-B"], afternoon: [],
+  constraints: { "P-A": { notBefore: "10:00" } }
+}, { propertiesByCode: wByCode, base: BASE, travel: flat });
+
+const aEntry = windowed.timeline.find((t) => t.propertyCode === "P-A");
+ok("A 'NOT BEFORE' IS HONOURED — the stop is not arrived at earlier",
+  aEntry.arriveAt >= "10:00", aEntry.arriveAt);
+ok("...and the window travels onto the timeline so the screen can show it",
+  aEntry.notBefore === "10:00");
+ok("WAITING IS REAL — the constrained stop is second, after the free one",
+  windowed.timeline[1].propertyCode === "P-A",
+  windowed.timeline.map((t) => t.propertyCode).join(","));
+
+// The same day WITHOUT the window must not produce that arrival, or the
+// assertion above would pass for the wrong reason.
+const unwindowed = await resequence.sequenceDay({
+  label: "R9", morning: ["P-A", "P-B"], afternoon: []
+}, { propertiesByCode: wByCode, base: BASE, travel: flat });
+ok("THE SAME DAY WITHOUT THE WINDOW ARRIVES EARLY — proving the window did the work",
+  unwindowed.timeline.find((t) => t.propertyCode === "P-A").arriveAt < "10:00",
+  unwindowed.timeline.find((t) => t.propertyCode === "P-A").arriveAt);
+ok("...and carries no window on the timeline",
+  unwindowed.timeline[0].notBefore === undefined);
+
+// A window that cannot be met: the morning cannot reach 06:00.
+const impossible = await resequence.sequenceDay({
+  label: "R9", morning: ["P-A", "P-B"], afternoon: [],
+  constraints: { "P-A": { notAfter: "06:00" } }
+}, { propertiesByCode: wByCode, base: BASE, travel: flat });
+ok("AN UNMEETABLE WINDOW IS FLAGGED, NOT SILENTLY MISSED",
+  (impossible.flags || []).some((f) => f.code === "window_missed"
+    && f.propertyCode === "P-A"));
+ok("...and the day is still sequenced rather than refused",
+  impossible.timeline.length === 2);
+ok("...and the flag says how late it is, not just that it is late",
+  /min late/.test((impossible.flags || []).find((f) => f.code === "window_missed").message));
+
+// Long waits are worth saying out loud.
+const longWait = await resequence.sequenceDay({
+  label: "R9", morning: ["P-A"], afternoon: [],
+  constraints: { "P-A": { notBefore: "11:00" } }
+}, { propertiesByCode: wByCode, base: BASE, travel: flat });
+ok("a long wait for a window is flagged",
+  (longWait.flags || []).some((f) => f.code === "window_waiting"));
+
+// ---- The customer seam ------------------------------------------------
+//
+// Built now, unused today. When the booking pool can take a request, it is
+// passed in here and merges over the plan's own entry.
+
+const viaBooking = await resequence.sequenceDay({
+  label: "R9", morning: ["P-A", "P-B"], afternoon: []
+}, {
+  propertiesByCode: wByCode, base: BASE, travel: flat,
+  requestedWindows: { "P-A": { notBefore: "10:00" } }
+});
+ok("A REQUESTED WINDOW WORKS WITHOUT THE PLAN CARRYING ONE — the customer seam",
+  viaBooking.timeline.find((t) => t.propertyCode === "P-A").arriveAt >= "10:00");
+
+const bookingWins = await resequence.sequenceDay({
+  label: "R9", morning: ["P-A", "P-B"], afternoon: [],
+  constraints: { "P-A": { notBefore: "08:30" } }
+}, {
+  propertiesByCode: wByCode, base: BASE, travel: flat,
+  requestedWindows: { "P-A": { notBefore: "10:00" } }
+});
+ok("...and what the customer asked for beats the plan's standing default",
+  bookingWins.timeline.find((t) => t.propertyCode === "P-A").arriveAt >= "10:00",
+  bookingWins.timeline.find((t) => t.propertyCode === "P-A").arriveAt);
+
+// ---- Storing a window -------------------------------------------------
+
+await reseed();
+const set = await plans.setStopWindow("fall", 2026, {
+  date: "2026-09-28", propertyCode: "P-2026-0071", notBefore: "10:00", notAfter: "12:00"
+}, { actor: "patrick" });
+ok("the window is stored on the day",
+  set.plan.days["2026-09-28"].constraints["P-2026-0071"].notBefore === "10:00"
+  && set.plan.days["2026-09-28"].constraints["P-2026-0071"].notAfter === "12:00");
+
+await plans.savePlan("fall", 2026, await plans.getPlan("fall", 2026), { actor: "test" });
+ok("A WINDOW SURVIVES A SAVE — validate() rebuilds days and must copy it",
+  (await plans.getPlan("fall", 2026)).days["2026-09-28"].constraints["P-2026-0071"].notBefore === "10:00");
+
+const cleared2 = await plans.setStopWindow("fall", 2026,
+  { date: "2026-09-28", propertyCode: "P-2026-0071", notBefore: "", notAfter: "" });
+ok("clearing both halves removes the entry rather than leaving an empty object",
+  !cleared2.plan.days["2026-09-28"].constraints);
+
+await throws("a half-typed time is refused rather than stored as a constraint nobody can meet",
+  () => plans.setStopWindow("fall", 2026,
+    { date: "2026-09-28", propertyCode: "P-2026-0071", notBefore: "9am" }),
+  /is not a time/);
+await throws("a window with no time in it is refused",
+  () => plans.setStopWindow("fall", 2026,
+    { date: "2026-09-28", propertyCode: "P-2026-0071", notBefore: "14:00", notAfter: "10:00" }),
+  /no time to arrive in/);
+await throws("a window on a stop that is not on that day is refused",
+  () => plans.setStopWindow("fall", 2026,
+    { date: "2026-09-28", propertyCode: "P-2026-9999", notBefore: "10:00" }),
+  /not a stop on/);
+
 if (failures.length) {
   console.error(`\n✗ test-day-reschedule: ${failures.length} failed, ${pass} passed\n`);
   failures.forEach((f) => console.error(`  ✗ ${f}`));

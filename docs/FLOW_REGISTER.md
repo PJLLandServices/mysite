@@ -19,6 +19,41 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-30 (Time windows on a stop):** "not before 10:00" is a locked gate or a customer out
+until then; "not after 12:30" is a promise already made. Neither is visible to an optimiser that can
+only see driving minutes. Each stop now carries an optional window, set from the plan screen and
+stored on the day as `constraints[code]`.
+**SOFT, NOT REFUSED.** A window that cannot be met still gets sequenced and is flagged
+(`window_missed`, naming how many minutes late). Refusing would leave the day unsequenced, which is
+worse than a day that runs with one visible problem on it. A wait of 15 min or more raises
+`window_waiting` — a tight window can cost more than it is worth and should be visible.
+**WAITING IS MODELLED, because it is real.** Arriving before a gate opens means sitting in the
+truck, so the clock is held to `notBefore` and everything after it moves later — which means a
+window can now cause a genuine morning overrun, and it will show up as one.
+**The search became lexicographic** when any window exists: fewest missed windows, then least
+waiting, then least driving, then finishing nearest the yard. Driving drops to third on purpose — an
+order saving four minutes that arrives after the gate is locked has saved nothing.
+**When NO stop on a day has a window, the previous search runs completely untouched.** Every day in
+the current plan has none, so routing them through a new scorer to serve a case none of them have
+was not worth the risk; `test-resequence.mjs`'s 39 assertions still pass unchanged, which is the
+regression guarantee.
+**The clock walk was extracted into one `walk()` used by BOTH the search and the printed timeline.**
+Two implementations of "when does this day happen" is precisely how SEQ-02 printed times the route
+did not produce.
+**THE CUSTOMER SEAM IS BUILT AND UNUSED.** `sequenceDay(day, { requestedWindows })` merges a
+per-code window over the plan's own, and the customer's request wins — the plan entry is Patrick's
+standing guess about a property, the booking is what that customer actually asked for this time.
+Nothing in the booking flow supplies it yet; that flow does not exist. It is tested so that when the
+pool can take a request, the enabling is a wiring job and not a redesign.
+Above `EXACT_SEARCH_LIMIT` stops in a bucket the joint enumeration is not run, so windows cannot be
+optimised for; that case raises `windows_not_optimised` rather than letting the day look as though
+they were honoured. No bucket in the current plan is near it.
+`scripts/test-day-reschedule.mjs` grows to 59 assertions. The one the feature rests on: the same
+fixture WITHOUT the window arrives early, so the honoured-window assertion cannot pass for the wrong
+reason. Display and planning only — no PASS flow touched, though as with hand ordering the stored
+order feeds `buildDayShapes()`, so a window that changes the order also changes what the booking
+page can cheaply add to that day.
+
 **2026-08-30 (Hand ordering inside a bucket):** the optimiser is very good at the only thing it can
 see — driving minutes — and blind to everything it cannot: who is not home before ten, which gate is
 locked until nine, which north slope is better done before the frost comes off. There was nowhere to

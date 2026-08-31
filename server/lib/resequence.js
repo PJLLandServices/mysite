@@ -153,6 +153,40 @@ async function buildMatrix(points, travel, travelRaw) {
 // the choice becomes deliberate instead of arbitrary; outside it, a
 // genuinely shorter route still wins and the truck takes the longer
 // drive home.
+// Time windows on a stop: "not before 10:00", "not after 12:30".
+//
+// The optimiser can see driving minutes and nothing else. A locked gate, a
+// customer who is out until one, a north slope better done before the frost
+// lifts — none of that is visible to it, and this is how it gets in.
+//
+// SOFT, NOT REFUSED. When a window cannot be met the day is still sequenced
+// and the miss is flagged. A refusal would leave the day unsequenced, which
+// is worse than a day that runs with one visible problem on it.
+const WINDOW_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+function parseWindow(value) {
+  if (typeof value !== "string") return null;
+  const m = WINDOW_RE.exec(value.trim());
+  if (!m) return null;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+// { code -> {notBefore, notAfter} } in minutes, dropping anything unparseable
+// rather than silently treating it as no constraint at all.
+function windowsFor(day) {
+  const out = new Map();
+  const src = day && day.constraints;
+  if (!src || typeof src !== "object") return out;
+  for (const [code, raw] of Object.entries(src)) {
+    if (!raw || typeof raw !== "object") continue;
+    const notBefore = parseWindow(raw.notBefore);
+    const notAfter = parseWindow(raw.notAfter);
+    if (notBefore == null && notAfter == null) continue;
+    out.set(code, { notBefore, notAfter });
+  }
+  return out;
+}
+
 const FINISH_NEAR_BASE_TOLERANCE_MINUTES = 3;
 
 function bestDayOrder(cost, morningIdx, afternoonIdx) {
@@ -194,6 +228,53 @@ function bestDayOrder(cost, morningIdx, afternoonIdx) {
   const morning = bestOrder(cost, 0, morningIdx, null);
   const exit = morning.length ? morning[morning.length - 1] : 0;
   return { morning, afternoon: bestOrder(cost, exit, afternoonIdx, 0) };
+}
+
+// Choose an order when at least one stop has a time window.
+//
+// LEXICOGRAPHIC, and the priority order is the whole design:
+//
+//   1. fewest missed "not after" times   — a missed window is a job not done
+//   2. least waiting                     — waiting is unpaid time in a truck
+//   3. least driving                     — the old objective, now third
+//   4. finishing nearest the yard        — the existing tiebreak, kept
+//
+// Driving drops to third deliberately. An order that saves four minutes of
+// driving and arrives after a gate is locked has not saved anything.
+//
+// Every candidate is scored by walking the real clock, the same walk that
+// produces the printed timeline — so the order chosen and the times shown
+// can never come from different arithmetic.
+function bestConstrainedOrder(walk, morningIdx, afternoonIdx, cost) {
+  let best = null;
+  let bestScore = null;
+  for (const m of permutations(morningIdx)) {
+    for (const a of permutations(afternoonIdx)) {
+      const run = walk(m, a);
+      const seq = [...m, ...a];
+      const score = [
+        run.misses.length,
+        run.waitedMinutes,
+        run.driveMinutes + (seq.length ? cost[seq[seq.length - 1]][0] : 0),
+        seq.length ? cost[seq[seq.length - 1]][0] : 0
+      ];
+      if (bestScore === null || betterScore(score, bestScore)) {
+        bestScore = score;
+        best = { morning: m, afternoon: a };
+      }
+    }
+  }
+  return best || { morning: morningIdx, afternoon: afternoonIdx };
+}
+
+// Strictly-better on the first component that differs. A plain < on each in
+// turn would let a later component override an earlier one.
+function betterScore(a, b) {
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] < b[i] - 1e-9) return true;
+    if (a[i] > b[i] + 1e-9) return false;
+  }
+  return false;
 }
 
 function permutations(items) {
@@ -323,9 +404,140 @@ async function sequenceDay(day, opts = {}) {
   // still checked, and an overrun is still flagged. A manual day is not an
   // unchecked day — it is an unoptimised one.
   const manual = Boolean(day.manualOrder);
-  const { morning: morningOrder, afternoon: afternoonOrder } = manual
-    ? { morning: morningIdx, afternoon: afternoonIdx }
-    : bestDayOrder(cost, morningIdx, afternoonIdx);
+
+  // Walk the clock ONCE, here, and let the search call the same function to
+  // score candidates. Two implementations of "when does this day happen" is
+  // how the screen ends up printing times the route does not produce — the
+  // SEQ-02 lesson, in the module that taught it.
+  const windows = { morning: bucketWindow("morning"), afternoon: bucketWindow("afternoon") };
+
+  // THE CUSTOMER SEAM, deliberately built now and unused today.
+  //
+  // Patrick sets windows on the plan (day.constraints). A customer booking
+  // through the pool has no way to ask for one yet — that flow does not
+  // exist. When it does, whoever builds it passes the requested windows in
+  // here as { code -> {notBefore, notAfter} } and they merge on top of the
+  // plan's own, without this module or the plan store changing shape.
+  //
+  // The customer's request wins over the plan's default on purpose: the plan
+  // entry is Patrick's standing guess about a property, the booking is what
+  // that customer actually asked for this time.
+  const stopWindows = windowsFor(day);
+  for (const [code, raw] of Object.entries(opts.requestedWindows || {})) {
+    const notBefore = parseWindow(raw && raw.notBefore);
+    const notAfter = parseWindow(raw && raw.notAfter);
+    if (notBefore == null && notAfter == null) continue;
+    const existing = stopWindows.get(code) || {};
+    stopWindows.set(code, {
+      notBefore: notBefore == null ? (existing.notBefore ?? null) : notBefore,
+      notAfter: notAfter == null ? (existing.notAfter ?? null) : notAfter
+    });
+  }
+
+  function walk(mOrder, aOrder) {
+    const timeline = [];
+    const ends = {};
+    let clock = windows.morning.from;
+    let at = 0;
+    let driveMinutes = 0;
+    let waitedMinutes = 0;
+    const misses = [];
+
+    for (const bucket of BUCKETS) {
+      const order = bucket === "morning" ? mOrder : aOrder;
+      if (clock < windows[bucket].from) clock = windows[bucket].from;
+      for (const idx of order) {
+        const stop = stops[idx - 1];
+        const drive = matrix[at][idx];
+        driveMinutes += drive;
+        clock += drive;
+
+        // WAITING IS REAL. Arriving before a gate opens does not mean the
+        // job starts — it means sitting in the truck. Modelling that is what
+        // makes the rest of the day's times true, and what lets an overrun
+        // caused by a window actually show up as an overrun.
+        const window = stopWindows.get(stop.code);
+        if (window && window.notBefore != null && clock < window.notBefore) {
+          waitedMinutes += window.notBefore - clock;
+          clock = window.notBefore;
+        }
+        if (window && window.notAfter != null && clock > window.notAfter) {
+          misses.push({
+            propertyCode: stop.code,
+            arriveAt: minutesToHHmm(Math.round(clock)),
+            notAfter: minutesToHHmm(window.notAfter),
+            overBy: Math.round(clock - window.notAfter)
+          });
+        }
+
+        const work = onSiteMinutes(stop.property, season);
+        timeline.push({
+          // Position in the day's drive, 1-based and continuous across both
+          // buckets — it is one trip, not two. Display reads this rather
+          // than counting rows, so a screen rendering stops in any other
+          // order cannot silently disagree with the route.
+          stopNumber: timeline.length + 1,
+          bucket,
+          propertyCode: stop.code,
+          address: stop.property.address || "",
+          town: stop.property.town || "",
+          arriveAt: minutesToHHmm(Math.round(clock)),
+          leaveAt: minutesToHHmm(Math.round(clock + work.minutes)),
+          driveMinutes: drive,
+          onSiteMinutes: work.minutes,
+          zones: work.zones,
+          zonesEstimated: work.estimated,
+          ...(window ? {
+            notBefore: window.notBefore == null ? null : minutesToHHmm(window.notBefore),
+            notAfter: window.notAfter == null ? null : minutesToHHmm(window.notAfter)
+          } : {})
+        });
+        clock += work.minutes;
+        at = idx;
+      }
+      ends[bucket] = Math.round(clock);
+    }
+    return { timeline, ends, driveMinutes, waitedMinutes, misses, lastIndex: at };
+  }
+
+
+  // WHEN NOTHING IS CONSTRAINED, THE OLD SEARCH RUNS UNTOUCHED. Windows are
+  // rare; every day in the current plan has none. Routing those through a new
+  // scorer would risk changing eleven working days to serve a case none of
+  // them have, so the constrained search is only reached when a window exists.
+  const constrained = stops.some((s) => stopWindows.has(s.code));
+
+  let morningOrder;
+  let afternoonOrder;
+  if (manual) {
+    morningOrder = morningIdx;
+    afternoonOrder = afternoonIdx;
+  } else if (constrained && morningIdx.length <= EXACT_SEARCH_LIMIT
+      && afternoonIdx.length <= EXACT_SEARCH_LIMIT) {
+    const best = bestConstrainedOrder(walk, morningIdx, afternoonIdx, cost);
+    morningOrder = best.morning;
+    afternoonOrder = best.afternoon;
+  } else {
+    if (constrained) {
+      // Above the exact-search limit the joint enumeration is not run at
+      // all, so windows cannot be optimised for. Say so rather than let the
+      // day look as though they were honoured.
+      flags.push({
+        code: "windows_not_optimised",
+        message: `This day has more than ${EXACT_SEARCH_LIMIT} stops in a bucket, `
+          + "so the time windows were not used to choose the order. Any miss is still flagged."
+      });
+    }
+    const chosen = bestDayOrder(cost, morningIdx, afternoonIdx);
+    morningOrder = chosen.morning;
+    afternoonOrder = chosen.afternoon;
+  }
+
+  const walked = walk(morningOrder, afternoonOrder);
+  const { timeline, ends, misses, waitedMinutes } = walked;
+  let driveMinutes = walked.driveMinutes;
+  const homeDrive = stops.length ? matrix[walked.lastIndex][0] : 0;
+  driveMinutes += homeDrive;
 
   if (manual) {
     flags.push({
@@ -335,48 +547,24 @@ async function sequenceDay(day, opts = {}) {
     });
   }
 
-  // Walk the clock. Each bucket starts no earlier than its own window.
-  const timeline = [];
-  const windows = { morning: bucketWindow("morning"), afternoon: bucketWindow("afternoon") };
-  let clock = windows.morning.from;
-  let at = 0;
-  let driveMinutes = 0;
-  const ends = {};
-
-  for (const bucket of BUCKETS) {
-    const order = bucket === "morning" ? morningOrder : afternoonOrder;
-    if (clock < windows[bucket].from) clock = windows[bucket].from;
-    for (const idx of order) {
-      const stop = stops[idx - 1];
-      const drive = matrix[at][idx];
-      driveMinutes += drive;
-      clock += drive;
-      const work = onSiteMinutes(stop.property, season);
-      timeline.push({
-        // Position in the day's drive, 1-based and continuous across both
-        // buckets — it is one trip, not two. Display reads this rather
-        // than counting rows, so a screen rendering stops in any other
-        // order cannot silently disagree with the route.
-        stopNumber: timeline.length + 1,
-        bucket,
-        propertyCode: stop.code,
-        address: stop.property.address || "",
-        town: stop.property.town || "",
-        arriveAt: minutesToHHmm(Math.round(clock)),
-        leaveAt: minutesToHHmm(Math.round(clock + work.minutes)),
-        driveMinutes: drive,
-        onSiteMinutes: work.minutes,
-        zones: work.zones,
-        zonesEstimated: work.estimated
-      });
-      clock += work.minutes;
-      at = idx;
-    }
-    ends[bucket] = Math.round(clock);
+  // A window that could not be met. Loud, because the alternative is a day
+  // that quietly arrives after the gate is locked.
+  for (const miss of misses) {
+    flags.push({
+      code: "window_missed",
+      propertyCode: miss.propertyCode,
+      message: `${miss.propertyCode} is set to be done by ${miss.notAfter} but the route `
+        + `arrives ${miss.arriveAt}, ${miss.overBy} min late. Move it earlier, `
+        + "to another bucket, or to another day."
+    });
   }
-
-  const homeDrive = stops.length ? matrix[at][0] : 0;
-  driveMinutes += homeDrive;
+  if (waitedMinutes >= 15) {
+    flags.push({
+      code: "window_waiting",
+      message: `${waitedMinutes} min of the day is spent waiting for a "not before" time. `
+        + "Another order may waste less, or the window may be tighter than it needs to be."
+    });
+  }
 
   // Rule 2. Reordering is all this function may do — it must not move
   // anyone to the afternoon to make the morning fit — so when the best
@@ -492,4 +680,5 @@ async function suggestBucketMoves(day, opts = {}) {
 }
 
 module.exports = { sequenceDay, sequencePlan, suggestBucketMoves, onSiteMinutes,
+  parseWindow, windowsFor,
   EXACT_SEARCH_LIMIT, FINISH_NEAR_BASE_TOLERANCE_MINUTES };
