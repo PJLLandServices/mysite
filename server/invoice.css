@@ -3,7 +3,7 @@
 
 .invoice-body { background: #FAFAF5; }
 .invoice-shell { padding: 24px clamp(16px, 3vw, 36px) 60px; }
-.invoice-loading { text-align: center; color: #777; font-style: italic; padding: 60px 20px; }
+.invoice-loading { text-align: center; color: #6B6B63; font-style: italic; padding: 60px 20px; }
 .invoice-back { margin: 0 0 14px; font-size: 13px; }
 .invoice-back a { color: #1B4D2E; text-decoration: none; font-weight: 600; }
 .invoice-back a:hover { text-decoration: underline; }
@@ -78,7 +78,7 @@
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
-  color: #777;
+  color: #6B6B63;
   text-transform: uppercase;
   margin-bottom: 8px;
 }
@@ -91,7 +91,7 @@
 .invoice-doc-sub {
   margin: 0;
   font-size: 13px;
-  color: #777;
+  color: #6B6B63;
   line-height: 1.5;
 }
 
@@ -105,7 +105,7 @@
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
-  color: #777;
+  color: #6B6B63;
   padding: 10px 8px;
   border-bottom: 2px solid #1B4D2E;
   text-transform: uppercase;
@@ -121,12 +121,12 @@
 .invoice-doc-line-note {
   display: block;
   margin-top: 4px;
-  color: #999;
+  color: #6B6B63;
   font-size: 12px;
 }
 .invoice-doc-line-empty {
   text-align: center !important;
-  color: #999 !important;
+  color: #6B6B63 !important;
   font-style: italic;
   padding: 24px !important;
 }
@@ -280,10 +280,10 @@
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
-  color: #777;
+  color: #6B6B63;
   text-transform: uppercase;
 }
-.invoice-action-meta { margin: 0; font-size: 12px; color: #777; }
+.invoice-action-meta { margin: 0; font-size: 12px; color: #6B6B63; }
 .invoice-action-meta a { color: #1B4D2E; font-weight: 600; text-decoration: none; }
 .invoice-action-meta a:hover { text-decoration: underline; }
 .invoice-action-status { margin: 0; font-size: 12px; }
@@ -505,7 +505,7 @@
   gap: 8px;
   margin: 0;
   font-size: 12px;
-  color: #777;
+  color: #6B6B63;
 }
 .invoice-action-link a {
   color: #1B4D2E;
@@ -548,7 +548,7 @@
   max-width: 62ch;
   font-size: 12.5px;
   line-height: 1.5;
-  color: var(--pjl-muted, #7a7a72);
+  color: var(--pjl-muted, #6B6B63);
 }
 .invoice-letter-switch {
   display: inline-flex;
@@ -631,7 +631,7 @@
 }
 .invoice-letter-body:empty::before {
   content: attr(data-placeholder);
-  color: var(--pjl-muted, #7a7a72);
+  color: var(--pjl-muted, #6B6B63);
 }
 .invoice-letter-body p { margin: 0 0 10px; }
 .invoice-letter-body ul,
@@ -670,7 +670,7 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--pjl-text-muted, #7A7A72);
+  color: var(--pjl-text-muted, #6B6B63);
 }
 
 .invoice-woreport-select {
@@ -690,5 +690,5 @@
 .invoice-woreport-empty {
   margin: 12px 0 0;
   font-size: 13px;
-  color: var(--pjl-text-muted, #7A7A72);
+  color: var(--pjl-text-muted, #6B6B63);
 }

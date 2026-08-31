@@ -183,5 +183,98 @@ for (const [file, prefix] of [["work-order.css", "wo"], ["work-order-tech.css", 
   }
 }
 
+// ---- 4. Muted text must clear the readability floor -------------------
+// The second half of what Patrick reported: text that was legible but too
+// light — muted labels, table headings, hint lines. The CRM had drifted
+// into SEVEN spellings of "muted grey" (#7A7A72, #777, #888, #9A9A90,
+// #9A9A92, #9A9A8E, #8A8A80), none of which cleared 4.5:1 on a white
+// card, plus two green-greys and an amber pill. They are collapsed onto
+// three deliberate values.
+//
+// Unlike the dark-ground bug above, this one IS decidable from source:
+// the foreground is a literal and the grounds are the shell's own light
+// surfaces. So the ratio is computed here rather than described.
+
+function srgb(v) {
+  const c = v / 255;
+  return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+function luminance([r, g, b]) {
+  return 0.2126 * srgb(r) + 0.7152 * srgb(g) + 0.0722 * srgb(b);
+}
+function rgb(hex) {
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? [...h].map((c) => c + c).join("") : h;
+  return [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16));
+}
+function contrast(a, b) {
+  const la = luminance(rgb(a)), lb = luminance(rgb(b));
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+
+// Every light surface muted text actually lands on in this CRM.
+const LIGHT_GROUNDS = ["#FFFFFF", "#FAFAF5", "#F4F2EC", "#EAF3DE", "#FDF0E4", "#F4EFE4"];
+const FLOOR = 4.5;
+const worstOn = (fg) => Math.min(...LIGHT_GROUNDS.map((bg) => contrast(fg, bg)));
+
+// The muted tokens. pay.css and portal.css are the customer's own pages
+// and carry their own copy of the same token under a different name —
+// they drifted apart once before, which is how three files ended up
+// defining the same grey.
+const MUTED_TOKENS = [
+  ["crm.css", "--pjl-text-muted"],
+  ["pay.css", "--text-muted"],
+  ["portal.css", "--text-muted"]
+];
+for (const [file, token] of MUTED_TOKENS) {
+  const css = await fs.readFile(path.join(ROOT, "server", file), "utf8");
+  const m = css.match(new RegExp(`${token}:\\s*(#[0-9A-Fa-f]{3,6})\\s*;`));
+  ok(Boolean(m), `${file}: ${token} is defined as a literal colour`);
+  if (!m) continue;
+  const worst = worstOn(m[1]);
+  ok(worst >= FLOOR,
+    `${file}: ${token} (${m[1]}) reads at ${worst.toFixed(2)}:1 on the worst light ground — ` +
+    `below the ${FLOOR}:1 floor it is legible-but-straining, which is exactly what was reported`);
+}
+
+// The retired greys must not come back as text. Each is still fine as a
+// border, a fill or a background — only `color:` has a contrast floor,
+// and schedule.css legitimately still paints a swatch with #7A7A72.
+// Six-digit and three-digit spellings both, because the first pass fixed
+// only the long forms and the short ones sailed through. #555 (7.46:1) and
+// #666 (5.74:1) are NOT here: they already clear the floor, and sweeping
+// them in alongside the rest made text lighter, not darker.
+const RETIRED = ["#7A7A72", "#9A9A90", "#9A9A92", "#9A9A8E", "#8A8A80",
+                 "#888888", "#777777", "#999999", "#8FA093",
+                 "#888", "#777", "#999", "#aaa"];
+{
+  const files = (await fs.readdir(path.join(ROOT, "server")))
+    .filter((f) => f.endsWith(".css") || f.endsWith(".html"));
+  const offenders = [];
+  for (const file of files) {
+    const text = (await fs.readFile(path.join(ROOT, "server", file), "utf8"))
+      .replace(/\/\*[\s\S]*?\*\//g, "");
+    for (const line of text.split("\n")) {
+      if (!/(^|[;{\s])color\s*:/.test(line)) continue;
+      for (const grey of RETIRED) {
+        if (new RegExp(grey + "(?![0-9A-Fa-f])", "i").test(line)) offenders.push(`${file}: ${line.trim().slice(0, 70)}`);
+      }
+    }
+  }
+  ok(offenders.length === 0,
+    `a retired too-light grey is back as text (${offenders.length}): ${offenders.slice(0, 3).join(" | ")}`);
+}
+
+// And the three replacements themselves clear the floor — if someone
+// lightens one, this says so before it ships rather than after.
+for (const [label, value] of [
+  ["the warm muted grey", "#6B6B63"],
+  ["the green-grey", "#616D64"],
+  ["the amber pill text", "#7E6234"]
+]) {
+  const worst = worstOn(value);
+  ok(worst >= FLOOR, `${label} (${value}) clears the floor on every light ground (${worst.toFixed(2)}:1)`);
+}
+
 console.log(`\ntest-crm-contrast: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

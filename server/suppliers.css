@@ -48,7 +48,7 @@
   font-weight: 700;
   letter-spacing: 0.10em;
   text-transform: uppercase;
-  color: #7A7A72;
+  color: #6B6B63;
   text-decoration: none;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
@@ -101,7 +101,7 @@
     border-color: #1B4D2E;
   }
   .suppliers-subnav-trigger-eyebrow {
-    color: #7A7A72;
+    color: #6B6B63;
     font-weight: 500;
     flex: 0 0 auto;
   }
@@ -157,7 +157,7 @@
     font-weight: 700;
     letter-spacing: 0.10em;
     text-transform: uppercase;
-    color: #7A7A72;
+    color: #6B6B63;
     text-decoration: none;
   }
   .suppliers-subnav-menu a::before {
@@ -252,7 +252,7 @@
   font-weight: 400;
   text-transform: none;
   letter-spacing: 0;
-  color: #7A7A72;
+  color: #6B6B63;
   margin-left: 6px;
 }
 .supplier-field abbr {
@@ -343,7 +343,7 @@
   display: inline-block;
   font-family: ui-monospace, "SFMono-Regular", monospace;
   font-size: 11px;
-  color: #7A7A72;
+  color: #6B6B63;
   margin-left: 8px;
   vertical-align: middle;
 }
@@ -382,9 +382,9 @@
 .supplier-card-phone { font-variant-numeric: tabular-nums; }
 .supplier-card-address {
   font-size: 13px;
-  color: #7A7A72;
+  color: #6B6B63;
 }
-.supplier-card-empty { color: #7A7A72; }
+.supplier-card-empty { color: #6B6B63; }
 .supplier-card-meta a {
   color: #1B4D2E;
   text-decoration: none;
@@ -450,7 +450,7 @@
 .suppliers-empty {
   padding: 32px 16px;
   text-align: center;
-  color: #7A7A72;
+  color: #6B6B63;
   background: #fff;
   border: 1px dashed #C7C0A8;
   border-radius: 12px;

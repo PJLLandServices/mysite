@@ -758,7 +758,7 @@ function mergeRenderResults(query) {
   }).slice(0, 8);
 
   if (!matches.length) {
-    mergeResults.innerHTML = `<div style="padding: 10px; color: #888; font-size: 12px;">No customers match.</div>`;
+    mergeResults.innerHTML = `<div style="padding: 10px; color: #6B6B63; font-size: 12px;">No customers match.</div>`;
     mergeResults.style.display = "block";
     return;
   }
@@ -766,7 +766,7 @@ function mergeRenderResults(query) {
     <div class="merge-result" data-id="${escMerge(c.id)}" style="padding: 8px 12px; border-bottom: 1px solid #f0eee8; cursor: pointer;">
       <strong>${escMerge(c.name) || "(unnamed)"}</strong>
       <span style="color: #666; font-size: 12px; margin-left: 8px;">${escMerge(c.email) || c.phone || c.id}</span>
-      <div style="color: #888; font-size: 11px;">${escMerge(c.id)} · ${c.propertyCount || 0} ${(c.propertyCount === 1 ? "property" : "properties")}</div>
+      <div style="color: #6B6B63; font-size: 11px;">${escMerge(c.id)} · ${c.propertyCount || 0} ${(c.propertyCount === 1 ? "property" : "properties")}</div>
     </div>
   `).join("");
   mergeResults.style.display = "block";

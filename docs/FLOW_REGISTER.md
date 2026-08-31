@@ -1126,6 +1126,39 @@ customer", "Complete project", "End session") are below AA, but that is the bran
 design decision rather than a defect. CSS only — no API, route, payload or template change; no
 PASS flow touched.
 
+**2026-08-31 (CRM-21 — muted text too light to read comfortably):** the second half of what
+Patrick reported. Separate from CRM-20's dark-on-dark: this text was visible but straining —
+muted labels, table headings, hint lines and stat captions. The CRM had drifted into **seven
+spellings of "muted grey"** (`#7A7A72`, `#777`, `#888`, `#9A9A90`, `#9A9A92`, `#9A9A8E`,
+`#8A8A80`), plus two green-greys (`#8FA093`, `#6B756E`) and an amber pill (`#8A6D3B`). **None
+of the greys cleared 4.5:1 on a white card** — the worst, `#8FA093` on the review-requests
+table headings, read at **2.40:1**; the shared `--pjl-text-muted` token at **3.77:1**. They are
+collapsed onto **three** deliberate values: `--pjl-text-muted: #6B6B63` (4.69:1 worst case),
+the green-grey `#616D64` (4.72:1), and the amber pill text `#7E6234` (4.97:1) — each solved
+against every light surface the shell actually paints (white, cream `#FAFAF5`, panel `#F4F2EC`,
+green-pale `#EAF3DE`, amber-pale `#FDF0E4`, pill `#F4EFE4`), not just white. 265 colour
+declarations across 31 stylesheets and 14 HTML/JS files. **Only `color:` declarations were
+rewritten** — `schedule.css` still paints a swatch background with `#7A7A72`, which has no
+contrast floor to meet. `pay.css` and `portal.css` carry the customer's own copy of the token
+under a different name and were moved in step, since letting them drift is how one grey became
+three. **Two boundaries drawn deliberately.** (a) `#555` (7.46:1) and `#666` (5.74:1) already
+clear the floor and are UNTOUCHED — an over-broad first pass swept them in with the rest and
+made that text *lighter*, the opposite of the fix; it was reverted before it was committed,
+and the guard's retired list now spells out why they are absent. (b) The greys inside
+`server.js` are customer EMAIL templates, a different surface from the admin portal Patrick
+reported, so they were reverted too and are left for a separate decision. `unsubscribe.html`'s
+footer note (`#999`, 2.85:1) IS fixed — it is a real page, not an email. **Measurement method changed, and it mattered:** the first sweep reasoned about
+backgrounds from `getComputedStyle` and produced **1146 findings, ~1000 of them phantom** —
+it read only `backgroundColor`, so the sidebar's `linear-gradient` looked transparent and
+every nav link scored white-on-white; averaging gradient stops then mis-scored translucent
+overlays; and boxes measured before the blocked webfont settled described a layout the
+screenshot no longer showed. The method that holds: **render the page, hide the text, and read
+the pixel actually painted behind it.** That gives 56 real findings, now 0.
+`scripts/test-crm-contrast.mjs` grows to 30 assertions — it computes the ratios rather than
+describing them, and its retired-grey guard caught 15 inline `style=` and `<style>` usages in
+HTML that the stylesheet pass had missed. CSS/markup only — no API, route, payload or template
+change; no PASS flow touched.
+
 **2026-08-28 (CRM-19 — the rest of the record lists):** Bookings, Work orders, Projects,
 Material lists and Suppliers rebuilt on the same `.crm-table` primitive as CRM-18. Invoices
 was already a real table and is untouched. Each page sets its own `--crm-cols`; the guard in

@@ -1204,7 +1204,7 @@ init();
       return;
     }
     if (!matches.length) {
-      resultsEl.innerHTML = `<div style="padding: 12px; text-align: center; color: var(--crm-muted, #888); font-size: 13px;">No customers match. Use "Create a new customer" below.</div>`;
+      resultsEl.innerHTML = `<div style="padding: 12px; text-align: center; color: var(--crm-muted, #6B6B63); font-size: 13px;">No customers match. Use "Create a new customer" below.</div>`;
       resultsEl.style.display = "block";
       return;
     }

@@ -93,7 +93,7 @@
 
 .proj-loading {
   text-align: center;
-  color: #7A7A72;
+  color: #6B6B63;
   padding: 40px 0;
 }
 .proj-error {
@@ -121,7 +121,7 @@
 .proj-header-id-text {
   font-family: ui-monospace, "SFMono-Regular", monospace;
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .proj-header-source {
   font-size: 12px;
@@ -145,7 +145,7 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .proj-name-field input {
   width: 100%;
@@ -215,7 +215,7 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .proj-customer-linked {
   display: flex;
@@ -278,7 +278,7 @@
   border-radius: 0 6px 6px 0;
 }
 .proj-customer-legacy strong { color: #4A4A42; }
-.proj-customer-legacy-hint { font-size: 12px; color: #8A8A80; }
+.proj-customer-legacy-hint { font-size: 12px; color: #6B6B63; }
 .proj-customer-billing {
   margin: 0;
   display: flex;
@@ -293,9 +293,9 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #9A9A8E;
+  color: #6B6B63;
 }
-.proj-customer-billing-self { color: #8A8A80; font-style: italic; }
+.proj-customer-billing-self { color: #6B6B63; font-style: italic; }
 
 .proj-section {
   background: #fff;
@@ -355,7 +355,7 @@
   border-radius: 8px;
   padding: 14px 16px;
   text-align: center;
-  color: #7A7A72;
+  color: #6B6B63;
   font-size: 14px;
 }
 
@@ -400,7 +400,7 @@
   flex-wrap: wrap;
   gap: 4px 12px;
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .proj-row-meta .proj-row-id {
   font-family: ui-monospace, "SFMono-Regular", monospace;
@@ -528,7 +528,7 @@
 .proj-savebar-state.is-error  { color: #8A2A1F; }
 .proj-savebar-state {
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .proj-savebar-status-pill {
   display: flex;
@@ -695,7 +695,7 @@
 }
 .proj-task-item.is-done .proj-task-desc {
   text-decoration: line-through;
-  color: #9A9A90;
+  color: #6B6B63;
 }
 .proj-task-meta {
   font-size: 11px;

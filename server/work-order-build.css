@@ -109,7 +109,7 @@
   font-size: 13px;
 }
 .tech-build-task-item.is-done .tech-build-task-desc {
-  color: #9A9A90;
+  color: #6B6B63;
   text-decoration: line-through;
 }
 .tech-build-task-desc { flex: 1; }
@@ -255,7 +255,7 @@
 }
 .tech-build-empty {
   font-size: 12px;
-  color: #9A9A90;
+  color: #6B6B63;
   font-style: italic;
   padding: 8px 0;
 }
@@ -513,13 +513,13 @@
 .tech-cat > summary::after {
   content: "▾";
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
   transition: transform 160ms ease;
 }
 .tech-cat[open] > summary::after { transform: rotate(180deg); }
 .tech-cat-count {
   font-size: 11px;
-  color: #7A7A72;
+  color: #6B6B63;
   margin-left: auto;
   margin-right: 6px;
   font-weight: 500;
@@ -555,13 +555,13 @@
 .tech-cat-sub > summary::after {
   content: "▾";
   font-size: 11px;
-  color: #9A9A90;
+  color: #6B6B63;
   transition: transform 160ms ease;
 }
 .tech-cat-sub[open] > summary::after { transform: rotate(180deg); }
 .tech-cat-sub-count {
   font-size: 11px;
-  color: #9A9A90;
+  color: #6B6B63;
   margin-left: auto;
   margin-right: 6px;
   font-weight: 500;
@@ -582,7 +582,7 @@
 .tech-cat-empty {
   text-align: center;
   font-size: 13px;
-  color: #9A9A90;
+  color: #6B6B63;
   font-style: italic;
   padding: 18px;
 }
