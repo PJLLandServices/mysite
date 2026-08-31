@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Image,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -15,6 +16,7 @@ import {
   View,
 } from 'react-native';
 import { AuthRequiredError, listProperties } from '../api';
+import { avatarLetter, propertyThumb } from '../format';
 import { colors, radius, space, type } from '../theme';
 
 export default function PropertiesScreen({ onOpen }) {
@@ -104,9 +106,13 @@ export default function PropertiesScreen({ onOpen }) {
             onPress={() => onOpen(item.id)}
             style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
           >
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{(item.address || '?').trim().charAt(0).toUpperCase()}</Text>
-            </View>
+            {propertyThumb(item) ? (
+              <Image source={{ uri: propertyThumb(item) }} style={styles.avatar} resizeMode="cover" />
+            ) : (
+              <View style={[styles.avatar, styles.avatarLetter]}>
+                <Text style={styles.avatarText}>{avatarLetter(item)}</Text>
+              </View>
+            )}
             <View style={styles.rowText}>
               <Text style={styles.rowTitle} numberOfLines={1}>{item.address || 'Address not set'}</Text>
               <Text style={styles.rowSub} numberOfLines={1}>
@@ -152,8 +158,9 @@ const styles = StyleSheet.create({
   rowPressed: { backgroundColor: colors.ground },
   avatar: {
     width: 40, height: 40, borderRadius: radius.pill,
-    backgroundColor: colors.brandTint, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.brandTint,
   },
+  avatarLetter: { alignItems: 'center', justifyContent: 'center' },
   avatarText: { color: colors.brand, fontWeight: '700', fontSize: 17 },
   rowText: { flex: 1 },
   rowTitle: { ...type.body, fontWeight: '600' },

@@ -17,29 +17,15 @@ import {
   Text,
   View,
 } from 'react-native';
-import { AuthRequiredError, getProperty, HOST } from '../api';
+import { AuthRequiredError, getProperty } from '../api';
+import { absolute, avatarLetter, money, shortDate, telHref, zoneMeta, zoneName } from '../format';
 import { colors, radius, space, type } from '../theme';
-import { ActionButton, Card, Empty, NoteRow, Pill, Row, SectionHeader } from '../ui';
+import { ActionButton, Card, NoteRow, Pill, Row, SectionHeader } from '../ui';
 
 // deferredIssues statuses that still want a tech's attention. resolved
 // and dismissed are done; everything else is live work.
 const LIVE_ISSUE_STATUSES = new Set(['open', 'pre_authorized', 'in_progress', 're_deferred']);
 
-const money = (n) =>
-  typeof n === 'number' && Number.isFinite(n)
-    ? `$${n.toFixed(2)}`
-    : null;
-
-const shortDate = (iso) => {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-};
-
-const absolute = (url) => (url && url.startsWith('/') ? `${HOST}${url}` : url);
-
-const telHref = (phone) => `tel:${String(phone).replace(/[^\d+]/g, '')}`;
 
 export default function PropertyProfileScreen({ propertyId, onBack }) {
   const [property, setProperty] = useState(null);
@@ -121,6 +107,19 @@ export default function PropertyProfileScreen({ propertyId, onBack }) {
   const systemKnown = sys.controllerBrand || sys.controllerLocation || sys.shutoffLocation ||
     sys.blowoutLocation || zoneCount;
 
+  // zones.length is the walked-the-property record; zoneCount alone is
+  // what a customer told us over the phone, so it gets labelled as such.
+  const zoneText = zoneCount ? (zones.length ? String(zoneCount) : `${zoneCount} (declared)`) : '';
+
+  const sysRow = (label, value, extra) => (
+    <Row
+      label={label}
+      value={value || 'Not recorded'}
+      valueStyle={value ? undefined : styles.missing}
+      {...extra}
+    />
+  );
+
   return (
     <ScrollView
       style={styles.screen}
@@ -139,7 +138,7 @@ export default function PropertyProfileScreen({ propertyId, onBack }) {
         ) : (
           <View style={[styles.heroImage, styles.heroFallback]}>
             <Text style={styles.heroFallbackText}>
-              {(p.address || '?').trim().charAt(0).toUpperCase()}
+              {avatarLetter(p)}
             </Text>
           </View>
         )}
@@ -158,39 +157,52 @@ export default function PropertyProfileScreen({ propertyId, onBack }) {
       </View>
 
       <SectionHeader>The system</SectionHeader>
+      {/* Every row, every time, in the same order — even when empty.
+          Rendering only the fields that had data made this card a
+          different shape at every property: 25 Billinger opened on
+          "Location", the next site opened on "Blowout", and there was
+          nothing for the eye to learn. On a phone in a driveway,
+          predictable beats compact.
+
+          The gaps are worth showing too. "Shutoff — Not recorded" tells
+          whoever is standing there that nobody has ever written it down,
+          which is a job to do rather than a blank to scroll past. */}
       <Card>
-        {systemKnown ? (
-          <>
-            {sys.controllerBrand ? <Row label="Controller" value={sys.controllerBrand} /> : null}
-            {sys.controllerLocation ? <Row label="Located" value={sys.controllerLocation} /> : null}
-            {sys.shutoffLocation ? <Row label="Shutoff" value={sys.shutoffLocation} /> : null}
-            {sys.blowoutLocation ? <Row label="Blowout" value={sys.blowoutLocation} /> : null}
-            {zoneCount ? (
-              <Row
-                label="Zones"
-                value={zones.length ? `${zoneCount}` : `${zoneCount} (declared)`}
-                last={!sys.notes}
-              />
-            ) : null}
-            {sys.notes ? <NoteRow label="Notes" last>{sys.notes}</NoteRow> : null}
-          </>
-        ) : (
-          <Empty>Nothing recorded yet. Whoever walks this site next can fill it in from the CRM.</Empty>
-        )}
+        {sysRow('Controller', sys.controllerBrand)}
+        {sysRow('Location', sys.controllerLocation)}
+        {sysRow('Shutoff', sys.shutoffLocation)}
+        {sysRow('Blowout', sys.blowoutLocation)}
+        {sysRow('Zones', zoneText, { last: !sys.notes })}
+        {sys.notes ? <NoteRow label="Notes" last>{sys.notes}</NoteRow> : null}
       </Card>
+      {!systemKnown ? (
+        <Text style={styles.cardHint}>
+          Nothing recorded for this site yet — worth filling in from the CRM next time you're here.
+        </Text>
+      ) : null}
 
       {zones.length ? (
         <>
-          <SectionHeader>Zones</SectionHeader>
+          <SectionHeader>Zones ({zones.length})</SectionHeader>
           <Card>
-            {zones.map((z, i) => (
-              <Row
-                key={z.number ?? i}
-                label={`Zone ${z.number ?? i + 1}`}
-                value={[z.label, z.notes].filter(Boolean).join(' — ') || '—'}
-                last={i === zones.length - 1}
-              />
-            ))}
+            {zones.map((z, i) => {
+              const name = zoneName(z);
+              const meta = zoneMeta(z);
+              return (
+                <View
+                  key={z.number ?? i}
+                  style={[styles.zone, i === zones.length - 1 && styles.zoneLast]}
+                >
+                  <View style={styles.zoneTop}>
+                    <Text style={styles.zoneNum}>Zone {z.number ?? i + 1}</Text>
+                    <Text style={[styles.zoneName, !name && styles.missing]} numberOfLines={2}>
+                      {name || 'Not named'}
+                    </Text>
+                  </View>
+                  {meta ? <Text style={styles.zoneMeta}>{meta}</Text> : null}
+                </View>
+              );
+            })}
           </Card>
         </>
       ) : null}
@@ -332,6 +344,20 @@ const styles = StyleSheet.create({
   issueNotes: { ...type.body, lineHeight: 21 },
   issueMeta: { ...type.caption },
   link: { color: colors.brand },
+  missing: { color: colors.textFaint },
+  zone: {
+    paddingHorizontal: space.lg,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.separator,
+    gap: 3,
+  },
+  zoneLast: { borderBottomWidth: 0 },
+  zoneTop: { flexDirection: 'row', alignItems: 'baseline', gap: space.md },
+  zoneNum: { ...type.label, width: 60, flexShrink: 0, fontVariant: ['tabular-nums'] },
+  zoneName: { ...type.body, flex: 1 },
+  zoneMeta: { ...type.caption, paddingLeft: 60 + space.md },
+  cardHint: { ...type.caption, marginTop: space.sm, marginHorizontal: space.lg },
   photoStrip: { paddingHorizontal: space.md, gap: space.sm },
   photo: { width: 132, height: 132, borderRadius: radius.card, backgroundColor: colors.separator },
   more: { ...type.caption, marginTop: space.sm, marginHorizontal: space.lg },
