@@ -5,6 +5,47 @@ tech mode.
 
 ## What this app is
 
+Five tabs over the five things the field needs — **Today, Properties,
+Work, Invoices, Messages** — and nothing else. The CRM's other fifteen
+admin pages are not reachable from the app. That is the design, not an
+omission: this is not the CRM on a small screen, it is the subset that
+gets used standing on a lawn.
+
+### The line between native and web
+
+**Native for reading. Web for doing.**
+
+Properties is a native screen (`src/screens/`). A record you only read is
+cheap to rebuild, carries no write paths to get wrong, and gains the most
+from being shaped for a phone — the admin property page is organised for
+a desk, and no amount of shrinking fixes that. It reads the existing
+`GET /api/properties` endpoints; no new server code.
+
+Everything transactional — completing a work order, invoicing, messaging
+— stays on the web pages that already do it correctly and carry
+FLOW_REGISTER coverage. Rebuilding 6,000 lines of tech mode natively
+would duplicate every rule and re-open flows that are only PASS because
+Patrick walked them personally.
+
+Hold that line. The moment a native screen starts writing, it owes the
+register an entry and a walk.
+
+### How the native screens authenticate
+
+They don't, separately. The WebView is mounted with
+`sharedCookiesEnabled`, which puts the `pjl_crm_session` cookie in the
+system cookie store, and React Native's `fetch` reads that same store on
+iOS. Signing in once on Today authenticates the native screens too. Before
+that first login every call 401s, so they treat it as a normal state with
+a "sign in on Today" message rather than an error.
+
+The app also hides the CRM's own hamburger nav inside the WebView with
+injected CSS. The tab bar is the app's navigation; the hamburger leads
+back into the fifteen pages this app deliberately doesn't carry. CSS at
+the app end only — the website is untouched for desktop.
+
+## The web half
+
 A **shell** around the existing tech-mode web UI, not a second copy of it.
 
 `App.js` loads `https://www.pjllandservices.com/admin/today` — the tech's

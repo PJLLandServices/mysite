@@ -1,134 +1,116 @@
-import { useCallback, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Linking,
-  Pressable,
-  SafeAreaView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+// The app shell: a five-tab bar over the five things the field actually
+// needs. The CRM's other fifteen admin pages are not reachable from
+// here, which is the point — this is not the CRM on a small screen, it
+// is the subset of it that gets used standing on someone's lawn.
+//
+// Properties is native (see src/screens/PropertyProfileScreen.js): a
+// record you only read is cheap to rebuild and benefits most from being
+// shaped for a phone. The rest stay as the web pages that already do the
+// work correctly and carry FLOW_REGISTER coverage.
+//
+// Tabs keep their state once visited: each is mounted on first open and
+// then hidden rather than unmounted, so switching away from a half-
+// scrolled work order and back doesn't reload it.
+
+import { useCallback, useState } from 'react';
+import { Pressable, SafeAreaView, StatusBar as RNStatusBar, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { WebView } from 'react-native-webview';
+import PropertiesScreen from './src/screens/PropertiesScreen';
+import PropertyProfileScreen from './src/screens/PropertyProfileScreen';
+import WebScreen from './src/screens/WebScreen';
+import { colors, space } from './src/theme';
 
-// The tech's morning hub — today's bookings, each linking through to the
-// field WO tech-mode page. Everything the app shows lives on the server;
-// this app is the shell around it, not a second copy of it.
-const HOST = 'https://www.pjllandservices.com';
-const START_URL = `${HOST}/admin/today`;
-
-// Anything that isn't a page on our own site gets handed to iOS instead of
-// being loaded in here: the Navigate button's Apple/Google Maps chooser,
-// tel: links to the customer, mailto:. Loading those in the WebView would
-// either dead-end or strand the tech away from the work order.
-function isInternal(url) {
-  return url.startsWith(HOST) || url.startsWith('about:');
-}
+const TABS = [
+  { key: 'today',      label: 'Today',      glyph: '◷', path: '/admin/today' },
+  { key: 'properties', label: 'Properties', glyph: '⌂' },
+  { key: 'work',       label: 'Work',       glyph: '✓', path: '/admin/work-orders' },
+  { key: 'invoices',   label: 'Invoices',   glyph: '$', path: '/admin/invoices' },
+  { key: 'messages',   label: 'Messages',   glyph: '✉', path: '/admin/messages' },
+];
 
 export default function App() {
-  const webRef = useRef(null);
-  const [loading, setLoading] = useState(true);
-  const [failed, setFailed] = useState(false);
+  const [active, setActive] = useState('today');
+  // Mount lazily, then keep. An unvisited tab costs nothing; a visited
+  // one keeps its scroll position and its session.
+  const [visited, setVisited] = useState({ today: true });
+  const [openPropertyId, setOpenPropertyId] = useState(null);
 
-  const handleRequest = useCallback((request) => {
-    const { url } = request;
-    if (isInternal(url)) return true;
-    Linking.openURL(url).catch(() => {});
-    return false;
-  }, []);
-
-  const retry = useCallback(() => {
-    setFailed(false);
-    setLoading(true);
-    webRef.current?.reload();
+  const select = useCallback((key) => {
+    setActive(key);
+    setVisited((v) => (v[key] ? v : { ...v, [key]: true }));
   }, []);
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <StatusBar style="light" />
-
-      <WebView
-        ref={webRef}
-        source={{ uri: START_URL }}
-        style={styles.web}
-        // Keeps the session cookie in the system store, so the tech isn't
-        // logged out every time the app is closed.
-        sharedCookiesEnabled
-        allowsBackForwardNavigationGestures
-        pullToRefreshEnabled
-        originWhitelist={['https://*', 'http://*', 'about:*']}
-        onShouldStartLoadWithRequest={handleRequest}
-        onLoadEnd={() => setLoading(false)}
-        onError={() => {
-          setLoading(false);
-          setFailed(true);
-        }}
-        onHttpError={({ nativeEvent }) => {
-          // 401/403 are the login redirect doing its job, not a failure.
-          if (nativeEvent.statusCode >= 500) setFailed(true);
-        }}
-        renderError={() => <View />}
-      />
-
-      {loading && !failed ? (
-        <View style={styles.overlay} pointerEvents="none">
-          <ActivityIndicator size="large" color="#1B4D2E" />
+    <View style={styles.root}>
+      <StatusBar style="dark" />
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.body}>
+          {TABS.map((tab) => {
+            if (!visited[tab.key]) return null;
+            const isActive = active === tab.key;
+            return (
+              <View
+                key={tab.key}
+                style={[styles.pane, { display: isActive ? 'flex' : 'none' }]}
+                // Keeps VoiceOver and taps out of hidden panes.
+                pointerEvents={isActive ? 'auto' : 'none'}
+                accessibilityElementsHidden={!isActive}
+              >
+                {tab.key === 'properties' ? (
+                  openPropertyId ? (
+                    <PropertyProfileScreen
+                      propertyId={openPropertyId}
+                      onBack={() => setOpenPropertyId(null)}
+                    />
+                  ) : (
+                    <PropertiesScreen onOpen={setOpenPropertyId} />
+                  )
+                ) : (
+                  <WebScreen path={tab.path} />
+                )}
+              </View>
+            );
+          })}
         </View>
-      ) : null}
 
-      {failed ? (
-        <View style={styles.overlay}>
-          <Text style={styles.title}>Can't reach PJL</Text>
-          <Text style={styles.body}>
-            No connection, or the server didn't answer. Your queued work is
-            still on the phone.
-          </Text>
-          <Pressable style={styles.button} onPress={retry}>
-            <Text style={styles.buttonText}>Try again</Text>
-          </Pressable>
+        <View style={styles.tabBar}>
+          {TABS.map((tab) => {
+            const isActive = active === tab.key;
+            return (
+              <Pressable
+                key={tab.key}
+                onPress={() => select(tab.key)}
+                style={styles.tab}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: isActive }}
+                accessibilityLabel={tab.label}
+              >
+                <Text style={[styles.tabGlyph, isActive && styles.tabActive]}>{tab.glyph}</Text>
+                <Text style={[styles.tabLabel, isActive && styles.tabActive]}>{tab.label}</Text>
+              </Pressable>
+            );
+          })}
         </View>
-      ) : null}
-    </SafeAreaView>
+      </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: '#1B4D2E',
+  root: { flex: 1, backgroundColor: colors.card },
+  safe: { flex: 1, backgroundColor: colors.card, paddingTop: RNStatusBar.currentHeight || 0 },
+  body: { flex: 1 },
+  pane: { ...StyleSheet.absoluteFillObject },
+  tabBar: {
+    flexDirection: 'row',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.separator,
+    backgroundColor: colors.card,
+    paddingTop: 6,
+    paddingBottom: 2,
   },
-  web: {
-    flex: 1,
-  },
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 32,
-    backgroundColor: '#fff',
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: '#1B4D2E',
-    marginBottom: 8,
-  },
-  body: {
-    fontSize: 15,
-    lineHeight: 21,
-    color: '#444',
-    textAlign: 'center',
-    marginBottom: 24,
-  },
-  button: {
-    backgroundColor: '#1B4D2E',
-    paddingVertical: 14,
-    paddingHorizontal: 28,
-    borderRadius: 8,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
+  tab: { flex: 1, alignItems: 'center', gap: 2, paddingVertical: space.xs },
+  tabGlyph: { fontSize: 19, color: colors.textFaint },
+  tabLabel: { fontSize: 10, fontWeight: '600', color: colors.textFaint },
+  tabActive: { color: colors.brand },
 });
