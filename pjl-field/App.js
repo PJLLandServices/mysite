@@ -17,6 +17,7 @@ import { Pressable, SafeAreaView, StatusBar as RNStatusBar, StyleSheet, Text, Vi
 import { StatusBar } from 'expo-status-bar';
 import PropertiesScreen from './src/screens/PropertiesScreen';
 import TodayScreen from './src/screens/TodayScreen';
+import ClosingScreen from './src/screens/ClosingScreen';
 import PropertyProfileScreen from './src/screens/PropertyProfileScreen';
 import WebScreen from './src/screens/WebScreen';
 import { colors, space } from './src/theme';
@@ -43,6 +44,11 @@ export default function App() {
   // WebView, so there is only ever one tech-mode page alive and the tab
   // bar keeps telling the truth about where you are.
   const [workUrl, setWorkUrl] = useState(WORK_LIST);
+  // A fall closing opens the native flow; everything else opens the web
+  // work order, which still owns sign-off, payment and the completion
+  // cascade. Set together with the tab switch so the Work tab always
+  // shows one thing or the other, never both.
+  const [closingId, setClosingId] = useState(null);
 
   // Cold start: pull a newer bundle if there is one, then reload into
   // it. Without this the app runs the previous bundle for one more
@@ -72,7 +78,15 @@ export default function App() {
               >
                 {tab.key === 'today' ? (
                   <TodayScreen
-                    onOpenWorkOrder={(url) => { setWorkUrl(url); select('work'); }}
+                    onOpenWorkOrder={(workOrder) => {
+                      if (workOrder.type === 'fall_closing') {
+                        setClosingId(workOrder.id);
+                      } else {
+                        setClosingId(null);
+                        setWorkUrl(`/admin/work-order/${encodeURIComponent(workOrder.id)}/tech`);
+                      }
+                      select('work');
+                    }}
                   />
                 ) : tab.key === 'properties' ? (
                   openPropertyId ? (
@@ -83,6 +97,12 @@ export default function App() {
                   ) : (
                     <PropertiesScreen onOpen={setOpenPropertyId} />
                   )
+                ) : tab.key === 'work' && closingId ? (
+                  <ClosingScreen
+                    workOrderId={closingId}
+                    onExit={() => { setClosingId(null); select('today'); }}
+                    onOpenFullWorkOrder={(url) => { setClosingId(null); setWorkUrl(url); }}
+                  />
                 ) : (
                   <WebScreen path={tab.key === 'work' ? workUrl : tab.path} />
                 )}

@@ -79,3 +79,67 @@ export const notifyOnRoute = (leadId) =>
 // field, and confirms before the creating case.
 export const openWorkOrder = (leadId) =>
   postJson(`/api/leads/${encodeURIComponent(leadId)}/open-wo`);
+
+// ---- work orders -----------------------------------------------------
+
+export const getWorkOrder = (id) =>
+  getJson(`/api/work-orders/${encodeURIComponent(id)}`).then((d) => d.workOrder || d);
+
+async function sendJson(path, method, body) {
+  const res = await fetch(`${HOST}${path}`, {
+    method,
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(body || {}),
+  });
+  if (res.status === 401 || res.status === 403) throw new AuthRequiredError();
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { throw new AuthRequiredError(); }
+  if (!res.ok) throw new Error((data && data.errors && data.errors[0]) || `Request failed (${res.status})`);
+  return data;
+}
+
+export const patchWorkOrder = (id, patch) =>
+  sendJson(`/api/work-orders/${encodeURIComponent(id)}`, 'PATCH', patch);
+
+// Sweeps every issue off the work order's zones into the property's
+// deferred recommendations. Takes no payload — the server reads the
+// zones. Called once, at finish.
+export const deferIssues = (id) =>
+  sendJson(`/api/work-orders/${encodeURIComponent(id)}/issues/defer`, 'POST');
+
+// The zone label a tech corrects on site belongs to the property, not
+// just to today's visit — that is the whole point of correcting it.
+export const patchProperty = (id, patch) =>
+  sendJson(`/api/properties/${encodeURIComponent(id)}`, 'PATCH', patch);
+
+// photos: [{ mediaType, data (base64, no data: prefix), category, zoneNumber, label }]
+// 90-second timeout, matching the web page: slow cellular is normal,
+// but "forever" is not a state a tech can act on.
+export async function uploadWoPhotos(id, photos) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 90_000);
+  try {
+    const res = await fetch(`${HOST}/api/work-orders/${encodeURIComponent(id)}/photos`, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ photos }),
+      signal: controller.signal,
+    });
+    if (res.status === 401 || res.status === 403) throw new AuthRequiredError();
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch { throw new AuthRequiredError(); }
+    if (!res.ok) throw new Error((data && data.errors && data.errors[0]) || `Upload failed (${res.status})`);
+    return data;
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      throw new Error('Upload timed out after 90 seconds. Try again when you have more signal.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}

@@ -18,6 +18,11 @@
       "bundleIdentifier": "com.pjllandservices.field",
       "config": {
         "usesNonExemptEncryption": false
+      },
+      "infoPlist": {
+        "NSCameraUsageDescription": "PJL Field uses the camera to photograph findings and the water shut-off during a service visit.",
+        "NSPhotoLibraryUsageDescription": "PJL Field lets you attach photos you have already taken to a work order.",
+        "NSLocationWhenInUseUsageDescription": "PJL Field records where you were when you started a service visit, as proof of attendance on the work order."
       }
     },
     "android": {
@@ -40,6 +45,10 @@
     },
     "runtimeVersion": {
       "policy": "fingerprint"
-    }
+    },
+    "plugins": [
+      "expo-image-picker",
+      "expo-location"
+    ]
   }
 }

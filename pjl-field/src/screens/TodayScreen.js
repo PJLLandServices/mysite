@@ -164,8 +164,10 @@ export default function TodayScreen({ onOpenWorkOrder }) {
     setBusyId(b.leadId);
     try {
       const data = await openWorkOrder(b.leadId);
-      const id = data?.workOrder?.id;
-      if (id) onOpenWorkOrder(`/admin/work-order/${encodeURIComponent(id)}/tech`);
+      // The whole work order, not a URL: the shell decides from its
+      // `type` whether this opens the native closing flow or the full
+      // web page, and only it knows which surfaces exist.
+      if (data?.workOrder?.id) onOpenWorkOrder(data.workOrder);
       else Alert.alert('No work order', 'The server did not return a work order for this booking.');
     } catch (err) {
       Alert.alert("Couldn't open", err?.message || 'Please try again.');
