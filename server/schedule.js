@@ -180,10 +180,11 @@ function effectiveSettings() {
 }
 
 async function loadAll() {
-  const [blocksResp, bookingsResp, settingsResp] = await Promise.all([
+  const [blocksResp, bookingsResp, settingsResp, canonicalResp] = await Promise.all([
     fetch("/api/schedule/blocks", { cache: "no-store" }).then((r) => r.json()),
     fetch("/api/quotes", { cache: "no-store" }).then((r) => r.json()),
-    fetch("/api/schedule/settings", { cache: "no-store" }).then((r) => r.json())
+    fetch("/api/schedule/settings", { cache: "no-store" }).then((r) => r.json()),
+    fetch("/api/bookings", { cache: "no-store" }).then((r) => r.json()).catch(() => ({}))
   ]);
   blocks = blocksResp.ok ? blocksResp.blocks : [];
   bookings = (bookingsResp.leads || [])
@@ -204,6 +205,42 @@ async function loadAll() {
       bookingStatus: l.booking.status || "confirmed",
       cancelledAt: l.booking.cancelledAt || null
     }));
+
+  // Union canonical bookings.json records not represented by a lead —
+  // above all the assignment writer's records, which are property-first
+  // and have NO lead behind them, so the lead map alone would leave a
+  // fully-assigned route day looking empty on this calendar. Same dedup
+  // rule activeBookings() uses server-side: a record whose leadId+start
+  // matches a lead event is that event, not a second appointment.
+  const canonical = (canonicalResp && canonicalResp.ok && Array.isArray(canonicalResp.bookings))
+    ? canonicalResp.bookings : [];
+  for (const b of canonical) {
+    if (!b.scheduledFor) continue;
+    if (b.status === "completed" || b.status === "no_show") continue;
+    const startMs = Date.parse(b.scheduledFor);
+    const dup = bookings.find((e) => e.id === b.leadId && Date.parse(e.start) === startMs);
+    if (dup) {
+      // Remember the canonical id so the action panel skips a lookup.
+      if (!dup.bookingId) dup.bookingId = b.id;
+      continue;
+    }
+    bookings.push({
+      id: b.leadId || "",
+      bookingId: b.id,
+      start: new Date(startMs).toISOString(),
+      end: new Date(startMs + (Number(b.durationMinutes) || 60) * 60000).toISOString(),
+      label: b.serviceLabel || "Booking",
+      customer: b.customerName || "Customer",
+      phone: b.customerPhone || "",
+      address: b.address || "",
+      status: undefined,
+      serviceKey: b.serviceKey || "",
+      bookingStatus: b.status || "confirmed",
+      cancelledAt: b.cancelledAt || null
+    });
+  }
+  bookings.sort((a, b2) => Date.parse(a.start) - Date.parse(b2.start));
+
   if (settingsResp.ok) {
     defaults = settingsResp.defaults;
     overrides = settingsResp.overrides;
@@ -368,6 +405,7 @@ function layoutEvents(host, days) {
       // tightest 45-min bucket slot.
       evtEl.style.height = `${Math.max(height, 84)}px`;
       evtEl.dataset.leadId = b.id;
+      if (b.bookingId) evtEl.dataset.bookingId = b.bookingId;
       evtEl.dataset.start = b.start;
       evtEl.dataset.bookingStatus = b.bookingStatus;
       evtEl.title = isCancelled
@@ -472,7 +510,7 @@ function renderMonth() {
         const isCancelled = b.bookingStatus === "cancelled";
         const colorClass = eventColorClass(b.serviceKey);
         return `<button type="button" class="cal-month-event${isCancelled ? " is-cancelled" : ""}${colorClass ? " " + colorClass : ""}"
-          data-lead-id="${escapeHtml(b.id)}" data-start="${escapeHtml(b.start)}" data-booking-status="${escapeHtml(b.bookingStatus)}"
+          data-lead-id="${escapeHtml(b.id)}"${b.bookingId ? ` data-booking-id="${escapeHtml(b.bookingId)}"` : ""} data-start="${escapeHtml(b.start)}" data-booking-status="${escapeHtml(b.bookingStatus)}"
           title="${escapeHtml(b.label)} — ${escapeHtml(b.customer)}">${escapeHtml(fmtTime(b.start))} ${escapeHtml(b.label)}</button>`;
       }).join("");
       const more = dayBookings.length > 3
@@ -716,10 +754,14 @@ calCanvas.addEventListener("click", (event) => {
   const evtEl = event.target.closest(".cal-event, .cal-month-event");
   if (!evtEl) return;
   const leadId = evtEl.dataset.leadId;
+  const bookingId = evtEl.dataset.bookingId;
   const start = evtEl.dataset.start;
-  if (!leadId) return;
+  // An assignment booking has a bookingId and no lead; either identity
+  // is enough to open the panel.
+  if (!leadId && !bookingId) return;
   openBookingActionPanel({
-    leadId,
+    leadId: leadId || "",
+    bookingId: bookingId || null,
     scheduledFor: start || undefined,
     bookingStatus: evtEl.dataset.bookingStatus || "confirmed"
   });
@@ -1355,24 +1397,29 @@ async function fillActionServiceSelect(currentServiceKey) {
   if (currentServiceKey) actionServiceSelect.value = currentServiceKey;
 }
 
-async function openBookingActionPanel({ leadId, scheduledFor, bookingStatus }) {
-  if (!leadId) return;
+async function openBookingActionPanel({ leadId, bookingId, scheduledFor, bookingStatus }) {
+  if (!leadId && !bookingId) return;
   // Find the matching booking row from the cached canvas state so we can
   // populate the summary instantly (the canonical record fetch happens
   // in the background and updates pendingAction.bookingId before the
   // user reaches the Cancel/Delete flows).
-  const localMatch = bookings.find((b) => b.id === leadId && (!scheduledFor || b.start === scheduledFor));
+  const localMatch = bookings.find((b) =>
+    (bookingId && b.bookingId === bookingId)
+    || (leadId && b.id === leadId && (!scheduledFor || b.start === scheduledFor)));
   const summary = localMatch
     ? { label: localMatch.label, customer: localMatch.customer, address: localMatch.address, scheduledFor: localMatch.start, status: localMatch.bookingStatus }
     : { label: "Booking", customer: "", address: "", scheduledFor };
   const currentServiceKey = (localMatch && localMatch.serviceKey) || "";
-  pendingAction = { leadId, scheduledFor, bookingId: null, summary, bookingStatus: bookingStatus || "confirmed", serviceKey: currentServiceKey };
+  pendingAction = { leadId, scheduledFor, bookingId: bookingId || null, summary, bookingStatus: bookingStatus || "confirmed", serviceKey: currentServiceKey };
   actionSummary.innerHTML = summaryHtml(summary);
   actionStatus.textContent = "";
   // Reschedule + Cancel are meaningless on an already-cancelled booking
-  // — hide both, leaving only Delete (admin) on the panel.
+  // — hide both, leaving only Delete (admin) on the panel. Reschedule is
+  // also hidden for a lead-less booking (an assignment record): the CRM
+  // reschedule modal is lead-keyed, and moving an assigned stop belongs
+  // to the day-move flow on the season plan anyway.
   const cancelled = pendingAction.bookingStatus === "cancelled";
-  actionRescheduleBtn.hidden = cancelled;
+  actionRescheduleBtn.hidden = cancelled || !leadId;
   actionCancelBtn.hidden = cancelled;
   actionDeleteBtn.hidden = viewerRole !== "admin";
   // Change-appointment-type control — same audience as Reschedule; hidden
@@ -1384,13 +1431,16 @@ async function openBookingActionPanel({ leadId, scheduledFor, bookingStatus }) {
   showDialog(actionDialog);
   // Resolve the canonical bookingId in the background — the user can
   // click Reschedule (which calls openCrmReschedule by leadId anyway)
-  // or wait briefly for Cancel/Delete to enable.
-  resolveBookingByLead(leadId, scheduledFor).then((rec) => {
-    if (!rec) return;
-    if (pendingAction && pendingAction.leadId === leadId) {
-      pendingAction.bookingId = rec.id;
-    }
-  }).catch(() => {});
+  // or wait briefly for Cancel/Delete to enable. A canonical event
+  // arrived knowing its id; nothing to resolve.
+  if (!pendingAction.bookingId && leadId) {
+    resolveBookingByLead(leadId, scheduledFor).then((rec) => {
+      if (!rec) return;
+      if (pendingAction && pendingAction.leadId === leadId) {
+        pendingAction.bookingId = rec.id;
+      }
+    }).catch(() => {});
+  }
 }
 
 actionClose?.addEventListener("click", () => closeDialog(actionDialog));

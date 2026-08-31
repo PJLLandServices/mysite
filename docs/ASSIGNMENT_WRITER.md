@@ -114,6 +114,17 @@ Full rationale in the build-plan artifact; this is the working checklist.
 
 Newest first. Every stage PR adds its entry.
 
+- *2026-08-31 — STAGE 2 DEFECT, found by Patrick on the live run: assigned
+  bookings appeared on /admin/bookings but not on the /admin/schedule
+  calendar or the tech day sheet — both surfaces predate property-first
+  bookings and mapped only `lead.booking`. Fixed with the same
+  leadId+start union rule `activeBookings()` uses; the calendar's manage
+  panel now works off the canonical booking id for lead-less records
+  (Reschedule hidden — moving an assigned stop is the season plan's
+  day-move flow). Verified in a Playwright harness, 7 assertions. LESSON
+  for later stages: any surface that renders appointments must be checked
+  against LEAD-LESS bookings, not just lead-backed ones — the register
+  entry lists which surfaces have been checked.*
 - *2026-08-31 — STAGE 2 SHIPPED. `assign()` / `unassign()` in
   `server/lib/assignments.js`, `POST /api/assignments/:season/:year/assign`
   + `/unassign` (ADMIN only — techs can preflight, not assign), and
