@@ -12,7 +12,7 @@
 // then hidden rather than unmounted, so switching away from a half-
 // scrolled work order and back doesn't reload it.
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Pressable, SafeAreaView, StatusBar as RNStatusBar, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import PropertiesScreen from './src/screens/PropertiesScreen';
@@ -20,6 +20,7 @@ import TodayScreen from './src/screens/TodayScreen';
 import PropertyProfileScreen from './src/screens/PropertyProfileScreen';
 import WebScreen from './src/screens/WebScreen';
 import { colors, space } from './src/theme';
+import { applyPendingUpdate } from './src/updates';
 
 // Where the Work tab sits when nothing has sent it somewhere specific.
 const WORK_LIST = '/admin/work-orders';
@@ -42,6 +43,11 @@ export default function App() {
   // WebView, so there is only ever one tech-mode page alive and the tab
   // bar keeps telling the truth about where you are.
   const [workUrl, setWorkUrl] = useState(WORK_LIST);
+
+  // Cold start: pull a newer bundle if there is one, then reload into
+  // it. Without this the app runs the previous bundle for one more
+  // launch, which reads as "my update didn't work".
+  useEffect(() => { applyPendingUpdate(); }, []);
 
   const select = useCallback((key) => {
     setActive(key);

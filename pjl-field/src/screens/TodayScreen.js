@@ -29,6 +29,7 @@ import {
 import { AuthRequiredError, getToday, notifyOnRoute, openWorkOrder } from '../api';
 import { telHref } from '../format';
 import { colors, radius, space, type } from '../theme';
+import { runningVersionLabel } from '../updates';
 import { Pill } from '../ui';
 
 const WO_STATUS_LABELS = {
@@ -166,6 +167,7 @@ export default function TodayScreen({ onOpenWorkOrder }) {
   }
 
   const bookings = payload?.bookings || [];
+  const versionLabel = runningVersionLabel();
 
   return (
     <ScrollView
@@ -235,6 +237,9 @@ export default function TodayScreen({ onOpenWorkOrder }) {
         );
       })}
 
+      {versionLabel ? (
+        <Text style={styles.version}>App updated {versionLabel}</Text>
+      ) : null}
       <View style={styles.footerSpace} />
     </ScrollView>
   );
@@ -318,5 +323,6 @@ const styles = StyleSheet.create({
   actionTextPrimary: { color: '#fff' },
   actionTextDisabled: { color: colors.textFaint },
 
+  version: { ...type.caption, textAlign: 'center', paddingTop: space.md },
   footerSpace: { height: space.lg },
 });
