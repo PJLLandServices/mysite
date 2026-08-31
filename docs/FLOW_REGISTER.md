@@ -1099,6 +1099,33 @@ checkbox, sort, search, maps affordance) plus 1440px and 390px renders of both p
 no JS errors and no horizontal overflow. No API, route or payload change — presentation
 only, no PASS flow touched.
 
+**2026-08-31 (CRM-20 — dark-ground text wearing the body's near-black):** Patrick reported
+two places where text was rendering too dark to read against a dark background: the
+work-order page's completion banner ("Visit bypass-locked and completed." plus the draft-invoice
+line) and the assignment-messages test-send toast ("Test sent to ... Saved wording was used.").
+Both are **one root cause.** crm.css carries two blanket rules over the whole admin shell —
+`.pjl-crm-body p { color: var(--pjl-text-mid) }` and `.pjl-crm-body a { color: inherit }` — each
+at specificity (0,1,1). A component that paints a dark pill and sets `color: #fff` on a single
+class is (0,1,0), so the blanket wins; and a component that sets the colour on a WRAPPER and
+expects its children to inherit loses too, because an inherited value is beaten by ANY rule
+matching the child directly. Measured in headless Chromium against the real stylesheets, both
+reported fixtures came out **#4A4A4A on #1B4D2E — 1.10:1**, and are now **9.78:1**. A sweep of
+all 38 CRM pages found **three more of the same shape**, all likewise #1A1A1A on a dark pill:
+`settings.html` `.settings-save` (the CSV-export and Connect-to-QuickBooks links — the
+`<button>` instances were always fine, only the `<a>` ones broke), `work-order.html`
+`.wo-tech-mode-btn`, and `warranty-claim.html` `.wcd-status-link` (1.78–1.99:1, now 9.78 /
+8.74:1). Each is fixed by scoping the component's own rule to `.pjl-crm-body` (0,2,0) so the
+component wins its own colour back; the banner's two text lines re-assert `color: inherit`
+above the blanket, which restores the four state rules as the banner's single source of truth
+— the other three states had silently lost their tints to the same grey. `scripts/test-crm-contrast.mjs`
+(20 assertions, in `build:check`) computes selector specificity rather than reading
+declarations, because this bug's whole character is that the source looks right and only the
+resolved cascade is wrong; it was confirmed to FAIL on the pre-fix CSS before being kept.
+**Not changed, reported instead:** five white-on-amber controls (`#E07B24`, 2.99:1 — "Send to
+customer", "Complete project", "End session") are below AA, but that is the brand amber and a
+design decision rather than a defect. CSS only — no API, route, payload or template change; no
+PASS flow touched.
+
 **2026-08-28 (CRM-19 — the rest of the record lists):** Bookings, Work orders, Projects,
 Material lists and Suppliers rebuilt on the same `.crm-table` primitive as CRM-18. Invoices
 was already a real table and is untouched. Each page sets its own `--crm-cols`; the guard in

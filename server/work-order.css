@@ -962,7 +962,10 @@ body[data-locked="true"] .wo-signoff-form {
   border: 1px solid rgba(15, 31, 20, 0.18);
   background: #fff;
 }
-.wo-tech-mode-btn {
+/* Scoped to the body class: crm.css's `.pjl-crm-body a { color:
+   inherit }` (0,1,1) beat a bare `.wo-tech-mode-btn` and painted this
+   link #1A1A1A on the green pill — 1.78:1. */
+.pjl-crm-body .wo-tech-mode-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2020,6 +2023,18 @@ body[data-locked="true"] .wo-zone-location {
   background: rgba(224, 168, 90, 0.12);
   border-color: rgba(224, 168, 90, 0.55);
   color: #6E4A1A;
+}
+/* The banner's state colour has to reach its own text. Both lines are
+   <p>, and crm.css carries a blanket `.pjl-crm-body p { color: ... }` at
+   specificity (0,1,1) — that beats INHERITANCE from the rules above no
+   matter what they set, because inherited values lose to any rule that
+   matches the element directly. On the completed state that painted
+   #4A4A4A on #1B4D2E: 1.10:1, effectively unreadable. Re-asserting
+   inherit here (0,2,0) puts the four state rules back in charge, so the
+   banner keeps one source of truth for its colour. */
+.wo-postsig-banner .wo-postsig-headline,
+.wo-postsig-banner .wo-postsig-detail {
+  color: inherit;
 }
 .wo-postsig-icon {
   font-size: 24px;

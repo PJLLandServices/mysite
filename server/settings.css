@@ -85,7 +85,11 @@
   color: #1F2A22;
 }
 
-.settings-save {
+/* Scoped to the body class so it outranks crm.css's blanket
+   `.pjl-crm-body a { color: inherit }` — this rule is worn by an <a>
+   as well as a <button>, and as an <a> it was inheriting #1A1A1A onto
+   the green pill at 1.78:1. */
+.pjl-crm-body .settings-save {
   font-family: inherit;
   font-size: 14px;
   font-weight: 600;
