@@ -19,6 +19,24 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-31 (Assignment writer — spec locked, stage 0 shipped):** the assignment writer now has a
+locked spec at `docs/ASSIGNMENT_WRITER.md` — decisions A–G settled with Patrick, including his exact
+follow-up cadence (one blast at season start, then D−15/D−10/D−7/D−5 for non-responders with his
+escalation wording at D−10, a 24-hour text to everyone; steps fire once ever, within 09:00–18:00
+Toronto). Stage 0 (preflight) shipped: read-only "who would be told, who would be skipped and why"
+for every planned stop, as a panel on /admin/season-plan.
+**The load-bearing move is the extraction.** `outreach.sendBulk`'s inline eligibility gauntlet moved
+into shared `assessEligibility` / `channelCapability` and sendBulk was rewired onto them, so the
+preflight literally runs the send's own rules — a preflight with its own copy of the rules is one
+that drifts from the send it claims to predict. Same check order, same reason strings (they are API
+to the outreach screen's skip report); the consent suite (43) and seasonal-handoff suite (669)
+passed the refactor unchanged, which is the evidence of behaviour preservation. FLOW-29 remains
+UNMAPPED; no PASS flow touched.
+One verdict is assignment-specific: **already_booked preflights as "settled", not "skipped"** — a
+customer with their own seasonal booking made their appointment and the writer's job for them is
+already done. Partial-channel customers are counted and listed by name so the ready headline cannot
+hide the people who will silently miss the SMS half of the cadence.
+
 **2026-08-30 (Time window control — closed on touch, and read as a range):** reported from an
 iPhone: tapping "Time window" opened the picker and it closed immediately. Cause was not the picker.
 `linkRowsToPins()` bound a click handler to the WHOLE stop row that opened the marker's info window,

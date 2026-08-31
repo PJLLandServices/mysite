@@ -335,3 +335,19 @@
   }
   .sp-stoppanel-scroll { overflow-y: visible; }
 }
+
+/* Assignment preflight — the action list is the skips, so they lead. */
+.sp-preflight-out { margin-top: 14px; }
+.sp-preflight-summary { margin: 0 0 10px; font-weight: 600; font-size: 0.92rem; }
+.sp-preflight-h {
+  margin: 14px 0 6px; font-size: 0.8rem; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--pjl-text-muted);
+}
+.sp-preflight-list { margin: 0; padding-left: 18px; display: grid; gap: 5px; }
+.sp-preflight-list li { font-size: 0.88rem; color: var(--pjl-text-mid); }
+.sp-preflight-list li.is-skip { color: #A32020; }
+.sp-preflight-list li.is-skip strong { color: var(--pjl-text); }
+.sp-preflight-list li.is-partial { color: var(--pjl-amber); }
+.sp-preflight-list li.is-partial strong { color: var(--pjl-text); }
+.sp-preflight-clean { margin: 0; font-size: 0.9rem; color: var(--pjl-green); font-weight: 600; }
+.sp-preflight-bad { margin: 0; font-size: 0.9rem; color: #A32020; }
