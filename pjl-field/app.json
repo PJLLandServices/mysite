@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "PJL Field",
+    "slug": "pjl-field",
+    "owner": "pjllandservices",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1B4D2E"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.pjllandservices.field",
+      "config": {
+        "usesNonExemptEncryption": false
+      },
+      "infoPlist": {
+        "NSCameraUsageDescription": "PJL Field uses the camera to photograph findings and the water shut-off during a service visit.",
+        "NSPhotoLibraryUsageDescription": "PJL Field lets you attach photos you have already taken to a work order.",
+        "NSLocationWhenInUseUsageDescription": "PJL Field records where you were when you started a service visit, as proof of attendance on the work order."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1B4D2E"
+      },
+      "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "0e85ca2e-506f-436e-8814-0b3dd2086582"
+      }
+    },
+    "updates": {
+      "url": "https://u.expo.dev/0e85ca2e-506f-436e-8814-0b3dd2086582"
+    },
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
+    "plugins": [
+      "expo-image-picker",
+      "expo-location"
+    ]
+  }
+}

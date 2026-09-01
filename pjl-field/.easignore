@@ -1,0 +1,56 @@
+# EAS uploads a tarball of the whole repository to its build servers, and
+# this file REPLACES .gitignore for that upload — anything not listed here
+# gets sent, including what .gitignore would have kept out. That is why the
+# secrets block below exists and must not be trimmed.
+#
+# Paths are anchored with a leading slash so they resolve at the repository
+# root. pjl-field's own files are never matched.
+
+# --- Secrets and customer data. Never upload. -------------------------
+# server/data holds real leads and the hashed admin password; .env holds
+# the Gmail and Twilio credentials. The root .gitignore keeps both out of
+# git, and that protection does not carry over to this file.
+/server/
+.env
+.env.*
+memory/
+.claude/
+*.p8
+*.p12
+*.key
+*.jks
+*.mobileprovision
+*.pem
+
+# --- The website. ~790MB, none of it needed to build the app. ---------
+# The app itself is under 1MB; without these the archive was 789MB and
+# took 79 seconds just to compress.
+/.git/
+/.github/
+/images/
+/scripts/
+/worker/
+/docs/
+/_design/
+/_partials/
+/*.mp4
+/*.png
+/*.jpg
+/*.jpeg
+
+# --- Standard Expo and node ignores, copied from .gitignore ------------
+node_modules/
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+.kotlin/
+*.orig.*
+.metro-health-check*
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+.DS_Store
+*.tsbuildinfo
+/ios
+/android
