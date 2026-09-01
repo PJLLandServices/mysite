@@ -44,6 +44,7 @@ const voicemailStore = require("./lib/voicemail-store");
 const { geocode, PJL_BASE } = require("./lib/geocode");
 const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, parseLocalDateKey } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
+const { mergeDaySchedule } = require("./lib/day-schedule");
 const { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice } = require("./lib/pricing");
 const { normalizeServiceFeeWaiver, friendlyWaiverReason } = require("./lib/service-fee-waiver");
 const bookingSessions = require("./lib/booking-sessions");
@@ -20569,6 +20570,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
         const town = lead.contact?.town || lead.contactExport?.address?.town || "";
         return {
           leadId: lead.id,
+          // Where this row came from. A booking has a lead behind it (and
+          // so can be notified-on-route); a "work_order" row appended by
+          // mergeDaySchedule below is a job scheduled straight against a
+          // property with no lead at all.
+          source: "booking",
           customerName: contact.name || lead.contact?.name || "",
           customerPhone: contact.telephone || lead.contact?.phone || "",
           customerEmail: contact.email || lead.contact?.email || "",
@@ -20624,6 +20630,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
           const p = b.propertyId ? propsById.get(b.propertyId) : null;
           const start = new Date(b.scheduledFor);
           const end = new Date(start.getTime() + (Number(b.durationMinutes) || 60) * 60 * 1000);
+          // A booking that already spawned a work order names it, so the
+          // tech sees "already opened, status" on the card — and so the
+          // work-order union below (mergeDaySchedule dedupes on wo.id)
+          // can never list that job a second time.
+          const linkedWo = (Array.isArray(b.workOrderIds) && b.workOrderIds.length)
+            ? allWos.find((w) => b.workOrderIds.includes(w.id)) || null
+            : null;
           dayBookings.push({
             leadId: b.leadId || "",
             bookingId: b.id,
@@ -20644,7 +20657,12 @@ Customer signature captured at ${new Date().toISOString()}.`;
             internalNotes: b.prepNotes || "",
             stage: b.status || "confirmed",
             propertyId: b.propertyId || null,
-            workOrder: null,
+            workOrder: linkedWo ? {
+              id: linkedWo.id,
+              type: linkedWo.type,
+              status: linkedWo.status,
+              zoneCount: (linkedWo.zones || []).length
+            } : null,
             onRouteNotifiedAt: null
           });
         }
@@ -20654,11 +20672,24 @@ Customer signature captured at ${new Date().toISOString()}.`;
       console.warn("[schedule/today] bookings.json union skipped:", err?.message);
     }
 
+    // Lead and canonical bookings are still only part of the day. A work
+    // order scheduled straight against a property — the CRM's new-WO form
+    // or the work-order page's own schedule/backdate input — has no lead
+    // booking and no canonical booking; its only date is scheduledFor on
+    // the work order itself. That is how a management company's
+    // properties get scheduled (one customer, many addresses, a WO per
+    // visit), which is how Willowridge could be booked for today and
+    // appear nowhere on this page (FLOW-32; see lib/day-schedule.js for
+    // why this union was here once, got reverted, and came back). The
+    // merge is additive: every row above renders exactly as before, and
+    // a work order already named by a row is never listed twice.
+    const merged = mergeDaySchedule(dayBookings, allWos, dayStart, dayEnd);
+
     return sendJson(res, 200, {
       ok: true,
       date: new Date(dayStart).toISOString().slice(0, 10),
-      bookings: dayBookings,
-      count: dayBookings.length
+      bookings: merged,
+      count: merged.length
     });
   }
 
