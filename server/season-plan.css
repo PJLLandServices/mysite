@@ -369,5 +369,8 @@
 .sp-preflight-list li.is-skip strong { color: var(--pjl-text); }
 .sp-preflight-list li.is-partial { color: var(--pjl-amber); }
 .sp-preflight-list li.is-partial strong { color: var(--pjl-text); }
+/* The skipped stop's address links to its property record — keep the
+   row's tone, but make the tap target visible. */
+.sp-preflight-list li a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .sp-preflight-clean { margin: 0; font-size: 0.9rem; color: var(--pjl-green); font-weight: 600; }
 .sp-preflight-bad { margin: 0; font-size: 0.9rem; color: #A32020; }

@@ -51,6 +51,10 @@ const base = (id, extra = {}) => ({
   customerEmail: "test@example.com",
   address: "1 Test St, Newmarket, ON",
   town: "Newmarket",
+  // A declared count so the channel-focused fixtures clear the zone
+  // gate (the preflight now names no-zone stops); P-NO-ZONES below
+  // strips it to test exactly that gate.
+  system: { zones: [], zoneCount: 6 },
   ...extra
 });
 
@@ -66,7 +70,8 @@ const FIXTURES = {
   "P-OPTED-OUT": base("P-OPTED-OUT", {
     seasonalOutreach: { [seasonKey]: { optOutThisSeason: true, touches: [] } }
   }),
-  "P-BOOKED": base("P-BOOKED")
+  "P-BOOKED": base("P-BOOKED"),
+  "P-NO-ZONES": base("P-NO-ZONES", { system: { zones: [], zoneCount: null } })
 };
 
 const PLAN = {
@@ -79,7 +84,7 @@ const PLAN = {
     "2026-09-29": {
       label: "R2", territory: "Test north",
       morning: ["P-NOT-ELIGIBLE", "P-NAMELESS", "P-OPTED-OUT", "P-BOOKED"],
-      afternoon: []
+      afternoon: ["P-NO-ZONES"]
     }
   }
 };
@@ -102,7 +107,7 @@ const result = await assignments.preflight(SEASON, YEAR, deps);
 
 ok("the preflight runs against the injected plan", result.ok === true);
 ok("every planned stop is accounted for — none silently dropped",
-  result.summary.stops === 11, String(result.summary.stops));
+  result.summary.stops === 12, String(result.summary.stops));
 ok("the summary adds up: ready + settled + skipped = stops",
   result.summary.ready + result.summary.settled + result.summary.skipped === result.summary.stops,
   JSON.stringify(result.summary));
@@ -154,6 +159,12 @@ ok("a nameless property is skipped — outreach's name invariant holds here too"
 
 ok("a per-season opt-out is skipped as season_opt_out",
   rows.get("P-OPTED-OUT").outcome === "skipped" && rows.get("P-OPTED-OUT").reason === "season_opt_out");
+
+ok("no zone count -> skipped HERE, before assign can hide it — Patrick's list",
+  rows.get("P-NO-ZONES").outcome === "skipped"
+  && rows.get("P-NO-ZONES").reason === "no_zone_count"
+  && rows.get("P-NO-ZONES").propertyId === "P-NO-ZONES",
+  JSON.stringify(rows.get("P-NO-ZONES")));
 
 // ---- already_booked is SETTLED, not a problem -------------------------
 

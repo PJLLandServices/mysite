@@ -132,6 +132,24 @@ await bookings.createDirect({
   status: "confirmed"
 });
 
+// ---- 0. The preflight names the no-zone stops -------------------------
+// Patrick's ask ("what properties are on this no_zone_count??"): the
+// check-the-plan step must name each stop assign() would refuse — a
+// "ready" the assign then skips would break stage 0's promise.
+
+const flight = await assignments.preflight(SEASON, YEAR, deps);
+const flightRows = new Map(flight.days.flatMap((d) => d.stops).map((r) => [`${r.date}|${r.code}`, r]));
+ok("the preflight flags a missing zone count BEFORE anything is booked",
+  flightRows.get(`${DAY1}|P-NOZONE`).outcome === "skipped"
+  && flightRows.get(`${DAY1}|P-NOZONE`).reason === "no_zone_count"
+  && flight.summary.byReason.no_zone_count === 1,
+  JSON.stringify(flightRows.get(`${DAY1}|P-NOZONE`)));
+ok("preflight rows carry the propertyId — the skip list links to the fix",
+  flightRows.get(`${DAY1}|P-NOZONE`).propertyId === "P-NOZONE"
+  && flightRows.get(`${DAY1}|P-A1`).propertyId === "P-A1");
+ok("a declared count (no documented zones) still preflights ready",
+  flightRows.get(`${DAY1}|P-A2`).outcome === "ready");
+
 // ---- 1. The first assignment ----------------------------------------
 
 const first = await assignments.assign(SEASON, YEAR, deps);

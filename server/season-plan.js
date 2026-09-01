@@ -1062,15 +1062,7 @@
       out.appendChild(preflightHeading("Would be skipped — fix or accept before sending"));
       const ul = document.createElement("ul");
       ul.className = "sp-preflight-list";
-      for (const r of problems) {
-        const li = document.createElement("li");
-        li.className = "is-skip";
-        li.innerHTML = `<strong>${r.label || r.date} · ${prettyDate(r.date)}</strong> — `
-          + `${escapeHtml(r.address ? r.address.split(",")[0] : r.code)}`
-          + `${r.customerName ? ` (${escapeHtml(r.customerName)})` : ""} — `
-          + `${escapeHtml(words[r.reason] || r.reason)}`;
-        ul.appendChild(li);
-      }
+      for (const r of problems) ul.appendChild(skipRowFor(r, words));
       out.appendChild(ul);
     }
 
@@ -1096,6 +1088,23 @@
       p.textContent = "Every planned stop is reachable on both channels. Nothing to fix.";
       out.appendChild(p);
     }
+  }
+
+  // One skipped-stop row, shared by the preflight and the assign
+  // result. The address links to the property record when we have one —
+  // "no zone count" and friends are fixed THERE, so the skip list is
+  // the to-do list and each row is one tap from its fix.
+  function skipRowFor(r, words) {
+    const li = document.createElement("li");
+    li.className = "is-skip";
+    const who = `${escapeHtml(r.address ? r.address.split(",")[0] : r.code)}`
+      + `${r.customerName ? ` (${escapeHtml(r.customerName)})` : ""}`;
+    li.innerHTML = `<strong>${r.label || r.date} · ${prettyDate(r.date)}</strong> — `
+      + (r.propertyId
+        ? `<a href="/admin/property/${encodeURIComponent(r.propertyId)}" target="_blank" rel="noopener">${who}</a>`
+        : who)
+      + ` — ${escapeHtml(words[r.reason] || r.reason)}`;
+    return li;
   }
 
   function preflightHeading(text) {
@@ -1237,15 +1246,7 @@
       out.appendChild(preflightHeading("Skipped — not booked"));
       const ul = document.createElement("ul");
       ul.className = "sp-preflight-list";
-      for (const r of problems) {
-        const li = document.createElement("li");
-        li.className = "is-skip";
-        li.innerHTML = `<strong>${r.label || r.date} · ${prettyDate(r.date)}</strong> — `
-          + `${escapeHtml(r.address ? r.address.split(",")[0] : r.code)}`
-          + `${r.customerName ? ` (${escapeHtml(r.customerName)})` : ""} — `
-          + `${escapeHtml(words[r.reason] || r.reason)}`;
-        ul.appendChild(li);
-      }
+      for (const r of problems) ul.appendChild(skipRowFor(r, words));
       out.appendChild(ul);
     } else {
       const p = document.createElement("p");

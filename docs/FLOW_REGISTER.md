@@ -19,6 +19,15 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-08-31 (Preflight names the no-zone stops):** Patrick asked which properties sit behind
+the `no_zone_count` skips and no screen could answer — only `assign()` checked zone counts, so
+Check-the-plan reported those stops ready and they vanished later. `assignments.preflight()` now
+runs the same `zoneCountFor` gate; the Season Plan's skip lists (preflight AND assign result,
+via one shared row renderer) print each stop with its address linked to `/admin/property/<id>`,
+where the count is filled in. Rows gained `propertyId`; `assign()` keeps its own check for the
+race between the two reads. Read-only reporting plus a link — no store, route or payload
+removal; writer suite 45 assertions (+3). No PASS flow touched.
+
 **2026-08-31 (Decision H — the customer's real zone count, from their appointment page):**
 Patrick's post-launch-review ask: profiles often hold only the booking class for the customer's
 category, not their actual system. The appointment page grew a "Your system" row and a zone-count
