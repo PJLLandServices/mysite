@@ -19,6 +19,24 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-01 (Lead-booking heal becomes a sweep — the two booking stores can't quietly
+disagree):** Patrick reported a customer's bookings on the schedule and his phone calendar but
+missing from /admin/bookings ("why are the Willowridge landscaping bookings not showing up on the
+bookings again?"). Root cause: a public-flow booking is born on its LEAD; the canonical
+bookings.json record — the only thing /admin/bookings reads — is materialized by
+`upsertFromLead`, and the sole whole-list heal lived INSIDE the iCal feed: it ran only when a
+calendar client fetched, and swallowed every failure (`catch (_)`), so a lead whose upsert failed
+was invisible on canonical surfaces forever, with no trace. The loop now lives once in
+`bookings.healFromLeads(leads)` — the feed calls it, and server.js runs it as the EIGHTH sweep
+(boot + 10 min), logging a count when it heals and NAMING each lead whose heal fails. Same
+"swept state, not human-triggered code paths" rule the assignment time sweep recorded. Feed
+semantics preserved exactly: a lead whose canonical record exists is left alone (no re-sync), a
+`lead.booking` without a start stays out. New `scripts/test-booking-heal.mjs` (10 assertions, in
+`build:check`): heals what's missing, idempotent, existing records untouched, a broken lead is
+reported by id without sinking the rest, empty input no-ops. **No PASS flow's route or payload
+changed** — the heal is additive materialization the feed already performed; FLOW-01/02/23
+untouched, FLOW-03's booking write path untouched.
+
 **2026-08-31 (Preflight names the no-zone stops):** Patrick asked which properties sit behind
 the `no_zone_count` skips and no screen could answer — only `assign()` checked zone counts, so
 Check-the-plan reported those stops ready and they vanished later. `assignments.preflight()` now
