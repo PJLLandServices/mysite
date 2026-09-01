@@ -45,6 +45,7 @@ const { geocode, PJL_BASE } = require("./lib/geocode");
 const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, parseLocalDateKey } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
 const { mergeDaySchedule } = require("./lib/day-schedule");
+const jobFinder = require("./lib/job-finder");
 const { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice } = require("./lib/pricing");
 const { normalizeServiceFeeWaiver, friendlyWaiverReason } = require("./lib/service-fee-waiver");
 const bookingSessions = require("./lib/booking-sessions");
@@ -20691,6 +20692,44 @@ Customer signature captured at ${new Date().toISOString()}.`;
       bookings: merged,
       count: merged.length
     });
+  }
+
+  // "Why isn't this customer on the schedule?" — searches EVERY store a
+  // job's date can live in (leads, canonical bookings, work orders,
+  // properties, season-plan stops) and answers per record, in plain
+  // sentences, against the asked-about day. Read-only. Born from the
+  // Willowridge hunt (FLOW-32): three real fixes in, the symptom
+  // outlived the code-reading, and the data needed a way to speak.
+  if (req.method === "GET" && pathname === "/api/schedule/find-jobs") {
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const q = normalizeString(url.searchParams.get("q"), 120);
+    const dateKey = normalizeString(url.searchParams.get("date"), 10)
+      || new Date().toLocaleDateString("en-CA");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+      return sendJson(res, 422, { ok: false, errors: ["Bad date param."] });
+    }
+    if (!q) return sendJson(res, 422, { ok: false, errors: ["Type a name, address, or code to search for."] });
+    try {
+      const y = new Date().getFullYear();
+      const plans = [];
+      for (const season of ["fall", "spring"]) {
+        try {
+          const plan = await seasonPlans.getPlan(season, y);
+          if (plan) plans.push({ season, year: y, plan });
+        } catch { /* a season without a plan is simply not searched */ }
+      }
+      const result = jobFinder.findJobs(q, dateKey, {
+        leads: await readLeads(),
+        bookings: await bookings.list(),
+        workOrders: await workOrders.list(),
+        properties: await properties.list(),
+        plans
+      });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      console.error("[find-jobs]", err?.message);
+      return sendJson(res, 500, { ok: false, errors: ["The search failed — see the server log."] });
+    }
   }
 
   // Tech taps "Notify on route" on the today's-schedule view.

@@ -157,5 +157,22 @@ const wo = (over) => ({
   eq(townFromAddress(null), "", "null address is safe");
 }
 
+// ---- 10. date-only scheduledFor stays on the day the person meant ----
+// A bare "2026-10-15" parsed with new Date() is UTC midnight — the
+// evening of Oct 14 in Toronto — which would silently shift the job to
+// the wrong local day. parseStored treats it as LOCAL midnight.
+{
+  const { parseStored } = require("../server/lib/day-schedule.js");
+  const dateOnlyKey = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+  const woDateOnly = { id: "WO-DATEONLY", type: "fall_closing", status: "scheduled",
+    customerName: "Date-Only Customer", address: "1 Bare St, Aurora, ON", scheduledFor: dateOnlyKey };
+  const merged = mergeDaySchedule([], [woDateOnly], dayStart, dayEnd);
+  eq(merged.length, 1, "a date-only scheduledFor lands on ITS OWN local day, not the day before");
+  eq(merged[0]?.workOrder?.id, "WO-DATEONLY", "…and it is the right work order");
+  eq(parseStored(dateOnlyKey).getHours(), 0, "date-only parses to local midnight");
+  ok(parseStored(null) === null, "no date parses to null, not an Invalid Date");
+  ok(parseStored("garbage") === null, "an unreadable date parses to null rather than throwing");
+}
+
 console.log(`\nday-schedule: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

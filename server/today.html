@@ -93,6 +93,20 @@
     </section>
 
     <ul class="today-list" id="todayList"></ul>
+
+    <!-- FLOW-32's lantern: when a job you expected isn't above, this
+         searches every store a date can live in and says, per record,
+         why it does or doesn't show on the selected day. -->
+    <details class="today-finder" id="todayFinder">
+      <summary>Missing a job? Search every record</summary>
+      <div class="today-finder-row">
+        <input type="search" id="finderQuery" placeholder="Customer, address, or property code…" maxlength="120">
+        <button type="button" class="today-action today-action--open" id="finderGo">
+          <span class="today-action-label">Search</span>
+        </button>
+      </div>
+      <div class="today-finder-results" id="finderResults" hidden></div>
+    </details>
     </main>
   </div><!-- /.pjl-app -->
 

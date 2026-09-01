@@ -238,6 +238,55 @@ async function load(dateString) {
   }
 }
 
+// ---- The job finder ("missing a job?") ---------------------------
+// One fetch, plain-sentence verdicts per record, grouped by where the
+// record lives. The date searched is the day the page is showing.
+
+const finderQuery = document.getElementById("finderQuery");
+const finderGo = document.getElementById("finderGo");
+const finderResults = document.getElementById("finderResults");
+
+function finderGroupHtml(title, rows, line) {
+  if (!rows.length) return "";
+  return `<h3 class="today-finder-h">${escapeHtml(title)}</h3><ul class="today-finder-list">${
+    rows.map((r) => `<li class="${r.onDay || r.booked ? "is-on" : "is-off"}">${line(r)}</li>`).join("")
+  }</ul>`;
+}
+
+async function runFinder() {
+  const q = (finderQuery.value || "").trim();
+  if (!q) { finderQuery.focus(); return; }
+  finderGo.disabled = true;
+  finderResults.hidden = false;
+  finderResults.textContent = "Searching every store…";
+  try {
+    const date = datePicker.value || todayDateString();
+    const res = await fetch(`/api/schedule/find-jobs?q=${encodeURIComponent(q)}&date=${encodeURIComponent(date)}`, { credentials: "same-origin" });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error((data.errors || ["Search failed."]).join(" "));
+    const who = (r) => `<strong>${escapeHtml(r.name || r.address || r.code || r.id)}</strong>`;
+    const html =
+      finderGroupHtml("Properties on file", data.properties, (r) =>
+        `${who(r)} — ${escapeHtml(r.address)} <span class="today-finder-id">${escapeHtml(r.code)}</span>`)
+      + finderGroupHtml("Bookings", data.bookings, (r) =>
+        `${who(r)} <span class="today-finder-id">${escapeHtml(r.id)}</span> — ${escapeHtml(r.verdict)}`)
+      + finderGroupHtml("Work orders", data.workOrders, (r) =>
+        `${who(r)} <a class="today-finder-id" href="/admin/work-order/${encodeURIComponent(r.id)}">${escapeHtml(r.id)}</a> — ${escapeHtml(r.verdict)}`)
+      + finderGroupHtml("Lead bookings", data.leads, (r) =>
+        `${who(r)} <span class="today-finder-id">${escapeHtml(r.id)}</span> — ${escapeHtml(r.verdict)}`)
+      + finderGroupHtml("Season-plan stops", data.planStops, (r) =>
+        `${who(r)} <span class="today-finder-id">${escapeHtml(r.season)} ${escapeHtml(String(r.year))}</span> — ${escapeHtml(r.verdict)}`);
+    finderResults.innerHTML = html
+      || `<p class="today-finder-none">Nothing anywhere matches “${escapeHtml(q)}” — no property, booking, work order, lead, or plan stop. The record this job should live on hasn't been created.</p>`;
+  } catch (err) {
+    finderResults.textContent = err.message || "Search failed.";
+  } finally {
+    finderGo.disabled = false;
+  }
+}
+if (finderGo) finderGo.addEventListener("click", runFinder);
+if (finderQuery) finderQuery.addEventListener("keydown", (e) => { if (e.key === "Enter") runFinder(); });
+
 // ---- Action handlers --------------------------------------------
 
 todayList.addEventListener("click", async (event) => {

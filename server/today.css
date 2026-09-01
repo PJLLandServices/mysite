@@ -423,3 +423,55 @@
   .today-action--navigate { grid-column: auto; }
   .today-action { font-size: 13px; min-height: 44px; }
 }
+
+/* ---- The job finder ("Missing a job?") — FLOW-32 ------------------ */
+.today-finder {
+  margin: 24px 0 0;
+  border: 1px solid var(--pjl-border, #E3E1D5);
+  border-radius: 12px;
+  background: #fff;
+  padding: 14px 16px;
+}
+.today-finder summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--pjl-green);
+}
+.today-finder-row {
+  display: flex;
+  gap: 10px;
+  margin: 12px 0 0;
+}
+.today-finder-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  font: inherit;
+  border: 1px solid var(--pjl-border, #E3E1D5);
+  border-radius: 8px;
+}
+.today-finder-results { margin-top: 14px; }
+.today-finder-h {
+  margin: 12px 0 4px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--pjl-text-muted);
+}
+.today-finder-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 5px;
+}
+.today-finder-list li { font-size: 14px; }
+.today-finder-list li.is-on { color: var(--pjl-green); }
+.today-finder-list li.is-off { color: var(--pjl-text, #1F241F); }
+.today-finder-list li strong { color: var(--pjl-text, #1F241F); }
+.today-finder-id {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--pjl-text-muted);
+}
+a.today-finder-id { text-decoration: underline; }
+.today-finder-none { margin: 8px 0 0; color: var(--pjl-text-muted); }
