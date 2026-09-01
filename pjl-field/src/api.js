@@ -85,6 +85,13 @@ export const openWorkOrder = (leadId) =>
 export const getWorkOrder = (id) =>
   getJson(`/api/work-orders/${encodeURIComponent(id)}`).then((d) => d.workOrder || d);
 
+// Every work order on a property, newest first from the server. Used
+// before creating one so a second tap opens what the first tap made
+// instead of raising a duplicate.
+export const listPropertyWorkOrders = (propertyId) =>
+  getJson(`/api/work-orders?propertyId=${encodeURIComponent(propertyId)}`)
+    .then((d) => d.workOrders || []);
+
 async function sendJson(path, method, body) {
   const res = await fetch(`${HOST}${path}`, {
     method,
@@ -102,6 +109,13 @@ async function sendJson(path, method, body) {
 
 export const patchWorkOrder = (id, patch) =>
   sendJson(`/api/work-orders/${encodeURIComponent(id)}`, 'PATCH', patch);
+
+// Raise a work order against a PROPERTY rather than a lead. A booking
+// written from a season plan — how a management company's route days get
+// scheduled — has no lead, so /api/leads/:id/open-wo has no id to take.
+// This is the same call the CRM's own property page makes.
+export const createWorkOrderForProperty = ({ type, propertyId }) =>
+  sendJson('/api/work-orders', 'POST', { type, propertyId }).then((d) => d.workOrder);
 
 // Sweeps every issue off the work order's zones into the property's
 // deferred recommendations. Takes no payload — the server reads the

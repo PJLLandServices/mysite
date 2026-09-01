@@ -1323,6 +1323,29 @@ date **cannot presently exist**. The fix addressed a case the codebase cannot pr
 root cause of the wrong diagnosis was reading a two-week-stale `origin/main`. If a
 property-first work order ever does get a schedulable date, this is the gap that opens.
 
+**2026-09-01 (Start WO on a lead-less booking — found on a driveway):** Patrick opened the
+app on a real Willowridge stop and tapped **Start WO**: *"Couldn't open — API endpoint not
+found."* Cause: the app built `/api/leads/${leadId}/open-wo` unconditionally, and an
+assignment booking's `leadId` arrives as `""`, so the path collapsed to `/api/leads//open-wo`
+— which matches no route (`([^/]+)` needs a character) and fell through to the catch-all 404.
+Every lead booking on the same screen worked, which is why it read as a Willowridge problem.
+**Fixed:** a row with no lead now raises its work order against its PROPERTY, via the same
+`POST /api/work-orders { type, propertyId }` the CRM's property page uses, with the service
+key mapped to a template exactly as the server maps it. **Look before creating** — that
+endpoint has no upsert, so an unguarded second tap raises a second work order for the same
+visit: two documents and two invoices for one lawn. The property's existing work orders are
+read first and an unfinished one of the same type is reopened instead. A row with neither a
+lead nor a property cannot start one, and says so by disabling the button rather than
+failing at the server. Routing logic lives in `pjl-field/src/workorder-routing.js` (out of
+the screen so it is testable without React Native); `scripts/test-wo-routing.mjs` (38
+assertions, in `build:check`) pins that a lead-less row never routes through the lead
+endpoint, that duplicates are refused, and — checked against `BOOKABLE_SERVICES` and the
+server's own `templateForServiceKey` — that the app's template mapping cannot silently drift
+from the server's. **What still needs Patrick:** tap Start WO on a Willowridge stop, confirm
+it opens a fall closing; back out and tap it again, confirming it reopens the SAME work
+order rather than making a second; and confirm an ordinary residential row still starts
+normally.
+
 **2026-09-01 (Field app, assignment bookings):** the app's native Today screen honours the
 lead-less rows the assignment writer produces — Notify and Start WO disable rather than
 posting an empty lead id, and the card keys off `bookingId`. This matches, and does not
