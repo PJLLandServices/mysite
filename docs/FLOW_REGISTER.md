@@ -1323,6 +1323,25 @@ or catalog change, and the CTA that moved is FLOW-28's (UNMAPPED). `publicBookin
 (fall 2026: Oct 30) is defined in the config for the future gate and is deliberately
 consumed by nothing, pinned by a source guard. Cover:
 `scripts/test-season-config.mjs` (66 assertions, in `build:check`).
+**2026-09-01 (The job finder — the data gets a voice):** Patrick reported the Willowridge
+symptom STILL alive after the FLOW-32 restore deployed. Three real fixes in (bookings-page heal,
+preflight naming, work-order union), each found by code reading, and the live symptom outlived
+them all — so the fourth move is not a fourth guess. Two things shipped: (1) **hardening** —
+`day-schedule.parseStored` treats a date-only `scheduledFor` ("2026-10-02") as LOCAL midnight;
+`new Date()` alone would land it at UTC midnight, the evening of Oct 1 in Toronto, silently
+shifting the job to the wrong day (day-schedule suite 41, +5). (2) **The finder** —
+`server/lib/job-finder.js` + `GET /api/schedule/find-jobs?q=&date=` + a "Missing a job? Search
+every record" box on the Today page: searches EVERY store a job's date can live in (leads,
+canonical bookings, work orders, properties, season-plan stops), reaches records **by property
+link** when their own name field is blank (the standard shape of a WO raised against a
+property), and issues one plain-sentence verdict per record against the selected day — "NO
+scheduled date at all — open the work order and set it", "stored as a date with no time —
+counted as local midnight", "planned but NEVER BOOKED — run preflight", "ARCHIVED — never
+shows". Read-only; judges dates with day-schedule's own parser so its verdicts cannot drift
+from the schedule's behaviour. `scripts/test-job-finder.mjs` (17 assertions, in `build:check`).
+**No PASS flow touched.** The acceptance IS the use: Patrick types "Willowridge" on the Today
+page and the next message in this hunt is whatever the finder says, not another hypothesis.
+
 **2026-09-01 (FLOW-32 — directly-scheduled work orders reach Today; the reverted fix
 restored):** Patrick's third report of the same live symptom — Willowridge Landscaping absent
 from the Today page — after both #111 and #112 deployed. The field-app merge had DROPPED the

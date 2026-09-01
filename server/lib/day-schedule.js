@@ -55,6 +55,23 @@ const WO_TYPE_LABELS = {
 // see what they finished.
 const SKIP_WO_STATUS = new Set(["cancelled", "no_show"]);
 
+// Parse a stored date the way a person means it. A bare "2026-10-02"
+// parsed with new Date() lands at UTC midnight — the evening of Oct 1
+// in Toronto — which would silently shift the job to the wrong local
+// day. Date-only values are treated as LOCAL midnight instead. Full
+// ISO datetimes (what the WO page's schedule input writes) parse as-is.
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+function parseStored(value) {
+  if (!value) return null;
+  const text = String(value).trim();
+  if (DATE_ONLY_RE.test(text)) {
+    const [y, m, d] = text.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  }
+  const when = new Date(text);
+  return Number.isNaN(when.getTime()) ? null : when;
+}
+
 // Work orders carry a free-text address and no town of their own. Same
 // second-comma-segment convention lib/notify-sms.js uses, so a row reads
 // the same wherever it came from.
@@ -70,7 +87,7 @@ function townFromAddress(address) {
 // Project one work order into the same row shape the booking branch emits,
 // so the client renders both without branching on source.
 function workOrderRow(wo) {
-  const start = new Date(wo.scheduledFor);
+  const start = parseStored(wo.scheduledFor);
   return {
     // No lead, so no lead id. The client keys off the work order and hides
     // notify-on-route, which needs a lead to message.
@@ -115,8 +132,9 @@ function mergeDaySchedule(bookings, allWos, dayStart, dayEnd) {
       if (!wo || !wo.id) return false;
       if (seenWoIds.has(wo.id)) return false;
       if (SKIP_WO_STATUS.has(wo.status)) return false;
-      const when = wo.scheduledFor ? new Date(wo.scheduledFor).getTime() : null;
-      if (!when || Number.isNaN(when)) return false;
+      const parsed = parseStored(wo.scheduledFor);
+      const when = parsed ? parsed.getTime() : null;
+      if (!when) return false;
       return when >= dayStart && when < dayEnd;
     })
     .map(workOrderRow);
@@ -124,4 +142,4 @@ function mergeDaySchedule(bookings, allWos, dayStart, dayEnd) {
   return [...rows, ...scheduled].sort((a, b) => new Date(a.start) - new Date(b.start));
 }
 
-module.exports = { mergeDaySchedule, workOrderRow, townFromAddress, WO_TYPE_LABELS, SKIP_WO_STATUS };
+module.exports = { mergeDaySchedule, workOrderRow, townFromAddress, parseStored, WO_TYPE_LABELS, SKIP_WO_STATUS };
