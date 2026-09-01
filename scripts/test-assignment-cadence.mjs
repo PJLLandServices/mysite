@@ -53,7 +53,11 @@ fs.writeFileSync(path.join(SANDBOX, "server/data/properties.json"), JSON.stringi
   prop("P-2"),
   prop("P-3"),
   prop("P-OPTOUT", { seasonalOutreach: { [seasonKey]: { optOutThisSeason: true, touches: [] } } }),
-  prop("P-EMAILONLY", { customerPhone: "" })
+  prop("P-EMAILONLY", { customerPhone: "" }),
+  // Decision I — "no need to contact": booked by the writer, and the
+  // cadence engine must refuse EVERY send for it, forever.
+  prop("P-SILENT", { customerPhone: "", customerEmail: "",
+    commPrefs: { noContactNeeded: true } })
 ], null, 2));
 
 const bookings = require(path.join(SANDBOX, "server/lib/bookings.js"));
@@ -83,6 +87,7 @@ await mk("P-2", { bucket: "afternoon", scheduledFor: D(5, 12, 53) });
 await mk("P-3");
 await mk("P-OPTOUT");
 await mk("P-EMAILONLY");
+await mk("P-SILENT");
 
 // The captured wire.
 const wire = { emails: [], smses: [], failNextSms: false };
@@ -137,6 +142,16 @@ ok("the SMS body carries the customer's REAL appointment link, not a placeholder
   && !wire.smses.some((s) => s.smsBody.includes("[appointment-link]")));
 ok("the email goes out with the appointment-page button",
   wire.emails.every((e) => e.ctaLabel === "Open your appointment page"));
+
+// Decision I at the send: the silent booking is skipped BY NAME with its
+// own reason — not lumped into no_contact — and carries no step marks.
+ok("a 'no need to contact' booking is skipped at the blast with its own reason",
+  blastResult.skipped.some((s) => s.code === "P-SILENT" && s.reason === "no_contact_needed"),
+  JSON.stringify(blastResult.skipped));
+ok("nothing was ever sent to the silent booking and no step was marked",
+  !(await bookings.list()).find((b) => b.propertyId === "P-SILENT").assignment.outreach?.steps
+  && !wire.emails.some((e) => (e.to || "").includes("p-silent"))
+  && !wire.smses.some((t) => (t.smsBody || "").includes("P-SILENT")));
 
 const touchedP1 = await propertiesLib.get("P-1");
 const touch = touchedP1.seasonalOutreach[seasonKey].touches.at(-1);
@@ -331,6 +346,12 @@ ok("steps 1–5 are email+SMS; step 6 is SMS",
   && cadence.STEPS[5].channels.join() === "sms");
 ok("only steps 2–5 stop on response",
   cadence.STEPS.filter((s) => s.stopsOnResponse).map((s) => s.n).join() === "2,3,4,5");
+
+// Decision I, end of arc: after every sweep this suite ran — including
+// the D-1 reminder that "nothing stops" — the silent booking has never
+// been marked with a single step.
+ok("rule: NOTHING reaches a 'no need to contact' booking, step 6 included",
+  !(await bookings.list()).find((b) => b.propertyId === "P-SILENT").assignment.outreach?.steps);
 
 // ---- Report ----------------------------------------------------------
 

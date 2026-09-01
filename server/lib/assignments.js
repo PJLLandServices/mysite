@@ -70,7 +70,7 @@ async function preflight(season, year, deps = {}) {
   const byCode = new Map((all || []).filter((p) => p && p.code).map((p) => [p.code, p]));
 
   const days = [];
-  const summary = { stops: 0, ready: 0, readyPartial: 0, settled: 0, skipped: 0, byReason: {} };
+  const summary = { stops: 0, ready: 0, readyPartial: 0, readySilent: 0, settled: 0, skipped: 0, byReason: {} };
   const count = (reason) => { summary.byReason[reason] = (summary.byReason[reason] || 0) + 1; };
 
   for (const date of Object.keys(plan.days).sort()) {
@@ -130,6 +130,22 @@ async function preflight(season, year, deps = {}) {
           row.reason = "no_zone_count";
           summary.skipped += 1;
           count(row.reason);
+          rows.push(row);
+          continue;
+        }
+
+        // Decision I — "no need to contact" (Patrick's phrase): a
+        // property he coordinates with directly, typically a management
+        // company whose sites carry no contact info of their own. READY
+        // to book — the truck-never-surprises-a-house rule is satisfied
+        // by the standing relationship, not by a message — and the
+        // cadence engine refuses every send for it (cadenceGates).
+        if (property.commPrefs?.noContactNeeded === true) {
+          row.outcome = "ready";
+          row.channels = [];
+          row.silent = true;
+          summary.ready += 1;
+          summary.readySilent += 1;
           rows.push(row);
           continue;
         }

@@ -1323,6 +1323,21 @@ or catalog change, and the CTA that moved is FLOW-28's (UNMAPPED). `publicBookin
 (fall 2026: Oct 30) is defined in the config for the future gate and is deliberately
 consumed by nothing, pinned by a source guard. Cover:
 `scripts/test-season-config.mjs` (66 assertions, in `build:check`).
+**2026-09-01 (Decision I — "no need to contact" customers; the Willowridge hunt's true
+ending):** the finder + preflight finally named it: all 14 Willowridge stops skipped as
+`no_contact` — correctly, by the truck-never-surprises-a-house rule, but wrongly for a
+management company Patrick coordinates with directly ("these are non need to contact
+bookings"). New property flag `commPrefs.noContactNeeded` ("No need to contact" tick on the
+property page). Preflight: **ready (silent)**, counted and listed under "Will book WITHOUT
+messages" so the send arithmetic stays visible; assign books them like anyone else; the
+cadence engine refuses EVERY send through the one `cadenceGates` gate (reason
+`no_contact_needed`) — blast, steps 2–6, day-move notices. Persistence trap honoured:
+`hydrate()` rebuilds commPrefs key by key and DELETES unlisted keys on the next read (the
+2026-08-25 reviewRequestsEmail lesson), so the flag is in the blank default, the hydrate list,
+and COMM_PREF_KEYS. Suites: preflight 31, writer 46, cadence 45; full `build:check` exit 0.
+**No PASS flow touched** — FLOW-01/02/03/23 don't read these gates; the flag defaults false so
+every existing property behaves byte-identically until Patrick ticks it.
+
 **2026-09-01 (The job finder — the data gets a voice):** Patrick reported the Willowridge
 symptom STILL alive after the FLOW-32 restore deployed. Three real fixes in (bookings-page heal,
 preflight naming, work-order union), each found by code reading, and the live symptom outlived

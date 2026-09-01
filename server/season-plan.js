@@ -1046,7 +1046,8 @@
     const head = document.createElement("p");
     head.className = "sp-preflight-summary";
     head.textContent =
-      `${s.stops} planned stops · ${s.ready} would be sent`
+      `${s.stops} planned stops · ${s.ready} would be booked`
+      + (s.readySilent ? ` (${s.readySilent} without messages)` : "")
       + (s.readyPartial ? ` (${s.readyPartial} on one channel only)` : "")
       + (s.settled ? ` · ${s.settled} already booked themselves` : "")
       + ` · ${s.skipped} would be skipped`;
@@ -1055,6 +1056,7 @@
     const rows = data.days.flatMap((d) => d.stops);
     const problems = rows.filter((r) => r.outcome === "skipped");
     const partials = rows.filter((r) => r.outcome === "ready" && r.partial);
+    const silents = rows.filter((r) => r.outcome === "ready" && r.silent);
 
     // Skips first — they are the action list. Ready rows are the happy
     // majority and listing them all would bury the seven that need a fix.
@@ -1077,6 +1079,22 @@
           + `${escapeHtml(r.address ? r.address.split(",")[0] : r.code)} — `
           + `${r.channels[0] === "email" ? "email only" : "text only"}: `
           + `${escapeHtml(words[r.partial] || r.partial)}`;
+        ul.appendChild(li);
+      }
+      out.appendChild(ul);
+    }
+
+    // Decision I rows — booked, never messaged. Listed so the "0 would
+    // be sent" arithmetic is visibly accounted for, not a mystery.
+    if (silents.length) {
+      out.appendChild(preflightHeading("Will book WITHOUT messages — you coordinate directly"));
+      const ul = document.createElement("ul");
+      ul.className = "sp-preflight-list";
+      for (const r of silents) {
+        const li = document.createElement("li");
+        li.innerHTML = `<strong>${r.label || r.date} · ${prettyDate(r.date)}</strong> — `
+          + `${escapeHtml(r.address ? r.address.split(",")[0] : r.code)}`
+          + `${r.customerName ? ` (${escapeHtml(r.customerName)})` : ""} — books silently.`;
         ul.appendChild(li);
       }
       out.appendChild(ul);
