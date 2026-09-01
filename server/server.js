@@ -23753,6 +23753,33 @@ server.listen(PORT, HOST, () => {
   sweepAssignedTimes();
   setInterval(sweepAssignedTimes, 10 * 60 * 1000);
 
+  // Lead-booking heal sweep. A booking made through the public flow is
+  // born on its LEAD; the canonical bookings.json record is a mirror
+  // that upsertFromLead materializes. Until now the only whole-list
+  // heal lived inside the iCal feed — it ran only when a calendar
+  // client fetched, and swallowed failures — so a lead-held booking
+  // could sit on the schedule and the phone calendar while the
+  // /admin/bookings page (canonical-only) knew nothing about it
+  // (Patrick: "why are the Willowridge bookings not showing up on the
+  // bookings?"). Same rule as the assignment time sweep: swept state,
+  // not human-triggered code paths. Boot + 10 minutes; healed=0 writes
+  // nothing, and every failure names its lead in the log.
+  const sweepLeadBookings = async () => {
+    try {
+      const result = await bookings.healFromLeads(await readLeads());
+      if (result.healed) {
+        console.log(`[bookings] lead-booking sweep healed ${result.healed} canonical record${result.healed === 1 ? "" : "s"}`);
+      }
+      for (const f of result.failures) {
+        console.warn(`[bookings] lead-booking heal FAILED for ${f.leadId} (${f.name}): ${f.error} — this booking is on the lead but NOT on /admin/bookings`);
+      }
+    } catch (err) {
+      console.warn("[bookings] lead-booking sweep failed:", err?.message);
+    }
+  };
+  sweepLeadBookings();
+  setInterval(sweepLeadBookings, 10 * 60 * 1000);
+
   // Assignment cadence sweep (stage 4) — dispatches steps 2–6 of the
   // follow-up cadence for blasted bookings, each step at most once,
   // only on its own day, only inside the 09:00–18:00 send window (the
