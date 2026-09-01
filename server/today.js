@@ -5,6 +5,13 @@
 // data-map-address), Notify on route (POST /api/leads/:id/notify-on-route),
 // Open WO (POST /api/leads/:id/open-wo → redirect to the field WO tech-mode
 // page).
+//
+// Not every row has a lead behind it. A "work_order" row (FLOW-32) is a
+// job scheduled straight against a property — commercial work, mostly —
+// and it already HAS a work order, so Open WO is a plain link to it, and
+// there is no lead to send an on-route message from, so Notify is not
+// offered. An assignment-booking row may also arrive lead-less; when it
+// names a workOrder the same direct link applies.
 
 // Mobile nav hamburger toggle (shared pattern across all admin pages).
 (function setupNavToggle() {
@@ -37,7 +44,8 @@ const logoutButton = document.getElementById("logoutButton");
 const TYPE_LABELS = {
   spring_opening: "Spring Opening",
   fall_closing: "Fall Closing",
-  service_visit: "Service Visit"
+  service_visit: "Service Visit",
+  build: "Install / Build"
 };
 
 let bookingsCache = [];
@@ -115,6 +123,10 @@ function woStatusLabel(wo) {
 function bookingCardHtml(booking) {
   const wo = booking.workOrder;
   const woTypeLabel = wo ? (TYPE_LABELS[wo.type] || wo.type) : null;
+  // No lead means no on-route notify (nothing to message from). With a
+  // work order already on the row, Open WO is a direct link instead of a
+  // create-from-lead call.
+  const leadless = !booking.leadId;
   const notified = Boolean(booking.onRouteNotifiedAt);
   const notifiedTime = notified
     ? new Date(booking.onRouteNotifiedAt).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" })
@@ -143,7 +155,7 @@ function bookingCardHtml(booking) {
     : "";
 
   return `
-    <li class="today-card" data-lead-id="${escapeHtml(booking.leadId)}">
+    <li class="today-card" data-lead-id="${escapeHtml(booking.leadId)}" data-wo-id="${escapeHtml(wo ? wo.id : "")}">
       <div class="today-card-time">
         <strong>${escapeHtml(booking.startLabel || "—")}</strong>
         ${booking.endLabel ? `<span>to ${escapeHtml(booking.endLabel)}</span>` : ""}
@@ -163,10 +175,10 @@ function bookingCardHtml(booking) {
             <span class="today-action-icon" aria-hidden="true">→</span>
             <span class="today-action-label">Navigate</span>
           </button>
-          <button type="button" class="today-action today-action--notify" data-action="notify" ${notified ? "data-notified" : ""}>
+          ${leadless ? "" : `<button type="button" class="today-action today-action--notify" data-action="notify" ${notified ? "data-notified" : ""}>
             <span class="today-action-icon" aria-hidden="true">${notified ? "✓" : "📣"}</span>
             <span class="today-action-label">${notified ? `Notified ${escapeHtml(notifiedTime)}` : "On route — notify"}</span>
-          </button>
+          </button>`}
           <button type="button" class="today-action today-action--open" data-action="open-wo">
             <span class="today-action-label">${wo ? "Open WO" : "Start WO"}</span>
             <span class="today-action-icon" aria-hidden="true">→</span>
@@ -190,8 +202,8 @@ function render(bookings, dateString) {
   todaySubline.textContent = count === 0
     ? "Nothing scheduled."
     : count === 1
-      ? "1 booking · sorted by start time"
-      : `${count} bookings · sorted by start time`;
+      ? "1 job · sorted by start time"
+      : `${count} jobs · sorted by start time`;
 
   todayLoading.hidden = true;
   todayError.hidden = true;
@@ -234,8 +246,19 @@ todayList.addEventListener("click", async (event) => {
   const card = actionEl.closest(".today-card");
   if (!card) return;
   const leadId = card.dataset.leadId;
-  if (!leadId) return;
+  const woId = card.dataset.woId;
   const action = actionEl.dataset.action;
+
+  // A lead-less row (a work order scheduled directly against a property,
+  // or an assignment booking whose WO already exists) has its work order
+  // — open it rather than asking a lead we do not have to create one.
+  if (!leadId) {
+    if (action === "open-wo" && woId) {
+      event.preventDefault();
+      window.location.assign(`/admin/work-order/${encodeURIComponent(woId)}/tech`);
+    }
+    return;
+  }
 
   // Navigate is no longer handled here — the button carries data-map-address
   // and is handled by the shared contact primitive (crm-contact.js), which
