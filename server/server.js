@@ -20569,10 +20569,6 @@ Customer signature captured at ${new Date().toISOString()}.`;
         const town = lead.contact?.town || lead.contactExport?.address?.town || "";
         return {
           leadId: lead.id,
-          // Where this row came from. Bookings carry a lead (and so can be
-          // notified-on-route); work orders scheduled directly from the
-          // CRM do not.
-          source: "booking",
           customerName: contact.name || lead.contact?.name || "",
           customerPhone: contact.telephone || lead.contact?.phone || "",
           customerEmail: contact.email || lead.contact?.email || "",
