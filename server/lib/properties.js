@@ -321,6 +321,13 @@ function blankProperty() {
     commPrefs: {
       seasonalRemindersSMS: true,
       seasonalRemindersEmail: true,
+      // Decision I (docs/ASSIGNMENT_WRITER.md) — "no need to contact":
+      // Patrick coordinates with this customer directly (management
+      // companies whose sites carry no contact info of their own). The
+      // assignment writer BOOKS these; the cadence engine never
+      // messages them. Default false: everyone is contactable until
+      // said otherwise.
+      noContactNeeded: false,
       // Review-request emails are their own consent channel (Jul 2026) —
       // opting out of seasonal reminders doesn't kill review asks and
       // vice versa, so the flag and its token get their own slots.
@@ -521,6 +528,9 @@ function hydrate(p) {
       seasonalRemindersSMS: incomingCommPrefs.seasonalRemindersSMS !== false,
       seasonalRemindersEmail: incomingCommPrefs.seasonalRemindersEmail !== false,
       reviewRequestsEmail: incomingCommPrefs.reviewRequestsEmail !== false,
+      // Opposite default from the three above: contact is assumed
+      // NEEDED unless the flag was explicitly set (Decision I).
+      noContactNeeded: incomingCommPrefs.noContactNeeded === true,
       optOutTokens: {
         seasonalSMS: typeof incomingTokens.seasonalSMS === "string" ? incomingTokens.seasonalSMS : null,
         seasonalEmail: typeof incomingTokens.seasonalEmail === "string" ? incomingTokens.seasonalEmail : null,
@@ -1784,7 +1794,7 @@ async function setSeasonalCommPref(propertyId, type, value) {
 
 // Keys a client is allowed to set. optOutTokens is deliberately absent.
 const ELIGIBILITY_KEYS = ["springOpening", "fallClosing"];
-const COMM_PREF_KEYS = ["seasonalRemindersSMS", "seasonalRemindersEmail", "reviewRequestsEmail"];
+const COMM_PREF_KEYS = ["seasonalRemindersSMS", "seasonalRemindersEmail", "reviewRequestsEmail", "noContactNeeded"];
 
 // `false` is the meaningful value here — it IS the opt-out — so the
 // usual Boolean() coercion is the wrong tool: Boolean("false") is true,

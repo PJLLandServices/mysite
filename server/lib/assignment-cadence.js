@@ -107,6 +107,14 @@ function cadenceGates(property, season, year) {
   if (property.seasonalOutreach?.[key]?.optOutThisSeason === true) {
     return { ok: false, reason: "season_opt_out" };
   }
+  // Decision I — a "no need to contact" property (Patrick's phrase: a
+  // management company he coordinates with directly). Booked like
+  // everyone else, messaged NEVER: this gate sits in front of the
+  // blast, steps 2–6, and the day-move notice alike, because every
+  // send routes through cadenceGates.
+  if (property.commPrefs?.noContactNeeded === true) {
+    return { ok: false, reason: "no_contact_needed" };
+  }
   return { ok: true, capability: outreach.channelCapability(property) };
 }
 

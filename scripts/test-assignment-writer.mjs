@@ -83,7 +83,10 @@ const FIXTURES = {
     seasonalOutreach: { [properties.seasonKey(YEAR, SEASON)]: { optOutThisSeason: true, touches: [] } }
   }),
   "P-NOCONTACT": prop("P-NOCONTACT", { customerPhone: "", customerEmail: "", system: { zones: zones(4), zoneCount: null } }),
-  "P-DUP": prop("P-DUP", { system: { zones: zones(4), zoneCount: null } })
+  "P-DUP": prop("P-DUP", { system: { zones: zones(4), zoneCount: null } }),
+  // Decision I — "no need to contact": unreachable on purpose, still books.
+  "P-SILENT": prop("P-SILENT", { customerPhone: "", customerEmail: "",
+    commPrefs: { noContactNeeded: true }, system: { zones: zones(4), zoneCount: null } })
 };
 
 const PLAN = {
@@ -91,7 +94,7 @@ const PLAN = {
   days: {
     [DAY1]: {
       label: "R1", territory: "Test turf",
-      morning: ["P-A1", "P-A2", "P-NOZONE", "P-BOOKED", "P-DUP"],
+      morning: ["P-A1", "P-A2", "P-NOZONE", "P-BOOKED", "P-DUP", "P-SILENT"],
       afternoon: ["P-C1", "P-OPTOUT", "P-NOCONTACT"]
     },
     [DAY2]: { label: "R2", territory: "Test north", morning: ["P-DUP"], afternoon: [] }
@@ -154,7 +157,7 @@ ok("a declared count (no documented zones) still preflights ready",
 
 const first = await assignments.assign(SEASON, YEAR, deps);
 ok("assign runs against the injected plan", first.ok === true);
-ok("every planned stop is accounted for", first.summary.stops === 9, String(first.summary.stops));
+ok("every planned stop is accounted for", first.summary.stops === 10, String(first.summary.stops));
 ok("the summary adds up: created + settled + skipped = stops",
   first.summary.created + first.summary.settled + first.summary.skipped === first.summary.stops,
   JSON.stringify(first.summary));
@@ -163,8 +166,16 @@ const rows = new Map(first.days.flatMap((d) => d.stops).map((r) => [`${r.date}|$
 const stored = await bookings.list();
 const byProperty = new Map(stored.filter((b) => b.source === "assignment").map((b) => [b.propertyId, b]));
 
-ok("four ready stops became bookings (A1, A2, C1, DUP-once)",
-  first.summary.created === 4, JSON.stringify(first.summary));
+ok("five ready stops became bookings (A1, A2, C1, DUP-once, SILENT)",
+  first.summary.created === 5, JSON.stringify(first.summary));
+
+// Decision I: no phone, no email, flag set -> BOOKED anyway. The
+// truck-never-surprises rule is satisfied by the standing relationship;
+// the cadence engine (its own suite) refuses every send for it.
+const silent = byProperty.get("P-SILENT");
+ok("a 'no need to contact' stop books like anyone else",
+  silent && silent.status === "confirmed" && silent.source === "assignment",
+  JSON.stringify(rows.get(`${DAY1}|P-SILENT`)));
 
 // -- record shape --
 const a1 = byProperty.get("P-A1");
@@ -231,9 +242,9 @@ ok("running assign again creates NOTHING — the worst bug this system can have"
 // and BOTH its rows now read as settled — the duplicate guard's job is
 // done by the store itself once the booking exists.
 ok("the first run's bookings now read as settled through the REAL booking-state derivation",
-  second.summary.settled === 6, JSON.stringify(second.summary));
+  second.summary.settled === 7, JSON.stringify(second.summary));
 ok("the store still holds exactly the first run's records",
-  (await bookings.list()).filter((b) => b.source === "assignment").length === 4);
+  (await bookings.list()).filter((b) => b.source === "assignment").length === 5);
 
 // ---- 2b. Re-anchoring: booking times follow the route -----------------
 //
@@ -345,8 +356,8 @@ ok("the time sync leaves a rescheduled booking exactly where the customer put it
 ok("...and reports nothing to update", syncAfterTouch.updated === 0, JSON.stringify(syncAfterTouch));
 
 const undo = await assignments.unassign(SEASON, YEAR, deps);
-ok("unassign finds exactly the assignment records", undo.summary.found === 4, JSON.stringify(undo.summary));
-ok("untouched records are removed", undo.summary.removed === 2, JSON.stringify(undo.summary));
+ok("unassign finds exactly the assignment records", undo.summary.found === 5, JSON.stringify(undo.summary));
+ok("untouched records are removed (A1, A2, SILENT)", undo.summary.removed === 3, JSON.stringify(undo.summary));
 ok("a rescheduled booking is KEPT — someone changed it on purpose",
   undo.kept.some((k) => k.bookingId === dupBooking.id && k.reason === "rescheduled"));
 ok("a cancelled booking is KEPT — the cancellation is a customer's answer",
@@ -357,8 +368,8 @@ ok("P-BOOKED's own (non-assignment) booking is untouched by unassign",
 // After a clean undo, the freed stops are assignable again — but the
 // cancelled customer stays un-booked: their cancellation was an answer.
 const third = await assignments.assign(SEASON, YEAR, deps);
-ok("after undo, the freed stops book again (A1, A2) — the loop is closed",
-  third.summary.created === 2, JSON.stringify(third.summary));
+ok("after undo, the freed stops book again (A1, A2, SILENT) — the loop is closed",
+  third.summary.created === 3, JSON.stringify(third.summary));
 const thirdRows = new Map(third.days.flatMap((d) => d.stops).map((r) => [`${r.date}|${r.code}`, r]));
 ok("a customer who CANCELLED their assignment is never auto-booked again",
   thirdRows.get(`${DAY1}|P-C1`).outcome === "skipped"
