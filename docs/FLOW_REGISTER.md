@@ -1323,6 +1323,30 @@ date **cannot presently exist**. The fix addressed a case the codebase cannot pr
 root cause of the wrong diagnosis was reading a two-week-stale `origin/main`. If a
 property-first work order ever does get a schedulable date, this is the gap that opens.
 
+**2026-09-01 (Three faults found walking a live fall closing):** Patrick ran a real closing
+on the app and hit three, all app-side, all under FLOW-31. **(1) Photos refused.** The server
+verifies a photo's declared mediaType against its MAGIC BYTES; `photos.js` hardcoded
+`image/jpeg` on every payload while its own header comment claimed images were re-encoded to
+JPEG on device. Nothing did that. An iPhone library photo is HEIC and a screenshot is PNG, so
+the server saw JPEG in the envelope and something else in the bytes: *"File 1 doesn't look
+like a real image/jpeg."* Intermittent, because a camera capture often IS a JPEG — it worked
+in testing and failed on a driveway with the water already off. Now declares what the file
+actually is, from the asset's `mimeType` or its extension, and can only emit a type the
+server's own whitelist accepts. **(2) Thumbnails blank.** The stored photo record carries `n`,
+not a `url`; both closing screens read `p.url`, got undefined, and rendered grey boxes for
+photos that had uploaded fine. Now built from `n` against
+`/api/work-orders/:id/photo/:n`. **(3) A zone rename never reached the property.**
+`GET /api/work-orders/:id` returns `{ workOrder, property, lead }` with property a SIBLING of
+the work order; `getWorkOrder()` returned `d.workOrder` alone and dropped it. `ZoneStage` read
+`wo.property.system.zones`, got undefined, mapped an empty array, and the (correct) "don't
+wipe the zone list" guard swallowed it — silently, which is why it looked like nothing
+happened. The property now travels with the work order, and the guard says which case it hit
+instead of nodding. **Coverage:** `scripts/test-media-type.mjs` (19 assertions, in
+`build:check`), which checks every type the app can emit against the server's OWN
+`WO_MEDIA_MIME_WHITELIST` so the two cannot drift. **What still needs Patrick:** attach a
+photo from the library (not just the camera) and confirm it lands and shows a thumbnail;
+rename a zone and confirm the new name appears on the property afterwards.
+
 **2026-09-01 (Start WO on a lead-less booking — found on a driveway):** Patrick opened the
 app on a real Willowridge stop and tapped **Start WO**: *"Couldn't open — API endpoint not
 found."* Cause: the app built `/api/leads/${leadId}/open-wo` unconditionally, and an

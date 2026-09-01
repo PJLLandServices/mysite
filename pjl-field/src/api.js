@@ -82,8 +82,24 @@ export const openWorkOrder = (leadId) =>
 
 // ---- work orders -----------------------------------------------------
 
+// The endpoint returns { workOrder, property, lead, ... } — property as a
+// SIBLING of the work order, not nested inside it. This used to return
+// d.workOrder alone and drop the rest, which is why writing a corrected
+// zone name back to the property silently did nothing: the screen read
+// wo.property.system.zones, got undefined, mapped an empty array, and the
+// "don't wipe the zones" guard swallowed it without a word. Carry the
+// property (and the lead) on the work order the screens already pass around.
 export const getWorkOrder = (id) =>
-  getJson(`/api/work-orders/${encodeURIComponent(id)}`).then((d) => d.workOrder || d);
+  getJson(`/api/work-orders/${encodeURIComponent(id)}`).then((d) => {
+    if (!d?.workOrder) return d;
+    return { ...d.workOrder, property: d.property || null, lead: d.lead || null };
+  });
+
+// Where a work-order photo actually lives. The stored record carries `n`,
+// not a url — building the URI here keeps every screen that shows a
+// thumbnail from having to know that.
+export const woPhotoUri = (woId, photo) =>
+  photo?.n != null ? `${HOST}/api/work-orders/${encodeURIComponent(woId)}/photo/${photo.n}` : null;
 
 // Every work order on a property, newest first from the server. Used
 // before creating one so a second tap opens what the first tap made

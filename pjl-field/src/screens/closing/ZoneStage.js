@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { Alert, Image, StyleSheet, Text, TextInput, View } from 'react-native';
-import { HOST, patchProperty, uploadWoPhotos } from '../../api';
+import { patchProperty, uploadWoPhotos, woPhotoUri } from '../../api';
 import { colors, radius, space, type } from '../../theme';
 import { pickPhoto, takePhoto } from '../../photos';
 import { Button, CheckRow, Chip, Section } from './parts';
@@ -75,13 +75,30 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
     });
 
     // A corrected label belongs to the property, not just to today.
+    //
+    // The empty-list guard below is real — patching `zones: []` onto a
+    // property would erase its zone list — but it used to hide the actual
+    // failure: the work order arrived without its property attached, so
+    // there were never any zones to map and the rename quietly went
+    // nowhere. Say so now instead of nodding.
     if (wo?.propertyId && label.trim() && label.trim() !== (zone.location || '')) {
       try {
-        const propZones = (wo.property?.system?.zones || []).map((z) =>
+        const propSystem = wo.property?.system || {};
+        const propZones = (propSystem.zones || []).map((z) =>
           z.number === zone.number ? { ...z, location: label.trim() } : z
         );
-        if (propZones.length) {
-          await patchProperty(wo.propertyId, { system: { ...(wo.property?.system || {}), zones: propZones } });
+        if (!propZones.length) {
+          Alert.alert(
+            'Zone renamed here only',
+            "This visit has the new name, but the property record doesn't list any zones to rename."
+          );
+        } else if (!propZones.some((z) => z.number === zone.number)) {
+          Alert.alert(
+            'Zone renamed here only',
+            `The property record has no Zone ${zone.number}, so there was nothing to rename on it.`
+          );
+        } else {
+          await patchProperty(wo.propertyId, { system: { ...propSystem, zones: propZones } });
         }
       } catch (err) {
         // The visit record is right either way; the property just didn't
@@ -164,8 +181,8 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
           <View style={styles.thumbs}>
             {zonePhotos.map((p) => (
               <Image
-                key={p.id || p.url}
-                source={{ uri: p.url?.startsWith('/') ? `${HOST}${p.url}` : p.url }}
+                key={p.n}
+                source={{ uri: woPhotoUri(wo.id, p) }}
                 style={styles.thumb}
                 resizeMode="cover"
               />
