@@ -161,10 +161,13 @@ export default function TodayScreen({ onOpenWorkOrder }) {
   };
 
   const goToWorkOrder = async (b) => {
-    // A row that came from a scheduled work order already has one — there
-    // is no lead to open it from, and nothing to create.
-    if (!b.leadId && b.workOrder) {
-      onOpenWorkOrder(b.workOrder);
+    // An assignment booking — written from a season plan, which is how a
+    // management company's route days get scheduled — has no lead behind
+    // it. If it already carries a work order, open that; otherwise there
+    // is nothing to open and no lead to raise one from, and the button is
+    // disabled rather than posting an empty lead id.
+    if (!b.leadId) {
+      if (b.workOrder) onOpenWorkOrder(b.workOrder);
       return;
     }
     setBusyId(b.leadId);
@@ -313,7 +316,7 @@ export default function TodayScreen({ onOpenWorkOrder }) {
         const notified = !!b.onRouteNotifiedAt;
         const woLabel = b.workOrder ? (WO_STATUS_LABELS[b.workOrder.status] || b.workOrder.status) : null;
         return (
-          <View key={b.leadId || b.workOrder?.id} style={styles.card}>
+          <View key={b.leadId || b.bookingId || b.workOrder?.id} style={styles.card}>
             <View style={styles.cardTop}>
               <View style={styles.time}>
                 <Text style={styles.timeStart}>{b.startLabel || timeOf(b.start) || '—'}</Text>
@@ -348,7 +351,7 @@ export default function TodayScreen({ onOpenWorkOrder }) {
               <Action
                 label={b.workOrder ? 'Open WO' : 'Start WO'}
                 onPress={() => handleWorkOrder(b)}
-                disabled={busy}
+                disabled={busy || (!b.leadId && !b.workOrder)}
                 primary
               />
             </View>

@@ -329,6 +329,8 @@ function render(inv) {
       sentMeta.textContent = sentBit + toBit;
     }
   }
+  renderLetterCard(inv);
+  renderWoReportCard(inv);
 }
 
 document.getElementById("invoiceStatus")?.addEventListener("change", async (event) => {
@@ -471,10 +473,42 @@ document.getElementById("invoiceSendBtn")?.addEventListener("click", async () =>
   }
   // Confirm with the recipient + total in the prompt so the admin can
   // catch a wrong email or wrong invoice before anything goes out.
+  // What actually ships is decided by the RECORD, not by what the letter
+  // editor happens to be showing. Block on unsaved edits rather than
+  // sending a state the admin can see but the server has never been told
+  // about — that is exactly how an invoice goes out with the letter
+  // silently missing.
+  const letterEditor = document.getElementById("invoiceLetterBody");
+  const letterToggle = document.getElementById("invoiceLetterEnabled");
+  const savedLetter = currentInvoice.letter || {};
+  if (letterEditor && letterToggle && currentInvoice.status !== "void") {
+    const editorBody = letterHtmlToMarkup(letterEditor);
+    const editorSubject = (document.getElementById("invoiceLetterSubject")?.value || "").trim();
+    const dirty = editorBody !== String(savedLetter.body || "")
+      || editorSubject !== String(savedLetter.subject || "")
+      || letterToggle.checked !== (savedLetter.enabled === true);
+    if (dirty) {
+      alert(
+        "The accompanying letter has unsaved changes.\n\n" +
+        "Save it first — what gets attached is what's on the record, not what's " +
+        "on screen. Sending now would go out with the last saved version."
+      );
+      document.getElementById("invoiceLetterCard")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+  }
+
+  // Say plainly whether a second PDF is riding along, at the one moment
+  // it can still be changed.
+  const willAttachLetter = savedLetter.enabled === true && String(savedLetter.body || "").trim().length > 0;
+  const letterLine = willAttachLetter
+    ? `\n\nATTACHED: the accompanying letter "${savedLetter.subject || "(no subject)"}" will be sent as a second PDF.`
+    : `\n\nNo accompanying letter will be attached — the invoice PDF only.`;
+
   const confirmMsg = isResend
-    ? `Resend invoice ${currentInvoice.id} (${fmt(currentInvoice.total)}) to ${recipient}?`
+    ? `Resend invoice ${currentInvoice.id} (${fmt(currentInvoice.total)}) to ${recipient}?${letterLine}`
     : `Send invoice ${currentInvoice.id} (${fmt(currentInvoice.total)}) to ${recipient}?\n\n` +
-      `Status will flip from Draft to Sent and the customer will receive the branded PDF by email.`;
+      `Status will flip from Draft to Sent and the customer will receive the branded PDF by email.${letterLine}`;
   if (!confirm(confirmMsg)) return;
 
   const btn = document.getElementById("invoiceSendBtn");
@@ -504,7 +538,10 @@ document.getElementById("invoiceSendBtn")?.addEventListener("click", async () =>
       status.textContent = `✓ Sent. QuickBooks invoice ${data.qbInvoiceId} (${data.qbAction}).`;
       status.dataset.kind = "ok";
     } else {
-      status.textContent = isResend ? "✓ Re-sent to customer." : "✓ Sent to customer.";
+      // Report what actually shipped, from the server's own answer —
+      // not from what the editor was showing.
+      const attachedBit = data.letterAttached ? " Letter attached." : "";
+      status.textContent = (isResend ? "✓ Re-sent to customer." : "✓ Sent to customer.") + attachedBit;
       status.dataset.kind = "ok";
     }
     render(data.invoice);
@@ -1515,3 +1552,489 @@ function bypassReasonLabel(slug) {
 }
 
 load();
+
+// ---- Accompanying letter (repair summary / written record) -----------
+//
+// A contenteditable rather than a textarea, so formatting is applied to
+// selected text the way it is in a word processor instead of the admin
+// typing markup by hand.
+//
+// Storage stays a plain string. The editor serializes its HTML down to
+// the SAME markup vocabulary quote-pdf.js already parses -- **bold**,
+// __underline__, *italic*, "- " bullets, "1." numbered -- which is what
+// server/lib/letter-pdf.js renders. One dialect across the whole system,
+// and the stored record never becomes a rich-text schema nobody can read.
+
+// Private-use sentinels for parking backslash escapes during conversion.
+// Nothing a human types will collide with these.
+var LETTER_ESC_OPEN = "";
+var LETTER_ESC_CLOSE = "";
+
+// ---- markup -> HTML (loading the editor) ----
+function letterInlineToHtml(src) {
+  var held = [];
+  // Pull backslash escapes out before the markup regexes run, so an
+  // escaped \* is never mistaken for an emphasis marker.
+  var t = String(src == null ? "" : src).replace(/\\([*_\-\\])/g, function (_m, c) {
+    held.push(c);
+    return LETTER_ESC_OPEN + (held.length - 1) + LETTER_ESC_CLOSE;
+  });
+  t = escapeHtml(t);
+  t = t.replace(/\*\*([\s\S]+?)\*\*/g, "<b>$1</b>");
+  t = t.replace(/__([\s\S]+?)__/g, "<u>$1</u>");
+  t = t.replace(/\*([\s\S]+?)\*/g, "<i>$1</i>");
+  return t.replace(
+    new RegExp(LETTER_ESC_OPEN + "(\\d+)" + LETTER_ESC_CLOSE, "g"),
+    function (_m, n) { return escapeHtml(held[Number(n)]); }
+  );
+}
+
+function letterMarkupToHtml(markup) {
+  var lines = String(markup == null ? "" : markup).replace(/\r\n?/g, "\n").split("\n");
+  var html = "";
+  var listTag = null;
+  var para = [];
+  function flushPara() {
+    if (para.length) { html += "<p>" + para.join("<br>") + "</p>"; para = []; }
+  }
+  function closeList() {
+    if (listTag) { html += "</" + listTag + ">"; listTag = null; }
+  }
+  function openList(tag) {
+    if (listTag !== tag) { closeList(); html += "<" + tag + ">"; listTag = tag; }
+  }
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (!line) { flushPara(); closeList(); continue; }
+    var bullet = line.match(/^-\s+([\s\S]*)$/);
+    var numbered = line.match(/^\d+\.\s+([\s\S]*)$/);
+    if (bullet) { flushPara(); openList("ul"); html += "<li>" + letterInlineToHtml(bullet[1]) + "</li>"; continue; }
+    if (numbered) { flushPara(); openList("ol"); html += "<li>" + letterInlineToHtml(numbered[1]) + "</li>"; continue; }
+    closeList();
+    para.push(letterInlineToHtml(line));
+  }
+  flushPara();
+  closeList();
+  return html;
+}
+
+// ---- HTML -> markup (saving) ----
+function letterEscapeMarkup(s) {
+  // contenteditable sprays non-breaking spaces in as you type; they must
+  // not survive into the stored markup or the PDF gets rivers of them.
+  return String(s == null ? "" : s)
+    .replace(/\u00A0/g, " ")
+    .replace(/([*_\\])/g, "\\$1");
+}
+
+// Walk one node's inline content, wrapping it in markers for whatever
+// styling it carries. execCommand is asked for tags rather than CSS
+// (styleWithCSS false), but a paste or an older engine can still produce
+// styled spans, so both forms are read.
+function letterInlineMarkup(node) {
+  if (node.nodeType === 3) return letterEscapeMarkup(node.nodeValue);
+  if (node.nodeType !== 1) return "";
+  var tag = node.nodeName.toLowerCase();
+  if (tag === "br") return "\n";
+  var inner = "";
+  node.childNodes.forEach(function (c) { inner += letterInlineMarkup(c); });
+  if (!inner.trim()) return inner;
+
+  var st = node.style || {};
+  var weight = String(st.fontWeight || "");
+  var deco = String(st.textDecoration || "") + " " + String(st.textDecorationLine || "");
+  var bold = tag === "b" || tag === "strong" || weight === "bold" || /^[6-9]00$/.test(weight);
+  var italic = tag === "i" || tag === "em" || String(st.fontStyle || "") === "italic";
+  var underline = tag === "u" || deco.indexOf("underline") !== -1;
+
+  var out = inner;
+  if (bold) out = "**" + out + "**";
+  if (italic) out = "*" + out + "*";
+  if (underline) out = "__" + out + "__";
+  return out;
+}
+
+function letterHtmlToMarkup(root) {
+  var out = [];
+  function pushBlock(text) {
+    var parts = String(text).split("\n").map(function (l) {
+      return l.replace(/ /g, " ").replace(/\s+$/, "");
+    });
+    while (parts.length && !parts[0].trim()) parts.shift();
+    while (parts.length && !parts[parts.length - 1].trim()) parts.pop();
+    if (!parts.length) return;
+    out.push(parts.join("\n"), "");
+  }
+
+  root.childNodes.forEach(function (node) {
+    if (node.nodeType === 3) { pushBlock(letterEscapeMarkup(node.nodeValue)); return; }
+    if (node.nodeType !== 1) return;
+    var tag = node.nodeName.toLowerCase();
+
+    if (tag === "ul" || tag === "ol") {
+      var n = 0;
+      Array.prototype.forEach.call(node.children, function (li) {
+        if (li.nodeName.toLowerCase() !== "li") return;
+        n += 1;
+        // A list item is one line -- a stray <br> inside it would
+        // otherwise break the item in half and orphan the tail as a
+        // paragraph.
+        var text = letterInlineMarkup(li).replace(/\s*\n\s*/g, " ").trim();
+        if (text) out.push(tag === "ul" ? "- " + text : n + ". " + text);
+      });
+      out.push("");
+      return;
+    }
+
+    pushBlock(letterInlineMarkup(node));
+  });
+
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+// ---- Card wiring ----
+function letterEls() {
+  return {
+    card: document.getElementById("invoiceLetterCard"),
+    enabled: document.getElementById("invoiceLetterEnabled"),
+    subject: document.getElementById("invoiceLetterSubject"),
+    body: document.getElementById("invoiceLetterBody"),
+    save: document.getElementById("invoiceLetterSave"),
+    preview: document.getElementById("invoiceLetterPreview"),
+    status: document.getElementById("invoiceLetterStatus")
+  };
+}
+
+function renderLetterCard(inv) {
+  var el = letterEls();
+  if (!el.card) return;
+  // Void invoices cannot be edited at all -- the server refuses the
+  // patch, so do not offer a surface that will only fail.
+  var readOnly = inv.status === "void";
+  el.card.hidden = false;
+
+  var letter = inv.letter || {};
+  el.enabled.checked = letter.enabled === true;
+  el.subject.value = letter.subject || "";
+  el.body.innerHTML = letterMarkupToHtml(letter.body || "");
+
+  el.enabled.disabled = readOnly;
+  el.subject.disabled = readOnly;
+  el.body.setAttribute("contenteditable", readOnly ? "false" : "true");
+  el.save.disabled = readOnly;
+
+  el.preview.href = "/api/invoices/" + encodeURIComponent(inv.id) + "/letter.pdf";
+  var hasBody = String(letter.body || "").trim().length > 0;
+  el.preview.classList.toggle("invoice-action-btn--outline", !hasBody);
+
+  if (readOnly) {
+    el.status.textContent = "Voided - the letter is locked.";
+    el.status.dataset.kind = "info";
+  } else if (letter.updatedAt) {
+    el.status.textContent = "Saved " + fmtDate(letter.updatedAt) +
+      (letter.enabled ? "" : " - not attached to this invoice") + ".";
+    el.status.dataset.kind = "info";
+  } else {
+    el.status.textContent = "";
+  }
+}
+
+(function wireLetterEditor() {
+  var el = letterEls();
+  if (!el.card) return;
+
+  // Ask the engine for <b>/<i>/<u> tags rather than styled spans -- it
+  // makes the round trip to markup lossless in the common case.
+  try { document.execCommand("styleWithCSS", false, false); } catch (_) { /* older engines */ }
+
+  function syncToolStates() {
+    document.querySelectorAll(".invoice-letter-tool").forEach(function (btn) {
+      var cmd = btn.dataset.cmd;
+      if (cmd === "removeFormat") return;
+      var on = false;
+      try { on = document.queryCommandState(cmd); } catch (_) { on = false; }
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+  }
+
+  document.querySelectorAll(".invoice-letter-tool").forEach(function (btn) {
+    // mousedown, not click -- the editor must not lose its selection
+    // before the command runs.
+    btn.addEventListener("mousedown", function (e) {
+      e.preventDefault();
+      el.body.focus();
+      try { document.execCommand(btn.dataset.cmd, false, null); } catch (_) { /* ignore */ }
+      syncToolStates();
+    });
+  });
+
+  ["keyup", "mouseup", "focus"].forEach(function (ev) {
+    el.body.addEventListener(ev, syncToolStates);
+  });
+
+  // Paste as plain text. Pasting from Word or a browser drags in a wall
+  // of markup this editor has no vocabulary for; taking the text keeps
+  // what is stored predictable and readable.
+  el.body.addEventListener("paste", function (e) {
+    e.preventDefault();
+    var text = (e.clipboardData || window.clipboardData).getData("text/plain");
+    document.execCommand("insertText", false, text);
+  });
+
+  // One save path for both the button and the switch. Whatever is in the
+  // editor right now is what gets stored — the switch is not a separate
+  // setting from the text it applies to.
+  async function saveLetter(reason) {
+    if (!currentInvoice) return false;
+    var payload = {
+      letter: {
+        enabled: el.enabled.checked,
+        subject: el.subject.value.trim(),
+        body: letterHtmlToMarkup(el.body)
+      }
+    };
+    if (payload.letter.enabled && !payload.letter.body.trim()) {
+      el.enabled.checked = false;
+      el.status.textContent = "Nothing to attach - write the letter first, then tick the box.";
+      el.status.dataset.kind = "error";
+      return false;
+    }
+    var wasLabel = el.save.textContent;
+    el.save.disabled = true;
+    el.save.textContent = "Saving...";
+    el.status.textContent = "";
+    try {
+      var r = await fetch("/api/invoices/" + encodeURIComponent(idFromPath), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Save failed.");
+      currentInvoice = data.invoice;
+      renderLetterCard(data.invoice);
+      el.status.textContent = payload.letter.enabled
+        ? "Saved - this letter WILL be attached when the invoice is sent."
+        : "Saved. Not attached - tick Attach to this invoice to send it.";
+      el.status.dataset.kind = "ok";
+      return true;
+    } catch (err) {
+      el.status.textContent = (err.message || "Failed.") +
+        (reason === "toggle" ? " The switch was not saved." : "");
+      el.status.dataset.kind = "error";
+      // Put the switch back to whatever the record actually says, so it
+      // never shows a state the server did not accept.
+      el.enabled.checked = Boolean(currentInvoice && currentInvoice.letter && currentInvoice.letter.enabled);
+      return false;
+    } finally {
+      el.save.disabled = currentInvoice && currentInvoice.status === "void";
+      el.save.textContent = wasLabel;
+    }
+  }
+
+  el.save.addEventListener("click", function () { saveLetter("button"); });
+
+  // The switch saves itself. It reads as a switch, so ticking it and
+  // hitting Send is the natural sequence — and before this, that sent the
+  // invoice with no letter and said nothing. A control that looks live
+  // must be live.
+  el.enabled.addEventListener("change", function () { saveLetter("toggle"); });
+
+  // Preview renders server-side from the SAVED record, so an unsaved
+  // edit would preview stale text. Say so rather than open a stale PDF.
+  el.preview.addEventListener("click", function (e) {
+    var savedBody = String((currentInvoice && currentInvoice.letter && currentInvoice.letter.body) || "");
+    if (!savedBody.trim()) {
+      e.preventDefault();
+      el.status.textContent = "Save the letter first - the preview renders what is on the record.";
+      el.status.dataset.kind = "error";
+      return;
+    }
+    if (letterHtmlToMarkup(el.body) !== savedBody) {
+      el.status.textContent = "Heads up: you have unsaved edits. The preview shows the last saved version.";
+      el.status.dataset.kind = "info";
+    }
+  });
+})();
+
+
+// ---- Work-order report attachment ------------------------------------
+//
+// The customer already received this PDF when the visit completed. This
+// card is the option to send it a second time, alongside the invoice —
+// for the case where the invoice is the document they actually open.
+//
+// Deliberately thinner than the letter card: nothing is authored here,
+// only chosen. The report itself is written on the work order.
+
+function woReportEls() {
+  return {
+    card: document.getElementById("invoiceWoReportCard"),
+    enabled: document.getElementById("invoiceWoReportEnabled"),
+    select: document.getElementById("invoiceWoReportSelect"),
+    empty: document.getElementById("invoiceWoReportEmpty"),
+    save: document.getElementById("invoiceWoReportSave"),
+    preview: document.getElementById("invoiceWoReportPreview"),
+    status: document.getElementById("invoiceWoReportStatus"),
+    pick: document.querySelector(".invoice-woreport-pick")
+  };
+}
+
+// Why there is nothing to offer, in the operator's terms. A bare disabled
+// control makes someone go looking for a bug; a sentence does not.
+var WO_REPORT_REASONS = {
+  no_work_order: "This invoice was written by hand, so there is no work-order report to attach.",
+  work_order_missing: "The work order this invoice came from is no longer on file.",
+  no_report_yet: "This work order has no report yet — one is generated when the visit is completed and signed."
+};
+
+function woReportLabel(snap) {
+  // The date ON the report (the visit), not when the copy was frozen.
+  // Date only — the picker is chosen by day, and a timestamp down to the
+  // minute just makes two options harder to tell apart.
+  var when = "undated";
+  if (snap.documentDate) {
+    var d = new Date(snap.documentDate);
+    if (!isNaN(d.getTime())) {
+      when = d.toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" });
+    }
+  }
+  var kind = snap.mode === "service_report" ? "Service report" : "Inspection report";
+  // How the copy came to exist matters when choosing between two: the
+  // cascade copy is the one the customer was sent at completion.
+  var origin = snap.triggerType === "cascade" ? "sent at completion"
+    : snap.triggerType === "quote_send" ? "sent with a quote"
+    : "generated by hand";
+  return kind + " — " + when + " (" + origin + ")";
+}
+
+async function renderWoReportCard(inv) {
+  var el = woReportEls();
+  if (!el.card) return;
+
+  var saved = inv.woReport || {};
+  var readOnly = inv.status === "void";
+
+  var data = null;
+  try {
+    var r = await fetch("/api/invoices/" + encodeURIComponent(inv.id) + "/wo-reports", { cache: "no-store" });
+    data = await r.json();
+  } catch (_) {
+    data = null;
+  }
+
+  if (!data || !data.ok) {
+    // Couldn't ask. Hide rather than show a control that cannot work.
+    el.card.hidden = true;
+    return;
+  }
+
+  var snapshots = Array.isArray(data.snapshots) ? data.snapshots : [];
+  el.card.hidden = false;
+
+  if (!snapshots.length) {
+    el.pick.hidden = true;
+    el.empty.hidden = false;
+    el.empty.textContent = WO_REPORT_REASONS[data.reason] || "There is no report to attach to this invoice.";
+    el.enabled.checked = false;
+    el.enabled.disabled = true;
+    el.save.disabled = true;
+    el.preview.hidden = true;
+    el.status.textContent = "";
+    return;
+  }
+
+  el.pick.hidden = false;
+  el.empty.hidden = true;
+  el.preview.hidden = false;
+
+  el.select.innerHTML = snapshots.map(function (snap) {
+    return '<option value="' + escapeHtml(snap.snapshotId) + '">' + escapeHtml(woReportLabel(snap)) + "</option>";
+  }).join("");
+
+  // Default the picker to the copy sent at completion when nothing is
+  // saved yet — that is the one Patrick means nine times out of ten.
+  var preselect = saved.snapshotId
+    || (snapshots.filter(function (s) { return s.triggerType === "cascade"; }).pop() || snapshots[snapshots.length - 1]).snapshotId;
+  el.select.value = preselect;
+
+  el.enabled.checked = saved.enabled === true;
+  el.enabled.disabled = readOnly;
+  el.select.disabled = readOnly;
+  el.save.disabled = readOnly;
+
+  el.preview.href = "/api/work-orders/" + encodeURIComponent(data.woId) +
+    "/report-pdf/snapshot/" + encodeURIComponent(el.select.value) + "?audience=customer";
+
+  if (readOnly) {
+    el.status.textContent = "Voided — nothing will be sent.";
+    el.status.dataset.kind = "info";
+  } else if (saved.updatedAt) {
+    el.status.textContent = "Saved " + fmtDate(saved.updatedAt) +
+      (saved.enabled ? "" : " — not attached to this invoice") + ".";
+    el.status.dataset.kind = "info";
+  } else {
+    el.status.textContent = "";
+  }
+}
+
+(function wireWoReportCard() {
+  var el = woReportEls();
+  if (!el.card) return;
+
+  async function saveWoReport(reason) {
+    if (!currentInvoice) return false;
+    var payload = {
+      woReport: {
+        enabled: el.enabled.checked,
+        woId: currentInvoice.woId || null,
+        snapshotId: el.select.value || null
+      }
+    };
+    var wasLabel = el.save.textContent;
+    el.save.disabled = true;
+    el.save.textContent = "Saving…";
+    try {
+      var r = await fetch("/api/invoices/" + encodeURIComponent(currentInvoice.id), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      var data = await r.json();
+      if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't save.");
+      currentInvoice = data.invoice;
+      el.status.textContent = el.enabled.checked
+        ? "The report will be attached when this invoice is sent."
+        : "Saved — the report will not be attached.";
+      el.status.dataset.kind = "info";
+      return true;
+    } catch (err) {
+      el.status.textContent = (err.message || "Failed.") +
+        (reason === "toggle" ? " The switch was not saved." : "");
+      el.status.dataset.kind = "error";
+      // Snap the switch back to what the record actually says.
+      el.enabled.checked = Boolean(currentInvoice && currentInvoice.woReport && currentInvoice.woReport.enabled);
+      return false;
+    } finally {
+      el.save.disabled = currentInvoice && currentInvoice.status === "void";
+      el.save.textContent = wasLabel;
+    }
+  }
+
+  el.save.addEventListener("click", function () { saveWoReport("button"); });
+
+  // Same rule as the letter's switch: a control that reads as live must be
+  // live, or ticking it and hitting Send silently sends nothing.
+  el.enabled.addEventListener("change", function () { saveWoReport("toggle"); });
+
+  // Changing which report is chosen keeps the preview link honest, and
+  // saves it when the attachment is already on — otherwise the box says
+  // one thing and the record holds another.
+  el.select.addEventListener("change", function () {
+    if (currentInvoice && currentInvoice.woId) {
+      el.preview.href = "/api/work-orders/" + encodeURIComponent(currentInvoice.woId) +
+        "/report-pdf/snapshot/" + encodeURIComponent(el.select.value) + "?audience=customer";
+    }
+    if (el.enabled.checked) saveWoReport("select");
+  });
+})();

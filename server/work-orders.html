@@ -31,6 +31,7 @@
       <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
       <a href="/admin">CRM</a>
       <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/season-plan">Season plan</a>
       <a href="/admin/handoff">Handoff</a>
       <a href="/admin/outreach">Outreach</a>
       <a href="/admin/review-requests">Reviews</a>
@@ -42,6 +43,7 @@
       <a href="/admin/work-orders" class="is-active">Work orders</a>
       <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
       <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/warranty-claims">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
       <a href="/admin/material-lists">Materials</a>
       <a href="/admin/chats">AI Chats</a>
       <a href="/admin/trash">Trash</a>
@@ -90,7 +92,20 @@
       </section>
 
       <p class="suppliers-empty" id="woEmpty" hidden>No work orders match the current filter.</p>
-      <ul class="ml-cards" id="woContainer" aria-label="Work orders"></ul>
+      <!-- Data table, same primitive as the Customers and Properties
+           indexes (.crm-table in crm.css). Header row and data rows read one
+           --crm-cols template, so they cannot drift out of register. -->
+      <section class="crm-table wo-table">
+        <div class="crm-table-head" role="row">
+          <span>Work order</span>
+          <span>Type</span>
+          <span>Scheduled</span>
+          <span class="is-num">Zones</span>
+          <span>Status</span>
+          <span></span>
+        </div>
+        <ul class="ml-cards" id="woContainer" aria-label="Work orders"></ul>
+      </section>
     </main>
   </div>
 

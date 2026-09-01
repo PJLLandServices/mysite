@@ -1,0 +1,91 @@
+{
+  "_doc": [
+    "Season windows — the single authoritative definition of when PJL's seasonal",
+    "services run. Lives here at the repo root alongside pricing.json / parts.json,",
+    "and is read by server/lib/seasons.js. Edit the JSON, not the code.",
+    "",
+    "Before this file existed, the fall window was hardcoded in server/lib/outreach.js",
+    "as Sep 1 - Dec 15. The real fall 2026 season ends Nov 6 (hard frost); the last 39",
+    "days of that window were not serviceable, which made 'is this customer already",
+    "booked for fall?' unreliable and put December dates in front of the operator.",
+    "",
+    "SHAPE",
+    "  defaults[season]  - year-agnostic fallback, MM-DD. Applies to any year with no",
+    "                      entry under `years`. Fall defaults to the Nov 6 frost stop,",
+    "                      NOT the Dec 15 the old hardcoded constant used: a year nobody",
+    "                      has planned should inherit a safe date rather than a known-",
+    "                      wrong one. A comment warning that 2027 would reinherit the bug",
+    "                      is not a control; this is. Spring's defaults are its long-",
+    "                      standing Mar 1 - Jun 30 and are unchanged.",
+    "                      A year that runs later than the default is a year someone must",
+    "                      plan explicitly under `years` — erring toward too short means",
+    "                      a late booking reads as unbooked and the customer gets one",
+    "                      more nudge; erring long means offering work past frost.",
+    "  years[YYYY][season] - full YYYY-MM-DD dates, overriding the default for that",
+    "                      year. Add a new year by adding a block here; no code change.",
+    "",
+    "FIELDS (per season)",
+    "  serviceableFrom      First day a truck rolls. Inclusive.",
+    "  serviceableThrough   Last day a truck rolls. Inclusive. Hard frost stop in fall.",
+    "  publicBookingFrom    OPTIONAL. First day the public flow accepts a self-serve",
+    "                       booking. Defaults to serviceableFrom when absent. Fall 2026",
+    "                       sets Sep 28 — the first planned route day — so a customer",
+    "                       cannot self-book a September date no truck is scheduled to",
+    "                       serve. Consumed by the same availability.js season gate.",
+    "  publicBookingThrough Last day the public flow accepts a self-serve booking.",
+    "                       Intentionally earlier than serviceableThrough in fall 2026",
+    "                       (Oct 30 vs Nov 6), reserving Nov 1-6 for admin placement so",
+    "                       there is routing room at season end.",
+    "                       Consumed by the season gate in server/lib/availability.js:",
+    "                       days after this date emit no public slots for seasonal",
+    "                       services (the admin picker is not gated). Where no admin-",
+    "                       reserved tail is defined, it equals serviceableThrough.",
+    "",
+    "TIMEZONE",
+    "  These are plain calendar dates in America/Toronto, PJL's operating timezone.",
+    "  Consumers compare them against local date fields; server.js pins process.env.TZ",
+    "  = America/Toronto at boot so that math is honest. See server/lib/seasons.js.",
+    "",
+    "ADMIN OVERRIDES",
+    "  The two public-booking bounds can be changed per season+year from the",
+    "  /admin/season-plan screen without editing this file. Those edits live in",
+    "  server/data/season-windows.json (persistent disk, survives deploys) and",
+    "  win over this file; clearing them there falls back to these dates. The",
+    "  serviceable window is NOT editable from the UI - it is the fence every",
+    "  override must fit inside. See server/lib/seasons.js.",
+    "",
+    "PLANNING EACH YEAR",
+    "  A year with no block here inherits `defaults`. That is a safe floor, not a",
+    "  forecast — add each season's real dates under `years` as it is planned, and set",
+    "  publicBookingThrough to reserve whatever admin-placement tail that season needs."
+  ],
+
+  "defaults": {
+    "spring": {
+      "serviceableFrom": "03-01",
+      "serviceableThrough": "06-30",
+      "publicBookingThrough": "06-30"
+    },
+    "fall": {
+      "serviceableFrom": "09-01",
+      "serviceableThrough": "11-06",
+      "publicBookingThrough": "11-06"
+    }
+  },
+
+  "years": {
+    "2026": {
+      "spring": {
+        "serviceableFrom": "2026-03-01",
+        "serviceableThrough": "2026-06-30",
+        "publicBookingThrough": "2026-06-30"
+      },
+      "fall": {
+        "serviceableFrom": "2026-09-01",
+        "serviceableThrough": "2026-11-06",
+        "publicBookingFrom": "2026-09-28",
+        "publicBookingThrough": "2026-10-30"
+      }
+    }
+  }
+}

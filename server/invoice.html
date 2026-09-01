@@ -30,6 +30,7 @@
       <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
       <a href="/admin">CRM</a>
       <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/season-plan">Season plan</a>
       <a href="/admin/handoff">Handoff</a>
       <a href="/admin/outreach">Outreach</a>
       <a href="/admin/review-requests">Reviews</a>
@@ -41,6 +42,7 @@
       <a href="/admin/work-orders">Work orders</a>
       <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
       <a href="/admin/invoices" class="is-active">Invoices</a>
+      <a href="/admin/warranty-claims">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
       <a href="/admin/material-lists">Materials</a>
       <a href="/admin/chats">AI Chats</a>
       <a href="/admin/users">Users</a>
@@ -319,6 +321,88 @@
           </section>
         </aside>
       </div>
+
+      <!-- Accompanying letter (repair summary / written record). Optional
+           prose that ships with the invoice email as a second PDF on PJL
+           letterhead. Full width because this is a writing surface, not a
+           control — the action rail is too narrow to compose in.
+
+           Carries NO financial content: it never touches line items,
+           totals, tax, the payment ledger or the QuickBooks push. -->
+      <!-- Work-order report attachment (Aug 2026). Sits above the letter
+           because that is the order the customer receives them in:
+           invoice, report, letter. Hidden entirely on invoices with no
+           work order behind them. -->
+      <section class="invoice-letter invoice-woreport" id="invoiceWoReportCard" hidden>
+        <header class="invoice-letter-head">
+          <div>
+            <h2 class="invoice-letter-title">Work-order report</h2>
+            <p class="invoice-letter-sub">
+              The service report from the visit this invoice came from — the same
+              PDF the customer received at completion. Attach it here when the
+              invoice is the thing they will actually open.
+            </p>
+          </div>
+          <label class="invoice-letter-switch">
+            <input type="checkbox" id="invoiceWoReportEnabled">
+            <span>Attach to this invoice</span>
+          </label>
+        </header>
+
+        <div class="invoice-woreport-pick">
+          <label class="invoice-woreport-label" for="invoiceWoReportSelect">Which report</label>
+          <select id="invoiceWoReportSelect" class="invoice-woreport-select"></select>
+        </div>
+
+        <p class="invoice-woreport-empty" id="invoiceWoReportEmpty" hidden></p>
+
+        <footer class="invoice-letter-foot">
+          <button type="button" id="invoiceWoReportSave" class="invoice-action-btn">Save selection</button>
+          <a class="invoice-action-btn" id="invoiceWoReportPreview" href="#" target="_blank" rel="noopener">📄 Preview the customer's copy</a>
+          <p class="invoice-action-status" id="invoiceWoReportStatus"></p>
+        </footer>
+      </section>
+
+      <section class="invoice-letter" id="invoiceLetterCard" hidden>
+        <header class="invoice-letter-head">
+          <div>
+            <h2 class="invoice-letter-title">Accompanying letter</h2>
+            <p class="invoice-letter-sub">
+              A written record — repair summary, scope note, anything the customer
+              should have alongside the numbers. Sent as a second PDF on PJL
+              letterhead when the invoice goes out.
+            </p>
+          </div>
+          <label class="invoice-letter-switch">
+            <input type="checkbox" id="invoiceLetterEnabled">
+            <span>Attach to this invoice</span>
+          </label>
+        </header>
+
+        <input type="text" id="invoiceLetterSubject" class="invoice-letter-subject"
+               maxlength="200" placeholder="Subject — becomes the heading on the letter">
+
+        <div class="invoice-letter-toolbar" role="toolbar" aria-label="Formatting">
+          <button type="button" class="invoice-letter-tool" data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+          <button type="button" class="invoice-letter-tool" data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+          <button type="button" class="invoice-letter-tool" data-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+          <span class="invoice-letter-toolsep"></span>
+          <button type="button" class="invoice-letter-tool" data-cmd="insertUnorderedList" title="Bulleted list">• List</button>
+          <button type="button" class="invoice-letter-tool" data-cmd="insertOrderedList" title="Numbered list">1. List</button>
+          <span class="invoice-letter-toolsep"></span>
+          <button type="button" class="invoice-letter-tool" data-cmd="removeFormat" title="Clear formatting">Clear</button>
+        </div>
+
+        <div id="invoiceLetterBody" class="invoice-letter-body" contenteditable="true"
+             role="textbox" aria-multiline="true" aria-label="Letter body"
+             data-placeholder="Write the letter here…"></div>
+
+        <footer class="invoice-letter-foot">
+          <button type="button" id="invoiceLetterSave" class="invoice-action-btn">Save letter</button>
+          <a class="invoice-action-btn" id="invoiceLetterPreview" href="#" target="_blank" rel="noopener">📄 Preview PDF</a>
+          <p class="invoice-action-status" id="invoiceLetterStatus"></p>
+        </footer>
+      </section>
     </main>
   </div>
 

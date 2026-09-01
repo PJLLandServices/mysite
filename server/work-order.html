@@ -37,6 +37,7 @@
       <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
       <a href="/admin">CRM</a>
       <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/season-plan">Season plan</a>
       <a href="/admin/handoff">Handoff</a>
       <a href="/admin/outreach">Outreach</a>
       <a href="/admin/review-requests">Reviews</a>
@@ -48,6 +49,7 @@
       <a href="/admin/work-orders">Work orders</a>
       <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
       <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/warranty-claims">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
       <a href="/admin/material-lists">Materials</a>
       <a href="/admin/chats">AI Chats</a>
       <a href="/admin/users">Users</a>
@@ -164,6 +166,64 @@
          · active — waived: banner + Remove. Loud so the $95 isn't collected.
          The waiver flips the service_call line to $0 in the on-site quote.
          Hidden entirely once the WO is signed (read-only contract). -->
+    <!-- Warranty provenance (FLOW-30). Shown only on a WO raised by
+         approving a warranty claim. It answers the two questions the tech
+         has on the driveway: what am I honouring, and why is it free? The
+         convert control beneath it is the escape hatch for when the fault
+         turns out not to be what the claim described. -->
+    <div class="wo-warranty" id="woWarrantyPanel" hidden>
+      <div class="wo-warranty-head">
+        <span class="wo-warranty-icon" aria-hidden="true">🛡️</span>
+        <div>
+          <strong class="wo-warranty-title">Warranty repair — no charge</strong>
+          <span class="wo-warranty-claim" id="woWarrantyClaim"></span>
+        </div>
+      </div>
+      <dl class="wo-warranty-grid">
+        <div><dt>Prior work being honoured</dt><dd id="woWarrantyPrior">—</dd></div>
+        <div><dt>Customer's claim</dt><dd id="woWarrantySummary">—</dd></div>
+      </dl>
+
+      <!-- Converted state. Replaces the convert control once used. -->
+      <div class="wo-warranty-converted" id="woWarrantyConverted" hidden>
+        <strong>Converted to a chargeable service call</strong>
+        <span id="woWarrantyConvertedMeta"></span>
+        <span class="wo-warranty-reason" id="woWarrantyConvertedReason"></span>
+      </div>
+
+      <div class="wo-warranty-convert" id="woWarrantyConvertControl">
+        <p class="wo-warranty-convert-lede">
+          Turns out it isn't covered? Convert this to a normal service call. The $95 call-out is
+          restored, the claim is closed as <em>converted</em>, and the customer is emailed your
+          reason. They must still sign for the work before it's completed.
+        </p>
+        <button type="button" class="pjl-btn pjl-btn-outline wo-warranty-convert-open" id="woWarrantyConvertOpenBtn">
+          Not covered — convert to a paid service call
+        </button>
+        <div class="wo-warranty-convert-form" id="woWarrantyConvertForm" hidden>
+          <label class="wo-warranty-field">
+            <span>Why isn't this covered? The customer reads this. (required)</span>
+            <textarea id="woWarrantyConvertReason" rows="3"
+              placeholder="e.g. The leak is on the homeowner-side shutoff, upstream of the backflow we installed — outside the scope of the April repair."></textarea>
+          </label>
+          <p class="wo-waiver-err" id="woWarrantyConvertErr" role="alert" hidden></p>
+          <div class="wo-waiver-form-actions">
+            <button type="button" class="pjl-btn pjl-btn-primary" id="woWarrantyConvertConfirmBtn">Convert &amp; restore the fee</button>
+            <button type="button" class="pjl-btn pjl-btn-outline" id="woWarrantyConvertCancelBtn">Cancel</button>
+          </div>
+        </div>
+      </div>
+      <p class="wo-warranty-locked" id="woWarrantyAdminOnly" hidden>
+        Only an admin can change whether this visit is charged for. If the fault isn't what the
+        claim describes, don't complete it as a warranty visit — contact the office and they'll
+        convert it.
+      </p>
+      <p class="wo-warranty-locked" id="woWarrantyLocked" hidden>
+        This work order is signed and locked, so the warranty status can't change. Unlock it first
+        if the visit needs to become chargeable.
+      </p>
+    </div>
+
     <div class="wo-waiver" id="woWaiverControl" hidden>
       <div class="wo-waiver-offer" id="woWaiverOffer" hidden>
         <span class="wo-waiver-icon" aria-hidden="true">🏷️</span>

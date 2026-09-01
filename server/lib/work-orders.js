@@ -395,6 +395,26 @@ function blankWorkOrder() {
     // Scope-protected — frozen once the WO is signed (the customer agreed
     // to the waived total).
     serviceFeeWaiver: null,
+    // Warranty-claim provenance (FLOW-30, 2026-08-29). Set when this WO
+    // was raised by approving a warranty claim, so the tech on site can
+    // see WHAT prior work they are honouring and WHY the service call is
+    // free. null on every WO not born from a claim.
+    //
+    //   {
+    //     claimId,              "2026-08-29-00020260001"
+    //     claimedInvoiceId,     the invoice the claim was made against
+    //     claimedWorkOrderId,   the WO behind that invoice (the prior work)
+    //     summary,              the customer's description of the fault
+    //     approvedBy, approvedAt,
+    //     converted: null | {   the scapegoat — see convertWarrantyToChargeable()
+    //       at, by, reason
+    //     }
+    //   }
+    //
+    // Scope-protected: this is the customer's contractual context ("we
+    // are here at no charge to fix X"), so it freezes with the rest of
+    // the scope once they sign.
+    warrantyClaim: null,
     // Payment captured on-site? (spec §4.3.2 Payment & Billing).
     //   false — "No, invoice to follow" (default — Patrick's stated
     //           real-world default. "we are highly unlikely to recieve
@@ -531,6 +551,30 @@ function hydrate(w) {
     serviceFeeWaiver: (w?.serviceFeeWaiver && typeof w.serviceFeeWaiver === "object" && w.serviceFeeWaiver.waived === true)
       ? { ...w.serviceFeeWaiver }
       : null,
+    // Warranty-claim provenance. hydrate() rebuilds this record key by
+    // key and readAll() writes the hydrated result back, so a key missing
+    // from here is not merely hidden — it is erased on the next read.
+    warrantyClaim: (w?.warrantyClaim && typeof w.warrantyClaim === "object" && w.warrantyClaim.claimId)
+      ? {
+          claimId: String(w.warrantyClaim.claimId),
+          claimedInvoiceId: w.warrantyClaim.claimedInvoiceId ? String(w.warrantyClaim.claimedInvoiceId) : null,
+          claimedWorkOrderId: w.warrantyClaim.claimedWorkOrderId ? String(w.warrantyClaim.claimedWorkOrderId) : null,
+          summary: String(w.warrantyClaim.summary || "").slice(0, 2000),
+          approvedBy: String(w.warrantyClaim.approvedBy || ""),
+          approvedAt: w.warrantyClaim.approvedAt || null,
+          // Set the moment the waiver is lifted on site. Once present the
+          // visit is a chargeable service call that BEGAN as a warranty
+          // visit — the pair is the audit trail, so `converted` is added
+          // alongside the original approval, never replacing it.
+          converted: (w.warrantyClaim.converted && typeof w.warrantyClaim.converted === "object")
+            ? {
+                at: w.warrantyClaim.converted.at || null,
+                by: String(w.warrantyClaim.converted.by || ""),
+                reason: String(w.warrantyClaim.converted.reason || "").slice(0, 2000)
+              }
+            : null
+        }
+      : null,
     onSiteQuote: {
       ...base.onSiteQuote,
       ...(w?.onSiteQuote || {}),
@@ -623,6 +667,12 @@ const SCOPE_PROTECTED_FIELDS = [
   // Fee waiver changes the customer's contractual total — freeze it once
   // the signed WO is the contract.
   "serviceFeeWaiver",
+  // Warranty provenance is the customer's contractual context for the
+  // visit ("no charge, we are honouring the April repair"). It freezes
+  // with the waiver it explains — converting a signed warranty visit to
+  // a chargeable one has to go through unlock, like any other post-
+  // signature scope change.
+  "warrantyClaim",
   // Customer-facing visit narrative — locks alongside scope so the
   // service-report snapshot at completion captures the same notes the
   // customer attested to at signature (Service Report brief, 2026-05-19).
@@ -1284,7 +1334,7 @@ async function listByLead(leadId) {
 // quote propagates onto the WO so the tech sees the bonus-pending banner
 // in field mode (1 hr of repair labour pending — temporarily disabled
 // until the tech confirms the on-site diagnosis matches the AI scope).
-async function create({ type, lead, property, customId, quote = null, project = null, workDate = null, carryFromWoId = null, serviceFeeWaiver = null }) {
+async function create({ type, lead, property, customId, quote = null, project = null, workDate = null, carryFromWoId = null, serviceFeeWaiver = null, warrantyClaim = null }) {
   if (!TEMPLATES[type]) throw new Error(`Unknown work-order type: ${type}`);
   // Build-mode WOs are project-scoped and don't require a lead — the
   // proposal acceptance is the original handshake. Property is still
@@ -1412,6 +1462,13 @@ async function create({ type, lead, property, customId, quote = null, project = 
   // pre-validated, normalized waiver object (lib/service-fee-waiver.js) or
   // null. Only meaningful where a service_call is actually charged
   // (service_visit); harmless no-op on seasonal WOs.
+  // Warranty provenance, when this WO was raised by approving a claim.
+  // Stamped before the waiver below so the two always land together — a
+  // warranty WO with no waiver (or a waiver with no provenance) would be
+  // a WO nobody on site can explain.
+  if (warrantyClaim && typeof warrantyClaim === "object" && warrantyClaim.claimId) {
+    wo.warrantyClaim = { ...warrantyClaim, converted: null };
+  }
   if (serviceFeeWaiver && typeof serviceFeeWaiver === "object" && serviceFeeWaiver.waived === true) {
     wo.serviceFeeWaiver = { ...serviceFeeWaiver };
   }
@@ -1586,6 +1643,16 @@ async function update(id, patch) {
   if (Object.prototype.hasOwnProperty.call(patch, "serviceFeeWaiver")) {
     next.serviceFeeWaiver = (patch.serviceFeeWaiver && typeof patch.serviceFeeWaiver === "object" && patch.serviceFeeWaiver.waived === true)
       ? { ...patch.serviceFeeWaiver }
+      : null;
+  }
+  // Warranty-claim provenance. Written once at create (from the claim
+  // approval) and then only by the conversion path, which stamps
+  // `converted`. Guarded the same way as the waiver it explains: the
+  // route checks wo.locked before calling, and warrantyClaim is in
+  // SCOPE_PROTECTED_FIELDS so a signed WO refuses the change.
+  if (Object.prototype.hasOwnProperty.call(patch, "warrantyClaim")) {
+    next.warrantyClaim = (patch.warrantyClaim && typeof patch.warrantyClaim === "object" && patch.warrantyClaim.claimId)
+      ? { ...patch.warrantyClaim }
       : null;
   }
   next.updatedAt = new Date().toISOString();

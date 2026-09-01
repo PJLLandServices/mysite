@@ -1,0 +1,376 @@
+/* Season plan review — /admin/season-plan
+   Uses the CRM tokens from crm.css; defines nothing global. */
+
+.sp-head {
+  display: flex; flex-wrap: wrap; gap: 20px;
+  align-items: flex-end; justify-content: space-between;
+  margin-bottom: 8px;
+}
+.sp-head h1 { margin: 2px 0 4px; }
+.sp-sub { margin: 0; color: var(--pjl-text-muted); font-size: 0.9rem; }
+.sp-head-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.sp-control { display: flex; flex-direction: column; gap: 4px; }
+.sp-control > span {
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--pjl-text-muted); font-weight: 600;
+}
+.sp-control select {
+  padding: 8px 10px; border: 1px solid var(--pjl-border); border-radius: 8px;
+  background: #fff; font: inherit; min-width: 150px;
+}
+
+.sp-explainer {
+  margin: 0 0 22px; max-width: 68ch;
+  color: var(--pjl-text-mid); font-size: 0.92rem; line-height: 1.55;
+}
+
+.sp-panel {
+  background: #fff; border: 1px solid var(--pjl-border); border-radius: 12px;
+  padding: 18px 20px; margin-bottom: 20px;
+}
+.sp-panel-title {
+  margin: 0 0 12px; font-size: 0.78rem; text-transform: uppercase;
+  letter-spacing: 0.07em; color: var(--pjl-text-muted);
+}
+
+/* Unresolved codes get amber, not red: they are a data problem to fix
+   before assignment, not a broken page. */
+.sp-problems { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.sp-problems li { font-size: 0.9rem; color: var(--pjl-text-mid); }
+.sp-problem-where { color: var(--pjl-text-muted); }
+#problemsPanel { border-left: 3px solid var(--pjl-amber); background: var(--pjl-amber-pale); }
+
+.sp-probe { display: flex; gap: 10px; flex-wrap: wrap; }
+.sp-probe input {
+  flex: 1 1 320px; padding: 10px 12px; font: inherit;
+  border: 1px solid var(--pjl-border); border-radius: 8px; background: #fff;
+}
+.sp-probe-out { margin-top: 16px; }
+.sp-probe-head { margin: 0 0 10px; font-size: 0.9rem; color: var(--pjl-text-mid); }
+.sp-probe-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+.sp-probe-table th {
+  text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--pjl-border);
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--pjl-text-muted);
+}
+.sp-probe-table td { padding: 7px 10px; border-bottom: 1px solid var(--pjl-border); }
+.sp-probe-table .sp-num { text-align: right; font-variant-numeric: tabular-nums; }
+.sp-probe-table tr.is-offered { background: var(--pjl-green-pale); }
+.sp-probe-table tr.is-offered td:last-child { font-weight: 700; color: var(--pjl-green); }
+
+/* Assignment actions — two-press arming so one stray thumb tap can't
+   book (or delete) a season. */
+.sp-assign-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.sp-assign-actions .pjl-btn.is-armed {
+  background: var(--pjl-amber); border-color: var(--pjl-amber); color: #fff;
+}
+
+.sp-cadence-status { margin: 10px 0 0; font-size: 0.85rem; color: var(--pjl-text-muted); }
+
+/* Public booking window — the season gate's dates, edited in place.
+   44px date inputs: this gets used from a phone in a truck. */
+.sp-bwindow { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+.sp-bwindow[hidden] { display: none; }
+.sp-bwindow .sp-control input[type="date"] {
+  padding: 10px 12px; font: inherit; min-height: 44px; min-width: 160px;
+  border: 1px solid var(--pjl-border); border-radius: 8px; background: #fff;
+}
+.sp-bwindow-actions { display: flex; gap: 10px; }
+.sp-bwindow-status { margin: 10px 0 0; font-size: 0.85rem; color: var(--pjl-text-muted); }
+
+.sp-days { display: grid; gap: 16px; }
+.sp-day {
+  background: #fff; border: 1px solid var(--pjl-border);
+  border-radius: 12px; overflow: hidden;
+}
+.sp-day-head {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  align-items: center; justify-content: space-between;
+  padding: 14px 20px; background: var(--pjl-cream);
+  border-bottom: 1px solid var(--pjl-border);
+}
+.sp-day-head h3 { margin: 0; font-size: 1.02rem; }
+.sp-day-territory { margin: 3px 0 0; font-size: 0.84rem; color: var(--pjl-text-muted); }
+
+/* Re-dating a day. Tucked under the title rather than in the stats row —
+   the stats are facts about the day, this is an action on it. */
+.sp-reschedule { margin-top: 4px; }
+.sp-manual { display: flex; align-items: center; gap: 8px; margin: 5px 0 0; }
+.sp-manual-clear {
+  font: inherit; font-size: 0.74rem; color: var(--pjl-text-mid);
+  background: none; border: 1px solid var(--pjl-border);
+  border-radius: 6px; padding: 2px 8px; cursor: pointer;
+}
+.sp-manual-clear:hover { border-color: var(--pjl-green); color: var(--pjl-green); }
+.sp-manual-clear:disabled { opacity: 0.5; cursor: default; }
+
+/* Up/down inside the bucket. Small, because the day's order is usually the
+   optimiser's job — these are for the cases only Patrick knows about. */
+.sp-window { display: inline-flex; }
+.sp-window-btn {
+  font: inherit; font-size: 0.7rem; line-height: 1.2;
+  padding: 5px 9px; cursor: pointer; white-space: nowrap;
+  border: 1px solid var(--pjl-border); border-radius: 999px;
+  background: #fff; color: var(--pjl-text-muted);
+}
+.sp-window-btn:hover { border-color: var(--pjl-green); color: var(--pjl-green); }
+.sp-window-btn.is-set {
+  background: var(--pjl-amber-pale); border-color: var(--pjl-amber); color: var(--pjl-amber);
+  font-weight: 700;
+}
+
+/* Its own full-width row across the stop's grid. The meta column is 168px —
+   nowhere near enough for a labelled time field — and an absolutely
+   positioned popover would be clipped by the panel's own scrolling. */
+.sp-window-form {
+  grid-column: 1 / -1; margin: 8px 0 2px;
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px; border: 1px solid var(--pjl-amber);
+  border-radius: 9px; background: var(--pjl-amber-pale);
+}
+.sp-window-form[hidden] { display: none; }
+.sp-window-line { display: flex; align-items: center; gap: 8px; }
+.sp-window-label {
+  font-family: "Barlow Condensed", sans-serif; text-transform: uppercase;
+  letter-spacing: 0.08em; font-size: 0.78rem; font-weight: 700;
+  color: var(--pjl-text-mid); width: 52px; flex: none;
+}
+/* 40px tall so a thumb can hit it — the old 20px inputs were a desktop
+   assumption, and this screen gets read on a phone. */
+.sp-window-line input[type="time"] {
+  font: inherit; font-size: 0.85rem; padding: 8px 10px; min-height: 40px;
+  flex: 1 1 auto; min-width: 0;
+  border: 1px solid var(--pjl-border); border-radius: 7px; background: #fff;
+  color: var(--pjl-text);
+}
+.sp-window-clear, .sp-window-cancel, .sp-window-save {
+  font: inherit; font-size: 0.78rem; min-height: 36px; padding: 6px 12px;
+  cursor: pointer; border: 1px solid var(--pjl-border); border-radius: 7px;
+  background: #fff; color: var(--pjl-text-mid); flex: none;
+}
+.sp-window-clear:hover, .sp-window-cancel:hover { border-color: var(--pjl-green); color: var(--pjl-green); }
+.sp-window-foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 2px; }
+.sp-window-save {
+  background: var(--pjl-green); border-color: var(--pjl-green); color: #fff; font-weight: 700;
+}
+.sp-window-save:hover { background: var(--pjl-green-mid); }
+.sp-window-save:disabled { opacity: 0.6; cursor: default; }
+
+.sp-nudge { display: inline-flex; gap: 2px; }
+.sp-nudge-btn {
+  font: inherit; font-size: 0.72rem; line-height: 1;
+  width: 20px; height: 20px; padding: 0; cursor: pointer;
+  border: 1px solid var(--pjl-border); border-radius: 5px;
+  background: #fff; color: var(--pjl-text-mid);
+}
+.sp-nudge-btn:hover { border-color: var(--pjl-green); color: var(--pjl-green); }
+.sp-nudge-btn:disabled { opacity: 0.4; cursor: default; }
+.sp-reschedule-open,
+.sp-reschedule-cancel {
+  font: inherit; font-size: 0.76rem; color: var(--pjl-text-mid);
+  background: none; border: 1px solid var(--pjl-border);
+  border-radius: 6px; padding: 2px 8px; cursor: pointer;
+}
+.sp-reschedule-open:hover,
+.sp-reschedule-cancel:hover { border-color: var(--pjl-green); color: var(--pjl-green); }
+.sp-reschedule-form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.sp-reschedule-form[hidden] { display: none; }
+.sp-reschedule-form input[type="date"] {
+  font: inherit; font-size: 0.8rem; padding: 3px 6px;
+  border: 1px solid var(--pjl-border); border-radius: 6px; background: #fff;
+}
+.sp-reschedule-go { font-size: 0.76rem; padding: 3px 10px; }
+.sp-day-stats { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+.sp-bucket { padding: 8px 10px 10px; }
+.sp-bucket + .sp-bucket { border-top: 1px solid var(--pjl-border); }
+.sp-bucket-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin: 0 0 10px; font-size: 0.75rem; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--pjl-text-muted);
+}
+.sp-bucket-empty { margin: 0; font-size: 0.85rem; color: var(--pjl-text-muted); font-style: italic; }
+
+.sp-stops { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+/* One row, three columns: stop number over arrival time, the address, then
+   the tags and the move control. It was a wrapping flex row, which made every
+   stop 107px tall — two visible in the panel at a time, on a seven-stop day. */
+.sp-stop {
+  display: grid; grid-template-columns: 46px minmax(0, 1fr) auto;
+  align-items: center; gap: 0 8px;
+  padding: 6px 8px; border: 1px solid var(--pjl-border);
+  border-radius: 8px; background: #fff;
+}
+.sp-stop.is-hot { border-color: var(--pjl-amber); box-shadow: 0 0 0 1px var(--pjl-amber); }
+.sp-stop.is-unresolved { border-color: var(--pjl-amber); background: var(--pjl-amber-pale); }
+.sp-stop-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.sp-stop-who { font-size: 0.86rem; font-weight: 600; color: var(--pjl-text); overflow-wrap: anywhere; }
+.sp-stop-sub {
+  font-size: 0.75rem; color: var(--pjl-text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sp-stop-meta { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; justify-content: flex-end; max-width: 168px; }
+
+.sp-tag {
+  font-size: 0.72rem; padding: 2px 8px; border-radius: 999px;
+  background: var(--pjl-green-pale); color: var(--pjl-green); white-space: nowrap;
+}
+.sp-tag.is-warn { background: var(--pjl-amber-pale); color: var(--pjl-amber); }
+.sp-tag.is-bad { background: #FBE3E3; color: #A32020; }
+.sp-count {
+  font-size: 0.78rem; font-weight: 700; font-variant-numeric: tabular-nums;
+  padding: 2px 8px; border-radius: 999px;
+  background: var(--pjl-green-pale); color: var(--pjl-green);
+}
+.sp-count.is-over { background: var(--pjl-amber-pale); color: var(--pjl-amber); }
+
+.sp-move {
+  font: inherit; font-size: 0.72rem; padding: 2px 4px; max-width: 92px;
+  border: 1px solid var(--pjl-border); border-radius: 6px; background: #fff;
+}
+
+.sp-empty { color: var(--pjl-text-muted); font-style: italic; }
+
+/* Import dialog */
+.sp-modal {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(15,31,20,0.5);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.sp-modal[hidden] { display: none; }
+.sp-modal-card {
+  background: #fff; border-radius: 14px; width: min(680px, 100%);
+  max-height: 90vh; overflow: auto; padding: 20px 22px;
+  box-shadow: var(--pjl-shadow-lg);
+}
+.sp-modal-head { display: flex; align-items: center; justify-content: space-between; }
+.sp-modal-head h2 { margin: 0; font-size: 1.1rem; }
+.sp-modal-close {
+  border: 0; background: none; font-size: 1.6rem; line-height: 1;
+  cursor: pointer; color: var(--pjl-text-muted);
+}
+.sp-modal-hint { font-size: 0.87rem; color: var(--pjl-text-mid); line-height: 1.5; }
+.sp-modal-hint code { background: var(--pjl-cream); padding: 1px 5px; border-radius: 4px; }
+.sp-modal-card textarea {
+  width: 100%; margin-top: 10px; padding: 10px; border-radius: 8px;
+  border: 1px solid var(--pjl-border); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem; resize: vertical;
+}
+.sp-modal-error { color: #A32020; font-size: 0.87rem; margin: 10px 0 0; }
+.sp-modal-foot { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+
+.sp-toast {
+  position: fixed; right: 20px; bottom: 20px; z-index: 70;
+  background: var(--pjl-dark); color: #fff; padding: 12px 16px;
+  border-radius: 10px; box-shadow: var(--pjl-shadow-lg);
+  font-size: 0.9rem; max-width: 380px;
+}
+.sp-toast.is-bad { background: #A32020; }
+.sp-toast.is-warn { background: var(--pjl-amber); }
+.sp-toast[hidden] { display: none; }
+
+.sp-probe-note {
+  margin: 0 0 12px; font-size: 0.84rem; line-height: 1.5;
+  color: var(--pjl-text-muted); max-width: 70ch;
+}
+
+/* Arrival estimates and the re-sequencer's notes. */
+.sp-stop-time {
+  font-variant-numeric: tabular-nums; font-weight: 700; font-size: 0.82rem;
+  color: var(--pjl-green); background: var(--pjl-green-pale);
+  padding: 3px 7px; border-radius: 6px; white-space: nowrap;
+}
+.sp-day-notes {
+  list-style: none; margin: 0; padding: 10px 20px 0;
+  display: grid; gap: 6px;
+}
+.sp-day-notes li {
+  font-size: 0.84rem; line-height: 1.45; color: var(--pjl-text-mid);
+  padding-left: 12px; border-left: 3px solid var(--pjl-border);
+}
+.sp-day-notes li.is-bad { border-left-color: #A32020; color: #A32020; }
+.sp-day-notes li.is-suggestion { border-left-color: var(--pjl-amber); }
+
+/* Stop number + arrival, stacked so a long address never squeezes them. */
+.sp-stop-lead { display: flex; flex-direction: column; gap: 3px; align-items: center; }
+.sp-stop-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 26px; height: 26px; padding: 0 6px;
+  border-radius: 50%; background: var(--pjl-green); color: #fff;
+  font-size: 0.82rem; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+
+/* The route anchor, stated on the page — silence here is how a town
+   centroid anchored eleven route days without anyone noticing. */
+.sp-anchor { margin: 4px 0 0; font-size: 0.85rem; color: var(--pjl-text-muted); }
+.sp-anchor.is-bad { color: #A32020; font-weight: 600; }
+
+/* Route map, inline on each day */
+/* ---- Layout A: the map is the card, the stops float over it ----------
+   The map is a FIXED viewport, never a percentage. The old screen stretched
+   a 640x360 image to the full card width, so it grew with the window and one
+   day filled the screen; eleven of those is a page you cannot read. 400px
+   holds a whole day above the fold at 100% zoom and stays put. */
+.sp-daybody { position: relative; height: 400px; }
+.sp-map { position: absolute; inset: 0; background: var(--pjl-cream); z-index: 0; }
+.sp-map-note {
+  position: absolute; left: 10px; bottom: 8px; z-index: 500;
+  font-size: 0.72rem; color: var(--pjl-text-muted);
+  background: rgba(255,255,255,0.88); border: 1px solid var(--pjl-border);
+  padding: 2px 7px; border-radius: 5px; pointer-events: none; max-width: 60%;
+}
+.sp-map-note.is-bad { color: #A32020; border-color: #E8B4B4; background: #FDF2F2; }
+
+.sp-stoppanel {
+  position: absolute; top: 12px; right: 12px; bottom: 12px; width: 408px;
+  max-width: calc(100% - 24px); z-index: 600;
+  background: rgba(255,255,255,0.94);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--pjl-border); border-radius: 12px;
+  box-shadow: var(--pjl-shadow); display: flex; flex-direction: column; overflow: hidden;
+}
+.sp-stoppanel-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px 8px; border-bottom: 1px solid var(--pjl-border);
+}
+.sp-stoppanel-head h4 { margin: 0; font-size: 0.95rem; }
+.sp-stoppanel-when { margin: 0; font-size: 0.76rem; color: var(--pjl-text-muted); font-variant-numeric: tabular-nums; }
+.sp-open-route {
+  margin-left: auto; font-size: 0.76rem; font-weight: 700; text-decoration: none;
+  color: var(--pjl-green); border: 1px solid var(--pjl-border); background: #fff;
+  border-radius: 7px; padding: 4px 9px; white-space: nowrap;
+}
+.sp-open-route:hover { border-color: var(--pjl-green); }
+.sp-stoppanel-scroll { overflow-y: auto; padding-bottom: 4px; }
+
+
+@media (max-width: 900px) {
+  .sp-daybody { height: auto; }
+  .sp-map { position: relative; inset: auto; height: 260px; }
+  .sp-stoppanel {
+    position: relative; inset: auto; width: auto; max-width: none;
+    border-radius: 0; border-left: 0; border-right: 0; border-bottom: 0;
+    box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none;
+    background: #fff;
+  }
+  .sp-stoppanel-scroll { overflow-y: visible; }
+}
+
+/* Assignment preflight — the action list is the skips, so they lead. */
+.sp-preflight-out { margin-top: 14px; }
+.sp-preflight-summary { margin: 0 0 10px; font-weight: 600; font-size: 0.92rem; }
+.sp-preflight-h {
+  margin: 14px 0 6px; font-size: 0.8rem; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--pjl-text-muted);
+}
+.sp-preflight-list { margin: 0; padding-left: 18px; display: grid; gap: 5px; }
+.sp-preflight-list li { font-size: 0.88rem; color: var(--pjl-text-mid); }
+.sp-preflight-list li.is-skip { color: #A32020; }
+.sp-preflight-list li.is-skip strong { color: var(--pjl-text); }
+.sp-preflight-list li.is-partial { color: var(--pjl-amber); }
+.sp-preflight-list li.is-partial strong { color: var(--pjl-text); }
+/* The skipped stop's address links to its property record — keep the
+   row's tone, but make the tap target visible. */
+.sp-preflight-list li a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.sp-preflight-clean { margin: 0; font-size: 0.9rem; color: var(--pjl-green); font-weight: 600; }
+.sp-preflight-bad { margin: 0; font-size: 0.9rem; color: #A32020; }

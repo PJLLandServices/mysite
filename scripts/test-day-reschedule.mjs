@@ -1,0 +1,440 @@
+// Re-dating a route day.
+//
+//   node scripts/test-day-reschedule.mjs
+//
+// The case: the weather stays too warm to close systems down, a day cannot
+// run, and it has to slide. Only that day slides.
+//
+// Three properties carry the risk and each is asserted here:
+//
+//   1. THE STOPS TRAVEL WITH THE DAY. A move that dropped or reordered the
+//      day's properties would be silent — the screen would still show a
+//      plausible route, on the wrong date, with the wrong stops.
+//   2. TWO DAYS CANNOT SHARE A DATE. The store is keyed by date, so an
+//      unchecked move would overwrite the day already sitting there and
+//      take its stops with it.
+//   3. A DAY WITH REAL BOOKINGS IS REFUSED. Today no booking can exist
+//      against a planned day, because nothing tells a customer their date
+//      yet. The moment the assignment writer lands, moving a day breaks a
+//      promise — the guard has to already be here, not be remembered after
+//      three customers are stood up.
+process.env.TZ = "America/Toronto";
+
+import { createRequire } from "node:module";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// THE STORE WRITES TO THE REAL FILE. server/lib/season-plans.js resolves
+// server/data/season-plans.json at require time with no injectable path, so
+// this test would otherwise overwrite a live season plan on any machine that
+// has one — build:check is not part of the deploy build, but it is run
+// locally, and "the tests ate the plan" is not a thing to discover later.
+//
+// So: snapshot the file, restore it in a finally. If it did not exist, it is
+// removed again rather than left behind as an empty plan store.
+const REAL_FILE = path.join(ROOT, "server", "data", "season-plans.json");
+const hadFile = fs.existsSync(REAL_FILE);
+const snapshot = hadFile ? fs.readFileSync(REAL_FILE, "utf8") : null;
+function restore() {
+  if (!hadFile) { fs.rmSync(REAL_FILE, { force: true }); return; }
+  fs.writeFileSync(REAL_FILE, snapshot);
+}
+process.on("exit", restore);
+
+const require = createRequire(import.meta.url);
+const plans = require(path.join(ROOT, "server/lib/season-plans.js"));
+
+let pass = 0;
+const failures = [];
+function ok(name, cond, detail = "") {
+  if (cond) { pass += 1; return; }
+  failures.push(`${name}${detail ? ` — ${detail}` : ""}`);
+}
+async function throws(name, fn, match) {
+  try {
+    await fn();
+    failures.push(`${name} — expected it to refuse, but it succeeded`);
+  } catch (err) {
+    if (match && !match.test(err.message)) {
+      failures.push(`${name} — refused with the wrong reason: ${err.message}`);
+      return;
+    }
+    pass += 1;
+  }
+}
+
+const SEED = {
+  generatedAt: "2026-08-30T00:00:00Z",
+  source: "test",
+  bucketCap: 5,
+  dayCap: 7,
+  days: {
+    "2026-09-28": { label: "R1", territory: "North home turf",
+      morning: ["P-2026-0071", "P-2026-0074"], afternoon: ["P-2026-0107"] },
+    "2026-09-29": { label: "R2", territory: "Far north",
+      morning: ["P-2026-0002"], afternoon: [] }
+  }
+};
+
+async function reseed() {
+  await plans.savePlan("fall", 2026, JSON.parse(JSON.stringify(SEED)), { actor: "test" });
+}
+
+await reseed();
+
+// ---- The ordinary move -----------------------------------------------
+
+const moved = await plans.moveDay("fall", 2026,
+  { fromDate: "2026-09-28", toDate: "2026-10-01" }, { actor: "patrick" });
+
+ok("the day is gone from its old date", !moved.plan.days["2026-09-28"]);
+ok("the day is on its new date", Boolean(moved.plan.days["2026-10-01"]));
+ok("THE STOPS TRAVEL WITH THE DAY, in order",
+  JSON.stringify(moved.plan.days["2026-10-01"].morning) === JSON.stringify(["P-2026-0071", "P-2026-0074"])
+  && JSON.stringify(moved.plan.days["2026-10-01"].afternoon) === JSON.stringify(["P-2026-0107"]),
+  JSON.stringify(moved.plan.days["2026-10-01"]));
+
+// The label is the name of a set of properties in a territory, and Patrick
+// talks about days that way. Renumbering on a move would make yesterday's
+// sentence about R1 refer to somewhere else.
+ok("THE LABEL TRAVELS WITH THE DAY, not with the date",
+  moved.plan.days["2026-10-01"].label === "R1", moved.plan.days["2026-10-01"].label);
+ok("...and so does the territory",
+  moved.plan.days["2026-10-01"].territory === "North home turf");
+
+ok("ONLY THAT DAY MOVED — the rest of the season kept its dates",
+  Boolean(moved.plan.days["2026-09-29"])
+  && moved.plan.days["2026-09-29"].label === "R2");
+ok("the plan still holds the same number of days",
+  Object.keys(moved.plan.days).length === 2, String(Object.keys(moved.plan.days).length));
+
+ok("the move is reported back with both dates and the label",
+  moved.moved.from === "2026-09-28" && moved.moved.to === "2026-10-01"
+  && moved.moved.label === "R1", JSON.stringify(moved.moved));
+ok("the move is attributed", moved.plan.updatedBy === "patrick", moved.plan.updatedBy);
+
+// ---- Collisions ------------------------------------------------------
+
+await reseed();
+await throws("MOVING ONTO AN OCCUPIED DATE IS REFUSED — it would overwrite that day",
+  () => plans.moveDay("fall", 2026, { fromDate: "2026-09-28", toDate: "2026-09-29" }),
+  /already holds/);
+
+const afterRefusal = await plans.getPlan("fall", 2026);
+ok("...and the refused move changed nothing",
+  Boolean(afterRefusal.days["2026-09-28"]) && Boolean(afterRefusal.days["2026-09-29"])
+  && afterRefusal.days["2026-09-29"].label === "R2");
+ok("...and the day it would have overwritten kept its stops",
+  JSON.stringify(afterRefusal.days["2026-09-29"].morning) === JSON.stringify(["P-2026-0002"]));
+
+// The error has to name the day in the way, not just say "taken" — the
+// operator's next move is to decide what to do with THAT day.
+try {
+  await plans.moveDay("fall", 2026, { fromDate: "2026-09-28", toDate: "2026-09-29" });
+} catch (err) {
+  ok("the collision names the day standing in the way", /R2/.test(err.message), err.message);
+}
+
+// ---- Real bookings ---------------------------------------------------
+
+await throws("A DAY CARRYING REAL BOOKINGS IS REFUSED",
+  () => plans.moveDay("fall", 2026,
+    { fromDate: "2026-09-28", toDate: "2026-10-01", bookedCount: 3 }),
+  /3 real bookings/);
+
+await throws("...and the message is singular for one booking",
+  () => plans.moveDay("fall", 2026,
+    { fromDate: "2026-09-28", toDate: "2026-10-01", bookedCount: 1 }),
+  /1 real booking\b/);
+
+const stillThere = await plans.getPlan("fall", 2026);
+ok("...and a refused booking-guard move changed nothing",
+  Boolean(stillThere.days["2026-09-28"]) && !stillThere.days["2026-10-01"]);
+
+// A PLANNED STOP IS NOT A BOOKING. R1 has three planned properties on it
+// and must still move freely — the guard counts bookings, which the caller
+// supplies, never the plan's own stops.
+const withPlannedStops = await plans.moveDay("fall", 2026,
+  { fromDate: "2026-09-28", toDate: "2026-10-01", bookedCount: 0 });
+ok("PLANNED STOPS DO NOT BLOCK A MOVE — only real bookings do",
+  Boolean(withPlannedStops.plan.days["2026-10-01"]));
+
+// ---- Dates that are not dates ----------------------------------------
+
+await reseed();
+await throws("a non-date is refused",
+  () => plans.moveDay("fall", 2026, { fromDate: "2026-09-28", toDate: "not-a-date" }),
+  /Not a calendar date/);
+await throws("Feb 31 is refused rather than rolled into March",
+  () => plans.moveDay("fall", 2026, { fromDate: "2026-09-28", toDate: "2026-02-31" }),
+  /Not a calendar date/);
+await throws("moving a day that is not in the plan is refused",
+  () => plans.moveDay("fall", 2026, { fromDate: "2026-12-25", toDate: "2026-12-26" }),
+  /not a route day/);
+await throws("moving a day onto its own date is refused rather than being a silent no-op",
+  () => plans.moveDay("fall", 2026, { fromDate: "2026-09-28", toDate: "2026-09-28" }),
+  /already on that date/);
+
+// ---- Weekends --------------------------------------------------------
+//
+// Allowed — Patrick may choose one — but reported, because landing on a
+// Saturday by arithmetic accident reads exactly like choosing one.
+
+await reseed();
+const toSaturday = await plans.moveDay("fall", 2026,
+  { fromDate: "2026-09-28", toDate: "2026-10-03" });   // Saturday
+ok("a weekend date is allowed", Boolean(toSaturday.plan.days["2026-10-03"]));
+ok("...and is flagged as a weekend so the screen can say so",
+  toSaturday.moved.weekend === true);
+
+await reseed();
+const toThursday = await plans.moveDay("fall", 2026,
+  { fromDate: "2026-09-28", toDate: "2026-10-01" });   // Thursday
+ok("a weekday is not flagged", toThursday.moved.weekend === false);
+
+// ---- Hand ordering inside a bucket -----------------------------------
+//
+// The optimiser cannot know who is not home before ten. This is how that
+// gets in — and the property that makes it worth having is that it STICKS.
+
+const resequence = require(path.join(ROOT, "server/lib/resequence.js"));
+
+await reseed();
+const nudged = await plans.reorderStop("fall", 2026, {
+  date: "2026-09-28", bucket: "morning", propertyCode: "P-2026-0074", direction: "up"
+}, { actor: "patrick" });
+
+ok("the stop moved up inside its bucket",
+  JSON.stringify(nudged.plan.days["2026-09-28"].morning) === JSON.stringify(["P-2026-0074", "P-2026-0071"]),
+  JSON.stringify(nudged.plan.days["2026-09-28"].morning));
+ok("THE DAY IS MARKED HAND-ORDERED — otherwise the next re-sequence reverts it",
+  nudged.plan.days["2026-09-28"].manualOrder === true);
+ok("the other bucket is untouched",
+  JSON.stringify(nudged.plan.days["2026-09-28"].afternoon) === JSON.stringify(["P-2026-0107"]));
+ok("the other day is untouched and still automatic",
+  !nudged.plan.days["2026-09-29"].manualOrder);
+ok("the reorder is reported with both positions",
+  nudged.reordered.from === 1 && nudged.reordered.to === 0, JSON.stringify(nudged.reordered));
+
+// validate() rebuilds every day from scratch on save. A manualOrder that
+// survived one write and vanished on the next would be worse than one that
+// never worked at all.
+await plans.savePlan("fall", 2026, await plans.getPlan("fall", 2026), { actor: "test" });
+const afterSave = await plans.getPlan("fall", 2026);
+ok("MANUAL ORDER SURVIVES A SAVE — validate() rebuilds days and must copy it",
+  afterSave.days["2026-09-28"].manualOrder === true);
+ok("...and so does the hand-set order",
+  JSON.stringify(afterSave.days["2026-09-28"].morning) === JSON.stringify(["P-2026-0074", "P-2026-0071"]));
+
+await throws("nudging past the top is refused rather than being a silent no-op",
+  () => plans.reorderStop("fall", 2026,
+    { date: "2026-09-28", bucket: "morning", propertyCode: "P-2026-0074", direction: "up" }),
+  /already first/);
+await throws("a stop that is not in that bucket is refused",
+  () => plans.reorderStop("fall", 2026,
+    { date: "2026-09-28", bucket: "afternoon", propertyCode: "P-2026-0074", direction: "up" }),
+  /not in the afternoon/);
+await throws("a bad direction is refused",
+  () => plans.reorderStop("fall", 2026,
+    { date: "2026-09-28", bucket: "morning", propertyCode: "P-2026-0071", direction: "sideways" }),
+  /up.*down|down.*up/);
+
+// ---- The sequencer must honour it ------------------------------------
+//
+// This is the assertion the whole feature rests on: a hand-ordered day is
+// walked in the order as written, and an automatic day is not.
+
+const COORDS = {
+  "P-2026-0071": { lat: 44.1084804, lng: -79.5006803 },
+  "P-2026-0074": { lat: 44.1098484, lng: -79.4846980 },
+  "P-2026-0107": { lat: 44.0351649, lng: -79.4318712 }
+};
+const byCode = new Map(Object.entries(COORDS).map(([code, coords]) =>
+  [code, { code, coords, zoneCount: 4 }]));
+const BASE = { lat: 44.0350, lng: -79.4820 };
+// A travel function that makes the reversed order clearly worse, so an
+// optimiser that is still running would visibly undo the hand order.
+const travel = async (a, b) => Math.round(
+  Math.abs(a.lat - b.lat) * 1000 + Math.abs(a.lng - b.lng) * 1000);
+
+const manualDay = {
+  label: "R1", manualOrder: true,
+  morning: ["P-2026-0074", "P-2026-0071"], afternoon: ["P-2026-0107"]
+};
+const seqManual = await resequence.sequenceDay(manualDay,
+  { propertiesByCode: byCode, base: BASE, travel });
+ok("A HAND-ORDERED DAY IS WALKED IN THE ORDER AS WRITTEN",
+  JSON.stringify(seqManual.morning) === JSON.stringify(["P-2026-0074", "P-2026-0071"]),
+  JSON.stringify(seqManual.morning));
+ok("...and it says so, in a flag the screen can show",
+  (seqManual.flags || []).some((f) => f.code === "manual_order"));
+ok("...and it is still TIMED — a manual day is unoptimised, not unchecked",
+  Array.isArray(seqManual.timeline) && seqManual.timeline.length === 3
+  && Boolean(seqManual.morningEndsAt));
+
+const autoDay = { label: "R1", morning: ["P-2026-0074", "P-2026-0071"], afternoon: ["P-2026-0107"] };
+const seqAuto = await resequence.sequenceDay(autoDay,
+  { propertiesByCode: byCode, base: BASE, travel });
+ok("THE SAME DAY WITHOUT THE FLAG IS REORDERED — proving the fixture would move",
+  JSON.stringify(seqAuto.morning) !== JSON.stringify(seqManual.morning),
+  `auto ${JSON.stringify(seqAuto.morning)} vs manual ${JSON.stringify(seqManual.morning)}`);
+ok("...and an automatic day carries no manual flag",
+  !(seqAuto.flags || []).some((f) => f.code === "manual_order"));
+
+// ---- Handing it back --------------------------------------------------
+
+await reseed();
+await plans.reorderStop("fall", 2026,
+  { date: "2026-09-28", bucket: "morning", propertyCode: "P-2026-0074", direction: "up" });
+const cleared = await plans.clearManualOrder("fall", 2026, { date: "2026-09-28" }, { actor: "patrick" });
+ok("the day goes back to automatic", !cleared.plan.days["2026-09-28"].manualOrder);
+await throws("clearing a day that is already automatic is refused rather than pretending",
+  () => plans.clearManualOrder("fall", 2026, { date: "2026-09-29" }),
+  /already optimised/);
+
+// ---- Time windows ----------------------------------------------------
+//
+// "Not before 10:00" is a locked gate; "not after 12:30" is a promise
+// already made. Neither is visible to an optimiser that can only see
+// driving minutes.
+//
+// Four properties carry the risk:
+//   1. A window must actually CHANGE the chosen order, not merely be stored.
+//   2. Waiting must be real — arriving early means sitting in the truck, and
+//      the rest of the day's times have to reflect that.
+//   3. A window that cannot be met is FLAGGED, never silently missed.
+//   4. With no windows anywhere, the old search must run untouched.
+
+ok("parseWindow accepts HH:MM and rejects everything else",
+  resequence.parseWindow("09:30") === 570
+  && resequence.parseWindow("00:00") === 0
+  && resequence.parseWindow("23:59") === 1439
+  && resequence.parseWindow("24:00") === null
+  && resequence.parseWindow("9:30") === null
+  && resequence.parseWindow("") === null
+  && resequence.parseWindow(null) === null);
+
+// Two stops, both trivially close to base, so DRIVING cannot decide the
+// order — only the window can. Without a window the optimiser is free to
+// pick either; with "not before", the constrained one must go second.
+const W = {
+  "P-A": { lat: 44.0360, lng: -79.4820 },
+  "P-B": { lat: 44.0361, lng: -79.4821 }
+};
+const wByCode = new Map(Object.entries(W).map(([code, coords]) =>
+  [code, { code, coords, zoneCount: 1, system: { zones: [1] } }]));
+const flat = async () => 5;
+
+const windowed = await resequence.sequenceDay({
+  label: "R9", morning: ["P-A", "P-B"], afternoon: [],
+  constraints: { "P-A": { notBefore: "10:00" } }
+}, { propertiesByCode: wByCode, base: BASE, travel: flat });
+
+const aEntry = windowed.timeline.find((t) => t.propertyCode === "P-A");
+ok("A 'NOT BEFORE' IS HONOURED — the stop is not arrived at earlier",
+  aEntry.arriveAt >= "10:00", aEntry.arriveAt);
+ok("...and the window travels onto the timeline so the screen can show it",
+  aEntry.notBefore === "10:00");
+ok("WAITING IS REAL — the constrained stop is second, after the free one",
+  windowed.timeline[1].propertyCode === "P-A",
+  windowed.timeline.map((t) => t.propertyCode).join(","));
+
+// The same day WITHOUT the window must not produce that arrival, or the
+// assertion above would pass for the wrong reason.
+const unwindowed = await resequence.sequenceDay({
+  label: "R9", morning: ["P-A", "P-B"], afternoon: []
+}, { propertiesByCode: wByCode, base: BASE, travel: flat });
+ok("THE SAME DAY WITHOUT THE WINDOW ARRIVES EARLY — proving the window did the work",
+  unwindowed.timeline.find((t) => t.propertyCode === "P-A").arriveAt < "10:00",
+  unwindowed.timeline.find((t) => t.propertyCode === "P-A").arriveAt);
+ok("...and carries no window on the timeline",
+  unwindowed.timeline[0].notBefore === undefined);
+
+// A window that cannot be met: the morning cannot reach 06:00.
+const impossible = await resequence.sequenceDay({
+  label: "R9", morning: ["P-A", "P-B"], afternoon: [],
+  constraints: { "P-A": { notAfter: "06:00" } }
+}, { propertiesByCode: wByCode, base: BASE, travel: flat });
+ok("AN UNMEETABLE WINDOW IS FLAGGED, NOT SILENTLY MISSED",
+  (impossible.flags || []).some((f) => f.code === "window_missed"
+    && f.propertyCode === "P-A"));
+ok("...and the day is still sequenced rather than refused",
+  impossible.timeline.length === 2);
+ok("...and the flag says how late it is, not just that it is late",
+  /min late/.test((impossible.flags || []).find((f) => f.code === "window_missed").message));
+
+// Long waits are worth saying out loud.
+const longWait = await resequence.sequenceDay({
+  label: "R9", morning: ["P-A"], afternoon: [],
+  constraints: { "P-A": { notBefore: "11:00" } }
+}, { propertiesByCode: wByCode, base: BASE, travel: flat });
+ok("a long wait for a window is flagged",
+  (longWait.flags || []).some((f) => f.code === "window_waiting"));
+
+// ---- The customer seam ------------------------------------------------
+//
+// Built now, unused today. When the booking pool can take a request, it is
+// passed in here and merges over the plan's own entry.
+
+const viaBooking = await resequence.sequenceDay({
+  label: "R9", morning: ["P-A", "P-B"], afternoon: []
+}, {
+  propertiesByCode: wByCode, base: BASE, travel: flat,
+  requestedWindows: { "P-A": { notBefore: "10:00" } }
+});
+ok("A REQUESTED WINDOW WORKS WITHOUT THE PLAN CARRYING ONE — the customer seam",
+  viaBooking.timeline.find((t) => t.propertyCode === "P-A").arriveAt >= "10:00");
+
+const bookingWins = await resequence.sequenceDay({
+  label: "R9", morning: ["P-A", "P-B"], afternoon: [],
+  constraints: { "P-A": { notBefore: "08:30" } }
+}, {
+  propertiesByCode: wByCode, base: BASE, travel: flat,
+  requestedWindows: { "P-A": { notBefore: "10:00" } }
+});
+ok("...and what the customer asked for beats the plan's standing default",
+  bookingWins.timeline.find((t) => t.propertyCode === "P-A").arriveAt >= "10:00",
+  bookingWins.timeline.find((t) => t.propertyCode === "P-A").arriveAt);
+
+// ---- Storing a window -------------------------------------------------
+
+await reseed();
+const set = await plans.setStopWindow("fall", 2026, {
+  date: "2026-09-28", propertyCode: "P-2026-0071", notBefore: "10:00", notAfter: "12:00"
+}, { actor: "patrick" });
+ok("the window is stored on the day",
+  set.plan.days["2026-09-28"].constraints["P-2026-0071"].notBefore === "10:00"
+  && set.plan.days["2026-09-28"].constraints["P-2026-0071"].notAfter === "12:00");
+
+await plans.savePlan("fall", 2026, await plans.getPlan("fall", 2026), { actor: "test" });
+ok("A WINDOW SURVIVES A SAVE — validate() rebuilds days and must copy it",
+  (await plans.getPlan("fall", 2026)).days["2026-09-28"].constraints["P-2026-0071"].notBefore === "10:00");
+
+const cleared2 = await plans.setStopWindow("fall", 2026,
+  { date: "2026-09-28", propertyCode: "P-2026-0071", notBefore: "", notAfter: "" });
+ok("clearing both halves removes the entry rather than leaving an empty object",
+  !cleared2.plan.days["2026-09-28"].constraints);
+
+await throws("a half-typed time is refused rather than stored as a constraint nobody can meet",
+  () => plans.setStopWindow("fall", 2026,
+    { date: "2026-09-28", propertyCode: "P-2026-0071", notBefore: "9am" }),
+  /is not a time/);
+await throws("a window with no time in it is refused",
+  () => plans.setStopWindow("fall", 2026,
+    { date: "2026-09-28", propertyCode: "P-2026-0071", notBefore: "14:00", notAfter: "10:00" }),
+  /no time to arrive in/);
+await throws("a window on a stop that is not on that day is refused",
+  () => plans.setStopWindow("fall", 2026,
+    { date: "2026-09-28", propertyCode: "P-2026-9999", notBefore: "10:00" }),
+  /not a stop on/);
+
+if (failures.length) {
+  console.error(`\n✗ test-day-reschedule: ${failures.length} failed, ${pass} passed\n`);
+  failures.forEach((f) => console.error(`  ✗ ${f}`));
+  console.error("");
+  process.exit(1);
+}
+console.log(`✓ test-day-reschedule: ${pass} assertions passed`);

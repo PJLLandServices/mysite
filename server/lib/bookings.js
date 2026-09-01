@@ -238,6 +238,59 @@ async function upsertFromLead(lead) {
   return next;
 }
 
+// Create a canonical booking record directly — the property-first path.
+// Everything before the assignment writer entered bookings.json through
+// upsertFromLead (a lead books, the record mirrors); an assigned booking
+// has no lead behind it, only a property, so it is born canonical here.
+// activeBookings() in server.js already resolves coordinates for
+// lead-less records through propertyId, and the iCal feed reads this
+// store — nothing downstream needs a lead to exist.
+//
+// The caller supplies every field; this function only stamps identity
+// (id, timestamps, history) and refuses records that would be invisible
+// or unattributable. NOTHING here sends anything.
+async function createDirect(fields, { by = "system", note = "" } = {}) {
+  if (!fields || typeof fields !== "object") throw new Error("Booking fields are required.");
+  if (!fields.scheduledFor || Number.isNaN(Date.parse(fields.scheduledFor))) {
+    throw new Error("A valid scheduledFor is required.");
+  }
+  if (!fields.serviceKey) throw new Error("A serviceKey is required.");
+  if (!fields.propertyId && !fields.leadId) {
+    throw new Error("A booking needs a propertyId or a leadId to belong to someone.");
+  }
+  if (fields.status && !STATUSES.has(fields.status)) {
+    throw new Error(`Unknown booking status: ${fields.status}`);
+  }
+  const records = await readAll();
+  const next = blank();
+  next.id = await nextBookingId(new Date().getUTCFullYear());
+  next.customerId = fields.customerId || null;
+  next.customerEmail = String(fields.customerEmail || "").toLowerCase();
+  next.customerName = fields.customerName || "";
+  next.customerPhone = fields.customerPhone || "";
+  next.propertyId = fields.propertyId || null;
+  next.leadId = fields.leadId || null;
+  next.scheduledFor = new Date(fields.scheduledFor).toISOString();
+  next.durationMinutes = Number(fields.durationMinutes) || 0;
+  next.serviceKey = fields.serviceKey;
+  next.serviceLabel = fields.serviceLabel || "";
+  next.zoneCount = (fields.zoneCount != null) ? fields.zoneCount : null;
+  next.address = fields.address || "";
+  next.status = fields.status || "confirmed";
+  next.prepNotes = fields.prepNotes || "";
+  // Provenance — how this record came to exist. "assignment" marks the
+  // season writer's records; the assignment block carries what it needs
+  // to be reversed and audited (season, year, plan date, bucket, code).
+  if (fields.source) next.source = fields.source;
+  if (fields.assignment && typeof fields.assignment === "object") {
+    next.assignment = { ...fields.assignment };
+  }
+  next.history = [{ ts: next.createdAt, action: "created", by, note }];
+  records.unshift(next);
+  await writeAll(records);
+  return next;
+}
+
 // Update a booking record. Allowed fields are explicit so we don't
 // accept arbitrary patches (e.g., changing leadId would break the
 // back-reference).
@@ -397,6 +450,221 @@ async function remove(id, { by = "admin", isActiveWo = null } = {}) {
   return { ok: true, deletedId: id, deletedBy: by };
 }
 
+// Merge a patch into booking.assignment.outreach — the cadence engine's
+// state block: { token, blastAt, steps: { "1": {...} }, respondedAt,
+// responseVia, responseBy }. Only assignment bookings carry it. update()
+// deliberately can't reach booking.assignment, so cadence state has its
+// own narrow writer with its own audit entry.
+async function setAssignmentOutreach(id, patch, { action = "cadence", by = "system", note = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const current = records[idx];
+  if (!current.assignment) throw new Error(`${id} is not an assignment booking.`);
+  const outreach = { ...(current.assignment.outreach || {}) };
+  for (const [key, value] of Object.entries(patch || {})) {
+    if (key === "steps") {
+      outreach.steps = { ...(outreach.steps || {}), ...value };
+    } else {
+      outreach[key] = value;
+    }
+  }
+  const next = {
+    ...current,
+    assignment: { ...current.assignment, outreach },
+    updatedAt: new Date().toISOString()
+  };
+  next.history = [...(current.history || []), {
+    ts: next.updatedAt, action, by, note
+  }];
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// Patrick moved a WHOLE ROUTE DAY (stage 6): this booking rides along.
+// Deliberately NOT reschedule(): the day move is plan steering, so it
+// does not bump rescheduleCount (the customer keeps their one self-serve
+// move, and the time sweep keeps steering the record). Cadence rule 6:
+// the old confirmation was for the old date — a moved day is a new
+// promise needing a new acknowledgment — so the response state resets
+// (stashed into history, never lost) and, when the customer was already
+// messaged, a day-move notice is queued for the cadence sweep to send
+// inside the send window. A queued notice that hasn't gone out yet keeps
+// its ORIGINAL oldDate through further moves: the customer is told
+// "was Sept 28, now Oct 3", not a chain of intermediate hops.
+async function moveAssignmentDay(id, { toDate, scheduledFor, oldDate, resetResponse = true, queueNotice = false, by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const current = records[idx];
+  if (!current.assignment) throw new Error(`${id} is not an assignment booking.`);
+  const now = new Date().toISOString();
+  const outreach = { ...(current.assignment.outreach || {}) };
+  const history = [...(current.history || [])];
+
+  if (resetResponse && outreach.respondedAt) {
+    history.push({
+      ts: now, action: "response_reset", by,
+      note: `Day moved — previous answer (${outreach.responseVia} at ${outreach.respondedAt}) no longer covers the new date.`
+    });
+    delete outreach.respondedAt;
+    delete outreach.responseVia;
+    delete outreach.responseBy;
+  }
+  if (queueNotice) {
+    outreach.pendingDayMove = {
+      oldDate: outreach.pendingDayMove?.oldDate || oldDate,
+      newDate: toDate,
+      queuedAt: now
+    };
+  }
+  history.push({
+    ts: now, action: "day_moved", by,
+    note: `${oldDate} → ${toDate} (route day moved)`
+  });
+
+  const next = {
+    ...current,
+    scheduledFor: new Date(scheduledFor).toISOString(),
+    assignment: { ...current.assignment, date: toDate, outreach },
+    updatedAt: now,
+    history
+  };
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// The customer chose the FREE BUCKET: they're normally home (or can be
+// on short notice), so the job runs whenever PJL is in the area and the
+// tech calls ahead with an ETA. The booking KEEPS its current date as
+// the tentative anchor — it still counts against that day's capacity
+// (conservative: never overbooks) and still gets its 24-hour reminder —
+// and Patrick moves it freely when a nearby day has room.
+async function setFreeBucket(id, { by = "customer" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const now = new Date().toISOString();
+  const next = {
+    ...records[idx],
+    flexBucket: { at: now, by: String(by).slice(0, 120) },
+    updatedAt: now,
+    history: [...(records[idx].history || []), {
+      ts: now, action: "free_bucket", by,
+      note: "Customer chose the free bucket — run when in the area, tech calls with an ETA."
+    }]
+  };
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// The customer's own timing constraint for their day: "not before" /
+// "not after", HH:MM or null. Feeds the sequencer's requestedWindows
+// seam, where a customer's ask wins over the plan's standing guess.
+const WINDOW_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+async function setRequestedWindow(id, { notBefore, notAfter, by = "customer" } = {}) {
+  const clean = (v) => {
+    const text = String(v == null ? "" : v).trim();
+    if (!text) return null;
+    if (!WINDOW_RE.test(text)) throw new Error(`"${text}" is not a valid HH:MM time.`);
+    return text;
+  };
+  const before = clean(notBefore);
+  const after = clean(notAfter);
+  if (before && after && before >= after) {
+    throw new Error("The \"after\" time has to come before the \"before\" time.");
+  }
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const now = new Date().toISOString();
+  const next = {
+    ...records[idx],
+    requestedWindow: (before || after)
+      ? { notBefore: before, notAfter: after, at: now, by: String(by).slice(0, 120) }
+      : null,
+    updatedAt: now,
+    history: [...(records[idx].history || []), {
+      ts: now, action: "requested_window", by,
+      note: (before || after)
+        ? [before ? `not before ${before}` : "", after ? `not after ${after}` : ""].filter(Boolean).join(", ")
+        : "cleared"
+    }]
+  };
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// The customer told us how many zones their system actually has (their
+// appointment page's "update your zone count"). The booking's tier
+// fields follow the real number — serviceKey/serviceLabel so the page
+// and day sheet name the right bracket, durationMinutes so the
+// sequencer plans the right amount of on-site time. Deliberately NOT a
+// response (they haven't answered about the date) and deliberately no
+// rescheduleCount bump — correcting our records costs the customer
+// nothing.
+async function setDeclaredZones(id, { zoneCount, serviceKey, serviceLabel, durationMinutes, by = "customer" } = {}) {
+  const zones = Math.floor(Number(zoneCount) || 0);
+  if (zones < 1 || zones > 50) throw new Error("Zone count must be a whole number from 1 to 50.");
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const current = records[idx];
+  if (!current.assignment) throw new Error(`${id} is not an assignment booking.`);
+  const now = new Date().toISOString();
+  const tierChanged = Boolean(serviceKey) && serviceKey !== current.serviceKey;
+  const next = {
+    ...current,
+    zoneCount: zones,
+    ...(tierChanged ? {
+      serviceKey,
+      serviceLabel: serviceLabel || current.serviceLabel,
+      durationMinutes: Number(durationMinutes) > 0 ? Number(durationMinutes) : current.durationMinutes
+    } : {}),
+    updatedAt: now,
+    history: [...(current.history || []), {
+      ts: now, action: "zones_declared", by,
+      note: `${zones} zones${tierChanged ? ` — service tier ${current.serviceKey} → ${serviceKey}` : ""}`
+    }]
+  };
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// The customer (or Patrick, marking a phone call) answered. First answer
+// wins — a later confirm doesn't overwrite how they first responded.
+async function markAssignmentResponded(id, { via = "manual", by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const current = records[idx];
+  if (!current.assignment) throw new Error(`${id} is not an assignment booking.`);
+  const outreach = { ...(current.assignment.outreach || {}) };
+  if (outreach.respondedAt) return current;   // already answered — keep the first
+  outreach.respondedAt = new Date().toISOString();
+  outreach.responseVia = String(via).slice(0, 40);
+  outreach.responseBy = String(by).slice(0, 120);
+  const next = {
+    ...current,
+    assignment: { ...current.assignment, outreach },
+    updatedAt: outreach.respondedAt,
+    history: [...(current.history || []), {
+      ts: outreach.respondedAt,
+      action: "assignment_responded",
+      by,
+      note: `via ${outreach.responseVia}`
+    }]
+  };
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
 // Attach a WO id to a booking's workOrderIds[]. Used when techs spin
 // up additional WOs from a single booking (multi-day repairs).
 async function attachWorkOrder(bookingId, woId) {
@@ -420,6 +688,13 @@ module.exports = {
   listByLead,
   listByProperty,
   upsertFromLead,
+  createDirect,
+  setAssignmentOutreach,
+  markAssignmentResponded,
+  moveAssignmentDay,
+  setFreeBucket,
+  setRequestedWindow,
+  setDeclaredZones,
   update,
   reschedule,
   cancel,

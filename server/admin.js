@@ -772,7 +772,15 @@ function renderTranscriptDetail(lead) {
     detailTranscriptSection.hidden = true;
     return;
   }
-  detailTranscript.textContent = transcript;
+  // Lay the chat out as the conversation it was, instead of dumping the
+  // stored string into one block. crm-transcript.js does the parsing and
+  // falls back to the raw text if a transcript has no speaker labels.
+  detailTranscript.textContent = "";
+  if (window.PJLTranscript) {
+    detailTranscript.appendChild(window.PJLTranscript.render(transcript));
+  } else {
+    detailTranscript.textContent = transcript;
+  }
   detailTranscriptSection.hidden = false;
 }
 

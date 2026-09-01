@@ -627,50 +627,137 @@ async function remove(id, { by = "admin", note = "" } = {}) {
   );
 }
 
-// Hard-delete — actually removes the record from customers.json.
-// Refuses if any entity references this customer. Caller must use
-// merge() first when they want to combine duplicates, or accept
-// loss-of-link when nothing is yet attached (typical for test data
-// and accidental near-duplicates with no bookings/WOs/etc yet).
+// Stores carrying a customerId. Same list as mergeCustomers' re-point
+// pass — the two must stay in step: anything merge can re-point is
+// something delete has to account for.
 //
-// Returns { ok: true, customer } on success, or
-//         { ok: false, error, references } when blocked.
-async function hardDelete(id) {
-  const records = await readAll();
-  const idx = records.findIndex((c) => c.id === id);
-  if (idx === -1) return { ok: false, error: "Customer not found." };
+// deleted-invoices.json (the void-invoice tombstone log) is deliberately
+// absent — see the note on DELETED_FILE in lib/invoices.js.
+const CUSTOMER_LINK_FILES = [
+  "leads.json", "properties.json", "bookings.json",
+  "work-orders.json", "quotes.json", "invoices.json", "projects.json"
+];
 
+// A record in the Trash carries `deletedAt` (leads, quotes, properties,
+// work-orders all use that one marker; bookings and projects have no
+// soft-delete, and a deleted invoice leaves invoices.json entirely for
+// the tombstone log). It is gone from every index, so it is NOT a live
+// link — see the split in scanCustomerLinks().
+function isTrashed(record) {
+  return Boolean(record && typeof record.deletedAt === "string" && record.deletedAt);
+}
+
+// Split everything pointing at this customer into what is live and what
+// is already in the Trash. Both maps are { store: [ids] }, keyed by the
+// file's base name ("quotes", "work-orders", …).
+async function scanCustomerLinks(id) {
   const dataDir = path.join(__dirname, "..", "data");
-  const filesToCheck = [
-    "leads.json", "properties.json", "bookings.json",
-    "work-orders.json", "quotes.json", "invoices.json", "projects.json"
-  ];
-  const references = {};
-  for (const file of filesToCheck) {
+  const live = {};
+  const trashed = {};
+  for (const file of CUSTOMER_LINK_FILES) {
     const fullPath = path.join(dataDir, file);
     if (!fsSync.existsSync(fullPath)) continue;
     try {
       const raw = await fs.readFile(fullPath, "utf8");
       const arr = JSON.parse(raw || "[]");
       if (!Array.isArray(arr)) continue;
+      const store = file.replace(".json", "");
       const matches = arr.filter((r) => r && r.customerId === id);
-      if (matches.length) {
-        references[file.replace(".json", "")] = matches.map((r) => r.id).filter(Boolean);
-      }
+      const liveIds = matches.filter((r) => !isTrashed(r)).map((r) => r.id).filter(Boolean);
+      const trashedIds = matches.filter(isTrashed).map((r) => r.id).filter(Boolean);
+      if (liveIds.length) live[store] = liveIds;
+      if (trashedIds.length) trashed[store] = trashedIds;
     } catch (err) {
       console.warn(`[hardDelete] couldn't check ${file}:`, err.message);
     }
   }
-  if (Object.keys(references).length) {
+  return { live, trashed };
+}
+
+// Permanently remove the Trash records named in `trashed` ({ store: [ids] }).
+// Direct JSON-file ops for the same reason mergeCustomers uses them: this
+// is a bulk cross-store pass, not a granular per-entity patch. What it does
+// to each record is what the 30-day Trash purge does — splice it out, no
+// history (the record itself is going). Returns { store: [ids] } actually
+// removed.
+async function purgeTrashedLinks(id, trashed) {
+  const dataDir = path.join(__dirname, "..", "data");
+  const purged = {};
+  for (const [store, ids] of Object.entries(trashed)) {
+    const idSet = new Set(ids);
+    const fullPath = path.join(dataDir, `${store}.json`);
+    if (!fsSync.existsSync(fullPath)) continue;
+    const raw = await fs.readFile(fullPath, "utf8");
+    const arr = JSON.parse(raw || "[]");
+    if (!Array.isArray(arr)) continue;
+    // Re-assert both conditions at the moment of the write: only this
+    // customer's records, and only ones still in the Trash. A restore
+    // between the scan and here takes the record back out of scope.
+    const kept = arr.filter((r) => !(r && idSet.has(r.id) && r.customerId === id && isTrashed(r)));
+    const removedCount = arr.length - kept.length;
+    if (!removedCount) continue;
+    const removedIds = arr
+      .filter((r) => r && idSet.has(r.id) && r.customerId === id && isTrashed(r))
+      .map((r) => r.id);
+    await fs.writeFile(fullPath, JSON.stringify(kept, null, 2) + "\n", "utf8");
+    purged[store] = removedIds;
+  }
+  return purged;
+}
+
+// Hard-delete — actually removes the record from customers.json.
+// Refuses if any LIVE entity references this customer. Caller must use
+// merge() first when they want to combine duplicates, or accept
+// loss-of-link when nothing is yet attached (typical for test data
+// and accidental near-duplicates with no bookings/WOs/etc yet).
+//
+// Records already in the Trash do not block (CRM-16). They are invisible
+// everywhere in the CRM — the customer page's own tabs are built from
+// list() calls that filter them out — so counting them made the refusal
+// name links the operator could not see and had no way to act on from
+// this page. But they cannot simply be ignored either: restoring one
+// after its customer is gone would strand it exactly the way CRM-15's
+// booking was stranded. So a Trash-only customer needs a second, explicit
+// confirm, and the delete then purges those Trash records with it. The
+// caller passes { purgeTrashed: true } for that confirm.
+//
+// Returns { ok: true, customer, purged } on success, or
+//         { ok: false, code, error, references, trashed } when blocked:
+//           code "linked"       — live links; Merge (or delete them) first
+//           code "trashed_only" — nothing live, N records in the Trash;
+//                                 re-call with purgeTrashed to go ahead
+async function hardDelete(id, { purgeTrashed = false } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((c) => c.id === id);
+  if (idx === -1) return { ok: false, error: "Customer not found." };
+
+  const { live, trashed } = await scanCustomerLinks(id);
+  if (Object.keys(live).length) {
     return {
       ok: false,
+      code: "linked",
       error: "Customer is referenced by other records. Use merge to combine them, or remove the references first.",
-      references
+      references: live,
+      ...(Object.keys(trashed).length ? { trashed } : {})
     };
   }
+  if (Object.keys(trashed).length && !purgeTrashed) {
+    return {
+      ok: false,
+      code: "trashed_only",
+      error: "Nothing live is linked to this customer, but records in the Trash still are. Deleting the customer permanently deletes those Trash records too.",
+      trashed
+    };
+  }
+
+  // Purge BEFORE removing the customer: a failed write leaves the
+  // customer in place with its Trash records intact, which is a state the
+  // operator can retry from. The reverse order would strand them.
+  const purged = Object.keys(trashed).length ? await purgeTrashedLinks(id, trashed) : {};
+
   const removed = records.splice(idx, 1)[0];
   await writeAll(records);
-  return { ok: true, customer: removed };
+  return { ok: true, customer: removed, purged };
 }
 
 // ---- Matching --------------------------------------------------------
@@ -1009,6 +1096,7 @@ module.exports = {
   update,
   remove,
   hardDelete,
+  scanCustomerLinks,
   findByEmail,
   findByPhone,
   findByIdentifier,

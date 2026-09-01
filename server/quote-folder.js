@@ -13,11 +13,16 @@ const TYPE_LABELS = {
   project_proposal: "Project proposal"
 };
 
+// Browser copy of PROPOSAL_BRANCH_LABELS in server/lib/quotes.js — this file
+// runs in the page and can't require() a server module. Pinned to the
+// canonical map by scripts/test-branch-labels.mjs, so drift fails the build.
+// ("Renovation" here vs "Renovation Coordination" everywhere else was
+// exactly that drift, found when the map was centralized.)
 const BRANCH_LABELS = {
   gc_subcontract: "GC Subcontract",
-  direct_residential: "Residential",
+  direct_residential: "Residential Install",
   lighting_design: "Lighting Design",
-  renovation_coordination: "Renovation",
+  renovation_coordination: "Renovation Coordination",
   change_order: "Change Order",
   residential_repair: "Residential Repair",
   lighting_repair: "Landscape Lighting Repairs"
@@ -45,6 +50,14 @@ function fmtDate(iso) {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
 }
+// Views need the time of day — "opened Aug 28" and "opened Aug 28, 9:14 p.m."
+// are very different facts when you are reconstructing what happened.
+function fmtDateTime(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("en-CA", {
+    month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
+  });
+}
 
 // Phase 2 — fetched alongside quotes so each card can render a chip
 // showing "X lists" attached and surface "Convert to project" /
@@ -52,6 +65,10 @@ function fmtDate(iso) {
 // quote.
 let mlCountByQuote = new Map();    // quoteId -> count of attached lists
 let projectByQuote = new Map();    // quoteId -> project record (if exists)
+// Quote View Tracker — quoteId -> view summary from the ledger. Answers
+// "did the customer actually open it?" on the row, so a customer claiming
+// they signed can be checked without digging through server logs.
+let viewsByQuote = new Map();
 
 async function load() {
   // Compose query string from the status filter + the show-deleted toggle.
@@ -59,10 +76,11 @@ async function load() {
   if (currentFilter) qs.push(`status=${encodeURIComponent(currentFilter)}`);
   if (showDeleted) qs.push("includeDeleted=1");
   const url = qs.length ? `/api/admin/quote-folder?${qs.join("&")}` : "/api/admin/quote-folder";
-  const [quotesRes, mlRes, projRes] = await Promise.all([
+  const [quotesRes, mlRes, projRes, viewsRes] = await Promise.all([
     fetch(url, { cache: "no-store" }).then((r) => r.json()).catch(() => ({})),
     fetch("/api/material-lists?includeArchived=1", { cache: "no-store" }).then((r) => r.json()).catch(() => ({})),
-    fetch("/api/projects?includeArchived=1", { cache: "no-store" }).then((r) => r.json()).catch(() => ({}))
+    fetch("/api/projects?includeArchived=1", { cache: "no-store" }).then((r) => r.json()).catch(() => ({})),
+    fetch("/api/admin/quote-folder/views", { cache: "no-store" }).then((r) => r.json()).catch(() => ({}))
   ]);
   let items = (quotesRes.ok && Array.isArray(quotesRes.quotes)) ? quotesRes.quotes : [];
   // Track how many of the returned items are soft-deleted so we can show
@@ -90,6 +108,10 @@ async function load() {
   projectByQuote = new Map();
   for (const p of (projRes.projects || [])) {
     if (p.sourceQuoteId) projectByQuote.set(p.sourceQuoteId, p);
+  }
+  viewsByQuote = new Map();
+  for (const [qid, summary] of Object.entries((viewsRes && viewsRes.views) || {})) {
+    viewsByQuote.set(qid, summary);
   }
 
   // Cache items so the delete-confirmation modal can read customer /
@@ -133,6 +155,29 @@ async function load() {
     const isSmartController = q.type === "ai_repair_quote" && q.narrativeKey === "smart-controller";
     const proposalHref = `/admin/quote/${encodeURIComponent(q.id)}/proposal`;
     const combinedPreviewHref = `/approve/${encodeURIComponent(q.id)}`;
+
+    // Quote View Tracker — only meaningful once the customer has a link,
+    // so drafts and previews show nothing rather than a misleading
+    // "not opened". Three states, and the middle one is the point of the
+    // whole feature: "opened but blocked at the phone gate" is the case
+    // that used to look identical to "never bothered to open it".
+    const view = viewsByQuote.get(q.id) || null;
+    const isSendable = q.status !== "draft" && q.status !== "draft_preview";
+    let viewedLine = "";
+    if (isSendable) {
+      if (!view || !view.count) {
+        viewedLine = `<p class="qf-card__viewed qf-card__viewed--none">Not opened yet</p>`;
+      } else if (view.stuckAtGate) {
+        const at = escapeHtml(fmtDateTime(view.gateChallengedAt));
+        viewedLine = `<p class="qf-card__viewed qf-card__viewed--stuck" title="They opened the link but never passed the phone gate — check the phone number on the customer record.">Blocked at phone gate &middot; ${at}</p>`;
+      } else {
+        const opens = Number(view.byKind && view.byKind.document ? view.byKind.document.count : 0)
+          + Number(view.byKind && view.byKind.sign_page ? view.byKind.sign_page.count : 0);
+        const label = opens > 1 ? `Opened ${opens}\u00d7` : "Opened";
+        const pdfBit = view.byKind && view.byKind.pdf ? " &middot; downloaded PDF" : "";
+        viewedLine = `<p class="qf-card__viewed qf-card__viewed--seen">${label} &middot; last ${escapeHtml(fmtDateTime(view.lastAt))}${pdfBit}</p>`;
+      }
+    }
 
     const isDeleted = !!q.deletedAt;
     const actions = [];
@@ -229,6 +274,7 @@ async function load() {
         <p class="qf-card__dates">${datesLine}</p>
         ${supersededTag ? `<p class="qf-card__lineage">${supersededTag}</p>` : ""}
         <p class="qf-card__materials">${materialsLine}</p>
+        ${viewedLine}
         <nav class="qf-card__actions">${actionsHtml}</nav>
       </article>
     `;

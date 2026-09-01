@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1B4D2E">
+  <meta name="robots" content="noindex">
+  <title>Your appointment — PJL Land Services</title>
+  <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260518" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/appointment.css">
+</head>
+<body>
+  <main class="ap-shell">
+    <header class="ap-brand">
+      <img src="/crm/pjl-logo.svg" alt="PJL Land Services">
+    </header>
+
+    <section class="ap-card" id="card">
+      <p class="ap-loading" id="loading">Loading your appointment…</p>
+
+      <div id="details" hidden>
+        <p class="ap-hello" id="hello"></p>
+        <span class="ap-badge" id="badge" hidden></span>
+        <h1 class="ap-service" id="service"></h1>
+        <dl class="ap-facts">
+          <div><dt>Date</dt><dd id="dateLabel"></dd></div>
+          <div><dt>Arrival window</dt><dd id="bucketLabel"></dd></div>
+          <div><dt>Address</dt><dd id="street"></dd></div>
+          <div id="priceRow" hidden><dt>Your price</dt><dd id="priceLabel"></dd></div>
+          <div id="zonesRow" hidden><dt>Your system</dt><dd id="zonesLabel"><span id="zonesText"></span> <button type="button" class="ap-linklike" id="zonesBtn" hidden>Update my zone count</button></dd></div>
+        </dl>
+
+        <p class="ap-intro">
+          In our effort to increase day-to-day efficiency, we've created dedicated routes for
+          our service trucks, so nearby homes are completed together rather than jumping
+          between towns through our busy season. Working this way lets us keep providing the
+          same great service without raising our prices. <strong>Please only choose a
+          different day if no one can be home.</strong> Any restrictions beyond the options
+          below? Call or text us at <a href="tel:+19059600181">(905)&nbsp;960-0181</a>.
+        </p>
+
+        <div class="ap-actions" id="actions">
+          <button type="button" class="ap-btn ap-btn-primary" id="confirmBtn">Confirm this appointment</button>
+          <button type="button" class="ap-btn ap-btn-outline" id="windowBtn">Set timing for my day (after / before)</button>
+          <button type="button" class="ap-btn ap-btn-outline" id="rescheduleBtn">Pick a different day</button>
+          <button type="button" class="ap-btn ap-btn-quiet" id="cancelBtn">I no longer need this</button>
+        </div>
+
+        <div class="ap-panel" id="windowPanel" hidden>
+          <h2>Timing for your day</h2>
+          <p class="ap-note">
+            Keep your day, but tell us when works. We'll plan your stop around it.
+          </p>
+          <div class="ap-window-rows">
+            <label class="ap-label">Not before
+              <select id="windowAfter"><option value="">No preference</option></select>
+            </label>
+            <label class="ap-label">Not after
+              <select id="windowBefore"><option value="">No preference</option></select>
+            </label>
+          </div>
+          <div class="ap-actions">
+            <button type="button" class="ap-btn ap-btn-primary" id="windowSave">Save my timing</button>
+            <button type="button" class="ap-btn ap-btn-quiet" id="windowBack">Back</button>
+          </div>
+        </div>
+
+        <div class="ap-panel" id="zonesPanel" hidden>
+          <h2>How many zones does your system have?</h2>
+          <p class="ap-note">
+            A zone is one section of your sprinkler system that runs at a time — your
+            controller counts them. Knowing the real number lets us plan the right amount
+            of time for your visit, and makes sure your price matches your system.
+          </p>
+          <label class="ap-label">Number of zones
+            <select id="zonesSelect"><option value="" disabled selected>Choose…</option></select>
+          </label>
+          <div class="ap-actions">
+            <button type="button" class="ap-btn ap-btn-primary" id="zonesSave">Save my zone count</button>
+            <button type="button" class="ap-btn ap-btn-quiet" id="zonesBack">Back</button>
+          </div>
+        </div>
+
+        <div class="ap-panel" id="reschedulePanel" hidden>
+          <h2>Pick a new day</h2>
+          <p class="ap-note">
+            Afternoon windows (12 PM – 5 PM) on any day with room left, right through the
+            end of the season.
+          </p>
+          <div class="ap-freebucket">
+            <h3>Or choose the Free Bucket</h3>
+            <p class="ap-note">
+              Our crews are in nearby towns regularly, and we use the free bucket to fill our
+              days when we're in your area. Choose it if you're normally home, or can be home
+              on short notice — our technician will contact you with an approximate time of
+              arrival.
+            </p>
+            <button type="button" class="ap-btn ap-btn-outline" id="freeBucketBtn">Put me in the Free Bucket</button>
+          </div>
+          <div class="ap-slots" id="slotList"><p class="ap-loading">Finding days with room…</p></div>
+          <button type="button" class="ap-btn ap-btn-quiet" id="rescheduleBack">Never mind — keep my day</button>
+        </div>
+
+        <div class="ap-panel" id="cancelPanel" hidden>
+          <h2>Cancel this appointment?</h2>
+          <p class="ap-note">If your plans have just shifted, picking a different day keeps your spot on our route.</p>
+          <label class="ap-label">Anything we should know? (optional)
+            <textarea id="cancelReason" rows="2" maxlength="300"></textarea>
+          </label>
+          <div class="ap-actions">
+            <button type="button" class="ap-btn ap-btn-danger" id="cancelConfirm">Yes, cancel it</button>
+            <button type="button" class="ap-btn ap-btn-quiet" id="cancelBack">Keep my appointment</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="terminal" hidden>
+        <h1 class="ap-terminal-title" id="terminalTitle"></h1>
+        <p class="ap-terminal-body" id="terminalBody"></p>
+      </div>
+
+      <p class="ap-error" id="error" hidden></p>
+    </section>
+
+    <footer class="ap-foot">
+      Questions? Call or text <a href="tel:+19059600181">(905) 960-0181</a><br>
+      PJL Land Services · Newmarket, Ontario
+    </footer>
+  </main>
+  <script src="/crm/appointment.js"></script>
+</body>
+</html>

@@ -1,0 +1,280 @@
+// The appointment page's actions — stage 5 of docs/ASSIGNMENT_WRITER.md.
+//
+//   node scripts/test-appointment-page.mjs
+//
+// WHAT THIS PROTECTS. The token-addressed page is the customer's whole
+// voice in the assign-and-confirm system: confirm, reschedule, cancel.
+// The suite runs the real booking store and the REAL cadence engine so
+// the claims that matter are proven end to end:
+//   - a confirm stops the follow-up messages (steps 2–5) but not the
+//     24-hour reminder;
+//   - a cancel stops everything;
+//   - the 24-hour cutoff and the one-reschedule cap gate the page.
+process.env.TZ = "America/Toronto";
+
+import { createRequire } from "node:module";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const require = createRequire(import.meta.url);
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+let pass = 0;
+const failures = [];
+function ok(name, cond, detail = "") {
+  if (cond) { pass += 1; return; }
+  failures.push(`${name}${detail ? ` — ${detail}` : ""}`);
+}
+
+const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "pjl-appt-"));
+fs.mkdirSync(path.join(SANDBOX, "server"), { recursive: true });
+fs.cpSync(path.join(ROOT, "server/lib"), path.join(SANDBOX, "server/lib"), { recursive: true });
+for (const f of ["seasons.json", "pricing.json", "parts.json"]) {
+  fs.cpSync(path.join(ROOT, f), path.join(SANDBOX, f));
+}
+fs.mkdirSync(path.join(SANDBOX, "server/data"), { recursive: true });
+
+const propertiesLib = require(path.join(SANDBOX, "server/lib/properties.js"));
+fs.writeFileSync(path.join(SANDBOX, "server/data/properties.json"), JSON.stringify([
+  { id: "P-1", code: "P-1", customerName: "Kristen Holmes", customerPhone: "+19055550100",
+    customerEmail: "k@example.com", address: "90 Oriole Drive, East Gwillimbury, ON", town: "East Gwillimbury" },
+  { id: "P-2", code: "P-2", customerName: "Charles Schwarz", customerPhone: "+19055550101",
+    customerEmail: "c@example.com", address: "1009 Little Cedar Ave, Churchill, ON", town: "Churchill" }
+], null, 2));
+
+const bookings = require(path.join(SANDBOX, "server/lib/bookings.js"));
+const appointment = require(path.join(SANDBOX, "server/lib/appointment-actions.js"));
+const cadence = require(path.join(SANDBOX, "server/lib/assignment-cadence.js"));
+
+const mk = (pid, scheduledFor) => bookings.createDirect({
+  propertyId: pid,
+  customerName: pid === "P-1" ? "Kristen Holmes" : "Charles Schwarz",
+  customerPhone: "+19055550100",
+  customerEmail: `${pid.toLowerCase()}@example.com`,
+  address: pid === "P-1" ? "90 Oriole Drive, East Gwillimbury, ON" : "1009 Little Cedar Ave, Churchill, ON",
+  serviceKey: "fall_close_4z",
+  serviceLabel: "Fall winterization (1-4 zones residential)",
+  scheduledFor,
+  durationMinutes: 30,
+  status: "confirmed",
+  source: "assignment",
+  assignment: {
+    season: "fall", year: 2026, batchId: "AS-t", assignedAt: "x",
+    date: "2026-10-05", bucket: "morning", code: pid
+  }
+});
+const b1 = await mk("P-1", new Date(2026, 9, 5, 8, 13).toISOString());
+const b2 = await mk("P-2", new Date(2026, 9, 5, 9, 2).toISOString());
+
+const NOW = new Date(2026, 8, 20, 10, 0);            // Sun^H Sept 20, well before D
+
+// ---- 1. Tokens --------------------------------------------------------
+
+const token1 = await appointment.ensureToken(b1.id);
+ok("ensureToken mints a real token", typeof token1 === "string" && token1.length >= 16);
+ok("ensureToken is idempotent — same token every time",
+  (await appointment.ensureToken(b1.id)) === token1);
+ok("a non-assignment booking gets no token",
+  (await appointment.ensureToken("BK-NOPE")) === null);
+
+ok("the token resolves its booking", (await appointment.findByToken(token1))?.id === b1.id);
+ok("an unknown token resolves nothing", (await appointment.findByToken("x".repeat(24))) === null);
+ok("a short/garbage token is rejected without a scan", (await appointment.findByToken("abc")) === null);
+
+// ---- 2. What the page may offer ---------------------------------------
+
+const open = appointment.summarize(await bookings.get(b1.id), { now: NOW });
+ok("a future, unanswered appointment offers all three actions",
+  open.state === "open" && open.canConfirm && open.canReschedule && open.canCancel,
+  JSON.stringify(open));
+ok("the summary speaks the customer's language, not the record's",
+  open.firstName === "Kristen" && open.street === "90 Oriole Drive"
+  && open.dateLabel.includes("October 5") && /Morning/.test(open.bucketLabel));
+
+const nearNow = new Date(2026, 9, 4, 20, 0);         // 12 hours before
+const near = appointment.summarize(await bookings.get(b1.id), { now: nearNow });
+ok("inside 24 hours: confirm still works, changes need a phone call",
+  near.canConfirm && !near.canReschedule && !near.canCancel && near.insideCutoff);
+
+// ---- 3. Confirm — and the cadence integration -------------------------
+
+const confirmed = await appointment.confirm(token1, { now: NOW });
+ok("confirm records the response", confirmed.ok && confirmed.summary.state === "responded"
+  && confirmed.summary.respondedVia === "confirm");
+const confirmedAgain = await appointment.confirm(token1, { now: NOW });
+ok("confirming twice keeps the first answer",
+  confirmedAgain.ok
+  && (await bookings.get(b1.id)).assignment.outreach.responseVia === "confirm");
+
+// Blast both bookings, then sweep on D−15: the confirmed customer gets
+// no follow-up; the silent one does. On D−1 BOTH get the reminder.
+const wire = { emails: 0, smses: 0, to: [] };
+const deps = {
+  sendEmail: async (a) => { wire.emails += 1; wire.to.push(a.to); return { ok: true }; },
+  sendSms: async () => { wire.smses += 1; return { ok: true }; }
+};
+await cadence.blast("fall", 2026, { deps, now: new Date(2026, 8, 10, 10, 0), appointmentPageReady: true });
+wire.emails = 0; wire.smses = 0;
+await cadence.sweepDue("fall", 2026, { deps, now: new Date(2026, 8, 20, 10, 0), appointmentPageReady: true });
+ok("a page confirm STOPS the follow-ups: only the silent customer got step 2",
+  !(await bookings.get(b1.id)).assignment.outreach.steps["2"]
+  && Boolean((await bookings.get(b2.id)).assignment.outreach.steps["2"]));
+
+// ---- 4. Cancel — BEFORE the D−1 sweep, so rule 5 is provable ----------
+
+const token2 = (await bookings.get(b2.id)).assignment.outreach.token;
+ok("the blast minted b2's token on its own", typeof token2 === "string");
+
+const lateCancel = await appointment.cancel(token2, { now: nearNow });
+ok("a cancel inside 24 hours is refused with the phone number",
+  !lateCancel.ok && /less than 24 hours/.test(lateCancel.errors[0]));
+
+const cancelled = await appointment.cancel(token2, { reason: "selling the house", now: NOW });
+ok("a cancel outside the cutoff goes through and says so",
+  cancelled.ok && cancelled.summary.state === "cancelled");
+const b2After = await bookings.get(b2.id);
+ok("the booking is cancelled with the customer's reason kept",
+  b2After.status === "cancelled" && b2After.cancellationReason === "selling the house"
+  && b2After.assignment.outreach.responseVia === "cancel");
+
+// The D−1 sweep (Oct 4): the confirmed customer's reminder fires —
+// nothing stops step 6 — while the cancelled customer's never does.
+await cadence.sweepDue("fall", 2026, { deps, now: new Date(2026, 9, 4, 10, 0), appointmentPageReady: true });
+ok("nothing stops the 24-hour reminder for a live booking",
+  Boolean((await bookings.get(b1.id)).assignment.outreach.steps["6"]));
+ok("a page cancel stops everything — the cancelled customer gets no reminder",
+  !(await bookings.get(b2.id)).assignment.outreach.steps["6"]);
+
+// ---- 5. The reschedule cap gates the page -----------------------------
+
+await bookings.reschedule(b1.id, { scheduledFor: new Date(2026, 9, 7, 8, 0).toISOString(), by: "customer" });
+const capped = appointment.summarize(await bookings.get(b1.id), { now: NOW });
+ok("after their one move, the page stops offering reschedule (call us instead)",
+  !capped.canReschedule && capped.canConfirm);
+
+// ---- 6. Cancelled and past states are terminal ------------------------
+
+const cancelledView = appointment.summarize(await bookings.get(b2.id), { now: NOW });
+ok("a cancelled appointment offers nothing",
+  cancelledView.state === "cancelled"
+  && !cancelledView.canConfirm && !cancelledView.canReschedule && !cancelledView.canCancel);
+const pastView = appointment.summarize(await bookings.get(b1.id), { now: new Date(2026, 9, 20, 10, 0) });
+ok("a past appointment offers nothing", pastView.state === "past" && !pastView.canConfirm);
+
+// ---- 7. Patrick's live-review batch: full name, window, free bucket ----
+
+ok("the page addresses the customer by FULL name — this is a private link",
+  appointment.summarize(await bookings.get(b1.id), { now: NOW }).name === "Kristen Holmes");
+
+// A fresh booking for the window + free-bucket flows.
+const b3 = await mk("P-1", new Date(2026, 9, 13, 8, 0).toISOString());
+const token3 = await appointment.ensureToken(b3.id);
+
+// The customer says "not before 10, not after 15:00".
+const winBad = await appointment.setWindow(token3, { notBefore: "3pm", now: NOW });
+ok("a garbled time is refused at the page", !winBad.ok && /not a valid/.test(winBad.errors[0]));
+const winInverted = await appointment.setWindow(token3, { notBefore: "15:00", notAfter: "10:00", now: NOW });
+ok("an inverted window is refused", !winInverted.ok);
+
+const winOk = await appointment.setWindow(token3, { notBefore: "10:00", notAfter: "15:00", now: NOW });
+ok("the customer's after/before is stored and counts as a response",
+  winOk.ok && winOk.summary.requestedWindow.notBefore === "10:00"
+  && winOk.summary.requestedWindow.notAfter === "15:00"
+  && winOk.summary.state === "responded" && winOk.summary.respondedVia === "window");
+
+// The seam's food: requestedWindowsFor keys the ask by plan code, so
+// the sequencer plans the stop around it (customer wins over the plan).
+const assignments = require(path.join(SANDBOX, "server/lib/assignments.js"));
+const windowMap = await assignments.requestedWindowsFor("fall", 2026);
+ok("the sequencer's requestedWindows seam receives the customer's ask, keyed by code",
+  windowMap["P-1"] && windowMap["P-1"].notBefore === "10:00" && windowMap["P-1"].notAfter === "15:00",
+  JSON.stringify(windowMap));
+
+const winCleared = await appointment.setWindow(token3, { notBefore: "", notAfter: "", now: NOW });
+ok("clearing both rows removes the window", winCleared.ok && winCleared.summary.requestedWindow === null);
+
+// The free bucket: an answer, a flag, and the end of self-serve moves.
+const fb = await appointment.freeBucket(token3, { now: NOW });
+ok("the free bucket is recorded as the customer's answer",
+  fb.ok && fb.summary.freeBucket === true && fb.summary.respondedVia === "window",
+  JSON.stringify(fb.summary));
+const b3After = await bookings.get(b3.id);
+ok("the booking carries the flag with its history",
+  Boolean(b3After.flexBucket) && b3After.history.some((h) => h.action === "free_bucket"));
+ok("a free-bucket booking keeps its anchor date but leaves self-serve rescheduling",
+  b3After.scheduledFor === b3.scheduledFor
+  && !appointment.summarize(b3After, { now: NOW }).canReschedule
+  && !appointment.summarize(b3After, { now: NOW }).canFreeBucket);
+const fbAgain = await appointment.freeBucket(token3, { now: NOW });
+ok("choosing the free bucket twice is refused politely", !fbAgain.ok);
+
+// ---- 8. Patrick's follow-up: the customer's REAL zone count -----------
+// Many profiles carry only the booking class for the customer's
+// category. The page lets the customer set the record straight; the
+// count lands on the PROPERTY, the tier follows, and documented zones
+// stay ground truth.
+
+const b4 = await mk("P-2", new Date(2026, 9, 13, 13, 0).toISOString());
+const token4 = await appointment.ensureToken(b4.id);
+
+const infoNone = appointment.zonesInfo(await propertiesLib.get("P-2"),
+  appointment.summarize(await bookings.get(b4.id), { now: NOW }));
+ok("no count on file: the page may ask",
+  infoNone.source === "none" && infoNone.count === null && infoNone.canUpdate === true,
+  JSON.stringify(infoNone));
+
+const zBad = await appointment.setZones(token4, { zoneCount: 0, now: NOW });
+const zBad2 = await appointment.setZones(token4, { zoneCount: "lots", now: NOW });
+const zBad3 = await appointment.setZones(token4, { zoneCount: 51, now: NOW });
+ok("a zone count outside 1-50 (or garbage) is refused", !zBad.ok && !zBad2.ok && !zBad3.ok);
+
+const zOk = await appointment.setZones(token4, { zoneCount: 7, now: NOW });
+ok("seven zones saves, and the 1-4 booking class becomes the 7-8 tier",
+  zOk.ok && zOk.tierChanged === true, JSON.stringify(zOk.errors || ""));
+ok("the count lands on the PROPERTY — the same field Patrick edits",
+  (await propertiesLib.get("P-2")).system?.zoneCount === 7);
+const b4After = await bookings.get(b4.id);
+ok("the booking's tier follows the real number — key, label, minutes",
+  b4After.zoneCount === 7 && b4After.serviceKey === "fall_close_8z"
+  && /7-8 zones/.test(b4After.serviceLabel) && b4After.durationMinutes === 45,
+  JSON.stringify({ z: b4After.zoneCount, k: b4After.serviceKey, d: b4After.durationMinutes }));
+ok("declaring zones is NOT a response — the cadence still nudges them",
+  !b4After.assignment.outreach?.respondedAt
+  && appointment.summarize(b4After, { now: NOW }).state === "open");
+ok("the history says what happened",
+  b4After.history.some((h) => h.action === "zones_declared" && /7 zones/.test(h.note)));
+
+const zSame = await appointment.setZones(token4, { zoneCount: 8, now: NOW });
+ok("a same-bracket correction saves without a tier change",
+  zSame.ok && zSame.tierChanged === false && (await bookings.get(b4.id)).zoneCount === 8);
+
+const pricing = require(path.join(SANDBOX, "server/lib/pricing.js"));
+ok("the shown price re-resolves from the declared count — page and tier agree",
+  pricing.resolveSeasonalPrice(await propertiesLib.get("P-2"), "fall_closing").key === "fall_close_8z");
+
+// Documented zones are ground truth: they win, and they close the door.
+await propertiesLib.update("P-2", { system: { zones: [{ number: 1 }, { number: 2 }, { number: 3 }] } });
+ok("documented zones win over the declared count",
+  pricing.effectiveZoneCount(await propertiesLib.get("P-2")) === 3);
+const zDoc = await appointment.setZones(token4, { zoneCount: 12, now: NOW });
+ok("with zones mapped, the page refuses the edit and says why",
+  !zDoc.ok && /already mapped/.test(zDoc.errors[0]), JSON.stringify(zDoc.errors));
+const infoDoc = appointment.zonesInfo(await propertiesLib.get("P-2"),
+  appointment.summarize(await bookings.get(b4.id), { now: NOW }));
+ok("the page then shows the mapped count read-only",
+  infoDoc.source === "documented" && infoDoc.count === 3 && infoDoc.canUpdate === false);
+
+const zCancelled = await appointment.setZones(token2, { zoneCount: 5, now: NOW });
+ok("a cancelled appointment refuses a zone update", !zCancelled.ok);
+
+// ---- Report ----------------------------------------------------------
+
+if (failures.length) {
+  console.error(`\n✗ test-appointment-page: ${failures.length} failed, ${pass} passed\n`);
+  failures.forEach((f) => console.error(`  ✗ ${f}`));
+  console.error("");
+  process.exit(1);
+}
+console.log(`✓ test-appointment-page: ${pass} assertions passed`);

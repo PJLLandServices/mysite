@@ -27,6 +27,7 @@ const grid = document.getElementById("propertiesGrid");
 const empty = document.getElementById("propertiesEmpty");
 const search = document.getElementById("propertySearch");
 const countEl = document.getElementById("propertiesCount");
+const sortEl = document.getElementById("propertySort");
 const logoutButton = document.getElementById("logoutButton");
 
 const selectToggle = document.getElementById("selectToggle");
@@ -47,7 +48,26 @@ const confirmError = document.getElementById("confirmError");
 const confirmCancel = document.getElementById("confirmCancel");
 const confirmAccept = document.getElementById("confirmAccept");
 
+// Sort options, keyed by the <select> values in properties.html.
+// Alphabetical by customer is the default — the grid is read as "whose
+// property is this", and the cards lead with the customer name.
+// `town` is derived server-side from the address (lib/format.js
+// townFromAddress) so it matches the customers index exactly.
+// Every non-name sort breaks ties on customer name, then address, so two
+// properties in one town — or two sites for one customer — hold a stable,
+// readable order instead of falling back to file order.
+const SORTS = {
+  "customer-asc": { keys: ["customerName"], tiebreak: "address" },
+  "customer-desc": { keys: ["customerName"], direction: "desc", tiebreak: "address" },
+  "town-asc": { keys: ["town"], tiebreak: "customerName" },
+  "town-desc": { keys: ["town"], direction: "desc", tiebreak: "customerName" },
+  "address-asc": { keys: ["address"], tiebreak: "customerName" }
+};
+const SORT_STORAGE_KEY = "pjl.properties.sort";
+const DEFAULT_SORT = "customer-asc";
+
 let properties = [];
+let sortKey = PJLSort.readStored(SORT_STORAGE_KEY, Object.keys(SORTS), DEFAULT_SORT);
 let selecting = false;
 const selected = new Set();
 
@@ -73,9 +93,12 @@ function searchableProperty(p) {
 
 function visibleProperties() {
   const query = search.value.trim().toLowerCase();
-  return query
+  const filtered = query
     ? properties.filter((p) => searchableProperty(p).includes(query))
     : properties;
+  // Sorting a copy — `properties` stays the unfiltered source of truth for
+  // the count line and the bulk bar's select-all.
+  return PJLSort.sortRecords(filtered, SORTS[sortKey] || SORTS[DEFAULT_SORT]);
 }
 
 function render() {
@@ -98,34 +121,41 @@ function render() {
     const zoneCount = (p.system?.zones || []).length;
     const valveBoxCount = (p.system?.valveBoxes || []).length;
     const bookingCount = (p.leadIds || []).length;
-    const codeBadge = p.code
-      ? `<span class="property-card-code">${escapeHtml(p.code)}</span>`
+    const isSelected = selected.has(p.id);
+    // The checkbox lives INSIDE the head cell, not as a sibling: the row is
+    // a grid reading --crm-cols, so an extra leading child would shift every
+    // column one place to the right. The bulk-selection toolbar's injected
+    // wrap gets relocated into the same cell below, for the same reason.
+    // In Select mode the address carries NO map affordance: crm-contact.js
+    // would open the "Open in…" chooser on a click meant to tick the row,
+    // and the address is the widest target in it. Selection is the only
+    // thing that mode is for.
+    const legacyCheck = selecting
+      ? `<input type="checkbox" class="property-card-check" aria-label="Select ${escapeHtml(p.customerName) || "property"}"${isSelected ? " checked" : ""}>`
       : "";
     const inner = `
-      <div class="property-card-head">
-        <strong>${escapeHtml(p.customerName) || "Unnamed customer"}</strong>
-        ${codeBadge}
-      </div>
-      <span class="property-card-address"${p.address ? ` data-map-address="${escapeHtml(p.address)}"` : ""}>${escapeHtml(p.address) || "(no address on file)"}</span>
-      <span class="property-card-email">${escapeHtml(p.customerEmail) || "—"}</span>
-      <div class="property-card-stats">
-        <span><strong>${zoneCount}</strong> zone${zoneCount === 1 ? "" : "s"}</span>
-        <span><strong>${valveBoxCount}</strong> valve box${valveBoxCount === 1 ? "" : "es"}</span>
-        <span><strong>${bookingCount}</strong> booking${bookingCount === 1 ? "" : "s"}</span>
-      </div>
+      <span class="crm-cell property-card-head">
+        ${legacyCheck}
+        <span class="property-card-identity">
+          <span class="crm-cell-primary">${escapeHtml(p.customerName) || "Unnamed customer"}</span>
+          ${p.code ? `<span class="crm-cell-sub">${escapeHtml(p.code)}</span>` : ""}
+        </span>
+      </span>
+      <span class="crm-cell property-card-address"${p.address && !selecting ? ` data-map-address="${escapeHtml(p.address)}"` : ""}>${escapeHtml(p.address) || '<span class="crm-cell-muted">(no address on file)</span>'}</span>
+      <span class="crm-cell property-card-town">${p.town ? escapeHtml(p.town) : '<span class="crm-cell-muted">&mdash;</span>'}</span>
+      <span class="crm-cell property-card-stat" data-label="zones">${zoneCount}</span>
+      <span class="crm-cell property-card-stat" data-label="valves">${valveBoxCount}</span>
+      <span class="crm-cell property-card-stat" data-label="visits">${bookingCount}</span>
     `;
 
     if (selecting) {
-      // Render a div + checkbox so clicking the card toggles selection
-      // instead of navigating away.
+      // Render a div so clicking the row toggles selection instead of
+      // navigating away.
       const card = document.createElement("div");
-      card.className = "property-card";
+      card.className = "crm-table-row property-card";
       card.dataset.id = p.id;
-      if (selected.has(p.id)) card.classList.add("is-selected");
-      card.innerHTML = `
-        <input type="checkbox" class="property-card-check" aria-label="Select ${escapeHtml(p.customerName) || "property"}" ${selected.has(p.id) ? "checked" : ""}>
-        ${inner}
-      `;
+      if (isSelected) card.classList.add("is-selected");
+      card.innerHTML = inner;
       const checkbox = card.querySelector(".property-card-check");
       const toggle = (event) => {
         // Avoid double-toggle when click bubbles up from the checkbox itself.
@@ -143,7 +173,7 @@ function render() {
     } else {
       const link = document.createElement("a");
       link.href = `/admin/property/${encodeURIComponent(p.id)}`;
-      link.className = "property-card";
+      link.className = "crm-table-row property-card";
       // Carry data-id on the active-mode row too so the new bulk-selection
       // toolbar (Session 2 brief) can decorate it. The legacy in-page
       // select mode continues to use its own checkbox+selected Set.
@@ -220,6 +250,15 @@ bulkSelectAll.addEventListener("change", () => {
 });
 
 search.addEventListener("input", render);
+
+if (sortEl) {
+  sortEl.value = sortKey;
+  sortEl.addEventListener("change", () => {
+    sortKey = SORTS[sortEl.value] ? sortEl.value : DEFAULT_SORT;
+    PJLSort.writeStored(SORT_STORAGE_KEY, sortKey);
+    render();
+  });
+}
 
 logoutButton.addEventListener("click", async () => {
   await fetch("/api/logout", { method: "POST" });

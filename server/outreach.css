@@ -139,7 +139,7 @@
 .outreach-stat dt {
   font-size: 11px;
   font-weight: 600;
-  color: #777;
+  color: #6B6B63;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   margin: 0;
@@ -235,7 +235,7 @@
 .outreach-select-all {
   font-weight: 600;
 }
-.outreach-loading { font-size: 13px; color: #777; }
+.outreach-loading { font-size: 13px; color: #6B6B63; }
 
 .outreach-list {
   list-style: none;
@@ -256,11 +256,11 @@
 .outreach-row.is-selected { background: #f0f7f2; }
 .outreach-row.is-disabled {
   background: #f7f6f1;
-  color: #888;
+  color: #6B6B63;
   cursor: not-allowed;
 }
-.outreach-row.is-disabled strong { color: #888; }
-.outreach-row.is-disabled .outreach-row-address { color: #999; }
+.outreach-row.is-disabled strong { color: #6B6B63; }
+.outreach-row.is-disabled .outreach-row-address { color: #6B6B63; }
 .outreach-row.is-disabled .outreach-row-check input { cursor: not-allowed; }
 
 .outreach-row-main {
@@ -299,7 +299,7 @@
   align-items: center;
   gap: 8px;
   font-size: 12px;
-  color: #777;
+  color: #6B6B63;
 }
 .outreach-row-touch { white-space: nowrap; }
 
@@ -316,12 +316,12 @@
 }
 .outreach-badge-booked {
   background: #e6f5ec;
-  color: #0c8a3e;
+  color: #0B7E39;
   border: 1px solid #b7e1c5;
 }
 .outreach-badge-pending {
   background: #fff5e6;
-  color: #b35900;
+  color: #B05700;
   border: 1px solid #f0b67f;
 }
 .outreach-badge-warn {
@@ -333,7 +333,7 @@
 .outreach-empty {
   padding: 28px 16px;
   text-align: center;
-  color: #777;
+  color: #6B6B63;
   margin: 0;
 }
 
@@ -483,7 +483,7 @@
 }
 .outreach-test-hint {
   font-size: 11px;
-  color: #777;
+  color: #6B6B63;
   line-height: 1.4;
 }
 .outreach-test-hint code {
@@ -541,7 +541,7 @@
 .outreach-field > span small {
   font-weight: 400;
   font-size: 11px;
-  color: #888;
+  color: #6B6B63;
   text-transform: none;
   letter-spacing: 0;
   margin-left: 6px;
@@ -562,13 +562,13 @@
 #smsCharCount {
   font-weight: 400;
   font-size: 11px;
-  color: #888;
+  color: #6B6B63;
 }
 #smsCharCount.is-over { color: #c0392b; font-weight: 600; }
 
 .outreach-merge-hint {
   font-size: 12px;
-  color: #777;
+  color: #6B6B63;
   margin: 0;
   line-height: 1.5;
 }
@@ -615,7 +615,7 @@
 .outreach-preview-eyebrow {
   font-size: 11px;
   font-weight: 600;
-  color: #777;
+  color: #6B6B63;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }

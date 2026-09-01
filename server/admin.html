@@ -17,6 +17,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/crm/crm.css?v=20260721">
+  <link rel="stylesheet" href="/crm/crm-transcript.css">
   <!-- Shared month-calendar time picker — reused by the lead-card
        "Book appointment" action (admin mode, custom-time enabled). -->
   <link rel="stylesheet" href="/js/time-picker.css?v=1">
@@ -31,6 +32,7 @@
       <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
       <a href="/admin" class="is-active">CRM</a>
       <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/season-plan">Season plan</a>
       <a href="/admin/handoff">Handoff</a>
       <a href="/admin/outreach">Outreach</a>
       <a href="/admin/review-requests">Reviews</a>
@@ -42,6 +44,7 @@
       <a href="/admin/work-orders">Work orders</a>
       <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
       <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/warranty-claims">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
       <a href="/admin/material-lists">Materials</a>
       <a href="/admin/chats">AI Chats</a>
       <a href="/admin/trash">Trash</a>
@@ -166,7 +169,7 @@
                   return "<span style=\"display:inline-block;margin:0 14px 4px 0;\">" +
                     k + ": <strong>" + b.sent + "</strong> sent" +
                     (b.failed ? ", <strong style=\"color:#8a1f1f;\">" + b.failed + " failed</strong>" : "") +
-                    (lastOk ? " <span style=\"color:#888;\">(last ok " + ago(lastOk) + ")</span>" : "") +
+                    (lastOk ? " <span style=\"color:#6B6B63;\">(last ok " + ago(lastOk) + ")</span>" : "") +
                     "</span>";
                 }).join("")
               : "<em>No sends recorded in the last 7 days.</em>";
@@ -561,7 +564,7 @@
 
           <section class="detail-section detail-transcript" id="detailTranscriptSection" hidden>
             <h3>AI chat transcript</h3>
-            <pre id="detailTranscript" class="detail-transcript-body"></pre>
+            <div id="detailTranscript" class="detail-transcript-body"></div>
           </section>
 
           <label class="full-editor">
@@ -682,7 +685,8 @@
   <script src="/crm/bulk-toast.js"></script>
   <script src="/crm/bulk-modal.js"></script>
   <script src="/crm/bulk-selection.js"></script>
-  <script src="/crm/admin.js?v=20260721"></script>
+  <script src="/crm/crm-transcript.js"></script>
+  <script src="/crm/admin.js?v=20260722"></script>
   <script src="/crm/nav-badges.js?v=1"></script>
   <script>
     // Wire the unified bulk-operations floating toolbar for leads.

@@ -31,6 +31,7 @@
       <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
       <a href="/admin">CRM</a>
       <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/season-plan">Season plan</a>
       <a href="/admin/handoff">Handoff</a>
       <a href="/admin/outreach">Outreach</a>
       <a href="/admin/review-requests">Reviews</a>
@@ -42,6 +43,7 @@
       <a href="/admin/work-orders">Work orders</a>
       <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
       <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/warranty-claims">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
       <a href="/admin/material-lists">Materials</a>
       <a href="/admin/chats">AI Chats</a>
       <a href="/admin/users">Users</a>
@@ -108,7 +110,7 @@
         <p id="propertyCustomerNameWarn" hidden style="margin: 8px 0 0; padding: 8px 12px; background: #fff5e6; border: 1px solid #f0b67f; border-radius: 6px; font-size: 13px; color: #6b3a09;">
           <strong>Customer name missing.</strong> Outreach will skip this property until the linked customer record has a non-blank name. Add a name on the customer page.
         </p>
-        <p id="propertyCustomerFallbackNote" hidden style="margin: 6px 0 0; font-size: 12px; color: var(--crm-muted, #888); font-style: italic;">No customer record linked yet — using the legacy contact snapshot from before the Customers folder existed. <a href="/admin/customers">Open Customers</a> to link or create one.</p>
+        <p id="propertyCustomerFallbackNote" hidden style="margin: 6px 0 0; font-size: 12px; color: var(--crm-muted, #6B6B63); font-style: italic;">No customer record linked yet — using the legacy contact snapshot from before the Customers folder existed. <a href="/admin/customers">Open Customers</a> to link or create one.</p>
         <label class="property-full" style="margin-top: 14px;">
           <span>Property address</span>
           <input class="js-address-autocomplete" type="text" name="address" autocomplete="off">
@@ -153,7 +155,7 @@
             Who PJL calls to schedule and meets on arrival at <em>this</em> address — often the board president or building super.
           </p>
           <div id="propSiteContactsList"></div>
-          <p id="propSiteContactsEmpty" style="margin: 0; font-size: 13px; color: var(--crm-muted, #888); font-style: italic;">No site contacts yet.</p>
+          <p id="propSiteContactsEmpty" style="margin: 0; font-size: 13px; color: var(--crm-muted, #6B6B63); font-style: italic;">No site contacts yet.</p>
         </div>
       </section>
 
@@ -409,7 +411,7 @@
 
       <div id="transferResults" style="max-height: 240px; overflow-y: auto; margin: 8px 0 12px; border: 1px solid var(--crm-border, #d4d2cb); border-radius: 6px; display: none;"></div>
 
-      <p style="font-size: 12px; color: var(--crm-muted, #888); text-align: center; margin: 10px 0;">— or —</p>
+      <p style="font-size: 12px; color: var(--crm-muted, #6B6B63); text-align: center; margin: 10px 0;">— or —</p>
 
       <button type="button" class="pjl-btn pjl-btn-outline" id="transferShowNewBtn" style="width: 100%;">+ Create a new customer</button>
 

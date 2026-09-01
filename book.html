@@ -254,6 +254,20 @@
 }
 .zones-accuracy-note strong { color: var(--green); }
 
+/* Shown when the confirmed zone count lands in a different tier than the
+   service card the customer picked — amber, because it changes what gets
+   booked and they should read it before continuing. */
+.zones-tier-note {
+  margin: 16px 0 0;
+  padding: 14px 16px;
+  background: rgba(224, 123, 36, 0.09);
+  border-left: 3px solid var(--amber);
+  border-radius: 6px;
+  font-size: 14px;
+  color: rgba(15, 31, 20, 0.80);
+  line-height: 1.55;
+}
+
 /* When-step arrival disclosure */
 .when-disclosure {
   margin: 0 0 18px;
@@ -616,6 +630,7 @@
           <option value="unsure">I'm not sure</option>
         </select>
       </div>
+      <p class="zones-tier-note" id="zonesTierNote" hidden></p>
       <p class="zones-accuracy-note">
         <strong>Accuracy helps.</strong> Knowing your zone count lets us schedule the right amount of time for your property and keeps every customer's appointment running smoothly.
       </p>
@@ -743,7 +758,8 @@
 <script src="nav.js?v=2"></script>
 <script src="js/anti-bot.js?v=1"></script>
 <script src="js/time-picker.js?v=1"></script>
-<script src="js/booking.js?v=5"></script>
+<script src="js/seasonal-tiers.js"></script>
+<script src="js/booking.js?v=6"></script>
 <script src="js/pricing-injector.js" defer></script>
 </body>
 </html>

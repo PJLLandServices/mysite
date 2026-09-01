@@ -1,0 +1,129 @@
+/* The customer's appointment page — public, mobile-first, one card.
+   PJL palette: green #1B4D2E, amber #E07B24, cream ground. */
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #F2F1E8;
+  color: #1F241F;
+  line-height: 1.55;
+}
+
+.ap-shell { max-width: 460px; margin: 0 auto; padding: 20px 16px 40px; }
+
+.ap-brand {
+  background: #1B4D2E; border-radius: 12px 12px 0 0; padding: 18px 22px;
+}
+.ap-brand img { display: block; width: 170px; max-width: 60%; }
+
+.ap-card {
+  background: #fff; border: 1px solid #E3E1D5; border-top: 0;
+  border-radius: 0 0 12px 12px; padding: 22px;
+}
+
+.ap-loading { color: #6B6B63; margin: 8px 0; }
+.ap-error {
+  margin: 14px 0 0; padding: 12px 14px; border-radius: 8px;
+  background: #FBEDEA; color: #8A2F22; font-size: 0.95rem;
+}
+
+.ap-hello { margin: 0 0 2px; color: #55604F; }
+.ap-badge {
+  display: inline-block; margin: 4px 0 6px; padding: 4px 12px;
+  border-radius: 999px; background: #E8F2EA; color: #1B4D2E;
+  font-size: 0.85rem; font-weight: 600;
+}
+.ap-service {
+  margin: 2px 0 14px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 1.6rem; font-weight: 700; line-height: 1.15;
+  color: #1B4D2E; text-wrap: balance;
+}
+
+.ap-facts { margin: 0 0 18px; display: grid; gap: 10px; }
+.ap-facts div { display: grid; }
+.ap-facts dt {
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: #6B6B63;
+}
+.ap-facts dd { margin: 0; font-weight: 600; }
+
+/* The zone-count correction: a quiet inline link, not a fifth button. */
+.ap-linklike {
+  border: 0; padding: 0; margin-left: 4px; background: none; cursor: pointer;
+  font: inherit; font-size: 0.88rem; font-weight: 600;
+  color: #1B4D2E; text-decoration: underline; text-underline-offset: 2px;
+}
+.ap-linklike:hover { color: #E07B24; }
+
+.ap-intro {
+  margin: 0 0 18px; padding: 12px 14px; border-radius: 10px;
+  background: #FAFAF5; border: 1px solid #E3E1D5;
+  font-size: 0.92rem; color: #55604F;
+}
+.ap-intro a { color: #1B4D2E; font-weight: 600; }
+
+.ap-freebucket {
+  margin: 0 0 14px; padding: 12px 14px; border-radius: 10px;
+  background: #FDF4EA; border: 1px solid #EED9BC;
+}
+.ap-freebucket h3 {
+  margin: 0 0 4px; font-family: "Barlow Condensed", sans-serif;
+  font-size: 1.05rem; color: #A05A12;
+}
+
+.ap-window-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.ap-window-rows select,
+.ap-label select {
+  display: block; width: 100%; margin-top: 6px; padding: 10px 12px;
+  font: inherit; border: 1px solid #E3E1D5; border-radius: 8px; background: #fff;
+  min-height: 44px;
+}
+
+.ap-actions { display: grid; gap: 10px; }
+.ap-btn {
+  display: block; width: 100%; padding: 14px 18px; border-radius: 10px;
+  font: inherit; font-weight: 600; font-size: 1rem; cursor: pointer;
+  border: 1px solid transparent; min-height: 48px;
+}
+.ap-btn-primary { background: #1B4D2E; color: #fff; }
+.ap-btn-primary:hover { background: #164026; }
+.ap-btn-outline { background: #fff; color: #1B4D2E; border-color: #1B4D2E; }
+.ap-btn-outline:hover { background: #F2F6F3; }
+.ap-btn-quiet { background: transparent; color: #6B6B63; border-color: #E3E1D5; }
+.ap-btn-danger { background: #A33A2A; color: #fff; }
+.ap-btn:disabled { opacity: 0.6; cursor: default; }
+.ap-btn:focus-visible { outline: 3px solid #E07B24; outline-offset: 2px; }
+
+.ap-panel { margin-top: 18px; border-top: 1px solid #E3E1D5; padding-top: 16px; }
+.ap-panel h2 {
+  margin: 0 0 6px; font-family: "Barlow Condensed", sans-serif;
+  font-size: 1.25rem; color: #1B4D2E;
+}
+.ap-note { margin: 0 0 12px; font-size: 0.9rem; color: #6B6B63; }
+
+.ap-slots { display: grid; gap: 8px; margin-bottom: 12px; }
+.ap-slot {
+  display: grid; gap: 2px; text-align: left; padding: 12px 14px;
+  border: 1px solid #E3E1D5; border-radius: 10px; background: #FAFAF5;
+  font: inherit; cursor: pointer; min-height: 48px;
+}
+.ap-slot:hover { border-color: #1B4D2E; }
+.ap-slot strong { color: #1B4D2E; }
+.ap-slot span { font-size: 0.88rem; color: #6B6B63; }
+
+.ap-label { display: block; margin: 0 0 12px; font-size: 0.9rem; color: #55604F; }
+.ap-label textarea {
+  display: block; width: 100%; margin-top: 6px; padding: 10px 12px;
+  font: inherit; border: 1px solid #E3E1D5; border-radius: 8px; resize: vertical;
+}
+
+.ap-terminal-title {
+  margin: 4px 0 8px; font-family: "Barlow Condensed", sans-serif;
+  font-size: 1.5rem; color: #1B4D2E;
+}
+.ap-terminal-body { margin: 0; color: #55604F; }
+
+.ap-foot { margin-top: 18px; text-align: center; font-size: 0.85rem; color: #6B6B63; }
+.ap-foot a { color: #1B4D2E; font-weight: 600; }

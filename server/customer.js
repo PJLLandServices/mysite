@@ -758,7 +758,7 @@ function mergeRenderResults(query) {
   }).slice(0, 8);
 
   if (!matches.length) {
-    mergeResults.innerHTML = `<div style="padding: 10px; color: #888; font-size: 12px;">No customers match.</div>`;
+    mergeResults.innerHTML = `<div style="padding: 10px; color: #6B6B63; font-size: 12px;">No customers match.</div>`;
     mergeResults.style.display = "block";
     return;
   }
@@ -766,7 +766,7 @@ function mergeRenderResults(query) {
     <div class="merge-result" data-id="${escMerge(c.id)}" style="padding: 8px 12px; border-bottom: 1px solid #f0eee8; cursor: pointer;">
       <strong>${escMerge(c.name) || "(unnamed)"}</strong>
       <span style="color: #666; font-size: 12px; margin-left: 8px;">${escMerge(c.email) || c.phone || c.id}</span>
-      <div style="color: #888; font-size: 11px;">${escMerge(c.id)} · ${c.propertyCount || 0} ${(c.propertyCount === 1 ? "property" : "properties")}</div>
+      <div style="color: #6B6B63; font-size: 11px;">${escMerge(c.id)} · ${c.propertyCount || 0} ${(c.propertyCount === 1 ? "property" : "properties")}</div>
     </div>
   `).join("");
   mergeResults.style.display = "block";
@@ -847,14 +847,57 @@ mergeConfirm.addEventListener("click", async () => {
 // ---- Delete ------------------------------------------------------
 //
 // Hard-delete the customer record. Server-side is the source of truth
-// for whether deletion is allowed — if anything references this
-// customer (booking, WO, quote, invoice, property, lead, project), the
-// API returns 409 with a `references` map and Patrick is told to Merge
-// first. Otherwise the record is removed and the page redirects back
-// to the customers index.
+// for whether deletion is allowed. Three answers come back:
+//
+//   200                  — gone; redirect to the index.
+//   409 code "linked"    — LIVE records point at this customer (booking,
+//                          WO, quote, invoice, property, lead, project).
+//                          Patrick is told to Merge first.
+//   409 code "trashed_only"
+//                        — nothing live, but records sitting in the Trash
+//                          still carry the customerId. Those are invisible
+//                          from this page (every tab above is built from
+//                          list endpoints that filter the Trash out), so
+//                          the old refusal named links Patrick could not
+//                          see. Now it's a second confirm that says what
+//                          will be permanently deleted along with the
+//                          customer, and re-issues the DELETE with
+//                          ?purgeTrashed=1.
 
 const deleteBtn = document.getElementById("deleteBtn");
 const deleteErrorEl = document.getElementById("deleteError");
+
+// Singular / plural per store, so a refusal reads "1 quote", not
+// "1 quotes". Keys are the store names the API sends.
+const LINK_LABELS = {
+  leads: ["lead", "leads"],
+  properties: ["property", "properties"],
+  bookings: ["booking", "bookings"],
+  "work-orders": ["work order", "work orders"],
+  quotes: ["quote", "quotes"],
+  invoices: ["invoice", "invoices"],
+  projects: ["project", "projects"]
+};
+
+function describeLinks(map) {
+  return Object.entries(map || {})
+    .map(([kind, ids]) => {
+      const n = Array.isArray(ids) ? ids.length : 0;
+      const pair = LINK_LABELS[kind] || [kind, kind];
+      return `${n} ${n === 1 ? pair[0] : pair[1]}`;
+    })
+    .join(", ");
+}
+
+async function requestDelete({ purgeTrashed = false } = {}) {
+  const qs = purgeTrashed ? "?purgeTrashed=1" : "";
+  const res = await fetch(`/api/customer/${encodeURIComponent(customerId)}${qs}`, {
+    method: "DELETE",
+    credentials: "same-origin"
+  });
+  const body = await res.json();
+  return { res, body };
+}
 
 deleteBtn?.addEventListener("click", async () => {
   if (!original) return;
@@ -865,17 +908,43 @@ deleteBtn?.addEventListener("click", async () => {
   deleteErrorEl.hidden = true;
   deleteBtn.disabled = true;
   try {
-    const res = await fetch(`/api/customer/${encodeURIComponent(customerId)}`, {
-      method: "DELETE",
-      credentials: "same-origin"
-    });
-    const body = await res.json();
+    let { res, body } = await requestDelete();
+
+    // Trash-only: ask once more, naming exactly what goes with the
+    // customer, then retry carrying the confirmation.
+    if (!res.ok && body?.code === "trashed_only") {
+      const trashSummary = describeLinks(body.trashed);
+      const proceed = confirm(
+        `${label} has nothing live attached, but ${trashSummary} still in the Trash `
+        + `point at this customer.\n\nDeleting the customer permanently deletes `
+        + `${trashSummary} too — they can't be restored afterwards.\n\nGo ahead?`
+      );
+      if (!proceed) {
+        deleteBtn.disabled = false;
+        return;
+      }
+      ({ res, body } = await requestDelete({ purgeTrashed: true }));
+    }
+
     if (!res.ok || !body.ok) {
+      // The confirmed call coming back with the same refusal means the
+      // confirmation didn't reach the server. Echoing the server's sentence
+      // again would read as "nothing happened" — say what to do instead.
+      if (body?.code === "trashed_only") {
+        deleteErrorEl.textContent =
+          "The confirmation didn't reach the server, so nothing was deleted. "
+          + "Reload the page (Ctrl+Shift+R / Cmd+Shift+R) and try again.";
+        deleteErrorEl.hidden = false;
+        deleteBtn.disabled = false;
+        return;
+      }
       if (body.references) {
-        const counts = Object.entries(body.references)
-          .map(([kind, ids]) => `${ids.length} ${kind}`)
-          .join(", ");
-        deleteErrorEl.textContent = `Can't delete — this customer is linked to ${counts}. Use Merge to combine them into another customer first.`;
+        const counts = describeLinks(body.references);
+        let msg = `Can't delete — this customer is linked to ${counts}. Use Merge to combine them into another customer first.`;
+        if (body.trashed) {
+          msg += ` (${describeLinks(body.trashed)} in the Trash also point here; those go automatically once the live links are cleared.)`;
+        }
+        deleteErrorEl.textContent = msg;
       } else {
         deleteErrorEl.textContent = body?.error || "Couldn't delete.";
       }

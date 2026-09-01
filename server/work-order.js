@@ -434,6 +434,54 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+// ===== Scroll helpers =====
+// scrollIntoView({ block: "start" | "center" }) moves the page even when the
+// target is already fully visible — it re-aligns it to the top/centre of the
+// viewport. The tap-to-jump targets below are often already in front of the
+// tech — the checklist row they tapped sits right beside the section it
+// points at — so the re-alignment reads as an unprompted lurch. It is worst
+// on a phone: the distance thrown is the element's distance from the top of
+// the viewport, which on a ~700px handset is most of a screen height. Scroll
+// only when the target genuinely is off-screen.
+//
+// pinnedTopBarHeight measures whatever bar is pinned across the TOP of the
+// viewport at call time, so this tracks each page's own responsive
+// breakpoints instead of a hard-coded number that silently drifts.
+function pinnedTopBarHeight() {
+  let height = 0;
+  document.querySelectorAll(".nav, .pjl-app-topbar, .tech-header, header").forEach((el) => {
+    const position = window.getComputedStyle(el).position;
+    // Sticky counts: a pinned sticky bar (the CRM topbar, the tech header)
+    // overlaps scrolled content exactly as a fixed one does.
+    if (position !== "fixed" && position !== "sticky") return;
+    const rect = el.getBoundingClientRect();
+    // Only a bar actually spanning the top edge is overhead. This is what
+    // keeps the CRM's full-height fixed sidebar (.pjl-admin-nav is
+    // top:0;bottom:0) out of the measurement — it is pinned, but it sits
+    // beside the content, not above it, and counting it would report a
+    // viewport-tall "header" and make everything look off-screen.
+    if (rect.top > 4 || rect.bottom <= 0) return;
+    if (rect.height > window.innerHeight * 0.4) return;
+    height = Math.max(height, Math.round(rect.bottom));
+  });
+  return height;
+}
+
+function revealIfOffscreen(el, block) {
+  if (!el || typeof el.getBoundingClientRect !== "function") return;
+  const headerH = pinnedTopBarHeight();
+  const rect = el.getBoundingClientRect();
+  const LOWER_BOUND = window.innerHeight * 0.85;   // "still comfortably in view"
+  if (rect.top >= headerH && rect.top <= LOWER_BOUND) return;
+  // scroll-margin-top keeps block:"start" from parking the target underneath
+  // the pinned bar. Set rather than restored: it is idempotent, and any later
+  // scroll of this element wants the same clearance.
+  el.style.scrollMarginTop = headerH + "px";
+  const reduceMotion = window.matchMedia
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  el.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: block || "start" });
+}
+
 function formatDateTime(value) {
   if (!value) return "—";
   const d = new Date(value);
@@ -1086,18 +1134,156 @@ function renderServiceFeeWaiver(wo) {
     if (offer) offer.hidden = true;
     if (banner) banner.hidden = false;
     if (meta) meta.textContent = `(${woWaiverFriendlyReason(w)})`;
-    if (removeBtn) removeBtn.hidden = locked; // can't un-waive a signed WO
+    // Hidden on a signed WO (can't un-waive) AND on a live warranty WO:
+    // there, lifting the waiver has to capture a reason for the customer,
+    // which only the convert control collects. Leaving this button would
+    // give two paths to the same money change, one of which always 422s.
+    const liveWarranty = !!(wo && wo.warrantyClaim && wo.warrantyClaim.claimId && !wo.warrantyClaim.converted);
+    if (removeBtn) removeBtn.hidden = locked || liveWarranty || !viewerIsAdmin;
   } else {
-    if (offer) offer.hidden = false;
+    // Waiving is admin-only (server returns 403 for a tech). Hide the
+    // offer rather than showing a button that fails on click — the tech
+    // can still READ the banner above when a waiver is already on.
+    if (offer) offer.hidden = !viewerIsAdmin;
     if (banner) banner.hidden = true;
   }
 }
+
+// Warranty provenance panel (FLOW-30). Only rendered on a WO raised by
+// approving a warranty claim. Three states:
+//   * waived        — the normal warranty visit; offers the convert control
+//   * converted     — the escape hatch was used; shows who, when and why
+//   * locked        — signed, so nothing can change without an unlock
+function renderWorkOrderWarranty(wo) {
+  const panel = document.getElementById("woWarrantyPanel");
+  if (!panel) return;
+  const wc = wo && wo.warrantyClaim;
+  if (!wc || !wc.claimId) { panel.hidden = true; return; }
+  panel.hidden = false;
+
+  const claimEl = document.getElementById("woWarrantyClaim");
+  if (claimEl) {
+    claimEl.textContent = "";
+    const a = document.createElement("a");
+    a.href = "/admin/warranty-claim/" + encodeURIComponent(wc.claimId);
+    a.textContent = wc.claimId;
+    claimEl.appendChild(document.createTextNode("Claim "));
+    claimEl.appendChild(a);
+  }
+
+  const prior = document.getElementById("woWarrantyPrior");
+  if (prior) {
+    prior.textContent = "";
+    const bits = [];
+    if (wc.claimedInvoiceId) bits.push(["invoice", wc.claimedInvoiceId, "/admin/invoice/"]);
+    if (wc.claimedWorkOrderId) bits.push(["work order", wc.claimedWorkOrderId, "/admin/work-order/"]);
+    if (!bits.length) {
+      prior.textContent = "Not matched to a prior invoice — check the claim.";
+    } else {
+      bits.forEach(function (b, i) {
+        if (i) prior.appendChild(document.createTextNode(" · "));
+        prior.appendChild(document.createTextNode(b[0] + " "));
+        const link = document.createElement("a");
+        link.href = b[2] + encodeURIComponent(b[1]);
+        link.textContent = b[1];
+        prior.appendChild(link);
+      });
+    }
+  }
+
+  const summary = document.getElementById("woWarrantySummary");
+  if (summary) summary.textContent = wc.summary || "—";
+
+  // wo.locked alone, matching renderServiceFeeWaiver() — an unlocked WO
+  // must expose the convert control again or an admin can unlock and
+  // still not be able to make the visit chargeable.
+  const locked = wo.locked === true;
+  const converted = !!wc.converted;
+
+  const convertedBox = document.getElementById("woWarrantyConverted");
+  const convertControl = document.getElementById("woWarrantyConvertControl");
+  const lockedNote = document.getElementById("woWarrantyLocked");
+  const form = document.getElementById("woWarrantyConvertForm");
+  if (form) form.hidden = true;
+
+  if (convertedBox) convertedBox.hidden = !converted;
+  if (converted) {
+    const meta = document.getElementById("woWarrantyConvertedMeta");
+    if (meta) {
+      const at = wc.converted.at ? new Date(wc.converted.at) : null;
+      meta.textContent = (at && !isNaN(at.getTime()) ? at.toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" }) : "") +
+        (wc.converted.by ? " · by " + wc.converted.by : "");
+    }
+    const reason = document.getElementById("woWarrantyConvertedReason");
+    if (reason) reason.textContent = wc.converted.reason || "";
+  }
+
+  // The convert control is offered only while there is a live waiver to
+  // lift, and only on an unlocked WO.
+  const stillWaived = !!(wo.serviceFeeWaiver && wo.serviceFeeWaiver.waived === true);
+  // Converting changes what the customer pays, so it is admin-only and the
+  // server 403s a tech regardless. A tech sees the banner (they need to
+  // know the visit is free) and a line telling them to call the office.
+  const canConvert = viewerIsAdmin && !converted && !locked && stillWaived;
+  if (convertControl) convertControl.hidden = !canConvert;
+  const adminOnlyNote = document.getElementById("woWarrantyAdminOnly");
+  if (adminOnlyNote) adminOnlyNote.hidden = !(!viewerIsAdmin && !converted && stillWaived);
+  if (lockedNote) lockedNote.hidden = !(viewerIsAdmin && locked && !converted);
+}
+
+(function wireWarrantyConvert() {
+  const openBtn = document.getElementById("woWarrantyConvertOpenBtn");
+  const form = document.getElementById("woWarrantyConvertForm");
+  const cancelBtn = document.getElementById("woWarrantyConvertCancelBtn");
+  const confirmBtn = document.getElementById("woWarrantyConvertConfirmBtn");
+  const reasonEl = document.getElementById("woWarrantyConvertReason");
+  const errEl = document.getElementById("woWarrantyConvertErr");
+  if (!openBtn || !form || !confirmBtn) return;
+
+  openBtn.addEventListener("click", function () {
+    form.hidden = false;
+    if (errEl) errEl.hidden = true;
+    if (reasonEl) reasonEl.focus();
+  });
+  if (cancelBtn) cancelBtn.addEventListener("click", function () { form.hidden = true; });
+
+  confirmBtn.addEventListener("click", async function () {
+    const reason = (reasonEl && reasonEl.value ? reasonEl.value : "").trim();
+    // Mirrors the server's 10-char floor so the tech isn't made to wait on
+    // a round trip to be told the box is empty. The server re-checks.
+    if (reason.length < 10) {
+      if (errEl) {
+        errEl.textContent = "Give the reason this isn't covered — the customer reads it (at least 10 characters).";
+        errEl.hidden = false;
+      }
+      return;
+    }
+    if (!window.confirm(
+      "Convert this warranty visit to a chargeable service call?\n\n" +
+      "The $95 call-out is restored, the warranty claim is closed as converted, and the " +
+      "customer is emailed your reason. They must still sign for the work."
+    )) return;
+
+    confirmBtn.disabled = true;
+    const original = confirmBtn.textContent;
+    confirmBtn.textContent = "Converting…";
+    // Same route as every other fee change — one code path for the money.
+    await postServiceFeeWaiver({ waived: false, reason: reason });
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = original;
+  });
+})();
 
 // POST a waiver change and refresh the waiver control + on-site quote.
 async function postServiceFeeWaiver(body) {
   const id = getWorkOrderId();
   if (!id) return;
-  const errEl = document.getElementById("woWaiverFormErr");
+  // A conversion carries `reason`; surface its errors in the convert form
+  // the user is actually looking at, not the collapsed waiver form.
+  const convertErr = document.getElementById("woWarrantyConvertErr");
+  const errEl = (body && body.reason && convertErr)
+    ? convertErr
+    : document.getElementById("woWaiverFormErr");
   try {
     const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/service-fee-waiver`, {
       method: "POST",
@@ -1107,13 +1293,29 @@ async function postServiceFeeWaiver(body) {
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
       const msg = (data.errors && data.errors[0]) || `Couldn't update the waiver (HTTP ${r.status}).`;
-      if (errEl) { errEl.textContent = msg; errEl.hidden = false; }
-      else alert(msg);
+      // Un-hide FIRST, then test whether it actually became visible:
+      // offsetParent is null while any ANCESTOR is still hidden, and the
+      // waiver form collapses on every render. Checking before un-hiding
+      // would always read as invisible. Falling back to an alert stops a
+      // refused fee change from looking like a dead button.
+      if (errEl) {
+        errEl.textContent = msg;
+        errEl.hidden = false;
+      }
+      if (!errEl || errEl.offsetParent === null) alert(msg);
       return;
     }
     loadedWorkOrder = data.workOrder;
     renderServiceFeeWaiver(loadedWorkOrder);
+    renderWorkOrderWarranty(loadedWorkOrder);
     renderOnSiteQuote(loadedWorkOrder);
+    // The claim write-back is best-effort server-side; if it failed the
+    // money already changed, so say so rather than letting the claim sit
+    // at "approved — free repair" unnoticed.
+    if (data.claimConversion && data.claimConversion.ok === false) {
+      alert("The fee was restored on this work order, but the warranty claim could not be updated. " +
+            "Open the claim and set it to converted manually.");
+    }
   } catch (err) {
     if (errEl) { errEl.textContent = err.message; errEl.hidden = false; }
     else alert(err.message);
@@ -1270,6 +1472,7 @@ function populateForm(wo) {
   renderDiagnosis(wo);
   renderIntakeGuarantee(wo);
   renderServiceFeeWaiver(wo);
+  renderWorkOrderWarranty(wo);
   renderServiceChecklist(wo);
   renderWoPhotos(wo);
   renderSignoff(wo);
@@ -2590,6 +2793,12 @@ async function resolveViewerRole() {
   // The WO usually loads before this resolves; re-render so the buttons
   // appear once the role is known. Harmless no-op if it hasn't loaded yet.
   renderUnlockControls(loadedWorkOrder);
+  // Same for the money controls — they default to hidden (fail closed),
+  // so this is what reveals them for an admin.
+  if (loadedWorkOrder) {
+    renderServiceFeeWaiver(loadedWorkOrder);
+    renderWorkOrderWarranty(loadedWorkOrder);
+  }
 }
 
 function renderUnlockControls(wo) {
@@ -3578,7 +3787,7 @@ document.getElementById("woGateList")?.addEventListener("click", (event) => {
   if (!sel) return;
   const target = document.querySelector(sel);
   if (!target) return;
-  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  revealIfOffscreen(target, "center");
   if (target.matches("input, textarea, select")) setTimeout(() => target.focus(), 250);
 });
 document.getElementById("woGateClose")?.addEventListener("click", () => closeWoGateModal({ dismissed: true }));
@@ -3854,7 +4063,7 @@ document.getElementById("woBypassRemoteApproval")?.addEventListener("click", () 
   closeWoBypassModal();
   const remoteBtn = document.getElementById("woOnSiteSendApprovalBtn");
   if (remoteBtn) {
-    remoteBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+    revealIfOffscreen(remoteBtn, "center");
     remoteBtn.focus();
   } else {
     alert("Open the on-site quote section and tap 'Send for remote approval'.");

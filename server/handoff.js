@@ -355,7 +355,7 @@ handoffDoneBtn.addEventListener("click", () => {
     }).slice(0, 8);
 
     if (!matches.length) {
-      resultsEl.innerHTML = `<div style="padding: 10px 14px; color: #888; font-size: 12px;">No customers match. Fill the form below to create a new one.</div>`;
+      resultsEl.innerHTML = `<div style="padding: 10px 14px; color: #6B6B63; font-size: 12px;">No customers match. Fill the form below to create a new one.</div>`;
       resultsEl.style.display = "block";
       return;
     }
@@ -364,7 +364,7 @@ handoffDoneBtn.addEventListener("click", () => {
       <div class="handoff-customer-result" data-id="${esc(c.id)}" style="padding: 8px 12px; border-bottom: 1px solid #f0eee8; cursor: pointer; font-size: 13px;">
         <strong>${esc(c.name) || "(unnamed)"}</strong>
         <span style="color: #666; margin-left: 6px; font-size: 12px;">${esc(c.email) || c.phone || ""}</span>
-        <div style="color: #888; font-size: 11px; margin-top: 1px;">${esc(c.id)} · ${c.propertyCount || 0} ${(c.propertyCount === 1 ? "property" : "properties")}</div>
+        <div style="color: #6B6B63; font-size: 11px; margin-top: 1px;">${esc(c.id)} · ${c.propertyCount || 0} ${(c.propertyCount === 1 ? "property" : "properties")}</div>
       </div>
     `).join("");
     resultsEl.style.display = "block";

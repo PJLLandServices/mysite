@@ -109,9 +109,62 @@
     // loadAvailability. Both check state.customerFirstName at render time.
   }
 
+  // ===== Scroll helpers =====
+  // scrollIntoView({ block: "start" | "center" }) moves the page even when the
+  // target is already fully visible — it re-aligns it to the top/centre of the
+  // viewport. Every call site below swaps content in place, so the target is
+  // usually already on screen and the re-alignment reads as an unprompted
+  // lurch. It is worst on a phone: the distance thrown is the element's
+  // distance from the top of the viewport, which on a ~700px handset is most
+  // of a screen height. Scroll only when the target genuinely is off-screen.
+  //
+  // pinnedTopBarHeight measures whatever bar is pinned across the TOP of the
+  // viewport at call time, so this tracks each page's own responsive
+  // breakpoints instead of a hard-coded number that silently drifts.
+  function pinnedTopBarHeight() {
+    let height = 0;
+    document.querySelectorAll(".nav, .pjl-app-topbar, .tech-header, header").forEach((el) => {
+      const position = window.getComputedStyle(el).position;
+      // Sticky counts: a pinned sticky bar (the CRM topbar, the tech header)
+      // overlaps scrolled content exactly as a fixed one does.
+      if (position !== "fixed" && position !== "sticky") return;
+      const rect = el.getBoundingClientRect();
+      // Only a bar actually spanning the top edge is overhead. This is what
+      // keeps the CRM's full-height fixed sidebar (.pjl-admin-nav is
+      // top:0;bottom:0) out of the measurement — it is pinned, but it sits
+      // beside the content, not above it, and counting it would report a
+      // viewport-tall "header" and make everything look off-screen.
+      if (rect.top > 4 || rect.bottom <= 0) return;
+      if (rect.height > window.innerHeight * 0.4) return;
+      height = Math.max(height, Math.round(rect.bottom));
+    });
+    return height;
+  }
+
+  function revealIfOffscreen(el, block) {
+    if (!el || typeof el.getBoundingClientRect !== "function") return;
+    const headerH = pinnedTopBarHeight();
+    const rect = el.getBoundingClientRect();
+    const LOWER_BOUND = window.innerHeight * 0.85;   // "still comfortably in view"
+    if (rect.top >= headerH && rect.top <= LOWER_BOUND) return;
+    // scroll-margin-top keeps block:"start" from parking the target underneath
+    // the pinned bar. Set rather than restored: it is idempotent, and any later
+    // scroll of this element wants the same clearance.
+    el.style.scrollMarginTop = headerH + "px";
+    const reduceMotion = window.matchMedia
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: block || "start" });
+  }
+
   function showStep(name, { scroll = true } = {}) {
     state.step = name;
     steps.forEach((s) => { s.hidden = s.dataset.step !== name; });
+
+    // A zone count can arrive pre-filled (?zones= on a seasonal CTA, or a
+    // session handoff), which fires no change event. Re-check it on entry so
+    // a mismatched tier is announced here rather than swapped silently when
+    // the customer taps Continue.
+    if (name === "zones" && typeof reviewZoneAnswer === "function") reviewZoneAnswer();
 
     // Hide the whole progress strip on the confirm/success state — the
     // "You're booked!" card already says everything the strip would
@@ -152,16 +205,14 @@
       }
     }
 
-    // Scroll to the active step on mobile so the user always sees it. This is
-    // wanted for customer-driven step changes (Next, Back, service-card click)
-    // and opt-out via { scroll: false } for the deep-link bootstrap, which
-    // otherwise lurches the page on first paint.
+    // Bring the active step into view when it lands off-screen — wanted for
+    // customer-driven step changes (Next, Back, service-card click), and
+    // opted out via { scroll: false } for the deep-link bootstrap, which
+    // otherwise lurches the page on first paint. Steps swap in place, so the
+    // new step is usually already on screen: revealIfOffscreen leaves the
+    // page alone in that case rather than re-aligning what you're looking at.
     const active = steps.find((s) => s.dataset.step === name);
-    if (scroll && active) {
-      const reduceMotion = window.matchMedia
-        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      active.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
-    }
+    if (scroll && active) revealIfOffscreen(active, "start");
   }
 
   // ===== Service catalog =====
@@ -269,7 +320,12 @@
     if (state.familyFilter && FAMILY_COPY[state.familyFilter]) {
       const family = FAMILY_COPY[state.familyFilter];
       serviceHeading.textContent = name ? `Hi ${name} — ${lowerFirst(family.heading)}` : family.heading;
-      serviceLead.textContent = family.lead;
+      // When the customer arrived on a link that already names a tier, the
+      // matching card is rendered active — say so, rather than showing a
+      // pre-ticked box with no explanation.
+      serviceLead.textContent = (state.serviceKey && filtered.some(([k]) => k === state.serviceKey))
+        ? "We've carried over the size from the page you came from — change it here if that's not right."
+        : family.lead;
     } else {
       serviceHeading.textContent = name
         ? `Hi ${name}, what can we help with today?`
@@ -313,6 +369,7 @@
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "service-card";
+      if (key === state.serviceKey) btn.classList.add("is-active");
       btn.dataset.serviceKey = key;
       const blurb = friendly.blurb || `${meta.minutes} min`;
       btn.innerHTML = `
@@ -335,9 +392,14 @@
   bookOtherLink.addEventListener("click", (event) => {
     event.preventDefault();
     state.familyFilter = null;
+    // Backing out of a deep link drops its tier as well — otherwise the full
+    // catalog renders with a card still ticked from the page they left.
+    state.serviceKey = null;
+    state.serviceMeta = null;
     // Strip the ?service= param from the URL so refreshing doesn't re-filter.
     const next = new URL(window.location.href);
     next.searchParams.delete("service");
+    next.searchParams.delete("zones");
     window.history.replaceState({}, "", next.toString());
     renderServiceCards();
   });
@@ -370,12 +432,80 @@
     }
   })();
 
+  // ===== Zone confirmation vs. the tier that was picked =====
+  // The service card names a zone bracket and the next step asks for the
+  // zone count, so the two can disagree. Nothing used to reconcile them:
+  // priceForBooking() ignores the zone count outright (its second argument
+  // is marked "no longer used"), so tier, price and on-site duration all
+  // followed the card while the real number went to the booking notes. A
+  // customer could pick the 5-6 zone card, answer 12, and be booked and
+  // priced as a 5-6 zone job.
+  //
+  // Resolving through pricing.json's seasonal_tiers — the same rows the
+  // spring and fall page estimators price from — keeps the promise those
+  // pages make: the tier you are shown is the tier you book.
+  let pendingTierKey = null;
+
+  function tierNoteEl() {
+    return document.getElementById("zonesTierNote");
+  }
+
+  function clearTierNote() {
+    pendingTierKey = null;
+    const el = tierNoteEl();
+    if (el) { el.hidden = true; el.textContent = ""; }
+  }
+
+  // Returns the service key the chosen zone count actually belongs to, or
+  // null when we can't tell (non-seasonal service, "I'm not sure", or
+  // pricing.json not loaded — in which case we leave the booking alone
+  // rather than guessing).
+  function tierKeyForZoneAnswer(value) {
+    if (!state.serviceKey || !serviceNeedsZones()) return null;
+    if (!value || value === "unsure") return null;
+    const helper = window.PJLSeasonalTiers;
+    const pricing = window.__pjlPricing;
+    if (!helper || !pricing) return null;
+    const tier = helper.tierForKeyAndZones(pricing.seasonal_tiers, state.serviceKey, value);
+    if (!tier || !tier.key || tier.key === state.serviceKey) return null;
+    return state.services[tier.key] ? tier.key : null;
+  }
+
+  function reviewZoneAnswer() {
+    const key = tierKeyForZoneAnswer(bookZones.value);
+    if (!key) { clearTierNote(); return; }
+    pendingTierKey = key;
+    const el = tierNoteEl();
+    if (el) {
+      el.textContent = `${zoneCountLabel(bookZones.value)} puts you in a different size — we'll book ${state.services[key].label} so the price matches your system.`;
+      el.hidden = false;
+    }
+  }
+
+  bookZones.addEventListener("change", reviewZoneAnswer);
+
+  // The tier check needs pricing.json, which js/pricing-injector.js fetches
+  // asynchronously. A customer who reaches this step before that resolves
+  // would otherwise get no check at all, so re-run it when the rows land.
+  document.addEventListener("pjl:pricing-loaded", () => {
+    if (state.step === "zones") reviewZoneAnswer();
+  });
+
   zonesNextBtn.addEventListener("click", () => {
     if (!bookZones.value) {
       bookZones.focus();
       return;
     }
     state.zoneCount = bookZones.value;
+    // Apply the corrected tier before moving on: availability is fetched
+    // against the service's duration, so this has to settle first.
+    const corrected = pendingTierKey || tierKeyForZoneAnswer(bookZones.value);
+    if (corrected && state.services[corrected]) {
+      state.serviceKey = corrected;
+      state.serviceMeta = state.services[corrected];
+      renderServiceCards();
+    }
+    clearTierNote();
     showStep("address");
   });
 
@@ -726,6 +856,19 @@
         // Pick the deep-link service from the URL OR the session's
         // suggestedService. URL wins if both present (manual override).
         const preselect = params.get("service") || suggestedService;
+
+        // ?zones= travels with the seasonal pages' booking CTAs so the count
+        // the visitor already dialled in on the estimator isn't asked for
+        // again from scratch. Same treatment as a session hint: pre-select,
+        // don't assume — they still confirm.
+        const zonesParam = params.get("zones");
+        if (zonesParam && !state.zoneCount) {
+          const n = Math.floor(Number(zonesParam));
+          if (isFinite(n) && n >= 1 && n <= 50) {
+            state.zoneCount = String(n);
+            if (bookZones) bookZones.value = String(n);
+          }
+        }
         // A "session handoff" is when the AI / admin has explicitly chosen
         // the service for this customer. Trust their choice — lock the
         // service in and skip the family picker entirely.
@@ -756,7 +899,17 @@
 
           // Multi-variant family without a session-locked choice: show the
           // family-filtered picker so the customer picks the right size.
+          // The link already named a tier, so mark that card chosen — the
+          // customer confirms or corrects instead of choosing from scratch.
+          // Advancing still needs a card tap; nothing auto-submits.
           state.familyFilter = family;
+          state.serviceKey = preselect;
+          state.serviceMeta = state.services[preselect];
+          // Open on the tab the link belongs to. The grid filters by
+          // property type and defaults to residential, so without this a
+          // commercial link renders the residential cards with the chosen
+          // tier nowhere on screen.
+          state.propertyType = propertyTypeForKey(preselect);
         }
         renderServiceCards();
       }

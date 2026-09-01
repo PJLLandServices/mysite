@@ -32,6 +32,7 @@
       <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
       <a href="/admin">CRM</a>
       <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/season-plan">Season plan</a>
       <a href="/admin/handoff">Handoff</a>
       <a href="/admin/outreach">Outreach</a>
       <a href="/admin/review-requests">Reviews</a>
@@ -43,6 +44,7 @@
       <a href="/admin/work-orders">Work orders</a>
       <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
       <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/warranty-claims">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
       <a href="/admin/material-lists">Materials</a>
       <a href="/admin/chats">AI Chats</a>
       <a href="/admin/users">Users</a>
@@ -88,7 +90,19 @@
         <button type="button" class="customers-filter" data-status="no_show">No-show</button>
       </nav>
 
-      <section class="customers-list" id="bookingsList"></section>
+      <!-- Data table, same primitive as the Customers and Properties
+           indexes (.crm-table in crm.css). Header row and data rows read one
+           --crm-cols template, so they cannot drift out of register. -->
+      <section class="crm-table bookings-table">
+        <div class="crm-table-head" role="row">
+          <span>Booking</span>
+          <span>Customer</span>
+          <span>Address</span>
+          <span>Scheduled</span>
+          <span>Status</span>
+        </div>
+        <section class="customers-list" id="bookingsList"></section>
+      </section>
       <p class="customers-empty" id="bookingsEmpty" hidden>No bookings match.</p>
     </main>
   </div>
