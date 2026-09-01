@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { Alert, Image, StyleSheet, Text, TextInput, View } from 'react-native';
-import { patchProperty, uploadWoPhotos, woPhotoUri } from '../../api';
+import { getProperty, patchProperty, uploadWoPhotos, woPhotoUri } from '../../api';
 import { colors, radius, space, type } from '../../theme';
 import { pickPhoto, takePhoto } from '../../photos';
 import { Button, CheckRow, Chip, Section } from './parts';
@@ -76,28 +76,40 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
 
     // A corrected label belongs to the property, not just to today.
     //
-    // The empty-list guard below is real — patching `zones: []` onto a
-    // property would erase its zone list — but it used to hide the actual
-    // failure: the work order arrived without its property attached, so
-    // there were never any zones to map and the rename quietly went
-    // nowhere. Say so now instead of nodding.
+    // The property is FETCHED FRESH here rather than read off the work
+    // order, and that matters twice over. `PATCH /api/properties/:id`
+    // merges `system` only one level deep, so the `zones` array it
+    // receives REPLACES the stored one outright — send a stale copy and
+    // you revert every rename made earlier in this visit; send an empty
+    // one and you erase the property's zone list altogether. A work-order
+    // copy goes stale the moment the first zone is renamed, so it is not
+    // safe to patch from. One extra request, on an action a tech takes
+    // rarely, buys an array that is provably current.
     if (wo?.propertyId && label.trim() && label.trim() !== (zone.location || '')) {
       try {
-        const propSystem = wo.property?.system || {};
-        const propZones = (propSystem.zones || []).map((z) =>
-          z.number === zone.number ? { ...z, location: label.trim() } : z
-        );
-        if (!propZones.length) {
+        const fresh = await getProperty(wo.propertyId);
+        const propSystem = fresh?.system || {};
+        const existing = Array.isArray(propSystem.zones) ? propSystem.zones : [];
+        if (!existing.length) {
           Alert.alert(
             'Zone renamed here only',
             "This visit has the new name, but the property record doesn't list any zones to rename."
           );
-        } else if (!propZones.some((z) => z.number === zone.number)) {
+        } else if (!existing.some((z) => Number(z.number) === Number(zone.number))) {
           Alert.alert(
             'Zone renamed here only',
             `The property record has no Zone ${zone.number}, so there was nothing to rename on it.`
           );
         } else {
+          const propZones = existing.map((z) =>
+            Number(z.number) === Number(zone.number)
+              // Both names: older property records key off `label`, newer
+              // off `location`, and the CRM reads `location || label`.
+              // Writing one and leaving the other stale shows the old name
+              // on whichever surface reads the other.
+              ? { ...z, location: label.trim(), label: label.trim() }
+              : z
+          );
           await patchProperty(wo.propertyId, { system: { ...propSystem, zones: propZones } });
         }
       } catch (err) {

@@ -1323,6 +1323,26 @@ date **cannot presently exist**. The fix addressed a case the codebase cannot pr
 root cause of the wrong diagnosis was reading a two-week-stale `origin/main`. If a
 property-first work order ever does get a schedulable date, this is the gap that opens.
 
+**2026-09-01 (The zone rename, second pass — and a data-loss risk found on the way):** the
+first fix carried the property along with the work order, and it still failed on Zone 3 with
+"the property record doesn't list any zones to rename" — on a property whose work order had
+scaffolded four zones FROM that list, so the zones plainly existed. Two causes, stacked.
+**(a)** `ClosingScreen.save()` replaced the whole work order with the PATCH response, which
+returns the work order ALONE — so the `property` the initial GET attached was thrown away by
+the first save. It worked on Zone 1 and was gone by Zone 2. Decorations are now carried
+forward. **(b)** The deeper problem, found while fixing (a): `properties.update()` merges
+`system` only ONE LEVEL DEEP, so the `zones` array in a PATCH **replaces** the stored array
+outright. Patching from a work-order copy is therefore unsafe by construction — a copy taken
+before Zone 1's rename still carries Zone 1's old name, and sending it reverts that rename;
+an empty copy erases the property's zone list entirely. (The empty-list guard that produced
+the confusing message was preventing exactly that, which is why it stays.) The rename now
+**fetches the property fresh** immediately before patching, so the array it sends is provably
+current, and writes both `location` and `label` because older records key off one and newer
+off the other while the CRM reads `location || label` — writing one and leaving the other
+stale shows the old name on whichever surface reads the other. **What still needs Patrick:**
+rename two different zones in one visit, then open the property and confirm BOTH new names
+are there and no zone has gone missing.
+
 **2026-09-01 (Three faults found walking a live fall closing):** Patrick ran a real closing
 on the app and hit three, all app-side, all under FLOW-31. **(1) Photos refused.** The server
 verifies a photo's declared mediaType against its MAGIC BYTES; `photos.js` hardcoded
