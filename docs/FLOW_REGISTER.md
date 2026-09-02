@@ -1374,6 +1374,22 @@ or catalog change, and the CTA that moved is FLOW-28's (UNMAPPED). `publicBookin
 (fall 2026: Oct 30) is defined in the config for the future gate and is deliberately
 consumed by nothing, pinned by a source guard. Cover:
 `scripts/test-season-config.mjs` (66 assertions, in `build:check`).
+**2026-09-02 (Best-day stars get loud):** Patrick on the shipped stars: "This isn't big enough
+to make a customer realize, it should be a very big star, and a big call out." Display-only
+follow-up, no server change. The starred day cell now fills with the amber gradient the booking
+button already wears — big white ★ stacked above the date, white bold number — instead of a
+thin ring and corner star; a selected starred day flips to the solid selection green (star
+kept). The small legend line under the grid is replaced by a call-out banner ABOVE the grid:
+amber-bordered box, 34px star, "WE'RE ALREADY IN YOUR NEIGHBOURHOOD!" headline, and a body line
+that NAMES the customer's top pick ("Monday, September 14 is the top pick" — cheapest added
+drive among the month's starred days, earliest date breaking ties), still hidden whenever no
+starred day is visible in the month. FLOW-03 surface, presentation only: `renderGrid` reads the
+same `recommended`/`addedDriveMinutes` keys #121 added; no request, payload, or engine change —
+geo/booking suites unchanged and green. Verified in headless Chromium against the real
+stylesheet at 375px and 720px: banner, amber cells, selected-state precedence (a hover-beats-
+selected specificity bug was caught and fixed in the same pass: the hover rule now excludes
+`.is-selected`).
+
 **2026-09-02 (Customer best-day stars on the public picker):** Patrick, closing the loop on the
 probe's "Best days for this address": "we never suggest to customers the best possible day for
 them to book. Can we build that too?" The engine already prices every offered day for the
