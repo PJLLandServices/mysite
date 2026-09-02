@@ -107,7 +107,13 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
               // off `location`, and the CRM reads `location || label`.
               // Writing one and leaving the other stale shows the old name
               // on whichever surface reads the other.
-              ? { ...z, location: label.trim(), label: label.trim() }
+              //
+              // pendingReview drops here too. A zone materialized from a
+              // declared count carries it until someone has actually seen
+              // the zone; a tech standing in front of it, naming it, IS
+              // that confirmation — and it is what stops the customer
+              // overwriting a walked count from their appointment page.
+              ? { ...z, location: label.trim(), label: label.trim(), pendingReview: false }
               : z
           );
           await patchProperty(wo.propertyId, { system: { ...propSystem, zones: propZones } });

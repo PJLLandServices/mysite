@@ -1276,8 +1276,43 @@ function hydrateIssue(issue) {
 // (location/sprinklerTypes/coverage) rather than referencing the
 // property — if Patrick later edits the property profile, the WO
 // keeps showing what was true at the time of the visit.
+// The zone list a property's DECLARED count implies, when nobody has
+// documented its zones yet.
+//
+// The count and the list were two different questions and only pricing
+// knew about both. Pricing reads documented zones first and falls back to
+// `system.zoneCount` — the "customer told us eight" number — so a
+// first-time property was PRICED for eight zones while its work order
+// scaffolded from an empty list and fell through to the single "Zone 1"
+// placeholder below. The tech arrived at an eight-zone lawn holding a
+// one-zone work order.
+//
+// Zones land `pendingReview: true` — the same flag applySystemUpdates()
+// puts on zones discovered in the field — because a number typed into a
+// booking form is a claim, not a survey. The flag is what lets a customer
+// still correct their own count from the appointment page, and what tells
+// Patrick these have never been walked. Naming a zone clears it.
+//
+// Returns [] when the property already has documented zones (they win) or
+// has declared nothing. Exported so the route that CREATES a work order
+// can write the same list to the property record itself — this module
+// deliberately depends on nothing but node built-ins, so it cannot write
+// to properties, and the tests that sandbox it rely on that.
+function declaredZoneList(property) {
+  const documented = Array.isArray(property?.system?.zones) ? property.system.zones : [];
+  if (documented.length) return [];
+  const declared = Math.floor(Number(property?.system?.zoneCount) || 0);
+  if (!(declared > 0)) return [];
+  const zones = [];
+  for (let n = 1; n <= declared; n++) {
+    zones.push({ number: n, location: "", label: "", notes: "", pendingReview: true });
+  }
+  return zones;
+}
+
 function scaffoldZonesFromProperty(property) {
-  const zones = Array.isArray(property?.system?.zones) ? property.system.zones : [];
+  const documented = Array.isArray(property?.system?.zones) ? property.system.zones : [];
+  const zones = documented.length ? documented : declaredZoneList(property);
   const blankChecks = {};
   for (const key of ZONE_CHECK_KEYS) blankChecks[key] = false;
   return zones
@@ -2160,6 +2195,8 @@ module.exports = {
   BYPASS_REASONS,
   UNLOCK_MIN_REASON_LEN,
   templateForServiceKey,
+  declaredZoneList,
+  scaffoldZonesFromProperty,
   canBuildOnSiteQuote,
   isScopeFrozen,
   findProtectedFieldTouched,

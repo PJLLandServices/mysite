@@ -2053,6 +2053,37 @@ function sendTwiml(res, status, xml) {
   res.end(`<?xml version="1.0" encoding="UTF-8"?>\n${xml}`);
 }
 
+// Give a property the zone list its declared count implies, before a work
+// order scaffolds from it.
+//
+// A customer who books saying "eight zones" is priced for eight — pricing
+// has always fallen back to system.zoneCount — but the property's zone
+// LIST stayed empty until a tech documented it, so the work order
+// scaffolded one placeholder zone. Writing the list here means the record
+// carries those zones from the first booking, and the work order and the
+// property agree from the first visit.
+//
+// Lives at the route layer because lib/work-orders.js deliberately depends
+// on nothing but node built-ins (two test suites sandbox it on its own),
+// so it can describe the list but cannot write it.
+//
+// Returns the property to scaffold from — updated when zones were written,
+// the original otherwise. Never throws: a tech is standing on the lawn and
+// a work order must open regardless.
+async function materializeDeclaredZones(property) {
+  const zones = workOrders.declaredZoneList(property);
+  if (!property?.id || !zones.length) return property;
+  try {
+    const updated = await properties.update(property.id, {
+      system: { ...(property.system || {}), zones }
+    });
+    return updated || { ...property, system: { ...(property.system || {}), zones } };
+  } catch (err) {
+    console.warn("[wo create] declared-zone materialize failed:", err?.message);
+    return { ...property, system: { ...(property.system || {}), zones } };
+  }
+}
+
 // ----- Photo handling ----------------------------------------------------
 // Accepts client payload of the form: photos: [{ data: "<base64>", mediaType: "image/jpeg" }]
 // Returns a normalized + validated array of { buffer, mediaType, ext, meta }, or throws.
@@ -17299,6 +17330,10 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 422, { ok: false, errors: [waiverResult.error] });
       }
 
+      // Seasonal work orders scaffold their zones from the property, so
+      // give it the list its declared count implies before we do.
+      property = await materializeDeclaredZones(property);
+
       let wo = await workOrders.create({
         type, lead, property, customId, quote: sourceQuote,
         serviceFeeWaiver: waiverResult.waiver
@@ -20751,6 +20786,9 @@ Customer signature captured at ${new Date().toISOString()}.`;
         try { sourceQuote = await quotes.get(lead.quoteId); }
         catch (err) { console.warn("[quotes] fetch on WO create failed:", err?.message); }
       }
+      // Same as the admin create path: the property gets the zone list
+      // its declared count implies before the work order scaffolds from it.
+      property = await materializeDeclaredZones(property);
       const wo = await workOrders.create({ type, lead, property, customId, quote: sourceQuote });
       if (sourceQuote) {
         try { await quotes.attachWorkOrder(sourceQuote.id, wo.id); }

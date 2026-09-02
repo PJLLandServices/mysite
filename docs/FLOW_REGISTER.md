@@ -1323,6 +1323,30 @@ date **cannot presently exist**. The fix addressed a case the codebase cannot pr
 root cause of the wrong diagnosis was reading a two-week-stale `origin/main`. If a
 property-first work order ever does get a schedulable date, this is the gap that opens.
 
+**2026-09-01 (A declared zone count now becomes real zones):** a customer books a fall
+closing saying they have eight zones; pricing has always honoured that (`effectiveZoneCount()`
+reads documented zones first, then `system.zoneCount`), so they are charged the 7-8 zone tier.
+But `scaffoldZonesFromProperty()` read the documented list ONLY, which on a first-time property
+is empty, so `create()` fell through to its "always give the tech at least one zone"
+placeholder. **Priced for eight, dispatched with one** — the tech arrives at an eight-zone lawn
+holding a one-zone work order. Two functions asking the same question and one of them not
+knowing about the fallback. **Fixed:** `declaredZoneList()` describes the list a declared count
+implies, `scaffoldZonesFromProperty()` falls back to it, and the seasonal create routes write
+that list onto the PROPERTY first (Patrick's call — the record should carry its zones from the
+first booking) so the work order and the property agree from visit one. The write lives at the
+route layer on purpose: `lib/work-orders.js` depends on nothing but node built-ins and two test
+suites sandbox it alone, an invariant this change briefly broke and then respected. Zones land
+`pendingReview: true`, the flag `applySystemUpdates()` already uses for zones discovered in the
+field, because a number typed into a booking form is a claim, not a survey. **A consequence
+handled with it:** the appointment page refuses a customer's zone-count correction once the
+property has documented zones ("our technicians have already mapped your system"), so
+materializing zones would have locked customers out with a message that wasn't true — that
+check now counts only zones a human confirmed, and naming a zone in the app clears the flag.
+**Coverage:** `scripts/test-declared-zones.mjs` (27 assertions, in `build:check`). **What still
+needs Patrick:** book a new property declaring a zone count, open its work order, and confirm
+the right number of zones appear on both the work order and the property; then confirm the
+customer can still correct that count until a tech names a zone.
+
 **2026-09-01 (The zone rename, second pass — and a data-loss risk found on the way):** the
 first fix carried the property along with the work order, and it still failed on Zone 3 with
 "the property record doesn't list any zones to rename" — on a property whose work order had

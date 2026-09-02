@@ -242,7 +242,14 @@ async function setZones(token, {
   if (!property) {
     return { ok: false, status: 409, errors: ["We couldn't find your property record — call us at (905) 960-0181 and we'll fix it together."] };
   }
-  const documented = Array.isArray(property.system?.zones) ? property.system.zones.length : 0;
+  // Only zones a HUMAN has confirmed count as "mapped". Zones materialized
+  // from a declared count at work-order creation land pendingReview: true
+  // and must not lock the customer out of correcting their own number —
+  // telling someone we have already mapped a system nobody has visited
+  // would be false, and it would leave a wrong count uncorrectable.
+  const documented = Array.isArray(property.system?.zones)
+    ? property.system.zones.filter((z) => z && z.pendingReview !== true).length
+    : 0;
   if (documented > 0) {
     return { ok: false, status: 409, errors: [
       `Our technicians have already mapped your system (${documented} zone${documented === 1 ? "" : "s"} on file). If that looks wrong, call or text us at (905) 960-0181.`
