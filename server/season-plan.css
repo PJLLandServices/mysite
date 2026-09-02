@@ -381,3 +381,10 @@
   background: #FBEDEA; border: 1px solid #E5B8AF;
   color: #8A2F22; font-weight: 600; font-size: 0.92rem;
 }
+
+/* The phone-booking answer line: the cheapest days for a typed address. */
+.sp-probe-best {
+  margin: 0 0 10px; padding: 9px 13px; border-radius: 8px;
+  background: var(--pjl-green-pale); border: 1px solid var(--pjl-green);
+  color: var(--pjl-green); font-size: 0.92rem;
+}

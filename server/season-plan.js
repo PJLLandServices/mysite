@@ -1350,15 +1350,35 @@
     }
     out.appendChild(head);
 
+    // The phone-booking answer, first: the cheapest days for this
+    // address, so Patrick can offer a date while the caller is still on
+    // the line. Sorted by added drive; counts shown so a nearly-full
+    // day is visible at a glance.
+    if (!data.filterSkipped) {
+      const best = (data.days || [])
+        .filter((d) => d.offered && d.addedDriveMinutes != null)
+        .sort((a, b) => a.addedDriveMinutes - b.addedDriveMinutes)
+        .slice(0, 3);
+      if (best.length) {
+        const line = document.createElement("p");
+        line.className = "sp-probe-best";
+        line.innerHTML = "<strong>Best days for this address:</strong> " + best.map((d) =>
+          `${prettyDate(d.date)} (+${d.addedDriveMinutes} min · ${d.points} stop${d.points === 1 ? "" : "s"}${d.bookingsOnly ? " booked" : ""})`
+        ).join(" · ");
+        out.appendChild(line);
+      }
+    }
+
     // Without this line the table reads as the whole answer, and a row of
     // "no" looks like the customer has been shut out of the season. They
-    // have not: the filter only has an opinion about days that carry a
-    // planned route.
+    // have not: days with nothing on them at all carry no shape, so they
+    // are offered to this address as normal.
     const rest = document.createElement("p");
     rest.className = "sp-probe-note";
-    rest.textContent = "This table covers route days only. Every other open day in the season "
-      + "has no planned route, so it is offered to this address as normal — a customer with no "
-      + "route day still sees most of the calendar.";
+    rest.textContent = "This table covers planned route days AND days real bookings have started "
+      + "(marked 'Booked day'). Every other open day in the season has nothing on it yet, so it "
+      + "is offered to this address as normal — a customer with no cheap day still sees most of "
+      + "the calendar.";
     out.appendChild(rest);
 
     const table = document.createElement("table");
@@ -1369,7 +1389,8 @@
       const tr = document.createElement("tr");
       tr.className = day.offered ? "is-offered" : "";
       const added = day.addedDriveMinutes == null ? "—" : `${day.addedDriveMinutes} min`;
-      tr.innerHTML = `<td>${day.label || "—"}</td><td>${day.date}</td><td>${day.points}</td>`
+      const routeCell = day.bookingsOnly ? "Booked day" : (day.label || "—");
+      tr.innerHTML = `<td>${routeCell}</td><td>${day.date}</td><td>${day.points}</td>`
         + `<td class="sp-num">${added}</td><td>${day.offered ? "yes" : "no"}</td>`;
       body.appendChild(tr);
     }

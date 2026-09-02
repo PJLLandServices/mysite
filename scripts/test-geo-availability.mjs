@@ -290,6 +290,58 @@ ok("real calendar dates are accepted", seasonPlans.isRealDate("2026-09-28"));
 ok("impossible calendar dates are refused", !seasonPlans.isRealDate("2026-02-30"));
 ok("season+year keys match the seed file", seasonPlans.planKey("fall", 2026) === "fall-2026");
 
+// ---- 9. Booking-made days (Patrick, ads live: "newly booked
+// appointments must populate") ----------------------------------------
+// A day the plan never routed but a real booking sits on becomes a
+// shape of its own: the probe can show it, and the booking page
+// measures the next customer against it instead of offering the day to
+// anyone at any distance.
+
+const AD_DAY = dayKey(plusDays(9));                   // Wed 23 Sep — not in the plan
+// The ad customer booked in Mississauga; the day's whole shape is that
+// one house. A second Mississauga caller inserts for pennies; a Keswick
+// caller (40+ km the other way) must not share the day.
+const adBooking = { start: `${AD_DAY}T13:00:00`, coords: { lat: 43.5890, lng: -79.6441, source: "google" }, propertyId: "P-AD" };
+const KESWICK = { lat: 44.240, lng: -79.462, source: "google" };
+const shapesWithAd = geoFilter.buildDayShapes({ plan, propertiesByCode, bookings: [adBooking] });
+ok("a booking on an unplanned day creates that day's shape",
+  Boolean(shapesWithAd[AD_DAY]) && shapesWithAd[AD_DAY].bookingsOnly === true
+  && shapesWithAd[AD_DAY].points.length === 1 && shapesWithAd[AD_DAY].bookedCount === 1
+  && shapesWithAd[AD_DAY].plannedCount === 0,
+  JSON.stringify(shapesWithAd[AD_DAY]));
+ok("a booking-made day inherits the plan's bucket cap",
+  shapesWithAd[AD_DAY].bucketCap === 5);
+ok("planned days are byte-identical with the extra booking elsewhere",
+  JSON.stringify(shapesWithAd[WEST_DAY]) === JSON.stringify(shapes[WEST_DAY])
+  && JSON.stringify(shapesWithAd[NORTH_DAY]) === JSON.stringify(shapes[NORTH_DAY]));
+ok("an unresolved booking on an unplanned day makes no shape",
+  !geoFilter.buildDayShapes({ plan, propertiesByCode,
+    bookings: [{ start: `${AD_DAY}T13:00:00`, coords: UNGEOCODED }] })[AD_DAY]);
+ok("two bookings at the same rounded point on a booking-made day count once",
+  geoFilter.buildDayShapes({ plan, propertiesByCode,
+    bookings: [adBooking, { ...adBooking, propertyId: "P-AD2" }] })[AD_DAY].points.length === 1);
+
+// The outcome through the REAL engine: a Mississauga caller is offered
+// the booking-made day (the booking is a west-side house), while a
+// customer far from that booking is suppressed on it but keeps truly
+// empty days.
+const adDiag = { geoSuppressed: [] };
+const adFiltered = await listAvailableSlots({
+  ...baseArgs, customerCoords: MISSISSAUGA, dayShapes: shapesWithAd, diagnostics: adDiag
+});
+ok("a near customer IS offered the booking-made day",
+  datesOf(adFiltered).has(AD_DAY));
+const farDiag = { geoSuppressed: [] };
+const farFiltered = await listAvailableSlots({
+  ...baseArgs, customerCoords: KESWICK, dayShapes: shapesWithAd, diagnostics: farDiag
+});
+ok("a far customer is SUPPRESSED on the booking-made day — no more 80-km day-sharing",
+  !datesOf(farFiltered).has(AD_DAY)
+  && farDiag.geoSuppressed.some((g) => g.date === AD_DAY),
+  JSON.stringify(farDiag.geoSuppressed));
+ok("…but the far customer still sees days with nothing on them at all",
+  datesOf(farFiltered).size > 0);
+
 // ---- Report ----------------------------------------------------------
 
 if (failures.length) {

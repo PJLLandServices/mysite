@@ -1323,6 +1323,29 @@ or catalog change, and the CTA that moved is FLOW-28's (UNMAPPED). `publicBookin
 (fall 2026: Oct 30) is defined in the config for the future gate and is deliberately
 consumed by nothing, pinned by a source guard. Cover:
 `scripts/test-season-config.mjs` (66 assertions, in `build:check`).
+**2026-09-02 (Booked days join the geography — the probe becomes a phone-booking tool):**
+Patrick, with Google Ads live: a customer booked Oct 1 (a day the fall plan never routed) and
+the season-plan address tester didn't show it — he wants to type a caller's address and offer
+the best day. Root cause: `geoFilter.buildDayShapes` iterated ONLY `plan.days`, so a day whose
+only contents are real bookings had no shape — invisible to the probe, and (worse) carrying no
+geography on the LIVE booking page either: two ad customers 80 km apart could seed the same
+empty day, and no bucket cap applied there. Now `buildDayShapes` grows a `bookingsOnly` shape
+for any date with a resolvable booking and no plan entry: the day's points are its bookings,
+it inherits the plan's `bucketCap`, planned days are byte-identical (asserted), and a date with
+no plan AND no bookings stays unshaped and open to everyone — someone has to book it first.
+The probe inherits it (rows labeled "Booked day") and gains the phone answer: **"Best days for
+this address"** — the three cheapest offered days with added-drive minutes and stop counts.
+**FLOW-03 IS PASS AND ITS GEOGRAPHY GATE NOW COVERS MORE DAYS:** `listAvailableSlots` is
+unchanged; what changed is which days carry shapes. New behavior only on booked-but-unplanned
+days — previously offered to anyone at any distance and uncapped, now geo-gated and capped
+like every route day. Engine re-verified: test-geo-availability grows to 35 (+8: the
+booking-made shape, cap inheritance, planned-days byte-identity, unresolved-booking and
+same-point dedup, and through the REAL engine a Mississauga caller offered the booked day
+while a Keswick caller is suppressed with the day named in diagnostics); booking-guards 35,
+day-reschedule 59, season-config 93 unchanged. **Needs Patrick's walk:** probe his Oct 1
+booker's address (Oct 1 should list as "Booked day" with a small added-drive number), then a
+far-away address (Oct 1 offered "no").
+
 **2026-09-02 (Geocode failure posture — "we cannot have this fail"):** Patrick probed an Erin
 address on the season plan and got EVERY route day offered: the geocode failed, fell back to
 the depot pin, and the geography filter — fail-soft by design — switched itself off for that
