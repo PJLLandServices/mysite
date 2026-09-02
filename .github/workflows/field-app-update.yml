@@ -1,0 +1,89 @@
+name: Field app — publish OTA update
+
+# Publishes the iPhone app's JavaScript to the phones that run it, on every
+# merge to main that touches pjl-field/.
+#
+# WHY THIS EXISTS. Publishing used to mean Patrick at his desk running an eas
+# command by hand. That is the wrong place for it twice over: he is usually in
+# a truck, and a step done by hand is a step done inconsistently. GitHub can
+# reach Expo's servers, so it does the publishing.
+#
+# THE PINNED VERSION IS LOAD-BEARING. runtimeVersion is on the `fingerprint`
+# policy, and the fingerprint is computed BY THE CLI. On 2026-09-02 an update
+# published with `eas-cli@latest` hashed an unchanged project differently from
+# the installed build — three files had dropped out of the hashed set between
+# CLI releases — so the update went to a runtime no phone was listening on,
+# and the app quietly ran the previous day's code while every command reported
+# success. The version below MUST stay in step with `cli.version` in
+# pjl-field/eas.json, which is what the build uses. If they drift, updates stop
+# arriving and nothing says so.
+#
+# Only the app's JavaScript ships this way. A new native module, an icon, or an
+# SDK bump changes the fingerprint and needs a real build through TestFlight —
+# and then this workflow's next run must be checked against the new runtime.
+
+on:
+  push:
+    branches: [main]
+    # Server-only changes are the majority of commits here and have nothing to
+    # publish. Narrowing the trigger keeps the run log meaningful: a run in this
+    # workflow means the app actually changed.
+    paths:
+      - 'pjl-field/**'
+      - '.github/workflows/field-app-update.yml'
+  # Publishing by hand, for a re-publish after a rollback or a rebuild.
+  workflow_dispatch:
+
+# A newer merge supersedes an older one. Cancelling in flight is safe: an update
+# is a whole bundle, not an increment, so the last one to finish is the truth.
+concurrency:
+  group: field-app-update
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Without the token the CLI would sit waiting for a login nobody can give
+    # it. Fail the run with a sentence that says what to do instead.
+    steps:
+      - name: Check the Expo token is present
+        run: |
+          if [ -z "${{ secrets.EXPO_TOKEN }}" ]; then
+            echo "::error::EXPO_TOKEN is not set. Add the Expo robot token under"
+            echo "::error::Settings → Secrets and variables → Actions → New repository secret."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: pjl-field/package-lock.json
+
+      # `npm ci` installs the lockfile exactly. That matters here beyond the
+      # usual reasons: the dependency tree feeds the fingerprint, so a loose
+      # install could publish to a runtime the phones are not listening on.
+      - name: Install
+        working-directory: pjl-field
+        run: npm ci
+
+      - name: Publish the update
+        working-directory: pjl-field
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          npx eas-cli@23.2.0 update \
+            --branch production \
+            --message "${{ github.event.head_commit.message || 'Manual publish' }}" \
+            --non-interactive
+
+      # The runtime version the update went to is the one thing worth reading in
+      # this log. If it stops matching the installed build's, updates are being
+      # published into the void — which looks exactly like success.
+      - name: Show what the phones will receive
+        working-directory: pjl-field
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: npx eas-cli@23.2.0 branch:view production --non-interactive || true

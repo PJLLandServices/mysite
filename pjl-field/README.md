@@ -161,6 +161,18 @@ npx eas-cli@23.2.0 update --branch production -m "what changed"
 
 Reopen the app and it's there. No build, no TestFlight, no Apple.
 
+### Updates publish themselves
+
+A merge to `main` that touches `pjl-field/` publishes the update — see
+`.github/workflows/field-app-update.yml`. GitHub can reach Expo, so nobody has
+to be at a desk to ship a change to a phone in a truck. It authenticates with
+an Expo **robot** token stored as the `EXPO_TOKEN` repository secret.
+
+The workflow pins the same CLI version as `eas.json` and the two must stay in
+step; the comment at the top of the workflow says why in detail. Publishing by
+hand still works and is sometimes right (a re-publish after a rollback):
+run the command below at the pinned version.
+
 ### Always run EAS at the pinned version. Never `@latest`.
 
 `eas.json` pins `cli.version` to an exact release, and every command in this
