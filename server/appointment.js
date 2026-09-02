@@ -66,6 +66,7 @@
     el("windowBtn").hidden = !a.canSetWindow;
     fillWindowSelects(a.requestedWindow);
     renderZones(a.zones);
+    renderCalendar(a.calendar);
     el("reschedulePanel").hidden = true;
     el("cancelPanel").hidden = true;
     el("windowPanel").hidden = true;
@@ -89,6 +90,20 @@
     btn.hidden = !z.canUpdate;
     btn.textContent = z.count ? "Update my zone count" : "Tell us your zone count";
     fillZonesSelect(z.count);
+  }
+
+  // "Add it to your calendar" — Google/Outlook prefilled links plus the
+  // .ics for Apple and everything else. A response without calendar
+  // links (e.g. after an action that doesn't recompute them) leaves the
+  // row as it was.
+  function renderCalendar(cal) {
+    if (cal === undefined) return;
+    const row = el("calendarRow");
+    if (!cal || !cal.google) { row.hidden = true; return; }
+    el("calGoogle").href = cal.google;
+    el("calOutlook").href = cal.outlook;
+    el("calIcs").href = cal.ics;
+    row.hidden = false;
   }
 
   function fillZonesSelect(current) {

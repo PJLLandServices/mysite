@@ -638,6 +638,28 @@ async function setRequestedWindow(id, { notBefore, notAfter, by = "customer" } =
   return next;
 }
 
+// The day-before reminder's once-ever mark, for SELF-BOOKED bookings
+// (assignment bookings get theirs from the cadence's step 6). Marked
+// BEFORE the send goes out — same rule as every cadence step: a send
+// that half-fails errs quiet, never double-texts.
+async function markReminderSent(id, { channel = "", by = "system" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const now = new Date().toISOString();
+  const next = {
+    ...records[idx],
+    reminder24: { sentAt: now, channel: String(channel).slice(0, 40) },
+    updatedAt: now,
+    history: [...(records[idx].history || []), {
+      ts: now, action: "reminder_24h", by, note: channel ? `via ${channel}` : ""
+    }]
+  };
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
 // The customer told us how many zones their system actually has (their
 // appointment page's "update your zone count"). The booking's tier
 // fields follow the real number — serviceKey/serviceLabel so the page
@@ -735,6 +757,7 @@ module.exports = {
   setFreeBucket,
   setRequestedWindow,
   setDeclaredZones,
+  markReminderSent,
   update,
   reschedule,
   cancel,

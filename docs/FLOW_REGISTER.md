@@ -1323,6 +1323,34 @@ or catalog change, and the CTA that moved is FLOW-28's (UNMAPPED). `publicBookin
 (fall 2026: Oct 30) is defined in the config for the future gate and is deliberately
 consumed by nothing, pinned by a source guard. Cover:
 `scripts/test-season-config.mjs` (66 assertions, in `build:check`).
+**2026-09-02 (Day-before reminder for self-booked + add-to-calendar):** two customer-facing
+additions on Patrick's ask. (1) **Self-booked appointments now get a day-before reminder** —
+assignment customers had the cadence's step 6, ad customers had nothing. New
+`lib/booking-reminders.js` sweep (boot + 5 min in server.js), borrowing the cadence's hard-won
+rules: mark-BEFORE-send (`bookings.markReminderSent`), once ever, 09:00–18:00 Toronto window,
+missed days stay missed, ASSIGNMENT bookings excluded so nobody is texted twice. Posture is
+transactional (it is about their own appointment, so seasonal-marketing opt-outs don't block it
+— same rule as booking confirmations), but decision I's "no need to contact" tick and archived
+properties DO block it. Delivery rides notify-customer's new `day_before` template through
+`notifyCustomer()`, so it wears the same brand frame, spouse-recipient logic, and
+bucket-not-exact-time rule as every notice. (2) **"Add it to your calendar"** — new pure
+`lib/calendar-links.js` (Google/Outlook prefilled-compose URLs + single-VEVENT `.ics` for Apple
+and the rest). THE EVENT CARRIES THE BUCKET WINDOW the customer was told (8–12 / 12–5), never
+the sequenced internal arrival — a calendar block reading 8:13 would be a promise the
+optimiser breaks daily; legacy no-bucket bookings fall back to exact start + duration.
+Surfaces: the booked/rescheduled/site-visit/day-before EMAILS gain a "Add it to your calendar:
+Google · Outlook · Apple (.ics)" row; the appointment page (/a/:token) gains the same row with
+`GET /api/appointment/:token/calendar.ics`; self-booked customers' ics is
+`GET /api/portal/:token/calendar.ics` (lead token → their booking; property token → the
+property's next upcoming booking; token is the credential, same as the portal itself).
+Suites: `test-booking-reminders.mjs` (12 — window gate, once-ever, mark-before-send survives a
+failed send without a double text, assignment exclusion, decision I) and
+`test-calendar-links.mjs` (20 — bucket rule, EDT/EST UTC conversion, RFC 5545 escaping, the
+three formats), both in `build:check`. **No PASS flow's route changed shape** — the email
+additions are additive rows in existing notices; new endpoints only. **Needs Patrick's walk:**
+book a test appointment for tomorrow, get the reminder after 9 AM; tap all three calendar
+links from the confirmation email and the appointment page.
+
 **2026-09-02 (Booked days join the geography — the probe becomes a phone-booking tool):**
 Patrick, with Google Ads live: a customer booked Oct 1 (a day the fall plan never routed) and
 the season-plan address tester didn't show it — he wants to type a caller's address and offer
