@@ -58,7 +58,18 @@ export default function ClosingScreen({ workOrderId, onExit, onOpenFullWorkOrder
     setSaving(true);
     try {
       const data = await patchWorkOrder(workOrderId, patch);
-      if (data?.workOrder) setWo(data.workOrder);
+      // PATCH returns the work order alone. The GET that loaded this
+      // screen decorated it with `property` and `lead`, and replacing the
+      // whole object here threw those away on the first save — so a
+      // screen that read wo.property worked once and then silently
+      // stopped. Carry the decorations forward.
+      if (data?.workOrder) {
+        setWo((prev) => ({
+          ...data.workOrder,
+          property: prev?.property ?? null,
+          lead: prev?.lead ?? null,
+        }));
+      }
       setUnsaved(false);
     } catch (err) {
       setUnsaved(true);

@@ -1073,6 +1073,81 @@ async function get(id) {
   return properties.find((p) => p.id === id) || null;
 }
 
+// Remove one zone from a property's documented list, with a reason.
+//
+// Zone numbers are CONTROLLER STATIONS, not positions in a list: if the
+// box on the garage wall says Zone 5, it stays Zone 5 whatever happens to
+// Zone 3. So this deletes and never renumbers, and the survivors keep the
+// numbers a tech will read off the controller next spring.
+//
+// The reason is written here rather than accepted from the client. A
+// client-writable audit log is not an audit log — the whole value of the
+// entry is that the record, not the phone, decided what it says.
+//
+// Reasons are a closed set so the trail can be counted later; "other"
+// carries the note instead. Returns the updated property, or null when the
+// property or the zone does not exist.
+const ZONE_REMOVAL_REASONS = {
+  not_present: "not on this property",
+  merged: "merged into another zone",
+  mistake: "added in error",
+  other: ""
+};
+
+async function removeZone(propertyId, zoneNumber, { reason, note = "", by = "tech" } = {}) {
+  const num = Math.floor(Number(zoneNumber));
+  if (!Number.isFinite(num) || num <= 0) {
+    const err = new Error("Zone number must be a positive whole number.");
+    err.code = "BAD_ZONE";
+    throw err;
+  }
+  if (!Object.prototype.hasOwnProperty.call(ZONE_REMOVAL_REASONS, String(reason || ""))) {
+    const err = new Error("Pick a reason for removing the zone.");
+    err.code = "BAD_REASON";
+    throw err;
+  }
+  const trimmedNote = String(note || "").trim().slice(0, 500);
+  if (reason === "other" && trimmedNote.length < 4) {
+    const err = new Error("Say why, in a few words — it is the only record of what happened here.");
+    err.code = "NOTE_REQUIRED";
+    throw err;
+  }
+
+  const properties = await readAll();
+  const idx = properties.findIndex((p) => p.id === propertyId);
+  if (idx === -1) return null;
+  const target = properties[idx];
+  const zones = Array.isArray(target.system?.zones) ? target.system.zones : [];
+  const zone = zones.find((z) => Number(z.number) === num);
+  if (!zone) return null;
+
+  target.system = target.system || {};
+  target.system.zones = zones.filter((z) => Number(z.number) !== num);
+  // The declared count, if any, is now a claim the record has outlived.
+  // Leaving it would let it resurface as a fallback the day the last
+  // documented zone is removed.
+  if (target.system.zoneCount != null) {
+    target.system.zoneCount = target.system.zones.length || null;
+  }
+
+  const named = (zone.location || zone.label || "").trim();
+  const why = ZONE_REMOVAL_REASONS[reason] || trimmedNote;
+  if (!Array.isArray(target.history)) target.history = [];
+  target.history.push({
+    ts: new Date().toISOString(),
+    action: "zone_removed",
+    by,
+    note: `Zone ${num}${named ? ` (${named})` : ""} removed — ${why}${
+      reason !== "other" && trimmedNote ? `. ${trimmedNote}` : ""
+    }`
+  });
+
+  target.updatedAt = new Date().toISOString();
+  properties[idx] = target;
+  await writeAll(properties);
+  return target;
+}
+
 async function update(id, patch) {
   const properties = await readAll();
   const idx = properties.findIndex((p) => p.id === id);
@@ -1876,6 +1951,8 @@ async function auditMissingCustomerName() {
 }
 
 module.exports = {
+  removeZone,
+  ZONE_REMOVAL_REASONS,
   attachLead,
   relinkLead,
   findMatch,

@@ -9,7 +9,7 @@
 import { useState } from 'react';
 import { Alert, Image, StyleSheet, Text, View } from 'react-native';
 import { uploadWoPhotos } from '../../api';
-import { HOST } from '../../api';
+import { woPhotoUri } from '../../api';
 import { colors, radius, space, type } from '../../theme';
 import { pickPhoto, takePhoto } from '../../photos';
 import { Button, ChoiceRow, Section } from './parts';
@@ -55,8 +55,8 @@ export default function WaterOffStage({ wo, save, saving, onNext }) {
           <View style={styles.thumbs}>
             {photos.map((p) => (
               <Image
-                key={p.id || p.url}
-                source={{ uri: p.url?.startsWith('/') ? `${HOST}${p.url}` : p.url }}
+                key={p.n}
+                source={{ uri: woPhotoUri(wo.id, p) }}
                 style={styles.thumb}
                 resizeMode="cover"
               />

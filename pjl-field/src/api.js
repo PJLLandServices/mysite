@@ -82,8 +82,31 @@ export const openWorkOrder = (leadId) =>
 
 // ---- work orders -----------------------------------------------------
 
+// The endpoint returns { workOrder, property, lead, ... } — property as a
+// SIBLING of the work order, not nested inside it. This used to return
+// d.workOrder alone and drop the rest, which is why writing a corrected
+// zone name back to the property silently did nothing: the screen read
+// wo.property.system.zones, got undefined, mapped an empty array, and the
+// "don't wipe the zones" guard swallowed it without a word. Carry the
+// property (and the lead) on the work order the screens already pass around.
 export const getWorkOrder = (id) =>
-  getJson(`/api/work-orders/${encodeURIComponent(id)}`).then((d) => d.workOrder || d);
+  getJson(`/api/work-orders/${encodeURIComponent(id)}`).then((d) => {
+    if (!d?.workOrder) return d;
+    return { ...d.workOrder, property: d.property || null, lead: d.lead || null };
+  });
+
+// Where a work-order photo actually lives. The stored record carries `n`,
+// not a url — building the URI here keeps every screen that shows a
+// thumbnail from having to know that.
+export const woPhotoUri = (woId, photo) =>
+  photo?.n != null ? `${HOST}/api/work-orders/${encodeURIComponent(woId)}/photo/${photo.n}` : null;
+
+// Every work order on a property, newest first from the server. Used
+// before creating one so a second tap opens what the first tap made
+// instead of raising a duplicate.
+export const listPropertyWorkOrders = (propertyId) =>
+  getJson(`/api/work-orders?propertyId=${encodeURIComponent(propertyId)}`)
+    .then((d) => d.workOrders || []);
 
 async function sendJson(path, method, body) {
   const res = await fetch(`${HOST}${path}`, {
@@ -103,6 +126,13 @@ async function sendJson(path, method, body) {
 export const patchWorkOrder = (id, patch) =>
   sendJson(`/api/work-orders/${encodeURIComponent(id)}`, 'PATCH', patch);
 
+// Raise a work order against a PROPERTY rather than a lead. A booking
+// written from a season plan — how a management company's route days get
+// scheduled — has no lead, so /api/leads/:id/open-wo has no id to take.
+// This is the same call the CRM's own property page makes.
+export const createWorkOrderForProperty = ({ type, propertyId }) =>
+  sendJson('/api/work-orders', 'POST', { type, propertyId }).then((d) => d.workOrder);
+
 // Sweeps every issue off the work order's zones into the property's
 // deferred recommendations. Takes no payload — the server reads the
 // zones. Called once, at finish.
@@ -113,6 +143,16 @@ export const deferIssues = (id) =>
 // just to today's visit — that is the whole point of correcting it.
 export const patchProperty = (id, patch) =>
   sendJson(`/api/properties/${encodeURIComponent(id)}`, 'PATCH', patch);
+
+// Remove a documented zone, with a reason. The server writes the audit
+// entry itself and never renumbers what's left — a controller station
+// keeps its number whatever happens to the ones before it.
+export const removePropertyZone = (propertyId, zoneNumber, { reason, note }) =>
+  sendJson(
+    `/api/properties/${encodeURIComponent(propertyId)}/zones/${encodeURIComponent(zoneNumber)}`,
+    'DELETE',
+    { reason, note }
+  ).then((d) => d.property);
 
 // photos: [{ mediaType, data (base64, no data: prefix), category, zoneNumber, label }]
 // 90-second timeout, matching the web page: slow cellular is normal,

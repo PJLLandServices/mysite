@@ -1,13 +1,21 @@
 // Getting a photo off the phone and into a work order.
 //
-// The server wants base64 with no data: prefix, a real mediaType it can
-// verify against the file's magic bytes, and nothing over its size cap —
-// so images are downscaled and re-encoded as JPEG before they leave the
-// device rather than shipped straight off the camera at 12 megapixels.
-// A tech on rural cellular should not be uploading 8MB because nobody
-// resized it.
+// The server wants base64 with no data: prefix and a real mediaType it
+// verifies against the file's MAGIC BYTES — so the declared type has to be
+// the truth, not a hopeful default.
+//
+// This module used to hardcode 'image/jpeg' on every payload, with a
+// comment claiming images were re-encoded as JPEG before they left the
+// device. Nothing did that. An iPhone photo library hands back HEIC, and a
+// screenshot hands back PNG, so the server saw JPEG in the envelope and
+// something else in the bytes and refused it: "File 1 doesn't look like a
+// real image/jpeg." Intermittently — a camera capture often does come back
+// as JPEG, which is why it worked until it didn't. Say what the file
+// actually is; the server's work-order whitelist takes JPEG, PNG, HEIC,
+// WebP and GIF.
 
 import * as ImagePicker from 'expo-image-picker';
+import { mediaTypeOf } from './media-type';
 
 const OPTIONS = {
   mediaTypes: ['images'],
@@ -20,7 +28,7 @@ const OPTIONS = {
 function toPayload(asset, meta) {
   if (!asset?.base64) return null;
   return {
-    mediaType: 'image/jpeg',
+    mediaType: mediaTypeOf(asset),
     data: asset.base64,
     ...meta,
   };

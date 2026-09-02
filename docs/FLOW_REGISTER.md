@@ -1422,6 +1422,115 @@ opposite of the one first recorded: a fix verified against a live symptom is not
 the codebase cannot produce" just because the write path is hard to find — data outranks code
 reading, and the bar for removing the union again is a walked Today page, not an argument.
 
+**2026-09-01 (Add and remove zones from the app):** the other half of the declared-count
+work. A tech who arrives to five zones where the customer said six can now fix it on the
+spot — add appends a zone to the visit and the property; remove takes it off both, behind a
+confirm and a **reason**. Patrick's call that removal is destructive and that is fine: "if
+someone tells me their system is 6 zones and I arrive to only 5, deleting isn't that big of a
+deal." **Two things the implementation is careful about.** Zone numbers are CONTROLLER
+STATIONS, not list positions — removing Zone 3 leaves 1,2,4,5,6, never renumbering a survivor
+onto a station it does not own, because next spring a tech reads those numbers off the box on
+the garage wall. And the reason is written by the SERVER (`properties.removeZone()`, reached
+by `DELETE /api/properties/:id/zones/:n`) rather than sent as a history entry by the phone: a
+client-writable audit log is not an audit log. Reasons are a closed set — not on this
+property / merged / added in error / other-with-a-note — so the trail can be counted later,
+and `system.zoneCount` follows the surviving list so a stale declared count can never
+resurface as a fallback. **Coverage:** `scripts/test-declared-zones.mjs` grew to 33
+assertions. **What still needs Patrick:** remove a zone from a six-zone property and confirm
+the remaining five keep their original numbers on both the work order and the property, and
+that the reason shows up in the property's history.
+
+**2026-09-01 (A declared zone count now becomes real zones):** a customer books a fall
+closing saying they have eight zones; pricing has always honoured that (`effectiveZoneCount()`
+reads documented zones first, then `system.zoneCount`), so they are charged the 7-8 zone tier.
+But `scaffoldZonesFromProperty()` read the documented list ONLY, which on a first-time property
+is empty, so `create()` fell through to its "always give the tech at least one zone"
+placeholder. **Priced for eight, dispatched with one** — the tech arrives at an eight-zone lawn
+holding a one-zone work order. Two functions asking the same question and one of them not
+knowing about the fallback. **Fixed:** `declaredZoneList()` describes the list a declared count
+implies, `scaffoldZonesFromProperty()` falls back to it, and the seasonal create routes write
+that list onto the PROPERTY first (Patrick's call — the record should carry its zones from the
+first booking) so the work order and the property agree from visit one. The write lives at the
+route layer on purpose: `lib/work-orders.js` depends on nothing but node built-ins and two test
+suites sandbox it alone, an invariant this change briefly broke and then respected. Zones land
+`pendingReview: true`, the flag `applySystemUpdates()` already uses for zones discovered in the
+field, because a number typed into a booking form is a claim, not a survey. **A consequence
+handled with it:** the appointment page refuses a customer's zone-count correction once the
+property has documented zones ("our technicians have already mapped your system"), so
+materializing zones would have locked customers out with a message that wasn't true — that
+check now counts only zones a human confirmed, and naming a zone in the app clears the flag.
+**Coverage:** `scripts/test-declared-zones.mjs` (27 assertions, in `build:check`). **What still
+needs Patrick:** book a new property declaring a zone count, open its work order, and confirm
+the right number of zones appear on both the work order and the property; then confirm the
+customer can still correct that count until a tech names a zone.
+
+**2026-09-01 (The zone rename, second pass — and a data-loss risk found on the way):** the
+first fix carried the property along with the work order, and it still failed on Zone 3 with
+"the property record doesn't list any zones to rename" — on a property whose work order had
+scaffolded four zones FROM that list, so the zones plainly existed. Two causes, stacked.
+**(a)** `ClosingScreen.save()` replaced the whole work order with the PATCH response, which
+returns the work order ALONE — so the `property` the initial GET attached was thrown away by
+the first save. It worked on Zone 1 and was gone by Zone 2. Decorations are now carried
+forward. **(b)** The deeper problem, found while fixing (a): `properties.update()` merges
+`system` only ONE LEVEL DEEP, so the `zones` array in a PATCH **replaces** the stored array
+outright. Patching from a work-order copy is therefore unsafe by construction — a copy taken
+before Zone 1's rename still carries Zone 1's old name, and sending it reverts that rename;
+an empty copy erases the property's zone list entirely. (The empty-list guard that produced
+the confusing message was preventing exactly that, which is why it stays.) The rename now
+**fetches the property fresh** immediately before patching, so the array it sends is provably
+current, and writes both `location` and `label` because older records key off one and newer
+off the other while the CRM reads `location || label` — writing one and leaving the other
+stale shows the old name on whichever surface reads the other. **What still needs Patrick:**
+rename two different zones in one visit, then open the property and confirm BOTH new names
+are there and no zone has gone missing.
+
+**2026-09-01 (Three faults found walking a live fall closing):** Patrick ran a real closing
+on the app and hit three, all app-side, all under FLOW-31. **(1) Photos refused.** The server
+verifies a photo's declared mediaType against its MAGIC BYTES; `photos.js` hardcoded
+`image/jpeg` on every payload while its own header comment claimed images were re-encoded to
+JPEG on device. Nothing did that. An iPhone library photo is HEIC and a screenshot is PNG, so
+the server saw JPEG in the envelope and something else in the bytes: *"File 1 doesn't look
+like a real image/jpeg."* Intermittent, because a camera capture often IS a JPEG — it worked
+in testing and failed on a driveway with the water already off. Now declares what the file
+actually is, from the asset's `mimeType` or its extension, and can only emit a type the
+server's own whitelist accepts. **(2) Thumbnails blank.** The stored photo record carries `n`,
+not a `url`; both closing screens read `p.url`, got undefined, and rendered grey boxes for
+photos that had uploaded fine. Now built from `n` against
+`/api/work-orders/:id/photo/:n`. **(3) A zone rename never reached the property.**
+`GET /api/work-orders/:id` returns `{ workOrder, property, lead }` with property a SIBLING of
+the work order; `getWorkOrder()` returned `d.workOrder` alone and dropped it. `ZoneStage` read
+`wo.property.system.zones`, got undefined, mapped an empty array, and the (correct) "don't
+wipe the zone list" guard swallowed it — silently, which is why it looked like nothing
+happened. The property now travels with the work order, and the guard says which case it hit
+instead of nodding. **Coverage:** `scripts/test-media-type.mjs` (19 assertions, in
+`build:check`), which checks every type the app can emit against the server's OWN
+`WO_MEDIA_MIME_WHITELIST` so the two cannot drift. **What still needs Patrick:** attach a
+photo from the library (not just the camera) and confirm it lands and shows a thumbnail;
+rename a zone and confirm the new name appears on the property afterwards.
+
+**2026-09-01 (Start WO on a lead-less booking — found on a driveway):** Patrick opened the
+app on a real Willowridge stop and tapped **Start WO**: *"Couldn't open — API endpoint not
+found."* Cause: the app built `/api/leads/${leadId}/open-wo` unconditionally, and an
+assignment booking's `leadId` arrives as `""`, so the path collapsed to `/api/leads//open-wo`
+— which matches no route (`([^/]+)` needs a character) and fell through to the catch-all 404.
+Every lead booking on the same screen worked, which is why it read as a Willowridge problem.
+**Fixed:** a row with no lead now raises its work order against its PROPERTY, via the same
+`POST /api/work-orders { type, propertyId }` the CRM's property page uses, with the service
+key mapped to a template exactly as the server maps it. **Look before creating** — that
+endpoint has no upsert, so an unguarded second tap raises a second work order for the same
+visit: two documents and two invoices for one lawn. The property's existing work orders are
+read first and an unfinished one of the same type is reopened instead. A row with neither a
+lead nor a property cannot start one, and says so by disabling the button rather than
+failing at the server. Routing logic lives in `pjl-field/src/workorder-routing.js` (out of
+the screen so it is testable without React Native); `scripts/test-wo-routing.mjs` (38
+assertions, in `build:check`) pins that a lead-less row never routes through the lead
+endpoint, that duplicates are refused, and — checked against `BOOKABLE_SERVICES` and the
+server's own `templateForServiceKey` — that the app's template mapping cannot silently drift
+from the server's. **What still needs Patrick:** tap Start WO on a Willowridge stop, confirm
+it opens a fall closing; back out and tap it again, confirming it reopens the SAME work
+order rather than making a second; and confirm an ordinary residential row still starts
+normally.
+
 **2026-09-01 (Field app, assignment bookings):** the app's native Today screen honours the
 lead-less rows the assignment writer produces — Notify and Start WO disable rather than
 posting an empty lead id, and the card keys off `bookingId`. This matches, and does not

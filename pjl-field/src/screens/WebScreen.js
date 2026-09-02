@@ -1,7 +1,13 @@
-// A CRM page hosted in the app. The transactional flows — completing a
-// work order, invoicing, messaging — stay on the pages that already do
-// them correctly and are covered by FLOW_REGISTER. Only reading and
-// browsing was worth rebuilding natively.
+// A CRM page hosted in the app.
+//
+// TRANSITIONAL. The app is moving to its own screens end to end; this is
+// what still runs on the website until each native replacement lands.
+//
+// While it is here it must not be a trap door. Handing a tech from a
+// native screen into a web page with no way back strands them mid-visit:
+// the tab bar switches tabs but does not undo the handoff, and the page's
+// own chrome is hidden by design. Any screen that pushes a path here
+// passes `onBack`, and a bar appears with it.
 
 import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -25,7 +31,7 @@ const HIDE_CRM_NAV = `
   true;
 `;
 
-export default function WebScreen({ path }) {
+export default function WebScreen({ path, onBack, title }) {
   const ref = useRef(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
@@ -39,6 +45,14 @@ export default function WebScreen({ path }) {
 
   return (
     <View style={styles.screen}>
+      {onBack ? (
+        <View style={styles.bar}>
+          <Pressable onPress={onBack} hitSlop={12} style={styles.back}>
+            <Text style={styles.backText}>‹ Back</Text>
+          </Pressable>
+          {title ? <Text style={styles.barTitle} numberOfLines={1}>{title}</Text> : null}
+        </View>
+      ) : null}
       <WebView
         ref={ref}
         source={{ uri: `${HOST}${path}` }}
@@ -76,6 +90,19 @@ export default function WebScreen({ path }) {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.card },
   web: { flex: 1 },
+  bar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    backgroundColor: colors.card,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.separator,
+  },
+  back: { paddingVertical: 4, paddingRight: space.sm },
+  backText: { ...type.body, color: colors.brand, fontWeight: '600' },
+  barTitle: { ...type.body, color: colors.textMuted, flexShrink: 1 },
   overlay: {
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center', justifyContent: 'center',
