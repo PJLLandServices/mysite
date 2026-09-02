@@ -19,6 +19,24 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-01 (Lead-booking heal becomes a sweep — the two booking stores can't quietly
+disagree):** Patrick reported a customer's bookings on the schedule and his phone calendar but
+missing from /admin/bookings ("why are the Willowridge landscaping bookings not showing up on the
+bookings again?"). Root cause: a public-flow booking is born on its LEAD; the canonical
+bookings.json record — the only thing /admin/bookings reads — is materialized by
+`upsertFromLead`, and the sole whole-list heal lived INSIDE the iCal feed: it ran only when a
+calendar client fetched, and swallowed every failure (`catch (_)`), so a lead whose upsert failed
+was invisible on canonical surfaces forever, with no trace. The loop now lives once in
+`bookings.healFromLeads(leads)` — the feed calls it, and server.js runs it as the EIGHTH sweep
+(boot + 10 min), logging a count when it heals and NAMING each lead whose heal fails. Same
+"swept state, not human-triggered code paths" rule the assignment time sweep recorded. Feed
+semantics preserved exactly: a lead whose canonical record exists is left alone (no re-sync), a
+`lead.booking` without a start stays out. New `scripts/test-booking-heal.mjs` (10 assertions, in
+`build:check`): heals what's missing, idempotent, existing records untouched, a broken lead is
+reported by id without sinking the rest, empty input no-ops. **No PASS flow's route or payload
+changed** — the heal is additive materialization the feed already performed; FLOW-01/02/23
+untouched, FLOW-03's booking write path untouched.
+
 **2026-08-31 (Preflight names the no-zone stops):** Patrick asked which properties sit behind
 the `no_zone_count` skips and no screen could answer — only `assign()` checked zone counts, so
 Check-the-plan reported those stops ready and they vanished later. `assignments.preflight()` now
@@ -1305,6 +1323,78 @@ or catalog change, and the CTA that moved is FLOW-28's (UNMAPPED). `publicBookin
 (fall 2026: Oct 30) is defined in the config for the future gate and is deliberately
 consumed by nothing, pinned by a source guard. Cover:
 `scripts/test-season-config.mjs` (66 assertions, in `build:check`).
+**2026-09-01 (Completion email + service report, Patrick's simulated-closing review):** three
+fixes from his walk of a real completed work order. (1) **The email names the service**:
+subject "PJL Fall Closing Summary — please review" (was the generic "visit summary"), headline
+to match, and Patrick's lead copy for the seasonal services ("PJL has successfully completed
+the fall closing of your sprinkler system… we observe your system for potential issues and
+note them for next year's spring opening — anything the technician flagged is in your Service
+Report"); "attached summary" wording corrected — the report is a portal link, never an
+attachment. (2) **Warranty paragraph removed from the email** on his instruction; the warranty
+itself is untouched — the record still stamps, the portal still shows coverage, claims (FLOW-30)
+unaffected. Summary verb fixed too: "4 zones winterized" for a closing / "inspected" for an
+opening, not "checked". (3) **The report's checkmarks are DRAWN, not typed**: "✓" (U+2713)
+exists in neither Barlow Condensed nor built-in Helvetica, so every completed checklist line
+printed "?" on the customer's signed document. `drawCheckmark()` strokes two vector lines —
+no font to fall back through. Verified by stream inspection of a rendered fixture: exactly 5
+stroked marks for 3 checked steps + 2 answer lines, zero "?" glyphs. **FLOW-31's historical
+invariant untouched** — checklist KEYS and `checklistKeysForWorkOrder()` unchanged; only how a
+mark is painted. wo suites: fall-closing 31, completedat 39, unlock 56, invoice-wo-report 21,
+mailer-log 18 — all pass unchanged. No PASS flow touched.
+
+**2026-09-01 (Decision I — "no need to contact" customers; the Willowridge hunt's true
+ending):** the finder + preflight finally named it: all 14 Willowridge stops skipped as
+`no_contact` — correctly, by the truck-never-surprises-a-house rule, but wrongly for a
+management company Patrick coordinates with directly ("these are non need to contact
+bookings"). New property flag `commPrefs.noContactNeeded` ("No need to contact" tick on the
+property page). Preflight: **ready (silent)**, counted and listed under "Will book WITHOUT
+messages" so the send arithmetic stays visible; assign books them like anyone else; the
+cadence engine refuses EVERY send through the one `cadenceGates` gate (reason
+`no_contact_needed`) — blast, steps 2–6, day-move notices. Persistence trap honoured:
+`hydrate()` rebuilds commPrefs key by key and DELETES unlisted keys on the next read (the
+2026-08-25 reviewRequestsEmail lesson), so the flag is in the blank default, the hydrate list,
+and COMM_PREF_KEYS. Suites: preflight 31, writer 46, cadence 45; full `build:check` exit 0.
+**No PASS flow touched** — FLOW-01/02/03/23 don't read these gates; the flag defaults false so
+every existing property behaves byte-identically until Patrick ticks it.
+
+**2026-09-01 (The job finder — the data gets a voice):** Patrick reported the Willowridge
+symptom STILL alive after the FLOW-32 restore deployed. Three real fixes in (bookings-page heal,
+preflight naming, work-order union), each found by code reading, and the live symptom outlived
+them all — so the fourth move is not a fourth guess. Two things shipped: (1) **hardening** —
+`day-schedule.parseStored` treats a date-only `scheduledFor` ("2026-10-02") as LOCAL midnight;
+`new Date()` alone would land it at UTC midnight, the evening of Oct 1 in Toronto, silently
+shifting the job to the wrong day (day-schedule suite 41, +5). (2) **The finder** —
+`server/lib/job-finder.js` + `GET /api/schedule/find-jobs?q=&date=` + a "Missing a job? Search
+every record" box on the Today page: searches EVERY store a job's date can live in (leads,
+canonical bookings, work orders, properties, season-plan stops), reaches records **by property
+link** when their own name field is blank (the standard shape of a WO raised against a
+property), and issues one plain-sentence verdict per record against the selected day — "NO
+scheduled date at all — open the work order and set it", "stored as a date with no time —
+counted as local midnight", "planned but NEVER BOOKED — run preflight", "ARCHIVED — never
+shows". Read-only; judges dates with day-schedule's own parser so its verdicts cannot drift
+from the schedule's behaviour. `scripts/test-job-finder.mjs` (17 assertions, in `build:check`).
+**No PASS flow touched.** The acceptance IS the use: Patrick types "Willowridge" on the Today
+page and the next message in this hunt is whatever the finder says, not another hypothesis.
+
+**2026-09-01 (FLOW-32 — directly-scheduled work orders reach Today; the reverted fix
+restored):** Patrick's third report of the same live symptom — Willowridge Landscaping absent
+from the Today page — after both #111 and #112 deployed. The field-app merge had DROPPED the
+work-order union built for exactly this ("a lead-less scheduled work order cannot presently
+exist" — see the corrected entry below): wrong, because the work-order page's schedule/backdate
+input PATCHes `scheduledFor` on any work order, and because existing records keep their dates
+regardless of current write paths. `server/lib/day-schedule.js` + `scripts/test-day-schedule.mjs`
+(36 assertions) restored from the reverted commit, with the revert history written into the
+module header; `/api/schedule/today` now unions all THREE date homes — `lead.booking.start`,
+canonical `bookings.json`, `workOrder.scheduledFor` — additive, re-sorted, deduped on
+`workOrder.id`. New over the original: canonical (assignment) rows now NAME their linked work
+order from `booking.workOrderIds`, so the card shows "already opened · status" and the dedup
+covers a WO spawned from an assignment booking. The CRM Today client renders lead-less rows
+live (Notify omitted — nothing to message from; Open WO links straight to the WO); the field
+app already handled these rows since #111 and needs no update. **No PASS flow touched** — the
+endpoint is FLOW-32's own (UNMAPPED, needs Patrick's walk: open Today on a day Willowridge is
+scheduled, confirm every property listed with the right times, tap through to a work order,
+and confirm no row that showed before has stopped showing).
+
 **2026-09-01 (Fall closing on the field app):** FLOW-31 opened — the fall-closing visit as
 performed on the iPhone app. Opened as FLOW-28 on a branch cut 2026-08-18 and renumbered on
 merge: FLOW-28 and FLOW-29 were both taken by work that landed on main in the interim. No
@@ -1322,6 +1412,15 @@ ever written from `lead.booking.start` at creation or back-filled at completion
 date **cannot presently exist**. The fix addressed a case the codebase cannot produce. The
 root cause of the wrong diagnosis was reading a two-week-stale `origin/main`. If a
 property-first work order ever does get a schedulable date, this is the gap that opens.
+**Correction, 2026-09-01, hours later:** the ORIGINAL diagnosis was right and the drop was the
+error — see FLOW-32 above. Premise (2) was false on both halves: the work-order page carries a
+schedule/backdate input (`server/work-order.js` ~502) that PATCHes `scheduledFor` on any work
+order (`scheduledFor` is in `lib/work-orders.js`'s PATCH allow-list), and existing records keep
+whatever date they carry regardless of what today's code writes. Patrick confirmed the gap
+live: Willowridge still missing from Today after both deploys. The durable lesson is the
+opposite of the one first recorded: a fix verified against a live symptom is not "for a case
+the codebase cannot produce" just because the write path is hard to find — data outranks code
+reading, and the bar for removing the union again is a walked Today page, not an argument.
 
 **2026-09-01 (Add and remove zones from the app):** the other half of the declared-count
 work. A tech who arrives to five zones where the customer said six can now fix it on the
@@ -1946,6 +2045,7 @@ Nothing below has been walked. Assume nothing works until verified.
 | FLOW-24 | Form failure → does anything alert Patrick? | Contact page shows "Your message didn't send." Unknown whether that failure is logged anywhere. |
 | FLOW-25 | AI diagnostic tool (`/sprinkler-repair.html`) | Carries a financial promise: "correct diagnosis = 1 hr labour free." Runs on Cloudflare Worker + API key — a dependency chain separate from Render and from email. |
 | FLOW-27 | **Material List → RFQ → cheapest price → PO** — **UNMAPPED** (opened 2026-08-16) | Hop chain: **ML-… `need` lines → shop or split → RFQ-… per supplier → send (PDF+CSV, no prices) → vendor replies → `recordQuotedPrices` → compare by SKU → apply cheapest to the parts catalog → ML reprices → PO-…**. The supplier half of the money path, and it had **no registered flow and no test coverage at all** before this. `scripts/test-rfq-shopping.mjs` (39 assertions, in `build:check`) now covers the pure logic, and a live-API walk covered the routes: shop mode gives every supplier the whole list including SKUs with no supplier assigned; an outgoing line carries no price of ours and its frozen CSV names no other supplier, no material list and no price column; two suppliers each win different SKUs; **applying a quote dearer than one already recorded for the same list is refused with a 409 naming the SKUs** (this was silently overwriting the cheaper price before); apply-cheapest writes the winner of each SKU with the source RFQ attributed; and asking for quotes never moves a line off `need`. **What is NOT covered and needs Patrick:** the email leg (this sandbox has no SMTP credentials, so `markSent` was called directly), a real two-supplier round trip with genuine replies, and confirming the resulting PO prices against an invoice. |
+| FLOW-32 | **A job reaches today's schedule** — **UNMAPPED** (opened 2026-09-01; the FLOW-29-that-wasn't, restored after the revert proved wrong live) | Hop chain: **job scheduled (public booking → `lead.booking.start` · assignment writer → canonical `bookings.json` · CRM new-WO form or the work-order page's schedule/backdate input → `workOrder.scheduledFor`) → `GET /api/schedule/today` unions all three (`server/lib/day-schedule.js`) → the CRM's Today page AND the field app's Today tab → tap through to the work order**. Additive by identity: every lead and canonical row renders exactly as before; work orders in the local-day window append, deduped on `workOrder.id` (canonical rows name their linked WO from `booking.workOrderIds`, so a WO spawned from an assignment booking can't list twice); `cancelled`/`no_show` skipped, `completed` still shows. Lead-less rows: Notify not offered (no lead to message from), Open WO links straight to the WO. Coverage: `scripts/test-day-schedule.mjs`, 36 assertions, in `build:check`. **Needs Patrick's walk:** Today on a day Willowridge is scheduled — every property listed at the right time, tap one through to its WO, and no previously-showing row gone. |
 | FLOW-31 | **Fall closing performed on the field app** — **UNMAPPED** (opened 2026-08-31 as FLOW-28, renumbered on merge 2026-09-01 — FLOW-28 and FLOW-29 were both claimed by work that landed on main while this branch was out) | Hop chain: **Start Service (status → `on_site`, stamps `arrivedAt` + new `arrivalLocation`) → water-off screen (`waterShutoffBy`, optional photo) → one page per zone (findings, notes, photo, explicit Done, and a zone label edit that writes back to `property.system.zones[].location`) → close-out (four ticks + `backFlush`) → signature or bypass → completion cascade → invoice**. The closing is the highest-volume visit PJL performs and had **no registered flow**. This pass is schema only — no field screens yet. **Shipped:** `zone_revamp` added to `ZONE_ISSUE_TYPES` (a zone needing redoing is a different job from replacing a part in it, and next spring should read that way rather than hide under `other`); `SERVICE_CHECKLISTS.fall_closing` cut from six ticks to the four Patrick actually performs; `waterShutoffBy` (`customer` \| `tech` — one or the other, never both) and `backFlush` (`yes` \| `no` — an answer, where "no" is complete, not a task left undone) as validated top-level fields rather than forced into a boolean checklist; `arrivalLocation` stored but never trusted — an impossible reading becomes an absent stamp rather than a refused PATCH, because a confused GPS must not stop a tech starting a job. **A latent regression found and prevented, which is the reason this entry is worth reading:** `lib/wo-report-pdf.js` rendered the service checklist from a **hardcoded duplicate** of the definition in `lib/work-orders.js`. Shortening the fall-closing list would therefore have silently deleted two lines — `compressor_connected`, `zones_blown_clear` — from the customer report of **every closing already signed**, including one regenerated years later for a warranty claim, against a document the customer signed. Fixed by importing the definition (one source of truth) and rendering `checklistKeysForWorkOrder()`, the union of the current definition and whatever that work order actually stored. The past keeps saying what it said. The report also now states who shut the water off and whether a back-flush was needed, omitted entirely when unanswered. **Coverage:** `scripts/test-fall-closing.mjs` (31 assertions, in `build:check`), which asserts the historical-report invariant directly; full `build:check` green including `test-wo-unlock` (56) and `test-wo-completedat` (39), the two suites that exercise `work-orders.js` hardest. **What still needs Patrick:** walk a real fall closing end to end once the screens exist; regenerate the report for a closing completed BEFORE 2026-08-31 and confirm it still prints all six of its original lines; and confirm the two new report statements read correctly to a customer. |
 | FLOW-26 | **Site Builder design → Quote + Material List** — **UNMAPPED** (opened 2026-08-13, Site Plan Underlay brief) | Hop chain: **traced geometry → `compute()` → `desiredQuoteLines()` → `syncQuoteFromDesign()` → Q-… → `generateMaterialList()` → ML-…**. This is the design half of the money path and it feeds **FLOW-20** (quote written → delivered), also UNMAPPED. Every hop exists in code and each was exercised in a scripted browser walk of `/admin/sitebuilder` (see the acceptance notes below), but **that is not a walked flow** — mark PASS only after Patrick has walked it end to end and observed each hop with a real tender. **What the scripted walk did establish, on a synthetic known-scale sheet:** a 100.0 ft × 60.0 ft rectangle uploads, calibrates and traces to **6,000.0 sq ft (0.000% error)**; the same drawing exported at a different DPI calibrates to the same real-world dimensions; a deliberately 2×-mistyped calibration dimension produces a **failed** verification and **blocks tracing**; the stated-scale cross-check agrees on a to-scale sheet and flags a fit-to-page export; traced geometry flows into head count, zone count and GPM; the design saves and restores across a reload; recalibrating a traced-over sheet is refused naming the dependent area; and the customer quote sheet renders the traced geometry with **no underlay**. **Master plan (added Aug 2026):** the same scripted-walk standard — every traced area renders on one sheet in the calibrated frame coloured by its real valve; drip beds sharing a valve resolve to ONE colour; the point of connection, manifolds and mainline place by click, drag in sheet feet, measure to the hand-computed length (300.000 ft over two legs), tee to the nearest point on the run rather than back to the start, assign every valve to its nearest manifold with none lost or double-counted, survive a save + reload at blob `version: 5`, and — checked explicitly — **a 1,400 ft mainline does not move a single line of the material list**. **Laterals (layer 3):** each valve's run is verified to be the true minimum spanning tree from its manifold (91.623 ft on a four-head lawn where a pipe-per-head would be 107.781), the branches leaving a manifold sum to exactly the valve's flow with no segment carrying more than it delivers, a drip bed taps the point on its outline nearest the manifold, sizes never fall below the 3/4" actually stocked, a bed split across several valves draws one distinct path per valve rather than three lines on top of each other, and moving manifolds 700 ft apart still moves nothing in the material list. **Tees and control wire (layer 4):** a branching mainline measures each leg once (100+80+80) rather than doubling back through the branch; deleting a node mid-branch splices it out and reattaches its children; the wire trunk carries every valve while each branch carries only its own box; conductors round up to real spool sizes; a mainline stub past the last box carries no wire; gauge steps 18→16→14→12 AWG with run length; a version-5 chain migrates to parent `i-1` and measures the same run it always did; a circular parent re-roots to the POC rather than dropping pipe; and 2,100 ft of main and wire still moves nothing in the material list. **Valve-to-box assignment (layer 5):** a valve defaults to its nearest box and can be overridden by hand; the override is stored against the box's **id**, so deleting a *different* box does not silently hand the valve to whichever box inherits that array position; inserting an area renumbers the valve list without moving any assignment; dragging a box does not assign the selected valve while clicking it does; deleting a box warns and releases its valves; an assignment pointing at a vanished box is reported and falls back to nearest rather than being obeyed; one for a valve that no longer exists is dropped on save; a version-6 sheet gets ids minted on load and starts fully automatic; and re-assigning valves between boxes moves nothing in the material list. **What is NOT covered and needs Patrick:** a real multi-page tender PDF (thumbnail legibility, sheet choice, underlay readability at working zoom); a traced area against a **hand-measured real bed** agreeing within 2%; and the full hop out to a live Q-… and ML-… on a real project. |
 | FLOW-28 | **Portal "Book your seasonal service" → booked appointment** — **UNMAPPED** (opened 2026-08-19) | Hop chain: **property portal button → `POST /api/portal/:token/begin-booking` → `bookingSessions.createSession({ suggestedService, customerHints })` → redirect to `/book.html?session=…` → `js/booking.js` `applySessionPrefill()` → service locked in via `fromSessionHandoff` → `bestLandingStep()` skips to the first empty step**. This is the existing-customer express path and it had no registered flow. **Defect found and fixed 2026-08-19 (seasonal CTA brief):** `begin-booking` composed the tier key by hand as `` `${season}_${zoneCount}z` ``, which is a real key for **only 4 of 50 zone counts** (4, 6, 8, 15). Every other count produced a key `BOOKABLE_SERVICES` does not contain; `booking.js` honours `suggestedService` only when it resolves, and otherwise falls through **in silence** — so the handoff collapsed to the generic unfiltered catalog (spring cards first, whatever the season) with no error anywhere. It survived because 4 and 8 are the counts anyone would spot-check. Now resolved through `deriveSeasonalKey()` (pricing.json `seasonal_tiers`), which the same file already imported. **Second defect fixed in the same change:** the key was always residential, so a **commercial** customer was handed a residential tier — and because a session handoff *locks the service in*, they would be booked at the residential price with no chance to correct it. That was live for commercial properties with exactly 4 zones. The endpoint now reads `customer.accountType` via `property.customerId` and picks the matching tier table. `scripts/test-seasonal-handoff.mjs` (584 assertions, in `build:check`) pins every zone count 1–50 × both seasons × both account types to a bookable key in the right bracket, and a source guard fails the build if a seasonal key is ever composed by interpolation again. **Entry point — read this before testing.** The Book button lives ONLY on the **property portal**, which is a different surface from the customer portal. `GET /api/portal/:token` resolves the token as a **lead** first (→ `portal` payload → `renderPortal()`, the normal customer portal, which has **no booking CTA of any kind**) and only falls back to matching a **property** token (→ `propertyPortal` payload → `renderPropertyPortal()`, which has the button). The property-token link is minted by the seasonal outreach engine (`server/lib/outreach.js` `buildPortalLink()` → `<base>/portal/<propertyToken>?season=spring|fall`) and reaches the customer by email from `/admin/outreach`. **Opening a customer's portal from the CRM will never show this button** — that is the wrong door, not a bug in this flow.

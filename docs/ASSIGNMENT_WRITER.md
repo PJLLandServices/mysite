@@ -27,6 +27,7 @@ Decided with Patrick, 2026-08-31. Unlisted recommendations were accepted as deci
 | F | What counts as "responded" | **A confirm on their appointment page, a reschedule/cancel there, or a one-tap manual mark in the CRM** (for phone calls and text replies, which the system cannot see — there is no inbound SMS handling and none is being built now). *Refined 2026-08-31 on Patrick's stage-3 review: every message carries ONE `{appointmentLink}` to a single appointment page where the customer decides — confirm, reschedule, or cancel — instead of separate confirm/reschedule links. Two URLs per SMS split each text into extra segments the customer receives as multiple messages.* |
 | G | Early-day compression | **Send exactly on schedule.** R1 (Sept 28) non-responders get six messages in 17 days — Sept 10, 13, 18, 21, 23, 27. Patrick chose this over a spacing rule, knowingly. |
 | H | The customer's real zone count | *Added 2026-08-31, Patrick's post-launch-review ask: many profiles carry only the booking class for the customer's category, not their actual system.* **The appointment page lets the customer enter their real zone count.** It saves to the property (`system.zoneCount` — the same field Patrick fills by hand); tech-DOCUMENTED zones always win and make the row read-only. The booking's tier follows the real number (serviceKey, label, price bracket, on-site minutes — one shared rule, `pricing.effectiveZoneCount`, now feeds the writer, the shown price AND the sequencer). It is **not** a response — nothing was said about the date — and it never bumps `rescheduleCount`. Patrick is paged only when the count moves the price bracket. |
+| I | "No need to contact" customers | *Added 2026-09-01, from the Willowridge hunt: all 14 of their plan stops were skipped as unreachable — their properties carry no contact info because Patrick coordinates with the office directly ("these are non need to contact bookings").* **A property ticked "No need to contact" (property page → communication preferences → `commPrefs.noContactNeeded`) is BOOKED by the assignment writer like anyone else — calendar, day sheet, capacity, sequenced times — and the cadence engine refuses EVERY send for it: no blast, no follow-ups, no D−1 reminder, no day-move notice (one gate, `cadenceGates`, in front of them all; skip reason `no_contact_needed`).** Preflight reports these stops as **ready (silent)**, listed under "Will book WITHOUT messages" so the send arithmetic stays visible. The truck-never-surprises-a-house rule is satisfied by the standing relationship, not by a message. Default off: everyone is contactable until Patrick says otherwise. |
 
 ## Part 2 — The cadence
 
@@ -114,6 +115,23 @@ Full rationale in the build-plan artifact; this is the working checklist.
 ## Part 6 — Build log
 
 Newest first. Every stage PR adds its entry.
+
+- *2026-09-01 — DECISION I: "no need to contact" customers. The
+  Willowridge hunt's true ending: all 14 stops were skipped as
+  unreachable because their properties carry no contact info — by
+  design, Patrick works with their office. New property flag
+  `commPrefs.noContactNeeded` ("No need to contact" tick on the
+  property page, wired through COMM_PREF_KEYS and hydrate() — the
+  key-by-key rebuild DELETES unlisted commPrefs keys on the next read,
+  the reviewRequestsEmail lesson). Preflight: ready + `silent: true`,
+  counted as `readySilent`, listed under "Will book WITHOUT messages".
+  Assign: books them like anyone else. Cadence: ONE gate in
+  `cadenceGates` (reason `no_contact_needed`) refuses the blast, steps
+  2–6, and day-move notices alike, since every send routes through it;
+  nothing is ever marked, nothing ever retried noisily. Suites:
+  preflight 31, writer 46 (silent books; unassign/idempotency arcs
+  include it), cadence 45 (skipped at blast by name; zero step marks
+  after the full arc incl. D−1).*
 
 - *2026-08-31 — THE PREFLIGHT NOW NAMES THE NO-ZONE STOPS (decision D's
   blind spot). Patrick asked "what properties are on this

@@ -720,6 +720,10 @@ function populateForm(property, seasonalPricingResolved) {
   if (propertyForm.elements.prefEmail) {
     propertyForm.elements.prefEmail.checked = prefs.seasonalRemindersEmail !== false;
   }
+  if (propertyForm.elements.prefNoContact) {
+    // Opposite default from the two above: contact is assumed needed.
+    propertyForm.elements.prefNoContact.checked = prefs.noContactNeeded === true;
+  }
   populateSeasonalPricing(property.seasonalPricing || {}, seasonalPricingResolved || null);
 }
 
@@ -829,7 +833,8 @@ function collectForm() {
     },
     commPrefs: {
       seasonalRemindersSMS: Boolean(propertyForm.elements.prefSms?.checked),
-      seasonalRemindersEmail: Boolean(propertyForm.elements.prefEmail?.checked)
+      seasonalRemindersEmail: Boolean(propertyForm.elements.prefEmail?.checked),
+      noContactNeeded: Boolean(propertyForm.elements.prefNoContact?.checked)
     },
     seasonalPricing: collectSeasonalPricing()
   };

@@ -67,6 +67,21 @@ function logoBuffer() {
 }
 function fontHeading() { return barlowBuffer() ? "Barlow-Bold" : "Helvetica-Bold"; }
 
+// A checkmark DRAWN, never typed. The "✓" glyph (U+2713) exists in
+// neither Barlow Condensed nor the built-in Helvetica, so printing it
+// as text rendered "?" on every completed checklist line of the
+// customer's signed report (Patrick's 2026-09-01 review: "definitely a
+// questionable point"). Two stroked lines can't fall back to anything.
+function drawCheckmark(doc, x, y, size = 11, color = PJL_GREEN) {
+  doc.save();
+  doc.lineWidth(Math.max(1.8, size * 0.16)).lineCap("round").lineJoin("round").strokeColor(color);
+  doc.moveTo(x, y + size * 0.55)
+    .lineTo(x + size * 0.36, y + size * 0.88)
+    .lineTo(x + size, y + size * 0.12)
+    .stroke();
+  doc.restore();
+}
+
 const WO_PHOTOS_BASE = path.resolve(__dirname, "..", "data", "wo-photos");
 
 const SERVICE_LABEL = {
@@ -655,12 +670,15 @@ function generateWoReportPdf({ wo, property = {}, customer = {}, mode, audience 
       checklistDef.forEach((key) => {
         ensureSpace(doc, 16);
         const checked = sc[key] === true;
-        const mark = checked ? "✓" : "—";
-        doc.font(fontHeading()).fontSize(11).fillColor(checked ? PJL_GREEN : PJL_MUTED);
-        doc.text(mark, 60, doc.y, { width: 18, continued: false });
-        const labelY = doc.y - 13;
+        const rowY = doc.y;
+        if (checked) {
+          drawCheckmark(doc, 61, rowY - 1, 12);
+        } else {
+          doc.font("Helvetica-Bold").fontSize(11).fillColor(PJL_MUTED);
+          doc.text("—", 60, rowY, { lineBreak: false });
+        }
         doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
-        doc.text(SERVICE_CHECKLIST_LABELS[key] || key, 84, labelY,
+        doc.text(SERVICE_CHECKLIST_LABELS[key] || key, 84, rowY,
           { width: doc.page.width - 60 - 84 });
         doc.moveDown(0.15);
       });
@@ -676,11 +694,11 @@ function generateWoReportPdf({ wo, property = {}, customer = {}, mode, audience 
       if (wo.backFlush === "no") answers.push("Back-flush not required at this property");
       answers.forEach((line) => {
         ensureSpace(doc, 16);
-        doc.font(fontHeading()).fontSize(11).fillColor(PJL_GREEN);
-        doc.text("\u2713", 60, doc.y, { width: 18, continued: false });
-        const y = doc.y - 13;
+        const rowY = doc.y;
+        drawCheckmark(doc, 61, rowY - 1, 12);
         doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
-        doc.text(line, 84, y, { width: doc.page.width - 60 - 84 });
+        doc.text(line, 84, rowY, { width: doc.page.width - 60 - 84 });
+        doc.moveDown(0.15);
       });
       doc.moveDown(0.4);
     }

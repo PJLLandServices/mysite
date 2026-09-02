@@ -44,6 +44,8 @@ const voicemailStore = require("./lib/voicemail-store");
 const { geocode, PJL_BASE } = require("./lib/geocode");
 const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, parseLocalDateKey } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
+const { mergeDaySchedule } = require("./lib/day-schedule");
+const jobFinder = require("./lib/job-finder");
 const { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice } = require("./lib/pricing");
 const { normalizeServiceFeeWaiver, friendlyWaiverReason } = require("./lib/service-fee-waiver");
 const bookingSessions = require("./lib/booking-sessions");
@@ -18018,9 +18020,12 @@ async function handleApi(req, res, pathname) {
         const totalLine = invoice && invoice.total > 0
           ? `<p style="margin: 0 0 14px;">Total for today's visit: <strong>$${moneyCad(invoice.total)} CAD</strong> (incl. HST). An invoice will follow.</p>`
           : "";
-        const warranty = serviceRecord.warrantyExpiresAt
-          ? `<p style="margin: 0 0 14px;">Today's work is covered under PJL's <strong>${serviceRecord.warrantyMonths}-month warranty</strong>, valid through ${new Date(serviceRecord.warrantyExpiresAt).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" })}.</p>`
-          : "";
+        // Warranty line REMOVED from this email on Patrick's 2026-09-01
+        // review ("you can abolish anything regarding warranty"). The
+        // warranty itself is unchanged — serviceRecord.warrantyExpiresAt
+        // still stamps, the portal's service history still shows
+        // coverage, and the claims flow still works. It just doesn't
+        // lead the completion email.
         // Service report — attached when the cascade produced a snapshot
         // (Service Report brief, 2026-05-19). The line goes in the body
         // so the customer knows what the attachment is.
@@ -18050,20 +18055,41 @@ async function handleApi(req, res, pathname) {
         const bypassFollowUp = isBypassed
           ? `<p style="margin: 0 0 14px;">If anything in the visit summary or invoice does not match your understanding of what was authorized, please contact us within 7 days at <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a> or by replying to this email.</p>`
           : "";
-        // Headline + greeting body diverge between the two paths. Signed
-        // WO: "Today's visit is complete." + visit summary. Bypassed WO:
-        // factual "Work was completed at your property…" framing that
-        // doesn't presuppose the customer was the one authorizing.
+        // The email leads with the SERVICE by name — Patrick's 2026-09-01
+        // review of his simulated closing: "visit summary" is too generic
+        // when the customer bought a fall closing. His copy for the lead
+        // paragraph, lightly polished; the seasonal services explain the
+        // on-site observation habit, everything else keeps the factual
+        // completed-at-your-property line. The Service Report is a portal
+        // link, never an attachment, so the copy says "in your Service
+        // Report", not "attached".
+        const typeLabel = ({
+          spring_opening: "Spring Opening",
+          fall_closing: "Fall Closing",
+          service_visit: "Service Visit",
+          build: "Install / Build"
+        })[wo.type] || "Visit";
+        const onDate = completedDateStr ? ` on ${completedDateStr.replace(/</g, "&lt;")}` : "";
+        const serviceIntro = wo.type === "fall_closing"
+          ? `PJL has successfully completed the fall closing of your sprinkler system${onDate}. While on site, we observe your system for potential issues and note them for next year's spring opening — anything the technician flagged is in your Service Report.`
+          : wo.type === "spring_opening"
+            ? `PJL has successfully completed the spring opening of your sprinkler system${onDate}. While on site, we observe your system for potential issues — anything the technician flagged is in your Service Report.`
+            : `Work was completed at your property${onDate}.`;
+        // Headline + greeting body still diverge between the two paths.
+        // Bypassed WO framing doesn't presuppose the customer was the one
+        // authorizing (Admin Signature Bypass brief §3.4).
         const headline = isBypassed
-          ? "Your visit summary"
-          : "Today's visit is complete.";
+          ? `Your ${typeLabel} summary`
+          : `Your ${typeLabel} is complete.`;
         const greetingBlock = isBypassed
           ? `
     <p style="margin: 0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
-    <p style="margin: 0 0 14px;">Work was completed at your property${completedDateStr ? ` on ${completedDateStr.replace(/</g, "&lt;")}` : ""}. Please review the attached summary and the invoice (which will follow separately).</p>
+    <p style="margin: 0 0 14px;">${serviceIntro}</p>
+    <p style="margin: 0 0 14px;">Please review the summary below — your invoice will follow separately.</p>
     <p style="margin: 0 0 14px;">${serviceRecord.summary.replace(/</g, "&lt;")}</p>`
           : `
     <p style="margin: 0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
+    <p style="margin: 0 0 14px;">${serviceIntro}</p>
     <p style="margin: 0 0 14px;">${serviceRecord.summary.replace(/</g, "&lt;")}</p>`;
         const html = `
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
@@ -18074,7 +18100,6 @@ async function handleApi(req, res, pathname) {
   <div style="padding: 24px 28px; background: #FAFAF5; border: 1px solid #e5e5dd; border-top: none; border-radius: 0 0 8px 8px;">${greetingBlock}
     ${reportLine}
     ${totalLine}
-    ${warranty}
     ${bypassFollowUp}
     <p style="margin: 0 0 18px;">
       <a href="${portalUrl}" style="display: inline-block; padding: 11px 20px; background: #E07B24; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600;">Open your portal</a>
@@ -18092,8 +18117,8 @@ async function handleApi(req, res, pathname) {
           to: wo.customerEmail,
           replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
           subject: isBypassed
-            ? "PJL visit summary — please review"
-            : "Your PJL visit is complete",
+            ? `PJL ${typeLabel} Summary — please review`
+            : `Your PJL ${typeLabel} is complete`,
           html
         }).catch(async (err) => {
           await mailerLog.logSend({ kind: "completion", to: wo.customerEmail, ok: false, error: err.message, refId: wo.id });
@@ -20630,6 +20655,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
         const town = lead.contact?.town || lead.contactExport?.address?.town || "";
         return {
           leadId: lead.id,
+          // Where this row came from. A booking has a lead behind it (and
+          // so can be notified-on-route); a "work_order" row appended by
+          // mergeDaySchedule below is a job scheduled straight against a
+          // property with no lead at all.
+          source: "booking",
           customerName: contact.name || lead.contact?.name || "",
           customerPhone: contact.telephone || lead.contact?.phone || "",
           customerEmail: contact.email || lead.contact?.email || "",
@@ -20685,6 +20715,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
           const p = b.propertyId ? propsById.get(b.propertyId) : null;
           const start = new Date(b.scheduledFor);
           const end = new Date(start.getTime() + (Number(b.durationMinutes) || 60) * 60 * 1000);
+          // A booking that already spawned a work order names it, so the
+          // tech sees "already opened, status" on the card — and so the
+          // work-order union below (mergeDaySchedule dedupes on wo.id)
+          // can never list that job a second time.
+          const linkedWo = (Array.isArray(b.workOrderIds) && b.workOrderIds.length)
+            ? allWos.find((w) => b.workOrderIds.includes(w.id)) || null
+            : null;
           dayBookings.push({
             leadId: b.leadId || "",
             bookingId: b.id,
@@ -20705,7 +20742,12 @@ Customer signature captured at ${new Date().toISOString()}.`;
             internalNotes: b.prepNotes || "",
             stage: b.status || "confirmed",
             propertyId: b.propertyId || null,
-            workOrder: null,
+            workOrder: linkedWo ? {
+              id: linkedWo.id,
+              type: linkedWo.type,
+              status: linkedWo.status,
+              zoneCount: (linkedWo.zones || []).length
+            } : null,
             onRouteNotifiedAt: null
           });
         }
@@ -20715,12 +20757,63 @@ Customer signature captured at ${new Date().toISOString()}.`;
       console.warn("[schedule/today] bookings.json union skipped:", err?.message);
     }
 
+    // Lead and canonical bookings are still only part of the day. A work
+    // order scheduled straight against a property — the CRM's new-WO form
+    // or the work-order page's own schedule/backdate input — has no lead
+    // booking and no canonical booking; its only date is scheduledFor on
+    // the work order itself. That is how a management company's
+    // properties get scheduled (one customer, many addresses, a WO per
+    // visit), which is how Willowridge could be booked for today and
+    // appear nowhere on this page (FLOW-32; see lib/day-schedule.js for
+    // why this union was here once, got reverted, and came back). The
+    // merge is additive: every row above renders exactly as before, and
+    // a work order already named by a row is never listed twice.
+    const merged = mergeDaySchedule(dayBookings, allWos, dayStart, dayEnd);
+
     return sendJson(res, 200, {
       ok: true,
       date: new Date(dayStart).toISOString().slice(0, 10),
-      bookings: dayBookings,
-      count: dayBookings.length
+      bookings: merged,
+      count: merged.length
     });
+  }
+
+  // "Why isn't this customer on the schedule?" — searches EVERY store a
+  // job's date can live in (leads, canonical bookings, work orders,
+  // properties, season-plan stops) and answers per record, in plain
+  // sentences, against the asked-about day. Read-only. Born from the
+  // Willowridge hunt (FLOW-32): three real fixes in, the symptom
+  // outlived the code-reading, and the data needed a way to speak.
+  if (req.method === "GET" && pathname === "/api/schedule/find-jobs") {
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const q = normalizeString(url.searchParams.get("q"), 120);
+    const dateKey = normalizeString(url.searchParams.get("date"), 10)
+      || new Date().toLocaleDateString("en-CA");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+      return sendJson(res, 422, { ok: false, errors: ["Bad date param."] });
+    }
+    if (!q) return sendJson(res, 422, { ok: false, errors: ["Type a name, address, or code to search for."] });
+    try {
+      const y = new Date().getFullYear();
+      const plans = [];
+      for (const season of ["fall", "spring"]) {
+        try {
+          const plan = await seasonPlans.getPlan(season, y);
+          if (plan) plans.push({ season, year: y, plan });
+        } catch { /* a season without a plan is simply not searched */ }
+      }
+      const result = jobFinder.findJobs(q, dateKey, {
+        leads: await readLeads(),
+        bookings: await bookings.list(),
+        workOrders: await workOrders.list(),
+        properties: await properties.list(),
+        plans
+      });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      console.error("[find-jobs]", err?.message);
+      return sendJson(res, 500, { ok: false, errors: ["The search failed — see the server log."] });
+    }
   }
 
   // Tech taps "Notify on route" on the today's-schedule view.
@@ -23816,6 +23909,33 @@ server.listen(PORT, HOST, () => {
   };
   sweepAssignedTimes();
   setInterval(sweepAssignedTimes, 10 * 60 * 1000);
+
+  // Lead-booking heal sweep. A booking made through the public flow is
+  // born on its LEAD; the canonical bookings.json record is a mirror
+  // that upsertFromLead materializes. Until now the only whole-list
+  // heal lived inside the iCal feed — it ran only when a calendar
+  // client fetched, and swallowed failures — so a lead-held booking
+  // could sit on the schedule and the phone calendar while the
+  // /admin/bookings page (canonical-only) knew nothing about it
+  // (Patrick: "why are the Willowridge bookings not showing up on the
+  // bookings?"). Same rule as the assignment time sweep: swept state,
+  // not human-triggered code paths. Boot + 10 minutes; healed=0 writes
+  // nothing, and every failure names its lead in the log.
+  const sweepLeadBookings = async () => {
+    try {
+      const result = await bookings.healFromLeads(await readLeads());
+      if (result.healed) {
+        console.log(`[bookings] lead-booking sweep healed ${result.healed} canonical record${result.healed === 1 ? "" : "s"}`);
+      }
+      for (const f of result.failures) {
+        console.warn(`[bookings] lead-booking heal FAILED for ${f.leadId} (${f.name}): ${f.error} — this booking is on the lead but NOT on /admin/bookings`);
+      }
+    } catch (err) {
+      console.warn("[bookings] lead-booking sweep failed:", err?.message);
+    }
+  };
+  sweepLeadBookings();
+  setInterval(sweepLeadBookings, 10 * 60 * 1000);
 
   // Assignment cadence sweep (stage 4) — dispatches steps 2–6 of the
   // follow-up cadence for blasted bookings, each step at most once,

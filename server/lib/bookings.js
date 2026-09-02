@@ -238,6 +238,45 @@ async function upsertFromLead(lead) {
   return next;
 }
 
+// Heal every lead-held booking into the canonical store. The Bookings
+// page, capacity math over bookings.json, and anything else canonical-
+// only can only see records that went through upsertFromLead — and
+// until now the only thing that ran that heal for the whole lead list
+// was the iCal feed, which fires only when a calendar client happens to
+// fetch, and swallowed every failure without a trace ("why are the
+// Willowridge bookings not on the bookings page?"). This helper is the
+// one shared loop: the feed calls it, and server.js runs it as a sweep
+// at boot + on an interval, so the two stores can't quietly disagree.
+//
+// Takes the leads array as an argument (readLeads lives in server.js —
+// same circular-dep avoidance as the feed). Idempotent: a lead whose
+// canonical record exists is left alone entirely (NOT re-synced — the
+// feed's original semantics; edits flow through the explicit paths).
+// Returns what happened so the caller can log it loudly:
+//   { healed, failures: [{ leadId, name, error }] }
+// A lead.booking without a start is not listable anywhere and is
+// skipped silently, exactly as the feed always has.
+async function healFromLeads(leads = []) {
+  const records = await readAll();
+  const canonicalByLead = new Set(records.map((b) => b.leadId).filter(Boolean));
+  const result = { healed: 0, failures: [] };
+  for (const lead of leads) {
+    if (!lead?.booking?.start) continue;
+    if (canonicalByLead.has(lead.id)) continue;
+    try {
+      const upserted = await upsertFromLead(lead);
+      if (upserted) result.healed += 1;
+    } catch (err) {
+      // The name is best-effort — on a record broken enough to fail the
+      // upsert, even reading contact can throw, and the report must not.
+      let name = "";
+      try { name = lead.contact?.name || ""; } catch { /* keep "" */ }
+      result.failures.push({ leadId: lead.id, name, error: err?.message || String(err) });
+    }
+  }
+  return result;
+}
+
 // Create a canonical booking record directly — the property-first path.
 // Everything before the assignment writer entered bookings.json through
 // upsertFromLead (a lead books, the record mirrors); an assigned booking
@@ -688,6 +727,7 @@ module.exports = {
   listByLead,
   listByProperty,
   upsertFromLead,
+  healFromLeads,
   createDirect,
   setAssignmentOutreach,
   markAssignmentResponded,
