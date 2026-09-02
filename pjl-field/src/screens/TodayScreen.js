@@ -26,11 +26,19 @@ import {
   Text,
   View,
 } from 'react-native';
-import { AuthRequiredError, getToday, notifyOnRoute, openWorkOrder } from '../api';
+import {
+  AuthRequiredError,
+  createWorkOrderForProperty,
+  getToday,
+  listPropertyWorkOrders,
+  notifyOnRoute,
+  openWorkOrder,
+} from '../api';
 import { telHref } from '../format';
 import { colors, radius, space, type } from '../theme';
 import { runningVersionLabel } from '../updates';
 import { Pill } from '../ui';
+import { canStartWorkOrder, existingWorkOrderFor, routeForRow, rowKey } from '../workorder-routing';
 
 const WO_STATUS_LABELS = {
   draft: 'Draft',
@@ -160,23 +168,38 @@ export default function TodayScreen({ onOpenWorkOrder }) {
     );
   };
 
+  // A booking with no lead cannot go through /api/leads/:id/open-wo —
+  // there is no id to put in the path, and the request 404s. Those rows
+  // are property-first (an assignment booking off a season plan), so the
+  // work order is raised against the PROPERTY instead, exactly as the
+  // CRM's own property page does it.
+  //
+  // Checked before created: /api/work-orders has no upsert, so a second
+  // tap would raise a second work order for the same visit. If the
+  // property already has an unfinished one of this type, that is the one
+  // that opens.
   const goToWorkOrder = async (b) => {
-    // An assignment booking — written from a season plan, which is how a
-    // management company's route days get scheduled — has no lead behind
-    // it. If it already carries a work order, open that; otherwise there
-    // is nothing to open and no lead to raise one from, and the button is
-    // disabled rather than posting an empty lead id.
-    if (!b.leadId) {
-      if (b.workOrder) onOpenWorkOrder(b.workOrder);
-      return;
-    }
-    setBusyId(b.leadId);
+    const route = routeForRow(b);
+    if (route.action === 'open') { onOpenWorkOrder(route.workOrder); return; }
+    if (route.action === 'none') return;
+
+    setBusyId(rowKey(b));
     try {
-      const data = await openWorkOrder(b.leadId);
+      let wo;
+      if (route.action === 'lead') {
+        wo = (await openWorkOrder(route.leadId))?.workOrder;
+      } else {
+        // Property-first. Look before creating: POST /api/work-orders has
+        // no upsert, so a second tap would raise a second work order for
+        // the same visit.
+        const onProperty = await listPropertyWorkOrders(route.propertyId);
+        wo = existingWorkOrderFor(onProperty, route.type)
+          || await createWorkOrderForProperty({ type: route.type, propertyId: route.propertyId });
+      }
       // The whole work order, not a URL: the shell decides from its
       // `type` whether this opens the native closing flow or the full
       // web page, and only it knows which surfaces exist.
-      if (data?.workOrder?.id) onOpenWorkOrder(data.workOrder);
+      if (wo?.id) onOpenWorkOrder(wo);
       else Alert.alert('No work order', 'The server did not return a work order for this booking.');
     } catch (err) {
       Alert.alert("Couldn't open", err?.message || 'Please try again.');
@@ -312,11 +335,14 @@ export default function TodayScreen({ onOpenWorkOrder }) {
       ) : null}
 
       {bookings.map((b) => {
-        const busy = !!b.leadId && busyId === b.leadId;
+        const busy = busyId === rowKey(b);
+        // Start WO needs somewhere to hang the work order: a lead, or a
+        // property. A row with neither can only be navigated to.
+        const canStartWo = canStartWorkOrder(b);
         const notified = !!b.onRouteNotifiedAt;
         const woLabel = b.workOrder ? (WO_STATUS_LABELS[b.workOrder.status] || b.workOrder.status) : null;
         return (
-          <View key={b.leadId || b.bookingId || b.workOrder?.id} style={styles.card}>
+          <View key={rowKey(b)} style={styles.card}>
             <View style={styles.cardTop}>
               <View style={styles.time}>
                 <Text style={styles.timeStart}>{b.startLabel || timeOf(b.start) || '—'}</Text>
@@ -351,7 +377,7 @@ export default function TodayScreen({ onOpenWorkOrder }) {
               <Action
                 label={b.workOrder ? 'Open WO' : 'Start WO'}
                 onPress={() => handleWorkOrder(b)}
-                disabled={busy || (!b.leadId && !b.workOrder)}
+                disabled={busy || !canStartWo}
                 primary
               />
             </View>

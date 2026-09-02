@@ -158,6 +158,50 @@ function buildDayShapes({ plan, propertiesByCode, bookings = [] } = {}) {
       unresolved
     };
   }
+
+  // A day the PLAN never routed but a real booking now sits on is a
+  // route day in the making — the first ad customer to book Oct 1
+  // starts Oct 1's cluster. Without a shape here that day carried no
+  // geography at all: the probe couldn't show it, and the booking page
+  // would offer it to anyone at any distance, so two customers 80 km
+  // apart could seed the same day (Patrick, with ads live: newly booked
+  // appointments must populate, so a caller gets the best possible
+  // day). Booking-made shapes get the same bucketCap as every other
+  // day; a day with no plan AND no bookings stays unshaped and open to
+  // everyone, exactly as before — someone has to book it first.
+  const cap = Number(plan.bucketCap) > 0 ? Number(plan.bucketCap) : null;
+  for (const booking of bookings) {
+    if (!booking || !booking.start) continue;
+    const dateKey = localDateKey(new Date(booking.start));
+    if (!dateKey || shapes[dateKey]) continue;
+    if (!coordsAreResolved(booking.coords)) continue;
+    shapes[dateKey] = {
+      bucketCap: cap,
+      buckets: { morning: { count: 0, keys: [] }, afternoon: { count: 0, keys: [] } },
+      label: "",
+      points: [],
+      plannedCount: 0,
+      bookedCount: 0,
+      unresolved: [],
+      bookingsOnly: true
+    };
+  }
+  for (const booking of bookings) {
+    if (!booking || !booking.start) continue;
+    const dateKey = localDateKey(new Date(booking.start));
+    const shape = dateKey ? shapes[dateKey] : null;
+    if (!shape || !shape.bookingsOnly) continue;
+    if (!coordsAreResolved(booking.coords)) continue;
+    const key = pointKey(booking.coords);
+    if (shape.points.some((p) => pointKey(p) === key)) continue;
+    shape.points.push({
+      lat: Number(booking.coords.lat),
+      lng: Number(booking.coords.lng),
+      source: "booked",
+      label: booking.propertyId || booking.leadId || "booking"
+    });
+    shape.bookedCount = shape.points.length;
+  }
   return shapes;
 }
 

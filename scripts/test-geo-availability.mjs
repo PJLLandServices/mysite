@@ -47,7 +47,7 @@ const availability = require(path.join(ROOT, "server/lib/availability.js"));
 const geoFilter = require(path.join(ROOT, "server/lib/geo-filter.js"));
 const seasonPlans = require(path.join(ROOT, "server/lib/season-plans.js"));
 
-const { listAvailableSlots, expandDaysToRange, DEFAULT_HOURS, DEFAULT_SETTINGS } = availability;
+const { listAvailableSlots, expandDaysToRange, recommendDays, DEFAULT_HOURS, DEFAULT_SETTINGS } = availability;
 
 let pass = 0;
 const failures = [];
@@ -289,6 +289,101 @@ for (const [label, bad] of [
 ok("real calendar dates are accepted", seasonPlans.isRealDate("2026-09-28"));
 ok("impossible calendar dates are refused", !seasonPlans.isRealDate("2026-02-30"));
 ok("season+year keys match the seed file", seasonPlans.planKey("fall", 2026) === "fall-2026");
+
+// ---- 9. Booking-made days (Patrick, ads live: "newly booked
+// appointments must populate") ----------------------------------------
+// A day the plan never routed but a real booking sits on becomes a
+// shape of its own: the probe can show it, and the booking page
+// measures the next customer against it instead of offering the day to
+// anyone at any distance.
+
+const AD_DAY = dayKey(plusDays(9));                   // Wed 23 Sep — not in the plan
+// The ad customer booked in Mississauga; the day's whole shape is that
+// one house. A second Mississauga caller inserts for pennies; a Keswick
+// caller (40+ km the other way) must not share the day.
+const adBooking = { start: `${AD_DAY}T13:00:00`, coords: { lat: 43.5890, lng: -79.6441, source: "google" }, propertyId: "P-AD" };
+const KESWICK = { lat: 44.240, lng: -79.462, source: "google" };
+const shapesWithAd = geoFilter.buildDayShapes({ plan, propertiesByCode, bookings: [adBooking] });
+ok("a booking on an unplanned day creates that day's shape",
+  Boolean(shapesWithAd[AD_DAY]) && shapesWithAd[AD_DAY].bookingsOnly === true
+  && shapesWithAd[AD_DAY].points.length === 1 && shapesWithAd[AD_DAY].bookedCount === 1
+  && shapesWithAd[AD_DAY].plannedCount === 0,
+  JSON.stringify(shapesWithAd[AD_DAY]));
+ok("a booking-made day inherits the plan's bucket cap",
+  shapesWithAd[AD_DAY].bucketCap === 5);
+ok("planned days are byte-identical with the extra booking elsewhere",
+  JSON.stringify(shapesWithAd[WEST_DAY]) === JSON.stringify(shapes[WEST_DAY])
+  && JSON.stringify(shapesWithAd[NORTH_DAY]) === JSON.stringify(shapes[NORTH_DAY]));
+ok("an unresolved booking on an unplanned day makes no shape",
+  !geoFilter.buildDayShapes({ plan, propertiesByCode,
+    bookings: [{ start: `${AD_DAY}T13:00:00`, coords: UNGEOCODED }] })[AD_DAY]);
+ok("two bookings at the same rounded point on a booking-made day count once",
+  geoFilter.buildDayShapes({ plan, propertiesByCode,
+    bookings: [adBooking, { ...adBooking, propertyId: "P-AD2" }] })[AD_DAY].points.length === 1);
+
+// The outcome through the REAL engine: a Mississauga caller is offered
+// the booking-made day (the booking is a west-side house), while a
+// customer far from that booking is suppressed on it but keeps truly
+// empty days.
+const adDiag = { geoSuppressed: [] };
+const adFiltered = await listAvailableSlots({
+  ...baseArgs, customerCoords: MISSISSAUGA, dayShapes: shapesWithAd, diagnostics: adDiag
+});
+ok("a near customer IS offered the booking-made day",
+  datesOf(adFiltered).has(AD_DAY));
+const farDiag = { geoSuppressed: [] };
+const farFiltered = await listAvailableSlots({
+  ...baseArgs, customerCoords: KESWICK, dayShapes: shapesWithAd, diagnostics: farDiag
+});
+ok("a far customer is SUPPRESSED on the booking-made day — no more 80-km day-sharing",
+  !datesOf(farFiltered).has(AD_DAY)
+  && farDiag.geoSuppressed.some((g) => g.date === AD_DAY),
+  JSON.stringify(farDiag.geoSuppressed));
+ok("…but the far customer still sees days with nothing on them at all",
+  datesOf(farFiltered).size > 0);
+
+// ---- 10. Customer best-day stars (Patrick: "we never suggest to
+//          customers the best possible day for them to book") ---------
+
+// Through the real engine: the Mississauga caller's day rows, spanning
+// the planned west day (+7), the suppressed north day (+8), the
+// booking-made ad day (+9), and two truly empty days (+10, +11).
+const recDays = recommendDays(expandDaysToRange(adFiltered, {
+  from: plusDays(7), to: plusDays(11), hours: DEFAULT_HOURS, now: NOW,
+  geoSuppressed: adDiag.geoSuppressed
+}));
+const recRow = (key) => recDays.find((d) => d.date === key);
+ok("the booking-made day next door is starred",
+  recRow(AD_DAY)?.recommended === true, JSON.stringify(recRow(AD_DAY)));
+ok("the planned west day is starred",
+  recRow(WEST_DAY)?.recommended === true, JSON.stringify(recRow(WEST_DAY)));
+ok("the day next to an existing booking costs no more than the farther planned route",
+  // (the estimate rounds to a 5-minute floor, so a tie is legitimate)
+  Number.isFinite(recRow(AD_DAY)?.addedDriveMinutes)
+  && Number.isFinite(recRow(WEST_DAY)?.addedDriveMinutes)
+  && recRow(AD_DAY).addedDriveMinutes <= recRow(WEST_DAY).addedDriveMinutes,
+  `ad +${recRow(AD_DAY)?.addedDriveMinutes} vs west +${recRow(WEST_DAY)?.addedDriveMinutes}`);
+ok("a truly empty day is offered but never starred — no fake 'best days'",
+  recDays.some((d) => d.slots.length && d.slots[0].addedDriveMinutes == null && !d.recommended)
+  && recDays.every((d) => !d.recommended || Number.isFinite(d.addedDriveMinutes)),
+  JSON.stringify(recDays.map((d) => ({ date: d.date, rec: !!d.recommended, cost: d.addedDriveMinutes }))));
+ok("a suppressed day row is untouched by the recommender",
+  recRow(NORTH_DAY)?.reason === "outside_route_area" && !recRow(NORTH_DAY)?.recommended);
+
+// The cap, in isolation: five priced days in, exactly the three
+// cheapest come back starred, and the array is annotated in place.
+const capIn = [40, 10, 25, 5, 30].map((cost, i) => ({
+  date: `2026-10-0${i + 1}`, slots: [{ addedDriveMinutes: cost }]
+}));
+const capOut = recommendDays(capIn);
+ok("recommendDays caps at three and picks the cheapest, in place",
+  capOut === capIn
+  && capIn.filter((d) => d.recommended).map((d) => d.date).sort().join(",")
+     === "2026-10-02,2026-10-03,2026-10-04",
+  JSON.stringify(capIn.map((d) => ({ date: d.date, rec: !!d.recommended }))));
+ok("recommendDays survives an empty or slotless list",
+  recommendDays([]).length === 0
+  && recommendDays([{ date: "2026-10-01", slots: [], reason: "no_availability" }])[0].recommended === undefined);
 
 // ---- Report ----------------------------------------------------------
 

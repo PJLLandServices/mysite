@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { Alert, Image, StyleSheet, Text, TextInput, View } from 'react-native';
-import { HOST, patchProperty, uploadWoPhotos } from '../../api';
+import { getProperty, patchProperty, removePropertyZone, uploadWoPhotos, woPhotoUri } from '../../api';
 import { colors, radius, space, type } from '../../theme';
 import { pickPhoto, takePhoto } from '../../photos';
 import { Button, CheckRow, Chip, Section } from './parts';
@@ -18,6 +18,29 @@ import { Button, CheckRow, Chip, Section } from './parts';
 // remain reachable from the full web work order — they are not offered
 // here because a closing rarely produces them and a shorter list is
 // faster in the cold.
+// Why a zone is coming off the property. A closed set so the trail can be
+// counted later; "other" carries the note instead. Mirrors
+// ZONE_REMOVAL_REASONS in server/lib/properties.js, which validates it.
+const REMOVAL_REASONS = [
+  { key: 'not_present', label: "Isn't on this property" },
+  { key: 'merged', label: 'Merged into another zone' },
+  { key: 'mistake', label: 'Added by mistake' },
+  { key: 'other', label: 'Other (say why)' },
+];
+
+// A zone the tech adds on site. Matches what the server scaffolds, so a
+// zone added here behaves like one that came from the property.
+const blankZone = (number) => ({
+  number,
+  location: '',
+  sprinklerTypes: [],
+  coverage: [],
+  status: '',
+  notes: '',
+  checks: {},
+  issues: [],
+});
+
 const REPAIR_TYPES = [
   { key: 'broken_head', label: 'Sprinkler Head' },
   { key: 'leak', label: 'Leak / Pipe Break' },
@@ -36,6 +59,12 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
   const [types, setTypes] = useState(() => (zone.issues || []).map((i) => i.type));
   const [repairs, setRepairs] = useState(() => (zone.issues || []).length > 0);
   const [busy, setBusy] = useState(false);
+  // The removal sheet slides down over the page: pick a reason, then
+  // confirm. Kept in one piece of state so it can only be open for the
+  // zone it was opened on.
+  const [removing, setRemoving] = useState(null);   // { number } | null
+  const [removeReason, setRemoveReason] = useState('');
+  const [removeNote, setRemoveNote] = useState('');
 
   // Re-seed when the page changes, so stepping to the next zone doesn't
   // carry the last one's answers across.
@@ -75,13 +104,48 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
     });
 
     // A corrected label belongs to the property, not just to today.
+    //
+    // The property is FETCHED FRESH here rather than read off the work
+    // order, and that matters twice over. `PATCH /api/properties/:id`
+    // merges `system` only one level deep, so the `zones` array it
+    // receives REPLACES the stored one outright — send a stale copy and
+    // you revert every rename made earlier in this visit; send an empty
+    // one and you erase the property's zone list altogether. A work-order
+    // copy goes stale the moment the first zone is renamed, so it is not
+    // safe to patch from. One extra request, on an action a tech takes
+    // rarely, buys an array that is provably current.
     if (wo?.propertyId && label.trim() && label.trim() !== (zone.location || '')) {
       try {
-        const propZones = (wo.property?.system?.zones || []).map((z) =>
-          z.number === zone.number ? { ...z, location: label.trim() } : z
-        );
-        if (propZones.length) {
-          await patchProperty(wo.propertyId, { system: { ...(wo.property?.system || {}), zones: propZones } });
+        const fresh = await getProperty(wo.propertyId);
+        const propSystem = fresh?.system || {};
+        const existing = Array.isArray(propSystem.zones) ? propSystem.zones : [];
+        if (!existing.length) {
+          Alert.alert(
+            'Zone renamed here only',
+            "This visit has the new name, but the property record doesn't list any zones to rename."
+          );
+        } else if (!existing.some((z) => Number(z.number) === Number(zone.number))) {
+          Alert.alert(
+            'Zone renamed here only',
+            `The property record has no Zone ${zone.number}, so there was nothing to rename on it.`
+          );
+        } else {
+          const propZones = existing.map((z) =>
+            Number(z.number) === Number(zone.number)
+              // Both names: older property records key off `label`, newer
+              // off `location`, and the CRM reads `location || label`.
+              // Writing one and leaving the other stale shows the old name
+              // on whichever surface reads the other.
+              //
+              // pendingReview drops here too. A zone materialized from a
+              // declared count carries it until someone has actually seen
+              // the zone; a tech standing in front of it, naming it, IS
+              // that confirmation — and it is what stops the customer
+              // overwriting a walked count from their appointment page.
+              ? { ...z, location: label.trim(), label: label.trim(), pendingReview: false }
+              : z
+          );
+          await patchProperty(wo.propertyId, { system: { ...propSystem, zones: propZones } });
         }
       } catch (err) {
         // The visit record is right either way; the property just didn't
@@ -103,6 +167,61 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
       if (data?.workOrder) save({ photos: data.workOrder.photos });
     } catch (err) {
       Alert.alert("Photo didn't attach", err?.message || 'Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Add a zone the customer's count didn't know about. Numbered one past
+  // the highest on the work order — never reusing a number a removed zone
+  // once had, because the controller station it named may still exist.
+  const addZone = async () => {
+    const nextNumber = zones.reduce((max, z) => Math.max(max, Number(z.number) || 0), 0) + 1;
+    setBusy(true);
+    try {
+      const fresh = wo?.propertyId ? await getProperty(wo.propertyId) : null;
+      if (fresh) {
+        const propSystem = fresh.system || {};
+        const propZones = Array.isArray(propSystem.zones) ? propSystem.zones : [];
+        if (!propZones.some((z) => Number(z.number) === nextNumber)) {
+          await patchProperty(wo.propertyId, {
+            system: {
+              ...propSystem,
+              zones: [...propZones, { number: nextNumber, location: '', label: '', notes: '', pendingReview: true }],
+            },
+          });
+        }
+      }
+      save({ zones: [...zones, blankZone(nextNumber)] });
+      setZoneIndex(zones.length);
+    } catch (err) {
+      Alert.alert("Couldn't add the zone", err?.message || 'Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmRemove = async () => {
+    const number = removing?.number;
+    if (!number) return;
+    setBusy(true);
+    try {
+      if (wo?.propertyId) {
+        await removePropertyZone(wo.propertyId, number, {
+          reason: removeReason,
+          note: removeNote.trim(),
+        });
+      }
+      const next = zones.filter((z) => Number(z.number) !== Number(number));
+      save({ zones: next });
+      // Step back rather than off the end when the last page goes.
+      setZoneIndex(Math.max(0, Math.min(zoneIndex, next.length - 1)));
+      setRemoving(null);
+      setRemoveReason('');
+      setRemoveNote('');
+      if (!next.length) onDoneAll();
+    } catch (err) {
+      Alert.alert("Couldn't remove the zone", err?.message || 'Please try again.');
     } finally {
       setBusy(false);
     }
@@ -164,8 +283,8 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
           <View style={styles.thumbs}>
             {zonePhotos.map((p) => (
               <Image
-                key={p.id || p.url}
-                source={{ uri: p.url?.startsWith('/') ? `${HOST}${p.url}` : p.url }}
+                key={p.n}
+                source={{ uri: woPhotoUri(wo.id, p) }}
                 style={styles.thumb}
                 resizeMode="cover"
               />
@@ -175,6 +294,63 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
           <Text style={styles.none}>No photos on this zone.</Text>
         )}
       </Section>
+
+      <Section
+        title="This zone list"
+        footer="The count came from the customer. Fix it here if the ground disagrees — the property record follows."
+      >
+        <View style={styles.listActions}>
+          <Button label="+ Add a zone" tone="ghost" onPress={addZone} disabled={busy || saving} />
+          <Button
+            label={`Remove Zone ${zone.number ?? zoneIndex + 1}`}
+            tone="ghost"
+            danger
+            onPress={() => { setRemoveReason(''); setRemoveNote(''); setRemoving({ number: zone.number }); }}
+            disabled={busy || saving}
+          />
+        </View>
+      </Section>
+
+      {removing ? (
+        <View style={styles.sheet}>
+          <Text style={styles.sheetTitle}>Remove Zone {removing.number}?</Text>
+          <Text style={styles.sheetBody}>
+            It comes off this visit and off the property record. The zones after it keep their
+            numbers — Zone 5 is still whatever the controller calls Zone 5.
+          </Text>
+
+          <Text style={styles.sheetLabel}>Why?</Text>
+          <View style={styles.sheetChips}>
+            {REMOVAL_REASONS.map((r) => (
+              <Chip
+                key={r.key}
+                label={r.label}
+                active={removeReason === r.key}
+                onPress={() => setRemoveReason(r.key)}
+              />
+            ))}
+          </View>
+
+          <TextInput
+            value={removeNote}
+            onChangeText={setRemoveNote}
+            placeholder={removeReason === 'other' ? 'Say what happened' : 'Anything to add (optional)'}
+            placeholderTextColor={colors.textFaint}
+            style={[styles.input, styles.sheetInput]}
+            multiline
+          />
+
+          <View style={styles.sheetActions}>
+            <Button label="Keep it" tone="ghost" onPress={() => setRemoving(null)} disabled={busy} />
+            <Button
+              label={busy ? 'Removing…' : 'Remove zone'}
+              danger
+              onPress={confirmRemove}
+              disabled={busy || !removeReason || (removeReason === 'other' && removeNote.trim().length < 4)}
+            />
+          </View>
+        </View>
+      ) : null}
 
       <View style={styles.actions}>
         <Button label={busy ? 'Working…' : 'Take a photo'} tone="ghost" onPress={() => attach(takePhoto)} disabled={busy} />
@@ -190,6 +366,21 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
 }
 
 const styles = StyleSheet.create({
+  listActions: { flexDirection: 'row', gap: space.sm, padding: space.md },
+  sheet: {
+    backgroundColor: colors.card,
+    borderRadius: radius.card,
+    padding: space.lg,
+    gap: space.md,
+    borderWidth: 2,
+    borderColor: colors.danger,
+  },
+  sheetTitle: { ...type.hero, fontSize: 19 },
+  sheetBody: { ...type.caption, lineHeight: 19 },
+  sheetLabel: { ...type.section },
+  sheetChips: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
+  sheetInput: { minHeight: 72, textAlignVertical: 'top' },
+  sheetActions: { flexDirection: 'row', gap: space.sm },
   pager: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   pagerMid: { flex: 1, alignItems: 'center' },
   pagerText: { ...type.title },

@@ -127,3 +127,11 @@ body {
 
 .ap-foot { margin-top: 18px; text-align: center; font-size: 0.85rem; color: #6B6B63; }
 .ap-foot a { color: #1B4D2E; font-weight: 600; }
+
+/* Add-to-calendar row — quiet links under the facts. */
+.ap-calendar { margin: -6px 0 16px; font-size: 0.9rem; color: #55604F; }
+.ap-calendar a {
+  color: #1B4D2E; font-weight: 600;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.ap-calendar a:hover { color: #E07B24; }

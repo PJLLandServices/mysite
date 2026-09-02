@@ -143,6 +143,41 @@
 .tp-day.is-selected.is-today {
   outline-color: var(--tp-amber-light);
 }
+.tp-day.is-recommended {
+  /* Best day for this address — our crew is already routed nearby. */
+  position: relative;
+  border-color: var(--tp-amber);
+}
+.tp-day.is-recommended::after {
+  content: "★";
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--tp-amber);
+}
+.tp-day.is-recommended.is-available:hover {
+  border-color: var(--tp-amber);
+  background: #DDEACB;
+}
+.tp-day.is-recommended.is-selected {
+  border-color: var(--tp-green);
+}
+.tp-day.is-recommended.is-selected::after {
+  color: var(--tp-amber-light);
+}
+
+.tp-legend {
+  margin: 10px 4px 0;
+  font-size: 13px;
+  color: var(--tp-muted);
+}
+.tp-legend[hidden] { display: none; }
+.tp-legend-star {
+  color: var(--tp-amber);
+  margin-right: 2px;
+}
 
 .tp-month-empty {
   margin: 12px 4px 0;

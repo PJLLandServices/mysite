@@ -71,7 +71,10 @@ export function Chip({ label, active, onPress }) {
   );
 }
 
-export function Button({ label, onPress, disabled, tone = 'primary' }) {
+// `danger` colours the label only — a destructive action should read as
+// destructive without shouting louder than the button that finishes the
+// visit.
+export function Button({ label, onPress, disabled, tone = 'primary', danger = false }) {
   const isGhost = tone === 'ghost';
   return (
     <Pressable
@@ -80,11 +83,17 @@ export function Button({ label, onPress, disabled, tone = 'primary' }) {
       style={({ pressed }) => [
         styles.button,
         isGhost && styles.buttonGhost,
+        danger && !isGhost && styles.buttonDanger,
         disabled && styles.buttonOff,
         pressed && !disabled && styles.pressedBtn,
       ]}
     >
-      <Text style={[styles.buttonText, isGhost && styles.buttonTextGhost, disabled && styles.buttonTextOff]}>
+      <Text style={[
+        styles.buttonText,
+        isGhost && styles.buttonTextGhost,
+        danger && (isGhost ? styles.buttonTextDangerGhost : null),
+        disabled && styles.buttonTextOff,
+      ]}>
         {label}
       </Text>
     </Pressable>
@@ -92,6 +101,8 @@ export function Button({ label, onPress, disabled, tone = 'primary' }) {
 }
 
 const styles = StyleSheet.create({
+  buttonDanger: { backgroundColor: colors.danger },
+  buttonTextDangerGhost: { color: colors.danger },
   section: { gap: space.sm },
   sectionTitle: { ...type.section, marginHorizontal: space.xs },
   card: { backgroundColor: colors.card, borderRadius: radius.card, overflow: 'hidden' },

@@ -104,7 +104,18 @@ export default function App() {
                     onOpenFullWorkOrder={(url) => { setClosingId(null); setWorkUrl(url); }}
                   />
                 ) : (
-                  <WebScreen path={tab.key === 'work' ? workUrl : tab.path} />
+                  <WebScreen
+                    path={tab.key === 'work' ? workUrl : tab.path}
+                    // Only a pushed page gets a back bar — the tab's own
+                    // landing page has nowhere to go back TO. Without this
+                    // the closing's handoff to the web work order was a
+                    // one-way door: the tab bar switches tabs but does not
+                    // undo the handoff, and the page's own nav is hidden.
+                    onBack={tab.key === 'work' && workUrl !== WORK_LIST
+                      ? () => setWorkUrl(WORK_LIST)
+                      : undefined}
+                    title={tab.key === 'work' && workUrl !== WORK_LIST ? 'Work orders' : undefined}
+                  />
                 )}
               </View>
             );

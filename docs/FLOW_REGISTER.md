@@ -1374,6 +1374,109 @@ or catalog change, and the CTA that moved is FLOW-28's (UNMAPPED). `publicBookin
 (fall 2026: Oct 30) is defined in the config for the future gate and is deliberately
 consumed by nothing, pinned by a source guard. Cover:
 `scripts/test-season-config.mjs` (66 assertions, in `build:check`).
+**2026-09-02 (Customer best-day stars on the public picker):** Patrick, closing the loop on the
+probe's "Best days for this address": "we never suggest to customers the best possible day for
+them to book. Can we build that too?" The engine already prices every offered day for the
+geography gate (`addedDriveMinutes` on each slot — until now admin-facing only); new pure
+`availability.recommendDays(days, {max:3})` ranks the day rows by that cost and marks the top
+three `recommended: true`. **Only days that HAVE a cost qualify** — a day with an existing
+route or booking nearby is genuinely cheap for the customer's neighbourhood; a day with no
+shape at all (nothing scheduled) costs a dedicated trip and gets NO star, so an empty calendar
+never fakes popularity. `/api/booking/availability` calls it after composing day rows; the
+shared time-picker paints starred days (amber ★ + amber ring on the cell,
+title/aria "Best day for your address") and shows a one-line legend ("our crew is already
+scheduled in your neighbourhood") only when a starred day is visible in the month.
+**FLOW-03 IS PASS AND WAS TOUCHED — additively:** `listAvailableSlots` unchanged, no day
+added or removed, no route/payload field removed; day rows gain optional
+`recommended`/`addedDriveMinutes` keys, and admin callers of the same endpoint simply ignore
+them. Engine re-verified: test-geo-availability grows to 42 (+7: through the REAL engine the
+Mississauga caller's booking-made day and planned west day are both starred with the booked
+day at least as cheap, an empty day is offered but never starred, a suppressed day row is
+untouched; in isolation the three-cheapest cap, in-place annotation, and empty/slotless-input
+safety). **Needs Patrick's walk:** open /book.html with a real address whose neighbourhood has
+a routed day — that day shows the ★ and the legend line; a remote address shows plain days
+and no legend.
+
+**2026-09-02 (Day-before reminder for self-booked + add-to-calendar):** two customer-facing
+additions on Patrick's ask. (1) **Self-booked appointments now get a day-before reminder** —
+assignment customers had the cadence's step 6, ad customers had nothing. New
+`lib/booking-reminders.js` sweep (boot + 5 min in server.js), borrowing the cadence's hard-won
+rules: mark-BEFORE-send (`bookings.markReminderSent`), once ever, 09:00–18:00 Toronto window,
+missed days stay missed, ASSIGNMENT bookings excluded so nobody is texted twice. Posture is
+transactional (it is about their own appointment, so seasonal-marketing opt-outs don't block it
+— same rule as booking confirmations), but decision I's "no need to contact" tick and archived
+properties DO block it. Delivery rides notify-customer's new `day_before` template through
+`notifyCustomer()`, so it wears the same brand frame, spouse-recipient logic, and
+bucket-not-exact-time rule as every notice. (2) **"Add it to your calendar"** — new pure
+`lib/calendar-links.js` (Google/Outlook prefilled-compose URLs + single-VEVENT `.ics` for Apple
+and the rest). THE EVENT CARRIES THE BUCKET WINDOW the customer was told (8–12 / 12–5), never
+the sequenced internal arrival — a calendar block reading 8:13 would be a promise the
+optimiser breaks daily; legacy no-bucket bookings fall back to exact start + duration.
+Surfaces: the booked/rescheduled/site-visit/day-before EMAILS gain a "Add it to your calendar:
+Google · Outlook · Apple (.ics)" row; the appointment page (/a/:token) gains the same row with
+`GET /api/appointment/:token/calendar.ics`; self-booked customers' ics is
+`GET /api/portal/:token/calendar.ics` (lead token → their booking; property token → the
+property's next upcoming booking; token is the credential, same as the portal itself).
+Suites: `test-booking-reminders.mjs` (12 — window gate, once-ever, mark-before-send survives a
+failed send without a double text, assignment exclusion, decision I) and
+`test-calendar-links.mjs` (20 — bucket rule, EDT/EST UTC conversion, RFC 5545 escaping, the
+three formats), both in `build:check`. **No PASS flow's route changed shape** — the email
+additions are additive rows in existing notices; new endpoints only. **Needs Patrick's walk:**
+book a test appointment for tomorrow, get the reminder after 9 AM; tap all three calendar
+links from the confirmation email and the appointment page.
+
+**2026-09-02 (Booked days join the geography — the probe becomes a phone-booking tool):**
+Patrick, with Google Ads live: a customer booked Oct 1 (a day the fall plan never routed) and
+the season-plan address tester didn't show it — he wants to type a caller's address and offer
+the best day. Root cause: `geoFilter.buildDayShapes` iterated ONLY `plan.days`, so a day whose
+only contents are real bookings had no shape — invisible to the probe, and (worse) carrying no
+geography on the LIVE booking page either: two ad customers 80 km apart could seed the same
+empty day, and no bucket cap applied there. Now `buildDayShapes` grows a `bookingsOnly` shape
+for any date with a resolvable booking and no plan entry: the day's points are its bookings,
+it inherits the plan's `bucketCap`, planned days are byte-identical (asserted), and a date with
+no plan AND no bookings stays unshaped and open to everyone — someone has to book it first.
+The probe inherits it (rows labeled "Booked day") and gains the phone answer: **"Best days for
+this address"** — the three cheapest offered days with added-drive minutes and stop counts.
+**FLOW-03 IS PASS AND ITS GEOGRAPHY GATE NOW COVERS MORE DAYS:** `listAvailableSlots` is
+unchanged; what changed is which days carry shapes. New behavior only on booked-but-unplanned
+days — previously offered to anyone at any distance and uncapped, now geo-gated and capped
+like every route day. Engine re-verified: test-geo-availability grows to 35 (+8: the
+booking-made shape, cap inheritance, planned-days byte-identity, unresolved-booking and
+same-point dedup, and through the REAL engine a Mississauga caller offered the booked day
+while a Keswick caller is suppressed with the day named in diagnostics); booking-guards 35,
+day-reschedule 59, season-config 93 unchanged. **Needs Patrick's walk:** probe his Oct 1
+booker's address (Oct 1 should list as "Booked day" with a small added-drive number), then a
+far-away address (Oct 1 offered "no").
+
+**2026-09-02 (Geocode failure posture — "we cannot have this fail"):** Patrick probed an Erin
+address on the season plan and got EVERY route day offered: the geocode failed, fell back to
+the depot pin, and the geography filter — fail-soft by design — switched itself off for that
+address. Worse, the same happens on the live booking page's availability, and if
+`GOOGLE_MAPS_SERVER_KEY` is missing in Render it happens for EVERY address, silently. Three
+layers now: (1) `geocode()` is tougher — 4s timeout, one retry on network errors and Google's
+transient UNKNOWN_ERROR. (2) **Town-centroid parachute** (`lib/town-centroids.js`, ~60 hand-kept
+Ontario town centres): a failed lookup whose address names a recognizable town answers from
+that town's approximate centre, `source "town-centroid"`, which `coordsAreResolved` accepts —
+the filter stays ON and Erin still reads as an hour away. The result stays `ok:false`, and
+every path that persists coordinates requires `ok:true` (audited: geocodeForRecord + four
+server.js sites), so an approximation can steer availability but never pin a record. Only an
+address with no recognizable town still skips the filter. (3) **Loudness**: a boot-time banner
+in the server log when the key is missing; the probe now echoes the address Patrick TYPED (it
+previously showed the fallback's own "Newmarket, ON, Canada" label — a failure dressed as the
+wrong address), distinguishes exact / approximate-town / unplaceable, and shows a red alarm
+when the server has no key ("the filter is degraded for EVERYONE"). **FLOW-03 IS PASS AND ITS
+GEOCODE HOP IS TOUCHED:** `listAvailableSlots` itself is byte-unchanged (the change is upstream
+in what coords a FAILED geocode yields), resolved addresses behave identically, and the change
+only affects addresses that previously fell through fail-open — those now get filtered
+approximately instead of not at all. Engine re-verified: geo-availability 27, booking-guards
+35, day-reschedule 59, season-config 93 all pass unchanged. New
+`scripts/test-geocode-fallback.mjs` (15 assertions, in `build:check`): the town matcher
+(whole-word, longest-name-wins), fallback order, the ok:false persistence invariant, and the
+outcome itself — Erin +68 min suppressed, Aurora +4 min offered, through the real filter math.
+**Residual, said out loud:** an address with NO recognizable town still fails open (offered
+every day). Fail-closed for those would block legitimate rural customers on a Google hiccup —
+Patrick's call if he wants it flipped.
+
 **2026-09-01 (Completion email + service report, Patrick's simulated-closing review):** three
 fixes from his walk of a real completed work order. (1) **The email names the service**:
 subject "PJL Fall Closing Summary — please review" (was the generic "visit summary"), headline
@@ -1472,6 +1575,115 @@ live: Willowridge still missing from Today after both deploys. The durable lesso
 opposite of the one first recorded: a fix verified against a live symptom is not "for a case
 the codebase cannot produce" just because the write path is hard to find — data outranks code
 reading, and the bar for removing the union again is a walked Today page, not an argument.
+
+**2026-09-01 (Add and remove zones from the app):** the other half of the declared-count
+work. A tech who arrives to five zones where the customer said six can now fix it on the
+spot — add appends a zone to the visit and the property; remove takes it off both, behind a
+confirm and a **reason**. Patrick's call that removal is destructive and that is fine: "if
+someone tells me their system is 6 zones and I arrive to only 5, deleting isn't that big of a
+deal." **Two things the implementation is careful about.** Zone numbers are CONTROLLER
+STATIONS, not list positions — removing Zone 3 leaves 1,2,4,5,6, never renumbering a survivor
+onto a station it does not own, because next spring a tech reads those numbers off the box on
+the garage wall. And the reason is written by the SERVER (`properties.removeZone()`, reached
+by `DELETE /api/properties/:id/zones/:n`) rather than sent as a history entry by the phone: a
+client-writable audit log is not an audit log. Reasons are a closed set — not on this
+property / merged / added in error / other-with-a-note — so the trail can be counted later,
+and `system.zoneCount` follows the surviving list so a stale declared count can never
+resurface as a fallback. **Coverage:** `scripts/test-declared-zones.mjs` grew to 33
+assertions. **What still needs Patrick:** remove a zone from a six-zone property and confirm
+the remaining five keep their original numbers on both the work order and the property, and
+that the reason shows up in the property's history.
+
+**2026-09-01 (A declared zone count now becomes real zones):** a customer books a fall
+closing saying they have eight zones; pricing has always honoured that (`effectiveZoneCount()`
+reads documented zones first, then `system.zoneCount`), so they are charged the 7-8 zone tier.
+But `scaffoldZonesFromProperty()` read the documented list ONLY, which on a first-time property
+is empty, so `create()` fell through to its "always give the tech at least one zone"
+placeholder. **Priced for eight, dispatched with one** — the tech arrives at an eight-zone lawn
+holding a one-zone work order. Two functions asking the same question and one of them not
+knowing about the fallback. **Fixed:** `declaredZoneList()` describes the list a declared count
+implies, `scaffoldZonesFromProperty()` falls back to it, and the seasonal create routes write
+that list onto the PROPERTY first (Patrick's call — the record should carry its zones from the
+first booking) so the work order and the property agree from visit one. The write lives at the
+route layer on purpose: `lib/work-orders.js` depends on nothing but node built-ins and two test
+suites sandbox it alone, an invariant this change briefly broke and then respected. Zones land
+`pendingReview: true`, the flag `applySystemUpdates()` already uses for zones discovered in the
+field, because a number typed into a booking form is a claim, not a survey. **A consequence
+handled with it:** the appointment page refuses a customer's zone-count correction once the
+property has documented zones ("our technicians have already mapped your system"), so
+materializing zones would have locked customers out with a message that wasn't true — that
+check now counts only zones a human confirmed, and naming a zone in the app clears the flag.
+**Coverage:** `scripts/test-declared-zones.mjs` (27 assertions, in `build:check`). **What still
+needs Patrick:** book a new property declaring a zone count, open its work order, and confirm
+the right number of zones appear on both the work order and the property; then confirm the
+customer can still correct that count until a tech names a zone.
+
+**2026-09-01 (The zone rename, second pass — and a data-loss risk found on the way):** the
+first fix carried the property along with the work order, and it still failed on Zone 3 with
+"the property record doesn't list any zones to rename" — on a property whose work order had
+scaffolded four zones FROM that list, so the zones plainly existed. Two causes, stacked.
+**(a)** `ClosingScreen.save()` replaced the whole work order with the PATCH response, which
+returns the work order ALONE — so the `property` the initial GET attached was thrown away by
+the first save. It worked on Zone 1 and was gone by Zone 2. Decorations are now carried
+forward. **(b)** The deeper problem, found while fixing (a): `properties.update()` merges
+`system` only ONE LEVEL DEEP, so the `zones` array in a PATCH **replaces** the stored array
+outright. Patching from a work-order copy is therefore unsafe by construction — a copy taken
+before Zone 1's rename still carries Zone 1's old name, and sending it reverts that rename;
+an empty copy erases the property's zone list entirely. (The empty-list guard that produced
+the confusing message was preventing exactly that, which is why it stays.) The rename now
+**fetches the property fresh** immediately before patching, so the array it sends is provably
+current, and writes both `location` and `label` because older records key off one and newer
+off the other while the CRM reads `location || label` — writing one and leaving the other
+stale shows the old name on whichever surface reads the other. **What still needs Patrick:**
+rename two different zones in one visit, then open the property and confirm BOTH new names
+are there and no zone has gone missing.
+
+**2026-09-01 (Three faults found walking a live fall closing):** Patrick ran a real closing
+on the app and hit three, all app-side, all under FLOW-31. **(1) Photos refused.** The server
+verifies a photo's declared mediaType against its MAGIC BYTES; `photos.js` hardcoded
+`image/jpeg` on every payload while its own header comment claimed images were re-encoded to
+JPEG on device. Nothing did that. An iPhone library photo is HEIC and a screenshot is PNG, so
+the server saw JPEG in the envelope and something else in the bytes: *"File 1 doesn't look
+like a real image/jpeg."* Intermittent, because a camera capture often IS a JPEG — it worked
+in testing and failed on a driveway with the water already off. Now declares what the file
+actually is, from the asset's `mimeType` or its extension, and can only emit a type the
+server's own whitelist accepts. **(2) Thumbnails blank.** The stored photo record carries `n`,
+not a `url`; both closing screens read `p.url`, got undefined, and rendered grey boxes for
+photos that had uploaded fine. Now built from `n` against
+`/api/work-orders/:id/photo/:n`. **(3) A zone rename never reached the property.**
+`GET /api/work-orders/:id` returns `{ workOrder, property, lead }` with property a SIBLING of
+the work order; `getWorkOrder()` returned `d.workOrder` alone and dropped it. `ZoneStage` read
+`wo.property.system.zones`, got undefined, mapped an empty array, and the (correct) "don't
+wipe the zone list" guard swallowed it — silently, which is why it looked like nothing
+happened. The property now travels with the work order, and the guard says which case it hit
+instead of nodding. **Coverage:** `scripts/test-media-type.mjs` (19 assertions, in
+`build:check`), which checks every type the app can emit against the server's OWN
+`WO_MEDIA_MIME_WHITELIST` so the two cannot drift. **What still needs Patrick:** attach a
+photo from the library (not just the camera) and confirm it lands and shows a thumbnail;
+rename a zone and confirm the new name appears on the property afterwards.
+
+**2026-09-01 (Start WO on a lead-less booking — found on a driveway):** Patrick opened the
+app on a real Willowridge stop and tapped **Start WO**: *"Couldn't open — API endpoint not
+found."* Cause: the app built `/api/leads/${leadId}/open-wo` unconditionally, and an
+assignment booking's `leadId` arrives as `""`, so the path collapsed to `/api/leads//open-wo`
+— which matches no route (`([^/]+)` needs a character) and fell through to the catch-all 404.
+Every lead booking on the same screen worked, which is why it read as a Willowridge problem.
+**Fixed:** a row with no lead now raises its work order against its PROPERTY, via the same
+`POST /api/work-orders { type, propertyId }` the CRM's property page uses, with the service
+key mapped to a template exactly as the server maps it. **Look before creating** — that
+endpoint has no upsert, so an unguarded second tap raises a second work order for the same
+visit: two documents and two invoices for one lawn. The property's existing work orders are
+read first and an unfinished one of the same type is reopened instead. A row with neither a
+lead nor a property cannot start one, and says so by disabling the button rather than
+failing at the server. Routing logic lives in `pjl-field/src/workorder-routing.js` (out of
+the screen so it is testable without React Native); `scripts/test-wo-routing.mjs` (38
+assertions, in `build:check`) pins that a lead-less row never routes through the lead
+endpoint, that duplicates are refused, and — checked against `BOOKABLE_SERVICES` and the
+server's own `templateForServiceKey` — that the app's template mapping cannot silently drift
+from the server's. **What still needs Patrick:** tap Start WO on a Willowridge stop, confirm
+it opens a fall closing; back out and tap it again, confirming it reopens the SAME work
+order rather than making a second; and confirm an ordinary residential row still starts
+normally.
 
 **2026-09-01 (Field app, assignment bookings):** the app's native Today screen honours the
 lead-less rows the assignment writer produces — Notify and Start WO disable rather than

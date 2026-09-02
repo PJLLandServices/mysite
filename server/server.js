@@ -41,11 +41,13 @@ const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms } = require(
 const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
 const voicemailStore = require("./lib/voicemail-store");
-const { geocode, PJL_BASE } = require("./lib/geocode");
-const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, parseLocalDateKey } = require("./lib/availability");
+const { geocode, PJL_BASE, isConfigured: geocodeIsConfigured } = require("./lib/geocode");
+const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, recommendDays, parseLocalDateKey } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
 const { mergeDaySchedule } = require("./lib/day-schedule");
 const jobFinder = require("./lib/job-finder");
+const bookingReminders = require("./lib/booking-reminders");
+const calendarLinks = require("./lib/calendar-links");
 const { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice } = require("./lib/pricing");
 const { normalizeServiceFeeWaiver, friendlyWaiverReason } = require("./lib/service-fee-waiver");
 const bookingSessions = require("./lib/booking-sessions");
@@ -2053,6 +2055,37 @@ function sendTwiml(res, status, xml) {
     "cache-control": "no-store"
   });
   res.end(`<?xml version="1.0" encoding="UTF-8"?>\n${xml}`);
+}
+
+// Give a property the zone list its declared count implies, before a work
+// order scaffolds from it.
+//
+// A customer who books saying "eight zones" is priced for eight — pricing
+// has always fallen back to system.zoneCount — but the property's zone
+// LIST stayed empty until a tech documented it, so the work order
+// scaffolded one placeholder zone. Writing the list here means the record
+// carries those zones from the first booking, and the work order and the
+// property agree from the first visit.
+//
+// Lives at the route layer because lib/work-orders.js deliberately depends
+// on nothing but node built-ins (two test suites sandbox it on its own),
+// so it can describe the list but cannot write it.
+//
+// Returns the property to scaffold from — updated when zones were written,
+// the original otherwise. Never throws: a tech is standing on the lawn and
+// a work order must open regardless.
+async function materializeDeclaredZones(property) {
+  const zones = workOrders.declaredZoneList(property);
+  if (!property?.id || !zones.length) return property;
+  try {
+    const updated = await properties.update(property.id, {
+      system: { ...(property.system || {}), zones }
+    });
+    return updated || { ...property, system: { ...(property.system || {}), zones } };
+  } catch (err) {
+    console.warn("[wo create] declared-zone materialize failed:", err?.message);
+    return { ...property, system: { ...(property.system || {}), zones } };
+  }
 }
 
 // ----- Photo handling ----------------------------------------------------
@@ -6595,6 +6628,48 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, contact });
   }
 
+  // "Add to your calendar" for a self-booked customer — the ics leg of
+  // the links in their confirmation email. Same token-first resolution
+  // as the portal itself: a lead token serves that lead's booking; a
+  // property token serves the property's next upcoming booking. The
+  // event carries the bucket window the customer was told.
+  const portalCalMatch = pathname.match(/^\/api\/portal\/([^/]+)\/calendar\.ics$/);
+  if (portalCalMatch && req.method === "GET") {
+    const token = decodeURIComponent(portalCalMatch[1]);
+    const leads = await readLeads();
+    const lead = leads.find((item) => (item.portal?.token || portalTokenForId(item.id)) === token);
+    let eventSource = null;
+    if (lead?.booking?.start) {
+      eventSource = {
+        id: lead.id,
+        start: lead.booking.start,
+        durationMinutes: lead.booking.durationMinutes,
+        bucketKey: lead.booking.bucketKey || null,
+        serviceLabel: lead.booking.serviceLabel || "",
+        address: lead.contact?.address || ""
+      };
+    } else {
+      const property = (await properties.list()).find((p) => p.id && portalTokenForId(p.id) === token) || null;
+      if (property) {
+        const upcoming = (await bookings.list())
+          .filter((b) => b && b.propertyId === property.id && b.status === "confirmed"
+            && b.scheduledFor && new Date(b.scheduledFor).getTime() > Date.now())
+          .sort((a, b) => new Date(a.scheduledFor) - new Date(b.scheduledFor))[0];
+        if (upcoming) eventSource = { ...upcoming, address: upcoming.address || property.address || "" };
+      }
+    }
+    if (!eventSource) return sendJson(res, 404, { ok: false, errors: ["No upcoming appointment to add."] });
+    const event = calendarLinks.eventForBooking(eventSource, {
+      portalUrl: `${resolvePublicBaseUrl()}/portal/${encodeURIComponent(token)}`
+    });
+    if (!event) return sendJson(res, 404, { ok: false, errors: ["No upcoming appointment to add."] });
+    res.writeHead(200, {
+      "Content-Type": "text/calendar; charset=utf-8",
+      "Content-Disposition": 'attachment; filename="pjl-appointment.ics"'
+    });
+    return res.end(calendarLinks.icsText(event));
+  }
+
   const portalMatch = pathname.match(/^\/api\/portal\/([^/]+)$/);
   if (portalMatch && req.method === "GET") {
     const token = decodeURIComponent(portalMatch[1]);
@@ -8890,6 +8965,32 @@ async function handleApi(req, res, pathname) {
       });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't attach property."] });
+    }
+  }
+
+  // DELETE a documented zone, with a reason. The field app calls this when
+  // a tech arrives to find the customer's declared count was wrong — six
+  // on the booking form, five on the ground.
+  //
+  // A dedicated route rather than a PATCH because the removal carries an
+  // audit entry, and the lib writes that entry itself: a client-writable
+  // history is not a history. Never renumbers — zone numbers are
+  // controller stations, not list positions.
+  const zoneRemoveMatch = pathname.match(/^\/api\/properties\/([^/]+)\/zones\/(\d+)$/);
+  if (zoneRemoveMatch && req.method === "DELETE") {
+    try {
+      await requireAdmin(req);
+      const payload = await parseRequestBody(req);
+      const updated = await properties.removeZone(
+        decodeURIComponent(zoneRemoveMatch[1]),
+        Number(zoneRemoveMatch[2]),
+        { reason: payload.reason, note: payload.note, by: await actorLabel(req) }
+      );
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["That zone isn't on this property."] });
+      return sendJson(res, 200, { ok: true, property: updated });
+    } catch (err) {
+      const status = ["BAD_ZONE", "BAD_REASON", "NOTE_REQUIRED"].includes(err.code) ? 422 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't remove the zone."] });
     }
   }
 
@@ -17360,6 +17461,10 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 422, { ok: false, errors: [waiverResult.error] });
       }
 
+      // Seasonal work orders scaffold their zones from the property, so
+      // give it the list its declared count implies before we do.
+      property = await materializeDeclaredZones(property);
+
       let wo = await workOrders.create({
         type, lead, property, customId, quote: sourceQuote,
         serviceFeeWaiver: waiverResult.waiver
@@ -19980,6 +20085,10 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const days = (fromDate && toDate)
         ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now, geoSuppressed: diagnostics.geoSuppressed, seasonClosed: diagnostics.seasonClosed })
         : groupByDay(slots);
+      // Star the customer's best days — the ones where their address
+      // joins a route we're already driving (Patrick, 2026-09-02). Days
+      // with no route or bookings get no star: nothing to join.
+      recommendDays(days);
 
       return sendJson(res, 200, {
         ok: true,
@@ -20903,6 +21012,9 @@ Customer signature captured at ${new Date().toISOString()}.`;
         try { sourceQuote = await quotes.get(lead.quoteId); }
         catch (err) { console.warn("[quotes] fetch on WO create failed:", err?.message); }
       }
+      // Same as the admin create path: the property gets the zone list
+      // its declared count implies before the work order scaffolds from it.
+      property = await materializeDeclaredZones(property);
       const wo = await workOrders.create({ type, lead, property, customId, quote: sourceQuote });
       if (sourceQuote) {
         try { await quotes.attachWorkOrder(sourceQuote.id, wo.id); }
@@ -21960,7 +22072,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
   // Assignment writer stage 5 — the customer's appointment page API.
   // PUBLIC: the token is the credential, exactly like /portal/<token>.
   // It addresses one booking and grants three actions on it.
-  const apptMatch = pathname.match(/^\/api\/appointment\/([A-Za-z0-9_-]{16,64})(?:\/(confirm|cancel|availability|reschedule|free-bucket|time-window|zones))?$/);
+  const apptMatch = pathname.match(/^\/api\/appointment\/([A-Za-z0-9_-]{16,64})(?:\/(confirm|cancel|availability|reschedule|free-bucket|time-window|zones|calendar\.ics))?$/);
   if (apptMatch) {
     const token = apptMatch[1];
     const action = apptMatch[2] || null;
@@ -21982,14 +22094,41 @@ Customer signature captured at ${new Date().toISOString()}.`;
         return appointmentActions.zonesInfo(property, summary);
       } catch { return null; }
     };
+    // "Add to your calendar" — Google/Outlook are prefilled-compose
+    // URLs; the ics link below serves Apple Calendar and the rest. The
+    // event carries the BUCKET window the customer was told, never the
+    // sequenced internal time.
+    const calendarFor = (booking) => {
+      try {
+        const links = calendarLinks.linksForBooking(booking, {
+          portalUrl: `${resolvePublicBaseUrl()}/a/${token}`
+        });
+        return links ? { google: links.google, outlook: links.outlook, ics: `/api/appointment/${encodeURIComponent(token)}/calendar.ics` } : null;
+      } catch { return null; }
+    };
     try {
+      if (action === "calendar.ics" && req.method === "GET") {
+        const booking = await appointmentActions.findByToken(token);
+        if (!booking || booking.status !== "confirmed") {
+          return sendJson(res, 404, { ok: false, errors: ["That link doesn't match a live appointment."] });
+        }
+        const event = calendarLinks.eventForBooking(booking, {
+          portalUrl: `${resolvePublicBaseUrl()}/a/${token}`
+        });
+        if (!event) return sendJson(res, 404, { ok: false, errors: ["This appointment has no date to add."] });
+        res.writeHead(200, {
+          "Content-Type": "text/calendar; charset=utf-8",
+          "Content-Disposition": 'attachment; filename="pjl-appointment.ics"'
+        });
+        return res.end(calendarLinks.icsText(event));
+      }
       if (!action && req.method === "GET") {
         const booking = await appointmentActions.findByToken(token);
         if (!booking) return sendJson(res, 404, { ok: false, errors: ["That link doesn't match an appointment."] });
         const summary = appointmentActions.summarize(booking);
         return sendJson(res, 200, {
           ok: true,
-          appointment: { ...summary, priceLabel: await priceFor(booking), zones: await zonesFor(booking, summary) }
+          appointment: { ...summary, priceLabel: await priceFor(booking), zones: await zonesFor(booking, summary), calendar: calendarFor(booking) }
         });
       }
       if (action === "confirm" && req.method === "POST") {
@@ -22552,6 +22691,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
         days.push({
           date,
           label: shape.label,
+          // A day the plan never routed but real bookings sit on —
+          // buildDayShapes now grows these, so the probe sees newly
+          // booked days (Patrick's ad-season ask) the moment the first
+          // customer lands on them.
+          bookingsOnly: Boolean(shape.bookingsOnly),
           points: shape.points.length,
           plannedCount: shape.plannedCount,
           bookedCount: shape.bookedCount,
@@ -22572,9 +22716,22 @@ Customer signature captured at ${new Date().toISOString()}.`;
       return sendJson(res, 200, {
         ok: true,
         address: geo.coords?.formattedAddress || address,
+        // The address Patrick TYPED, always — showing only the geocoder's
+        // fallback label ("Newmarket, ON, Canada" for a failed Erin
+        // lookup) made a failure read like the wrong address was tested.
+        typedAddress: address,
         geocodeOk: geo.ok === true,
-        // An address we could not geocode skips the filter entirely and
-        // is offered every day — say so plainly rather than showing a
+        // A recognized-town approximation (geocode failed but the town
+        // matched lib/town-centroids.js): the filter RAN, from the town
+        // centre.
+        approximate: geo.coords?.source === "town-centroid",
+        approximateTown: geo.coords?.source === "town-centroid" ? (geo.coords.town || "") : "",
+        geocodeReason: geo.ok === true ? null : (geo.reason || "unknown"),
+        // Without the server key the filter is degraded for EVERY
+        // address, not just this probe — the screen must say so in red.
+        keyConfigured: geocodeIsConfigured(),
+        // An address we could not place at all skips the filter entirely
+        // and is offered every day — say so plainly rather than showing a
         // column of zeroes that looks like a perfect match.
         filterSkipped: !resolvedAddress,
         thresholdMinutes: threshold,
@@ -23819,6 +23976,19 @@ server.listen(PORT, HOST, () => {
   console.log(`  Public homepage:   http://${HOST}:${PORT}/`);
   console.log(`  CRM dashboard:     http://${HOST}:${PORT}/admin   (login: http://${HOST}:${PORT}/login)`);
 
+  // The geography filter's key, checked ONCE at boot where nobody can
+  // miss it. Without it every address is placed by town name only
+  // (lib/town-centroids.js), and an unrecognized town skips the filter
+  // — Patrick: "we cannot have this fail."
+  if (!geocodeIsConfigured()) {
+    console.error("=".repeat(72));
+    console.error("[geocode] GOOGLE_MAPS_SERVER_KEY IS NOT SET.");
+    console.error("[geocode] Exact drive-time geocoding is OFF. Addresses fall back to");
+    console.error("[geocode] approximate town centres; unknown towns skip the geography");
+    console.error("[geocode] filter entirely. Set the key in Render > Environment.");
+    console.error("=".repeat(72));
+  }
+
   // Quote auto-expire sweep — spec §4.1 default 30-day validity. Runs at
   // startup AND every 6 hours so stale "sent" quotes flip to "expired"
   // without manual intervention. Best-effort; logs only.
@@ -23931,6 +24101,38 @@ server.listen(PORT, HOST, () => {
   };
   sweepLeadBookings();
   setInterval(sweepLeadBookings, 10 * 60 * 1000);
+
+  // Day-before reminder sweep for SELF-BOOKED appointments. Assignment
+  // customers get theirs from the cadence's step 6; the customer who
+  // booked themselves (the ad traffic) got nothing the day before —
+  // Patrick, 2026-09-02: "add the day-before reminder for self booked."
+  // Same posture as the cadence: mark-before-send, once ever, 9–18
+  // Toronto window; assignment bookings excluded so nobody is texted
+  // twice. 5-minute cadence so it lands minutes after 9 AM.
+  const sweepBookingReminders = async () => {
+    try {
+      const result = await bookingReminders.sweepDayBefore({
+        leads: await readLeads(),
+        getProperty: (id) => properties.get(id),
+        notify: notifyCustomer,
+        portalUrlFor: (lead, b) => {
+          const base = resolvePublicBaseUrl();
+          const token = lead?.portal?.token || (b?.propertyId ? portalTokenForId(b.propertyId) : "");
+          return token ? `${base}/portal/${token}` : base;
+        }
+      });
+      if (result.sent || result.errors?.length) {
+        console.log(`[booking-reminders] day-before: sent ${result.sent}/${result.due} due, skipped ${result.skipped.length}, errors ${result.errors.length}`);
+      }
+      for (const e of result.errors || []) {
+        console.warn(`[booking-reminders] FAILED for ${e.bookingId}: ${e.error}`);
+      }
+    } catch (err) {
+      console.warn("[booking-reminders] sweep failed:", err?.message);
+    }
+  };
+  sweepBookingReminders();
+  setInterval(sweepBookingReminders, 5 * 60 * 1000);
 
   // Assignment cadence sweep (stage 4) — dispatches steps 2–6 of the
   // follow-up cadence for blasted bookings, each step at most once,
