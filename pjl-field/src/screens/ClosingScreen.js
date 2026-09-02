@@ -1,8 +1,9 @@
 // The fall closing, as performed.
 //
-// Four stages rather than one scroll: start, water off, one page per
-// zone, close-out. You move between them freely — the checkmarks happen
-// after the work, not as a wizard driving you through it.
+// Five stages rather than one scroll: start, water off, one page per
+// zone, close-out, sign-off. You move between them freely — the
+// checkmarks happen after the work, not as a wizard driving you through
+// it.
 //
 // Three things gate finishing, and they are the things that must be true
 // of a closing: the water is off and recorded, every zone has been
@@ -13,12 +14,16 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View,
 } from 'react-native';
-import { AuthRequiredError, deferIssues, getWorkOrder, patchWorkOrder } from '../api';
+import {
+  AuthRequiredError, completeWorkOrder, deferIssues, getWorkOrder,
+  patchWorkOrder, signatureBypass,
+} from '../api';
 import { colors, radius, space, type } from '../theme';
 import StartStage from './closing/StartStage';
 import WaterOffStage from './closing/WaterOffStage';
 import ZoneStage from './closing/ZoneStage';
 import CloseOutStage from './closing/CloseOutStage';
+import SignOffStage from './closing/SignOffStage';
 import { CLOSEOUT_STEPS } from './closing/steps';
 
 const STAGES = [
@@ -26,9 +31,10 @@ const STAGES = [
   { key: 'water', label: 'Water' },
   { key: 'zones', label: 'Zones' },
   { key: 'closeout', label: 'Close-out' },
+  { key: 'signoff', label: 'Sign-off' },
 ];
 
-export default function ClosingScreen({ workOrderId, onExit, onOpenFullWorkOrder }) {
+export default function ClosingScreen({ workOrderId, onExit, onFinished }) {
   const [wo, setWo] = useState(null);
   const [state, setState] = useState('loading');
   const [error, setError] = useState('');
@@ -97,27 +103,29 @@ export default function ClosingScreen({ workOrderId, onExit, onOpenFullWorkOrder
   if (zones.length && zonesDone < zones.length) blockers.push(`${zones.length - zonesDone} zone${zones.length - zonesDone === 1 ? '' : 's'} still to do`);
   if (closeoutDone < closeoutTotal) blockers.push(`${closeoutTotal - closeoutDone} close-out step${closeoutTotal - closeoutDone === 1 ? '' : 's'} left`);
 
-  const finish = useCallback(() => {
+  // Close-out's Finish banks the findings and moves to sign-off. It does
+  // NOT complete anything: findings move to the property FIRST, so that a
+  // closing abandoned at sign-off — nobody home, dead battery, a customer
+  // who wants to talk — still leaves next spring's work recorded. Losing
+  // that because of who was standing on the lawn would be the worst
+  // possible trade.
+  const toSignOff = useCallback(() => {
     Alert.alert(
-      'Finish fall closing?',
+      'Finish the walk-through?',
       findings
         ? `${findings} finding${findings === 1 ? '' : 's'} will be saved to the property for next spring, then you'll go to sign-off.`
         : "No findings recorded. You'll go straight to sign-off.",
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Finish',
+          text: 'Continue',
           onPress: async () => {
             setSaving(true);
             try {
-              // Findings move to the property FIRST. If sign-off is
-              // abandoned afterwards the findings are still banked —
-              // losing next spring's work because nobody was home to
-              // sign would be the worst possible trade.
               if (findings) await deferIssues(workOrderId);
-              onOpenFullWorkOrder(`/admin/work-order/${encodeURIComponent(workOrderId)}/tech`);
+              setStage('signoff');
             } catch (err) {
-              Alert.alert("Couldn't finish", err?.message || 'Please try again.');
+              Alert.alert("Couldn't save the findings", err?.message || 'Please try again.');
             } finally {
               setSaving(false);
             }
@@ -125,7 +133,55 @@ export default function ClosingScreen({ workOrderId, onExit, onOpenFullWorkOrder
         },
       ]
     );
-  }, [findings, workOrderId, onOpenFullWorkOrder]);
+  }, [findings, workOrderId]);
+
+  // Sign-off's Finish. Both paths end with the completion cascade, which
+  // writes the service record, promotes the zone names, drafts the
+  // invoice, stamps the warranty and emails the customer — all
+  // server-side, all in one transition to `completed`.
+  //
+  // A bypass locks the work order but does not complete it, so that path
+  // is two calls. Deliberately in this order: lock first, complete second.
+  // If the second fails the visit is still recorded as accepted and can be
+  // completed from the desk; the reverse would leave a completed visit
+  // with no record of how it was accepted.
+  const [finishing, setFinishing] = useState(false);
+  const finishSignOff = useCallback(async (result) => {
+    setFinishing(true);
+    try {
+      const nowIso = new Date().toISOString();
+      let data;
+      if (result.mode === 'customer') {
+        data = await completeWorkOrder(workOrderId, {
+          signature: result.signature,
+          arrivedAt: wo?.arrivedAt ? null : nowIso,
+          departedAt: wo?.departedAt ? null : nowIso,
+        });
+      } else {
+        await signatureBypass(workOrderId, { reason: result.reason, note: result.note });
+        data = await completeWorkOrder(workOrderId, {
+          arrivedAt: wo?.arrivedAt ? null : nowIso,
+          departedAt: wo?.departedAt ? null : nowIso,
+        });
+      }
+      const invoiceId = data?.cascade?.invoiceId || data?.cascade?.invoice?.id || null;
+      onFinished({ workOrder: data?.workOrder || wo, invoiceId });
+    } catch (err) {
+      // The server's own gate list, when it has one. These are the things
+      // that can still be fixed standing here, so name them rather than
+      // showing one sentence and no way forward.
+      if (Array.isArray(err?.gateFailures) && err.gateFailures.length) {
+        Alert.alert(
+          'Not quite ready',
+          err.gateFailures.map((g) => `• ${g.label || g.key}`).join('\n')
+        );
+      } else {
+        Alert.alert("Couldn't finish", err?.message || 'Please try again.');
+      }
+    } finally {
+      setFinishing(false);
+    }
+  }, [workOrderId, wo, onFinished]);
 
   if (state === 'loading') return <View style={styles.centre}><ActivityIndicator color={colors.brand} /></View>;
   if (state === 'auth') {
@@ -196,8 +252,10 @@ export default function ClosingScreen({ workOrderId, onExit, onOpenFullWorkOrder
               </Text>
             </View>
           )
+        ) : stage === 'closeout' ? (
+          <CloseOutStage {...shared} blockers={blockers} onFinish={toSignOff} />
         ) : (
-          <CloseOutStage {...shared} blockers={blockers} onFinish={finish} />
+          <SignOffStage {...shared} onFinish={finishSignOff} busy={finishing} />
         )}
       </ScrollView>
     </View>

@@ -18,6 +18,7 @@ import { StatusBar } from 'expo-status-bar';
 import PropertiesScreen from './src/screens/PropertiesScreen';
 import TodayScreen from './src/screens/TodayScreen';
 import ClosingScreen from './src/screens/ClosingScreen';
+import InvoiceScreen from './src/screens/InvoiceScreen';
 import PropertyProfileScreen from './src/screens/PropertyProfileScreen';
 import WebScreen from './src/screens/WebScreen';
 import { colors, space } from './src/theme';
@@ -49,6 +50,9 @@ export default function App() {
   // cascade. Set together with the tab switch so the Work tab always
   // shows one thing or the other, never both.
   const [closingId, setClosingId] = useState(null);
+  // Set when a closing finishes: the invoice the cascade drafted, which is
+  // where the tech lands rather than back on a list.
+  const [invoiceId, setInvoiceId] = useState(null);
 
   // Cold start: pull a newer bundle if there is one, then reload into
   // it. Without this the app runs the previous bundle for one more
@@ -97,11 +101,25 @@ export default function App() {
                   ) : (
                     <PropertiesScreen onOpen={setOpenPropertyId} />
                   )
+                ) : tab.key === 'work' && invoiceId ? (
+                  <InvoiceScreen
+                    invoiceId={invoiceId}
+                    onBack={() => { setInvoiceId(null); select('today'); }}
+                  />
                 ) : tab.key === 'work' && closingId ? (
                   <ClosingScreen
                     workOrderId={closingId}
                     onExit={() => { setClosingId(null); select('today'); }}
-                    onOpenFullWorkOrder={(url) => { setClosingId(null); setWorkUrl(url); }}
+                    // A finished closing goes straight to its invoice. When
+                    // the cascade did not hand one back — it is best-effort
+                    // and the visit is completed either way — fall back to
+                    // the work order rather than stranding the tech on a
+                    // screen that has just told them it is done.
+                    onFinished={({ invoiceId: id }) => {
+                      setClosingId(null);
+                      if (id) setInvoiceId(id);
+                      else setWorkUrl(`/admin/work-order/${encodeURIComponent(closingId)}/tech`);
+                    }}
                   />
                 ) : (
                   <WebScreen

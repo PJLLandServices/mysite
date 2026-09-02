@@ -133,6 +133,65 @@ export const patchWorkOrder = (id, patch) =>
 export const createWorkOrderForProperty = ({ type, propertyId }) =>
   sendJson('/api/work-orders', 'POST', { type, propertyId }).then((d) => d.workOrder);
 
+// Lock the work order without a customer signature. Nobody was home,
+// which on a fall closing is the normal case rather than the exception.
+// The reason vocabulary is the server's (BYPASS_REASONS); it locks the
+// work order but does NOT complete it — completion is the separate call
+// below, same as the web page.
+export const signatureBypass = (id, { reason, note }) =>
+  sendJson(`/api/work-orders/${encodeURIComponent(id)}/signature-bypass`, 'POST', { reason, note });
+
+// Sign (when there is someone to sign) and complete, in one PATCH — the
+// server applies the signature, flips status, AWAITS the completion
+// cascade, and hands back the invoice it drafted. Pass no signature to
+// complete a work order already locked by a bypass.
+//
+// A refusal here is usually `presign_gate_unmet` with the unmet gates
+// listed in `gateFailures`; the caller shows them rather than a dead end,
+// because every one of them is something the tech can still fix on site.
+export async function completeWorkOrder(id, { signature = null, arrivedAt = null, departedAt = null } = {}) {
+  const body = { status: 'completed' };
+  if (signature) body.signature = signature;
+  if (arrivedAt) body.arrivedAt = arrivedAt;
+  if (departedAt) body.departedAt = departedAt;
+  const res = await fetch(`${HOST}/api/work-orders/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401 || res.status === 403) throw new AuthRequiredError();
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { throw new AuthRequiredError(); }
+  if (!res.ok || !data.ok) {
+    const err = new Error((data && data.errors && data.errors[0]) || `Couldn't complete (${res.status})`);
+    // Carried so the screen can list what is still unmet instead of
+    // showing one sentence and no way forward.
+    if (data && data.error === 'presign_gate_unmet' && Array.isArray(data.gateFailures)) {
+      err.gateFailures = data.gateFailures;
+    }
+    throw err;
+  }
+  return data;   // { ok, workOrder, cascade? }
+}
+
+// ---- invoices --------------------------------------------------------
+
+export const getInvoice = (id) =>
+  getJson(`/api/invoices/${encodeURIComponent(id)}`).then((d) => d.invoice || d);
+
+// Emails the invoice to the customer. The server owns the template, the
+// attachments and the send log.
+export const sendInvoice = (id) =>
+  sendJson(`/api/invoices/${encodeURIComponent(id)}/send`, 'POST', {});
+
+// The customer's own payment page, minted without sending anything — a
+// draft invoice has no payable link until this runs. The app never talks
+// to Stripe; it opens this URL and the server does the rest.
+export const invoicePaymentLink = (id) =>
+  sendJson(`/api/invoices/${encodeURIComponent(id)}/payment-link`, 'POST', {}).then((d) => d.url);
+
 // Sweeps every issue off the work order's zones into the property's
 // deferred recommendations. Takes no payload — the server reads the
 // zones. Called once, at finish.
