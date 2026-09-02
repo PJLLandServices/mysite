@@ -1323,6 +1323,25 @@ or catalog change, and the CTA that moved is FLOW-28's (UNMAPPED). `publicBookin
 (fall 2026: Oct 30) is defined in the config for the future gate and is deliberately
 consumed by nothing, pinned by a source guard. Cover:
 `scripts/test-season-config.mjs` (66 assertions, in `build:check`).
+**2026-09-01 (Completion email + service report, Patrick's simulated-closing review):** three
+fixes from his walk of a real completed work order. (1) **The email names the service**:
+subject "PJL Fall Closing Summary — please review" (was the generic "visit summary"), headline
+to match, and Patrick's lead copy for the seasonal services ("PJL has successfully completed
+the fall closing of your sprinkler system… we observe your system for potential issues and
+note them for next year's spring opening — anything the technician flagged is in your Service
+Report"); "attached summary" wording corrected — the report is a portal link, never an
+attachment. (2) **Warranty paragraph removed from the email** on his instruction; the warranty
+itself is untouched — the record still stamps, the portal still shows coverage, claims (FLOW-30)
+unaffected. Summary verb fixed too: "4 zones winterized" for a closing / "inspected" for an
+opening, not "checked". (3) **The report's checkmarks are DRAWN, not typed**: "✓" (U+2713)
+exists in neither Barlow Condensed nor built-in Helvetica, so every completed checklist line
+printed "?" on the customer's signed document. `drawCheckmark()` strokes two vector lines —
+no font to fall back through. Verified by stream inspection of a rendered fixture: exactly 5
+stroked marks for 3 checked steps + 2 answer lines, zero "?" glyphs. **FLOW-31's historical
+invariant untouched** — checklist KEYS and `checklistKeysForWorkOrder()` unchanged; only how a
+mark is painted. wo suites: fall-closing 31, completedat 39, unlock 56, invoice-wo-report 21,
+mailer-log 18 — all pass unchanged. No PASS flow touched.
+
 **2026-09-01 (Decision I — "no need to contact" customers; the Willowridge hunt's true
 ending):** the finder + preflight finally named it: all 14 Willowridge stops skipped as
 `no_contact` — correctly, by the truck-never-surprises-a-house rule, but wrongly for a

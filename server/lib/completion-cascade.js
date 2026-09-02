@@ -42,7 +42,11 @@ function summarizeWo(wo) {
   };
   const base = labels[wo.type] || "Visit";
   if (issueCount) return `${base} — ${issueCount} issue${issueCount === 1 ? "" : "s"} found across ${zoneCount} zone${zoneCount === 1 ? "" : "s"}`;
-  return `${base} — ${zoneCount} zone${zoneCount === 1 ? "" : "s"} checked`;
+  // The verb says what the visit actually did — Patrick's review of his
+  // simulated closing flagged "4 zones checked" as the wrong word for a
+  // winterization.
+  const verbs = { fall_closing: "winterized", spring_opening: "inspected" };
+  return `${base} — ${zoneCount} zone${zoneCount === 1 ? "" : "s"} ${verbs[wo.type] || "checked"}`;
 }
 
 // Pull line items from the WO. Priority:

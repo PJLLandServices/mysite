@@ -17959,9 +17959,12 @@ async function handleApi(req, res, pathname) {
         const totalLine = invoice && invoice.total > 0
           ? `<p style="margin: 0 0 14px;">Total for today's visit: <strong>$${moneyCad(invoice.total)} CAD</strong> (incl. HST). An invoice will follow.</p>`
           : "";
-        const warranty = serviceRecord.warrantyExpiresAt
-          ? `<p style="margin: 0 0 14px;">Today's work is covered under PJL's <strong>${serviceRecord.warrantyMonths}-month warranty</strong>, valid through ${new Date(serviceRecord.warrantyExpiresAt).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" })}.</p>`
-          : "";
+        // Warranty line REMOVED from this email on Patrick's 2026-09-01
+        // review ("you can abolish anything regarding warranty"). The
+        // warranty itself is unchanged — serviceRecord.warrantyExpiresAt
+        // still stamps, the portal's service history still shows
+        // coverage, and the claims flow still works. It just doesn't
+        // lead the completion email.
         // Service report — attached when the cascade produced a snapshot
         // (Service Report brief, 2026-05-19). The line goes in the body
         // so the customer knows what the attachment is.
@@ -17991,20 +17994,41 @@ async function handleApi(req, res, pathname) {
         const bypassFollowUp = isBypassed
           ? `<p style="margin: 0 0 14px;">If anything in the visit summary or invoice does not match your understanding of what was authorized, please contact us within 7 days at <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a> or by replying to this email.</p>`
           : "";
-        // Headline + greeting body diverge between the two paths. Signed
-        // WO: "Today's visit is complete." + visit summary. Bypassed WO:
-        // factual "Work was completed at your property…" framing that
-        // doesn't presuppose the customer was the one authorizing.
+        // The email leads with the SERVICE by name — Patrick's 2026-09-01
+        // review of his simulated closing: "visit summary" is too generic
+        // when the customer bought a fall closing. His copy for the lead
+        // paragraph, lightly polished; the seasonal services explain the
+        // on-site observation habit, everything else keeps the factual
+        // completed-at-your-property line. The Service Report is a portal
+        // link, never an attachment, so the copy says "in your Service
+        // Report", not "attached".
+        const typeLabel = ({
+          spring_opening: "Spring Opening",
+          fall_closing: "Fall Closing",
+          service_visit: "Service Visit",
+          build: "Install / Build"
+        })[wo.type] || "Visit";
+        const onDate = completedDateStr ? ` on ${completedDateStr.replace(/</g, "&lt;")}` : "";
+        const serviceIntro = wo.type === "fall_closing"
+          ? `PJL has successfully completed the fall closing of your sprinkler system${onDate}. While on site, we observe your system for potential issues and note them for next year's spring opening — anything the technician flagged is in your Service Report.`
+          : wo.type === "spring_opening"
+            ? `PJL has successfully completed the spring opening of your sprinkler system${onDate}. While on site, we observe your system for potential issues — anything the technician flagged is in your Service Report.`
+            : `Work was completed at your property${onDate}.`;
+        // Headline + greeting body still diverge between the two paths.
+        // Bypassed WO framing doesn't presuppose the customer was the one
+        // authorizing (Admin Signature Bypass brief §3.4).
         const headline = isBypassed
-          ? "Your visit summary"
-          : "Today's visit is complete.";
+          ? `Your ${typeLabel} summary`
+          : `Your ${typeLabel} is complete.`;
         const greetingBlock = isBypassed
           ? `
     <p style="margin: 0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
-    <p style="margin: 0 0 14px;">Work was completed at your property${completedDateStr ? ` on ${completedDateStr.replace(/</g, "&lt;")}` : ""}. Please review the attached summary and the invoice (which will follow separately).</p>
+    <p style="margin: 0 0 14px;">${serviceIntro}</p>
+    <p style="margin: 0 0 14px;">Please review the summary below — your invoice will follow separately.</p>
     <p style="margin: 0 0 14px;">${serviceRecord.summary.replace(/</g, "&lt;")}</p>`
           : `
     <p style="margin: 0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
+    <p style="margin: 0 0 14px;">${serviceIntro}</p>
     <p style="margin: 0 0 14px;">${serviceRecord.summary.replace(/</g, "&lt;")}</p>`;
         const html = `
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
@@ -18015,7 +18039,6 @@ async function handleApi(req, res, pathname) {
   <div style="padding: 24px 28px; background: #FAFAF5; border: 1px solid #e5e5dd; border-top: none; border-radius: 0 0 8px 8px;">${greetingBlock}
     ${reportLine}
     ${totalLine}
-    ${warranty}
     ${bypassFollowUp}
     <p style="margin: 0 0 18px;">
       <a href="${portalUrl}" style="display: inline-block; padding: 11px 20px; background: #E07B24; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600;">Open your portal</a>
@@ -18033,8 +18056,8 @@ async function handleApi(req, res, pathname) {
           to: wo.customerEmail,
           replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
           subject: isBypassed
-            ? "PJL visit summary — please review"
-            : "Your PJL visit is complete",
+            ? `PJL ${typeLabel} Summary — please review`
+            : `Your PJL ${typeLabel} is complete`,
           html
         }).catch(async (err) => {
           await mailerLog.logSend({ kind: "completion", to: wo.customerEmail, ok: false, error: err.message, refId: wo.id });
