@@ -144,6 +144,16 @@ export const deferIssues = (id) =>
 export const patchProperty = (id, patch) =>
   sendJson(`/api/properties/${encodeURIComponent(id)}`, 'PATCH', patch);
 
+// Remove a documented zone, with a reason. The server writes the audit
+// entry itself and never renumbers what's left — a controller station
+// keeps its number whatever happens to the ones before it.
+export const removePropertyZone = (propertyId, zoneNumber, { reason, note }) =>
+  sendJson(
+    `/api/properties/${encodeURIComponent(propertyId)}/zones/${encodeURIComponent(zoneNumber)}`,
+    'DELETE',
+    { reason, note }
+  ).then((d) => d.property);
+
 // photos: [{ mediaType, data (base64, no data: prefix), category, zoneNumber, label }]
 // 90-second timeout, matching the web page: slow cellular is normal,
 // but "forever" is not a state a tech can act on.

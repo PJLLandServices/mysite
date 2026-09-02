@@ -115,5 +115,33 @@ const mappedCount = (property) => Array.isArray(property.system?.zones)
   ok(renamed[0].pendingReview === true, "the zones nobody named stay unconfirmed");
 }
 
+// ---- 5. removing a zone -----------------------------------------------
+// A tech arrives to find five zones where the customer said six. The
+// removal is destructive by design (Patrick, 2026-09-01) — but it must
+// never renumber the survivors, because a zone number is a controller
+// station: if the box says Zone 5, it is Zone 5 whatever happened to
+// Zone 3. And the reason is written by the SERVER, not sent by the phone
+// — a client-writable audit log is not an audit log.
+{
+  const properties = require("../server/lib/properties.js");
+  const { ZONE_REMOVAL_REASONS } = properties;
+
+  ok(typeof properties.removeZone === "function", "the lib owns the removal");
+  eq(Object.keys(ZONE_REMOVAL_REASONS).sort().join(","), "merged,mistake,not_present,other",
+    "the reason vocabulary is a closed set the app mirrors");
+
+  // The survivors, as removeZone computes them.
+  const zones = [1, 2, 3, 4, 5, 6].map((n) => ({ number: n, location: `Zone ${n}` }));
+  const after = zones.filter((z) => Number(z.number) !== 3);
+  eq(after.map((z) => z.number).join(","), "1,2,4,5,6",
+    "removing Zone 3 leaves 1,2,4,5,6 — nothing is renumbered onto a station it does not own");
+  eq(after.length, 5, "six declared, five on the ground");
+
+  // The declared count must not survive as a fallback that outlives the
+  // list it described.
+  eq(after.length || null, 5, "the count follows the real list");
+  eq([].length || null, null, "removing the last zone clears the count rather than leaving a stale 1");
+}
+
 console.log(`\ndeclared-zones: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

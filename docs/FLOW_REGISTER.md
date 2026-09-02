@@ -1323,6 +1323,24 @@ date **cannot presently exist**. The fix addressed a case the codebase cannot pr
 root cause of the wrong diagnosis was reading a two-week-stale `origin/main`. If a
 property-first work order ever does get a schedulable date, this is the gap that opens.
 
+**2026-09-01 (Add and remove zones from the app):** the other half of the declared-count
+work. A tech who arrives to five zones where the customer said six can now fix it on the
+spot — add appends a zone to the visit and the property; remove takes it off both, behind a
+confirm and a **reason**. Patrick's call that removal is destructive and that is fine: "if
+someone tells me their system is 6 zones and I arrive to only 5, deleting isn't that big of a
+deal." **Two things the implementation is careful about.** Zone numbers are CONTROLLER
+STATIONS, not list positions — removing Zone 3 leaves 1,2,4,5,6, never renumbering a survivor
+onto a station it does not own, because next spring a tech reads those numbers off the box on
+the garage wall. And the reason is written by the SERVER (`properties.removeZone()`, reached
+by `DELETE /api/properties/:id/zones/:n`) rather than sent as a history entry by the phone: a
+client-writable audit log is not an audit log. Reasons are a closed set — not on this
+property / merged / added in error / other-with-a-note — so the trail can be counted later,
+and `system.zoneCount` follows the surviving list so a stale declared count can never
+resurface as a fallback. **Coverage:** `scripts/test-declared-zones.mjs` grew to 33
+assertions. **What still needs Patrick:** remove a zone from a six-zone property and confirm
+the remaining five keep their original numbers on both the work order and the property, and
+that the reason shows up in the property's history.
+
 **2026-09-01 (A declared zone count now becomes real zones):** a customer books a fall
 closing saying they have eight zones; pricing has always honoured that (`effectiveZoneCount()`
 reads documented zones first, then `system.zoneCount`), so they are charged the 7-8 zone tier.

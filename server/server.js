@@ -8877,6 +8877,32 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // DELETE a documented zone, with a reason. The field app calls this when
+  // a tech arrives to find the customer's declared count was wrong — six
+  // on the booking form, five on the ground.
+  //
+  // A dedicated route rather than a PATCH because the removal carries an
+  // audit entry, and the lib writes that entry itself: a client-writable
+  // history is not a history. Never renumbers — zone numbers are
+  // controller stations, not list positions.
+  const zoneRemoveMatch = pathname.match(/^\/api\/properties\/([^/]+)\/zones\/(\d+)$/);
+  if (zoneRemoveMatch && req.method === "DELETE") {
+    try {
+      await requireAdmin(req);
+      const payload = await parseRequestBody(req);
+      const updated = await properties.removeZone(
+        decodeURIComponent(zoneRemoveMatch[1]),
+        Number(zoneRemoveMatch[2]),
+        { reason: payload.reason, note: payload.note, by: await actorLabel(req) }
+      );
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["That zone isn't on this property."] });
+      return sendJson(res, 200, { ok: true, property: updated });
+    } catch (err) {
+      const status = ["BAD_ZONE", "BAD_REASON", "NOTE_REQUIRED"].includes(err.code) ? 422 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't remove the zone."] });
+    }
+  }
+
   const propertyMatch = pathname.match(/^\/api\/properties\/([^/]+)$/);
   if (propertyMatch && req.method === "GET") {
     const property = await properties.get(decodeURIComponent(propertyMatch[1]));
