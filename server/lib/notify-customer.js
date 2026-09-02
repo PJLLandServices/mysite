@@ -147,6 +147,21 @@ const TEMPLATES = {
       "If this new time doesn't work, call (905) 960-0181 — we'll find another slot.",
     sms: "{namePrefix}your PJL appointment moved to {dateStr} at {timeStr}. WO {workOrderId}. Details: {portalUrl}. Different time? (905) 960-0181"
   },
+  // Day-before reminder for SELF-BOOKED appointments (Patrick,
+  // 2026-09-02: assignment customers get a D−1 text from the cadence;
+  // ad customers who booked themselves got nothing the day before).
+  // Sent by the booking-reminders sweep — transactional, about their
+  // own appointment, so seasonal-marketing opt-outs don't block it;
+  // the "no need to contact" tick does.
+  day_before: {
+    subject: "Reminder: PJL comes tomorrow — {serviceLabel}",
+    headline: "We'll see you tomorrow.",
+    body:
+      "Hi {firstName}, a friendly reminder that PJL Land Services comes tomorrow, {dateStr}, " +
+      "for your {serviceLabel} — {timeStr}. Please make sure we can reach what we need to. " +
+      "If anything has changed, call or text (905) 960-0181.",
+    sms: "{namePrefix}reminder: PJL comes tomorrow ({dateStr}) for your {serviceLabel} — {timeStr}. Anything changed? (905) 960-0181. Details: {portalUrl}"
+  },
   // Fired manually from the tech's daily-schedule view when they tap
   // "Notify on route" before driving over. Short, direct — the tech is
   // about to be at the door, the customer just needs to know.
@@ -221,6 +236,42 @@ function buildEmail(event, lead) {
   // logo and CTA always agree on host.
   const publicBaseUrl = cleanBase;
 
+  // "Add your appointment to your calendar" (Patrick, 2026-09-02) — on
+  // every email that names a scheduled visit. Google/Outlook open a
+  // prefilled event; the .ics link covers Apple Calendar and the rest,
+  // served by the tokened portal endpoint. The event carries the bucket
+  // window the customer was told, never an exact internal time
+  // (calendar-links.js owns that rule).
+  let calendarRowHtml = "";
+  let calendarRowText = "";
+  if (["booked", "rescheduled", "site_visit", "day_before"].includes(event) && lead.booking?.start) {
+    try {
+      const calendarLinks = require("./calendar-links");
+      const links = calendarLinks.linksForBooking({
+        id: lead.id,
+        start: lead.booking.start,
+        durationMinutes: lead.booking.durationMinutes,
+        bucketKey: lead.booking.bucketKey || null,
+        serviceLabel: lead.booking.serviceLabel || "",
+        address: lead.contact?.address || ""
+      }, { portalUrl });
+      const portalToken = lead.portal?.token || "";
+      const icsUrl = portalToken ? `${cleanBase}/api/portal/${encodeURIComponent(portalToken)}/calendar.ics` : "";
+      if (links) {
+        calendarRowHtml = `
+    <p style="margin: 0 0 18px; font-size: 14px;">
+      Add it to your calendar:
+      <a href="${escapeHtml(links.google)}" style="color: #1B4D2E; font-weight: 600;">Google</a> ·
+      <a href="${escapeHtml(links.outlook)}" style="color: #1B4D2E; font-weight: 600;">Outlook</a>${icsUrl ? ` ·
+      <a href="${escapeHtml(icsUrl)}" style="color: #1B4D2E; font-weight: 600;">Apple&nbsp;/&nbsp;other (.ics)</a>` : ""}
+    </p>`;
+        calendarRowText = `Add it to your calendar: ${links.google}${icsUrl ? `\nApple/other (.ics): ${icsUrl}` : ""}`;
+      }
+    } catch (err) {
+      console.warn("[customer-email] calendar links skipped:", err?.message);
+    }
+  }
+
   const html = `
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
   <div style="background: #1B4D2E; border-radius: 8px 8px 0 0; padding: 24px 28px;">
@@ -242,7 +293,7 @@ function buildEmail(event, lead) {
     <p style="margin: 0 0 18px;">${escapeHtml(body)}</p>
     <p style="margin: 0 0 18px;">
       <a href="${escapeHtml(portalUrl)}" style="display: inline-block; padding: 11px 20px; background: #E07B24; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600;">Open your portal</a>
-    </p>
+    </p>${calendarRowHtml}
     <p style="margin: 24px 0 0; font-size: 13px; color: #777;">
       Questions? Call <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a> or reply to this email.
     </p>
@@ -261,10 +312,12 @@ function buildEmail(event, lead) {
     body,
     "",
     `Open your portal: ${portalUrl}`,
+    calendarRowText ? "" : null,
+    calendarRowText || null,
     "",
     "Questions? Call (905) 960-0181.",
     "PJL Land Services — Newmarket, Ontario"
-  ].join("\n");
+  ].filter((line) => line !== null).join("\n");
 
   return { subject, html, text };
 }

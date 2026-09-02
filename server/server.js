@@ -46,6 +46,8 @@ const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, 
 const scheduleStore = require("./lib/schedule-store");
 const { mergeDaySchedule } = require("./lib/day-schedule");
 const jobFinder = require("./lib/job-finder");
+const bookingReminders = require("./lib/booking-reminders");
+const calendarLinks = require("./lib/calendar-links");
 const { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice } = require("./lib/pricing");
 const { normalizeServiceFeeWaiver, friendlyWaiverReason } = require("./lib/service-fee-waiver");
 const bookingSessions = require("./lib/booking-sessions");
@@ -6585,6 +6587,48 @@ async function handleApi(req, res, pathname) {
       return;
     }
     return sendJson(res, 200, { ok: true, contact });
+  }
+
+  // "Add to your calendar" for a self-booked customer — the ics leg of
+  // the links in their confirmation email. Same token-first resolution
+  // as the portal itself: a lead token serves that lead's booking; a
+  // property token serves the property's next upcoming booking. The
+  // event carries the bucket window the customer was told.
+  const portalCalMatch = pathname.match(/^\/api\/portal\/([^/]+)\/calendar\.ics$/);
+  if (portalCalMatch && req.method === "GET") {
+    const token = decodeURIComponent(portalCalMatch[1]);
+    const leads = await readLeads();
+    const lead = leads.find((item) => (item.portal?.token || portalTokenForId(item.id)) === token);
+    let eventSource = null;
+    if (lead?.booking?.start) {
+      eventSource = {
+        id: lead.id,
+        start: lead.booking.start,
+        durationMinutes: lead.booking.durationMinutes,
+        bucketKey: lead.booking.bucketKey || null,
+        serviceLabel: lead.booking.serviceLabel || "",
+        address: lead.contact?.address || ""
+      };
+    } else {
+      const property = (await properties.list()).find((p) => p.id && portalTokenForId(p.id) === token) || null;
+      if (property) {
+        const upcoming = (await bookings.list())
+          .filter((b) => b && b.propertyId === property.id && b.status === "confirmed"
+            && b.scheduledFor && new Date(b.scheduledFor).getTime() > Date.now())
+          .sort((a, b) => new Date(a.scheduledFor) - new Date(b.scheduledFor))[0];
+        if (upcoming) eventSource = { ...upcoming, address: upcoming.address || property.address || "" };
+      }
+    }
+    if (!eventSource) return sendJson(res, 404, { ok: false, errors: ["No upcoming appointment to add."] });
+    const event = calendarLinks.eventForBooking(eventSource, {
+      portalUrl: `${resolvePublicBaseUrl()}/portal/${encodeURIComponent(token)}`
+    });
+    if (!event) return sendJson(res, 404, { ok: false, errors: ["No upcoming appointment to add."] });
+    res.writeHead(200, {
+      "Content-Type": "text/calendar; charset=utf-8",
+      "Content-Disposition": 'attachment; filename="pjl-appointment.ics"'
+    });
+    return res.end(calendarLinks.icsText(event));
   }
 
   const portalMatch = pathname.match(/^\/api\/portal\/([^/]+)$/);
@@ -21965,7 +22009,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
   // Assignment writer stage 5 — the customer's appointment page API.
   // PUBLIC: the token is the credential, exactly like /portal/<token>.
   // It addresses one booking and grants three actions on it.
-  const apptMatch = pathname.match(/^\/api\/appointment\/([A-Za-z0-9_-]{16,64})(?:\/(confirm|cancel|availability|reschedule|free-bucket|time-window|zones))?$/);
+  const apptMatch = pathname.match(/^\/api\/appointment\/([A-Za-z0-9_-]{16,64})(?:\/(confirm|cancel|availability|reschedule|free-bucket|time-window|zones|calendar\.ics))?$/);
   if (apptMatch) {
     const token = apptMatch[1];
     const action = apptMatch[2] || null;
@@ -21987,14 +22031,41 @@ Customer signature captured at ${new Date().toISOString()}.`;
         return appointmentActions.zonesInfo(property, summary);
       } catch { return null; }
     };
+    // "Add to your calendar" — Google/Outlook are prefilled-compose
+    // URLs; the ics link below serves Apple Calendar and the rest. The
+    // event carries the BUCKET window the customer was told, never the
+    // sequenced internal time.
+    const calendarFor = (booking) => {
+      try {
+        const links = calendarLinks.linksForBooking(booking, {
+          portalUrl: `${resolvePublicBaseUrl()}/a/${token}`
+        });
+        return links ? { google: links.google, outlook: links.outlook, ics: `/api/appointment/${encodeURIComponent(token)}/calendar.ics` } : null;
+      } catch { return null; }
+    };
     try {
+      if (action === "calendar.ics" && req.method === "GET") {
+        const booking = await appointmentActions.findByToken(token);
+        if (!booking || booking.status !== "confirmed") {
+          return sendJson(res, 404, { ok: false, errors: ["That link doesn't match a live appointment."] });
+        }
+        const event = calendarLinks.eventForBooking(booking, {
+          portalUrl: `${resolvePublicBaseUrl()}/a/${token}`
+        });
+        if (!event) return sendJson(res, 404, { ok: false, errors: ["This appointment has no date to add."] });
+        res.writeHead(200, {
+          "Content-Type": "text/calendar; charset=utf-8",
+          "Content-Disposition": 'attachment; filename="pjl-appointment.ics"'
+        });
+        return res.end(calendarLinks.icsText(event));
+      }
       if (!action && req.method === "GET") {
         const booking = await appointmentActions.findByToken(token);
         if (!booking) return sendJson(res, 404, { ok: false, errors: ["That link doesn't match an appointment."] });
         const summary = appointmentActions.summarize(booking);
         return sendJson(res, 200, {
           ok: true,
-          appointment: { ...summary, priceLabel: await priceFor(booking), zones: await zonesFor(booking, summary) }
+          appointment: { ...summary, priceLabel: await priceFor(booking), zones: await zonesFor(booking, summary), calendar: calendarFor(booking) }
         });
       }
       if (action === "confirm" && req.method === "POST") {
@@ -23967,6 +24038,38 @@ server.listen(PORT, HOST, () => {
   };
   sweepLeadBookings();
   setInterval(sweepLeadBookings, 10 * 60 * 1000);
+
+  // Day-before reminder sweep for SELF-BOOKED appointments. Assignment
+  // customers get theirs from the cadence's step 6; the customer who
+  // booked themselves (the ad traffic) got nothing the day before —
+  // Patrick, 2026-09-02: "add the day-before reminder for self booked."
+  // Same posture as the cadence: mark-before-send, once ever, 9–18
+  // Toronto window; assignment bookings excluded so nobody is texted
+  // twice. 5-minute cadence so it lands minutes after 9 AM.
+  const sweepBookingReminders = async () => {
+    try {
+      const result = await bookingReminders.sweepDayBefore({
+        leads: await readLeads(),
+        getProperty: (id) => properties.get(id),
+        notify: notifyCustomer,
+        portalUrlFor: (lead, b) => {
+          const base = resolvePublicBaseUrl();
+          const token = lead?.portal?.token || (b?.propertyId ? portalTokenForId(b.propertyId) : "");
+          return token ? `${base}/portal/${token}` : base;
+        }
+      });
+      if (result.sent || result.errors?.length) {
+        console.log(`[booking-reminders] day-before: sent ${result.sent}/${result.due} due, skipped ${result.skipped.length}, errors ${result.errors.length}`);
+      }
+      for (const e of result.errors || []) {
+        console.warn(`[booking-reminders] FAILED for ${e.bookingId}: ${e.error}`);
+      }
+    } catch (err) {
+      console.warn("[booking-reminders] sweep failed:", err?.message);
+    }
+  };
+  sweepBookingReminders();
+  setInterval(sweepBookingReminders, 5 * 60 * 1000);
 
   // Assignment cadence sweep (stage 4) — dispatches steps 2–6 of the
   // follow-up cadence for blasted bookings, each step at most once,
