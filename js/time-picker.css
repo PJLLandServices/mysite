@@ -143,40 +143,73 @@
 .tp-day.is-selected.is-today {
   outline-color: var(--tp-amber-light);
 }
+/* Best day for this address — our crew is already routed nearby.
+   Loud by design (Patrick: "it should be a very big star, and a big call
+   out"): the whole cell fills amber — the same gradient as the booking
+   button — with a big star stacked above the date. */
 .tp-day.is-recommended {
-  /* Best day for this address — our crew is already routed nearby. */
-  position: relative;
+  flex-direction: column;
+  gap: 1px;
+  background: linear-gradient(135deg, var(--tp-amber-light) 0%, var(--tp-amber) 100%);
   border-color: var(--tp-amber);
+  color: #fff;
+  font-weight: 800;
 }
-.tp-day.is-recommended::after {
+.tp-day.is-recommended::before {
   content: "★";
-  position: absolute;
-  top: 1px;
-  right: 3px;
-  font-size: 10px;
+  font-size: 18px;
   line-height: 1;
-  color: var(--tp-amber);
 }
-.tp-day.is-recommended.is-available:hover {
-  border-color: var(--tp-amber);
-  background: #DDEACB;
+.tp-day.is-recommended.is-available:hover:not(.is-selected) {
+  border-color: var(--tp-green);
+  background: linear-gradient(135deg, var(--tp-amber) 0%, var(--tp-amber) 100%);
+}
+.tp-day.is-recommended.is-other-month.is-available {
+  color: #fff;
 }
 .tp-day.is-recommended.is-selected {
+  background: var(--tp-green);
   border-color: var(--tp-green);
-}
-.tp-day.is-recommended.is-selected::after {
-  color: var(--tp-amber-light);
+  color: #fff;
 }
 
-.tp-legend {
-  margin: 10px 4px 0;
-  font-size: 13px;
-  color: var(--tp-muted);
+/* The big call-out above the grid — only rendered when a starred day is
+   visible in the month. */
+.tp-callout {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  background: #FDF2E4;
+  border: 2px solid var(--tp-amber);
+  border-radius: 10px;
 }
-.tp-legend[hidden] { display: none; }
-.tp-legend-star {
+.tp-callout[hidden] { display: none; }
+.tp-callout-star {
+  font-size: 34px;
+  line-height: 1;
   color: var(--tp-amber);
-  margin-right: 2px;
+  flex-shrink: 0;
+}
+.tp-callout-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.tp-callout-title {
+  font-family: "Barlow Condensed", "DM Sans", sans-serif;
+  font-weight: 700;
+  font-size: 19px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--tp-green);
+}
+.tp-callout-body {
+  font-size: 14px;
+  line-height: 1.35;
+  color: var(--text, #1A1A1A);
 }
 
 .tp-month-empty {
@@ -335,6 +368,11 @@
   .tp-weekdays { gap: 3px; }
   .tp-weekdays > span { padding: 4px 0; font-size: 11px; }
   .tp-day { font-size: 14px; border-radius: 7px; }
+  .tp-day.is-recommended::before { font-size: 14px; }
+  .tp-callout { gap: 10px; padding: 10px 12px; }
+  .tp-callout-star { font-size: 28px; }
+  .tp-callout-title { font-size: 17px; }
+  .tp-callout-body { font-size: 13px; }
   .tp-slot-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
   .tp-custom-fields { grid-template-columns: 1fr; }
 }

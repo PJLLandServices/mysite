@@ -140,11 +140,14 @@
         <div class="tp-weekdays" aria-hidden="true">
           ${WEEKDAY_LETTERS.map((l) => `<span>${l}</span>`).join("")}
         </div>
+        <div class="tp-callout" data-legend role="status" hidden>
+          <span class="tp-callout-star" aria-hidden="true">★</span>
+          <span class="tp-callout-text">
+            <strong class="tp-callout-title">We're already in your neighbourhood!</strong>
+            <span class="tp-callout-body" data-callout-body>Pick a starred day — our crew is scheduled near you.</span>
+          </span>
+        </div>
         <div class="tp-grid" data-grid role="grid"></div>
-        <p class="tp-legend" data-legend hidden>
-          <span class="tp-legend-star" aria-hidden="true">★</span>
-          Best days for your address — our crew is already scheduled in your neighbourhood.
-        </p>
         <p class="tp-month-empty" data-month-empty hidden>
           No availability this month. Try next month.
         </p>
@@ -189,6 +192,7 @@
     const gridEl = wrap.querySelector("[data-grid]");
     const monthEmptyEl = wrap.querySelector("[data-month-empty]");
     const legendEl = wrap.querySelector("[data-legend]");
+    const calloutBodyEl = wrap.querySelector("[data-callout-body]");
     const errorEl = wrap.querySelector("[data-error]");
     const slotsBlock = wrap.querySelector("[data-slots]");
     const slotsLabelEl = wrap.querySelector("[data-slots-label]");
@@ -219,7 +223,7 @@
       const { from } = monthGridRange(viewYear, viewMonth);
       gridEl.innerHTML = "";
       let anyAvailableThisMonth = false;
-      let anyRecommendedThisMonth = false;
+      const recommendedThisMonth = []; // {key, cost} — feeds the call-out
       for (let i = 0; i < 42; i++) {
         const cellDate = new Date(from);
         cellDate.setDate(from.getDate() + i);
@@ -254,10 +258,28 @@
         }
         gridEl.appendChild(btn);
         if (hasSlots && inThisMonth) anyAvailableThisMonth = true;
-        if (recommended && inThisMonth) anyRecommendedThisMonth = true;
+        if (recommended && inThisMonth) {
+          recommendedThisMonth.push({
+            key,
+            cost: Number.isFinite(data.addedDriveMinutes) ? data.addedDriveMinutes : Infinity
+          });
+        }
       }
       monthEmptyEl.hidden = anyAvailableThisMonth;
-      if (legendEl) legendEl.hidden = !anyRecommendedThisMonth;
+      if (legendEl) {
+        legendEl.hidden = !recommendedThisMonth.length;
+        if (recommendedThisMonth.length && calloutBodyEl) {
+          // Name their single best pick in the call-out: cheapest added
+          // drive first, earliest date breaking ties.
+          recommendedThisMonth.sort((a, b) =>
+            (a.cost - b.cost) || (a.key < b.key ? -1 : 1));
+          const bestLabel = parseDateKey(recommendedThisMonth[0].key)
+            .toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" });
+          calloutBodyEl.textContent = recommendedThisMonth.length === 1
+            ? `${bestLabel} is your best day to book — our crew is already scheduled near you.`
+            : `The ★ days are your best days to book — our crew is already scheduled near you. ${bestLabel} is the top pick.`;
+        }
+      }
     }
 
     function renderSlotsList() {
