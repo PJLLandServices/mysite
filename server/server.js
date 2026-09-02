@@ -42,7 +42,7 @@ const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentRe
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
 const voicemailStore = require("./lib/voicemail-store");
 const { geocode, PJL_BASE, isConfigured: geocodeIsConfigured } = require("./lib/geocode");
-const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, parseLocalDateKey } = require("./lib/availability");
+const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, recommendDays, parseLocalDateKey } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
 const { mergeDaySchedule } = require("./lib/day-schedule");
 const jobFinder = require("./lib/job-finder");
@@ -20026,6 +20026,10 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const days = (fromDate && toDate)
         ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now, geoSuppressed: diagnostics.geoSuppressed, seasonClosed: diagnostics.seasonClosed })
         : groupByDay(slots);
+      // Star the customer's best days — the ones where their address
+      // joins a route we're already driving (Patrick, 2026-09-02). Days
+      // with no route or bookings get no star: nothing to join.
+      recommendDays(days);
 
       return sendJson(res, 200, {
         ok: true,

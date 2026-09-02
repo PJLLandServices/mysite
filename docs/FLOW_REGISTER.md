@@ -1323,6 +1323,29 @@ or catalog change, and the CTA that moved is FLOW-28's (UNMAPPED). `publicBookin
 (fall 2026: Oct 30) is defined in the config for the future gate and is deliberately
 consumed by nothing, pinned by a source guard. Cover:
 `scripts/test-season-config.mjs` (66 assertions, in `build:check`).
+**2026-09-02 (Customer best-day stars on the public picker):** Patrick, closing the loop on the
+probe's "Best days for this address": "we never suggest to customers the best possible day for
+them to book. Can we build that too?" The engine already prices every offered day for the
+geography gate (`addedDriveMinutes` on each slot — until now admin-facing only); new pure
+`availability.recommendDays(days, {max:3})` ranks the day rows by that cost and marks the top
+three `recommended: true`. **Only days that HAVE a cost qualify** — a day with an existing
+route or booking nearby is genuinely cheap for the customer's neighbourhood; a day with no
+shape at all (nothing scheduled) costs a dedicated trip and gets NO star, so an empty calendar
+never fakes popularity. `/api/booking/availability` calls it after composing day rows; the
+shared time-picker paints starred days (amber ★ + amber ring on the cell,
+title/aria "Best day for your address") and shows a one-line legend ("our crew is already
+scheduled in your neighbourhood") only when a starred day is visible in the month.
+**FLOW-03 IS PASS AND WAS TOUCHED — additively:** `listAvailableSlots` unchanged, no day
+added or removed, no route/payload field removed; day rows gain optional
+`recommended`/`addedDriveMinutes` keys, and admin callers of the same endpoint simply ignore
+them. Engine re-verified: test-geo-availability grows to 42 (+7: through the REAL engine the
+Mississauga caller's booking-made day and planned west day are both starred with the booked
+day at least as cheap, an empty day is offered but never starred, a suppressed day row is
+untouched; in isolation the three-cheapest cap, in-place annotation, and empty/slotless-input
+safety). **Needs Patrick's walk:** open /book.html with a real address whose neighbourhood has
+a routed day — that day shows the ★ and the legend line; a remote address shows plain days
+and no legend.
+
 **2026-09-02 (Day-before reminder for self-booked + add-to-calendar):** two customer-facing
 additions on Patrick's ask. (1) **Self-booked appointments now get a day-before reminder** —
 assignment customers had the cadence's step 6, ad customers had nothing. New

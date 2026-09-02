@@ -566,6 +566,28 @@ async function listAvailableSlots(opts = {}) {
   return results;
 }
 
+// Suggest the customer's best days (Patrick, 2026-09-02: "we never
+// suggest to customers the best possible day for them to book").
+// Ranks offered days by how cheaply this address joins that day's
+// existing route — the slot-level addedDriveMinutes the geography gate
+// already computed and, until now, threw away on the public path. Only
+// days that HAVE a cost are candidates: a day with no shape at all
+// costs a dedicated trip, the opposite of the dedicated-routes pitch,
+// so an empty calendar gets no fake stars. Marks the top `max` day
+// rows with recommended: true (and mirrors the cost at day level for
+// the admin probe); returns the same array, annotated in place.
+function recommendDays(days, { max = 3 } = {}) {
+  const cap = Number(max) > 0 ? Number(max) : 3;
+  const candidates = (days || []).filter((d) => d && Array.isArray(d.slots) && d.slots.length
+    && Number.isFinite(d.slots[0]?.addedDriveMinutes));
+  candidates.sort((a, b) => a.slots[0].addedDriveMinutes - b.slots[0].addedDriveMinutes);
+  for (const d of candidates.slice(0, cap)) {
+    d.recommended = true;
+    d.addedDriveMinutes = d.slots[0].addedDriveMinutes;
+  }
+  return days;
+}
+
 // Group slots by day for the UI's typical "pick a day, then pick a time" flow.
 function groupByDay(slots) {
   const out = new Map();
@@ -677,6 +699,7 @@ module.exports = {
   groupByDay,
   groupByDayMap,
   expandDaysToRange,
+  recommendDays,
   parseLocalDateKey,
   parseHHmmToMinutes,
   minutesToHHmm
