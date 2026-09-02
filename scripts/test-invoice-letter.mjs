@@ -119,9 +119,15 @@ for (const [label, body] of [
 }
 {
   const src = readFileSync(path.join(ROOT, "server/lib/notify-customer.js"), "utf8");
+  // Still the FLOW-22 invariant "the invoice always wins" — only the
+  // spelling of the filename changed. DOC-01 routed every customer-facing
+  // document through the shared naming convention, so the first
+  // attachment is now named by invoiceAttachmentName() rather than by a
+  // bare id. What is asserted is unchanged: the invoice PDF is the first
+  // entry in the array, ahead of the letter and the report.
   ok(
     "the invoice PDF is always the first attachment",
-    /attachments: \[\s*\{\s*filename: `\$\{invoice\.id \|\| "invoice"\}\.pdf`/.test(src)
+    /attachments: \[\s*\{\s*filename: invoiceAttachmentName\(invoice\)/.test(src)
   );
   ok(
     "malformed extra attachments are dropped, not handed to nodemailer",

@@ -28,6 +28,22 @@ const { logSend } = require("./mailer-log");
 // the billing-party model. Pure helper — billing-parties.js requires no
 // siblings, so this is safe at load time.
 const { buildInvoiceCcList } = require("./billing-parties");
+const { documentFilename } = require("./format");
+
+// The invoice PDF's name, wherever this module attaches one. Same
+// convention as the download (server.js invoiceFilename) — deliberately
+// so: the file a customer saves out of the email and the one Patrick
+// downloads from the CRM must not be two different names for one
+// document. Dated from the invoice, never from send time, so a resend
+// cannot re-date an August document.
+function invoiceAttachmentName(invoice) {
+  return documentFilename({
+    date: invoice?.sentAt || invoice?.createdAt,
+    label: `${invoice?.id || "Invoice"} Invoice`,
+    customerName: invoice?.customerName,
+    address: invoice?.address
+  });
+}
 
 let nodemailerCache = null;
 function getNodemailer() {
@@ -573,7 +589,7 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
       // invoice from reaching the customer.
       attachments: [
         {
-          filename: `${invoice.id || "invoice"}.pdf`,
+          filename: invoiceAttachmentName(invoice),
           content: pdfBuffer,
           contentType: "application/pdf"
         },
@@ -701,7 +717,7 @@ async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
   const attachments = [];
   if (Buffer.isBuffer(pdfBuffer) && pdfBuffer.length > 0) {
     attachments.push({
-      filename: `${invoice.id || "invoice"}.pdf`,
+      filename: invoiceAttachmentName(invoice),
       content: pdfBuffer,
       contentType: "application/pdf"
     });
