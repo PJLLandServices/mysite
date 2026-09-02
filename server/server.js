@@ -22557,6 +22557,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
         days.push({
           date,
           label: shape.label,
+          // A day the plan never routed but real bookings sit on —
+          // buildDayShapes now grows these, so the probe sees newly
+          // booked days (Patrick's ad-season ask) the moment the first
+          // customer lands on them.
+          bookingsOnly: Boolean(shape.bookingsOnly),
           points: shape.points.length,
           plannedCount: shape.plannedCount,
           bookedCount: shape.bookedCount,
