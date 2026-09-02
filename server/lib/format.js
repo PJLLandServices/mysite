@@ -381,10 +381,117 @@ function normalizeTownCase(town) {
   return town.toLowerCase().replace(/(^|[\s\-'])([a-z])/g, (m, sep, ch) => sep + ch.toUpperCase());
 }
 
+// ---------------------------------------------------------------------
+// documentFilename — the one name a saved PJL document wears.
+//
+//   2026-08-21 - Inspection Report - Kristen Holmes - 90 Oriole Dr.pdf
+//   2026-08-21 - I-2026-0065 Invoice - Kristen Holmes - 90 Oriole Dr.pdf
+//
+// Four parts, always in this order: the date ON the document, what the
+// document is, who it is for, and which address it concerns. Before this
+// every route named its own downloads and they had drifted apart —
+// I-2026-0065.pdf, PJL-Service-Report-WO-2026-0100-2026-08-21.pdf,
+// Q-2026-0007.pdf — so a folder of saved PJL paperwork sorted by nothing
+// useful and told you nothing without opening it.
+//
+// THE DATE IS THE CALLER'S AND IT COMES FROM THE DOCUMENT, NEVER THE
+// CLOCK. An invoice uses its issue date, a report its visit date, a quote
+// when it was sent. There is deliberately no `new Date()` fallback: a
+// missing date drops the component rather than stamping today onto a
+// document from August, which is the failure that would go unnoticed
+// longest — you would only catch it by re-downloading an old file and
+// noticing the name had changed.
+function documentFilename({ date, label, customerName, address, ext = "pdf" } = {}) {
+  const parts = [
+    isoDay(date),
+    clean(label),
+    clean(customerName),
+    // Street line only — "90 Oriole Dr", not the town, province and
+    // postal code. The town is the same for most of the book and adds
+    // length without telling you which job this was.
+    clean(streetLine(address))
+  ].filter(Boolean);
+  // Every part empty would leave a bare ".pdf" — hand back something a
+  // person can still identify rather than a hidden dotfile.
+  if (!parts.length) return `PJL Document.${ext}`;
+  // 180 leaves room for the extension and a browser's " (1)" inside the
+  // 255-byte limit every common filesystem imposes.
+  return `${parts.join(" - ").slice(0, 180).trim()}.${ext}`;
+}
+
+// The street line, with the town kept out of it.
+//
+// parseCanadianAddress() gets this right most of the time, but its
+// single-line split works off a street-SUFFIX list, so a street type the
+// list doesn't carry leaves the town glued on: "8 Rue Principale,
+// Montréal", "22 Kingsmere Gate, Aurora", "4293 ON-7, Norwood". Splitting
+// on the first comma instead fixes those and breaks a different case —
+// "Unit 4, 17 Elm St, King City" collapses to "Unit 4", which names no
+// street at all.
+//
+// So: take the parser's answer, and if it still carries a comma, drop the
+// trailing segment UNLESS the leading one is a unit designator — the only
+// shape where both halves are genuinely part of the street.
+const UNIT_PREFIX = /^(unit|apt|apartment|suite|ste|#)\b/i;
+function streetLine(address) {
+  const parsed = parseCanadianAddress(address).streetAddress || String(address || "");
+  const segments = parsed.split(",").map((x) => x.trim()).filter(Boolean);
+  if (segments.length < 2) return parsed;
+  if (UNIT_PREFIX.test(segments[0])) return segments.slice(0, 2).join(", ");
+  return segments[0];
+}
+
+// YYYY-MM-DD from an ISO string or a Date. Anything unparseable yields ""
+// so the caller's name simply loses its date rather than gaining a wrong one.
+function isoDay(value) {
+  if (!value) return "";
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? "" : value.toISOString().slice(0, 10);
+  }
+  const text = String(value).trim();
+  const iso = text.match(/^(\d{4}-\d{2}-\d{2})/);
+  return iso ? iso[1] : "";
+}
+
+// Strip what filesystems refuse and what would fold the name onto a second
+// line, but KEEP accents — "Renée" stays "Renée". The wire encoding is
+// contentDisposition()'s job, not this function's.
+function clean(value) {
+  return String(value == null ? "" : value)
+    .replace(/[/\\:*?"<>|]/g, " ")     // illegal on Windows and/or POSIX
+    .replace(/[\u0000-\u001F\u007F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Content-Disposition value carrying BOTH spellings of the name.
+//
+// `filename=` is ASCII-only by the RFC, so a name with an accent has to
+// travel in `filename*=UTF-8''…` (RFC 5987) as well — send only the plain
+// one and browsers mangle "Renée" into "RenÃ©e" or drop the name entirely.
+// Send only the encoded one and older clients ignore it. Both, in that
+// order, is what every client understands: the ones that grasp filename*
+// prefer it, the rest fall back.
+function contentDisposition(filename, { download = false } = {}) {
+  const name = String(filename || "document.pdf");
+  // The ASCII fallback: strip accents to their base letters, then drop
+  // anything still non-ASCII, so the plain parameter stays legal.
+  const ascii = name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036F]/g, "")
+    .replace(/[^\x20-\x7E]/g, "")
+    .replace(/["\\]/g, "")
+    .trim() || "document.pdf";
+  return `${download ? "attachment" : "inline"}; filename="${ascii}"; ` +
+    `filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
 module.exports = {
   formatUnit,
   formatVendorAddress,
   parseCanadianAddress,
   townFromAddress,
-  resolveLineDescription
+  resolveLineDescription,
+  documentFilename,
+  contentDisposition
 };

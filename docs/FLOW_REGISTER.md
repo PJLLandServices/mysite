@@ -1248,6 +1248,57 @@ run together. Method note: an over-broad search-and-replace had to be reverted a
 caught borders and a pill background), so the fixes here are spliced inside each rule's own braces.
 CSS/markup only — no API, route, payload or template change; no PASS flow touched.
 
+**2026-09-02 (DOC-01 — one naming rule for every customer-facing document):** Patrick asked for
+this on 2026-08-21 alongside the invoice work-order-report attachment; it was agreed and then
+overlooked. Verified missing on `eb66c32` before starting — `format.js` exported no naming helper
+and all 26 download sites still named themselves: `I-2026-0065.pdf`, `Q-2026-0007.pdf`,
+`PJL-Service-Report-WO-2026-0100-2026-08-21.pdf`, `${po.id}.csv`. Now
+`2026-08-21 - I-2026-0065 Invoice - Kristen Holmes - 90 Oriole Dr.pdf`: date on the document, what
+it is, who it is for, which address. One helper (`format.js documentFilename`) behind
+`invoiceFilename` / `invoiceLetterFilename` / `quoteFilename` (server.js), `reportFilename`
+(wo-report-pdf.js) and `invoiceAttachmentName` (notify-customer.js).
+**Scope: the three customer-facing types only** — invoice, service/inspection report, quote.
+Supplier documents (PO, RFQ and their CSVs) keep their id names deliberately, not by omission: a
+supplier files by PO number, not by our customer's address. **Three rules, each a silent failure
+mode.** (1) *The date is the document's, never the clock* — invoice issue date (`sentAt ||
+createdAt`), report visit date (`arrivedAt || scheduledFor || createdAt`), quote sent date. The
+old `reportFilename` had a `|| new Date()` tail; it is gone, so a WO with no dates yields a name
+WITHOUT a date rather than one stamped today. Re-downloading an August invoice in December must
+still say August, and the drift would be invisible unless you compared two copies. (2) *Accents
+survive the wire* — `contentDisposition()` emits BOTH `filename="…"` (accents folded to base
+letters, ASCII as the RFC requires) and `filename*=UTF-8''…` (RFC 5987); modern clients take the
+second, older ones the first. (3) *Storage is untouched* — frozen quotes and report snapshots stay
+on disk as `<id>.pdf`, looked up and sha256'd by that path; only the DISPLAY name follows the
+convention, and the suite guards `path.join(dir, \`${snapshotId}.pdf\`)` directly. A stored
+snapshot's own `filename` field is likewise never rewritten — the download name is recomputed from
+the work order at serve time, so reports frozen before this convention come down under it while the
+record keeps saying what it said. **Street address only:** `parseCanadianAddress().streetAddress`
+splits a single line on a street-SUFFIX list, so "Rue", "Gate" and a highway address left the town
+glued on ("8 Rue Principale, Montréal"); splitting on the first comma instead fixes those and
+breaks "Unit 4, 17 Elm St, King City" down to "Unit 4". `streetLine()` takes the parser's answer
+and drops a trailing segment unless the leading one is a unit designator — both shapes covered by
+the suite. **PASS flow touched, deliberately and narrowly:** the invoice PDF attached to the
+PAYMENT RECEIPT (`sendPaymentReceipt`, FLOW-23 **PASS**) is the same document as the invoice email's
+and now shares its name. Only the filename string changed; no payment route, `stripe.js`, `pay.js`,
+`finalizeStripeInvoicePayment` or ledger path was edited, and none of the seven HANDOFF_STRIPE_PAYMENTS
+§6 invariants concerns an attachment name. This follows the JOB-008 precedent exactly (that change
+also touched `sendPaymentReceipt` alone), so **FLOW-23 carries the pending-recheck flag until the
+next real payment** — receipt arrives, ledger shows `receipt ok`, and the attachment is named by the
+convention. **FLOW-22's own invariant re-asserted, not weakened:** `test-invoice-letter.mjs`'s "the
+invoice PDF is always the first attachment" guard matched the old literal; it now matches
+`invoiceAttachmentName(invoice)` and still pins the invoice ahead of the letter and the report.
+**Live walk on a sandboxed server** (isolated data dir, seeded user, accented customer "Renée
+Côté"): `GET /api/invoices/:id/pdf` → `inline; filename="2026-09-02 - I-2026-0003 Invoice - Renee
+Cote - 90 Oriole Dr.pdf"; filename*=UTF-8''…Ren%C3%A9e%20C%C3%B4t%C3%A9…`, `?download=1` → the same
+name as `attachment`, `letter.pdf` → `… Letter …`, all 200 with real PDF bytes; decoding the
+RFC 5987 parameter yields the accented name a browser saves. `scripts/test-document-filenames.mjs`
+(45 assertions, in `build:check`) was confirmed to FAIL on a reintroduced clock fallback and on the
+receipt attachment reverted to a bare id before being kept. **A scope bug was found and fixed
+mid-change:** hoisting the download name to the snapshot-serve header referenced `wo`/`mode` from
+inside an `if` block on one route and from a handler that has neither on another — a ReferenceError
+on every snapshot download, invisible to `node --check`. Both fixed and re-read. Presentation only:
+no API, route, payload, schema or PDF-content change.
+
 **2026-08-28 (CRM-19 — the rest of the record lists):** Bookings, Work orders, Projects,
 Material lists and Suppliers rebuilt on the same `.crm-table` primitive as CRM-18. Invoices
 was already a real table and is untouched. Each page sets its own `--crm-cols`; the guard in

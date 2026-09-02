@@ -3275,7 +3275,7 @@ async function writeFrozenQuotePdf(q, buffer) {
 async function serveQuotePdf(res, q, opts, { by = "system" } = {}) {
   const pdfHeaders = {
     "content-type": "application/pdf",
-    "content-disposition": `inline; filename="${q.id}.pdf"`,
+    "content-disposition": contentDisposition(quoteFilename(q, opts)),
     "cache-control": "no-store"
   };
   const isDraft = q.status === "draft" || q.status === "draft_preview";
@@ -3356,8 +3356,47 @@ async function renderInvoiceLetterPdf(inv) {
 
 // Filename the customer sees on the attachment. Derived from the invoice
 // id so a saved copy is self-identifying in a download folder.
+// The invoice's own saved name, and its letter's. Both follow the shared
+// convention in lib/format.js: date on the document, what it is, who it is
+// for, which address. The DATE IS THE ISSUE DATE — sentAt if the invoice
+// has gone out, else when it was drafted — never render time, so
+// re-downloading an August invoice in December still names it August.
+// Shared document-naming convention — every customer-facing PDF this
+// server hands out or emails wears the same four-part name. See
+// lib/format.js documentFilename().
+const { documentFilename, contentDisposition } = require("./lib/format");
+
+// A quote's saved name. Party details are not on the quote record — they
+// are resolved by quoteRenderParties() and arrive in the renderer opts,
+// which is why this takes them rather than reading q alone.
+function quoteFilename(q, opts) {
+  return documentFilename({
+    date: q?.sentAt || q?.createdAt,
+    label: `${q?.id || "Quote"} Quote`,
+    customerName: opts?.customer?.name,
+    // The SITE address — which job this quote is for. Deliberately not
+    // preparedForAddress, which is who the offer is addressed TO and can
+    // be a management company three towns away (QUOTE-01).
+    address: opts?.property?.address || opts?.customer?.address
+  });
+}
+
+function invoiceFilename(inv) {
+  return documentFilename({
+    date: inv?.sentAt || inv?.createdAt,
+    label: `${inv?.id || "Invoice"} Invoice`,
+    customerName: inv?.customerName,
+    address: inv?.address
+  });
+}
+
 function invoiceLetterFilename(inv) {
-  return `${inv?.id || "invoice"}-report.pdf`;
+  return documentFilename({
+    date: inv?.sentAt || inv?.createdAt,
+    label: `${inv?.id || "Invoice"} Letter`,
+    customerName: inv?.customerName,
+    address: inv?.address
+  });
 }
 
 // Hydrate a decorated lead with its source Quote (if any) so the CRM
@@ -7482,12 +7521,18 @@ async function handleApi(req, res, pathname) {
       // download works on every completed WO, warranty state regardless.
       // Only for pin-less requests: a pinned snapshotId that's missing is
       // a real 404, never silently substituted.
+      // Hoisted out of the live-render branch below: the download name is
+      // needed on every path, including the one that serves a stored
+      // snapshot, and it is derived from the work order rather than from
+      // whatever string the snapshot froze — so reports frozen before the
+      // naming convention still download under it. The record's own
+      // `filename` field is left untouched.
+      const mode = wo.locked === true ? "service_report" : "inspection_report";
       if (!found && !snapshotId && wo.status === "completed") {
         let woProperty = null;
         let woCustomer = null;
         if (wo.propertyId) { try { woProperty = await properties.get(wo.propertyId); } catch (_) {} }
         if (wo.customerId) { try { woCustomer = await customers.get(wo.customerId, { withProperties: false }); } catch (_) {} }
-        const mode = wo.locked === true ? "service_report" : "inspection_report";
         const buffer = await renderWoReportBuffer({
           wo, property: woProperty || {}, customer: woCustomer || {}, mode, audience: "customer"
         });
@@ -7496,7 +7541,7 @@ async function handleApi(req, res, pathname) {
       if (!found) return sendJson(res, 404, { ok: false, errors: ["Snapshot not found."] });
       res.writeHead(200, {
         "content-type": "application/pdf",
-        "content-disposition": `inline; filename="${found.record.filename}"`,
+        "content-disposition": contentDisposition(reportFilename({ wo, mode })),
         // no-cache: a stable "latest" URL must never serve a stale
         // corrected report from an intermediary/browser cache.
         "cache-control": "private, no-cache, must-revalidate",
@@ -7554,7 +7599,7 @@ async function handleApi(req, res, pathname) {
       const buffer = await generateInvoicePdf(inv);
       res.writeHead(200, {
         "content-type": "application/pdf",
-        "content-disposition": `inline; filename="${inv.id}.pdf"`,
+        "content-disposition": contentDisposition(invoiceFilename(inv)),
         "content-length": buffer.length,
         "cache-control": "private, no-cache, must-revalidate"
       });
@@ -10485,7 +10530,7 @@ async function handleApi(req, res, pathname) {
       const buffer = await renderInvoiceLetterPdf(inv);
       res.writeHead(200, {
         "content-type": "application/pdf",
-        "content-disposition": `${isDownload ? "attachment" : "inline"}; filename="${invoiceLetterFilename(inv)}"`,
+        "content-disposition": contentDisposition(invoiceLetterFilename(inv), { download: isDownload }),
         "content-length": buffer.length,
         "cache-control": "no-store"
       });
@@ -10508,7 +10553,7 @@ async function handleApi(req, res, pathname) {
       const buffer = await generateInvoicePdf(inv);
       res.writeHead(200, {
         "content-type": "application/pdf",
-        "content-disposition": `${isDownload ? "attachment" : "inline"}; filename="${inv.id}.pdf"`,
+        "content-disposition": contentDisposition(invoiceFilename(inv), { download: isDownload }),
         "content-length": buffer.length,
         "cache-control": "no-store"
       });
@@ -12756,7 +12801,7 @@ async function handleApi(req, res, pathname) {
       catch (err) { console.warn("[wo-report] derivative prep failed:", err?.message); }
       res.writeHead(200, {
         "content-type": "application/pdf",
-        "content-disposition": `inline; filename="${filename}"`,
+        "content-disposition": contentDisposition(filename),
         "cache-control": "no-store"
       });
       generateWoReportPdf({ wo, property: property || {}, customer: customer || {}, mode }).pipe(res);
@@ -12781,9 +12826,23 @@ async function handleApi(req, res, pathname) {
       const audience = snapUrl.searchParams.get("audience") === "customer" ? "customer" : "internal";
       const found = await woReportSnapshot.readSnapshot({ woId, snapshotId, audience });
       if (!found) return sendJson(res, 404, { ok: false, errors: ["Snapshot not found."] });
+      // Name the download from the work order so snapshots frozen before
+      // the naming convention still come down under it. The stored
+      // record's own filename is the fallback, never overwritten — if the
+      // WO can't be read for any reason the download still has a name.
+      let snapDownloadName = found.record?.filename;
+      try {
+        const snapWo = await workOrders.get(woId);
+        if (snapWo) {
+          snapDownloadName = reportFilename({
+            wo: snapWo,
+            mode: snapWo.locked === true ? "service_report" : "inspection_report"
+          });
+        }
+      } catch (_) { /* keep the stored name */ }
       res.writeHead(200, {
         "content-type": "application/pdf",
-        "content-disposition": `inline; filename="${found.record.filename}"`,
+        "content-disposition": contentDisposition(snapDownloadName),
         "cache-control": "no-store",
         "content-length": found.buffer.length
       });

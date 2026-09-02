@@ -36,6 +36,7 @@ const PDFDocument = require("pdfkit");
 // its own copy of the key lists, which is how a definition and a report
 // drift apart without anyone noticing.
 const { checklistKeysForWorkOrder } = require("./work-orders");
+const { documentFilename } = require("./format");
 const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -970,14 +971,27 @@ async function renderWoReportToFile(opts, destPath) {
   return { path: destPath, bytes: size };
 }
 
-// Filename builder — used by the snapshotter, the live-render route,
-// and email-attachment paths. Date component is YYYY-MM-DD pulled from
-// the WO's most-canonical visit date (arrival > scheduled > created).
+// Filename builder — used by the snapshotter, the live-render route, and
+// email-attachment paths. Now delegates to the shared convention in
+// lib/format.js so a saved report sorts and reads like every other PJL
+// document (see documentFilename there for the full rule).
+//
+// The date is the VISIT date, not render time: arrival if the tech
+// stamped one, else the scheduled slot, else when the WO was raised.
+// Regenerating a March report in December has to still say March. The
+// old `|| new Date()` tail is deliberately gone — a WO with no date at
+// all now yields a name without a date rather than one stamped today.
+//
+// This is the DISPLAY name only. Snapshots are stored on disk as
+// <snapshotId>.pdf and looked up by that path; nothing here touches
+// storage or the integrity hashes.
 function reportFilename({ wo, mode }) {
-  const tag = mode === "service_report" ? "Service-Report" : "Inspection-Report";
-  const visitIso = wo?.arrivedAt || wo?.scheduledFor || wo?.createdAt || new Date().toISOString();
-  const ymd = visitIso.slice(0, 10);
-  return `PJL-${tag}-${wo?.id || "WO"}-${ymd}.pdf`;
+  return documentFilename({
+    date: wo?.arrivedAt || wo?.scheduledFor || wo?.createdAt,
+    label: mode === "service_report" ? "Service Report" : "Inspection Report",
+    customerName: wo?.customerName,
+    address: wo?.address
+  });
 }
 
 module.exports = {
