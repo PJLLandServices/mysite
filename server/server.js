@@ -41,7 +41,7 @@ const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms } = require(
 const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
 const voicemailStore = require("./lib/voicemail-store");
-const { geocode, PJL_BASE } = require("./lib/geocode");
+const { geocode, PJL_BASE, isConfigured: geocodeIsConfigured } = require("./lib/geocode");
 const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, parseLocalDateKey } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
 const { mergeDaySchedule } = require("./lib/day-schedule");
@@ -22577,9 +22577,22 @@ Customer signature captured at ${new Date().toISOString()}.`;
       return sendJson(res, 200, {
         ok: true,
         address: geo.coords?.formattedAddress || address,
+        // The address Patrick TYPED, always — showing only the geocoder's
+        // fallback label ("Newmarket, ON, Canada" for a failed Erin
+        // lookup) made a failure read like the wrong address was tested.
+        typedAddress: address,
         geocodeOk: geo.ok === true,
-        // An address we could not geocode skips the filter entirely and
-        // is offered every day — say so plainly rather than showing a
+        // A recognized-town approximation (geocode failed but the town
+        // matched lib/town-centroids.js): the filter RAN, from the town
+        // centre.
+        approximate: geo.coords?.source === "town-centroid",
+        approximateTown: geo.coords?.source === "town-centroid" ? (geo.coords.town || "") : "",
+        geocodeReason: geo.ok === true ? null : (geo.reason || "unknown"),
+        // Without the server key the filter is degraded for EVERY
+        // address, not just this probe — the screen must say so in red.
+        keyConfigured: geocodeIsConfigured(),
+        // An address we could not place at all skips the filter entirely
+        // and is offered every day — say so plainly rather than showing a
         // column of zeroes that looks like a perfect match.
         filterSkipped: !resolvedAddress,
         thresholdMinutes: threshold,
@@ -23823,6 +23836,19 @@ server.listen(PORT, HOST, () => {
   console.log(`PJL site + lead receiver running at http://${HOST}:${PORT}`);
   console.log(`  Public homepage:   http://${HOST}:${PORT}/`);
   console.log(`  CRM dashboard:     http://${HOST}:${PORT}/admin   (login: http://${HOST}:${PORT}/login)`);
+
+  // The geography filter's key, checked ONCE at boot where nobody can
+  // miss it. Without it every address is placed by town name only
+  // (lib/town-centroids.js), and an unrecognized town skips the filter
+  // — Patrick: "we cannot have this fail."
+  if (!geocodeIsConfigured()) {
+    console.error("=".repeat(72));
+    console.error("[geocode] GOOGLE_MAPS_SERVER_KEY IS NOT SET.");
+    console.error("[geocode] Exact drive-time geocoding is OFF. Addresses fall back to");
+    console.error("[geocode] approximate town centres; unknown towns skip the geography");
+    console.error("[geocode] filter entirely. Set the key in Render > Environment.");
+    console.error("=".repeat(72));
+  }
 
   // Quote auto-expire sweep — spec §4.1 default 30-day validity. Runs at
   // startup AND every 6 hours so stale "sent" quotes flip to "expired"

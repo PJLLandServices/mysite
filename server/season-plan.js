@@ -1322,12 +1322,32 @@
 
   function renderProbe(out, data) {
     out.innerHTML = "";
+    // No server key = the filter is degraded for EVERYONE, not just this
+    // probe. That state must be impossible to mistake for a one-off.
+    if (data.keyConfigured === false) {
+      const alarm = document.createElement("p");
+      alarm.className = "sp-probe-alarm";
+      alarm.textContent = "⚠ The server has NO Google Maps key (GOOGLE_MAPS_SERVER_KEY in Render). "
+        + "Every address is being placed by its town name only, and an address whose town "
+        + "isn't recognized skips the geography filter entirely. Set the key to restore "
+        + "exact drive times.";
+      out.appendChild(alarm);
+    }
+    const shown = data.typedAddress || data.address;
     const head = document.createElement("p");
     head.className = "sp-probe-head";
-    head.textContent = data.filterSkipped
-      ? `${data.address} — could not be geocoded, so the filter is skipped and every day is offered.`
-      : `${data.address} — offered on ${data.routeDaysOffered} of ${data.routeDaysTotal} route days, `
+    if (data.filterSkipped) {
+      head.textContent = `${shown} — couldn't be placed at all (no match from Google`
+        + `${data.keyConfigured === false ? " — no key" : ""}, and no recognizable town in the text), `
+        + "so the filter is skipped and every day is offered to this address.";
+    } else if (data.approximate) {
+      head.textContent = `${shown} — Google couldn't pinpoint it, so it was measured from the centre `
+        + `of ${data.approximateTown || "its town"} (approximate). Offered on ${data.routeDaysOffered} of `
+        + `${data.routeDaysTotal} route days at the ${data.thresholdMinutes}-minute drive threshold.`;
+    } else {
+      head.textContent = `${shown} — offered on ${data.routeDaysOffered} of ${data.routeDaysTotal} route days, `
         + `where inserting them costs ${data.thresholdMinutes} min of extra driving or less.`;
+    }
     out.appendChild(head);
 
     // Without this line the table reads as the whole answer, and a row of

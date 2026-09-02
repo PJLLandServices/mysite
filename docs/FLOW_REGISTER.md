@@ -1323,6 +1323,35 @@ or catalog change, and the CTA that moved is FLOW-28's (UNMAPPED). `publicBookin
 (fall 2026: Oct 30) is defined in the config for the future gate and is deliberately
 consumed by nothing, pinned by a source guard. Cover:
 `scripts/test-season-config.mjs` (66 assertions, in `build:check`).
+**2026-09-02 (Geocode failure posture — "we cannot have this fail"):** Patrick probed an Erin
+address on the season plan and got EVERY route day offered: the geocode failed, fell back to
+the depot pin, and the geography filter — fail-soft by design — switched itself off for that
+address. Worse, the same happens on the live booking page's availability, and if
+`GOOGLE_MAPS_SERVER_KEY` is missing in Render it happens for EVERY address, silently. Three
+layers now: (1) `geocode()` is tougher — 4s timeout, one retry on network errors and Google's
+transient UNKNOWN_ERROR. (2) **Town-centroid parachute** (`lib/town-centroids.js`, ~60 hand-kept
+Ontario town centres): a failed lookup whose address names a recognizable town answers from
+that town's approximate centre, `source "town-centroid"`, which `coordsAreResolved` accepts —
+the filter stays ON and Erin still reads as an hour away. The result stays `ok:false`, and
+every path that persists coordinates requires `ok:true` (audited: geocodeForRecord + four
+server.js sites), so an approximation can steer availability but never pin a record. Only an
+address with no recognizable town still skips the filter. (3) **Loudness**: a boot-time banner
+in the server log when the key is missing; the probe now echoes the address Patrick TYPED (it
+previously showed the fallback's own "Newmarket, ON, Canada" label — a failure dressed as the
+wrong address), distinguishes exact / approximate-town / unplaceable, and shows a red alarm
+when the server has no key ("the filter is degraded for EVERYONE"). **FLOW-03 IS PASS AND ITS
+GEOCODE HOP IS TOUCHED:** `listAvailableSlots` itself is byte-unchanged (the change is upstream
+in what coords a FAILED geocode yields), resolved addresses behave identically, and the change
+only affects addresses that previously fell through fail-open — those now get filtered
+approximately instead of not at all. Engine re-verified: geo-availability 27, booking-guards
+35, day-reschedule 59, season-config 93 all pass unchanged. New
+`scripts/test-geocode-fallback.mjs` (15 assertions, in `build:check`): the town matcher
+(whole-word, longest-name-wins), fallback order, the ok:false persistence invariant, and the
+outcome itself — Erin +68 min suppressed, Aurora +4 min offered, through the real filter math.
+**Residual, said out loud:** an address with NO recognizable town still fails open (offered
+every day). Fail-closed for those would block legitimate rural customers on a Google hiccup —
+Patrick's call if he wants it flipped.
+
 **2026-09-01 (Completion email + service report, Patrick's simulated-closing review):** three
 fixes from his walk of a real completed work order. (1) **The email names the service**:
 subject "PJL Fall Closing Summary — please review" (was the generic "visit summary"), headline
