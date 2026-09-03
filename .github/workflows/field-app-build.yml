@@ -27,6 +27,24 @@ on:
         type: boolean
         default: true
 
+  # A build can also be started by pushing a tag named build-ios-<anything>.
+  #
+  # WHY A TAG. Claude can push to this repository but cannot press "Run
+  # workflow" — dispatching a workflow needs a permission the GitHub App it
+  # acts through does not have, and asking for that permission would hand it
+  # the ability to run every workflow here. A tag is narrower: it starts this
+  # one workflow, it is deliberate (no ordinary push or merge matches the
+  # pattern), and it leaves a visible record of who asked and when.
+  #
+  # To start a build this way:   git tag build-ios-11 && git push origin build-ios-11
+  # Any suffix works; the build number comes from EAS, not from the tag, so the
+  # tag is only a label. Reusing a name needs the old tag deleted first
+  # (`git push origin :build-ios-11`), which is friction worth keeping — it
+  # means every build has its own tag to trace back to.
+  push:
+    tags:
+      - 'build-ios-*'
+
 # One build at a time. Unlike an update, a build is not safe to cancel and
 # replace — it consumes queue time and increments the build number — so a second
 # run waits rather than killing the first.
@@ -37,6 +55,12 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # `inputs.submit` exists only on a manual run; on a tag push it is empty,
+      # which would otherwise read as "don't submit" and quietly produce a build
+      # that never reaches TestFlight. A tag push means submit — that is the
+      # whole point of asking for one.
+      SUBMIT: ${{ github.event_name != 'workflow_dispatch' || inputs.submit }}
     steps:
       - name: Check the Expo token is present
         run: |
@@ -74,21 +98,28 @@ jobs:
         working-directory: pjl-field
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-          # Unquoted on use, so an empty value contributes no argument at all
-          # rather than an empty one the CLI would reject.
-          SUBMIT_FLAG: ${{ inputs.submit && '--auto-submit' || '' }}
         run: |
+          # Built in bash from SUBMIT rather than in a `${{ }}` expression, so
+          # the flag is decided by something that can be read and tested.
+          # An `if`, not `[ ... ] && flag=...`. Both are safe here, but the &&
+          # form is only safe because something follows it: as the last line of
+          # a step it returns 1 when the test is false, and `bash -e {0}` makes
+          # that the step's exit status. The `if` cannot break by being moved.
+          flag=""
+          if [ "$SUBMIT" = "true" ]; then flag="--auto-submit"; fi
+          echo "submit: $SUBMIT"
+
           npx eas-cli@23.2.0 build \
             --platform ios \
             --profile production \
             --non-interactive \
-            --wait $SUBMIT_FLAG
+            --wait $flag
 
       - name: What to do now
         if: success()
         run: |
           echo "Build finished."
-          if [ "${{ inputs.submit }}" = "true" ]; then
+          if [ "$SUBMIT" = "true" ]; then
             echo "It has been sent to App Store Connect. Give TestFlight a few minutes,"
             echo "then install it from the TestFlight app on the iPhone."
             echo "Once it is installed, re-run 'Field app — publish OTA update'."

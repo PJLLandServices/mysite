@@ -7,7 +7,7 @@
 // them — but the fields are left untouched in the data for spring.
 
 import { useEffect, useState } from 'react';
-import { Alert, Image, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActionSheetIOS, Alert, Image, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { getProperty, patchProperty, removePropertyZone, uploadWoPhotos, woPhotoUri } from '../../api';
 import { colors, radius, space, type } from '../../theme';
 import { pickPhoto, takePhoto } from '../../photos';
@@ -227,6 +227,39 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
     }
   };
 
+  // Changing how many zones the visit has is editing the LIST, not filling in
+  // the zone you are standing at, so it does not belong in this form. It lives
+  // behind Edit, in a sheet, where the explanation is read at the moment of the
+  // decision instead of sitting on screen as permanent grey text.
+  const zoneNumber = zone.number ?? zoneIndex + 1;
+  const askToRemove = () => {
+    setRemoveReason('');
+    setRemoveNote('');
+    setRemoving({ number: zone.number });
+  };
+  const openZoneActions = () => {
+    const message =
+      'The count came from the customer. Fix it here if the ground disagrees — the property record follows.';
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          title: `Zone ${zoneNumber} of ${total}`,
+          message,
+          options: ['Cancel', 'Add a zone', `Remove Zone ${zoneNumber}`],
+          destructiveButtonIndex: 2,
+          cancelButtonIndex: 0,
+        },
+        (i) => { if (i === 1) addZone(); if (i === 2) askToRemove(); },
+      );
+      return;
+    }
+    Alert.alert(`Zone ${zoneNumber} of ${total}`, message, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Add a zone', onPress: addZone },
+      { text: `Remove Zone ${zoneNumber}`, style: 'destructive', onPress: askToRemove },
+    ]);
+  };
+
   const zonePhotos = (wo?.photos || []).filter((p) => p.zoneNumber === zone.number);
   const done = !!zone.status;
 
@@ -238,6 +271,16 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
           <Text style={styles.pagerText}>Zone {zone.number ?? zoneIndex + 1} of {total}</Text>
           {done ? <Text style={styles.pagerDone}>Done</Text> : null}
         </View>
+        <Pressable
+          onPress={openZoneActions}
+          disabled={busy || saving}
+          hitSlop={12}
+          style={({ pressed }) => [styles.pagerEdit, pressed && styles.pagerEditOn]}
+          accessibilityRole="button"
+          accessibilityLabel="Edit the zone list"
+        >
+          <Text style={[styles.pagerEditText, (busy || saving) && styles.pagerEditOff]}>Edit</Text>
+        </Pressable>
         <Button label="›" tone="ghost" onPress={() => setZoneIndex(Math.min(total - 1, zoneIndex + 1))} disabled={zoneIndex + 1 >= total} />
       </View>
 
@@ -293,21 +336,9 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
         ) : (
           <Text style={styles.none}>No photos on this zone.</Text>
         )}
-      </Section>
-
-      <Section
-        title="This zone list"
-        footer="The count came from the customer. Fix it here if the ground disagrees — the property record follows."
-      >
-        <View style={styles.listActions}>
-          <Button label="+ Add a zone" tone="ghost" onPress={addZone} disabled={busy || saving} />
-          <Button
-            label={`Remove Zone ${zone.number ?? zoneIndex + 1}`}
-            tone="ghost"
-            danger
-            onPress={() => { setRemoveReason(''); setRemoveNote(''); setRemoving({ number: zone.number }); }}
-            disabled={busy || saving}
-          />
+        <View style={styles.photoActions}>
+          <Button label={busy ? 'Working…' : 'Take a photo'} tone="ghost" onPress={() => attach(takePhoto)} disabled={busy} />
+          <Button label="Choose from library" tone="ghost" onPress={() => attach(pickPhoto)} disabled={busy} />
         </View>
       </Section>
 
@@ -353,8 +384,6 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
       ) : null}
 
       <View style={styles.actions}>
-        <Button label={busy ? 'Working…' : 'Take a photo'} tone="ghost" onPress={() => attach(takePhoto)} disabled={busy} />
-        <Button label="Choose from library" tone="ghost" onPress={() => attach(pickPhoto)} disabled={busy} />
         <Button
           label={repairs && !types.length ? 'Pick a repair type' : zoneIndex + 1 < total ? 'Done — next zone' : 'Done — close out'}
           onPress={markDone}
@@ -366,7 +395,11 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
 }
 
 const styles = StyleSheet.create({
-  listActions: { flexDirection: 'row', gap: space.sm, padding: space.md },
+  pagerEdit: { paddingHorizontal: space.sm, paddingVertical: 8 },
+  pagerEditOn: { opacity: 0.5 },
+  pagerEditText: { ...type.body, color: colors.brand, fontWeight: '600' },
+  pagerEditOff: { color: colors.textFaint },
+  photoActions: { gap: space.sm, padding: space.md, paddingTop: 0 },
   sheet: {
     backgroundColor: colors.card,
     borderRadius: radius.card,
