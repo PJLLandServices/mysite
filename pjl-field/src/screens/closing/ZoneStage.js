@@ -241,6 +241,22 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
         <Button label="›" tone="ghost" onPress={() => setZoneIndex(Math.min(total - 1, zoneIndex + 1))} disabled={zoneIndex + 1 >= total} />
       </View>
 
+      <Section
+        title="This zone list"
+        footer="The count came from the customer. Fix it here if the ground disagrees — the property record follows."
+      >
+        <View style={styles.listActions}>
+          <Button label="+ Add a zone" tone="ghost" onPress={addZone} disabled={busy || saving} />
+          <Button
+            label={`Remove Zone ${zone.number ?? zoneIndex + 1}`}
+            tone="ghost"
+            danger
+            onPress={() => { setRemoveReason(''); setRemoveNote(''); setRemoving({ number: zone.number }); }}
+            disabled={busy || saving}
+          />
+        </View>
+      </Section>
+
       <Section title="Where is it?" footer="Correcting this updates the property record too, so the system gets better described every visit.">
         <TextInput
           value={label}
@@ -293,21 +309,9 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
         ) : (
           <Text style={styles.none}>No photos on this zone.</Text>
         )}
-      </Section>
-
-      <Section
-        title="This zone list"
-        footer="The count came from the customer. Fix it here if the ground disagrees — the property record follows."
-      >
-        <View style={styles.listActions}>
-          <Button label="+ Add a zone" tone="ghost" onPress={addZone} disabled={busy || saving} />
-          <Button
-            label={`Remove Zone ${zone.number ?? zoneIndex + 1}`}
-            tone="ghost"
-            danger
-            onPress={() => { setRemoveReason(''); setRemoveNote(''); setRemoving({ number: zone.number }); }}
-            disabled={busy || saving}
-          />
+        <View style={styles.photoActions}>
+          <Button label={busy ? 'Working…' : 'Take a photo'} tone="ghost" onPress={() => attach(takePhoto)} disabled={busy} />
+          <Button label="Choose from library" tone="ghost" onPress={() => attach(pickPhoto)} disabled={busy} />
         </View>
       </Section>
 
@@ -353,8 +357,6 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
       ) : null}
 
       <View style={styles.actions}>
-        <Button label={busy ? 'Working…' : 'Take a photo'} tone="ghost" onPress={() => attach(takePhoto)} disabled={busy} />
-        <Button label="Choose from library" tone="ghost" onPress={() => attach(pickPhoto)} disabled={busy} />
         <Button
           label={repairs && !types.length ? 'Pick a repair type' : zoneIndex + 1 < total ? 'Done — next zone' : 'Done — close out'}
           onPress={markDone}
@@ -367,6 +369,7 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
 
 const styles = StyleSheet.create({
   listActions: { flexDirection: 'row', gap: space.sm, padding: space.md },
+  photoActions: { gap: space.sm, padding: space.md, paddingTop: 0 },
   sheet: {
     backgroundColor: colors.card,
     borderRadius: radius.card,
