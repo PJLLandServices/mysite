@@ -1631,12 +1631,22 @@ is not an error in any tool. No command fails, no warning prints, the dashboard 
 healthy update. It is indistinguishable from success, and the only symptom is a tech standing
 on a driveway with yesterday's app. Twice now that has been diagnosed from scratch. **Fixed
 by making it impossible to miss, not by weakening the fingerprint:** before publishing, the
-workflow computes the runtime this checkout would publish to and asks EAS whether any
-finished iOS build is listening on it (`build:list --runtime-version`, which is the real
-question — an update reaches ANY build with a matching runtime, not merely the newest). No
-match means no publish, a red X, and a message naming the fix. The gate fails **closed** on a
-missing, empty or malformed answer, since an unreadable check is the exact condition the last
-two outages hid inside. **A rebuild is now a button:** `.github/workflows/field-app-build.yml`
+workflow computes the runtime this checkout would publish to and checks whether any finished
+iOS build is listening on it — the real question, since an update reaches ANY build with a
+matching runtime, not merely the newest. No match means no publish, a red X, and a message
+naming the fix. The gate fails **closed** on a missing, empty or malformed answer, since an
+unreadable check is the exact condition the last two outages hid inside. **The comparison is
+done in the workflow, not by `build:list --runtime-version`**, and the first version of this
+guard got that wrong: pushing the match onto a server-side filter makes the check's behaviour
+invisible to the thing depending on it, and a filter that silently stopped matching would
+block every publish forever — a failure as quiet as the one being fixed. The build's runtime
+is read as `runtime.version`, the field name taken from eas-cli's own `BuildFragment` rather
+than guessed; the first version read `runtimeVersion`, which does not exist and printed `?`
+for every build in the live run. **Proven both ways before shipping:** the step body runs
+verbatim against a stubbed `npx` and blocks when nothing listens, **passes when a matching
+build exists**, and fails closed on unparseable output. That middle case is the one that
+matters — a guard nobody has watched succeed is a guard that may never let anything through
+again. **A rebuild is now a button:** `.github/workflows/field-app-build.yml`
 builds and auto-submits to TestFlight from `workflow_dispatch`, runnable from the GitHub app
 on a phone — the two times this was needed, Patrick was not at a desk. It prints the runtime
 the build will listen on, which is the number the update workflow compares against.
