@@ -156,13 +156,51 @@ change ships over the air in about a minute:
 
 ```
 git pull
-npx eas-cli@latest update --branch production -m "what changed"
+npx eas-cli@23.2.0 update --branch production -m "what changed"
 ```
 
 Reopen the app and it's there. No build, no TestFlight, no Apple.
 
+### Updates publish themselves
+
+A merge to `main` that touches `pjl-field/` publishes the update — see
+`.github/workflows/field-app-update.yml`. GitHub can reach Expo, so nobody has
+to be at a desk to ship a change to a phone in a truck. It authenticates with
+an Expo **robot** token stored as the `EXPO_TOKEN` repository secret.
+
+The workflow pins the same CLI version as `eas.json` and the two must stay in
+step; the comment at the top of the workflow says why in detail. Publishing by
+hand still works and is sometimes right (a re-publish after a rollback):
+run the command below at the pinned version.
+
+### Always run EAS at the pinned version. Never `@latest`.
+
+`eas.json` pins `cli.version` to an exact release, and every command in this
+file names that same version. That is not fussiness — it is the fix for a
+real outage.
+
+`runtimeVersion` is on the **fingerprint** policy, and the fingerprint is
+computed by the CLI. On 2026-09-02 an update published with
+`npx eas-cli@latest` computed a DIFFERENT fingerprint from the installed
+build for a project that had not changed at all: three files
+(`.easignore`, `.gitignore`, `eas.json`) had silently dropped out of the
+hashed set between CLI releases. The build listened on one runtime, the
+update went to another, and the phone kept running a bundle from the day
+before while reporting success at every step. Nothing in the app or the
+repo was wrong, and nothing in the output said anything was wrong.
+
+A build and the updates that must reach it have to be fingerprinted by the
+same CLI. Pinning is what guarantees that. When you do want a newer CLI,
+change the pin and **rebuild** — a new fingerprint needs a new binary to
+listen for it.
+
+Diagnosing this again, if an update ever seems not to arrive: the running
+bundle's date is printed at the bottom of the Today tab, and
+`eas-cli fingerprint:compare --build-id <id>` names exactly what differs.
+
 A **rebuild** is needed only when the native side changes: a new native
-library, the icon or splash, the app name, iOS permissions, an SDK bump.
+library, the icon or splash, the app name, iOS permissions, an SDK bump —
+or a change to the pinned CLI version, per the note above.
 Then it's the full round again — `eas build`, `eas submit`, install from
 TestFlight.
 

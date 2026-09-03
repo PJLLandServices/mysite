@@ -1592,6 +1592,37 @@ opposite of the one first recorded: a fix verified against a live symptom is not
 the codebase cannot produce" just because the write path is hard to find — data outranks code
 reading, and the bar for removing the union again is a walked Today page, not an argument.
 
+**2026-09-02 (The closing ends in the app — sign-off and invoice):** FLOW-31's last
+handoff is gone. A fall closing now finishes natively and lands on its invoice. **Patrick's
+four decisions, taken 2026-09-02:** sign-off ASKS who is there rather than defaulting —
+"Customer is here" or "Nobody home", because on a seasonal closing neither is the exception;
+payment and the return visit are two explicit buttons each, never defaulted, because a
+default is an answer nobody gave; Finish goes straight to the invoice; and the invoice offers
+**Send** and **Take payment now** side by side. (The return-visit question was not put to him
+directly — it was matched to his payment answer and is his to change.) **How it completes:**
+a signature is one PATCH carrying `signature` + `status: completed`, which locks scope and
+awaits the cascade; a bypass is two calls, `POST /signature-bypass` then the completion —
+deliberately in that order, so a failure between them leaves a visit recorded as accepted and
+completable from the desk rather than a completed visit with no record of how it was
+accepted. A `presign_gate_unmet` refusal renders the server's own `gateFailures` list, since
+every one of them is something the tech can still fix standing there. **The signature pad is
+a WebView canvas** — `react-native-webview` is already a dependency, so it ships over the air;
+any native drawing library would have changed the fingerprint and cost a TestFlight round
+trip for a box you draw a line in. **One server addition:** `POST
+/api/invoices/:id/payment-link` mints the public payment token without sending anything.
+`ensurePaymentToken` had only ever run at send time, which is right for the emailed link and
+wrong on a driveway — a tech standing with the customer should not have to email them first
+to take their money. Idempotent, so it never invalidates a link already in an inbox. **The
+app never talks to Stripe:** Take payment opens the customer's own page on the server's
+domain, where the intent is minted and where the double-charge and stale-amount protections
+already live. **Coverage:** `scripts/test-signoff-gates.mjs` (19 assertions, in
+`build:check`), which reads the gate list out of `computeServerSidePreSignFailures` rather
+than restating it, and pins what a fall closing does not have to answer — photo minimum zero,
+materials auto-confirmed, never quotes on site. **What still needs Patrick:** walk one, end
+to end, both ways — once with a signature and once with nobody home — and confirm the invoice
+that appears is right, that Send reaches the customer, and that Take payment opens a page that
+can actually be paid.
+
 **2026-09-01 (Add and remove zones from the app):** the other half of the declared-count
 work. A tech who arrives to five zones where the customer said six can now fix it on the
 spot — add appends a zone to the visit and the property; remove takes it off both, behind a

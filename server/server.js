@@ -13495,6 +13495,32 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // Mint (or return) the public payment link for an invoice, without
+  // sending anything.
+  //
+  // ensurePaymentToken has always run at SEND time, which is right for the
+  // emailed link but leaves a freshly drafted invoice with no payable URL.
+  // That is fine at a desk and wrong on a driveway: a tech standing with
+  // the customer, phone in hand, should not have to email them first to be
+  // able to take their money. Idempotent — the same invoice keeps the same
+  // token, so this never invalidates a link already in someone's inbox.
+  const invoicePayLinkMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/payment-link$/);
+  if (invoicePayLinkMatch && req.method === "POST") {
+    try {
+      await requireAdmin(req);
+      const id = decodeURIComponent(invoicePayLinkMatch[1]);
+      const inv = await invoices.ensurePaymentToken(id);
+      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      const publicBase = resolvePublicBaseUrl();
+      return sendJson(res, 200, {
+        ok: true,
+        url: `${publicBase}/pay/invoice/${encodeURIComponent(inv.id)}?t=${encodeURIComponent(inv.paymentToken)}`
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't build a payment link."] });
+    }
+  }
+
   const invoiceMatch = pathname.match(/^\/api\/invoices\/([^/]+)$/);
   if (invoiceMatch && req.method === "GET") {
     const inv = await invoices.get(decodeURIComponent(invoiceMatch[1]));
