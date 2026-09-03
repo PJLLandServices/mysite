@@ -1612,6 +1612,45 @@ opposite of the one first recorded: a fix verified against a live symptom is not
 the codebase cannot produce" just because the write path is hard to find — data outranks code
 reading, and the bar for removing the union again is a walked Today page, not an argument.
 
+**2026-09-03 (The update that published into the void, twice — and the check that ends
+it):** the GitHub publishing workflow ran for the first time on the merge of PR #124,
+reported success at every step, and delivered the sign-off screens to **nothing**. Same
+failure as the previous day, different trigger, and that repetition is the entry's point.
+**What happened:** `runtimeVersion` is on the `fingerprint` policy, and an update only
+reaches a phone whose installed build carries the SAME runtime. `eas.json` is in the hashed
+source set (`"reasons":["easBuild"]`). Build 9 was made at ~13:00 from `2b59815`; at 18:46
+`c471c31` added four lines of `submit.production.ios.ascAppId` to `eas.json` — a setting that
+configures **App Store submission** and cannot affect the compiled binary in any way — and
+that moved the iOS runtime. The merge published to `40890188…`; build 9 listens on something
+else. Verified locally, not inferred: `expo-updates fingerprint:generate` on this checkout
+reproduces `40890188…` exactly (so the runner and a laptop agree — that was never the
+problem), and the same command with `eas.json` reverted to `2b59815` produces a different
+hash, with `git diff --stat` confirming `eas.json` is the ONLY hashed input that changed
+between them. **Why it keeps costing a day:** publishing to a runtime nothing is listening on
+is not an error in any tool. No command fails, no warning prints, the dashboard shows a
+healthy update. It is indistinguishable from success, and the only symptom is a tech standing
+on a driveway with yesterday's app. Twice now that has been diagnosed from scratch. **Fixed
+by making it impossible to miss, not by weakening the fingerprint:** before publishing, the
+workflow computes the runtime this checkout would publish to and asks EAS whether any
+finished iOS build is listening on it (`build:list --runtime-version`, which is the real
+question — an update reaches ANY build with a matching runtime, not merely the newest). No
+match means no publish, a red X, and a message naming the fix. The gate fails **closed** on a
+missing, empty or malformed answer, since an unreadable check is the exact condition the last
+two outages hid inside. **A rebuild is now a button:** `.github/workflows/field-app-build.yml`
+builds and auto-submits to TestFlight from `workflow_dispatch`, runnable from the GitHub app
+on a phone — the two times this was needed, Patrick was not at a desk. It prints the runtime
+the build will listen on, which is the number the update workflow compares against.
+**Deliberately NOT done:** adding `eas.json` to a fingerprint ignore list. It would have made
+this exact recurrence free, and would have traded a visible cost for an invisible one — a
+build profile's `env` or `channel` genuinely does reach the binary, and the failure mode of
+getting that wrong is another silent outage. The honest position is that some edits need a
+build; the defect was never the rebuild, it was the silence. **Also fixed in passing:** the
+publish step interpolated `github.event.head_commit.message` directly into a shell command;
+it now travels through the environment, where a quote in a commit message is text rather than
+syntax. **What still needs Patrick:** run "Field app — build for TestFlight" once (this is
+required — build 9 cannot receive the sign-off work), install it from TestFlight, then re-run
+the publish workflow and watch it go green for the right reason.
+
 **2026-09-02 (The closing ends in the app — sign-off and invoice):** FLOW-31's last
 handoff is gone. A fall closing now finishes natively and lands on its invoice. **Patrick's
 four decisions, taken 2026-09-02:** sign-off ASKS who is there rather than defaulting —

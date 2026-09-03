@@ -18,9 +18,15 @@ name: Field app — publish OTA update
 # pjl-field/eas.json, which is what the build uses. If they drift, updates stop
 # arriving and nothing says so.
 #
-# Only the app's JavaScript ships this way. A new native module, an icon, or an
-# SDK bump changes the fingerprint and needs a real build through TestFlight —
-# and then this workflow's next run must be checked against the new runtime.
+# Only the app's JavaScript ships this way. A new native module, an icon, an SDK
+# bump, app.json or eas.json changes the fingerprint and needs a real build
+# through TestFlight — run "Field app — build for TestFlight".
+#
+# You do not have to work out which case you are in. Before publishing, this
+# workflow compares the runtime this checkout would publish to against the newest
+# finished build's, and refuses to publish when they differ. That check is the
+# whole point: publishing to a runtime nothing is listening on is not an error in
+# any tool, it is simply nothing happening, and it looks identical to success.
 
 on:
   push:
@@ -69,14 +75,78 @@ jobs:
         working-directory: pjl-field
         run: npm ci
 
-      - name: Publish the update
+      # THE CHECK THIS WORKFLOW EXISTS FOR.
+      #
+      # An update only reaches a phone whose installed build has the same runtime
+      # version. Nothing in the publish path enforces that: `eas update` computes
+      # the runtime from this checkout, publishes to it, and reports success
+      # whether or not any build is listening. Twice now that silence has cost a
+      # day — once when a CLI release changed the hashed file set, and once when a
+      # one-line `ascAppId` in eas.json (a submit-only setting that cannot affect
+      # the binary) moved the runtime out from under a build made hours earlier.
+      #
+      # So: compare before publishing, and fail loudly instead of publishing into
+      # the void. A red X with a sentence beats a green tick that did nothing.
+      - name: Check a build is actually listening
+        id: runtime
         working-directory: pjl-field
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
+          set -o pipefail
+
+          # What this checkout would publish to. `eas update` delegates the
+          # fingerprint to the project's own expo-updates, so this is the same
+          # number by the same code — not a reimplementation of it.
+          update_rt=$(npx expo-updates fingerprint:generate --platform ios \
+            | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8')).hash")
+
+          # Ask the question that actually matters: does a finished iOS build
+          # listening on that runtime exist? Not "does the newest build match" —
+          # an update reaches ANY installed build with the same runtime, and the
+          # phone in the truck is not necessarily running the latest one.
+          match=$(npx eas-cli@23.2.0 build:list \
+            --platform ios --status finished \
+            --runtime-version "$update_rt" \
+            --limit 1 --json --non-interactive \
+            | node -pe "const j=JSON.parse(require('fs').readFileSync(0,'utf8')); (Array.isArray(j)?j:(j.builds||[])).length")
+
+          echo "This update would go to runtime $update_rt"
+          echo "Finished iOS builds on that runtime: $match"
+
+          if [ "$match" -ge 1 ] 2>/dev/null; then
+            echo "A build is listening. The phones will get this."
+            exit 0
+          fi
+
+          # Nothing is listening. Say what IS out there, so the log answers the
+          # obvious next question without another round trip.
+          echo "Most recent finished iOS builds:"
+          npx eas-cli@23.2.0 build:list --platform ios --status finished \
+            --limit 3 --json --non-interactive \
+            | node -pe "const j=JSON.parse(require('fs').readFileSync(0,'utf8')); (Array.isArray(j)?j:(j.builds||[])).map(b=>'  '+(b.runtimeVersion||'?')+'  '+(b.appBuildVersion||'?')+'  '+(b.completedAt||'')).join('\n')" \
+            || true
+
+          echo "::error::No installed build can receive this update, so it was NOT published."
+          echo "::error::This checkout publishes to runtime $update_rt and no finished iOS build"
+          echo "::error::listens on it — something in the native fingerprint changed (app.json,"
+          echo "::error::eas.json, or a dependency)."
+          echo "::error::Fix: Actions → 'Field app — build for TestFlight' → Run workflow. Install"
+          echo "::error::it from TestFlight, then re-run this workflow."
+          exit 1
+
+      - name: Publish the update
+        working-directory: pjl-field
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          # Through the environment rather than interpolated into the command:
+          # a commit message is text someone else wrote, and `${{ }}` pastes it
+          # into the shell before bash ever sees a quote.
+          UPDATE_MESSAGE: ${{ github.event.head_commit.message || 'Manual publish' }}
+        run: |
           npx eas-cli@23.2.0 update \
             --branch production \
-            --message "${{ github.event.head_commit.message || 'Manual publish' }}" \
+            --message "$UPDATE_MESSAGE" \
             --non-interactive
 
       # The runtime version the update went to is the one thing worth reading in

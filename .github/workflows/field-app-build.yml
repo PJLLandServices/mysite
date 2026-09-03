@@ -1,0 +1,98 @@
+name: Field app — build for TestFlight
+
+# Makes a new iPhone build and sends it to TestFlight, from a button rather than
+# from a laptop.
+#
+# WHEN YOU NEED THIS. Most changes to the app are JavaScript and ship over the
+# air through "Field app — publish OTA update". A build is only needed when the
+# app's NATIVE fingerprint changes — a new native module, an SDK bump, the icon,
+# app.json, or eas.json. You do not have to work out whether that happened: the
+# update workflow checks, and when it can't reach the installed app it fails and
+# tells you to run this one.
+#
+# HOW TO RUN IT. GitHub → Actions → this workflow → "Run workflow". That works
+# from the GitHub app on a phone, which is the point — the last two times this
+# was needed, Patrick was not at a desk.
+#
+# WHAT HAPPENS NEXT. EAS builds, then submits to App Store Connect. TestFlight
+# takes a few minutes to process, then the build appears in the TestFlight app to
+# install. Internal testing needs no Beta App Review. Once it is installed, re-run
+# the update workflow — its runtime check will pass against the new build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      submit:
+        description: 'Also submit to TestFlight when the build finishes'
+        type: boolean
+        default: true
+
+# One build at a time. Unlike an update, a build is not safe to cancel and
+# replace — it consumes queue time and increments the build number — so a second
+# run waits rather than killing the first.
+concurrency:
+  group: field-app-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the Expo token is present
+        run: |
+          if [ -z "${{ secrets.EXPO_TOKEN }}" ]; then
+            echo "::error::EXPO_TOKEN is not set. Add the Expo robot token under"
+            echo "::error::Settings → Secrets and variables → Actions → New repository secret."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: pjl-field/package-lock.json
+
+      - name: Install
+        working-directory: pjl-field
+        run: npm ci
+
+      # Printed before the build so the log says, up front, which runtime this
+      # build will listen on. That number is what the update workflow compares
+      # against, and having it here makes a later mismatch readable rather than
+      # something to re-derive.
+      - name: Show the runtime this build will listen on
+        working-directory: pjl-field
+        run: |
+          npx expo-updates fingerprint:generate --platform ios \
+            | node -pe "'runtime version: ' + JSON.parse(require('fs').readFileSync(0,'utf8')).hash"
+
+      # --wait so the run's success means the build succeeded, not merely that it
+      # was queued. Free-tier queues can be long; the paid tier starts promptly.
+      - name: Build
+        working-directory: pjl-field
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          # Unquoted on use, so an empty value contributes no argument at all
+          # rather than an empty one the CLI would reject.
+          SUBMIT_FLAG: ${{ inputs.submit && '--auto-submit' || '' }}
+        run: |
+          npx eas-cli@23.2.0 build \
+            --platform ios \
+            --profile production \
+            --non-interactive \
+            --wait $SUBMIT_FLAG
+
+      - name: What to do now
+        if: success()
+        run: |
+          echo "Build finished."
+          if [ "${{ inputs.submit }}" = "true" ]; then
+            echo "It has been sent to App Store Connect. Give TestFlight a few minutes,"
+            echo "then install it from the TestFlight app on the iPhone."
+            echo "Once it is installed, re-run 'Field app — publish OTA update'."
+          else
+            echo "It was not submitted. Run this workflow again with submit enabled,"
+            echo "or submit it from the Expo dashboard."
+          fi
