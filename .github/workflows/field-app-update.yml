@@ -88,7 +88,6 @@ jobs:
       # So: compare before publishing, and fail loudly instead of publishing into
       # the void. A red X with a sentence beats a green tick that did nothing.
       - name: Check a build is actually listening
-        id: runtime
         working-directory: pjl-field
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
@@ -100,40 +99,57 @@ jobs:
           # number by the same code — not a reimplementation of it.
           update_rt=$(npx expo-updates fingerprint:generate --platform ios \
             | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8')).hash")
-
-          # Ask the question that actually matters: does a finished iOS build
-          # listening on that runtime exist? Not "does the newest build match" —
-          # an update reaches ANY installed build with the same runtime, and the
-          # phone in the truck is not necessarily running the latest one.
-          match=$(npx eas-cli@23.2.0 build:list \
-            --platform ios --status finished \
-            --runtime-version "$update_rt" \
-            --limit 1 --json --non-interactive \
-            | node -pe "const j=JSON.parse(require('fs').readFileSync(0,'utf8')); (Array.isArray(j)?j:(j.builds||[])).length")
-
           echo "This update would go to runtime $update_rt"
-          echo "Finished iOS builds on that runtime: $match"
 
-          if [ "$match" -ge 1 ] 2>/dev/null; then
-            echo "A build is listening. The phones will get this."
-            exit 0
-          fi
+          # The comparison is done HERE rather than with `build:list
+          # --runtime-version`, which would push it onto a server-side filter
+          # whose behaviour this workflow cannot see. If such a filter ever
+          # stopped matching, every publish would be blocked forever — and that
+          # failure would be exactly as quiet as the one this check exists to
+          # catch. `runtime.version` is the field name from eas-cli's own
+          # BuildFragment, read out of the CLI rather than guessed.
+          cat > "$RUNNER_TEMP/check-runtime.js" <<'JS'
+          const want = process.env.UPDATE_RT || "";
+          let list = null;
+          try {
+            const j = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            list = Array.isArray(j) ? j : (j && Array.isArray(j.builds) ? j.builds : null);
+          } catch (e) { list = null; }
 
-          # Nothing is listening. Say what IS out there, so the log answers the
-          # obvious next question without another round trip.
-          echo "Most recent finished iOS builds:"
-          npx eas-cli@23.2.0 build:list --platform ios --status finished \
-            --limit 3 --json --non-interactive \
-            | node -pe "const j=JSON.parse(require('fs').readFileSync(0,'utf8')); (Array.isArray(j)?j:(j.builds||[])).map(b=>'  '+(b.runtimeVersion||'?')+'  '+(b.appBuildVersion||'?')+'  '+(b.completedAt||'')).join('\n')" \
-            || true
+          if (!want || !Array.isArray(list)) {
+            console.log("::error::Could not read the runtime or the build list from EAS, so nothing");
+            console.log("::error::was published. An unreadable check is exactly how the last two");
+            console.log("::error::outages stayed invisible, so this fails rather than guessing.");
+            process.exit(1);
+          }
 
-          echo "::error::No installed build can receive this update, so it was NOT published."
-          echo "::error::This checkout publishes to runtime $update_rt and no finished iOS build"
-          echo "::error::listens on it — something in the native fingerprint changed (app.json,"
-          echo "::error::eas.json, or a dependency)."
-          echo "::error::Fix: Actions → 'Field app — build for TestFlight' → Run workflow. Install"
-          echo "::error::it from TestFlight, then re-run this workflow."
-          exit 1
+          const rows = list.map((b) => ({
+            rt: (b && b.runtime && b.runtime.version) || "",
+            no: (b && b.appBuildVersion) || "?",
+            at: (b && b.completedAt) || "",
+          }));
+
+          console.log("Recent finished iOS builds:");
+          for (const r of rows) console.log("  build " + r.no + "  " + (r.rt || "(no runtime)") + "  " + r.at);
+
+          if (rows.some((r) => r.rt && r.rt === want)) {
+            console.log("A build is listening on " + want + ". The phones will get this.");
+            process.exit(0);
+          }
+
+          console.log("::error::No installed build can receive this update, so it was NOT published.");
+          console.log("::error::This checkout publishes to runtime " + want + ", and none of the builds");
+          console.log("::error::above listen on it - something in the native fingerprint changed");
+          console.log("::error::(app.json, eas.json, or a dependency).");
+          console.log("::error::Fix: Actions -> Field app - build for TestFlight -> Run workflow.");
+          console.log("::error::Install it from TestFlight, then re-run this workflow.");
+          process.exit(1);
+          JS
+
+          npx eas-cli@23.2.0 build:list \
+            --platform ios --status finished \
+            --limit 20 --json --non-interactive \
+            | UPDATE_RT="$update_rt" node "$RUNNER_TEMP/check-runtime.js"
 
       - name: Publish the update
         working-directory: pjl-field
