@@ -1248,6 +1248,57 @@ run together. Method note: an over-broad search-and-replace had to be reverted a
 caught borders and a pill background), so the fixes here are spliced inside each rule's own braces.
 CSS/markup only — no API, route, payload or template change; no PASS flow touched.
 
+**2026-09-02 (DOC-01 — one naming rule for every customer-facing document):** Patrick asked for
+this on 2026-08-21 alongside the invoice work-order-report attachment; it was agreed and then
+overlooked. Verified missing on `eb66c32` before starting — `format.js` exported no naming helper
+and all 26 download sites still named themselves: `I-2026-0065.pdf`, `Q-2026-0007.pdf`,
+`PJL-Service-Report-WO-2026-0100-2026-08-21.pdf`, `${po.id}.csv`. Now
+`2026-08-21 - I-2026-0065 Invoice - Kristen Holmes - 90 Oriole Dr.pdf`: date on the document, what
+it is, who it is for, which address. One helper (`format.js documentFilename`) behind
+`invoiceFilename` / `invoiceLetterFilename` / `quoteFilename` (server.js), `reportFilename`
+(wo-report-pdf.js) and `invoiceAttachmentName` (notify-customer.js).
+**Scope: the three customer-facing types only** — invoice, service/inspection report, quote.
+Supplier documents (PO, RFQ and their CSVs) keep their id names deliberately, not by omission: a
+supplier files by PO number, not by our customer's address. **Three rules, each a silent failure
+mode.** (1) *The date is the document's, never the clock* — invoice issue date (`sentAt ||
+createdAt`), report visit date (`arrivedAt || scheduledFor || createdAt`), quote sent date. The
+old `reportFilename` had a `|| new Date()` tail; it is gone, so a WO with no dates yields a name
+WITHOUT a date rather than one stamped today. Re-downloading an August invoice in December must
+still say August, and the drift would be invisible unless you compared two copies. (2) *Accents
+survive the wire* — `contentDisposition()` emits BOTH `filename="…"` (accents folded to base
+letters, ASCII as the RFC requires) and `filename*=UTF-8''…` (RFC 5987); modern clients take the
+second, older ones the first. (3) *Storage is untouched* — frozen quotes and report snapshots stay
+on disk as `<id>.pdf`, looked up and sha256'd by that path; only the DISPLAY name follows the
+convention, and the suite guards `path.join(dir, \`${snapshotId}.pdf\`)` directly. A stored
+snapshot's own `filename` field is likewise never rewritten — the download name is recomputed from
+the work order at serve time, so reports frozen before this convention come down under it while the
+record keeps saying what it said. **Street address only:** `parseCanadianAddress().streetAddress`
+splits a single line on a street-SUFFIX list, so "Rue", "Gate" and a highway address left the town
+glued on ("8 Rue Principale, Montréal"); splitting on the first comma instead fixes those and
+breaks "Unit 4, 17 Elm St, King City" down to "Unit 4". `streetLine()` takes the parser's answer
+and drops a trailing segment unless the leading one is a unit designator — both shapes covered by
+the suite. **PASS flow touched, deliberately and narrowly:** the invoice PDF attached to the
+PAYMENT RECEIPT (`sendPaymentReceipt`, FLOW-23 **PASS**) is the same document as the invoice email's
+and now shares its name. Only the filename string changed; no payment route, `stripe.js`, `pay.js`,
+`finalizeStripeInvoicePayment` or ledger path was edited, and none of the seven HANDOFF_STRIPE_PAYMENTS
+§6 invariants concerns an attachment name. This follows the JOB-008 precedent exactly (that change
+also touched `sendPaymentReceipt` alone), so **FLOW-23 carries the pending-recheck flag until the
+next real payment** — receipt arrives, ledger shows `receipt ok`, and the attachment is named by the
+convention. **FLOW-22's own invariant re-asserted, not weakened:** `test-invoice-letter.mjs`'s "the
+invoice PDF is always the first attachment" guard matched the old literal; it now matches
+`invoiceAttachmentName(invoice)` and still pins the invoice ahead of the letter and the report.
+**Live walk on a sandboxed server** (isolated data dir, seeded user, accented customer "Renée
+Côté"): `GET /api/invoices/:id/pdf` → `inline; filename="2026-09-02 - I-2026-0003 Invoice - Renee
+Cote - 90 Oriole Dr.pdf"; filename*=UTF-8''…Ren%C3%A9e%20C%C3%B4t%C3%A9…`, `?download=1` → the same
+name as `attachment`, `letter.pdf` → `… Letter …`, all 200 with real PDF bytes; decoding the
+RFC 5987 parameter yields the accented name a browser saves. `scripts/test-document-filenames.mjs`
+(45 assertions, in `build:check`) was confirmed to FAIL on a reintroduced clock fallback and on the
+receipt attachment reverted to a bare id before being kept. **A scope bug was found and fixed
+mid-change:** hoisting the download name to the snapshot-serve header referenced `wo`/`mode` from
+inside an `if` block on one route and from a handler that has neither on another — a ReferenceError
+on every snapshot download, invisible to `node --check`. Both fixed and re-read. Presentation only:
+no API, route, payload, schema or PDF-content change.
+
 **2026-08-28 (CRM-19 — the rest of the record lists):** Bookings, Work orders, Projects,
 Material lists and Suppliers rebuilt on the same `.crm-table` primitive as CRM-18. Invoices
 was already a real table and is untouched. Each page sets its own `--crm-cols`; the guard in
@@ -1323,6 +1374,45 @@ or catalog change, and the CTA that moved is FLOW-28's (UNMAPPED). `publicBookin
 (fall 2026: Oct 30) is defined in the config for the future gate and is deliberately
 consumed by nothing, pinned by a source guard. Cover:
 `scripts/test-season-config.mjs` (66 assertions, in `build:check`).
+**2026-09-02 (Best-day stars get loud):** Patrick on the shipped stars: "This isn't big enough
+to make a customer realize, it should be a very big star, and a big call out." Display-only
+follow-up, no server change. The starred day cell now fills with the amber gradient the booking
+button already wears — big white ★ stacked above the date, white bold number — instead of a
+thin ring and corner star; a selected starred day flips to the solid selection green (star
+kept). The small legend line under the grid is replaced by a call-out banner ABOVE the grid:
+amber-bordered box, 34px star, "WE'RE ALREADY IN YOUR NEIGHBOURHOOD!" headline, and a body line
+that NAMES the customer's top pick ("Monday, September 14 is the top pick" — cheapest added
+drive among the month's starred days, earliest date breaking ties), still hidden whenever no
+starred day is visible in the month. FLOW-03 surface, presentation only: `renderGrid` reads the
+same `recommended`/`addedDriveMinutes` keys #121 added; no request, payload, or engine change —
+geo/booking suites unchanged and green. Verified in headless Chromium against the real
+stylesheet at 375px and 720px: banner, amber cells, selected-state precedence (a hover-beats-
+selected specificity bug was caught and fixed in the same pass: the hover rule now excludes
+`.is-selected`).
+
+**2026-09-02 (Customer best-day stars on the public picker):** Patrick, closing the loop on the
+probe's "Best days for this address": "we never suggest to customers the best possible day for
+them to book. Can we build that too?" The engine already prices every offered day for the
+geography gate (`addedDriveMinutes` on each slot — until now admin-facing only); new pure
+`availability.recommendDays(days, {max:3})` ranks the day rows by that cost and marks the top
+three `recommended: true`. **Only days that HAVE a cost qualify** — a day with an existing
+route or booking nearby is genuinely cheap for the customer's neighbourhood; a day with no
+shape at all (nothing scheduled) costs a dedicated trip and gets NO star, so an empty calendar
+never fakes popularity. `/api/booking/availability` calls it after composing day rows; the
+shared time-picker paints starred days (amber ★ + amber ring on the cell,
+title/aria "Best day for your address") and shows a one-line legend ("our crew is already
+scheduled in your neighbourhood") only when a starred day is visible in the month.
+**FLOW-03 IS PASS AND WAS TOUCHED — additively:** `listAvailableSlots` unchanged, no day
+added or removed, no route/payload field removed; day rows gain optional
+`recommended`/`addedDriveMinutes` keys, and admin callers of the same endpoint simply ignore
+them. Engine re-verified: test-geo-availability grows to 42 (+7: through the REAL engine the
+Mississauga caller's booking-made day and planned west day are both starred with the booked
+day at least as cheap, an empty day is offered but never starred, a suppressed day row is
+untouched; in isolation the three-cheapest cap, in-place annotation, and empty/slotless-input
+safety). **Needs Patrick's walk:** open /book.html with a real address whose neighbourhood has
+a routed day — that day shows the ★ and the legend line; a remote address shows plain days
+and no legend.
+
 **2026-09-02 (Day-before reminder for self-booked + add-to-calendar):** two customer-facing
 additions on Patrick's ask. (1) **Self-booked appointments now get a day-before reminder** —
 assignment customers had the cadence's step 6, ad customers had nothing. New

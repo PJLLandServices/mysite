@@ -140,6 +140,13 @@
         <div class="tp-weekdays" aria-hidden="true">
           ${WEEKDAY_LETTERS.map((l) => `<span>${l}</span>`).join("")}
         </div>
+        <div class="tp-callout" data-legend role="status" hidden>
+          <span class="tp-callout-star" aria-hidden="true">★</span>
+          <span class="tp-callout-text">
+            <strong class="tp-callout-title">We're already in your neighbourhood!</strong>
+            <span class="tp-callout-body" data-callout-body>Pick a starred day — our crew is scheduled near you.</span>
+          </span>
+        </div>
         <div class="tp-grid" data-grid role="grid"></div>
         <p class="tp-month-empty" data-month-empty hidden>
           No availability this month. Try next month.
@@ -184,6 +191,8 @@
     const monthLabelEl = wrap.querySelector("[data-month-label]");
     const gridEl = wrap.querySelector("[data-grid]");
     const monthEmptyEl = wrap.querySelector("[data-month-empty]");
+    const legendEl = wrap.querySelector("[data-legend]");
+    const calloutBodyEl = wrap.querySelector("[data-callout-body]");
     const errorEl = wrap.querySelector("[data-error]");
     const slotsBlock = wrap.querySelector("[data-slots]");
     const slotsLabelEl = wrap.querySelector("[data-slots-label]");
@@ -214,6 +223,7 @@
       const { from } = monthGridRange(viewYear, viewMonth);
       gridEl.innerHTML = "";
       let anyAvailableThisMonth = false;
+      const recommendedThisMonth = []; // {key, cost} — feeds the call-out
       for (let i = 0; i < 42; i++) {
         const cellDate = new Date(from);
         cellDate.setDate(from.getDate() + i);
@@ -222,11 +232,16 @@
         const inPast = cellDate.getTime() < today.getTime();
         const data = daysByDate.get(key);
         const hasSlots = Boolean(data && data.slots && data.slots.length);
+        // Best-day stars: the server marks the days where this address
+        // joins a route we're already driving. Pure presentation here —
+        // the ranking lives server-side with the drive-time math.
+        const recommended = Boolean(hasSlots && !inPast && data.recommended);
         const classes = ["tp-day"];
         if (!inThisMonth) classes.push("is-other-month");
         if (isSameDay(cellDate, today)) classes.push("is-today");
         if (inPast || !hasSlots) classes.push("is-unavailable");
         else classes.push("is-available");
+        if (recommended) classes.push("is-recommended");
         if (selectedDate === key) classes.push("is-selected");
         const btn = document.createElement("button");
         btn.type = "button";
@@ -235,13 +250,36 @@
         btn.textContent = String(cellDate.getDate());
         if (!hasSlots || inPast) {
           btn.disabled = true;
+        } else if (recommended) {
+          btn.title = "Best day for your address — we're already in your neighbourhood";
+          btn.setAttribute("aria-label", `${key} — best day for your address`);
         } else {
           btn.title = `${data.slots.length} slot${data.slots.length === 1 ? "" : "s"}`;
         }
         gridEl.appendChild(btn);
         if (hasSlots && inThisMonth) anyAvailableThisMonth = true;
+        if (recommended && inThisMonth) {
+          recommendedThisMonth.push({
+            key,
+            cost: Number.isFinite(data.addedDriveMinutes) ? data.addedDriveMinutes : Infinity
+          });
+        }
       }
       monthEmptyEl.hidden = anyAvailableThisMonth;
+      if (legendEl) {
+        legendEl.hidden = !recommendedThisMonth.length;
+        if (recommendedThisMonth.length && calloutBodyEl) {
+          // Name their single best pick in the call-out: cheapest added
+          // drive first, earliest date breaking ties.
+          recommendedThisMonth.sort((a, b) =>
+            (a.cost - b.cost) || (a.key < b.key ? -1 : 1));
+          const bestLabel = parseDateKey(recommendedThisMonth[0].key)
+            .toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" });
+          calloutBodyEl.textContent = recommendedThisMonth.length === 1
+            ? `${bestLabel} is your best day to book — our crew is already scheduled near you.`
+            : `The ★ days are your best days to book — our crew is already scheduled near you. ${bestLabel} is the top pick.`;
+        }
+      }
     }
 
     function renderSlotsList() {

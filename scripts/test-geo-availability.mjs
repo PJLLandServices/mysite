@@ -47,7 +47,7 @@ const availability = require(path.join(ROOT, "server/lib/availability.js"));
 const geoFilter = require(path.join(ROOT, "server/lib/geo-filter.js"));
 const seasonPlans = require(path.join(ROOT, "server/lib/season-plans.js"));
 
-const { listAvailableSlots, expandDaysToRange, DEFAULT_HOURS, DEFAULT_SETTINGS } = availability;
+const { listAvailableSlots, expandDaysToRange, recommendDays, DEFAULT_HOURS, DEFAULT_SETTINGS } = availability;
 
 let pass = 0;
 const failures = [];
@@ -341,6 +341,49 @@ ok("a far customer is SUPPRESSED on the booking-made day — no more 80-km day-s
   JSON.stringify(farDiag.geoSuppressed));
 ok("…but the far customer still sees days with nothing on them at all",
   datesOf(farFiltered).size > 0);
+
+// ---- 10. Customer best-day stars (Patrick: "we never suggest to
+//          customers the best possible day for them to book") ---------
+
+// Through the real engine: the Mississauga caller's day rows, spanning
+// the planned west day (+7), the suppressed north day (+8), the
+// booking-made ad day (+9), and two truly empty days (+10, +11).
+const recDays = recommendDays(expandDaysToRange(adFiltered, {
+  from: plusDays(7), to: plusDays(11), hours: DEFAULT_HOURS, now: NOW,
+  geoSuppressed: adDiag.geoSuppressed
+}));
+const recRow = (key) => recDays.find((d) => d.date === key);
+ok("the booking-made day next door is starred",
+  recRow(AD_DAY)?.recommended === true, JSON.stringify(recRow(AD_DAY)));
+ok("the planned west day is starred",
+  recRow(WEST_DAY)?.recommended === true, JSON.stringify(recRow(WEST_DAY)));
+ok("the day next to an existing booking costs no more than the farther planned route",
+  // (the estimate rounds to a 5-minute floor, so a tie is legitimate)
+  Number.isFinite(recRow(AD_DAY)?.addedDriveMinutes)
+  && Number.isFinite(recRow(WEST_DAY)?.addedDriveMinutes)
+  && recRow(AD_DAY).addedDriveMinutes <= recRow(WEST_DAY).addedDriveMinutes,
+  `ad +${recRow(AD_DAY)?.addedDriveMinutes} vs west +${recRow(WEST_DAY)?.addedDriveMinutes}`);
+ok("a truly empty day is offered but never starred — no fake 'best days'",
+  recDays.some((d) => d.slots.length && d.slots[0].addedDriveMinutes == null && !d.recommended)
+  && recDays.every((d) => !d.recommended || Number.isFinite(d.addedDriveMinutes)),
+  JSON.stringify(recDays.map((d) => ({ date: d.date, rec: !!d.recommended, cost: d.addedDriveMinutes }))));
+ok("a suppressed day row is untouched by the recommender",
+  recRow(NORTH_DAY)?.reason === "outside_route_area" && !recRow(NORTH_DAY)?.recommended);
+
+// The cap, in isolation: five priced days in, exactly the three
+// cheapest come back starred, and the array is annotated in place.
+const capIn = [40, 10, 25, 5, 30].map((cost, i) => ({
+  date: `2026-10-0${i + 1}`, slots: [{ addedDriveMinutes: cost }]
+}));
+const capOut = recommendDays(capIn);
+ok("recommendDays caps at three and picks the cheapest, in place",
+  capOut === capIn
+  && capIn.filter((d) => d.recommended).map((d) => d.date).sort().join(",")
+     === "2026-10-02,2026-10-03,2026-10-04",
+  JSON.stringify(capIn.map((d) => ({ date: d.date, rec: !!d.recommended }))));
+ok("recommendDays survives an empty or slotless list",
+  recommendDays([]).length === 0
+  && recommendDays([{ date: "2026-10-01", slots: [], reason: "no_availability" }])[0].recommended === undefined);
 
 // ---- Report ----------------------------------------------------------
 
