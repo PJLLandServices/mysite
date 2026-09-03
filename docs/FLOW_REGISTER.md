@@ -1374,6 +1374,26 @@ or catalog change, and the CTA that moved is FLOW-28's (UNMAPPED). `publicBookin
 (fall 2026: Oct 30) is defined in the config for the future gate and is deliberately
 consumed by nothing, pinned by a source guard. Cover:
 `scripts/test-season-config.mjs` (66 assertions, in `build:check`).
+**2026-09-02 (The call-out shows right away, whatever month is on screen):** Patrick, after
+merging the loud stars: "itll only display this if they are on the exact same Month as the
+booking is, we should populate this right away... at the top of the page." Correct read — the
+banner was scoped to the visible month, so a September visitor whose best day is Oct 5 saw
+nothing until they paged forward. Now the picker fires ONE background look-ahead fetch
+(today → +90 days, inside the endpoint's existing 120-day cap) after the first month loads,
+merges those day rows without overwriting month data, and the call-out names the single best
+day across everything loaded (cheapest added drive, earliest date breaking ties) the moment
+the page settles. The banner also grew a jump button — "★ Take me to Monday, October 5" when
+that day is off-screen, "★ Pick Monday, October 5" when in view — which navigates the
+calendar to that month, selects the day, and opens its time buckets in one tap. Copy
+rewritten to Patrick's pitch, customer-voiced: "Our crew is already booked near your address
+on {day}. Choose that day and we'll be right around the corner — one tight route through your
+neighbourhood means an on-time arrival and the smoothest visit for you." Still hidden
+entirely for addresses with no starred day anywhere. FLOW-03 surface, client-side only: the
+look-ahead is a second GET to the same /api/booking/availability contract (from/to already
+supported and capped server-side); no server change, engine untouched, suites green. Verified
+in headless Chromium: September view with stars only in October shows the banner immediately;
+the jump lands on October with Oct 5 selected and buckets open.
+
 **2026-09-02 (Best-day stars get loud):** Patrick on the shipped stars: "This isn't big enough
 to make a customer realize, it should be a very big star, and a big call out." Display-only
 follow-up, no server change. The starred day cell now fills with the amber gradient the booking

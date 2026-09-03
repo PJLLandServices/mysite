@@ -123,6 +123,7 @@
     let selectedDate = null;       // 'YYYY-MM-DD'
     let selectedSlotStart = null;  // ISO datetime
     let loadingMonthKey = "";      // most-recent fetch key (used to cancel stale fetches)
+    let lookaheadStarted = false;  // one wide fetch past the visible month, for the call-out
     let destroyed = false;
 
     // Root scaffolding.
@@ -145,6 +146,7 @@
           <span class="tp-callout-text">
             <strong class="tp-callout-title">We're already in your neighbourhood!</strong>
             <span class="tp-callout-body" data-callout-body>Pick a starred day — our crew is scheduled near you.</span>
+            <button type="button" class="tp-callout-jump" data-callout-jump hidden></button>
           </span>
         </div>
         <div class="tp-grid" data-grid role="grid"></div>
@@ -193,6 +195,7 @@
     const monthEmptyEl = wrap.querySelector("[data-month-empty]");
     const legendEl = wrap.querySelector("[data-legend]");
     const calloutBodyEl = wrap.querySelector("[data-callout-body]");
+    const calloutJumpEl = wrap.querySelector("[data-callout-jump]");
     const errorEl = wrap.querySelector("[data-error]");
     const slotsBlock = wrap.querySelector("[data-slots]");
     const slotsLabelEl = wrap.querySelector("[data-slots-label]");
@@ -223,7 +226,6 @@
       const { from } = monthGridRange(viewYear, viewMonth);
       gridEl.innerHTML = "";
       let anyAvailableThisMonth = false;
-      const recommendedThisMonth = []; // {key, cost} — feeds the call-out
       for (let i = 0; i < 42; i++) {
         const cellDate = new Date(from);
         cellDate.setDate(from.getDate() + i);
@@ -258,27 +260,76 @@
         }
         gridEl.appendChild(btn);
         if (hasSlots && inThisMonth) anyAvailableThisMonth = true;
-        if (recommended && inThisMonth) {
-          recommendedThisMonth.push({
-            key,
-            cost: Number.isFinite(data.addedDriveMinutes) ? data.addedDriveMinutes : Infinity
-          });
-        }
       }
       monthEmptyEl.hidden = anyAvailableThisMonth;
-      if (legendEl) {
-        legendEl.hidden = !recommendedThisMonth.length;
-        if (recommendedThisMonth.length && calloutBodyEl) {
-          // Name their single best pick in the call-out: cheapest added
-          // drive first, earliest date breaking ties.
-          recommendedThisMonth.sort((a, b) =>
-            (a.cost - b.cost) || (a.key < b.key ? -1 : 1));
-          const bestLabel = parseDateKey(recommendedThisMonth[0].key)
-            .toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" });
-          calloutBodyEl.textContent = recommendedThisMonth.length === 1
-            ? `${bestLabel} is your best day to book — our crew is already scheduled near you.`
-            : `The ★ days are your best days to book — our crew is already scheduled near you. ${bestLabel} is the top pick.`;
+      renderCallout();
+    }
+
+    // The customer's single best day across EVERYTHING loaded — not just
+    // the month on screen. Cheapest added drive first, earliest date
+    // breaking ties. (YYYY-MM-DD keys compare correctly as strings.)
+    function computeBestDay() {
+      const todayKey = localDateKey(today);
+      let best = null;
+      daysByDate.forEach((data, key) => {
+        if (!data || !data.recommended || !(data.slots && data.slots.length)) return;
+        if (key < todayKey) return;
+        const cost = Number.isFinite(data.addedDriveMinutes) ? data.addedDriveMinutes : Infinity;
+        if (!best || cost < best.cost || (cost === best.cost && key < best.key)) {
+          best = { key, cost };
         }
+      });
+      return best;
+    }
+
+    // The big call-out shows the moment ANY loaded day is starred, even
+    // when that day sits in a month the customer hasn't paged to yet
+    // (Patrick: "we should populate this right away") — with a button
+    // that jumps the calendar straight to it.
+    function renderCallout() {
+      if (!legendEl) return;
+      const best = computeBestDay();
+      if (!best) {
+        legendEl.hidden = true;
+        return;
+      }
+      const bestDate = parseDateKey(best.key);
+      const label = bestDate.toLocaleDateString("en-CA", {
+        weekday: "long", month: "long", day: "numeric"
+      });
+      if (calloutBodyEl) {
+        calloutBodyEl.textContent = `Our crew is already booked near your address on ${label}. `
+          + `Choose that day and we'll be right around the corner — one tight route through your `
+          + `neighbourhood means an on-time arrival and the smoothest visit for you. `
+          + `Days marked ★ are your best picks.`;
+      }
+      if (calloutJumpEl) {
+        const inView = bestDate.getFullYear() === viewYear && bestDate.getMonth() === viewMonth;
+        calloutJumpEl.textContent = inView ? `★ Pick ${label}` : `★ Take me to ${label}`;
+        calloutJumpEl.dataset.date = best.key;
+        calloutJumpEl.hidden = false;
+      }
+      legendEl.hidden = false;
+    }
+
+    // One wide background fetch (today → +90 days) after the first month
+    // lands, so the call-out can name a best day that lives past the
+    // visible 6-week window. Month rows already loaded are kept as-is.
+    async function loadLookahead() {
+      const from = localDateKey(today);
+      const toDate = new Date(today);
+      toDate.setDate(toDate.getDate() + 90);
+      try {
+        const result = await loadAvailability({ from, to: localDateKey(toDate) });
+        if (destroyed) return;
+        const days = (result && Array.isArray(result.days)) ? result.days : [];
+        days.forEach((day) => {
+          if (day && day.date && !daysByDate.has(day.date)) daysByDate.set(day.date, day);
+        });
+        renderGrid(); // repaint stars + call-out with the wider horizon
+      } catch (_) {
+        // Non-fatal: the call-out just stays scoped to what the month
+        // fetches have seen.
       }
     }
 
@@ -350,6 +401,10 @@
           selectedSlotStart = null;
         }
         renderSlotsList();
+        if (!lookaheadStarted) {
+          lookaheadStarted = true;
+          loadLookahead();
+        }
       } catch (err) {
         if (destroyed) return;
         showError(err && err.message ? err.message : "Couldn't load availability.");
@@ -380,6 +435,28 @@
       renderGrid();
       loadMonth();
     });
+
+    if (calloutJumpEl) {
+      calloutJumpEl.addEventListener("click", () => {
+        const key = calloutJumpEl.dataset.date;
+        if (!key || !daysByDate.has(key)) return;
+        const target = parseDateKey(key);
+        const monthChanged = target.getFullYear() !== viewYear || target.getMonth() !== viewMonth;
+        viewYear = target.getFullYear();
+        viewMonth = target.getMonth();
+        selectedDate = key;
+        selectedSlotStart = null;
+        renderMonthLabel();
+        renderGrid();
+        renderSlotsList();
+        // Fill in the rest of the target month's grid window; the selected
+        // day's own data is already here, so the slot list shows now.
+        if (monthChanged) loadMonth();
+        try {
+          slotsBlock.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        } catch (_) { /* older browsers — no-op */ }
+      });
+    }
 
     gridEl.addEventListener("click", (event) => {
       const cell = event.target.closest(".tp-day");
