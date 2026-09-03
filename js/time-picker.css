@@ -211,6 +211,22 @@
   line-height: 1.35;
   color: var(--text, #1A1A1A);
 }
+.tp-callout-jump {
+  align-self: flex-start;
+  margin-top: 8px;
+  background: linear-gradient(135deg, var(--tp-amber-light) 0%, var(--tp-amber) 100%);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 14px;
+  min-height: 42px;
+  cursor: pointer;
+}
+.tp-callout-jump:hover { filter: brightness(1.06); }
+.tp-callout-jump[hidden] { display: none; }
 
 .tp-month-empty {
   margin: 12px 4px 0;
