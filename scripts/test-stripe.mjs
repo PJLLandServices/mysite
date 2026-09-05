@@ -4,6 +4,7 @@
 // other test-*.mjs scripts.
 import crypto from "node:crypto";
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 const require = createRequire(import.meta.url);
 const stripe = require("../server/lib/stripe.js");
 
@@ -144,6 +145,47 @@ function assert(cond, label) {
   delete process.env.STRIPE_SECRET_KEY;
   delete process.env.STRIPE_PUBLISHABLE_KEY;
   assert(stripe.isConfigured() === false, "keys: unset means not configured");
+}
+
+// ---- Terminal connection token ----------------------------------------
+//
+// The one route the field app is allowed to call. These are the properties
+// that keep Tap to Pay out of PCI scope and out of a tech's hands by
+// accident; the network call itself is Stripe's and is not exercised here.
+{
+  assert(typeof stripe.createTerminalConnectionToken === "function",
+    "terminal: the lib mints connection tokens");
+
+  // No key configured must FAIL, not fall through to an anonymous call.
+  const savedSecret = process.env.STRIPE_SECRET_KEY;
+  const savedPub = process.env.STRIPE_PUBLISHABLE_KEY;
+  delete process.env.STRIPE_SECRET_KEY;
+  delete process.env.STRIPE_PUBLISHABLE_KEY;
+  let refused = false;
+  try { await stripe.createTerminalConnectionToken(); }
+  catch (err) { refused = /not configured/i.test(err.message || ""); }
+  assert(refused, "terminal: refuses to mint without STRIPE_SECRET_KEY");
+  if (savedSecret) process.env.STRIPE_SECRET_KEY = savedSecret;
+  if (savedPub) process.env.STRIPE_PUBLISHABLE_KEY = savedPub;
+
+  // The route is the only Stripe surface the app may reach, and it is
+  // staff-gated. Read from server.js rather than restated, so deleting the
+  // gate fails here rather than in the field.
+  const serverSrc = readFileSync(new URL("../server/server.js", import.meta.url), "utf8");
+  const routeAt = serverSrc.indexOf('pathname === "/api/terminal/connection-token"');
+  assert(routeAt > 0, "terminal: the connection-token route exists");
+  const routeBlock = serverSrc.slice(routeAt, routeAt + 900);
+  assert(/requireAdmin\(req\)/.test(routeBlock),
+    "terminal: the connection-token route is staff-gated");
+  assert(!/secretKey|STRIPE_SECRET_KEY/.test(routeBlock),
+    "terminal: the route never hands out the secret key");
+
+  // The app must reach Stripe through this route and nothing else. A
+  // publishable key or a secret in the app bundle would mean card data or
+  // account credentials on a phone.
+  const appSrc = readFileSync(new URL("../pjl-field/src/api.js", import.meta.url), "utf8");
+  assert(!/sk_live|sk_test|pk_live|pk_test/.test(appSrc),
+    "terminal: no Stripe key is shipped in the app");
 }
 
 console.log(`\ntest-stripe: ${failed ? "FAIL" : "PASS"} — ${passed} passed, ${failed} failed`);

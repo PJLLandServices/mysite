@@ -323,6 +323,29 @@ function verifyWebhookSignature(rawBody, signatureHeader, { toleranceSeconds = 3
   return JSON.parse(rawBody);
 }
 
+// ---- Terminal (Tap to Pay on iPhone) ---------------------------------
+//
+// A connection token is what the Terminal SDK on the phone trades for the
+// right to talk to Stripe directly. It is SHORT-LIVED and scoped to
+// Terminal — it is not the secret key and cannot be used to move money on
+// its own — but it is still minted here, server-side, and never derived
+// on the device.
+//
+// This is the ONLY place the field app is allowed near Stripe, and the
+// reason the "app never talks to Stripe" rule survives Tap to Pay: card
+// data goes from the customer's card to Apple's secure element to Stripe.
+// It never reaches our code, which is what keeps this out of PCI scope.
+//
+// Requires Terminal to be enabled on the account. Until Stripe switches it
+// on this returns their error verbatim rather than a guess.
+async function createTerminalConnectionToken() {
+  const { data } = await stripeRequest("POST", "/terminal/connection_tokens", {});
+  if (!data || !data.secret) {
+    throw paymentFailure("Stripe returned no connection token secret.");
+  }
+  return { secret: data.secret, location: data.location || null };
+}
+
 module.exports = {
   isConfigured,
   isLiveMode,
@@ -332,6 +355,7 @@ module.exports = {
   createPaymentIntent,
   retrievePaymentIntent,
   cancelPaymentIntent,
+  createTerminalConnectionToken,
   summarizeIntent,
   cardFactsFrom,
   verifyWebhookSignature,
