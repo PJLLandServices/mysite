@@ -1896,20 +1896,51 @@
     } catch (_) { /* fine */ }
   }
 
+  function emailStatus(text, { retry = false } = {}) {
+    em.status.textContent = text;
+    if (retry) {
+      const a = document.createElement("a");
+      a.href = "#";
+      a.className = "pb-email-retry";
+      a.textContent = "Retry";
+      a.addEventListener("click", (e) => { e.preventDefault(); loadEmailPreview(); });
+      em.status.append(" · ", a);
+    }
+  }
+
+  // A brand-new sandboxed frame every time the body is (re)composed. Reusing
+  // one <iframe srcdoc> across dialog open/close left the body blank on the
+  // second open in at least one browser (Patrick, Sep 5 2026); a fresh
+  // element has no navigation history to get confused by.
+  function freshEmailFrame() {
+    const old = em.frame;
+    if (!old) return null;
+    const next = document.createElement("iframe");
+    next.className = old.className;
+    next.id = old.id;
+    next.title = old.title;
+    next.setAttribute("sandbox", "");
+    old.replaceWith(next);
+    em.frame = next;
+    return next;
+  }
+
   async function loadEmailPreview() {
     if (!state.quote) return;
     const seq = ++emailSeq;
-    em.status.textContent = "Composing…";
+    emailStatus("Composing…");
     const note = em.note.value;
+    const ctl = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), 15000) : null;
     try {
       const r = await fetch(
-        `/api/quotes/${encodeURIComponent(state.quote.id)}/proposal-email-preview?note=${encodeURIComponent(note)}`,
-        { cache: "no-store" }
+        `/api/quotes/${encodeURIComponent(state.quote.id)}/proposal-email-preview?note=${encodeURIComponent(note)}&ts=${Date.now()}`,
+        { cache: "no-store", ...(ctl ? { signal: ctl.signal } : {}) }
       );
       const d = await r.json().catch(() => ({}));
       if (seq !== emailSeq) return;
       if (!r.ok || !d.ok) {
-        em.status.textContent = d.errors?.[0] || `Preview failed (${r.status}).`;
+        emailStatus(d.errors?.[0] || `Preview failed (${r.status}).`, { retry: true });
         return;
       }
       em.from.textContent = d.from || "—";
@@ -1917,18 +1948,25 @@
       em.to.classList.toggle("is-missing", !d.to);
       em.subject.textContent = d.subject || "—";
       renderEmailFiles(d);
-      em.frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"></head>` +
-        `<body style="margin:0;padding:22px 18px;background:#ffffff;">${d.html || ""}</body></html>`;
+      const frame = freshEmailFrame();
+      if (frame) {
+        frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"></head>` +
+          `<body style="margin:0;padding:22px 18px;background:#ffffff;">${d.html || ""}</body></html>`;
+      }
       const warns = [];
       if (d.linkIsPlaceholder) warns.push("The “Review & sign” link is issued when you send — the preview shows a placeholder.");
       if (!d.to) warns.push("Set the customer email in the top bar before sending.");
       em.warn.textContent = warns.join(" ");
       em.warn.hidden = warns.length === 0;
       const stamp = new Date().toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
-      em.status.textContent = `${d.isRevision ? "Revision email · " : ""}Composed ${stamp}`;
+      emailStatus(`${d.isRevision ? "Revision email · " : ""}Composed ${stamp}`);
     } catch (err) {
       if (seq !== emailSeq) return;
-      em.status.textContent = err.message || "Preview failed.";
+      const timedOut = err && err.name === "AbortError";
+      emailStatus(timedOut ? "The preview took too long to compose." : (err.message || "Preview failed."), { retry: true });
+      if (typeof console !== "undefined") console.error("[proposal] email preview failed:", err);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -2028,9 +2066,17 @@
     em.note.disabled = alreadySent;
     em.status.textContent = "";
     em.warn.hidden = true;
-    em.frame.srcdoc = "";
-    if (typeof em.dialog.showModal === "function") em.dialog.showModal();
-    else em.dialog.setAttribute("open", "");
+    if (em.fileList) em.fileList.innerHTML = "";
+    if (em.filesTotal) em.filesTotal.textContent = "";
+    freshEmailFrame();
+    if (!em.dialog.open) {
+      try {
+        if (typeof em.dialog.showModal === "function") em.dialog.showModal();
+        else em.dialog.setAttribute("open", "");
+      } catch (_) {
+        em.dialog.setAttribute("open", "");
+      }
+    }
     loadEmailPreview();
   }
 
