@@ -1807,8 +1807,6 @@ posting an empty lead id, and the card keys off `bookingId`. This matches, and d
 change, the deliberate no-op recorded in the stage-2 defect entry below; the web day sheet
 is untouched.
 
-If a flow isn't in here with a status, it is not known to work.
-Update this file, not a chat thread.
 **2026-09-05 (Builder live PDF preview + email preview):** QUOTE-04 opened under FLOW-20 —
 the proposal builder now shows the customer PDF beside the editor (re-rendered on every
 autosave) and "Send for approval" passes through a preview of the exact email, with an
@@ -1816,6 +1814,8 @@ optional note to the customer. One server composer feeds both the preview and th
 Revision emails (version > 1) now say "updated proposal" in headline + subject. FLOW-20
 stays UNMAPPED and needs a walked acceptance (steps under QUOTE-04); no PASS flow touched.
 
+If a flow isn't in here with a status, it is not known to work.
+Update this file, not a chat thread.
 ---
 
 ## How to use this
