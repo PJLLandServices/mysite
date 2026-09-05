@@ -309,9 +309,11 @@
 /* ---- Layout A: the map is the card, the stops float over it ----------
    The map is a FIXED viewport, never a percentage. The old screen stretched
    a 640x360 image to the full card width, so it grew with the window and one
-   day filled the screen; eleven of those is a page you cannot read. 400px
-   holds a whole day above the fold at 100% zoom and stays put. */
-.sp-daybody { position: relative; height: 400px; }
+   day filled the screen; eleven of those is a page you cannot read. The
+   clamp answers Patrick's "the maps are miniature": on a laptop the map is
+   ~62vh — a real map you can read streets on — while the ceiling keeps two
+   days reachable per scroll on a tall monitor. */
+.sp-daybody { position: relative; height: clamp(480px, 62vh, 720px); }
 .sp-map { position: absolute; inset: 0; background: var(--pjl-cream); z-index: 0; }
 .sp-map-note {
   position: absolute; left: 10px; bottom: 8px; z-index: 500;
@@ -346,7 +348,7 @@
 
 @media (max-width: 900px) {
   .sp-daybody { height: auto; }
-  .sp-map { position: relative; inset: auto; height: 260px; }
+  .sp-map { position: relative; inset: auto; height: 340px; }
   .sp-stoppanel {
     position: relative; inset: auto; width: auto; max-width: none;
     border-radius: 0; border-left: 0; border-right: 0; border-bottom: 0;
@@ -354,6 +356,47 @@
     background: #fff;
   }
   .sp-stoppanel-scroll { overflow-y: visible; }
+}
+
+/* Booked appointments — real customers on the calendar, amber like their
+   map pins so panel and map read as one thing. */
+.sp-tag.is-booked {
+  background: var(--pjl-amber-pale, #FBEBDD);
+  border: 1px solid var(--pjl-amber);
+  color: #9A5314;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.sp-count.is-booked { color: #9A5314; }
+.sp-stop.sp-stop-booked {
+  border-left: 3px solid var(--pjl-amber);
+}
+.sp-stop-booked a { color: var(--pjl-green); font-weight: 600; overflow-wrap: anywhere; }
+.sp-booked-time {
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #9A5314;
+  white-space: nowrap;
+  align-self: center;
+}
+
+/* "Any other date…" — the inline mover for end-of-season requests. */
+.sp-move-custom { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.sp-move-custom input[type="date"],
+.sp-move-custom select {
+  font: inherit; font-size: 0.78rem; border: 1px solid var(--pjl-border);
+  border-radius: 6px; padding: 3px 5px; min-height: 30px; background: #fff;
+}
+.sp-move-custom button {
+  font: inherit; font-size: 0.78rem; font-weight: 700; min-height: 30px;
+  border-radius: 6px; border: 1px solid var(--pjl-green);
+  background: var(--pjl-green); color: #fff; padding: 3px 10px; cursor: pointer;
+}
+.sp-move-custom button.sp-move-cancel {
+  background: #fff; color: var(--pjl-text-muted); border-color: var(--pjl-border); padding: 3px 8px;
 }
 
 /* Assignment preflight — the action list is the skips, so they lead. */

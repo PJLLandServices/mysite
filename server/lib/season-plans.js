@@ -264,7 +264,16 @@ async function moveStop(season, year, { propertyCode, toDate, toBucket }, { acto
   const all = await read();
   const plan = all[key];
   if (!plan) throw new Error(`No ${key} plan to edit.`);
-  if (!plan.days[toDate]) throw new Error(`${toDate} is not a route day in this plan.`);
+  // A stop may move to ANY calendar date, not only days the generator
+  // seeded (Patrick: customers ask to "keep the closings to the very end
+  // of the year"). A date the plan has never routed becomes a new, empty
+  // route day and behaves like any other from then on — the geography
+  // filter grows a shape for it, Assign books it, the writer messages it.
+  let createdDay = false;
+  if (!plan.days[toDate]) {
+    plan.days[toDate] = { label: "", morning: [], afternoon: [] };
+    createdDay = true;
+  }
 
   let from = null;
   for (const [dateKey, day] of Object.entries(plan.days)) {
@@ -283,7 +292,7 @@ async function moveStop(season, year, { propertyCode, toDate, toBucket }, { acto
   revalidated.updatedBy = String(actor || "admin").slice(0, 80);
   all[key] = revalidated;
   await writeAll(all);
-  return { plan: revalidated, warnings, moved: { propertyCode: code, from, to: { date: toDate, bucket: toBucket } } };
+  return { plan: revalidated, warnings, moved: { propertyCode: code, from, to: { date: toDate, bucket: toBucket }, createdDay } };
 }
 
 // Set or clear a stop's time window.

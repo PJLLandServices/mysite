@@ -272,6 +272,7 @@
     head.textContent = "Move to…";
     select.appendChild(head);
     for (const day of current.days) {
+      if (day.bookedOnly) continue; // not a plan day (yet) — pick it via "Any other date…"
       for (const bucket of ["morning", "afternoon"]) {
         if (day.date === fromDate && bucket === fromBucket) continue;
         const opt = document.createElement("option");
@@ -280,10 +281,15 @@
         select.appendChild(opt);
       }
     }
-    select.addEventListener("change", async () => {
-      if (!select.value) return;
-      const [toDate, toBucket] = select.value.split("|");
-      select.disabled = true;
+    // The escape hatch the route days can't offer: any calendar date at
+    // all. This is how "keep my closing to the very end of the year"
+    // gets honoured — the server grows a new route day on that date.
+    const custom = document.createElement("option");
+    custom.value = "__custom";
+    custom.textContent = "Any other date…";
+    select.appendChild(custom);
+
+    const doMove = async (toDate, toBucket, revert) => {
       try {
         const response = await fetch(`${base()}/move`, {
           method: "PATCH",
@@ -296,9 +302,50 @@
         showToast(`${stop.code} moved to ${toDate} ${toBucket}.`);
       } catch (error) {
         showToast(error.message, "bad");
-        select.disabled = false;
-        select.value = "";
+        if (revert) revert();
       }
+    };
+
+    select.addEventListener("change", async () => {
+      if (!select.value) return;
+      if (select.value === "__custom") {
+        const form = document.createElement("span");
+        form.className = "sp-move-custom";
+        const dateInput = document.createElement("input");
+        dateInput.type = "date";
+        dateInput.setAttribute("aria-label", `New date for ${stop.code}`);
+        const bucketSel = document.createElement("select");
+        for (const [value, label] of [["morning", "morning"], ["afternoon", "afternoon"]]) {
+          const o = document.createElement("option");
+          o.value = value;
+          o.textContent = label;
+          bucketSel.appendChild(o);
+        }
+        const go = document.createElement("button");
+        go.type = "button";
+        go.textContent = "Move";
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "sp-move-cancel";
+        cancel.textContent = "✕";
+        cancel.setAttribute("aria-label", "Cancel move");
+        form.append(dateInput, bucketSel, go, cancel);
+        select.replaceWith(form);
+        dateInput.focus();
+        cancel.addEventListener("click", () => {
+          select.value = "";
+          form.replaceWith(select);
+        });
+        go.addEventListener("click", async () => {
+          if (!dateInput.value) { dateInput.focus(); return; }
+          go.disabled = true;
+          await doMove(dateInput.value, bucketSel.value, () => { go.disabled = false; });
+        });
+        return;
+      }
+      const [toDate, toBucket] = select.value.split("|");
+      select.disabled = true;
+      await doMove(toDate, toBucket, () => { select.disabled = false; select.value = ""; });
     });
     return select;
   }
@@ -333,6 +380,43 @@
     return wrap;
   }
 
+  // Real bookings on this date — self-booked ad customers, follow-ups,
+  // anything on the calendar the plan did not seed. Shown so the screen
+  // matches what the trucks will actually do; changing one is a
+  // reschedule of the CUSTOMER's appointment, so the row links to the
+  // record where that control lives.
+  function bookedBlock(day) {
+    const wrap = document.createElement("div");
+    wrap.className = "sp-bucket";
+    const head = document.createElement("h4");
+    head.className = "sp-bucket-head";
+    head.innerHTML = "<span>Booked appointments</span>";
+    const count = document.createElement("span");
+    count.className = "sp-count is-booked";
+    count.textContent = String(day.booked.length);
+    head.appendChild(count);
+    wrap.appendChild(head);
+    const list = document.createElement("ul");
+    list.className = "sp-stops";
+    for (const b of day.booked) {
+      const li = document.createElement("li");
+      li.className = "sp-stop sp-stop-booked";
+      const url = b.propertyId ? `/admin/property/${encodeURIComponent(b.propertyId)}`
+        : b.leadId ? `/admin/customer/${encodeURIComponent(b.leadId)}` : null;
+      const who = escapeHtml(b.customerName || b.address || "Booked customer");
+      li.innerHTML =
+        `<span class="sp-booked-time">${escapeHtml(b.timeLabel || "")}</span>`
+        + `<span class="sp-stop-main">`
+        + (url ? `<a href="${url}" target="_blank" rel="noopener">${who}</a>` : who)
+        + `<span class="sp-stop-sub">${escapeHtml(b.address || "")}${b.serviceLabel ? ` · ${escapeHtml(b.serviceLabel)}` : ""}</span>`
+        + `</span>`
+        + `<span class="sp-tag is-booked">booked</span>`;
+      list.appendChild(li);
+    }
+    wrap.appendChild(list);
+    return wrap;
+  }
+
   function dayCard(day) {
     const card = document.createElement("section");
     card.className = "sp-day";
@@ -344,7 +428,10 @@
     // when a day could not move and is not now: you cannot reschedule a day
     // you cannot see the date of.
     title.innerHTML = `<h3>${day.label || "—"} · ${day.weekday}, ${prettyDate(day.date)}</h3>`;
-    title.appendChild(rescheduleControl(day));
+    // A booked-only day has no plan entry to reschedule — moving a real
+    // customer's appointment is a reschedule of THEIR booking, done from
+    // the property/customer page, not a plan edit.
+    if (!day.bookedOnly) title.appendChild(rescheduleControl(day));
     if (day.manualOrder) title.appendChild(manualOrderNotice(day));
     if (day.territory) {
       const t = document.createElement("p");
@@ -356,16 +443,18 @@
 
     const stats = document.createElement("div");
     stats.className = "sp-day-stats";
-    const total = document.createElement("span");
-    total.className = `sp-count${day.counts.total > current.dayCap ? " is-over" : ""}`;
-    total.textContent = `${day.counts.total} / ${current.dayCap} stops`;
-    stats.appendChild(total);
-    const hours = document.createElement("span");
-    hours.className = "sp-tag";
-    const h = Math.floor(day.onSiteMinutes / 60);
-    const m = day.onSiteMinutes % 60;
-    hours.textContent = `${h}h ${String(m).padStart(2, "0")}m on site`;
-    stats.appendChild(hours);
+    if (!day.bookedOnly) {
+      const total = document.createElement("span");
+      total.className = `sp-count${day.counts.total > current.dayCap ? " is-over" : ""}`;
+      total.textContent = `${day.counts.total} / ${current.dayCap} stops`;
+      stats.appendChild(total);
+      const hours = document.createElement("span");
+      hours.className = "sp-tag";
+      const h = Math.floor(day.onSiteMinutes / 60);
+      const m = day.onSiteMinutes % 60;
+      hours.textContent = `${h}h ${String(m).padStart(2, "0")}m on site`;
+      stats.appendChild(hours);
+    }
     if (day.driveMinutes != null) {
       const drive = document.createElement("span");
       drive.className = "sp-tag";
@@ -385,6 +474,12 @@
       am.className = overruns ? "sp-tag is-bad" : "sp-tag";
       am.textContent = `morning ends ${day.morningEndsAt}`;
       stats.appendChild(am);
+    }
+    if ((day.booked || []).length) {
+      const bk = document.createElement("span");
+      bk.className = "sp-tag is-booked";
+      bk.textContent = `+${day.booked.length} booked`;
+      stats.appendChild(bk);
     }
     head.appendChild(stats);
     card.appendChild(head);
@@ -422,7 +517,10 @@
     panelHead.className = "sp-stoppanel-head";
     const panelTitle = document.createElement("div");
     const h4 = document.createElement("h4");
-    h4.textContent = `${day.counts.total} stop${day.counts.total === 1 ? "" : "s"}`;
+    const bookedN = (day.booked || []).length;
+    h4.textContent = day.bookedOnly
+      ? `${bookedN} booked appointment${bookedN === 1 ? "" : "s"}`
+      : `${day.counts.total} stop${day.counts.total === 1 ? "" : "s"}${bookedN ? ` + ${bookedN} booked` : ""}`;
     panelTitle.appendChild(h4);
     const when = document.createElement("p");
     when.className = "sp-stoppanel-when";
@@ -449,8 +547,11 @@
 
     const scroll = document.createElement("div");
     scroll.className = "sp-stoppanel-scroll";
-    scroll.appendChild(bucketBlock(day, "morning"));
-    scroll.appendChild(bucketBlock(day, "afternoon"));
+    if (!day.bookedOnly) {
+      scroll.appendChild(bucketBlock(day, "morning"));
+      scroll.appendChild(bucketBlock(day, "afternoon"));
+    }
+    if ((day.booked || []).length) scroll.appendChild(bookedBlock(day));
     panel.appendChild(scroll);
     body.appendChild(panel);
     card.appendChild(body);
@@ -707,7 +808,11 @@
 
   async function drawDayMap(mapBox, listRoot, day) {
     const stops = mappableStops(day);
-    if (!stops.length) { note(mapBox, "No stop on this day has coordinates to draw.", true); return; }
+    const booked = (day.booked || []).filter((b) => b.coords && b.coords.lat != null);
+    if (!stops.length && !booked.length) {
+      note(mapBox, "Nothing on this day has coordinates to draw.", true);
+      return;
+    }
 
     try {
       await mapsReady();
@@ -724,7 +829,8 @@
       // scroll over a map zooms it instead of moving the page.
       gestureHandling: "cooperative",
       zoom: 10,
-      center: stops[0].coords
+      center: stops.length ? stops[0].coords
+        : { lat: Number(booked[0].coords.lat), lng: Number(booked[0].coords.lng) }
     });
 
     const bounds = new google.maps.LatLngBounds();
@@ -761,10 +867,45 @@
       markers.set(stop.code, { marker, stop });
       bounds.extend(stop.coords);
     }
+    // Booked appointments — real customers on the calendar, drawn in
+    // amber so they read apart from plan stops. No number: they are not
+    // in the sequencer's driving order.
+    for (const b of booked) {
+      const pos = { lat: Number(b.coords.lat), lng: Number(b.coords.lng) };
+      const marker = new google.maps.Marker({
+        position: pos, map, zIndex: 3,
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 13,
+          fillColor: HOT_AMBER,
+          fillOpacity: 1,
+          strokeColor: "#ffffff",
+          strokeWeight: 2
+        },
+        label: { text: "B", color: "#ffffff", fontSize: "12px", fontWeight: "700" },
+        title: `Booked · ${b.timeLabel || ""} · ${b.address || b.customerName || ""}`
+      });
+      marker.addListener("click", () => {
+        info.setContent(
+          `<div style="font:13px/1.45 system-ui,sans-serif;max-width:230px">`
+          + `<strong>Booked${b.timeLabel ? ` · ${b.timeLabel}` : ""}</strong><br>`
+          + `${escapeHtml(b.address || "")}`
+          + `${b.customerName ? `<br>${escapeHtml(b.customerName)}` : ""}`
+          + `${b.serviceLabel ? `<br>${escapeHtml(b.serviceLabel)}` : ""}</div>`
+        );
+        info.open({ map, anchor: marker });
+      });
+      bounds.extend(pos);
+    }
+
     map.fitBounds(bounds, 48);
 
     linkRowsToPins(listRoot, markers);
-    drawRoadLine(map, day, mapBox);
+    if (stops.length) {
+      drawRoadLine(map, day, mapBox);
+    } else {
+      note(mapBox, "B pins are booked appointments — this day has no planned route yet.", false);
+    }
   }
 
   // Hovering a row lights its pin and the other way round. Without it the
@@ -864,8 +1005,13 @@
     const overrun = (plan.overrunDays || []).length
       ? ` · ${plan.overrunDays.length} day${plan.overrunDays.length === 1 ? "" : "s"} overrun the morning`
       : "";
+    const routeDayCount = plan.days.filter((d) => !d.bookedOnly).length;
+    const bookedOnlyCount = plan.days.length - routeDayCount;
+    const bookedNote = bookedOnlyCount
+      ? ` · ${bookedOnlyCount} booked-only day${bookedOnlyCount === 1 ? "" : "s"}`
+      : "";
     planMeta.textContent =
-      `${plan.totalStops} stops across ${plan.days.length} route days${drive}${overrun} · updated ${when}`
+      `${plan.totalStops} stops across ${routeDayCount} route days${bookedNote}${drive}${overrun} · updated ${when}`
       + (plan.updatedBy ? ` by ${plan.updatedBy}` : "");
 
     // The anchor, stated. A route pointed at the wrong start looks exactly
