@@ -107,6 +107,30 @@ const PHOTO_REQUIREMENT_BY_TYPE = {
   build:          0     // multi-day; photos accumulate naturally over days, no single-WO requirement
 };
 
+// Customer-visible note per service mode (Patrick, 2026-09-05).
+//
+// The note is the customer-facing NARRATIVE on the service report: what we
+// did at this visit. That is a real question on an opening or a service
+// call, where the work varies with what was found and the customer is
+// reading to learn what happened to their system.
+//
+// A fall closing does the same thing at every property: blow the zones out,
+// shut the water off, drain. The report already carries the four-step
+// checklist, who shut the water off, whether a back-flush was needed, and
+// per-zone findings — and the zone note field takes anything worth knowing
+// next spring. A required free-text box that always says "blew out the
+// system" is not a record; it is a field people learn to type through, and
+// it costs a tech standing in the cold at the end of every visit.
+//
+// Unknown types default to REQUIRED — a new service mode should have to opt
+// out deliberately rather than lose the narrative by omission.
+const CUSTOMER_NOTE_REQUIRED_BY_TYPE = {
+  spring_opening: true,   // what was found and fixed on the way back up
+  service_visit:  true,   // the repair narrative — the reason for the visit
+  fall_closing:   false,  // identical every time; the checklist IS the record
+  build:          true    // multi-day install; the customer is owed a summary
+};
+
 // Service-specific checklists per spec §4.3.2. Spring openings get a
 // 4-step "service-specific steps" block; fall closings get a 6-step
 // winterization block. Service visits (one-off repairs) have no
@@ -2191,6 +2215,7 @@ module.exports = {
   checklistKeysForWorkOrder,
   WO_PHOTO_CATEGORIES,
   PHOTO_REQUIREMENT_BY_TYPE,
+  CUSTOMER_NOTE_REQUIRED_BY_TYPE,
   SCOPE_PROTECTED_FIELDS,
   BYPASS_REASONS,
   UNLOCK_MIN_REASON_LEN,

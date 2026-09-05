@@ -1612,6 +1612,31 @@ opposite of the one first recorded: a fix verified against a live symptom is not
 the codebase cannot produce" just because the write path is hard to find — data outranks code
 reading, and the bar for removing the union again is a walked Today page, not an argument.
 
+**2026-09-05 (The closing stops asking for a note it does not need):** Patrick reached
+sign-off on a real fall closing and was stopped by "Add a note about what you did at this
+visit". His call, and it is the right one: that note belongs to **openings and service
+calls**, not closings. **Why:** the note is the customer-facing NARRATIVE on the service
+report. On an opening or a service call the work varies with what was found and the customer
+reads it to learn what happened to their system. A fall closing is the same job at every
+property — blow the zones out, shut the water off, drain — and its report already carries the
+four-step checklist, who shut the water off, whether a back-flush was needed, and the
+per-zone findings, with the zone note field taking anything worth knowing next spring. A
+required free-text box that always says "blew out the system" is not a record; it is a field
+people learn to type through, at the end of a cold visit. **Shaped like the rule it sits
+next to:** `CUSTOMER_NOTE_REQUIRED_BY_TYPE` in `lib/work-orders.js`, directly below
+`PHOTO_REQUIREMENT_BY_TYPE`, which already says `fall_closing: 0` for exactly the same
+reason (a winterized system has nothing left to photograph). **Unknown types default to
+REQUIRED** — a new service mode has to opt out deliberately rather than lose the narrative by
+omission. **Enforced in four places** (library, the server's
+`computeServerSidePreSignFailures`, tech mode, the desk work-order page), which is the shape
+the photo requirement already has and the shape that drifts: `test-signoff-gates.mjs` grew to
+38 assertions and now reads the map out of each of the four copies and fails if any disagrees
+— verified by flipping tech mode's `fall_closing` to `true` and watching it fail, then
+restoring it. **Not a PASS flow:** no registered flow covers the walk-out gates, so nothing
+required re-verification; openings, service calls and builds are untouched. **What still
+needs Patrick:** reach sign-off on a closing and confirm it no longer asks, then open a
+spring opening or service call next season and confirm it still does.
+
 **2026-09-03 (The update that published into the void, twice — and the check that ends
 it):** the GitHub publishing workflow ran for the first time on the merge of PR #124,
 reported success at every step, and delivered the sign-off screens to **nothing**. Same

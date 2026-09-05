@@ -18007,11 +18007,20 @@ async function handleApi(req, res, pathname) {
           fails.push({ key: "materialsConfirm", label: "Confirm materials packed" });
         }
         // Customer-visible notes for the report (Service Report brief,
-        // 2026-05-19). Required non-empty before signing — the service
-        // report PDF embeds this as the customer-facing narrative for
-        // the visit. Scope-protected at signature so the customer's
-        // copy can't be amended after sign-off.
-        if (typeof merged.customerNotes !== "string" || !merged.customerNotes.trim()) {
+        // 2026-05-19). The service report PDF embeds this as the
+        // customer-facing narrative for the visit, and it is
+        // scope-protected at signature so the customer's copy can't be
+        // amended after sign-off.
+        //
+        // BY TYPE since 2026-09-05, mirroring the lib's
+        // CUSTOMER_NOTE_REQUIRED_BY_TYPE (duplicated here for the same
+        // reason the photo map above is). A fall closing is the same job at
+        // every property and its report already carries the checklist, the
+        // water shut-off, the back-flush answer and the per-zone findings;
+        // requiring a narrative there produced a box people type through at
+        // the end of a cold visit. Unknown types stay required.
+        const noteRequired = { spring_opening: true, service_visit: true, fall_closing: false, build: true }[merged.type] ?? true;
+        if (noteRequired && (typeof merged.customerNotes !== "string" || !merged.customerNotes.trim())) {
           fails.push({ key: "customerNotes", label: "Add a note about what you did at this visit" });
         }
         return fails;

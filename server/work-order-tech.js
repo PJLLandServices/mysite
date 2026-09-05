@@ -1446,6 +1446,14 @@ const TECH_PHOTO_REQUIREMENT_BY_TYPE = {
   fall_closing:   0
 };
 
+// Mirror of lib's CUSTOMER_NOTE_REQUIRED_BY_TYPE — keep in sync.
+const TECH_CUSTOMER_NOTE_REQUIRED_BY_TYPE = {
+  spring_opening: true,
+  service_visit:  true,
+  fall_closing:   false,
+  build:          true
+};
+
 // Walk-out checklist — returns an array of human-readable failure reasons.
 // Empty = green light to complete. Spec §4.3.3 rule #14.
 function walkoutCheckFailures() {
@@ -3115,8 +3123,13 @@ function signGateBlockers() {
   // empty-materials WOs via hydrate()).
   if (!state.materialsConfirmedAt) blockers.push(signGate("materialsConfirm"));
   // Customer-visible notes — read live so the gate clears as the tech types.
-  const liveNotes = (document.getElementById("techCustomerNotes")?.value ?? state.customerNotes ?? "").trim();
-  if (!liveNotes) blockers.push(signGate("customerNotes"));
+  // Required by type (mirror of lib's CUSTOMER_NOTE_REQUIRED_BY_TYPE): a fall
+  // closing's report is already the checklist, so it does not ask for a
+  // narrative. Unknown types stay required.
+  if (TECH_CUSTOMER_NOTE_REQUIRED_BY_TYPE[state.type] ?? true) {
+    const liveNotes = (document.getElementById("techCustomerNotes")?.value ?? state.customerNotes ?? "").trim();
+    if (!liveNotes) blockers.push(signGate("customerNotes"));
+  }
   return blockers;
 }
 
