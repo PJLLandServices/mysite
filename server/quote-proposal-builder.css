@@ -1428,7 +1428,7 @@
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #9A9A90;
+  color: #6B6B63;
 }
 .pb-email-files-total { font-size: 12px; color: #6A6A60; }
 .pb-email-files-total.is-heavy { color: #842F1B; font-weight: 600; }
@@ -1466,7 +1466,7 @@
   color: #1F2A22;
   overflow-wrap: anywhere;
 }
-.pb-email-file-name small { font-weight: 400; color: #9A9A90; margin-left: 4px; }
+.pb-email-file-name small { font-weight: 400; color: #6B6B63; margin-left: 4px; }
 .pb-email-file-fate {
   grid-area: fate;
   font-size: 11.5px;
@@ -1485,5 +1485,5 @@
   cursor: pointer;
 }
 .pb-email-file-toggle input { width: 16px; height: 16px; accent-color: #1B4D2E; }
-.pb-email-file-toggle input:disabled + span { color: #9A9A90; }
+.pb-email-file-toggle input:disabled + span { color: #6B6B63; }
 .pb-email-file.is-none { grid-template-columns: minmax(0, 1fr); grid-template-areas: "name" "fate"; }
