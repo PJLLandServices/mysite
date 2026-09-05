@@ -1639,6 +1639,29 @@ opposite of the one first recorded: a fix verified against a live symptom is not
 the codebase cannot produce" just because the write path is hard to find — data outranks code
 reading, and the bar for removing the union again is a walked Today page, not an argument.
 
+**2026-09-05 (Field app records on-site payments; the money display stops guessing — PR
+#135, recorded here after the fact):** merged from the field-app session without a register
+entry; recorded now so the ledger-touching surfaces stay accounted for. Patrick's call: start
+collecting on the driveway THIS week with no new build — the card tap happens in **Stripe's
+own app**, and the invoice screen in pjl-field grew "**Record a payment I took**": a sheet
+pre-filled with the balance still owing (editable, so a part payment works), methods Card /
+Cash / Cheque / e-Transfer, posting to the EXISTING `POST /api/invoices/:id/payments` — **no
+server change**. Card taps record as `card_qb` deliberately: it is already the general card
+method (the pay page records its own Stripe charges as it, it renders as "Card", reversing
+one warns "refund in Stripe first"), so tap revenue files as card, not Other. The app
+re-reads the invoice after recording rather than patching locally — `amountPaid`,
+`balanceDue` and status are derived server-side — and the screen gained a "Still owing" row
+plus a "Part paid" status. **Bug fixed in the same file:** the app's `money()` guessed
+dollars-vs-cents ("an integer ≥ 1000 must be cents"), so a **$1,000.00 invoice rendered as
+$10.00** — on the very screen the collected amount is read from. Every invoice money field
+is dollars end to end, so the guess is gone; a missing value now renders "—" instead of
+"$0.00" (which reads as "nothing owing", the opposite of "unknown"). Never bit at closing
+prices ($90–$400); would have bitten on the first big job. **No registered flow touched** —
+app display plus an existing endpoint; FLOW-23 (payments) unchanged on the server. Ships
+over the air. **Still open if wanted:** true Tap to Pay inside pjl-field (Stripe Terminal
+SDK, Apple entitlement, TestFlight build). **Needs Patrick's walk:** reopen the app, finish
+a closing, record a driveway payment, and see the invoice status follow.
+
 **2026-09-05 (The closing stops asking for a note it does not need):** Patrick reached
 sign-off on a real fall closing and was stopped by "Add a note about what you did at this
 visit". His call, and it is the right one: that note belongs to **openings and service
