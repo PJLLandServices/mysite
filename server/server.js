@@ -21930,6 +21930,91 @@ Customer signature captured at ${new Date().toISOString()}.`;
       });
     }
 
+    // ---- Real bookings join the review (Patrick: "it only shows days
+    // which have bookings [planned], and any new bookings you cannot see
+    // on the map"). Every active booking in this season's window is
+    // attached to its day: on a planned day it rides along as a "booked"
+    // row (deduped against the plan stop it fulfils, so the post-blast
+    // screen does not show every customer twice), and a date the plan
+    // never routed — an ad customer's self-booked day — becomes its own
+    // "Booked day" card. Bookings never join the sequencer's timeline
+    // here: they carry their own promised bucket, and re-sequencing a
+    // promise is the writer's job, not the review screen's.
+    const seasonMonths = season === "spring" ? [0, 1, 2, 3, 4, 5, 6] : [7, 8, 9, 10, 11];
+    const codeByPropertyId = new Map(all.filter((p) => p && p.id && p.code).map((p) => [p.id, p.code]));
+    const propertyById = new Map(all.filter((p) => p && p.id).map((p) => [p.id, p]));
+    const leadsForBooked = await readLeads();
+    const leadByIdForBooked = new Map(leadsForBooked.map((l) => [l.id, l]));
+    const daysByDate = new Map(days.map((d) => [d.date, d]));
+    const nearYard = (c) => c && c.lat != null
+      && Math.abs(Number(c.lat) - PJL_BASE.lat) < 1e-6 && Math.abs(Number(c.lng) - PJL_BASE.lng) < 1e-6;
+    try {
+      for (const b of await activeBookings()) {
+        const startD = new Date(b.start);
+        if (Number.isNaN(startD.getTime())) continue;
+        if (startD.getFullYear() !== Number(year) || !seasonMonths.includes(startD.getMonth())) continue;
+        const dateKey = `${startD.getFullYear()}-${String(startD.getMonth() + 1).padStart(2, "0")}-${String(startD.getDate()).padStart(2, "0")}`;
+        const lead = b.leadId ? leadByIdForBooked.get(b.leadId) : null;
+        const propertyId = b.propertyId || (lead && lead.propertyId) || null;
+        const property = propertyId ? propertyById.get(propertyId) : null;
+        const planCode = propertyId ? codeByPropertyId.get(propertyId) : null;
+        const planDay = daysByDate.get(dateKey);
+        // The booking that FULFILS a plan stop on its own day is that
+        // stop — one row, not two.
+        if (planCode && planDay
+            && [...planDay.morning, ...planDay.afternoon].some((st) => st.code === planCode)) {
+          continue;
+        }
+        const coords = (property && property.coords && property.coords.lat != null)
+          ? { lat: property.coords.lat, lng: property.coords.lng }
+          : (!nearYard(b.coords) && b.coords && b.coords.lat != null)
+            ? { lat: Number(b.coords.lat), lng: Number(b.coords.lng) }
+            : null;
+        const row = {
+          code: planCode || null,
+          customerName: (property && property.customerName)
+            || [lead?.contact?.firstName, lead?.contact?.lastName].filter(Boolean).join(" ")
+            || "",
+          address: (property && property.address) || lead?.contact?.address || "",
+          serviceLabel: b.serviceLabel || "",
+          start: b.start,
+          timeLabel: startD.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }),
+          bucket: startD.getHours() < 12 ? "morning" : "afternoon",
+          coords,
+          propertyId,
+          leadId: b.leadId || null,
+          bookingId: b.bookingId || null
+        };
+        if (planDay) {
+          (planDay.booked = planDay.booked || []).push(row);
+        } else {
+          const synthetic = {
+            date: dateKey,
+            label: "Booked day",
+            territory: "",
+            weekday: new Date(`${dateKey}T12:00:00`).toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" }),
+            bookedOnly: true,
+            morning: [],
+            afternoon: [],
+            counts: { morning: 0, afternoon: 0, total: 0 },
+            onSiteMinutes: 0,
+            timeline: [],
+            flags: [],
+            suggestions: [],
+            booked: [row]
+          };
+          days.push(synthetic);
+          daysByDate.set(dateKey, synthetic);
+        }
+      }
+    } catch (err) {
+      console.warn("[season-plan] bookings could not join the review:", err?.message);
+    }
+    for (const d of days) {
+      if (d.booked) d.booked.sort((a, b) => String(a.start).localeCompare(String(b.start)));
+    }
+    days.sort((a, b) => (a.date < b.date ? -1 : 1));
+
     const problems = days.flatMap((d) => [...d.morning, ...d.afternoon]
       .filter((st) => st.problem)
       .map((st) => ({ date: d.date, label: d.label, code: st.code, problem: st.problem })));

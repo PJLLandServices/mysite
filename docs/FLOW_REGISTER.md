@@ -1374,6 +1374,33 @@ or catalog change, and the CTA that moved is FLOW-28's (UNMAPPED). `publicBookin
 (fall 2026: Oct 30) is defined in the config for the future gate and is deliberately
 consumed by nothing, pinned by a source guard. Cover:
 `scripts/test-season-config.mjs` (66 assertions, in `build:check`).
+**2026-09-03 (Season Plan review: bookings visible, any-date moves, bigger maps):** Patrick,
+against the Sept 10 blast: "the maps are miniture, it only shows day which have bookings
+[planned], and any new bookings you cannot see on the map... I cannot change individual
+customers bookings. Ive had requests to keep the closings to the very end of the year."
+Three changes, all scoped to the review screen and the plan store:
+(1) **Real bookings join the review.** `resolveSeasonPlan` now attaches every active booking
+in the season window (fall: Aug–Dec of the plan year) to its day — on a planned day as an
+amber "Booked appointments" group in the panel and amber "B" pins on the map, DEDUPED against
+the plan stop it fulfils (post-blast, an assignment booking and its plan stop are one row,
+not two); a date the plan never routed (the Oct 1 ad customer) becomes its own "Booked day"
+card with pins and no route line. Bookings never enter the sequencer's timeline or the
+day's stop counts — they carry their own promised bucket. Rows link to
+/admin/property/<id> (or /admin/customer/<leadId>) where the actual reschedule control lives.
+(2) **"Any other date…" on every stop's Move menu.** `seasonPlans.moveStop` now GROWS a new,
+empty route day when the target date is not in the plan (it used to refuse), so an
+end-of-November request is one dropdown + one date pick; the new day then behaves like any
+other — geo shape, Assign, writer, resequence. New `scripts/test-season-plan-moves.mjs`
+(13 assertions, in `build:check`): creates the day exactly once, stop leaves its source,
+existing-day moves unchanged, impossible dates and unknown codes still refused with no
+orphan day, re-save keeps the hand-grown day.
+(3) **Maps are maps again.** `.sp-daybody` height 400px → clamp(480px, 62vh, 720px); mobile
+340px. **No PASS flow's code touched**: FLOW-03's engine and endpoints unchanged (a
+hand-created plan day reaching the geo shapes is the same mechanism as any plan day);
+resolveSeasonPlan feeds only this screen's endpoints. **Needs Patrick's walk:** the Oct 1
+booking shows as a "Booked day" card; move one stop to a late-November date and see the new
+day appear; maps readable without squinting.
+
 **2026-09-02 (The call-out shows right away, whatever month is on screen):** Patrick, after
 merging the loud stars: "itll only display this if they are on the exact same Month as the
 booking is, we should populate this right away... at the top of the page." Correct read — the
