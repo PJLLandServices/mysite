@@ -92,6 +92,10 @@
     const allowCustomTime = mode === "admin"
       ? (opts.allowCustomTime !== false)   // admin default: on
       : false;                              // customer: always off
+    // The open bucket ("first available") — opt-in per mount, so the
+    // public booking page shows it and the portal-reschedule / admin
+    // pickers (where it makes no sense) stay exactly as they are.
+    const allowOpenBucket = opts.allowOpenBucket === true;
     const loadAvailability = typeof opts.loadAvailability === "function"
       ? opts.loadAvailability
       : null;
@@ -186,6 +190,21 @@
         </div>
       `;
       wrap.appendChild(custom);
+    }
+    if (allowOpenBucket) {
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "tp-openbucket";
+      open.innerHTML = `
+        <span class="tp-openbucket-flag">First available</span>
+        <strong class="tp-openbucket-title">Skip the calendar — we'll fit you in.</strong>
+        <span class="tp-openbucket-body">Join our route: the next time our crew is working in your
+        neighbourhood, you're on the list. We confirm your exact day ahead of time.</span>
+        <span class="tp-openbucket-cta">Fit me in when you're nearby →</span>`;
+      open.addEventListener("click", () => {
+        if (onSelect) onSelect(null, { source: "open_bucket" });
+      });
+      wrap.insertBefore(open, wrap.firstChild);
     }
     rootEl.appendChild(wrap);
 

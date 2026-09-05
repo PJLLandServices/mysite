@@ -1639,6 +1639,41 @@ opposite of the one first recorded: a fix verified against a live symptom is not
 the codebase cannot produce" just because the write path is hard to find — data outranks code
 reading, and the bar for removing the union again is a walked Today page, not an argument.
 
+**2026-09-05 (The open bucket — "first available" standby appointments):** Patrick: "an
+'open bucket' first next available type situation that allows us to collect open non
+actually booked appointments, and throw it in our day... if it's 'on our way home' we can
+pick it up at the end of all the calls." Built end to end:
+(1) **Customer side (FLOW-03 IS PASS AND WAS TOUCHED — additively).** The public picker
+(customer mode, opt-in `allowOpenBucket` so portal-reschedule and admin pickers are
+untouched) grows a "FIRST AVAILABLE — skip the calendar, we'll fit you in" card above the
+calendar. Choosing it sends `standby: true` to `/api/booking/reserve` with NO slot: the
+endpoint's new branch (gated on the explicit flag; absent it, byte-identical behaviour)
+skips every slot-shaped step and builds the lead exactly as a booked one EXCEPT
+`lead.standby` replaces `lead.booking` — so no capacity is used, nothing lands on
+Today/iCal, no reminders fire. Customer + property records resolve as normal; the customer
+gets the new `standby_joined` message ("you're on our First Available list — we'll confirm
+your exact day ahead of time"; deliberately no date placeholders), Patrick gets an OPEN
+BUCKET lead alert. Site visits are refused (a consult needs a time). Status is "won" — a
+committed customer, not an untriaged lead; the MISSING booking is what marks them waiting.
+(2) **Admin side.** New `GET /api/standby` (path-auth "user") lists waiting standbys
+oldest-first and ranks each against the upcoming day shapes with
+`open-bucket.rankDaysForCoords` — geoFilter's own cheapest-insertion math, the literal "on
+our way home" number; past days and empty days never rank, unpinpointed addresses list
+unranked with a warning. The Season Plan grows an "Open bucket — first available" panel:
+each row shows who/where/service/waiting-time and a top-3 day select; **Book + notify**
+posts to the EXISTING reserve book-from-lead path (admin custom time at 13:00 → afternoon
+bucket, the back half of the day) which books, mirrors canonically, sends the normal
+"booked" confirmation with calendar links, and now also CLEARS the standby envelope with a
+"Placed from the open bucket" activity entry — one click, whole story, no new booking
+machinery. (3) **Cover:** `scripts/test-open-bucket.mjs` (14 assertions, in `build:check`)
+pins ranking order/past/empty/cap/unresolved, the FIFO waiting filter, and the templates
+(standby_joined exists, dateless; booked untouched). Engine re-verified: geo-availability
+42, booking-guards, heal, reminders all green in the full chain. UI verified in headless
+Chromium: the card renders on the booking page and emits the standby selection; the panel
+renders ranked and unranked rows. **Needs Patrick's walk:** book a test "First available"
+from /book.html, see yourself in the Open bucket panel, place yourself onto a day, get the
+normal confirmation with calendar links.
+
 **2026-09-05 (Probe: a refused key stops masquerading as a bad address; no past or empty
 "best days"):** Patrick probed 45 Alamosa Dr, North York — "a readily known address" — and
 got "Google couldn't pinpoint it... (approximate)" ON EVERY SEARCH, with best-days listing

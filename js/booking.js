@@ -561,6 +561,10 @@
 
     window.mountTimePicker(timePickerHost, {
       mode: "customer",
+      // "First available" — the open bucket. Selecting it books no slot;
+      // the customer joins the standby list and PJL places them onto a
+      // route day later.
+      allowOpenBucket: true,
       loadAvailability: async ({ from, to }) => {
         const url = (window.PJL_API_BASE || "")
           + `/api/booking/availability`
@@ -579,6 +583,22 @@
         return { days: data.days || [] };
       },
       onSelect: (iso, slotMeta) => {
+        if (slotMeta && slotMeta.source === "open_bucket") {
+          state.selectedSlot = {
+            openBucket: true,
+            start: null,
+            end: null,
+            dayLabel: "First available",
+            timeLabel: "We fit you in when we're nearby",
+            bucketKey: null,
+            bucketWindow: null
+          };
+          setTimeout(() => {
+            renderContactSummary();
+            showStep("contact");
+          }, 200);
+          return;
+        }
         state.selectedSlot = {
           start: slotMeta.start || iso,
           end: slotMeta.end || null,
@@ -607,6 +627,15 @@
     const zoneRow = state.zoneCount
       ? `<dt>Zones</dt><dd>${escapeHtml(zoneCountLabel(state.zoneCount))}</dd>`
       : "";
+    if (state.selectedSlot.openBucket) {
+      contactSummary.innerHTML = `
+        <dt>Service</dt><dd>${escapeHtml(state.serviceMeta.label)}</dd>
+        ${zoneRow}
+        <dt>Day</dt><dd>First available — we come when our crew is next in your neighbourhood</dd>
+        <dt>Address</dt><dd>${escapeHtml(state.formattedAddress)}</dd>
+      `;
+      return;
+    }
     // Bucket mode: show the bucket window ("8 AM – 12 PM") instead of
     // the service's on-site duration. Customer never sees a precise
     // arrival time anywhere downstream.
@@ -658,7 +687,8 @@
     try {
       const payload = {
         serviceKey: state.serviceKey,
-        slotStart: state.selectedSlot.start,
+        slotStart: state.selectedSlot.openBucket ? null : state.selectedSlot.start,
+        standby: state.selectedSlot.openBucket === true || undefined,
         contact: {
           firstName: bookFirst.value.trim(),
           lastName: bookLast.value.trim(),
@@ -708,6 +738,22 @@
       // session handoff). Falls back to a generic greeting if somehow
       // first name is empty.
       const finalFirstName = bookFirst.value.trim() || state.customerFirstName;
+      if (state.selectedSlot.openBucket) {
+        confirmTitle.textContent = finalFirstName
+          ? `${finalFirstName}, you're on the list!`
+          : "You're on the list!";
+        confirmDetail.innerHTML = `Your ${escapeHtml(state.serviceMeta.label)} joined our `
+          + `<strong>First Available</strong> route list. The next time our crew is working in your `
+          + `neighbourhood we'll fit you in — you'll get your exact day ahead of time by text and email.`;
+        portalCta.href = data.portalUrl || "#";
+        try {
+          if (typeof gtag === "function") {
+            gtag("event", "conversion", { send_to: "AW-11358637592/YtmLCOCulN0cEJicnKgq" });
+          }
+        } catch (e) { /* non-fatal */ }
+        showStep("confirm");
+        return;
+      }
       confirmTitle.textContent = finalFirstName
         ? `${finalFirstName}, you're booked!`
         : "You're booked!";

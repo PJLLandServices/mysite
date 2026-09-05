@@ -1793,7 +1793,118 @@
     }
   });
 
-  const loadAll = () => { load(); loadBookingWindow(); };
+  // ---- The open bucket (first available) ----------------------------
+  //
+  // Standby customers ranked against the route days. Placing one books
+  // through the EXISTING reserve endpoint's book-from-lead path (with
+  // an admin custom time in the chosen half-day), which notifies the
+  // customer with the normal "booked" message + calendar links and
+  // clears their standby envelope — one click, whole story.
+  const standbyNote = el("standbyNote");
+  const standbyList = el("standbyList");
+
+  function waitingSince(iso) {
+    const then = new Date(iso);
+    if (Number.isNaN(then.getTime())) return "";
+    const days = Math.floor((Date.now() - then.getTime()) / 86400000);
+    return days <= 0 ? "today" : days === 1 ? "1 day" : `${days} days`;
+  }
+
+  async function loadStandby() {
+    if (!standbyNote || !standbyList) return;
+    try {
+      const response = await fetch("/api/standby", { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't load."]).join(" "));
+      standbyList.innerHTML = "";
+      if (!data.rows.length) {
+        standbyNote.textContent = "Empty — nobody is waiting. Customers land here when they pick "
+          + "“First available” on the booking page instead of a day.";
+        return;
+      }
+      standbyNote.textContent = `${data.rows.length} customer${data.rows.length === 1 ? "" : "s"} waiting. `
+        + "Best days use the same added-drive math as the booking filter — placing one books them, "
+        + "sends their confirmation, and takes them off this list.";
+      for (const row of data.rows) standbyList.appendChild(standbyRow(row));
+    } catch (error) {
+      standbyNote.textContent = error.message;
+    }
+  }
+
+  function standbyRow(row) {
+    const li = document.createElement("div");
+    li.className = "sp-standby-row";
+    const who = document.createElement("div");
+    who.className = "sp-standby-who";
+    who.innerHTML = `<strong>${escapeHtml(row.name || row.address || row.leadId)}</strong>`
+      + `<span>${escapeHtml(row.address || "")}</span>`
+      + `<span class="sp-standby-meta">${escapeHtml(row.serviceLabel || "")}`
+      + `${row.zoneCount ? ` · ${escapeHtml(String(row.zoneCount))} zones` : ""}`
+      + ` · waiting ${escapeHtml(waitingSince(row.requestedAt))}</span>`;
+    li.appendChild(who);
+
+    const act = document.createElement("div");
+    act.className = "sp-standby-act";
+    if (!row.resolved) {
+      const warn = document.createElement("span");
+      warn.className = "sp-tag is-warn";
+      warn.textContent = "address not pinpointed — place by hand from the CRM";
+      act.appendChild(warn);
+    } else if (!row.bestDays.length) {
+      const none = document.createElement("span");
+      none.className = "sp-standby-meta";
+      none.textContent = "No routed day near them yet.";
+      act.appendChild(none);
+    } else {
+      const select = document.createElement("select");
+      select.setAttribute("aria-label", `Day for ${row.name || row.leadId}`);
+      for (const d of row.bestDays) {
+        const opt = document.createElement("option");
+        opt.value = d.date;
+        opt.textContent = `${d.label || (d.bookingsOnly ? "Booked day" : d.date)} · ${prettyDate(d.date)} · +${d.addedDriveMinutes} min`;
+        select.appendChild(opt);
+      }
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "pjl-btn pjl-btn-primary sp-standby-book";
+      btn.textContent = "Book + notify";
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        try {
+          const [y, m, d] = select.value.split("-").map(Number);
+          // Afternoon by design: an open-bucket pickup rides the back
+          // half of the day — "on our way home". The customer is told
+          // the 12–5 window, never this anchor minute.
+          const slotStart = new Date(y, m - 1, d, 13, 0, 0).toISOString();
+          const response = await fetch("/api/booking/reserve", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              leadId: row.leadId,
+              serviceKey: row.serviceKey,
+              slotStart,
+              source: "admin_custom",
+              zoneCount: row.zoneCount || null,
+              contact: { address: row.address }
+            })
+          });
+          const data = await response.json();
+          if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't place them."]).join(" "));
+          showToast(`${row.name || row.leadId} booked onto ${select.value} — confirmation sent.`);
+          loadStandby();
+          load();
+        } catch (error) {
+          showToast(error.message, "bad");
+          btn.disabled = false;
+        }
+      });
+      act.append(select, btn);
+    }
+    li.appendChild(act);
+    return li;
+  }
+
+  const loadAll = () => { load(); loadBookingWindow(); loadStandby(); };
   seasonSelect.addEventListener("change", loadAll);
   yearSelect.addEventListener("change", loadAll);
   loadAll();

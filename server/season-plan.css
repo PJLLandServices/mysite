@@ -468,6 +468,26 @@
   background: #fff; color: var(--pjl-text-muted); border-color: var(--pjl-border); padding: 3px 8px;
 }
 
+/* The open bucket — first-available customers waiting for a day. */
+.sp-standby { display: grid; gap: 10px; }
+.sp-standby-row {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  align-items: center; justify-content: space-between;
+  background: #fff; border: 1px solid var(--pjl-border);
+  border-left: 3px solid var(--pjl-amber);
+  border-radius: 10px; padding: 10px 14px;
+}
+.sp-standby-who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sp-standby-who strong { font-size: 0.92rem; }
+.sp-standby-who span { font-size: 0.84rem; color: var(--pjl-text-mid); overflow-wrap: anywhere; }
+.sp-standby-meta { font-size: 0.78rem !important; color: var(--pjl-text-muted) !important; }
+.sp-standby-act { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sp-standby-act select {
+  font: inherit; font-size: 0.84rem; border: 1px solid var(--pjl-border);
+  border-radius: 8px; padding: 7px 8px; min-height: 38px; background: #fff; max-width: 320px;
+}
+.sp-standby-book { min-height: 38px; padding: 7px 14px; font-size: 0.86rem; }
+
 /* Assignment preflight — the action list is the skips, so they lead. */
 .sp-preflight-out { margin-top: 14px; }
 .sp-preflight-summary { margin: 0 0 10px; font-weight: 600; font-size: 0.92rem; }

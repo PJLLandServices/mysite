@@ -178,6 +178,20 @@ const TEMPLATES = {
       "If anything has changed, call or text (905) 960-0181.",
     sms: "{namePrefix}reminder: PJL comes tomorrow ({dateStr}) for your {serviceLabel} — {timeStr}. Anything changed? (905) 960-0181. Details: {portalUrl}"
   },
+  // "First available" — the customer joined the open bucket instead of
+  // picking a day. No date exists yet, so no {dateStr}/{timeStr}; the
+  // promise is the placement message they'll get when Patrick drops
+  // them onto a route day (which sends the normal "booked" template).
+  standby_joined: {
+    subject: "You're on our route list — {serviceLabel}",
+    headline: "You're on the list.",
+    body:
+      "Hi {firstName}, you're in! We've added your {serviceLabel} to our First Available list. " +
+      "The next time our crew is working in your neighbourhood, we'll fit you in and confirm your " +
+      "exact day ahead of time — usually within a couple of weeks. Nothing else to do for now. " +
+      "If any dates absolutely don't work, reply here or call (905) 960-0181 and we'll plan around them.",
+    sms: "{namePrefix}you're on PJL's First Available list for your {serviceLabel}. We'll confirm your exact day ahead of time when our crew is in your neighbourhood. Details: {portalUrl}"
+  },
   // Fired manually from the tech's daily-schedule view when they tap
   // "Notify on route" before driving over. Short, direct — the tech is
   // about to be at the door, the customer just needs to know.
@@ -240,7 +254,7 @@ function buildEmail(event, lead) {
   const portalUrl = lead.portalUrl || `${cleanBase}/portal/${lead.portal?.token || ""}`;
   const total = moneyText(lead.totals?.expectedTotal);
   const { dateStr, timeStr } = bookingDateTime(lead);
-  const serviceLabel = lead.booking?.serviceLabel || "your appointment";
+  const serviceLabel = lead.booking?.serviceLabel || lead.standby?.serviceLabel || "your appointment";
   const workOrderId = lead.booking?.workOrder?.id || "";
   const vars = { firstName, namePrefix, portalUrl, total, dateStr, timeStr, serviceLabel, workOrderId };
 
@@ -347,7 +361,7 @@ function buildSms(event, lead) {
   const portalUrl = lead.portalUrl || `${cleanBase}/portal/${lead.portal?.token || ""}`;
   const total = moneyText(lead.totals?.expectedTotal);
   const { dateStr, timeStr } = bookingDateTime(lead);
-  const serviceLabel = lead.booking?.serviceLabel || "your appointment";
+  const serviceLabel = lead.booking?.serviceLabel || lead.standby?.serviceLabel || "your appointment";
   const workOrderId = lead.booking?.workOrder?.id || "";
   return fill(tpl.sms, { namePrefix, portalUrl, total, dateStr, timeStr, serviceLabel, workOrderId });
 }
@@ -2252,6 +2266,8 @@ async function sendInvoiceJunkMailWarningSMS({ invoiceId, force, includeSpouse }
 
 module.exports = {
   notifyCustomer,
+  // Exposed for tests — the customer-facing wording is contract.
+  TEMPLATES,
   eventForTransition,
   sendBookingCancellation,
   sendPortalMessageAlertEmail,
