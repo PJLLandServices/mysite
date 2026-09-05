@@ -1689,6 +1689,33 @@ over the air. **Still open if wanted:** true Tap to Pay inside pjl-field (Stripe
 SDK, Apple entitlement, TestFlight build). **Needs Patrick's walk:** reopen the app, finish
 a closing, record a driveway payment, and see the invoice status follow.
 
+**2026-09-05 (Tap to Pay — the approvals started, the server half shipped):** Patrick
+asked for "Take payment now" to open the Stripe app ready to charge. **It cannot be built
+that way** — checked rather than assumed: Stripe publishes no URL scheme for their Dashboard
+app that accepts a preset amount (third-party apps like Payment for Stripe do; the official
+one does not). What he is describing is **Tap to Pay on iPhone inside pjl-field**, and he
+chose to start it. **Told to him before he chose, because it changes the value of the whole
+project:** many Canadian cards are offline-PIN only, which Tap to Pay cannot process — the
+card must be inserted — so Stripe's own guidance here is to ask for another card or fall
+back to the payment link. Tap to Pay is the fast path, not the only one; the link and the
+record-a-payment control both stay. **Shipped now, ahead of the approvals:** `POST
+/api/terminal/connection-token`, staff-gated, minting a short-lived Terminal connection
+token. That single route is the only place the field app is ever allowed near Stripe, and it
+is what lets the standing "the app never talks to Stripe" rule survive Tap to Pay — card data
+goes from the card to Apple's secure element to Stripe and never touches our code, which is
+what keeps this out of PCI scope. `test-stripe.mjs` grew to 36 assertions pinning that the
+route exists, is staff-gated, never hands out the secret key, and that no Stripe key of any
+kind ships in the app bundle; the gate assertion was verified by deleting the gate and
+watching it fail. **The sequencing matters and is written into `docs/TAP_TO_PAY.md`: the SDK
+goes in LAST.** `@stripe/stripe-terminal-react-native` is a native module, so the moment it
+enters `package.json` the fingerprint moves and the publish workflow will correctly refuse
+every over-the-air update until a matching build is installed — every unrelated fix would
+queue behind a TestFlight round trip. Approvals → SDK → build → publish. **What needs
+Patrick, and only him:** Apple's Tap to Pay development entitlement (then a second
+distribution entitlement before it ships), and Stripe enabling Terminal on the account. Apple
+also requires a "How to Tap" overlay in the app before review — that is code, on the list,
+and not optional.
+
 **2026-09-05 (The closing stops asking for a note it does not need):** Patrick reached
 sign-off on a real fall closing and was stopped by "Add a note about what you did at this
 visit". His call, and it is the right one: that note belongs to **openings and service

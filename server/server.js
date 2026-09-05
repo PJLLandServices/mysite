@@ -13611,6 +13611,35 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // Terminal connection token — what the Tap to Pay reader on the phone
+  // trades for the right to talk to Stripe directly.
+  //
+  // STAFF ONLY, and that is the whole point of the route existing. The
+  // token is short-lived and scoped to Terminal, but anyone holding one can
+  // drive a reader on this account, so it is minted behind the same gate as
+  // the rest of the money routes and never derived on the device.
+  //
+  // Card data does not pass through here, or through the app: it goes from
+  // the customer's card to Apple's secure element to Stripe. That is what
+  // keeps Tap to Pay out of our PCI scope, and why this single route is the
+  // only place the field app is allowed near Stripe.
+  //
+  // Returns Stripe's own error when Terminal is not yet enabled on the
+  // account, rather than a guess about why.
+  if (pathname === "/api/terminal/connection-token" && req.method === "POST") {
+    try {
+      await requireAdmin(req);
+      const token = await stripe.createTerminalConnectionToken();
+      return sendJson(res, 200, { ok: true, secret: token.secret });
+    } catch (err) {
+      const status = err && err.statusCode === 401 ? 401 : 400;
+      return sendJson(res, status, {
+        ok: false,
+        errors: [err.message || "Couldn't get a Terminal connection token."]
+      });
+    }
+  }
+
   const invoiceMatch = pathname.match(/^\/api\/invoices\/([^/]+)$/);
   if (invoiceMatch && req.method === "GET") {
     const inv = await invoices.get(decodeURIComponent(invoiceMatch[1]));
