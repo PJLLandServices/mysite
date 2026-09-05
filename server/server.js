@@ -3282,7 +3282,9 @@ async function writeFrozenQuotePdf(q, buffer) {
 //   gated       — phone-gated delivery → link only, no PDF attachment
 //   note        — Patrick's optional personal paragraph (plain text; escaped,
 //                 line breaks kept). Sits right under the greeting.
-function buildProposalApprovalEmail(q, { parties = null, approvalUrl = "", gated = false, note = "" } = {}) {
+//   extraFiles  — names of uploaded files attached alongside the PDF (from
+//                 quotes.emailAttachmentManifest); listed under the summary
+function buildProposalApprovalEmail(q, { parties = null, approvalUrl = "", gated = false, note = "", extraFiles = [] } = {}) {
   const custName = String((parties && parties.customer && parties.customer.name) || "").trim();
   const firstName = escapeHtmlServer(custName ? custName.split(/\s+/)[0] : "") || "there";
   const displayNo = escapeHtmlServer((q.quoteNumberDisplay && String(q.quoteNumberDisplay).trim()) || q.id);
@@ -3308,6 +3310,10 @@ function buildProposalApprovalEmail(q, { parties = null, approvalUrl = "", gated
     ? `<div style="margin:0 0 16px;padding:12px 14px;background:#FFFFFF;border-left:3px solid #1B4D2E;border-radius:0 8px 8px 0;font-size:14px;color:#1a1a1a;white-space:pre-line;">${escapeHtmlServer(noteText)}</div>`
     : "";
   const safeUrl = escapeHtmlServer(approvalUrl);
+  const extraNames = (Array.isArray(extraFiles) ? extraFiles : []).map((f) => String(f || "").trim()).filter(Boolean);
+  const extraHtml = (!gated && extraNames.length)
+    ? `<p style="margin:0 0 14px;font-size:13px;color:#555;">Also attached: ${extraNames.map((n) => `<strong>${escapeHtmlServer(n)}</strong>`).join(", ")}.</p>`
+    : "";
   const html = `
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55;">
   <div style="padding:24px 28px;background:#1B4D2E;border-radius:8px 8px 0 0;">
@@ -3321,6 +3327,7 @@ function buildProposalApprovalEmail(q, { parties = null, approvalUrl = "", gated
       ? `<p style="margin:0 0 14px;">Your detailed ${docNoun.lower} (<strong>${displayNo}</strong>) is ready to review at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>
     <p style="margin:0 0 14px;padding:12px 14px;background:#EAF3DE;border:1px solid #C7E0A8;border-radius:8px;font-size:13px;color:#33502f;">To open it, you'll be asked for your phone number — the one we have on file for you. Any format is fine.</p>`
       : `<p style="margin:0 0 14px;">Your detailed ${docNoun.lower} (<strong>${displayNo}</strong>) is attached and posted at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>`}
+    ${extraHtml}
     ${isRepairEmail
       ? `<p style="margin:0 0 14px;padding:12px 14px;background:#FFF4E5;border:1px solid #F0C88A;border-radius:8px;font-size:14px;color:#7A4E12;"><strong>Estimate must be signed ASAP to schedule.</strong>${schedLabel ? ` This repair is scheduled for <strong>${schedLabel}</strong> — please sign your estimate before then to keep that date.` : ""}</p>`
       : ""}
@@ -15138,6 +15145,27 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // PATCH /api/quotes/:id/attachments/:attId — admin, draft-only. Body:
+  // { emailAttach: true | false | null }. Sets the per-file "ride along
+  // with the approval email" choice the email preview shows; null clears
+  // it back to the derived default (see quotes.emailAttachmentManifest).
+  if (attachmentsGetMatch && req.method === "PATCH") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const quoteId = decodeURIComponent(attachmentsGetMatch[1]);
+      const attId = decodeURIComponent(attachmentsGetMatch[2]);
+      const payload = await parseRequestBody(req);
+      const raw = payload ? payload.emailAttach : undefined;
+      const emailAttach = raw === true || raw === false ? raw : (raw === null ? null : undefined);
+      const att = await quotes.updateAttachment(quoteId, attId, { emailAttach }, { by: session.uid || "admin" });
+      return sendJson(res, 200, { ok: true, attachment: att, quote: await quotes.get(quoteId) });
+    } catch (err) {
+      const status = err.code === "proposal_locked" ? 409 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't update attachment."] });
+    }
+  }
+
   // GET /api/quotes/:id/gate-phones — admin. The "Phone gate" panel in the
   // proposal builder. Returns the EXACT phone set the unlock challenge
   // checks (same proposalCustomerPhoneEntries the gate uses — no drift),
@@ -16131,9 +16159,14 @@ async function handleApi(req, res, pathname) {
       const gated = q.deliveryMode === "plain_pdf" ? false : await proposalHasCustomDoc(q);
       const hasToken = Boolean(q.approval && q.approval.token);
       const approvalUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${hasToken ? q.approval.token : "issued-on-send"}`;
-      const mail = buildProposalApprovalEmail(q, { parties, approvalUrl, gated, note });
+      const manifest = quotes.emailAttachmentManifest(q, { gated });
+      const extraFiles = manifest.filter((m) => m.emailAttached).map((m) => m.filename);
+      const mail = buildProposalApprovalEmail(q, { parties, approvalUrl, gated, note, extraFiles });
       return sendJson(res, 200, {
         ok: true,
+        attachments: manifest,
+        attachedBytes: manifest.filter((m) => m.emailAttached).reduce((sum, m) => sum + m.sizeBytes, 0),
+        editable: q.status === "draft" || q.status === "draft_preview",
         from: mail.from,
         replyTo: mail.replyTo,
         to: toEmail,
@@ -16265,7 +16298,20 @@ async function handleApi(req, res, pathname) {
             const gated = q.deliveryMode === "plain_pdf" ? false : await proposalHasCustomDoc(q);
             // Same composer the builder's "Preview email" uses — the preview
             // IS the send.
-            const mail = buildProposalApprovalEmail(q, { parties, approvalUrl, gated, note });
+            // Uploaded files that ride along — the SAME manifest the preview
+            // shows (quotes.emailAttachmentManifest), so the list Patrick
+            // approved is the list that goes. Gated → empty by construction.
+            const manifest = quotes.emailAttachmentManifest(q, { gated });
+            const extraAttachments = [];
+            for (const m of manifest) {
+              if (!m.emailAttached) continue;
+              const file = await quotes.readAttachmentBuffer(q.id, m.id);
+              if (!file) continue; // missing on disk: skip rather than fail the send
+              extraAttachments.push({ filename: m.filename, content: file.buffer, contentType: m.mimeType || "application/octet-stream" });
+            }
+            const mail = buildProposalApprovalEmail(q, {
+              parties, approvalUrl, gated, note, extraFiles: extraAttachments.map((a) => a.filename)
+            });
             // Ungated → attach the FROZEN bytes (Brief B), identical to the
             // admin download and the /approve print-to-sign page. Gated →
             // deliberately NO attachment; the PDF lives behind the gate.
@@ -16273,7 +16319,7 @@ async function handleApi(req, res, pathname) {
               filename: mail.attachmentFilename,
               content: pdfBuffer,
               contentType: "application/pdf"
-            }] : [];
+            }, ...extraAttachments] : [];
             await transporter.sendMail({
               from: mail.from,
               to: toEmail,

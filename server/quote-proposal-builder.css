@@ -1410,3 +1410,80 @@
   .pb-email-body { grid-template-columns: minmax(0, 1fr); }
   .pb-email-frame { height: 480px; }
 }
+
+/* ---- Email attachment manifest (Sep 2026) ---- */
+.pb-email-files {
+  padding: 10px 16px 12px;
+  background: #F5F4EE;
+  border-bottom: 1px solid #E5E5DD;
+}
+.pb-email-files-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.pb-email-files-head > span:first-child {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9A9A90;
+}
+.pb-email-files-total { font-size: 12px; color: #6A6A60; }
+.pb-email-files-total.is-heavy { color: #842F1B; font-weight: 600; }
+.pb-email-file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.pb-email-file {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-areas: "tick name toggle" "tick fate toggle";
+  column-gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  background: #FFFFFF;
+  border: 1px solid #E5E5DD;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.pb-email-file.is-off { background: #FAFAF7; }
+.pb-email-file.is-off .pb-email-file-name { color: #6A6A60; }
+.pb-email-file-tick {
+  grid-area: tick;
+  font-weight: 700;
+  color: #3E9E4E;
+  text-align: center;
+}
+.pb-email-file.is-off .pb-email-file-tick { color: #B9B9B0; }
+.pb-email-file-name {
+  grid-area: name;
+  font-weight: 500;
+  color: #1F2A22;
+  overflow-wrap: anywhere;
+}
+.pb-email-file-name small { font-weight: 400; color: #9A9A90; margin-left: 4px; }
+.pb-email-file-fate {
+  grid-area: fate;
+  font-size: 11.5px;
+  color: #6A6A60;
+  line-height: 1.4;
+}
+.pb-email-file-reset { color: #1B4D2E; font-size: 11px; }
+.pb-email-file-toggle {
+  grid-area: toggle;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #1F2A22;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pb-email-file-toggle input { width: 16px; height: 16px; accent-color: #1B4D2E; }
+.pb-email-file-toggle input:disabled + span { color: #9A9A90; }
+.pb-email-file.is-none { grid-template-columns: minmax(0, 1fr); grid-template-areas: "name" "fate"; }

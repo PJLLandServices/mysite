@@ -454,7 +454,13 @@
                 <div><span>From</span><strong id="pbEmailFrom">—</strong></div>
                 <div><span>To</span><strong id="pbEmailTo">—</strong></div>
                 <div><span>Subject</span><strong id="pbEmailSubject">—</strong></div>
-                <div><span>Attached</span><strong id="pbEmailAttach">—</strong></div>
+              </div>
+              <div class="pb-email-files" id="pbEmailFiles">
+                <div class="pb-email-files-head">
+                  <span>Attached to this email</span>
+                  <span class="pb-email-files-total" id="pbEmailFilesTotal"></span>
+                </div>
+                <ul class="pb-email-file-list" id="pbEmailFileList"></ul>
               </div>
               <iframe class="pb-email-frame" id="pbEmailFrame" title="Email body preview" sandbox=""></iframe>
             </div>

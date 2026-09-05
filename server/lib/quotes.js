@@ -2455,6 +2455,92 @@ async function removeAttachment(quoteId, attachmentId, { by = "admin" } = {}) {
   return { id: attachmentId };
 }
 
+// Per-attachment email flag (Sep 2026). `emailAttach` is a tri-state on
+// the attachment record: true / false = Patrick's explicit choice, missing
+// = the default the email manifest derives (PDF files the proposal points
+// at with "See attached" ride along; embedded images don't). Draft-only,
+// like every other attachment edit.
+async function updateAttachment(quoteId, attachmentId, { emailAttach, caption } = {}, { by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === quoteId);
+  if (idx === -1) throw new Error(`Quote ${quoteId} not found.`);
+  const q = records[idx];
+  if (q.type === "project_proposal" && isProposalLocked(q)) {
+    const err = new Error("Proposal is locked. Attachments can't be modified.");
+    err.code = "proposal_locked";
+    throw err;
+  }
+  const att = (q.attachments || []).find((a) => a.id === attachmentId);
+  if (!att) throw new Error(`Attachment ${attachmentId} not found.`);
+  if (emailAttach === true || emailAttach === false) att.emailAttach = emailAttach;
+  else if (emailAttach === null) delete att.emailAttach;
+  if (typeof caption === "string") att.caption = caption.slice(0, 400);
+  q.history.push({
+    ts: nowIso(),
+    action: "attachment_updated",
+    by,
+    note: `${attachmentId} emailAttach=${att.emailAttach === undefined ? "default" : att.emailAttach}`
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return att;
+}
+
+// What actually leaves with the approval email (Sep 2026). One derivation
+// for the preview manifest AND the send, so the list Patrick sees is the
+// list the customer gets. Each uploaded file gets a fate:
+//   embedded     — image anchored to an included section → drawn inside
+//                  the proposal PDF (not a separate file)
+//   referenced   — PDF file anchored to an included section → the proposal
+//                  prints "See attached: …", so the file itself must ride
+//                  along or the reference dangles (default: attach)
+//   unanchored   — not placed in any section → in neither the PDF nor the
+//                  email unless explicitly attached
+//   excluded     — anchored, but its section is out of the PDF or the
+//                  "Include attachments" / "Include project map" switch is off
+// `gated` (phone-gated delivery) → nothing attaches; everything lives
+// behind the gate.
+function emailAttachmentManifest(q, { gated = false } = {}) {
+  const rawOpts = q.pdfOptions && typeof q.pdfOptions === "object" ? q.pdfOptions : {};
+  const showAttachments = rawOpts.showAttachments !== false;
+  const showProjectMap = rawOpts.showProjectMap !== false;
+  const sections = Array.isArray(q.proposalSections) ? q.proposalSections : [];
+  const items = [];
+  for (const att of (q.attachments || [])) {
+    if (!att || att.kind === "signed_pdf_return") continue;
+    const isImage = att.mimeType === "image/png" || att.mimeType === "image/jpeg";
+    const isPdf = att.mimeType === "application/pdf";
+    const anchors = sections.filter((s) => Array.isArray(s.attachmentIds) && s.attachmentIds.includes(att.id));
+    const live = anchors.filter((s) => {
+      if (s.include === false) return false;
+      if (s.kind === "project_map") return showProjectMap;
+      return showAttachments;
+    });
+    let fate;
+    if (!anchors.length) fate = "unanchored";
+    else if (!live.length) fate = "excluded";
+    else fate = isImage ? "embedded" : "referenced";
+    const defaultAttach = fate === "referenced";
+    const chosen = att.emailAttach === true || att.emailAttach === false ? att.emailAttach : defaultAttach;
+    items.push({
+      id: att.id,
+      filename: att.filename || att.id,
+      mimeType: att.mimeType,
+      sizeBytes: Number(att.sizeBytes) || 0,
+      caption: att.caption || "",
+      kind: att.kind,
+      isImage,
+      isPdf,
+      fate,
+      sectionTitles: live.map((s) => s.title || s.kind),
+      defaultAttach,
+      explicit: att.emailAttach === true || att.emailAttach === false,
+      emailAttached: !gated && chosen
+    });
+  }
+  return items;
+}
+
 async function readAttachmentBuffer(quoteId, attachmentId) {
   const q = await get(quoteId);
   if (!q) return null;
@@ -2940,6 +3026,8 @@ module.exports = {
   addAttachment,
   removeAttachment,
   readAttachmentBuffer,
+  updateAttachment,
+  emailAttachmentManifest,
   listAttachments,
   snapshotRatesFromCustomer,
   recordPortalSignAcceptance,

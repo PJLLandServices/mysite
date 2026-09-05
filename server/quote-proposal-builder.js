@@ -1873,7 +1873,9 @@
     from: $("pbEmailFrom"),
     to: $("pbEmailTo"),
     subject: $("pbEmailSubject"),
-    attach: $("pbEmailAttach"),
+    files: $("pbEmailFiles"),
+    fileList: $("pbEmailFileList"),
+    filesTotal: $("pbEmailFilesTotal"),
     frame: $("pbEmailFrame"),
     status: $("pbEmailStatus"),
     openBtn: $("pbEmailPreviewBtn")
@@ -1914,9 +1916,7 @@
       em.to.textContent = d.to || "— no customer email on the quote —";
       em.to.classList.toggle("is-missing", !d.to);
       em.subject.textContent = d.subject || "—";
-      em.attach.textContent = d.attachmentFilename
-        ? `📎 ${d.attachmentFilename}`
-        : "None — the PDF sits behind the phone gate; the customer opens it from the link.";
+      renderEmailFiles(d);
       em.frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"></head>` +
         `<body style="margin:0;padding:22px 18px;background:#ffffff;">${d.html || ""}</body></html>`;
       const warns = [];
@@ -1930,6 +1930,87 @@
       if (seq !== emailSeq) return;
       em.status.textContent = err.message || "Preview failed.";
     }
+  }
+
+  // The attachment manifest — every uploaded file with what happens to it,
+  // plus the proposal PDF itself. Derived server-side by the SAME function
+  // the send uses (quotes.emailAttachmentManifest), so this list IS what
+  // leaves. Fates: embedded (drawn inside the PDF), referenced (the PDF
+  // says "See attached" → file rides along by default), unanchored /
+  // excluded (in neither, unless ticked).
+  function fmtBytes(n) {
+    n = Number(n) || 0;
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)} MB`;
+    if (n >= 1_000) return `${Math.round(n / 1_000)} KB`;
+    return `${n} B`;
+  }
+  function fateLabel(m) {
+    const where = m.sectionTitles && m.sectionTitles.length ? ` (${m.sectionTitles.join(", ")})` : "";
+    switch (m.fate) {
+      case "embedded": return `Printed inside the proposal PDF${where}`;
+      case "referenced": return `Proposal says “See attached”${where}`;
+      case "unanchored": return "Not placed in any section — not in the PDF";
+      case "excluded": return "Its section is left out of the PDF";
+      default: return "";
+    }
+  }
+  function renderEmailFiles(d) {
+    if (!em.fileList) return;
+    const rows = [];
+    if (d.gated) {
+      rows.push(`<li class="pb-email-file is-none"><span class="pb-email-file-name">Nothing attached</span><span class="pb-email-file-fate">Phone-gated delivery — the customer opens everything from the link.</span></li>`);
+    } else if (d.attachmentFilename) {
+      rows.push(`<li class="pb-email-file is-on"><span class="pb-email-file-tick" aria-hidden="true">✓</span><span class="pb-email-file-name">📄 ${escapeHtml(d.attachmentFilename)}</span><span class="pb-email-file-fate">The proposal itself, frozen at send</span></li>`);
+    }
+    for (const m of (d.attachments || [])) {
+      const on = m.emailAttached === true;
+      const icon = m.isPdf ? "📄" : "🖼";
+      const control = d.gated
+        ? ""
+        : `<label class="pb-email-file-toggle"><input type="checkbox" data-att="${escapeAttr(m.id)}" ${on ? "checked" : ""} ${d.editable ? "" : "disabled"}> <span>Attach file</span></label>`;
+      const explicitNote = m.explicit ? ` · <a href="#" class="pb-email-file-reset" data-att="${escapeAttr(m.id)}" title="Back to the default for this file">reset to default</a>` : "";
+      rows.push(`<li class="pb-email-file ${on ? "is-on" : "is-off"}">` +
+        `<span class="pb-email-file-tick" aria-hidden="true">${on ? "✓" : "–"}</span>` +
+        `<span class="pb-email-file-name">${icon} ${escapeHtml(m.filename)} <small>${fmtBytes(m.sizeBytes)}</small></span>` +
+        `<span class="pb-email-file-fate">${escapeHtml(fateLabel(m))}${explicitNote}</span>` +
+        control +
+        `</li>`);
+    }
+    if (!rows.length) rows.push(`<li class="pb-email-file is-none"><span class="pb-email-file-name">Nothing attached</span></li>`);
+    em.fileList.innerHTML = rows.join("");
+    const count = (d.gated ? 0 : (d.attachmentFilename ? 1 : 0)) + (d.attachments || []).filter((m) => m.emailAttached).length;
+    const bytes = Number(d.attachedBytes) || 0;
+    em.filesTotal.textContent = d.gated ? "" : `${count} file${count === 1 ? "" : "s"}${bytes ? ` · ${fmtBytes(bytes)} + the PDF` : ""}`;
+    em.filesTotal.classList.toggle("is-heavy", bytes > 20_000_000);
+    if (bytes > 20_000_000) em.filesTotal.textContent += " — over Gmail's 25 MB limit, untick something";
+  }
+  async function patchEmailAttach(attId, value) {
+    try {
+      const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/attachments/${encodeURIComponent(attId)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ emailAttach: value })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) { showError(d.errors?.[0] || "Couldn't update the attachment."); return; }
+      if (d.quote) state.quote.attachments = d.quote.attachments || state.quote.attachments;
+      loadEmailPreview();
+    } catch (err) {
+      showError(err.message || "Couldn't update the attachment.");
+    }
+  }
+  if (em.fileList) {
+    em.fileList.addEventListener("change", (e) => {
+      const cb = e.target.closest("input[type=checkbox][data-att]");
+      if (!cb) return;
+      patchEmailAttach(cb.dataset.att, cb.checked);
+    });
+    em.fileList.addEventListener("click", (e) => {
+      const a = e.target.closest("a.pb-email-file-reset");
+      if (!a) return;
+      e.preventDefault();
+      patchEmailAttach(a.dataset.att, null);
+    });
   }
 
   function openEmailDialog(mode) {
