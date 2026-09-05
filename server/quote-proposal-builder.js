@@ -205,6 +205,7 @@
         return;
       }
       state.quote = data.quote;
+      schedulePreviewRefresh();
       state.isDirty = false;
       renderTotals();
       renderDelivery(); // branch change may have re-derived deliveryMode
@@ -887,7 +888,8 @@
   }
 
   function refreshPreviewLink() {
-    el.previewLink.href = `/api/admin/quote-folder/${encodeURIComponent(state.quote.id)}/pdf`;
+    el.previewLink.href = previewPdfUrl();
+    if (pv.open) pv.open.href = previewPdfUrl();
   }
 
   // ---- Catalog (project_rates) --------------------------------------
@@ -961,6 +963,7 @@
         return;
       }
       state.quote.attachments = [...(state.quote.attachments || []), data.attachment];
+      schedulePreviewRefresh();
       renderAttachments();
       renderActiveSection();
     } catch (err) {
@@ -982,6 +985,7 @@
         return;
       }
       state.quote.attachments = (state.quote.attachments || []).filter((a) => a.id !== attId);
+      schedulePreviewRefresh();
       for (const s of (state.quote.proposalSections || [])) {
         s.attachmentIds = (s.attachmentIds || []).filter((id) => id !== attId);
       }
@@ -1511,6 +1515,7 @@
         return;
       }
       state.quote = data.quote;
+      schedulePreviewRefresh();
       setSaveState("Saved", null);
     } catch (err) {
       showError(err.message || "Save failed.");
@@ -1575,6 +1580,7 @@
         return;
       }
       state.quote = data.quote;
+      schedulePreviewRefresh();
       renderDelivery();
       renderProposalDoc();
       renderGeneratePanel();
@@ -1602,6 +1608,7 @@
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) { showError(data.errors?.[0] || "Couldn't re-seed sections."); return; }
       state.quote = data.quote;
+      schedulePreviewRefresh();
       state.activeSectionId = (state.quote.proposalSections[0] || {}).id || null;
       render();
     } catch (err) {
@@ -1610,6 +1617,9 @@
   }
 
   // ---- Send / Revise / Convert / Attest ----------------------------
+  // Send always passes through the email preview (Sep 2026): Patrick sees
+  // the exact from / to / subject / attachment / body, can add a note, and
+  // only then presses "Send now" inside the dialog.
   el.sendBtn.addEventListener("click", async () => {
     if (state.isDirty) await saveDraft();
     const email = state.quote.customerEmail;
@@ -1617,25 +1627,7 @@
       showError("Customer email is required before sending.");
       return;
     }
-    if (!confirm(`Send proposal ${state.quote.id} to ${email}? This locks the proposal.`)) return;
-    try {
-      const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/send-proposal-for-approval`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email, sendEmail: true, sendSms: false })
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok || !data.ok) {
-        showError(data.errors?.[0] || "Send failed.");
-        return;
-      }
-      state.quote = data.quote;
-      alert(`Sent. ${data.emailSent ? "Email delivered." : "Email NOT sent: " + (data.emailError || "?")}` +
-        `\n\nApproval URL:\n${data.approvalUrl}`);
-      render();
-    } catch (err) {
-      showError(err.message || "Send failed.");
-    }
+    openEmailDialog("send");
   });
 
   el.reviseBtn.addEventListener("click", async () => {
@@ -1685,11 +1677,339 @@
         return;
       }
       state.quote = data.quote;
+      schedulePreviewRefresh();
       render();
     } catch (err) {
       showError(err.message || "Attest failed.");
     }
   });
+
+  // ---- Live PDF preview (Sep 2026) ----------------------------------
+  // Right-hand column: the customer's PDF, re-rendered after every
+  // autosave / attachment change so spacing and page-break problems show
+  // up while editing, not after sending. Rendering goes through pdf.js
+  // (pages → <canvas>, all pages drawn off-screen then swapped in at once
+  // so the scroll position survives a refresh). If pdf.js didn't load
+  // (offline, CDN blocked) the same bytes go into a plain <iframe>.
+  // A sent quote renders its FROZEN bytes — exactly what the customer got.
+  const pv = {
+    workspace: $("pbWorkspace"),
+    panel: $("pbPreview"),
+    scroll: $("pbPreviewScroll"),
+    pages: $("pbPreviewPages"),
+    frame: $("pbPreviewFrame"),
+    empty: $("pbPreviewEmpty"),
+    state: $("pbPreviewState"),
+    note: $("pbPreviewNote"),
+    pagesLabel: $("pbPreviewPagesLabel"),
+    refresh: $("pbPreviewRefresh"),
+    open: $("pbPreviewOpen"),
+    hide: $("pbPreviewHide"),
+    show: $("pbPreviewShow")
+  };
+  const PREVIEW_PREF_KEY = "pb-pdf-preview";
+  const PDFJS_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  let previewSeq = 0;
+  let previewTimer = null;
+  let previewBusy = false;
+  let previewQueued = false;
+  let previewDoc = null;
+  let previewVisible = false;
+
+  function previewPdfUrl() {
+    return `/api/admin/quote-folder/${encodeURIComponent(state.quote.id)}/pdf`;
+  }
+
+  function previewPrefOn() {
+    try { return localStorage.getItem(PREVIEW_PREF_KEY) !== "off"; } catch (_) { return true; }
+  }
+
+  function setPreviewState(label, kind) {
+    if (!pv.state) return;
+    pv.state.textContent = label;
+    pv.state.classList.toggle("is-busy", kind === "busy");
+    pv.state.classList.toggle("is-error", kind === "error");
+  }
+
+  // persist=true only for an explicit Hide/Show click. The narrow-screen
+  // auto-hide at load must NOT write the preference, or one visit from a
+  // phone would switch the desktop preview off for good.
+  function setPreviewVisible(on, { persist = false } = {}) {
+    previewVisible = on === true;
+    if (!pv.workspace) return;
+    pv.workspace.classList.toggle("has-preview", previewVisible);
+    pv.panel.hidden = !previewVisible;
+    pv.show.hidden = previewVisible;
+    if (persist) {
+      try { localStorage.setItem(PREVIEW_PREF_KEY, previewVisible ? "on" : "off"); } catch (_) { /* fine */ }
+    }
+    if (previewVisible) schedulePreviewRefresh(0);
+  }
+
+  function schedulePreviewRefresh(delay = 350) {
+    if (!previewVisible || !state.quote) return;
+    if (previewTimer) clearTimeout(previewTimer);
+    previewTimer = setTimeout(refreshPreview, delay);
+  }
+
+  async function refreshPreview() {
+    previewTimer = null;
+    if (!previewVisible || !state.quote) return;
+    if (previewBusy) { previewQueued = true; return; }
+    previewBusy = true;
+    const seq = ++previewSeq;
+    setPreviewState("Rendering…", "busy");
+    try {
+      const r = await fetch(`${previewPdfUrl()}?ts=${Date.now()}`, { cache: "no-store" });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.errors?.[0] || `PDF render failed (${r.status})`);
+      }
+      const buf = await r.arrayBuffer();
+      if (seq !== previewSeq) return;
+      if (window.pdfjsLib) await renderPreviewPages(buf, seq);
+      else renderPreviewFrame(buf);
+      if (seq !== previewSeq) return;
+      pv.empty.hidden = true;
+      const q = state.quote;
+      const frozen = !(q.status === "draft" || q.status === "draft_preview");
+      const stamp = new Date().toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
+      setPreviewState(frozen ? `Frozen copy — what the customer received` : `Up to date · ${stamp}`, null);
+      pv.note.hidden = !frozen;
+      if (frozen) pv.note.textContent = "This quote has been sent, so the PDF is locked. Create a revision to change it.";
+    } catch (err) {
+      if (seq !== previewSeq) return;
+      setPreviewState("Preview failed", "error");
+      pv.empty.textContent = err.message || "Couldn't render the PDF.";
+      pv.empty.hidden = false;
+    } finally {
+      previewBusy = false;
+      if (previewQueued) { previewQueued = false; schedulePreviewRefresh(100); }
+    }
+  }
+
+  async function renderPreviewPages(buf, seq) {
+    const lib = window.pdfjsLib;
+    if (lib.GlobalWorkerOptions && !lib.GlobalWorkerOptions.workerSrc) {
+      lib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+    }
+    const doc = await lib.getDocument({ data: buf }).promise;
+    if (seq !== previewSeq) { doc.destroy(); return; }
+    const scrollTop = pv.scroll.scrollTop;
+    const width = Math.max(240, pv.scroll.clientWidth - 32);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const frag = document.createDocumentFragment();
+    for (let n = 1; n <= doc.numPages; n++) {
+      const page = await doc.getPage(n);
+      if (seq !== previewSeq) { doc.destroy(); return; }
+      const base = page.getViewport({ scale: 1 });
+      const scale = width / base.width;
+      const vp = page.getViewport({ scale: scale * dpr });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.floor(vp.width);
+      canvas.height = Math.floor(vp.height);
+      canvas.style.width = `${Math.floor(width)}px`;
+      canvas.style.height = `${Math.floor(vp.height / dpr)}px`;
+      await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+      if (seq !== previewSeq) { doc.destroy(); return; }
+      const wrap = document.createElement("div");
+      wrap.className = "pb-preview-page";
+      wrap.dataset.page = String(n);
+      wrap.appendChild(canvas);
+      const label = document.createElement("span");
+      label.className = "pb-preview-pageno";
+      label.textContent = `Page ${n} of ${doc.numPages}`;
+      wrap.appendChild(label);
+      frag.appendChild(wrap);
+    }
+    pv.pages.replaceChildren(frag);
+    pv.pages.hidden = false;
+    pv.frame.hidden = true;
+    pv.scroll.scrollTop = scrollTop;
+    pv.pagesLabel.textContent = `${doc.numPages} page${doc.numPages === 1 ? "" : "s"}`;
+    if (previewDoc) { try { previewDoc.destroy(); } catch (_) { /* fine */ } }
+    previewDoc = doc;
+  }
+
+  function renderPreviewFrame(buf) {
+    const url = URL.createObjectURL(new Blob([buf], { type: "application/pdf" }));
+    if (pv.frame.dataset.url) { try { URL.revokeObjectURL(pv.frame.dataset.url); } catch (_) { /* fine */ } }
+    pv.frame.dataset.url = url;
+    pv.frame.src = url;
+    pv.frame.hidden = false;
+    pv.pages.hidden = true;
+    pv.pagesLabel.textContent = "";
+  }
+
+  function initPreview() {
+    if (!pv.workspace) return;
+    pv.refresh.addEventListener("click", () => schedulePreviewRefresh(0));
+    pv.hide.addEventListener("click", () => setPreviewVisible(false, { persist: true }));
+    pv.show.addEventListener("click", () => setPreviewVisible(true, { persist: true }));
+    let resizeTimer = null;
+    window.addEventListener("resize", () => {
+      if (!previewVisible || !window.pdfjsLib) return;
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => schedulePreviewRefresh(0), 400);
+    });
+    // Wide screens only — below the breakpoint the CSS hides the column
+    // and the "Open PDF" link is the preview.
+    const wide = window.matchMedia("(min-width: 1200px)").matches;
+    setPreviewVisible(wide && previewPrefOn());
+  }
+
+  // ---- Email preview (Sep 2026) --------------------------------------
+  // GET /proposal-email-preview composes with the SAME server function the
+  // send uses, so this dialog shows exactly what the customer receives.
+  // "send" mode adds the Send-now button; "preview" mode is read-only.
+  const em = {
+    dialog: $("pbEmailDialog"),
+    title: $("pbEmailDialogTitle"),
+    close: $("pbEmailClose"),
+    cancel: $("pbEmailCancel"),
+    send: $("pbEmailSend"),
+    note: $("pbEmailNote"),
+    warn: $("pbEmailWarn"),
+    from: $("pbEmailFrom"),
+    to: $("pbEmailTo"),
+    subject: $("pbEmailSubject"),
+    attach: $("pbEmailAttach"),
+    frame: $("pbEmailFrame"),
+    status: $("pbEmailStatus"),
+    openBtn: $("pbEmailPreviewBtn")
+  };
+  let emailMode = "preview";
+  let emailSeq = 0;
+  let emailTimer = null;
+  let emailSending = false;
+  const noteKey = () => `pb-email-note:${QUOTE_ID}`;
+
+  function readStoredNote() {
+    try { return localStorage.getItem(noteKey()) || ""; } catch (_) { return ""; }
+  }
+  function storeNote(v) {
+    try {
+      if (String(v || "").trim()) localStorage.setItem(noteKey(), v);
+      else localStorage.removeItem(noteKey());
+    } catch (_) { /* fine */ }
+  }
+
+  async function loadEmailPreview() {
+    if (!state.quote) return;
+    const seq = ++emailSeq;
+    em.status.textContent = "Composing…";
+    const note = em.note.value;
+    try {
+      const r = await fetch(
+        `/api/quotes/${encodeURIComponent(state.quote.id)}/proposal-email-preview?note=${encodeURIComponent(note)}`,
+        { cache: "no-store" }
+      );
+      const d = await r.json().catch(() => ({}));
+      if (seq !== emailSeq) return;
+      if (!r.ok || !d.ok) {
+        em.status.textContent = d.errors?.[0] || `Preview failed (${r.status}).`;
+        return;
+      }
+      em.from.textContent = d.from || "—";
+      em.to.textContent = d.to || "— no customer email on the quote —";
+      em.to.classList.toggle("is-missing", !d.to);
+      em.subject.textContent = d.subject || "—";
+      em.attach.textContent = d.attachmentFilename
+        ? `📎 ${d.attachmentFilename}`
+        : "None — the PDF sits behind the phone gate; the customer opens it from the link.";
+      em.frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"></head>` +
+        `<body style="margin:0;padding:22px 18px;background:#ffffff;">${d.html || ""}</body></html>`;
+      const warns = [];
+      if (d.linkIsPlaceholder) warns.push("The “Review & sign” link is issued when you send — the preview shows a placeholder.");
+      if (!d.to) warns.push("Set the customer email in the top bar before sending.");
+      em.warn.textContent = warns.join(" ");
+      em.warn.hidden = warns.length === 0;
+      const stamp = new Date().toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
+      em.status.textContent = `${d.isRevision ? "Revision email · " : ""}Composed ${stamp}`;
+    } catch (err) {
+      if (seq !== emailSeq) return;
+      em.status.textContent = err.message || "Preview failed.";
+    }
+  }
+
+  function openEmailDialog(mode) {
+    if (!em.dialog || !state.quote) return;
+    emailMode = mode === "send" ? "send" : "preview";
+    em.send.hidden = emailMode !== "send";
+    em.cancel.textContent = emailMode === "send" ? "Not yet" : "Close";
+    em.title.textContent = emailMode === "send"
+      ? `Review the email, then send ${state.quote.id}`
+      : `Email preview — ${state.quote.id}`;
+    const alreadySent = state.quote.status !== "draft" && state.quote.status !== "draft_preview";
+    // A sent quote shows the note that went out with it (read-only); a
+    // draft restores whatever Patrick typed last time the dialog was open.
+    em.note.value = alreadySent ? (state.quote.approval?.note || "") : readStoredNote();
+    em.note.disabled = alreadySent;
+    em.status.textContent = "";
+    em.warn.hidden = true;
+    em.frame.srcdoc = "";
+    if (typeof em.dialog.showModal === "function") em.dialog.showModal();
+    else em.dialog.setAttribute("open", "");
+    loadEmailPreview();
+  }
+
+  function closeEmailDialog() {
+    if (!em.dialog) return;
+    if (typeof em.dialog.close === "function" && em.dialog.open) em.dialog.close();
+    else em.dialog.removeAttribute("open");
+  }
+
+  if (em.dialog) {
+    em.openBtn.addEventListener("click", async () => {
+      if (state.isDirty) await saveDraft();
+      openEmailDialog("preview");
+    });
+    em.close.addEventListener("click", closeEmailDialog);
+    em.cancel.addEventListener("click", closeEmailDialog);
+    em.note.addEventListener("input", () => {
+      storeNote(em.note.value);
+      if (emailTimer) clearTimeout(emailTimer);
+      emailTimer = setTimeout(loadEmailPreview, 450);
+    });
+    em.send.addEventListener("click", async () => {
+      if (emailSending) return;
+      const email = state.quote.customerEmail;
+      if (!email) {
+        showError("Customer email is required before sending.");
+        return;
+      }
+      if (!confirm(`Send ${state.quote.id} to ${email} now? This locks the proposal.`)) return;
+      emailSending = true;
+      em.send.disabled = true;
+      em.status.textContent = "Sending…";
+      try {
+        const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/send-proposal-for-approval`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email, sendEmail: true, sendSms: false, note: em.note.value.trim() })
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) {
+          em.status.textContent = data.errors?.[0] || "Send failed.";
+          showError(data.errors?.[0] || "Send failed.");
+          return;
+        }
+        state.quote = data.quote;
+        storeNote("");
+        closeEmailDialog();
+        alert(`Sent. ${data.emailSent ? "Email delivered." : "Email NOT sent: " + (data.emailError || "?")}` +
+          `\n\nApproval URL:\n${data.approvalUrl}`);
+        render();
+        schedulePreviewRefresh(0);
+      } catch (err) {
+        em.status.textContent = err.message || "Send failed.";
+        showError(err.message || "Send failed.");
+      } finally {
+        emailSending = false;
+        em.send.disabled = false;
+      }
+    });
+  }
 
   // ---- Bootstrap -----------------------------------------------------
   async function bootstrap() {
@@ -1726,6 +2046,7 @@
       el.app.hidden = false;
       wireDepositEvents();
       render();
+      initPreview();
       loadProjectRates();
       loadGatePhones();
       loadDepositSettings();

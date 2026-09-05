@@ -67,6 +67,13 @@
       <p class="pb-error" id="pbError" role="alert" hidden></p>
 
       <section id="pbApp" hidden>
+      <!-- Live PDF preview (Sep 2026). The editor is the left column; the
+           right column is the customer's PDF, re-rendered after every
+           autosave so spacing / page-break problems show up while writing,
+           not after sending. Below 1200px the preview collapses to a
+           toggle (the "Open PDF" link still opens it in a new tab). -->
+      <div class="pb-workspace" id="pbWorkspace">
+      <div class="pb-editor">
         <!-- Top bar: identity + branch + billing -->
         <section class="pb-topbar">
           <div class="pb-id-block">
@@ -374,7 +381,8 @@
         <section class="pb-actions">
           <span class="pb-save-state" id="pbSaveState">Saved</span>
           <div class="pb-actions-buttons">
-            <a class="pjl-btn pjl-btn-outline" href="#" id="pbPreviewLink" target="_blank" rel="noopener">Preview PDF</a>
+            <a class="pjl-btn pjl-btn-outline" href="#" id="pbPreviewLink" target="_blank" rel="noopener">Open PDF</a>
+            <button type="button" class="pjl-btn pjl-btn-outline" id="pbEmailPreviewBtn">Preview email</button>
             <button type="button" class="pjl-btn pjl-btn-outline" id="pbReviseBtn" hidden>Create revision</button>
             <button type="button" class="pjl-btn pjl-btn-primary" id="pbSendBtn">Send for approval</button>
             <button type="button" class="pjl-btn pjl-btn-primary" id="pbConvertBtn" hidden>Convert to project</button>
@@ -395,10 +403,76 @@
             <button type="button" class="pjl-btn pjl-btn-primary" id="pbAttestConfirm">Confirm — accept proposal</button>
           </div>
         </section>
+      </div><!-- /.pb-editor -->
+
+      <aside class="pb-preview" id="pbPreview" aria-label="PDF preview">
+        <header class="pb-preview-head">
+          <div class="pb-preview-title">
+            <h3>PDF preview</h3>
+            <span class="pb-preview-state" id="pbPreviewState">Rendering…</span>
+          </div>
+          <div class="pb-preview-tools">
+            <span class="pb-preview-pages" id="pbPreviewPagesLabel"></span>
+            <button type="button" class="pb-preview-btn" id="pbPreviewRefresh" title="Re-render the PDF now">Refresh</button>
+            <a class="pb-preview-btn" id="pbPreviewOpen" href="#" target="_blank" rel="noopener" title="Open the PDF in a new tab">Open</a>
+            <button type="button" class="pb-preview-btn" id="pbPreviewHide" title="Hide the preview">Hide</button>
+          </div>
+        </header>
+        <p class="pb-preview-note" id="pbPreviewNote" hidden></p>
+        <div class="pb-preview-scroll" id="pbPreviewScroll">
+          <div class="pb-preview-pages" id="pbPreviewPages"></div>
+          <iframe class="pb-preview-frame" id="pbPreviewFrame" title="PDF preview" hidden></iframe>
+          <p class="pb-preview-empty" id="pbPreviewEmpty" hidden></p>
+        </div>
+      </aside>
+      </div><!-- /.pb-workspace -->
+
+      <button type="button" class="pb-preview-show" id="pbPreviewShow" hidden>Show PDF preview</button>
+
+      <!-- Email preview (Sep 2026). The exact email the customer gets —
+           from / to / subject / attachment / body — composed by the SAME
+           server function the send uses. "Send for approval" always passes
+           through here; the optional note is Patrick's personal paragraph
+           under the greeting (e.g. what changed in a revision). -->
+      <dialog class="pb-email-dialog" id="pbEmailDialog" aria-labelledby="pbEmailDialogTitle">
+        <form method="dialog" class="pb-email-form" id="pbEmailForm">
+          <header class="pb-email-head">
+            <h3 id="pbEmailDialogTitle">Email preview</h3>
+            <button type="button" class="pb-email-close" id="pbEmailClose" aria-label="Close">&times;</button>
+          </header>
+          <div class="pb-email-body">
+            <div class="pb-email-compose">
+              <label class="pb-email-field">
+                <span>Note to customer (optional)</span>
+                <textarea id="pbEmailNote" rows="4" maxlength="2000" placeholder="e.g. Updated version — I've added the sleeve measurements to the attached site plan and corrected the zone count."></textarea>
+              </label>
+              <p class="pb-email-hint">Plain text. Appears right under the greeting, before the proposal summary. Saved with the quote when you send.</p>
+              <p class="pb-email-warn" id="pbEmailWarn" hidden></p>
+            </div>
+            <div class="pb-email-client">
+              <div class="pb-email-meta">
+                <div><span>From</span><strong id="pbEmailFrom">—</strong></div>
+                <div><span>To</span><strong id="pbEmailTo">—</strong></div>
+                <div><span>Subject</span><strong id="pbEmailSubject">—</strong></div>
+                <div><span>Attached</span><strong id="pbEmailAttach">—</strong></div>
+              </div>
+              <iframe class="pb-email-frame" id="pbEmailFrame" title="Email body preview" sandbox=""></iframe>
+            </div>
+          </div>
+          <footer class="pb-email-actions">
+            <span class="pb-email-status" id="pbEmailStatus"></span>
+            <div class="pb-email-buttons">
+              <button type="button" class="pjl-btn pjl-btn-outline" id="pbEmailCancel">Close</button>
+              <button type="button" class="pjl-btn pjl-btn-primary" id="pbEmailSend" hidden>Send now</button>
+            </div>
+          </footer>
+        </form>
+      </dialog>
       </section>
     </main>
   </div>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="/crm/crm-nav.js"></script>
   <script src="/crm/quote-proposal-builder.js"></script>
 </body>

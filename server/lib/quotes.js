@@ -1800,7 +1800,7 @@ async function ensureApprovalToken(id) {
   return token;
 }
 
-async function markSentForApproval(id, { token, channels = [], toEmail = "", toPhone = "", by = "tech", pdf = null } = {}) {
+async function markSentForApproval(id, { token, channels = [], toEmail = "", toPhone = "", by = "tech", pdf = null, note = "" } = {}) {
   if (!id || !token) throw new Error("markSentForApproval needs id + token");
   const records = await readAll();
   const idx = records.findIndex((q) => q.id === id);
@@ -1812,7 +1812,10 @@ async function markSentForApproval(id, { token, channels = [], toEmail = "", toP
     sentAt: ts,
     sentVia: Array.isArray(channels) ? channels.slice() : [],
     sentToEmail: String(toEmail || "").toLowerCase().trim(),
-    sentToPhone: String(toPhone || "").trim()
+    sentToPhone: String(toPhone || "").trim(),
+    // Patrick's optional personal note from the email preview — kept so
+    // the record shows what the customer was told alongside the document.
+    ...(String(note || "").trim() ? { note: String(note).trim().slice(0, 2000) } : {})
   };
   // Promote draft → sent on send. Also handle draft_preview → sent so
   // a tech who previewed first can flip the existing record without

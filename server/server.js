@@ -3272,6 +3272,89 @@ async function writeFrozenQuotePdf(q, buffer) {
 //                                re-render (a fabricated "snapshot" reads as
 //                                authoritative and isn't)
 // `opts` is the renderer options for the live/backfill render paths.
+// Proposal / estimate approval email — ONE composer shared by the real
+// send (POST /api/quotes/:id/send-proposal-for-approval) and the admin
+// preview (GET /api/quotes/:id/proposal-email-preview), so what Patrick
+// previews in the builder is exactly what the customer receives.
+//   parties     — quoteRenderParties(q) (customer name for the greeting)
+//   approvalUrl — the tokenized /approve link (preview passes a placeholder
+//                 when the draft has no token yet)
+//   gated       — phone-gated delivery → link only, no PDF attachment
+//   note        — Patrick's optional personal paragraph (plain text; escaped,
+//                 line breaks kept). Sits right under the greeting.
+function buildProposalApprovalEmail(q, { parties = null, approvalUrl = "", gated = false, note = "" } = {}) {
+  const custName = String((parties && parties.customer && parties.customer.name) || "").trim();
+  const firstName = escapeHtmlServer(custName ? custName.split(/\s+/)[0] : "") || "there";
+  const displayNo = escapeHtmlServer((q.quoteNumberDisplay && String(q.quoteNumberDisplay).trim()) || q.id);
+  // Customer-facing document noun (residential_repair brief): a repair
+  // job reads as an "Estimate", every other branch as a "Proposal".
+  const docNoun = quotes.customerDocNoun(q);
+  const isRevision = (Number(q.version) || 1) > 1;
+  // "Sign ASAP to schedule" urgency (Jul 2026) — repair estimates only.
+  // Format a plain YYYY-MM-DD as a UTC calendar date so no timezone shift
+  // moves it a day.
+  const isRepairEmail = q.branch === "residential_repair";
+  const fmtSchedDate = (iso) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+    if (!m) return "";
+    const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    const WD = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const MO = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    return `${WD[dt.getUTCDay()]}, ${MO[dt.getUTCMonth()]} ${dt.getUTCDate()}`;
+  };
+  const schedLabel = isRepairEmail ? fmtSchedDate(q.scheduledServiceDate) : "";
+  const noteText = String(note || "").trim();
+  const noteHtml = noteText
+    ? `<div style="margin:0 0 16px;padding:12px 14px;background:#FFFFFF;border-left:3px solid #1B4D2E;border-radius:0 8px 8px 0;font-size:14px;color:#1a1a1a;white-space:pre-line;">${escapeHtmlServer(noteText)}</div>`
+    : "";
+  const safeUrl = escapeHtmlServer(approvalUrl);
+  const html = `
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55;">
+  <div style="padding:24px 28px;background:#1B4D2E;border-radius:8px 8px 0 0;">
+    <div style="color:#EAF3DE;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;font-weight:600;">PJL Land Services</div>
+    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;">Your ${isRevision ? "updated " : ""}${docNoun.lower} — ready for review.</h1>
+  </div>
+  <div style="padding:24px 28px;background:#FAFAF5;border:1px solid #e5e5dd;border-top:none;border-radius:0 0 8px 8px;">
+    <p style="margin:0 0 14px;">Hi ${firstName},</p>
+    ${noteHtml}
+    ${gated
+      ? `<p style="margin:0 0 14px;">Your detailed ${docNoun.lower} (<strong>${displayNo}</strong>) is ready to review at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>
+    <p style="margin:0 0 14px;padding:12px 14px;background:#EAF3DE;border:1px solid #C7E0A8;border-radius:8px;font-size:13px;color:#33502f;">To open it, you'll be asked for your phone number — the one we have on file for you. Any format is fine.</p>`
+      : `<p style="margin:0 0 14px;">Your detailed ${docNoun.lower} (<strong>${displayNo}</strong>) is attached and posted at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>`}
+    ${isRepairEmail
+      ? `<p style="margin:0 0 14px;padding:12px 14px;background:#FFF4E5;border:1px solid #F0C88A;border-radius:8px;font-size:14px;color:#7A4E12;"><strong>Estimate must be signed ASAP to schedule.</strong>${schedLabel ? ` This repair is scheduled for <strong>${schedLabel}</strong> — please sign your estimate before then to keep that date.` : ""}</p>`
+      : ""}
+    <p style="margin:0 0 14px;font-size:13px;color:#555;">You can accept this ${docNoun.lower} in either of two ways:</p>
+    <ul style="margin:0 0 14px;padding-left:20px;font-size:13px;color:#333;line-height:1.7;">
+      <li><strong>Sign online</strong> — tap the button below, draw your signature, done.</li>
+      ${gated
+        ? `<li><strong>Print, sign, return</strong> — open the ${docNoun.lower}, download the PDF, sign by hand, scan or photograph it, and email it back to <a href="mailto:info@pjllandservices.com" style="color:#1B4D2E;">info@pjllandservices.com</a>.</li>`
+        : `<li><strong>Print, sign, return</strong> — print the attached PDF, sign by hand, scan or photograph it, and email it back to <a href="mailto:info@pjllandservices.com" style="color:#1B4D2E;">info@pjllandservices.com</a>.</li>`}
+    </ul>
+    <p style="margin:0 0 18px;text-align:center;">
+      <a href="${safeUrl}" style="display:inline-block;padding:14px 28px;background:#E07B24;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;">Review &amp; sign online</a>
+    </p>
+    <p style="margin:18px 0 0;font-size:13px;color:#777;">If the button doesn't work, paste this link:<br><span style="color:#1B4D2E;word-break:break-all;">${safeUrl}</span></p>
+    <p style="margin:24px 0 0;font-size:13px;color:#777;">Questions? Reply to this email or call <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a>.</p>
+  </div>
+  <p style="margin:16px 0 0;font-size:11px;color:#999;text-align:center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
+</div>`.trim();
+  const fromAddress = process.env.CUSTOMER_EMAIL || "info@pjllandservices.com";
+  return {
+    subject: `PJL ${docNoun.lower} ${displayNo} — your ${isRevision ? "updated " : ""}review and acceptance`,
+    html,
+    from: `"PJL Land Services" <${fromAddress}>`,
+    replyTo: fromAddress,
+    // Ungated → the frozen PDF rides along; gated → deliberately none (the
+    // PDF lives behind the phone gate).
+    attachmentFilename: gated ? null : `PJL-${docNoun.cap}-${q.id}.pdf`,
+    gated,
+    isRevision,
+    docNoun,
+    displayNo
+  };
+}
+
 async function serveQuotePdf(res, q, opts, { by = "system" } = {}) {
   const pdfHeaders = {
     "content-type": "application/pdf",
@@ -16023,6 +16106,52 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // GET /api/quotes/:id/proposal-email-preview?note=… — admin-only dry
+  // run of the approval email. Composes with the SAME builder + gate check
+  // the send uses, so the builder's "Preview email" panel shows exactly what
+  // the customer will get: from / to / subject / attachment / body HTML.
+  // Nothing is sent, no token is minted, no state changes. A draft with no
+  // token yet gets a visibly-placeholder link (the real one is issued on
+  // send).
+  const proposalEmailPreviewMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/proposal-email-preview$/);
+  if (proposalEmailPreviewMatch && req.method === "GET") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(proposalEmailPreviewMatch[1]);
+      const q = await quotes.get(id);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Proposal not found."] });
+      if (!quoteCanCarryCustomDoc(q)) {
+        return sendJson(res, 422, { ok: false, errors: ["This quote can't be sent as a designed proposal."] });
+      }
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const note = String(url.searchParams.get("note") || "").trim().slice(0, 2000);
+      const toEmail = String(url.searchParams.get("email") || q.customerEmail || "").trim();
+      const parties = await quoteRenderParties(q);
+      const gated = q.deliveryMode === "plain_pdf" ? false : await proposalHasCustomDoc(q);
+      const hasToken = Boolean(q.approval && q.approval.token);
+      const approvalUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${hasToken ? q.approval.token : "issued-on-send"}`;
+      const mail = buildProposalApprovalEmail(q, { parties, approvalUrl, gated, note });
+      return sendJson(res, 200, {
+        ok: true,
+        from: mail.from,
+        replyTo: mail.replyTo,
+        to: toEmail,
+        subject: mail.subject,
+        html: mail.html,
+        gated,
+        isRevision: mail.isRevision,
+        attachmentFilename: mail.attachmentFilename,
+        approvalUrl,
+        linkIsPlaceholder: !hasToken,
+        customerName: String((parties.customer && parties.customer.name) || "").trim(),
+        note
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't build the email preview."] });
+    }
+  }
+
   // POST /api/quotes/:id/send-proposal-for-approval — admin sends a
   // draft project_proposal to the customer. Generates a 32-hex token,
   // marks the quote sent, emails (and optionally texts) the customer
@@ -16053,6 +16182,9 @@ async function handleApi(req, res, pathname) {
       const sendEmail = payload?.sendEmail !== false;
       const toEmail = String(payload?.email || q.customerEmail || "").trim();
       const toPhone = String(payload?.phone || "").trim();
+      // Optional personal note from the builder's email preview (plain
+      // text, capped). Rendered under the greeting; kept on approval.note.
+      const note = String(payload?.note || "").trim().slice(0, 2000);
       if (sendEmail && !toEmail) {
         return sendJson(res, 422, { ok: false, errors: ["Customer email is required for email delivery."] });
       }
@@ -16101,7 +16233,7 @@ async function handleApi(req, res, pathname) {
         }
       }
       await quotes.markSentForApproval(q.id, {
-        token, channels, toEmail, toPhone, by: sendBy,
+        token, channels, toEmail, toPhone, by: sendBy, note,
         ...(freezeMeta ? { pdf: freezeMeta } : {})
       });
       const approvalUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${token}`;
@@ -16119,87 +16251,35 @@ async function handleApi(req, res, pathname) {
               service: "gmail",
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
-            // Greet by the customer's real first name (resolved above),
-            // and show the display quote-number override on the PDF (falls
-            // back to the internal id).
-            const custName = String((parties.customer && parties.customer.name) || "").trim();
-            const firstName = (custName ? custName.split(/\s+/)[0] : "").replace(/</g, "&lt;") || "there";
-            const displayNo = (q.quoteNumberDisplay && String(q.quoteNumberDisplay).trim()) || q.id;
-            const branchLabel = q.branch || "project";
-            // Customer-facing document noun (residential_repair brief): a repair
-            // job reads as an "Estimate", every other branch as a "Proposal".
-            const docNoun = quotes.customerDocNoun(q);
-            // "Sign ASAP to schedule" urgency (Jul 2026) — repair estimates
-            // only. Format a plain YYYY-MM-DD as a UTC calendar date so no
-            // timezone shift moves it a day.
-            const isRepairEmail = q.branch === "residential_repair";
-            const fmtSchedDate = (iso) => {
-              const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
-              if (!m) return "";
-              const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
-              const WD = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-              const MO = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-              return `${WD[dt.getUTCDay()]}, ${MO[dt.getUTCMonth()]} ${dt.getUTCDate()}`;
-            };
-            const schedLabel = isRepairEmail ? fmtSchedDate(q.scheduledServiceDate) : "";
             // Phone-Gated Proposal Access (2026-07, rescoped Jul 13): the
             // gate exists ONLY when a custom HTML document is attached, so
             // the email branches on the same check the /approve routes use.
             //   gated   → link only, NO PDF attachment (gating a document
             //             and then emailing it defeats the gate), plus the
             //             "you'll be asked for your phone" expectation.
-            //   ungated → the classic email, PDF attached, byte-identical
-            //             to pre-gate behaviour.
+            //   ungated → the classic email, PDF attached.
             // plain_pdf delivery (residential_repair brief) composes the
             // plain-PDF path unconditionally — it never consults the document
             // field, so a stray file could never gate a repair estimate the
             // customer already has a link to.
             const gated = q.deliveryMode === "plain_pdf" ? false : await proposalHasCustomDoc(q);
-            const html = `
-<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55;">
-  <div style="padding:24px 28px;background:#1B4D2E;border-radius:8px 8px 0 0;">
-    <div style="color:#EAF3DE;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;font-weight:600;">PJL Land Services</div>
-    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;">Your ${docNoun.lower} — ready for review.</h1>
-  </div>
-  <div style="padding:24px 28px;background:#FAFAF5;border:1px solid #e5e5dd;border-top:none;border-radius:0 0 8px 8px;">
-    <p style="margin:0 0 14px;">Hi ${firstName},</p>
-    ${gated
-      ? `<p style="margin:0 0 14px;">Your detailed ${docNoun.lower} (<strong>${displayNo}</strong>) is ready to review at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>
-    <p style="margin:0 0 14px;padding:12px 14px;background:#EAF3DE;border:1px solid #C7E0A8;border-radius:8px;font-size:13px;color:#33502f;">To open it, you'll be asked for your phone number — the one we have on file for you. Any format is fine.</p>`
-      : `<p style="margin:0 0 14px;">Your detailed ${docNoun.lower} (<strong>${displayNo}</strong>) is attached and posted at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>`}
-    ${isRepairEmail
-      ? `<p style="margin:0 0 14px;padding:12px 14px;background:#FFF4E5;border:1px solid #F0C88A;border-radius:8px;font-size:14px;color:#7A4E12;"><strong>Estimate must be signed ASAP to schedule.</strong>${schedLabel ? ` This repair is scheduled for <strong>${schedLabel}</strong> — please sign your estimate before then to keep that date.` : ""}</p>`
-      : ""}
-    <p style="margin:0 0 14px;font-size:13px;color:#555;">You can accept this ${docNoun.lower} in either of two ways:</p>
-    <ul style="margin:0 0 14px;padding-left:20px;font-size:13px;color:#333;line-height:1.7;">
-      <li><strong>Sign online</strong> — tap the button below, draw your signature, done.</li>
-      ${gated
-        ? `<li><strong>Print, sign, return</strong> — open the ${docNoun.lower}, download the PDF, sign by hand, scan or photograph it, and email it back to <a href="mailto:info@pjllandservices.com" style="color:#1B4D2E;">info@pjllandservices.com</a>.</li>`
-        : `<li><strong>Print, sign, return</strong> — print the attached PDF, sign by hand, scan or photograph it, and email it back to <a href="mailto:info@pjllandservices.com" style="color:#1B4D2E;">info@pjllandservices.com</a>.</li>`}
-    </ul>
-    <p style="margin:0 0 18px;text-align:center;">
-      <a href="${approvalUrl}" style="display:inline-block;padding:14px 28px;background:#E07B24;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;">Review &amp; sign online</a>
-    </p>
-    <p style="margin:18px 0 0;font-size:13px;color:#777;">If the button doesn't work, paste this link:<br><span style="color:#1B4D2E;word-break:break-all;">${approvalUrl}</span></p>
-    <p style="margin:24px 0 0;font-size:13px;color:#777;">Questions? Reply to this email or call <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a>.</p>
-  </div>
-  <p style="margin:16px 0 0;font-size:11px;color:#999;text-align:center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
-</div>`.trim();
-
+            // Same composer the builder's "Preview email" uses — the preview
+            // IS the send.
+            const mail = buildProposalApprovalEmail(q, { parties, approvalUrl, gated, note });
             // Ungated → attach the FROZEN bytes (Brief B), identical to the
             // admin download and the /approve print-to-sign page. Gated →
             // deliberately NO attachment; the PDF lives behind the gate.
-            const attachments = gated ? [] : [{
-              filename: `PJL-${docNoun.cap}-${q.id}.pdf`,
+            const attachments = mail.attachmentFilename ? [{
+              filename: mail.attachmentFilename,
               content: pdfBuffer,
               contentType: "application/pdf"
-            }];
+            }] : [];
             await transporter.sendMail({
-              from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
+              from: mail.from,
               to: toEmail,
-              replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
-              subject: `PJL ${docNoun.lower} ${displayNo} — your review and acceptance`,
-              html,
+              replyTo: mail.replyTo,
+              subject: mail.subject,
+              html: mail.html,
               ...(attachments.length ? { attachments } : {})
             }).catch(async (err) => {
               await mailerLog.logSend({ kind: "other", to: toEmail, ok: false, error: err.message, refId: q.id });
