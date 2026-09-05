@@ -35,6 +35,8 @@ import {
   openWorkOrder,
 } from '../api';
 import { telHref } from '../format';
+import { addDays, fromYmd, startOfWeek, WEEKDAY_INITIALS, ymd } from '../dates';
+import MonthSheet from './MonthSheet';
 import { colors, radius, space, type } from '../theme';
 import { runningVersionLabel } from '../updates';
 import { Pill } from '../ui';
@@ -57,27 +59,8 @@ const timeOf = (iso) => {
 };
 
 // All date maths is done on LOCAL dates anchored at noon. Building a
-// YYYY-MM-DD out of toISOString() would use UTC, which in Toronto is
-// four or five hours ahead — enough to ask the server for tomorrow's
-// schedule any evening after 8pm. Noon keeps a day safe from DST too.
-const ymd = (d) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-
-const fromYmd = (s) => {
-  const [y, m, d] = String(s).split('-').map(Number);
-  return new Date(y, (m || 1) - 1, d || 1, 12, 0, 0);
-};
-
-const addDays = (date, n) => {
-  const c = new Date(date);
-  c.setDate(c.getDate() + n);
-  return c;
-};
-
-// Weeks run Monday to Sunday — a work week, not a calendar-app week.
-const startOfWeek = (date) => addDays(date, -((date.getDay() + 6) % 7));
-
-const WEEKDAY_INITIALS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+// The date arithmetic lives in ../dates so the week strip and the month
+// picker below it cannot disagree about where a week starts.
 
 const longDate = (ymd) => {
   const d = ymd ? new Date(`${ymd}T12:00:00`) : new Date();
@@ -96,6 +79,7 @@ export default function TodayScreen({ onOpenWorkOrder }) {
   const [error, setError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [busyId, setBusyId] = useState(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const load = useCallback(async (date) => {
     try {
@@ -287,7 +271,15 @@ export default function TodayScreen({ onOpenWorkOrder }) {
             <Pressable onPress={() => goTo(ymd(addDays(anchor, -7)))} hitSlop={10} style={styles.step}>
               <Text style={styles.stepText}>‹</Text>
             </Pressable>
-            <Text style={styles.weekLabel}>{weekLabel}</Text>
+            <Pressable
+              onPress={() => setPickerOpen(true)}
+              hitSlop={8}
+              style={({ pressed }) => pressed && styles.weekLabelPressed}
+              accessibilityRole="button"
+              accessibilityLabel={`${weekLabel}. Open the calendar to pick a date.`}
+            >
+              <Text style={styles.weekLabel}>{weekLabel}</Text>
+            </Pressable>
             <Pressable onPress={() => goTo(ymd(addDays(anchor, 7)))} hitSlop={10} style={styles.step}>
               <Text style={styles.stepText}>›</Text>
             </Pressable>
@@ -319,6 +311,14 @@ export default function TodayScreen({ onOpenWorkOrder }) {
           })}
         </View>
       </View>
+
+      <MonthSheet
+        visible={pickerOpen}
+        selected={selected}
+        today={serverToday}
+        onPick={(key) => { setPickerOpen(false); goTo(key); }}
+        onClose={() => setPickerOpen(false)}
+      />
 
       <View style={styles.head}>
         <Text style={styles.date}>{longDate(payload?.date)}</Text>
@@ -443,6 +443,7 @@ const styles = StyleSheet.create({
   step: { width: 34, alignItems: 'center' },
   stepText: { fontSize: 24, color: colors.brand, marginTop: -4 },
   weekLabel: { ...type.label, fontWeight: '600', color: colors.text },
+  weekLabelPressed: { opacity: 0.55 },
   days: { flexDirection: 'row', paddingHorizontal: space.sm },
   day: { flex: 1, alignItems: 'center', gap: 4, paddingVertical: 2 },
   dayInitial: { fontSize: 11, fontWeight: '600', color: colors.textFaint },
