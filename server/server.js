@@ -21941,6 +21941,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
     // here: they carry their own promised bucket, and re-sequencing a
     // promise is the writer's job, not the review screen's.
     const seasonMonths = season === "spring" ? [0, 1, 2, 3, 4, 5, 6] : [7, 8, 9, 10, 11];
+    // Today and forward only. A completed appointment belongs to the
+    // Bookings and Today pages; on a forward-looking route plan it is
+    // noise (Patrick: "it shows every booked appointment from the past").
+    const nowForBooked = new Date();
+    const todayKeyForBooked = `${nowForBooked.getFullYear()}-${String(nowForBooked.getMonth() + 1).padStart(2, "0")}-${String(nowForBooked.getDate()).padStart(2, "0")}`;
     const codeByPropertyId = new Map(all.filter((p) => p && p.id && p.code).map((p) => [p.id, p.code]));
     const propertyById = new Map(all.filter((p) => p && p.id).map((p) => [p.id, p]));
     const leadsForBooked = await readLeads();
@@ -21954,6 +21959,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
         if (Number.isNaN(startD.getTime())) continue;
         if (startD.getFullYear() !== Number(year) || !seasonMonths.includes(startD.getMonth())) continue;
         const dateKey = `${startD.getFullYear()}-${String(startD.getMonth() + 1).padStart(2, "0")}-${String(startD.getDate()).padStart(2, "0")}`;
+        if (dateKey < todayKeyForBooked) continue;
         const lead = b.leadId ? leadByIdForBooked.get(b.leadId) : null;
         const propertyId = b.propertyId || (lead && lead.propertyId) || null;
         const property = propertyId ? propertyById.get(propertyId) : null;

@@ -90,6 +90,75 @@
   border-bottom: 1px solid var(--pjl-border);
 }
 .sp-day-head h3 { margin: 0; font-size: 1.02rem; }
+/* The day row — the collapsed face of a day card. */
+.sp-dayrow { cursor: pointer; user-select: none; }
+.sp-dayrow > div:first-of-type { flex: 1 1 auto; min-width: 0; text-align: left; }
+.sp-dayrow:hover { background: #F4F1E6; }
+.sp-day.is-open .sp-dayrow { background: var(--pjl-cream); }
+.sp-day-caret {
+  font-size: 0.9rem; color: var(--pjl-green); flex: 0 0 auto;
+  width: 16px; text-align: center;
+}
+.sp-daycontent[hidden] { display: none; }
+
+/* The jump bar — the whole season in one strip. */
+.sp-jumpbar {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  padding: 4px 0 2px;
+}
+.sp-jump {
+  display: inline-flex; align-items: baseline; gap: 7px;
+  font: inherit; cursor: pointer;
+  background: #fff; border: 1px solid var(--pjl-border); border-radius: 999px;
+  padding: 6px 12px; min-height: 34px;
+}
+.sp-jump:hover { border-color: var(--pjl-green); }
+.sp-jump-label { font-weight: 800; font-size: 0.8rem; color: var(--pjl-green); }
+.sp-jump-date { font-size: 0.8rem; color: var(--pjl-text-mid); }
+.sp-jump-count { font-size: 0.74rem; font-weight: 700; color: var(--pjl-text-muted); font-variant-numeric: tabular-nums; }
+.sp-jump.is-bookedonly { border-color: var(--pjl-amber); }
+.sp-jump.is-bookedonly .sp-jump-label { color: #9A5314; }
+.sp-jump.is-over { border-color: #A32020; }
+.sp-jump.is-over .sp-jump-count { color: #A32020; }
+.sp-jump.is-today { box-shadow: 0 0 0 2px var(--pjl-amber); }
+
+/* Find a customer's appointment. */
+.sp-finder { position: relative; }
+.sp-finder-input {
+  width: 100%; box-sizing: border-box; font: inherit; font-size: 0.95rem;
+  border: 1px solid var(--pjl-border); border-radius: 10px;
+  padding: 11px 14px; min-height: 46px; background: #fff;
+}
+.sp-finder-input:focus { outline: 2px solid var(--pjl-green); outline-offset: -1px; }
+.sp-finder-out {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 800;
+  margin: 0; padding: 4px; list-style: none;
+  background: #fff; border: 1px solid var(--pjl-border); border-radius: 10px;
+  box-shadow: var(--pjl-shadow); max-height: 340px; overflow-y: auto;
+}
+.sp-finder-out[hidden] { display: none; }
+.sp-finder-hit {
+  display: grid; grid-template-columns: minmax(120px, 0.9fr) 1.4fr auto;
+  gap: 10px; align-items: baseline;
+  padding: 9px 10px; border-radius: 7px; cursor: pointer;
+}
+.sp-finder-hit:hover { background: var(--pjl-cream); }
+.sp-finder-who { font-weight: 700; font-size: 0.88rem; overflow-wrap: anywhere; }
+.sp-finder-where { font-size: 0.84rem; color: var(--pjl-text-mid); overflow-wrap: anywhere; }
+.sp-finder-when { font-size: 0.78rem; font-weight: 600; color: var(--pjl-green); white-space: nowrap; }
+.sp-finder-none { padding: 10px; font-size: 0.85rem; color: var(--pjl-text-muted); }
+@media (max-width: 700px) {
+  .sp-finder-hit { grid-template-columns: 1fr; gap: 2px; }
+  .sp-finder-when { white-space: normal; }
+}
+
+/* Past days, folded away. */
+.sp-past { border: 1px dashed var(--pjl-border); border-radius: 12px; padding: 0 14px; }
+.sp-past > summary {
+  cursor: pointer; padding: 12px 2px; font-size: 0.9rem; font-weight: 600;
+  color: var(--pjl-text-muted); list-style-position: inside;
+}
+.sp-past > .sp-day { margin: 0 0 12px; }
 .sp-day-territory { margin: 3px 0 0; font-size: 0.84rem; color: var(--pjl-text-muted); }
 
 /* Re-dating a day. Tucked under the title rather than in the stats row —

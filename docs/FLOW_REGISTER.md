@@ -1639,6 +1639,33 @@ opposite of the one first recorded: a fix verified against a live symptom is not
 the codebase cannot produce" just because the write path is hard to find — data outranks code
 reading, and the bar for removing the union again is a walked Today page, not an argument.
 
+**2026-09-05 (Season Plan organized: closed day rows, jump bar, customer finder, past off
+the board):** Patrick on the merged #134 screen: "way too scattered. It shows every booked
+appointment from the past... Please organize that page entirely. Search a customers
+appointment from that page." Four changes, review screen + its payload only:
+(1) **Past stays past.** `resolveSeasonPlan` only attaches bookings dated today or later —
+a completed appointment belongs to Bookings/Today, not a forward route plan; past PLAN days
+still exist but render inside a closed "N past days — done and off the board" fold at the
+bottom. (2) **One row per day, closed by default.** The day card's header became a
+clickable row (label · weekday-date, Reschedule, stat chips); the notes strip, map and stop
+panel live in a fold that opens on click, and the map draws on FIRST OPEN (replacing the
+draw-on-scroll IntersectionObserver — same one-request-per-day-looked-at discipline). Fixed
+in passing: every title printed its date twice ("Monday, Sep 28, Sep 28") because
+`day.weekday` already carries the date and the renderer appended `prettyDate` again.
+(3) **Jump bar.** One chip per upcoming day (label · date · stops+booked; amber ring for
+booked-only, red for morning-overrun, amber glow for today) — click opens the day and lands
+on it. (4) **Find a customer's appointment.** A search box above the board matches name,
+address, town or property code across plan stops AND booked appointments in the loaded
+season; a hit opens the day, scrolls to it, and lights the exact row for ~2.5s. The
+no-match row points at Today's job finder, which searches every record. **No PASS flow
+touched** — client presentation plus a read-path filter in `resolveSeasonPlan`, which feeds
+only this screen's endpoints; `moveStop`, the engine and the writer are unchanged
+(`test-season-plan-moves` still green). Verified in headless Chromium against the real
+page HTML/CSS/JS with a fixture payload: rows closed on load, chips correct (booked-only
+shows "+1", not "0+1"), past day folded, "cerise" finds the Oct 1 ad booking, click opens
+Oct 1 and highlights the row. **Needs Patrick's walk:** the real plan loads as a tidy list;
+type a customer's street into the finder and land on their day.
+
 **2026-09-05 (Field app records on-site payments; the money display stops guessing — PR
 #135, recorded here after the fact):** merged from the field-app session without a register
 entry; recorded now so the ledger-touching surfaces stay accounted for. Patrick's call: start
