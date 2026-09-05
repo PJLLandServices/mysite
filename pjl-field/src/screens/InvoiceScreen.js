@@ -15,18 +15,28 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator, Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View,
+  ActivityIndicator, Alert, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
-import { AuthRequiredError, getInvoice, invoicePaymentLink, sendInvoice } from '../api';
+import { AuthRequiredError, getInvoice, invoicePaymentLink, recordInvoicePayment, sendInvoice } from '../api';
 import { colors, radius, space, type } from '../theme';
 
-const money = (cents, currency = 'CAD') => {
-  const n = Number(cents);
+// DOLLARS. Every money field on an invoice is dollars, end to end:
+// balanceDue is `round2(total - amountPaid)`, addPayment takes dollars, and
+// the Stripe path divides its cents by 100 before recording. The server's
+// own tolerance ("a balance within a cent counts as settled") only makes
+// sense in dollars.
+//
+// This used to guess — "an integer of 1000 or more must be cents" — which
+// rendered a $1,000.00 invoice as $10.00. It never bit because a closing is
+// $90-$400, and it would have bitten on the first big job, on the screen the
+// collected amount is read from.
+const money = (value, currency = 'CAD') => {
+  // A missing field is not zero. Number(null) is 0, and "$0.00" on a balance
+  // reads as "nothing owing" — the opposite of "we don't know".
+  if (value === null || value === undefined || value === '') return '—';
+  const n = Number(value);
   if (!Number.isFinite(n)) return '—';
-  // Invoices store dollars in some paths and cents in others; anything
-  // with a decimal is already dollars.
-  const dollars = Number.isInteger(n) && Math.abs(n) >= 1000 ? n / 100 : n;
-  return `$${dollars.toFixed(2)} ${currency}`;
+  return `$${n.toFixed(2)} ${currency}`;
 };
 
 export default function InvoiceScreen({ invoiceId, onBack }) {
@@ -34,6 +44,9 @@ export default function InvoiceScreen({ invoiceId, onBack }) {
   const [state, setState] = useState('loading');
   const [busy, setBusy] = useState(false);
   const [sentAt, setSentAt] = useState(null);
+  const [recording, setRecording] = useState(false);   // the sheet is open
+  const [amount, setAmount] = useState('');
+  const [method, setMethod] = useState('card_qb');
 
   const load = useCallback(async () => {
     try {
@@ -85,6 +98,36 @@ export default function InvoiceScreen({ invoiceId, onBack }) {
     }
   };
 
+  // Money that arrived some other way — a card tapped in Stripe's own app,
+  // cash, a cheque. The server owns the ledger and derives the balance and
+  // the status; this only reports what was collected.
+  const saveRecorded = async () => {
+    const value = Number(String(amount).replace(/[^0-9.]/g, ''));
+    if (!Number.isFinite(value) || value <= 0) {
+      Alert.alert('How much?', 'Enter the amount collected.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await recordInvoicePayment(invoiceId, {
+        amount: value,
+        method,
+        notes: method === 'card_qb' ? 'Card taken on site (Stripe app)' : 'Collected on site',
+      });
+      setRecording(false);
+      setAmount('');
+      // Re-read rather than patching locally: amountPaid, balanceDue and the
+      // status are all derived server-side, and a partial payment leaves the
+      // invoice open. Guessing that here is how a balance goes wrong.
+      setState('loading');
+      await load();
+    } catch (err) {
+      Alert.alert("Didn't record", err?.message || 'Nothing was recorded. Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (state === 'loading') {
     return <View style={styles.centre}><ActivityIndicator color={colors.brand} /></View>;
   }
@@ -108,6 +151,10 @@ export default function InvoiceScreen({ invoiceId, onBack }) {
 
   const already = invoice?.sentAt || sentAt;
   const paid = invoice?.status === 'paid';
+  // The server derives these; a partial payment leaves the invoice open and
+  // the balance is what a second payment should default to.
+  const owing = Number(invoice?.balanceDue);
+  const partPaid = !paid && Number.isFinite(owing) && owing > 0 && Number(invoice?.amountPaid) > 0;
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -122,9 +169,12 @@ export default function InvoiceScreen({ invoiceId, onBack }) {
         <Row label="Customer" value={invoice?.customerName || invoice?.billTo?.name || '—'} />
         <Row label="Property" value={invoice?.address || invoice?.propertyAddress || '—'} />
         <Row label="Total" value={money(invoice?.total ?? invoice?.amountDue, invoice?.currency)} strong />
+        {partPaid ? (
+          <Row label="Still owing" value={money(invoice?.balanceDue, invoice?.currency)} strong />
+        ) : null}
         <Row
           label="Status"
-          value={paid ? 'Paid' : already ? 'Sent, awaiting payment' : 'Draft — not sent yet'}
+          value={paid ? 'Paid' : partPaid ? 'Part paid' : already ? 'Sent, awaiting payment' : 'Draft — not sent yet'}
           last
         />
       </View>
@@ -145,8 +195,78 @@ export default function InvoiceScreen({ invoiceId, onBack }) {
           <Pressable style={[styles.button, busy && styles.off]} onPress={takePayment} disabled={busy}>
             <Text style={styles.buttonText}>Take payment now</Text>
           </Pressable>
+
+          {/* For money collected some other way. Opening the sheet fills the
+              amount with what is still owed, because that is what it almost
+              always is — but it stays editable for a part payment. */}
+          {recording ? null : (
+            <Pressable
+              style={[styles.button, styles.buttonGhost, busy && styles.off]}
+              onPress={() => {
+                const due = Number.isFinite(owing) && owing > 0 ? owing : Number(invoice?.total);
+                setAmount(Number.isFinite(due) ? String(due.toFixed(2)) : '');
+                setRecording(true);
+              }}
+              disabled={busy}
+            >
+              <Text style={styles.buttonGhostText}>Record a payment I took</Text>
+            </Pressable>
+          )}
         </View>
       )}
+
+      {recording ? (
+        <View style={styles.sheet}>
+          <Text style={styles.sheetTitle}>What did you collect?</Text>
+
+          <TextInput
+            value={amount}
+            onChangeText={setAmount}
+            keyboardType="decimal-pad"
+            placeholder="0.00"
+            placeholderTextColor={colors.textFaint}
+            style={styles.amountInput}
+          />
+
+          <View style={styles.methods}>
+            {[
+              ['card_qb', 'Card'],
+              ['cash', 'Cash'],
+              ['cheque', 'Cheque'],
+              ['e_transfer', 'e-Transfer'],
+            ].map(([key, label]) => (
+              <Pressable
+                key={key}
+                onPress={() => setMethod(key)}
+                style={[styles.method, method === key && styles.methodOn]}
+                accessibilityRole="button"
+                accessibilityState={{ selected: method === key }}
+              >
+                <Text style={[styles.methodText, method === key && styles.methodTextOn]}>{label}</Text>
+              </Pressable>
+            ))}
+          </View>
+
+          <Text style={styles.sheetNote}>
+            {method === 'card_qb'
+              ? 'For a card tapped in the Stripe app. This records it against the invoice — it does not charge anything here.'
+              : 'Recorded against the invoice. Nothing is charged here.'}
+          </Text>
+
+          <View style={styles.sheetActions}>
+            <Pressable
+              style={[styles.button, styles.sheetBtn, styles.buttonGhost, busy && styles.off]}
+              onPress={() => setRecording(false)}
+              disabled={busy}
+            >
+              <Text style={styles.buttonGhostText}>Cancel</Text>
+            </Pressable>
+            <Pressable style={[styles.button, styles.sheetBtn, busy && styles.off]} onPress={saveRecorded} disabled={busy}>
+              <Text style={styles.buttonText}>{busy ? 'Recording…' : 'Record it'}</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       <Text style={styles.footer}>
         {paid
@@ -202,6 +322,30 @@ const styles = StyleSheet.create({
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   buttonGhostText: { color: colors.brand, fontSize: 16, fontWeight: '600' },
   off: { opacity: 0.5 },
+
+  sheet: { backgroundColor: colors.card, borderRadius: radius.card, padding: space.lg, gap: space.md },
+  sheetTitle: { ...type.title },
+  amountInput: {
+    ...type.hero,
+    backgroundColor: colors.ground,
+    borderRadius: radius.card,
+    paddingHorizontal: space.md,
+    paddingVertical: 12,
+    fontVariant: ['tabular-nums'],
+  },
+  methods: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
+  method: {
+    paddingVertical: 10, paddingHorizontal: space.lg,
+    borderRadius: radius.pill, backgroundColor: colors.ground,
+  },
+  methodOn: { backgroundColor: colors.brand },
+  methodText: { ...type.body, fontWeight: '600', color: colors.text },
+  methodTextOn: { color: '#fff' },
+  sheetNote: { ...type.caption, lineHeight: 19 },
+  sheetActions: { flexDirection: 'row', gap: space.sm },
+  // Equal halves; without this the two buttons size to their labels and
+  // "Cancel" ends up a different width from "Record it".
+  sheetBtn: { flex: 1 },
 
   note: { ...type.caption, lineHeight: 20 },
   footer: { ...type.caption, lineHeight: 20 },

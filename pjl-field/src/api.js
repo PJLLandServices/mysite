@@ -192,6 +192,26 @@ export const sendInvoice = (id) =>
 export const invoicePaymentLink = (id) =>
   sendJson(`/api/invoices/${encodeURIComponent(id)}/payment-link`, 'POST', {}).then((d) => d.url);
 
+// Record money that arrived OUTSIDE our pay page — cash, a cheque, or a
+// card tapped on the phone through Stripe's own app.
+//
+// `card_qb` is not a QuickBooks-only method despite its name: it is what
+// the pay page already records a Stripe charge as, it renders as plain
+// "Card", and reversing one warns "refund in Stripe first" — all correct
+// for a Tap to Pay charge. Recording a tap as anything else would file
+// card revenue under Other.
+//
+// The server owns the ledger: it derives amountPaid, balanceDue and the
+// invoice status from the payments it holds. This only reports what was
+// collected.
+export const recordInvoicePayment = (id, { amount, method, notes = '' }) =>
+  sendJson(`/api/invoices/${encodeURIComponent(id)}/payments`, 'POST', {
+    amount,
+    method,
+    receivedAt: new Date().toISOString(),
+    notes,
+  });
+
 // Sweeps every issue off the work order's zones into the property's
 // deferred recommendations. Takes no payload — the server reads the
 // zones. Called once, at finish.
