@@ -421,13 +421,25 @@
     const card = document.createElement("section");
     card.className = "sp-day";
 
+    card.dataset.date = day.date;
+
+    // ONE ROW PER DAY, CLOSED BY DEFAULT. Twelve full-height map cards in
+    // a stack is the "way too scattered" page — the row is the season at
+    // a glance, and the map opens only for the day being worked.
     const head = document.createElement("header");
-    head.className = "sp-day-head";
+    head.className = "sp-day-head sp-dayrow";
+    const caret = document.createElement("span");
+    caret.className = "sp-day-caret";
+    caret.setAttribute("aria-hidden", "true");
+    caret.textContent = "▸";
+    head.appendChild(caret);
     const title = document.createElement("div");
     // The DATE, not just the weekday. It was missing, which was survivable
     // when a day could not move and is not now: you cannot reschedule a day
     // you cannot see the date of.
-    title.innerHTML = `<h3>${day.label || "—"} · ${day.weekday}, ${prettyDate(day.date)}</h3>`;
+    // day.weekday already carries the date ("Monday, Sep 28") — appending
+    // prettyDate again printed every day as "Monday, Sep 28, Sep 28".
+    title.innerHTML = `<h3>${day.label || (day.bookedOnly ? "Booked day" : "—")} · ${day.weekday}</h3>`;
     // A booked-only day has no plan entry to reschedule — moving a real
     // customer's appointment is a reschedule of THEIR booking, done from
     // the property/customer page, not a plan edit.
@@ -484,6 +496,12 @@
     head.appendChild(stats);
     card.appendChild(head);
 
+    // Everything below the row lives in a fold that opens on click.
+    const content = document.createElement("div");
+    content.className = "sp-daycontent";
+    content.hidden = true;
+    card.appendChild(content);
+
     const notes = [...(day.flags || []), ...(day.suggestions || [])];
     if (notes.length) {
       const strip = document.createElement("ul");
@@ -495,7 +513,7 @@
         li.textContent = n.message;
         strip.appendChild(li);
       }
-      card.appendChild(strip);
+      content.appendChild(strip);
     }
 
     // The route, drawn on the day itself. Not behind a button and not in
@@ -554,14 +572,42 @@
     if ((day.booked || []).length) scroll.appendChild(bookedBlock(day));
     panel.appendChild(scroll);
     body.appendChild(panel);
-    card.appendChild(body);
+    content.appendChild(body);
 
-    // BUILT ON SCROLL, NOT ON LOAD. Eleven days rendering at once fired
-    // eleven route requests in the same tick; the ones that lost that race
-    // came back refused and the page finished half-drawn. One day at a
-    // time, and only the days actually looked at.
-    whenVisible(mapBox, () => drawDayMap(mapBox, scroll, day));
+    // DRAWN ON OPEN, NOT ON LOAD. The old page drew on scroll; with the
+    // rows closed by default the honest trigger is expansion — one map
+    // request per day actually looked at, same discipline as before.
+    let drawn = false;
+    const setOpen = (open) => {
+      content.hidden = !open;
+      card.classList.toggle("is-open", open);
+      caret.textContent = open ? "▾" : "▸";
+      if (open && !drawn) {
+        drawn = true;
+        drawDayMap(mapBox, scroll, day);
+      }
+    };
+    card.__spSetOpen = setOpen;
+    head.addEventListener("click", (event) => {
+      // The row carries live controls (Reschedule, Move, the territory
+      // link) — only bare parts of the row toggle the fold.
+      if (event.target.closest("button, select, input, a, label, form")) return;
+      setOpen(content.hidden);
+    });
 
+    return card;
+  }
+
+  // Open one day by date (from the jump bar or the finder) and hand the
+  // card back so the caller can scroll to it.
+  function expandDay(date) {
+    const card = dayList.querySelector(`.sp-day[data-date="${date}"]`);
+    if (!card) return null;
+    // A past day lives inside the closed fold at the bottom — open it so
+    // the card has a box to scroll to.
+    const fold = card.closest("details");
+    if (fold) fold.open = true;
+    if (typeof card.__spSetOpen === "function") card.__spSetOpen(true);
     return card;
   }
 
@@ -727,18 +773,6 @@
       }
     })();
     return mapsPromise;
-  }
-
-  function whenVisible(el, run) {
-    if (typeof IntersectionObserver !== "function") { run(); return; }
-    const observer = new IntersectionObserver((entries) => {
-      for (const entry of entries) {
-        if (!entry.isIntersecting) continue;
-        observer.disconnect();
-        run();
-      }
-    }, { rootMargin: "200px" });
-    observer.observe(el);
   }
 
   // Stops in driving order that we can actually put a pin on. A stop with no
@@ -1046,7 +1080,148 @@
       problemsPanel.hidden = true;
     }
 
-    plan.days.forEach((day) => dayList.appendChild(dayCard(day)));
+    // The organized board: find-a-customer, a one-line jump bar, the
+    // upcoming days as closed rows, and past days folded away at the
+    // bottom (Patrick: "way too scattered... every booked appointment
+    // from the past").
+    const todayYmd = localYmd(new Date());
+    const upcoming = plan.days.filter((d) => d.date >= todayYmd);
+    const past = plan.days.filter((d) => d.date < todayYmd);
+
+    dayList.appendChild(buildFinder());
+    if (upcoming.length) dayList.appendChild(buildJumpBar(upcoming, todayYmd));
+    upcoming.forEach((day) => dayList.appendChild(dayCard(day)));
+
+    if (past.length) {
+      const fold = document.createElement("details");
+      fold.className = "sp-past";
+      const sum = document.createElement("summary");
+      sum.textContent = `${past.length} past day${past.length === 1 ? "" : "s"} — done and off the board`;
+      fold.appendChild(sum);
+      past.forEach((day) => fold.appendChild(dayCard(day)));
+      dayList.appendChild(fold);
+    }
+    if (!upcoming.length && !past.length) return;
+  }
+
+  function localYmd(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  // One chip per upcoming day. The season in one line; a click opens the
+  // day and lands on it.
+  function buildJumpBar(days, todayYmd) {
+    const bar = document.createElement("nav");
+    bar.className = "sp-jumpbar";
+    bar.setAttribute("aria-label", "Jump to a day");
+    for (const day of days) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      const overruns = (day.flags || []).some((f) => f.code === "morning_overruns");
+      chip.className = "sp-jump"
+        + (day.bookedOnly ? " is-bookedonly" : "")
+        + (overruns ? " is-over" : "")
+        + (day.date === todayYmd ? " is-today" : "");
+      const bookedN = (day.booked || []).length;
+      chip.innerHTML =
+        `<span class="sp-jump-label">${escapeHtml(day.label || (day.bookedOnly ? "Booked" : "—"))}</span>`
+        + `<span class="sp-jump-date">${escapeHtml(prettyDate(day.date))}</span>`
+        + `<span class="sp-jump-count">${day.bookedOnly ? `+${bookedN}` : `${day.counts.total}${bookedN ? `+${bookedN}` : ""}`}</span>`;
+      chip.title = `${day.weekday} — ${day.counts.total} stop${day.counts.total === 1 ? "" : "s"}`
+        + (bookedN ? `, ${bookedN} booked` : "") + (overruns ? " · morning overruns" : "");
+      chip.addEventListener("click", () => {
+        const card = expandDay(day.date);
+        if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      bar.appendChild(chip);
+    }
+    return bar;
+  }
+
+  // Find a customer's appointment from this page: name, street, town or
+  // property code, across plan stops AND booked appointments. A hit opens
+  // the day and lights the row.
+  function buildFinder() {
+    const panel = document.createElement("div");
+    panel.className = "sp-finder";
+    const input = document.createElement("input");
+    input.type = "search";
+    input.className = "sp-finder-input";
+    input.placeholder = "Find a customer's appointment — name, address, or code";
+    input.setAttribute("aria-label", "Find a customer's appointment");
+    const out = document.createElement("ul");
+    out.className = "sp-finder-out";
+    out.hidden = true;
+    panel.append(input, out);
+
+    const entries = [];
+    for (const day of current.days) {
+      for (const bucket of ["morning", "afternoon"]) {
+        for (const stop of day[bucket] || []) {
+          entries.push({
+            hay: `${stop.customerName || ""} ${stop.address || ""} ${stop.town || ""} ${stop.code || ""}`.toLowerCase(),
+            date: day.date, day, kind: "stop", bucket, stop
+          });
+        }
+      }
+      for (const b of day.booked || []) {
+        entries.push({
+          hay: `${b.customerName || ""} ${b.address || ""}`.toLowerCase(),
+          date: day.date, day, kind: "booked", booked: b
+        });
+      }
+    }
+
+    const runFind = () => {
+      const q = input.value.trim().toLowerCase();
+      out.innerHTML = "";
+      if (q.length < 2) { out.hidden = true; return; }
+      const hits = entries.filter((e) => e.hay.includes(q)).slice(0, 12);
+      if (!hits.length) {
+        const li = document.createElement("li");
+        li.className = "sp-finder-none";
+        li.textContent = "No appointment matches. The job finder on Today searches every record, past seasons included.";
+        out.appendChild(li);
+        out.hidden = false;
+        return;
+      }
+      for (const hit of hits) {
+        const li = document.createElement("li");
+        li.className = "sp-finder-hit";
+        const who = hit.kind === "stop"
+          ? (hit.stop.customerName || hit.stop.address || hit.stop.code)
+          : (hit.booked.customerName || hit.booked.address || "Booked customer");
+        const where = hit.kind === "stop" ? (hit.stop.address || "") : (hit.booked.address || "");
+        const whenBits = hit.kind === "stop"
+          ? `${hit.day.label || "—"} · ${hit.bucket}`
+          : `Booked · ${hit.booked.timeLabel || ""}`;
+        li.innerHTML =
+          `<span class="sp-finder-who">${escapeHtml(who)}</span>`
+          + `<span class="sp-finder-where">${escapeHtml(where)}</span>`
+          + `<span class="sp-finder-when">${escapeHtml(hit.day.weekday)} — ${escapeHtml(whenBits)}</span>`;
+        li.addEventListener("click", () => {
+          const card = expandDay(hit.date);
+          if (!card) return;
+          card.scrollIntoView({ behavior: "smooth", block: "start" });
+          // Light the exact row once the fold is open.
+          const row = hit.kind === "stop"
+            ? card.querySelector(`.sp-stop[data-code="${hit.stop.code}"]`)
+            : [...card.querySelectorAll(".sp-stop-booked")]
+                .find((r) => r.textContent.includes(hit.booked.address || hit.booked.customerName || ""));
+          if (row) {
+            row.classList.add("is-hot");
+            row.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            setTimeout(() => row.classList.remove("is-hot"), 2600);
+          }
+          out.hidden = true;
+        });
+        out.appendChild(li);
+      }
+      out.hidden = false;
+    };
+    input.addEventListener("input", runFind);
+    input.addEventListener("search", runFind);
+    return panel;
   }
 
   async function load() {

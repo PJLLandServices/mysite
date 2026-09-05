@@ -1639,6 +1639,56 @@ opposite of the one first recorded: a fix verified against a live symptom is not
 the codebase cannot produce" just because the write path is hard to find — data outranks code
 reading, and the bar for removing the union again is a walked Today page, not an argument.
 
+**2026-09-05 (Season Plan organized: closed day rows, jump bar, customer finder, past off
+the board):** Patrick on the merged #134 screen: "way too scattered. It shows every booked
+appointment from the past... Please organize that page entirely. Search a customers
+appointment from that page." Four changes, review screen + its payload only:
+(1) **Past stays past.** `resolveSeasonPlan` only attaches bookings dated today or later —
+a completed appointment belongs to Bookings/Today, not a forward route plan; past PLAN days
+still exist but render inside a closed "N past days — done and off the board" fold at the
+bottom. (2) **One row per day, closed by default.** The day card's header became a
+clickable row (label · weekday-date, Reschedule, stat chips); the notes strip, map and stop
+panel live in a fold that opens on click, and the map draws on FIRST OPEN (replacing the
+draw-on-scroll IntersectionObserver — same one-request-per-day-looked-at discipline). Fixed
+in passing: every title printed its date twice ("Monday, Sep 28, Sep 28") because
+`day.weekday` already carries the date and the renderer appended `prettyDate` again.
+(3) **Jump bar.** One chip per upcoming day (label · date · stops+booked; amber ring for
+booked-only, red for morning-overrun, amber glow for today) — click opens the day and lands
+on it. (4) **Find a customer's appointment.** A search box above the board matches name,
+address, town or property code across plan stops AND booked appointments in the loaded
+season; a hit opens the day, scrolls to it, and lights the exact row for ~2.5s. The
+no-match row points at Today's job finder, which searches every record. **No PASS flow
+touched** — client presentation plus a read-path filter in `resolveSeasonPlan`, which feeds
+only this screen's endpoints; `moveStop`, the engine and the writer are unchanged
+(`test-season-plan-moves` still green). Verified in headless Chromium against the real
+page HTML/CSS/JS with a fixture payload: rows closed on load, chips correct (booked-only
+shows "+1", not "0+1"), past day folded, "cerise" finds the Oct 1 ad booking, click opens
+Oct 1 and highlights the row. **Needs Patrick's walk:** the real plan loads as a tidy list;
+type a customer's street into the finder and land on their day.
+
+**2026-09-05 (Field app records on-site payments; the money display stops guessing — PR
+#135, recorded here after the fact):** merged from the field-app session without a register
+entry; recorded now so the ledger-touching surfaces stay accounted for. Patrick's call: start
+collecting on the driveway THIS week with no new build — the card tap happens in **Stripe's
+own app**, and the invoice screen in pjl-field grew "**Record a payment I took**": a sheet
+pre-filled with the balance still owing (editable, so a part payment works), methods Card /
+Cash / Cheque / e-Transfer, posting to the EXISTING `POST /api/invoices/:id/payments` — **no
+server change**. Card taps record as `card_qb` deliberately: it is already the general card
+method (the pay page records its own Stripe charges as it, it renders as "Card", reversing
+one warns "refund in Stripe first"), so tap revenue files as card, not Other. The app
+re-reads the invoice after recording rather than patching locally — `amountPaid`,
+`balanceDue` and status are derived server-side — and the screen gained a "Still owing" row
+plus a "Part paid" status. **Bug fixed in the same file:** the app's `money()` guessed
+dollars-vs-cents ("an integer ≥ 1000 must be cents"), so a **$1,000.00 invoice rendered as
+$10.00** — on the very screen the collected amount is read from. Every invoice money field
+is dollars end to end, so the guess is gone; a missing value now renders "—" instead of
+"$0.00" (which reads as "nothing owing", the opposite of "unknown"). Never bit at closing
+prices ($90–$400); would have bitten on the first big job. **No registered flow touched** —
+app display plus an existing endpoint; FLOW-23 (payments) unchanged on the server. Ships
+over the air. **Still open if wanted:** true Tap to Pay inside pjl-field (Stripe Terminal
+SDK, Apple entitlement, TestFlight build). **Needs Patrick's walk:** reopen the app, finish
+a closing, record a driveway payment, and see the invoice status follow.
+
 **2026-09-05 (Tap to Pay — the approvals started, the server half shipped):** Patrick
 asked for "Take payment now" to open the Stripe app ready to charge. **It cannot be built
 that way** — checked rather than assumed: Stripe publishes no URL scheme for their Dashboard
