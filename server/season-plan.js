@@ -1654,6 +1654,25 @@
         + "exact drive times.";
       out.appendChild(alarm);
     }
+    // A key that EXISTS but Google refuses is a different disease from an
+    // address Google can't find — and it degrades EVERY address, so it
+    // must read as a system alarm, never as "couldn't pinpoint it".
+    // ZERO_RESULTS is the only reason that actually means "no such
+    // address"; everything else is the key or the service.
+    const keyRefused = data.geocodeOk === false && data.keyConfigured !== false
+      && data.geocodeReason && data.geocodeReason !== "ZERO_RESULTS"
+      && data.geocodeReason !== "empty address";
+    if (keyRefused) {
+      const alarm = document.createElement("p");
+      alarm.className = "sp-probe-alarm";
+      alarm.textContent = `⚠ Google is REFUSING the server's lookups (${data.geocodeReason}). `
+        + "The key is set, but Google rejects it — the usual causes: the key has an "
+        + "HTTP-referrer (website) restriction, which server calls always fail (use a key with "
+        + "an IP restriction or none); the Geocoding API isn't enabled for that key; or "
+        + "billing is off on the Google Cloud project. EVERY address is being placed by its "
+        + "town centre until this is fixed — this is not a problem with the address you typed.";
+      out.appendChild(alarm);
+    }
     const shown = data.typedAddress || data.address;
     const head = document.createElement("p");
     head.className = "sp-probe-head";
@@ -1662,8 +1681,10 @@
         + `${data.keyConfigured === false ? " — no key" : ""}, and no recognizable town in the text), `
         + "so the filter is skipped and every day is offered to this address.";
     } else if (data.approximate) {
-      head.textContent = `${shown} — Google couldn't pinpoint it, so it was measured from the centre `
-        + `of ${data.approximateTown || "its town"} (approximate). Offered on ${data.routeDaysOffered} of `
+      head.textContent = `${shown} — ${keyRefused
+        ? `placed at the centre of ${data.approximateTown || "its town"} because Google refused the lookup (see above)`
+        : `Google couldn't pinpoint it, so it was measured from the centre of ${data.approximateTown || "its town"} (approximate)`}. `
+        + `Offered on ${data.routeDaysOffered} of `
         + `${data.routeDaysTotal} route days at the ${data.thresholdMinutes}-minute drive threshold.`;
     } else {
       head.textContent = `${shown} — offered on ${data.routeDaysOffered} of ${data.routeDaysTotal} route days, `
@@ -1676,8 +1697,11 @@
     // the line. Sorted by added drive; counts shown so a nearly-full
     // day is visible at a glance.
     if (!data.filterSkipped) {
+      // Only days that HAVE something on them belong in "best days" — an
+      // empty day at +0 min is not "we're already nearby", it's a blank
+      // calendar, and it was headlining the list.
       const best = (data.days || [])
-        .filter((d) => d.offered && d.addedDriveMinutes != null)
+        .filter((d) => d.offered && d.addedDriveMinutes != null && d.points > 0)
         .sort((a, b) => a.addedDriveMinutes - b.addedDriveMinutes)
         .slice(0, 3);
       if (best.length) {
