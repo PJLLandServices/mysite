@@ -1741,6 +1741,23 @@ distribution entitlement before it ships), and Stripe enabling Terminal on the a
 also requires a "How to Tap" overlay in the app before review — that is code, on the list,
 and not optional.
 
+**2026-09-05, same day (Apple's entitlement requested — Case-ID 22041657):** Patrick
+submitted the Tap to Pay development entitlement request; Apple acknowledged from
+`ttpoientitlements@apple.com` and it is queued for review in the order received, no ETA.
+The request names **Stripe** as PSP, **Canada**, and internal distribution. **One answer
+needs correcting and is recorded because a stale "it's submitted" would hide it:** "how many
+new apps that use this entitlement will you distribute in the next 12 months" was answered
+*None*, when the true answer is *1* — pjl-field itself. (*None* was correct for the
+preceding question, which asks about apps already on the App Store.) As submitted it asks
+for an entitlement no app will use while requesting up to 99 devices, which is the
+contradiction a reviewer would query; the fix is a reply on the thread quoting the Case-ID,
+**not confirmed sent**. Also recorded as a wrong turn taken first: registering an Apple
+**Merchant ID** (`merchant.com.pjllandservices.field`) is the **Apple Pay** path and is not
+part of Tap to Pay — Terminal readers associate with a Stripe Location at connect time, not
+with an Apple identifier registered in advance. Searching "accept payments on iPhone" lands
+on Apple Pay first, which is how the detour happened. **No code changed** — `docs/TAP_TO_PAY.md`
+now carries a status table so the gate state is readable without re-deriving it.
+
 **2026-09-05 (The closing stops asking for a note it does not need):** Patrick reached
 sign-off on a real fall closing and was stopped by "Add a note about what you did at this
 visit". His call, and it is the right one: that note belongs to **openings and service
