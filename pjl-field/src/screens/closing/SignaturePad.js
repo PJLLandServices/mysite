@@ -58,6 +58,10 @@ const PAD_HTML = `<!doctype html>
     e.preventDefault();
     c.setPointerCapture(e.pointerId);
     drawing = true;
+    // Tells the native side to stop the page scrolling. touch-action and
+    // preventDefault only govern this document; the React Native ScrollView
+    // wrapping this WebView is a separate gesture system and hears none of it.
+    post('down');
     var p = pos(e);
     ctx.beginPath();
     ctx.moveTo(p.x, p.y);
@@ -74,6 +78,7 @@ const PAD_HTML = `<!doctype html>
     if (!drawing) return;
     drawing = false;
     try { c.releasePointerCapture(e.pointerId); } catch (_) {}
+    post('up');
   }
   c.addEventListener('pointerup', end);
   c.addEventListener('pointercancel', end);
@@ -96,11 +101,14 @@ const PAD_HTML = `<!doctype html>
 </script>
 </body></html>`;
 
+// onStrokeChange(isDown) fires while a finger is actually on the pad, so the
+// screen around it can stop scrolling for the length of a stroke.
+//
 // onDrawnChange(hasDrawn) fires as soon as the first stroke lands, so the
 // screen can enable its own button without polling. onReady(capture) hands
 // up the one function the parent needs: `await capture()` returns the PNG
 // data URL, or '' when nothing was drawn.
-export default function SignaturePad({ onDrawnChange, onReady }) {
+export default function SignaturePad({ onDrawnChange, onReady, onStrokeChange }) {
   const ref = useRef(null);
   const [drawn, setDrawn] = useState(false);
   const pending = useRef(null);
@@ -108,14 +116,16 @@ export default function SignaturePad({ onDrawnChange, onReady }) {
   const message = useCallback((event) => {
     let msg;
     try { msg = JSON.parse(event.nativeEvent.data); } catch { return; }
-    if (msg.type === 'drawn') { setDrawn(true); onDrawnChange?.(true); }
+    if (msg.type === 'down') { onStrokeChange?.(true); }
+    else if (msg.type === 'up') { onStrokeChange?.(false); }
+    else if (msg.type === 'drawn') { setDrawn(true); onDrawnChange?.(true); }
     else if (msg.type === 'cleared') { setDrawn(false); onDrawnChange?.(false); }
     else if (msg.type === 'image') {
       const resolve = pending.current;
       pending.current = null;
       resolve?.(msg.data || '');
     }
-  }, [onDrawnChange]);
+  }, [onDrawnChange, onStrokeChange]);
 
   // Exposed through the ref the parent holds, so "capture the signature"
   // reads as one await rather than a message dance at the call site.
@@ -136,6 +146,11 @@ export default function SignaturePad({ onDrawnChange, onReady }) {
   // Hand the capture function up once. `capture` is stable, so this runs
   // on mount and never again.
   useEffect(() => { onReady?.(capture); }, [onReady, capture]);
+
+  // A lock is only ever released by a message from the WebView, so if this
+  // unmounts mid-stroke nothing would ever unlock the page. Release on the way
+  // out rather than leaving a screen that cannot scroll.
+  useEffect(() => () => { onStrokeChange?.(false); }, [onStrokeChange]);
 
   return (
     <View style={styles.wrap}>
