@@ -55,6 +55,7 @@ const properties = require("./lib/properties");
 const seasonPlans = require("./lib/season-plans");
 const geoFilter = require("./lib/geo-filter");
 const resequence = require("./lib/resequence");
+const openBucket = require("./lib/open-bucket");
 const routeOriginLib = require("./lib/route-origin");
 const routeMap = require("./lib/route-map");
 const routeGeometry = require("./lib/route-geometry");
@@ -1189,6 +1190,8 @@ function needsAuth(method, pathname) {
   // Admin/tech only: it decides which customers get offered which days.
   if (pathname === "/admin/season-plan" || pathname === "/admin/season-plan/") return "user";
   if (pathname.startsWith("/api/season-plans")) return "user";
+  // The open bucket — standby customers ranked against route days.
+  if (pathname === "/api/standby") return "user";
   if (pathname === "/api/maps-config") return "user";
   if (pathname.startsWith("/api/assignments")) return "user";
   // Assignment message templates — reading is staff; saving re-checks admin.
@@ -20343,8 +20346,22 @@ Customer signature captured at ${new Date().toISOString()}.`;
           errors: ["Unknown service."]
         });
       }
-      const startDate = new Date(slotStart);
-      if (Number.isNaN(startDate.getTime())) {
+      // The open bucket ("first available"): no slot at all. The customer
+      // joins the standby list and Patrick places them onto a route day
+      // from the Season Plan later — everything slot-shaped below is
+      // skipped, and the lead is built exactly like a booked one minus
+      // the booking envelope. Additive: absent the flag, nothing changes.
+      const isStandby = payload.standby === true;
+      if (isStandby && service.category === "consult") {
+        return sendJson(res, 422, {
+          ok: false,
+          code: "standby_unsupported",
+          message: "Site visits need a scheduled time — pick a day.",
+          errors: ["Site visits need a scheduled time — please pick a day."]
+        });
+      }
+      const startDate = isStandby ? null : new Date(slotStart);
+      if (!isStandby && Number.isNaN(startDate.getTime())) {
         return sendJson(res, 422, {
           ok: false,
           code: "slot_invalid",
@@ -20383,11 +20400,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // request carries an admin session — public customer bookings
       // can't forge this and skip the slot check.
       const claimsAdminCustom = payload.source === "admin_custom";
-      const useAdminCustom = claimsAdminCustom && isAdmin;
+      const useAdminCustom = claimsAdminCustom && isAdmin && !isStandby;
 
-      let matched;
+      let matched = null;
       let forcedByAdmin = false;
-      if (useAdminCustom) {
+      if (isStandby) {
+        // No slot to validate — the whole point.
+      } else if (useAdminCustom) {
         // Physical-conflict check. Force-book bypasses corridor +
         // hours, but it must NOT silently double-book — overlapping
         // the same crew with another active booking would create a
@@ -20486,7 +20505,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
       }
       // matched.end is the bucket end for standard bucket slots, or
       // start + service.minutes for admin-custom precise times.
-      const endDate = new Date(matched.end);
+      const endDate = isStandby ? null : new Date(matched.end);
 
       // ---- Admin: book from an EXISTING lead (Book-from-lead brief) --------
       // When an admin session supplies `leadId`, attach the booking to THAT
@@ -20505,7 +20524,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
       //     status (work-orders.js copies intakeGuarantee whenever the quote
       //     is linked), so it lands whether or not Patrick marks the quote
       //     accepted here.
-      const boundLeadId = isAdmin ? normalizeString(payload.leadId, 40) : "";
+      const boundLeadId = isAdmin && !isStandby ? normalizeString(payload.leadId, 40) : "";
       if (boundLeadId) {
         const all = await readLeads();
         const idx = all.findIndex((l) => l.id === boundLeadId);
@@ -20572,10 +20591,15 @@ Customer signature captured at ${new Date().toISOString()}.`;
         lead.crm = lead.crm || {};
         lead.crm.status = lead.status;
         lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
+        // Placing an open-bucket customer onto a day RESOLVES their
+        // standby — the envelope goes, so the bucket list stops showing
+        // them and the record reads as one story.
+        const wasStandby = Boolean(lead.standby);
+        if (wasStandby) delete lead.standby;
         lead.crm.activity.unshift({
           at: now,
           type: "update",
-          text: `${boundIsSiteVisit ? "Site visit booked" : "Service booked"} from lead: ${service.label} on ${matched.dayLabel} at ${matched.timeLabel}.`
+          text: `${wasStandby ? "Placed from the open bucket" : boundIsSiteVisit ? "Site visit booked" : "Service booked"}${wasStandby ? "" : " from lead"}: ${service.label} on ${matched.dayLabel} at ${matched.timeLabel}.`
         });
         lead.crm.lastUpdated = now;
         all[idx] = lead;
@@ -20752,6 +20776,28 @@ Customer signature captured at ${new Date().toISOString()}.`;
         capturedAt: prebooking.createdAt
       } : null;
 
+      if (isStandby) {
+        // First available: a commitment without a calendar entry. No
+        // lead.booking means no capacity used, no Today/iCal presence,
+        // no reminders — until Patrick places them from the Season
+        // Plan's Open bucket panel, which books through the
+        // book-from-lead path above and clears this envelope.
+        result.lead.standby = {
+          requestedAt: now,
+          serviceKey,
+          serviceLabel: service.label,
+          zoneCount,
+          coords: {
+            lat: customerCoords.lat,
+            lng: customerCoords.lng,
+            formattedAddress: customerCoords.formattedAddress || null
+          },
+          // Whether the coords are a REAL geocode. Unresolved standbys
+          // still join the bucket — the panel just can't rank them.
+          resolved: Boolean(resolvedCoords),
+          diagnosis: diagnosisBlock
+        };
+      } else {
       result.lead.booking = {
         start: startDate.toISOString(),
         end: endDate.toISOString(),
@@ -20792,7 +20838,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
           createdAt: now
         }
       };
-      // Status starts at site_visit for consults, won for committed direct bookings.
+      }
+      // Status starts at site_visit for consults, won for committed direct
+      // bookings. A standby customer has committed too — "won" keeps them
+      // out of the untriaged-lead pile; the missing booking is what marks
+      // them as waiting.
       result.lead.status = isSiteVisit ? "site_visit" : "won";
       result.lead.crm.status = result.lead.status;
       // Replace the default "Quote request received." seed entry with booking-
@@ -20801,7 +20851,9 @@ Customer signature captured at ${new Date().toISOString()}.`;
       result.lead.crm.activity = [{
         at: now,
         type: "created",
-        text: `${isSiteVisit ? "Site visit booked" : "Service booked"}: ${service.label} on ${matched.dayLabel} at ${matched.timeLabel}.`
+        text: isStandby
+          ? `Joined the open bucket (first available): ${service.label}. Place them from the Season Plan.`
+          : `${isSiteVisit ? "Site visit booked" : "Service booked"}: ${service.label} on ${matched.dayLabel} at ${matched.timeLabel}.`
       }];
 
       const all = await readLeads();
@@ -20861,12 +20913,14 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // works unchanged; the canonical record carries prep notes,
       // multi-WO links, sourceQuoteId, and audit history. Best-effort
       // — failure here doesn't roll back the lead.
-      try {
-        const liveLeads = await readLeads();
-        const fresh = liveLeads.find((l) => l.id === result.lead.id);
-        if (fresh) await bookings.upsertFromLead(fresh);
-      } catch (err) {
-        console.warn("[bookings] upsertFromLead failed:", err?.message);
+      if (!isStandby) {
+        try {
+          const liveLeads = await readLeads();
+          const fresh = liveLeads.find((l) => l.id === result.lead.id);
+          if (fresh) await bookings.upsertFromLead(fresh);
+        } catch (err) {
+          console.warn("[bookings] upsertFromLead failed:", err?.message);
+        }
       }
 
       // If a pre-booking session backed this reservation, mark it consumed
@@ -20880,16 +20934,24 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // Notify Patrick (admin) and the customer.
       const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
       const decorated = decorateLeadForAdmin(result.lead, req);
-      Promise.allSettled([
-        sendNewLeadEmail({ ...decorated, sourceLabel: `BOOKED · ${service.label} · ${matched.dayLabel} ${matched.timeLabel}` }, { baseUrl }),
-        sendNewLeadSms({ ...decorated, sourceLabel: `BOOKED ${matched.timeLabel}` }, { baseUrl }),
-        notifyCustomer(isSiteVisit ? "site_visit" : "booked", decorated, { baseUrl })
-      ]).catch(() => {});
+      Promise.allSettled(isStandby
+        ? [
+            sendNewLeadEmail({ ...decorated, sourceLabel: `OPEN BUCKET · ${service.label} · first available` }, { baseUrl }),
+            sendNewLeadSms({ ...decorated, sourceLabel: "OPEN BUCKET first available" }, { baseUrl }),
+            notifyCustomer("standby_joined", decorated, { baseUrl })
+          ]
+        : [
+            sendNewLeadEmail({ ...decorated, sourceLabel: `BOOKED · ${service.label} · ${matched.dayLabel} ${matched.timeLabel}` }, { baseUrl }),
+            sendNewLeadSms({ ...decorated, sourceLabel: `BOOKED ${matched.timeLabel}` }, { baseUrl }),
+            notifyCustomer(isSiteVisit ? "site_visit" : "booked", decorated, { baseUrl })
+          ]
+      ).catch(() => {});
 
       return sendJson(res, 201, {
         ok: true,
         leadId: result.lead.id,
-        booking: result.lead.booking,
+        booking: result.lead.booking || null,
+        standby: isStandby || undefined,
         portalUrl: decorated.portalUrl
       });
     } catch (error) {
@@ -23029,6 +23091,55 @@ Customer signature captured at ${new Date().toISOString()}.`;
       });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Probe failed."] });
+    }
+  }
+
+  // ---- The open bucket (first available) ---------------------------
+  //
+  // Every waiting standby customer, ranked against the upcoming route
+  // days with the same cheapest-insertion drive math the geography
+  // filter runs — the "on our way home" number. Read-only; placing a
+  // customer goes through POST /api/booking/reserve with their leadId
+  // (the book-from-lead path), which books, notifies, and clears the
+  // standby envelope in one move. Admin-only via path auth.
+  if (req.method === "GET" && pathname === "/api/standby") {
+    try {
+      const leads = await readLeads();
+      const waiting = openBucket.waitingLeads(leads);
+      const now = new Date();
+      const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+      let shapes = null;
+      if (waiting.length) {
+        try {
+          const active = await activeBookings();
+          shapes = await dayShapesForSeason({ bookings: active, now });
+        } catch (err) {
+          console.warn("[standby] day shapes unavailable, listing unranked:", err?.message);
+        }
+      }
+      const rows = [];
+      for (const lead of waiting) {
+        const s = lead.standby;
+        const bestDays = (s.resolved && shapes)
+          ? await openBucket.rankDaysForCoords(s.coords, shapes, { max: 3, todayKey })
+          : [];
+        rows.push({
+          leadId: lead.id,
+          name: lead.contact?.name
+            || [lead.contact?.firstName, lead.contact?.lastName].filter(Boolean).join(" "),
+          phone: lead.contact?.phone || "",
+          address: lead.contact?.address || "",
+          serviceKey: s.serviceKey,
+          serviceLabel: s.serviceLabel,
+          zoneCount: s.zoneCount ?? null,
+          requestedAt: s.requestedAt,
+          resolved: Boolean(s.resolved),
+          bestDays
+        });
+      }
+      return sendJson(res, 200, { ok: true, waiting: rows.length, rows });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the open bucket."] });
     }
   }
 

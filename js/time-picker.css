@@ -21,6 +21,41 @@
   gap: 16px;
 }
 
+/* ---------- Open bucket (first available) ---------- */
+.tp-openbucket {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  background: var(--tp-bg);
+  border: 2px solid var(--tp-green);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.tp-openbucket:hover { background: var(--tp-green-pale); }
+.tp-openbucket-flag {
+  font-family: "Barlow Condensed", "DM Sans", sans-serif;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #fff;
+  background: var(--tp-green);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+.tp-openbucket-title { font-size: 16px; color: var(--tp-green); }
+.tp-openbucket-body { font-size: 13px; line-height: 1.4; color: var(--tp-muted); }
+.tp-openbucket-cta {
+  margin-top: 2px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--tp-amber);
+}
+
 /* ---------- Calendar ---------- */
 .tp-calendar {
   background: var(--tp-bg);
