@@ -1639,6 +1639,31 @@ opposite of the one first recorded: a fix verified against a live symptom is not
 the codebase cannot produce" just because the write path is hard to find — data outranks code
 reading, and the bar for removing the union again is a walked Today page, not an argument.
 
+**2026-09-05 (Probe: a refused key stops masquerading as a bad address; no past or empty
+"best days"):** Patrick probed 45 Alamosa Dr, North York — "a readily known address" — and
+got "Google couldn't pinpoint it... (approximate)" ON EVERY SEARCH, with best-days listing
+Jul 21 (past) and an Oct 31 with 0 stops at +0 min. Three defects: (1) **The probe blamed
+the address for a key-level failure.** geocode() already returns Google's real status; the
+screen showed the same "couldn't pinpoint" for ZERO_RESULTS (genuinely no such address) and
+for REQUEST_DENIED (Google rejecting the KEY — every address degraded). A failure on every
+known-good address with the key configured is the latter: classically an HTTP-REFERRER-
+restricted (browser) key pasted into GOOGLE_MAPS_SERVER_KEY — server calls carry no
+referrer, so Google denies them all. renderProbe now raises a red alarm for any non-
+ZERO_RESULTS reason, naming the status and the three usual causes (referrer restriction →
+use an IP-restricted or unrestricted key; Geocoding API not enabled; billing off), and the
+head line says "Google refused the lookup", never "couldn't pinpoint". (2) **The probe
+offered the past.** It walked every day-shape date; old booked days carry shapes (correct
+for history), so July surfaced as a bookable answer. The endpoint now skips dates before
+today. (3) **Empty days headlined best-days.** A shape with 0 mappable points costs +0 min
+by definition; the client ranking now requires points > 0 — "we're already nearby" must
+mean something is actually there. Probe endpoint + probe rendering only; engine, booking
+page and writer untouched. Verified in headless Chromium with a REQUEST_DENIED fixture:
+red alarm with the status, honest head line, best-days lists only the day with real stops.
+**Patrick's fix on his side once merged:** probe once — if the red alarm names
+REQUEST_DENIED, create a NEW Google Cloud key with no referrer restriction (IP-restrict it
+to Render if desired), enable Geocoding API on it, put it in Render's
+GOOGLE_MAPS_SERVER_KEY, redeploy, probe again: the alarm goes and addresses pinpoint.
+
 **2026-09-05 (Season Plan organized: closed day rows, jump bar, customer finder, past off
 the board):** Patrick on the merged #134 screen: "way too scattered. It shows every booked
 appointment from the past... Please organize that page entirely. Search a customers

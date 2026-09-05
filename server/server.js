@@ -22964,7 +22964,14 @@ Customer signature captured at ${new Date().toISOString()}.`;
 
       const resolvedAddress = geoFilter.coordsAreResolved(geo.coords);
       const days = [];
+      // Yesterday cannot be offered to anyone. Old booked days grow
+      // shapes like any other (that's correct for history), but the
+      // probe is a phone-booking tool — a July date in its "best days"
+      // line is an answer Patrick cannot give a caller.
+      const probeNow = new Date();
+      const probeTodayKey = `${probeNow.getFullYear()}-${String(probeNow.getMonth() + 1).padStart(2, "0")}-${String(probeNow.getDate()).padStart(2, "0")}`;
       for (const date of Object.keys(shapes).sort()) {
+        if (date < probeTodayKey) continue;
         const shape = shapes[date];
         const added = resolvedAddress
           ? await geoFilter.addedDriveMinutes(geo.coords, shape.points)
