@@ -42,6 +42,16 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished }) {
   const [zoneIndex, setZoneIndex] = useState(0);
   const [saving, setSaving] = useState(false);
   const [unsaved, setUnsaved] = useState(false);
+  // True only while a finger is on the signature pad. The pad lives in a
+  // WebView, and a WebView does not stop the ScrollView around it from taking
+  // the drag -- so without this the page scrolls under the customer's hand
+  // while they are signing, and they sign a moving target.
+  //
+  // UP HERE WITH THE OTHER HOOKS, above the early returns below. It was
+  // declared after them, which made it a conditional hook: eight hooks while
+  // loading, nine once the work order arrived, and React refuses that. Every
+  // work order crashed on open.
+  const [signing, setSigning] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -201,12 +211,6 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished }) {
       </View>
     );
   }
-
-  // True only while a finger is on the signature pad. The pad lives in a
-  // WebView, and a WebView does not stop the ScrollView around it from taking
-  // the drag -- so without this the page scrolls under the customer's hand
-  // while they are signing, and they sign a moving target.
-  const [signing, setSigning] = useState(false);
 
   const shared = { wo, save, saving };
 
