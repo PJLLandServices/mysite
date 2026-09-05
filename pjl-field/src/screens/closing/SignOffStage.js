@@ -30,7 +30,7 @@ const BYPASS_REASONS = [
   { key: 'other', label: 'Other (say why)' },
 ];
 
-export default function SignOffStage({ wo, save, saving, onFinish, busy }) {
+export default function SignOffStage({ wo, save, saving, onFinish, busy, onStrokeChange }) {
   // null until asked. Not defaulted: which of these is "normal" is the
   // thing that varies, and guessing wrong makes the common case worse.
   const [who, setWho] = useState(null);          // 'customer' | 'nobody'
@@ -124,7 +124,7 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy }) {
               style={styles.input}
               autoCapitalize="words"
             />
-            <SignaturePad onDrawnChange={setDrawn} onReady={onReady} />
+            <SignaturePad onDrawnChange={setDrawn} onReady={onReady} onStrokeChange={onStrokeChange} />
           </View>
           <ChoiceRow
             label="They authorize the work as described"

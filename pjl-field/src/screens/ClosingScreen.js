@@ -202,6 +202,12 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished }) {
     );
   }
 
+  // True only while a finger is on the signature pad. The pad lives in a
+  // WebView, and a WebView does not stop the ScrollView around it from taking
+  // the drag -- so without this the page scrolls under the customer's hand
+  // while they are signing, and they sign a moving target.
+  const [signing, setSigning] = useState(false);
+
   const shared = { wo, save, saving };
 
   return (
@@ -231,7 +237,12 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished }) {
         })}
       </View>
 
-      <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        style={styles.body}
+        contentContainerStyle={styles.bodyContent}
+        keyboardShouldPersistTaps="handled"
+        scrollEnabled={!signing}
+      >
         {stage === 'start' ? (
           <StartStage {...shared} findings={findings} onNext={() => setStage('water')} />
         ) : stage === 'water' ? (
@@ -255,7 +266,7 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished }) {
         ) : stage === 'closeout' ? (
           <CloseOutStage {...shared} blockers={blockers} onFinish={toSignOff} />
         ) : (
-          <SignOffStage {...shared} onFinish={finishSignOff} busy={finishing} />
+          <SignOffStage {...shared} onFinish={finishSignOff} busy={finishing} onStrokeChange={setSigning} />
         )}
       </ScrollView>
     </View>
