@@ -56,11 +56,19 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # `inputs.submit` exists only on a manual run; on a tag push it is empty,
-      # which would otherwise read as "don't submit" and quietly produce a build
-      # that never reaches TestFlight. A tag push means submit — that is the
-      # whole point of asking for one.
-      SUBMIT: ${{ github.event_name != 'workflow_dispatch' || inputs.submit }}
+      # Decided once, from the `github` context ONLY.
+      #
+      # This read `inputs.submit` for a while, and that made the whole file
+      # invalid: `inputs` is not an available context in a job's `env`. An
+      # unparseable workflow does not fail quietly — GitHub cannot read its
+      # triggers, so it raises a failed, job-less run on EVERY push to EVERY
+      # branch, and emails about each one. The push trigger did not cause that;
+      # it only made a file that was already invalid start being noticed.
+      #
+      # `github.event.inputs` is the event payload rather than a context, so it
+      # is readable anywhere and is simply empty when no one filled a form in.
+      # A boolean input arrives as the string "true".
+      SUBMIT: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.submit == 'true' }}
     steps:
       - name: Check the Expo token is present
         run: |
