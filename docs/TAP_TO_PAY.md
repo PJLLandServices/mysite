@@ -10,6 +10,37 @@ is the short part.
 
 ---
 
+## Where this stands  (2026-09-05)
+
+| Gate | State |
+|------|-------|
+| Apple development entitlement | **requested 2026-09-05**, Case-ID `22041657` — awaiting review |
+| Apple distribution entitlement | not yet requested (comes after internal testing) |
+| Stripe Terminal enabled | not confirmed |
+| Connection-token route | shipped (PR #137) — needs a Render deploy to be live |
+| SDK + overlay + reader UI | not started, and must not start early (see §4) |
+
+Apple's reply comes from `ttpoientitlements@apple.com`; follow-ups must quote
+the Case-ID. As submitted, the request named **Stripe** as PSP, **Canada** as
+the region, and internal distribution (Apple Business or unlisted).
+
+**One answer needs correcting, by replying to Apple's acknowledgement with the
+Case-ID.** "How many new apps that use this entitlement will you distribute in
+the next 12 months" was answered *None*; the true answer is *1* — pjl-field
+itself. (*None* was right for the preceding question, which asks about apps
+already on the App Store.) Left as submitted it reads as a request for an
+entitlement no app will use, on an account asking for up to 99 devices. If
+Apple queries anything, expect it to be this. **Not known to be sent yet — if
+you are reading this later, check the thread before assuming it was.**
+
+**A Merchant ID is not part of this.** Registering one (`merchant.…`) is the
+**Apple Pay** path — a different product. Tap to Pay through Stripe Terminal
+needs only the entitlement above; readers are associated with a Stripe Location
+at connect time, not registered with Apple in advance. Noted because it is an
+easy wrong turn: searching "accept payments on iPhone" lands on Apple Pay first.
+
+---
+
 ## Before anything: know what you are buying
 
 **Many Canadian cards are offline-PIN only.** Entering that PIN requires the
@@ -22,12 +53,14 @@ Pay is the fast path, not the only one.
 
 ---
 
-## 1. Apple — the Tap to Pay entitlement  (Patrick)
+## 1. Apple — the Tap to Pay entitlement  (Patrick — DEVELOPMENT ONE REQUESTED)
 
 Two separate entitlements, requested from the Apple Developer account that
 owns `com.pjllandservices.field`:
 
 1. **Development entitlement** — needed before it can be tested at all.
+   **Requested 2026-09-05, Case-ID `22041657`.** Apple reviews in the order
+   received and gives no ETA; there is nothing to do but wait for their reply.
 2. **Distribution entitlement** — a second request, needed before it can ship,
    and only after internal testing.
 
@@ -95,7 +128,7 @@ Then, in one build:
 
 | # | What | Who | Blocks |
 |---|------|-----|--------|
-| 1 | Apple development entitlement | Patrick | everything on the phone |
+| 1 | Apple development entitlement — **requested, Case-ID 22041657** | Apple now | everything on the phone |
 | 2 | Stripe Terminal enabled | Patrick | the token route returning a secret |
 | 3 | Connection-token route | done | — |
 | 4 | SDK + overlay + reader UI | Claude | needs 1 and 2 |
