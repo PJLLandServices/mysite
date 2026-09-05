@@ -1495,6 +1495,14 @@ const WO_PHOTO_REQUIREMENT_BY_TYPE = {
   fall_closing:   0
 };
 
+// Mirror of lib's CUSTOMER_NOTE_REQUIRED_BY_TYPE — keep in sync.
+const WO_CUSTOMER_NOTE_REQUIRED_BY_TYPE = {
+  spring_opening: true,
+  service_visit:  true,
+  fall_closing:   false,
+  build:          true
+};
+
 // Post-signature narrative banner (Brief E) — desktop mirror of tech
 // mode's banner. Surfaces the photo gate + Mark Complete CTA so Patrick
 // isn't stranded between "signature captured" and "visit completed."
@@ -2591,8 +2599,11 @@ function woSignGateBlockers() {
   }
   if (wo.paidOnSite !== true && wo.paidOnSite !== false) blockers.push(woSignGate("payment"));
   if (!wo.materialsConfirmedAt) blockers.push(woSignGate("materialsConfirm"));
-  const liveNotes = (document.getElementById("woCustomerNotes")?.value ?? wo.customerNotes ?? "").trim();
-  if (!liveNotes) blockers.push(woSignGate("customerNotes"));
+  // Required by type (mirror of lib's CUSTOMER_NOTE_REQUIRED_BY_TYPE).
+  if (WO_CUSTOMER_NOTE_REQUIRED_BY_TYPE[wo.type] ?? true) {
+    const liveNotes = (document.getElementById("woCustomerNotes")?.value ?? wo.customerNotes ?? "").trim();
+    if (!liveNotes) blockers.push(woSignGate("customerNotes"));
+  }
   return blockers;
 }
 
