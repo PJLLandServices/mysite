@@ -510,15 +510,51 @@
   });
 
   // ===== Address step =====
-  addressNextBtn.addEventListener("click", () => {
+  // "Where's the property?" is the gate, not the calendar (Patrick,
+  // piloting: "filter out the riffraff at 'wheres the property?'").
+  // The server verifies the address BEFORE the step advances: it must
+  // geocode to a real street address inside the service area. A junk
+  // or out-of-area address stays on this step with the reason inline.
+  addressNextBtn.addEventListener("click", async () => {
     const value = addressInput.value.trim();
+    const errEl = document.getElementById("addressError");
+    if (errEl) errEl.hidden = true;
     if (!value) {
       addressInput.focus();
       return;
     }
-    state.address = value;
-    showStep("when");
-    loadAvailability();
+    addressNextBtn.disabled = true;
+    const originalLabel = addressNextBtn.textContent;
+    addressNextBtn.textContent = "Checking your address…";
+    try {
+      const response = await fetch((window.PJL_API_BASE || "") + "/api/booking/verify-address", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ address: value })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        throw new Error((data.errors || []).join(" ")
+          || "We couldn't verify that address. Please pick it from the suggestions, or call (905) 960-0181.");
+      }
+      state.address = value;
+      // The server's canonical formatting, so every later step shows
+      // what the geocoder resolved.
+      state.formattedAddress = data.address || value;
+      showStep("when");
+      loadAvailability();
+    } catch (error) {
+      if (errEl) {
+        errEl.textContent = error.message;
+        errEl.hidden = false;
+      } else {
+        alert(error.message);
+      }
+      addressInput.focus();
+    } finally {
+      addressNextBtn.disabled = false;
+      addressNextBtn.textContent = originalLabel;
+    }
   });
 
   addressInput.addEventListener("keydown", (event) => {

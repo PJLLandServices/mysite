@@ -1918,7 +1918,7 @@ function mountBookPicker() {
       const url = `/api/booking/availability`
         + `?service=${encodeURIComponent(serviceKey)}`
         + `&address=${encodeURIComponent(address)}`
-        + `&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+        + `&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&adminBypass=1`;
       const r = await fetch(url, { cache: "no-store" });
       const data = await r.json();
       if (!data.ok) throw new Error((data.errors || ["Couldn't load times."]).join(" "));

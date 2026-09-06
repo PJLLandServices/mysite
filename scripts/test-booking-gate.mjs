@@ -106,6 +106,52 @@ ok("a bare route is NOT street level",
   streetLevelFrom({ address_components: [{ types: ["route"], long_name: "Yonge St" }], types: ["route"] }) === false);
 ok("garbage input answers false, not a throw", streetLevelFrom(null) === false);
 
+// ---- 5. The cache cannot grandfather junk ---------------------------
+// "toronto" typed during a PRE-gate test sits in the geocode cache
+// without the streetLevel flag. Serving it as-is would wave the same
+// junk through forever; a flag-less hit is re-verified once and the
+// entry rewritten with its true nature.
+{
+  const fsMod = await import("node:fs");
+  const osMod = await import("node:os");
+  const SANDBOX = fsMod.mkdtempSync(path.join(osMod.default.tmpdir(), "pjl-gate-"));
+  fsMod.mkdirSync(path.join(SANDBOX, "server"), { recursive: true });
+  fsMod.cpSync(path.join(ROOT, "server/lib"), path.join(SANDBOX, "server/lib"), { recursive: true });
+  fsMod.mkdirSync(path.join(SANDBOX, "server/data"), { recursive: true });
+  fsMod.writeFileSync(path.join(SANDBOX, "server/data/geocode-cache.json"), JSON.stringify({
+    "toronto": { lat: 43.65, lng: -79.38, formattedAddress: "Toronto, ON, Canada", source: "google" }
+  }));
+  process.env.GOOGLE_MAPS_SERVER_KEY = "test-key";
+  const realFetch = global.fetch;
+  global.fetch = async () => ({
+    json: async () => ({
+      status: "OK",
+      results: [{
+        geometry: { location: { lat: 43.6532, lng: -79.3832 } },
+        formatted_address: "Toronto, ON, Canada",
+        types: ["locality", "political"],
+        address_components: [{ types: ["locality", "political"], long_name: "Toronto" }]
+      }]
+    })
+  });
+  try {
+    const sandboxGeo = require(path.join(SANDBOX, "server/lib/geocode.js"));
+    const first = await sandboxGeo.geocode("Toronto");
+    ok("a flag-less cached entry is re-verified, not grandfathered",
+      first.ok === true && first.coords.streetLevel === false && first.fromCache !== true,
+      JSON.stringify(first));
+    const second = await sandboxGeo.geocode("Toronto");
+    ok("the rewritten entry carries its flag and serves from cache",
+      second.fromCache === true && second.coords.streetLevel === false);
+    const verdict = await gate(second, { travelMinutes: minutesStub(30), base: BASE });
+    ok("the re-verified town entry is refused by the gate",
+      verdict.ok === false && verdict.code === "address_incomplete");
+  } finally {
+    global.fetch = realFetch;
+    delete process.env.GOOGLE_MAPS_SERVER_KEY;
+  }
+}
+
 // ---- Report ----------------------------------------------------------
 if (failures.length) {
   console.error(`\n✗ test-booking-gate: ${failures.length} failed, ${pass} passed`);
