@@ -10,15 +10,26 @@ is the short part.
 
 ---
 
-## Where this stands  (2026-09-05)
+## Where this stands  (2026-09-06)
 
 | Gate | State |
 |------|-------|
-| Apple development entitlement | **requested 2026-09-05**, Case-ID `22041657` — awaiting review |
-| Apple distribution entitlement | not yet requested (comes after internal testing) |
+| Apple development entitlement | **GRANTED 2026-09-06**, Case-ID `22041657` — development distribution restriction in place |
+| Apple publishing entitlement | not yet requested — **gates TestFlight**, see below |
 | Stripe Terminal enabled | not confirmed |
 | Connection-token route | shipped (PR #137) — needs a Render deploy to be live |
 | SDK + overlay + reader UI | not started, and must not start early (see §4) |
+
+**Apple sent the requirements with the grant. They are audited row by row in
+`docs/TAP_TO_PAY_REQUIREMENTS.md` — read that before writing any Tap to Pay
+code.** Two findings there change this file's plan:
+
+- **TestFlight needs the PUBLISHING entitlement**, not the development one. The
+  build → auto-submit → TestFlight pipeline cannot carry the Tap to Pay build.
+  Development entitlements only support development provisioning profiles on
+  devices registered to the developer account.
+- **Canada requires a fallback payment method and PIN education**, as an Apple
+  requirement now, not just our own caution about offline-PIN cards.
 
 Apple's reply comes from `ttpoientitlements@apple.com`; follow-ups must quote
 the Case-ID. As submitted, the request named **Stripe** as PSP, **Canada** as
@@ -53,20 +64,26 @@ Pay is the fast path, not the only one.
 
 ---
 
-## 1. Apple — the Tap to Pay entitlement  (Patrick — DEVELOPMENT ONE REQUESTED)
+## 1. Apple — the Tap to Pay entitlement  (development one GRANTED)
 
 Two separate entitlements, requested from the Apple Developer account that
 owns `com.pjllandservices.field`:
 
 1. **Development entitlement** — needed before it can be tested at all.
-   **Requested 2026-09-05, Case-ID `22041657`.** Apple reviews in the order
-   received and gives no ETA; there is nothing to do but wait for their reply.
-2. **Distribution entitlement** — a second request, needed before it can ship,
-   and only after internal testing.
+   **Granted 2026-09-06, Case-ID `22041657`**, with the development
+   distribution restriction: registered test devices and development
+   provisioning profiles only.
+2. **Publishing entitlement** — a second request, made by replying to the grant
+   email with three videos and the completed checklist. It gates **TestFlight**,
+   not just the App Store, which is the part that surprised this plan. Details
+   in `TAP_TO_PAY_REQUIREMENTS.md`.
 
-Apple also **requires a "How to Tap" instructional overlay** in the app before
-review. That is code, and it is on the list below — but it is Apple's
-condition, not a nicety, so it cannot be skipped or restyled away.
+Apple also **requires merchant education** in the app before review — and on
+iOS 18+ the `ProximityReaderDiscovery` API provides it, satisfying four
+checklist rows at once (4.4, 4.6, 4.7, 4.8). That is code, it is on the list
+below, and it is Apple's condition rather than a nicety. Whether Stripe's React
+Native SDK exposes that API is **not yet known** — check before planning around
+it.
 
 Device floor: **iPhone XS or later**, on a recent iOS. Patrick's phone
 qualifies.
@@ -128,7 +145,7 @@ Then, in one build:
 
 | # | What | Who | Blocks |
 |---|------|-----|--------|
-| 1 | Apple development entitlement — **requested, Case-ID 22041657** | Apple now | everything on the phone |
+| 1 | Apple development entitlement — **GRANTED, Case-ID 22041657** | done | — |
 | 2 | Stripe Terminal enabled | Patrick | the token route returning a secret |
 | 3 | Connection-token route | done | — |
 | 4 | SDK + overlay + reader UI | Claude | needs 1 and 2 |
