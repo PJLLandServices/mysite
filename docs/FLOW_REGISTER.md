@@ -1867,6 +1867,19 @@ server route is the only thing keeping a Stripe key out of the app bundle. The s
 also listed requesting the entitlement as a next step, which was already granted. **No code
 changed** — docs only.
 
+**2026-09-06 (iOS 18+ confirmed — a screen set drops out of the build):** Patrick's iPhone is
+on iOS 18 or later, which closes two checklist rows rather than one. **4.1:**
+`ProximityReaderDiscovery` is iOS 18+, so Apple's own merchant education covers it — and
+through it 4.4, 4.6, 4.7 and 4.8 — meaning the fallback education screens we would otherwise
+have had to write, carrying Apple's verbatim PIN and fallback copy, **are not needed at all**.
+**1.1** (iPhone XS or later) is met as a consequence rather than by a model lookup: iOS 18
+does not install on anything older than an iPhone XR/XS, so being on 18 proves the device
+floor. **1.4** (handling `osVersionNotSupported` below iOS 17.6) stays on the list even
+though it should never fire for him: it is Required, and it is what protects a future crew
+phone on an older iOS. **The condition worth remembering instead of the conclusion:** all of
+this holds while every phone taking payment is on iOS 18+; add an older crew phone and the
+fallback screens and their verbatim-copy obligation come back. **No code changed** — docs only.
+
 **2026-09-05 (The closing stops asking for a note it does not need):** Patrick reached
 sign-off on a real fall closing and was stopped by "Add a note about what you did at this
 visit". His call, and it is the right one: that note belongs to **openings and service

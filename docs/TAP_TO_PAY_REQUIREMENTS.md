@@ -79,10 +79,10 @@ per Team and app; the grant email does not say. **Do not assume either answer.**
 
 | # | Req | Applies? | State | What it needs |
 |---|-----|----------|-------|---------------|
-| 1.1 | Required | Yes | **Unknown** | iPhone XS or later. Confirm Patrick's model; his phone was said to qualify but it has never been checked against this list. |
+| 1.1 | Required | Yes | **Met** | iPhone XS or later. Confirmed indirectly and soundly: Patrick reported **iOS 18+** on 2026-09-06, and iOS 18 does not install on anything older than an iPhone XR/XS. No model lookup needed. |
 | 1.2 | Conditional | **No** | N/A | Only if Tap to Pay is the *primary* payment method. Ours isn't — the payment link is, and stays (see §Canada). Set the deployment target to Stripe's floor anyway. |
 | 1.3 | Conditional | **No** | N/A | Same condition. `supportsTablet: true` in `app.json` is worth revisiting regardless: an iPad cannot tap. |
-| 1.4 | Required | Yes | **Missing** | Handle `PaymentCardReaderError.osVersionNotSupported` on iOS < 17.6 with a message telling him to update iOS. |
+| 1.4 | Required | Yes | **Missing (defensive)** | Handle `PaymentCardReaderError.osVersionNotSupported` on iOS < 17.6 with a message telling the user to update iOS. Patrick is on 18+, so this should never fire for him — but it is Required, and it is what protects a future crew phone on an older iOS. Build it; do not expect to see it. |
 | 1.5 | Required | Yes | **Missing** | Warm the reader on launch and on foreground. This is also what makes 5.6 achievable. |
 | 1.6 | Required | Yes | **Missing** | Read T&C acceptance **from Apple**, never from a local variable. Easy to get wrong by caching it in state. |
 | 1.7 | Recommended | No | N/A | Face ID login. Public-App-Store guidance; our auth is the CRM session cookie. |
@@ -157,18 +157,17 @@ bridging two calls — and **no new dependency**. Weighed against writing our ow
 education screens, which would then have to carry Apple's PIN and fallback copy
 and be kept current by us, the module is much the smaller job.
 
-**The catch, and it is a real scope item: `ProximityReaderDiscovery` is iOS 18.0
-and later.** Stripe's own guidance is to provide your own fallback merchant
-education UI for earlier versions. So:
+**`ProximityReaderDiscovery` is iOS 18.0 and later**, and below that Stripe's
+guidance is to provide your own fallback merchant education UI — which would have
+had to carry Apple's verbatim PIN (4.7) and fallback (4.8) copy.
 
-> **If any phone that will take payment runs iOS < 18, we must build our own
-> education screens anyway** — and those screens must carry Apple's verbatim PIN
-> (4.7) and fallback (4.8) copy, because 4.1 is what would otherwise have
-> covered them.
+> **Settled 2026-09-06: Patrick's iPhone is on iOS 18+, so the fallback education
+> screens are not needed.** Apple's API covers 4.1, and through it 4.4, 4.6, 4.7
+> and 4.8. That is a whole screen set removed from the build.
 
-**Open, and easy to answer:** the iOS version on Patrick's iPhone and on any crew
-phone that will accept payment. If everything is on 18 or later, the fallback
-screens are not needed at all.
+**The condition to remember rather than the conclusion:** this holds while every
+phone that takes payment is on iOS 18 or later. Add a crew phone on an older iOS
+and the fallback screens come back, along with the verbatim-copy obligation.
 
 Also noted from the same reading, useful later: the RN SDK exposes
 `supportsReadersOfType({ deviceType: 'appleBuiltIn' })` for capability checks, and
