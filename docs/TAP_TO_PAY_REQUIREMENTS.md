@@ -123,7 +123,7 @@ on the device, and Patrick will accept them on his own iPhone.
 | 3.7 | Required | **Missing** | Either a trigger inside checkout, or require it enabled before checkout. |
 | 3.8 | Required | **Partly** | Only an admin may accept. The CRM already has a staff/admin gate (`requireAdmin`), so the mechanism exists; the app must respect it. |
 | 3.8.1 | Required | **Missing** | A non-admin sees "contact an admin to enable it". |
-| 3.8.2 | Conditional | **Open** | For unlisted/custom/enterprise distribution, T&C acceptance outside the app via **Apple Business Connect**. Depends on the distribution decision below; ask Stripe for their implementation. |
+| 3.8.2 | Conditional | **Likely N/A** | Apple Business Connect acceptance is for enterprise deployments **where no Apple Account is in use on the device** (guide, p11). Patrick accepts on his own iPhone with his own Apple Account, so this should not bite. Confirm with Stripe rather than assume. |
 | 3.9 | Recommended | **Missing** | After T&Cs + tutorial, a screen inviting him to try it. |
 | 3.9.1 | **Required** | **Missing** | A configuration progress indicator driven by `updateProgress` (or Stripe's equivalent), shown during first setup *and* whenever the reader is preparing. |
 
@@ -229,31 +229,76 @@ transaction, PIN entry, and the fallback mechanism.
 | Date | date of submission |
 | Version | app version submitted |
 | Existing or New app | **New** |
-| Distribution type | **decision pending — see below** |
+| Distribution type | **Unlisted** |
 | Number of Devices | how many crew iPhones will accept payment |
 
 ---
 
-## The one decision that has to be made first
+## Distribution: UNLISTED  (decided 2026-09-06 by Patrick)
 
-**Public App Store, or Unlisted / Custom App?** It changes which requirements are
-mandatory, and it should be settled before any code is written.
+Settled. This is what the entitlement request already told Apple, and it is the
+right call: public App Store distribution would mean building a full in-app
+merchant signup flow for an app one company uses.
 
-**Unlisted or Custom App** — recommended, and what the entitlement request already
-told Apple. Section 2 falls away entirely, section 4 becomes strongly-recommended,
-section 6 is moot, and the HIG/marketing conditionals (1.8, 1.9) relax. Section 5
-still applies in full. The cost is Apple Business Connect for T&C acceptance
-(3.8.2) if no Apple Account is used on the device — which for Patrick's own phone
-it is, so this may not bite.
+### What it relaxes
 
-**Public App Store** would mean building a full in-app merchant onboarding flow
-for an app used by one company. There is no reason to.
+Against **Apple's Tap to Pay checklist** only:
 
----
+- **§2 Onboarding — waived entirely**, under Apple's own escape clause (p9) for
+  apps with no in-app signup path distributed as Unlisted/Custom/ADEP.
+- **§4 Educating merchants — strongly recommended, not mandatory**, if education
+  is provided by other means. Build 4.1 anyway; it is cheap and carries four rows.
+- **§6 Marketing — moot.** Patrick is the sole merchant; there is no user base to
+  email or notify.
+- **1.8 / 1.9** (HIG and marketing-guideline conformance) are conditional on
+  public App Store distribution, so they relax too.
+
+**§5 Checking Out still applies in full.** Page 14: *"These requirements are
+applicable for all apps."* No exemption, and it is the largest section.
+
+### What it does NOT relax — corrected after checking
+
+**Unlisted apps still go through full App Store Review.** "Unlisted" means not
+discoverable and reachable only by direct link; it does not mean unreviewed. An
+app carrying the Tap to Pay entitlement also gets a special review by the App
+Store Review team (guide, p18). So the review burden is unchanged — only the
+Tap to Pay checklist gets shorter.
+
+### The mechanics, verified 2026-09-06
+
+Apple's own support page and App Store Connect help, not inference:
+
+1. **The app must be submitted to App Review first.** Requests for unlisted
+   distribution are **declined if the app has not been submitted to App Review,
+   or if it is in a beta or prerelease state**.
+   → PJL Field is on TestFlight and has never been released, so it is in exactly
+   the prerelease state that gets declined. **It cannot be made unlisted from
+   where it sits today.**
+2. **Add a note in Review Notes** on the submission saying the app is intended
+   for unlisted distribution, *then* submit the unlisted request.
+3. **The request form is Account Holder only** — submissions from other roles are
+   rejected.
+4. Once approved, the distribution method changes to Unlisted in Pricing and
+   Availability and applies to every future version.
+
+> **The conversion is permanent.** An app converted to unlisted **cannot be
+> changed back to public distribution**. For a crew app that was never going to
+> the storefront this is the right trade, but it is one-way, and worth knowing
+> before the form is submitted rather than after.
+
+### On "Custom App" as the alternative
+
+Custom Apps distribute privately through Apple Business Manager rather than a
+link. They are a plausible fit, but they generally need an **organization**
+developer account, and the entitlement grant lists the team as
+*Company / Organization: Patrick Lalande* — which reads as an individual
+membership. **Not established either way.** Unlisted is the route that does not
+depend on resolving that, so the plan assumes unlisted unless Apple says
+otherwise.
 
 ## Order of work
 
-1. **Settle distribution** (above) — everything else keys off it.
+1. ~~Settle distribution~~ — **done: Unlisted** (2026-09-06).
 2. **Ask Stripe** whether their React Native SDK surfaces `ProximityReaderDiscovery`
    (4.1) and what they advise for Apple Business Connect (3.8.2).
 3. **Stripe enables Terminal** on the account — still not confirmed.
@@ -266,3 +311,8 @@ for an app used by one company. There is no reason to.
 7. **Submit** the checklist and videos, quoting the Case-ID.
 8. **Publishing entitlement** → only then TestFlight, and the normal build pipeline
    comes back.
+9. **Submit to App Review** with a Review Note saying the app is intended for
+   unlisted distribution — an unlisted request is declined while the app is still
+   prerelease, which is what it is today.
+10. **Request unlisted distribution**, from the Account Holder. One-way: the app
+    cannot go back to public afterwards.
