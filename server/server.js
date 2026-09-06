@@ -1328,6 +1328,15 @@ function needsAuth(method, pathname) {
   // public (the token in the URL IS the credential — same model
   // as the iCal feed). Everything else under /api/outreach/* is
   // admin/tech-only.
+  // Tap to Pay's connection token — ADMIN ONLY. It mints a LIVE Stripe
+  // Terminal credential, so an unlisted path here is not a missing
+  // convenience, it is an open one: needsAuth defaults to null (no auth)
+  // for anything it does not name, and this route sat unnamed while its
+  // own `await requireAdmin(req)` discarded the result. It handed a
+  // pst_live_ token to an unauthenticated curl. The route now checks the
+  // session too — the gate is the fence, the route check is the lock, and
+  // this needed both.
+  if (pathname === "/api/terminal/connection-token") return "admin";
   if (pathname === "/api/outreach/unsubscribe") return null;
   if (pathname.startsWith("/api/outreach/")) return "user";
   // Availability lookups + the public booking endpoint stay public.
@@ -9072,7 +9081,11 @@ async function handleApi(req, res, pathname) {
   const zoneRemoveMatch = pathname.match(/^\/api\/properties\/([^/]+)\/zones\/(\d+)$/);
   if (zoneRemoveMatch && req.method === "DELETE") {
     try {
-      await requireAdmin(req);
+      // Same no-op again. /api/properties is fenced at "user", so this was
+      // never anonymous — but removing a controller station is an admin
+      // action, and a tech could do it.
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
       const payload = await parseRequestBody(req);
       const updated = await properties.removeZone(
         decodeURIComponent(zoneRemoveMatch[1]),
@@ -13600,7 +13613,11 @@ async function handleApi(req, res, pathname) {
   const invoicePayLinkMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/payment-link$/);
   if (invoicePayLinkMatch && req.method === "POST") {
     try {
-      await requireAdmin(req);
+      // Same no-op as the Terminal route had. /api/invoices is fenced at
+      // "user", so this was never anonymous — but a TECH could mint a
+      // payment link for any invoice, which is an admin action.
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
       const id = decodeURIComponent(invoicePayLinkMatch[1]);
       const inv = await invoices.ensurePaymentToken(id);
       if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
@@ -13631,7 +13648,11 @@ async function handleApi(req, res, pathname) {
   // account, rather than a guess about why.
   if (pathname === "/api/terminal/connection-token" && req.method === "POST") {
     try {
-      await requireAdmin(req);
+      // requireAdmin RETURNS NULL on failure — it does not throw. A bare
+      // `await requireAdmin(req)` is not a gate, it is a no-op with the
+      // shape of one.
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
       // Both halves of what the reader needs to come up: the short-lived
       // token it trades for the right to talk to Stripe, and the Location
       // it has to be associated with at connect time. Fetched together
