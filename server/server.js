@@ -20774,7 +20774,9 @@ Customer signature captured at ${new Date().toISOString()}.`;
         // Notify Patrick + the customer, same channels as the new-lead path.
         const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
         const decorated = decorateLeadForAdmin(lead, req);
-        Promise.allSettled([
+        if (isLoadTest) {
+          console.log("[load-test] notifications suppressed for", lead.id);
+        } else Promise.allSettled([
           sendNewLeadEmail({ ...decorated, sourceLabel: `BOOKED · ${service.label} · ${matched.dayLabel} ${matched.timeLabel}` }, { baseUrl }),
           sendNewLeadSms({ ...decorated, sourceLabel: `BOOKED ${matched.timeLabel}` }, { baseUrl }),
           notifyCustomer(boundIsSiteVisit ? "site_visit" : "booked", decorated, { baseUrl })
@@ -21057,7 +21059,9 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // Notify Patrick (admin) and the customer.
       const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
       const decorated = decorateLeadForAdmin(result.lead, req);
-      Promise.allSettled(isStandby
+      if (isLoadTest) {
+        console.log("[load-test] notifications suppressed for", result.lead.id);
+      } else Promise.allSettled(isStandby
         ? [
             sendNewLeadEmail({ ...decorated, sourceLabel: `OPEN BUCKET · ${service.label} · first available` }, { baseUrl }),
             sendNewLeadSms({ ...decorated, sourceLabel: "OPEN BUCKET first available" }, { baseUrl }),
