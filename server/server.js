@@ -20400,6 +20400,23 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const adminSession = await requireUser(req);
       const isAdmin = Boolean(adminSession);
 
+      // Load-test bypass. Only honoured when ALL of:
+      //   - PJL_TEST_KEY env var is set on the server
+      //   - request carries X-PJL-Test-Key matching it
+      //   - notes start with "PJLTEST-" (so test records are findable
+      //     and deletable afterwards)
+      // Skips Turnstile + the per-IP rate limit so the booking bot can
+      // create 100+ bookings from one machine. Honeypot + time-trap still
+      // run. Unset PJL_TEST_KEY on Render to switch the bypass off.
+      const testKey = String(process.env.PJL_TEST_KEY || "");
+      const testNotes = String(payload?.contact?.notes || payload?.notes || "");
+      const isLoadTest = Boolean(
+        testKey &&
+        String(req.headers["x-pjl-test-key"] || "") === testKey &&
+        testNotes.startsWith("PJLTEST-")
+      );
+      if (isLoadTest) console.log("[load-test] anti-bot bypass for", testNotes.slice(0, 12));
+
       // Anti-bot gate. Honeypot + time-trap + rate-limit always run —
       // they're cheap and harmless for admin too. Turnstile is skipped
       // for admin sessions; the session itself is the bot filter.
@@ -20407,7 +20424,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
         body: payload,
         ip: callerIp(req),
         userAgent: req.headers["user-agent"] || "",
-        skipTurnstile: isAdmin
+        skipTurnstile: isAdmin || isLoadTest,
+        skipRateLimit: isLoadTest
       });
       if (!verdict.ok) return sendJson(res, verdict.status, verdict.responseBody);
 
