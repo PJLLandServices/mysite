@@ -1844,6 +1844,29 @@ Connect acceptance) is **likely N/A**, since it applies where no Apple Account i
 the device and Patrick accepts on his own iPhone with his own — to be confirmed with Stripe,
 not assumed. **No code changed** — docs only.
 
+**2026-09-06 (Merchant education resolved — 4.1 is buildable, and Stripe support's answer
+needed correcting):** Patrick asked Stripe about `ProximityReaderDiscovery`; their support
+assistant answered about the **payment** framework (`ProximityReader`, which the Terminal SDK
+wraps) rather than the **education** API of nearly the same name, so it did not answer the
+question. Resolved from Stripe's and Apple's own documentation instead. **The finding:**
+`ProximityReaderDiscovery` is Apple's API, iOS 18.0+, a two-step native call
+(`content(for:)` then `presentContent(_:from:)`), and is **not exposed as a JavaScript
+method by `@stripe/stripe-terminal-react-native`**. It is still the right route and a cheap
+one — `ProximityReader` is a system framework **already linked by the Terminal SDK**, so
+reaching it costs a small local Expo native module and **no new dependency**, against the
+alternative of writing and maintaining our own education screens carrying Apple's verbatim
+PIN and fallback copy. **New scope item, conditional:** because 4.1 is iOS 18+, any phone
+taking payment on an earlier iOS needs our own education screens after all — so the iOS
+version on Patrick's iPhone and any crew phone is now an open question with a real
+consequence. **One claim from the support answer deliberately not carried forward:** "the SDK
+manages reader connection tokens through Stripe's direct relationship with Apple" — connection
+tokens are minted by OUR server with OUR secret key, which is precisely what
+`POST /api/terminal/connection-token` (PR #137) exists for; the SDK requests a token from a
+provider we supply. Read the other way that sentence would retire the server route, and the
+server route is the only thing keeping a Stripe key out of the app bundle. The same answer
+also listed requesting the entitlement as a next step, which was already granted. **No code
+changed** — docs only.
+
 **2026-09-05 (The closing stops asking for a note it does not need):** Patrick reached
 sign-off on a real fall closing and was stopped by "Add a note about what you did at this
 visit". His call, and it is the right one: that note belongs to **openings and service
