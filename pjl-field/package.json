@@ -9,6 +9,7 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@stripe/stripe-terminal-react-native": "^0.0.1-beta.32",
     "expo": "~54.0.36",
     "expo-image-picker": "~17.0.11",
     "expo-location": "~19.0.8",

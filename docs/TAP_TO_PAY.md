@@ -17,8 +17,9 @@ is the short part.
 | Apple development entitlement | **GRANTED 2026-09-06**, Case-ID `22041657` — development distribution restriction in place |
 | Apple publishing entitlement | not yet requested — **gates TestFlight**, see below |
 | Stripe Terminal enabled | **yes**, confirmed 2026-09-06 — one Location, "PJL Land Services", Newmarket ON |
-| Connection-token route | shipped, now also returns the Terminal `locationId` — **needs a Render deploy to be live** |
-| SDK + overlay + reader UI | not started, and must not start early (see §4) |
+| Connection-token route | **live and correctly gated** — returns secret + locationId (deployed 2026-09-06) |
+| SDK + reader UI | **built** on `claude/pjl-field-taptopay` — NOT merged, and must not be until publishing lands |
+| Education overlay + push + splash | not built — see `TAP_TO_PAY_INSTALLING.md`, none block a first tap |
 
 **Apple sent the requirements with the grant. They are audited row by row in
 `docs/TAP_TO_PAY_REQUIREMENTS.md` — read that before writing any Tap to Pay
@@ -151,6 +152,7 @@ Then, in one build:
 | 1 | Apple development entitlement — **GRANTED, Case-ID 22041657** | done | — |
 | 2 | Stripe Terminal enabled | done | — |
 | 3 | Connection-token route | done | — |
-| 4 | SDK + overlay + reader UI | Claude | needs 1 and 2 |
-| 5 | TestFlight build | the build workflow | needs 4 |
+| 4 | SDK + reader UI | done (branch) | — |
+| 4b | Education overlay, push, splash | Claude | needs Apple's Marketing Toolkit for the splash |
+| 5 | Development build on a registered iPhone | Patrick | `docs/TAP_TO_PAY_INSTALLING.md` |
 | 6 | Apple distribution entitlement | Patrick | shipping beyond internal testing |
