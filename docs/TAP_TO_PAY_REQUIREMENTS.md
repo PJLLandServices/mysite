@@ -213,6 +213,27 @@ copy **verbatim** (page 21):
 > this occurs, simply ask the customer if they have an alternative contactless
 > card or digital wallet and continue the transaction using Tap to Pay on iPhone.
 
+### The Terminal Location — a build input the documents do not mention
+
+Stripe Terminal is enabled (confirmed 2026-09-06), with exactly one Location:
+**PJL Land Services, Newmarket ON**.
+
+That Location matters more than it looks. **A Tap to Pay reader is not registered
+in the Dashboard ahead of time — it is associated with a Location at CONNECT
+time**, so without the Location id the app cannot bring the reader up at all.
+Nothing in Apple's checklist says this; it falls out of how Stripe's SDK works.
+
+`POST /api/terminal/connection-token` now returns `locationId` alongside the
+secret, resolved server-side: `STRIPE_TERMINAL_LOCATION_ID` when set, otherwise
+the single Location on the account. **Several Locations are refused, not guessed
+at** — a payment filed against the wrong site is a quiet error that surfaces at
+reconciliation, long after the driveway.
+
+The id is configuration rather than a secret, but it still comes from the server:
+hard-coded in a shipped bundle it could not be changed without a TestFlight round
+trip, and TestFlight is exactly what we do not have until the publishing
+entitlement lands.
+
 ## Section 5 — Checking out
 
 Page 14: **"These requirements are applicable for all apps."** No distribution

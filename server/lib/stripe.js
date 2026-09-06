@@ -346,6 +346,50 @@ async function createTerminalConnectionToken() {
   return { secret: data.secret, location: data.location || null };
 }
 
+// Which Stripe Terminal Location a Tap to Pay reader belongs to.
+//
+// A Tap to Pay reader is not registered in the Dashboard ahead of time —
+// it is associated with a Location at CONNECT time, so the app cannot
+// bring up the reader without this id. It is configuration, not a
+// secret, but it still comes from here rather than being typed into the
+// app: a hard-coded id in a shipped bundle is one that cannot be changed
+// without a TestFlight round trip.
+//
+// STRIPE_TERMINAL_LOCATION_ID wins when set. Otherwise, with exactly one
+// Location on the account, use it — which is the real shape of a
+// one-truck business and saves an env var that would only ever hold the
+// single obvious value. Zero or several is NOT guessed at: an account
+// with two locations that silently picked the first would file a
+// driveway payment against the wrong site, and that is worse than an
+// error naming the fix.
+//
+// Deliberately not cached. Connection tokens are minted when the reader
+// connects, not per transaction, so the extra call is rare — and a cache
+// would hold a stale id after the Location is renamed or replaced, which
+// is a worse failure than one more request.
+async function resolveTerminalLocationId() {
+  const configured = (process.env.STRIPE_TERMINAL_LOCATION_ID || "").trim();
+  if (configured) return configured;
+
+  const { data } = await stripeRequest("GET", "/terminal/locations?limit=2");
+  const locations = (data && Array.isArray(data.data)) ? data.data : [];
+
+  if (locations.length === 1 && locations[0] && locations[0].id) {
+    return locations[0].id;
+  }
+  if (locations.length === 0) {
+    throw paymentFailure(
+      "No Stripe Terminal Location exists. Create one in the Stripe Dashboard " +
+      "under Terminal → Locations; a Tap to Pay reader has to belong to one."
+    );
+  }
+  throw paymentFailure(
+    "This Stripe account has more than one Terminal Location, so which one a " +
+    "payment belongs to cannot be inferred. Set STRIPE_TERMINAL_LOCATION_ID " +
+    "to the right one."
+  );
+}
+
 module.exports = {
   isConfigured,
   isLiveMode,
@@ -356,6 +400,7 @@ module.exports = {
   retrievePaymentIntent,
   cancelPaymentIntent,
   createTerminalConnectionToken,
+  resolveTerminalLocationId,
   summarizeIntent,
   cardFactsFrom,
   verifyWebhookSignature,

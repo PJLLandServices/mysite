@@ -13632,8 +13632,14 @@ async function handleApi(req, res, pathname) {
   if (pathname === "/api/terminal/connection-token" && req.method === "POST") {
     try {
       await requireAdmin(req);
+      // Both halves of what the reader needs to come up: the short-lived
+      // token it trades for the right to talk to Stripe, and the Location
+      // it has to be associated with at connect time. Fetched together
+      // because the app cannot connect with only one of them, and a
+      // second round trip on a driveway is a second chance to fail.
       const token = await stripe.createTerminalConnectionToken();
-      return sendJson(res, 200, { ok: true, secret: token.secret });
+      const locationId = await stripe.resolveTerminalLocationId();
+      return sendJson(res, 200, { ok: true, secret: token.secret, locationId });
     } catch (err) {
       const status = err && err.statusCode === 401 ? 401 : 400;
       return sendJson(res, status, {

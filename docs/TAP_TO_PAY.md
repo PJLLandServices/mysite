@@ -16,8 +16,8 @@ is the short part.
 |------|-------|
 | Apple development entitlement | **GRANTED 2026-09-06**, Case-ID `22041657` — development distribution restriction in place |
 | Apple publishing entitlement | not yet requested — **gates TestFlight**, see below |
-| Stripe Terminal enabled | not confirmed |
-| Connection-token route | shipped (PR #137) — needs a Render deploy to be live |
+| Stripe Terminal enabled | **yes**, confirmed 2026-09-06 — one Location, "PJL Land Services", Newmarket ON |
+| Connection-token route | shipped, now also returns the Terminal `locationId` — **needs a Render deploy to be live** |
 | SDK + overlay + reader UI | not started, and must not start early (see §4) |
 
 **Apple sent the requirements with the grant. They are audited row by row in
@@ -146,7 +146,7 @@ Then, in one build:
 | # | What | Who | Blocks |
 |---|------|-----|--------|
 | 1 | Apple development entitlement — **GRANTED, Case-ID 22041657** | done | — |
-| 2 | Stripe Terminal enabled | Patrick | the token route returning a secret |
+| 2 | Stripe Terminal enabled | done | — |
 | 3 | Connection-token route | done | — |
 | 4 | SDK + overlay + reader UI | Claude | needs 1 and 2 |
 | 5 | TestFlight build | the build workflow | needs 4 |

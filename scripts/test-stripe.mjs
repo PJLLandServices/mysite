@@ -188,5 +188,71 @@ function assert(cond, label) {
     "terminal: no Stripe key is shipped in the app");
 }
 
+// ---- Terminal Location -------------------------------------------------
+//
+// A Tap to Pay reader is associated with a Location at CONNECT time, so
+// without this id the app cannot bring the reader up at all. The rule
+// worth pinning is the refusal: an account with several Locations must
+// NOT have one picked for it, because a payment filed against the wrong
+// site is a quiet error nobody catches until reconciliation.
+{
+  assert(typeof stripe.resolveTerminalLocationId === "function",
+    "location: the lib resolves a Terminal location");
+
+  const savedLoc = process.env.STRIPE_TERMINAL_LOCATION_ID;
+  const savedSecret = process.env.STRIPE_SECRET_KEY;
+
+  // Configured id wins, and short-circuits before any network call —
+  // which is also why this assertion can run with no key at all.
+  delete process.env.STRIPE_SECRET_KEY;
+  process.env.STRIPE_TERMINAL_LOCATION_ID = "tml_configured";
+  assert(await stripe.resolveTerminalLocationId() === "tml_configured",
+    "location: STRIPE_TERMINAL_LOCATION_ID is used when set");
+
+  // Whitespace-only is not a value. Without this, a stray space in a
+  // Render env var would look configured and be sent to Stripe as an id.
+  process.env.STRIPE_TERMINAL_LOCATION_ID = "   ";
+  let refusedBlank = false;
+  try { await stripe.resolveTerminalLocationId(); }
+  catch (err) { refusedBlank = /not configured/i.test(err.message || ""); }
+  assert(refusedBlank,
+    "location: a blank STRIPE_TERMINAL_LOCATION_ID falls through, it does not count as set");
+
+  // No key and no configured id must fail rather than call anonymously.
+  delete process.env.STRIPE_TERMINAL_LOCATION_ID;
+  let refused = false;
+  try { await stripe.resolveTerminalLocationId(); }
+  catch (err) { refused = /not configured/i.test(err.message || ""); }
+  assert(refused, "location: refuses to look up without STRIPE_SECRET_KEY");
+
+  if (savedLoc) process.env.STRIPE_TERMINAL_LOCATION_ID = savedLoc;
+  else delete process.env.STRIPE_TERMINAL_LOCATION_ID;
+  if (savedSecret) process.env.STRIPE_SECRET_KEY = savedSecret;
+
+  // The several-locations refusal, read from the source: it is the
+  // assertion that cannot be exercised without a live Stripe account,
+  // and the one whose absence would be silent and expensive.
+  const libSrc = readFileSync(new URL("../server/lib/stripe.js", import.meta.url), "utf8");
+  const fnAt = libSrc.indexOf("async function resolveTerminalLocationId");
+  assert(fnAt > 0, "location: the resolver exists in the lib");
+  const fnBlock = libSrc.slice(fnAt, fnAt + 1400);
+  assert(/locations\.length === 1/.test(fnBlock),
+    "location: exactly one Location is used without configuration");
+  assert(/STRIPE_TERMINAL_LOCATION_ID/.test(fnBlock),
+    "location: several Locations point the reader at the env var instead of guessing");
+  assert(!/locations\[0\]\.id;?\s*\n\s*}\s*$/.test(fnBlock),
+    "location: no unconditional first-location fallback");
+
+  // The route must hand back both halves. One without the other leaves
+  // the app holding a token it cannot connect with.
+  const serverSrc2 = readFileSync(new URL("../server/server.js", import.meta.url), "utf8");
+  const routeAt2 = serverSrc2.indexOf('pathname === "/api/terminal/connection-token"');
+  const routeBlock2 = serverSrc2.slice(routeAt2, routeAt2 + 1200);
+  assert(/resolveTerminalLocationId\(\)/.test(routeBlock2),
+    "location: the connection-token route resolves the location");
+  assert(/locationId/.test(routeBlock2),
+    "location: the route returns locationId alongside the secret");
+}
+
 console.log(`\ntest-stripe: ${failed ? "FAIL" : "PASS"} — ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
