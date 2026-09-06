@@ -135,13 +135,63 @@ cheap and carries four other rows with it.
 
 | # | Req | State | What it needs |
 |---|-----|-------|---------------|
-| 4.1 | Required | **Missing** | `ProximityReaderDiscovery` on iOS 18+. Apple keeps it current and localized, **and it fulfils 4.4, 4.6, 4.7 and 4.8 outright.** This is the single highest-leverage item in the whole list. **Unknown: whether Stripe's React Native SDK exposes it** — if not, it needs a small native module. Check before planning around it. |
+| 4.1 | Required | **Resolved — buildable** | `ProximityReaderDiscovery` on iOS 18+. Apple keeps it current and localized, **and it fulfils 4.4, 4.6, 4.7 and 4.8 outright.** Highest-leverage item on the list. See the resolution below. |
 | 4.2 | Required | **Missing** | Education right after T&C acceptance. |
 | 4.3 | Required | **Missing** | Reachable later from Settings or Help. Again: no settings screen exists. |
 | 4.5 | Required | **Missing** | Show how to accept contactless cards. |
 | 4.6 | Required | **Missing** | Show how to accept Apple Pay and digital wallets. |
 | 4.7 | **Conditional on region — CANADA IS INCLUDED** | **Missing** | PIN entry *and the accessibility options on the PIN screen* must be covered. The region table reads "All regions except JP, TW". |
 | 4.8 | **Conditional on region — CANADA IS INCLUDED** | **Missing** | Fallback payment method must be covered. See below. |
+
+### Merchant education: how 4.1 gets built  (resolved 2026-09-06)
+
+**`ProximityReaderDiscovery` is Apple's own API, not a Stripe one, and it is not
+exposed as a JavaScript method by `@stripe/stripe-terminal-react-native`.** It is
+a two-step native call: `content(for:)` to fetch the content, then
+`presentContent(_:from:)` to show it.
+
+**This is still the right route, and it is cheap:** `ProximityReader` is a
+built-in iOS system framework **already linked by the Stripe Terminal SDK**, so
+reaching it costs a small local Expo native module — a few dozen lines of Swift
+bridging two calls — and **no new dependency**. Weighed against writing our own
+education screens, which would then have to carry Apple's PIN and fallback copy
+and be kept current by us, the module is much the smaller job.
+
+**The catch, and it is a real scope item: `ProximityReaderDiscovery` is iOS 18.0
+and later.** Stripe's own guidance is to provide your own fallback merchant
+education UI for earlier versions. So:
+
+> **If any phone that will take payment runs iOS < 18, we must build our own
+> education screens anyway** — and those screens must carry Apple's verbatim PIN
+> (4.7) and fallback (4.8) copy, because 4.1 is what would otherwise have
+> covered them.
+
+**Open, and easy to answer:** the iOS version on Patrick's iPhone and on any crew
+phone that will accept payment. If everything is on 18 or later, the fallback
+screens are not needed at all.
+
+Also noted from the same reading, useful later: the RN SDK exposes
+`supportsReadersOfType({ deviceType: 'appleBuiltIn' })` for capability checks, and
+`setLocalMobileUxConfiguration` for customising the Tap to Pay screen.
+
+### A correction to Stripe support's answer
+
+Stripe's support assistant, asked about this, answered about the **payment**
+framework rather than the **education** API — they are different things that share
+a prefix — and included one claim worth not carrying forward:
+
+> *"The SDK manages reader connection tokens through Stripe's direct relationship
+> with Apple"*
+
+**Connection tokens come from our own server, minted with our own Stripe secret
+key** — that is exactly what `POST /api/terminal/connection-token` (PR #137) is
+for. The SDK *requests* a token from a provider we supply; it does not obtain one
+by itself. Read the other way, that sentence would suggest the server route is
+unnecessary. It is not, and it is the one thing standing between this feature and
+a Stripe key in the app bundle.
+
+The same answer also listed "request the entitlement" as a next step; it was
+already granted on 2026-09-06.
 
 ### Canada's two extra obligations
 
@@ -299,8 +349,9 @@ otherwise.
 ## Order of work
 
 1. ~~Settle distribution~~ — **done: Unlisted** (2026-09-06).
-2. **Ask Stripe** whether their React Native SDK surfaces `ProximityReaderDiscovery`
-   (4.1) and what they advise for Apple Business Connect (3.8.2).
+2. ~~Ask Stripe about `ProximityReaderDiscovery`~~ — **answered 2026-09-06**; see
+   §"Merchant education: how 4.1 gets built". Apple Business Connect (3.8.2)
+   still worth confirming, but reads as N/A.
 3. **Stripe enables Terminal** on the account — still not confirmed.
 4. **Register the iPhone** on the developer account; add an EAS build profile with
    development signing.
