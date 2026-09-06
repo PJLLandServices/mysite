@@ -1639,6 +1639,30 @@ opposite of the one first recorded: a fix verified against a live symptom is not
 the codebase cannot produce" just because the write path is hard to find — data outranks code
 reading, and the bar for removing the union again is a walked Today page, not an argument.
 
+**2026-09-06 (Season Plan becomes the dispatch cockpit):** Patrick, after two rounds of
+reorganizing the vertical page: "still extremely conflicted with the layout... not
+completely fluent in terms of my accessibility for planning." Rather than a third guess,
+two full layout mockups went to him (dispatch cockpit vs month calendar) and he picked the
+cockpit. The page is now ONE SCREEN, three panes, nothing scrolls away: the season down a
+LEFT RAIL (every day as a dense row — label, date, territory, stops count and a fill bar,
+red when over cap, amber for booked-only days; past days in a fold at the rail's foot), the
+SELECTED day's live map filling the CENTRE STAGE (header carries the day's chips,
+Reschedule, notes and Open route), and its stops in driving order down the RIGHT PANE (the
+same bucket blocks, move/window/nudge controls, and booked-appointments group as before).
+Planning is by SELECTING, never scrolling: a rail click swaps the stage; the customer
+finder sits in the top toolbar and a hit selects the day and lights the exact row; every
+tool (probe, open bucket with a waiting-count badge, needs-attention, assignment + booking
+window + import) docks in the toolbar and opens as a DRAWER over the cockpit, one at a
+time. One map draw per day selected — the same one-request-per-day-looked-at discipline
+every prior layout held. Selection survives re-renders (moves, reschedules), defaulting to
+today's day else the first day ahead. Presentation only: no endpoint, payload, engine or
+store change; the same day-row data renders in new furniture; full `build:check` green.
+Verified in headless Chromium against the real page with a fixture season: default
+selection lands on the first day ahead, a rail click swaps the stage and stops, the finder
+selects a booked ad customer's day and lights their row, the bucket drawer opens with its
+badge count. **Needs Patrick's walk:** the real season loads as the cockpit; plan a day
+end-to-end (select, move a stop, reschedule) without scrolling.
+
 **2026-09-05 (The open bucket — "first available" standby appointments):** Patrick: "an
 'open bucket' first next available type situation that allows us to collect open non
 actually booked appointments, and throw it in our day... if it's 'on our way home' we can
