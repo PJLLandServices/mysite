@@ -1825,6 +1825,25 @@ what the entitlement request already told them; and marketing (6.x), since Patri
 sole merchant — both to be declared with reasons, not left blank. **No code changed** — docs
 only, and the SDK still goes in last.
 
+**2026-09-06 (Distribution decided: UNLISTED — and one thing I had understated):** Patrick's
+call, matching what the entitlement request already told Apple. Against **Apple's Tap to Pay
+checklist** it waives §2 onboarding outright, drops §4 education to strongly-recommended,
+makes §6 marketing moot (he is the sole merchant), and relaxes the 1.8/1.9 conditionals —
+while **§5 Checking Out still applies in full** ("These requirements are applicable for all
+apps"), which is the largest section. **The correction:** "unlisted" is not "unreviewed", and
+the earlier framing let that slide. Verified against Apple's own unlisted-distribution support
+page and App Store Connect help: an unlisted app goes through **full App Store Review**, plus
+the special Tap to Pay review the guide describes; unlisted only means not discoverable and
+link-only. Two mechanics that bite in order: (1) **the request is declined if the app has not
+been submitted to App Review or is in a beta/prerelease state** — pjl-field is on TestFlight
+and has never shipped, which is exactly the state that gets declined, so it cannot be made
+unlisted from where it sits; the app must be submitted to review first, with a Review Note
+saying unlisted is intended, and (2) **the conversion is permanent** — an unlisted app cannot
+be returned to public distribution. Also resolved by the decision: 3.8.2 (Apple Business
+Connect acceptance) is **likely N/A**, since it applies where no Apple Account is in use on
+the device and Patrick accepts on his own iPhone with his own — to be confirmed with Stripe,
+not assumed. **No code changed** — docs only.
+
 **2026-09-05 (The closing stops asking for a note it does not need):** Patrick reached
 sign-off on a real fall closing and was stopped by "Add a note about what you did at this
 visit". His call, and it is the right one: that note belongs to **openings and service
