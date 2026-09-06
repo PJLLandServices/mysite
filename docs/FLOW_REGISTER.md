@@ -1793,6 +1793,38 @@ with an Apple identifier registered in advance. Searching "accept payments on iP
 on Apple Pay first, which is how the detour happened. **No code changed** — `docs/TAP_TO_PAY.md`
 now carries a status table so the gate state is readable without re-deriving it.
 
+**2026-09-06 (Apple granted the development entitlement — and the requirements changed the
+plan):** Case-ID 22041657 granted with the development distribution restriction, along with
+two documents (App & Marketing Requirements and Review Guide v1.7, and the App Review
+Requirements Checklist v1.7). Audited row by row into `docs/TAP_TO_PAY_REQUIREMENTS.md`.
+**Honest state: we meet none of the app requirements, and could not — there is no Tap to Pay
+code in pjl-field**; its dependencies are still expo/image-picker/location/status-bar/updates
+/react/react-native/webview. **Two findings that move the plan, both read off Apple's own
+text rather than assumed:** (1) **the PUBLISHING entitlement is what gates TestFlight**, not
+just the App Store — a development entitlement supports only development provisioning
+profiles on registered devices, so `field-app-build.yml`'s build → auto-submit → TestFlight
+pipeline cannot carry this build at all, and the order is build → three videos → publishing
+entitlement → TestFlight. (2) Same bundle ID means one install, so a development Tap to Pay
+build would REPLACE the app Patrick runs on real closings, and the moment the SDK lands on
+`main` his installed app stops receiving OTA fixes; the recommendation is a long-lived
+branch with its own build profile and `main` kept SDK-free until publishing is granted.
+**Canada-specific, now an Apple requirement rather than our own caution:** CA is on the
+Fallback Payment Method list and in PIN-Entry-in-Education (all regions except JP/TW), so the
+app must carry an alternative payment method (we have two), a *seamless* transition to it
+from the Tap to Pay UI (missing), and education covering both PIN entry and the fallback —
+with Apple's verbatim copy if we write our own screens. **Scope items that were invisible
+before reading the documents:** a configuration progress indicator (3.9.1), reading T&C
+acceptance from Apple instead of local state (1.6), reader warm-up on foreground (1.5, which
+is what makes the one-second requirement 5.6 achievable), a settings surface for enabling and
+for education (3.6/4.3 — the app has no settings screen at all), a receipt sendable on a
+DECLINED transaction (5.10), and **push notifications** for an outcome seen after the app is
+closed (5.12 — pjl-field has no push capability whatsoever, so that is another native module
+and an APNs setup). **What falls away:** the whole onboarding section (2.x) under Apple's own
+escape clause for apps without a signup path distributed as Unlisted/Custom/ADEP, which is
+what the entitlement request already told them; and marketing (6.x), since Patrick is the
+sole merchant — both to be declared with reasons, not left blank. **No code changed** — docs
+only, and the SDK still goes in last.
+
 **2026-09-05 (The closing stops asking for a note it does not need):** Patrick reached
 sign-off on a real fall closing and was stopped by "Add a note about what you did at this
 visit". His call, and it is the right one: that note belongs to **openings and service
