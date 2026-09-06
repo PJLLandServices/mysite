@@ -1639,6 +1639,43 @@ opposite of the one first recorded: a fix verified against a live symptom is not
 the codebase cannot produce" just because the write path is hard to find — data outranks code
 reading, and the bar for removing the union again is a walked Today page, not an argument.
 
+**2026-09-06 (The booking gate — full addresses only, inside the service area only):**
+Patrick, piloting before the blast: "a massive issue that might insinuate a ton of
+potential spam. And i believe in a different prompt i requested that 'only full address
+selections can be approved to move forward' — unfortunately that isnt the case. Also, we
+need to put a lock on 'who can book' — it needs to be within our service areas." He is
+right that the rule never got built; this builds it, SERVER-SIDE, where spam cannot route
+around the autocomplete. New `lib/booking-gate.js` (`gate(geo, {travelMinutes, base})`),
+applied to `/api/booking/availability` and the public path of `/api/booking/reserve`
+(standby/open-bucket joins included): (1) **full addresses only** — geocode.js now captures
+`streetLevel` (a street_number component, or Google typing the result street_address /
+premise / subpremise) and the gate refuses a result that resolved only to a town, route or
+postal area (`address_incomplete`), or did not resolve at all (`address_unverified`, on
+ZERO_RESULTS); legacy cache entries lack the flag and PASS — they are real, served
+addresses, only an explicit false refuses. (2) **the service-area lock** — the customer's
+coords must sit within 90 driving minutes of the Newmarket base, the same TIER_EXTENDED
+"confirmed coverage" outer bound the public coverage checker advertises
+(`outside_service_area` past it, with the drive named and the phone offered);
+`distance.js` answers even offline via Haversine, so the measurement cannot wedge.
+(3) **our faults stand aside** — a geocode failure that is OURS (no key, REQUEST_DENIED,
+quota, network) allows the booking and logs `[booking-gate] degraded`; invariant 5, a PJL
+outage never blocks a customer, and the anti-bot gate still stands. This RESOLVES the
+fail-open-vs-fail-closed residual from the geocode-posture entry: the public flow now
+fails CLOSED on definitively bad addresses and open only on our own outages. **Admin
+outranks the gate everywhere** (availability with an admin session, reserve with isAdmin
+— same philosophy as admin_custom), so Patrick's +Book modal and phone bookings are
+untouched. Refusal codes carry customer-readable copy client-side (booking.js
+CUSTOMER_COPY) and server-side. **FLOW-03 IS PASS AND WAS TOUCHED — a deliberate new
+refusal on Patrick's explicit direction**, not a regression: slot math, payloads and every
+previously-valid street-level in-area booking are unchanged; engine suites green in the
+full chain. Cover: `scripts/test-booking-gate.mjs` (19 assertions, in `build:check`) —
+town-level refused, street-level books, legacy cache passes, the 90-minute tier inclusive
+at the boundary, drive-measurement failure never refuses, all four our-fault reasons
+allowed-and-flagged, ZERO_RESULTS refused, streetLevelFrom reads Google's shapes.
+**Needs Patrick's walk:** on /book.html try "Toronto" (refused as incomplete), a real
+picked address (books), and an Ottawa address (refused as outside the area with the
+minutes named).
+
 **2026-09-06 (Season Plan becomes the dispatch cockpit):** Patrick, after two rounds of
 reorganizing the vertical page: "still extremely conflicted with the layout... not
 completely fluent in terms of my accessibility for planning." Rather than a third guess,

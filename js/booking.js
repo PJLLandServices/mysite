@@ -722,6 +722,9 @@
         // server's errors[] (still customer-readable for public-reachable
         // codes), then to a generic "try again" line.
         var CUSTOMER_COPY = {
+          address_unverified: "We couldn't find that address. Please go back and pick your full address from the suggestions, or call (905) 960-0181.",
+          address_incomplete: "That looks like a town or area rather than a full address. Please go back and pick your exact street address from the suggestions.",
+          outside_service_area: "That address is outside our service area. Call (905) 960-0181 and we'll see what we can do.",
           service_unknown: "We didn't recognize that service. Please refresh and pick one from the list.",
           slot_invalid: "That time didn't look right. Please pick a slot from the calendar.",
           address_missing: "Please enter the service address before booking.",

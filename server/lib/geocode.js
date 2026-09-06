@@ -145,7 +145,15 @@ async function geocode(address) {
           lat: top.geometry?.location?.lat,
           lng: top.geometry?.location?.lng,
           formattedAddress: top.formatted_address,
-          source: "google"
+          source: "google",
+          // Whether Google resolved a REAL street address, or just a
+          // town/street/postal area. "Toronto" geocodes fine — to city
+          // hall — and the booking gate must be able to tell the
+          // difference (Patrick: "only full address selections can be
+          // approved to move forward"). Cached entries from before this
+          // field simply lack it; the gate treats absent as pass, since
+          // those were real, served addresses.
+          streetLevel: streetLevelFrom(top)
         };
         cache[key] = coords;
         saveCache().catch(() => {});
@@ -170,4 +178,15 @@ async function geocode(address) {
   return failedLookup(address, "network", { error: lastError });
 }
 
-module.exports = { geocode, PJL_BASE, isConfigured };
+// A geocode result is street-level when it carries a street number (the
+// normal case for a picked-from-the-dropdown address) or Google itself
+// typed it as a street address / premise. A locality, route, or postal
+// code result is a real point on the map but NOT a bookable address.
+function streetLevelFrom(result) {
+  const comps = Array.isArray(result?.address_components) ? result.address_components : [];
+  const types = Array.isArray(result?.types) ? result.types : [];
+  return comps.some((c) => (c.types || []).includes("street_number"))
+    || types.some((t) => t === "street_address" || t === "premise" || t === "subpremise");
+}
+
+module.exports = { geocode, PJL_BASE, isConfigured, streetLevelFrom };
