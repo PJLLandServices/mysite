@@ -1928,6 +1928,15 @@ the code: weakening `length === 1` to `>= 1` and dropping the `.trim()` each fai
 one named assertion and nothing else. **FLOW-23 (payments) untouched** — this is a new route's
 response shape, no ledger path altered. **Needs a Render deploy**, along with #133 and #137.
 
+**2026-09-06 (Apple correction sent — an unknown recorded as unknown, now closed):** Patrick
+confirmed the reply to Case-ID 22041657 has gone, correcting the new-app count from *None* to
+*1*. Recorded because `TAP_TO_PAY.md` deliberately carried "**not known to be sent** — check
+the thread before assuming it was", and a note like that is only worth writing if it is
+actually closed when the fact arrives; left standing it trains the next reader to ignore the
+next one. The substance is kept rather than deleted, because **the same answers carry into the
+PUBLISHING entitlement review**, which is a separate submission: app count *1*, PSP Stripe,
+region Canada, distribution unlisted. **No code changed** — docs only.
+
 **2026-09-05 (The closing stops asking for a note it does not need):** Patrick reached
 sign-off on a real fall closing and was stopped by "Add a note about what you did at this
 visit". His call, and it is the right one: that note belongs to **openings and service

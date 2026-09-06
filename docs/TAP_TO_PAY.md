@@ -35,14 +35,17 @@ Apple's reply comes from `ttpoientitlements@apple.com`; follow-ups must quote
 the Case-ID. As submitted, the request named **Stripe** as PSP, **Canada** as
 the region, and internal distribution (Apple Business or unlisted).
 
-**One answer needs correcting, by replying to Apple's acknowledgement with the
-Case-ID.** "How many new apps that use this entitlement will you distribute in
-the next 12 months" was answered *None*; the true answer is *1* — pjl-field
-itself. (*None* was right for the preceding question, which asks about apps
-already on the App Store.) Left as submitted it reads as a request for an
-entitlement no app will use, on an account asking for up to 99 devices. If
-Apple queries anything, expect it to be this. **Not known to be sent yet — if
-you are reading this later, check the thread before assuming it was.**
+**One answer was corrected, and the correction has been sent** (Patrick
+confirmed 2026-09-06). "How many new apps that use this entitlement will you
+distribute in the next 12 months" was submitted as *None*; the true answer is
+*1* — pjl-field itself. (*None* was right for the preceding question, which asks
+about apps already on the App Store.) As originally submitted it read as a
+request for an entitlement no app would use, on an account asking for up to 99
+devices.
+
+**Kept here because the same answers carry into the PUBLISHING review**, which is
+a separate submission: the app count is *1*, the PSP is Stripe, the region is
+Canada, and distribution is unlisted. Answer them consistently there.
 
 **A Merchant ID is not part of this.** Registering one (`merchant.…`) is the
 **Apple Pay** path — a different product. Tap to Pay through Stripe Terminal
