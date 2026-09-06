@@ -1880,6 +1880,30 @@ phone on an older iOS. **The condition worth remembering instead of the conclusi
 this holds while every phone taking payment is on iOS 18+; add an older crew phone and the
 fallback screens and their verbatim-copy obligation come back. **No code changed** — docs only.
 
+**2026-09-06 (Terminal is on, and the Location turns out to be a build input):** Patrick's
+Stripe Dashboard shows Terminal active with exactly one Location — "PJL Land Services",
+Newmarket ON. That clears the last external blocker, and surfaced a requirement **neither
+Apple document mentions**: a Tap to Pay reader is not registered in the Dashboard ahead of
+time, it is **associated with a Location at CONNECT time**, so without the Location id the app
+cannot bring the reader up at all. `POST /api/terminal/connection-token` therefore now
+returns `locationId` beside the secret, resolved by `resolveTerminalLocationId()`:
+`STRIPE_TERMINAL_LOCATION_ID` when set (trimmed, so a stray space in a Render env var does
+not read as configured), otherwise the single Location on the account — which is the real
+shape of a one-truck business and saves an env var that could only hold the one obvious value.
+**Zero or several Locations are refused with the fix named, never guessed at:** an account with
+two Locations that silently took the first would file a driveway payment against the wrong
+site, which surfaces at reconciliation rather than at the door. Both halves are fetched in the
+one call because the app cannot connect with only one of them and a second round trip on a
+driveway is a second chance to fail. Deliberately **not cached** — tokens are minted at reader
+connect, not per transaction, so the extra call is rare, while a cache would serve a stale id
+after the Location is renamed. The id is configuration, not a secret, but still comes from the
+server: hard-coded in a bundle it could not be changed without a TestFlight round trip, and
+TestFlight is precisely what is unavailable until the publishing entitlement lands.
+`test-stripe.mjs` **36 → 46**, and the two assertions that matter were verified by breaking
+the code: weakening `length === 1` to `>= 1` and dropping the `.trim()` each failed exactly
+one named assertion and nothing else. **FLOW-23 (payments) untouched** — this is a new route's
+response shape, no ledger path altered. **Needs a Render deploy**, along with #133 and #137.
+
 **2026-09-05 (The closing stops asking for a note it does not need):** Patrick reached
 sign-off on a real fall closing and was stopped by "Add a note about what you did at this
 visit". His call, and it is the right one: that note belongs to **openings and service
