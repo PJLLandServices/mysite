@@ -68,7 +68,7 @@ const longDate = (ymd) => {
   return d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 };
 
-export default function TodayScreen({ onOpenWorkOrder }) {
+export default function TodayScreen({ onOpenWorkOrder, onOpenTapToPay }) {
   const [payload, setPayload] = useState(null);
   // The server's idea of today, learned from the first response rather
   // than assumed from the phone's clock — the schedule belongs to the
@@ -266,6 +266,20 @@ export default function TodayScreen({ onOpenWorkOrder }) {
               (!serverToday || selected === serverToday) && styles.todayBtnTextOff,
             ]}>Today</Text>
           </Pressable>
+
+          {/* 3.6 — reaching Tap to Pay when he is NOT at an invoice. The
+              app has one header and this is it. */}
+          {onOpenTapToPay ? (
+            <Pressable
+              onPress={onOpenTapToPay}
+              hitSlop={10}
+              style={({ pressed }) => [styles.step, pressed && styles.weekLabelPressed]}
+              accessibilityRole="button"
+              accessibilityLabel="Tap to Pay on iPhone settings"
+            >
+              <Text style={styles.stepText}>▤</Text>
+            </Pressable>
+          ) : null}
 
           <View style={styles.stepper}>
             <Pressable onPress={() => goTo(ymd(addDays(anchor, -7)))} hitSlop={10} style={styles.step}>

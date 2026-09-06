@@ -20,7 +20,9 @@ import TodayScreen from './src/screens/TodayScreen';
 import ClosingScreen from './src/screens/ClosingScreen';
 import InvoiceScreen from './src/screens/InvoiceScreen';
 import PropertyProfileScreen from './src/screens/PropertyProfileScreen';
+import TapToPaySettings from './src/screens/TapToPaySettings';
 import WebScreen from './src/screens/WebScreen';
+import { TapToPayProvider } from './src/taptopay/TapToPayProvider';
 import { colors, space } from './src/theme';
 import { applyPendingUpdate } from './src/updates';
 
@@ -53,6 +55,10 @@ export default function App() {
   // Set when a closing finishes: the invoice the cascade drafted, which is
   // where the tech lands rather than back on a list.
   const [invoiceId, setInvoiceId] = useState(null);
+  // Tap to Pay's own screen, opened from Today's header. Apple 3.6 wants
+  // it reachable outside checkout; a modal over the current tab keeps the
+  // tab bar honest about where you are.
+  const [tapSettingsOpen, setTapSettingsOpen] = useState(false);
 
   // Cold start: pull a newer bundle if there is one, then reload into
   // it. Without this the app runs the previous bundle for one more
@@ -65,6 +71,7 @@ export default function App() {
   }, []);
 
   return (
+    <TapToPayProvider>
     <View style={styles.root}>
       <StatusBar style="dark" />
       <SafeAreaView style={styles.safe}>
@@ -82,6 +89,7 @@ export default function App() {
               >
                 {tab.key === 'today' ? (
                   <TodayScreen
+                    onOpenTapToPay={() => setTapSettingsOpen(true)}
                     onOpenWorkOrder={(workOrder) => {
                       if (workOrder.type === 'fall_closing') {
                         setClosingId(workOrder.id);
@@ -159,12 +167,21 @@ export default function App() {
           })}
         </View>
       </SafeAreaView>
+      {tapSettingsOpen ? (
+        <View style={styles.overlay}>
+          <SafeAreaView style={styles.safe}>
+            <TapToPaySettings onBack={() => setTapSettingsOpen(false)} />
+          </SafeAreaView>
+        </View>
+      ) : null}
     </View>
+    </TapToPayProvider>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.card },
+  overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: colors.ground },
   safe: { flex: 1, backgroundColor: colors.card, paddingTop: RNStatusBar.currentHeight || 0 },
   body: { flex: 1 },
   pane: { ...StyleSheet.absoluteFillObject },

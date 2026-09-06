@@ -262,3 +262,34 @@ export async function uploadWoPhotos(id, photos) {
     clearTimeout(timer);
   }
 }
+
+// The one Stripe-adjacent call the app is allowed to make, and the only
+// reason `@stripe/stripe-terminal-react-native` can exist here without a
+// Stripe key on the phone. The server mints a short-lived Terminal
+// connection token with the secret key and hands back the Location the
+// reader has to be associated with at connect time.
+//
+// Staff-gated on the server. It returned a LIVE token to anonymous
+// callers for a few hours on 2026-09-06 because the gate was written as
+// `await requireAdmin(req)` — which returns null rather than throwing —
+// on a route `needsAuth` had never been told about. Both halves are now
+// closed and pinned by scripts/test-admin-gates.mjs.
+export async function terminalConnectionToken() {
+  const res = await fetch(`${HOST}/api/terminal/connection-token`, {
+    method: 'POST',
+    headers: { accept: 'application/json' },
+    credentials: 'include',
+    cache: 'no-store',
+  });
+  if (res.status === 401 || res.status === 403) throw new AuthRequiredError();
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { throw new AuthRequiredError(); }
+  if (!res.ok || !data.ok) {
+    // Stripe's own refusal, verbatim — "Terminal is not enabled on this
+    // account" says what to do; "couldn't start the reader" does not.
+    throw new Error((data && data.errors && data.errors[0]) || `Couldn't get a reader token (${res.status})`);
+  }
+  if (!data.secret) throw new Error('The server returned no connection token.');
+  return { secret: data.secret, locationId: data.locationId || null };
+}
