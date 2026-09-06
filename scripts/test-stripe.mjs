@@ -172,11 +172,21 @@ function assert(cond, label) {
   // staff-gated. Read from server.js rather than restated, so deleting the
   // gate fails here rather than in the field.
   const serverSrc = readFileSync(new URL("../server/server.js", import.meta.url), "utf8");
-  const routeAt = serverSrc.indexOf('pathname === "/api/terminal/connection-token"');
+  // Anchored on the dispatch condition, not the bare path: needsAuth now
+  // names the same path and appears EARLIER in the file, so indexOf on the
+  // path alone reads the fence and not the route.
+  const routeAt = serverSrc.indexOf('pathname === "/api/terminal/connection-token" && req.method === "POST"');
   assert(routeAt > 0, "terminal: the connection-token route exists");
-  const routeBlock = serverSrc.slice(routeAt, routeAt + 900);
-  assert(/requireAdmin\(req\)/.test(routeBlock),
-    "terminal: the connection-token route is staff-gated");
+  const routeBlock = serverSrc.slice(routeAt, routeAt + 1600);
+  // NOT "does the source mention requireAdmin" — that assertion passed for
+  // a day while the route was open to the whole internet, because
+  // requireAdmin RETURNS NULL rather than throwing and the route discarded
+  // it. What is checked here is the shape that actually gates: bind the
+  // result, reject when it is null. The fence in needsAuth, and the rule
+  // across every call site, are in test-admin-gates.mjs.
+  assert(/const session = await requireAdmin\(req\);/.test(routeBlock)
+      && /if \(!session\) return sendJson\(res, 403/.test(routeBlock),
+    "terminal: the connection-token route checks requireAdmin's answer");
   assert(!/secretKey|STRIPE_SECRET_KEY/.test(routeBlock),
     "terminal: the route never hands out the secret key");
 
@@ -246,8 +256,8 @@ function assert(cond, label) {
   // The route must hand back both halves. One without the other leaves
   // the app holding a token it cannot connect with.
   const serverSrc2 = readFileSync(new URL("../server/server.js", import.meta.url), "utf8");
-  const routeAt2 = serverSrc2.indexOf('pathname === "/api/terminal/connection-token"');
-  const routeBlock2 = serverSrc2.slice(routeAt2, routeAt2 + 1200);
+  const routeAt2 = serverSrc2.indexOf('pathname === "/api/terminal/connection-token" && req.method === "POST"');
+  const routeBlock2 = serverSrc2.slice(routeAt2, routeAt2 + 1600);
   assert(/resolveTerminalLocationId\(\)/.test(routeBlock2),
     "location: the connection-token route resolves the location");
   assert(/locationId/.test(routeBlock2),

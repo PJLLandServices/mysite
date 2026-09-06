@@ -1937,6 +1937,36 @@ next one. The substance is kept rather than deleted, because **the same answers 
 PUBLISHING entitlement review**, which is a separate submission: app count *1*, PSP Stripe,
 region Canada, distribution unlisted. **No code changed** — docs only.
 
+**2026-09-06 (SECURITY — the Terminal token route was open to the internet, and the test that
+covered it was green):** the Render deploy went out; the first thing done with it was an
+UNAUTHENTICATED `curl -X POST /api/terminal/connection-token`, which returned **HTTP 200 with
+a live `pst_live_…` Stripe Terminal connection token and the location id**. Mine, from #137.
+**Two independent defects had to line up:** (1) **the fence** — `needsAuth(method, pathname)`
+decides whether a request is challenged at all and ends in `return null` (NO AUTH) for any
+path it does not name; the route was never added, and the file's own comments say the pattern
+is "the gate is the fence, the route check is the lock"; (2) **the lock** — `requireAdmin(req)`
+**RETURNS NULL on failure, it does not throw**, so the route's `await requireAdmin(req);`
+was a no-op with the shape of a gate. **Why the test did not catch it, which is the durable
+lesson:** the assertion was `/requireAdmin\(req\)/.test(routeBlock)` — does the source
+mention the call. It did. It was green the whole time, and deleting the line failed it, which
+made the check look verified by mutation. **A source-text assertion cannot tell a gate from a
+no-op.** `scripts/test-admin-gates.mjs` (new, 9 assertions, in build:check) instead **lifts
+`needsAuth` out of server.js and runs it**, asserting what it RETURNS for the route, and
+bans any bare `await requireAdmin(req)` whose result is discarded; test-stripe's assertion
+was rewritten to check the binding-and-rejecting shape rather than the words. Both were
+mutation-verified: removing the fence entry and reverting the route each failed the specific
+named assertions and nothing else. **Two more routes had the same no-op lock** —
+`POST /api/invoices/:id/payment-link` and `DELETE /api/properties/:id/zones/:n` — both
+**saved from anonymous callers by the fence** (`/api/invoices` and `/api/properties` are
+fenced at "user") but reachable by a signed-in TECH for what are admin actions; probed with
+non-existent ids, both returned 401, confirming no anonymous exposure. Both fixed the same
+way. **Deliberately NOT changed:** `needsAuth`'s open-by-default, which is pinned by a test
+so it stays a decision rather than an oversight — flipping it would silently fence the pay
+pages, the iCal feed and the unsubscribe link, and that is a change to make with each one
+walked. **Observed, not fixed:** eighteen routes bind `requireAdmin`'s result only for
+attribution (`by: session?.uid || "admin"`) on surfaces fenced at "user", so a tech's action
+is stamped "admin" — an attribution weakness, not an access one, and pre-existing.
+
 **2026-09-05 (The closing stops asking for a note it does not need):** Patrick reached
 sign-off on a real fall closing and was stopped by "Add a note about what you did at this
 visit". His call, and it is the right one: that note belongs to **openings and service
