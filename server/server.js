@@ -20413,7 +20413,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const isLoadTest = Boolean(
         testKey &&
         String(req.headers["x-pjl-test-key"] || "") === testKey &&
-        testNotes.startsWith("PJLTEST-")
+        testNotes.includes("PJLTEST-")
       );
       if (isLoadTest) console.log("[load-test] anti-bot bypass for", testNotes.slice(0, 12));
 
