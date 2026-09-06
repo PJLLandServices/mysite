@@ -33,6 +33,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          # Both lockfiles, because both trees get installed below.
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            pjl-field/package-lock.json
 
       # `build:check` used to need no install — every script used only Node
       # built-ins. That stopped being true in 2026-08: test-prepared-for-address
@@ -42,6 +47,24 @@ jobs:
       # at server/lib/quote-pdf.js. Taking the honest option the note here always
       # pointed at, rather than weakening the tests to dodge the dependency.
       - name: Install dependencies
+        run: npm ci
+
+      # The phone app is now part of what CI verifies, so its dependencies
+      # have to be here too. test-app-parses.mjs parses every app source
+      # with the app's own Babel, and test-tap-to-pay.mjs reads the Stripe
+      # Terminal SDK's type definitions to check the API this integration
+      # calls still exists.
+      #
+      # This is not free — it is the React Native toolchain, and it is the
+      # slowest step in the job. Taken deliberately, for the same reason
+      # the note above took it: the alternative is a suite that skips
+      # itself when the dependency is missing, and a check that silently
+      # proves nothing is worse than no check. That failure mode is not
+      # hypothetical here — on 2026-09-06 an assertion that only looked
+      # for the WORD "requireAdmin" stayed green while the endpoint it
+      # guarded was open to the internet.
+      - name: Install the field app's dependencies
+        working-directory: pjl-field
         run: npm ci
 
       - name: Run build + price-lint checks
