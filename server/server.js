@@ -42,6 +42,8 @@ const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentRe
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
 const voicemailStore = require("./lib/voicemail-store");
 const { geocode, PJL_BASE, isConfigured: geocodeIsConfigured } = require("./lib/geocode");
+const bookingGate = require("./lib/booking-gate");
+const distanceLib = require("./lib/distance");
 const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, recommendDays, parseLocalDateKey } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
 const { mergeDaySchedule } = require("./lib/day-schedule");
@@ -20282,6 +20284,22 @@ Customer signature captured at ${new Date().toISOString()}.`;
       }
 
       const geo = await geocode(address);
+      // The booking gate (Patrick, piloting: spam + "who can book").
+      // Junk addresses and out-of-area addresses are refused BEFORE a
+      // calendar renders; our own geocode outages stand aside, flagged.
+      // An admin session bypasses — Patrick's +Book modal and phone
+      // bookings outrank the rule, same philosophy as admin_custom.
+      if (!(await requireUser(req))) {
+        const gateVerdict = await bookingGate.gate(geo, {
+          travelMinutes: distanceLib.travelMinutes, base: PJL_BASE
+        });
+        if (!gateVerdict.ok) {
+          return sendJson(res, 422, { ok: false, code: gateVerdict.code, errors: [gateVerdict.message] });
+        }
+        if (gateVerdict.degraded) {
+          console.warn("[booking-gate] geocode degraded (", gateVerdict.reason, ") — availability served ungated for:", address);
+        }
+      }
       const customerCoords = geo.coords;
       const [bookings, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
 
@@ -20410,6 +20428,27 @@ Customer signature captured at ${new Date().toISOString()}.`;
         });
       }
       const geo = await geocode(address);
+      // The booking gate — full street addresses inside the service area
+      // only (Patrick, piloting). ADMIN bookings skip it: Patrick booking
+      // by hand outranks any rule, same philosophy as admin_custom. The
+      // open bucket rides the same gate — spam does not get a standby
+      // pass. Our own geocode outages stand aside, flagged.
+      if (!isAdmin) {
+        const gateVerdict = await bookingGate.gate(geo, {
+          travelMinutes: distanceLib.travelMinutes, base: PJL_BASE
+        });
+        if (!gateVerdict.ok) {
+          return sendJson(res, 422, {
+            ok: false,
+            code: gateVerdict.code,
+            message: gateVerdict.message,
+            errors: [gateVerdict.message]
+          });
+        }
+        if (gateVerdict.degraded) {
+          console.warn("[booking-gate] geocode degraded (", gateVerdict.reason, ") — reserve accepted ungated for:", address);
+        }
+      }
       // customerCoords keeps the PJL-base fallback on purpose: the
       // availability engine needs an origin to compute drive time from, and
       // approximating an unresolvable address at the depot is the documented
