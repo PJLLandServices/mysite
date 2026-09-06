@@ -2393,6 +2393,7 @@ const PUBLIC_API_PATHS = new Set([
   // it's same-origin and CORS becomes a no-op. Either way, safe.
   "/api/booking/services",
   "/api/booking/availability",
+  "/api/booking/verify-address",
   "/api/booking/reserve",
   // Pricing dictionary — public so any page (including pricing.html on
   // GitHub Pages) can fetch the live catalog and render from it.
@@ -20252,6 +20253,38 @@ Customer signature captured at ${new Date().toISOString()}.`;
     }
   }
 
+  // The "Where's the property?" gate. book.html calls this BEFORE the
+  // address step advances, so the riffraff is filtered right there
+  // (Patrick, piloting) rather than at the calendar. Same booking-gate
+  // policy as availability/reserve — this is the front door, those are
+  // the locks behind it.
+  if (req.method === "POST" && pathname === "/api/booking/verify-address") {
+    try {
+      const body = await parseRequestBody(req);
+      const address = normalizeString(body.address, 320);
+      if (!address) {
+        return sendJson(res, 422, { ok: false, code: "address_missing", errors: ["Enter the property address."] });
+      }
+      const geo = await geocode(address);
+      const verdict = await bookingGate.gate(geo, {
+        travelMinutes: distanceLib.travelMinutes, base: PJL_BASE
+      });
+      if (!verdict.ok) {
+        return sendJson(res, 422, { ok: false, code: verdict.code, errors: [verdict.message] });
+      }
+      if (verdict.degraded) {
+        console.warn("[booking-gate] geocode degraded (", verdict.reason, ") — verify-address allowed:", address);
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        address: geo.coords?.formattedAddress || address,
+        minutes: verdict.minutes ?? null
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't verify that address."] });
+    }
+  }
+
   // Public availability lookup. Query: ?service=<key>&address=<text>
   // Returns slots grouped by day so the UI can render "pick a day, then a time".
   if (req.method === "GET" && pathname === "/api/booking/availability") {
@@ -20287,9 +20320,12 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // The booking gate (Patrick, piloting: spam + "who can book").
       // Junk addresses and out-of-area addresses are refused BEFORE a
       // calendar renders; our own geocode outages stand aside, flagged.
-      // An admin session bypasses — Patrick's +Book modal and phone
-      // bookings outrank the rule, same philosophy as admin_custom.
-      if (!(await requireUser(req))) {
+      // The bypass must be ASKED FOR (adminBypass=1 from the admin
+      // pages) and backed by a session. A bare admin cookie is not
+      // enough — Patrick piloting the PUBLIC page while logged in must
+      // see exactly what a customer sees, or the gate is untestable.
+      const wantsAdminBypass = url.searchParams.get("adminBypass") === "1";
+      if (!(wantsAdminBypass && await requireUser(req))) {
         const gateVerdict = await bookingGate.gate(geo, {
           travelMinutes: distanceLib.travelMinutes, base: PJL_BASE
         });
@@ -20429,11 +20465,14 @@ Customer signature captured at ${new Date().toISOString()}.`;
       }
       const geo = await geocode(address);
       // The booking gate — full street addresses inside the service area
-      // only (Patrick, piloting). ADMIN bookings skip it: Patrick booking
-      // by hand outranks any rule, same philosophy as admin_custom. The
-      // open bucket rides the same gate — spam does not get a standby
-      // pass. Our own geocode outages stand aside, flagged.
-      if (!isAdmin) {
+      // only (Patrick, piloting). Only a DELIBERATE admin act skips it —
+      // a custom-time force-book or a book-from-lead — never a bare
+      // admin cookie, so Patrick testing the public page while logged in
+      // is gated like any customer. The open bucket rides the same gate;
+      // our own geocode outages stand aside, flagged.
+      const deliberateAdminAct = isAdmin
+        && (payload.source === "admin_custom" || Boolean(normalizeString(payload.leadId, 40)));
+      if (!deliberateAdminAct) {
         const gateVerdict = await bookingGate.gate(geo, {
           travelMinutes: distanceLib.travelMinutes, base: PJL_BASE
         });

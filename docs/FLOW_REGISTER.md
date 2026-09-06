@@ -1639,6 +1639,30 @@ opposite of the one first recorded: a fix verified against a live symptom is not
 the codebase cannot produce" just because the write path is hard to find — data outranks code
 reading, and the bar for removing the union again is a walked Today page, not an argument.
 
+**2026-09-06 (The gate that let everything through — three holes, same hour):** Patrick
+re-piloted after the booking gate merged: "it is still letting anything through... it still
+allows to populate to the next street, filter out the riffraff at 'wheres the property?'"
+Three real defects, all fixed: (1) **His own admin cookie bypassed the gate.** Availability
+bypassed on ANY admin session — and Patrick pilots the public page in the same browser as
+the CRM, so his tests (and only his) sailed through; the gate was untestable by its owner.
+The bypass now has to be ASKED FOR: availability honours it only with `adminBypass=1` (sent
+by the three admin surfaces — admin.js, crm-followup.js, schedule.js) AND a session; reserve
+skips only a DELIBERATE admin act (`admin_custom` or a bound leadId), never a bare cookie.
+(2) **The cache grandfathered junk.** Pre-gate test addresses ("toronto") sat in
+geocode-cache.json without the streetLevel flag and the gate passed flag-less entries;
+geocode() now re-verifies a flag-less hit once and rewrites the entry with its true nature
+(still served as-is when no key — our-fault posture unchanged). (3) **The refusal came a
+step too late.** The address step advanced on any non-empty text; the gate only answered at
+the calendar. New public `POST /api/booking/verify-address` runs the same gate, and
+book.html's "See available times" now verifies BEFORE advancing — junk stays on "Where's
+the property?" with the reason inline under the input; availability and reserve keep the
+same gate as backstops for direct-API spam. Suite grows to 22 (+3): a flag-less cached
+entry is re-verified not grandfathered, the rewritten entry carries its flag, and the
+re-verified town is refused. FLOW-03 posture unchanged from the entry below — this makes
+that entry TRUE. **Needs Patrick's walk (logged in, same browser):** "Toronto" now refuses
+AT the address step; a picked address advances; Ottawa refuses with minutes; the +Book
+modal still bypasses.
+
 **2026-09-06 (The booking gate — full addresses only, inside the service area only):**
 Patrick, piloting before the blast: "a massive issue that might insinuate a ton of
 potential spam. And i believe in a different prompt i requested that 'only full address

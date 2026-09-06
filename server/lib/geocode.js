@@ -118,7 +118,15 @@ async function geocode(address) {
 
   const cache = await loadCache();
   if (cache[key]) {
-    return { ok: true, fromCache: true, coords: cache[key] };
+    // An entry from before streetLevel existed cannot be trusted by the
+    // booking gate — "toronto" typed during a pre-gate test is cached as
+    // a clean point and would be grandfathered through forever. Re-verify
+    // it once (the fresh lookup below overwrites the entry with the
+    // flag). Without a key we serve the hit as-is: the gate stands aside
+    // on our own faults anyway.
+    if (cache[key].streetLevel !== undefined || !isConfigured()) {
+      return { ok: true, fromCache: true, coords: cache[key] };
+    }
   }
 
   if (!isConfigured()) {
