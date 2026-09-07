@@ -1,0 +1,112 @@
+name: Field app — Tap to Pay build (development)
+
+# Makes the Tap to Pay build and gives you a link to install it, from a button
+# rather than from a laptop. Patrick has no terminal; every other step in this
+# project is a button or a web page, and this one has to be too.
+#
+# WHY THIS IS SEPARATE FROM "Field app — build for TestFlight".
+# That workflow builds the `production` profile and submits to TestFlight.
+# NEITHER is allowed for a Tap to Pay build:
+#
+#   - Apple's development entitlement supports only registered devices. A
+#     production build is not that.
+#   - TestFlight needs the PUBLISHING entitlement, which has not been granted
+#     (Requirements Guide v1.7, p4). Submitting would fail, and submitting is
+#     not something to discover having failed.
+#
+# So this builds the `taptopay` profile — internal distribution, this branch —
+# and does NOT submit anywhere.
+#
+# BEFORE THIS WILL WORK: your iPhone must be registered on the Apple Developer
+# account. An internal-distribution build can only install on devices Apple has
+# been told about, and with none registered this job fails with a message from
+# EAS saying exactly that. docs/TAP_TO_PAY_INSTALLING.md has the steps.
+#
+# WHAT YOU GET: EAS finishes and prints an install URL. Open it in Safari ON THE
+# IPHONE and it installs. It REPLACES the PJL Field already on the phone —
+# same bundle id, one install. Reinstall from TestFlight to swap back.
+
+on:
+  workflow_dispatch:
+
+# One at a time. A build consumes queue time and a build number, so a second
+# run waits rather than killing the first.
+concurrency:
+  group: field-app-taptopay-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the Expo token is present
+        run: |
+          if [ -z "${{ secrets.EXPO_TOKEN }}" ]; then
+            echo "::error::EXPO_TOKEN is not set. Add the Expo robot token under"
+            echo "::error::Settings → Secrets and variables → Actions → New repository secret."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: pjl-field/package-lock.json
+
+      - name: Install
+        working-directory: pjl-field
+        run: npm ci
+
+      # Fails early and loudly if the branch does not carry the SDK, rather
+      # than producing a perfectly good build with no Tap to Pay in it — which
+      # would look like success and waste an install and a test drive.
+      - name: Check this branch actually has Tap to Pay in it
+        working-directory: pjl-field
+        run: |
+          node -e "
+            const pkg = JSON.parse(require('fs').readFileSync('package.json','utf8'));
+            if (!pkg.dependencies['@stripe/stripe-terminal-react-native']) {
+              console.error('::error::This branch has no Stripe Terminal SDK, so the build would have no Tap to Pay in it. Run this workflow from the claude/pjl-field-taptopay branch.');
+              process.exit(1);
+            }
+            const app = JSON.parse(require('fs').readFileSync('app.json','utf8'));
+            const ent = (app.expo.ios && app.expo.ios.entitlements) || {};
+            if (ent['com.apple.developer.proximity-reader.payment.acceptance'] !== true) {
+              console.error('::error::The Tap to Pay entitlement is missing from app.json. The build would install and then fail at the first card.');
+              process.exit(1);
+            }
+            console.log('SDK present, entitlement declared.');
+          "
+
+      - name: Build
+        working-directory: pjl-field
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          npx eas-cli@23.2.0 build \
+            --platform ios \
+            --profile taptopay \
+            --non-interactive \
+            --wait
+
+      - name: What to do now
+        if: success()
+        run: |
+          echo "Build finished."
+          echo "Scroll UP in this log to the EAS output and find the install URL."
+          echo "Open that URL in Safari ON THE IPHONE, not on a computer."
+          echo ""
+          echo "It replaces the PJL Field currently on the phone. To swap back,"
+          echo "reinstall from TestFlight."
+          echo ""
+          echo "Then: Today screen, the small button beside the week arrows,"
+          echo "then 'Set up Tap to Pay on iPhone'."
+
+      - name: If it failed on signing
+        if: failure()
+        run: |
+          echo "::warning::If the error mentions provisioning, signing, or 'no devices',"
+          echo "::warning::the most likely cause is that no iPhone is registered on the"
+          echo "::warning::Apple Developer account yet. See docs/TAP_TO_PAY_INSTALLING.md."
