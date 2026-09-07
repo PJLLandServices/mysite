@@ -459,6 +459,9 @@
   border-radius: 50%; background: var(--pjl-green); color: #fff;
   font-size: 0.82rem; font-weight: 700; font-variant-numeric: tabular-nums;
 }
+/* A booked appointment's stop number — amber to match its pin, so the
+   card and the map agree at a glance. */
+.sp-stop-num-booked { background: var(--pjl-amber); }
 
 /* The route anchor, stated on the page — silence here is how a town
    centroid anchored eleven route days without anyone noticing. */

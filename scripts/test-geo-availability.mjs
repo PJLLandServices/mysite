@@ -385,6 +385,65 @@ ok("recommendDays survives an empty or slotless list",
   recommendDays([]).length === 0
   && recommendDays([{ date: "2026-10-01", slots: [], reason: "no_availability" }])[0].recommended === undefined);
 
+// ---- 7b. Bucket-coherent geography — the double-drive fix ------------
+//
+// Patrick, 2026-09-07, from the load-test data: on one booked-only day
+// the crew got Etobicoke at noon, Whitby at 1:30, Etobicoke again at 4,
+// Whitby again at 7 — the 401 crossed twice. Cause: the day was scored
+// as one blob, so a Whitby caller read "cheap" off the day and could
+// book the MORNING even though the morning was the west cluster. Scoring
+// each bucket against ITS OWN stops funnels a region into one half.
+
+// A booked-only day whose MORNING already holds a west cluster
+// (Etobicoke, from WEST) and whose AFTERNOON holds one east booking.
+const BUCKET_DAY = dayKey(plusDays(10));               // Thu 24 Sep, not planned
+const etobicokeAM = { start: `${BUCKET_DAY}T09:00:00`, coords: { ...WEST[0].coords }, propertyId: "P-AM" };
+const whitbyPM = { start: `${BUCKET_DAY}T13:30:00`, coords: { lat: 43.884, lng: -78.941, source: "google" }, propertyId: "P-PM" };
+const WHITBY = { lat: 43.897, lng: -78.930, source: "google" }; // a second Whitby caller
+const bucketShapes = geoFilter.buildDayShapes({ plan, propertiesByCode, bookings: [etobicokeAM, whitbyPM] });
+
+ok("the booked day splits into morning/afternoon clusters",
+  bucketShapes[BUCKET_DAY].bucketPoints.morning.length === 1
+  && bucketShapes[BUCKET_DAY].bucketPoints.afternoon.length === 1,
+  JSON.stringify(bucketShapes[BUCKET_DAY].bucketPoints));
+
+const bucketDiag = { geoSuppressed: [] };
+const whitbySlots = (await listAvailableSlots({
+  ...baseArgs, customerCoords: WHITBY, dayShapes: bucketShapes, diagnostics: bucketDiag
+})).filter((s) => dayKey(new Date(s.start)) === BUCKET_DAY);
+const bucketsOffered = whitbySlots.map((s) => s.bucketKey);
+ok("a Whitby caller is offered the AFTERNOON (its cluster), not the west morning",
+  bucketsOffered.includes("afternoon") && !bucketsOffered.includes("morning"),
+  `offered buckets: ${bucketsOffered.join(", ") || "none"}`);
+ok("the west morning bucket is the one suppressed for the Whitby caller",
+  bucketDiag.geoSuppressed.some((g) => g.date === BUCKET_DAY && g.bucket === "morning"),
+  JSON.stringify(bucketDiag.geoSuppressed));
+ok("the afternoon slot carries an honest low insertion cost against its own cluster",
+  Number.isFinite(whitbySlots.find((s) => s.bucketKey === "afternoon")?.addedDriveMinutes)
+  && whitbySlots.find((s) => s.bucketKey === "afternoon").addedDriveMinutes <= 15);
+
+// The other direction: an Etobicoke caller lands in the morning, never
+// the east afternoon — the west cluster stays west.
+const etoDiag = { geoSuppressed: [] };
+const etoSlots = (await listAvailableSlots({
+  ...baseArgs, customerCoords: { lat: WEST[0].coords.lat, lng: WEST[0].coords.lng, source: "google" },
+  dayShapes: bucketShapes, diagnostics: etoDiag
+})).filter((s) => dayKey(new Date(s.start)) === BUCKET_DAY);
+ok("an Etobicoke caller is offered the MORNING (its cluster), not the east afternoon",
+  etoSlots.map((s) => s.bucketKey).includes("morning")
+  && !etoSlots.map((s) => s.bucketKey).includes("afternoon"),
+  `offered buckets: ${etoSlots.map((s) => s.bucketKey).join(", ") || "none"}`);
+
+// The barbell guard: an empty bucket on a day that already has a cluster
+// is NOT a free landing pad for a far region. A Keswick caller (north,
+// far from both) gets neither bucket on this west/east day.
+const kesDiag = { geoSuppressed: [] };
+const kesSlots = (await listAvailableSlots({
+  ...baseArgs, customerCoords: KESWICK, dayShapes: bucketShapes, diagnostics: kesDiag
+})).filter((s) => dayKey(new Date(s.start)) === BUCKET_DAY);
+ok("a far caller gets NEITHER half of a day that already has a geography (no new barbell)",
+  kesSlots.length === 0, `offered buckets: ${kesSlots.map((s) => s.bucketKey).join(", ")}`);
+
 // ---- 8. The corridor is elastic — widening before turning away -------
 //
 // Patrick, 2026-09-07: "as the dates fill up, we allow for drive times

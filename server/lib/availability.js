@@ -402,7 +402,6 @@ async function listAvailableSlots(opts = {}) {
         if (Array.isArray(diagnostics[key])) diagnostics[key].length = 0;
       }
     }
-    let dayAddedDrive = null;
     for (let offset = 0; offset < scanDays; offset++) {
       const day = new Date(now);
       day.setHours(0, 0, 0, 0);
@@ -448,26 +447,16 @@ async function listAvailableSlots(opts = {}) {
       // Admin force-book (source: "admin_custom") never reaches this
       // function at all — it bypasses the slot grid entirely — so it is
       // exempt without needing a case here.
+      // Geography is now scored PER BUCKET, inside the bucket loop below —
+      // not once for the whole day here. The crew drives one loop a day
+      // but a customer books one half of it, so a day that already runs
+      // west in the morning must not accept an east job into that same
+      // morning off the strength of an unrelated afternoon stop. Scoring
+      // each bucket against its own cluster is what stops the double-drive
+      // (Patrick, 2026-09-07). The season gate above still skips whole days.
       const shape = dayShapes ? dayShapes[dateKey(day)] : null;
-      if (shape && shape.points && shape.points.length
-          && Number.isFinite(geoMax) && geoMax > 0
-          && geoFilter.coordsAreResolved(customerCoords)) {
-        const added = await geoFilter.addedDriveMinutes(customerCoords, shape.points);
-        if (added && added.minutes > geoMax) {
-          geoSuppressedCount += 1;
-          if (diagnostics && Array.isArray(diagnostics.geoSuppressed)) {
-            diagnostics.geoSuppressed.push({
-              date: dateKey(day),
-              label: shape.label || "",
-              addedDriveMinutes: added.minutes
-            });
-          }
-          continue;
-        }
-        dayAddedDrive = added ? added.minutes : null;
-      } else {
-        dayAddedDrive = null;
-      }
+      const geoActive = Number.isFinite(geoMax) && geoMax > 0
+        && geoFilter.coordsAreResolved(customerCoords);
 
       const openMin = parseHHmmToMinutes(window.open);
       const closeMin = parseHHmmToMinutes(window.close);
@@ -544,6 +533,44 @@ async function listAvailableSlots(opts = {}) {
           }
         }
 
+        // ---- Bucket-scoped geography -----------------------------------
+        // Cost this address against THIS bucket's own cluster, not the
+        // whole day. Fallbacks, in order:
+        //   - the bucket has stops        → score against them, so a
+        //     region coalesces into the half it already occupies
+        //   - the bucket is empty but the
+        //     day already has stops        → score against the whole day.
+        //     An empty half of a day that already has a geography does NOT
+        //     become a free landing pad for a second region — that is
+        //     exactly the barbell (west morning, east afternoon) we are
+        //     removing. Only a day with no stops at all (no shape) is free,
+        //     and that path never reaches here (shape is null).
+        let bucketAddedDrive = null;
+        if (geoActive && shape) {
+          const bucketStops = shape.bucketPoints
+            ? shape.bucketPoints[bucket.key]
+            : shape.points; // legacy shapes without bucketPoints: whole day
+          let scoreAgainst = null;
+          if (bucketStops && bucketStops.length) scoreAgainst = bucketStops;
+          else if (shape.points && shape.points.length) scoreAgainst = shape.points;
+          if (scoreAgainst) {
+            const added = await geoFilter.addedDriveMinutes(customerCoords, scoreAgainst);
+            if (added && !added.emptyDay && added.minutes > geoMax) {
+              geoSuppressedCount += 1;
+              if (diagnostics && Array.isArray(diagnostics.geoSuppressed)) {
+                diagnostics.geoSuppressed.push({
+                  date: dateKey(day),
+                  bucket: bucket.key,
+                  label: shape.label || "",
+                  addedDriveMinutes: added.minutes
+                });
+              }
+              continue;
+            }
+            bucketAddedDrive = added && !added.emptyDay ? added.minutes : null;
+          }
+        }
+
         let emitted = false;
         for (let m = bucketFromMin; m + slotDuration <= bucketToMin && !emitted; m += incrementMin) {
           const slotStart = dateAtLocalMinutes(day, m);
@@ -582,12 +609,12 @@ async function listAvailableSlots(opts = {}) {
             timeLabel: bucket.label,
             bucketKey: bucket.key,
             bucketWindow: bucket.windowLabel,
-            // How much extra driving serving this address on this day costs
-            // against the planned route. null when the day has no planned
-            // shape or the filter was skipped. Admin-facing: the customer
-            // never sees it, but the settle board and the standby-fill
-            // screen both rank on exactly this number.
-            addedDriveMinutes: dayAddedDrive
+            // How much extra driving serving this address in THIS bucket
+            // costs against the bucket's existing cluster. null when the
+            // bucket has no cluster yet or the filter was skipped. Admin-
+            // facing: the customer never sees it, but the best-day stars,
+            // the settle board and the standby-fill screen all rank on it.
+            addedDriveMinutes: bucketAddedDrive
           });
           emitted = true;
         }
