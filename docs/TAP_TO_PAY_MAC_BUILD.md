@@ -38,8 +38,14 @@ batch of components the first time you open it.
    Mac, not your Apple ID. Type it and press Return.
 5. Wait. This is several minutes.
 
+6. Then **Xcode** → **Settings…** → **Components**, and install the **iOS 26**
+   platform if it is not already there. Xcode 26 ships with no iOS SDK at all,
+   so without this there is nothing to build *for* and the Run button offers
+   no devices. It is a large download; let it finish.
+
 **Worked when:** you end up at a window with "Welcome to Xcode" and a list on
-the right that is either empty or shows recent projects. Leave Xcode open.
+the right that is either empty or shows recent projects, and Components shows
+iOS 26 installed. Leave Xcode open.
 
 ---
 
@@ -119,6 +125,12 @@ Press `⌘ Space`, type `terminal`, press Return. A window with white or black
 text appears. That is Terminal. Every command below: **copy it, click into the
 Terminal window, paste with `⌘ V`, press Return.**
 
+**One command at a time.** Pasting several lines at once looks faster and is
+not: Terminal sends invisible control characters with a multi-line paste, and
+zsh answers `zsh: bad pattern: ^[[200~echo`, silently eats the first command
+and staples stray characters onto the last one. That produced a "the folder
+isn't there" that was really "grep searched for the wrong word".
+
 **When Terminal asks for your password, nothing appears as you type.** No dots,
 no stars, nothing moves. That is deliberate, not a frozen screen. Type it and
 press Return.
@@ -128,7 +140,7 @@ press Return.
 Homebrew is the standard installer-of-things on a Mac. One command:
 
 ```
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/brew/HEAD/install.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ```
 
 It prints a list of what it will do and says **"Press RETURN to continue"** —
@@ -150,13 +162,30 @@ eval "$(/opt/homebrew/bin/brew shellenv)"
 
 Neither prints anything. Silence is success.
 
+**These affect the window you run them in, plus any window opened afterwards
+— never a window that was already open.** If Terminal was open before
+Homebrew finished, that window has no idea `brew` exists, and the failure
+arrives much later disguised as something else: Step 7 ends in
+`Cause: spawn brew ENOENT`, which is Expo saying it went looking for `brew`
+and there was no such command. Run `eval "$(/opt/homebrew/bin/brew shellenv)"`
+in that window and it is fixed.
+
+Prove it before moving on:
+
+```
+brew --version
+```
+
 ### 5d. Install CocoaPods
 
 ```
 brew install cocoapods
 ```
 
-A few minutes of scrolling text.
+A few minutes of scrolling text. It installs its own Ruby (macOS's built-in
+Ruby is too old for CocoaPods, which is why Expo's own
+`gem install cocoapods` attempt fails with `exited with non-zero code: 1` —
+expected, and not the real error in that output).
 
 **Worked when:** this command prints a version number:
 
@@ -164,8 +193,8 @@ A few minutes of scrolling text.
 pod --version
 ```
 
-Something like `1.16.2`. If it says `command not found`, 5c did not take —
-close Terminal, open a new one, and try again.
+Something like `1.17.0`. If it says `command not found`, 5c did not take in
+this window — run the `eval` line from 5c again, right here.
 
 ---
 
@@ -206,10 +235,20 @@ finish — redo it.
 npm install
 ```
 
-Two to five minutes. Warnings in yellow are normal and can be ignored. A red
-block starting `npm ERR!` is not — send it to me.
+Two to five minutes. A red block starting `npm ERR!` is a real failure — send
+it to me. Everything else in that output is noise, including the two that look
+worst:
 
-**Worked when:** it finishes with a line like `added 1200 packages in 90s`.
+- **`19 vulnerabilities (10 moderate, 9 high)`** — normal for any React Native
+  project; these are build-time tools, nothing that ships in the app.
+  **Do not run `npm audit fix --force`** — it upgrades packages past what
+  Expo 54 supports and breaks the build.
+- **`2 packages have install scripts not yet covered by allowScripts`** —
+  npm 11 blocks post-install scripts by default. The two blocked here are the
+  Stripe package deleting a stale types folder and `fsevents`, a file-watcher.
+  Neither is needed for an iOS build.
+
+**Worked when:** it finishes with a line like `added 723 packages in 10s`.
 
 ---
 
@@ -224,18 +263,50 @@ npx expo prebuild --platform ios
 
 If it asks to install a package to continue, answer **y**.
 
+It then asks **`Continue with uncommitted changes?`**, because a folder
+unzipped from GitHub has no git history in it. Answer **y**. Nothing you do on
+the Mac needs saving back — this copy exists only to build from.
+
 This runs for a few minutes and finishes by running CocoaPods itself — the
 last screenful is pod names scrolling past.
 
-**Worked when:** the last lines mention pod installation completing, and this
-command lists a file:
+**Worked when:** the output ends in these five ticks —
+
+```
+✔ Cleared ios code
+✔ Created native directory
+✔ Finished prebuild
+✔ Installed CocoaPods
+```
+
+Then confirm the workspace exists:
 
 ```
 ls ios/*.xcworkspace
 ```
 
-If that says "No such file or directory", stop and send me everything the
+**It prints `contents.xcworkspacedata`, and that is the pass.** A
+`.xcworkspace` is really a folder, so `ls` lists what is inside it rather than
+naming it. "No such file or directory" is the failure — send me everything
 prebuild printed.
+
+### 7a. Read the entitlement before building anything
+
+Five seconds, and it checks the one thing every earlier attempt failed on:
+
+```
+cat ios/*/*.entitlements
+```
+
+It must contain:
+
+```xml
+<key>com.apple.developer.proximity-reader.payment.acceptance</key>
+<true/>
+```
+
+If that key is absent, stop. Everything downstream would fail, and you would
+find out forty minutes into a build.
 
 ---
 
@@ -264,8 +335,13 @@ Xcode opens with the project loaded. **Always the `.xcworkspace`, never the
    (the first one, named after the app — not one ending in `Tests`).
 3. Click the **Signing & Capabilities** tab across the top.
 4. Tick **Automatically manage signing** if it is not already ticked.
-5. In the **Team** dropdown, choose the **PJL Land Services** team. Not
-   "Personal Team".
+5. In the **Team** dropdown, choose the paid team. **On an individual
+   enrolment Apple names the team after the person, not the business** — so
+   `Patrick Lalande` is correct here and the absence of a company name is not
+   a mistake. What must NOT be selected is the free team, which is labelled
+   `Patrick Lalande (Personal Team)`, in brackets, and cannot carry this
+   entitlement. Open the dropdown and read the whole list: if no entry carries
+   that suffix, there is only the paid team and you are fine.
 6. Wait a few seconds. Xcode contacts Apple and creates a development
    provisioning profile by itself. **This is the entire point of using the
    Mac.**
@@ -279,6 +355,10 @@ If you get a red error here, screenshot the whole Signing & Capabilities panel
 and send it. Do not click "Try Again" repeatedly — the message is the useful
 part.
 
+**Ignore the yellow "Update to recommended settings" warning** in the left
+sidebar. Xcode offers it on every React Native project, and accepting it
+changes build settings Expo set deliberately.
+
 ---
 
 ## Step 9 — Plug in the iPhone and switch on Developer Mode
@@ -287,9 +367,11 @@ part.
 2. The phone asks **"Trust This Computer?"** — tap **Trust** and enter your
    phone passcode.
 3. In Xcode, at the top-middle of the window, there is a dropdown showing a
-   device name. Click it and choose **your iPhone** from the list. It may say
-   "(preparing)" for a minute or two while Xcode copies debug symbols — wait
-   for that to finish.
+   device name. **It defaults to a simulator** — something like
+   "iPhone 17 Pro", which is a picture of a phone on your Mac, has no NFC
+   hardware, and cannot run Tap to Pay at all. Click it and choose **your real
+   iPhone**, listed above the simulators. It may say "(preparing)" for a
+   minute or two while Xcode copies debug symbols — wait for that to finish.
 4. On the phone: **Settings → Privacy & Security**, scroll to the bottom,
    tap **Developer Mode**, turn it **On**.
 5. The phone insists on restarting. Let it. After it restarts, unlock it and
@@ -305,6 +387,22 @@ warning triangle beside it.
 ---
 
 ## Step 10 — Build and run
+
+### 10a. Switch the build to Release first
+
+Xcode defaults to **Debug**, where the app carries no JavaScript of its own
+and streams it live from the Mac. That is fine while tethered and useless
+everywhere else — the app stops working the moment you walk away, which rules
+out filming the videos and rules out taking a card in a driveway. **Release**
+bakes everything into the app.
+
+1. **Product** → **Scheme** → **Edit Scheme…**
+2. **Run**, in the left column of the sheet.
+3. The **Info** tab.
+4. **Build Configuration**: change **Debug** to **Release**.
+5. **Close**.
+
+### 10b. Run it
 
 Press the **▶ play button** at the top-left of the Xcode window (keyboard:
 `⌘ R`).
@@ -359,7 +457,11 @@ that the EAS button build works and this file becomes history.
 
 | What you see | What it means | What to do |
 |---|---|---|
-| `command not found: brew` | Step 5c did not take | Close Terminal, open a new window, redo 5c |
+| `command not found: brew` | Step 5c did not take **in this window** | Run the `eval "$(/opt/homebrew/bin/brew shellenv)"` line here |
+| `Cause: spawn brew ENOENT` from prebuild | same thing — Expo went looking for `brew` and this window has no such command | as above, then re-run prebuild |
+| `curl: (56) ... returned error: 404` on the Homebrew line | the URL is wrong | the installer is in `Homebrew/install`, not `Homebrew/brew` |
+| `zsh: bad pattern: ^[[200~echo` | several lines pasted at once | paste one command at a time |
+| `gem install cocoapods ... exited with non-zero code: 1` | macOS's built-in Ruby is too old | expected — not the real error; read further down the output |
 | `command not found: node` | Step 3 did not finish | Redo Step 3, then open a **new** Terminal window |
 | `command not found: pod` | CocoaPods not installed or not on the path | Redo 5c and 5d |
 | prebuild ends with a CocoaPods error | Usually a half-finished Step 5 | Send me the last 30 lines |
