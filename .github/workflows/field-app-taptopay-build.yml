@@ -43,9 +43,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # Through env for the same reason as the Apple key below: a secret
+      # interpolated into a script is pasted into the command line. This one
+      # is single-line so it does not break, but the habit is what matters.
       - name: Check the Expo token is present
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
-          if [ -z "${{ secrets.EXPO_TOKEN }}" ]; then
+          if [ -z "$EXPO_TOKEN" ]; then
             echo "::error::EXPO_TOKEN is not set. Add the Expo robot token under"
             echo "::error::Settings → Secrets and variables → Actions → New repository secret."
             exit 1
@@ -65,12 +70,24 @@ jobs:
       # ref", which is confusing rather than wrong.
       # Named individually, because "credentials failed" twenty minutes in
       # is the worst possible way to learn that one field was pasted wrong.
+      # Named individually, because "credentials failed" twenty minutes in
+      # is the worst possible way to learn that one field was pasted wrong.
+      #
+      # The secrets come through `env`, NEVER interpolated into the script.
+      # A .p8 is a multi-line PEM block: written as `[ -z "${{ secrets.X }}" ]`
+      # it is pasted straight into the shell, which both breaks the syntax and
+      # scatters lines of a private key across the command line. Through env
+      # it is one opaque value the shell never parses.
       - name: Check the Apple key is present
+        env:
+          ASC_KEY: ${{ secrets.EXPO_ASC_API_KEY }}
+          ASC_KEY_ID: ${{ secrets.EXPO_ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.EXPO_ASC_ISSUER_ID }}
         run: |
           missing=""
-          [ -z "${{ secrets.EXPO_ASC_API_KEY }}" ] && missing="$missing EXPO_ASC_API_KEY"
-          [ -z "${{ secrets.EXPO_ASC_KEY_ID }}" ] && missing="$missing EXPO_ASC_KEY_ID"
-          [ -z "${{ secrets.EXPO_ASC_ISSUER_ID }}" ] && missing="$missing EXPO_ASC_ISSUER_ID"
+          if [ -z "$ASC_KEY" ]; then missing="$missing EXPO_ASC_API_KEY"; fi
+          if [ -z "$ASC_KEY_ID" ]; then missing="$missing EXPO_ASC_KEY_ID"; fi
+          if [ -z "$ASC_ISSUER_ID" ]; then missing="$missing EXPO_ASC_ISSUER_ID"; fi
           if [ -n "$missing" ]; then
             echo "::error::Missing GitHub secret(s):$missing"
             echo "::error::Settings → Secrets and variables → Actions → New repository secret."
