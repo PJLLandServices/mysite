@@ -19,6 +19,26 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-07 (The widening ladder stops at 40 minutes — past that, the open bucket):**
+Patrick, reading a live route day: three self-booked customers had landed on R6 "West of the 400",
+one of them in MARKHAM, and he asked how the algorithm allowed it. Diagnosis: not a bug — the
+elastic corridor from earlier today doing exactly what it was told. With the calendar starved by
+~104 load-test bookings, a Markham address found fewer than `GEO_WIDEN_MIN_DAYS` days at the tight
+15-minute corridor, so the ladder widened 25 → 40 → 60 → 90 and bought that customer a date at the
+cost of an hour of detour. (The two Aurora bookings on the same day passed honestly at ~+5 min.)
+His call: the open bucket "exists precisely for the customer we can't place efficiently yet", so
+`GEO_WIDEN_TIERS` is now `[25, 40]` — the ladder widens twice and stops. Past 40 minutes of added
+drive NO day is offered and the first-available card (always present on the picker) takes the
+customer. This does not turn anyone down and does not touch the booking GATE: anyone inside the
+90-minute service area still books, via the open bucket when the calendar cannot hold them
+efficiently. The season-plan probe's `widensAtMinutes` follows the same tiers, so a row that reads
+"when full (widens at N min)" can no longer promise a 60- or 90-minute placement, and its explainer
+now states the cap and the open-bucket fallback. `test-geo-availability.mjs` grew to 59 assertions
+with measured fixtures against the north route: Aurora (+17) still gets days via widening, Richmond
+Hill (+61) now gets NONE and reports no widening past the cap, Mississauga (+179) unchanged, and a
+calendar with enough cheap days still never widens. Full `build:check` green. FLOW-03 route and
+payload unchanged — same endpoint, same slot shape; only how far the corridor will stretch.
+
 **2026-09-07 (Bookings are route stops — the daily-mapping flow reaches the self-booked
 days):** Patrick, on a booking-only day showing amber "B" dots with no line and no numbers:
 "it does not show the route, and doesn't show stop numbers. I've requested that the same flow that

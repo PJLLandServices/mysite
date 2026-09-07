@@ -242,11 +242,20 @@ const DEFAULT_SETTINGS = {
 // we allow for drive times to widen. we NEVER turn down a customer.").
 // geoMaxAddedDriveMinutes above is the OPENING posture; when a scan at
 // the current corridor leaves an address fewer than GEO_WIDEN_MIN_DAYS
-// bookable days, the scan reruns at the next tier, out to the 90-minute
-// service-area bound booking-gate.js enforces. A customer the gate let
-// in is therefore never geo-refused into an empty calendar while any
-// route day still has room.
-const GEO_WIDEN_TIERS = [25, 40, 60, 90]; // last = booking-gate MAX_DRIVE_MINUTES — keep in step
+// bookable days, the scan reruns at the next tier.
+//
+// THE LADDER STOPS AT 40 MINUTES, ON PURPOSE. It used to run to the
+// 90-minute service bound, and that is how a Markham address landed on a
+// "West of the 400" route day: with the calendar starved, the valve
+// opened all the way and bought the customer a day at the cost of an
+// hour of extra driving. Patrick's call (2026-09-07, reading that day):
+// the open bucket "exists precisely for the customer we can't place
+// efficiently yet" — so past 40 minutes we stop offering days and let the
+// first-available card take them. That is still never turning a customer
+// down; it is refusing to wreck a route to seat them on a date. The
+// booking GATE is unchanged — anyone inside the 90-minute service area
+// still books, via the open bucket when the calendar can't hold them.
+const GEO_WIDEN_TIERS = [25, 40];         // past this the open bucket is the answer, not a longer drive
 const GEO_WIDEN_MIN_DAYS = 3;             // matches the three starred recommendations
 
 // Customer-facing booking buckets. ONE customer per bucket per day —
