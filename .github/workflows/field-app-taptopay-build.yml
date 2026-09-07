@@ -63,6 +63,21 @@ jobs:
       # WHEN TAP TO PAY MERGES TO MAIN, DELETE THIS `ref:` — the branch
       # will be gone and checkout will fail with "couldn't find remote
       # ref", which is confusing rather than wrong.
+      # Named individually, because "credentials failed" twenty minutes in
+      # is the worst possible way to learn that one field was pasted wrong.
+      - name: Check the Apple key is present
+        run: |
+          missing=""
+          [ -z "${{ secrets.EXPO_ASC_API_KEY }}" ] && missing="$missing EXPO_ASC_API_KEY"
+          [ -z "${{ secrets.EXPO_ASC_KEY_ID }}" ] && missing="$missing EXPO_ASC_KEY_ID"
+          [ -z "${{ secrets.EXPO_ASC_ISSUER_ID }}" ] && missing="$missing EXPO_ASC_ISSUER_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing GitHub secret(s):$missing"
+            echo "::error::Settings → Secrets and variables → Actions → New repository secret."
+            exit 1
+          fi
+          echo "All three Apple key secrets are present."
+
       - uses: actions/checkout@v4
         with:
           ref: claude/pjl-field-taptopay
@@ -99,10 +114,36 @@ jobs:
             console.log('SDK present, entitlement declared.');
           "
 
+      # The CLI wants a PATH to the .p8, not its contents, so the secret is
+      # written to a file. RUNNER_TEMP is wiped when the job ends, and the
+      # file is never inside the checkout, so it cannot be committed by
+      # accident. umask keeps it unreadable to anything else on the runner.
+      - name: Write the Apple key to a file
+        env:
+          ASC_KEY: ${{ secrets.EXPO_ASC_API_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$ASC_KEY" > "$RUNNER_TEMP/asc-api-key.p8"
+          # Shape check only — never the contents, which are secret. A key
+          # pasted without its BEGIN/END lines fails deep inside the CLI
+          # with something unhelpful.
+          if ! grep -q "BEGIN PRIVATE KEY" "$RUNNER_TEMP/asc-api-key.p8"; then
+            echo "::error::The EXPO_ASC_API_KEY secret does not look like a .p8 key."
+            echo "::error::It must include the -----BEGIN PRIVATE KEY----- and END lines."
+            exit 1
+          fi
+          echo "Apple key written, $(wc -l < "$RUNNER_TEMP/asc-api-key.p8") lines."
+
       - name: Build
         working-directory: pjl-field
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          # What lets EAS create the ad-hoc signing paperwork with Apple on
+          # its own. Without these it asks interactively, and a workflow has
+          # nobody to ask — which is exactly how the first run failed.
+          EXPO_ASC_API_KEY_PATH: ${{ runner.temp }}/asc-api-key.p8
+          EXPO_ASC_KEY_ID: ${{ secrets.EXPO_ASC_KEY_ID }}
+          EXPO_ASC_ISSUER_ID: ${{ secrets.EXPO_ASC_ISSUER_ID }}
         run: |
           npx eas-cli@23.2.0 build \
             --platform ios \
