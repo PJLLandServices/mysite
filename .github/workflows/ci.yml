@@ -50,15 +50,18 @@ jobs:
         run: npm ci
 
       # The phone app is now part of what CI verifies, so its dependencies
-      # have to be here too. test-app-parses.mjs parses every app source
-      # with the app's own Babel, and test-tap-to-pay.mjs reads the Stripe
-      # Terminal SDK's type definitions to check the API this integration
-      # calls still exists.
+      # have to be here too. Three suites read the app's own tree:
+      # test-app-parses.mjs parses every app source with the app's own
+      # Babel, test-today-map.mjs does the same for the screens it covers,
+      # and test-tap-to-pay.mjs reads the Stripe Terminal SDK's type
+      # definitions to check the API this integration calls still exists.
+      # What CI accepts is then what Metro will accept, rather than a
+      # guess at it.
       #
       # This is not free — it is the React Native toolchain, and it is the
       # slowest step in the job. Taken deliberately, for the same reason
-      # the note above took it: the alternative is a suite that skips
-      # itself when the dependency is missing, and a check that silently
+      # the note above took it: the alternative is a check that skips
+      # itself when a dependency is missing, and a check that silently
       # proves nothing is worse than no check. That failure mode is not
       # hypothetical here — on 2026-09-06 an assertion that only looked
       # for the WORD "requireAdmin" stayed green while the endpoint it

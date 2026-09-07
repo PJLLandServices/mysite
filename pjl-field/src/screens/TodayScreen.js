@@ -14,7 +14,7 @@
 // so both confirm first, both disable while in flight, and Notify
 // disables permanently once it has fired.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -36,6 +36,7 @@ import {
 } from '../api';
 import { telHref } from '../format';
 import { addDays, fromYmd, startOfWeek, WEEKDAY_INITIALS, ymd } from '../dates';
+import DayMap from './DayMap';
 import MonthSheet from './MonthSheet';
 import { colors, radius, space, type } from '../theme';
 import { runningVersionLabel } from '../updates';
@@ -80,6 +81,14 @@ export default function TodayScreen({ onOpenWorkOrder, onOpenTapToPay }) {
   const [refreshing, setRefreshing] = useState(false);
   const [busyId, setBusyId] = useState(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Which stop the map is emphasising. Held here rather than in the map
+  // so a tap on a card and a tap on a pin move the same one thing.
+  const [focusKey, setFocusKey] = useState(null);
+  const scrollRef = useRef(null);
+  // Where each card starts, learned from its own layout. A tapped pin has
+  // to scroll to its card, and the card is the only thing that knows
+  // where it ended up once the week strip and the map are above it.
+  const cardTops = useRef(new Map());
 
   const load = useCallback(async (date) => {
     try {
@@ -226,6 +235,22 @@ export default function TodayScreen({ onOpenWorkOrder, onOpenTapToPay }) {
   }
 
   const bookings = payload?.bookings || [];
+  // Changes whenever a row appears, disappears or finishes. That is
+  // exactly when the map has to redraw — a completed work order is what
+  // turns a numbered pin into a tick, and waiting for a pull-to-refresh
+  // to show it would make the map the last thing to know.
+  const mapSignature = bookings
+    .map((b) => `${rowKey(b)}:${b.workOrder?.status || ''}`)
+    .join('|');
+
+  const revealStop = (key) => {
+    setFocusKey(key || null);
+    const top = key ? cardTops.current.get(key) : null;
+    if (top == null || !scrollRef.current) return;
+    // A little above the card, so it does not sit welded to the map's
+    // bottom edge.
+    scrollRef.current.scrollTo({ y: Math.max(0, top - 12), animated: true });
+  };
   const versionLabel = runningVersionLabel();
   const anchor = fromYmd(selected || payload?.date || ymd(new Date()));
   const weekStart = startOfWeek(anchor);
@@ -239,6 +264,7 @@ export default function TodayScreen({ onOpenWorkOrder, onOpenTapToPay }) {
 
   return (
     <ScrollView
+      ref={scrollRef}
       style={styles.screen}
       contentContainerStyle={styles.content}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.brand} />}
@@ -341,6 +367,18 @@ export default function TodayScreen({ onOpenWorkOrder, onOpenTapToPay }) {
         </Text>
       </View>
 
+      {/* The route, above the list it belongs to. Only when there is a
+          route: an empty day would draw an empty map and take 200px of a
+          phone screen to say nothing. */}
+      {bookings.length ? (
+        <DayMap
+          date={payload?.date || selected}
+          refreshToken={mapSignature}
+          focusKey={focusKey}
+          onSelectStop={revealStop}
+        />
+      ) : null}
+
       {bookings.length === 0 ? (
         <View style={styles.emptyCard}>
           <Text style={styles.emptyTitle}>Clear day</Text>
@@ -355,8 +393,15 @@ export default function TodayScreen({ onOpenWorkOrder, onOpenTapToPay }) {
         const canStartWo = canStartWorkOrder(b);
         const notified = !!b.onRouteNotifiedAt;
         const woLabel = b.workOrder ? (WO_STATUS_LABELS[b.workOrder.status] || b.workOrder.status) : null;
+        const key = rowKey(b);
         return (
-          <View key={rowKey(b)} style={styles.card}>
+          <Pressable
+            key={key}
+            style={[styles.card, focusKey === key && styles.cardFocused]}
+            onPress={() => setFocusKey(key)}
+            onLayout={(event) => { cardTops.current.set(key, event.nativeEvent.layout.y); }}
+            accessibilityLabel={`Show ${b.address || 'this stop'} on the map`}
+          >
             <View style={styles.cardTop}>
               <View style={styles.time}>
                 <Text style={styles.timeStart}>{b.startLabel || timeOf(b.start) || '—'}</Text>
@@ -395,7 +440,7 @@ export default function TodayScreen({ onOpenWorkOrder, onOpenTapToPay }) {
                 primary
               />
             </View>
-          </View>
+          </Pressable>
         );
       })}
 
@@ -492,9 +537,15 @@ const styles = StyleSheet.create({
   emptyTitle: { ...type.title },
   emptyBody: { ...type.caption, textAlign: 'center' },
 
+  // The border is always there and usually invisible. Growing one on
+  // focus would shove every card below it down two pixels at the exact
+  // moment the screen is scrolling to one.
+  cardFocused: { borderColor: colors.brand },
   card: {
     backgroundColor: colors.card,
     borderRadius: radius.card,
+    borderWidth: 2,
+    borderColor: 'transparent',
     marginHorizontal: space.md,
     marginBottom: space.md,
     padding: space.lg,
