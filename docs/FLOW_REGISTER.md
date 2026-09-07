@@ -19,6 +19,30 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-07 (Bookings are route stops — the daily-mapping flow reaches the self-booked
+days):** Patrick, on a booking-only day showing amber "B" dots with no line and no numbers:
+"it does not show the route, and doesn't show stop numbers. I've requested that the same flow that
+process' the daily mapping be provided to the individual uploads. not the half assed shit." Before:
+`resolveSeasonPlan` sequenced only the PLAN codes; bookings were pinned on afterward as un-numbered
+amber dots, and a booking-only date was a synthetic day with `timeline: []`. The route-line
+endpoint 404'd for any date not in `plan.days`. Now two shared helpers — `gatherBookedRows` (the
+in-window, today-or-later, plan-stop-deduped bookings per date) and `sequenceDayWithBookings`
+(feeds each mappable booking into `resequence.sequenceDay` under a synthetic `__bk:` code, bucketed
+by its start hour) — run in BOTH the resolver and the route-line endpoint, so numbers and line come
+from one sequence. A booking-only day is now a first-class numbered route; a planned day's extra
+self-bookings interleave into its drive. The customer only ever saw an AM/PM bucket and the
+sequencer orders within a bucket, so the promise is kept. Client: `mappableStops` reads booked
+stops from the shared timeline (by `mapCode`), `drawDayMap` draws them as numbered amber pins on the
+one route line (the separate un-numbered "B" loop is gone), and `bookedBlock` leads each row with
+its amber stop-number badge wired to its pin. Booked rows carry `booked`/`stopNumber`/`arriveAt`/
+`mapCode`; an un-mappable booking (no coords) stays an un-numbered booked row and simply doesn't
+join the drive. **FLOW-03-adjacent (the Season Plan review is admin-only display, not the booking
+write path — no customer-facing route or payload changed).** Verified end-to-end against the real
+server (booted, real login): a two-booking unplanned day comes back `bookedOnly` with both rows
+numbered on distinct stops, the timeline covering both, and `route-line` returning a drawable
+polyline where it used to 404; the ordinary plan day still renders. Full `build:check` green;
+Chromium confirms the booked row renders its number badge with a pin-linked `data-code`.
+
 **2026-09-07 (Bucket-coherent geography — one region per half-day, killing the double
 drive):** Patrick, reading the load-test bookings against the live board: "it really just let
 anyone book at any point throughout the schedule… it makes us drive all the way across the 401
