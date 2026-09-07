@@ -1704,8 +1704,10 @@
     rest.className = "sp-probe-note";
     rest.textContent = "This table covers planned route days AND days real bookings have started "
       + "(marked 'Booked day'). Every other open day in the season has nothing on it yet, so it "
-      + "is offered to this address as normal — a customer with no cheap day still sees most of "
-      + "the calendar.";
+      + "is offered to this address as normal. The corridor is also elastic: when the calendar "
+      + "leaves an address short of cheap days, availability widens the drive allowance step by "
+      + "step (out to the 90-minute service edge) — amber rows show where a day would open up. "
+      + "We never turn a customer away while any route day has room.";
     out.appendChild(rest);
 
     const table = document.createElement("table");
@@ -1714,11 +1716,16 @@
     const body = document.createElement("tbody");
     for (const day of data.days) {
       const tr = document.createElement("tr");
-      tr.className = day.offered ? "is-offered" : "";
+      tr.className = day.offered ? "is-offered" : (day.widensAtMinutes ? "is-widened" : "");
       const added = day.addedDriveMinutes == null ? "—" : `${day.addedDriveMinutes} min`;
       const routeCell = day.bookingsOnly ? "Booked day" : (day.label || "—");
+      // "when full" = the elastic corridor: past the tight threshold but
+      // inside the service bound, so availability offers this day once
+      // the calendar leaves the customer short of cheap days.
+      const offeredCell = day.offered ? "yes"
+        : day.widensAtMinutes ? `when full (widens at ${day.widensAtMinutes} min)` : "no";
       tr.innerHTML = `<td>${routeCell}</td><td>${day.date}</td><td>${day.points}</td>`
-        + `<td class="sp-num">${added}</td><td>${day.offered ? "yes" : "no"}</td>`;
+        + `<td class="sp-num">${added}</td><td>${offeredCell}</td>`;
       body.appendChild(tr);
     }
     table.appendChild(body);

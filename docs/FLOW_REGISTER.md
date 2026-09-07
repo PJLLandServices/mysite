@@ -19,6 +19,25 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-07 (The corridor is elastic — drive times widen before a customer is turned
+away):** Patrick's load bot booked ~104 fall appointments and the calendar went dry; his call:
+"nope, we don't extend windows into November, as the dates fill up, we allow for drive times to
+widen. we NEVER turn down a customer." `listAvailableSlots` now scans in tiers: the configured
+`geoMaxAddedDriveMinutes` (15) is the OPENING corridor, and when a pass leaves an address fewer
+than `GEO_WIDEN_MIN_DAYS` (3) bookable days, it rescans at 25 → 40 → 60 → 90 added-drive minutes
+(90 = booking-gate `MAX_DRIVE_MINUTES`, the service-area edge — a gate-approved customer is never
+geo-refused into an empty calendar while any route day has room). Widening changes what is
+OFFERED, never what is RECOMMENDED: slots keep their true `addedDriveMinutes`, so the stars still
+rank the cheapest days first. The ladder stops early when geography suppressed nothing (scarcity
+is capacity — the open bucket is that overflow). Diagnostics gain `geoWidenedTo`; the season-plan
+probe now shows amber "when full (widens at N min)" rows and per-day `widensAtMinutes`. The public
+booking WINDOW (Sep 28–Oct 30) is untouched by his explicit instruction. Seven new assertions in
+`test-geo-availability.mjs` (49 total): widening admits a Richmond Hill address every-day-shaped
+fixture would have blanked, the widened tier is reported, true costs survive, the 90-minute bound
+still refuses (+179 min Mississauga), and a calendar with enough cheap days never widens.
+FLOW-03's route/payload unchanged — same endpoint, same slot shape, one new optional diagnostics
+field; reserve's re-validation runs the same ladder deterministically, so a widened slot re-books.
+
 **2026-09-01 (Lead-booking heal becomes a sweep — the two booking stores can't quietly
 disagree):** Patrick reported a customer's bookings on the schedule and his phone calendar but
 missing from /admin/bookings ("why are the Willowridge landscaping bookings not showing up on the
