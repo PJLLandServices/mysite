@@ -46,6 +46,10 @@ after which the entitlement is no longer development-restricted and **the EAS
 cloud pipeline works again permanently.** The Mac is a one-time detour, not a
 new way of working.
 
+**The step-by-step for that build is `docs/TAP_TO_PAY_MAC_BUILD.md`** — Xcode
+first-launch through to taking a real card, written to be followed without
+knowing what any of it does.
+
 ### What is NOT wasted
 
 Everything set up on 2026-09-07 is needed regardless and stays: the device
