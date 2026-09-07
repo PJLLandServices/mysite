@@ -220,5 +220,120 @@ check('the SDK actually exports what this integration calls', () => {
   assert.match(types, /InteracPresent/, 'Interac is no longer an offered payment method type');
 });
 
+// ---- Initialize before you ask. The bug this suite did not catch. -----
+//
+// On 2026-09-07 the app told an iPhone 17 Pro Max, running iOS 26.6.1,
+// that it "cannot accept contactless payments". Nothing was wrong with
+// the phone, the entitlement, the profile or the account.
+//
+// `supportsReadersOfType` THROWS if `initialize()` has not run — the SDK
+// answers "First call initialize" rather than true or false. The probe
+// ran on mount, before anything had initialized, threw, and a catch
+// recorded the throw as "unsupported". warmUp then refused to initialize
+// on the grounds that the device was unsupported. A closed loop, and the
+// screen stated the false half of it as fact.
+//
+// Every assertion in this suite passed while that was happening, because
+// each one asked whether a call was PRESENT. Presence was never the
+// question; order was.
+
+check('the SDK still refuses every question before initialize', () => {
+  // Read from the installed SDK, so this tracks Stripe rather than our
+  // memory of Stripe. If the guard is ever removed, the ordering rule
+  // below stops being load-bearing and this is what should say so.
+  const requireFromApp = createRequire(path.join(APP, 'package.json'));
+  const sdk = readFileSync(
+    requireFromApp.resolve('@stripe/stripe-terminal-react-native/lib/module/hooks/useStripeTerminal.js'),
+    'utf8',
+  );
+  const at = sdk.indexOf('_supportsReadersOfType');
+  assert.ok(at > 0, 'the SDK no longer defines supportsReadersOfType in this hook');
+  const body = sdk.slice(at, at + 400);
+  assert.match(
+    body, /_isInitialized\(\)/,
+    'supportsReadersOfType is no longer guarded by initialize — revisit the ordering rule',
+  );
+});
+
+check('the support probe is never reached without an awaited initialize', () => {
+  // The probe must sit in a function that awaits initialization first.
+  const at = hook.indexOf('supportsReadersOfType({');
+  assert.ok(at > 0, 'the support probe is gone');
+  // Walk back to the enclosing declaration and require the await between.
+  const before = hook.slice(0, at);
+  const fnStart = Math.max(
+    before.lastIndexOf('const probeSupport'),
+    before.lastIndexOf('const warmUp'),
+  );
+  assert.ok(fnStart > 0, 'the probe is not inside probeSupport or warmUp');
+  const between = hook.slice(fnStart, at);
+  assert.match(
+    between, /await ensureInitialized\(\)/,
+    'supportsReadersOfType is called without awaiting initialization first — it throws',
+  );
+});
+
+check('the probe has exactly one call site, inside probeSupport', () => {
+  // Subsumes "not from a mount effect": if the probe were fired from an
+  // effect, or from anywhere else that has not initialized, it would not
+  // be between these two declarations.
+  const sites = [...hook.matchAll(/supportsReadersOfType\(/g)].map((m) => m.index);
+  const called = sites.filter((at) => hook.slice(at - 40, at).includes('await'));
+  assert.equal(called.length, 1, `expected one awaited probe call, found ${called.length}`);
+  const from = hook.indexOf('const probeSupport');
+  const to = hook.indexOf('const warmUp');
+  assert.ok(from > 0 && to > from, 'probeSupport or warmUp is gone');
+  assert.ok(
+    called[0] > from && called[0] < to,
+    'reader support is probed outside probeSupport, where nothing has initialized',
+  );
+});
+
+
+
+check('a question that could not be asked is not recorded as "no"', () => {
+  // `supported === false` is what draws "This device cannot accept
+  // contactless payments". It may only be set from a real answer, or
+  // from not being iOS at all.
+  const sets = [...hook.matchAll(/setSupported\(([^)]*)\)/g)].map((m) => m[1].trim());
+  assert.ok(sets.length > 0, 'setSupported is gone');
+  for (const value of sets) {
+    assert.ok(
+      value === 'false' || value === '!!readerSupportResult',
+      `setSupported(${value}) — support is being inferred rather than answered`,
+    );
+  }
+  // And the false ones must be the platform check, never a catch.
+  assert.ok(
+    !/catch[^}]*setSupported\(false\)/s.test(hook),
+    'a thrown probe is being recorded as an unsupported device',
+  );
+});
+
+check('warmUp does not refuse to run because support is unknown', () => {
+  // The other half of the loop. `supported` starts null; a warmUp that
+  // returns early on anything other than an explicit false can never
+  // reach the initialize that would answer the question.
+  const at = hook.indexOf('const warmUp');
+  assert.ok(at > 0, 'warmUp is gone');
+  const head = hook.slice(at, at + 500);
+  assert.ok(
+    !/supported !== true/.test(head),
+    'warmUp returns early while support is unknown — it can never initialize',
+  );
+  assert.match(head, /supported === false/, 'warmUp no longer short-circuits a genuinely unsupported device');
+});
+
+check('the Location is read synchronously, not a render late', () => {
+  // initialize() is what fetches the token that carries the Location, so
+  // the provider's state is one render behind the first warmUp. Reading
+  // only the ref made the first press fail and the second succeed.
+  assert.match(provider, /getLocationId/, 'the provider no longer exposes a synchronous Location getter');
+  const at = hook.indexOf("throw new Error('No Stripe Terminal location");
+  assert.ok(at > 0, 'the missing-location guard is gone');
+  const before = hook.slice(Math.max(0, at - 300), at);
+  assert.match(before, /getLocationId\(\)/, 'warmUp reads only the ref, which initialize has not filled yet');
+});
+
 console.log(`\ntap-to-pay: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

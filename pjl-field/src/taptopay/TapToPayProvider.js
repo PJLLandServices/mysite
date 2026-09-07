@@ -18,7 +18,11 @@ import { createContext, useCallback, useContext, useMemo, useRef, useState } fro
 import { StripeTerminalProvider } from '@stripe/stripe-terminal-react-native';
 import { terminalConnectionToken } from '../api';
 
-const TapToPayContext = createContext({ locationId: null, tokenError: null });
+const TapToPayContext = createContext({
+  locationId: null,
+  tokenError: null,
+  getLocationId: () => null,
+});
 
 export function useTapToPayLocation() {
   return useContext(TapToPayContext);
@@ -52,7 +56,18 @@ export function TapToPayProvider({ children }) {
     }
   }, []);
 
-  const value = useMemo(() => ({ locationId, tokenError }), [locationId, tokenError]);
+  // Read synchronously, because the reader needs the Location in the same
+  // turn the token arrives. `locationId` state is a render behind: the SDK
+  // fetches the token during initialize(), the provider sets state, and the
+  // screen's effect calls setLocation only after React re-renders. warmUp
+  // runs before all of that and would find nothing, so the first press
+  // failed with "the server did not send one" and the second worked.
+  const getLocationId = useCallback(() => locationRef.current, []);
+
+  const value = useMemo(
+    () => ({ locationId, tokenError, getLocationId }),
+    [locationId, tokenError, getLocationId],
+  );
 
   return (
     <StripeTerminalProvider tokenProvider={tokenProvider} logLevel="error">

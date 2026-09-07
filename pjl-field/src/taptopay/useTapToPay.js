@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Platform } from 'react-native';
 import { useStripeTerminal } from '@stripe/stripe-terminal-react-native';
+import { useTapToPayLocation } from './TapToPayProvider';
 
 // What the invoice screen renders from. Deliberately a small closed set
 // rather than a pile of booleans, because 5.7/5.8/5.9 are about the user
@@ -46,6 +47,10 @@ export function useTapToPay({ onProgress } = {}) {
   const [state, setState] = useState(READER.IDLE);
   const [error, setError] = useState(null);
   const [progress, setProgress] = useState(null);
+  // null = not asked yet. Only ever set to false when the SDK ANSWERS
+  // false. A question we could not ask is not a "no" — see the effect
+  // below, which used to conflate the two and told a brand-new iPhone it
+  // could not accept contactless payments.
   const [supported, setSupported] = useState(null);
 
   const {
@@ -71,50 +76,84 @@ export function useTapToPay({ onProgress } = {}) {
   // because reconnecting must not depend on a re-render having happened.
   const locationRef = useRef(null);
   const warmingRef = useRef(false);
+  const initializedRef = useRef(false);
+  // An automatic warm-up that failed does not retry itself on every
+  // return to the foreground; pressing the button always does.
+  const autoFailedRef = useRef(false);
+
+  const { getLocationId } = useTapToPayLocation();
+
+  // Android has no Tap to Pay on iPhone, by definition. That is the only
+  // thing knowable without asking the SDK, so it is the only thing
+  // decided here.
+  useEffect(() => {
+    if (Platform.OS !== 'ios') setSupported(false);
+  }, []);
+
+  // The SDK REFUSES every question until initialize() has run —
+  // `supportsReadersOfType` throws "First call initialize" rather than
+  // answering. So the support probe cannot come first, and initialize
+  // cannot come second.
+  //
+  // It used to. The probe ran on mount, threw, and the catch recorded
+  // "unsupported"; warmUp then refused to initialize because the device
+  // was "unsupported". An iPhone 17 Pro Max was told it could not accept
+  // contactless payments, and nothing could talk it out of that.
+  const ensureInitialized = useCallback(async () => {
+    if (initializedRef.current) return;
+    // initialize() calls our tokenProvider, so this is also where "not
+    // signed in as an admin" and "Terminal is off at Stripe" surface.
+    const { error: initError } = (await initialize()) || {};
+    if (initError) {
+      throw new Error(initError.message || 'Could not start the payment reader.');
+    }
+    initializedRef.current = true;
+  }, [initialize]);
 
   // 1.1 / 1.3 — an iPad has no NFC for payment acceptance, so Tap to Pay
   // is iPhone-only on both Apple's side and Stripe's. Asked rather than
   // assumed from the device model, so a phone that is simply too old
   // answers the same way and gets the same hidden button instead of one
   // that fails when pressed.
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      if (Platform.OS !== 'ios') { if (alive) setSupported(false); return; }
-      try {
-        const { readerSupportResult } = await supportsReadersOfType({
-          deviceType: 'tapToPay',
-          discoveryMethod: 'tapToPay',
-        });
-        if (alive) setSupported(!!readerSupportResult);
-      } catch {
-        // Treat an unanswerable question as "no". Showing the button and
-        // failing at the card is worse than not showing it.
-        if (alive) setSupported(false);
-      }
-    })();
-    return () => { alive = false; };
-  }, [supportsReadersOfType]);
+  const probeSupport = useCallback(async () => {
+    if (Platform.OS !== 'ios') { setSupported(false); return false; }
+    await ensureInitialized();
+    const { readerSupportResult, error: supportError } =
+      (await supportsReadersOfType({
+        deviceType: 'tapToPay',
+        discoveryMethod: 'tapToPay',
+      })) || {};
+    if (supportError) {
+      throw new Error(supportError.message || 'Could not ask whether this iPhone can accept cards.');
+    }
+    setSupported(!!readerSupportResult);
+    return !!readerSupportResult;
+  }, [ensureInitialized, supportsReadersOfType]);
 
   // 1.5 — warm up on open and on every return to the foreground. This is
   // what buys 5.6: by the time he presses the button on a driveway the
   // reader is already connected, so Apple's sheet appears at once instead
   // of after a connect.
-  const warmUp = useCallback(async () => {
+  const warmUp = useCallback(async ({ auto = false } = {}) => {
     if (warmingRef.current) return;
     if (supported === false) { setState(READER.UNSUPPORTED); return; }
-    if (supported !== true) return;
     if (connectedReader) { setState(READER.READY); return; }
+    if (auto && autoFailedRef.current) return;
 
     warmingRef.current = true;
     setError(null);
     setState(READER.PREPARING);
     try {
-      await initialize();
+      // Initialize, then ask. Both inside the try, so a refusal from
+      // either says what happened instead of becoming "unsupported".
+      const ok = await probeSupport();
+      if (!ok) { setState(READER.UNSUPPORTED); return; }
       // The token provider is wired once at the provider (see
       // TapToPayProvider); this only needs the Location, which the same
-      // server call returns.
-      const locationId = locationRef.current;
+      // server call returns. Read through the getter as well as the ref,
+      // because initialize() is what fetches the token that carries it —
+      // the ref is set a render later, which is after this line.
+      const locationId = locationRef.current || (getLocationId && getLocationId());
       if (!locationId) throw new Error('No Stripe Terminal location — the server did not send one.');
 
       const { error: connectError } = await easyConnect({
@@ -128,21 +167,23 @@ export function useTapToPay({ onProgress } = {}) {
         autoReconnectOnUnexpectedDisconnect: true,
       });
       if (connectError) throw new Error(connectError.message || 'Could not start the reader.');
+      autoFailedRef.current = false;
       setState(READER.READY);
     } catch (err) {
+      autoFailedRef.current = true;
       setError(err?.message || 'Could not start the reader.');
       setState(READER.FAILED);
     } finally {
       warmingRef.current = false;
     }
-  }, [supported, connectedReader, initialize, easyConnect]);
+  }, [supported, connectedReader, probeSupport, getLocationId, easyConnect]);
 
   // Foreground transitions, per 1.5. `change` fires on cold start too in
   // some cases but not reliably, so warmUp is also called directly by the
   // screen that needs it.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
-      if (next === 'active') warmUp();
+      if (next === 'active') warmUp({ auto: true });
     });
     return () => sub.remove();
   }, [warmUp]);
