@@ -385,6 +385,124 @@ ok("recommendDays survives an empty or slotless list",
   recommendDays([]).length === 0
   && recommendDays([{ date: "2026-10-01", slots: [], reason: "no_availability" }])[0].recommended === undefined);
 
+// ---- 7b. Bucket-coherent geography — the double-drive fix ------------
+//
+// Patrick, 2026-09-07, from the load-test data: on one booked-only day
+// the crew got Etobicoke at noon, Whitby at 1:30, Etobicoke again at 4,
+// Whitby again at 7 — the 401 crossed twice. Cause: the day was scored
+// as one blob, so a Whitby caller read "cheap" off the day and could
+// book the MORNING even though the morning was the west cluster. Scoring
+// each bucket against ITS OWN stops funnels a region into one half.
+
+// A booked-only day whose MORNING already holds a west cluster
+// (Etobicoke, from WEST) and whose AFTERNOON holds one east booking.
+const BUCKET_DAY = dayKey(plusDays(10));               // Thu 24 Sep, not planned
+const etobicokeAM = { start: `${BUCKET_DAY}T09:00:00`, coords: { ...WEST[0].coords }, propertyId: "P-AM" };
+const whitbyPM = { start: `${BUCKET_DAY}T13:30:00`, coords: { lat: 43.884, lng: -78.941, source: "google" }, propertyId: "P-PM" };
+const WHITBY = { lat: 43.897, lng: -78.930, source: "google" }; // a second Whitby caller
+const bucketShapes = geoFilter.buildDayShapes({ plan, propertiesByCode, bookings: [etobicokeAM, whitbyPM] });
+
+ok("the booked day splits into morning/afternoon clusters",
+  bucketShapes[BUCKET_DAY].bucketPoints.morning.length === 1
+  && bucketShapes[BUCKET_DAY].bucketPoints.afternoon.length === 1,
+  JSON.stringify(bucketShapes[BUCKET_DAY].bucketPoints));
+
+const bucketDiag = { geoSuppressed: [] };
+const whitbySlots = (await listAvailableSlots({
+  ...baseArgs, customerCoords: WHITBY, dayShapes: bucketShapes, diagnostics: bucketDiag
+})).filter((s) => dayKey(new Date(s.start)) === BUCKET_DAY);
+const bucketsOffered = whitbySlots.map((s) => s.bucketKey);
+ok("a Whitby caller is offered the AFTERNOON (its cluster), not the west morning",
+  bucketsOffered.includes("afternoon") && !bucketsOffered.includes("morning"),
+  `offered buckets: ${bucketsOffered.join(", ") || "none"}`);
+ok("the west morning bucket is the one suppressed for the Whitby caller",
+  bucketDiag.geoSuppressed.some((g) => g.date === BUCKET_DAY && g.bucket === "morning"),
+  JSON.stringify(bucketDiag.geoSuppressed));
+ok("the afternoon slot carries an honest low insertion cost against its own cluster",
+  Number.isFinite(whitbySlots.find((s) => s.bucketKey === "afternoon")?.addedDriveMinutes)
+  && whitbySlots.find((s) => s.bucketKey === "afternoon").addedDriveMinutes <= 15);
+
+// The other direction: an Etobicoke caller lands in the morning, never
+// the east afternoon — the west cluster stays west.
+const etoDiag = { geoSuppressed: [] };
+const etoSlots = (await listAvailableSlots({
+  ...baseArgs, customerCoords: { lat: WEST[0].coords.lat, lng: WEST[0].coords.lng, source: "google" },
+  dayShapes: bucketShapes, diagnostics: etoDiag
+})).filter((s) => dayKey(new Date(s.start)) === BUCKET_DAY);
+ok("an Etobicoke caller is offered the MORNING (its cluster), not the east afternoon",
+  etoSlots.map((s) => s.bucketKey).includes("morning")
+  && !etoSlots.map((s) => s.bucketKey).includes("afternoon"),
+  `offered buckets: ${etoSlots.map((s) => s.bucketKey).join(", ") || "none"}`);
+
+// The barbell guard: an empty bucket on a day that already has a cluster
+// is NOT a free landing pad for a far region. A Keswick caller (north,
+// far from both) gets neither bucket on this west/east day.
+const kesDiag = { geoSuppressed: [] };
+const kesSlots = (await listAvailableSlots({
+  ...baseArgs, customerCoords: KESWICK, dayShapes: bucketShapes, diagnostics: kesDiag
+})).filter((s) => dayKey(new Date(s.start)) === BUCKET_DAY);
+ok("a far caller gets NEITHER half of a day that already has a geography (no new barbell)",
+  kesSlots.length === 0, `offered buckets: ${kesSlots.map((s) => s.bucketKey).join(", ")}`);
+
+// ---- 8. The corridor is elastic — widening before turning away -------
+//
+// Patrick, 2026-09-07: "as the dates fill up, we allow for drive times
+// to widen. we NEVER turn down a customer." When the tight corridor
+// leaves an address fewer than GEO_WIDEN_MIN_DAYS bookable days, the
+// scan reruns at the next tier out to the 90-minute service bound.
+// Every day in this fixture carries the NORTH shape, so there are no
+// unplanned days for a far customer to fall back on — the ladder is the
+// only thing standing between them and an empty calendar.
+
+const { GEO_WIDEN_TIERS, GEO_WIDEN_MIN_DAYS } = availability;
+const RICHMOND_HILL = { lat: 43.8828, lng: -79.4403, source: "google" };
+
+const allNorthPlan = { generatedAt: NOW.toISOString(), bucketCap: 5, dayCap: 10, days: {} };
+for (let i = 0; i < 20; i++) { // every day the 20-day scan can reach
+  const d = plusDays(i);
+  if (d.getDay() === 0) continue; // Sundays are closed
+  allNorthPlan.days[dayKey(d)] = { label: "R1", morning: NORTH.map((p) => p.code), afternoon: [] };
+}
+const allNorthShapes = geoFilter.buildDayShapes({ plan: allNorthPlan, propertiesByCode, bookings: [] });
+const anyNorthShape = allNorthShapes[Object.keys(allNorthShapes)[0]];
+
+const rhCost = await geoFilter.addedDriveMinutes(RICHMOND_HILL, anyNorthShape.points);
+ok("fixture: Richmond Hill costs more than the tight corridor but is inside the service bound",
+  rhCost.minutes > 15 && rhCost.minutes <= 90,
+  `+${rhCost.minutes} min`);
+
+const wideDiag = { geoSuppressed: [], seasonClosed: [] };
+const widened = await listAvailableSlots({
+  ...baseArgs, customerCoords: RICHMOND_HILL, dayShapes: allNorthShapes, diagnostics: wideDiag
+});
+ok("a customer beyond the tight corridor still gets days — the corridor widened",
+  datesOf(widened).size >= GEO_WIDEN_MIN_DAYS,
+  `offered ${datesOf(widened).size} days`);
+ok("the widened corridor is reported and is one of the ladder's tiers",
+  GEO_WIDEN_TIERS.includes(wideDiag.geoWidenedTo) && wideDiag.geoWidenedTo >= rhCost.minutes,
+  `geoWidenedTo=${wideDiag.geoWidenedTo}`);
+ok("widened slots keep their TRUE added-drive cost — the stars still rank honestly",
+  widened.every((s) => Number.isFinite(s.addedDriveMinutes) && s.addedDriveMinutes > 15),
+  JSON.stringify(widened.slice(0, 2).map((s) => s.addedDriveMinutes)));
+
+// Beyond the service bound the ladder stops: geography still protects
+// the routes from a dedicated cross-region trip.
+const missCost = await geoFilter.addedDriveMinutes(MISSISSAUGA, anyNorthShape.points);
+ok("fixture: Mississauga costs beyond the 90-minute service bound", missCost.minutes > 90, `+${missCost.minutes} min`);
+const farDiag2 = { geoSuppressed: [] };
+const farWiden = await listAvailableSlots({
+  ...baseArgs, customerCoords: MISSISSAUGA, dayShapes: allNorthShapes, diagnostics: farDiag2
+});
+ok("past the service bound the ladder is spent — no days, open bucket is the overflow",
+  datesOf(farWiden).size === 0,
+  `offered: ${[...datesOf(farWiden)].join(", ")}`);
+
+// A calendar that already offers enough days never widens: the original
+// mixed fixture gave Mississauga the west day plus unplanned days at the
+// TIGHT corridor, and its diagnostics carry no widening marker.
+ok("a calendar with enough days at the tight corridor never widens",
+  diagnostics.geoWidenedTo === undefined);
+
 // ---- Report ----------------------------------------------------------
 
 if (failures.length) {

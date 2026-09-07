@@ -90,20 +90,39 @@ function buildDayShapes({ plan, propertiesByCode, bookings = [] } = {}) {
     const points = [];
     const index = new Set();
     const unresolved = [];
+    // Per-bucket point sets, alongside the flat `points`. The crew drives
+    // ONE loop a day, but a customer picks morning OR afternoon, so a day
+    // is really two clusters. Scoring an incoming address against the
+    // WHOLE day let a Whitby caller read "cheap" off an afternoon Whitby
+    // stop and then book the MORNING — stranding an east job in the west
+    // half and forcing the crew across the 401 twice (Patrick, 2026-09-07,
+    // from the load-test data). bucketPoints lets availability score each
+    // half against its own cluster, so a region coalesces into one bucket.
+    const bucketPoints = { morning: [], afternoon: [] };
+    const bucketIndex = { morning: new Set(), afternoon: new Set() };
+    const addBucketPoint = (bucketName, pt, key) => {
+      if (bucketIndex[bucketName].has(key)) return;
+      bucketIndex[bucketName].add(key);
+      bucketPoints[bucketName].push(pt);
+    };
 
-    for (const code of [...(day.morning || []), ...(day.afternoon || [])]) {
-      const property = byCode.get(code);
-      if (!property) { unresolved.push({ code, reason: "no_such_property" }); continue; }
-      if (!usable(property.coords)) { unresolved.push({ code, reason: "no_coordinates" }); continue; }
-      const key = pointKey(property.coords);
-      if (index.has(key)) continue;
-      index.add(key);
-      points.push({
-        lat: Number(property.coords.lat),
-        lng: Number(property.coords.lng),
-        source: "planned",
-        label: code
-      });
+    for (const bucketName of ["morning", "afternoon"]) {
+      for (const code of day[bucketName] || []) {
+        const property = byCode.get(code);
+        if (!property) { unresolved.push({ code, reason: "no_such_property" }); continue; }
+        if (!usable(property.coords)) { unresolved.push({ code, reason: "no_coordinates" }); continue; }
+        const key = pointKey(property.coords);
+        const pt = {
+          lat: Number(property.coords.lat),
+          lng: Number(property.coords.lng),
+          source: "planned",
+          label: code
+        };
+        addBucketPoint(bucketName, pt, key);
+        if (index.has(key)) continue;
+        index.add(key);
+        points.push(pt);
+      }
     }
     const plannedCount = points.length;
 
@@ -135,22 +154,29 @@ function buildDayShapes({ plan, propertiesByCode, bookings = [] } = {}) {
     // rather than dragging the day's centre of mass to Newmarket.
     for (const booking of bookings) {
       if (!booking || !booking.start) continue;
-      if (localDateKey(new Date(booking.start)) !== dateKey) continue;
+      const bStart = new Date(booking.start);
+      if (localDateKey(bStart) !== dateKey) continue;
       if (!coordsAreResolved(booking.coords)) continue;
       const key = pointKey(booking.coords);
-      if (index.has(key)) continue;
-      index.add(key);
-      points.push({
+      const pt = {
         lat: Number(booking.coords.lat),
         lng: Number(booking.coords.lng),
         source: "booked",
         label: booking.propertyId || booking.leadId || "booking"
-      });
+      };
+      // Noon splits the day into buckets everywhere in this system
+      // (BOOKING_BUCKETS afternoon opens at 12:00) — a booking joins the
+      // half its start falls in, so it clusters with its own bucket.
+      addBucketPoint(bStart.getHours() < 12 ? "morning" : "afternoon", pt, key);
+      if (index.has(key)) continue;
+      index.add(key);
+      points.push(pt);
     }
 
     shapes[dateKey] = {
       bucketCap: Number(plan.bucketCap) > 0 ? Number(plan.bucketCap) : null,
       buckets,
+      bucketPoints,
       label: day.label || "",
       points,
       plannedCount,
@@ -178,6 +204,7 @@ function buildDayShapes({ plan, propertiesByCode, bookings = [] } = {}) {
     shapes[dateKey] = {
       bucketCap: cap,
       buckets: { morning: { count: 0, keys: [] }, afternoon: { count: 0, keys: [] } },
+      bucketPoints: { morning: [], afternoon: [] },
       label: "",
       points: [],
       plannedCount: 0,
@@ -188,18 +215,27 @@ function buildDayShapes({ plan, propertiesByCode, bookings = [] } = {}) {
   }
   for (const booking of bookings) {
     if (!booking || !booking.start) continue;
-    const dateKey = localDateKey(new Date(booking.start));
+    const bStart = new Date(booking.start);
+    const dateKey = localDateKey(bStart);
     const shape = dateKey ? shapes[dateKey] : null;
     if (!shape || !shape.bookingsOnly) continue;
     if (!coordsAreResolved(booking.coords)) continue;
     const key = pointKey(booking.coords);
     if (shape.points.some((p) => pointKey(p) === key)) continue;
-    shape.points.push({
+    const pt = {
       lat: Number(booking.coords.lat),
       lng: Number(booking.coords.lng),
       source: "booked",
       label: booking.propertyId || booking.leadId || "booking"
-    });
+    };
+    shape.points.push(pt);
+    // Same noon split — a booked-only day's two halves cluster
+    // independently, so the second Whitby joins the first Whitby's bucket
+    // instead of scattering to the empty half.
+    const bucketName = bStart.getHours() < 12 ? "morning" : "afternoon";
+    if (!shape.bucketPoints[bucketName].some((p) => pointKey(p) === key)) {
+      shape.bucketPoints[bucketName].push(pt);
+    }
     shape.bookedCount = shape.points.length;
   }
   return shapes;

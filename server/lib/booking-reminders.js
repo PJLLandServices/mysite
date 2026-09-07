@@ -89,6 +89,11 @@ async function sweepDayBefore({
       skip("no_contact");
       continue;
     }
+    // Load-test records (see /api/booking/reserve bypass) never get reminders.
+    if (String(contact.notes || lead?.contact?.notes || "").includes("PJLTEST-")) {
+      skip("load_test");
+      continue;
+    }
 
     // The template's lead shape: contact + booking (bucket fields kept so
     // the customer sees the window they were promised, never an exact

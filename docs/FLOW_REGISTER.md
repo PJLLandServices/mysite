@@ -19,6 +19,76 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-07 (Bookings are route stops — the daily-mapping flow reaches the self-booked
+days):** Patrick, on a booking-only day showing amber "B" dots with no line and no numbers:
+"it does not show the route, and doesn't show stop numbers. I've requested that the same flow that
+process' the daily mapping be provided to the individual uploads. not the half assed shit." Before:
+`resolveSeasonPlan` sequenced only the PLAN codes; bookings were pinned on afterward as un-numbered
+amber dots, and a booking-only date was a synthetic day with `timeline: []`. The route-line
+endpoint 404'd for any date not in `plan.days`. Now two shared helpers — `gatherBookedRows` (the
+in-window, today-or-later, plan-stop-deduped bookings per date) and `sequenceDayWithBookings`
+(feeds each mappable booking into `resequence.sequenceDay` under a synthetic `__bk:` code, bucketed
+by its start hour) — run in BOTH the resolver and the route-line endpoint, so numbers and line come
+from one sequence. A booking-only day is now a first-class numbered route; a planned day's extra
+self-bookings interleave into its drive. The customer only ever saw an AM/PM bucket and the
+sequencer orders within a bucket, so the promise is kept. Client: `mappableStops` reads booked
+stops from the shared timeline (by `mapCode`), `drawDayMap` draws them as numbered amber pins on the
+one route line (the separate un-numbered "B" loop is gone), and `bookedBlock` leads each row with
+its amber stop-number badge wired to its pin. Booked rows carry `booked`/`stopNumber`/`arriveAt`/
+`mapCode`; an un-mappable booking (no coords) stays an un-numbered booked row and simply doesn't
+join the drive. **FLOW-03-adjacent (the Season Plan review is admin-only display, not the booking
+write path — no customer-facing route or payload changed).** Verified end-to-end against the real
+server (booted, real login): a two-booking unplanned day comes back `bookedOnly` with both rows
+numbered on distinct stops, the timeline covering both, and `route-line` returning a drawable
+polyline where it used to 404; the ordinary plan day still renders. Full `build:check` green;
+Chromium confirms the booked row renders its number badge with a pin-linked `data-code`.
+
+**2026-09-07 (Bucket-coherent geography — one region per half-day, killing the double
+drive):** Patrick, reading the load-test bookings against the live board: "it really just let
+anyone book at any point throughout the schedule… it makes us drive all the way across the 401
+to get to the other side… one appointment is at 9:30 in the morning, and the other is at 3PM, so
+we do that drive twice." Root cause: the geography filter scored an incoming address against the
+WHOLE day's point set and applied one verdict to BOTH buckets. A caller could read "cheap" off an
+afternoon stop in their region and then book the MORNING, stranding an east job in a west morning
+(and vice-versa) — the barbell. Fix: `geo-filter.buildDayShapes` now emits `bucketPoints`
+`{morning, afternoon}` (planned codes split by their plan bucket; bookings split at noon, the
+system-wide bucket boundary — `BOOKING_BUCKETS` afternoon opens 12:00). `availability.listAvailableSlots`
+moved the geo gate OUT of the day loop and INTO the bucket loop: each bucket is scored against its
+OWN cluster (`bucketPoints[bucket.key]`); an empty bucket on a day that already has stops falls
+back to the whole-day points, so an empty half is NOT a free landing pad for a second region (the
+barbell guard); a day with no stops at all still has no shape and stays open. `diagnostics.geoSuppressed`
+entries gained a `bucket` field. Net effect: a region coalesces into the one half-day it already
+occupies, so the crew makes a single pass through it. Same endpoint, same slot shape, same
+per-slot `addedDriveMinutes` contract (now a per-bucket cost, which is what the stars/settle/standby
+already wanted); the elastic-corridor ladder from earlier today rides on top unchanged. Six new
+assertions in `test-geo-availability.mjs` (55 total) replay the exact Etobicoke/Whitby day: a
+Whitby caller is offered only the afternoon, an Etobicoke caller only the morning, and a far
+Keswick caller neither half. **FLOW-03 behaviour change, documented, re-verified:** full
+`build:check` green including `test-day-reschedule` (59) and `test-booking-guards` (35), which
+drive the same engine. NOTE — within-bucket minute ordering on booking-only days (the visible
+9:30-vs-3PM on the Season Plan) is a display concern the resequencer already handles for PLANNED
+days; booking-only days still show customer-picked times until a follow-up runs the sequencer over
+them. The customer only ever sees the AM/PM label, and Patrick drives the order on the board.
+
+**2026-09-07 (The corridor is elastic — drive times widen before a customer is turned
+away):** Patrick's load bot booked ~104 fall appointments and the calendar went dry; his call:
+"nope, we don't extend windows into November, as the dates fill up, we allow for drive times to
+widen. we NEVER turn down a customer." `listAvailableSlots` now scans in tiers: the configured
+`geoMaxAddedDriveMinutes` (15) is the OPENING corridor, and when a pass leaves an address fewer
+than `GEO_WIDEN_MIN_DAYS` (3) bookable days, it rescans at 25 → 40 → 60 → 90 added-drive minutes
+(90 = booking-gate `MAX_DRIVE_MINUTES`, the service-area edge — a gate-approved customer is never
+geo-refused into an empty calendar while any route day has room). Widening changes what is
+OFFERED, never what is RECOMMENDED: slots keep their true `addedDriveMinutes`, so the stars still
+rank the cheapest days first. The ladder stops early when geography suppressed nothing (scarcity
+is capacity — the open bucket is that overflow). Diagnostics gain `geoWidenedTo`; the season-plan
+probe now shows amber "when full (widens at N min)" rows and per-day `widensAtMinutes`. The public
+booking WINDOW (Sep 28–Oct 30) is untouched by his explicit instruction. Seven new assertions in
+`test-geo-availability.mjs` (49 total): widening admits a Richmond Hill address every-day-shaped
+fixture would have blanked, the widened tier is reported, true costs survive, the 90-minute bound
+still refuses (+179 min Mississauga), and a calendar with enough cheap days never widens.
+FLOW-03's route/payload unchanged — same endpoint, same slot shape, one new optional diagnostics
+field; reserve's re-validation runs the same ladder deterministically, so a widened slot re-books.
+
 **2026-09-01 (Lead-booking heal becomes a sweep — the two booking stores can't quietly
 disagree):** Patrick reported a customer's bookings on the schedule and his phone calendar but
 missing from /admin/bookings ("why are the Willowridge landscaping bookings not showing up on the
@@ -1988,6 +2058,36 @@ TestFlight is precisely what is unavailable until the publishing entitlement lan
 the code: weakening `length === 1` to `>= 1` and dropping the `.trim()` each failed exactly
 one named assertion and nothing else. **FLOW-23 (payments) untouched** — this is a new route's
 response shape, no ledger path altered. **Needs a Render deploy**, along with #133 and #137.
+
+**2026-09-07 (Tap to Pay is BLOCKED on Apple, and the app code is not why):** a full day walked
+end to end with Patrick on a phone and a Windows PC. **The finding, established by experiment
+rather than inference: Apple's development-restricted entitlement only goes into a DEVELOPMENT
+provisioning profile, and EAS cloud builds can only produce `IOS_APP_ADHOC`,
+`IOS_APP_INHOUSE` or `IOS_APP_STORE` — the CLI has no `IOS_APP_DEVELOPMENT` at all.** Those
+two facts do not meet, so the GitHub-button pipeline cannot carry this build. **The first two
+attempts were confounded and the third was not**, which is the only reason this is a finding
+and not a guess: attempt one had the capability unconfirmed; attempt two deleted the profile
+"from your project", which unlinks it from EAS but leaves it on Apple's portal, so EAS found
+the same profile and reused it (same name, same timestamp); attempt three deleted it **on
+Apple's Developer Portal**, produced `AdHoc 1788797529920` against the old
+`AdHoc 1788795456931`, and failed identically. **The app code is correct and the error proves
+it** — Xcode only complains that a profile lacks an entitlement when the app REQUESTS it, which
+it does because `app.json` declares it; a missing declaration produces silence. **The route
+that works is Xcode on a Mac**, which makes development profiles automatically — build to the
+registered iPhone, record the three videos, obtain the publishing entitlement, after which the
+entitlement stops being development-restricted and **the EAS pipeline works again
+permanently**. Patrick has an M2 Mac; that is now the plan. **Nothing set up today is wasted:**
+the device registered with Apple AND imported into EAS (they keep SEPARATE lists, which cost
+an hour to discover), the distribution certificate, the ad-hoc credentials, the App Store
+Connect API key, and `field-app-taptopay-build.yml`. **Two traps recorded because they will
+recur:** `EXPO_NO_CAPABILITY_SYNC=1` is required on every run — EAS PATCHes the capability to
+ON when Apple already has it ON and Apple answers "relationship with an invalid value" — and on
+Windows `set` lasts only for that terminal window; and `@stripe/stripe-terminal-react-native`
+ships `"postinstall": "rm -rf …"`, a Unix command, so `npm install` fails on Windows and needs
+`--ignore-scripts` (CI is unaffected, it runs on Linux). **Also corrected in passing:** an
+Apple **Merchant ID** and the **Apple Pay Payment Processing** capability are the Apple Pay
+path and are NOT part of Tap to Pay; the latter was found enabled with zero merchant IDs and
+turned off. **No app code changed** — docs only.
 
 **2026-09-06 (Apple correction sent — an unknown recorded as unknown, now closed):** Patrick
 confirmed the reply to Case-ID 22041657 has gone, correcting the new-app count from *None* to

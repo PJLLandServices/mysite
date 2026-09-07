@@ -426,11 +426,21 @@
     for (const b of day.booked) {
       const li = document.createElement("li");
       li.className = "sp-stop sp-stop-booked";
+      // The row's code is the sequencer mapCode so hovering it lights its
+      // numbered pin, exactly like a plan stop.
+      if (b.mapCode) li.dataset.code = b.mapCode;
       const url = b.propertyId ? `/admin/property/${encodeURIComponent(b.propertyId)}`
         : b.leadId ? `/admin/customer/${encodeURIComponent(b.leadId)}` : null;
       const who = escapeHtml(b.customerName || b.address || "Booked customer");
+      // The stop number (from the shared drive order) leads the row, so a
+      // booked appointment reads as "stop 3 on today's route", not a
+      // floating amber dot. Un-numbered = no coordinates to route.
+      const numBadge = b.stopNumber
+        ? `<span class="sp-stop-num sp-stop-num-booked">${b.stopNumber}</span>`
+        : "";
       li.innerHTML =
-        `<span class="sp-booked-time">${escapeHtml(b.timeLabel || "")}</span>`
+        `<span class="sp-stop-lead">${numBadge}`
+        + `<span class="sp-booked-time">${escapeHtml(b.timeLabel || "")}</span></span>`
         + `<span class="sp-stop-main">`
         + (url ? `<a href="${url}" target="_blank" rel="noopener">${who}</a>` : who)
         + `<span class="sp-stop-sub">${escapeHtml(b.address || "")}${b.serviceLabel ? ` · ${escapeHtml(b.serviceLabel)}` : ""}</span>`
@@ -793,22 +803,48 @@
   // coordinates still belongs in the list — it is a real job — but it cannot
   // be drawn, and pretending otherwise would move the route.
   function mappableStops(day) {
+    // Plan stops (by their code) AND booked appointments (by their
+    // sequencer mapCode) both live in the one shared timeline now, so the
+    // map numbers and lines a self-booked customer exactly like a planned
+    // stop — Patrick's "same flow ... for the individual uploads".
     const byCode = new Map();
     for (const bucket of ["morning", "afternoon"]) {
       for (const stop of day[bucket] || []) byCode.set(stop.code, { stop, bucket });
     }
+    const bookedByMap = new Map();
+    for (const b of day.booked || []) {
+      if (b.mapCode) bookedByMap.set(b.mapCode, b);
+    }
     return (day.timeline || []).map((t) => {
       const found = byCode.get(t.propertyCode);
-      if (!found || !found.stop.coords || found.stop.coords.lat == null) return null;
-      return {
-        code: t.propertyCode,
-        number: t.stopNumber,
-        bucket: found.bucket,
-        arriveAt: t.arriveAt,
-        address: found.stop.address || t.address || "",
-        customerName: found.stop.customerName || "",
-        coords: { lat: Number(found.stop.coords.lat), lng: Number(found.stop.coords.lng) }
-      };
+      if (found) {
+        if (!found.stop.coords || found.stop.coords.lat == null) return null;
+        return {
+          code: t.propertyCode,
+          number: t.stopNumber,
+          bucket: found.bucket,
+          booked: false,
+          arriveAt: t.arriveAt,
+          address: found.stop.address || t.address || "",
+          customerName: found.stop.customerName || "",
+          coords: { lat: Number(found.stop.coords.lat), lng: Number(found.stop.coords.lng) }
+        };
+      }
+      const b = bookedByMap.get(t.propertyCode);
+      if (b && b.coords && b.coords.lat != null) {
+        return {
+          code: t.propertyCode,
+          number: t.stopNumber,
+          bucket: b.bucket || "afternoon",
+          booked: true,
+          arriveAt: t.arriveAt,
+          address: b.address || "",
+          customerName: b.customerName || "",
+          serviceLabel: b.serviceLabel || "",
+          coords: { lat: Number(b.coords.lat), lng: Number(b.coords.lng) }
+        };
+      }
+      return null;
     }).filter(Boolean);
   }
 
@@ -837,7 +873,9 @@
     return {
       path: google.maps.SymbolPath.CIRCLE,
       scale: hot ? 15 : 13,
-      fillColor: stop.bucket === "morning" ? AM_GREEN : PM_GREEN,
+      // A booked appointment is amber so it reads apart from a planned
+      // stop, but it is now a NUMBERED stop on the same route line.
+      fillColor: stop.booked ? HOT_AMBER : (stop.bucket === "morning" ? AM_GREEN : PM_GREEN),
       fillOpacity: 1,
       strokeColor: hot ? HOT_AMBER : "#ffffff",
       strokeWeight: hot ? 3 : 2
@@ -855,9 +893,9 @@
   }
 
   async function drawDayMap(mapBox, listRoot, day) {
+    // One numbered, sequenced set — plan stops AND booked appointments.
     const stops = mappableStops(day);
-    const booked = (day.booked || []).filter((b) => b.coords && b.coords.lat != null);
-    if (!stops.length && !booked.length) {
+    if (!stops.length) {
       note(mapBox, "Nothing on this day has coordinates to draw.", true);
       return;
     }
@@ -877,8 +915,7 @@
       // scroll over a map zooms it instead of moving the page.
       gestureHandling: "cooperative",
       zoom: 10,
-      center: stops.length ? stops[0].coords
-        : { lat: Number(booked[0].coords.lat), lng: Number(booked[0].coords.lng) }
+      center: stops[0].coords
     });
 
     const bounds = new google.maps.LatLngBounds();
@@ -897,53 +934,24 @@
     const markers = new Map();
     for (const stop of stops) {
       const marker = new google.maps.Marker({
-        position: stop.coords, map, icon: pinIcon(stop, false), zIndex: 2,
+        position: stop.coords, map, icon: pinIcon(stop, false), zIndex: stop.booked ? 3 : 2,
         // Two digits fit here. Google's STATIC map markers take a single
         // character, which is why stops past nine used to lose their number.
         label: { text: String(stop.number), color: "#ffffff", fontSize: "12px", fontWeight: "700" },
-        title: `Stop ${stop.number} · ${stop.arriveAt || ""} · ${stop.address}`
+        title: `${stop.booked ? "Booked · " : "Stop "}${stop.number} · ${stop.arriveAt || ""} · ${stop.address}`
       });
       marker.addListener("click", () => {
         info.setContent(
           `<div style="font:13px/1.45 system-ui,sans-serif;max-width:230px">`
-          + `<strong>Stop ${stop.number}${stop.arriveAt ? ` · ${stop.arriveAt}` : ""}</strong><br>`
+          + `<strong>${stop.booked ? "Booked · " : "Stop "}${stop.number}${stop.arriveAt ? ` · ${stop.arriveAt}` : ""}</strong><br>`
           + `${escapeHtml(stop.address)}`
-          + `${stop.customerName ? `<br>${escapeHtml(stop.customerName)}` : ""}</div>`
+          + `${stop.customerName ? `<br>${escapeHtml(stop.customerName)}` : ""}`
+          + `${stop.booked && stop.serviceLabel ? `<br>${escapeHtml(stop.serviceLabel)}` : ""}</div>`
         );
         info.open({ map, anchor: marker });
       });
       markers.set(stop.code, { marker, stop });
       bounds.extend(stop.coords);
-    }
-    // Booked appointments — real customers on the calendar, drawn in
-    // amber so they read apart from plan stops. No number: they are not
-    // in the sequencer's driving order.
-    for (const b of booked) {
-      const pos = { lat: Number(b.coords.lat), lng: Number(b.coords.lng) };
-      const marker = new google.maps.Marker({
-        position: pos, map, zIndex: 3,
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 13,
-          fillColor: HOT_AMBER,
-          fillOpacity: 1,
-          strokeColor: "#ffffff",
-          strokeWeight: 2
-        },
-        label: { text: "B", color: "#ffffff", fontSize: "12px", fontWeight: "700" },
-        title: `Booked · ${b.timeLabel || ""} · ${b.address || b.customerName || ""}`
-      });
-      marker.addListener("click", () => {
-        info.setContent(
-          `<div style="font:13px/1.45 system-ui,sans-serif;max-width:230px">`
-          + `<strong>Booked${b.timeLabel ? ` · ${b.timeLabel}` : ""}</strong><br>`
-          + `${escapeHtml(b.address || "")}`
-          + `${b.customerName ? `<br>${escapeHtml(b.customerName)}` : ""}`
-          + `${b.serviceLabel ? `<br>${escapeHtml(b.serviceLabel)}` : ""}</div>`
-        );
-        info.open({ map, anchor: marker });
-      });
-      bounds.extend(pos);
     }
 
     map.fitBounds(bounds, 48);
@@ -952,7 +960,7 @@
     if (stops.length) {
       drawRoadLine(map, day, mapBox);
     } else {
-      note(mapBox, "B pins are booked appointments — this day has no planned route yet.", false);
+      note(mapBox, "Nothing on this day has coordinates to draw.", false);
     }
   }
 
@@ -1704,8 +1712,10 @@
     rest.className = "sp-probe-note";
     rest.textContent = "This table covers planned route days AND days real bookings have started "
       + "(marked 'Booked day'). Every other open day in the season has nothing on it yet, so it "
-      + "is offered to this address as normal — a customer with no cheap day still sees most of "
-      + "the calendar.";
+      + "is offered to this address as normal. The corridor is also elastic: when the calendar "
+      + "leaves an address short of cheap days, availability widens the drive allowance step by "
+      + "step (out to the 90-minute service edge) — amber rows show where a day would open up. "
+      + "We never turn a customer away while any route day has room.";
     out.appendChild(rest);
 
     const table = document.createElement("table");
@@ -1714,11 +1724,16 @@
     const body = document.createElement("tbody");
     for (const day of data.days) {
       const tr = document.createElement("tr");
-      tr.className = day.offered ? "is-offered" : "";
+      tr.className = day.offered ? "is-offered" : (day.widensAtMinutes ? "is-widened" : "");
       const added = day.addedDriveMinutes == null ? "—" : `${day.addedDriveMinutes} min`;
       const routeCell = day.bookingsOnly ? "Booked day" : (day.label || "—");
+      // "when full" = the elastic corridor: past the tight threshold but
+      // inside the service bound, so availability offers this day once
+      // the calendar leaves the customer short of cheap days.
+      const offeredCell = day.offered ? "yes"
+        : day.widensAtMinutes ? `when full (widens at ${day.widensAtMinutes} min)` : "no";
       tr.innerHTML = `<td>${routeCell}</td><td>${day.date}</td><td>${day.points}</td>`
-        + `<td class="sp-num">${added}</td><td>${day.offered ? "yes" : "no"}</td>`;
+        + `<td class="sp-num">${added}</td><td>${offeredCell}</td>`;
       body.appendChild(tr);
     }
     table.appendChild(body);

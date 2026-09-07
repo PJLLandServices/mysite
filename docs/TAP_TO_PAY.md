@@ -10,6 +10,61 @@ is the short part.
 
 ---
 
+## BLOCKED: EAS cloud builds cannot carry this entitlement  (2026-09-07)
+
+Established by experiment, not inference, after a full day of walking it:
+
+**Apple's development entitlement only goes into a DEVELOPMENT provisioning
+profile. EAS builds in the cloud and can only produce `IOS_APP_ADHOC`,
+`IOS_APP_INHOUSE` or `IOS_APP_STORE` — grep the CLI, there is no
+`IOS_APP_DEVELOPMENT`. Those two facts do not meet.**
+
+The proof, because the first two attempts were confounded and it matters that
+the third was not:
+
+1. Capability `Tap to Pay on iPhone` enabled on the App ID, confirmed visually
+   — ticked, saved, no error state.
+2. The ad-hoc profile **deleted on Apple's Developer Portal**, not merely
+   unlinked from the EAS project. Deleting it "from your project" is what
+   confounded attempt two: EAS went back to Apple, found the same profile still
+   there, and reused it. Same name, same timestamp, same missing entitlement.
+3. A genuinely new profile generated — `AdHoc 1788797529920`, a different
+   timestamp from `AdHoc 1788795456931`, so demonstrably not the old one.
+4. Build failed identically: *"doesn't include the
+   com.apple.developer.proximity-reader.payment.acceptance entitlement"*.
+
+**The app code is not the problem.** For Xcode to complain the profile lacks the
+entitlement, the app must be requesting it — which it only does because
+`app.json` declares it. A missing declaration produces silence, not this error.
+
+### What actually works
+
+**Xcode on a Mac.** It creates development provisioning profiles automatically,
+which is the exact combination Apple's restriction permits. Build to a
+registered iPhone, record the three videos, get the publishing entitlement —
+after which the entitlement is no longer development-restricted and **the EAS
+cloud pipeline works again permanently.** The Mac is a one-time detour, not a
+new way of working.
+
+### What is NOT wasted
+
+Everything set up on 2026-09-07 is needed regardless and stays: the device
+registered with Apple AND imported into EAS (they keep separate lists — that
+gap cost an hour), the distribution certificate, the ad-hoc credentials, the
+App Store Connect API key, and the build workflow.
+
+### Two things that will bite again
+
+- `EXPO_NO_CAPABILITY_SYNC=1` is needed on every run. EAS tries to PATCH the
+  capability to ON when Apple already has it ON, and Apple's API answers *"The
+  provided entity includes a relationship with an invalid value"*. On Windows
+  `set` lasts only for that terminal window.
+- `@stripe/stripe-terminal-react-native` has `"postinstall": "rm -rf …"`, which
+  is a Unix command. `npm install` fails on Windows; `--ignore-scripts` gets
+  past it. CI is unaffected because it runs on Linux.
+
+---
+
 ## Where this stands  (2026-09-06)
 
 | Gate | State |

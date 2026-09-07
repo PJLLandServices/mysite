@@ -57,6 +57,10 @@
 .sp-probe-table .sp-num { text-align: right; font-variant-numeric: tabular-nums; }
 .sp-probe-table tr.is-offered { background: var(--pjl-green-pale); }
 .sp-probe-table tr.is-offered td:last-child { font-weight: 700; color: var(--pjl-green); }
+/* Elastic corridor: this day opens up to the address once the calendar
+   leaves them short of cheap days. Amber — between yes and no. */
+.sp-probe-table tr.is-widened { background: var(--pjl-amber-pale); }
+.sp-probe-table tr.is-widened td:last-child { font-weight: 600; color: var(--pjl-amber); }
 
 /* Assignment actions — two-press arming so one stray thumb tap can't
    book (or delete) a season. */
@@ -358,12 +362,13 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .sp-stop-meta { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; justify-content: flex-end; max-width: 168px; }
-/* On a phone the meta pills drop BELOW the address instead of squeezing
-   it into one word per line. */
+/* On a phone the chips + move controls get their own full-width row UNDER
+   the address. They sit in an auto-sized grid column, and on a narrow
+   screen that column's natural width is the whole row — which crushed the
+   address track to nothing (one letter per line, controls printed over
+   text). The old flex-basis fix here predated the grid and did nothing. */
 @media (max-width: 700px) {
-  .sp-stop { flex-wrap: wrap; }
-  .sp-stop-main { flex: 1 1 65%; min-width: 55%; }
-  .sp-stop-meta { max-width: none; flex-basis: 100%; justify-content: flex-start; }
+  .sp-stop-meta { grid-column: 1 / -1; max-width: none; justify-content: flex-start; margin-top: 6px; }
 }
 
 .sp-tag {
@@ -454,6 +459,9 @@
   border-radius: 50%; background: var(--pjl-green); color: #fff;
   font-size: 0.82rem; font-weight: 700; font-variant-numeric: tabular-nums;
 }
+/* A booked appointment's stop number — amber to match its pin, so the
+   card and the map agree at a glance. */
+.sp-stop-num-booked { background: var(--pjl-amber); }
 
 /* The route anchor, stated on the page — silence here is how a town
    centroid anchored eleven route days without anyone noticing. */

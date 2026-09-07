@@ -17,6 +17,10 @@ name: Field app — Tap to Pay build (development)
 # So this builds the `taptopay` profile — internal distribution, this branch —
 # and does NOT submit anywhere.
 #
+# HOW TO RUN IT: Actions → this workflow → Run workflow → the green button.
+# IGNORE THE BRANCH DROPDOWN. It does not matter what it says; the checkout
+# above is pinned to the Tap to Pay branch either way.
+#
 # BEFORE THIS WILL WORK: your iPhone must be registered on the Apple Developer
 # account. An internal-distribution build can only install on devices Apple has
 # been told about, and with none registered this job fails with a message from
@@ -39,15 +43,62 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # Through env for the same reason as the Apple key below: a secret
+      # interpolated into a script is pasted into the command line. This one
+      # is single-line so it does not break, but the habit is what matters.
       - name: Check the Expo token is present
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
-          if [ -z "${{ secrets.EXPO_TOKEN }}" ]; then
+          if [ -z "$EXPO_TOKEN" ]; then
             echo "::error::EXPO_TOKEN is not set. Add the Expo robot token under"
             echo "::error::Settings → Secrets and variables → Actions → New repository secret."
             exit 1
           fi
 
+      # PINNED, deliberately. This workflow always builds the Tap to Pay
+      # branch, whatever the "Run workflow" dropdown was left on.
+      #
+      # It used to depend on choosing the right branch there, and Patrick
+      # said plainly he would get that wrong every time. He is right —
+      # it is a dropdown that defaults to the wrong answer, on a screen
+      # you visit once a month. A workflow that fails when a human picks
+      # the default is a badly built workflow, not a human error.
+      #
+      # WHEN TAP TO PAY MERGES TO MAIN, DELETE THIS `ref:` — the branch
+      # will be gone and checkout will fail with "couldn't find remote
+      # ref", which is confusing rather than wrong.
+      # Named individually, because "credentials failed" twenty minutes in
+      # is the worst possible way to learn that one field was pasted wrong.
+      # Named individually, because "credentials failed" twenty minutes in
+      # is the worst possible way to learn that one field was pasted wrong.
+      #
+      # The secrets come through `env`, NEVER interpolated into the script.
+      # A .p8 is a multi-line PEM block: written as `[ -z "${{ secrets.X }}" ]`
+      # it is pasted straight into the shell, which both breaks the syntax and
+      # scatters lines of a private key across the command line. Through env
+      # it is one opaque value the shell never parses.
+      - name: Check the Apple key is present
+        env:
+          ASC_KEY: ${{ secrets.EXPO_ASC_API_KEY }}
+          ASC_KEY_ID: ${{ secrets.EXPO_ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.EXPO_ASC_ISSUER_ID }}
+        run: |
+          missing=""
+          if [ -z "$ASC_KEY" ]; then missing="$missing EXPO_ASC_API_KEY"; fi
+          if [ -z "$ASC_KEY_ID" ]; then missing="$missing EXPO_ASC_KEY_ID"; fi
+          if [ -z "$ASC_ISSUER_ID" ]; then missing="$missing EXPO_ASC_ISSUER_ID"; fi
+          if [ -n "$missing" ]; then
+            echo "::error::Missing GitHub secret(s):$missing"
+            echo "::error::Settings → Secrets and variables → Actions → New repository secret."
+            exit 1
+          fi
+          echo "All three Apple key secrets are present."
+
       - uses: actions/checkout@v4
+        with:
+          ref: claude/pjl-field-taptopay
+
 
       - uses: actions/setup-node@v4
         with:
@@ -68,22 +119,48 @@ jobs:
           node -e "
             const pkg = JSON.parse(require('fs').readFileSync('package.json','utf8'));
             if (!pkg.dependencies['@stripe/stripe-terminal-react-native']) {
-              console.error('::error::This branch has no Stripe Terminal SDK, so the build would have no Tap to Pay in it. Run this workflow from the claude/pjl-field-taptopay branch.');
+              console.error('::error::The claude/pjl-field-taptopay branch has no Stripe Terminal SDK. Nothing you did wrong — the branch changed, or it was merged and deleted. Send this message to Claude.');
               process.exit(1);
             }
             const app = JSON.parse(require('fs').readFileSync('app.json','utf8'));
             const ent = (app.expo.ios && app.expo.ios.entitlements) || {};
             if (ent['com.apple.developer.proximity-reader.payment.acceptance'] !== true) {
-              console.error('::error::The Tap to Pay entitlement is missing from app.json. The build would install and then fail at the first card.');
+              console.error('::error::The Tap to Pay entitlement is missing from app.json, so the app would install and then fail at the first card. Nothing you did wrong. Send this message to Claude.');
               process.exit(1);
             }
             console.log('SDK present, entitlement declared.');
           "
 
+      # The CLI wants a PATH to the .p8, not its contents, so the secret is
+      # written to a file. RUNNER_TEMP is wiped when the job ends, and the
+      # file is never inside the checkout, so it cannot be committed by
+      # accident. umask keeps it unreadable to anything else on the runner.
+      - name: Write the Apple key to a file
+        env:
+          ASC_KEY: ${{ secrets.EXPO_ASC_API_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$ASC_KEY" > "$RUNNER_TEMP/asc-api-key.p8"
+          # Shape check only — never the contents, which are secret. A key
+          # pasted without its BEGIN/END lines fails deep inside the CLI
+          # with something unhelpful.
+          if ! grep -q "BEGIN PRIVATE KEY" "$RUNNER_TEMP/asc-api-key.p8"; then
+            echo "::error::The EXPO_ASC_API_KEY secret does not look like a .p8 key."
+            echo "::error::It must include the -----BEGIN PRIVATE KEY----- and END lines."
+            exit 1
+          fi
+          echo "Apple key written, $(wc -l < "$RUNNER_TEMP/asc-api-key.p8") lines."
+
       - name: Build
         working-directory: pjl-field
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          # What lets EAS create the ad-hoc signing paperwork with Apple on
+          # its own. Without these it asks interactively, and a workflow has
+          # nobody to ask — which is exactly how the first run failed.
+          EXPO_ASC_API_KEY_PATH: ${{ runner.temp }}/asc-api-key.p8
+          EXPO_ASC_KEY_ID: ${{ secrets.EXPO_ASC_KEY_ID }}
+          EXPO_ASC_ISSUER_ID: ${{ secrets.EXPO_ASC_ISSUER_ID }}
         run: |
           npx eas-cli@23.2.0 build \
             --platform ios \
@@ -107,6 +184,8 @@ jobs:
       - name: If it failed on signing
         if: failure()
         run: |
-          echo "::warning::If the error mentions provisioning, signing, or 'no devices',"
-          echo "::warning::the most likely cause is that no iPhone is registered on the"
-          echo "::warning::Apple Developer account yet. See docs/TAP_TO_PAY_INSTALLING.md."
+          echo "::warning::Nothing above is something you did wrong."
+          echo "::warning::If the error mentions provisioning, signing or 'no devices',"
+          echo "::warning::the likely cause is device registration or the signing type."
+          echo "::warning::Copy the red error text and send it to Claude — it is a"
+          echo "::warning::small fix, and guessing at it wastes a 20-minute build."

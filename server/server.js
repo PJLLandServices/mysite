@@ -44,7 +44,7 @@ const voicemailStore = require("./lib/voicemail-store");
 const { geocode, PJL_BASE, isConfigured: geocodeIsConfigured } = require("./lib/geocode");
 const bookingGate = require("./lib/booking-gate");
 const distanceLib = require("./lib/distance");
-const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, recommendDays, parseLocalDateKey } = require("./lib/availability");
+const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, GEO_WIDEN_TIERS, listAvailableSlots, groupByDay, expandDaysToRange, recommendDays, parseLocalDateKey } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
 const { mergeDaySchedule } = require("./lib/day-schedule");
 const jobFinder = require("./lib/job-finder");
@@ -20400,6 +20400,23 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const adminSession = await requireUser(req);
       const isAdmin = Boolean(adminSession);
 
+      // Load-test bypass. Only honoured when ALL of:
+      //   - PJL_TEST_KEY env var is set on the server
+      //   - request carries X-PJL-Test-Key matching it
+      //   - notes start with "PJLTEST-" (so test records are findable
+      //     and deletable afterwards)
+      // Skips Turnstile + the per-IP rate limit so the booking bot can
+      // create 100+ bookings from one machine. Honeypot + time-trap still
+      // run. Unset PJL_TEST_KEY on Render to switch the bypass off.
+      const testKey = String(process.env.PJL_TEST_KEY || "");
+      const testNotes = String(payload?.contact?.notes || payload?.notes || "");
+      const isLoadTest = Boolean(
+        testKey &&
+        String(req.headers["x-pjl-test-key"] || "") === testKey &&
+        testNotes.includes("PJLTEST-")
+      );
+      if (isLoadTest) console.log("[load-test] anti-bot bypass for", testNotes.slice(0, 12));
+
       // Anti-bot gate. Honeypot + time-trap + rate-limit always run —
       // they're cheap and harmless for admin too. Turnstile is skipped
       // for admin sessions; the session itself is the bot filter.
@@ -20407,7 +20424,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
         body: payload,
         ip: callerIp(req),
         userAgent: req.headers["user-agent"] || "",
-        skipTurnstile: isAdmin
+        skipTurnstile: isAdmin || isLoadTest,
+        skipRateLimit: isLoadTest
       });
       if (!verdict.ok) return sendJson(res, verdict.status, verdict.responseBody);
 
@@ -20756,7 +20774,9 @@ Customer signature captured at ${new Date().toISOString()}.`;
         // Notify Patrick + the customer, same channels as the new-lead path.
         const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
         const decorated = decorateLeadForAdmin(lead, req);
-        Promise.allSettled([
+        if (isLoadTest) {
+          console.log("[load-test] notifications suppressed for", lead.id);
+        } else Promise.allSettled([
           sendNewLeadEmail({ ...decorated, sourceLabel: `BOOKED · ${service.label} · ${matched.dayLabel} ${matched.timeLabel}` }, { baseUrl }),
           sendNewLeadSms({ ...decorated, sourceLabel: `BOOKED ${matched.timeLabel}` }, { baseUrl }),
           notifyCustomer(boundIsSiteVisit ? "site_visit" : "booked", decorated, { baseUrl })
@@ -21039,7 +21059,9 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // Notify Patrick (admin) and the customer.
       const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
       const decorated = decorateLeadForAdmin(result.lead, req);
-      Promise.allSettled(isStandby
+      if (isLoadTest) {
+        console.log("[load-test] notifications suppressed for", result.lead.id);
+      } else Promise.allSettled(isStandby
         ? [
             sendNewLeadEmail({ ...decorated, sourceLabel: `OPEN BUCKET · ${service.label} · first available` }, { baseUrl }),
             sendNewLeadSms({ ...decorated, sourceLabel: "OPEN BUCKET first available" }, { baseUrl }),
@@ -22035,6 +22057,103 @@ Customer signature captured at ${new Date().toISOString()}.`;
   // property behind it is how a merged-away duplicate shows itself, and
   // silently shrinking the day would hide exactly the problem this screen
   // exists to catch.
+  // ---- Bookings are route stops -------------------------------------
+  //
+  // Patrick, 2026-09-07, on a booking-only day showing amber "B" dots with
+  // no line and no numbers: "it does not show the route, and doesn't show
+  // stop numbers. I've requested that the same flow that process' the
+  // daily mapping be provided to the individual uploads. not the half
+  // assed shit." So a self-booked customer is sequenced, numbered and
+  // drawn like any planned stop. The customer only ever saw an AM/PM
+  // bucket, and sequenceDay orders WITHIN a bucket, so every promise is
+  // kept while the crew gets one numbered route and one drawable line.
+
+  const SEASON_MONTHS_FOR_BOOKED = { spring: [0, 1, 2, 3, 4, 5, 6], fall: [7, 8, 9, 10, 11] };
+
+  // Every active booking that belongs on this season/year's board, grouped
+  // by date. Same filters the review has always used: this year, an
+  // in-season month, today-or-later, and a booking that FULFILS a plan
+  // stop is that stop (skipped — one row, not two). Shared by the plan
+  // resolver and the route-line endpoint so numbers and line never
+  // disagree. Returns Map<dateKey, row[]>.
+  async function gatherBookedRows({ plan, season, year, all, leads }) {
+    const months = SEASON_MONTHS_FOR_BOOKED[season] || SEASON_MONTHS_FOR_BOOKED.fall;
+    const now = new Date();
+    const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const codeByPropertyId = new Map(all.filter((p) => p && p.id && p.code).map((p) => [p.id, p.code]));
+    const propertyById = new Map(all.filter((p) => p && p.id).map((p) => [p.id, p]));
+    const leadById = new Map((leads || []).map((l) => [l.id, l]));
+    const plannedCodesByDate = new Map();
+    for (const [d, day] of Object.entries((plan && plan.days) || {})) {
+      plannedCodesByDate.set(d, new Set([...(day.morning || []), ...(day.afternoon || [])]));
+    }
+    const nearYard = (c) => c && c.lat != null
+      && Math.abs(Number(c.lat) - PJL_BASE.lat) < 1e-6 && Math.abs(Number(c.lng) - PJL_BASE.lng) < 1e-6;
+    const out = new Map();
+    for (const b of await activeBookings()) {
+      const startD = new Date(b.start);
+      if (Number.isNaN(startD.getTime())) continue;
+      if (startD.getFullYear() !== Number(year) || !months.includes(startD.getMonth())) continue;
+      const dateKey = `${startD.getFullYear()}-${String(startD.getMonth() + 1).padStart(2, "0")}-${String(startD.getDate()).padStart(2, "0")}`;
+      if (dateKey < todayKey) continue;
+      const lead = b.leadId ? leadById.get(b.leadId) : null;
+      const propertyId = b.propertyId || (lead && lead.propertyId) || null;
+      const property = propertyId ? propertyById.get(propertyId) : null;
+      const planCode = propertyId ? codeByPropertyId.get(propertyId) : null;
+      if (planCode && plannedCodesByDate.get(dateKey)?.has(planCode)) continue; // the booking IS the plan stop
+      const coords = (property && property.coords && property.coords.lat != null)
+        ? { lat: property.coords.lat, lng: property.coords.lng }
+        : (!nearYard(b.coords) && b.coords && b.coords.lat != null)
+          ? { lat: Number(b.coords.lat), lng: Number(b.coords.lng) }
+          : null;
+      const row = {
+        code: planCode || null,
+        customerName: (property && property.customerName)
+          || [lead?.contact?.firstName, lead?.contact?.lastName].filter(Boolean).join(" ")
+          || "",
+        address: (property && property.address) || lead?.contact?.address || "",
+        serviceLabel: b.serviceLabel || "",
+        start: b.start,
+        timeLabel: startD.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }),
+        bucket: startD.getHours() < 12 ? "morning" : "afternoon",
+        coords,
+        propertyId,
+        leadId: b.leadId || null,
+        bookingId: b.bookingId || null
+      };
+      if (!out.has(dateKey)) out.set(dateKey, []);
+      out.get(dateKey).push(row);
+    }
+    return out;
+  }
+
+  // Sequence a day's drive INCLUDING its bookings. `storedDay` is the plan
+  // day (or null for a booking-only day). Each mappable booked row is
+  // tagged with a synthetic `mapCode` that appears in the returned
+  // timeline, so stop numbers and the route line cover the bookings too.
+  // An unmappable booked row (no coords) is left un-numbered and simply
+  // does not join the drive. Returns { sequenced, rowByMapCode }.
+  async function sequenceDayWithBookings({ storedDay, bookedRows, byCode, season, requestedWindows }) {
+    const augByCode = new Map(byCode);
+    const extra = { morning: [], afternoon: [] };
+    const rowByMapCode = new Map();
+    (bookedRows || []).forEach((row, i) => {
+      if (!row.coords || row.coords.lat == null) { row.mapCode = null; return; }
+      const code = `__bk:${row.bookingId || row.leadId || `i${i}`}`;
+      row.mapCode = code;
+      augByCode.set(code, { code, id: code, coords: { lat: Number(row.coords.lat), lng: Number(row.coords.lng) } });
+      rowByMapCode.set(code, row);
+      extra[row.bucket === "morning" ? "morning" : "afternoon"].push(code);
+    });
+    const day = {
+      ...(storedDay || {}),
+      morning: [...((storedDay && storedDay.morning) || []), ...extra.morning],
+      afternoon: [...((storedDay && storedDay.afternoon) || []), ...extra.afternoon]
+    };
+    const sequenced = await resequence.sequenceDay(day, { propertiesByCode: augByCode, season, requestedWindows });
+    return { sequenced, rowByMapCode };
+  }
+
   async function resolveSeasonPlan(season, year) {
     const plan = await seasonPlans.getPlan(season, year);
     if (!plan) return null;
@@ -22078,9 +22197,34 @@ Customer signature captured at ${new Date().toISOString()}.`;
     // pages ride into the same clock the plan screen prints — the
     // requestedWindows seam, finally fed by its intended caller.
     const customerWindows = await assignments.requestedWindowsFor(season, year);
+
+    // Gather the real bookings first, so they can be sequenced INTO each
+    // day's drive rather than pinned on afterward as un-numbered dots.
+    const leadsForBooked = await readLeads();
+    const bookedByDate = await gatherBookedRows({ plan, season, year, all, leads: leadsForBooked });
+
+    // Turn a sequenced timeline into a booked row's number + arrival, and
+    // give the row a booked flag so the card and the map draw it apart
+    // from a plan stop (amber pin, no plan controls).
+    const numberBookedRows = (rows, timeline) => {
+      const byMapCode = new Map((timeline || []).map((t) => [t.propertyCode, t]));
+      for (const row of rows || []) {
+        const t = row.mapCode ? byMapCode.get(row.mapCode) : null;
+        row.booked = true;
+        row.stopNumber = t ? t.stopNumber : null;
+        row.arriveAt = t ? t.arriveAt : null;
+      }
+      return (rows || []).slice().sort((a, b) =>
+        (a.stopNumber || 999) - (b.stopNumber || 999) || String(a.start).localeCompare(String(b.start)));
+    };
+
     for (const date of Object.keys(plan.days).sort()) {
       const day = plan.days[date];
-      const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode, season, requestedWindows: customerWindows });
+      const bookedRows = bookedByDate.get(date) || [];
+      bookedByDate.delete(date); // consumed — the rest become booking-only days
+      const { sequenced } = await sequenceDayWithBookings({
+        storedDay: day, bookedRows, byCode, season, requestedWindows: customerWindows
+      });
 
       // RENDER THE SEQUENCED ORDER, NOT THE STORED ONE. These used to be
       // allowed to differ: the rows came from the stored arrays and the
@@ -22100,12 +22244,17 @@ Customer signature captured at ${new Date().toISOString()}.`;
         notBefore: (windows[code] && windows[code].notBefore) || null,
         notAfter: (windows[code] && windows[code].notAfter) || null
       });
-      const morning = (sequenced.morning || []).map(withNumber);
-      const afternoon = (sequenced.afternoon || []).map(withNumber);
+      // Plan stops only — the synthetic booked codes are dropped from the
+      // rendered bucket lists (they render as booked rows), but they DO
+      // keep their numbers in the shared timeline so the map draws them.
+      const isBooked = (code) => String(code).startsWith("__bk:");
+      const morning = (sequenced.morning || []).filter((c) => !isBooked(c)).map(withNumber);
+      const afternoon = (sequenced.afternoon || []).filter((c) => !isBooked(c)).map(withNumber);
       const minutes = [...morning, ...afternoon].reduce((t, st) => t + (st.minutes || 0), 0);
       const suggestions = await resequence.suggestBucketMoves(day, {
         propertiesByCode: byCode, season, bucketCap: plan.bucketCap
       });
+      const booked = numberBookedRows(bookedRows, sequenced.timeline);
       days.push({
         date,
         label: day.label || "",
@@ -22122,99 +22271,42 @@ Customer signature captured at ${new Date().toISOString()}.`;
         homeAt: sequenced.homeAt,
         driveMinutes: sequenced.driveMinutes,
         flags: sequenced.flags,
-        suggestions
+        suggestions,
+        booked: booked.length ? booked : undefined
       });
     }
 
-    // ---- Real bookings join the review (Patrick: "it only shows days
-    // which have bookings [planned], and any new bookings you cannot see
-    // on the map"). Every active booking in this season's window is
-    // attached to its day: on a planned day it rides along as a "booked"
-    // row (deduped against the plan stop it fulfils, so the post-blast
-    // screen does not show every customer twice), and a date the plan
-    // never routed — an ad customer's self-booked day — becomes its own
-    // "Booked day" card. Bookings never join the sequencer's timeline
-    // here: they carry their own promised bucket, and re-sequencing a
-    // promise is the writer's job, not the review screen's.
-    const seasonMonths = season === "spring" ? [0, 1, 2, 3, 4, 5, 6] : [7, 8, 9, 10, 11];
-    // Today and forward only. A completed appointment belongs to the
-    // Bookings and Today pages; on a forward-looking route plan it is
-    // noise (Patrick: "it shows every booked appointment from the past").
-    const nowForBooked = new Date();
-    const todayKeyForBooked = `${nowForBooked.getFullYear()}-${String(nowForBooked.getMonth() + 1).padStart(2, "0")}-${String(nowForBooked.getDate()).padStart(2, "0")}`;
-    const codeByPropertyId = new Map(all.filter((p) => p && p.id && p.code).map((p) => [p.id, p.code]));
-    const propertyById = new Map(all.filter((p) => p && p.id).map((p) => [p.id, p]));
-    const leadsForBooked = await readLeads();
-    const leadByIdForBooked = new Map(leadsForBooked.map((l) => [l.id, l]));
-    const daysByDate = new Map(days.map((d) => [d.date, d]));
-    const nearYard = (c) => c && c.lat != null
-      && Math.abs(Number(c.lat) - PJL_BASE.lat) < 1e-6 && Math.abs(Number(c.lng) - PJL_BASE.lng) < 1e-6;
-    try {
-      for (const b of await activeBookings()) {
-        const startD = new Date(b.start);
-        if (Number.isNaN(startD.getTime())) continue;
-        if (startD.getFullYear() !== Number(year) || !seasonMonths.includes(startD.getMonth())) continue;
-        const dateKey = `${startD.getFullYear()}-${String(startD.getMonth() + 1).padStart(2, "0")}-${String(startD.getDate()).padStart(2, "0")}`;
-        if (dateKey < todayKeyForBooked) continue;
-        const lead = b.leadId ? leadByIdForBooked.get(b.leadId) : null;
-        const propertyId = b.propertyId || (lead && lead.propertyId) || null;
-        const property = propertyId ? propertyById.get(propertyId) : null;
-        const planCode = propertyId ? codeByPropertyId.get(propertyId) : null;
-        const planDay = daysByDate.get(dateKey);
-        // The booking that FULFILS a plan stop on its own day is that
-        // stop — one row, not two.
-        if (planCode && planDay
-            && [...planDay.morning, ...planDay.afternoon].some((st) => st.code === planCode)) {
-          continue;
-        }
-        const coords = (property && property.coords && property.coords.lat != null)
-          ? { lat: property.coords.lat, lng: property.coords.lng }
-          : (!nearYard(b.coords) && b.coords && b.coords.lat != null)
-            ? { lat: Number(b.coords.lat), lng: Number(b.coords.lng) }
-            : null;
-        const row = {
-          code: planCode || null,
-          customerName: (property && property.customerName)
-            || [lead?.contact?.firstName, lead?.contact?.lastName].filter(Boolean).join(" ")
-            || "",
-          address: (property && property.address) || lead?.contact?.address || "",
-          serviceLabel: b.serviceLabel || "",
-          start: b.start,
-          timeLabel: startD.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }),
-          bucket: startD.getHours() < 12 ? "morning" : "afternoon",
-          coords,
-          propertyId,
-          leadId: b.leadId || null,
-          bookingId: b.bookingId || null
-        };
-        if (planDay) {
-          (planDay.booked = planDay.booked || []).push(row);
-        } else {
-          const synthetic = {
-            date: dateKey,
-            label: "Booked day",
-            territory: "",
-            weekday: new Date(`${dateKey}T12:00:00`).toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" }),
-            bookedOnly: true,
-            morning: [],
-            afternoon: [],
-            counts: { morning: 0, afternoon: 0, total: 0 },
-            onSiteMinutes: 0,
-            timeline: [],
-            flags: [],
-            suggestions: [],
-            booked: [row]
-          };
-          days.push(synthetic);
-          daysByDate.set(dateKey, synthetic);
-        }
-      }
-    } catch (err) {
-      console.warn("[season-plan] bookings could not join the review:", err?.message);
+    // Booking-only days — dates the plan never routed, now first-class
+    // numbered routes built from their bookings alone.
+    for (const [date, bookedRows] of bookedByDate) {
+      const { sequenced } = await sequenceDayWithBookings({
+        storedDay: null, bookedRows, byCode, season, requestedWindows: customerWindows
+      });
+      const booked = numberBookedRows(bookedRows, sequenced.timeline);
+      days.push({
+        date,
+        label: "Booked day",
+        territory: "",
+        weekday: new Date(`${date}T12:00:00`).toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" }),
+        bookedOnly: true,
+        morning: [],
+        afternoon: [],
+        counts: { morning: 0, afternoon: 0, total: 0 },
+        onSiteMinutes: 0,
+        timeline: sequenced.timeline,
+        morningEndsAt: sequenced.morningEndsAt || null,
+        dayEndsAt: sequenced.dayEndsAt || null,
+        homeAt: sequenced.homeAt || null,
+        driveMinutes: sequenced.driveMinutes || null,
+        flags: sequenced.flags || [],
+        suggestions: [],
+        booked
+      });
     }
-    for (const d of days) {
-      if (d.booked) d.booked.sort((a, b) => String(a.start).localeCompare(String(b.start)));
-    }
+
+    // (Real bookings were sequenced INTO each day above — numbered stops
+    // with arrival times and a drawable route line, the same flow the
+    // planned days get. See gatherBookedRows / sequenceDayWithBookings.)
     days.sort((a, b) => (a.date < b.date ? -1 : 1));
 
     const problems = days.flatMap((d) => [...d.morning, ...d.afternoon]
@@ -22391,20 +22483,37 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const year = Number(seasonPlanLineMatch[2]);
       const date = seasonPlanLineMatch[3];
       const plan = await seasonPlans.getPlan(season, year);
-      const day = plan && plan.days ? plan.days[date] : null;
-      if (!day) return sendJson(res, 404, { ok: false, errors: ["No such route day."] });
+      const storedDay = plan && plan.days ? plan.days[date] : null;
 
       const all = await properties.list();
       const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
-      const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode, season, requestedWindows: await assignments.requestedWindowsFor(season, year) });
+      // Include the day's bookings in the drive — a booking-only day
+      // (storedDay null) is a real numbered route now, not a 404. Same
+      // helper the plan resolver uses, so the line matches the numbers.
+      const leads = await readLeads();
+      const bookedByDate = await gatherBookedRows({ plan, season, year, all, leads });
+      const bookedRows = bookedByDate.get(date) || [];
+      if (!storedDay && !bookedRows.length) {
+        return sendJson(res, 404, { ok: false, errors: ["No such route day."] });
+      }
+      const { sequenced, rowByMapCode } = await sequenceDayWithBookings({
+        storedDay, bookedRows, byCode, season, requestedWindows: await assignments.requestedWindowsFor(season, year)
+      });
       const origin = await routeOriginLib.routeOrigin();
 
       // Driving order, from the timeline — the same source the cards and
       // the stop numbers read, so the line can never disagree with them.
+      // A code resolves to a plan property, or to a booked row's coords.
       const stops = (sequenced.timeline || []).map((t) => {
         const property = byCode.get(t.propertyCode);
-        if (!property || !property.coords || property.coords.lat == null) return null;
-        return { number: t.stopNumber, coords: { lat: property.coords.lat, lng: property.coords.lng } };
+        if (property && property.coords && property.coords.lat != null) {
+          return { number: t.stopNumber, coords: { lat: property.coords.lat, lng: property.coords.lng } };
+        }
+        const row = rowByMapCode.get(t.propertyCode);
+        if (row && row.coords && row.coords.lat != null) {
+          return { number: t.stopNumber, coords: { lat: Number(row.coords.lat), lng: Number(row.coords.lng) } };
+        }
+        return null;
       }).filter(Boolean);
 
       if (!stops.length) return sendJson(res, 404, { ok: false, errors: ["Nothing to draw on this day."] });
@@ -23157,7 +23266,14 @@ Customer signature captured at ${new Date().toISOString()}.`;
           addedDriveMinutes: added ? added.minutes : null,
           offered: !resolvedAddress || !shape.points.length
             || !Number.isFinite(threshold) || threshold <= 0
-            || (added && added.minutes <= threshold)
+            || (added && added.minutes <= threshold),
+          // The corridor is elastic: when the tight corridor leaves a
+          // customer short of days, availability reruns at wider tiers.
+          // This is the first tier that would admit the day — null when
+          // even the 90-minute service bound would not.
+          widensAtMinutes: (added && added.minutes > threshold)
+            ? (GEO_WIDEN_TIERS.find((t) => added.minutes <= t) ?? null)
+            : null
         });
       }
       // THE NUMBER THAT IS EASY TO MISREAD. This list covers ROUTE days
