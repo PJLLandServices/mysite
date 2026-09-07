@@ -19,6 +19,33 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-07 (Bucket-coherent geography — one region per half-day, killing the double
+drive):** Patrick, reading the load-test bookings against the live board: "it really just let
+anyone book at any point throughout the schedule… it makes us drive all the way across the 401
+to get to the other side… one appointment is at 9:30 in the morning, and the other is at 3PM, so
+we do that drive twice." Root cause: the geography filter scored an incoming address against the
+WHOLE day's point set and applied one verdict to BOTH buckets. A caller could read "cheap" off an
+afternoon stop in their region and then book the MORNING, stranding an east job in a west morning
+(and vice-versa) — the barbell. Fix: `geo-filter.buildDayShapes` now emits `bucketPoints`
+`{morning, afternoon}` (planned codes split by their plan bucket; bookings split at noon, the
+system-wide bucket boundary — `BOOKING_BUCKETS` afternoon opens 12:00). `availability.listAvailableSlots`
+moved the geo gate OUT of the day loop and INTO the bucket loop: each bucket is scored against its
+OWN cluster (`bucketPoints[bucket.key]`); an empty bucket on a day that already has stops falls
+back to the whole-day points, so an empty half is NOT a free landing pad for a second region (the
+barbell guard); a day with no stops at all still has no shape and stays open. `diagnostics.geoSuppressed`
+entries gained a `bucket` field. Net effect: a region coalesces into the one half-day it already
+occupies, so the crew makes a single pass through it. Same endpoint, same slot shape, same
+per-slot `addedDriveMinutes` contract (now a per-bucket cost, which is what the stars/settle/standby
+already wanted); the elastic-corridor ladder from earlier today rides on top unchanged. Six new
+assertions in `test-geo-availability.mjs` (55 total) replay the exact Etobicoke/Whitby day: a
+Whitby caller is offered only the afternoon, an Etobicoke caller only the morning, and a far
+Keswick caller neither half. **FLOW-03 behaviour change, documented, re-verified:** full
+`build:check` green including `test-day-reschedule` (59) and `test-booking-guards` (35), which
+drive the same engine. NOTE — within-bucket minute ordering on booking-only days (the visible
+9:30-vs-3PM on the Season Plan) is a display concern the resequencer already handles for PLANNED
+days; booking-only days still show customer-picked times until a follow-up runs the sequencer over
+them. The customer only ever sees the AM/PM label, and Patrick drives the order on the board.
+
 **2026-09-07 (The corridor is elastic — drive times widen before a customer is turned
 away):** Patrick's load bot booked ~104 fall appointments and the calendar went dry; his call:
 "nope, we don't extend windows into November, as the dates fill up, we allow for drive times to
