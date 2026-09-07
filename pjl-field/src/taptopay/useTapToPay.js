@@ -188,6 +188,30 @@ export function useTapToPay({ onProgress } = {}) {
     return () => sub.remove();
   }, [warmUp]);
 
+  // The reader outlives the screen. `connectedReader` belongs to the SDK
+  // provider, which is mounted for the life of the app; this hook's state
+  // dies with whichever screen used it. Backing out of the settings screen
+  // and coming back showed "Not started yet" over a reader that was still
+  // connected — the screen had forgotten, the reader had not, and the two
+  // disagreeing is exactly what 5.6 is about.
+  useEffect(() => {
+    if (!connectedReader) return;
+    setState((s) => (
+      s === READER.IDLE || s === READER.FAILED || s === READER.PREPARING ? READER.READY : s
+    ));
+  }, [connectedReader]);
+
+  // 1.5 — "when the app opens", not only when it returns to the
+  // foreground. AppState fires on transitions, so a cold start or a
+  // freshly opened screen warmed nothing, and the first press on a
+  // driveway paid for the connect that should already have happened.
+  //
+  // Once per mount, deliberately: warmUp returns immediately when a reader
+  // is already connected or a warm-up is in flight, so this costs nothing
+  // when there is nothing to do.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { warmUp({ auto: true }); }, []);
+
   const setLocation = useCallback((locationId) => {
     locationRef.current = locationId || null;
   }, []);

@@ -324,6 +324,27 @@ check('warmUp does not refuse to run because support is unknown', () => {
   assert.match(head, /supported === false/, 'warmUp no longer short-circuits a genuinely unsupported device');
 });
 
+check('a connected reader is reflected even on a freshly opened screen', () => {
+  // The reader belongs to the provider and outlives the screen; this
+  // hook's state does not. Without this the settings screen reported
+  // "Not started yet" over a live, connected reader.
+  const at = hook.indexOf('if (!connectedReader) return;');
+  assert.ok(at > 0, 'nothing reflects an already-connected reader into the screen');
+  const block = hook.slice(at, at + 300);
+  assert.match(block, /READER\.READY/, 'the connected reader is not surfaced as ready');
+  assert.match(block, /\}, \[connectedReader\]\);/, 'that effect does not track connectedReader');
+});
+
+check('the reader is warmed when the screen opens, not only on foreground', () => {
+  // 1.5 says "when the app opens". AppState only fires on transitions, so
+  // a cold start warmed nothing and 5.6 (UI up within a second) was paid
+  // for at the first press instead.
+  assert.match(
+    hook, /useEffect\(\(\) => \{ warmUp\(\{ auto: true \}\); \}, \[\]\);/,
+    'nothing warms the reader on mount',
+  );
+});
+
 check('the Location is read synchronously, not a render late', () => {
   // initialize() is what fetches the token that carries the Location, so
   // the provider's state is one render behind the first warmUp. Reading
