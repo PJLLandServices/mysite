@@ -92,6 +92,14 @@
       <a class="pjl-btn pjl-btn-primary" href="/admin/handoff">Send a booking link →</a>
     </section>
 
+    <!-- The day's route. Framed rather than reimplemented: the field
+         app's Today screen loads the same page in a band above its own
+         list, and one implementation is how the two stay identical. The
+         frame's src is set by today.js as the date changes. -->
+    <section class="today-map" id="todayMap" hidden>
+      <iframe id="todayMapFrame" title="Today's route" loading="lazy"></iframe>
+    </section>
+
     <ul class="today-list" id="todayList"></ul>
 
     <!-- FLOW-32's lantern: when a job you expected isn't above, this

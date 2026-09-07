@@ -1187,6 +1187,10 @@ function needsAuth(method, pathname) {
   // CRM pages — admin OR tech.
   if (pathname === "/admin" || pathname === "/admin/") return "user";
   if (pathname === "/admin/today" || pathname === "/admin/today/") return "user";
+  // The day's route map. Named separately because the line above is an
+  // exact match and needsAuth defaults to NO AUTH for anything it does
+  // not name — the same shape as the 2026-09-06 Terminal-token hole.
+  if (pathname === "/admin/today/map" || pathname === "/admin/today/map/") return "user";
   if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") return "user";
   // Season plan — the route seed the geography filter measures against.
   // Admin/tech only: it decides which customers get offered which days.
@@ -21264,6 +21268,64 @@ Customer signature captured at ${new Date().toISOString()}.`;
     });
   }
 
+  // The road line for the day the map is drawing.
+  //
+  // The ORDERED coordinates are posted by the page, which took them from
+  // GET /api/schedule/today — the same rows, in the same order, that it
+  // drew the numbered pins from. Deriving the day a second time here
+  // would be a second implementation of "what is on today", and the
+  // first time the two disagreed the line would run through a house the
+  // map never drew. Same reasoning as the season plan's route-line
+  // endpoint: the line follows the numbers, it does not re-decide them.
+  //
+  // Staff-only — the /api/schedule/ prefix is fenced at "user" — and it
+  // answers with geometry and nothing else. No minutes: every drive time
+  // on this system comes from Distance Matrix and a second router
+  // printing its own would put two numbers for one leg on one screen
+  // (see lib/route-geometry.js). No addresses, no customer, nothing that
+  // was not already on the caller's own screen.
+  if (req.method === "POST" && pathname === "/api/schedule/today/route-line") {
+    try {
+      const payload = await parseRequestBody(req, { maxBytes: 16_000 });
+      const raw = Array.isArray(payload?.stops) ? payload.stops : [];
+      // Capped because each call can cost a Directions request. Google
+      // takes 25 waypoints; a day that long is not a day.
+      if (raw.length > 25) {
+        return sendJson(res, 422, { ok: false, errors: ["Too many stops to draw."] });
+      }
+      const stops = raw
+        .map((stop, index) => {
+          // Number(null) and Number("") are both 0. Coercing an absent
+          // coordinate would route the drive through 0,0 rather than
+          // refusing it, so absent is rejected before it can become zero.
+          const raw = (value) => (value === null || value === undefined || value === "" ? NaN : Number(value));
+          const lat = raw(stop?.lat);
+          const lng = raw(stop?.lng);
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+          if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+          return { number: index + 1, coords: { lat, lng } };
+        })
+        .filter(Boolean);
+      if (stops.length < 2) {
+        return sendJson(res, 422, { ok: false, errors: ["Need at least two stops to draw a line."] });
+      }
+
+      const origin = await routeOriginLib.routeOrigin();
+      const line = await routeGeometry.roadLine(origin, stops);
+      return sendJson(res, 200, {
+        ok: true,
+        coords: line.coords,
+        // "straight" is not an error the screen may ignore: it means the
+        // lines are hops, not roads, and the map has to say so.
+        source: line.source,
+        error: line.error || null,
+        origin: origin && origin.lat != null ? { lat: origin.lat, lng: origin.lng } : null
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't draw that route."] });
+    }
+  }
+
   // "Why isn't this customer on the schedule?" — searches EVERY store a
   // job's date can live in (leads, canonical bookings, work orders,
   // properties, season-plan stops) and answers per record, in plain
@@ -23729,6 +23791,13 @@ function resolveStaticTarget(pathname) {
   }
   // Today's Schedule — the tech's daily morning hub. Lists today's
   // confirmed bookings with navigate/notify/open-WO actions per row.
+  // The day's route as a map. Its own page because it is drawn in two
+  // places — framed by the CRM's Today page, and loaded by the field
+  // app's Today screen in a band above the list. One implementation,
+  // two hosts; the app carries no map SDK of its own.
+  if (pathname === "/admin/today/map" || pathname === "/admin/today/map/") {
+    return { dir: SERVER_DIR, relative: "/today-map.html" };
+  }
   if (pathname === "/admin/today" || pathname === "/admin/today/") {
     return { dir: SERVER_DIR, relative: "/today.html" };
   }

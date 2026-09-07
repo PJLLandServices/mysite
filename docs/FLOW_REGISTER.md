@@ -43,6 +43,49 @@ numbered on distinct stops, the timeline covering both, and `route-line` returni
 polyline where it used to 404; the ordinary plan day still renders. Full `build:check` green;
 Chromium confirms the booked row renders its number badge with a pin-linked `data-code`.
 
+**2026-09-07 (Today's route on a map, in the app and on the CRM):** Patrick, having just got
+Tap to Pay to Ready on the phone: "Can we possibly make the Day slide, interactive similar to
+what we have done on the web portal? Show the user stops, and numbers etc on an interactive map.
+This interactive map, as you are making your way through the day should also check off the
+completed homes." **Read-only, and additive by construction: `GET /api/schedule/today` is not
+touched, so FLOW-32 renders exactly as before.** New surfaces: `/admin/today/map`
+(`server/today-map.html` + `server/today-map.js`) and `POST /api/schedule/today/route-line`.
+
+**One map, two hosts.** The page draws the day; the CRM's Today page frames it and the field
+app's Today screen loads it in a band above its list (`pjl-field/src/screens/DayMap.js`). The
+alternative was a native map SDK in the app — a second implementation of the same picture, a
+new native dependency, and a build every time the map changed. The map reads the SAME endpoint
+the list beside it reads, in the same order, so stop numbers are positions in the day's own
+response and a pin cannot disagree with its card. A row with no coordinates KEEPS its number
+and is reported as skipped rather than renumbering the stops around it.
+
+**Completed stops tick off.** A stop whose work order is `completed` is drawn muted with a ✓
+instead of its number, and the app redraws the map on any status change rather than waiting for
+a pull-to-refresh — a tick that only appears after a manual refresh lies until someone pulls.
+
+**The line follows the numbers, and never carries minutes.** The endpoint is handed the ordered
+coordinates the pins were drawn from rather than re-deriving the day, because two
+implementations of "what is on today" is how a line ends up running through a house the map
+never drew. It answers with geometry only: every drive time on this system comes from Distance
+Matrix, and a second router printing its own would put two numbers for one leg on one screen
+(`lib/route-geometry.js`). A straight-hop fallback is drawn as dots and named on the screen.
+
+**Two defects found by the tests, both the same defect.** `Number(null)` and `Number("")` are
+both `0`, so a row whose coordinates came back empty would have been drawn — confidently,
+numbered — at 0,0 in the Gulf of Guinea, and the road line routed through it. Rejected before
+coercion on both sides of the wire. And the fence: `needsAuth` matches `/admin/today` EXACTLY
+and ends in `return null` for anything it does not name, so `/admin/today/map` would have been
+public. Named, and the rule is EXECUTED in the test rather than read — the 2026-09-06
+Terminal-token hole was exactly this shape.
+
+`scripts/test-today-map.mjs`, 21 assertions, in `build:check`: the fence run for real, the
+row-key rule extracted from BOTH the page and the app and run against the same rows (they must
+agree or every pin tap lands on nothing), numbering, the completed rule, the coordinate
+refusals, the geometry-only response, and a Babel parse of the two app screens with the app's
+own Babel. **UNMAPPED — needs Patrick's walk:** open Today on a booked day, confirm every card
+has a pin and the numbers match, tap a pin and land on its card, complete a work order and
+watch its pin tick without refreshing.
+
 **2026-09-07 (Bucket-coherent geography — one region per half-day, killing the double
 drive):** Patrick, reading the load-test bookings against the live board: "it really just let
 anyone book at any point throughout the schedule… it makes us drive all the way across the 401
