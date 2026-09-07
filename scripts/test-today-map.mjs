@@ -246,6 +246,67 @@ check('the map redraws when a job finishes, without a pull-to-refresh', () => {
   assert.match(APP_MAP, /post\(\{ type: 'refresh' \}\)/, 'the refresh signal is gone');
 });
 
+check('the WebView is whitelisted by ORIGIN, never by a path pattern', () => {
+  // 2026-09-07, on the phone: the band spun forever and Safari opened on
+  // top of the app with the map's URL. One cause for both.
+  //
+  // react-native-webview matches originWhitelist entries against the
+  // ORIGIN ONLY — its own words, in WebViewTypes.d.ts — and its
+  // documented behaviour for a navigation that matches nothing is to
+  // open the URL in the system browser. `${HOST}/*` has a path, so it
+  // matched nothing, so the WebView's own first load was handed to
+  // Safari.
+  // The PROP, not the prose about it — the comment above it names the
+  // old broken value on purpose, and matching that would read the
+  // documentation instead of the code.
+  const at = APP_MAP.indexOf('originWhitelist={');
+  assert.ok(at > 0, 'originWhitelist is gone');
+  const line = APP_MAP.slice(at, APP_MAP.indexOf('\n', at));
+  assert.ok(
+    !/\/\*/.test(line),
+    'originWhitelist carries a path pattern — it is matched against the origin alone and will match nothing',
+  );
+  assert.match(line, /\[HOST\]/, 'the whitelist is no longer the plain origin');
+});
+
+check('a navigation off our own page is refused, not opened in Safari', () => {
+  // Extracted and RUN, because "there is a handler" was never the
+  // question — what it returns is.
+  const at = APP_MAP.indexOf('export function isOurPage(url) {');
+  assert.ok(at > 0, 'isOurPage is gone');
+  const end = APP_MAP.indexOf('\n}\n', at);
+  const isOurPage = new Function(
+    'HOST',
+    `${APP_MAP.slice(at, end + 3).replace('export function', 'function')}; return isOurPage;`,
+  )('https://www.pjllandservices.com');
+
+  assert.equal(isOurPage('https://www.pjllandservices.com/admin/today/map?date=2026-09-28'), true);
+  assert.equal(isOurPage('https://www.pjllandservices.com'), true);
+  assert.equal(isOurPage('about:blank'), true);
+  // The ones that would throw a tech out of the app mid-route.
+  assert.equal(isOurPage('https://maps.google.com/'), false);
+  assert.equal(isOurPage('https://www.pjllandservices.com.evil.example/x'), false,
+    'a lookalike host prefixed onto ours is accepted');
+  assert.equal(isOurPage('http://www.pjllandservices.com/admin/today/map'), false, 'plain http is accepted');
+  assert.equal(isOurPage(''), false);
+  assert.equal(isOurPage(null), false);
+});
+
+check('the handler is actually wired to the WebView', () => {
+  assert.match(
+    APP_MAP, /onShouldStartLoadWithRequest=\{\(request\) => isOurPage\(request\?\.url\)\}/,
+    'isOurPage is defined but nothing consults it',
+  );
+});
+
+check('a load that never finishes becomes a message, not a spinner', () => {
+  // onError does not fire for "still going". A refused or hanging load
+  // reports nothing at all, and the band spun until the app was closed.
+  assert.match(APP_MAP, /LOAD_TIMEOUT_MS/, 'the load is unbounded again');
+  assert.match(APP_MAP, /setTimeout\(\(\) => \{ setLoading\(false\); setFailed\(true\); \}, LOAD_TIMEOUT_MS\)/,
+    'a stuck load no longer ends in the failed state');
+});
+
 check('a map that fails does not take the day sheet with it', () => {
   assert.match(APP_MAP, /if \(failed\)/, 'a failed map no longer degrades');
   assert.match(APP_MAP, /The list below still works/, 'a failed map no longer says the list still works');

@@ -23,6 +23,28 @@ import { colors, radius, space, type } from '../theme';
 
 const SHORT = 210;
 const TALL = 430;
+// A load that never finishes has to become a message. An endless spinner
+// is indistinguishable from a map that is merely slow, and on a driveway
+// the difference decides whether you wait or get on with the day.
+const LOAD_TIMEOUT_MS = 20000;
+
+// The map never navigates. Its only load is its own page, and anything
+// else — a stray link, a redirect, a frame — is REFUSED rather than
+// handed to the system browser.
+//
+// This exists because of a real failure on 2026-09-07: `originWhitelist`
+// was given `${HOST}/*`, a full-URL pattern with a path. The library
+// matches those entries against the ORIGIN ONLY, so it never matched,
+// and its documented behaviour for an unmatched navigation is to open
+// the URL in Safari. The map therefore spun forever while Safari opened
+// on top of the app. Being thrown out of the app mid-route is worse than
+// a map that does nothing, so refusing is the correct answer here even
+// for a URL a browser would happily follow.
+export function isOurPage(url) {
+  const target = String(url || '');
+  if (target.startsWith('about:')) return true;
+  return target === HOST || target.startsWith(`${HOST}/`);
+}
 
 export default function DayMap({ date, refreshToken, focusKey, onSelectStop }) {
   const ref = useRef(null);
@@ -30,6 +52,15 @@ export default function DayMap({ date, refreshToken, focusKey, onSelectStop }) {
   const [failed, setFailed] = useState(false);
   const [tall, setTall] = useState(false);
   const readyRef = useRef(false);
+
+  // Bounded, because onError does not fire for "still going". A WebView
+  // that is refused, blocked or simply never answers reports nothing at
+  // all, and the band would spin until the app was closed.
+  useEffect(() => {
+    if (!loading || failed) return undefined;
+    const timer = setTimeout(() => { setLoading(false); setFailed(true); }, LOAD_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [loading, failed]);
 
   // Post into the page rather than reloading it: a reload throws away the
   // basemap tiles and the pan the user just did, which on a driveway is
@@ -84,7 +115,10 @@ export default function DayMap({ date, refreshToken, focusKey, onSelectStop }) {
         source={{ uri: `${HOST}/admin/today/map?date=${encodeURIComponent(date || '')}` }}
         style={styles.web}
         sharedCookiesEnabled
-        originWhitelist={[`${HOST}/*`]}
+        // The ORIGIN, with no path. See isOurPage above for what a path
+        // here cost.
+        originWhitelist={[HOST]}
+        onShouldStartLoadWithRequest={(request) => isOurPage(request?.url)}
         onMessage={handleMessage}
         onLoadStart={() => { readyRef.current = false; }}
         onLoadEnd={() => setLoading(false)}
