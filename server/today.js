@@ -35,6 +35,10 @@ const todayHeadline = document.getElementById("todayHeadline");
 const todaySubline = document.getElementById("todaySubline");
 const datePicker = document.getElementById("datePicker");
 const todayList = document.getElementById("todayList");
+// The route map, framed. `today-map.js` draws it; this page only decides
+// which day it is showing and whether there is a day worth drawing.
+const todayMap = document.getElementById("todayMap");
+const todayMapFrame = document.getElementById("todayMapFrame");
 const todayLoading = document.getElementById("todayLoading");
 const todayError = document.getElementById("todayError");
 const todayEmpty = document.getElementById("todayEmpty");
@@ -211,11 +215,22 @@ function render(bookings, dateString) {
   if (!bookings.length) {
     todayList.innerHTML = "";
     todayEmpty.hidden = false;
+    // An empty day draws an empty map. Hide it rather than reserve space
+    // for a picture of nothing.
+    if (todayMap) todayMap.hidden = true;
     return;
   }
   todayEmpty.hidden = true;
 
   todayList.innerHTML = bookings.map(bookingCardHtml).join("");
+
+  if (todayMap && todayMapFrame) {
+    const src = `/admin/today/map?date=${encodeURIComponent(dateString || "")}`;
+    // Reassigning an unchanged src reloads the frame and throws away the
+    // basemap tiles, so only move it when the day actually moved.
+    if (todayMapFrame.getAttribute("src") !== src) todayMapFrame.setAttribute("src", src);
+    todayMap.hidden = false;
+  }
 }
 
 async function load(dateString) {

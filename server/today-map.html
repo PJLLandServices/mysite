@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>PJL — Today's route</title>
+  <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
+  <style>
+    /* Deliberately no CRM chrome. This page is a map and nothing else:
+       it is drawn inside the field app's Today screen, where the app's
+       own tab bar is the navigation, and inside the CRM's Today page as
+       a frame. Loading crm.css here would put a sidebar inside a band
+       200px tall. */
+    html, body { margin: 0; padding: 0; height: 100%; background: #EDEFEA; }
+    #map { position: absolute; inset: 0; }
+    /* Says what the map cannot: a line that is hops rather than roads, a
+       day with no coordinates, a refused Maps key. Silence would let the
+       screen imply a drive it has not drawn. */
+    #note {
+      position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 2;
+      font: 500 12px/1.35 "DM Sans", system-ui, sans-serif;
+      background: rgba(15, 31, 20, 0.86); color: #FAFAF5;
+      padding: 7px 10px; border-radius: 8px;
+    }
+    #note[hidden] { display: none; }
+    #note.is-bad { background: rgba(150, 40, 24, 0.92); }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <p id="note" hidden></p>
+  <script src="/crm/today-map.js"></script>
+</body>
+</html>
