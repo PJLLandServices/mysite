@@ -44,7 +44,7 @@ const voicemailStore = require("./lib/voicemail-store");
 const { geocode, PJL_BASE, isConfigured: geocodeIsConfigured } = require("./lib/geocode");
 const bookingGate = require("./lib/booking-gate");
 const distanceLib = require("./lib/distance");
-const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, recommendDays, parseLocalDateKey } = require("./lib/availability");
+const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, GEO_WIDEN_TIERS, listAvailableSlots, groupByDay, expandDaysToRange, recommendDays, parseLocalDateKey } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
 const { mergeDaySchedule } = require("./lib/day-schedule");
 const jobFinder = require("./lib/job-finder");
@@ -23179,7 +23179,14 @@ Customer signature captured at ${new Date().toISOString()}.`;
           addedDriveMinutes: added ? added.minutes : null,
           offered: !resolvedAddress || !shape.points.length
             || !Number.isFinite(threshold) || threshold <= 0
-            || (added && added.minutes <= threshold)
+            || (added && added.minutes <= threshold),
+          // The corridor is elastic: when the tight corridor leaves a
+          // customer short of days, availability reruns at wider tiers.
+          // This is the first tier that would admit the day — null when
+          // even the 90-minute service bound would not.
+          widensAtMinutes: (added && added.minutes > threshold)
+            ? (GEO_WIDEN_TIERS.find((t) => added.minutes <= t) ?? null)
+            : null
         });
       }
       // THE NUMBER THAT IS EASY TO MISREAD. This list covers ROUTE days

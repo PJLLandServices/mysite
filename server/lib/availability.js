@@ -238,6 +238,17 @@ const DEFAULT_SETTINGS = {
   geoMaxAddedDriveMinutes: 15
 };
 
+// The corridor is elastic (Patrick, 2026-09-07: "as the dates fill up,
+// we allow for drive times to widen. we NEVER turn down a customer.").
+// geoMaxAddedDriveMinutes above is the OPENING posture; when a scan at
+// the current corridor leaves an address fewer than GEO_WIDEN_MIN_DAYS
+// bookable days, the scan reruns at the next tier, out to the 90-minute
+// service-area bound booking-gate.js enforces. A customer the gate let
+// in is therefore never geo-refused into an empty calendar while any
+// route day still has room.
+const GEO_WIDEN_TIERS = [25, 40, 60, 90]; // last = booking-gate MAX_DRIVE_MINUTES — keep in step
+const GEO_WIDEN_MIN_DAYS = 3;             // matches the three starred recommendations
+
 // Customer-facing booking buckets. ONE customer per bucket per day —
 // Patrick committed to dropping the 20-slot grid in favour of two
 // labelled windows so the booking page reads like "morning or afternoon"
@@ -333,8 +344,6 @@ async function listAvailableSlots(opts = {}) {
     .filter((b) => b && b.start && b.end)
     .map((b) => ({ start: new Date(b.start), end: new Date(b.end), label: b.label || "Blocked" }));
 
-  const results = [];
-
   // ---- Season gate setup ---------------------------------------------
   // Seasonal services are publicly bookable only inside the season's
   // [publicBookingFrom .. publicBookingThrough] window (seasons.json).
@@ -371,197 +380,231 @@ async function listAvailableSlots(opts = {}) {
     return seasonBoundsByYear.get(year);
   };
 
-  let dayAddedDrive = null;
-  for (let offset = 0; offset < scanDays; offset++) {
-    const day = new Date(now);
-    day.setHours(0, 0, 0, 0);
-    day.setDate(day.getDate() + offset);
-
-    const dow = day.getDay();
-    const window = dayHours[dow];
-    if (!window) continue;
-
-    // ---- Season gate --------------------------------------------------
-    // YYYY-MM-DD strings compare correctly as strings. A gated day emits
-    // no buckets at all; the geography filter below never runs for it.
-    // The diagnostics entry names the bound it hit, so the calendar can
-    // say "booking opens Sep 28" and "the season has wrapped up" as two
-    // different things.
-    const bounds = seasonBoundsFor(day.getFullYear());
-    if (bounds && bounds.from && dateKey(day) < bounds.from) {
-      if (diagnostics && Array.isArray(diagnostics.seasonClosed)) {
-        diagnostics.seasonClosed.push({ date: dateKey(day), publicBookingFrom: bounds.from });
+  // ---- Adaptive corridor scan ----------------------------------------
+  // Widening changes what is OFFERED, never what is RECOMMENDED: every
+  // slot keeps its true addedDriveMinutes, so the stars still steer
+  // customers to the cheapest days first even on a widened calendar.
+  const baseGeoMax = Number(cfg.geoMaxAddedDriveMinutes);
+  const geoLadder = (Number.isFinite(baseGeoMax) && baseGeoMax > 0)
+    ? [baseGeoMax, ...GEO_WIDEN_TIERS.filter((t) => t > baseGeoMax)]
+    : [baseGeoMax];
+  let geoTierIdx = 0;
+  let geoMax = geoLadder[0];
+  let results = [];
+  while (true) {
+    results = [];
+    let geoSuppressedCount = 0;
+    // Each pass reports its own diagnostics: a widened pass replaces the
+    // stricter pass's entries, so "outside_route_area" copy always
+    // describes the corridor the customer was actually served with.
+    if (diagnostics) {
+      for (const key of ["geoSuppressed", "seasonClosed", "bucketFull"]) {
+        if (Array.isArray(diagnostics[key])) diagnostics[key].length = 0;
       }
-      continue;
     }
-    if (bounds && bounds.through && dateKey(day) > bounds.through) {
-      if (diagnostics && Array.isArray(diagnostics.seasonClosed)) {
-        diagnostics.seasonClosed.push({ date: dateKey(day), publicBookingThrough: bounds.through });
-      }
-      continue;
-    }
+    let dayAddedDrive = null;
+    for (let offset = 0; offset < scanDays; offset++) {
+      const day = new Date(now);
+      day.setHours(0, 0, 0, 0);
+      day.setDate(day.getDate() + offset);
 
-    // ---- Geography filter -------------------------------------------
-    // Runs before any slot work: if the customer does not belong on this
-    // day's route, no bucket on it should be offered, and there is no
-    // point costing out slots we are about to discard.
-    //
-    // Three ways to be exempt, all deliberate:
-    //   - no plan for this date (or an empty shape) — nothing to violate
-    //   - the filter is switched off in settings
-    //   - the address did not geocode, so we have no honest opinion.
-    //     geocode.js hands back the PJL depot on failure; measuring
-    //     against that would say every day is cheap. Skipping is the
-    //     documented behaviour: never refuse a booking because geocoding
-    //     failed.
-    // Admin force-book (source: "admin_custom") never reaches this
-    // function at all — it bypasses the slot grid entirely — so it is
-    // exempt without needing a case here.
-    const geoMax = Number(cfg.geoMaxAddedDriveMinutes);
-    const shape = dayShapes ? dayShapes[dateKey(day)] : null;
-    if (shape && shape.points && shape.points.length
-        && Number.isFinite(geoMax) && geoMax > 0
-        && geoFilter.coordsAreResolved(customerCoords)) {
-      const added = await geoFilter.addedDriveMinutes(customerCoords, shape.points);
-      if (added && added.minutes > geoMax) {
-        if (diagnostics && Array.isArray(diagnostics.geoSuppressed)) {
-          diagnostics.geoSuppressed.push({
-            date: dateKey(day),
-            label: shape.label || "",
-            addedDriveMinutes: added.minutes
-          });
+      const dow = day.getDay();
+      const window = dayHours[dow];
+      if (!window) continue;
+
+      // ---- Season gate --------------------------------------------------
+      // YYYY-MM-DD strings compare correctly as strings. A gated day emits
+      // no buckets at all; the geography filter below never runs for it.
+      // The diagnostics entry names the bound it hit, so the calendar can
+      // say "booking opens Sep 28" and "the season has wrapped up" as two
+      // different things.
+      const bounds = seasonBoundsFor(day.getFullYear());
+      if (bounds && bounds.from && dateKey(day) < bounds.from) {
+        if (diagnostics && Array.isArray(diagnostics.seasonClosed)) {
+          diagnostics.seasonClosed.push({ date: dateKey(day), publicBookingFrom: bounds.from });
         }
         continue;
       }
-      dayAddedDrive = added ? added.minutes : null;
-    } else {
-      dayAddedDrive = null;
-    }
-
-    const openMin = parseHHmmToMinutes(window.open);
-    const closeMin = parseHHmmToMinutes(window.close);
-
-    // Bookings on this day, sorted.
-    const dayBookings = norm.filter((b) => sameDayLocal(b.start, day));
-    // Blocks that intersect this day's window.
-    const dayBlocks = blockRanges.filter((b) => rangeOverlaps(
-      b.start, b.end, dateAtLocalMinutes(day, openMin), dateAtLocalMinutes(day, closeMin)
-    ));
-
-    // For each bucket, walk start-times at the configured slot increment
-    // (default 30 min) and emit the FIRST candidate that satisfies
-    // every constraint — lead time, admin blocks, conflicts with
-    // existing bookings, and travel time from prev / to next. Only one
-    // slot per bucket per day is surfaced to the customer (labelled
-    // "Morning Appointment" or "Afternoon Appointment"), but multiple
-    // bookings can still land in the same bucket on subsequent calls —
-    // each new caller sees a slot pushed later by travel + duration.
-    // When the next candidate would run past bucket.to, the bucket is
-    // effectively full and disappears from availability.
-    const incrementMin = service.slotIncrementMinutes || cfg.slotIncrementMinutes;
-    const slotDuration = service.minutes;
-
-    for (const bucket of BOOKING_BUCKETS) {
-      const bucketFromMin = parseHHmmToMinutes(bucket.from);
-      const bucketToMin = parseHHmmToMinutes(bucket.to);
-      // Bucket must fit fully inside the day's open/close window.
-      if (bucketFromMin < openMin) continue;
-      if (bucketToMin > closeMin) continue;
-
-      // ---- Bucket capacity (stage 1, docs/ASSIGNMENT_WRITER.md) ------
-      // The season plan says how many jobs a bucket holds (bucketCap,
-      // default 5) and which stops are already planned into it. The
-      // bucket's load is those planned stops PLUS any real booking in the
-      // bucket's half of the day that is NOT one of them — a planned
-      // customer who books themselves converts their planned stop into a
-      // booking, so counting both would charge one house twice. The same
-      // rule exempts the requesting customer: if their rounded coordinate
-      // is a planned stop of this bucket, their booking adds no load.
-      // No shape / no cap / no buckets on the shape → no gate, exactly
-      // the pre-stage-1 behaviour.
-      if (shape && shape.bucketCap && shape.buckets && shape.buckets[bucket.key]) {
-        const planned = shape.buckets[bucket.key];
-        const plannedKeys = new Set(planned.keys || []);
-        // A booking belongs to the morning bucket when it starts before
-        // the afternoon bucket opens, else the afternoon — every same-day
-        // booking lands in exactly one bucket, including admin-custom
-        // times outside either window.
-        const splitMin = parseHHmmToMinutes(BOOKING_BUCKETS[BOOKING_BUCKETS.length - 1].from);
-        let extraBooked = 0;
-        for (const b of dayBookings) {
-          const startMin = (b.start.getHours() * 60) + b.start.getMinutes();
-          const bucketOf = startMin < splitMin
-            ? BOOKING_BUCKETS[0].key
-            : BOOKING_BUCKETS[BOOKING_BUCKETS.length - 1].key;
-          if (bucketOf !== bucket.key) continue;
-          if (plannedKeys.has(geoFilter.pointKey(b.coords))) continue;
-          extraBooked += 1;
+      if (bounds && bounds.through && dateKey(day) > bounds.through) {
+        if (diagnostics && Array.isArray(diagnostics.seasonClosed)) {
+          diagnostics.seasonClosed.push({ date: dateKey(day), publicBookingThrough: bounds.through });
         }
-        const incoming = geoFilter.coordsAreResolved(customerCoords)
-          && plannedKeys.has(geoFilter.pointKey(customerCoords)) ? 0 : 1;
-        if (planned.count + extraBooked + incoming > shape.bucketCap) {
-          if (diagnostics && Array.isArray(diagnostics.bucketFull)) {
-            diagnostics.bucketFull.push({
+        continue;
+      }
+
+      // ---- Geography filter -------------------------------------------
+      // Runs before any slot work: if the customer does not belong on this
+      // day's route, no bucket on it should be offered, and there is no
+      // point costing out slots we are about to discard.
+      //
+      // Three ways to be exempt, all deliberate:
+      //   - no plan for this date (or an empty shape) — nothing to violate
+      //   - the filter is switched off in settings
+      //   - the address did not geocode, so we have no honest opinion.
+      //     geocode.js hands back the PJL depot on failure; measuring
+      //     against that would say every day is cheap. Skipping is the
+      //     documented behaviour: never refuse a booking because geocoding
+      //     failed.
+      // Admin force-book (source: "admin_custom") never reaches this
+      // function at all — it bypasses the slot grid entirely — so it is
+      // exempt without needing a case here.
+      const shape = dayShapes ? dayShapes[dateKey(day)] : null;
+      if (shape && shape.points && shape.points.length
+          && Number.isFinite(geoMax) && geoMax > 0
+          && geoFilter.coordsAreResolved(customerCoords)) {
+        const added = await geoFilter.addedDriveMinutes(customerCoords, shape.points);
+        if (added && added.minutes > geoMax) {
+          geoSuppressedCount += 1;
+          if (diagnostics && Array.isArray(diagnostics.geoSuppressed)) {
+            diagnostics.geoSuppressed.push({
               date: dateKey(day),
-              bucket: bucket.key,
-              planned: planned.count,
-              booked: extraBooked,
-              cap: shape.bucketCap
+              label: shape.label || "",
+              addedDriveMinutes: added.minutes
             });
           }
           continue;
         }
+        dayAddedDrive = added ? added.minutes : null;
+      } else {
+        dayAddedDrive = null;
       }
 
-      let emitted = false;
-      for (let m = bucketFromMin; m + slotDuration <= bucketToMin && !emitted; m += incrementMin) {
-        const slotStart = dateAtLocalMinutes(day, m);
-        const slotEnd = new Date(slotStart.getTime() + slotDuration * 60 * 1000);
+      const openMin = parseHHmmToMinutes(window.open);
+      const closeMin = parseHHmmToMinutes(window.close);
 
-        if (slotStart.getTime() < earliestStart) continue;
-        if (dayBlocks.some((b) => rangeOverlaps(slotStart, slotEnd, b.start, b.end))) continue;
-        if (dayBookings.some((b) => rangeOverlaps(slotStart, slotEnd, b.start, b.end))) continue;
+      // Bookings on this day, sorted.
+      const dayBookings = norm.filter((b) => sameDayLocal(b.start, day));
+      // Blocks that intersect this day's window.
+      const dayBlocks = blockRanges.filter((b) => rangeOverlaps(
+        b.start, b.end, dateAtLocalMinutes(day, openMin), dateAtLocalMinutes(day, closeMin)
+      ));
 
-        // Travel from prev booking (anywhere earlier today) + buffer.
-        const prev = [...dayBookings].reverse().find((b) => b.end.getTime() <= slotStart.getTime());
-        if (prev) {
-          const travelIn = await travelMinutes(prev.coords, customerCoords);
-          const earliestSlotStart = prev.end.getTime() + (travelIn + buffer) * 60 * 1000;
-          if (slotStart.getTime() < earliestSlotStart) continue;
+      // For each bucket, walk start-times at the configured slot increment
+      // (default 30 min) and emit the FIRST candidate that satisfies
+      // every constraint — lead time, admin blocks, conflicts with
+      // existing bookings, and travel time from prev / to next. Only one
+      // slot per bucket per day is surfaced to the customer (labelled
+      // "Morning Appointment" or "Afternoon Appointment"), but multiple
+      // bookings can still land in the same bucket on subsequent calls —
+      // each new caller sees a slot pushed later by travel + duration.
+      // When the next candidate would run past bucket.to, the bucket is
+      // effectively full and disappears from availability.
+      const incrementMin = service.slotIncrementMinutes || cfg.slotIncrementMinutes;
+      const slotDuration = service.minutes;
+
+      for (const bucket of BOOKING_BUCKETS) {
+        const bucketFromMin = parseHHmmToMinutes(bucket.from);
+        const bucketToMin = parseHHmmToMinutes(bucket.to);
+        // Bucket must fit fully inside the day's open/close window.
+        if (bucketFromMin < openMin) continue;
+        if (bucketToMin > closeMin) continue;
+
+        // ---- Bucket capacity (stage 1, docs/ASSIGNMENT_WRITER.md) ------
+        // The season plan says how many jobs a bucket holds (bucketCap,
+        // default 5) and which stops are already planned into it. The
+        // bucket's load is those planned stops PLUS any real booking in the
+        // bucket's half of the day that is NOT one of them — a planned
+        // customer who books themselves converts their planned stop into a
+        // booking, so counting both would charge one house twice. The same
+        // rule exempts the requesting customer: if their rounded coordinate
+        // is a planned stop of this bucket, their booking adds no load.
+        // No shape / no cap / no buckets on the shape → no gate, exactly
+        // the pre-stage-1 behaviour.
+        if (shape && shape.bucketCap && shape.buckets && shape.buckets[bucket.key]) {
+          const planned = shape.buckets[bucket.key];
+          const plannedKeys = new Set(planned.keys || []);
+          // A booking belongs to the morning bucket when it starts before
+          // the afternoon bucket opens, else the afternoon — every same-day
+          // booking lands in exactly one bucket, including admin-custom
+          // times outside either window.
+          const splitMin = parseHHmmToMinutes(BOOKING_BUCKETS[BOOKING_BUCKETS.length - 1].from);
+          let extraBooked = 0;
+          for (const b of dayBookings) {
+            const startMin = (b.start.getHours() * 60) + b.start.getMinutes();
+            const bucketOf = startMin < splitMin
+              ? BOOKING_BUCKETS[0].key
+              : BOOKING_BUCKETS[BOOKING_BUCKETS.length - 1].key;
+            if (bucketOf !== bucket.key) continue;
+            if (plannedKeys.has(geoFilter.pointKey(b.coords))) continue;
+            extraBooked += 1;
+          }
+          const incoming = geoFilter.coordsAreResolved(customerCoords)
+            && plannedKeys.has(geoFilter.pointKey(customerCoords)) ? 0 : 1;
+          if (planned.count + extraBooked + incoming > shape.bucketCap) {
+            if (diagnostics && Array.isArray(diagnostics.bucketFull)) {
+              diagnostics.bucketFull.push({
+                date: dateKey(day),
+                bucket: bucket.key,
+                planned: planned.count,
+                booked: extraBooked,
+                cap: shape.bucketCap
+              });
+            }
+            continue;
+          }
         }
 
-        // Travel to next booking + buffer must fit before the next visit.
-        const next = dayBookings.find((b) => b.start.getTime() >= slotEnd.getTime());
-        if (next) {
-          const travelOut = await travelMinutes(customerCoords, next.coords);
-          const latestSlotEnd = next.start.getTime() - (travelOut + buffer) * 60 * 1000;
-          if (slotEnd.getTime() > latestSlotEnd) continue;
-        }
+        let emitted = false;
+        for (let m = bucketFromMin; m + slotDuration <= bucketToMin && !emitted; m += incrementMin) {
+          const slotStart = dateAtLocalMinutes(day, m);
+          const slotEnd = new Date(slotStart.getTime() + slotDuration * 60 * 1000);
 
-        results.push({
-          start: slotStart.toISOString(),
-          end: slotEnd.toISOString(),
-          durationMinutes: slotDuration,
-          serviceKey,
-          serviceLabel: service.label,
-          dayLabel: dayLabel(slotStart),
-          // The bucket label is the ONLY customer-visible time on the
-          // booking flow / confirmation / portal — precise start times
-          // stay server-side for Patrick's scheduling.
-          timeLabel: bucket.label,
-          bucketKey: bucket.key,
-          bucketWindow: bucket.windowLabel,
-          // How much extra driving serving this address on this day costs
-          // against the planned route. null when the day has no planned
-          // shape or the filter was skipped. Admin-facing: the customer
-          // never sees it, but the settle board and the standby-fill
-          // screen both rank on exactly this number.
-          addedDriveMinutes: dayAddedDrive
-        });
-        emitted = true;
+          if (slotStart.getTime() < earliestStart) continue;
+          if (dayBlocks.some((b) => rangeOverlaps(slotStart, slotEnd, b.start, b.end))) continue;
+          if (dayBookings.some((b) => rangeOverlaps(slotStart, slotEnd, b.start, b.end))) continue;
+
+          // Travel from prev booking (anywhere earlier today) + buffer.
+          const prev = [...dayBookings].reverse().find((b) => b.end.getTime() <= slotStart.getTime());
+          if (prev) {
+            const travelIn = await travelMinutes(prev.coords, customerCoords);
+            const earliestSlotStart = prev.end.getTime() + (travelIn + buffer) * 60 * 1000;
+            if (slotStart.getTime() < earliestSlotStart) continue;
+          }
+
+          // Travel to next booking + buffer must fit before the next visit.
+          const next = dayBookings.find((b) => b.start.getTime() >= slotEnd.getTime());
+          if (next) {
+            const travelOut = await travelMinutes(customerCoords, next.coords);
+            const latestSlotEnd = next.start.getTime() - (travelOut + buffer) * 60 * 1000;
+            if (slotEnd.getTime() > latestSlotEnd) continue;
+          }
+
+          results.push({
+            start: slotStart.toISOString(),
+            end: slotEnd.toISOString(),
+            durationMinutes: slotDuration,
+            serviceKey,
+            serviceLabel: service.label,
+            dayLabel: dayLabel(slotStart),
+            // The bucket label is the ONLY customer-visible time on the
+            // booking flow / confirmation / portal — precise start times
+            // stay server-side for Patrick's scheduling.
+            timeLabel: bucket.label,
+            bucketKey: bucket.key,
+            bucketWindow: bucket.windowLabel,
+            // How much extra driving serving this address on this day costs
+            // against the planned route. null when the day has no planned
+            // shape or the filter was skipped. Admin-facing: the customer
+            // never sees it, but the settle board and the standby-fill
+            // screen both rank on exactly this number.
+            addedDriveMinutes: dayAddedDrive
+          });
+          emitted = true;
+        }
       }
     }
+
+    // Stop widening when the customer has enough days, when geography
+    // suppressed nothing (scarcity is capacity, not distance — the open
+    // bucket is that overflow), or when the ladder is spent.
+    const offeredDayCount = new Set(results.map((s) => dateKey(new Date(s.start)))).size;
+    if (offeredDayCount >= GEO_WIDEN_MIN_DAYS) break;
+    if (geoSuppressedCount === 0) break;
+    if (geoTierIdx === geoLadder.length - 1) break;
+    geoTierIdx += 1;
+    geoMax = geoLadder[geoTierIdx];
   }
+  if (diagnostics && geoTierIdx > 0) diagnostics.geoWidenedTo = geoMax;
 
   return results;
 }
@@ -695,6 +738,8 @@ module.exports = {
   BOOKING_BUCKETS,
   DEFAULT_HOURS,
   DEFAULT_SETTINGS,
+  GEO_WIDEN_TIERS,
+  GEO_WIDEN_MIN_DAYS,
   listAvailableSlots,
   groupByDay,
   groupByDayMap,

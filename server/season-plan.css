@@ -57,6 +57,10 @@
 .sp-probe-table .sp-num { text-align: right; font-variant-numeric: tabular-nums; }
 .sp-probe-table tr.is-offered { background: var(--pjl-green-pale); }
 .sp-probe-table tr.is-offered td:last-child { font-weight: 700; color: var(--pjl-green); }
+/* Elastic corridor: this day opens up to the address once the calendar
+   leaves them short of cheap days. Amber — between yes and no. */
+.sp-probe-table tr.is-widened { background: var(--pjl-amber-pale); }
+.sp-probe-table tr.is-widened td:last-child { font-weight: 600; color: var(--pjl-amber); }
 
 /* Assignment actions — two-press arming so one stray thumb tap can't
    book (or delete) a season. */
