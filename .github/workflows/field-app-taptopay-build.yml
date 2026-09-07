@@ -17,6 +17,10 @@ name: Field app — Tap to Pay build (development)
 # So this builds the `taptopay` profile — internal distribution, this branch —
 # and does NOT submit anywhere.
 #
+# HOW TO RUN IT: Actions → this workflow → Run workflow → the green button.
+# IGNORE THE BRANCH DROPDOWN. It does not matter what it says; the checkout
+# above is pinned to the Tap to Pay branch either way.
+#
 # BEFORE THIS WILL WORK: your iPhone must be registered on the Apple Developer
 # account. An internal-distribution build can only install on devices Apple has
 # been told about, and with none registered this job fails with a message from
@@ -47,7 +51,22 @@ jobs:
             exit 1
           fi
 
+      # PINNED, deliberately. This workflow always builds the Tap to Pay
+      # branch, whatever the "Run workflow" dropdown was left on.
+      #
+      # It used to depend on choosing the right branch there, and Patrick
+      # said plainly he would get that wrong every time. He is right —
+      # it is a dropdown that defaults to the wrong answer, on a screen
+      # you visit once a month. A workflow that fails when a human picks
+      # the default is a badly built workflow, not a human error.
+      #
+      # WHEN TAP TO PAY MERGES TO MAIN, DELETE THIS `ref:` — the branch
+      # will be gone and checkout will fail with "couldn't find remote
+      # ref", which is confusing rather than wrong.
       - uses: actions/checkout@v4
+        with:
+          ref: claude/pjl-field-taptopay
+
 
       - uses: actions/setup-node@v4
         with:
@@ -68,13 +87,13 @@ jobs:
           node -e "
             const pkg = JSON.parse(require('fs').readFileSync('package.json','utf8'));
             if (!pkg.dependencies['@stripe/stripe-terminal-react-native']) {
-              console.error('::error::This branch has no Stripe Terminal SDK, so the build would have no Tap to Pay in it. Run this workflow from the claude/pjl-field-taptopay branch.');
+              console.error('::error::The claude/pjl-field-taptopay branch has no Stripe Terminal SDK. Nothing you did wrong — the branch changed, or it was merged and deleted. Send this message to Claude.');
               process.exit(1);
             }
             const app = JSON.parse(require('fs').readFileSync('app.json','utf8'));
             const ent = (app.expo.ios && app.expo.ios.entitlements) || {};
             if (ent['com.apple.developer.proximity-reader.payment.acceptance'] !== true) {
-              console.error('::error::The Tap to Pay entitlement is missing from app.json. The build would install and then fail at the first card.');
+              console.error('::error::The Tap to Pay entitlement is missing from app.json, so the app would install and then fail at the first card. Nothing you did wrong. Send this message to Claude.');
               process.exit(1);
             }
             console.log('SDK present, entitlement declared.');
@@ -107,6 +126,8 @@ jobs:
       - name: If it failed on signing
         if: failure()
         run: |
-          echo "::warning::If the error mentions provisioning, signing, or 'no devices',"
-          echo "::warning::the most likely cause is that no iPhone is registered on the"
-          echo "::warning::Apple Developer account yet. See docs/TAP_TO_PAY_INSTALLING.md."
+          echo "::warning::Nothing above is something you did wrong."
+          echo "::warning::If the error mentions provisioning, signing or 'no devices',"
+          echo "::warning::the likely cause is device registration or the signing type."
+          echo "::warning::Copy the red error text and send it to Claude — it is a"
+          echo "::warning::small fix, and guessing at it wastes a 20-minute build."
