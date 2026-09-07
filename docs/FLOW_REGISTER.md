@@ -2008,6 +2008,36 @@ the code: weakening `length === 1` to `>= 1` and dropping the `.trim()` each fai
 one named assertion and nothing else. **FLOW-23 (payments) untouched** — this is a new route's
 response shape, no ledger path altered. **Needs a Render deploy**, along with #133 and #137.
 
+**2026-09-07 (Tap to Pay is BLOCKED on Apple, and the app code is not why):** a full day walked
+end to end with Patrick on a phone and a Windows PC. **The finding, established by experiment
+rather than inference: Apple's development-restricted entitlement only goes into a DEVELOPMENT
+provisioning profile, and EAS cloud builds can only produce `IOS_APP_ADHOC`,
+`IOS_APP_INHOUSE` or `IOS_APP_STORE` — the CLI has no `IOS_APP_DEVELOPMENT` at all.** Those
+two facts do not meet, so the GitHub-button pipeline cannot carry this build. **The first two
+attempts were confounded and the third was not**, which is the only reason this is a finding
+and not a guess: attempt one had the capability unconfirmed; attempt two deleted the profile
+"from your project", which unlinks it from EAS but leaves it on Apple's portal, so EAS found
+the same profile and reused it (same name, same timestamp); attempt three deleted it **on
+Apple's Developer Portal**, produced `AdHoc 1788797529920` against the old
+`AdHoc 1788795456931`, and failed identically. **The app code is correct and the error proves
+it** — Xcode only complains that a profile lacks an entitlement when the app REQUESTS it, which
+it does because `app.json` declares it; a missing declaration produces silence. **The route
+that works is Xcode on a Mac**, which makes development profiles automatically — build to the
+registered iPhone, record the three videos, obtain the publishing entitlement, after which the
+entitlement stops being development-restricted and **the EAS pipeline works again
+permanently**. Patrick has an M2 Mac; that is now the plan. **Nothing set up today is wasted:**
+the device registered with Apple AND imported into EAS (they keep SEPARATE lists, which cost
+an hour to discover), the distribution certificate, the ad-hoc credentials, the App Store
+Connect API key, and `field-app-taptopay-build.yml`. **Two traps recorded because they will
+recur:** `EXPO_NO_CAPABILITY_SYNC=1` is required on every run — EAS PATCHes the capability to
+ON when Apple already has it ON and Apple answers "relationship with an invalid value" — and on
+Windows `set` lasts only for that terminal window; and `@stripe/stripe-terminal-react-native`
+ships `"postinstall": "rm -rf …"`, a Unix command, so `npm install` fails on Windows and needs
+`--ignore-scripts` (CI is unaffected, it runs on Linux). **Also corrected in passing:** an
+Apple **Merchant ID** and the **Apple Pay Payment Processing** capability are the Apple Pay
+path and are NOT part of Tap to Pay; the latter was found enabled with zero merchant IDs and
+turned off. **No app code changed** — docs only.
+
 **2026-09-06 (Apple correction sent — an unknown recorded as unknown, now closed):** Patrick
 confirmed the reply to Case-ID 22041657 has gone, correcting the new-app count from *None* to
 *1*. Recorded because `TAP_TO_PAY.md` deliberately carried "**not known to be sent** — check
