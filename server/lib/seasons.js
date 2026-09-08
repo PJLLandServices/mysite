@@ -392,10 +392,61 @@ function hasExplicitYear(year) {
   return Number.isFinite(y) && Boolean(CONFIG.years[y]);
 }
 
+// Is the PUBLIC booking flow accepting this season today, and if not,
+// when will it?
+//
+// This lives HERE because the bounds live here. server.js needs the
+// answer for /api/booking/services — the app's Book tab marks
+// out-of-season services rather than showing an empty calendar and
+// letting it read as "we're full" — and the alternative was a second
+// copy of the comparison in the route, which is exactly what
+// test-season-config.mjs's single-consumer guard exists to prevent.
+//
+// Walks this year, then next: a season whose window has closed is not
+// "never again", it is next year's window, and that is the date a
+// customer would actually be booked into.
+//
+//   { name, open: true,  from, through }
+//   { name, open: false, opensOn, through }   — ahead of us
+//   { name, open: false, closed: true, through } — behind us, no next
+//
+// Returns null for a season this file does not know, so callers can
+// treat "no answer" as "do not annotate" rather than as "closed".
+function publicBookingStatus(season, todayKey, years = 2) {
+  const startYear = Number(String(todayKey).slice(0, 4));
+  if (!Number.isFinite(startYear)) return null;
+  let last = null;
+  for (let i = 0; i < years; i++) {
+    const cfg = configFor(season, startYear + i);
+    if (!cfg) continue;
+    const from = cfg.publicBookingFrom || null;
+    const through = cfg.publicBookingThrough || null;
+    if ((!from || todayKey >= from) && (!through || todayKey <= through)) {
+      return { name: season, open: true, from, through };
+    }
+    if (from && todayKey < from) {
+      return { name: season, open: false, opensOn: from, through };
+    }
+    last = { name: season, open: false, closed: true, through };
+  }
+  return last;
+}
+
+// The two seasonal families, mapped to their season. The same mapping
+// the availability gate makes — kept beside the windows so the two
+// cannot drift.
+function seasonForFamily(family) {
+  if (family === "fall_closing") return "fall";
+  if (family === "spring_opening") return "spring";
+  return null;
+}
+
 module.exports = {
   SEASONS,
   windowFor,
   configFor,
+  publicBookingStatus,
+  seasonForFamily,
   publicWindowFor,
   setPublicBookingWindow,
   hasExplicitYear,

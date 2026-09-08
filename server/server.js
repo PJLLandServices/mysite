@@ -8250,8 +8250,39 @@ async function handleApi(req, res, pathname) {
 
   // Public catalog of bookable services (used by the booking page UI).
   if (req.method === "GET" && pathname === "/api/booking/services") {
-    return sendJson(res, 200, { ok: true, services: BOOKABLE_SERVICES });
+    // Each service says whether the public flow will accept a booking for
+    // it TODAY, and if not, when it next will.
+    //
+    // WHY. Patrick picked "Spring opening" on 8 September and the picker
+    // came back empty. It was right to — spring 2026 ran Mar 1 to Jun 30
+    // and had been over for ten weeks — but nothing said so, and an empty
+    // calendar in front of a customer reads as "we're full", which is the
+    // opposite of the truth.
+    //
+    // The decision belongs to lib/seasons.js, which owns the windows.
+    // Asking it rather than comparing the bounds here is the difference
+    // between one rule with two callers and two rules that will disagree.
+    const today = new Date();
+    const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const decorated = {};
+    for (const [key, svc] of Object.entries(BOOKABLE_SERVICES)) {
+      let season = null;
+      const name = seasonsLib.seasonForFamily(svc.family);
+      if (name) {
+        // Fails soft, the same posture the availability gate takes: a
+        // broken seasons.json must degrade to an un-annotated list, never
+        // take booking down.
+        try { season = seasonsLib.publicBookingStatus(name, todayKey); }
+        catch (err) {
+          console.warn("[booking/services] season lookup:", err?.message);
+          season = null;
+        }
+      }
+      decorated[key] = season ? { ...svc, season } : svc;
+    }
+    return sendJson(res, 200, { ok: true, services: decorated });
   }
+
 
   // External handoff endpoint — AI chat agents (or any pre-booking tool)
   // POST a diagnosis + customer hints here, get back a session token, and

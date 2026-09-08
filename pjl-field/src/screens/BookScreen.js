@@ -84,10 +84,37 @@ export function zonesOnFile(property) {
   return Number.isFinite(declared) && declared > 0 ? declared : null;
 }
 
+// What the picker says about a service's season, in words a customer can
+// be told. `season` comes from /api/booking/services, derived server-side
+// from the same authority the availability gate uses.
+//
+// This exists because picking "Spring opening" on 8 September produced an
+// empty calendar and nothing else — and an empty calendar in front of a
+// customer reads as "we're full", which is the opposite of "that season
+// ended in June".
+export function seasonNote(service) {
+  const s = service?.season;
+  if (!s || s.open) return null;
+  const when = (iso) => {
+    const d = new Date(`${iso}T12:00:00`);
+    return Number.isNaN(d.getTime())
+      ? iso
+      : d.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+  };
+  if (s.opensOn) return `Booking opens ${when(s.opensOn)}`;
+  if (s.closed) return 'Season is over for this year';
+  return 'Not bookable right now';
+}
+
+// In-season services first. A closed one still SHOWS — Patrick books work
+// nobody else can, and hiding it would be its own kind of lying — but it
+// is out of the way and it says why.
 export function bookableList(services) {
-  return Object.entries(services || {})
+  const rows = Object.entries(services || {})
     .filter(([, s]) => s && s.bookable)
     .map(([key, s]) => ({ key, ...s }));
+  const shut = (r) => (seasonNote(r) ? 1 : 0);
+  return rows.sort((a, b) => shut(a) - shut(b));
 }
 
 // Which band holds this many zones, so typing 7 moves the service to
@@ -504,17 +531,30 @@ export default function BookScreen({ onSignIn }) {
                 ) : null}
 
                 <Text style={styles.lead}>What are we booking?</Text>
-                {list.map((s) => (
-                  <Pressable
-                    key={s.key}
-                    onPress={() => showDays(s.key)}
-                    disabled={loadingDays}
-                    style={({ pressed }) => [styles.option, pressed && styles.pressed]}
-                  >
-                    <Text style={styles.optionText}>{s.label}</Text>
-                    <Text style={styles.optionMeta}>{s.displayMinutes || `${s.minutes} min`}</Text>
-                  </Pressable>
-                ))}
+                {list.map((s) => {
+                  const shut = seasonNote(s);
+                  return (
+                    <Pressable
+                      key={s.key}
+                      onPress={() => showDays(s.key)}
+                      disabled={loadingDays}
+                      style={({ pressed }) => [
+                        styles.option,
+                        shut && styles.optionShut,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <Text style={[styles.optionText, shut && styles.optionTextShut]}>
+                        {s.label}
+                      </Text>
+                      {/* Still tappable — Patrick can book work the public
+                          flow will not — but it says what will happen. */}
+                      <Text style={shut ? styles.optionShutNote : styles.optionMeta}>
+                        {shut || s.displayMinutes || `${s.minutes} min`}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
                 {loadingDays ? <ActivityIndicator color={colors.brand} /> : null}
               </>
             ) : (
@@ -764,6 +804,9 @@ const styles = StyleSheet.create({
   },
   optionText: { ...type.body },
   optionMeta: { ...type.caption },
+  optionShut: { backgroundColor: colors.ground, borderColor: colors.separator },
+  optionTextShut: { color: colors.textMuted },
+  optionShutNote: { ...type.caption, color: colors.warning, fontWeight: '600' },
 
   holding: {
     backgroundColor: colors.brandTint, borderRadius: radius.card,

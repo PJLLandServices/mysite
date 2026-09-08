@@ -118,6 +118,58 @@ itself, which is what it is for. Full `build:check` green.
 clears; reply and confirm the bubble says "Emailed"; sign out and confirm the Sign in button
 reaches the login and that every screen reloads afterwards.
 
+**2026-09-08, same day ("No space for any more appointments" was three different problems, and
+one of them was Spring in September):** Patrick, screenshot from the truck: 26 Portland
+Crescent, Newmarket, **Spring opening (7-8 zones residential)** — "it came back to me saying
+that there was no space for any more appointments." It had not. Spring 2026 ran **Mar 1 - Jun
+30** and had been over for ten weeks. The calendar was not full; the season was finished.
+
+**Three faults, in order of how badly they lied.**
+
+**1. There was no open bucket.** The website's picker carries a "First available" card
+ALWAYS (`allowOpenBucket: true`, js/booking.js): selecting it books no slot, the customer
+joins the standby list, and Patrick places them onto a route day from the Season Plan later.
+That is the whole reason a full or awkward calendar still takes the job — and it is what the
+2026-09-07 `GEO_WIDEN_TIERS = [25, 40]` decision explicitly leaned on ("the open bucket exists
+precisely for the customer we can't place efficiently yet"). The app had none, so an address
+past the 40-minute cap read as *no space*. The card is now on the picker unconditionally, and
+books with `standby: true` and no `slotStart`. Site visits are the documented exception and
+the server already refuses them (`standby_unsupported`), so the card hides for a consult.
+
+**2. The app asked the wrong shape of the availability question.** Without `from`/`to` the
+server groups only days that HAVE slots, so an empty screen cannot tell full from out-of-season
+from outside-the-route-area. It now asks for the six-week range the desktop picker asks for,
+and every empty day comes back carrying `expandDaysToRange`'s own reason code. The screen names
+the dominant one — *out of season*, *too far from the routes running that week*, *bookings have
+not opened yet*, *fully booked* — instead of one sentence covering four different situations.
+
+**3. Nothing said Spring was shut before it was picked.** `GET /api/booking/services` now
+returns a `season` per service and the picker sorts in-season first, greys the rest, and prints
+*"Booking opens 1 March 2027"* or *"Season is over for this year"* on the row. A closed service
+is still tappable — Patrick books work the public flow will not — but it can no longer be
+walked into blind.
+
+**The guard that made this right.** The first version compared `publicBookingFrom` /
+`publicBookingThrough` inside the route, and `scripts/test-season-config.mjs` failed it: *"no
+consumer of the public booking bounds beyond the season gate and its test."* That guard was
+correct — a second copy of the comparison is a second answer to the question. The decision now
+lives in `lib/seasons.js` as **`publicBookingStatus(season, todayKey)`**, beside the windows it
+reads, with **`seasonForFamily()`** next to it so the family mapping cannot drift from the
+gate's. The route asks; it does not decide. **No PASS flow modified** — `/api/booking/services`
+gained a field, `/api/booking/availability` and `/reserve` are untouched, and the season gate
+itself is unchanged.
+
+**Also:** the missing address suggestions were not a fault. `geocode` falls back to town
+centroids without `GOOGLE_MAPS_SERVER_KEY`, so verify-address succeeds either way and silence
+in the box sends someone hunting the wrong problem. The proxy already reported
+`degraded: "no_key" | "upstream"`; the app was discarding it, and now says which, and that the
+address still books typed in full.
+
+`scripts/test-book.mjs` is 23 assertions, including the season decision RUN against the real
+seasons.json — spring closed on 2026-09-08 and open on 2026-05-15, fall closed on 2026-09-08
+and open on 2026-10-05 — and the open-bucket card asserted to render unconditionally rather
+than only when the list is empty. Full `build:check` green, season-config's guard included.
+
 **2026-09-08, same day (Book, rebuilt in the order of a phone call — and I had built it from
 my own summary):** Patrick, on the first version: "the booking tab did not do what I wanted it
 to do. Please tell me what you were instructed to do." It did not, and the reason is worth

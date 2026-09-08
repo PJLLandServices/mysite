@@ -399,6 +399,91 @@ check('missing address suggestions say why instead of looking broken', () => {
     'the screen does not say the booking still works without suggestions');
 });
 
+check('a service out of season says so, instead of showing an empty calendar', () => {
+  // The actual failure: "Spring opening" picked on 8 September 2026.
+  // Spring 2026 ran Mar 1 - Jun 30 and had been over for ten weeks. The
+  // picker came back empty and said nothing, which in front of a customer
+  // reads as "we're full" — the opposite of the truth.
+  const seasonNote = lift(BOOK, 'seasonNote');
+  assert.equal(seasonNote({ season: { name: 'fall', open: true } }), null, 'an open season is annotated');
+  assert.equal(seasonNote({}), null, 'a year-round service is annotated');
+  assert.equal(seasonNote(null), null);
+  assert.match(
+    seasonNote({ season: { name: 'fall', open: false, opensOn: '2026-09-28' } }),
+    /Booking opens .*September 28, 2026|Booking opens 28 September 2026/,
+  );
+  assert.equal(
+    seasonNote({ season: { name: 'spring', open: false, closed: true } }),
+    'Season is over for this year',
+  );
+
+  // In-season first, but a closed service still shows — Patrick books
+  // work the public flow will not, and hiding it is its own lie.
+  const bookableList = lift(
+    BOOK, 'bookableList',
+    BOOK.slice(BOOK.indexOf('export function seasonNote('), BOOK.indexOf('\n}\n', BOOK.indexOf('export function seasonNote(')) + 3).replace('export function', 'function'),
+  );
+  const ordered = bookableList({
+    shut: { bookable: true, season: { open: false, closed: true } },
+    open: { bookable: true, season: { open: true } },
+    always: { bookable: true },
+    hidden: { bookable: false },
+  });
+  assert.deepEqual(ordered.map((r) => r.key), ['open', 'always', 'shut']);
+  assert.ok(ordered.some((r) => r.key === 'shut'), 'an out-of-season service was hidden rather than labelled');
+
+  // And the screen shows the note rather than the duration.
+  assert.match(BOOK, /\{shut \|\| s\.displayMinutes \|\| `\$\{s\.minutes\} min`\}/);
+});
+
+check('the season status comes from the same authority the gate uses', () => {
+  // A second copy of "is spring open" is a second answer to it.
+  const at = SERVER.indexOf('pathname === "/api/booking/services"');
+  assert.ok(at > 0, 'the services route is gone');
+  const block = SERVER.slice(at, at + 3000);
+  // The route ASKS lib/seasons rather than comparing the bounds itself.
+  // One rule, two callers — not two rules that will disagree.
+  assert.match(block, /seasonsLib\.publicBookingStatus\(name, todayKey\)/,
+    'the route decides the season itself again instead of asking lib/seasons');
+  assert.match(block, /seasonsLib\.seasonForFamily\(svc\.family\)/,
+    'the family mapping was copied back into the route');
+  // And the mapping lives beside the windows, so the two cannot drift
+  // from the gate's own.
+  const SEASONS_LIB = read('server/lib/seasons.js');
+  assert.match(SEASONS_LIB, /function seasonForFamily\(family\)/);
+  assert.match(AVAILABILITY, /service\.family === "fall_closing" \? "fall"/,
+    "the availability gate's family mapping changed — lib/seasons needs revisiting");
+  // Fails soft, exactly as the gate does: a broken seasons.json must not
+  // take booking down.
+  assert.match(block, /catch \(err\) \{/);
+  assert.match(block, /season = null;/);
+
+  // And the answer it produces is RUN against the real season data rather
+  // than read off the source. Deliberately without naming the bound
+  // fields: test-season-config.mjs keeps a short allowlist of files that
+  // may read them, so that the rule has one home, and this file has no
+  // business joining it.
+  const requireRoot = createRequire(path.join(ROOT, 'package.json'));
+  const seasonsLib = requireRoot('./server/lib/seasons.js');
+  const asOf = (iso) => {
+    const d = new Date(`${iso}T12:00:00`);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  // The shared helper, not a second copy of the comparison — that copy
+  // is exactly what test-season-config.mjs's single-consumer guard is
+  // watching for, and it was right to catch it.
+  const openOn = (season, todayKey) => seasonsLib.publicBookingStatus(season, todayKey)?.open;
+  // The case Patrick actually hit: spring, in September.
+  assert.equal(openOn('spring', asOf('2026-09-08')), false,
+    'spring reads as open in September, which is what produced the empty calendar');
+  // And it is genuinely open in May, so this is not just always false.
+  assert.equal(openOn('spring', asOf('2026-05-15')), true);
+  // Fall 2026 opens later than it is serviceable — the front of the
+  // window is held until routes actually run.
+  assert.equal(openOn('fall', asOf('2026-09-08')), false);
+  assert.equal(openOn('fall', asOf('2026-10-05')), true);
+});
+
 // ---- 4. The gate fails closed -------------------------------------------
 
 check('Book is admin-only, and the gate fails closed', () => {
