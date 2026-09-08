@@ -271,6 +271,53 @@ ok("a cancelled appointment refuses a zone update", !zCancelled.ok);
 
 // ---- Report ----------------------------------------------------------
 
+// ---- The assignment page must not ignore geography (2026-09-08) ------
+//
+// "Pick a different day" used to call rescheduleAvailability with
+// settingsOverride { geoMaxAddedDriveMinutes: 0 } — the ONLY
+// geography-off override in the codebase, sitting on the page every
+// assignment customer is sent. A customer could move to any day with
+// room anywhere in the season, which is how a booked day ran Newmarket
+// -> Vaughan -> Erin -> Newmarket -> Markham at 213 minutes of driving.
+// These assertions pin the source so it cannot be reintroduced quietly.
+{
+  const src = fs.readFileSync(path.join(ROOT, "server", "server.js"), "utf8");
+  const codeLines = src.split("\n").filter((l) => !l.trim().startsWith("//"));
+  ok("no route switches the geography filter off",
+    !codeLines.some((l) => l.includes("geoMaxAddedDriveMinutes: 0")));
+
+  // The appointment page's availability branch still restricts to
+  // afternoons and still spans the season — geography is the only thing
+  // that changed.
+  const branch = src.slice(
+    src.indexOf('if (action === "availability" && req.method === "GET")'),
+    src.indexOf('if (action === "reschedule" && req.method === "PATCH")')
+  );
+  ok("the appointment availability branch is findable", branch.length > 0);
+  ok("the appointment page passes no settings override at all",
+    !branch.includes("settingsOverride"));
+  ok("it still offers afternoons only",
+    branch.includes('s.bucketKey === "afternoon"'));
+}
+
+// ---- Cancelling from the assignment page tells the CUSTOMER ----------
+//
+// The page confirmed the cancellation on screen and emailed only
+// Patrick; the portal's cancel has always emailed the customer. Same
+// template both ways now.
+{
+  const src = fs.readFileSync(path.join(ROOT, "server", "server.js"), "utf8");
+  const branch = src.slice(
+    src.indexOf('if (action === "cancel" && req.method === "POST")'),
+    src.indexOf('if (action === "availability" && req.method === "GET")')
+  );
+  ok("the assignment-page cancel emails the customer their confirmation",
+    branch.includes("sendBookingCancellation"));
+  ok("…and still pages Patrick",
+    branch.includes("sendNewLeadEmail") && branch.includes("sendNewLeadSms"));
+}
+
+
 if (failures.length) {
   console.error(`\n✗ test-appointment-page: ${failures.length} failed, ${pass} passed\n`);
   failures.forEach((f) => console.error(`  ✗ ${f}`));

@@ -19,6 +19,35 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-08 (The assignment page ignored geography — the one override left, on the page every
+blast customer gets):** Patrick, looking at three booked days before the Sept 10 blast — one running
+Newmarket → Vaughan → **Erin** → Newmarket → Markham at 213 min of driving, another Whitby →
+Oakville → Mississauga at 195 min: "this cannot happen when the bookings go out." Diagnosis first:
+the PUBLIC booking path is provably tight now (live probe: Erin offered **0** days with 21 refused
+`outside_route_area`; Vaughan 4 days at +15..+38, inside the 40-min cap; Markham 3 days at +13..+15).
+Those days are residue from bot runs made under the older engine — the corridor fixes govern new
+bookings, they cannot retro-move existing ones. But the diagnosis surfaced a genuine live hole:
+`/api/appointment/:token/availability` called `rescheduleAvailability` with
+`settingsOverride: { geoMaxAddedDriveMinutes: 0 }` — **the only geography-off override in the
+codebase**, sitting on the very page the assignment blast links to. Its original rationale (stage-5:
+"an off-route stop is an end-of-day addition") does not hold: the afternoon bucket runs 12–5 and the
+sequencer orders it geographically, so a far move lands MID-day and the crew drives out and back —
+exactly the Erin stop at 12:00. The override is removed; geography now applies there like everywhere
+else, afternoon-only and the season horizon unchanged, with the elastic corridor (25 → 40) still
+providing the give. A move is refused only when it would wreck the route, and then the customer
+calls — which the one-move-then-phone rule already expects. Second fix in the same page: the
+assignment-page cancel confirmed on screen and emailed only Patrick, while the portal's cancel has
+always emailed the customer; it now sends the same `sendBookingCancellation` template, so the two
+paths read identically in an inbox. Six assertions added to `test-appointment-page.mjs` (50 total)
+pinning the source: no route switches geography off, the branch passes no settingsOverride, it still
+offers afternoons only, and the cancel both emails the customer and pages Patrick. **The fail-first
+check earned its keep three times here:** the assertions passed against the reverted code twice
+before they were right — once because this suite's helper is `ok(name, cond)` and the arguments were
+reversed (a non-empty string is truthy, so every assertion passed unconditionally), and once because
+the new block had been appended AFTER the `if (failures.length)` gate, so its failures were recorded
+and never reported. Only on the third attempt did it fail correctly (3 failed, exit 1) on the old
+behaviour. A test that has never been seen to fail is a description, not a guard.
+
 **2026-09-08 (Cancelling gave the appointment back to the customer but not to the calendar):**
 Walking Patrick through the customer cancel/reschedule flows surfaced a live defect. Cancelling did
 everything except the thing that matters most operationally: the booking flipped to `cancelled`, the

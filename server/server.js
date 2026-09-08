@@ -22988,9 +22988,17 @@ Customer signature captured at ${new Date().toISOString()}.`;
         const reason = normalizeString(body.reason, 300);
         const result = await appointmentActions.cancel(token, { reason });
         if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors });
-        // Patrick's review question: "what happens to this, are we
-        // notified?" — now yes, same paging as a customer reschedule.
         const b = result.booking;
+        // Tell the CUSTOMER, not just Patrick. This page confirmed the
+        // cancellation on screen and then sent them nothing, while the
+        // portal's cancel has always emailed them — an asymmetry that
+        // existed only because the two pages were built months apart.
+        // Same template, so the two paths read identically in an inbox.
+        sendBookingCancellation(b, {
+          reason,
+          notify: true,
+          baseUrl: process.env.PUBLIC_BASE_URL || baseUrlFromReq(req)
+        }).catch(() => {});
         Promise.allSettled([
           sendNewLeadEmail({
             id: b.id, sourceLabel: "Customer CANCELLED their assigned appointment",
@@ -23011,14 +23019,29 @@ Customer signature captured at ${new Date().toISOString()}.`;
         if (!summary.canReschedule) {
           return sendJson(res, 409, { ok: false, errors: ["This appointment can't be rescheduled from this page — call us at (905) 960-0181."] });
         }
-        // Patrick's stage-5 review rules for customer moves:
-        //   - EVERY day with room, not just on-route days: geography
-        //     filter off (an off-route stop is an end-of-day addition);
-        //     capacity and physical conflicts still apply.
-        //   - AFTERNOON ONLY (12–5): a moved stop runs at the end of the
-        //     day before the crew heads home.
+        // Rules for customer moves from the assignment page:
+        //   - AFTERNOON ONLY (12–5): a moved stop runs late in the day,
+        //     before the crew heads home.
         //   - The horizon is the whole remaining season, not 30 days —
         //     the engine's own season gate caps it at publicBookingThrough.
+        //   - GEOGRAPHY APPLIES, same as every other booking path.
+        //
+        // It used to be switched OFF here (`geoMaxAddedDriveMinutes: 0`),
+        // on the reasoning that an off-route stop is just an end-of-day
+        // addition. It is not. The afternoon bucket runs 12–5 and the
+        // sequencer orders it geographically, so a far move lands MID-day
+        // and the crew drives out and back: Patrick, 2026-09-08, looking
+        // at a booked day that ran Newmarket → Vaughan → Erin → Newmarket
+        // → Markham, 213 minutes of driving. "this cannot happen when the
+        // bookings go out."
+        //
+        // This was the ONLY geography-off override left in the codebase,
+        // and it sat on the page every assignment customer is about to be
+        // sent. The elastic corridor still applies here (it widens to 25
+        // then 40 added minutes when the customer is short of days), so a
+        // move is refused only when it would genuinely wreck the route —
+        // and then they call, which is what the one-move-then-phone rule
+        // already expects of them.
         const now = new Date();
         const seasonName = String(booking.serviceKey || "").startsWith("spring") ? "spring" : "fall";
         let to = null;
@@ -23026,11 +23049,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
           to = seasonsLib.configFor(seasonName, new Date(booking.scheduledFor).getFullYear())?.publicBookingThrough || null;
         } catch { /* season gate inside the engine still governs */ }
         const fromKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-        const result = await rescheduleAvailability(booking.id, {
-          from: fromKey,
-          to,
-          settingsOverride: { geoMaxAddedDriveMinutes: 0 }
-        });
+        const result = await rescheduleAvailability(booking.id, { from: fromKey, to });
         if (!result.ok) return sendJson(res, result.status || 422, { ok: false, errors: result.errors });
         for (const day of result.data?.days || []) {
           day.slots = (day.slots || []).filter((s) => s.bucketKey === "afternoon");
