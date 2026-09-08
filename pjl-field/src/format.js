@@ -54,6 +54,37 @@ export const shortDate = (iso) => {
 //
 // The strip handles the shapes real addresses arrive in — "123 Main St",
 // "4293 ON-7", "12-45 Bayview", "#3 Elm Court", "1/2 Queen St".
+// Initials for a person, for the circle on a message thread. A PERSON,
+// unlike a property, has a name that means something at 40px — which is
+// why the properties list has no avatar and this one does.
+export function initials(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  const first = parts[0][0] || '';
+  const last = parts.length > 1 ? parts[parts.length - 1][0] || '' : '';
+  return (first + last).toUpperCase() || '?';
+}
+
+// The time stamp on a thread row: the clock for today, the weekday
+// inside the last week, the date beyond that — the shape a messages
+// list uses, because "9:41 AM" on a message from March is a lie about
+// how recent it is.
+export function messageStamp(iso, now = Date.now()) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const then = new Date(now);
+  if (d.toDateString() === then.toDateString()) {
+    return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+  const days = (then - d) / 86400000;
+  if (days >= 0 && days < 7) return d.toLocaleDateString(undefined, { weekday: 'short' });
+  const sameYear = d.getFullYear() === then.getFullYear();
+  return d.toLocaleDateString(undefined, {
+    month: 'numeric', day: 'numeric', ...(sameYear ? {} : { year: '2-digit' }),
+  });
+}
+
 export function avatarLetter(property) {
   const p = property || {};
   const street = String(p.address || '').trim().replace(/^[\d\s\-/#.,]+/, '');

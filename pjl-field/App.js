@@ -35,7 +35,10 @@ import PropertiesScreen from './src/screens/PropertiesScreen';
 import TodayScreen from './src/screens/TodayScreen';
 import ClosingScreen from './src/screens/ClosingScreen';
 import InvoiceScreen from './src/screens/InvoiceScreen';
+import MessagesScreen from './src/screens/MessagesScreen';
 import PropertyProfileScreen from './src/screens/PropertyProfileScreen';
+import SignInScreen from './src/screens/SignInScreen';
+import ThreadScreen from './src/screens/ThreadScreen';
 import WebScreen from './src/screens/WebScreen';
 import { colors, space } from './src/theme';
 import { applyPendingUpdate } from './src/updates';
@@ -43,7 +46,7 @@ import { applyPendingUpdate } from './src/updates';
 const TABS = [
   { key: 'today',      label: 'Today',      glyph: '◷' },
   { key: 'properties', label: 'Properties', glyph: '⌂' },
-  { key: 'messages',   label: 'Messages',   glyph: '✉', path: '/admin/messages' },
+  { key: 'messages',   label: 'Messages',   glyph: '✉' },
 ];
 
 // What an open job can be. A closed set rather than three independent
@@ -53,7 +56,7 @@ const TABS = [
 //   { kind: 'closing', workOrderId }  — the native fall-closing flow
 //   { kind: 'web',     url, title }   — any other work order, on the web
 //   { kind: 'invoice', invoiceId }    — where a finished closing lands
-export const JOB = { CLOSING: 'closing', WEB: 'web', INVOICE: 'invoice' };
+export const JOB = { CLOSING: 'closing', WEB: 'web', INVOICE: 'invoice', THREAD: 'thread' };
 
 // A work order becomes one of two things. Kept out of the component so
 // the routing decision can be tested without React Native — the same
@@ -93,6 +96,18 @@ export default function App() {
   // finish a closing, dismiss it, and without this the card still says
   // "Resume" and the pin is still a number.
   const [jobsClosed, setJobsClosed] = useState(0);
+  // Signing in, over everything, from anywhere.
+  //
+  // Auth rides the WebView's cookie jar (src/api.js), so before Messages
+  // went native every "not signed in" state could point at a tab that
+  // happened to be a web page. Now none of them is. Without this overlay
+  // the app would tell you to sign in somewhere and have nowhere to
+  // send you — which is not a worse message, it is an app you cannot
+  // use. `signedIn` is bumped on success so every mounted screen
+  // reloads: they each hold their own `auth` state and none of them is
+  // watching the cookie jar.
+  const [signInOpen, setSignInOpen] = useState(false);
+  const [signedIn, setSignedIn] = useState(0);
 
   // Cold start: pull a newer bundle if there is one, then reload into
   // it. Without this the app runs the previous bundle for one more
@@ -114,6 +129,12 @@ export default function App() {
     setJobsClosed((n) => n + 1);
   }, []);
 
+  const openSignIn = useCallback(() => setSignInOpen(true), []);
+  const finishSignIn = useCallback(() => {
+    setSignInOpen(false);
+    setSignedIn((n) => n + 1);
+  }, []);
+
   return (
     <View style={styles.root}>
       <StatusBar style="dark" />
@@ -131,20 +152,35 @@ export default function App() {
                 accessibilityElementsHidden={!isActive}
               >
                 {tab.key === 'today' ? (
-                  <TodayScreen onOpenWorkOrder={openWorkOrder} refreshToken={jobsClosed} />
+                  <TodayScreen
+                    key={`today-${signedIn}`}
+                    onOpenWorkOrder={openWorkOrder}
+                    refreshToken={jobsClosed}
+                    onSignIn={openSignIn}
+                  />
                 ) : tab.key === 'properties' ? (
                   openPropertyId ? (
                     <PropertyProfileScreen
+                      key={`property-${openPropertyId}-${signedIn}`}
                       propertyId={openPropertyId}
                       onBack={() => setOpenPropertyId(null)}
                       onOpenWorkOrder={openWorkOrder}
                       onOpenInvoice={(invoiceId) => setJob({ kind: JOB.INVOICE, invoiceId })}
+                      onSignIn={openSignIn}
                     />
                   ) : (
-                    <PropertiesScreen onOpen={setOpenPropertyId} />
+                    <PropertiesScreen
+                      key={`properties-${signedIn}`}
+                      onOpen={setOpenPropertyId}
+                      onSignIn={openSignIn}
+                    />
                   )
                 ) : (
-                  <WebScreen path={tab.path} />
+                  <MessagesScreen
+                    key={`messages-${signedIn}`}
+                    onOpenThread={(leadId) => setJob({ kind: JOB.THREAD, leadId })}
+                    onSignIn={openSignIn}
+                  />
                 )}
               </View>
             );
@@ -184,6 +220,7 @@ export default function App() {
               <ClosingScreen
                 workOrderId={job.workOrderId}
                 onExit={closeJob}
+                onSignIn={openSignIn}
                 // A finished closing goes straight to its invoice. When
                 // the cascade did not hand one back — it is best-effort
                 // and the visit is completed either way — fall back to
@@ -199,10 +236,24 @@ export default function App() {
                 }}
               />
             ) : job.kind === JOB.INVOICE ? (
-              <InvoiceScreen invoiceId={job.invoiceId} onBack={closeJob} />
+              <InvoiceScreen invoiceId={job.invoiceId} onBack={closeJob} onSignIn={openSignIn} />
+            ) : job.kind === JOB.THREAD ? (
+              <ThreadScreen leadId={job.leadId} onBack={closeJob} onSignIn={openSignIn} />
             ) : (
               <WebScreen path={job.url} onBack={closeJob} title={job.title} />
             )}
+          </SafeAreaView>
+        </View>
+      ) : null}
+
+      {/* Above the job overlay, deliberately: a session can expire while
+          a closing is open, and the sign-in has to reach over whatever
+          is already on screen. Modal to VoiceOver for the same reason
+          the job overlay is. */}
+      {signInOpen ? (
+        <View style={styles.overlay} accessibilityViewIsModal>
+          <SafeAreaView style={styles.overlaySafe}>
+            <SignInScreen onSignedIn={finishSignIn} onCancel={() => setSignInOpen(false)} />
           </SafeAreaView>
         </View>
       ) : null}

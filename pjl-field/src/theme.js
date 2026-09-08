@@ -23,7 +23,15 @@ export const colors = {
 };
 
 export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 };
-export const radius = { card: 12, pill: 999 };
+export const radius = {
+  card: 12,
+  pill: 999,
+  // A message bubble's corners: round everywhere except the one nearest
+  // its owner, which is what makes a column of bubbles read as a side of
+  // the conversation rather than as a list of boxes.
+  bubble: 18,
+  bubbleTail: 6,
+};
 
 export const type = {
   hero: { fontSize: 24, fontWeight: '700', color: colors.text },

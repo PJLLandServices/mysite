@@ -243,6 +243,46 @@ export const recordInvoicePayment = (id, { amount, method, notes = '' }) =>
 // Sweeps every issue off the work order's zones into the property's
 // deferred recommendations. Takes no payload — the server reads the
 // zones. Called once, at finish.
+// ---- Portal messages ----------------------------------------------------
+//
+// The customer's side of these lives in the CRM's portal, NOT in the
+// phone's Messages app. iOS gives an app no access to SMS or iMessage
+// content at all — Apple does not expose it, to anyone, at any
+// entitlement level — so "show me the customer's texts" is not a thing
+// that can be built. What CAN be shown is this thread, which is the
+// conversation PJL actually owns a record of.
+//
+// The fence is `user` (server.js needsAuth), so a tech reads and replies
+// on the same footing as an admin. No admin gate here.
+
+export const listThreads = () =>
+  getJson('/api/admin/portal-messages').then((d) => ({
+    threads: d.threads || [],
+    totalUnread: d.totalUnread || 0,
+  }));
+
+export const getThread = (leadId) =>
+  getJson(`/api/admin/portal-messages/${encodeURIComponent(leadId)}`).then((d) => d.thread || null);
+
+// Marks every CUSTOMER message on the thread read. Called when the
+// thread is opened, which is the moment the claim becomes true.
+export const markThreadRead = (leadId) =>
+  postJson(`/api/admin/portal-messages/${encodeURIComponent(leadId)}/read`);
+
+// The server's own cap (normalizeString(payload.message, 1500)). Held
+// here so the composer can stop the tech at the same number rather than
+// letting the server silently truncate a reply they thought they sent
+// whole.
+export const REPLY_MAX = 1500;
+
+// A reply is COMMITTED to the thread and then EMAILED to the customer,
+// fire-and-forget — the server does `.catch(() => {})` on the send, so a
+// dead SMTP leaves the reply in the thread with nobody told. It is not
+// a text message and must never be presented as one.
+export const replyToThread = (leadId, message) =>
+  sendJson(`/api/admin/portal-messages/${encodeURIComponent(leadId)}/reply`, 'POST', { message })
+    .then((d) => d.message || null);
+
 export const deferIssues = (id) =>
   sendJson(`/api/work-orders/${encodeURIComponent(id)}/issues/defer`, 'POST');
 
