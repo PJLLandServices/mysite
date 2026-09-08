@@ -19,6 +19,32 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-08 (The delete bot — removing 123 load-test bookings and everything they created):**
+Patrick, after the bot filled the calendar to pilot the booking system: "can you build a delete
+bot that deletes all these booked appointments, and everything that they have created?
+(Properties, Customers, Work orders and Invoices.)" New: `POST /api/admin/purge-test-data`
+(admin-only) and `scripts/purge-test-data.mjs`, the runner he types. **The runner holds no
+delete logic** — it logs in and calls the endpoint, so there is exactly one definition of what
+a test record is (the CLAUDE.md "define the rule once" rule; two copies of this rule would
+drift, and the copy that drifts deletes a real customer). Anchored on the marker in
+`lead.contact.notes` (default `PJLTEST-`, refused under 4 characters — "P" would match
+everything). From each marked lead it sweeps `bookings`, `work-orders`, `invoices`, `quotes`,
+`projects` by `leadId || customerId || propertyId`, then the lead's customer and property.
+Three guards, each pinned by a test that was run against deliberately broken code first and
+observed to fail: (1) **dry run is the default** — a live purge needs
+`confirm: "PURGE TEST DATA"`; (2) **the short-marker refusal**; (3) **the survival guard** — a
+customer or property is removed only when EVERY lead naming it is itself in the purge, so a bot
+booking made against somebody real takes the booking and leaves the person. A booking anchored
+to no lead is left standing: nothing marks it as the bot's, and guessing is how a real
+appointment disappears. Walked per the lifecycle checklist — the purge is a hard delete, not a
+status, so there is no reader left to disagree; deliberately NOT done: no customer
+notification (these are fictitious contacts), no invoice tombstones (test invoices, never sent
+— the QuickBooks/paid protection in `customers.hardDelete` is a separate path and untouched),
+and no Trash round-trip, because the point is to get the records out of the calendar. Coverage:
+`scripts/test-purge-test-data.mjs`, 33 assertions, in `build:check` — it boots the real server,
+drives the real endpoint AND the real CLI, and its fixture includes a marked bot lead pointing
+at a real customer. No PASS flow touched.
+
 **2026-09-08 (The assignment page ignored geography — the one override left, on the page every
 blast customer gets):** Patrick, looking at three booked days before the Sept 10 blast — one running
 Newmarket → Vaughan → **Erin** → Newmarket → Markham at 213 min of driving, another Whitby →
