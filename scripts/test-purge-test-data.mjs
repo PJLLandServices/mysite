@@ -20,6 +20,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import http from "node:http";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
@@ -241,7 +242,93 @@ try {
   ok("…and it took the bot's records", read("leads").map((l) => l.id).join() === "L-REAL");
   ok("…and it still left the real customer standing",
     read("customers").some((c) => c.id === "C-REAL"));
+
+  // 7b. THROUGH A PROXY THAT SETS ITS OWN COOKIE. Production sits behind
+  //     one, and a proxy that adds a Set-Cookie of its own ahead of the
+  //     session cookie is what broke this in Patrick's hands: joining the
+  //     Set-Cookie headers and taking the first one hands the purge a
+  //     bot-detection cookie and the server answers "CRM login required."
+  //     This proxy reproduces that shape exactly.
+  const PROXY_PORT = PORT + 1;
+  const proxy = http.createServer((creq, cres) => {
+    const upstream = http.request(
+      { host: "127.0.0.1", port: PORT, path: creq.url, method: creq.method, headers: creq.headers },
+      (ures) => {
+        const headers = { ...ures.headers };
+        const existing = ures.headers["set-cookie"] || [];
+        // The proxy's own cookie goes FIRST, as a real one does.
+        headers["set-cookie"] = ["__proxy_bm=abc123; Path=/; HttpOnly", ...existing];
+        cres.writeHead(ures.statusCode || 500, headers);
+        ures.pipe(cres);
+      }
+    );
+    upstream.on("error", () => { cres.writeHead(502); cres.end(); });
+    creq.pipe(upstream);
+  });
+  await new Promise((r) => proxy.listen(PROXY_PORT, "127.0.0.1", r));
+
+  seed();
+  const viaProxy = await new Promise((resolve) => {
+    const p = spawn("node", [path.join(ROOT, "scripts", "purge-test-data.mjs"),
+      `--base=http://127.0.0.1:${PROXY_PORT}`], {
+      cwd: ROOT,
+      env: { ...process.env, PJL_ADMIN_EMAIL: "purge@local.test", PJL_ADMIN_PASSWORD: "local-purge-pass-123" },
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let out = "";
+    p.stdout.on("data", (c) => { out += c; });
+    p.stderr.on("data", (c) => { out += c; });
+    p.on("close", (code) => resolve({ code, out }));
+  });
+  await new Promise((r) => proxy.close(r));
+  ok("a proxy setting its own cookie does not break the login",
+    viaProxy.code === 0 && !/CRM login required/.test(viaProxy.out), viaProxy.out.slice(-500));
+  ok("…and the run reports who it signed in as",
+    /signed in as purge@local\.test/.test(viaProxy.out), viaProxy.out.slice(-500));
+  ok("…and it still reaches the right records",
+    /3\s+appointments \/ leads/.test(viaProxy.out), viaProxy.out.slice(-500));
+
+  // 8. LOCAL MODE — no --base, no login, straight at server/data. This is
+  //    the mode Patrick runs on the Render shell, and it exists because the
+  //    HTTP mode failed in his hands with "CRM login required." It must
+  //    reach the same answer as the endpoint, not a second implementation
+  //    of it: same counts, same survivor.
+  seed();
+  const local = (extra = []) => new Promise((resolve) => {
+    const p = spawn("node", [path.join(ROOT, "scripts", "purge-test-data.mjs"), ...extra], {
+      cwd: ROOT, env: { ...process.env, PJL_BASE_URL: "" }, stdio: ["ignore", "pipe", "pipe"]
+    });
+    let out = "";
+    p.stdout.on("data", (c) => { out += c; });
+    p.stderr.on("data", (c) => { out += c; });
+    p.on("close", (code) => resolve({ code, out }));
+  });
+
+  const localDry = await local();
+  ok("local mode runs with no server and no login",
+    localDry.code === 0 && /dry run/i.test(localDry.out), localDry.out.slice(-400));
+  ok("local mode's dry run deleted nothing", read("leads").length === 4);
+  ok("local mode counts exactly what the endpoint counted",
+    /3\s+appointments \/ leads/.test(localDry.out) && /1\s+customers/.test(localDry.out),
+    localDry.out.slice(-400));
+
+  const localShort = await local(["--marker=P", "--confirm"]);
+  ok("local mode refuses a dangerously short marker", localShort.code === 1, localShort.out.slice(-200));
+  ok("…and deleted nothing", read("leads").length === 4);
+
+  const localLive = await local(["--confirm"]);
+  ok("local mode deletes when told to", localLive.code === 0 && /Removed:/.test(localLive.out),
+    localLive.out.slice(-400));
+  ok("local mode took the bot's leads", read("leads").map((l) => l.id).join() === "L-REAL");
+  ok("local mode took the bot's work orders and invoices",
+    read("work-orders").map((w) => w.id).join() === "WO-REAL"
+    && read("invoices").map((i) => i.id).join() === "INV-REAL");
+  ok("local mode left the real customer and property standing",
+    read("customers").some((c) => c.id === "C-REAL") && read("properties").some((p) => p.id === "P-REAL"));
+  ok("local mode backs the leads file up before rewriting it",
+    fs.existsSync(path.join(DATA, "leads.json.bak")));
 } finally {
+  fs.rmSync(path.join(DATA, "leads.json.bak"), { force: true });
   child.kill("SIGKILL");
   for (const [f, buf] of backups) {
     const p = path.join(DATA, f);
