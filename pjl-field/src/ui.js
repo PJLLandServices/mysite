@@ -14,11 +14,21 @@ export function Card({ children, style }) {
 
 // One line of a grouped list. `last` suppresses the hairline so the
 // separator never runs to the bottom edge of a card.
-export function Row({ label, value, onPress, last, valueStyle }) {
+//
+// `right` takes a NODE instead of text, for rows whose right-hand side is
+// a pill or an amount beside one. It exists because passing a <Pill> as
+// `value` puts a View inside a Text — legal on iOS, and unreliable about
+// sizing — so the rows that need one get a real container rather than a
+// nesting trick that mostly works.
+export function Row({ label, value, right, onPress, last, valueStyle }) {
   const body = (
     <View style={[styles.row, last && styles.rowLast]}>
       <Text style={styles.rowLabel} numberOfLines={1}>{label}</Text>
-      <Text style={[styles.rowValue, valueStyle]} selectable>{value}</Text>
+      {right != null ? (
+        <View style={styles.rowRight}>{right}</View>
+      ) : (
+        <Text style={[styles.rowValue, valueStyle]} selectable>{value}</Text>
+      )}
     </View>
   );
   if (!onPress) return body;
@@ -102,6 +112,14 @@ const styles = StyleSheet.create({
   rowLast: { borderBottomWidth: 0 },
   rowLabel: { ...type.label, flexShrink: 0 },
   rowValue: { ...type.body, flex: 1, textAlign: 'right' },
+  rowRight: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: space.sm,
+    flexWrap: 'wrap',
+  },
   pressed: { backgroundColor: colors.ground },
   note: {
     paddingHorizontal: space.lg,

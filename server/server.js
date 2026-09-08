@@ -13536,9 +13536,15 @@ async function handleApi(req, res, pathname) {
     const url = new URL(req.url, baseUrlFromReq(req));
     const status = url.searchParams.get("status");
     const woId = url.searchParams.get("woId");
+    // The field app's property screen asks for one address's invoices.
+    // Filtered here, the same way `status` and `woId` already are, rather
+    // than making the phone download every invoice in the business to
+    // show three. Absent, the response is byte-for-byte what it was.
+    const propertyId = url.searchParams.get("propertyId");
     let all = await invoices.list();
     if (status) all = all.filter((i) => i.status === status);
     if (woId) all = all.filter((i) => i.woId === woId);
+    if (propertyId) all = all.filter((i) => i.propertyId === propertyId);
     all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     return sendJson(res, 200, { ok: true, invoices: all });
   }

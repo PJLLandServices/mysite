@@ -42,6 +42,24 @@ export const isOpenWorkOrder = (wo) => !!wo && !TERMINAL.includes(wo.status);
 // one: an existing work order, a lead, or a property.
 export const canStartWorkOrder = (b) => !!(b?.workOrder || b?.leadId || b?.propertyId);
 
+// What the button on the day's card should SAY. Three states, because
+// there are three: nothing raised yet, something open, something
+// finished. The old label was `workOrder ? 'Open WO' : 'Start WO'`,
+// which called a half-done closing and a completed one the same thing
+// and made the card the only place the difference showed.
+//
+// Terminal work orders read "Open work order" rather than "Resume":
+// there is nothing to resume, and the card still has to reach the
+// record — that is where the invoice and the sign-off live.
+export function workOrderActionLabel(row) {
+  if (!row?.workOrder) return 'Start WO';
+  return isOpenWorkOrder(row.workOrder) ? 'Resume' : 'Open work order';
+}
+
+// A finished visit stays on the day, dimmed, rather than vanishing — it
+// is still one of the stops you drove to, and it is what the map ticks.
+export const isFinishedRow = (row) => row?.workOrder?.status === 'completed';
+
 // The route to take, as a plain value the screen acts on. Separated from
 // the fetching so the decision is testable on its own.
 //

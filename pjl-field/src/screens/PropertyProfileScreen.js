@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Image,
   Linking,
   Pressable,
@@ -17,18 +18,67 @@ import {
   Text,
   View,
 } from 'react-native';
-import { AuthRequiredError, getProperty } from '../api';
+import {
+  AuthRequiredError,
+  getProperty,
+  invoicePaymentLink,
+  isOverdue,
+  listPropertyInvoices,
+  listPropertyWorkOrders,
+} from '../api';
 import { absolute, avatarLetter, money, shortDate, telHref, zoneMeta, zoneName } from '../format';
 import { colors, radius, space, type } from '../theme';
 import { ActionButton, Card, NoteRow, Pill, Row, SectionHeader } from '../ui';
+import { isOpenWorkOrder } from '../workorder-routing';
 
 // deferredIssues statuses that still want a tech's attention. resolved
 // and dismissed are done; everything else is live work.
 const LIVE_ISSUE_STATUSES = new Set(['open', 'pre_authorized', 'in_progress', 're_deferred']);
 
+// The server's real invoice statuses. There is no `overdue` among them —
+// see isOverdue() in api.js for why that is derived rather than stored.
+const INVOICE_STATUS_LABELS = {
+  draft: 'Draft',
+  sent: 'Sent',
+  partially_paid: 'Part paid',
+  paid: 'Paid',
+  void: 'Void',
+};
 
-export default function PropertyProfileScreen({ propertyId, onBack }) {
+const WO_STATUS_LABELS = {
+  draft: 'Draft',
+  scheduled: 'Scheduled',
+  on_site: 'On site',
+  in_progress: 'In progress',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
+};
+
+// Which invoice the "text a link" button acts on. NAMED on the button
+// rather than left to guess: an address with three unpaid invoices and
+// an unlabelled button is a way to send someone the wrong balance.
+// Oldest first, because that is the one that has been waiting.
+export function invoiceToChase(invoices) {
+  const owing = (invoices || []).filter(
+    (i) => i && i.status !== 'void' && i.status !== 'paid' && Number(i.balanceDue) > 0,
+  );
+  if (!owing.length) return null;
+  return owing.reduce((oldest, i) => {
+    const a = new Date(i.createdAt || 0).getTime();
+    const b = new Date(oldest.createdAt || 0).getTime();
+    return Number.isFinite(a) && a < b ? i : oldest;
+  });
+}
+
+
+export default function PropertyProfileScreen({ propertyId, onBack, onOpenWorkOrder, onOpenInvoice }) {
   const [property, setProperty] = useState(null);
+  // Both loaded beside the property rather than inside it: the property
+  // record carries neither, and the two departing tabs are what these
+  // sections replace.
+  const [workOrders, setWorkOrders] = useState([]);
+  const [invoices, setInvoices] = useState([]);
+  const [linking, setLinking] = useState(false);
   const [state, setState] = useState('loading'); // loading | ready | auth | error
   const [error, setError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -38,6 +88,11 @@ export default function PropertyProfileScreen({ propertyId, onBack }) {
       const p = await getProperty(propertyId);
       setProperty(p);
       setState('ready');
+      // After the property, and never blocking it. A property that
+      // renders without its paperwork is useful; one that refuses to
+      // render because the invoice list 500'd is not.
+      listPropertyWorkOrders(propertyId).then(setWorkOrders).catch(() => setWorkOrders([]));
+      listPropertyInvoices(propertyId).then(setInvoices).catch(() => setInvoices([]));
     } catch (err) {
       if (err instanceof AuthRequiredError) setState('auth');
       else { setError(err?.message || 'Could not load this property.'); setState('error'); }
@@ -102,6 +157,36 @@ export default function PropertyProfileScreen({ propertyId, onBack }) {
       ? `${p.coords.lat},${p.coords.lng}`
       : p.address || '';
     if (dest) open(`http://maps.apple.com/?daddr=${encodeURIComponent(dest)}`);
+  };
+
+  // Mint the link, then hand the message to Apple's Messages app with it
+  // already written. Two reasons it is a handoff rather than a send:
+  // the server's payment-link route MINTS a url and sends nothing, and a
+  // text that leaves from your own number is a text the customer can
+  // reply to. You see it before it goes.
+  const chase = invoiceToChase(invoices);
+  const textPaymentLink = async () => {
+    if (!chase) return;
+    setLinking(true);
+    try {
+      const url = await invoicePaymentLink(chase.id);
+      if (!url) throw new Error('No payment link came back.');
+      const body = `Here's the payment link for ${chase.id}`
+        + `${chase.balanceDue != null ? ` (${money(chase.balanceDue, chase.currency)})` : ''}`
+        + `: ${url}`;
+      const to = String(phone || '').replace(/[^\d+]/g, '');
+      // `&body=` after a number, `?body=` without one — iOS ignores the
+      // text entirely if the separator is wrong, which looks like the
+      // link silently not attaching.
+      await open(to ? `sms:${to}&body=${encodeURIComponent(body)}` : `sms:&body=${encodeURIComponent(body)}`);
+    } catch (err) {
+      Alert.alert(
+        "Couldn't get a payment link",
+        err?.message || 'Open the invoice and send it by email instead.',
+      );
+    } finally {
+      setLinking(false);
+    }
   };
 
   const systemKnown = sys.controllerBrand || sys.controllerLocation || sys.shutoffLocation ||
@@ -267,6 +352,69 @@ export default function PropertyProfileScreen({ propertyId, onBack }) {
         </>
       ) : null}
 
+      {invoices.length ? (
+        <>
+          <SectionHeader>Invoices</SectionHeader>
+          <Card>
+            {invoices.slice(0, 8).map((inv, i, arr) => {
+              const overdue = isOverdue(inv);
+              const tone = overdue ? 'danger' : inv.status === 'paid' ? 'brand' : 'neutral';
+              const label = overdue ? 'Overdue' : (INVOICE_STATUS_LABELS[inv.status] || inv.status);
+              return (
+                <Row
+                  key={inv.id}
+                  label={[inv.id, shortDate(inv.createdAt)].filter(Boolean).join(' · ')}
+                  right={
+                    <>
+                      <Text style={styles.amount}>
+                        {money(inv.balanceDue > 0 ? inv.balanceDue : inv.total, inv.currency)}
+                      </Text>
+                      <Pill tone={tone}>{label}</Pill>
+                    </>
+                  }
+                  onPress={onOpenInvoice ? () => onOpenInvoice(inv.id) : undefined}
+                  last={i === arr.length - 1}
+                />
+              );
+            })}
+          </Card>
+          {chase ? (
+            <Pressable
+              onPress={textPaymentLink}
+              disabled={linking}
+              style={({ pressed }) => [styles.payBtn, (pressed || linking) && styles.payBtnPressed]}
+              accessibilityRole="button"
+            >
+              <Text style={styles.payBtnText}>
+                {linking ? 'Getting the link…' : `Text a payment link — ${chase.id}`}
+              </Text>
+            </Pressable>
+          ) : null}
+        </>
+      ) : null}
+
+      {workOrders.length ? (
+        <>
+          <SectionHeader>Work orders</SectionHeader>
+          <Card>
+            {workOrders.slice(0, 10).map((wo, i, arr) => (
+              <Row
+                key={wo.id}
+                label={[wo.type ? wo.type.replace(/_/g, ' ') : 'Visit', shortDate(wo.completedAt || wo.scheduledFor)]
+                  .filter(Boolean).join(' · ')}
+                right={
+                  <Pill tone={isOpenWorkOrder(wo) ? 'warn' : 'neutral'}>
+                    {WO_STATUS_LABELS[wo.status] || wo.status}
+                  </Pill>
+                }
+                onPress={onOpenWorkOrder ? () => onOpenWorkOrder(wo) : undefined}
+                last={i === arr.length - 1}
+              />
+            ))}
+          </Card>
+        </>
+      ) : null}
+
       {visits.length ? (
         <>
           <SectionHeader>Service history</SectionHeader>
@@ -344,6 +492,18 @@ const styles = StyleSheet.create({
   issueNotes: { ...type.body, lineHeight: 21 },
   issueMeta: { ...type.caption },
   link: { color: colors.brand },
+  // Tabular figures so a column of balances lines up on the decimal.
+  amount: { ...type.body, fontVariant: ['tabular-nums'] },
+  payBtn: {
+    backgroundColor: colors.brand,
+    borderRadius: radius.card,
+    marginHorizontal: space.md,
+    marginTop: space.sm,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  payBtnPressed: { opacity: 0.7 },
+  payBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   missing: { color: colors.textFaint },
   zone: {
     paddingHorizontal: space.lg,
