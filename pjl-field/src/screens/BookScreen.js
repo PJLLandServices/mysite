@@ -52,6 +52,7 @@ import {
 import {
   AuthRequiredError,
   bookingAvailability,
+  whyNoDays,
   listProperties,
   listServices,
   reserveBooking,
@@ -83,10 +84,37 @@ export function zonesOnFile(property) {
   return Number.isFinite(declared) && declared > 0 ? declared : null;
 }
 
+// What the picker says about a service's season, in words a customer can
+// be told. `season` comes from /api/booking/services, derived server-side
+// from the same authority the availability gate uses.
+//
+// This exists because picking "Spring opening" on 8 September produced an
+// empty calendar and nothing else — and an empty calendar in front of a
+// customer reads as "we're full", which is the opposite of "that season
+// ended in June".
+export function seasonNote(service) {
+  const s = service?.season;
+  if (!s || s.open) return null;
+  const when = (iso) => {
+    const d = new Date(`${iso}T12:00:00`);
+    return Number.isNaN(d.getTime())
+      ? iso
+      : d.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+  };
+  if (s.opensOn) return `Booking opens ${when(s.opensOn)}`;
+  if (s.closed) return 'Season is over for this year';
+  return 'Not bookable right now';
+}
+
+// In-season services first. A closed one still SHOWS — Patrick books work
+// nobody else can, and hiding it would be its own kind of lying — but it
+// is out of the way and it says why.
 export function bookableList(services) {
-  return Object.entries(services || {})
+  const rows = Object.entries(services || {})
     .filter(([, s]) => s && s.bookable)
     .map(([key, s]) => ({ key, ...s }));
+  const shut = (r) => (seasonNote(r) ? 1 : 0);
+  return rows.sort((a, b) => shut(a) - shut(b));
 }
 
 // Which band holds this many zones, so typing 7 moves the service to
@@ -109,13 +137,42 @@ export function serviceForZones(list, family, zoneCount) {
 // The text Patrick sends. Names the EXACT day and time that was just
 // reserved — not "your appointment is confirmed", which tells a customer
 // on the phone nothing they can write down.
-export function confirmationText({ dayLabel, timeLabel, serviceLabel, address }) {
+export function confirmationText({ dayLabel, timeLabel, serviceLabel, address, standby }) {
+  const where = address ? ` At ${address}.` : '';
+  const what = serviceLabel ? ` ${serviceLabel}.` : '';
+  // A standby booking has no day yet — saying one would be a promise
+  // nobody can keep.
+  if (standby) {
+    return `PJL Land Services — you're on the list for the next time we're`
+      + ` in your area.${what}${where} I'll text you the date as soon as it's set.`;
+  }
   const when = [dayLabel, timeLabel].filter(Boolean).join(', ');
   return `PJL Land Services — you're booked for ${when}.`
-    + `${serviceLabel ? ` ${serviceLabel}.` : ''}`
-    + `${address ? ` At ${address}.` : ''}`
+    + `${what}${where}`
     + ` Reply here if anything changes.`;
 }
+
+// "First available" — the open bucket, and the reason a full calendar is
+// not a dead end. The website's picker carries this card ALWAYS
+// (`allowOpenBucket: true` in js/booking.js), and selecting it books no
+// slot: the customer joins the standby list and gets placed onto a route
+// day from the Season Plan later. Without it, an address the corridor
+// cannot place efficiently — past the 40-minute widening cap — reads as
+// "there is no space", which is false and loses the job.
+//
+// Site visits are the one exception, and the server enforces it: a
+// consult needs a real time, so it returns `standby_unsupported`.
+export function openBucketAllowed(service) {
+  return Boolean(service) && service.category !== 'consult';
+}
+
+// The shape a slot takes when there is no slot.
+const OPEN_BUCKET = {
+  openBucket: true,
+  start: null,
+  dayLabel: 'First available',
+  timeLabel: "when we're next nearby",
+};
 
 const clean = (v) => String(v || '').trim();
 
@@ -130,6 +187,9 @@ export default function BookScreen({ onSignIn }) {
   // --- Slide 1: the address -------------------------------------------
   const [typed, setTyped] = useState('');
   const [suggestions, setSuggestions] = useState([]);
+  // Why suggestions are absent, when they are. Silence here reads as a
+  // broken app; naming it reads as a setting somebody can fix.
+  const [suggestDegraded, setSuggestDegraded] = useState(null);
   const [picked, setPicked] = useState(null);      // an existing property, or null
   const [verified, setVerified] = useState(null);  // { address, minutes }
   const [checking, setChecking] = useState(false);
@@ -174,15 +234,24 @@ export default function BookScreen({ onSignIn }) {
     const mine = ++seq.current;
     const t = setTimeout(() => {
       suggestAddresses(q)
-        .then((rows) => { if (mine === seq.current) setSuggestions(rows); })
+        .then((res) => {
+          if (mine !== seq.current) return;
+          setSuggestions(res.suggestions);
+          setSuggestDegraded(res.degraded);
+        })
         // A dead suggestion service must never block a booking: the tech
         // types the address and verify-address still does the real work.
-        .catch(() => { if (mine === seq.current) setSuggestions([]); });
+        .catch(() => {
+          if (mine !== seq.current) return;
+          setSuggestions([]);
+          setSuggestDegraded('upstream');
+        });
     }, 350);
     return () => clearTimeout(t);
   }, [typed, verified]);
 
   const list = useMemo(() => bookableList(services), [services]);
+  const noneBookable = days.length > 0 && !days.some((d) => d.slots?.length);
   const onFile = useMemo(() => matchProperties(properties, typed), [properties, typed]);
   const service = serviceKey ? { key: serviceKey, ...(services[serviceKey] || {}) } : null;
 
@@ -251,7 +320,8 @@ export default function BookScreen({ onSignIn }) {
       const name = [clean(firstName), clean(lastName)].filter(Boolean).join(' ');
       await reserveBooking({
         serviceKey,
-        slotStart: slot.start,
+        // A standby booking has no slot — that is the whole point of it.
+        ...(slot.openBucket ? { standby: true } : { slotStart: slot.start }),
         zoneCount: clean(zoneCount) || 'unsure',
         contact: {
           name,
@@ -271,6 +341,7 @@ export default function BookScreen({ onSignIn }) {
           timeLabel: slot.timeLabel,
           serviceLabel: service?.label,
           address: verified.address,
+          standby: slot.openBucket === true,
         }),
       });
     } catch (err) {
@@ -337,7 +408,11 @@ export default function BookScreen({ onSignIn }) {
       <ScrollView contentContainerStyle={styles.centre}>
         <Text style={styles.bookedMark}>✓</Text>
         <Text style={styles.centreTitle}>Booked</Text>
-        <Text style={styles.bookedWhen}>{done.slot.dayLabel}, {done.slot.timeLabel}</Text>
+        <Text style={styles.bookedWhen}>
+          {done.slot.openBucket
+            ? 'On the list — first available'
+            : `${done.slot.dayLabel}, ${done.slot.timeLabel}`}
+        </Text>
         <Text style={styles.centreBody}>{verified.address}</Text>
 
         <View style={styles.textCard}>
@@ -427,6 +502,14 @@ export default function BookScreen({ onSignIn }) {
               </>
             ) : null}
 
+            {!verified && suggestDegraded && typed.trim().length >= 3 ? (
+              <Text style={styles.hint}>
+                {suggestDegraded === 'no_key'
+                  ? 'Address suggestions are off — GOOGLE_MAPS_SERVER_KEY is not set on the server. Type the address in full; it still books.'
+                  : "Google isn't answering for suggestions right now. Type the address in full; it still books."}
+              </Text>
+            ) : null}
+
             {checking ? (
               <View style={styles.checking}>
                 <ActivityIndicator color={colors.brand} size="small" />
@@ -448,17 +531,30 @@ export default function BookScreen({ onSignIn }) {
                 ) : null}
 
                 <Text style={styles.lead}>What are we booking?</Text>
-                {list.map((s) => (
-                  <Pressable
-                    key={s.key}
-                    onPress={() => showDays(s.key)}
-                    disabled={loadingDays}
-                    style={({ pressed }) => [styles.option, pressed && styles.pressed]}
-                  >
-                    <Text style={styles.optionText}>{s.label}</Text>
-                    <Text style={styles.optionMeta}>{s.displayMinutes || `${s.minutes} min`}</Text>
-                  </Pressable>
-                ))}
+                {list.map((s) => {
+                  const shut = seasonNote(s);
+                  return (
+                    <Pressable
+                      key={s.key}
+                      onPress={() => showDays(s.key)}
+                      disabled={loadingDays}
+                      style={({ pressed }) => [
+                        styles.option,
+                        shut && styles.optionShut,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <Text style={[styles.optionText, shut && styles.optionTextShut]}>
+                        {s.label}
+                      </Text>
+                      {/* Still tappable — Patrick can book work the public
+                          flow will not — but it says what will happen. */}
+                      <Text style={shut ? styles.optionShutNote : styles.optionMeta}>
+                        {shut || s.displayMinutes || `${s.minutes} min`}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
                 {loadingDays ? <ActivityIndicator color={colors.brand} /> : null}
               </>
             ) : (
@@ -480,11 +576,18 @@ export default function BookScreen({ onSignIn }) {
             <Text style={styles.lead}>Read them the days</Text>
             <Text style={styles.hint}>{verified.address} · {service?.label}</Text>
 
-            {!days.some((d) => d.slots?.length) ? (
-              <Text style={styles.hint}>
-                No days come back for that address and service inside the booking
-                window — the calendar is genuinely full or out of season.
-              </Text>
+            {/* WHY, not "no space". The server hands back a reason per
+                day and they are not the same problem: out of season,
+                outside the route area that week, or genuinely full. */}
+            {noneBookable ? (
+              <View style={styles.emptyDays}>
+                <Text style={styles.emptyTitle}>{whyNoDays(days) || 'No open days.'}</Text>
+                <Text style={styles.hint}>
+                  {openBucketAllowed(service)
+                    ? 'They can still go on the list below — that is what the website offers too.'
+                    : 'A site visit needs a real time, so it cannot go on the standby list.'}
+                </Text>
+              </View>
             ) : null}
 
             {days.filter((d) => d.slots && d.slots.length).map((day) => (
@@ -512,10 +615,34 @@ export default function BookScreen({ onSignIn }) {
               </View>
             ))}
 
+            {/* ALWAYS present, exactly as it is on the website — not a
+                fallback that appears only when the list is empty. Some
+                customers take it over a date three weeks out. */}
+            {openBucketAllowed(service) ? (
+              <Pressable
+                onPress={() => setSlot(OPEN_BUCKET)}
+                style={({ pressed }) => [
+                  styles.bucket,
+                  slot?.openBucket && styles.bucketOn,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={[styles.bucketTitle, slot?.openBucket && styles.bucketTitleOn]}>
+                  First available
+                </Text>
+                <Text style={styles.bucketBody}>
+                  No fixed date — they go on the list and you place them from the
+                  Season Plan when you're next nearby.
+                </Text>
+              </Pressable>
+            ) : null}
+
             {slot ? (
               <Pressable onPress={() => setStep('who')} style={styles.primary}>
                 <Text style={styles.primaryText}>
-                  They'll take {slot.dayLabel}, {slot.timeLabel}
+                  {slot.openBucket
+                    ? "They'll take first available"
+                    : `They'll take ${slot.dayLabel}, ${slot.timeLabel}`}
                 </Text>
               </Pressable>
             ) : null}
@@ -530,7 +657,9 @@ export default function BookScreen({ onSignIn }) {
             </Pressable>
 
             <View style={styles.holding}>
-              <Text style={styles.holdingWhen}>{slot.dayLabel}, {slot.timeLabel}</Text>
+              <Text style={styles.holdingWhen}>
+                {slot.openBucket ? 'First available' : `${slot.dayLabel}, ${slot.timeLabel}`}
+              </Text>
               {/* Auto-populated from slide one — asked once, not twice. */}
               <Text style={styles.holdingWhere}>{verified.address}</Text>
             </View>
@@ -675,6 +804,9 @@ const styles = StyleSheet.create({
   },
   optionText: { ...type.body },
   optionMeta: { ...type.caption },
+  optionShut: { backgroundColor: colors.ground, borderColor: colors.separator },
+  optionTextShut: { color: colors.textMuted },
+  optionShutNote: { ...type.caption, color: colors.warning, fontWeight: '600' },
 
   holding: {
     backgroundColor: colors.brandTint, borderRadius: radius.card,
@@ -692,6 +824,20 @@ const styles = StyleSheet.create({
   bandLabel: { ...type.caption, color: colors.textMuted, fontWeight: '600' },
   bandValue: { ...type.body, flexShrink: 1, textAlign: 'right' },
 
+  emptyDays: {
+    backgroundColor: colors.warningTint, borderRadius: radius.card,
+    padding: space.md, gap: space.xs, marginTop: space.sm,
+  },
+  emptyTitle: { ...type.body, fontWeight: '600', color: colors.warning },
+  bucket: {
+    backgroundColor: colors.card, borderRadius: radius.card,
+    padding: space.md, gap: space.xs, marginTop: space.lg,
+    borderWidth: 1, borderColor: colors.separator,
+  },
+  bucketOn: { borderColor: colors.brand, backgroundColor: colors.brandTint },
+  bucketTitle: { ...type.body, fontWeight: '600' },
+  bucketTitleOn: { color: colors.brand, fontWeight: '700' },
+  bucketBody: { ...type.caption, lineHeight: 19 },
   day: { marginTop: space.md, gap: space.sm },
   dayLabel: { ...type.label, color: colors.text, fontWeight: '600' },
   slots: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
