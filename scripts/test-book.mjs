@@ -72,13 +72,47 @@ check('the book is searched by name AND by address', () => {
   assert.doesNotThrow(() => matchProperties([{ id: 'p3' }], 'holmes'));
 });
 
-check('search comes before "New customer", in that order, on screen', () => {
-  // The expensive mistake is a duplicate property, so the cheap path has
-  // to be the default one. Order in the source IS order on screen here.
-  const searchAt = BOOK.indexOf('placeholder="Name or address"');
-  const newAt = BOOK.indexOf('New customer</Text>');
-  assert.ok(searchAt > 0, 'the search box is gone');
-  assert.ok(newAt > searchAt, '"New customer" now sits above the search');
+check('the steps run address, then days, then who — the order of a phone call', () => {
+  // Patrick's own sequence: "request that customers address … it shows me
+  // JUST LIKE WHEN I search on desktop … Once i show them the booking
+  // dates, I select the date they accept". Asking for a name before a day
+  // can be offered means holding a stranger on the phone while you type.
+  const STEPS = new Function(
+    `${BOOK.slice(BOOK.indexOf('export const STEPS ='), BOOK.indexOf(';', BOOK.indexOf('export const STEPS =')) + 1).replace('export const', 'const')}\nreturn STEPS;`,
+  )();
+  assert.deepEqual(STEPS, ['address', 'when', 'who']);
+});
+
+check('the address box suggests as you type, and the book is offered first', () => {
+  // "a place to type in address with autocomplete", and the existing
+  // customer for that address announces itself before anything is made.
+  assert.match(BOOK, /suggestAddresses/, 'the address box no longer suggests anything');
+  assert.match(API, /\/api\/admin\/address-suggest\?q=/);
+  const onFileAt = BOOK.indexOf('Already in the book');
+  const suggestAt = BOOK.indexOf('>Suggestions<');
+  assert.ok(onFileAt > 0, 'existing customers are no longer offered');
+  assert.ok(suggestAt > 0, 'address suggestions are gone');
+  assert.ok(onFileAt < suggestAt, 'Google suggestions now sit above the customers already in the book');
+});
+
+check('the suggestion proxy costs money, so it is fenced and throttled', () => {
+  const start = SERVER.indexOf('function needsAuth(method, pathname) {');
+  const end = SERVER.indexOf('\n}\n', start);
+  const needsAuth = new Function(`${SERVER.slice(start, end + 3)}; return needsAuth;`)();
+  // NOT under /api/booking/, which is the public booking tree — a Places
+  // proxy anyone can call is a Google bill anyone can run up.
+  assert.equal(needsAuth('GET', '/api/admin/address-suggest'), 'user');
+  assert.ok(!SERVER.includes('"/api/booking/address-suggest"'), 'the proxy moved into the public tree');
+  // The HANDLER, not the needsAuth rule — both name the same path, and
+  // indexOf finds the fence first.
+  const at = SERVER.indexOf('req.method === "GET" && pathname === "/api/admin/address-suggest"');
+  assert.ok(at > 0, 'the suggestion route is gone');
+  const block = SERVER.slice(at, at + 2200);
+  assert.match(block, /q\.length < 3/, 'two characters is every address in Ontario');
+  assert.match(block, /country:ca/, 'the box will suggest Aurora, Colorado');
+  assert.match(block, /suggestions: \[\], degraded/, 'a missing key fails the whole screen');
+  // Debounced on the client: every keystroke is a paid call.
+  assert.match(BOOK, /setTimeout\(/, 'suggestions fire on every keystroke');
 });
 
 check('an existing customer is reused, not re-created', () => {
@@ -101,9 +135,9 @@ check('an existing customer is reused, not re-created', () => {
     'attachLead changed shape — the reuse-by-address assumption needs rechecking');
   // Everything known about the customer is prefilled, so a tech never
   // retypes a phone number into a second spelling of the same person.
-  const at = BOOK.indexOf('const choose = (property)');
+  const at = BOOK.indexOf('const takeProperty = (p)');
   assert.ok(at > 0, 'choosing an existing property is gone');
-  const block = BOOK.slice(at, BOOK.indexOf('};', at));
+  const block = BOOK.slice(at, BOOK.indexOf('\n  };', at));
   for (const field of ['customerName', 'customerPhone', 'customerEmail', 'address']) {
     assert.ok(block.includes(field), `${field} is no longer carried over from the property on file`);
   }
@@ -125,20 +159,59 @@ check('the zone count on file is the walked record, not the told-us number', () 
 // ---- 2. The geocode happens before any date -----------------------------
 
 check('no day is offered until the address has passed the booking gate', () => {
-  const loadAt = BOOK.indexOf('const loadDays = async');
-  assert.ok(loadAt > 0, 'the availability step is gone');
-  const block = BOOK.slice(loadAt, BOOK.indexOf('};', loadAt));
-  assert.match(block, /if \(!verified \|\| !serviceKey\) return;/,
+  // A Places suggestion is only a string. verify-address is what runs the
+  // gate and returns the coordinates, so picking a suggestion routes
+  // through it rather than around it.
+  const showAt = BOOK.indexOf('const showDays = async');
+  assert.ok(showAt > 0, 'the availability step is gone');
+  const block = BOOK.slice(showAt, BOOK.indexOf('\n  };', showAt));
+  assert.match(block, /if \(!verified \|\| !key\) return;/,
     'availability can be requested before the address is verified');
-  // And availability is asked against GOOGLE's address, not the typed
-  // one, so the corridor is computed against the point the pin lands on.
-  assert.match(block, /address: verified\.address/, 'availability uses the typed address, not the geocoded one');
-  // The button is disabled too — a guard the user can see beats one they
-  // discover.
-  assert.match(BOOK, /disabled=\{!verified \|\| !serviceKey \|\| loadingDays\}/);
+  assert.match(block, /address: verified\.address/,
+    'availability uses the typed address, not the geocoded one');
+  // Every path to an address goes through settleAddress, which verifies.
+  assert.match(BOOK, /onPress=\{\(\) => \{ setTyped\(s\.description\); settleAddress\(s\.description\); \}\}/,
+    'a Google suggestion is taken without being verified');
+  assert.match(BOOK, /onPress=\{\(\) => settleAddress\(takeProperty\(p\)\)\}/,
+    'an address from the book is taken without being verified');
   // Editing the address after verifying must drop the verification.
-  assert.match(BOOK, /onChangeText=\{\(v\) => \{ setAddress\(v\); setVerified\(null\); \}\}/,
+  assert.match(BOOK, /setTyped\(v\); setVerified\(null\); setPicked\(null\);/,
     'an edited address keeps its old verification');
+});
+
+check('the confirmation text names the exact day and time', () => {
+  // Patrick: "I send them a text message with that EXACT BOOKING DAY for
+  // that appointment time." Not "your appointment is confirmed", which
+  // tells someone on the phone nothing they can write down.
+  const confirmationText = lift(BOOK, 'confirmationText');
+  const body = confirmationText({
+    dayLabel: 'Thursday, Oct 2',
+    timeLabel: '9:00-11:00 AM',
+    serviceLabel: 'Fall closing (5-6 zones residential)',
+    address: '90 Oriole Dr, Aurora',
+  });
+  assert.ok(body.includes('Thursday, Oct 2'), 'the text does not name the day');
+  assert.ok(body.includes('9:00-11:00 AM'), 'the text does not name the time');
+  assert.ok(body.includes('90 Oriole Dr, Aurora'), 'the text does not name the address');
+  assert.ok(body.includes('PJL'), 'the text does not say who it is from');
+  // Missing pieces must not print "undefined" at a customer.
+  assert.ok(!/undefined|null/.test(confirmationText({ dayLabel: 'Fri' })));
+  // And it is a HANDOFF from Patrick's own number, so they can reply.
+  assert.match(BOOK, /sms:\$\{to\}\?body=/, 'the confirmation is not sent from the phone');
+  assert.ok(!/sms:\$\{to\}&body=/.test(BOOK), 'the iOS-only separator is back');
+});
+
+check('the second phone number is stored and shown, not swallowed', () => {
+  // It was captured on screen and dropped by the server, which makes the
+  // form lie about what it collected.
+  assert.match(SERVER, /const altPhone = normalizePhone\(contact\.altPhone\);/,
+    'altPhone is not normalized, so it is dropped');
+  assert.match(SERVER, /\.\.\.\(altPhone \? \{ altPhone \} : \{\}\)/,
+    'altPhone is not stored on the lead contact');
+  assert.match(SERVER, /Lead contact \(alternate\)/,
+    'altPhone is stored but never shown, which is the same as not capturing it');
+  // Additive: a lead without one is the record it always was.
+  assert.ok(!/altPhone: ""/.test(SERVER), 'an empty altPhone is being written onto every lead');
 });
 
 check('the app calls the same gate the website does', () => {
@@ -222,7 +295,7 @@ check('both zone answers are sent, and they are different things', () => {
 });
 
 check('the full contact is captured, including the second phone', () => {
-  for (const field of ['First name', 'Last name', 'Telephone', 'Alternate telephone', 'Email']) {
+  for (const field of ['First name', 'Last name', 'Telephone', 'Alternate telephone', 'Email', 'Zone count']) {
     assert.ok(BOOK.includes(`label="${field}"`), `the booking form lost its ${field} field`);
   }
   const at = BOOK.indexOf('const confirm = async');

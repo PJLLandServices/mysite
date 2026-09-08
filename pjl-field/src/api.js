@@ -250,6 +250,18 @@ export const recordInvoicePayment = (id, { amount, method, notes = '' }) =>
 // `leadId`, which is how a booking lands on an EXISTING customer instead
 // of minting a duplicate.
 
+// Google Places suggestions as you type. Staff-gated and proxied, because
+// a React Native screen has no browser to run the Places JS SDK in — the
+// CRM's own pages get autocomplete by binding that SDK to
+// `.js-address-autocomplete`, which is not available here.
+//
+// Suggestions ONLY. Whatever is picked still goes through verifyAddress,
+// so the booking gate and the coordinates come from one place and a
+// suggestion can never skip them.
+export const suggestAddresses = (q) =>
+  getJson(`/api/admin/address-suggest?q=${encodeURIComponent(q)}`)
+    .then((d) => d.suggestions || []);
+
 export const listServices = () =>
   getJson('/api/booking/services').then((d) => d.services || {});
 

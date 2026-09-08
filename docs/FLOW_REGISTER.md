@@ -141,6 +141,57 @@ itself, which is what it is for. Full `build:check` green.
 clears; reply and confirm the bubble says "Emailed"; sign out and confirm the Sign in button
 reaches the login and that every screen reloads afterwards.
 
+**2026-09-08, same day (Book, rebuilt in the order of a phone call — and I had built it from
+my own summary):** Patrick, on the first version: "the booking tab did not do what I wanted it
+to do. Please tell me what you were instructed to do." It did not, and the reason is worth
+recording: I built from a paraphrase of his brief instead of returning to his words. His words
+were a SEQUENCE, not a form —
+
+> - I open the app
+> - request that customers address (a place to type in address with autocomplete)
+> - it shows me JUST LIKE WHEN I search on desktop OR they go on the website
+> - Once i show them the booking dates, I select the date they accept
+> - I send them a text message with that EXACT BOOKING DAY for that appointment time
+
+**Three things were missing and one was backwards.** The steps ran customer → job → dates;
+they now run **address → days → who**, which is the order the call actually goes, and is why
+"Address (should auto populate from the previous slide)" made sense in his brief and had no
+referent in mine. There was no autocomplete — a "Check this address" button did the geocode
+half of the instruction and not the suggest half. There was no confirmation text at all, which
+is the last line of his sequence. And the alternate telephone was captured on screen and
+**dropped by the server**, so the form lied about what it collected.
+
+**The suggestion proxy.** `GET /api/admin/address-suggest` — Google Places, proxied, because a
+React Native screen has no browser to run the Places JS SDK in (the CRM's pages get
+autocomplete by binding that SDK to `.js-address-autocomplete` via coverage-checker.js).
+Deliberately in the **/api/admin tree and fenced at `user`**, NOT under `/api/booking/` which
+is public: it spends money per keystroke, and a Places proxy anyone can call is a Google bill
+anyone can run up. Debounced client-side, three characters minimum, `country:ca`, and a missing
+key or a dead upstream returns empty suggestions rather than failing the screen — the address
+box still works, it just stops suggesting. **Suggestions only:** whatever is picked still goes
+through `/api/booking/verify-address`, so the booking gate and the coordinates come from one
+place and a suggestion can never skip them.
+
+**`contact.altPhone`** is normalized in `validateLead`, written only when present (a lead
+without one is byte-for-byte the record it was), and surfaced in
+`proposalCustomerPhoneEntries` as "Lead contact (alternate)". A field that is stored and never
+shown is the same lie as one that is dropped.
+
+**The confirmation text is a handoff** naming the day, time, service and address, opened in
+Apple's Messages from Patrick's own number so the customer can reply to him. The screen also
+says outright that the system sends its own Twilio confirmation on booking, so nobody
+double-texts a customer without meaning to. **And the question he asked and I never answered:**
+the number cannot be extracted from the call in progress. iOS never exposes the remote party to
+an app at any entitlement level — CallKit reports that a call exists, never who is on it. It is
+typed, and the code says why.
+
+`scripts/test-book.mjs` is 17 assertions: the step order executed from the real `STEPS`, the
+book-before-Google ordering, every path to an address routed through verification, the fence
+run through the real `needsAuth`, the band boundaries against the server's own service keys,
+and the confirmation text asserted to name the day and time and never to print "undefined" at
+a customer. Full `build:check` green. **UNMAPPED — needs Patrick's walk:** take a booking the
+way he described, on the phone, start to finish.
+
 **2026-09-08 (Messages and Book: the app stops needing a web page to sign you in):**
 Patrick's brief — a native iMessage-shaped Messages tab, and a Book tab that sources
 existing customers before creating new ones. **No backend code changed.** Both tabs call
