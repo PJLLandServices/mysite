@@ -889,8 +889,8 @@ function describeLinks(map) {
     .join(", ");
 }
 
-async function requestDelete({ purgeTrashed = false } = {}) {
-  const qs = purgeTrashed ? "?purgeTrashed=1" : "";
+async function requestDelete({ purgeTrashed = false, cascade = false } = {}) {
+  const qs = cascade ? "?cascade=1" : (purgeTrashed ? "?purgeTrashed=1" : "");
   const res = await fetch(`/api/customer/${encodeURIComponent(customerId)}${qs}`, {
     method: "DELETE",
     credentials: "same-origin"
@@ -926,6 +926,24 @@ deleteBtn?.addEventListener("click", async () => {
       ({ res, body } = await requestDelete({ purgeTrashed: true }));
     }
 
+    // Live links: offer to take them WITH the customer. This is the
+    // test-data cleanup path (Patrick, 2026-09-08) — the records it
+    // destroys are the ones the plain delete protects, so it asks for the
+    // word to be typed rather than a click. A QuickBooks-pushed or
+    // part-paid invoice refuses it even here; the server says so.
+    if (!res.ok && body?.code === "linked" && body.references) {
+      const counts = describeLinks(body.references);
+      const typed = prompt(
+        `${label} is linked to ${counts}.\n\n`
+        + `DELETE EVERYTHING removes the customer and those ${counts} permanently. `
+        + `This cannot be undone.\n\n`
+        + `Type DELETE to remove them all, or cancel to stop.`
+      );
+      if (typed !== null && typed.trim().toUpperCase() === "DELETE") {
+        ({ res, body } = await requestDelete({ cascade: true }));
+      }
+    }
+
     if (!res.ok || !body.ok) {
       // The confirmed call coming back with the same refusal means the
       // confirmation didn't reach the server. Echoing the server's sentence
@@ -940,7 +958,7 @@ deleteBtn?.addEventListener("click", async () => {
       }
       if (body.references) {
         const counts = describeLinks(body.references);
-        let msg = `Can't delete — this customer is linked to ${counts}. Use Merge to combine them into another customer first.`;
+        let msg = `Can't delete — this customer is linked to ${counts}. Use Merge to combine them into another customer first, or use "Delete everything" to remove them together.`;
         if (body.trashed) {
           msg += ` (${describeLinks(body.trashed)} in the Trash also point here; those go automatically once the live links are cleared.)`;
         }

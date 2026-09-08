@@ -221,6 +221,84 @@ const TRASHED = "2026-08-20T12:00:00.000Z";
   ok(JSON.stringify(trashed) === JSON.stringify({ quotes: ["Q-TRASH"] }), "scan puts the trashed quote in trashed");
 }
 
+// ---- Cascade delete (test-data cleanup, 2026-09-08) ------------------
+//
+// Patrick, resetting between load-test runs: invoices and work orders he
+// created while testing the app were pinning the test customers in place.
+// The cascade is the opt-in way through — it deletes the linked records
+// WITH the customer — and it stops at the one thing cleanup must not
+// fake: an invoice carrying real money or a QuickBooks push.
+
+// 7. Cascade clears every linked store and the customer with them, and
+//    leaves the bystander's records untouched.
+{
+  const { target, bystander } = await seed();
+  writeStore("leads", [
+    { id: "L-1", customerId: target.id },
+    { id: "L-OTHER", customerId: bystander.id }
+  ]);
+  writeStore("properties", [{ id: "P-1", customerId: target.id }]);
+  writeStore("work-orders", [
+    { id: "WO-1", customerId: target.id, status: "completed", signature: { signed: true } },
+    { id: "WO-OTHER", customerId: bystander.id }
+  ]);
+  writeStore("invoices", [{ id: "INV-1", customerId: target.id, status: "draft", payments: [] }]);
+  writeStore("bookings", [{ id: "B-1", customerId: target.id }]);
+
+  const blocked = await customers.hardDelete(target.id);
+  ok(blocked.ok === false && blocked.code === "linked", "without cascade the links still block");
+
+  const res = await customers.hardDelete(target.id, { cascade: true, by: "patrick" });
+  ok(res.ok === true, "cascade deletes a customer the plain delete refused");
+  ok(readStore("customers").length === 1, "only the target customer is gone");
+  ok(ids(readStore("leads")).join() === "L-OTHER", "the bystander's lead survives");
+  ok(ids(readStore("work-orders")).join() === "WO-OTHER", "the bystander's work order survives");
+  ok(readStore("properties").length === 0 && readStore("bookings").length === 0,
+    "the target's property and booking are gone");
+  ok(readStore("invoices").length === 0, "the target's draft invoice is gone");
+  ok(JSON.stringify(res.cascaded.leads) === JSON.stringify(["L-1"]), "the result names what it removed");
+}
+
+// 8. A deleted invoice keeps its audit trail even in a cascade.
+{
+  const { target } = await seed();
+  writeStore("deleted-invoices", []); // the tombstone log survives seed() — it is the audit trail
+  writeStore("invoices", [{ id: "INV-2", customerId: target.id, status: "void", payments: [], total: 90 }]);
+  const res = await customers.hardDelete(target.id, { cascade: true, by: "patrick" });
+  ok(res.ok === true, "cascade removes an unpaid invoice");
+  const tombstones = readStore("deleted-invoices");
+  const stone = tombstones.find((t) => t.id === "INV-2");
+  ok(tombstones.length === 1 && Boolean(stone), "a tombstone is written for it");
+  ok(stone.snapshot && stone.snapshot.total === 90, "the tombstone freezes the record");
+  ok(stone.cascadedFromCustomer === true, "the tombstone says it came from a cascade");
+  ok(stone.deletedBy === "patrick", "the tombstone records who did it");
+}
+
+// 9. Money stops the cascade. A QuickBooks-pushed invoice and a part-paid
+//    one each refuse it, and NOTHING is deleted by the refusal.
+for (const [label, invoice] of [
+  ["a QuickBooks-pushed invoice", { id: "INV-QB", status: "sent", quickbooksInvoiceId: "QB-77", payments: [] }],
+  ["an invoice with a payment on it", { id: "INV-PAID", status: "sent", payments: [{ amount: 50 }] }]
+]) {
+  const { target } = await seed();
+  writeStore("invoices", [{ ...invoice, customerId: target.id }]);
+  writeStore("properties", [{ id: "P-KEEP", customerId: target.id }]);
+  const res = await customers.hardDelete(target.id, { cascade: true, by: "patrick" });
+  ok(res.ok === false && res.code === "protected", `${label} refuses the cascade`);
+  ok(res.protectedInvoices.length === 1 && res.protectedInvoices[0].id === invoice.id,
+    `${label} is named in the refusal`);
+  ok(readStore("customers").length === 2, `${label}: no customer was deleted`);
+  ok(readStore("properties").length === 1, `${label}: no linked record was deleted`);
+  ok(readStore("invoices").length === 1, `${label}: the invoice itself is untouched`);
+}
+
+// 10. Cascade on a customer with nothing attached still just works.
+{
+  const { target } = await seed();
+  const res = await customers.hardDelete(target.id, { cascade: true });
+  ok(res.ok === true && readStore("customers").length === 1, "cascade on a clean customer deletes it");
+}
+
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 
 console.log(`\ntest-customer-delete-trashed: ${passed} passed, ${failed} failed`);

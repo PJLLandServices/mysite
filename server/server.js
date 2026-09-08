@@ -8738,23 +8738,42 @@ async function handleApi(req, res, pathname) {
       // told apart by `code`, not by which key is present.
       const deleteUrl = new URL(req.url, baseUrlFromReq(req));
       const purgeTrashed = deleteUrl.searchParams.get("purgeTrashed") === "1";
-      const result = await customers.hardDelete(id, { purgeTrashed });
+      // ?cascade=1 — delete the linked records WITH the customer instead
+      // of refusing (test-data cleanup, Patrick 2026-09-08). Opt-in and
+      // admin-only: it destroys what the plain delete protects. A
+      // QuickBooks-pushed or part-paid invoice still refuses it.
+      const cascade = deleteUrl.searchParams.get("cascade") === "1";
+      const cascadeSession = await requireAdmin(req);
+      if (cascade && !cascadeSession) {
+        return sendJson(res, 403, { ok: false, errors: ["Admin role required to delete a customer and its records."] });
+      }
+      const result = await customers.hardDelete(id, {
+        purgeTrashed,
+        cascade,
+        by: await actorLabel(req),
+        reason: "Deleted with customer " + id + " (cascade)."
+      });
       if (!result.ok) {
-        if (result.code === "linked" || result.code === "trashed_only") {
+        if (result.code === "linked" || result.code === "trashed_only" || result.code === "protected") {
           return sendJson(res, 409, {
             ok: false,
             code: result.code,
             error: result.error,
             ...(result.references ? { references: result.references } : {}),
-            ...(result.trashed ? { trashed: result.trashed } : {})
+            ...(result.trashed ? { trashed: result.trashed } : {}),
+            ...(result.protectedInvoices ? { protectedInvoices: result.protectedInvoices } : {})
           });
         }
         return sendJson(res, 404, { ok: false, error: result.error });
       }
+      if (result.cascaded) {
+        console.log("[customer-delete] cascade removed", JSON.stringify(result.cascaded), "with", id);
+      }
       return sendJson(res, 200, {
         ok: true,
         deleted: { id: result.customer.id, name: result.customer.name },
-        purged: result.purged || {}
+        purged: result.purged || {},
+        ...(result.cascaded ? { cascaded: result.cascaded } : {})
       });
     }
   }

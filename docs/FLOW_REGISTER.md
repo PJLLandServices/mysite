@@ -19,6 +19,29 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-08 (Cascade delete — test customers that invoices and work orders had pinned):**
+Patrick, resetting between load-test runs: "If there are any of the above [invoices, work orders]
+attached to a property, or customer it will not delete. Can we incorporate the reasonable fix for
+this so that we continue to delete these test properties." `customers.hardDelete()` refuses on any
+LIVE reference across leads/properties/bookings/work-orders/quotes/invoices/projects — correct for
+the normal case (CRM-15/CRM-16 built it), and it stays the DEFAULT. Added an opt-in `cascade`
+that deletes those linked records WITH the customer: `DELETE /api/customer/:id?cascade=1`,
+admin-only, surfaced on the customer page as a typed-DELETE prompt after the "linked" refusal
+(properties were never guarded and already deleted freely — this was only ever the customer path).
+**The one thing it will not do** is fake an accounting step: an invoice with a `quickbooksInvoiceId`
+or any recorded payment refuses the whole cascade with code `protected`, naming itself, because
+`invoices.remove()` requires a void (in QBO too) and a written reason for exactly that reason.
+Everything else goes, and every cascaded invoice still gets the same tombstone
+(`deleted-invoices.json`, frozen snapshot + `cascadedFromCustomer: true`) that `invoices.remove()`
+writes — the audit trail survives the cleanup. Tombstones are appended by customers.js directly
+rather than through lib/invoices to avoid an import cycle; the file format is the contract.
+`test-customer-delete-trashed.mjs` grew to 59 assertions: cascade clears every store and leaves a
+bystander customer's records byte-intact, the tombstone is written and attributed, a QuickBooks-
+pushed invoice AND a part-paid one each refuse the cascade with NOTHING deleted, and cascade on a
+clean customer still works. The pre-existing refusal paths are unchanged and still pinned. Full
+`build:check` green — including `test-admin-gates`, which correctly rejected the first version of
+the gate for calling `requireAdmin` inline instead of binding its answer.
+
 **2026-09-07 (The widening ladder stops at 40 minutes — past that, the open bucket):**
 Patrick, reading a live route day: three self-booked customers had landed on R6 "West of the 400",
 one of them in MARKHAM, and he asked how the algorithm allowed it. Diagnosis: not a bug — the
