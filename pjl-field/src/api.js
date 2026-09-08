@@ -240,6 +240,90 @@ export const recordInvoicePayment = (id, { amount, method, notes = '' }) =>
     notes,
   });
 
+// ---- Booking -----------------------------------------------------------
+//
+// The SAME endpoints the public booking page uses, deliberately. A second
+// booking path is a second set of rules about who may book, how far the
+// drive corridor stretches, and what a slot costs — and the two would
+// drift on the first change to either. What differs here is only who is
+// asking: an admin session lets the server skip Turnstile and honour a
+// `leadId`, which is how a booking lands on an EXISTING customer instead
+// of minting a duplicate.
+
+export const listServices = () =>
+  getJson('/api/booking/services').then((d) => d.services || {});
+
+// The gate, run before a calendar is drawn: junk and out-of-area
+// addresses are refused here rather than after the customer has picked a
+// day. Also hands back Google's formatted address, which is what gets
+// stored — the geocode is sourced BEFORE any date is suggested, exactly
+// as the web booking page does it.
+export const verifyAddress = (address) =>
+  sendJson('/api/booking/verify-address', 'POST', { address });
+
+export const bookingAvailability = ({ service, address }) =>
+  getJson(
+    `/api/booking/availability?service=${encodeURIComponent(service)}`
+    + `&address=${encodeURIComponent(address)}`,
+  );
+
+// Two shapes, one route. With `leadId` the booking attaches to a customer
+// already on file; without it the server builds a new lead from `contact`.
+// `leadId` is only honoured for an admin session, which is the server's
+// own rule, not ours.
+export const reserveBooking = (payload) =>
+  sendJson('/api/booking/reserve', 'POST', payload);
+
+// Who is signed in. Book is admin-only — a tech booking work onto the
+// calendar is a business decision, not a field one — and the tab hides
+// itself rather than showing a locked door.
+export const getSession = () =>
+  getJson('/api/session').then((d) => ({
+    authenticated: Boolean(d.authenticated),
+    role: d.role || null,
+    user: d.user || null,
+  }));
+
+// ---- Portal messages ----------------------------------------------------
+//
+// The customer's side of these lives in the CRM's portal, NOT in the
+// phone's Messages app. iOS gives an app no access to SMS or iMessage
+// content at all — Apple does not expose it, to anyone, at any
+// entitlement level — so "show me the customer's texts" is not a thing
+// that can be built. What CAN be shown is this thread, which is the
+// conversation PJL actually owns a record of.
+//
+// The fence is `user` (server.js needsAuth), so a tech reads and replies
+// on the same footing as an admin. No admin gate here.
+
+export const listThreads = () =>
+  getJson('/api/admin/portal-messages').then((d) => ({
+    threads: d.threads || [],
+    totalUnread: d.totalUnread || 0,
+  }));
+
+export const getThread = (leadId) =>
+  getJson(`/api/admin/portal-messages/${encodeURIComponent(leadId)}`).then((d) => d.thread || null);
+
+// Marks every CUSTOMER message on the thread read. Called when the
+// thread is opened, which is the moment the claim becomes true.
+export const markThreadRead = (leadId) =>
+  postJson(`/api/admin/portal-messages/${encodeURIComponent(leadId)}/read`);
+
+// The server's own cap (normalizeString(payload.message, 1500)). Held
+// here so the composer can stop the tech at the same number rather than
+// letting the server silently truncate a reply they thought they sent
+// whole.
+export const REPLY_MAX = 1500;
+
+// A reply is COMMITTED to the thread and then EMAILED to the customer,
+// fire-and-forget — the server does `.catch(() => {})` on the send, so a
+// dead SMTP leaves the reply in the thread with nobody told. It is not
+// a text message and must never be presented as one.
+export const replyToThread = (leadId, message) =>
+  sendJson(`/api/admin/portal-messages/${encodeURIComponent(leadId)}/reply`, 'POST', { message })
+    .then((d) => d.message || null);
+
 // Sweeps every issue off the work order's zones into the property's
 // deferred recommendations. Takes no payload — the server reads the
 // zones. Called once, at finish.

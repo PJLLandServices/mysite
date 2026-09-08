@@ -48,7 +48,7 @@ import { colors, radius, space, type } from '../theme';
 // "nothing owing", which is the opposite of "we don't know".
 const money = (value, currency = 'CAD') => formatMoney(value, currency) ?? '—';
 
-export default function InvoiceScreen({ invoiceId, onBack }) {
+export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
   const [invoice, setInvoice] = useState(null);
   const [state, setState] = useState('loading');
   const [busy, setBusy] = useState(false);
@@ -230,11 +230,14 @@ export default function InvoiceScreen({ invoiceId, onBack }) {
           </Text>
           <Text style={styles.centreBody}>
             {state === 'auth'
-              ? 'Go back, open the Messages tab, and sign in to PJL.'
+              ? 'Sign in to PJL to open this invoice.'
               : 'The visit is finished and the invoice exists — it just would not load. Try again, or open it at the desk.'}
           </Text>
-          <Pressable style={styles.retry} onPress={() => { setState('loading'); load(); }}>
-            <Text style={styles.retryText}>Try again</Text>
+          <Pressable
+            style={styles.retry}
+            onPress={state === 'auth' ? onSignIn : () => { setState('loading'); load(); }}
+          >
+            <Text style={styles.retryText}>{state === 'auth' ? 'Sign in' : 'Try again'}</Text>
           </Pressable>
         </View>
       </View>
