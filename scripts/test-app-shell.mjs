@@ -584,7 +584,14 @@ check('every "sign in" message names the tab that can actually sign you in', () 
     'pjl-field/src/screens/ClosingScreen.js',
     'pjl-field/src/screens/InvoiceScreen.js',
   ]) {
-    const source = read(rel);
+    // Comments stripped WHOLE, not line by line. A block comment's
+    // second line does not start with `*` or `//`, and one of them
+    // (InvoiceScreen, on the reader-failed message) reads "update iOS,
+    // sign in, or use the link" — advice about the PHONE, not about this
+    // app's session, and not a string any user ever sees.
+    const source = read(rel)
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
     for (const line of source.split('\n')) {
       if (!/sign in/i.test(line)) continue;
       assert.ok(

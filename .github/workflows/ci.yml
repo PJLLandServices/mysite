@@ -50,9 +50,13 @@ jobs:
         run: npm ci
 
       # The phone app is now part of what CI verifies, so its dependencies
-      # have to be here too. test-today-map.mjs parses the app screens it
-      # covers with the APP'S OWN Babel, so that what CI accepts is what
-      # Metro will accept rather than a guess at it.
+      # have to be here too. Three suites read the app's own tree:
+      # test-app-parses.mjs parses every app source with the app's own
+      # Babel, test-today-map.mjs does the same for the screens it covers,
+      # and test-tap-to-pay.mjs reads the Stripe Terminal SDK's type
+      # definitions to check the API this integration calls still exists.
+      # What CI accepts is then what Metro will accept, rather than a
+      # guess at it.
       #
       # This is not free — it is the React Native toolchain, and it is the
       # slowest step in the job. Taken deliberately, for the same reason

@@ -19,6 +19,15 @@
     "production": {
       "autoIncrement": true,
       "channel": "production"
+    },
+    "taptopay": {
+      "extends": "preview",
+      "developmentClient": false,
+      "distribution": "internal",
+      "channel": "taptopay",
+      "ios": {
+        "simulator": false
+      }
     }
   },
   "submit": {

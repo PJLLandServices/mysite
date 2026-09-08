@@ -36,7 +36,9 @@ import TodayScreen from './src/screens/TodayScreen';
 import ClosingScreen from './src/screens/ClosingScreen';
 import InvoiceScreen from './src/screens/InvoiceScreen';
 import PropertyProfileScreen from './src/screens/PropertyProfileScreen';
+import TapToPaySettings from './src/screens/TapToPaySettings';
 import WebScreen from './src/screens/WebScreen';
+import { TapToPayProvider } from './src/taptopay/TapToPayProvider';
 import { colors, space } from './src/theme';
 import { applyPendingUpdate } from './src/updates';
 
@@ -93,6 +95,11 @@ export default function App() {
   // finish a closing, dismiss it, and without this the card still says
   // "Resume" and the pin is still a number.
   const [jobsClosed, setJobsClosed] = useState(0);
+  // Tap to Pay's own screen, opened from Today's header. Apple 3.6 wants
+  // it reachable outside checkout; an overlay over the current tab keeps
+  // the tab bar honest about where you are. It survived the restructure
+  // unchanged — the Work and Invoices tabs went, this did not.
+  const [tapSettingsOpen, setTapSettingsOpen] = useState(false);
 
   // Cold start: pull a newer bundle if there is one, then reload into
   // it. Without this the app runs the previous bundle for one more
@@ -115,6 +122,7 @@ export default function App() {
   }, []);
 
   return (
+    <TapToPayProvider>
     <View style={styles.root}>
       <StatusBar style="dark" />
       <SafeAreaView style={styles.safe}>
@@ -131,7 +139,11 @@ export default function App() {
                 accessibilityElementsHidden={!isActive}
               >
                 {tab.key === 'today' ? (
-                  <TodayScreen onOpenWorkOrder={openWorkOrder} refreshToken={jobsClosed} />
+                  <TodayScreen
+                    onOpenWorkOrder={openWorkOrder}
+                    refreshToken={jobsClosed}
+                    onOpenTapToPay={() => setTapSettingsOpen(true)}
+                  />
                 ) : tab.key === 'properties' ? (
                   openPropertyId ? (
                     <PropertyProfileScreen
@@ -206,12 +218,25 @@ export default function App() {
           </SafeAreaView>
         </View>
       ) : null}
+
+      {/* Tap to Pay's settings screen. A sibling of the job overlay, not
+          an arm of it: Apple 3.6 wants it reachable outside a checkout,
+          and it is opened from Today's header rather than from a job. */}
+      {tapSettingsOpen ? (
+        <View style={styles.overlay} accessibilityViewIsModal>
+          <SafeAreaView style={styles.overlaySafe}>
+            <TapToPaySettings onBack={() => setTapSettingsOpen(false)} />
+          </SafeAreaView>
+        </View>
+      ) : null}
     </View>
+    </TapToPayProvider>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.card },
+  overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: colors.ground },
   safe: { flex: 1, backgroundColor: colors.card, paddingTop: RNStatusBar.currentHeight || 0 },
   // The shell's `safe` is card-white because the TAB BAR sits at its
   // bottom. The overlay has no tab bar, and every screen inside it draws

@@ -23,6 +23,9 @@
         "NSCameraUsageDescription": "PJL Field uses the camera to photograph findings and the water shut-off during a service visit.",
         "NSPhotoLibraryUsageDescription": "PJL Field lets you attach photos you have already taken to a work order.",
         "NSLocationWhenInUseUsageDescription": "PJL Field records where you were when you started a service visit, as proof of attendance on the work order."
+      },
+      "entitlements": {
+        "com.apple.developer.proximity-reader.payment.acceptance": true
       }
     },
     "android": {
@@ -48,7 +51,14 @@
     },
     "plugins": [
       "expo-image-picker",
-      "expo-location"
+      "expo-location",
+      [
+        "@stripe/stripe-terminal-react-native",
+        {
+          "bluetoothBackgroundMode": false,
+          "locationWhenInUsePermission": "PJL Field confirms where a payment was taken, which Stripe requires for in-person card payments."
+        }
+      ]
     ]
   }
 }
