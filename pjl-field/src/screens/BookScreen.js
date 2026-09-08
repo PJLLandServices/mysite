@@ -99,11 +99,24 @@ export function seasonNote(service) {
     const d = new Date(`${iso}T12:00:00`);
     return Number.isNaN(d.getTime())
       ? iso
-      : d.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+      : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   };
-  if (s.opensOn) return `Booking opens ${when(s.opensOn)}`;
+  // DATES, not permission. Fall 2026's window is Sep 28 - Oct 30: booking
+  // has been open since Sep 1, and what starts on the 28th is the range
+  // of days work can be put on. Saying "Booking opens September 28" on
+  // the 8th told the owner he could not do something he had been able to
+  // do for a week.
+  if (s.startsOn) return `Dates from ${when(s.startsOn)}`;
   if (s.closed) return 'Season is over for this year';
-  return 'Not bookable right now';
+  return null;
+}
+
+// Whether the service can be booked AT ALL today — which is not the same
+// question as whether its dates have started. A season beginning three
+// weeks out is bookable now; one that ended in June is not.
+export function seasonShut(service) {
+  const s = service?.season;
+  return Boolean(s) && s.bookable === false;
 }
 
 // In-season services first. A closed one still SHOWS — Patrick books work
@@ -113,8 +126,9 @@ export function bookableList(services) {
   const rows = Object.entries(services || {})
     .filter(([, s]) => s && s.bookable)
     .map(([key, s]) => ({ key, ...s }));
-  const shut = (r) => (seasonNote(r) ? 1 : 0);
-  return rows.sort((a, b) => shut(a) - shut(b));
+  // Only a season that has ENDED goes to the bottom. One whose dates
+  // start later is ordinary bookable work and stays where it is.
+  return rows.sort((a, b) => (seasonShut(a) ? 1 : 0) - (seasonShut(b) ? 1 : 0));
 }
 
 // Which band holds this many zones, so typing 7 moves the service to
@@ -173,6 +187,28 @@ const OPEN_BUCKET = {
   dayLabel: 'First available',
   timeLabel: "when we're next nearby",
 };
+
+// Why the suggestions are empty, in words that point at the actual fix.
+// "Google isn't answering" was true of every failure and useful for none
+// of them — including the one that turned out to be a route that was
+// never deployed.
+export function suggestReason(d) {
+  if (!d) return null;
+  const tail = ' Type the address in full — it still books.';
+  if (d.degraded === 'no_key') {
+    return 'Suggestions are off: GOOGLE_MAPS_SERVER_KEY is not set on the server.' + tail;
+  }
+  if (d.degraded === 'google') {
+    // REQUEST_DENIED is nearly always the Places API not being enabled on
+    // the project, or the key being restricted to Geocoding and Distance
+    // Matrix. Naming it saves an hour of looking at the app.
+    const what = d.googleStatus === 'REQUEST_DENIED'
+      ? 'Google refused the request — the Places API is probably not enabled for this key.'
+      : `Google returned ${d.googleStatus || 'an error'}.`;
+    return `${what}${d.googleMessage ? ` (${d.googleMessage})` : ''}${tail}`;
+  }
+  return "Couldn't reach the suggestion service." + tail;
+}
 
 const clean = (v) => String(v || '').trim();
 
@@ -237,7 +273,7 @@ export default function BookScreen({ onSignIn }) {
         .then((res) => {
           if (mine !== seq.current) return;
           setSuggestions(res.suggestions);
-          setSuggestDegraded(res.degraded);
+          setSuggestDegraded(res.degraded ? { ...res } : null);
         })
         // A dead suggestion service must never block a booking: the tech
         // types the address and verify-address still does the real work.
@@ -504,9 +540,7 @@ export default function BookScreen({ onSignIn }) {
 
             {!verified && suggestDegraded && typed.trim().length >= 3 ? (
               <Text style={styles.hint}>
-                {suggestDegraded === 'no_key'
-                  ? 'Address suggestions are off — GOOGLE_MAPS_SERVER_KEY is not set on the server. Type the address in full; it still books.'
-                  : "Google isn't answering for suggestions right now. Type the address in full; it still books."}
+                {suggestReason(suggestDegraded)}
               </Text>
             ) : null}
 
@@ -532,7 +566,8 @@ export default function BookScreen({ onSignIn }) {
 
                 <Text style={styles.lead}>What are we booking?</Text>
                 {list.map((s) => {
-                  const shut = seasonNote(s);
+                  const note = seasonNote(s);
+                  const shut = seasonShut(s);
                   return (
                     <Pressable
                       key={s.key}
@@ -549,8 +584,8 @@ export default function BookScreen({ onSignIn }) {
                       </Text>
                       {/* Still tappable — Patrick can book work the public
                           flow will not — but it says what will happen. */}
-                      <Text style={shut ? styles.optionShutNote : styles.optionMeta}>
-                        {shut || s.displayMinutes || `${s.minutes} min`}
+                      <Text style={note ? styles.optionShutNote : styles.optionMeta}>
+                        {note || s.displayMinutes || `${s.minutes} min`}
                       </Text>
                     </Pressable>
                   );

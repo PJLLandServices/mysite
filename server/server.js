@@ -20411,6 +20411,24 @@ Customer signature captured at ${new Date().toISOString()}.`;
       api.searchParams.set("components", "country:ca");
       const r = await fetch(api, { signal: AbortSignal.timeout(6000) });
       const data = await r.json();
+      // Google answers 200 even when it is refusing. ZERO_RESULTS is an
+      // ordinary empty answer; everything else is a fault worth naming,
+      // and REQUEST_DENIED — the Places API not enabled on the project,
+      // or the key restricted to Geocoding and Distance Matrix only — is
+      // by far the likeliest. Reported rather than swallowed, because a
+      // silent empty list sends someone hunting the app instead of the
+      // Google console.
+      const status = String(data.status || "");
+      if (status && status !== "OK" && status !== "ZERO_RESULTS") {
+        console.warn("[address-suggest] Google says", status, data.error_message || "");
+        return sendJson(res, 200, {
+          ok: true,
+          suggestions: [],
+          degraded: "google",
+          googleStatus: status,
+          googleMessage: String(data.error_message || "")
+        });
+      }
       const suggestions = Array.isArray(data.predictions)
         ? data.predictions.slice(0, 6).map((p) => ({
             id: String(p.place_id || p.description || ""),
@@ -20522,6 +20540,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
         settings: mergedSettings,
         dayShapes,
         diagnostics
+        // NOTE: no seasonWindows override, deliberately. The booking
+        // window is the range of DATES that may be scheduled — fall 2026
+        // is Sep 28 to Oct 30 — and it applies to staff exactly as it
+        // applies to the public. Patrick opens further dates himself when
+        // he chooses to; an admin flag that quietly widened it would put
+        // work on days he has not opened, which is the opposite of the
+        // control the window exists to give him.
       });
 
       const days = (fromDate && toDate)

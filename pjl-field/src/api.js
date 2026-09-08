@@ -267,6 +267,10 @@ export const suggestAddresses = (q) =>
       // the screen can say WHY nothing is suggesting instead of looking
       // broken — the address box still works either way.
       degraded: d.degraded || null,
+      // Google's own words when it refuses, so the fix is findable
+      // rather than guessable.
+      googleStatus: d.googleStatus || null,
+      googleMessage: d.googleMessage || null,
     }));
 
 export const listServices = () =>
@@ -302,7 +306,7 @@ export const bookingAvailability = ({ service, address }) => {
     `/api/booking/availability?service=${encodeURIComponent(service)}`
     + `&address=${encodeURIComponent(address)}`
     + `&from=${encodeURIComponent(dateKey(from))}`
-    + `&to=${encodeURIComponent(dateKey(to))}`,
+    + `&to=${encodeURIComponent(dateKey(to))}`
   );
 };
 
