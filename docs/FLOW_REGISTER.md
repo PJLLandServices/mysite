@@ -118,6 +118,62 @@ itself, which is what it is for. Full `build:check` green.
 clears; reply and confirm the bubble says "Emailed"; sign out and confirm the Sign in button
 reaches the login and that every screen reloads afterwards.
 
+**2026-09-08 (Messages and Book: the app stops needing a web page to sign you in):**
+Patrick's brief — a native iMessage-shaped Messages tab, and a Book tab that sources
+existing customers before creating new ones. **No backend code changed.** Both tabs call
+endpoints that already exist: `/api/admin/portal-messages` (fenced at `user`, so a tech
+reads and replies on the same footing as an admin) and the public booking trio
+`verify-address` / `availability` / `reserve`.
+
+**The lockout this created, and the screen that answers it.** Authentication rides the
+WebView's cookie jar, so every "not signed in" state in this app pointed at whichever tab
+happened to be a web page. Making Messages native removed the last one — an app that says
+"sign in on another tab" while having no tab that can. `SignInScreen` is now a surface in
+its own right, and it loads the CRM's own `/login` rather than reimplementing the most
+security-sensitive form in the business.
+
+**It nearly shipped declaring success for people who never signed in.** The first version
+took "on our host and not `/login`" as proof. The login page carries two ordinary links —
+the PJL logo to `/`, and an orange "your portal sign-in" to `/portal/login` sitting
+directly above the email field, under the thumb. Tapping either navigated on-host, away
+from `/login`, and the app played its whole success animation and then showed "Not signed
+in" on every tab. Success is now REACHING `/admin`, an `onShouldStartLoadWithRequest`
+guard keeps the sheet on the form, and `startsWith(HOST)` was replaced with a real host
+check — it also matched `pjllandservices.com.attacker.tld`. It settles on load END rather
+than navigation start, because the session cookie's write-back from the WebView store to
+the one `fetch` reads is asynchronous and tearing the sheet down races it.
+
+**Messages is shaped like iMessage and does not lie about what a reply is.** A reply is
+committed to the thread and then EMAILED, fire-and-forget. So no bubble says "Delivered"
+or "Sent": it says **Emailed**, or **Read** when the customer's portal has marked it (a
+real receipt), or **"Saved — no email on file"** on a phone-only lead, where
+`sendPortalReplyToCustomer` returns `{ skipped: true }` and sends nothing. A real text is
+a **handoff** to Apple's Messages app — the only route an iPhone app has to the SMS wire,
+and iOS grants no read access to SMS or iMessage content at any entitlement level, so
+"show me the customer's texts" is not buildable by anyone.
+
+**Book: existing customers first, and the geocode before any date.** The search box is the
+default path and "New customer" sits under it, because the expensive mistake is a second
+property for an address PJL already services — that splits its history, invoices and work
+orders in two. Reuse is NOT by `leadId`: that path overwrites `lead.booking`, so pointing
+it at a won lead would wipe that visit's envelope. The customer's stored email and address
+go up instead and `properties.attachLead` binds the new lead to the property it already
+matches. The address passes `/api/booking/verify-address` — the real booking gate, junk
+and out-of-area refused — BEFORE a calendar is drawn, and availability is computed against
+Google's formatted address rather than what was typed. **Zones are two answers:** the
+service key carries the band (price and visit length), the count is what is in the ground,
+and typing 7 moves the band to 7-8 rather than leaving a contradiction on screen.
+**Admin-only, failing closed** — the tab is ABSENT for a tech rather than disabled, and
+every non-admin role including null and unknown gets the tech view.
+
+`scripts/test-messages.mjs` (21) and `scripts/test-book.mjs` (13) are in `build:check`,
+alongside app-shell at 25. The band boundaries are executed against the server's own
+service keys; the admin gate is executed against the real TABS array; the sign-in verdict
+is executed against the two links that broke it. Full `build:check` green, 31 app files
+parse. **UNMAPPED — needs Patrick's walk:** sign out, sign back in from each tab and
+confirm no loop; answer a customer and confirm the list updates; book an existing customer
+and confirm no second property appears.
+
 **2026-09-08, same day (Three screens you could only leave by force-quitting — and a
 bearer token on the handset):** three senior review passes over the tab restructure before it
 was walked. The reviews found what the tests did not, and one finding is the reason the others

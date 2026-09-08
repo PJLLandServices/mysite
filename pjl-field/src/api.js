@@ -240,9 +240,50 @@ export const recordInvoicePayment = (id, { amount, method, notes = '' }) =>
     notes,
   });
 
-// Sweeps every issue off the work order's zones into the property's
-// deferred recommendations. Takes no payload — the server reads the
-// zones. Called once, at finish.
+// ---- Booking -----------------------------------------------------------
+//
+// The SAME endpoints the public booking page uses, deliberately. A second
+// booking path is a second set of rules about who may book, how far the
+// drive corridor stretches, and what a slot costs — and the two would
+// drift on the first change to either. What differs here is only who is
+// asking: an admin session lets the server skip Turnstile and honour a
+// `leadId`, which is how a booking lands on an EXISTING customer instead
+// of minting a duplicate.
+
+export const listServices = () =>
+  getJson('/api/booking/services').then((d) => d.services || {});
+
+// The gate, run before a calendar is drawn: junk and out-of-area
+// addresses are refused here rather than after the customer has picked a
+// day. Also hands back Google's formatted address, which is what gets
+// stored — the geocode is sourced BEFORE any date is suggested, exactly
+// as the web booking page does it.
+export const verifyAddress = (address) =>
+  sendJson('/api/booking/verify-address', 'POST', { address });
+
+export const bookingAvailability = ({ service, address }) =>
+  getJson(
+    `/api/booking/availability?service=${encodeURIComponent(service)}`
+    + `&address=${encodeURIComponent(address)}`,
+  );
+
+// Two shapes, one route. With `leadId` the booking attaches to a customer
+// already on file; without it the server builds a new lead from `contact`.
+// `leadId` is only honoured for an admin session, which is the server's
+// own rule, not ours.
+export const reserveBooking = (payload) =>
+  sendJson('/api/booking/reserve', 'POST', payload);
+
+// Who is signed in. Book is admin-only — a tech booking work onto the
+// calendar is a business decision, not a field one — and the tab hides
+// itself rather than showing a locked door.
+export const getSession = () =>
+  getJson('/api/session').then((d) => ({
+    authenticated: Boolean(d.authenticated),
+    role: d.role || null,
+    user: d.user || null,
+  }));
+
 // ---- Portal messages ----------------------------------------------------
 //
 // The customer's side of these lives in the CRM's portal, NOT in the
@@ -283,6 +324,9 @@ export const replyToThread = (leadId, message) =>
   sendJson(`/api/admin/portal-messages/${encodeURIComponent(leadId)}/reply`, 'POST', { message })
     .then((d) => d.message || null);
 
+// Sweeps every issue off the work order's zones into the property's
+// deferred recommendations. Takes no payload — the server reads the
+// zones. Called once, at finish.
 export const deferIssues = (id) =>
   sendJson(`/api/work-orders/${encodeURIComponent(id)}/issues/defer`, 'POST');
 

@@ -33,6 +33,7 @@ import { Platform, Pressable, SafeAreaView, StatusBar as RNStatusBar, StyleSheet
 import { StatusBar } from 'expo-status-bar';
 import PropertiesScreen from './src/screens/PropertiesScreen';
 import TodayScreen from './src/screens/TodayScreen';
+import BookScreen from './src/screens/BookScreen';
 import ClosingScreen from './src/screens/ClosingScreen';
 import InvoiceScreen from './src/screens/InvoiceScreen';
 import MessagesScreen from './src/screens/MessagesScreen';
@@ -40,14 +41,27 @@ import PropertyProfileScreen from './src/screens/PropertyProfileScreen';
 import SignInScreen from './src/screens/SignInScreen';
 import ThreadScreen from './src/screens/ThreadScreen';
 import WebScreen from './src/screens/WebScreen';
+import { getSession } from './src/api';
 import { colors, space } from './src/theme';
 import { applyPendingUpdate } from './src/updates';
 
+// `admin: true` means the tab does not exist for a tech. Not disabled —
+// ABSENT. A locked tab teaches someone to press a thing that never works,
+// and the app's own answer to "may I" is only a hint anyway: the server
+// is what actually refuses, and it does.
 const TABS = [
   { key: 'today',      label: 'Today',      glyph: '◷' },
   { key: 'properties', label: 'Properties', glyph: '⌂' },
+  { key: 'book',       label: 'Book',       glyph: '＋', admin: true },
   { key: 'messages',   label: 'Messages',   glyph: '✉' },
 ];
+
+// The tabs a given role may see. Exported so the rule can be tested
+// without React Native — a Book tab appearing for a tech is exactly the
+// sort of thing nobody notices until a tech books a job.
+export function tabsForRole(role) {
+  return TABS.filter((tab) => !tab.admin || role === 'admin');
+}
 
 // What an open job can be. A closed set rather than three independent
 // booleans, because two of them being true at once was always a bug and
@@ -108,11 +122,26 @@ export default function App() {
   // watching the cookie jar.
   const [signInOpen, setSignInOpen] = useState(false);
   const [signedIn, setSignedIn] = useState(0);
+  // Null until /api/session answers. Book is admin-only, and a tab that
+  // flickers into existence a second after launch is worse than one that
+  // arrives with the rest of the app — so the bar renders without it
+  // until the answer is in, and never guesses.
+  const [role, setRole] = useState(null);
 
   // Cold start: pull a newer bundle if there is one, then reload into
   // it. Without this the app runs the previous bundle for one more
   // launch, which reads as "my update didn't work".
   useEffect(() => { applyPendingUpdate(); }, []);
+
+  // Re-asked on every sign-in, because the person signing in is not
+  // necessarily the person who signed out.
+  useEffect(() => {
+    let alive = true;
+    getSession()
+      .then((s) => { if (alive) setRole(s.authenticated ? s.role : null); })
+      .catch(() => { if (alive) setRole(null); });
+    return () => { alive = false; };
+  }, [signedIn]);
 
   const select = useCallback((key) => {
     setActive(key);
@@ -135,12 +164,20 @@ export default function App() {
     setSignedIn((n) => n + 1);
   }, []);
 
+  const visibleTabs = tabsForRole(role);
+
+  // A tab that disappears under you — sign out of admin while Book is
+  // open — must not leave the shell showing a pane with no tab.
+  useEffect(() => {
+    if (!visibleTabs.some((t) => t.key === active)) setActive('today');
+  }, [visibleTabs, active]);
+
   return (
     <View style={styles.root}>
       <StatusBar style="dark" />
       <SafeAreaView style={styles.safe}>
         <View style={styles.body}>
-          {TABS.map((tab) => {
+          {visibleTabs.map((tab) => {
             if (!visited[tab.key]) return null;
             const isActive = active === tab.key;
             return (
@@ -175,20 +212,23 @@ export default function App() {
                       onSignIn={openSignIn}
                     />
                   )
-                ) : (
+                ) : tab.key === 'book' ? (
+                  <BookScreen key={`book-${signedIn}`} onSignIn={openSignIn} />
+                ) : tab.key === 'messages' ? (
                   <MessagesScreen
                     key={`messages-${signedIn}`}
+                    refreshToken={jobsClosed}
                     onOpenThread={(leadId) => setJob({ kind: JOB.THREAD, leadId })}
                     onSignIn={openSignIn}
                   />
-                )}
+                ) : null}
               </View>
             );
           })}
         </View>
 
         <View style={styles.tabBar}>
-          {TABS.map((tab) => {
+          {visibleTabs.map((tab) => {
             const isActive = active === tab.key;
             return (
               <Pressable
@@ -218,6 +258,7 @@ export default function App() {
           <SafeAreaView style={styles.overlaySafe}>
             {job.kind === JOB.CLOSING ? (
               <ClosingScreen
+                key={`closing-${job.workOrderId}-${signedIn}`}
                 workOrderId={job.workOrderId}
                 onExit={closeJob}
                 onSignIn={openSignIn}
@@ -236,9 +277,19 @@ export default function App() {
                 }}
               />
             ) : job.kind === JOB.INVOICE ? (
-              <InvoiceScreen invoiceId={job.invoiceId} onBack={closeJob} onSignIn={openSignIn} />
+              <InvoiceScreen
+                key={`invoice-${job.invoiceId}-${signedIn}`}
+                invoiceId={job.invoiceId}
+                onBack={closeJob}
+                onSignIn={openSignIn}
+              />
             ) : job.kind === JOB.THREAD ? (
-              <ThreadScreen leadId={job.leadId} onBack={closeJob} onSignIn={openSignIn} />
+              <ThreadScreen
+                key={`thread-${job.leadId}-${signedIn}`}
+                leadId={job.leadId}
+                onBack={closeJob}
+                onSignIn={openSignIn}
+              />
             ) : (
               <WebScreen path={job.url} onBack={closeJob} title={job.title} />
             )}

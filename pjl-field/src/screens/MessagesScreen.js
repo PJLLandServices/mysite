@@ -16,7 +16,7 @@
 // Where it deliberately stops imitating Messages is the word "sent" —
 // see ThreadScreen. A reply here leaves by EMAIL.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -41,7 +41,7 @@ export function previewOf(thread) {
   return last.from === 'admin' ? `You: ${body}` : body;
 }
 
-export default function MessagesScreen({ onOpenThread, onSignIn }) {
+export default function MessagesScreen({ onOpenThread, onSignIn, refreshToken = 0 }) {
   const [threads, setThreads] = useState([]);
   const [state, setState] = useState('loading');
   const [error, setError] = useState('');
@@ -59,6 +59,16 @@ export default function MessagesScreen({ onOpenThread, onSignIn }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Re-read when a thread closes. Opening one marks it read on the
+  // server and replying changes both its preview and its place in the
+  // order — so without this you come back to a blue unread dot on the
+  // conversation you just answered.
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    load();
+  }, [refreshToken, load]);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);

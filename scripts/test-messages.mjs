@@ -118,44 +118,120 @@ check('no "sign in on another tab" message survives', () => {
   }
 });
 
-check('the sign-in knows when it has worked', () => {
-  const isLoginUrl = lift(SIGNIN, 'isLoginUrl', "const HOST = 'https://www.pjllandservices.com';");
-  const isSignedInUrl = lift(
-    SIGNIN, 'isSignedInUrl',
-    `const HOST = 'https://www.pjllandservices.com';
-     ${SIGNIN.slice(SIGNIN.indexOf('export function isLoginUrl('), SIGNIN.indexOf('\n}\n', SIGNIN.indexOf('export function isLoginUrl(')) + 3).replace('export function', 'function')}`,
-  );
+check('the sign-in only declares success on the page login sends you to', () => {
   const H = 'https://www.pjllandservices.com';
+  const deps = `const HOST = '${H}'; const NEXT = '/admin';`;
+  const pathOnHost = lift(SIGNIN, 'pathOnHost', deps);
+  const isLoginUrl = lift(SIGNIN, 'isLoginUrl', `${deps}
+    ${SIGNIN.slice(SIGNIN.indexOf('export function pathOnHost('), SIGNIN.indexOf('\n}\n', SIGNIN.indexOf('export function pathOnHost(')) + 3).replace('export function', 'function')}`);
+  const isSignedInUrl = lift(SIGNIN, 'isSignedInUrl', `${deps}
+    ${SIGNIN.slice(SIGNIN.indexOf('export function pathOnHost('), SIGNIN.indexOf('\n}\n', SIGNIN.indexOf('export function pathOnHost(')) + 3).replace('export function', 'function')}`);
+
   assert.equal(isLoginUrl(`${H}/login`), true);
   assert.equal(isLoginUrl(`${H}/login/`), true);
   assert.equal(isLoginUrl(`${H}/login?next=%2Fadmin`), true, 'the query string hid the login page');
   assert.equal(isLoginUrl(`${H}/admin`), false);
-  // Still on the form is NOT signed in — announcing success there would
-  // dismiss the sheet over an unsubmitted password box.
+
+  // THE DEFECT THIS EXISTS FOR. The login page carries two ordinary
+  // links: the PJL logo to `/`, and an orange "your portal sign-in" to
+  // `/portal/login` sitting directly above the email field, right under
+  // the thumb. Under "signed in means anywhere that is not /login",
+  // tapping either played the whole success animation for someone who
+  // never typed a password.
+  assert.equal(isSignedInUrl(`${H}/`), false, 'tapping the logo counts as signing in');
+  assert.equal(isSignedInUrl(`${H}/portal/login`), false, 'the portal link counts as signing in');
+  assert.equal(isSignedInUrl(`${H}/reset-password`), false);
   assert.equal(isSignedInUrl(`${H}/login?next=%2Fadmin`), false);
+  // What success actually is.
   assert.equal(isSignedInUrl(`${H}/admin`), true);
-  // Somebody else's host is never a sign-in, whatever it claims.
-  assert.equal(isSignedInUrl('https://evil.example/admin'), false, 'an off-host page counted as signed in');
+  assert.equal(isSignedInUrl(`${H}/admin/messages`), true);
+  assert.equal(isSignedInUrl(`${H}/admin?tab=x`), true);
+
+  // A prefix is not a host. `startsWith(HOST)` alone also matches
+  // pjllandservices.com.attacker.tld, because the prefix is there.
+  assert.equal(pathOnHost(`${H}.attacker.tld/admin`), null, 'a lookalike host passed as ours');
+  assert.equal(isSignedInUrl(`${H}.attacker.tld/admin`), false);
+  assert.equal(isSignedInUrl('https://evil.example/admin'), false);
   assert.equal(isSignedInUrl(''), false);
   assert.equal(isSignedInUrl(null), false);
+});
+
+check('the sign-in sheet cannot wander off the login form', () => {
+  const H = 'https://www.pjllandservices.com';
+  const deps = `const HOST = '${H}'; const NEXT = '/admin';`;
+  const head = (name) => SIGNIN.slice(SIGNIN.indexOf(`export function ${name}(`), SIGNIN.indexOf('\n}\n', SIGNIN.indexOf(`export function ${name}(`)) + 3).replace('export function', 'function');
+  const isAllowedNavigation = lift(
+    SIGNIN, 'isAllowedNavigation',
+    `${deps}\n${head('pathOnHost')}\n${head('isLoginUrl')}\n${head('isSignedInUrl')}`,
+  );
+  assert.equal(isAllowedNavigation(`${H}/login?next=%2Fadmin`), true);
+  assert.equal(isAllowedNavigation(`${H}/admin`), true);
+  assert.equal(isAllowedNavigation(`${H}/reset-password`), true, 'a forgotten password is a dead end');
+  assert.equal(isAllowedNavigation('about:blank'), true);
+  // The two links that used to read as success are simply not followed.
+  assert.equal(isAllowedNavigation(`${H}/`), false);
+  assert.equal(isAllowedNavigation(`${H}/portal/login`), false);
+  assert.equal(isAllowedNavigation('https://evil.example/'), false);
+  // And the guard is actually wired to the WebView.
+  assert.match(SIGNIN, /onShouldStartLoadWithRequest=\{\(request\) => isAllowedNavigation\(request\?\.url\)\}/);
+  // Settled on load END, not navigation start — the session cookie's
+  // write-back to the store this app's fetch reads is asynchronous.
+  assert.ok(!/onNavigationStateChange/.test(SIGNIN),
+    'the sheet settles on navigation start again, which races the cookie write-back');
+  assert.match(SIGNIN, /onLoadEnd=\{\(\{ nativeEvent \}\) => \{/);
+  // Offline must not leave a blank white sheet with only Cancel.
+  assert.match(SIGNIN, /Can't reach PJL/);
+});
+
+check('signing in from an overlay screen is not a dead end', () => {
+  // Each of these renders its own "Not signed in" and opens the sheet.
+  // Without a key tied to the sign-in they sit in `auth` for ever after
+  // a successful sign-in, and the only control is the button that
+  // reopens the form — a loop whose sole exit is the back bar.
+  for (const screen of ['ClosingScreen', 'InvoiceScreen', 'ThreadScreen']) {
+    const at = APP.indexOf(`<${screen}`);
+    assert.ok(at > 0, `${screen} is not mounted by the shell`);
+    const block = APP.slice(at, APP.indexOf('/>', at) + 2);
+    assert.match(block, /key=\{`[a-z]+-\$\{[^}]+\}-\$\{signedIn\}`\}/,
+      `${screen} does not remount after a sign-in, so its auth state is a loop`);
+  }
+});
+
+check('the thread list is re-read when a thread closes', () => {
+  // Opening a thread marks it read on the server, and replying changes
+  // both its preview and its place in the order.
+  const at = APP.indexOf('<MessagesScreen');
+  const block = APP.slice(at, APP.indexOf('/>', at) + 2);
+  assert.match(block, /refreshToken=\{jobsClosed\}/, 'the list keeps its stale unread dot');
+  assert.match(LIST, /refreshToken = 0/, 'MessagesScreen ignores the refresh');
 });
 
 // ---- 2. The lie ---------------------------------------------------------
 
 check('a reply is never described as a text message', () => {
   const note = lift(THREAD, 'deliveryNote');
+  const HAS = 'kristen@example.com';
   // "Emailed" is what happened. "Read" is a real receipt — the
   // customer's portal marks admin replies read.
-  assert.equal(note({ from: 'admin' }), 'Emailed');
-  assert.equal(note({ from: 'admin', readByCustomer: false }), 'Emailed');
-  assert.equal(note({ from: 'admin', readByCustomer: true }), 'Read');
+  assert.equal(note({ from: 'admin' }, HAS), 'Emailed');
+  assert.equal(note({ from: 'admin', readByCustomer: false }, HAS), 'Emailed');
+  assert.equal(note({ from: 'admin', readByCustomer: true }, HAS), 'Read');
+  // A phone-only lead is an ordinary record, and for it the server
+  // returns { skipped: true } without sending anything. "Emailed" there
+  // is the same lie as "Delivered".
+  assert.equal(note({ from: 'admin' }, ''), 'Saved — no email on file');
+  assert.equal(note({ from: 'admin' }, null), 'Saved — no email on file');
+  assert.equal(note({ from: 'admin' }, undefined), 'Saved — no email on file');
+  // A read receipt is real either way — the portal marks it.
+  assert.equal(note({ from: 'admin', readByCustomer: true }, ''), 'Read');
   // The customer's own messages carry no delivery note at all.
-  assert.equal(note({ from: 'customer' }), null);
-  assert.equal(note(null), null);
+  assert.equal(note({ from: 'customer' }, HAS), null);
+  assert.equal(note(null, HAS), null);
   // The words the app must never put under a green bubble.
   for (const word of ['Delivered', 'Sent', 'Texted', 'SMS']) {
-    assert.notEqual(note({ from: 'admin', readByCustomer: true }), word);
-    assert.notEqual(note({ from: 'admin' }), word);
+    assert.notEqual(note({ from: 'admin', readByCustomer: true }, HAS), word);
+    assert.notEqual(note({ from: 'admin' }, HAS), word);
+    assert.notEqual(note({ from: 'admin' }, ''), word);
   }
 });
 

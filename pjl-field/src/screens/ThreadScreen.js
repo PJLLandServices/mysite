@@ -98,9 +98,17 @@ export function withDayDividers(messages) {
 // What goes under the last outgoing bubble. NEVER "Delivered" and never
 // "Sent" — this left by email and the server does not wait to find out
 // whether it arrived.
-export function deliveryNote(message) {
+//
+// And "Emailed" is only true when there is an address to email. A
+// phone-only lead is an ordinary record, and for it
+// sendPortalReplyToCustomer returns `{ skipped: true }` without sending
+// anything — the reply is still saved to the thread, so the customer
+// sees it if they open their portal, but nothing was sent to them.
+// Claiming "Emailed" there is the same lie as claiming "Delivered".
+export function deliveryNote(message, customerEmail) {
   if (!message || message.from !== 'admin') return null;
-  return message.readByCustomer ? 'Read' : 'Emailed';
+  if (message.readByCustomer) return 'Read';
+  return customerEmail ? 'Emailed' : 'Saved — no email on file';
 }
 
 export default function ThreadScreen({ leadId, onBack, onSignIn }) {
@@ -110,6 +118,8 @@ export default function ThreadScreen({ leadId, onBack, onSignIn }) {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const listRef = useRef(null);
+  // Starts true: a thread opens at its newest message.
+  const atBottom = useRef(true);
 
   const load = useCallback(async () => {
     try {
@@ -263,7 +273,20 @@ export default function ThreadScreen({ leadId, onBack, onSignIn }) {
         data={rows}
         keyExtractor={(r) => r.id}
         contentContainerStyle={styles.list}
-        onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
+        onScroll={({ nativeEvent: e }) => {
+          // Only auto-scroll while the tech is already at the bottom.
+          // Rows are variable-height with no getItemLayout, so scrolling
+          // back through a long thread re-measures cells, changes content
+          // size, and an unconditional scrollToEnd snapped them to the
+          // bottom mid-read.
+          const fromBottom =
+            e.contentSize.height - e.layoutMeasurement.height - e.contentOffset.y;
+          atBottom.current = fromBottom < 80;
+        }}
+        scrollEventThrottle={64}
+        onContentSizeChange={() => {
+          if (atBottom.current) listRef.current?.scrollToEnd({ animated: false });
+        }}
         ListEmptyComponent={
           <View style={styles.centre}>
             <Text style={styles.centreBody}>No messages in this conversation yet.</Text>
@@ -275,7 +298,7 @@ export default function ThreadScreen({ leadId, onBack, onSignIn }) {
           }
           const m = item.message;
           const mine = m.from === 'admin';
-          const note = m === lastOutgoing ? deliveryNote(m) : null;
+          const note = m === lastOutgoing ? deliveryNote(m, thread?.customerEmail) : null;
           return (
             <View style={[styles.bubbleRow, mine && styles.bubbleRowMine]}>
               <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}>
@@ -320,6 +343,11 @@ export default function ThreadScreen({ leadId, onBack, onSignIn }) {
             : <Text style={styles.sendText}>↑</Text>}
         </Pressable>
       </View>
+      {/\n/.test(draft) ? (
+        <Text style={styles.notice}>
+          Line breaks are removed — the server stores this as one paragraph.
+        </Text>
+      ) : null}
       {over ? (
         <Text style={styles.overflow}>
           {draft.length - REPLY_MAX} characters too long — the server keeps the first {REPLY_MAX}.
@@ -390,6 +418,10 @@ const styles = StyleSheet.create({
   sendOff: { opacity: 0.35 },
   sendPressed: { opacity: 0.7 },
   sendText: { color: colors.onBrand, fontSize: 20, fontWeight: '700', lineHeight: 22 },
+  notice: {
+    ...type.caption, color: colors.textMuted,
+    paddingHorizontal: space.lg, paddingBottom: space.sm, backgroundColor: colors.card,
+  },
   overflow: {
     ...type.caption, color: colors.danger,
     paddingHorizontal: space.lg, paddingBottom: space.sm, backgroundColor: colors.card,
