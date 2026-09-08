@@ -587,7 +587,18 @@ async function renderPropertyDetail(lead) {
     detailPropertyMeta.textContent = "Property profile not available.";
     return;
   }
-  const zones = property.system?.zones?.length || 0;
+  // The count and the list are two different questions, and this panel only
+  // ever asked the second one. A property booked through the public form
+  // carries system.zoneCount ("the customer told us four") and an EMPTY
+  // system.zones until someone walks it — so every freshly booked property
+  // read "0 zones" here while its work order correctly scaffolded four.
+  // Same fix as declaredZoneList() in lib/work-orders.js: documented zones
+  // win, the declared count stands in, and the label says which it is so a
+  // number nobody has verified never passes for a survey.
+  const documentedZones = property.system?.zones?.length || 0;
+  const declaredZones = Math.floor(Number(property.system?.zoneCount) || 0);
+  const zones = documentedZones || declaredZones;
+  const zonesAreDeclared = !documentedZones && declaredZones > 0;
   const valveBoxes = property.system?.valveBoxes?.length || 0;
   const bookings = (property.leadIds || []).length;
   // Property code (P-YYYY-NNNN) renders as a small badge above the
@@ -597,7 +608,7 @@ async function renderPropertyDetail(lead) {
     : "";
   detailPropertyMeta.innerHTML = `
     ${codeBadge}<strong>${escapeHtml(property.address || "(no address)")}</strong><br>
-    ${zones} zone${zones === 1 ? "" : "s"} · ${valveBoxes} valve box${valveBoxes === 1 ? "" : "es"} · ${bookings} booking${bookings === 1 ? "" : "s"}
+    ${zones} zone${zones === 1 ? "" : "s"}${zonesAreDeclared ? " (declared)" : ""} · ${valveBoxes} valve box${valveBoxes === 1 ? "" : "es"} · ${bookings} booking${bookings === 1 ? "" : "s"}
   `;
 
   // Suggested-link banner — appears when the auto-link logic detected a

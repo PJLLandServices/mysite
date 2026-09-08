@@ -1791,7 +1791,30 @@ function parseCommercialPayload(raw) {
 //
 // Failures are logged but never block intake — a lead without
 // customerId is recoverable via `npm run migrate:customers --apply`.
-const { resolveCustomerForLead, finishCustomerForLead } = require("./lib/lead-customer");
+const { resolveCustomerForLead, finishCustomerForLead, promoteCustomerOnBooking } = require("./lib/lead-customer");
+
+// Every booking path goes through here, and none of them calls
+// bookings.upsertFromLead directly any more.
+//
+// Mirroring the lead's booking into the canonical record and marking the
+// person an active customer are two halves of ONE event: they booked. Split
+// across eight call sites they would drift, and seven of them would forget —
+// which is how a customer who booked, paid and had the work done still read
+// as a "lead" in the CRM (Patrick, 2026-09-08). The wrapper is what makes
+// "they booked" impossible to half-apply.
+//
+// Promotion never blocks the booking: promoteCustomerOnBooking swallows its
+// own errors, and the mirrored record is returned regardless.
+async function syncBookingFromLead(lead) {
+  const record = await bookings.upsertFromLead(lead);
+  if (record && lead?.customerId) {
+    await promoteCustomerOnBooking(lead.customerId, {
+      by: "booking",
+      reason: `Booked ${lead.booking?.serviceLabel || lead.booking?.serviceKey || "an appointment"}`
+    });
+  }
+  return record;
+}
 
 // "This building already belongs to an existing account" — the manual-create
 // dedup warning (commercial matching, Phase 0.5).
@@ -11761,7 +11784,7 @@ async function handleApi(req, res, pathname) {
         const allLeads = await readLeads();
         const lead = allLeads.find((l) => l.id === leadId);
         if (lead && lead.booking) {
-          const upserted = await bookings.upsertFromLead(lead);
+          const upserted = await syncBookingFromLead(lead);
           if (upserted) all = [upserted];
         }
       } catch (err) {
@@ -13340,7 +13363,7 @@ async function handleApi(req, res, pathname) {
       const currentStart = lead.booking.start ? new Date(lead.booking.start) : null;
       const tooLate = currentStart ? (currentStart.getTime() - Date.now()) < 24 * 60 * 60 * 1000 : false;
       let bookingRec = (await bookings.listByLead(lead.id))[0];
-      if (!bookingRec) bookingRec = await bookings.upsertFromLead(lead);
+      if (!bookingRec) bookingRec = await syncBookingFromLead(lead);
       const result = bookingRec
         ? await rescheduleAvailability(bookingRec.id, {
             from: url.searchParams.get("from"),
@@ -13393,7 +13416,7 @@ async function handleApi(req, res, pathname) {
       // Find the canonical Booking record for this lead (or upsert one if
       // the legacy lead.booking shape is the only thing present).
       let bookingRecord = (await bookings.listByLead(lead.id))[0];
-      if (!bookingRecord) bookingRecord = await bookings.upsertFromLead(lead);
+      if (!bookingRecord) bookingRecord = await syncBookingFromLead(lead);
       if (!bookingRecord) return sendJson(res, 422, { ok: false, errors: ["No bookable record on this appointment."] });
 
       const result = await rescheduleBooking({
@@ -13452,7 +13475,7 @@ async function handleApi(req, res, pathname) {
       }
 
       let bookingRec = (await bookings.listByLead(lead.id))[0];
-      if (!bookingRec) bookingRec = await bookings.upsertFromLead(lead);
+      if (!bookingRec) bookingRec = await syncBookingFromLead(lead);
 
       const currentStart = bookingRec?.scheduledFor ? new Date(bookingRec.scheduledFor) : null;
       const hoursUntil = currentStart ? (currentStart.getTime() - Date.now()) / (60 * 60 * 1000) : null;
@@ -13542,7 +13565,7 @@ async function handleApi(req, res, pathname) {
       }
 
       let bookingRec = (await bookings.listByLead(lead.id))[0];
-      if (!bookingRec) bookingRec = await bookings.upsertFromLead(lead);
+      if (!bookingRec) bookingRec = await syncBookingFromLead(lead);
       if (!bookingRec) return sendJson(res, 422, { ok: false, errors: ["No bookable record on this appointment."] });
 
       // Idempotent: cancelling an already-cancelled booking returns the
@@ -20991,7 +21014,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
         try {
           const liveLeads = await readLeads();
           const fresh = liveLeads.find((l) => l.id === lead.id);
-          if (fresh) canonicalBooking = await bookings.upsertFromLead(fresh);
+          if (fresh) canonicalBooking = await syncBookingFromLead(fresh);
         } catch (err) {
           console.warn("[bookings] upsertFromLead (book-from-lead) failed:", err?.message);
         }
@@ -21298,7 +21321,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
         try {
           const liveLeads = await readLeads();
           const fresh = liveLeads.find((l) => l.id === result.lead.id);
-          if (fresh) await bookings.upsertFromLead(fresh);
+          if (fresh) await syncBookingFromLead(fresh);
         } catch (err) {
           console.warn("[bookings] upsertFromLead failed:", err?.message);
         }
