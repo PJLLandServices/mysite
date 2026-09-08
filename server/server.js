@@ -73,6 +73,7 @@ const appointmentActions = require("./lib/appointment-actions");
 const APPOINTMENT_PAGE_READY = true;
 const seasonsLib = require("./lib/seasons");
 const customers = require("./lib/customers");
+const purgeTestData = require("./lib/purge-test-data");
 const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
 const quoteViews = require("./lib/quote-views");
@@ -9421,91 +9422,38 @@ async function handleApi(req, res, pathname) {
       const session = await requireAdmin(req);
       if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
       const payload = await parseRequestBody(req).catch(() => ({}));
-      const marker = String(payload?.marker || "PJLTEST-").trim();
-      if (marker.length < 4) {
-        return sendJson(res, 422, { ok: false, errors: ["Marker is too short to be safe — use at least 4 characters."] });
-      }
-      const confirm = String(payload?.confirm || "");
-      const live = confirm === "PURGE TEST DATA";
-
-      const allLeads = await readLeads();
-      const hit = (v) => typeof v === "string" && v.includes(marker);
-      const testLeads = allLeads.filter((l) => l && (
-        hit(l.contact?.notes) || hit(l.contact?.firstName) || hit(l.contact?.lastName) || hit(l.notes)
-      ));
-      const leadIds = new Set(testLeads.map((l) => l.id).filter(Boolean));
-      const customerIds = new Set(testLeads.map((l) => l.customerId).filter(Boolean));
-      const propertyIds = new Set(testLeads.map((l) => l.propertyId).filter(Boolean));
-
-      // A customer/property survives if ANY lead outside the purge needs it.
-      for (const l of allLeads) {
-        if (leadIds.has(l.id)) continue;
-        if (l.customerId) customerIds.delete(l.customerId);
-        if (l.propertyId) propertyIds.delete(l.propertyId);
-      }
-
       const dataDir = path.join(__dirname, "data");
-      const linked = (r) => Boolean(r && (
-        (r.leadId && leadIds.has(r.leadId))
-        || (r.customerId && customerIds.has(r.customerId))
-        || (r.propertyId && propertyIds.has(r.propertyId))
-      ));
-      const plan = { leads: testLeads.map((l) => l.id) };
-      const stores = ["bookings", "work-orders", "invoices", "quotes", "projects"];
-      const doomed = {};
-      for (const store of stores) {
-        const file = path.join(dataDir, `${store}.json`);
-        if (!fsSync.existsSync(file)) continue;
-        try {
-          const arr = JSON.parse((await fs.readFile(file, "utf8")) || "[]");
-          if (!Array.isArray(arr)) continue;
-          const going = arr.filter(linked);
-          if (going.length) { doomed[store] = arr; plan[store] = going.map((r) => r.id); }
-        } catch (err) {
-          console.warn(`[purge-test-data] couldn't read ${store}:`, err?.message);
-        }
-      }
-      if (customerIds.size) plan.customers = [...customerIds];
-      if (propertyIds.size) plan.properties = [...propertyIds];
 
-      const counts = Object.fromEntries(Object.entries(plan).map(([k, v]) => [k, v.length]));
-      if (!live) {
+      // What counts as a test record, and what is safe to take with it,
+      // is defined once in lib/purge-test-data.js — shared with the CLI.
+      let plan;
+      try {
+        plan = purgeTestData.planPurge({
+          dataDir,
+          marker: payload?.marker || purgeTestData.DEFAULT_MARKER,
+          leads: await readLeads()
+        });
+      } catch (err) {
+        if (err instanceof purgeTestData.PurgeRefused) {
+          return sendJson(res, 422, { ok: false, errors: [err.message] });
+        }
+        throw err;
+      }
+
+      if (String(payload?.confirm || "") !== "PURGE TEST DATA") {
         return sendJson(res, 200, {
           ok: true,
           dryRun: true,
-          marker,
-          counts,
-          sample: testLeads.slice(0, 5).map((l) => ({
-            id: l.id,
-            name: [l.contact?.firstName, l.contact?.lastName].filter(Boolean).join(" "),
-            address: l.contact?.address || "",
-            when: l.booking?.start || null
-          })),
+          marker: plan.marker,
+          counts: plan.counts,
+          sample: plan.sample,
           note: 'Nothing was deleted. Re-send with confirm: "PURGE TEST DATA" to remove these.'
         });
       }
 
-      // ---- Live purge ---------------------------------------------------
-      for (const store of stores) {
-        if (!doomed[store]) continue;
-        const kept = doomed[store].filter((r) => !linked(r));
-        await fs.writeFile(path.join(dataDir, `${store}.json`), JSON.stringify(kept, null, 2) + "\n", "utf8");
-      }
-      for (const [store, ids] of [["customers", customerIds], ["properties", propertyIds]]) {
-        if (!ids.size) continue;
-        const file = path.join(dataDir, `${store}.json`);
-        if (!fsSync.existsSync(file)) continue;
-        try {
-          const arr = JSON.parse((await fs.readFile(file, "utf8")) || "[]");
-          if (!Array.isArray(arr)) continue;
-          await fs.writeFile(file, JSON.stringify(arr.filter((r) => !(r && ids.has(r.id))), null, 2) + "\n", "utf8");
-        } catch (err) {
-          console.warn(`[purge-test-data] couldn't clear ${store}:`, err?.message);
-        }
-      }
-      await writeLeads(allLeads.filter((l) => !leadIds.has(l.id)));
+      const counts = await purgeTestData.applyPurge({ dataDir, plan, writeLeads });
       console.log("[purge-test-data] removed", JSON.stringify(counts), "by", session.uid || "admin");
-      return sendJson(res, 200, { ok: true, dryRun: false, marker, counts });
+      return sendJson(res, 200, { ok: true, dryRun: false, marker: plan.marker, counts });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Purge failed."] });
     }

@@ -19,6 +19,29 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-08, same day (The delete bot failed in Patrick's hands: "CRM login required"):** The
+first cut reached the endpoint over HTTP and picked the session cookie out of
+`headers.get("set-cookie")` with `.split(";")[0]`. Node's fetch JOINS multiple `Set-Cookie`
+headers into that one string, so behind a proxy that sets a cookie of its own — which
+production is — the script forwarded the proxy's cookie and the auth gate answered 401 "CRM
+login required." It passed every local test because the test server sets exactly one cookie.
+Two fixes, and the second is the one that matters. (1) The cookie is now selected by name from
+`headers.getSetCookie()`, the login is sent with `redirect: "manual"` so a www-vs-bare-domain
+redirect is named instead of silently turning the POST into a GET, and the session is proved
+against `/api/session` (printing which admin it belongs to) BEFORE anything is asked to delete
+— "CRM login required" from the purge itself says nothing about which half broke. (2) **The
+purge logic moved to `server/lib/purge-test-data.js`** (`planPurge` / `applyPurge`), shared by
+the endpoint and the CLI, so `scripts/purge-test-data.mjs` now runs straight against
+`server/data` on the Render shell with no login at all — the default whenever no `--base` is
+given. A cleanup that depends on a login round-trip through a proxy is a cleanup that fails at
+the worst moment. Local mode backs up `leads.json` before rewriting it. The endpoint is now a
+thin wrapper: auth, the confirm token, and the shared call — still one definition of the rule,
+per the CLAUDE.md lifecycle checklist. Coverage grew 33 → 46 assertions, and the suite now
+boots a **proxy that injects its own `Set-Cookie` ahead of the session cookie**, reproducing
+the production shape: restore the naive `.split(";")[0]` and three assertions fail with
+Patrick's exact symptom. Local mode is driven end to end too, and asserted to reach the same
+counts and the same survivor as the endpoint. No PASS flow touched.
+
 **2026-09-08 (The delete bot — removing 123 load-test bookings and everything they created):**
 Patrick, after the bot filled the calendar to pilot the booking system: "can you build a delete
 bot that deletes all these booked appointments, and everything that they have created?
