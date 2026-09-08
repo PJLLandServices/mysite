@@ -19,6 +19,30 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-08 (Cancelling gave the appointment back to the customer but not to the calendar):**
+Walking Patrick through the customer cancel/reschedule flows surfaced a live defect. Cancelling did
+everything except the thing that matters most operationally: the booking flipped to `cancelled`, the
+work order cascaded, the customer got their email, Patrick got paged — and the SLOT STAYED
+OCCUPIED. Cause: `activeBookings()` carried the "does this booking still hold its slot" rule
+TWICE. Its canonical bookings.json pass skipped `cancelled`/`completed`/`no_show`; its
+lead-snapshot pass filtered only archived and lost LEADS and never looked at
+`lead.booking.status`. Both cancel paths (portal `POST /api/portal/:token/cancel` and the admin
+path) mirror `lead.booking.status = "cancelled"`, so every cancellation on a lead-backed booking
+leaked capacity. Verified live before the fix: a day whose 08:00 booking was cancelled still pushed
+the next customer to 09:00, identical to the un-cancelled day. Fix: one exported-in-file definition,
+`bookingHoldsItsSlot(status)` over `DEAD_BOOKING_STATUSES`, called by BOTH passes — the drift is now
+unrepresentable rather than merely unlikely. New `scripts/test-booking-lifecycle.mjs` (12
+assertions, in `build:check`) boots the real server and drives the PUBLIC availability endpoint:
+a live booking holds its slot, cancelled/completed/no_show each give it back, both passes answer
+identically for the same state, and the day under test is DISCOVERED from the engine rather than
+hardcoded so the suite does not rot when a season closes. **The suite was run against the UNFIXED
+code first and failed 4 assertions** — including "a cancelled booking reads the same whether it
+lives on the lead or the record" — which is what makes it a regression test rather than a
+description. CLAUDE.md gained a "Lifecycle states: finish the workflow, not the write" checklist
+(find every reader, define the rule once, walk the whole workflow, pin it with a test that fails on
+the old code) because this is the third defect of the same shape. FLOW-03's route and payload are
+unchanged; what changed is which bookings the engine counts.
+
 **2026-09-08 (Cascade delete — test customers that invoices and work orders had pinned):**
 Patrick, resetting between load-test runs: "If there are any of the above [invoices, work orders]
 attached to a property, or customer it will not delete. Can we incorporate the reasonable fix for
