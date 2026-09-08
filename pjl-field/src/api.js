@@ -267,6 +267,10 @@ export const suggestAddresses = (q) =>
       // the screen can say WHY nothing is suggesting instead of looking
       // broken — the address box still works either way.
       degraded: d.degraded || null,
+      // Google's own words when it refuses, so the fix is findable
+      // rather than guessable.
+      googleStatus: d.googleStatus || null,
+      googleMessage: d.googleMessage || null,
     }));
 
 export const listServices = () =>
@@ -302,7 +306,13 @@ export const bookingAvailability = ({ service, address }) => {
     `/api/booking/availability?service=${encodeURIComponent(service)}`
     + `&address=${encodeURIComponent(address)}`
     + `&from=${encodeURIComponent(dateKey(from))}`
-    + `&to=${encodeURIComponent(dateKey(to))}`,
+    + `&to=${encodeURIComponent(dateKey(to))}`
+    // This app is staff-only, and a staff booking is not a public one.
+    // The flag asks the server to gate on whether a truck rolls (the
+    // serviceable window) rather than on the public self-serve hold, and
+    // it is honoured ONLY with a real session — the server checks, we
+    // do not get to assert it.
+    + `&adminBypass=1`,
   );
 };
 

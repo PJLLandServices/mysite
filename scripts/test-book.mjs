@@ -390,13 +390,31 @@ check('missing address suggestions say why instead of looking broken', () => {
   // still succeeds — which means "no suggestions" is NOT proof the app is
   // broken, and silence here sends someone hunting the wrong fault.
   const at = SERVER.indexOf('req.method === "GET" && pathname === "/api/admin/address-suggest"');
-  const block = SERVER.slice(at, at + 2200);
+  const block = SERVER.slice(at, at + 4000);
   assert.match(block, /degraded: "no_key"/);
   assert.match(block, /degraded: "upstream"/);
+  // Google answers 200 even when refusing. ZERO_RESULTS is an ordinary
+  // empty answer; anything else is a fault worth naming, and swallowing
+  // it sends someone hunting the app instead of the Google console.
+  assert.match(block, /status !== "OK" && status !== "ZERO_RESULTS"/,
+    'a Google refusal is swallowed as an empty list again');
+  assert.match(block, /googleStatus: status/);
   assert.match(API, /degraded: d\.degraded \|\| null/, 'the app throws the reason away');
-  assert.match(BOOK, /GOOGLE_MAPS_SERVER_KEY is not set/, 'a missing key is silent again');
-  assert.match(BOOK, /Type the address in full; it still books/,
-    'the screen does not say the booking still works without suggestions');
+  assert.match(API, /googleStatus: d\.googleStatus \|\| null/);
+
+  const suggestReason = lift(BOOK, 'suggestReason');
+  assert.match(suggestReason({ degraded: 'no_key' }), /GOOGLE_MAPS_SERVER_KEY is not set/);
+  assert.match(
+    suggestReason({ degraded: 'google', googleStatus: 'REQUEST_DENIED' }),
+    /Places API is probably not enabled/,
+  );
+  assert.match(suggestReason({ degraded: 'google', googleStatus: 'OVER_QUERY_LIMIT' }), /OVER_QUERY_LIMIT/);
+  assert.match(suggestReason({ degraded: 'upstream' }), /Couldn't reach the suggestion service/);
+  assert.equal(suggestReason(null), null);
+  // Every one of them says the booking still works.
+  for (const d of [{ degraded: 'no_key' }, { degraded: 'google' }, { degraded: 'upstream' }]) {
+    assert.match(suggestReason(d), /it still books/, 'a failure reads as though booking is blocked');
+  }
 });
 
 check('a service out of season says so, instead of showing an empty calendar', () => {
@@ -443,7 +461,7 @@ check('the season status comes from the same authority the gate uses', () => {
   const block = SERVER.slice(at, at + 3000);
   // The route ASKS lib/seasons rather than comparing the bounds itself.
   // One rule, two callers — not two rules that will disagree.
-  assert.match(block, /seasonsLib\.publicBookingStatus\(name, todayKey\)/,
+  assert.match(block, /seasonsLib\.publicBookingStatus\(name, todayKey, \{ scope \}\)/,
     'the route decides the season itself again instead of asking lib/seasons');
   assert.match(block, /seasonsLib\.seasonForFamily\(svc\.family\)/,
     'the family mapping was copied back into the route');
@@ -482,6 +500,44 @@ check('the season status comes from the same authority the gate uses', () => {
   // window is held until routes actually run.
   assert.equal(openOn('fall', asOf('2026-09-08')), false);
   assert.equal(openOn('fall', asOf('2026-10-05')), true);
+});
+
+check('staff are not the public — the Sept 28 hold is not Patrick\'s', () => {
+  // Fall 2026 is SERVICEABLE from Sep 1 and PUBLICLY bookable from Sep 28:
+  // that hold exists so a customer cannot self-book a September date no
+  // route is planned for. Asking the public question on Patrick's behalf
+  // told him "Booking opens September 28" on the 8th, a week after his
+  // own trucks started running.
+  const requireRoot2 = createRequire(path.join(ROOT, 'package.json'));
+  const seasonsLib2 = requireRoot2('./server/lib/seasons.js');
+  const staff = seasonsLib2.publicBookingStatus('fall', '2026-09-08', { scope: 'staff' });
+  const publik = seasonsLib2.publicBookingStatus('fall', '2026-09-08', { scope: 'public' });
+  assert.equal(staff.open, true, 'staff are still held to the public opening date');
+  assert.equal(publik.open, false, 'the public hold has been removed, which it should not be');
+  assert.equal(publik.opensOn, '2026-09-28');
+  // Spring really is over for everyone — the staff scope is not a bypass.
+  assert.equal(seasonsLib2.publicBookingStatus('spring', '2026-09-08', { scope: 'staff' }).open, false,
+    'the staff scope books a season that has genuinely ended');
+
+  // The services route asks the STAFF question for a signed-in caller.
+  const at = SERVER.indexOf('pathname === "/api/booking/services"');
+  const block = SERVER.slice(at, at + 3000);
+  assert.match(block, /const scope = \(await requireUser\(req\)\) \? "staff" : "public";/,
+    'the services route no longer distinguishes staff from the public');
+
+  // And availability gates staff on the SERVICEABLE window, via the
+  // seasonWindows hook the gate already accepts.
+  assert.match(SERVER, /seasonWindows: adminSession/, 'staff availability is gated on the public window again');
+  // Matched on the SERVICEABLE half only. test-season-config.mjs keeps a
+  // short allowlist of files that may name the public booking bounds, so
+  // that the rule has one home — and this file has no business joining it.
+  assert.match(SERVER, /cfg\.serviceableFrom \|\| null/, 'staff availability is not gated on the serviceable window');
+  assert.match(SERVER, /cfg\.serviceableThrough \|\| null/);
+  // The app identifies itself so the server can honour it — and the
+  // server still checks the session rather than trusting the flag.
+  assert.match(API, /&adminBypass=1/, 'the app no longer asks as staff');
+  assert.match(SERVER, /const adminSession = wantsAdminBypass \? await requireUser\(req\) : null;/,
+    'the admin flag is trusted without a session');
 });
 
 // ---- 4. The gate fails closed -------------------------------------------

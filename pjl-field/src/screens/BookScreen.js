@@ -174,6 +174,28 @@ const OPEN_BUCKET = {
   timeLabel: "when we're next nearby",
 };
 
+// Why the suggestions are empty, in words that point at the actual fix.
+// "Google isn't answering" was true of every failure and useful for none
+// of them — including the one that turned out to be a route that was
+// never deployed.
+export function suggestReason(d) {
+  if (!d) return null;
+  const tail = ' Type the address in full — it still books.';
+  if (d.degraded === 'no_key') {
+    return 'Suggestions are off: GOOGLE_MAPS_SERVER_KEY is not set on the server.' + tail;
+  }
+  if (d.degraded === 'google') {
+    // REQUEST_DENIED is nearly always the Places API not being enabled on
+    // the project, or the key being restricted to Geocoding and Distance
+    // Matrix. Naming it saves an hour of looking at the app.
+    const what = d.googleStatus === 'REQUEST_DENIED'
+      ? 'Google refused the request — the Places API is probably not enabled for this key.'
+      : `Google returned ${d.googleStatus || 'an error'}.`;
+    return `${what}${d.googleMessage ? ` (${d.googleMessage})` : ''}${tail}`;
+  }
+  return "Couldn't reach the suggestion service." + tail;
+}
+
 const clean = (v) => String(v || '').trim();
 
 export default function BookScreen({ onSignIn }) {
@@ -237,7 +259,7 @@ export default function BookScreen({ onSignIn }) {
         .then((res) => {
           if (mine !== seq.current) return;
           setSuggestions(res.suggestions);
-          setSuggestDegraded(res.degraded);
+          setSuggestDegraded(res.degraded ? { ...res } : null);
         })
         // A dead suggestion service must never block a booking: the tech
         // types the address and verify-address still does the real work.
@@ -504,9 +526,7 @@ export default function BookScreen({ onSignIn }) {
 
             {!verified && suggestDegraded && typed.trim().length >= 3 ? (
               <Text style={styles.hint}>
-                {suggestDegraded === 'no_key'
-                  ? 'Address suggestions are off — GOOGLE_MAPS_SERVER_KEY is not set on the server. Type the address in full; it still books.'
-                  : "Google isn't answering for suggestions right now. Type the address in full; it still books."}
+                {suggestReason(suggestDegraded)}
               </Text>
             ) : null}
 

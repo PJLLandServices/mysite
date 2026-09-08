@@ -412,22 +412,37 @@ function hasExplicitYear(year) {
 //
 // Returns null for a season this file does not know, so callers can
 // treat "no answer" as "do not annotate" rather than as "closed".
-function publicBookingStatus(season, todayKey, years = 2) {
+// `scope` decides WHICH window is being asked about, and it matters more
+// than it looks:
+//
+//   "public" — the self-serve flow on the website. Fall 2026 holds this
+//              until Sep 28, the first planned route day, so a customer
+//              cannot self-book a September date no truck is scheduled
+//              to serve.
+//   "staff"  — Patrick, booking someone over the phone. He is not the
+//              public and that hold is not his: the real constraint on
+//              him is whether a truck rolls at all, which is the
+//              SERVICEABLE window (fall 2026: Sep 1 - Nov 6).
+//
+// Getting this wrong told him "Booking opens September 28" on the 8th
+// while his own trucks had been running for a week.
+function publicBookingStatus(season, todayKey, { years = 2, scope = "public" } = {}) {
   const startYear = Number(String(todayKey).slice(0, 4));
   if (!Number.isFinite(startYear)) return null;
+  const staff = scope === "staff";
   let last = null;
   for (let i = 0; i < years; i++) {
     const cfg = configFor(season, startYear + i);
     if (!cfg) continue;
-    const from = cfg.publicBookingFrom || null;
-    const through = cfg.publicBookingThrough || null;
+    const from = (staff ? cfg.serviceableFrom : cfg.publicBookingFrom) || null;
+    const through = (staff ? cfg.serviceableThrough : cfg.publicBookingThrough) || null;
     if ((!from || todayKey >= from) && (!through || todayKey <= through)) {
-      return { name: season, open: true, from, through };
+      return { name: season, open: true, from, through, scope };
     }
     if (from && todayKey < from) {
-      return { name: season, open: false, opensOn: from, through };
+      return { name: season, open: false, opensOn: from, through, scope };
     }
-    last = { name: season, open: false, closed: true, through };
+    last = { name: season, open: false, closed: true, through, scope };
   }
   return last;
 }

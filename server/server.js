@@ -8264,6 +8264,14 @@ async function handleApi(req, res, pathname) {
     // between one rule with two callers and two rules that will disagree.
     const today = new Date();
     const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    // Patrick booking someone over the phone is NOT the public. The
+    // public hold (fall 2026 opens Sep 28, so nobody self-books a date no
+    // truck is scheduled for) is not his constraint; his is whether a
+    // truck rolls at all. Asking the public question on his behalf told
+    // him "Booking opens September 28" on the 8th, a week after his own
+    // trucks started running.
+    const scope = (await requireUser(req)) ? "staff" : "public";
+
     const decorated = {};
     for (const [key, svc] of Object.entries(BOOKABLE_SERVICES)) {
       let season = null;
@@ -8272,7 +8280,7 @@ async function handleApi(req, res, pathname) {
         // Fails soft, the same posture the availability gate takes: a
         // broken seasons.json must degrade to an un-annotated list, never
         // take booking down.
-        try { season = seasonsLib.publicBookingStatus(name, todayKey); }
+        try { season = seasonsLib.publicBookingStatus(name, todayKey, { scope }); }
         catch (err) {
           console.warn("[booking/services] season lookup:", err?.message);
           season = null;
@@ -20370,6 +20378,24 @@ Customer signature captured at ${new Date().toISOString()}.`;
       api.searchParams.set("components", "country:ca");
       const r = await fetch(api, { signal: AbortSignal.timeout(6000) });
       const data = await r.json();
+      // Google answers 200 even when it is refusing. ZERO_RESULTS is an
+      // ordinary empty answer; everything else is a fault worth naming,
+      // and REQUEST_DENIED — the Places API not enabled on the project,
+      // or the key restricted to Geocoding and Distance Matrix only — is
+      // by far the likeliest. Reported rather than swallowed, because a
+      // silent empty list sends someone hunting the app instead of the
+      // Google console.
+      const status = String(data.status || "");
+      if (status && status !== "OK" && status !== "ZERO_RESULTS") {
+        console.warn("[address-suggest] Google says", status, data.error_message || "");
+        return sendJson(res, 200, {
+          ok: true,
+          suggestions: [],
+          degraded: "google",
+          googleStatus: status,
+          googleMessage: String(data.error_message || "")
+        });
+      }
       const suggestions = Array.isArray(data.predictions)
         ? data.predictions.slice(0, 6).map((p) => ({
             id: String(p.place_id || p.description || ""),
@@ -20452,7 +20478,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // enough — Patrick piloting the PUBLIC page while logged in must
       // see exactly what a customer sees, or the gate is untestable.
       const wantsAdminBypass = url.searchParams.get("adminBypass") === "1";
-      if (!(wantsAdminBypass && await requireUser(req))) {
+      const adminSession = wantsAdminBypass ? await requireUser(req) : null;
+      if (!(wantsAdminBypass && adminSession)) {
         const gateVerdict = await bookingGate.gate(geo, {
           travelMinutes: distanceLib.travelMinutes, base: PJL_BASE
         });
@@ -20480,7 +20507,23 @@ Customer signature captured at ${new Date().toISOString()}.`;
         hours: mergedHours,
         settings: mergedSettings,
         dayShapes,
-        diagnostics
+        diagnostics,
+        // A staff caller is gated by whether a TRUCK ROLLS, not by the
+        // public self-serve hold. Fall 2026 is serviceable from Sep 1 but
+        // public booking opens Sep 28 — that hold exists so a customer
+        // cannot self-book a September date no route is planned for, and
+        // it is not a constraint on Patrick booking someone by phone.
+        // Same shape the gate already reads, different window.
+        seasonWindows: adminSession
+          ? (season, year) => {
+              const cfg = seasonsLib.configFor(season, year);
+              if (!cfg) return null;
+              return {
+                publicBookingFrom: cfg.serviceableFrom || null,
+                publicBookingThrough: cfg.serviceableThrough || null
+              };
+            }
+          : null
       });
 
       const days = (fromDate && toDate)

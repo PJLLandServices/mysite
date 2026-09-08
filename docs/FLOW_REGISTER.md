@@ -118,6 +118,50 @@ itself, which is what it is for. Full `build:check` green.
 clears; reply and confirm the bubble says "Emailed"; sign out and confirm the Sign in button
 reaches the login and that every screen reloads afterwards.
 
+**2026-09-08, same day (Patrick is not the public — and the autocomplete was never deployed):**
+Two faults, both mine, both from the same habit of not checking where a thing actually runs.
+
+**"Booking opens September 28" told the owner he could not book his own trucks.** Fall 2026 is
+**serviceable from Sep 1** and **publicly bookable from Sep 28** — that hold exists so a
+customer cannot self-book a September date no route is planned for, and it is a rule about the
+WEBSITE. I asked the public question on Patrick's behalf and printed the public answer in a
+staff-only app, on the 8th, a week after his own trucks started running.
+`publicBookingStatus` now takes a **`scope`**: `"public"` reads the public bounds, `"staff"`
+reads the SERVICEABLE ones, because the only real constraint on an admin booking by phone is
+whether a truck rolls at all. `/api/booking/services` picks the scope from the session;
+`/api/booking/availability` passes the serviceable window through the `seasonWindows` hook the
+gate already accepts when `adminBypass=1` is honoured — and it is honoured only against a real
+session, which the server checks rather than the app asserting. Spring stays shut for both
+scopes: the staff scope is a different window, not a bypass.
+
+**The address suggestions were failing because the route had never been deployed.** The app is
+built from a branch; the server it talks to is production, which runs `main`. Three server
+commits sat on a branch the live server had never seen, so the phone called
+`/api/admin/address-suggest`, got a 404, and reported it as an upstream failure — and the
+message "Google isn't answering" was true of every failure and useful for none of them. Merged
+as #167; verified live (`401 CRM login required` unauthenticated, which is the fence working).
+
+**The diagnostic hole that made it take three rounds.** Google answers **200 even when it is
+refusing**, with the reason in `status` — and the route was reading `predictions`, finding
+none, and returning a bare empty list. `REQUEST_DENIED` (the Places API not enabled on the
+project, or the key restricted to Geocoding and Distance Matrix, which is what the geocoder
+uses) looked identical to "no matches". The route now names Google's own status and message,
+and the screen prints it: *"Google refused the request — the Places API is probably not enabled
+for this key."* Every variant still ends "Type the address in full — it still books", because
+none of them blocks a booking.
+
+**Recorded for the process, not the code:** an app change ships when Patrick rebuilds in Xcode;
+a server change ships only when it reaches `main` and Render redeploys. Several changes need
+both, and saying which is part of delivering them.
+
+`scripts/test-book.mjs` is 24 assertions — the staff and public scopes RUN against the real
+seasons.json (fall staff open on 2026-09-08, fall public not until Sep 28, spring shut for
+both), the Google refusal asserted not to be swallowed, and every degraded message asserted to
+say the booking still works. `test-season-config.mjs`'s single-consumer guard passes: the test
+matches the serviceable half only, so this file stays off its allowlist. **No PASS flow
+modified** — `/api/booking/availability` changed only which window a staff caller is gated on,
+behind a session check that already existed.
+
 **2026-09-08, same day ("No space for any more appointments" was three different problems, and
 one of them was Spring in September):** Patrick, screenshot from the truck: 26 Portland
 Crescent, Newmarket, **Spring opening (7-8 zones residential)** — "it came back to me saying
