@@ -7,14 +7,41 @@ export const absolute = (url) => (url && url.startsWith('/') ? `${HOST}${url}` :
 
 export const telHref = (phone) => `tel:${String(phone).replace(/[^\d+]/g, '')}`;
 
-export const money = (n) =>
-  typeof n === 'number' && Number.isFinite(n) ? `$${n.toFixed(2)}` : null;
+// Currency is OPTIONAL and, when given, is shown — InvoiceScreen printed
+// "$285.00 CAD" for the same invoice the property screen printed as
+// "$285.00", because callers were passing a second argument this function
+// silently discarded.
+//
+// Grouped thousands, because a five-figure commercial balance rendered
+// "$12345.67" and the column of them was claimed to line up on the
+// decimal. `Number(n)` rather than a typeof check: balanceDue arrives as a
+// number from the server today, but three call sites already coerce
+// defensively, and a string that slipped through rendered the amount as
+// null — including inside a payment text that then read "(null)".
+export const money = (n, currency) => {
+  // A MISSING field is not zero, and this guard has to come before the
+  // coercion: Number(null), Number(undefined) and Number('') are all 0, so
+  // "$0.00" would be printed on a balance nobody knows — which reads as
+  // "nothing owing", the opposite of the truth. InvoiceScreen's own copy
+  // of this function carried the guard; the shared one has to as well.
+  if (n === null || n === undefined || n === '') return null;
+  const v = Number(n);
+  if (!Number.isFinite(v)) return null;
+  const amount = `$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return currency ? `${amount} ${String(currency).toUpperCase()}` : amount;
+};
 
 export const shortDate = (iso) => {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  // The year only when it is not this one. On a 320pt row every character
+  // is contested, and "2026" on every line of a list of this year's visits
+  // is ~35pt spent saying nothing.
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString(undefined, {
+    month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }),
+  });
 };
 
 // The letter in the avatar circle.

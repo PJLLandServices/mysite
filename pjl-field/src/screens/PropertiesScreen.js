@@ -121,7 +121,7 @@ export default function PropertiesScreen({ onOpen }) {
     return (
       <View style={styles.centre}>
         <Text style={styles.centreTitle}>Not signed in</Text>
-        <Text style={styles.centreBody}>Open the Today tab and sign in — this list shares that session.</Text>
+        <Text style={styles.centreBody}>Open the Messages tab and sign in — this list shares that session.</Text>
       </View>
     );
   }

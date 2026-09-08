@@ -13544,9 +13544,28 @@ async function handleApi(req, res, pathname) {
     let all = await invoices.list();
     if (status) all = all.filter((i) => i.status === status);
     if (woId) all = all.filter((i) => i.woId === woId);
-    if (propertyId) all = all.filter((i) => i.propertyId === propertyId);
+    // `!== null` rather than truthiness: `?propertyId=` (empty) is falsy,
+    // so it skipped the filter and answered with EVERY invoice in the
+    // business on a screen asking for one address's. Absent is still
+    // `null` from searchParams.get, so an unfiltered call is unchanged.
+    if (propertyId !== null) all = all.filter((i) => i.propertyId === propertyId);
     all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    return sendJson(res, 200, { ok: true, invoices: all });
+    // The two BEARER tokens never leave the server on this route.
+    //
+    // `paymentToken` is a permanent, unexpiring, unrevocable password to
+    // an invoice: whoever holds it can read the customer's name, email,
+    // address and every line item, and can pay it. `portalToken` is the
+    // same for the read-only portal view. Both were being handed to every
+    // caller of this list — which made the admin gate on
+    // POST /api/invoices/:id/payment-link (added 2026-09-06, precisely so
+    // a tech could not mint payment links) decorative: the list handed a
+    // tech the token for every invoice, and the pay URL is a fixed
+    // template. The public /pay route already strips paymentToken from
+    // its own response for exactly this reason; the staff list was doing
+    // the opposite. Nothing on any client reads either field — every use
+    // is server-side (notify-customer, invoice-pdf, the portal routes).
+    const safe = all.map(({ paymentToken, portalToken, ...rest }) => rest);
+    return sendJson(res, 200, { ok: true, invoices: safe });
   }
 
   // ---- Invoice payment ledger ----------------------------------------

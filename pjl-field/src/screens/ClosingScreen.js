@@ -193,21 +193,49 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished }) {
     }
   }, [workOrderId, wo, onFinished]);
 
-  if (state === 'loading') return <View style={styles.centre}><ActivityIndicator color={colors.brand} /></View>;
+  // The way out comes FIRST, and is rendered in every state including the
+  // ones that render nothing else. This screen is an overlay now: it covers
+  // the tab bar, so a state without this bar is a state you can only leave
+  // by force-quitting the app. That is not a hypothetical — loading has no
+  // timeout, and `auth` is reachable from a cold start in a driveway.
+  const exitBar = (
+    <View style={styles.bar}>
+      <Pressable onPress={onExit} hitSlop={10}><Text style={styles.back}>‹ Back</Text></Pressable>
+    </View>
+  );
+
+  if (state === 'loading') {
+    return (
+      <View style={styles.screen}>
+        {exitBar}
+        <View style={styles.centre}><ActivityIndicator color={colors.brand} /></View>
+      </View>
+    );
+  }
   if (state === 'auth') {
     return (
-      <View style={styles.centre}>
-        <Text style={styles.centreTitle}>Not signed in</Text>
-        <Text style={styles.centreBody}>Open any other tab and sign in to PJL.</Text>
+      <View style={styles.screen}>
+        {exitBar}
+        <View style={styles.centre}>
+          <Text style={styles.centreTitle}>Not signed in</Text>
+          {/* Messages by name: auth rides the WebView cookie jar, so the
+              web tab is the ONLY surface that can sign you in. "Any other
+              tab" was three-fifths true when there were five tabs and is
+              false now. */}
+          <Text style={styles.centreBody}>Go back, open the Messages tab, and sign in to PJL.</Text>
+        </View>
       </View>
     );
   }
   if (state === 'error') {
     return (
-      <View style={styles.centre}>
-        <Text style={styles.centreTitle}>Couldn't load</Text>
-        <Text style={styles.centreBody}>{error}</Text>
-        <Pressable onPress={load} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable>
+      <View style={styles.screen}>
+        {exitBar}
+        <View style={styles.centre}>
+          <Text style={styles.centreTitle}>Couldn't load</Text>
+          <Text style={styles.centreBody}>{error}</Text>
+          <Pressable onPress={load} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable>
+        </View>
       </View>
     );
   }
@@ -217,7 +245,7 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished }) {
   return (
     <View style={styles.screen}>
       <View style={styles.bar}>
-        <Pressable onPress={onExit} hitSlop={10}><Text style={styles.back}>‹ Today</Text></Pressable>
+        <Pressable onPress={onExit} hitSlop={10}><Text style={styles.back}>‹ Back</Text></Pressable>
         <Text style={styles.woId} numberOfLines={1}>{wo?.id || 'Work order'}</Text>
         <Text style={[styles.saveState, unsaved && styles.saveStateBad]}>
           {saving ? 'Saving…' : unsaved ? 'Not saved' : 'Saved'}

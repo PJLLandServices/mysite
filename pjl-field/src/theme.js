@@ -14,6 +14,10 @@ export const colors = {
   textMuted: '#6B7280',
   textFaint: '#9CA3AF',
   danger: '#B3261E',
+  // Text and glyphs ON a brand-filled surface. It was written '#fff' at
+  // five call sites; a token means the day the green changes, the thing
+  // sitting on it is one edit away, not five greps.
+  onBrand: '#FFFFFF',
   warning: '#9A6700',
   warningTint: '#FFF6E0',
 };

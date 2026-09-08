@@ -29,7 +29,7 @@
 // scrolled list and back doesn't reload it.
 
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, SafeAreaView, StatusBar as RNStatusBar, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, SafeAreaView, StatusBar as RNStatusBar, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import PropertiesScreen from './src/screens/PropertiesScreen';
 import TodayScreen from './src/screens/TodayScreen';
@@ -58,9 +58,18 @@ export const JOB = { CLOSING: 'closing', WEB: 'web', INVOICE: 'invoice' };
 // A work order becomes one of two things. Kept out of the component so
 // the routing decision can be tested without React Native — the same
 // reason src/workorder-routing.js exists.
+// A finished visit is a RECORD, not a form. Routing on `type` alone sent a
+// completed fall closing back into the editable closing flow, where every
+// stage is interactive and every tap calls patchWorkOrder — which the
+// server refuses on a locked work order, so each one produced "Didn't save"
+// and a red "Not saved" header on a visit that was finished and invoiced.
+// Terminal states go to the web record, which is where the sign-off and the
+// invoice actually live.
+const TERMINAL_WO = new Set(['completed', 'cancelled', 'no_show']);
+
 export function jobForWorkOrder(workOrder) {
   if (!workOrder || !workOrder.id) return null;
-  if (workOrder.type === 'fall_closing') {
+  if (workOrder.type === 'fall_closing' && !TERMINAL_WO.has(workOrder.status)) {
     return { kind: JOB.CLOSING, workOrderId: workOrder.id };
   }
   return {
@@ -78,6 +87,12 @@ export default function App() {
   const [openPropertyId, setOpenPropertyId] = useState(null);
   // The job laid over the tabs. Null means there isn't one.
   const [job, setJob] = useState(null);
+  // Bumped every time a job closes. Today reloads on it, because the whole
+  // point of the three-state button and the map tick is that they are TRUE
+  // — and both read a payload that was fetched before the job opened. You
+  // finish a closing, dismiss it, and without this the card still says
+  // "Resume" and the pin is still a number.
+  const [jobsClosed, setJobsClosed] = useState(0);
 
   // Cold start: pull a newer bundle if there is one, then reload into
   // it. Without this the app runs the previous bundle for one more
@@ -94,7 +109,10 @@ export default function App() {
     if (next) setJob(next);
   }, []);
 
-  const closeJob = useCallback(() => setJob(null), []);
+  const closeJob = useCallback(() => {
+    setJob(null);
+    setJobsClosed((n) => n + 1);
+  }, []);
 
   return (
     <View style={styles.root}>
@@ -113,7 +131,7 @@ export default function App() {
                 accessibilityElementsHidden={!isActive}
               >
                 {tab.key === 'today' ? (
-                  <TodayScreen onOpenWorkOrder={openWorkOrder} />
+                  <TodayScreen onOpenWorkOrder={openWorkOrder} refreshToken={jobsClosed} />
                 ) : tab.key === 'properties' ? (
                   openPropertyId ? (
                     <PropertyProfileScreen
@@ -156,8 +174,12 @@ export default function App() {
       {/* The open job, over everything including the tab bar. Each of
           these owns its own exit; none of them is a trap door. */}
       {job ? (
-        <View style={styles.overlay}>
-          <SafeAreaView style={styles.safe}>
+        // accessibilityViewIsModal is the non-visual half of "the overlay
+        // covers the tab bar": without it VoiceOver swipes straight past
+        // the job into the tab bar underneath and switches tabs invisibly,
+        // which is the exact confusion the overlay exists to prevent.
+        <View style={styles.overlay} accessibilityViewIsModal>
+          <SafeAreaView style={styles.overlaySafe}>
             {job.kind === JOB.CLOSING ? (
               <ClosingScreen
                 workOrderId={job.workOrderId}
@@ -191,6 +213,12 @@ export default function App() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.card },
   safe: { flex: 1, backgroundColor: colors.card, paddingTop: RNStatusBar.currentHeight || 0 },
+  // The shell's `safe` is card-white because the TAB BAR sits at its
+  // bottom. The overlay has no tab bar, and every screen inside it draws
+  // on `ground` — so reusing `safe` painted a white band across the bottom
+  // inset with a hard seam above it, on the closing and the invoice, the
+  // two screens a tech is in longest.
+  overlaySafe: { flex: 1, backgroundColor: colors.ground, paddingTop: RNStatusBar.currentHeight || 0 },
   body: { flex: 1 },
   pane: { ...StyleSheet.absoluteFillObject },
   overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: colors.ground },
@@ -200,7 +228,13 @@ const styles = StyleSheet.create({
     borderTopColor: colors.separator,
     backgroundColor: colors.card,
     paddingTop: 6,
-    paddingBottom: 2,
+    // React Native's own SafeAreaView is iOS-only — on Android it is a
+    // plain View — and app.json sets edgeToEdgeEnabled, so the labels
+    // would sit 2pt off the bottom edge under the gesture pill. The top
+    // is already handled by RNStatusBar.currentHeight above; this is the
+    // other end. No new dependency: react-native-safe-area-context would
+    // move the Expo fingerprint and force a native rebuild.
+    paddingBottom: Platform.OS === 'android' ? space.md : 2,
   },
   tab: { flex: 1, alignItems: 'center', gap: 2, paddingVertical: space.xs },
   tabGlyph: { fontSize: 19, color: colors.textFaint },
