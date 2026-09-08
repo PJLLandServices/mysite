@@ -271,6 +271,54 @@ itself, which is what it is for. Full `build:check` green.
 clears; reply and confirm the bubble says "Emailed"; sign out and confirm the Sign in button
 reaches the login and that every screen reloads afterwards.
 
+**2026-09-08, later (Nineteen services become six questions, and the picker learns the
+season):** Patrick's housekeeping list after Book started working on the phone. **No backend
+change** — every service, band and season below is read from what the server already sends.
+
+**Six categories, not nineteen keys.** The server sells nineteen bookable services and each
+one names a season, a property type and a zone band at once — "Fall winterization (5-6 zones
+residential)". Nineteen buttons on a phone means the one you want is scrolled off, and reading
+them aloud to a customer is not a conversation anyone wants to have. His shape instead:
+**Fall Closing · Spring Opening · Residential Service · Commercial Service · Site Visit /
+Scope · Hydrawise Retrofit**, then a follow-up that depends on which — zones for the seasonal
+pair, "how many issues" for a service call, nothing for a site visit. `booking-catalog.js` is
+pure and holds the mapping; it is tested against the server's real service list rather than a
+copy of it.
+
+**The season in progress sorts first, and nothing is hardcoded to fall.** The category order
+reads the `season` the server now returns per service: dates running now first, year-round
+work next, a spent season last. In September that puts Fall Closing at the top; in March the
+same code puts Spring Opening there with nobody editing anything. A spent season still shows —
+Patrick books work the public flow will not — it just sinks and says why.
+
+**The bands are read, including the one that hides in its label.** `fall_close_commercial` is
+the 1-4 commercial tier and says so **only in its label**; reading the key alone dropped it,
+and the tier above then claimed the range beneath it — "1-8 zones" for a service that starts at
+5. Both are read now. Residential and commercial are listed apart because their tiers genuinely
+differ: residential splits 5-6 and 7-8 where commercial has one 5-8, at a different price. And
+typing an exact count moves the band **within the property type already chosen**, so a
+commercial site is never snapped into a residential tier.
+
+**"How many issues" has no server field.** Rather than invent one, it is written into the
+booking notes, labelled, where a tech will read it. Same for the retrofit's zone count.
+
+**Two smaller things from the same list.** The address box gained a **✕** that clears it — and
+clears what the address SETTLED with it: the verified address, the matched property, the
+category, the band, the day list. A confirmed address sitting under a half-typed new one is how
+the wrong property gets booked. And the three steps are now **swipeable**: one horizontal pager
+whose page and the `step` state drive each other, so the pips, the back links and the gesture
+cannot disagree; you cannot swipe to a day list before one exists.
+
+**The details step stopped asking twice.** Zones and issues were already answered on step one,
+so the last step shows them and asks only for the contact. Two prompts for one number is how
+the two answers end up disagreeing — which is what Patrick meant by the details tab going away.
+
+`scripts/test-book.mjs` is 31 assertions: the six categories checked to name real families and
+real services, the ordering run for both September and March, every band asserted against the
+live `BOOKABLE_SERVICES` (including the label-only commercial tier), the follow-ups and their
+notes, the clear button asserted to clear all eight pieces of state, and the pager asserted not
+to be swipeable past the step reached. Full `build:check` green; 32 app files parse.
+
 **2026-09-08, same day (I misread the booking window as permission, and started changing a
 rule that had been right since day one):**
 
