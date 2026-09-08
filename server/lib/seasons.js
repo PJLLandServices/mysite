@@ -412,7 +412,21 @@ function hasExplicitYear(year) {
 //
 // Returns null for a season this file does not know, so callers can
 // treat "no answer" as "do not annotate" rather than as "closed".
-function publicBookingStatus(season, todayKey, years = 2) {
+// WHAT THIS ANSWERS, precisely: which DATES may be scheduled for this
+// season, and whether today is inside them.
+//
+// The distinction cost a round. Fall 2026's window is Sep 28 - Oct 30.
+// That is NOT "you may not book until Sep 28" — booking is open from
+// Sep 1. It is "the dates you may put work on run Sep 28 to Oct 30",
+// after which Patrick opens more himself. It applies to staff exactly as
+// it applies to the public, and an admin path that widened it would put
+// work on days he has not opened — the opposite of the control the
+// window exists to give him.
+//
+// So `open` here means "today falls inside the schedulable range", and a
+// caller must not read it as "bookable". A season whose dates start
+// three weeks out is perfectly bookable today; see `startsOn`.
+function publicBookingStatus(season, todayKey, { years = 2 } = {}) {
   const startYear = Number(String(todayKey).slice(0, 4));
   if (!Number.isFinite(startYear)) return null;
   let last = null;
@@ -422,12 +436,19 @@ function publicBookingStatus(season, todayKey, years = 2) {
     const from = cfg.publicBookingFrom || null;
     const through = cfg.publicBookingThrough || null;
     if ((!from || todayKey >= from) && (!through || todayKey <= through)) {
-      return { name: season, open: true, from, through };
+      return { name: season, open: true, bookable: true, from, through };
     }
+    // Dates ahead of us. `startsOn`, NOT "opens on": the service is
+    // bookable right now, its schedulable dates simply begin later. The
+    // old name said the opposite and put "Booking opens September 28" in
+    // front of the owner on the 8th, when booking had been open since
+    // the 1st.
     if (from && todayKey < from) {
-      return { name: season, open: false, opensOn: from, through };
+      return { name: season, open: false, bookable: true, startsOn: from, through };
     }
-    last = { name: season, open: false, closed: true, through };
+    // Behind us: the season's dates are spent for this year. Not
+    // bookable, and that is a different thing from "starts later".
+    last = { name: season, open: false, bookable: false, closed: true, through };
   }
   return last;
 }
