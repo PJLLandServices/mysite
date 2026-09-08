@@ -759,6 +759,12 @@ async function proposalCustomerPhoneEntries(q) {
     try {
       const lead = (await readLeads()).find((l) => l.id === q.leadId);
       if (lead?.contact?.phone) entries.push({ source: "lead", label: "Lead contact", value: lead.contact.phone });
+      // The second number the Book tab asks for. Listed beside the first
+      // rather than instead of it — a field that is stored and never
+      // shown is a field that lies about being captured.
+      if (lead?.contact?.altPhone) {
+        entries.push({ source: "lead", label: "Lead contact (alternate)", value: lead.contact.altPhone });
+      }
     } catch (_) { /* tolerate */ }
   }
   if (q?.propertyId) {
@@ -1271,6 +1277,11 @@ function needsAuth(method, pathname) {
   if (pathname === "/api/admin/action-log") return "admin";
   if (pathname === "/api/admin/send-booking-link") return "user";
   if (pathname === "/api/admin/features") return "user";
+  // Address suggestions for the app's Book tab. Deliberately in the
+  // /api/admin tree and fenced at `user`: it spends real money on every
+  // keystroke, and the rest of the booking flow is public. A Places proxy
+  // anyone can call is a Google bill anyone can run up.
+  if (pathname === "/api/admin/address-suggest") return "user";
   // Customers (the people PJL serves) — admin-only.
   if (pathname.startsWith("/api/customers")) return "user";
   if (pathname.startsWith("/api/customer/") || pathname === "/api/customer") return "user";
@@ -1609,6 +1620,11 @@ function validateLead(payload) {
   const now = new Date().toISOString();
   const name = normalizeString(contact.name, 120);
   const phone = normalizePhone(contact.phone);
+  // A SECOND number, kept because a booking taken over the phone is
+  // often taken on a number that is not the one to call back on — the
+  // app's Book tab asks for it explicitly. Additive: absent, this is ""
+  // and every existing caller is unchanged.
+  const altPhone = normalizePhone(contact.altPhone);
   const email = normalizeEmail(contact.email);
   const address = normalizeString(contact.address, 240);
   const notes = normalizeString(contact.notes, 1000);
@@ -1633,7 +1649,9 @@ function validateLead(payload) {
       // writeLeads(). Stays null on the validate() output; set on the
       // returned lead just before persistence.
       customerId: null,
-      contact: { name, phone, email, address, notes },
+      // altPhone only when there is one, so a lead without a second
+      // number is byte-for-byte the record it was before.
+      contact: { name, phone, ...(altPhone ? { altPhone } : {}), email, address, notes },
       features,
       totals: {
         expectedTotal,
@@ -8232,8 +8250,39 @@ async function handleApi(req, res, pathname) {
 
   // Public catalog of bookable services (used by the booking page UI).
   if (req.method === "GET" && pathname === "/api/booking/services") {
-    return sendJson(res, 200, { ok: true, services: BOOKABLE_SERVICES });
+    // Each service says whether the public flow will accept a booking for
+    // it TODAY, and if not, when it next will.
+    //
+    // WHY. Patrick picked "Spring opening" on 8 September and the picker
+    // came back empty. It was right to — spring 2026 ran Mar 1 to Jun 30
+    // and had been over for ten weeks — but nothing said so, and an empty
+    // calendar in front of a customer reads as "we're full", which is the
+    // opposite of the truth.
+    //
+    // The decision belongs to lib/seasons.js, which owns the windows.
+    // Asking it rather than comparing the bounds here is the difference
+    // between one rule with two callers and two rules that will disagree.
+    const today = new Date();
+    const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const decorated = {};
+    for (const [key, svc] of Object.entries(BOOKABLE_SERVICES)) {
+      let season = null;
+      const name = seasonsLib.seasonForFamily(svc.family);
+      if (name) {
+        // Fails soft, the same posture the availability gate takes: a
+        // broken seasons.json must degrade to an un-annotated list, never
+        // take booking down.
+        try { season = seasonsLib.publicBookingStatus(name, todayKey); }
+        catch (err) {
+          console.warn("[booking/services] season lookup:", err?.message);
+          season = null;
+        }
+      }
+      decorated[key] = season ? { ...svc, season } : svc;
+    }
+    return sendJson(res, 200, { ok: true, services: decorated });
   }
+
 
   // External handoff endpoint — AI chat agents (or any pre-booking tool)
   // POST a diagnosis + customer hints here, get back a session token, and
@@ -20306,6 +20355,55 @@ Customer signature captured at ${new Date().toISOString()}.`;
   // (Patrick, piloting) rather than at the calendar. Same booking-gate
   // policy as availability/reserve — this is the front door, those are
   // the locks behind it.
+  // GET /api/admin/address-suggest?q=<partial address>
+  //
+  // Google Places autocomplete, proxied. The CRM's own pages get this by
+  // loading the Places JS SDK in the browser and binding it to
+  // `.js-address-autocomplete` (coverage-checker.js). A React Native
+  // screen has no browser to do that in, so the same service is reached
+  // server-side with the key the geocoder already uses.
+  //
+  // Suggestions only — no geocode, no session token, no place details.
+  // The address the tech picks still goes through
+  // /api/booking/verify-address, so the booking gate and the coordinates
+  // come from exactly one place and a suggestion can never skip them.
+  if (req.method === "GET" && pathname === "/api/admin/address-suggest") {
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const q = normalizeString(url.searchParams.get("q"), 200);
+    // Two characters is every address in Ontario. Below that the call is
+    // spend with no signal.
+    if (q.length < 3) return sendJson(res, 200, { ok: true, suggestions: [] });
+    const key = process.env.GOOGLE_MAPS_SERVER_KEY;
+    if (!key) {
+      // Not an error the tech can act on: the address box still works,
+      // it just stops suggesting. Say so rather than failing the screen.
+      return sendJson(res, 200, { ok: true, suggestions: [], degraded: "no_key" });
+    }
+    try {
+      const api = new URL("https://maps.googleapis.com/maps/api/place/autocomplete/json");
+      api.searchParams.set("input", q);
+      api.searchParams.set("key", key);
+      // Addresses in Canada only — PJL does not service anywhere else,
+      // and an unrestricted box suggests Aurora, Colorado.
+      api.searchParams.set("types", "address");
+      api.searchParams.set("components", "country:ca");
+      const r = await fetch(api, { signal: AbortSignal.timeout(6000) });
+      const data = await r.json();
+      const suggestions = Array.isArray(data.predictions)
+        ? data.predictions.slice(0, 6).map((p) => ({
+            id: String(p.place_id || p.description || ""),
+            description: String(p.description || "")
+          })).filter((p) => p.description)
+        : [];
+      return sendJson(res, 200, { ok: true, suggestions });
+    } catch (err) {
+      // A dead suggestion service must never block a booking — the tech
+      // types the address and verify-address still does the real work.
+      console.warn("[address-suggest]", err?.message);
+      return sendJson(res, 200, { ok: true, suggestions: [], degraded: "upstream" });
+    }
+  }
+
   if (req.method === "POST" && pathname === "/api/booking/verify-address") {
     try {
       const body = await parseRequestBody(req);

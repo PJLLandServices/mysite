@@ -1,39 +1,46 @@
-// Booking a job from the truck.
+// Booking a customer while you are on the phone to them.
 //
-// EXISTING CUSTOMERS COME FIRST, and that is the whole shape of step one.
-// The search box is the default path and "New customer" sits underneath
-// it, because the expensive mistake here is not a slow search — it is a
-// second property record for an address PJL already services, which then
-// splits that address's history, invoices and work orders in two. The
-// same rule the CRM follows.
+// THE ORDER IS THE POINT, and it is Patrick's, not a form designer's:
 //
-// HOW AN EXISTING CUSTOMER IS ACTUALLY REUSED. Not by sending `leadId`.
-// That path exists for scheduling a lead that is still WAITING to be
-// booked, and it overwrites `lead.booking` — pointing it at a won lead
-// from two seasons ago would wipe that visit's envelope. Instead the
-// customer's stored email and address go up as the contact, and the
-// server's own `attachLead` binds the new lead to the property it
-// already matches, by address and email. One property, one history.
+//   - I open the app
+//   - request that customers address (a place to type in address with
+//     autocomplete)
+//   - it shows me JUST LIKE WHEN I search on desktop OR they go on the
+//     website
+//   - Once i show them the booking dates, I select the date they accept
+//   - I send them a text message with that EXACT BOOKING DAY for that
+//     appointment time
 //
-// THE ADDRESS IS GEOCODED BEFORE ANY DATE IS OFFERED, which is the rule
-// the public booking page follows and the reason it can promise a date
-// at all: `/api/booking/verify-address` runs the booking gate — junk
-// addresses and anything outside the service area are refused here,
-// before a calendar is drawn — and hands back Google's formatted
-// address, which is then the one availability is computed against.
+// So: ADDRESS first, DATES second, and the customer's details LAST —
+// because the call goes "what's the address… I can do Thursday
+// morning… great, let me take your details." A form that asks for a
+// name before it can offer a day makes you hold a stranger on the phone
+// while you type. That is why the address is on slide one and
+// auto-populates into slide three rather than being asked for twice.
 //
-// ZONES ARE TWO ANSWERS, NOT ONE. The service key carries the zone
-// BAND, because that is what sets the visit length and the price
-// (spring_open_6z is fifty minutes). The actual number is a separate
-// field on the booking. Patrick asked for both and they are genuinely
-// different things: the band is what we are selling, the count is what
-// the tech will find in the ground.
+// EXISTING CUSTOMERS ARE SOURCED FIRST, and the address-first order is
+// what makes that cheap: the same box that suggests addresses also
+// matches the book, so an address PJL already services announces itself
+// before anything is created. The expensive mistake is a second property
+// record for one address — it splits its history, invoices and work
+// orders in two.
+//
+// THE ADDRESS IS GEOCODED BEFORE ANY DATE IS OFFERED. A Places
+// suggestion is only a string; `/api/booking/verify-address` is what runs
+// the booking gate (junk and out-of-area refused) and returns the
+// formatted address availability is then computed against. Picking a
+// suggestion can never skip that.
+//
+// ZONES ARE TWO ANSWERS. The service key carries the BAND, which sets
+// the price and the visit length; the count is what is actually in the
+// ground. Patrick asked for both.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -45,30 +52,31 @@ import {
 import {
   AuthRequiredError,
   bookingAvailability,
+  whyNoDays,
   listProperties,
   listServices,
   reserveBooking,
+  suggestAddresses,
   verifyAddress,
 } from '../api';
 import { colors, radius, space, type } from '../theme';
 
-export const STEPS = ['customer', 'job', 'when'];
+export const STEPS = ['address', 'when', 'who'];
 
-// Matches a property against what the tech typed. Name and address both,
-// because "Holmes" and "90 Oriole" are the same question asked two ways
-// and a tech in a driveway will use whichever they have.
+// Existing customers, matched on the same string that is fetching
+// address suggestions. Address and name both, because a tech may have
+// either.
 export function matchProperties(all, query) {
   const q = String(query || '').trim().toLowerCase();
-  if (q.length < 2) return [];
+  if (q.length < 3) return [];
   const hit = (p) =>
-    String(p?.customerName || '').toLowerCase().includes(q)
-    || String(p?.address || '').toLowerCase().includes(q);
-  return (all || []).filter(hit).slice(0, 12);
+    String(p?.address || '').toLowerCase().includes(q)
+    || String(p?.customerName || '').toLowerCase().includes(q);
+  return (all || []).filter(hit).slice(0, 6);
 }
 
-// The zone count already on file for a property. `zones` is the WALKED
-// record and beats the number the customer told us, exactly as
-// lib/properties.js documents.
+// The zone count already on file. `zones` is the walked record and beats
+// the number the customer told us, as lib/properties.js documents.
 export function zonesOnFile(property) {
   const zones = property?.system?.zones;
   if (Array.isArray(zones) && zones.length) return zones.length;
@@ -76,70 +84,130 @@ export function zonesOnFile(property) {
   return Number.isFinite(declared) && declared > 0 ? declared : null;
 }
 
-// Only the services a booking can actually be made against, in the
-// server's own order, grouped by family so a list of twenty keys reads
-// as four decisions.
-export function bookableList(services) {
-  return Object.entries(services || {})
-    .filter(([, s]) => s && s.bookable)
-    .map(([key, s]) => ({ key, ...s }));
+// What the picker says about a service's season, in words a customer can
+// be told. `season` comes from /api/booking/services, derived server-side
+// from the same authority the availability gate uses.
+//
+// This exists because picking "Spring opening" on 8 September produced an
+// empty calendar and nothing else — and an empty calendar in front of a
+// customer reads as "we're full", which is the opposite of "that season
+// ended in June".
+export function seasonNote(service) {
+  const s = service?.season;
+  if (!s || s.open) return null;
+  const when = (iso) => {
+    const d = new Date(`${iso}T12:00:00`);
+    return Number.isNaN(d.getTime())
+      ? iso
+      : d.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+  };
+  if (s.opensOn) return `Booking opens ${when(s.opensOn)}`;
+  if (s.closed) return 'Season is over for this year';
+  return 'Not bookable right now';
 }
 
-// Which service the zone count implies, so picking "7" moves the
-// selection to the 7-8 band rather than leaving a contradiction on
-// screen. Returns null when nothing in the family matches — a 20-zone
-// commercial site has no residential band and should not be forced into
-// one.
+// In-season services first. A closed one still SHOWS — Patrick books work
+// nobody else can, and hiding it would be its own kind of lying — but it
+// is out of the way and it says why.
+export function bookableList(services) {
+  const rows = Object.entries(services || {})
+    .filter(([, s]) => s && s.bookable)
+    .map(([key, s]) => ({ key, ...s }));
+  const shut = (r) => (seasonNote(r) ? 1 : 0);
+  return rows.sort((a, b) => shut(a) - shut(b));
+}
+
+// Which band holds this many zones, so typing 7 moves the service to
+// 7-8 rather than leaving a contradiction on screen.
 export function serviceForZones(list, family, zoneCount) {
   const n = Number(zoneCount);
   if (!family || !Number.isFinite(n) || n < 1) return null;
-  const inFamily = list.filter((s) => s.family === family && s.category !== 'commercial');
   const band = (key) => {
     const m = String(key).match(/_(\d+)z$/);
     return m ? Number(m[1]) : (/_16plus$/.test(key) ? Infinity : null);
   };
-  const withBands = inFamily
+  return list
+    .filter((s) => s.family === family && s.category !== 'commercial')
     .map((s) => ({ ...s, top: band(s.key) }))
     .filter((s) => s.top !== null)
-    .sort((a, b) => a.top - b.top);
-  return withBands.find((s) => n <= s.top) || null;
+    .sort((a, b) => a.top - b.top)
+    .find((s) => n <= s.top) || null;
 }
+
+// The text Patrick sends. Names the EXACT day and time that was just
+// reserved — not "your appointment is confirmed", which tells a customer
+// on the phone nothing they can write down.
+export function confirmationText({ dayLabel, timeLabel, serviceLabel, address, standby }) {
+  const where = address ? ` At ${address}.` : '';
+  const what = serviceLabel ? ` ${serviceLabel}.` : '';
+  // A standby booking has no day yet — saying one would be a promise
+  // nobody can keep.
+  if (standby) {
+    return `PJL Land Services — you're on the list for the next time we're`
+      + ` in your area.${what}${where} I'll text you the date as soon as it's set.`;
+  }
+  const when = [dayLabel, timeLabel].filter(Boolean).join(', ');
+  return `PJL Land Services — you're booked for ${when}.`
+    + `${what}${where}`
+    + ` Reply here if anything changes.`;
+}
+
+// "First available" — the open bucket, and the reason a full calendar is
+// not a dead end. The website's picker carries this card ALWAYS
+// (`allowOpenBucket: true` in js/booking.js), and selecting it books no
+// slot: the customer joins the standby list and gets placed onto a route
+// day from the Season Plan later. Without it, an address the corridor
+// cannot place efficiently — past the 40-minute widening cap — reads as
+// "there is no space", which is false and loses the job.
+//
+// Site visits are the one exception, and the server enforces it: a
+// consult needs a real time, so it returns `standby_unsupported`.
+export function openBucketAllowed(service) {
+  return Boolean(service) && service.category !== 'consult';
+}
+
+// The shape a slot takes when there is no slot.
+const OPEN_BUCKET = {
+  openBucket: true,
+  start: null,
+  dayLabel: 'First available',
+  timeLabel: "when we're next nearby",
+};
 
 const clean = (v) => String(v || '').trim();
 
 export default function BookScreen({ onSignIn }) {
-  const [step, setStep] = useState('customer');
+  const [step, setStep] = useState('address');
   const [state, setState] = useState('loading');
   const [error, setError] = useState('');
 
   const [properties, setProperties] = useState([]);
   const [services, setServices] = useState({});
-  const [query, setQuery] = useState('');
-  // The property this booking is FOR, when it is an existing one. Null
-  // means a new customer is being typed.
-  const [picked, setPicked] = useState(null);
-  const [isNew, setIsNew] = useState(false);
 
+  // --- Slide 1: the address -------------------------------------------
+  const [typed, setTyped] = useState('');
+  const [suggestions, setSuggestions] = useState([]);
+  // Why suggestions are absent, when they are. Silence here reads as a
+  // broken app; naming it reads as a setting somebody can fix.
+  const [suggestDegraded, setSuggestDegraded] = useState(null);
+  const [picked, setPicked] = useState(null);      // an existing property, or null
+  const [verified, setVerified] = useState(null);  // { address, minutes }
+  const [checking, setChecking] = useState(false);
+
+  // --- Slide 2: the day ------------------------------------------------
+  const [serviceKey, setServiceKey] = useState('');
+  const [days, setDays] = useState([]);
+  const [loadingDays, setLoadingDays] = useState(false);
+  const [slot, setSlot] = useState(null);
+
+  // --- Slide 3: who they are -------------------------------------------
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [phone, setPhone] = useState('');
   const [altPhone, setAltPhone] = useState('');
   const [email, setEmail] = useState('');
-  const [address, setAddress] = useState('');
-  const [notes, setNotes] = useState('');
-
-  const [serviceKey, setServiceKey] = useState('');
   const [zoneCount, setZoneCount] = useState('');
-
-  // The address as GOOGLE spells it, set by verify-address. Availability
-  // and the booking both use this rather than what was typed, so the
-  // drive-time corridor is computed against the same point the pin will
-  // land on.
-  const [verified, setVerified] = useState(null);
-  const [checking, setChecking] = useState(false);
-  const [days, setDays] = useState([]);
-  const [loadingDays, setLoadingDays] = useState(false);
-  const [slot, setSlot] = useState(null);
+  const [notes, setNotes] = useState('');
   const [booking, setBooking] = useState(false);
   const [done, setDone] = useState(null);
 
@@ -154,78 +222,80 @@ export default function BookScreen({ onSignIn }) {
       else { setError(err?.message || "Couldn't load booking."); setState('error'); }
     }
   }, []);
-
   useEffect(() => { load(); }, [load]);
 
+  // Suggestions, debounced. Every keystroke is a paid Google call, so
+  // this waits for the typing to stop rather than racing it.
+  const seq = useRef(0);
+  useEffect(() => {
+    if (verified) return undefined;             // already settled
+    const q = typed.trim();
+    if (q.length < 3) { setSuggestions([]); return undefined; }
+    const mine = ++seq.current;
+    const t = setTimeout(() => {
+      suggestAddresses(q)
+        .then((res) => {
+          if (mine !== seq.current) return;
+          setSuggestions(res.suggestions);
+          setSuggestDegraded(res.degraded);
+        })
+        // A dead suggestion service must never block a booking: the tech
+        // types the address and verify-address still does the real work.
+        .catch(() => {
+          if (mine !== seq.current) return;
+          setSuggestions([]);
+          setSuggestDegraded('upstream');
+        });
+    }, 350);
+    return () => clearTimeout(t);
+  }, [typed, verified]);
+
   const list = useMemo(() => bookableList(services), [services]);
-  const results = useMemo(() => matchProperties(properties, query), [properties, query]);
+  const noneBookable = days.length > 0 && !days.some((d) => d.slots?.length);
+  const onFile = useMemo(() => matchProperties(properties, typed), [properties, typed]);
   const service = serviceKey ? { key: serviceKey, ...(services[serviceKey] || {}) } : null;
 
-  const choose = (property) => {
-    setPicked(property);
-    setIsNew(false);
-    // Everything we already know, filled in. A tech re-typing a phone
-    // number that is already on file is how a second spelling of the
-    // same customer gets created.
-    const parts = clean(property.customerName).split(/\s+/).filter(Boolean);
+  // Everything we already know about a customer already in the book.
+  const takeProperty = (p) => {
+    setPicked(p);
+    const parts = clean(p.customerName).split(/\s+/).filter(Boolean);
     setFirstName(parts[0] || '');
     setLastName(parts.slice(1).join(' '));
-    setPhone(clean(property.customerPhone));
-    setEmail(clean(property.customerEmail));
-    setAddress(clean(property.address));
-    const zones = zonesOnFile(property);
+    setPhone(clean(p.customerPhone));
+    setEmail(clean(p.customerEmail));
+    const zones = zonesOnFile(p);
     setZoneCount(zones ? String(zones) : '');
-    setVerified(null);
-    setStep('job');
+    setTyped(clean(p.address));
+    setSuggestions([]);
+    return clean(p.address);
   };
 
-  const startNew = () => {
-    setPicked(null);
-    setIsNew(true);
-    setFirstName(''); setLastName(''); setPhone(''); setAltPhone('');
-    setEmail(''); setAddress(''); setZoneCount(''); setVerified(null);
-    setStep('job');
-  };
-
-  // Zone count drives the band. Typing 7 moves the service to the 7-8
-  // band rather than leaving "1-4 zones" selected beside a 7.
-  const onZones = (value) => {
-    const digits = value.replace(/[^\d]/g, '').slice(0, 2);
-    setZoneCount(digits);
-    const family = service?.family;
-    const better = serviceForZones(list, family, digits);
-    if (better && better.key !== serviceKey) setServiceKey(better.key);
-  };
-
-  const checkAddress = async () => {
-    const typed = clean(address);
-    if (!typed) return;
+  const settleAddress = async (text) => {
+    const value = clean(text);
+    if (!value) return;
     setChecking(true);
-    setVerified(null);
+    setSuggestions([]);
     try {
-      const res = await verifyAddress(typed);
-      setVerified({ address: res.address || typed, minutes: res.minutes ?? null });
-      setAddress(res.address || typed);
+      const res = await verifyAddress(value);
+      const formatted = res.address || value;
+      setVerified({ address: formatted, minutes: res.minutes ?? null });
+      setTyped(formatted);
     } catch (err) {
       if (err instanceof AuthRequiredError) setState('auth');
-      else {
-        Alert.alert(
-          "That address won't book",
-          err?.message || 'Check the address and try again.',
-        );
-      }
+      else Alert.alert("That address won't book", err?.message || 'Check it and try again.');
     } finally {
       setChecking(false);
     }
   };
 
-  const loadDays = async () => {
-    if (!verified || !serviceKey) return;
+  const showDays = async (key) => {
+    if (!verified || !key) return;
+    setServiceKey(key);
     setLoadingDays(true);
     setDays([]);
     setSlot(null);
     try {
-      const res = await bookingAvailability({ service: serviceKey, address: verified.address });
+      const res = await bookingAvailability({ service: key, address: verified.address });
       setDays(res.days || []);
       setStep('when');
     } catch (err) {
@@ -236,17 +306,22 @@ export default function BookScreen({ onSignIn }) {
     }
   };
 
+  const onZones = (value) => {
+    const digits = value.replace(/[^\d]/g, '').slice(0, 2);
+    setZoneCount(digits);
+    const better = serviceForZones(list, service?.family, digits);
+    if (better && better.key !== serviceKey) setServiceKey(better.key);
+  };
+
   const confirm = async () => {
     if (!slot || booking) return;
     setBooking(true);
     try {
-      // The customer's own stored email and address when this is an
-      // existing property, so the server binds the new lead to the
-      // property it already has rather than minting a second one.
       const name = [clean(firstName), clean(lastName)].filter(Boolean).join(' ');
-      const res = await reserveBooking({
+      await reserveBooking({
         serviceKey,
-        slotStart: slot.start,
+        // A standby booking has no slot — that is the whole point of it.
+        ...(slot.openBucket ? { standby: true } : { slotStart: slot.start }),
         zoneCount: clean(zoneCount) || 'unsure',
         contact: {
           name,
@@ -259,7 +334,16 @@ export default function BookScreen({ onSignIn }) {
           notes: clean(notes),
         },
       });
-      setDone({ when: slot, id: res?.booking?.id || res?.lead?.id || null });
+      setDone({
+        slot,
+        text: confirmationText({
+          dayLabel: slot.dayLabel,
+          timeLabel: slot.timeLabel,
+          serviceLabel: service?.label,
+          address: verified.address,
+          standby: slot.openBucket === true,
+        }),
+      });
     } catch (err) {
       if (err instanceof AuthRequiredError) setState('auth');
       else {
@@ -273,12 +357,24 @@ export default function BookScreen({ onSignIn }) {
     }
   };
 
+  // The text Patrick sends himself, from his own number, with the exact
+  // day already written. `?body=` is the separator both platforms take.
+  const sendText = () => {
+    const to = clean(phone).replace(/[^\d+]/g, '');
+    const url = to
+      ? `sms:${to}?body=${encodeURIComponent(done.text)}`
+      : `sms:?body=${encodeURIComponent(done.text)}`;
+    Linking.openURL(url).catch(() => {
+      Alert.alert("Couldn't open Messages", 'The booking is made either way.');
+    });
+  };
+
   const reset = () => {
-    setDone(null); setPicked(null); setIsNew(false); setQuery('');
+    setDone(null); setPicked(null); setTyped(''); setSuggestions([]); setVerified(null);
+    setServiceKey(''); setDays([]); setSlot(null);
     setFirstName(''); setLastName(''); setPhone(''); setAltPhone('');
-    setEmail(''); setAddress(''); setNotes(''); setZoneCount('');
-    setServiceKey(''); setVerified(null); setDays([]); setSlot(null);
-    setStep('customer');
+    setEmail(''); setZoneCount(''); setNotes('');
+    setStep('address');
   };
 
   if (state === 'loading') {
@@ -309,20 +405,36 @@ export default function BookScreen({ onSignIn }) {
 
   if (done) {
     return (
-      <View style={styles.centre}>
+      <ScrollView contentContainerStyle={styles.centre}>
         <Text style={styles.bookedMark}>✓</Text>
         <Text style={styles.centreTitle}>Booked</Text>
-        <Text style={styles.centreBody}>
-          {[clean(firstName), clean(lastName)].filter(Boolean).join(' ') || 'The customer'}
-          {' — '}{done.when.dayLabel}, {done.when.timeLabel}
+        <Text style={styles.bookedWhen}>
+          {done.slot.openBucket
+            ? 'On the list — first available'
+            : `${done.slot.dayLabel}, ${done.slot.timeLabel}`}
         </Text>
-        <Text style={styles.confirmNote}>
-          The customer has been sent their confirmation. It's on the schedule.
-        </Text>
-        <Pressable onPress={reset} style={styles.primary}>
-          <Text style={styles.primaryText}>Book another</Text>
+        <Text style={styles.centreBody}>{verified.address}</Text>
+
+        <View style={styles.textCard}>
+          <Text style={styles.textCardLabel}>The text they'll get from you</Text>
+          <Text style={styles.textCardBody}>{done.text}</Text>
+        </View>
+
+        <Pressable onPress={sendText} style={styles.primary}>
+          <Text style={styles.primaryText}>
+            {clean(phone) ? `Text ${clean(phone)}` : 'Text the confirmation'}
+          </Text>
         </Pressable>
-      </View>
+        {/* Said plainly so nobody double-texts a customer by accident. */}
+        <Text style={styles.confirmNote}>
+          The system also sends its own confirmation automatically. This one comes
+          from your number, so they can reply to you.
+        </Text>
+
+        <Pressable onPress={reset} style={styles.secondary}>
+          <Text style={styles.secondaryText}>Book another</Text>
+        </Pressable>
+      </ScrollView>
     );
   }
 
@@ -341,181 +453,141 @@ export default function BookScreen({ onSignIn }) {
       </View>
 
       <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
-        {step === 'customer' ? (
+        {/* ---- 1. The address ------------------------------------------ */}
+        {step === 'address' ? (
           <>
-            <Text style={styles.lead}>Who is this for?</Text>
-            <Text style={styles.hint}>
-              Search the book first. Booking an address we already service onto a
-              new record splits its history in two.
-            </Text>
+            <Text style={styles.lead}>What's the address?</Text>
             <TextInput
               style={styles.input}
-              value={query}
-              onChangeText={setQuery}
-              placeholder="Name or address"
+              value={typed}
+              onChangeText={(v) => { setTyped(v); setVerified(null); setPicked(null); }}
+              placeholder="Start typing…"
               placeholderTextColor={colors.textFaint}
               autoCorrect={false}
               autoCapitalize="words"
             />
-            {results.map((p) => (
-              <Pressable
-                key={p.id}
-                onPress={() => choose(p)}
-                style={({ pressed }) => [styles.result, pressed && styles.resultPressed]}
-              >
-                <Text style={styles.resultName} numberOfLines={1}>
-                  {p.customerName || 'No name'}
-                </Text>
-                <Text style={styles.resultAddress} numberOfLines={1}>{p.address}</Text>
-              </Pressable>
-            ))}
-            {query.trim().length >= 2 && !results.length ? (
-              <Text style={styles.hint}>Nothing in the book matches that.</Text>
-            ) : null}
 
-            <Pressable onPress={startNew} style={styles.secondary}>
-              <Text style={styles.secondaryText}>New customer</Text>
-            </Pressable>
-          </>
-        ) : null}
-
-        {step === 'job' ? (
-          <>
-            <Pressable onPress={() => setStep('customer')} hitSlop={10}>
-              <Text style={styles.back}>‹ Who</Text>
-            </Pressable>
-
-            {picked ? (
-              <View style={styles.chosen}>
-                <Text style={styles.chosenName}>{picked.customerName || 'No name'}</Text>
-                <Text style={styles.chosenAddress}>{picked.address}</Text>
-                <Text style={styles.chosenNote}>On file — this booking joins their record.</Text>
-              </View>
-            ) : null}
-
-            {isNew ? (
+            {/* On file first — an address PJL already services announces
+                itself before anything new is created. */}
+            {!verified && onFile.length ? (
               <>
-                <Text style={styles.lead}>New customer</Text>
-                <Field label="First name" value={firstName} onChange={setFirstName} autoCapitalize="words" />
-                <Field label="Last name" value={lastName} onChange={setLastName} autoCapitalize="words" />
-                <Field label="Telephone" value={phone} onChange={setPhone} keyboardType="phone-pad" />
-                <Field
-                  label="Alternate telephone"
-                  value={altPhone}
-                  onChange={setAltPhone}
-                  keyboardType="phone-pad"
-                  optional
-                />
-                <Field label="Email" value={email} onChange={setEmail} keyboardType="email-address" />
+                <Text style={styles.groupLabel}>Already in the book</Text>
+                {onFile.map((p) => (
+                  <Pressable
+                    key={p.id}
+                    onPress={() => settleAddress(takeProperty(p))}
+                    style={({ pressed }) => [styles.suggest, styles.onFile, pressed && styles.pressed]}
+                  >
+                    <Text style={styles.suggestText} numberOfLines={1}>{p.address}</Text>
+                    <Text style={styles.onFileWho} numberOfLines={1}>
+                      {p.customerName || 'No name'}
+                    </Text>
+                  </Pressable>
+                ))}
               </>
             ) : null}
 
-            <Text style={styles.lead}>Address</Text>
-            <Text style={styles.hint}>
-              Checked against the service area and geocoded before any day is
-              offered — the same check the website does.
-            </Text>
-            <TextInput
-              style={styles.input}
-              value={address}
-              onChangeText={(v) => { setAddress(v); setVerified(null); }}
-              placeholder="123 Example Rd, Aurora, ON"
-              placeholderTextColor={colors.textFaint}
-              autoCapitalize="words"
-            />
-            {verified ? (
-              <Text style={styles.ok}>
-                ✓ {verified.address}
-                {verified.minutes != null ? `  ·  ${verified.minutes} min from base` : ''}
+            {!verified && suggestions.length ? (
+              <>
+                <Text style={styles.groupLabel}>Suggestions</Text>
+                {suggestions.map((s) => (
+                  <Pressable
+                    key={s.id}
+                    onPress={() => { setTyped(s.description); settleAddress(s.description); }}
+                    style={({ pressed }) => [styles.suggest, pressed && styles.pressed]}
+                  >
+                    <Text style={styles.suggestText} numberOfLines={2}>{s.description}</Text>
+                  </Pressable>
+                ))}
+              </>
+            ) : null}
+
+            {!verified && suggestDegraded && typed.trim().length >= 3 ? (
+              <Text style={styles.hint}>
+                {suggestDegraded === 'no_key'
+                  ? 'Address suggestions are off — GOOGLE_MAPS_SERVER_KEY is not set on the server. Type the address in full; it still books.'
+                  : "Google isn't answering for suggestions right now. Type the address in full; it still books."}
               </Text>
-            ) : (
-              <Pressable
-                onPress={checkAddress}
-                disabled={checking || !clean(address)}
-                style={({ pressed }) => [
-                  styles.secondary,
-                  (checking || !clean(address)) && styles.off,
-                  pressed && styles.pressed,
-                ]}
-              >
-                {checking
-                  ? <ActivityIndicator color={colors.brand} size="small" />
-                  : <Text style={styles.secondaryText}>Check this address</Text>}
-              </Pressable>
-            )}
+            ) : null}
 
-            <Text style={styles.lead}>Zones</Text>
-            <Text style={styles.hint}>
-              How many zones are actually in the ground. The band below sets the
-              visit length and the price.
-            </Text>
-            <TextInput
-              style={styles.input}
-              value={zoneCount}
-              onChangeText={onZones}
-              placeholder="e.g. 7"
-              placeholderTextColor={colors.textFaint}
-              keyboardType="number-pad"
-            />
+            {checking ? (
+              <View style={styles.checking}>
+                <ActivityIndicator color={colors.brand} size="small" />
+                <Text style={styles.hint}>Checking the service area…</Text>
+              </View>
+            ) : null}
 
-            <Text style={styles.lead}>Service</Text>
-            {list.map((s) => (
-              <Pressable
-                key={s.key}
-                onPress={() => setServiceKey(s.key)}
-                style={({ pressed }) => [
-                  styles.option,
-                  serviceKey === s.key && styles.optionOn,
-                  pressed && styles.pressed,
-                ]}
-              >
-                <Text style={[styles.optionText, serviceKey === s.key && styles.optionTextOn]}>
-                  {s.label}
+            {verified ? (
+              <>
+                <Text style={styles.ok}>
+                  ✓ {verified.address}
+                  {verified.minutes != null ? `  ·  ${verified.minutes} min from base` : ''}
                 </Text>
-                <Text style={styles.optionMeta}>{s.displayMinutes || `${s.minutes} min`}</Text>
-              </Pressable>
-            ))}
+                {picked ? (
+                  <Text style={styles.onFileNote}>
+                    {picked.customerName || 'This address'} is already in the book — this
+                    booking joins their record.
+                  </Text>
+                ) : null}
 
-            <Text style={styles.lead}>Notes</Text>
-            <TextInput
-              style={[styles.input, styles.multiline]}
-              value={notes}
-              onChangeText={setNotes}
-              placeholder="Anything the tech should know"
-              placeholderTextColor={colors.textFaint}
-              multiline
-            />
-
-            <Pressable
-              onPress={loadDays}
-              disabled={!verified || !serviceKey || loadingDays}
-              style={({ pressed }) => [
-                styles.primary,
-                (!verified || !serviceKey || loadingDays) && styles.off,
-                pressed && styles.pressed,
-              ]}
-            >
-              {loadingDays
-                ? <ActivityIndicator color={colors.onBrand} size="small" />
-                : <Text style={styles.primaryText}>See available days</Text>}
-            </Pressable>
-            {!verified ? <Text style={styles.hint}>Check the address first.</Text> : null}
+                <Text style={styles.lead}>What are we booking?</Text>
+                {list.map((s) => {
+                  const shut = seasonNote(s);
+                  return (
+                    <Pressable
+                      key={s.key}
+                      onPress={() => showDays(s.key)}
+                      disabled={loadingDays}
+                      style={({ pressed }) => [
+                        styles.option,
+                        shut && styles.optionShut,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <Text style={[styles.optionText, shut && styles.optionTextShut]}>
+                        {s.label}
+                      </Text>
+                      {/* Still tappable — Patrick can book work the public
+                          flow will not — but it says what will happen. */}
+                      <Text style={shut ? styles.optionShutNote : styles.optionMeta}>
+                        {shut || s.displayMinutes || `${s.minutes} min`}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+                {loadingDays ? <ActivityIndicator color={colors.brand} /> : null}
+              </>
+            ) : (
+              !checking && clean(typed) ? (
+                <Pressable onPress={() => settleAddress(typed)} style={styles.secondary}>
+                  <Text style={styles.secondaryText}>Use this address</Text>
+                </Pressable>
+              ) : null
+            )}
           </>
         ) : null}
 
+        {/* ---- 2. The day ---------------------------------------------- */}
         {step === 'when' ? (
           <>
-            <Pressable onPress={() => setStep('job')} hitSlop={10}>
-              <Text style={styles.back}>‹ Job</Text>
+            <Pressable onPress={() => setStep('address')} hitSlop={10}>
+              <Text style={styles.back}>‹ Address</Text>
             </Pressable>
-            <Text style={styles.lead}>When</Text>
+            <Text style={styles.lead}>Read them the days</Text>
+            <Text style={styles.hint}>{verified.address} · {service?.label}</Text>
 
-            {!days.length ? (
-              <Text style={styles.hint}>
-                No days come back for that address and service inside the booking
-                window. That is the calendar being genuinely full or out of season,
-                not an error.
-              </Text>
+            {/* WHY, not "no space". The server hands back a reason per
+                day and they are not the same problem: out of season,
+                outside the route area that week, or genuinely full. */}
+            {noneBookable ? (
+              <View style={styles.emptyDays}>
+                <Text style={styles.emptyTitle}>{whyNoDays(days) || 'No open days.'}</Text>
+                <Text style={styles.hint}>
+                  {openBucketAllowed(service)
+                    ? 'They can still go on the list below — that is what the website offers too.'
+                    : 'A site visit needs a real time, so it cannot go on the standby list.'}
+                </Text>
+              </View>
             ) : null}
 
             {days.filter((d) => d.slots && d.slots.length).map((day) => (
@@ -543,17 +615,101 @@ export default function BookScreen({ onSignIn }) {
               </View>
             ))}
 
-            {slot ? (
+            {/* ALWAYS present, exactly as it is on the website — not a
+                fallback that appears only when the list is empty. Some
+                customers take it over a date three weeks out. */}
+            {openBucketAllowed(service) ? (
               <Pressable
-                onPress={confirm}
-                disabled={booking}
-                style={({ pressed }) => [styles.primary, booking && styles.off, pressed && styles.pressed]}
+                onPress={() => setSlot(OPEN_BUCKET)}
+                style={({ pressed }) => [
+                  styles.bucket,
+                  slot?.openBucket && styles.bucketOn,
+                  pressed && styles.pressed,
+                ]}
               >
-                {booking
-                  ? <ActivityIndicator color={colors.onBrand} size="small" />
-                  : <Text style={styles.primaryText}>Book {slot.dayLabel}, {slot.timeLabel}</Text>}
+                <Text style={[styles.bucketTitle, slot?.openBucket && styles.bucketTitleOn]}>
+                  First available
+                </Text>
+                <Text style={styles.bucketBody}>
+                  No fixed date — they go on the list and you place them from the
+                  Season Plan when you're next nearby.
+                </Text>
               </Pressable>
             ) : null}
+
+            {slot ? (
+              <Pressable onPress={() => setStep('who')} style={styles.primary}>
+                <Text style={styles.primaryText}>
+                  {slot.openBucket
+                    ? "They'll take first available"
+                    : `They'll take ${slot.dayLabel}, ${slot.timeLabel}`}
+                </Text>
+              </Pressable>
+            ) : null}
+          </>
+        ) : null}
+
+        {/* ---- 3. Who they are ----------------------------------------- */}
+        {step === 'who' ? (
+          <>
+            <Pressable onPress={() => setStep('when')} hitSlop={10}>
+              <Text style={styles.back}>‹ Days</Text>
+            </Pressable>
+
+            <View style={styles.holding}>
+              <Text style={styles.holdingWhen}>
+                {slot.openBucket ? 'First available' : `${slot.dayLabel}, ${slot.timeLabel}`}
+              </Text>
+              {/* Auto-populated from slide one — asked once, not twice. */}
+              <Text style={styles.holdingWhere}>{verified.address}</Text>
+            </View>
+
+            <Text style={styles.lead}>Their details</Text>
+            <Field label="First name" value={firstName} onChange={setFirstName} autoCapitalize="words" />
+            <Field label="Last name" value={lastName} onChange={setLastName} autoCapitalize="words" />
+            <Field label="Telephone" value={phone} onChange={setPhone} keyboardType="phone-pad" />
+            {/* iOS never gives an app the number of the call you are on —
+                CallKit reports that a call exists, never who is on it, at
+                any entitlement level. So this is typed. */}
+            <Field
+              label="Alternate telephone"
+              value={altPhone}
+              onChange={setAltPhone}
+              keyboardType="phone-pad"
+              optional
+            />
+            <Field label="Email" value={email} onChange={setEmail} keyboardType="email-address" />
+
+            <Text style={styles.lead}>Zones</Text>
+            <Text style={styles.hint}>
+              How many are actually in the ground. The band sets the price and the
+              visit length.
+            </Text>
+            <Field label="Zone count" value={zoneCount} onChange={onZones} keyboardType="number-pad" />
+            <View style={styles.band}>
+              <Text style={styles.bandLabel}>Band</Text>
+              <Text style={styles.bandValue}>{service?.label || '—'}</Text>
+            </View>
+
+            <Text style={styles.lead}>Notes</Text>
+            <TextInput
+              style={[styles.input, styles.multiline]}
+              value={notes}
+              onChangeText={setNotes}
+              placeholder="Anything the tech should know"
+              placeholderTextColor={colors.textFaint}
+              multiline
+            />
+
+            <Pressable
+              onPress={confirm}
+              disabled={booking}
+              style={({ pressed }) => [styles.primary, booking && styles.off, pressed && styles.pressed]}
+            >
+              {booking
+                ? <ActivityIndicator color={colors.onBrand} size="small" />
+                : <Text style={styles.primaryText}>Book it</Text>}
+            </Pressable>
           </>
         ) : null}
       </ScrollView>
@@ -581,11 +737,24 @@ function Field({ label, value, onChange, optional, ...rest }) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.ground },
-  centre: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.xl, gap: space.sm, backgroundColor: colors.ground },
+  centre: {
+    flexGrow: 1, alignItems: 'center', justifyContent: 'center',
+    padding: space.xl, gap: space.sm, backgroundColor: colors.ground,
+  },
   centreTitle: { ...type.title },
   centreBody: { ...type.label, textAlign: 'center', lineHeight: 21 },
-  confirmNote: { ...type.caption, textAlign: 'center', marginTop: space.xs },
-  bookedMark: { fontSize: 44, color: colors.brand, marginBottom: space.sm },
+  confirmNote: { ...type.caption, textAlign: 'center', marginTop: space.sm, lineHeight: 18 },
+  bookedMark: { fontSize: 44, color: colors.brand },
+  bookedWhen: { ...type.hero, fontSize: 20, color: colors.brand, textAlign: 'center' },
+
+  textCard: {
+    backgroundColor: colors.card, borderRadius: radius.card,
+    padding: space.md, marginTop: space.lg, gap: space.xs,
+    alignSelf: 'stretch',
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.separator,
+  },
+  textCardLabel: { ...type.caption, color: colors.textMuted, fontWeight: '600' },
+  textCardBody: { ...type.body, lineHeight: 21 },
 
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -600,40 +769,32 @@ const styles = StyleSheet.create({
 
   body: { padding: space.lg, gap: space.sm, paddingBottom: space.xl * 2 },
   lead: { ...type.title, marginTop: space.md },
-  hint: { ...type.caption, lineHeight: 19, marginBottom: space.xs },
+  hint: { ...type.caption, lineHeight: 19 },
+  groupLabel: { ...type.section, marginTop: space.md },
   back: { ...type.body, color: colors.brand, fontWeight: '600', marginBottom: space.sm },
-  ok: { ...type.caption, color: colors.brand, fontWeight: '600', paddingVertical: space.sm },
+  ok: { ...type.body, color: colors.brand, fontWeight: '600', paddingVertical: space.sm },
+  checking: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingVertical: space.md },
 
   input: {
-    ...type.body,
-    backgroundColor: colors.card,
-    borderRadius: radius.card,
+    ...type.body, backgroundColor: colors.card, borderRadius: radius.card,
     borderWidth: StyleSheet.hairlineWidth, borderColor: colors.separator,
-    paddingHorizontal: space.md, paddingVertical: space.md,
-    minHeight: 48,
+    paddingHorizontal: space.md, paddingVertical: space.md, minHeight: 48,
   },
   multiline: { minHeight: 88, textAlignVertical: 'top' },
   field: { gap: space.xs, marginBottom: space.sm },
   fieldLabel: { ...type.caption, color: colors.textMuted, fontWeight: '600' },
   optional: { ...type.caption, color: colors.textFaint, fontWeight: '400' },
 
-  result: {
+  suggest: {
     backgroundColor: colors.card, borderRadius: radius.card,
     paddingHorizontal: space.md, paddingVertical: space.md,
-    minHeight: 56, justifyContent: 'center', gap: 2,
+    minHeight: 48, justifyContent: 'center', gap: 2,
     borderWidth: StyleSheet.hairlineWidth, borderColor: colors.separator,
   },
-  resultPressed: { backgroundColor: colors.brandTint },
-  resultName: { ...type.body, fontWeight: '600' },
-  resultAddress: { ...type.caption },
-
-  chosen: {
-    backgroundColor: colors.brandTint, borderRadius: radius.card,
-    padding: space.md, gap: 2, marginBottom: space.sm,
-  },
-  chosenName: { ...type.body, fontWeight: '700', color: colors.brand },
-  chosenAddress: { ...type.caption, color: colors.text },
-  chosenNote: { ...type.caption, color: colors.brand, marginTop: space.xs },
+  suggestText: { ...type.body },
+  onFile: { borderColor: colors.brand, backgroundColor: colors.brandTint },
+  onFileWho: { ...type.caption, color: colors.brand, fontWeight: '600' },
+  onFileNote: { ...type.caption, color: colors.brand, lineHeight: 19 },
 
   option: {
     backgroundColor: colors.card, borderRadius: radius.card,
@@ -641,11 +802,42 @@ const styles = StyleSheet.create({
     minHeight: 48, justifyContent: 'center', gap: 2,
     borderWidth: 1, borderColor: colors.separator,
   },
-  optionOn: { borderColor: colors.brand, backgroundColor: colors.brandTint },
   optionText: { ...type.body },
-  optionTextOn: { color: colors.brand, fontWeight: '600' },
   optionMeta: { ...type.caption },
+  optionShut: { backgroundColor: colors.ground, borderColor: colors.separator },
+  optionTextShut: { color: colors.textMuted },
+  optionShutNote: { ...type.caption, color: colors.warning, fontWeight: '600' },
 
+  holding: {
+    backgroundColor: colors.brandTint, borderRadius: radius.card,
+    padding: space.md, gap: 2, marginBottom: space.sm,
+  },
+  holdingWhen: { ...type.body, fontWeight: '700', color: colors.brand },
+  holdingWhere: { ...type.caption, color: colors.text },
+
+  band: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    gap: space.md, backgroundColor: colors.card, borderRadius: radius.card,
+    paddingHorizontal: space.md, paddingVertical: space.md, minHeight: 48,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.separator,
+  },
+  bandLabel: { ...type.caption, color: colors.textMuted, fontWeight: '600' },
+  bandValue: { ...type.body, flexShrink: 1, textAlign: 'right' },
+
+  emptyDays: {
+    backgroundColor: colors.warningTint, borderRadius: radius.card,
+    padding: space.md, gap: space.xs, marginTop: space.sm,
+  },
+  emptyTitle: { ...type.body, fontWeight: '600', color: colors.warning },
+  bucket: {
+    backgroundColor: colors.card, borderRadius: radius.card,
+    padding: space.md, gap: space.xs, marginTop: space.lg,
+    borderWidth: 1, borderColor: colors.separator,
+  },
+  bucketOn: { borderColor: colors.brand, backgroundColor: colors.brandTint },
+  bucketTitle: { ...type.body, fontWeight: '600' },
+  bucketTitleOn: { color: colors.brand, fontWeight: '700' },
+  bucketBody: { ...type.caption, lineHeight: 19 },
   day: { marginTop: space.md, gap: space.sm },
   dayLabel: { ...type.label, color: colors.text, fontWeight: '600' },
   slots: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
@@ -663,14 +855,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brand, borderRadius: radius.card,
     paddingHorizontal: space.lg, paddingVertical: space.md,
     minHeight: 48, alignItems: 'center', justifyContent: 'center',
-    marginTop: space.lg,
+    marginTop: space.lg, alignSelf: 'stretch',
   },
-  primaryText: { color: colors.onBrand, ...type.body, fontWeight: '600' },
+  primaryText: { color: colors.onBrand, ...type.body, fontWeight: '600', textAlign: 'center' },
   secondary: {
     backgroundColor: colors.card, borderRadius: radius.card,
     paddingHorizontal: space.lg, paddingVertical: space.md,
     minHeight: 48, alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: colors.brand, marginTop: space.md,
+    borderWidth: 1, borderColor: colors.brand, marginTop: space.md, alignSelf: 'stretch',
   },
   secondaryText: { color: colors.brand, ...type.body, fontWeight: '600' },
   off: { opacity: 0.4 },

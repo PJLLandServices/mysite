@@ -141,6 +141,109 @@ itself, which is what it is for. Full `build:check` green.
 clears; reply and confirm the bubble says "Emailed"; sign out and confirm the Sign in button
 reaches the login and that every screen reloads afterwards.
 
+**2026-09-08, same day ("No space for any more appointments" was three different problems, and
+one of them was Spring in September):** Patrick, screenshot from the truck: 26 Portland
+Crescent, Newmarket, **Spring opening (7-8 zones residential)** — "it came back to me saying
+that there was no space for any more appointments." It had not. Spring 2026 ran **Mar 1 - Jun
+30** and had been over for ten weeks. The calendar was not full; the season was finished.
+
+**Three faults, in order of how badly they lied.**
+
+**1. There was no open bucket.** The website's picker carries a "First available" card
+ALWAYS (`allowOpenBucket: true`, js/booking.js): selecting it books no slot, the customer
+joins the standby list, and Patrick places them onto a route day from the Season Plan later.
+That is the whole reason a full or awkward calendar still takes the job — and it is what the
+2026-09-07 `GEO_WIDEN_TIERS = [25, 40]` decision explicitly leaned on ("the open bucket exists
+precisely for the customer we can't place efficiently yet"). The app had none, so an address
+past the 40-minute cap read as *no space*. The card is now on the picker unconditionally, and
+books with `standby: true` and no `slotStart`. Site visits are the documented exception and
+the server already refuses them (`standby_unsupported`), so the card hides for a consult.
+
+**2. The app asked the wrong shape of the availability question.** Without `from`/`to` the
+server groups only days that HAVE slots, so an empty screen cannot tell full from out-of-season
+from outside-the-route-area. It now asks for the six-week range the desktop picker asks for,
+and every empty day comes back carrying `expandDaysToRange`'s own reason code. The screen names
+the dominant one — *out of season*, *too far from the routes running that week*, *bookings have
+not opened yet*, *fully booked* — instead of one sentence covering four different situations.
+
+**3. Nothing said Spring was shut before it was picked.** `GET /api/booking/services` now
+returns a `season` per service and the picker sorts in-season first, greys the rest, and prints
+*"Booking opens 1 March 2027"* or *"Season is over for this year"* on the row. A closed service
+is still tappable — Patrick books work the public flow will not — but it can no longer be
+walked into blind.
+
+**The guard that made this right.** The first version compared `publicBookingFrom` /
+`publicBookingThrough` inside the route, and `scripts/test-season-config.mjs` failed it: *"no
+consumer of the public booking bounds beyond the season gate and its test."* That guard was
+correct — a second copy of the comparison is a second answer to the question. The decision now
+lives in `lib/seasons.js` as **`publicBookingStatus(season, todayKey)`**, beside the windows it
+reads, with **`seasonForFamily()`** next to it so the family mapping cannot drift from the
+gate's. The route asks; it does not decide. **No PASS flow modified** — `/api/booking/services`
+gained a field, `/api/booking/availability` and `/reserve` are untouched, and the season gate
+itself is unchanged.
+
+**Also:** the missing address suggestions were not a fault. `geocode` falls back to town
+centroids without `GOOGLE_MAPS_SERVER_KEY`, so verify-address succeeds either way and silence
+in the box sends someone hunting the wrong problem. The proxy already reported
+`degraded: "no_key" | "upstream"`; the app was discarding it, and now says which, and that the
+address still books typed in full.
+
+`scripts/test-book.mjs` is 23 assertions, including the season decision RUN against the real
+seasons.json — spring closed on 2026-09-08 and open on 2026-05-15, fall closed on 2026-09-08
+and open on 2026-10-05 — and the open-bucket card asserted to render unconditionally rather
+than only when the list is empty. Full `build:check` green, season-config's guard included.
+
+**2026-09-08, same day (Book, rebuilt in the order of a phone call — and I had built it from
+my own summary):** Patrick, on the first version: "the booking tab did not do what I wanted it
+to do. Please tell me what you were instructed to do." It did not, and the reason is worth
+recording: I built from a paraphrase of his brief instead of returning to his words. His words
+were a SEQUENCE, not a form —
+
+> - I open the app
+> - request that customers address (a place to type in address with autocomplete)
+> - it shows me JUST LIKE WHEN I search on desktop OR they go on the website
+> - Once i show them the booking dates, I select the date they accept
+> - I send them a text message with that EXACT BOOKING DAY for that appointment time
+
+**Three things were missing and one was backwards.** The steps ran customer → job → dates;
+they now run **address → days → who**, which is the order the call actually goes, and is why
+"Address (should auto populate from the previous slide)" made sense in his brief and had no
+referent in mine. There was no autocomplete — a "Check this address" button did the geocode
+half of the instruction and not the suggest half. There was no confirmation text at all, which
+is the last line of his sequence. And the alternate telephone was captured on screen and
+**dropped by the server**, so the form lied about what it collected.
+
+**The suggestion proxy.** `GET /api/admin/address-suggest` — Google Places, proxied, because a
+React Native screen has no browser to run the Places JS SDK in (the CRM's pages get
+autocomplete by binding that SDK to `.js-address-autocomplete` via coverage-checker.js).
+Deliberately in the **/api/admin tree and fenced at `user`**, NOT under `/api/booking/` which
+is public: it spends money per keystroke, and a Places proxy anyone can call is a Google bill
+anyone can run up. Debounced client-side, three characters minimum, `country:ca`, and a missing
+key or a dead upstream returns empty suggestions rather than failing the screen — the address
+box still works, it just stops suggesting. **Suggestions only:** whatever is picked still goes
+through `/api/booking/verify-address`, so the booking gate and the coordinates come from one
+place and a suggestion can never skip them.
+
+**`contact.altPhone`** is normalized in `validateLead`, written only when present (a lead
+without one is byte-for-byte the record it was), and surfaced in
+`proposalCustomerPhoneEntries` as "Lead contact (alternate)". A field that is stored and never
+shown is the same lie as one that is dropped.
+
+**The confirmation text is a handoff** naming the day, time, service and address, opened in
+Apple's Messages from Patrick's own number so the customer can reply to him. The screen also
+says outright that the system sends its own Twilio confirmation on booking, so nobody
+double-texts a customer without meaning to. **And the question he asked and I never answered:**
+the number cannot be extracted from the call in progress. iOS never exposes the remote party to
+an app at any entitlement level — CallKit reports that a call exists, never who is on it. It is
+typed, and the code says why.
+
+`scripts/test-book.mjs` is 17 assertions: the step order executed from the real `STEPS`, the
+book-before-Google ordering, every path to an address routed through verification, the fence
+run through the real `needsAuth`, the band boundaries against the server's own service keys,
+and the confirmation text asserted to name the day and time and never to print "undefined" at
+a customer. Full `build:check` green. **UNMAPPED — needs Patrick's walk:** take a booking the
+way he described, on the phone, start to finish.
+
 **2026-09-08 (Messages and Book: the app stops needing a web page to sign you in):**
 Patrick's brief — a native iMessage-shaped Messages tab, and a Book tab that sources
 existing customers before creating new ones. **No backend code changed.** Both tabs call

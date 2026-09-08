@@ -250,6 +250,25 @@ export const recordInvoicePayment = (id, { amount, method, notes = '' }) =>
 // `leadId`, which is how a booking lands on an EXISTING customer instead
 // of minting a duplicate.
 
+// Google Places suggestions as you type. Staff-gated and proxied, because
+// a React Native screen has no browser to run the Places JS SDK in — the
+// CRM's own pages get autocomplete by binding that SDK to
+// `.js-address-autocomplete`, which is not available here.
+//
+// Suggestions ONLY. Whatever is picked still goes through verifyAddress,
+// so the booking gate and the coordinates come from one place and a
+// suggestion can never skip them.
+export const suggestAddresses = (q) =>
+  getJson(`/api/admin/address-suggest?q=${encodeURIComponent(q)}`)
+    .then((d) => ({
+      suggestions: d.suggestions || [],
+      // "no_key" means GOOGLE_MAPS_SERVER_KEY is not set on the server;
+      // "upstream" means Google refused or timed out. Passed through so
+      // the screen can say WHY nothing is suggesting instead of looking
+      // broken — the address box still works either way.
+      degraded: d.degraded || null,
+    }));
+
 export const listServices = () =>
   getJson('/api/booking/services').then((d) => d.services || {});
 
@@ -261,11 +280,59 @@ export const listServices = () =>
 export const verifyAddress = (address) =>
   sendJson('/api/booking/verify-address', 'POST', { address });
 
-export const bookingAvailability = ({ service, address }) =>
-  getJson(
+// The SAME shape the website's picker asks for: a from/to range rather
+// than the legacy "only days that have slots" call.
+//
+// This matters for more than tidiness. Without from/to the server groups
+// only the days that HAVE availability, so a screen showing nothing
+// cannot tell the difference between "the calendar is full", "we are out
+// of season for this service" and "this address is outside the route
+// area for every day in the window". With the range, every day comes
+// back carrying a `reason` — which is what the desktop picker reads, and
+// why it can say something useful instead of going blank.
+const dateKey = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+export const BOOKING_WINDOW_DAYS = 42;
+
+export const bookingAvailability = ({ service, address }) => {
+  const from = new Date();
+  const to = new Date(from.getTime() + BOOKING_WINDOW_DAYS * 86400000);
+  return getJson(
     `/api/booking/availability?service=${encodeURIComponent(service)}`
-    + `&address=${encodeURIComponent(address)}`,
+    + `&address=${encodeURIComponent(address)}`
+    + `&from=${encodeURIComponent(dateKey(from))}`
+    + `&to=${encodeURIComponent(dateKey(to))}`,
   );
+};
+
+// Why a day has no slots, in words. The server's own reason codes
+// (lib/availability.js expandDaysToRange): a screen that says "no space"
+// for every one of these is lying about three of them.
+export const DAY_REASONS = {
+  past: null,                       // never worth saying
+  closed: null,                     // an ordinary non-working day
+  season_not_open: 'Bookings for this service have not opened yet',
+  season_closed: 'This service is out of season',
+  outside_route_area: 'Too far from the routes running that week',
+  no_availability: 'Fully booked',
+};
+
+// The single sentence to show when NOTHING in the window is bookable.
+// Picks the reason that actually dominates rather than assuming "full".
+export function whyNoDays(days) {
+  const counts = new Map();
+  for (const d of days || []) {
+    if (d?.slots?.length) return null;              // there IS availability
+    const r = d?.reason;
+    if (!r || r === 'past' || r === 'closed') continue;
+    counts.set(r, (counts.get(r) || 0) + 1);
+  }
+  if (!counts.size) return 'No open days in the next six weeks.';
+  const [top] = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const label = DAY_REASONS[top[0]];
+  return label ? `${label}.` : 'No open days in the next six weeks.';
+}
 
 // Two shapes, one route. With `leadId` the booking attaches to a customer
 // already on file; without it the server builds a new lead from `contact`.
