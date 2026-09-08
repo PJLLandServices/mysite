@@ -108,6 +108,31 @@ export function bandForZones(bands, zoneCount, { commercial = false } = {}) {
   return bands.filter((b) => b.commercial === commercial).find((b) => n <= b.top) || null;
 }
 
+// The exact zone counts a band can hold.
+//
+// The count used to be typed, which put a number pad over the screen in
+// the middle of a phone call. It is a tap now, and the list is SCOPED TO
+// THE BAND already chosen — so "7" can no longer be sitting under
+// "1-4 zones", which is a mispriced visit nobody notices until the truck
+// is there.
+//
+// An open-ended band (16+, 9+) has no top, so it offers a workable run
+// above its floor rather than a list with no end.
+export function zoneOptionsFor(bands, band, { cap = 30, open = 14 } = {}) {
+  const run = (from, to) => {
+    const out = [];
+    for (let n = from; n <= to; n += 1) out.push(n);
+    return out;
+  };
+  // No band to scope by — Hydrawise retrofits are priced per zone with no
+  // tiers, so the whole range is offered.
+  if (!band) return run(1, cap);
+  const sameType = (bands || []).filter((b) => b.commercial === band.commercial);
+  const i = sameType.findIndex((b) => b.key === band.key);
+  const from = i > 0 ? sameType[i - 1].top + 1 : 1;
+  return run(from, Number.isFinite(band.top) ? band.top : from + open);
+}
+
 // What actually gets booked. A seasonal category resolves through its
 // band; everything else names its service outright.
 export function serviceKeyFor(category, band) {

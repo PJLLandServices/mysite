@@ -18,6 +18,10 @@
 //      ground. "7" beside "1-4 zones" is a mispriced visit.
 //   4. BOOK APPEARING FOR A TECH. Booking work onto the calendar is a
 //      business decision. The gate must fail CLOSED.
+//   5. A SLIDE THAT SCROLLS. "flows are big for me. I currently have to
+//      scroll through." The service questions are selects opening one
+//      shared sheet, so no slide grows past a few rows — and swiping back
+//      must not strand you behind work you have already done.
 
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -107,15 +111,25 @@ check('the book is searched by name AND by address', () => {
   assert.doesNotThrow(() => matchProperties([{ id: 'p3' }], 'holmes'));
 });
 
-check('the steps run address, then days, then who — the order of a phone call', () => {
+const STEPS_SRC = BOOK.slice(
+  BOOK.indexOf('export const STEPS ='),
+  BOOK.indexOf(';', BOOK.indexOf('export const STEPS =')) + 1,
+).replace('export const', 'const');
+const STEPS = new Function(`${STEPS_SRC}\nreturn STEPS;`)();
+
+check('the steps run address, service, days, then who — the order of a phone call', () => {
   // Patrick's own sequence: "request that customers address … it shows me
   // JUST LIKE WHEN I search on desktop … Once i show them the booking
   // dates, I select the date they accept". Asking for a name before a day
   // can be offered means holding a stranger on the phone while you type.
-  const STEPS = new Function(
-    `${BOOK.slice(BOOK.indexOf('export const STEPS ='), BOOK.indexOf(';', BOOK.indexOf('export const STEPS =')) + 1).replace('export const', 'const')}\nreturn STEPS;`,
-  )();
-  assert.deepEqual(STEPS, ['address', 'when', 'who']);
+  //
+  // The service questions have a slide of their own. Stacked under the
+  // address they made the one slide that must stay short — the one with a
+  // keyboard over it — into the longest in the app.
+  assert.deepEqual(STEPS, ['address', 'service', 'when', 'who']);
+  assert.ok(STEPS.indexOf('address') < STEPS.indexOf('service'), 'a service is chosen before an address');
+  assert.ok(STEPS.indexOf('service') < STEPS.indexOf('when'), 'days are offered before we know what for');
+  assert.ok(STEPS.indexOf('when') < STEPS.indexOf('who'), 'a name is asked for before a day is offered');
 });
 
 check('the address box suggests as you type, and the book is offered first', () => {
@@ -209,9 +223,20 @@ check('no day is offered until the address has passed the booking gate', () => {
     'a Google suggestion is taken without being verified');
   assert.match(BOOK, /onPress=\{\(\) => settleAddress\(takeProperty\(p\)\)\}/,
     'an address from the book is taken without being verified');
-  // Editing the address after verifying must drop the verification.
-  assert.match(BOOK, /setTyped\(v\); setVerified\(null\); setPicked\(null\);/,
+  // Editing the address after verifying must drop the verification — and
+  // the days and the slot chosen against it, which are now for an address
+  // that no longer exists.
+  assert.match(BOOK, /onChangeText=\{\(v\) => \{ setTyped\(v\); unsettle\(\); \}\}/,
     'an edited address keeps its old verification');
+  const unsettleAt = BOOK.indexOf('const unsettle = () =>');
+  assert.ok(unsettleAt > 0, 'unsettle is gone');
+  const unsettled = BOOK.slice(unsettleAt, BOOK.indexOf('\n  };', unsettleAt));
+  for (const cleared of ['setVerified', 'setPicked', 'setDays', 'setSlot']) {
+    assert.ok(unsettled.includes(cleared), `editing the address leaves ${cleared} behind`);
+  }
+  // And the slides built on it go with it. Left standing, the day slide
+  // reads `verified.address` off null and the screen crashes.
+  assert.ok(unsettled.includes("clamp('address')"), 'the later slides survive an edited address');
 });
 
 check('the confirmation text names the exact day and time', () => {
@@ -406,16 +431,37 @@ check('the address box can be cleared outright', () => {
   const at = BOOK.indexOf('const clearAddress = ()');
   assert.ok(at > 0, 'clearAddress is gone');
   const block = BOOK.slice(at, BOOK.indexOf('\n  };', at));
-  for (const cleared of ['setTyped', 'setVerified', 'setPicked', 'setCategory', 'setBand', 'setServiceKey', 'setDays', 'setSlot']) {
+  // What the box itself holds, and every answer that hung off it.
+  for (const cleared of ['setTyped', 'setCategory', 'setBand', 'setServiceKey', 'setZoneCount', 'setIssueCount']) {
     assert.ok(block.includes(cleared), `clearing the address leaves ${cleared} behind`);
   }
+  // And the verification, the days and the slot, via the same path an
+  // edited address takes — one place, so the two cannot disagree.
+  assert.ok(block.includes('unsettle()'), 'clearing the address keeps its verification');
 });
 
 check('the steps can be swiped, and cannot be swiped past', () => {
   assert.match(BOOK, /pagingEnabled/, 'the steps are not swipeable');
-  // You cannot swipe to a day list before there is one.
-  assert.match(BOOK, /const reached = STEPS\.slice\(0, STEPS\.indexOf\(step\) \+ 1\);/);
+  assert.match(BOOK, /const reached = reachedSteps\(furthest\);/);
   assert.match(BOOK, /scrollEnabled=\{reached\.length > 1\}/);
+
+  // You cannot swipe to a day list before there is one.
+  const reachedSteps = lift(BOOK, 'reachedSteps', STEPS_SRC);
+  assert.deepEqual(reachedSteps('address'), ['address']);
+  assert.deepEqual(reachedSteps('service'), ['address', 'service']);
+  assert.deepEqual(reachedSteps('who'), STEPS);
+  // A garbled value must not open the whole flow.
+  assert.deepEqual(reachedSteps(null), ['address']);
+  assert.deepEqual(reachedSteps('nonsense'), ['address']);
+
+  // And swiping BACK must not strand you. The extent is the furthest step
+  // reached, not the one you are standing on — reading it off the current
+  // step collapsed the pager to a single page the moment you swiped back,
+  // and you had to re-tap forward through work already done.
+  const laterStep = lift(BOOK, 'laterStep', STEPS_SRC);
+  assert.equal(laterStep('who', 'address'), 'who', 'going back shortens the pager');
+  assert.equal(laterStep('address', 'when'), 'when');
+  assert.equal(laterStep('service', 'service'), 'service');
   // The gesture and the buttons drive the same state, so the pips, the
   // back links and the page can never disagree.
   assert.match(BOOK, /onMomentumScrollEnd/);
@@ -425,7 +471,7 @@ check('the steps can be swiped, and cannot be swiped past', () => {
 });
 
 check('the details step shows what the cascade asked, and does not ask again', () => {
-  const at = BOOK.indexOf("{step === 'who' ?");
+  const at = BOOK.indexOf("{step === 'who'");
   assert.ok(at > 0, 'the details step is gone');
   const block = BOOK.slice(at, BOOK.indexOf("</>\n        ) : null}", at));
   // Contact details are still asked for.
@@ -608,8 +654,17 @@ check('a service out of season says so, instead of showing an empty calendar', (
 
   // In-season first, but a closed service still shows — Patrick books
   // work the public flow will not, and hiding it is its own lie.
-  // And the screen shows the note on the category row.
-  assert.match(BOOK, /note \? <Text style=\{styles\.optionShutNote\}>\{note\}<\/Text> : null/);
+  // The note rides each row of the service sheet…
+  assert.match(BOOK, /options: categories\.map\(\(c\) => \(\{ key: c\.key, label: c\.label, note: seasonNote\(c\) \}\)\)/,
+    'the service sheet drops the season note');
+  // …and stays on the select once it is chosen, so the reason is still on
+  // screen when the day list comes back short.
+  assert.match(BOOK, /note=\{category \? seasonNote\(category\) : null\}/,
+    'the chosen service loses its season note');
+  // A spent season is said BEFORE the calendar is asked for. Discovering
+  // it as an empty day list reads as "we're full" — the opposite.
+  assert.match(BOOK, /category && seasonShut\(category\)/,
+    'a spent season is only discovered as an empty calendar');
 });
 
 check('the season status comes from the same authority the gate uses', () => {
@@ -746,14 +801,174 @@ check('the role comes from the server, and is re-asked on every sign-in', () => 
     'a failed session lookup leaves the previous role in place');
 });
 
+// ---- 5. No slide scrolls ------------------------------------------------
+
+check('the service questions are selects, not a list stacked on the screen', () => {
+  // "Okay, you have the architecture correct, but I want the cascade to
+  // disappear, or become part of the next 'slide' … flows are big for me.
+  // I currently have to scroll through." Six services and then eight zone
+  // bands, laid out as buttons, was a slide you had to scroll.
+  const at = BOOK.indexOf("{step === 'service' ?");
+  assert.ok(at > 0, 'there is no service slide');
+  const block = BOOK.slice(at, BOOK.indexOf("{/* ---- 3.", at));
+
+  // Every question is one row.
+  for (const label of ['Service', 'Zones', 'Exactly how many', 'Issues']) {
+    assert.ok(block.includes(`label="${label}"`), `the service slide lost ${label}`);
+  }
+  // And nothing on it maps a list onto the screen itself.
+  assert.ok(!/categories\.map\(/.test(block), 'the services are still stacked on the slide');
+  assert.ok(!/bands\.map\(/.test(block), 'the zone bands are still stacked on the slide');
+  // The counts are chosen, not typed — a number pad over a slide in the
+  // middle of a phone call is the thing being removed.
+  assert.ok(!/<TextInput/.test(block), 'the service slide still opens a keyboard');
+
+  // Three rows is the deepest it goes: service, band, exact count.
+  const rows = (block.match(/<SelectRow/g) || []).length;
+  assert.equal(rows, 4, 'the service slide has a different number of questions');
+  // …and only three can be on screen at once, because Issues and the zone
+  // questions belong to different categories.
+  assert.ok(/category\?\.follow === 'issues'/.test(block));
+  assert.ok(/category\?\.follow === 'zones'/.test(block));
+});
+
+check('there is ONE sheet in the app, and both tabs open it', () => {
+  // It was written twice — the town filter and the service picker — which
+  // is two sheets that drift apart on the first change to either.
+  const UI = read('pjl-field/src/ui.js');
+  const PROPS = read('pjl-field/src/screens/PropertiesScreen.js');
+  assert.match(UI, /export function PickerSheet\(/, 'the shared sheet is gone');
+  assert.match(UI, /export function SelectRow\(/, 'the shared select is gone');
+
+  for (const [name, src] of [['Book', BOOK], ['Properties', PROPS]]) {
+    assert.match(src, /from '\.\.\/ui'/, `${name} does not use the shared sheet`);
+    assert.ok(!/<Modal\b/.test(src), `${name} still builds a modal of its own`);
+    assert.ok(!/borderTopLeftRadius/.test(src), `${name} still styles a sheet of its own`);
+  }
+  // The Book screen mounts exactly one, and swaps what it is asking.
+  assert.equal((BOOK.match(/<PickerSheet/g) || []).length, 1,
+    'the Book screen mounts more than one sheet');
+  assert.match(BOOK, /const asking = sheet \? sheets\[sheet\] : null;/);
+});
+
+check('the keyboard goes away when the address is settled', () => {
+  // It sat over the ✓ and the button beneath it, so picking an address and
+  // getting on with the call was two taps and a guess.
+  const at = BOOK.indexOf('const settleAddress = async');
+  assert.ok(at > 0, 'settleAddress is gone');
+  const block = BOOK.slice(at, BOOK.indexOf('\n  };', at));
+  assert.match(block, /Keyboard\.dismiss\(\)/, 'the keyboard stays up over the confirmation');
+  // Before the network call, not after it — the address is settled the
+  // moment it is chosen, and the wait is what the spinner is for.
+  assert.ok(block.indexOf('Keyboard.dismiss()') < block.indexOf('await verifyAddress'),
+    'the keyboard only drops once the server answers');
+  // Both ways in go through it: a Google suggestion and one from the book.
+  assert.match(BOOK, /settleAddress\(s\.description\)/);
+  assert.match(BOOK, /settleAddress\(takeProperty\(p\)\)/);
+  // And opening a question puts it away too — a sheet under a keyboard is
+  // half a sheet.
+  assert.match(BOOK, /const openSheet = \(which\) => \{\s*Keyboard\.dismiss\(\);/);
+});
+
+check('the exact zone count is scoped to the band, so it cannot contradict it', () => {
+  const zoneOptionsFor = liftCatalog('zoneOptionsFor', []);
+  const bandsFor = liftCatalog('bandsFor', ['bandOf', 'isCommercialKey']);
+  const { BOOKABLE_SERVICES } = createRequire(path.join(ROOT, 'package.json'))('./server/lib/availability.js');
+  const bands = bandsFor(BOOKABLE_SERVICES, 'fall_closing');
+  const res = bands.filter((b) => !b.commercial);
+  const com = bands.filter((b) => b.commercial);
+
+  // The real bands, off the server's own service list.
+  assert.deepEqual(zoneOptionsFor(bands, res[0]), [1, 2, 3, 4]);
+  assert.deepEqual(zoneOptionsFor(bands, res[1]), [5, 6]);
+  assert.deepEqual(zoneOptionsFor(bands, res[2]), [7, 8]);
+  assert.deepEqual(zoneOptionsFor(bands, res[3]), [9, 10, 11, 12, 13, 14, 15]);
+  // Commercial tiers differ, and the count must follow the tier chosen —
+  // 7 is a legal commercial 5-8 and an illegal residential 5-6.
+  assert.deepEqual(zoneOptionsFor(bands, com[1]), [5, 6, 7, 8]);
+  assert.ok(!zoneOptionsFor(bands, res[1]).includes(7), 'a 5-6 band offers 7 zones');
+
+  // An open-ended band has no top, so it offers a workable run rather than
+  // a list with no end.
+  const open = res[4];
+  assert.ok(!Number.isFinite(open.top), 'the top band is not open-ended');
+  assert.equal(zoneOptionsFor(bands, open)[0], 16);
+  assert.ok(zoneOptionsFor(bands, open).length > 5 && zoneOptionsFor(bands, open).length <= 30);
+
+  // No band at all — a Hydrawise retrofit is priced per zone with no tiers.
+  assert.deepEqual(zoneOptionsFor([], null)[0], 1);
+  assert.equal(zoneOptionsFor([], null).length, 30);
+
+  // And changing the band drops a count it cannot hold, rather than
+  // leaving "7" sitting under "1-4 zones".
+  const at = BOOK.indexOf('const pickBand = (b) =>');
+  assert.ok(at > 0, 'pickBand is gone');
+  const block = BOOK.slice(at, BOOK.indexOf('\n  };', at));
+  assert.match(block, /zoneOptionsFor\(bands, b\)\.includes\(n\)/);
+  assert.match(block, /setZoneCount\(''\)/);
+});
+
+check('a count reads as words, and "not sure" is a real answer', () => {
+  const zoneCountLabel = lift(BOOK, 'zoneCountLabel');
+  assert.equal(zoneCountLabel('1'), '1 zone');
+  assert.equal(zoneCountLabel('7'), '7 zones');
+  // 'unsure' is what the server is sent when the count is not known. It
+  // must not read as the number zero, or as nothing having been asked.
+  assert.equal(zoneCountLabel('unsure'), 'Not sure yet');
+  assert.equal(zoneCountLabel(''), '');
+  assert.equal(zoneCountLabel(null), '');
+  assert.match(BOOK, /key: 'unsure', label: 'Not sure yet'/, 'the count cannot be left unknown');
+  // And it still reaches the server as the value it understands.
+  assert.match(BOOK, /zoneCount: clean\(zoneCount\) \|\| 'unsure'/);
+
+  const issueCountLabel = lift(BOOK, 'issueCountLabel');
+  assert.equal(issueCountLabel('1'), '1 issue');
+  assert.equal(issueCountLabel('3'), '3 issues');
+  // Past eight the number stops helping a scheduler.
+  assert.equal(issueCountLabel('8+'), 'More than 8');
+  assert.equal(issueCountLabel(''), '');
+});
+
 // ---- It parses ----------------------------------------------------------
+
+check('no slide can be left reading a value that has been taken away', () => {
+  // Every one of these nulls a value a LATER slide renders. With the pager
+  // drawn from the furthest step reached, that slide can still be mounted
+  // — so each has to pull the flow back to itself as well.
+  //
+  // The one that bit: swiping back from the details slide and asking for
+  // days again nulled the slot, and the details slide reads
+  // `slot.dayLabel` off it. A crash, mid phone call.
+  for (const [fn, to] of [
+    ['const unsettle = () =>', 'address'],
+    ['const pickCategory = (c) =>', 'service'],
+    ['const pickBand = (b) =>', 'service'],
+    ['const showDays = async', 'service'],
+  ]) {
+    const at = BOOK.indexOf(fn);
+    assert.ok(at > 0, `${fn} is gone`);
+    const block = BOOK.slice(at, BOOK.indexOf('\n  };', at));
+    if (!/setSlot\(null\)|setVerified\(null\)/.test(block)) continue;
+    assert.ok(block.includes(`clamp('${to}')`), `${fn} strands a later slide`);
+  }
+  // And the slides guard themselves, so a path nobody thought of is a
+  // blank slide rather than a crash.
+  assert.match(BOOK, /\{step === 'when' && verified \?/);
+  assert.match(BOOK, /\{step === 'who' && slot && verified \?/);
+});
 
 check("the Book screen parses with the app's own Babel", () => {
   const requireFromApp = createRequire(path.join(ROOT, 'pjl-field/package.json'));
   let babel;
   try { babel = requireFromApp('@babel/core'); }
   catch { assert.fail("the app's dependencies are not installed — run npm ci in pjl-field"); }
-  for (const rel of ['pjl-field/App.js', 'pjl-field/src/api.js', 'pjl-field/src/screens/BookScreen.js']) {
+  for (const rel of [
+    'pjl-field/App.js',
+    'pjl-field/src/api.js',
+    'pjl-field/src/ui.js',
+    'pjl-field/src/screens/BookScreen.js',
+    'pjl-field/src/screens/PropertiesScreen.js',
+  ]) {
     babel.parse(read(rel), {
       filename: rel,
       parserOpts: { sourceType: 'module', plugins: ['jsx'] },

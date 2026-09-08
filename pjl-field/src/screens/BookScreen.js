@@ -34,11 +34,24 @@
 // ZONES ARE TWO ANSWERS. The service key carries the BAND, which sets
 // the price and the visit length; the count is what is actually in the
 // ground. Patrick asked for both.
+//
+// NO SLIDE SCROLLS, and that is why the service questions have a slide of
+// their own. Stacked on the end of the address slide they were a wall of
+// six buttons and then eight more — "I currently have to scroll through".
+// They are SELECTS now: one row per question, the choices in a sheet, so
+// the tallest this slide ever gets is three rows. It is the same sheet
+// the Properties tab opens for its town filter, shared rather than
+// copied.
+//
+// THE KEYBOARD GOES AWAY the moment an address is settled. It used to sit
+// over the confirmation and the button under it, so the next tap was
+// really two.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -67,10 +80,50 @@ import {
   categoriesInOrder,
   FOLLOW_UPS,
   serviceKeyFor,
+  zoneOptionsFor,
 } from '../booking-catalog';
 import { colors, radius, space, type } from '../theme';
+import { PickerSheet, SelectRow } from '../ui';
 
-export const STEPS = ['address', 'when', 'who'];
+export const STEPS = ['address', 'service', 'when', 'who'];
+
+// The steps you are allowed to swipe to: as far forward as you have
+// actually GOT, not as far as you happen to be standing.
+//
+// It used to read off the current step, which meant swiping back from the
+// day list collapsed the pager to one page and stranded you there — you
+// had to re-tap your way forward through work you had already done. The
+// furthest point reached is the honest boundary: everything behind it has
+// been answered, and nothing in front of it exists yet.
+export function reachedSteps(furthest) {
+  const i = STEPS.indexOf(furthest);
+  return STEPS.slice(0, i < 0 ? 1 : i + 1);
+}
+
+// The later of two steps, so going back never shortens the pager.
+export function laterStep(a, b) {
+  return STEPS.indexOf(b) > STEPS.indexOf(a) ? b : a;
+}
+
+// The issue counts offered. Past eight, the number stops being useful to
+// a scheduler and "more than eight" is the honest answer.
+export const ISSUE_COUNTS = ['1', '2', '3', '4', '5', '6', '7', '8', '8+'];
+
+export function issueCountLabel(value) {
+  const v = String(value || '').trim();
+  if (!v) return '';
+  if (v === '8+') return 'More than 8';
+  return `${v} issue${v === '1' ? '' : 's'}`;
+}
+
+// What the zone answer says out loud. 'unsure' is a real value the server
+// takes — it must not read as the number zero, or as nothing asked.
+export function zoneCountLabel(value) {
+  const v = String(value || '').trim();
+  if (!v) return '';
+  if (v === 'unsure') return 'Not sure yet';
+  return `${v} zone${v === '1' ? '' : 's'}`;
+}
 
 // Existing customers, matched on the same string that is fetching
 // address suggestions. Address and name both, because a tech may have
@@ -194,6 +247,11 @@ const clean = (v) => String(v || '').trim();
 
 export default function BookScreen({ onSignIn }) {
   const [step, setStep] = useState('address');
+  // The furthest slide reached, which is what the pager's extent is drawn
+  // from — see reachedSteps.
+  const [furthest, setFurthest] = useState('address');
+  // Which question's sheet is open, or null. One at a time, so one sheet.
+  const [sheet, setSheet] = useState(null);
   const pagerRef = useRef(null);
   const [pageWidth, setPageWidth] = useState(0);
   const [state, setState] = useState('loading');
@@ -290,7 +348,7 @@ export default function BookScreen({ onSignIn }) {
 
   // The steps that actually exist yet. You cannot swipe to a day list
   // before an address has been checked, because there isn't one.
-  const reached = STEPS.slice(0, STEPS.indexOf(step) + 1);
+  const reached = reachedSteps(furthest);
   // Enough to go and get days for. The exact zone count is wanted but not
   // required — "unsure" is a value the server understands, and holding the
   // calendar back over it would stall a live phone call.
@@ -301,6 +359,42 @@ export default function BookScreen({ onSignIn }) {
   const onFile = useMemo(() => matchProperties(properties, typed), [properties, typed]);
   const service = serviceKey ? { key: serviceKey, ...(services[serviceKey] || {}) } : null;
 
+  // Forward. `furthest` only ever grows here, so swiping back and forward
+  // again costs nothing.
+  const go = (next) => {
+    setStep(next);
+    setFurthest((f) => laterStep(f, next));
+  };
+
+  // Backward, and destructively: everything after this step is no longer
+  // true, so the slides holding it are taken away rather than left showing
+  // a stale day list. Both values move together — a step further along
+  // than the pager's extent would scroll to a page that isn't there.
+  const clamp = (to) => {
+    setStep(to);
+    setFurthest(to);
+  };
+
+  // Opening a sheet puts the keyboard away first. The notes box can still
+  // be focused when a question is re-opened, and a sheet under a keyboard
+  // is half a sheet.
+  const openSheet = (which) => {
+    Keyboard.dismiss();
+    setSheet(which);
+  };
+
+  // Typing over a settled address invalidates it — and with it the days
+  // and the slot that were chosen for it. Left standing, the day slide
+  // would be reading `verified.address` for an address that no longer
+  // exists.
+  const unsettle = () => {
+    setVerified(null);
+    setPicked(null);
+    setDays([]);
+    setSlot(null);
+    clamp('address');
+  };
+
   // Everything we already know about a customer already in the book.
   // Clears the box AND everything it settled. A confirmed address left
   // sitting under a half-typed new one is how the wrong property gets
@@ -309,13 +403,12 @@ export default function BookScreen({ onSignIn }) {
     setTyped('');
     setSuggestions([]);
     setSuggestDegraded(null);
-    setVerified(null);
-    setPicked(null);
     setCategory(null);
     setBand(null);
     setServiceKey('');
-    setDays([]);
-    setSlot(null);
+    setZoneCount('');
+    setIssueCount('');
+    unsettle();
   };
 
   const pickCategory = (c) => {
@@ -323,6 +416,9 @@ export default function BookScreen({ onSignIn }) {
     setBand(null);
     setDays([]);
     setSlot(null);
+    // The days were fetched for the old service. Changing it takes that
+    // slide away rather than leaving days nobody asked for.
+    clamp('service');
     // A category with one service needs no follow-up to know what it is.
     setServiceKey(c.family ? '' : c.serviceKey || '');
     // Zones already on file pick the band for you.
@@ -337,6 +433,12 @@ export default function BookScreen({ onSignIn }) {
     setServiceKey(b.key);
     setDays([]);
     setSlot(null);
+    clamp('service');
+    // A count the new band cannot hold is exactly the contradiction the
+    // two answers exist to avoid — "7" under "1-4 zones". Drop it and ask
+    // again, scoped to the band just chosen.
+    const n = Number(zoneCount);
+    if (Number.isFinite(n) && !zoneOptionsFor(bands, b).includes(n)) setZoneCount('');
   };
 
   const takeProperty = (p) => {
@@ -356,6 +458,10 @@ export default function BookScreen({ onSignIn }) {
   const settleAddress = async (text) => {
     const value = clean(text);
     if (!value) return;
+    // THE KEYBOARD GOES AWAY. It sat over the ✓ and the button beneath it,
+    // so picking an address and then getting on with the call was two taps
+    // and a guess at where the button had gone.
+    Keyboard.dismiss();
     setChecking(true);
     setSuggestions([]);
     try {
@@ -377,10 +483,14 @@ export default function BookScreen({ onSignIn }) {
     setLoadingDays(true);
     setDays([]);
     setSlot(null);
+    // The slot just went. Asking for days again after swiping back left
+    // the details slide mounted and reading `slot.dayLabel` off null,
+    // which is a crash in the middle of a phone call.
+    clamp('service');
     try {
       const res = await bookingAvailability({ service: key, address: verified.address });
       setDays(res.days || []);
-      setStep('when');
+      go('when');
     } catch (err) {
       if (err instanceof AuthRequiredError) setState('auth');
       else Alert.alert("Couldn't load available days", err?.message || 'Try again.');
@@ -389,14 +499,15 @@ export default function BookScreen({ onSignIn }) {
     }
   };
 
-  // Typing 7 moves the band to 7-8 rather than leaving a contradiction on
-  // screen. Stays inside the property type already chosen — a commercial
-  // site does not get snapped into a residential tier.
+  // A count of 7 moves the band to 7-8 rather than leaving a contradiction
+  // on screen. The sheet is already scoped to the band, so this is the
+  // path that matters: a zone count read off an existing property's file.
+  // Stays inside the property type already chosen — a commercial site does
+  // not get snapped into a residential tier.
   const onZones = (value) => {
-    const digits = value.replace(/[^\d]/g, '').slice(0, 2);
-    setZoneCount(digits);
+    setZoneCount(String(value));
     if (!category?.family) return;
-    const better = bandForZones(bands, digits, { commercial: Boolean(band?.commercial) });
+    const better = bandForZones(bands, value, { commercial: Boolean(band?.commercial) });
     if (better && better.key !== band?.key) {
       setBand(better);
       setServiceKey(better.key);
@@ -470,8 +581,57 @@ export default function BookScreen({ onSignIn }) {
     setCategory(null); setBand(null); setIssueCount('');
     setFirstName(''); setLastName(''); setPhone(''); setAltPhone('');
     setEmail(''); setZoneCount(''); setNotes('');
-    setStep('address');
+    setSheet(null);
+    clamp('address');
   };
+
+  // EVERY QUESTION IS A SHEET, and there is one of them. Each entry says
+  // what it asks, what is currently answered, and what the answer does —
+  // so the slide itself holds rows, not lists.
+  const sheets = {
+    service: {
+      title: 'What are we booking?',
+      selectedKey: category?.key || null,
+      // Season in progress first, and the note says why the others are
+      // where they are. A spent season still shows: Patrick books work
+      // the public flow will not, and hiding it is its own lie.
+      options: categories.map((c) => ({ key: c.key, label: c.label, note: seasonNote(c) })),
+      onSelect: (o) => {
+        const c = categories.find((x) => x.key === o.key);
+        if (c) pickCategory(c);
+      },
+    },
+    band: {
+      title: FOLLOW_UPS.zones,
+      selectedKey: band?.key || null,
+      // Residential and commercial under their own headers, because their
+      // tiers genuinely differ — one 5-8 where residential splits 5-6.
+      options: bands.map((b) => ({
+        key: b.key,
+        label: bandLabel(bands, b),
+        group: b.commercial ? 'Commercial' : 'Residential',
+      })),
+      onSelect: (o) => {
+        const b = bands.find((x) => x.key === o.key);
+        if (b) pickBand(b);
+      },
+    },
+    zones: {
+      title: 'How many zones exactly?',
+      selectedKey: clean(zoneCount) || null,
+      options: zoneOptionsFor(bands, band)
+        .map((n) => ({ key: String(n), label: zoneCountLabel(String(n)) }))
+        .concat([{ key: 'unsure', label: 'Not sure yet', note: 'The tech counts them on site' }]),
+      onSelect: (o) => onZones(o.key),
+    },
+    issues: {
+      title: FOLLOW_UPS.issues,
+      selectedKey: clean(issueCount) || null,
+      options: ISSUE_COUNTS.map((v) => ({ key: v, label: issueCountLabel(v) })),
+      onSelect: (o) => setIssueCount(o.key),
+    },
+  };
+  const asking = sheet ? sheets[sheet] : null;
 
   if (state === 'loading') {
     return <View style={styles.centre}><ActivityIndicator color={colors.brand} /></View>;
@@ -585,7 +745,7 @@ export default function BookScreen({ onSignIn }) {
               <TextInput
                 style={[styles.input, styles.addressInput]}
                 value={typed}
-                onChangeText={(v) => { setTyped(v); setVerified(null); setPicked(null); }}
+                onChangeText={(v) => { setTyped(v); unsettle(); }}
                 placeholder="Start typing…"
                 placeholderTextColor={colors.textFaint}
                 autoCorrect={false}
@@ -669,113 +829,15 @@ export default function BookScreen({ onSignIn }) {
                   </Text>
                 ) : null}
 
-                {/* SIX buttons, not nineteen — and the season in progress
-                    comes first, so in September Fall Closing is the top
-                    one and in March Spring Opening will be, with nobody
-                    editing anything. */}
-                <Text style={styles.lead}>What are we booking?</Text>
-                {categories.map((c) => {
-                  const note = seasonNote(c);
-                  const shut = seasonShut(c);
-                  const on = category?.key === c.key;
-                  return (
-                    <Pressable
-                      key={c.key}
-                      onPress={() => pickCategory(c)}
-                      style={({ pressed }) => [
-                        styles.option,
-                        on && styles.optionOn,
-                        shut && !on && styles.optionShut,
-                        pressed && styles.pressed,
-                      ]}
-                    >
-                      <Text style={[
-                        styles.optionText,
-                        on && styles.optionTextOn,
-                        shut && !on && styles.optionTextShut,
-                      ]}>
-                        {c.label}
-                      </Text>
-                      {note ? <Text style={styles.optionShutNote}>{note}</Text> : null}
-                    </Pressable>
-                  );
-                })}
-
-                {/* ---- the follow-up, whichever one this category asks -- */}
-                {category?.follow === 'zones' ? (
-                  <>
-                    <Text style={styles.lead}>{FOLLOW_UPS.zones}</Text>
-                    {bands.map((b) => {
-                      const on = band?.key === b.key;
-                      const first = bands.findIndex((x) => x.commercial === b.commercial) ===
-                        bands.indexOf(b);
-                      return (
-                        <View key={b.key}>
-                          {first ? (
-                            <Text style={styles.groupLabel}>
-                              {b.commercial ? 'Commercial' : 'Residential'}
-                            </Text>
-                          ) : null}
-                          <Pressable
-                            onPress={() => pickBand(b)}
-                            style={({ pressed }) => [
-                              styles.option,
-                              on && styles.optionOn,
-                              pressed && styles.pressed,
-                            ]}
-                          >
-                            <Text style={[styles.optionText, on && styles.optionTextOn]}>
-                              {bandLabel(bands, b)}
-                            </Text>
-                          </Pressable>
-                        </View>
-                      );
-                    })}
-                  </>
-                ) : null}
-
-                {/* The exact number, once the band is chosen. Two answers
-                    because they are two things: the band is what we are
-                    selling, the count is what is in the ground. */}
-                {(category?.follow === 'zones' && band) || category?.follow === 'zones_only' ? (
-                  <>
-                    <Text style={styles.lead}>How many zones exactly?</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={zoneCount}
-                      onChangeText={onZones}
-                      placeholder="e.g. 7"
-                      placeholderTextColor={colors.textFaint}
-                      keyboardType="number-pad"
-                    />
-                  </>
-                ) : null}
-
-                {category?.follow === 'issues' ? (
-                  <>
-                    <Text style={styles.lead}>{FOLLOW_UPS.issues}</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={issueCount}
-                      onChangeText={(v) => setIssueCount(v.replace(/[^\d]/g, '').slice(0, 2))}
-                      placeholder="e.g. 3"
-                      placeholderTextColor={colors.textFaint}
-                      keyboardType="number-pad"
-                    />
-                  </>
-                ) : null}
-
-                {readyForDays ? (
-                  <Pressable
-                    onPress={() => showDays(chosenServiceKey)}
-                    disabled={loadingDays}
-                    style={({ pressed }) => [styles.primary, loadingDays && styles.off, pressed && styles.pressed]}
-                  >
-                    {loadingDays
-                      ? <ActivityIndicator color={colors.onBrand} size="small" />
-                      : <Text style={styles.primaryText}>See available days</Text>}
-                  </Pressable>
-                ) : null}
+                {/* And that is the whole slide. The service questions used
+                    to hang off the bottom of it, which made the one slide
+                    that must stay short the longest one in the app. */}
+                <Pressable
+                  onPress={() => go('service')}
+                  style={({ pressed }) => [styles.primary, pressed && styles.pressed]}
+                >
+                  <Text style={styles.primaryText}>What are we booking?</Text>
+                </Pressable>
               </>
             ) : (
               !checking && clean(typed) ? (
@@ -787,11 +849,100 @@ export default function BookScreen({ onSignIn }) {
           </>
         ) : null}
 
-        {/* ---- 2. The day ---------------------------------------------- */}
-        {step === 'when' ? (
+        {/* ---- 2. What we are booking ---------------------------------- */}
+        {step === 'service' ? (
           <>
             <Pressable onPress={() => setStep('address')} hitSlop={10}>
-              <Text style={styles.back}>‹ Address</Text>
+              <Text style={styles.back} numberOfLines={1}>
+                ‹ {verified?.address || 'Address'}
+              </Text>
+            </Pressable>
+            <Text style={styles.lead}>What are we booking?</Text>
+
+            {/* THREE ROWS AT MOST, and usually one. Nineteen services
+                became six questions; six questions became a row with the
+                answer written in it. */}
+            <SelectRow
+              label="Service"
+              value={category?.label}
+              note={category ? seasonNote(category) : null}
+              placeholder="Choose"
+              onPress={() => openSheet('service')}
+            />
+
+            {category?.follow === 'zones' ? (
+              <SelectRow
+                label="Zones"
+                value={band
+                  ? `${bandLabel(bands, band)} · ${band.commercial ? 'commercial' : 'residential'}`
+                  : ''}
+                placeholder="Which band?"
+                onPress={() => openSheet('band')}
+              />
+            ) : null}
+
+            {/* The exact number, once the band is chosen. Two answers
+                because they are two things: the band is what we are
+                selling, the count is what is in the ground. */}
+            {(category?.follow === 'zones' && band) || category?.follow === 'zones_only' ? (
+              <SelectRow
+                label="Exactly how many"
+                value={zoneCountLabel(zoneCount)}
+                placeholder="Count in the ground"
+                onPress={() => openSheet('zones')}
+              />
+            ) : null}
+
+            {category?.follow === 'issues' ? (
+              <SelectRow
+                label="Issues"
+                value={issueCountLabel(issueCount)}
+                placeholder="How many are we looking at?"
+                onPress={() => openSheet('issues')}
+              />
+            ) : null}
+
+            {/* Said here rather than discovered as an empty calendar. A
+                season whose dates are spent is still bookable by Patrick —
+                "after that i have control to open up further bookings" —
+                so this is a warning, not a block. */}
+            {category && seasonShut(category) ? (
+              <Text style={styles.hint}>
+                Those dates are past for this year, so the day list will come back
+                empty until the season is opened up.
+              </Text>
+            ) : null}
+
+            {/* Present from the start, lit when the questions are answered
+                — so the slide never changes height as it is filled in. */}
+            <Pressable
+              onPress={() => showDays(chosenServiceKey)}
+              disabled={!readyForDays || loadingDays}
+              style={({ pressed }) => [
+                styles.primary,
+                (!readyForDays || loadingDays) && styles.off,
+                pressed && styles.pressed,
+              ]}
+            >
+              {loadingDays
+                ? <ActivityIndicator color={colors.onBrand} size="small" />
+                : <Text style={styles.primaryText}>See available days</Text>}
+            </Pressable>
+          </>
+        ) : null}
+
+        {/* ---- 3. The day ---------------------------------------------- */}
+        {step === 'when' && verified ? (
+          <>
+            <Pressable onPress={() => setStep('service')} hitSlop={10}>
+              <Text style={styles.back} numberOfLines={1}>
+                {/* The CATEGORY, not the service. `service.label` is the
+                    server's own — "Fall winterization (5-6 zones
+                    residential)" — which is the whole line and then some
+                    on a back link. */}
+                ‹ {[category?.label, zoneCountLabel(zoneCount)].filter(Boolean).join(' · ')
+                   || 'What we are booking'}
+              </Text>
             </Pressable>
             <Text style={styles.lead}>Read them the days</Text>
             <Text style={styles.hint}>{verified.address} · {service?.label}</Text>
@@ -858,7 +1009,7 @@ export default function BookScreen({ onSignIn }) {
             ) : null}
 
             {slot ? (
-              <Pressable onPress={() => setStep('who')} style={styles.primary}>
+              <Pressable onPress={() => go('who')} style={styles.primary}>
                 <Text style={styles.primaryText}>
                   {slot.openBucket
                     ? "They'll take first available"
@@ -869,8 +1020,8 @@ export default function BookScreen({ onSignIn }) {
           </>
         ) : null}
 
-        {/* ---- 3. Who they are ----------------------------------------- */}
-        {step === 'who' ? (
+        {/* ---- 4. Who they are ----------------------------------------- */}
+        {step === 'who' && slot && verified ? (
           <>
             <Pressable onPress={() => setStep('when')} hitSlop={10}>
               <Text style={styles.back}>‹ Days</Text>
@@ -900,7 +1051,7 @@ export default function BookScreen({ onSignIn }) {
             />
             <Field label="Email" value={email} onChange={setEmail} keyboardType="email-address" />
 
-            {/* No zone question here any more — the cascade on step one
+            {/* No zone question here any more — the service slide
                 already asked it, and asking twice is how the two answers
                 end up disagreeing. Shown, not re-asked. */}
             <View style={styles.band}>
@@ -910,13 +1061,13 @@ export default function BookScreen({ onSignIn }) {
             {clean(zoneCount) ? (
               <View style={styles.band}>
                 <Text style={styles.bandLabel}>Zones</Text>
-                <Text style={styles.bandValue}>{zoneCount}</Text>
+                <Text style={styles.bandValue}>{zoneCountLabel(zoneCount)}</Text>
               </View>
             ) : null}
             {clean(issueCount) ? (
               <View style={styles.band}>
                 <Text style={styles.bandLabel}>Issues</Text>
-                <Text style={styles.bandValue}>{issueCount}</Text>
+                <Text style={styles.bandValue}>{issueCountLabel(issueCount)}</Text>
               </View>
             ) : null}
 
@@ -945,6 +1096,21 @@ export default function BookScreen({ onSignIn }) {
       </ScrollView>
       ))}
       </ScrollView>
+
+      {/* The app's one sheet. Which question it is asking is the only
+          thing that changes — so there is a single modal on this screen
+          rather than one per question, and they cannot open at once. */}
+      <PickerSheet
+        visible={Boolean(asking)}
+        title={asking?.title}
+        options={asking?.options || []}
+        selectedKey={asking?.selectedKey ?? null}
+        onClose={() => setSheet(null)}
+        onSelect={(item) => {
+          asking?.onSelect(item);
+          setSheet(null);
+        }}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -1037,18 +1203,6 @@ const styles = StyleSheet.create({
   onFile: { borderColor: colors.brand, backgroundColor: colors.brandTint },
   onFileWho: { ...type.caption, color: colors.brand, fontWeight: '600' },
   onFileNote: { ...type.caption, color: colors.brand, lineHeight: 19 },
-
-  option: {
-    backgroundColor: colors.card, borderRadius: radius.card,
-    paddingHorizontal: space.md, paddingVertical: space.md,
-    minHeight: 48, justifyContent: 'center', gap: 2,
-    borderWidth: 1, borderColor: colors.separator,
-  },
-  optionText: { ...type.body },
-  optionMeta: { ...type.caption },
-  optionShut: { backgroundColor: colors.ground, borderColor: colors.separator },
-  optionTextShut: { color: colors.textMuted },
-  optionShutNote: { ...type.caption, color: colors.warning, fontWeight: '600' },
 
   holding: {
     backgroundColor: colors.brandTint, borderRadius: radius.card,

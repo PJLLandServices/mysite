@@ -1,7 +1,7 @@
 // The grouped-list primitives the screens are built from. Kept small and
 // dumb on purpose — layout only, no data knowledge.
 
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, radius, space, type } from './theme';
 
 export function SectionHeader({ children, style }) {
@@ -82,6 +82,107 @@ export function ActionButton({ glyph, label, onPress, disabled }) {
   );
 }
 
+// A SELECT: the row form of a question. The label sits above the answer
+// so an unanswered row and an answered one are the same height and the
+// same shape — a list of them does not reflow as it is filled in.
+//
+// The choices are NOT on the screen. They live in the sheet below, which
+// is the whole point: six services stacked on a slide is a scroll, and a
+// scroll in the middle of a phone call is a customer waiting.
+export function SelectRow({
+  label, value, placeholder, note, onPress, disabled, accessibilityLabel,
+}) {
+  const answered = Boolean(value);
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel || `${label}. ${value || 'not chosen'}.`}
+      style={({ pressed }) => [
+        styles.select,
+        answered && styles.selectOn,
+        disabled && styles.selectOff,
+        pressed && styles.selectPressed,
+      ]}
+    >
+      <View style={styles.selectBody}>
+        <Text style={[styles.selectLabel, answered && styles.selectLabelOn]}>{label}</Text>
+        <Text
+          style={[styles.selectValue, !answered && styles.selectPlaceholder]}
+          numberOfLines={1}
+        >
+          {value || placeholder || 'Choose'}
+        </Text>
+        {note ? <Text style={styles.selectNote}>{note}</Text> : null}
+      </View>
+      <Text style={[styles.chevron, answered && styles.chevronOn]}>›</Text>
+    </Pressable>
+  );
+}
+
+// The sheet a SelectRow opens, and the only one in the app.
+//
+// It was written twice — the Properties tab's town filter and the Book
+// tab's service picker — which is two sheets that would have drifted
+// apart on the first change to either. One component, both callers.
+//
+// `options` are `{ key, label, note, meta, group }`. `group` prints a
+// header the first time it changes, which is how the zone bands keep
+// residential and commercial apart without two lists.
+export function PickerSheet({ visible, title, options, selectedKey, onSelect, onClose }) {
+  const rows = options || [];
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      {/* Tap anywhere off the sheet to dismiss it — the gesture everyone
+          already expects, and the reason no Cancel button is needed. */}
+      <Pressable
+        style={styles.backdrop}
+        onPress={onClose}
+        accessibilityRole="button"
+        accessibilityLabel="Close"
+      />
+      <View style={styles.sheet}>
+        <View style={styles.grabber} />
+        {title ? <Text style={styles.sheetTitle}>{title}</Text> : null}
+        <FlatList
+          data={rows}
+          keyExtractor={(item) => String(item.key)}
+          style={styles.sheetList}
+          keyboardShouldPersistTaps="handled"
+          renderItem={({ item, index }) => {
+            const selected = item.key === selectedKey;
+            const heads = item.group && item.group !== rows[index - 1]?.group;
+            return (
+              <View>
+                {heads ? <Text style={styles.sheetGroup}>{item.group}</Text> : null}
+                <Pressable
+                  onPress={() => onSelect(item)}
+                  style={({ pressed }) => [styles.sheetRow, pressed && styles.pressed]}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                >
+                  <View style={styles.sheetRowBody}>
+                    <Text
+                      style={[styles.sheetRowText, selected && styles.sheetRowSelected]}
+                      numberOfLines={1}
+                    >
+                      {item.label}
+                    </Text>
+                    {item.note ? <Text style={styles.sheetRowNote}>{item.note}</Text> : null}
+                  </View>
+                  {item.meta != null ? <Text style={styles.sheetRowMeta}>{item.meta}</Text> : null}
+                  <Text style={[styles.check, !selected && styles.checkHidden]}>✓</Text>
+                </Pressable>
+              </View>
+            );
+          }}
+        />
+      </View>
+    </Modal>
+  );
+}
+
 export function Empty({ children }) {
   return <Text style={styles.empty}>{children}</Text>;
 }
@@ -154,6 +255,70 @@ const styles = StyleSheet.create({
   },
   actionGlyph: { fontSize: 22 },
   actionLabel: { fontSize: 12, color: colors.brand, fontWeight: '600' },
+  select: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    backgroundColor: colors.card,
+    borderRadius: radius.card,
+    borderWidth: 1,
+    borderColor: colors.separator,
+    paddingHorizontal: space.md,
+    paddingVertical: 10,
+    minHeight: 56,
+  },
+  selectOn: { borderColor: colors.brand },
+  selectOff: { opacity: 0.4 },
+  selectPressed: { opacity: 0.7 },
+  selectBody: { flex: 1, gap: 1 },
+  selectLabel: { ...type.section, fontSize: 11, letterSpacing: 0.7 },
+  selectLabelOn: { color: colors.brand },
+  selectValue: { ...type.body, fontWeight: '600' },
+  selectPlaceholder: { color: colors.textFaint, fontWeight: '400' },
+  selectNote: { ...type.caption, color: colors.warning, fontWeight: '600' },
+  chevron: { color: colors.textFaint, fontSize: 22 },
+  chevronOn: { color: colors.brand },
+
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(17,24,28,0.35)' },
+  sheet: {
+    position: 'absolute',
+    left: 0, right: 0, bottom: 0,
+    maxHeight: '72%',
+    backgroundColor: colors.card,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    paddingBottom: space.xl,
+  },
+  grabber: {
+    width: 38, height: 4, borderRadius: 2,
+    backgroundColor: colors.separator,
+    alignSelf: 'center', marginTop: space.sm, marginBottom: space.md,
+  },
+  sheetTitle: { ...type.section, marginHorizontal: space.lg, marginBottom: space.sm },
+  sheetList: { flexGrow: 0 },
+  sheetGroup: {
+    ...type.section,
+    backgroundColor: colors.ground,
+    paddingHorizontal: space.lg,
+    paddingVertical: 6,
+  },
+  sheetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    paddingHorizontal: space.lg,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.separator,
+  },
+  sheetRowBody: { flex: 1, gap: 1 },
+  sheetRowText: { ...type.body },
+  sheetRowSelected: { color: colors.brand, fontWeight: '600' },
+  sheetRowNote: { ...type.caption, color: colors.warning, fontWeight: '600' },
+  sheetRowMeta: { ...type.caption, fontVariant: ['tabular-nums'] },
+  check: { color: colors.brand, fontSize: 16, width: 16, textAlign: 'center' },
+  checkHidden: { opacity: 0 },
+
   empty: {
     ...type.caption,
     paddingHorizontal: space.lg,
