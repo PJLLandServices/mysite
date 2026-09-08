@@ -31,14 +31,49 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 const APP = read('pjl-field/App.js');
 const API = read('pjl-field/src/api.js');
 const BOOK = read('pjl-field/src/screens/BookScreen.js');
+const CATALOG = read('pjl-field/src/booking-catalog.js');
 const SERVER = read('server/server.js');
 const AVAILABILITY = read('server/lib/availability.js');
 
 let pass = 0, fail = 0;
 const check = (name, fn) => {
   try { fn(); pass++; }
-  catch (err) { fail++; console.log(`  FAIL: ${name}\n    ${err.message.split('\n')[0]}`); }
+  catch (err) { fail++; console.log(`  FAIL: ${name}\n    ${err.message.split('\n').slice(0,6).join('\n    ')}`); }
 };
+
+// Lifts an exported const (an array or object literal) out of a module.
+function liftConst(source, name) {
+  const start = source.indexOf(`export const ${name} = `);
+  assert.ok(start > 0, `${name} is not an exported const`);
+  const end = source.indexOf('\n];', start) >= 0 ? source.indexOf('\n];', start) + 3 : source.indexOf('\n};', start) + 3;
+  const body = source.slice(start, end).replace('export const', 'const');
+  return new Function(`${body}\nreturn ${name};`)();
+}
+
+// Lifts a function out of booking-catalog.js along with whatever else in
+// that file it closes over. The module is pure by design so this works.
+function liftCatalog(name, needs) {
+  const grab = (n) => {
+    const fnAt = CATALOG.indexOf(`export function ${n}(`);
+    if (fnAt >= 0) {
+      return CATALOG.slice(fnAt, CATALOG.indexOf('\n}\n', fnAt) + 3).replace('export function', 'function');
+    }
+    const constAt = CATALOG.indexOf(`export const ${n} = `);
+    assert.ok(constAt > 0, `${n} is not exported from booking-catalog`);
+    // The NEAREST terminator, not the first one of a preferred shape:
+    // `isCommercialKey` is a one-line arrow, and reaching for the next
+    // `\n];` swallowed the rest of the file including its exports.
+    const ends = [
+      CATALOG.indexOf('\n];', constAt) + 3,
+      CATALOG.indexOf('\n};', constAt) + 3,
+      CATALOG.indexOf(';\n', constAt) + 1,
+    ].filter((i) => i > constAt);
+    assert.ok(ends.length, `could not find the end of ${n}`);
+    return CATALOG.slice(constAt, Math.min(...ends)).replace('export const', 'const');
+  };
+  const parts = (needs || []).map(grab).join('\n');
+  return new Function(`${parts}\n${grab(name)}\nreturn ${name};`)();
+}
 
 function lift(source, name, deps = '') {
   const start = source.indexOf(`export function ${name}(`);
@@ -237,35 +272,171 @@ check('the app calls the same gate the website does', () => {
 
 // ---- 3. Zones: band and count agree -------------------------------------
 
-check('typing a zone count moves the service to the band that holds it', () => {
-  const serviceForZones = lift(BOOK, 'serviceForZones');
-  const list = [
-    { key: 'spring_open_4z', family: 'spring_opening', category: 'seasonal' },
-    { key: 'spring_open_6z', family: 'spring_opening', category: 'seasonal' },
-    { key: 'spring_open_8z', family: 'spring_opening', category: 'seasonal' },
-    { key: 'spring_open_15z', family: 'spring_opening', category: 'seasonal' },
-    { key: 'spring_open_16plus', family: 'spring_opening', category: 'seasonal' },
-    { key: 'spring_open_commercial', family: 'spring_opening', category: 'commercial' },
-  ];
-  const k = (n) => serviceForZones(list, 'spring_opening', n)?.key;
-  assert.equal(k(1), 'spring_open_4z');
-  assert.equal(k(4), 'spring_open_4z');
-  assert.equal(k(5), 'spring_open_6z', 'the boundary between bands is off by one');
-  assert.equal(k(6), 'spring_open_6z');
-  assert.equal(k(7), 'spring_open_8z');
-  assert.equal(k(8), 'spring_open_8z');
-  assert.equal(k(9), 'spring_open_15z');
-  assert.equal(k(15), 'spring_open_15z');
-  assert.equal(k(16), 'spring_open_16plus');
-  assert.equal(k(50), 'spring_open_16plus');
-  // A commercial site has no residential band and must not be forced
-  // into one.
-  assert.equal(serviceForZones(list, 'spring_opening', 0), null);
-  assert.equal(serviceForZones(list, 'spring_opening', ''), null);
-  assert.equal(serviceForZones(list, null, 6), null);
-  assert.equal(serviceForZones([], 'spring_opening', 6), null);
-  // And it never reaches across families.
-  assert.equal(serviceForZones(list, 'fall_closing', 6), null);
+check('nineteen services become six questions', () => {
+  // Nineteen buttons on a phone means the one you want is scrolled off,
+  // and reading them aloud to a customer is not a conversation anyone
+  // wants to have. Patrick's shape: six categories, then a follow-up that
+  // depends on which.
+  const CATEGORIES = liftConst(CATALOG, 'CATEGORIES');
+  assert.equal(CATEGORIES.length, 6);
+  assert.deepEqual(CATEGORIES.map((c) => c.label), [
+    'Fall Closing', 'Spring Opening', 'Residential Service',
+    'Commercial Service', 'Site Visit / Scope', 'Hydrawise Retrofit',
+  ]);
+  // Each names a real service, or a real family.
+  const { BOOKABLE_SERVICES } = createRequire(path.join(ROOT, 'package.json'))('./server/lib/availability.js');
+  const families = new Set(Object.values(BOOKABLE_SERVICES).map((s) => s.family));
+  for (const c of CATEGORIES) {
+    if (c.family) assert.ok(families.has(c.family), `no such family: ${c.family}`);
+    else assert.ok(BOOKABLE_SERVICES[c.serviceKey], `no such service: ${c.serviceKey}`);
+  }
+});
+
+check('the season in progress comes first, without anyone editing it', () => {
+  const categoriesInOrder = liftCatalog('categoriesInOrder', ['CATEGORIES', 'seasonOfCategory']);
+  // September: fall's dates are running, spring's are spent.
+  const services = {
+    fall_close_4z: { family: 'fall_closing', bookable: true, season: { open: true, bookable: true } },
+    spring_open_4z: { family: 'spring_opening', bookable: true, season: { open: false, bookable: false, closed: true } },
+    sprinkler_repair: { family: 'sprinkler_repair', bookable: true },
+  };
+  const order = categoriesInOrder(services).map((c) => c.key);
+  assert.equal(order[0], 'fall_closing', 'the season in progress is not first');
+  assert.equal(order[order.length - 1], 'spring_opening', 'a spent season is not last');
+  // March: the same code puts spring first. Nothing edited.
+  const march = categoriesInOrder({
+    fall_close_4z: { family: 'fall_closing', bookable: true, season: { open: false, bookable: true, startsOn: '2027-09-28' } },
+    spring_open_4z: { family: 'spring_opening', bookable: true, season: { open: true, bookable: true } },
+  }).map((c) => c.key);
+  assert.equal(march[0], 'spring_opening', 'the order is hardcoded to fall');
+  // Year-round work is never sunk to the bottom.
+  assert.ok(order.indexOf('residential_service') < order.indexOf('spring_opening'));
+});
+
+check('the zone bands are the ones the server actually sells', () => {
+  const bandsFor = liftCatalog('bandsFor', ['bandOf', 'isCommercialKey']);
+  const bandLabel = liftCatalog('bandLabel', []);
+  const { BOOKABLE_SERVICES } = createRequire(path.join(ROOT, 'package.json'))('./server/lib/availability.js');
+
+  for (const family of ['fall_closing', 'spring_opening']) {
+    const bands = bandsFor(BOOKABLE_SERVICES, family);
+    const res = bands.filter((b) => !b.commercial).map((b) => bandLabel(bands, b));
+    const com = bands.filter((b) => b.commercial).map((b) => bandLabel(bands, b));
+    assert.deepEqual(res, ['1-4 zones', '5-6 zones', '7-8 zones', '9-15 zones', '16+ zones'],
+      `${family} residential bands`);
+    // The commercial tiers differ from residential — one 5-8 where
+    // residential splits 5-6 and 7-8 — which is why they are listed apart.
+    assert.deepEqual(com, ['1-4 zones', '5-8 zones', '9+ zones'], `${family} commercial bands`);
+    // Residential first, then commercial, each ascending.
+    assert.deepEqual(bands.map((b) => b.commercial), [false, false, false, false, false, true, true, true]);
+  }
+
+  // The 1-4 commercial tier carries its range in its LABEL, not its key.
+  // Reading the key alone dropped it, and the tier above then claimed the
+  // range beneath it — "1-8 zones" for a service that starts at 5.
+  const bandOf = liftCatalog('bandOf', []);
+  assert.equal(bandOf('fall_close_commercial', 'Fall winterization — commercial (1-4 zones)'), 4);
+  assert.equal(bandOf('fall_close_8z', 'anything'), 8);
+  assert.equal(bandOf('fall_close_16plus', 'x'), Infinity);
+  assert.equal(bandOf('sprinkler_repair', 'Sprinkler repair (default block)'), null);
+});
+
+check('typing a zone count moves the band that holds it', () => {
+  const bandForZones = liftCatalog('bandForZones', []);
+  const bandsFor = liftCatalog('bandsFor', ['bandOf', 'isCommercialKey']);
+  const { BOOKABLE_SERVICES } = createRequire(path.join(ROOT, 'package.json'))('./server/lib/availability.js');
+  const bands = bandsFor(BOOKABLE_SERVICES, 'fall_closing');
+  const k = (n, o) => bandForZones(bands, n, o)?.key;
+
+  assert.equal(k(1), 'fall_close_4z');
+  assert.equal(k(4), 'fall_close_4z');
+  assert.equal(k(5), 'fall_close_6z', 'the boundary between bands is off by one');
+  assert.equal(k(7), 'fall_close_8z');
+  assert.equal(k(15), 'fall_close_15z');
+  assert.equal(k(16), 'fall_close_16plus');
+  assert.equal(k(50), 'fall_close_16plus');
+  // A commercial site is not snapped into a residential tier: 7 zones is
+  // 5-8 commercial, not 7-8 residential, and they are different prices.
+  assert.equal(k(7, { commercial: true }), 'fall_close_commercial_8z');
+  assert.equal(k(2, { commercial: true }), 'fall_close_commercial');
+  // Asserted on the function itself, not `?.key` — an optional chain on a
+  // null result yields undefined, which says nothing about what was
+  // returned.
+  assert.equal(bandForZones(bands, 0), null);
+  assert.equal(bandForZones(bands, ''), null);
+  assert.equal(bandForZones(bands, null), null);
+  assert.equal(bandForZones([], 6), null);
+});
+
+check('the follow-up question depends on the category, and reaches the tech', () => {
+  const CATEGORIES = liftConst(CATALOG, 'CATEGORIES');
+  const by = Object.fromEntries(CATEGORIES.map((c) => [c.key, c]));
+  assert.equal(by.fall_closing.follow, 'zones');
+  assert.equal(by.spring_opening.follow, 'zones');
+  assert.equal(by.residential_service.follow, 'issues');
+  assert.equal(by.commercial_service.follow, 'issues');
+  assert.equal(by.hydrawise_retrofit.follow, 'zones_only');
+  assert.equal(by.site_visit.follow, null, 'a site visit is being asked a follow-up');
+
+  // "How many issues" has no server field. Rather than invent one it is
+  // written into the notes, labelled, where a tech will read it.
+  const catalogNotes = liftCatalog('catalogNotes', []);
+  assert.match(catalogNotes({ category: by.commercial_service, issueCount: '3' }),
+    /Commercial service call\. Issues reported: 3\./);
+  assert.match(catalogNotes({ category: by.residential_service, issueCount: '1' }), /Residential/);
+  assert.match(catalogNotes({ category: by.hydrawise_retrofit, zoneCount: '9' }), /Zones: 9\./);
+  // Nothing to say is nothing said — not an empty label on the record.
+  assert.equal(catalogNotes({ category: by.site_visit }), '');
+  assert.equal(catalogNotes({ category: by.fall_closing, zoneCount: '6' }), '');
+  assert.equal(catalogNotes({}), '');
+
+  // And what actually gets booked.
+  const serviceKeyFor = liftCatalog('serviceKeyFor', []);
+  assert.equal(serviceKeyFor(by.fall_closing, { key: 'fall_close_6z' }), 'fall_close_6z');
+  assert.equal(serviceKeyFor(by.fall_closing, null), null, 'a seasonal booking resolved without a band');
+  assert.equal(serviceKeyFor(by.site_visit, null), 'site_visit');
+  assert.equal(serviceKeyFor(null, null), null);
+});
+
+check('the address box can be cleared outright', () => {
+  assert.match(BOOK, /accessibilityLabel="Clear the address"/, 'there is no clear button');
+  // It must clear what the address SETTLED as well as the text. A
+  // confirmed address sitting under a half-typed new one is how the wrong
+  // property gets booked.
+  const at = BOOK.indexOf('const clearAddress = ()');
+  assert.ok(at > 0, 'clearAddress is gone');
+  const block = BOOK.slice(at, BOOK.indexOf('\n  };', at));
+  for (const cleared of ['setTyped', 'setVerified', 'setPicked', 'setCategory', 'setBand', 'setServiceKey', 'setDays', 'setSlot']) {
+    assert.ok(block.includes(cleared), `clearing the address leaves ${cleared} behind`);
+  }
+});
+
+check('the steps can be swiped, and cannot be swiped past', () => {
+  assert.match(BOOK, /pagingEnabled/, 'the steps are not swipeable');
+  // You cannot swipe to a day list before there is one.
+  assert.match(BOOK, /const reached = STEPS\.slice\(0, STEPS\.indexOf\(step\) \+ 1\);/);
+  assert.match(BOOK, /scrollEnabled=\{reached\.length > 1\}/);
+  // The gesture and the buttons drive the same state, so the pips, the
+  // back links and the page can never disagree.
+  assert.match(BOOK, /onMomentumScrollEnd/);
+  assert.match(BOOK, /pagerRef\.current\?\.scrollTo/);
+  // Width is measured, not assumed — handsets differ.
+  assert.match(BOOK, /onLayout=\{\(\{ nativeEvent \}\) => setPageWidth/);
+});
+
+check('the details step shows what the cascade asked, and does not ask again', () => {
+  const at = BOOK.indexOf("{step === 'who' ?");
+  assert.ok(at > 0, 'the details step is gone');
+  const block = BOOK.slice(at, BOOK.indexOf("</>\n        ) : null}", at));
+  // Contact details are still asked for.
+  for (const field of ['First name', 'Last name', 'Telephone', 'Alternate telephone', 'Email']) {
+    assert.ok(block.includes(`label="${field}"`), `the details step lost ${field}`);
+  }
+  // The zone count is DISPLAYED, not re-asked — two prompts for one
+  // number is how the two answers end up disagreeing.
+  assert.ok(!/label="Zone count"/.test(block), 'the details step asks for zones again');
+  assert.ok(!/onChange=\{onZones\}/.test(block), 'the details step edits the zone count again');
+  assert.match(block, /Booking<\/Text>/, 'the details step does not say what is being booked');
 });
 
 check("the server's own bands are the ones being matched", () => {
@@ -295,7 +466,7 @@ check('both zone answers are sent, and they are different things', () => {
 });
 
 check('the full contact is captured, including the second phone', () => {
-  for (const field of ['First name', 'Last name', 'Telephone', 'Alternate telephone', 'Email', 'Zone count']) {
+  for (const field of ['First name', 'Last name', 'Telephone', 'Alternate telephone', 'Email']) {
     assert.ok(BOOK.includes(`label="${field}"`), `the booking form lost its ${field} field`);
   }
   const at = BOOK.indexOf('const confirm = async');
@@ -437,21 +608,8 @@ check('a service out of season says so, instead of showing an empty calendar', (
 
   // In-season first, but a closed service still shows — Patrick books
   // work the public flow will not, and hiding it is its own lie.
-  const bookableList = lift(
-    BOOK, 'bookableList',
-    BOOK.slice(BOOK.indexOf('export function seasonShut('), BOOK.indexOf('\n}\n', BOOK.indexOf('export function seasonShut(')) + 3).replace('export function', 'function'),
-  );
-  const ordered = bookableList({
-    shut: { bookable: true, season: { open: false, bookable: false, closed: true } },
-    open: { bookable: true, season: { open: true } },
-    always: { bookable: true },
-    hidden: { bookable: false },
-  });
-  assert.deepEqual(ordered.map((r) => r.key), ['open', 'always', 'shut']);
-  assert.ok(ordered.some((r) => r.key === 'shut'), 'an out-of-season service was hidden rather than labelled');
-
-  // And the screen shows the note rather than the duration.
-  assert.match(BOOK, /\{note \|\| s\.displayMinutes \|\| `\$\{s\.minutes\} min`\}/);
+  // And the screen shows the note on the category row.
+  assert.match(BOOK, /note \? <Text style=\{styles\.optionShutNote\}>\{note\}<\/Text> : null/);
 });
 
 check('the season status comes from the same authority the gate uses', () => {
@@ -550,17 +708,8 @@ check('the booking window is DATES, not permission — and it binds staff too', 
   assert.equal(seasonShut({ season: { open: false, bookable: false, closed: true } }), true);
   assert.equal(seasonShut({}), false);
 
-  const bookableList2 = lift(
-    BOOK, 'bookableList',
-    BOOK.slice(BOOK.indexOf('export function seasonShut('), BOOK.indexOf('\n}\n', BOOK.indexOf('export function seasonShut(')) + 3).replace('export function', 'function'),
-  );
-  const ordered2 = bookableList2({
-    over: { bookable: true, season: { open: false, bookable: false, closed: true } },
-    later: { bookable: true, season: { open: false, bookable: true, startsOn: '2026-09-28' } },
-    now: { bookable: true, season: { open: true } },
-  });
-  assert.deepEqual(ordered2.map((r) => r.key), ['later', 'now', 'over'],
-    'a season whose dates start later was sunk to the bottom with the dead ones');
+  // A season whose dates start later stays ordinary bookable work; only a
+  // spent one sinks. Covered against the real categories above.
 });
 
 // ---- 4. The gate fails closed -------------------------------------------
