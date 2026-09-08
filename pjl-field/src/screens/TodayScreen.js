@@ -41,7 +41,14 @@ import MonthSheet from './MonthSheet';
 import { colors, radius, space, type } from '../theme';
 import { runningVersionLabel } from '../updates';
 import { Pill } from '../ui';
-import { canStartWorkOrder, existingWorkOrderFor, routeForRow, rowKey } from '../workorder-routing';
+import {
+  canStartWorkOrder,
+  existingWorkOrderFor,
+  isFinishedRow,
+  routeForRow,
+  rowKey,
+  workOrderActionLabel,
+} from '../workorder-routing';
 
 const WO_STATUS_LABELS = {
   draft: 'Draft',
@@ -383,7 +390,11 @@ export default function TodayScreen({ onOpenWorkOrder }) {
         return (
           <Pressable
             key={key}
-            style={[styles.card, focusKey === key && styles.cardFocused]}
+            style={[
+              styles.card,
+              focusKey === key && styles.cardFocused,
+              isFinishedRow(b) && styles.cardDone,
+            ]}
             onPress={() => setFocusKey(key)}
             onLayout={(event) => { cardTops.current.set(key, event.nativeEvent.layout.y); }}
             accessibilityLabel={`Show ${b.address || 'this stop'} on the map`}
@@ -420,7 +431,7 @@ export default function TodayScreen({ onOpenWorkOrder }) {
                 disabled={notified || busy || !b.leadId}
               />
               <Action
-                label={b.workOrder ? 'Open WO' : 'Start WO'}
+                label={workOrderActionLabel(b)}
                 onPress={() => handleWorkOrder(b)}
                 disabled={busy || !canStartWo}
                 primary
@@ -527,6 +538,8 @@ const styles = StyleSheet.create({
   // focus would shove every card below it down two pixels at the exact
   // moment the screen is scrolling to one.
   cardFocused: { borderColor: colors.brand },
+  // Done, not gone. It was one of the stops; it is what the map ticks.
+  cardDone: { opacity: 0.72 },
   card: {
     backgroundColor: colors.card,
     borderRadius: radius.card,

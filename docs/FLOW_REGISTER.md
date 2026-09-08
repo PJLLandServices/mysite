@@ -63,6 +63,45 @@ numbered on distinct stops, the timeline covering both, and `route-line` returni
 polyline where it used to 404; the ordinary plan day still renders. Full `build:check` green;
 Chromium confirms the booked row renders its number badge with a pin-linked `data-code`.
 
+**2026-09-08 (The app loses two tabs — a work order is not a place, and neither is an
+invoice):** Patrick: "The workorder situation... maybe we can merge that back into the
+'schedule' as well as the properties tab, and get rid of that completely. The invoice
+interface is the same thing." Both tabs were showing whichever record you last opened —
+a tab whose contents depended on where you had been, and which said "Work" while showing
+one job from three weeks ago. The invoices tab was worse: it rendered `/admin/invoices`,
+a desktop page, at phone width with its sidebar hidden by injected CSS.
+
+**Three tabs now — Today, Properties, Messages — and an open job is an OVERLAY** laid over
+all of them, covering the tab bar deliberately: mid-closing, switching tabs is not a thing
+anyone means to do, and the old arrangement let you do it and then wonder where the closing
+went. `jobForWorkOrder()` in `pjl-field/App.js` is the whole routing decision and is exported
+so it can be tested without React Native — a fall closing opens the native flow, anything
+else opens `/admin/work-order/:id/tech`, and a finished closing lands on its invoice, or on
+the work order when the invoice cascade did not hand one back. Every overlay carries its own
+way out; there is no branch that renders without one.
+
+**Invoices and work orders now live on the property**, which is where "did we do this
+address in April" is actually asked. `PropertyProfileScreen` loads both AFTER the property
+and without blocking it, so a slow invoice list never holds up the address. `invoiceToChase()`
+picks the oldest invoice still owing (void and paid excluded) and is exported and tested.
+
+**ONE backend change, additive by construction:** `GET /api/invoices` accepts an optional
+`propertyId` filter, applied exactly the way `status` and `woId` already are
+(`server/server.js`). Absent, the response is byte-for-byte what it was — that is asserted in
+the test, not assumed. Without it the phone downloads every invoice in the business to show
+three. **No PASS flow was modified.**
+
+`scripts/test-app-shell.mjs`, 18 assertions, in `build:check`: the routing and label functions
+EXECUTED rather than read, the tab list, that nothing anywhere in the app still reaches for a
+removed tab, that every overlay branch has an exit, that the status label maps match the real
+`STATUSES` in `lib/invoices.js` (a status with no entry renders as nothing), that no second
+overdue rule exists beside `isOverdue`, that a Pill is never nested inside a Text, the additive
+filter, and a Babel parse of six app files with the app's own Babel. Full `build:check` green.
+
+**UNMAPPED — needs Patrick's walk:** open a job from Today and confirm it covers the tab bar
+and exits back to where you were; finish a closing and land on the invoice; open a property
+and confirm its invoices and work orders are its own; confirm no tab shows a stale record.
+
 **2026-09-07 (Today's route on a map, in the app and on the CRM):** Patrick, having just got
 Tap to Pay to Ready on the phone: "Can we possibly make the Day slide, interactive similar to
 what we have done on the web portal? Show the user stops, and numbers etc on an interactive map.

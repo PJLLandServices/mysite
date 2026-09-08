@@ -1,16 +1,32 @@
-// The app shell: a five-tab bar over the five things the field actually
-// needs. The CRM's other fifteen admin pages are not reachable from
-// here, which is the point — this is not the CRM on a small screen, it
-// is the subset of it that gets used standing on someone's lawn.
+// The app shell: a three-tab bar over the three places the field needs,
+// with the job you are doing laid OVER them rather than filed under a
+// tab of its own.
+//
+// WHY THERE IS NO WORK TAB. There was, and it showed whichever work
+// order you last opened — a tab whose contents depended on where you had
+// been, and which said "Work" while showing one job from three weeks
+// ago. A work order is not a place. It is something that happens to a
+// job on the schedule or to an address in the book, and it is reached
+// from one or the other. Its history lives on the property, where
+// "did we do this address in April" is actually asked.
+//
+// WHY THERE IS NO INVOICES TAB. Same reasoning, and it was worse: the
+// tab rendered /admin/invoices, a desktop page, at phone width with its
+// sidebar hidden by injected CSS. Invoices belong to an address too.
+//
+// So an open job is an OVERLAY. It covers the tab bar deliberately —
+// mid-closing, switching tabs is not a thing anyone means to do, and the
+// old arrangement let you do it and then wonder where the closing went.
+// Every overlay carries its own way out.
 //
 // Properties is native (see src/screens/PropertyProfileScreen.js): a
 // record you only read is cheap to rebuild and benefits most from being
-// shaped for a phone. The rest stay as the web pages that already do the
-// work correctly and carry FLOW_REGISTER coverage.
+// shaped for a phone. Messages stays as the web page that already does
+// the work correctly and carries FLOW_REGISTER coverage.
 //
 // Tabs keep their state once visited: each is mounted on first open and
 // then hidden rather than unmounted, so switching away from a half-
-// scrolled work order and back doesn't reload it.
+// scrolled list and back doesn't reload it.
 
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, SafeAreaView, StatusBar as RNStatusBar, StyleSheet, Text, View } from 'react-native';
@@ -24,16 +40,35 @@ import WebScreen from './src/screens/WebScreen';
 import { colors, space } from './src/theme';
 import { applyPendingUpdate } from './src/updates';
 
-// Where the Work tab sits when nothing has sent it somewhere specific.
-const WORK_LIST = '/admin/work-orders';
-
 const TABS = [
   { key: 'today',      label: 'Today',      glyph: '◷' },
   { key: 'properties', label: 'Properties', glyph: '⌂' },
-  { key: 'work',       label: 'Work',       glyph: '✓', path: WORK_LIST },
-  { key: 'invoices',   label: 'Invoices',   glyph: '$', path: '/admin/invoices' },
   { key: 'messages',   label: 'Messages',   glyph: '✉', path: '/admin/messages' },
 ];
+
+// What an open job can be. A closed set rather than three independent
+// booleans, because two of them being true at once was always a bug and
+// this makes that unrepresentable.
+//
+//   { kind: 'closing', workOrderId }  — the native fall-closing flow
+//   { kind: 'web',     url, title }   — any other work order, on the web
+//   { kind: 'invoice', invoiceId }    — where a finished closing lands
+export const JOB = { CLOSING: 'closing', WEB: 'web', INVOICE: 'invoice' };
+
+// A work order becomes one of two things. Kept out of the component so
+// the routing decision can be tested without React Native — the same
+// reason src/workorder-routing.js exists.
+export function jobForWorkOrder(workOrder) {
+  if (!workOrder || !workOrder.id) return null;
+  if (workOrder.type === 'fall_closing') {
+    return { kind: JOB.CLOSING, workOrderId: workOrder.id };
+  }
+  return {
+    kind: JOB.WEB,
+    url: `/admin/work-order/${encodeURIComponent(workOrder.id)}/tech`,
+    title: 'Work order',
+  };
+}
 
 export default function App() {
   const [active, setActive] = useState('today');
@@ -41,18 +76,8 @@ export default function App() {
   // one keeps its scroll position and its session.
   const [visited, setVisited] = useState({ today: true });
   const [openPropertyId, setOpenPropertyId] = useState(null);
-  // Today hands a work order to the Work tab rather than opening its own
-  // WebView, so there is only ever one tech-mode page alive and the tab
-  // bar keeps telling the truth about where you are.
-  const [workUrl, setWorkUrl] = useState(WORK_LIST);
-  // A fall closing opens the native flow; everything else opens the web
-  // work order, which still owns sign-off, payment and the completion
-  // cascade. Set together with the tab switch so the Work tab always
-  // shows one thing or the other, never both.
-  const [closingId, setClosingId] = useState(null);
-  // Set when a closing finishes: the invoice the cascade drafted, which is
-  // where the tech lands rather than back on a list.
-  const [invoiceId, setInvoiceId] = useState(null);
+  // The job laid over the tabs. Null means there isn't one.
+  const [job, setJob] = useState(null);
 
   // Cold start: pull a newer bundle if there is one, then reload into
   // it. Without this the app runs the previous bundle for one more
@@ -63,6 +88,13 @@ export default function App() {
     setActive(key);
     setVisited((v) => (v[key] ? v : { ...v, [key]: true }));
   }, []);
+
+  const openWorkOrder = useCallback((workOrder) => {
+    const next = jobForWorkOrder(workOrder);
+    if (next) setJob(next);
+  }, []);
+
+  const closeJob = useCallback(() => setJob(null), []);
 
   return (
     <View style={styles.root}>
@@ -81,59 +113,20 @@ export default function App() {
                 accessibilityElementsHidden={!isActive}
               >
                 {tab.key === 'today' ? (
-                  <TodayScreen
-                    onOpenWorkOrder={(workOrder) => {
-                      if (workOrder.type === 'fall_closing') {
-                        setClosingId(workOrder.id);
-                      } else {
-                        setClosingId(null);
-                        setWorkUrl(`/admin/work-order/${encodeURIComponent(workOrder.id)}/tech`);
-                      }
-                      select('work');
-                    }}
-                  />
+                  <TodayScreen onOpenWorkOrder={openWorkOrder} />
                 ) : tab.key === 'properties' ? (
                   openPropertyId ? (
                     <PropertyProfileScreen
                       propertyId={openPropertyId}
                       onBack={() => setOpenPropertyId(null)}
+                      onOpenWorkOrder={openWorkOrder}
+                      onOpenInvoice={(invoiceId) => setJob({ kind: JOB.INVOICE, invoiceId })}
                     />
                   ) : (
                     <PropertiesScreen onOpen={setOpenPropertyId} />
                   )
-                ) : tab.key === 'work' && invoiceId ? (
-                  <InvoiceScreen
-                    invoiceId={invoiceId}
-                    onBack={() => { setInvoiceId(null); select('today'); }}
-                  />
-                ) : tab.key === 'work' && closingId ? (
-                  <ClosingScreen
-                    workOrderId={closingId}
-                    onExit={() => { setClosingId(null); select('today'); }}
-                    // A finished closing goes straight to its invoice. When
-                    // the cascade did not hand one back — it is best-effort
-                    // and the visit is completed either way — fall back to
-                    // the work order rather than stranding the tech on a
-                    // screen that has just told them it is done.
-                    onFinished={({ invoiceId: id }) => {
-                      setClosingId(null);
-                      if (id) setInvoiceId(id);
-                      else setWorkUrl(`/admin/work-order/${encodeURIComponent(closingId)}/tech`);
-                    }}
-                  />
                 ) : (
-                  <WebScreen
-                    path={tab.key === 'work' ? workUrl : tab.path}
-                    // Only a pushed page gets a back bar — the tab's own
-                    // landing page has nowhere to go back TO. Without this
-                    // the closing's handoff to the web work order was a
-                    // one-way door: the tab bar switches tabs but does not
-                    // undo the handoff, and the page's own nav is hidden.
-                    onBack={tab.key === 'work' && workUrl !== WORK_LIST
-                      ? () => setWorkUrl(WORK_LIST)
-                      : undefined}
-                    title={tab.key === 'work' && workUrl !== WORK_LIST ? 'Work orders' : undefined}
-                  />
+                  <WebScreen path={tab.path} />
                 )}
               </View>
             );
@@ -159,6 +152,38 @@ export default function App() {
           })}
         </View>
       </SafeAreaView>
+
+      {/* The open job, over everything including the tab bar. Each of
+          these owns its own exit; none of them is a trap door. */}
+      {job ? (
+        <View style={styles.overlay}>
+          <SafeAreaView style={styles.safe}>
+            {job.kind === JOB.CLOSING ? (
+              <ClosingScreen
+                workOrderId={job.workOrderId}
+                onExit={closeJob}
+                // A finished closing goes straight to its invoice. When
+                // the cascade did not hand one back — it is best-effort
+                // and the visit is completed either way — fall back to
+                // the work order rather than stranding the tech on a
+                // screen that has just told them it is done.
+                onFinished={({ invoiceId }) => {
+                  if (invoiceId) setJob({ kind: JOB.INVOICE, invoiceId });
+                  else setJob({
+                    kind: JOB.WEB,
+                    url: `/admin/work-order/${encodeURIComponent(job.workOrderId)}/tech`,
+                    title: 'Work order',
+                  });
+                }}
+              />
+            ) : job.kind === JOB.INVOICE ? (
+              <InvoiceScreen invoiceId={job.invoiceId} onBack={closeJob} />
+            ) : (
+              <WebScreen path={job.url} onBack={closeJob} title={job.title} />
+            )}
+          </SafeAreaView>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -168,6 +193,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.card, paddingTop: RNStatusBar.currentHeight || 0 },
   body: { flex: 1 },
   pane: { ...StyleSheet.absoluteFillObject },
+  overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: colors.ground },
   tabBar: {
     flexDirection: 'row',
     borderTopWidth: StyleSheet.hairlineWidth,

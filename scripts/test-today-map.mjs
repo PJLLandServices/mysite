@@ -201,6 +201,51 @@ check('an absent coordinate is refused, not coerced to zero', () => {
   assert.match(PAGE_JS, /function num\(value\) \{/, 'the page coerces an empty coordinate to 0,0');
 });
 
+check('the line is converted from [lat,lng] pairs before it is drawn', () => {
+  // Shipped broken on 2026-09-07: numbered pins, no line, no error.
+  // route-geometry answers with PAIRS; google.maps.Polyline wants
+  // {lat,lng} objects and silently draws nothing when handed an array.
+  // Extracted and RUN, because the shape is the whole bug.
+  const page = fromPage(['num', 'toPath', 'isRoadLine']);
+
+  assert.deepEqual(
+    page.toPath([[44.05, -79.46], [44.06, -79.47]]),
+    [{ lat: 44.05, lng: -79.46 }, { lat: 44.06, lng: -79.47 }],
+    'pairs are not being converted — Polyline draws nothing',
+  );
+  // Tolerant of the object form too, so a future endpoint change does not
+  // reintroduce the same silence from the other direction.
+  assert.deepEqual(page.toPath([{ lat: 1, lng: 2 }, { lat: 3, lng: 4 }]), [
+    { lat: 1, lng: 2 }, { lat: 3, lng: 4 },
+  ]);
+  // And the empty-coordinate trap from the pins, on this path too.
+  assert.deepEqual(page.toPath([[null, null], [44.06, -79.47]]), [{ lat: 44.06, lng: -79.47 }]);
+  assert.deepEqual(page.toPath(null), []);
+});
+
+check('only a router\'s own geometry is drawn as a road', () => {
+  const page = fromPage(['num', 'toPath', 'isRoadLine']);
+  assert.equal(page.isRoadLine('google'), true);
+  assert.equal(page.isRoadLine('osrm'), true);
+  assert.equal(page.isRoadLine('straight'), false);
+  // The one that matters: a source this page has not been taught about is
+  // hops until proven otherwise. Testing for "straight" by name would draw
+  // a solid road for it and claim a drive that was never computed.
+  assert.equal(page.isRoadLine('none'), false);
+  assert.equal(page.isRoadLine('mapbox-someday'), false);
+  assert.equal(page.isRoadLine(undefined), false);
+});
+
+check('the page and the season plan read the same payload the same way', () => {
+  // Both draw the SAME endpoint's output. If one converts and the other
+  // does not, one of the two maps is silently lineless — which is how this
+  // was found, on a phone, rather than here.
+  const plan = read('server/season-plan.js');
+  assert.match(plan, /data\.coords\.map\(\(\[lat, lng\]\) => \(\{ lat, lng \}\)\)/,
+    'the season plan no longer converts pairs — check whether the endpoint changed shape');
+  assert.match(PAGE_JS, /toPath\(line\.coords\)/, 'the app map no longer converts pairs');
+});
+
 check('the endpoint refuses what it cannot honestly draw', () => {
   const at = SERVER.indexOf('pathname === "/api/schedule/today/route-line"');
   assert.ok(at > 0, 'the route-line endpoint is gone');
@@ -227,7 +272,9 @@ check('the line endpoint returns geometry and never minutes', () => {
 });
 
 check('a straight-hop fallback is drawn as hops, not as roads', () => {
-  assert.match(PAGE_JS, /line\.source === "straight" \? 0 : 0\.85/, 'a fallback line is drawn solid, implying a road');
+  // The rule is now "is this a router's geometry", not "is it named
+  // straight" — see isRoadLine above.
+  assert.match(PAGE_JS, /strokeOpacity: roads \? 0\.85 : 0/, 'a fallback line is drawn solid, implying a road');
   assert.match(PAGE_JS, /straight hops, not roads/, 'the screen no longer says the lines are not roads');
 });
 

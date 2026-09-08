@@ -192,6 +192,38 @@
       + "</div>";
   }
 
+  // The endpoint answers with [lat, lng] PAIRS, not {lat, lng} objects —
+  // see lib/route-geometry.js, and /admin/season-plan converts them the
+  // same way before drawing. Handing the raw pairs to google.maps.Polyline
+  // draws NOTHING, silently: no error, no warning, just numbered pins with
+  // no line between them. That is exactly what shipped on 2026-09-07.
+  function toPath(coords) {
+    if (!Array.isArray(coords)) return [];
+    return coords
+      .map(function (point) {
+        if (Array.isArray(point)) {
+          var lat = num(point[0]);
+          var lng = num(point[1]);
+          return isFinite(lat) && isFinite(lng) ? { lat: lat, lng: lng } : null;
+        }
+        if (point && typeof point === "object") {
+          var oLat = num(point.lat);
+          var oLng = num(point.lng);
+          return isFinite(oLat) && isFinite(oLng) ? { lat: oLat, lng: oLng } : null;
+        }
+        return null;
+      })
+      .filter(Boolean);
+  }
+
+  // Roads, or hops? Anything that is not a router's own geometry is hops.
+  // Testing for "straight" by name would draw a solid road for a source
+  // this page has not been taught about yet, which is the failure that
+  // matters: a line that claims to be a drive and is not.
+  function isRoadLine(source) {
+    return source === "google" || source === "osrm";
+  }
+
   // The road line, drawn by our server. Ordered coordinates go up, road
   // geometry comes back — the same helper the season plan's line uses,
   // so a day drawn on both screens is drawn the same way.
@@ -291,19 +323,21 @@
       });
       bounds.extend(line.origin);
     }
-    if (line) {
+    var path = line ? toPath(line.coords) : [];
+    if (path.length >= 2) {
+      var roads = isRoadLine(line.source);
       state.line = new google.maps.Polyline({
-        path: line.coords,
+        path: path,
         map: state.map,
-        strokeColor: AM_GREEN,
-        strokeOpacity: line.source === "straight" ? 0 : 0.85,
-        strokeWeight: 4,
+        strokeColor: roads ? AM_GREEN : "#7A7A72",
+        strokeOpacity: roads ? 0.85 : 0,
+        strokeWeight: roads ? 4 : 2,
         // A straight-hop fallback is drawn as dots, never as a road it is
         // not. route-geometry.js fails soft on purpose; this is the half
         // of that promise the screen has to keep.
-        icons: line.source === "straight"
-          ? [{ icon: { path: "M 0,-1 0,1", strokeOpacity: 0.7, scale: 3 }, offset: "0", repeat: "12px" }]
-          : undefined,
+        icons: roads
+          ? undefined
+          : [{ icon: { path: "M 0,-1 0,1", strokeOpacity: 0.7, scale: 3 }, offset: "0", repeat: "12px" }],
         zIndex: 0
       });
     }
@@ -314,8 +348,8 @@
     if (mapped.skipped) {
       messages.push(mapped.skipped + (mapped.skipped === 1 ? " stop has" : " stops have") + " no map location");
     }
-    if (line && line.source === "straight") messages.push("straight hops, not roads");
-    if (!line) messages.push("no route line");
+    if (path.length >= 2 && !isRoadLine(line.source)) messages.push("straight hops, not roads");
+    if (path.length < 2) messages.push("no route line");
     note(messages.join(" · "), false);
 
     tellHost({ type: "ready", stops: mapped.stops.length, skipped: mapped.skipped });
