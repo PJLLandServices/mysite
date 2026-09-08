@@ -14,11 +14,21 @@ export function Card({ children, style }) {
 
 // One line of a grouped list. `last` suppresses the hairline so the
 // separator never runs to the bottom edge of a card.
-export function Row({ label, value, onPress, last, valueStyle }) {
+//
+// `right` takes a NODE instead of text, for rows whose right-hand side is
+// a pill or an amount beside one. It exists because passing a <Pill> as
+// `value` puts a View inside a Text — legal on iOS, and unreliable about
+// sizing — so the rows that need one get a real container rather than a
+// nesting trick that mostly works.
+export function Row({ label, value, right, onPress, last, valueStyle }) {
   const body = (
     <View style={[styles.row, last && styles.rowLast]}>
       <Text style={styles.rowLabel} numberOfLines={1}>{label}</Text>
-      <Text style={[styles.rowValue, valueStyle]} selectable>{value}</Text>
+      {right != null ? (
+        <View style={styles.rowRight}>{right}</View>
+      ) : (
+        <Text style={[styles.rowValue, valueStyle]} selectable>{value}</Text>
+      )}
     </View>
   );
   if (!onPress) return body;
@@ -100,8 +110,23 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.separator,
   },
   rowLast: { borderBottomWidth: 0 },
-  rowLabel: { ...type.label, flexShrink: 0 },
+  // The label SHRINKS. It used to be flexShrink: 0, which on a 320pt
+  // screen meant "I-2026-0042 · Sep 8, 2026" (~170pt) held its full width
+  // and the amount and its pill had ~78pt to fit ~148pt of content — so
+  // the pill wrapped to a second line or was clipped by Card's
+  // overflow: 'hidden'. At 390pt it landed on the boundary, so SOME rows
+  // in one list wrapped and others did not, which is the worst of the
+  // outcomes. It truncates with an ellipsis instead; the id is at the
+  // front, which is the part that identifies the row.
+  rowLabel: { ...type.label, flexShrink: 1, flexGrow: 0 },
   rowValue: { ...type.body, flex: 1, textAlign: 'right' },
+  rowRight: {
+    flexShrink: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: space.sm,
+  },
   pressed: { backgroundColor: colors.ground },
   note: {
     paddingHorizontal: space.lg,

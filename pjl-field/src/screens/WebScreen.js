@@ -53,6 +53,12 @@ export default function WebScreen({ path, onBack, title }) {
           {title ? <Text style={styles.barTitle} numberOfLines={1}>{title}</Text> : null}
         </View>
       ) : null}
+      {/* The WebView and its overlays live in their own region BELOW the
+          bar. They are absoluteFillObject, so while they were siblings of
+          the bar the opaque "Can't reach PJL" panel covered `‹ Back` and
+          swallowed its taps — and since this screen became an overlay,
+          the tab bar is covered too, so that was a force-quit. */}
+      <View style={styles.viewport}>
       <WebView
         ref={ref}
         source={{ uri: `${HOST}${path}` }}
@@ -83,6 +89,7 @@ export default function WebScreen({ path, onBack, title }) {
           </Pressable>
         </View>
       ) : null}
+      </View>
     </View>
   );
 }
@@ -103,6 +110,7 @@ const styles = StyleSheet.create({
   back: { paddingVertical: 4, paddingRight: space.sm },
   backText: { ...type.body, color: colors.brand, fontWeight: '600' },
   barTitle: { ...type.body, color: colors.textMuted, flexShrink: 1 },
+  viewport: { flex: 1 },
   overlay: {
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center', justifyContent: 'center',

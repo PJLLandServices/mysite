@@ -444,18 +444,24 @@ const kesSlots = (await listAvailableSlots({
 ok("a far caller gets NEITHER half of a day that already has a geography (no new barbell)",
   kesSlots.length === 0, `offered buckets: ${kesSlots.map((s) => s.bucketKey).join(", ")}`);
 
-// ---- 8. The corridor is elastic — widening before turning away -------
+// ---- 8. The corridor is elastic, but it stops at 40 minutes ---------
 //
 // Patrick, 2026-09-07: "as the dates fill up, we allow for drive times
 // to widen. we NEVER turn down a customer." When the tight corridor
 // leaves an address fewer than GEO_WIDEN_MIN_DAYS bookable days, the
-// scan reruns at the next tier out to the 90-minute service bound.
-// Every day in this fixture carries the NORTH shape, so there are no
-// unplanned days for a far customer to fall back on — the ladder is the
-// only thing standing between them and an empty calendar.
+// scan reruns at the next tier — 25, then 40, and no further.
+//
+// The cap is the second half of the same call, made after a Markham
+// address landed on a "West of the 400" day: past 40 minutes we stop
+// buying a date with an hour of extra driving and let the OPEN BUCKET
+// take the customer instead. Nobody is turned down; the first-available
+// card is always on the picker. Every day in this fixture carries the
+// NORTH shape, so there are no unplanned days to fall back on — the
+// ladder is the only thing between these callers and an empty calendar.
 
 const { GEO_WIDEN_TIERS, GEO_WIDEN_MIN_DAYS } = availability;
-const RICHMOND_HILL = { lat: 43.8828, lng: -79.4403, source: "google" };
+const AURORA = { lat: 43.9997, lng: -79.4663, source: "google" };        // +17 min — inside the cap
+const RICHMOND_HILL = { lat: 43.8828, lng: -79.4403, source: "google" }; // +61 min — past it
 
 const allNorthPlan = { generatedAt: NOW.toISOString(), bucketCap: 5, dayCap: 10, days: {} };
 for (let i = 0; i < 20; i++) { // every day the 20-day scan can reach
@@ -466,34 +472,52 @@ for (let i = 0; i < 20; i++) { // every day the 20-day scan can reach
 const allNorthShapes = geoFilter.buildDayShapes({ plan: allNorthPlan, propertiesByCode, bookings: [] });
 const anyNorthShape = allNorthShapes[Object.keys(allNorthShapes)[0]];
 
-const rhCost = await geoFilter.addedDriveMinutes(RICHMOND_HILL, anyNorthShape.points);
-ok("fixture: Richmond Hill costs more than the tight corridor but is inside the service bound",
-  rhCost.minutes > 15 && rhCost.minutes <= 90,
-  `+${rhCost.minutes} min`);
+ok("the ladder stops at 40 minutes — no 60/90-minute detours are on offer",
+  Math.max(...GEO_WIDEN_TIERS) === 40, JSON.stringify(GEO_WIDEN_TIERS));
+
+// Inside the cap: widening still rescues a customer the tight corridor
+// would have blanked.
+const auroraCost = await geoFilter.addedDriveMinutes(AURORA, anyNorthShape.points);
+ok("fixture: Aurora costs past the tight corridor but inside the 40-minute cap",
+  auroraCost.minutes > 15 && auroraCost.minutes <= 40, `+${auroraCost.minutes} min`);
 
 const wideDiag = { geoSuppressed: [], seasonClosed: [] };
 const widened = await listAvailableSlots({
-  ...baseArgs, customerCoords: RICHMOND_HILL, dayShapes: allNorthShapes, diagnostics: wideDiag
+  ...baseArgs, customerCoords: AURORA, dayShapes: allNorthShapes, diagnostics: wideDiag
 });
-ok("a customer beyond the tight corridor still gets days — the corridor widened",
+ok("a customer inside the cap still gets days — the corridor widened",
   datesOf(widened).size >= GEO_WIDEN_MIN_DAYS,
   `offered ${datesOf(widened).size} days`);
 ok("the widened corridor is reported and is one of the ladder's tiers",
-  GEO_WIDEN_TIERS.includes(wideDiag.geoWidenedTo) && wideDiag.geoWidenedTo >= rhCost.minutes,
+  GEO_WIDEN_TIERS.includes(wideDiag.geoWidenedTo) && wideDiag.geoWidenedTo >= auroraCost.minutes,
   `geoWidenedTo=${wideDiag.geoWidenedTo}`);
 ok("widened slots keep their TRUE added-drive cost — the stars still rank honestly",
   widened.every((s) => Number.isFinite(s.addedDriveMinutes) && s.addedDriveMinutes > 15),
   JSON.stringify(widened.slice(0, 2).map((s) => s.addedDriveMinutes)));
 
-// Beyond the service bound the ladder stops: geography still protects
-// the routes from a dedicated cross-region trip.
+// Past the cap: no days at all, however empty the customer's calendar —
+// this is the Markham-on-a-west-day case, and the open bucket owns it.
+const rhCost = await geoFilter.addedDriveMinutes(RICHMOND_HILL, anyNorthShape.points);
+ok("fixture: Richmond Hill costs past the 40-minute cap but inside the service area",
+  rhCost.minutes > 40 && rhCost.minutes <= 90, `+${rhCost.minutes} min`);
+const overDiag = { geoSuppressed: [] };
+const overCap = await listAvailableSlots({
+  ...baseArgs, customerCoords: RICHMOND_HILL, dayShapes: allNorthShapes, diagnostics: overDiag
+});
+ok("past 40 minutes the ladder stops — no day is offered, the open bucket takes them",
+  datesOf(overCap).size === 0, `offered: ${[...datesOf(overCap)].join(", ")}`);
+ok("and it never reports widening past the cap",
+  (overDiag.geoWidenedTo === undefined || overDiag.geoWidenedTo <= 40),
+  `geoWidenedTo=${overDiag.geoWidenedTo}`);
+
+// The far end is unchanged: a cross-region address was never routable.
 const missCost = await geoFilter.addedDriveMinutes(MISSISSAUGA, anyNorthShape.points);
-ok("fixture: Mississauga costs beyond the 90-minute service bound", missCost.minutes > 90, `+${missCost.minutes} min`);
+ok("fixture: Mississauga is far beyond any tier", missCost.minutes > 90, `+${missCost.minutes} min`);
 const farDiag2 = { geoSuppressed: [] };
 const farWiden = await listAvailableSlots({
   ...baseArgs, customerCoords: MISSISSAUGA, dayShapes: allNorthShapes, diagnostics: farDiag2
 });
-ok("past the service bound the ladder is spent — no days, open bucket is the overflow",
+ok("a cross-region address still gets no days — open bucket is the overflow",
   datesOf(farWiden).size === 0,
   `offered: ${[...datesOf(farWiden)].join(", ")}`);
 

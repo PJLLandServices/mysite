@@ -181,6 +181,34 @@ export async function completeWorkOrder(id, { signature = null, arrivedAt = null
 export const getInvoice = (id) =>
   getJson(`/api/invoices/${encodeURIComponent(id)}`).then((d) => d.invoice || d);
 
+// Every invoice raised against one address, newest first — the server
+// sorts by createdAt descending and filters, so the phone never
+// downloads the whole business to show three rows.
+//
+// `overdue` is NOT a status the server has. The real set is draft, sent,
+// partially_paid, paid, void; an invoice is overdue when it was SENT and
+// still carries a balance, which is a question about two fields and a
+// date rather than a state anything stores. isOverdue() below is the one
+// place that decides it.
+export const listPropertyInvoices = (propertyId) =>
+  getJson(`/api/invoices?propertyId=${encodeURIComponent(propertyId)}`)
+    .then((d) => d.invoices || []);
+
+// Sent, still owed, and past the grace period. Kept here rather than in a
+// screen because the property list and anything added later have to agree
+// about what "overdue" means — two definitions is how a red badge starts
+// disagreeing with a total.
+export const OVERDUE_AFTER_DAYS = 14;
+
+export function isOverdue(invoice, now = Date.now()) {
+  if (!invoice || !invoice.sentAt) return false;
+  if (!(Number(invoice.balanceDue) > 0)) return false;
+  if (invoice.status === 'void' || invoice.status === 'paid') return false;
+  const sent = new Date(invoice.sentAt).getTime();
+  if (!Number.isFinite(sent)) return false;
+  return now - sent > OVERDUE_AFTER_DAYS * 24 * 60 * 60 * 1000;
+}
+
 // Emails the invoice to the customer. The server owns the template, the
 // attachments and the send log.
 export const sendInvoice = (id) =>

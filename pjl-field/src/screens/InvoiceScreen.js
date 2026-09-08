@@ -25,6 +25,7 @@ import {
   ActivityIndicator, Alert, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import { AuthRequiredError, getInvoice, invoicePaymentLink, recordInvoicePayment, sendInvoice } from '../api';
+import { money as formatMoney } from '../format';
 import { READER, useTapToPay } from '../taptopay/useTapToPay';
 import { useTapToPayLocation } from '../taptopay/TapToPayProvider';
 import { colors, radius, space, type } from '../theme';
@@ -39,14 +40,13 @@ import { colors, radius, space, type } from '../theme';
 // rendered a $1,000.00 invoice as $10.00. It never bit because a closing is
 // $90-$400, and it would have bitten on the first big job, on the screen the
 // collected amount is read from.
-const money = (value, currency = 'CAD') => {
-  // A missing field is not zero. Number(null) is 0, and "$0.00" on a balance
-  // reads as "nothing owing" — the opposite of "we don't know".
-  if (value === null || value === undefined || value === '') return '—';
-  const n = Number(value);
-  if (!Number.isFinite(n)) return '—';
-  return `$${n.toFixed(2)} ${currency}`;
-};
+// Formatting is shared with the rest of the app (src/format.js) so the same
+// invoice cannot read "$285.00 CAD" here and "$285.00" on the property
+// screen, and so a five-figure balance groups its thousands in both places.
+// What stays local is the fallback: on THIS screen a missing field must
+// render "—", because Number(null) is 0 and "$0.00" on a balance reads as
+// "nothing owing", which is the opposite of "we don't know".
+const money = (value, currency = 'CAD') => formatMoney(value, currency) ?? '—';
 
 export default function InvoiceScreen({ invoiceId, onBack }) {
   const [invoice, setInvoice] = useState(null);
@@ -200,23 +200,43 @@ export default function InvoiceScreen({ invoiceId, onBack }) {
     }
   };
 
+  // Rendered in EVERY state, before anything else. This screen is where a
+  // finished closing lands and where a payment is recorded — and it is an
+  // overlay, so it covers the tab bar. `saveRecorded` drops back to
+  // 'loading' after taking money; if that re-read 401s or hangs, a state
+  // without this bar would strand the tech on an exit-less screen holding
+  // a customer's card.
+  const exitBar = (
+    <Pressable onPress={onBack} hitSlop={12} style={styles.exitBar}>
+      <Text style={styles.backText}>‹ Back</Text>
+    </Pressable>
+  );
+
   if (state === 'loading') {
-    return <View style={styles.centre}><ActivityIndicator color={colors.brand} /></View>;
+    return (
+      <View style={styles.screen}>
+        {exitBar}
+        <View style={styles.centre}><ActivityIndicator color={colors.brand} /></View>
+      </View>
+    );
   }
   if (state !== 'ready') {
     return (
-      <View style={styles.centre}>
-        <Text style={styles.centreTitle}>
-          {state === 'auth' ? 'Not signed in' : "Couldn't load the invoice"}
-        </Text>
-        <Text style={styles.centreBody}>
-          {state === 'auth'
-            ? 'Open any other tab and sign in to PJL.'
-            : 'The visit is finished and the invoice exists — it just would not load. Try again, or open it at the desk.'}
-        </Text>
-        <Pressable style={styles.retry} onPress={() => { setState('loading'); load(); }}>
-          <Text style={styles.retryText}>Try again</Text>
-        </Pressable>
+      <View style={styles.screen}>
+        {exitBar}
+        <View style={styles.centre}>
+          <Text style={styles.centreTitle}>
+            {state === 'auth' ? 'Not signed in' : "Couldn't load the invoice"}
+          </Text>
+          <Text style={styles.centreBody}>
+            {state === 'auth'
+              ? 'Go back, open the Messages tab, and sign in to PJL.'
+              : 'The visit is finished and the invoice exists — it just would not load. Try again, or open it at the desk.'}
+          </Text>
+          <Pressable style={styles.retry} onPress={() => { setState('loading'); load(); }}>
+            <Text style={styles.retryText}>Try again</Text>
+          </Pressable>
+        </View>
       </View>
     );
   }
@@ -231,7 +251,7 @@ export default function InvoiceScreen({ invoiceId, onBack }) {
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <Pressable onPress={onBack} hitSlop={12} style={styles.back}>
-        <Text style={styles.backText}>‹ Today</Text>
+        <Text style={styles.backText}>‹ Back</Text>
       </Pressable>
 
       <Text style={styles.done}>Closing complete</Text>
@@ -432,6 +452,7 @@ const styles = StyleSheet.create({
   retryText: { color: '#fff', fontSize: 16, fontWeight: '600' },
 
   back: { paddingVertical: 4 },
+  exitBar: { paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.sm },
   backText: { ...type.body, color: colors.brand, fontWeight: '600' },
   done: { ...type.hero },
   id: { ...type.caption, fontVariant: ['tabular-nums'] },

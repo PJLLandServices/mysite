@@ -41,16 +41,15 @@ import MonthSheet from './MonthSheet';
 import { colors, radius, space, type } from '../theme';
 import { runningVersionLabel } from '../updates';
 import { Pill } from '../ui';
-import { canStartWorkOrder, existingWorkOrderFor, routeForRow, rowKey } from '../workorder-routing';
-
-const WO_STATUS_LABELS = {
-  draft: 'Draft',
-  scheduled: 'Scheduled',
-  on_site: 'On site',
-  in_progress: 'In progress',
-  completed: 'Completed',
-  cancelled: 'Cancelled',
-};
+import {
+  canStartWorkOrder,
+  existingWorkOrderFor,
+  isFinishedRow,
+  routeForRow,
+  rowKey,
+  workOrderActionLabel,
+  workOrderStatusLabel,
+} from '../workorder-routing';
 
 const timeOf = (iso) => {
   if (!iso) return '';
@@ -69,7 +68,7 @@ const longDate = (ymd) => {
   return d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 };
 
-export default function TodayScreen({ onOpenWorkOrder, onOpenTapToPay }) {
+export default function TodayScreen({ onOpenWorkOrder, onOpenTapToPay, refreshToken = 0 }) {
   const [payload, setPayload] = useState(null);
   // The server's idea of today, learned from the first response rather
   // than assumed from the phone's clock — the schedule belongs to the
@@ -85,6 +84,11 @@ export default function TodayScreen({ onOpenWorkOrder, onOpenTapToPay }) {
   // so a tap on a card and a tap on a pin move the same one thing.
   const [focusKey, setFocusKey] = useState(null);
   const scrollRef = useRef(null);
+  // Mirrors `selected` for the refresh effect below, which must reload the
+  // day you are LOOKING at without re-running every time you change days
+  // (goTo already fetches those).
+  const selectedRef = useRef(null);
+  selectedRef.current = selected;
   // Where each card starts, learned from its own layout. A tapped pin has
   // to scroll to its card, and the card is the only thing that knows
   // where it ended up once the week strip and the map are above it.
@@ -106,6 +110,17 @@ export default function TodayScreen({ onOpenWorkOrder, onOpenTapToPay }) {
   }, []);
 
   useEffect(() => { load(null); }, [load]);
+
+  // Reload when a job closes. The card's label ("Start WO" / "Resume" /
+  // "View WO"), the finished dimming and the map's ticks all read
+  // `payload`, which was fetched BEFORE the job opened — so without this
+  // you finish a closing, dismiss it, and the card still says "Resume".
+  // Skips the first render, which `load(null)` above already covers.
+  const firstRefresh = useRef(true);
+  useEffect(() => {
+    if (firstRefresh.current) { firstRefresh.current = false; return; }
+    load(selectedRef.current || null);
+  }, [refreshToken, load]);
 
   // Any day other than the first one is fetched explicitly.
   const goTo = useCallback((date) => {
@@ -218,7 +233,7 @@ export default function TodayScreen({ onOpenWorkOrder, onOpenTapToPay }) {
       <View style={styles.centre}>
         <Text style={styles.centreTitle}>Not signed in</Text>
         <Text style={styles.centreBody}>
-          Open any other tab and sign in to PJL — this screen shares that session.
+          Open the Messages tab and sign in to PJL — this screen shares that session.
         </Text>
         <Pressable onPress={() => load(selected)} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable>
       </View>
@@ -392,12 +407,16 @@ export default function TodayScreen({ onOpenWorkOrder, onOpenTapToPay }) {
         // property. A row with neither can only be navigated to.
         const canStartWo = canStartWorkOrder(b);
         const notified = !!b.onRouteNotifiedAt;
-        const woLabel = b.workOrder ? (WO_STATUS_LABELS[b.workOrder.status] || b.workOrder.status) : null;
+        const woLabel = b.workOrder ? workOrderStatusLabel(b.workOrder.status) : null;
         const key = rowKey(b);
         return (
           <Pressable
             key={key}
-            style={[styles.card, focusKey === key && styles.cardFocused]}
+            style={[
+              styles.card,
+              focusKey === key && styles.cardFocused,
+              isFinishedRow(b) && styles.cardDone,
+            ]}
             onPress={() => setFocusKey(key)}
             onLayout={(event) => { cardTops.current.set(key, event.nativeEvent.layout.y); }}
             accessibilityLabel={`Show ${b.address || 'this stop'} on the map`}
@@ -434,7 +453,7 @@ export default function TodayScreen({ onOpenWorkOrder, onOpenTapToPay }) {
                 disabled={notified || busy || !b.leadId}
               />
               <Action
-                label={b.workOrder ? 'Open WO' : 'Start WO'}
+                label={workOrderActionLabel(b)}
                 onPress={() => handleWorkOrder(b)}
                 disabled={busy || !canStartWo}
                 primary
@@ -541,6 +560,15 @@ const styles = StyleSheet.create({
   // focus would shove every card below it down two pixels at the exact
   // moment the screen is scrolling to one.
   cardFocused: { borderColor: colors.brand },
+  // Done, not gone. It was one of the stops; it is what the map ticks.
+  // Was `opacity: 0.72` on the whole Pressable — which dimmed the live
+  // primary button inside it, so a finished stop read as DISABLED while
+  // remaining fully tappable, and sat only 0.27 away from the app's real
+  // disabled treatment (0.45). It also washed out cardFocused's brand
+  // border on precisely the card you had just tapped. A recessive ground
+  // and a softened border say "done" without lying about what is tappable;
+  // the Completed pill and the map's tick carry the rest.
+  cardDone: { backgroundColor: colors.ground, borderColor: colors.separator },
   card: {
     backgroundColor: colors.card,
     borderRadius: radius.card,

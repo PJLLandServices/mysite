@@ -8738,23 +8738,42 @@ async function handleApi(req, res, pathname) {
       // told apart by `code`, not by which key is present.
       const deleteUrl = new URL(req.url, baseUrlFromReq(req));
       const purgeTrashed = deleteUrl.searchParams.get("purgeTrashed") === "1";
-      const result = await customers.hardDelete(id, { purgeTrashed });
+      // ?cascade=1 — delete the linked records WITH the customer instead
+      // of refusing (test-data cleanup, Patrick 2026-09-08). Opt-in and
+      // admin-only: it destroys what the plain delete protects. A
+      // QuickBooks-pushed or part-paid invoice still refuses it.
+      const cascade = deleteUrl.searchParams.get("cascade") === "1";
+      const cascadeSession = await requireAdmin(req);
+      if (cascade && !cascadeSession) {
+        return sendJson(res, 403, { ok: false, errors: ["Admin role required to delete a customer and its records."] });
+      }
+      const result = await customers.hardDelete(id, {
+        purgeTrashed,
+        cascade,
+        by: await actorLabel(req),
+        reason: "Deleted with customer " + id + " (cascade)."
+      });
       if (!result.ok) {
-        if (result.code === "linked" || result.code === "trashed_only") {
+        if (result.code === "linked" || result.code === "trashed_only" || result.code === "protected") {
           return sendJson(res, 409, {
             ok: false,
             code: result.code,
             error: result.error,
             ...(result.references ? { references: result.references } : {}),
-            ...(result.trashed ? { trashed: result.trashed } : {})
+            ...(result.trashed ? { trashed: result.trashed } : {}),
+            ...(result.protectedInvoices ? { protectedInvoices: result.protectedInvoices } : {})
           });
         }
         return sendJson(res, 404, { ok: false, error: result.error });
       }
+      if (result.cascaded) {
+        console.log("[customer-delete] cascade removed", JSON.stringify(result.cascaded), "with", id);
+      }
       return sendJson(res, 200, {
         ok: true,
         deleted: { id: result.customer.id, name: result.customer.name },
-        purged: result.purged || {}
+        purged: result.purged || {},
+        ...(result.cascaded ? { cascaded: result.cascaded } : {})
       });
     }
   }
@@ -13536,11 +13555,36 @@ async function handleApi(req, res, pathname) {
     const url = new URL(req.url, baseUrlFromReq(req));
     const status = url.searchParams.get("status");
     const woId = url.searchParams.get("woId");
+    // The field app's property screen asks for one address's invoices.
+    // Filtered here, the same way `status` and `woId` already are, rather
+    // than making the phone download every invoice in the business to
+    // show three. Absent, the response is byte-for-byte what it was.
+    const propertyId = url.searchParams.get("propertyId");
     let all = await invoices.list();
     if (status) all = all.filter((i) => i.status === status);
     if (woId) all = all.filter((i) => i.woId === woId);
+    // `!== null` rather than truthiness: `?propertyId=` (empty) is falsy,
+    // so it skipped the filter and answered with EVERY invoice in the
+    // business on a screen asking for one address's. Absent is still
+    // `null` from searchParams.get, so an unfiltered call is unchanged.
+    if (propertyId !== null) all = all.filter((i) => i.propertyId === propertyId);
     all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    return sendJson(res, 200, { ok: true, invoices: all });
+    // The two BEARER tokens never leave the server on this route.
+    //
+    // `paymentToken` is a permanent, unexpiring, unrevocable password to
+    // an invoice: whoever holds it can read the customer's name, email,
+    // address and every line item, and can pay it. `portalToken` is the
+    // same for the read-only portal view. Both were being handed to every
+    // caller of this list — which made the admin gate on
+    // POST /api/invoices/:id/payment-link (added 2026-09-06, precisely so
+    // a tech could not mint payment links) decorative: the list handed a
+    // tech the token for every invoice, and the pay URL is a fixed
+    // template. The public /pay route already strips paymentToken from
+    // its own response for exactly this reason; the staff list was doing
+    // the opposite. Nothing on any client reads either field — every use
+    // is server-side (notify-customer, invoice-pdf, the portal routes).
+    const safe = all.map(({ paymentToken, portalToken, ...rest }) => rest);
+    return sendJson(res, 200, { ok: true, invoices: safe });
   }
 
   // ---- Invoice payment ledger ----------------------------------------

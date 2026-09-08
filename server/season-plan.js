@@ -1713,9 +1713,10 @@
     rest.textContent = "This table covers planned route days AND days real bookings have started "
       + "(marked 'Booked day'). Every other open day in the season has nothing on it yet, so it "
       + "is offered to this address as normal. The corridor is also elastic: when the calendar "
-      + "leaves an address short of cheap days, availability widens the drive allowance step by "
-      + "step (out to the 90-minute service edge) — amber rows show where a day would open up. "
-      + "We never turn a customer away while any route day has room.";
+      + "leaves an address short of cheap days, availability widens the drive allowance a step at "
+      + "a time, but never past 40 minutes of extra driving — amber rows show where a day would "
+      + "open up. Past that we stop offering days and the customer joins the open bucket, so a "
+      + "far address never buys a date with an hour of detour.";
     out.appendChild(rest);
 
     const table = document.createElement("table");

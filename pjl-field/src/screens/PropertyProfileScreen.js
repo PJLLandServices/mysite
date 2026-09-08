@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Image,
   Linking,
   Pressable,
@@ -17,18 +18,100 @@ import {
   Text,
   View,
 } from 'react-native';
-import { AuthRequiredError, getProperty } from '../api';
+import {
+  AuthRequiredError,
+  getProperty,
+  invoicePaymentLink,
+  isOverdue,
+  listPropertyInvoices,
+  listPropertyWorkOrders,
+} from '../api';
 import { absolute, avatarLetter, money, shortDate, telHref, zoneMeta, zoneName } from '../format';
 import { colors, radius, space, type } from '../theme';
 import { ActionButton, Card, NoteRow, Pill, Row, SectionHeader } from '../ui';
+import { isOpenWorkOrder, workOrderStatusLabel, workOrderStatusTone } from '../workorder-routing';
 
 // deferredIssues statuses that still want a tech's attention. resolved
 // and dismissed are done; everything else is live work.
 const LIVE_ISSUE_STATUSES = new Set(['open', 'pre_authorized', 'in_progress', 're_deferred']);
 
+// The server's real invoice statuses. There is no `overdue` among them —
+// see isOverdue() in api.js for why that is derived rather than stored.
+const INVOICE_STATUS_LABELS = {
+  draft: 'Draft',
+  sent: 'Sent',
+  partially_paid: 'Part paid',
+  paid: 'Paid',
+  void: 'Void',
+};
 
-export default function PropertyProfileScreen({ propertyId, onBack }) {
+
+// Which invoice the "text a link" button acts on. NAMED on the button
+// rather than left to guess: an address with three unpaid invoices and
+// an unlabelled button is a way to send someone the wrong balance.
+// Oldest first, because that is the one that has been waiting.
+// ISSUED invoices only. A `draft` is a document the office has never
+// reviewed or sent — and it is often the OLDEST owing record on an
+// address, so an exclude-void-and-paid filter selected exactly the wrong
+// one. `ensurePaymentToken` has no status guard, so the button would have
+// minted a live, payable link for a stale draft with wrong line items and
+// texted a customer a dollar amount nobody had approved. Delivery of an
+// unissued invoice is not this button's to invent.
+// How many rows each section shows before it says so. Both sections used
+// to truncate silently while Service history, twelve lines below, printed
+// "Showing the 12 most recent of 47." — the pattern was already in the
+// file and was not followed.
+const INVOICE_ROWS = 8;
+const WO_ROWS = 10;
+
+// `fall_closing` → `Fall closing`. The raw replace produced "fall closing"
+// and "spring opening" in lowercase beside sentence-case pills and
+// sentence-case labels everywhere else on the screen.
+const titleCase = (value) => {
+  const words = String(value || '').replace(/_/g, ' ').trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : '';
+};
+
+const CHASEABLE = new Set(['sent', 'partially_paid']);
+
+export function invoiceToChase(invoices) {
+  const owing = (invoices || []).filter(
+    (i) => i && CHASEABLE.has(i.status) && Number(i.balanceDue) > 0,
+  );
+  if (!owing.length) return null;
+  // Both sides validated. The old version checked only the candidate, so
+  // an unparseable or missing createdAt on the SEED — which the server
+  // sorts newest-first, making it the newest invoice — left `b` as NaN,
+  // every comparison false, and the newest invoice winning permanently.
+  // That is the "texted someone the wrong balance" failure this function
+  // exists to prevent.
+  // A MISSING date is not 1970. `new Date(undefined || 0)` is the epoch,
+  // which is finite and older than everything, so an invoice with no
+  // createdAt would win "oldest" every time. Unknown sorts last: we chase
+  // what we can date, and an undateable invoice is never picked over one
+  // we can.
+  const at = (inv) => {
+    if (!inv?.createdAt) return Infinity;
+    const t = new Date(inv.createdAt).getTime();
+    return Number.isFinite(t) ? t : Infinity;
+  };
+  return owing.reduce((oldest, i) => (at(i) < at(oldest) ? i : oldest));
+}
+
+
+export default function PropertyProfileScreen({ propertyId, onBack, onOpenWorkOrder, onOpenInvoice }) {
   const [property, setProperty] = useState(null);
+  // Both loaded beside the property rather than inside it: the property
+  // record carries neither, and the two departing tabs are what these
+  // sections replace.
+  const [workOrders, setWorkOrders] = useState([]);
+  const [invoices, setInvoices] = useState([]);
+  // Whether the two side loads FAILED, as distinct from coming back
+  // empty. Standing at an address deciding whether to chase a balance,
+  // "this address has no invoices" and "the request failed" must not look
+  // identical — and they did, because both catches set [].
+  const [sideError, setSideError] = useState({ workOrders: false, invoices: false });
+  const [linking, setLinking] = useState(false);
   const [state, setState] = useState('loading'); // loading | ready | auth | error
   const [error, setError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -38,6 +121,19 @@ export default function PropertyProfileScreen({ propertyId, onBack }) {
       const p = await getProperty(propertyId);
       setProperty(p);
       setState('ready');
+      // After the property, and never blocking it. A property that
+      // renders without its paperwork is useful; one that refuses to
+      // render because the invoice list 500'd is not.
+      // On failure KEEP whatever is already on screen and say so. Blanking
+      // to [] meant a pull-to-refresh over a flaky link silently erased
+      // invoices and work orders that had loaded a moment earlier, with
+      // the sections gated on .length so they vanished entirely.
+      listPropertyWorkOrders(propertyId)
+        .then((rows) => { setWorkOrders(rows); setSideError((e) => ({ ...e, workOrders: false })); })
+        .catch(() => setSideError((e) => ({ ...e, workOrders: true })));
+      listPropertyInvoices(propertyId)
+        .then((rows) => { setInvoices(rows); setSideError((e) => ({ ...e, invoices: false })); })
+        .catch(() => setSideError((e) => ({ ...e, invoices: true })));
     } catch (err) {
       if (err instanceof AuthRequiredError) setState('auth');
       else { setError(err?.message || 'Could not load this property.'); setState('error'); }
@@ -63,7 +159,7 @@ export default function PropertyProfileScreen({ propertyId, onBack }) {
     return (
       <View style={styles.centre}>
         <Text style={styles.centreTitle}>Not signed in</Text>
-        <Text style={styles.centreBody}>Open the Today tab and sign in — this screen shares that session.</Text>
+        <Text style={styles.centreBody}>Open the Messages tab and sign in — this screen shares that session.</Text>
       </View>
     );
   }
@@ -102,6 +198,72 @@ export default function PropertyProfileScreen({ propertyId, onBack }) {
       ? `${p.coords.lat},${p.coords.lng}`
       : p.address || '';
     if (dest) open(`http://maps.apple.com/?daddr=${encodeURIComponent(dest)}`);
+  };
+
+  // Mint the link, then hand the message to Apple's Messages app with it
+  // already written. Two reasons it is a handoff rather than a send:
+  // the server's payment-link route MINTS a url and sends nothing, and a
+  // text that leaves from your own number is a text the customer can
+  // reply to. You see it before it goes.
+  // Ordered by when the visit IS, not by when the record was last touched.
+  // GET /api/work-orders sorts by updatedAt for the admin index, so a 2019
+  // visit edited last week sorted above this spring's, and the row cap
+  // could hide recent work behind old work.
+  const openWorkOrders = workOrders
+    .filter((wo) => wo && isOpenWorkOrder(wo))
+    .slice()
+    .sort((a, b) =>
+      new Date(b.scheduledFor || b.createdAt || 0) - new Date(a.scheduledFor || a.createdAt || 0));
+
+  const chase = invoiceToChase(invoices);
+  // The number on the INVOICE, not the number on the property. On a
+  // managed commercial site the payer is the billing entity (a condo
+  // corporation, c/o its management company) while the property's
+  // siteContacts are "the president / super / whoever PJL calls to
+  // schedule" — texting them a payment link shows a third party the
+  // billing name, billing email and full line-item pricing, and lets them
+  // pay it. The property phone stays as the last resort for the ordinary
+  // residential case where they are the same person.
+  const chaseTo = String(
+    (chase && (chase.billTo?.phone || chase.customerPhone)) || phone || '',
+  ).replace(/[^\d+]/g, '');
+
+  const textPaymentLink = async () => {
+    if (!chase || !chaseTo) return;
+    setLinking(true);
+    try {
+      const url = await invoicePaymentLink(chase.id);
+      if (!url) throw new Error('No payment link came back.');
+      const amount = money(chase.balanceDue, chase.currency);
+      const body = `Here's the payment link for ${chase.id}`
+        + `${amount ? ` (${amount})` : ''}`
+        + `: ${url}`;
+      // `?body=` is the separator Android requires in BOTH forms and iOS
+      // accepts in both; `&body=` after a number is iOS-only. One form
+      // that works on both beats two that each work on one. Get this
+      // wrong and the text opens empty, which reads as the link silently
+      // not attaching.
+      const opened = await Linking.openURL(`sms:${chaseTo}?body=${encodeURIComponent(body)}`)
+        .then(() => true)
+        .catch(() => false);
+      // The mint failure was surfaced and the OPEN failure was not, because
+      // `open()` swallows its rejection — so a handset that refuses the URL
+      // produced no alert and no state change, and the button just stopped
+      // saying "Getting the link…".
+      if (!opened) {
+        Alert.alert(
+          "Couldn't open Messages",
+          'The payment link is minted — open the invoice and send it by email instead.',
+        );
+      }
+    } catch (err) {
+      Alert.alert(
+        "Couldn't get a payment link",
+        err?.message || 'Open the invoice and send it by email instead.',
+      );
+    } finally {
+      setLinking(false);
+    }
   };
 
   const systemKnown = sys.controllerBrand || sys.controllerLocation || sys.shutoffLocation ||
@@ -267,6 +429,103 @@ export default function PropertyProfileScreen({ propertyId, onBack }) {
         </>
       ) : null}
 
+      {invoices.length ? (
+        <>
+          <SectionHeader>Invoices</SectionHeader>
+          <Card>
+            {invoices.slice(0, INVOICE_ROWS).map((inv, i, arr) => {
+              const overdue = isOverdue(inv);
+              const tone = overdue ? 'danger' : inv.status === 'paid' ? 'brand' : 'neutral';
+              const label = overdue ? 'Overdue' : (INVOICE_STATUS_LABELS[inv.status] || inv.status);
+              // Number() for the same reason isOverdue and invoiceToChase
+              // coerce: three call sites hedging on the type and one not
+              // is how a string balance renders a blank amount.
+              const owing = Number(inv.balanceDue);
+              const shown = Number.isFinite(owing) && owing > 0 ? owing : inv.total;
+              return (
+                <Row
+                  key={inv.id}
+                  label={[inv.id, shortDate(inv.createdAt)].filter(Boolean).join(' · ')}
+                  right={
+                    <>
+                      {/* "—" not an empty gap: money() returns null for a
+                          missing amount, and {null} rendered a bare pill
+                          with a hole beside it. */}
+                      <Text style={styles.amount}>{money(shown, inv.currency) ?? '—'}</Text>
+                      <Pill tone={tone}>{label}</Pill>
+                    </>
+                  }
+                  onPress={onOpenInvoice ? () => onOpenInvoice(inv.id) : undefined}
+                  last={i === arr.length - 1}
+                />
+              );
+            })}
+          </Card>
+          {sideError.invoices ? (
+            <Text style={styles.more}>Couldn't refresh invoices — showing what was last loaded.</Text>
+          ) : null}
+          {invoices.length > INVOICE_ROWS ? (
+            <Text style={styles.more}>
+              Showing the {INVOICE_ROWS} most recent of {invoices.length}.
+            </Text>
+          ) : null}
+          {chase && chaseTo ? (
+            <Pressable
+              onPress={textPaymentLink}
+              disabled={linking}
+              style={({ pressed }) => [styles.payBtn, (pressed || linking) && styles.payBtnPressed]}
+              accessibilityRole="button"
+            >
+              {/* Two lines rather than one long em-dashed string: the
+                  invoice id is which invoice this acts on, not part of
+                  the verb, and "Text a payment link — I-2026-0042" ran
+                  the full width of a 320pt screen. */}
+              <Text style={styles.payBtnText}>
+                {linking ? 'Getting the link…' : 'Text a payment link'}
+              </Text>
+              {!linking ? <Text style={styles.payBtnSub}>{chase.id}</Text> : null}
+            </Pressable>
+          ) : null}
+        </>
+      ) : null}
+
+      {sideError.invoices && !invoices.length ? (
+        <Text style={styles.more}>Couldn't load this address's invoices. Pull down to try again.</Text>
+      ) : null}
+
+      {/* OPEN work only. A completed work order and its service record are
+          the SAME VISIT, and this section sat directly above Service
+          history — so scrolling a property you read every visit twice,
+          back to back, in two formats. Each section has one job now:
+          this one is what is still owed here, the one below is what has
+          been done here. */}
+      {openWorkOrders.length ? (
+        <>
+          <SectionHeader>Open work orders</SectionHeader>
+          <Card>
+            {openWorkOrders.slice(0, WO_ROWS).map((wo, i, arr) => (
+              <Row
+                key={wo.id}
+                label={[titleCase(wo.type) || 'Visit', shortDate(wo.scheduledFor || wo.createdAt)]
+                  .filter(Boolean).join(' · ')}
+                right={<Pill tone={workOrderStatusTone(wo.status)}>{workOrderStatusLabel(wo.status)}</Pill>}
+                onPress={onOpenWorkOrder ? () => onOpenWorkOrder(wo) : undefined}
+                last={i === arr.length - 1}
+              />
+            ))}
+          </Card>
+          {openWorkOrders.length > WO_ROWS ? (
+            <Text style={styles.more}>
+              Showing the {WO_ROWS} most recent of {openWorkOrders.length}.
+            </Text>
+          ) : null}
+        </>
+      ) : null}
+
+      {sideError.workOrders && !openWorkOrders.length ? (
+        <Text style={styles.more}>Couldn't load this address's work orders. Pull down to try again.</Text>
+      ) : null}
+
       {visits.length ? (
         <>
           <SectionHeader>Service history</SectionHeader>
@@ -315,7 +574,7 @@ const styles = StyleSheet.create({
     paddingVertical: space.md,
     borderRadius: radius.card,
   },
-  retryText: { color: '#fff', fontWeight: '600' },
+  retryText: { color: colors.onBrand, fontWeight: '600' },
   back: { paddingHorizontal: space.lg, paddingTop: space.md },
   backText: { color: colors.brand, fontSize: 17 },
   hero: { alignItems: 'center', paddingTop: space.lg, paddingHorizontal: space.xl },
@@ -344,6 +603,24 @@ const styles = StyleSheet.create({
   issueNotes: { ...type.body, lineHeight: 21 },
   issueMeta: { ...type.caption },
   link: { color: colors.brand },
+  // Tabular figures so a column of balances lines up on the decimal.
+  amount: { ...type.body, fontVariant: ['tabular-nums'] },
+  payBtn: {
+    backgroundColor: colors.brand,
+    borderRadius: radius.card,
+    marginHorizontal: space.md,
+    marginTop: space.sm,
+    // Horizontal padding was missing entirely, so at 320pt the label ran
+    // edge to edge inside a 296pt button.
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  payBtnPressed: { opacity: 0.7 },
+  payBtnText: { color: colors.onBrand, ...type.body, fontWeight: '600' },
+  payBtnSub: { color: colors.onBrand, ...type.caption, opacity: 0.85, marginTop: 2 },
   missing: { color: colors.textFaint },
   zone: {
     paddingHorizontal: space.lg,
