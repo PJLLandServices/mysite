@@ -34,11 +34,30 @@
 // ZONES ARE TWO ANSWERS. The service key carries the BAND, which sets
 // the price and the visit length; the count is what is actually in the
 // ground. Patrick asked for both.
+//
+// THE SERVICE QUESTIONS DO NOT SCROLL, which is why they have a slide of
+// their own. Stacked on the end of the address slide they were a wall of
+// six buttons and then eight more — "I currently have to scroll through".
+// They are SELECTS now: one row per question, the choices in a sheet, so
+// the tallest that slide ever gets is three rows and it fits on an SE. It
+// is the same sheet the Properties tab opens for its town filter, shared
+// rather than copied.
+//
+// The details slide is still a form and still scrolls — five contact
+// fields and a notes box do not fit a phone, and hiding half of them
+// behind a disclosure would be worse. What it does NOT do is ask anything
+// twice: everything the earlier slides settled is one summary card at the
+// top, not a second set of questions.
+//
+// THE KEYBOARD GOES AWAY the moment an address is settled. It used to sit
+// over the confirmation and the button under it, so the next tap was
+// really two.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -59,9 +78,49 @@ import {
   suggestAddresses,
   verifyAddress,
 } from '../api';
+import {
+  bandForZones,
+  bandLabel,
+  bandsFor,
+  catalogNotes,
+  categoriesInOrder,
+  FOLLOW_UPS,
+  ISSUE_COUNTS,
+  issueCountLabel,
+  serviceKeyFor,
+  zoneOptionsFor,
+} from '../booking-catalog';
 import { colors, radius, space, type } from '../theme';
+import { PickerSheet, SelectRow } from '../ui';
 
-export const STEPS = ['address', 'when', 'who'];
+export const STEPS = ['address', 'service', 'when', 'who'];
+
+// The steps you are allowed to swipe to: as far forward as you have
+// actually GOT, not as far as you happen to be standing.
+//
+// It used to read off the current step, which meant swiping back from the
+// day list collapsed the pager to one page and stranded you there — you
+// had to re-tap your way forward through work you had already done. The
+// furthest point reached is the honest boundary: everything behind it has
+// been answered, and nothing in front of it exists yet.
+export function reachedSteps(furthest) {
+  const i = STEPS.indexOf(furthest);
+  return STEPS.slice(0, i < 0 ? 1 : i + 1);
+}
+
+// The later of two steps, so going back never shortens the pager.
+export function laterStep(a, b) {
+  return STEPS.indexOf(b) > STEPS.indexOf(a) ? b : a;
+}
+
+// What the zone answer says out loud. 'unsure' is a real value the server
+// takes — it must not read as the number zero, or as nothing asked.
+export function zoneCountLabel(value) {
+  const v = String(value || '').trim();
+  if (!v) return '';
+  if (v === 'unsure') return 'Not sure yet';
+  return `${v} zone${v === '1' ? '' : 's'}`;
+}
 
 // Existing customers, matched on the same string that is fetching
 // address suggestions. Address and name both, because a tech may have
@@ -97,9 +156,16 @@ export function seasonNote(service) {
   if (!s || s.open) return null;
   const when = (iso) => {
     const d = new Date(`${iso}T12:00:00`);
-    return Number.isNaN(d.getTime())
-      ? iso
-      : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    if (Number.isNaN(d.getTime())) return iso;
+    // THE YEAR, when it is not this one. Read on 8 September, a bare
+    // "Dates from Mar 1" is next March — and reads like this March, which
+    // has been and gone.
+    const sameYear = d.getFullYear() === new Date().getFullYear();
+    return d.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      ...(sameYear ? {} : { year: 'numeric' }),
+    });
   };
   // DATES, not permission. Fall 2026's window is Sep 28 - Oct 30: booking
   // has been open since Sep 1, and what starts on the 28th is the range
@@ -117,35 +183,6 @@ export function seasonNote(service) {
 export function seasonShut(service) {
   const s = service?.season;
   return Boolean(s) && s.bookable === false;
-}
-
-// In-season services first. A closed one still SHOWS — Patrick books work
-// nobody else can, and hiding it would be its own kind of lying — but it
-// is out of the way and it says why.
-export function bookableList(services) {
-  const rows = Object.entries(services || {})
-    .filter(([, s]) => s && s.bookable)
-    .map(([key, s]) => ({ key, ...s }));
-  // Only a season that has ENDED goes to the bottom. One whose dates
-  // start later is ordinary bookable work and stays where it is.
-  return rows.sort((a, b) => (seasonShut(a) ? 1 : 0) - (seasonShut(b) ? 1 : 0));
-}
-
-// Which band holds this many zones, so typing 7 moves the service to
-// 7-8 rather than leaving a contradiction on screen.
-export function serviceForZones(list, family, zoneCount) {
-  const n = Number(zoneCount);
-  if (!family || !Number.isFinite(n) || n < 1) return null;
-  const band = (key) => {
-    const m = String(key).match(/_(\d+)z$/);
-    return m ? Number(m[1]) : (/_16plus$/.test(key) ? Infinity : null);
-  };
-  return list
-    .filter((s) => s.family === family && s.category !== 'commercial')
-    .map((s) => ({ ...s, top: band(s.key) }))
-    .filter((s) => s.top !== null)
-    .sort((a, b) => a.top - b.top)
-    .find((s) => n <= s.top) || null;
 }
 
 // The text Patrick sends. Names the EXACT day and time that was just
@@ -214,6 +251,13 @@ const clean = (v) => String(v || '').trim();
 
 export default function BookScreen({ onSignIn }) {
   const [step, setStep] = useState('address');
+  // The furthest slide reached, which is what the pager's extent is drawn
+  // from — see reachedSteps.
+  const [furthest, setFurthest] = useState('address');
+  // Which question's sheet is open, or null. One at a time, so one sheet.
+  const [sheet, setSheet] = useState(null);
+  const pagerRef = useRef(null);
+  const [pageWidth, setPageWidth] = useState(0);
   const [state, setState] = useState('loading');
   const [error, setError] = useState('');
 
@@ -229,6 +273,11 @@ export default function BookScreen({ onSignIn }) {
   const [picked, setPicked] = useState(null);      // an existing property, or null
   const [verified, setVerified] = useState(null);  // { address, minutes }
   const [checking, setChecking] = useState(false);
+
+  // --- The cascade: category, then whatever it asks ---------------------
+  const [category, setCategory] = useState(null);
+  const [band, setBand] = useState(null);
+  const [issueCount, setIssueCount] = useState('');
 
   // --- Slide 2: the day ------------------------------------------------
   const [serviceKey, setServiceKey] = useState('');
@@ -260,6 +309,18 @@ export default function BookScreen({ onSignIn }) {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  // Keep the pager on the step. Setting `step` from a button scrolls the
+  // pages across; a swipe sets `step` and lands here as a no-op.
+  useEffect(() => {
+    if (!pageWidth) return;
+    const i = STEPS.indexOf(step);
+    if (i >= 0) pagerRef.current?.scrollTo({ x: i * pageWidth, animated: true });
+  }, [step, pageWidth]);
+
+  // Which address the screen is on. Bumped whenever one is abandoned, so a
+  // reply for the old one is dropped rather than applied to the new.
+  const gen = useRef(0);
+
   // Suggestions, debounced. Every keystroke is a paid Google call, so
   // this waits for the typing to stop rather than racing it.
   const seq = useRef(0);
@@ -286,12 +347,118 @@ export default function BookScreen({ onSignIn }) {
     return () => clearTimeout(t);
   }, [typed, verified]);
 
-  const list = useMemo(() => bookableList(services), [services]);
+  const categories = useMemo(() => categoriesInOrder(services), [services]);
+  const bands = useMemo(
+    () => (category?.family ? bandsFor(services, category.family) : []),
+    [services, category],
+  );
+  const chosenServiceKey = serviceKeyFor(category, band);
+
+  // The steps that actually exist yet. You cannot swipe to a day list
+  // before an address has been checked, because there isn't one.
+  const reached = reachedSteps(furthest);
+  // Enough to go and get days for. The exact zone count is wanted but not
+  // required — "unsure" is a value the server understands, and holding the
+  // calendar back over it would stall a live phone call.
+  const readyForDays = Boolean(
+    chosenServiceKey && (category?.follow !== 'zones' || band),
+  );
   const noneBookable = days.length > 0 && !days.some((d) => d.slots?.length);
   const onFile = useMemo(() => matchProperties(properties, typed), [properties, typed]);
   const service = serviceKey ? { key: serviceKey, ...(services[serviceKey] || {}) } : null;
 
+  // Forward. `furthest` only ever grows here, so swiping back and forward
+  // again costs nothing.
+  const go = (next) => {
+    setStep(next);
+    setFurthest((f) => laterStep(f, next));
+  };
+
+  // Backward, and destructively: everything after this step is no longer
+  // true, so the slides holding it are taken away rather than left showing
+  // a stale day list. Both values move together — a step further along
+  // than the pager's extent would scroll to a page that isn't there.
+  const clamp = (to) => {
+    setStep(to);
+    setFurthest(to);
+  };
+
+  // Typing over a settled address invalidates it — and with it the days
+  // and the slot that were chosen for it. Left standing, the day slide
+  // would be reading `verified.address` for an address that no longer
+  // exists.
+  const unsettle = () => {
+    // Abandon anything in flight for the address being replaced, BEFORE
+    // the early return below — a verify started a second ago is exactly
+    // the case where nothing is settled yet, and it is the one that must
+    // not be allowed to land. Otherwise typing over an address mid-check
+    // brings the old one back as confirmed.
+    gen.current += 1;
+    // Called on every keystroke. With nothing settled there is nothing to
+    // take away, and `setDays([])` would hand React a new array each time.
+    if (!verified && !picked && !slot && !days.length && furthest === 'address') return;
+    setVerified(null);
+    setPicked(null);
+    setDays([]);
+    setSlot(null);
+    clamp('address');
+  };
+
   // Everything we already know about a customer already in the book.
+  // Clears the box AND everything it settled. A confirmed address left
+  // sitting under a half-typed new one is how the wrong property gets
+  // booked.
+  const clearAddress = () => {
+    setTyped('');
+    setSuggestions([]);
+    setSuggestDegraded(null);
+    setCategory(null);
+    setBand(null);
+    setServiceKey('');
+    setZoneCount('');
+    setIssueCount('');
+    // AND THE CONTACT. Taking a property from the book fills in its
+    // customer's name, phone and email; clearing the box and typing a
+    // different address left them sitting there, and the next booking went
+    // out under the last customer's name and number.
+    setFirstName('');
+    setLastName('');
+    setPhone('');
+    setAltPhone('');
+    setEmail('');
+    unsettle();
+  };
+
+  const pickCategory = (c) => {
+    setCategory(c);
+    setBand(null);
+    setDays([]);
+    setSlot(null);
+    // The days were fetched for the old service. Changing it takes that
+    // slide away rather than leaving days nobody asked for.
+    clamp('service');
+    // A category with one service needs no follow-up to know what it is.
+    setServiceKey(c.family ? '' : c.serviceKey || '');
+    // Zones already on file pick the band for you.
+    if (c.family && clean(zoneCount)) {
+      const b = bandForZones(bandsFor(services, c.family), zoneCount, { commercial: false });
+      if (b) setBand(b);
+    }
+  };
+
+  const pickBand = (b) => {
+    setBand(b);
+    setServiceKey(b.key);
+    setDays([]);
+    setSlot(null);
+    clamp('service');
+    // A count the new band cannot hold is exactly the contradiction the
+    // two answers exist to avoid — "7" under "1-4 zones". Drop it and ask
+    // again, scoped to the band just chosen.
+    const n = Number(zoneCount);
+    if (Number.isFinite(n) && !zoneOptionsFor(bands, b).includes(n)) setZoneCount('');
+  };
+
   const takeProperty = (p) => {
     setPicked(p);
     const parts = clean(p.customerName).split(/\s+/).filter(Boolean);
@@ -309,10 +476,18 @@ export default function BookScreen({ onSignIn }) {
   const settleAddress = async (text) => {
     const value = clean(text);
     if (!value) return;
+    // THE KEYBOARD GOES AWAY. It sat over the ✓ and the button beneath it,
+    // so picking an address and then getting on with the call was two taps
+    // and a guess at where the button had gone.
+    Keyboard.dismiss();
+    const mine = ++gen.current;
     setChecking(true);
     setSuggestions([]);
     try {
       const res = await verifyAddress(value);
+      // Cleared or retyped while the server was thinking: the address this
+      // answers for is gone, and putting it back would undo the ✕.
+      if (mine !== gen.current) return;
       const formatted = res.address || value;
       setVerified({ address: formatted, minutes: res.minutes ?? null });
       setTyped(formatted);
@@ -326,14 +501,22 @@ export default function BookScreen({ onSignIn }) {
 
   const showDays = async (key) => {
     if (!verified || !key) return;
+    const mine = gen.current;
     setServiceKey(key);
     setLoadingDays(true);
     setDays([]);
     setSlot(null);
+    // The slot just went. Asking for days again after swiping back left
+    // the details slide mounted and reading `slot.dayLabel` off null,
+    // which is a crash in the middle of a phone call.
+    clamp('service');
     try {
       const res = await bookingAvailability({ service: key, address: verified.address });
+      // Same race: swiping back and editing the address mid-request would
+      // otherwise drop the user onto a day slide with nothing on it.
+      if (mine !== gen.current) return;
       setDays(res.days || []);
-      setStep('when');
+      go('when');
     } catch (err) {
       if (err instanceof AuthRequiredError) setState('auth');
       else Alert.alert("Couldn't load available days", err?.message || 'Try again.');
@@ -342,11 +525,28 @@ export default function BookScreen({ onSignIn }) {
     }
   };
 
+  // A count of 7 moves the band to 7-8 rather than leaving a contradiction
+  // on screen. The sheet is already scoped to the band, so this is the
+  // path that matters: a zone count read off an existing property's file.
+  // Stays inside the property type already chosen — a commercial site does
+  // not get snapped into a residential tier.
   const onZones = (value) => {
-    const digits = value.replace(/[^\d]/g, '').slice(0, 2);
-    setZoneCount(digits);
-    const better = serviceForZones(list, service?.family, digits);
-    if (better && better.key !== serviceKey) setServiceKey(better.key);
+    setZoneCount(String(value));
+    if (!category?.family) return;
+    const better = bandForZones(bands, value, { commercial: Boolean(band?.commercial) });
+    if (better && better.key !== band?.key) {
+      setBand(better);
+      setServiceKey(better.key);
+      // CHANGING THE BAND CHANGES WHAT IS BEING BOOKED, and every other
+      // handler that does that says so. Left out, a count that moved the
+      // band re-pointed the booking at a longer, differently-priced
+      // service while the day list and the chosen slot stayed alive — so
+      // "Book it" would send the new service against a slot sized for the
+      // old one.
+      setDays([]);
+      setSlot(null);
+      clamp('service');
+    }
   };
 
   const confirm = async () => {
@@ -367,7 +567,12 @@ export default function BookScreen({ onSignIn }) {
           altPhone: clean(altPhone),
           email: clean(email),
           address: verified.address,
-          notes: clean(notes),
+          // What the category asked for, written where a tech will read
+          // it. The server has no field for "how many issues" — rather
+          // than invent one, it is recorded in the notes and labelled.
+          notes: [catalogNotes({ category, zoneCount, issueCount }), clean(notes)]
+            .filter(Boolean).join(' ')
+            .trim(),
         },
       });
       setDone({
@@ -408,10 +613,60 @@ export default function BookScreen({ onSignIn }) {
   const reset = () => {
     setDone(null); setPicked(null); setTyped(''); setSuggestions([]); setVerified(null);
     setServiceKey(''); setDays([]); setSlot(null);
+    setCategory(null); setBand(null); setIssueCount('');
     setFirstName(''); setLastName(''); setPhone(''); setAltPhone('');
     setEmail(''); setZoneCount(''); setNotes('');
-    setStep('address');
+    setSheet(null);
+    clamp('address');
   };
+
+  // EVERY QUESTION IS A SHEET, and there is one of them. Each entry says
+  // what it asks, what is currently answered, and what the answer does —
+  // so the slide itself holds rows, not lists.
+  const sheets = {
+    service: {
+      title: 'What are we booking?',
+      selectedKey: category?.key || null,
+      // Season in progress first, and the note says why the others are
+      // where they are. A spent season still shows: Patrick books work
+      // the public flow will not, and hiding it is its own lie.
+      options: categories.map((c) => ({ key: c.key, label: c.label, note: seasonNote(c) })),
+      onSelect: (o) => {
+        const c = categories.find((x) => x.key === o.key);
+        if (c) pickCategory(c);
+      },
+    },
+    band: {
+      title: FOLLOW_UPS.zones,
+      selectedKey: band?.key || null,
+      // Residential and commercial under their own headers, because their
+      // tiers genuinely differ — one 5-8 where residential splits 5-6.
+      options: bands.map((b) => ({
+        key: b.key,
+        label: bandLabel(bands, b),
+        group: b.commercial ? 'Commercial' : 'Residential',
+      })),
+      onSelect: (o) => {
+        const b = bands.find((x) => x.key === o.key);
+        if (b) pickBand(b);
+      },
+    },
+    zones: {
+      title: 'How many zones exactly?',
+      selectedKey: clean(zoneCount) || null,
+      options: zoneOptionsFor(bands, band)
+        .map((n) => ({ key: String(n), label: zoneCountLabel(String(n)) }))
+        .concat([{ key: 'unsure', label: 'Not sure yet', note: 'The tech counts them on site' }]),
+      onSelect: (o) => onZones(o.key),
+    },
+    issues: {
+      title: FOLLOW_UPS.issues,
+      selectedKey: clean(issueCount) || null,
+      options: ISSUE_COUNTS.map((v) => ({ key: v, label: issueCountLabel(v) })),
+      onSelect: (o) => setIssueCount(o.key),
+    },
+  };
+  const asking = sheet ? sheets[sheet] : null;
 
   if (state === 'loading') {
     return <View style={styles.centre}><ActivityIndicator color={colors.brand} /></View>;
@@ -488,20 +743,67 @@ export default function BookScreen({ onSignIn }) {
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+      {/* Swipe sideways between the three steps. The pager and the `step`
+          state drive each other: a swipe reports which page settled, and
+          setting `step` scrolls to it — so the back links, the pips and
+          the gesture never disagree about where you are. Pages you have
+          not reached are not swipeable to; `pageWidth` is measured rather
+          than assumed so it is right on any handset. */}
+      <ScrollView
+        ref={pagerRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        scrollEnabled={reached.length > 1}
+        onLayout={({ nativeEvent }) => setPageWidth(nativeEvent.layout.width)}
+        onMomentumScrollEnd={({ nativeEvent: e }) => {
+          if (!pageWidth) return;
+          const i = Math.round(e.contentOffset.x / pageWidth);
+          const next = reached[Math.max(0, Math.min(reached.length - 1, i))];
+          if (next && next !== step) setStep(next);
+        }}
+      >
+      {reached.map((pageKey) => (
+      <ScrollView
+        key={pageKey}
+        style={pageWidth ? { width: pageWidth } : undefined}
+        contentContainerStyle={styles.body}
+        keyboardShouldPersistTaps="handled"
+      >
+      {(() => { const step = pageKey; return (<>
         {/* ---- 1. The address ------------------------------------------ */}
         {step === 'address' ? (
           <>
             <Text style={styles.lead}>What's the address?</Text>
-            <TextInput
-              style={styles.input}
-              value={typed}
-              onChangeText={(v) => { setTyped(v); setVerified(null); setPicked(null); }}
-              placeholder="Start typing…"
-              placeholderTextColor={colors.textFaint}
-              autoCorrect={false}
-              autoCapitalize="words"
-            />
+            <View style={styles.addressField}>
+              <TextInput
+                style={[styles.input, styles.addressInput]}
+                value={typed}
+                onChangeText={(v) => { setTyped(v); unsettle(); }}
+                placeholder="Start typing…"
+                placeholderTextColor={colors.textFaint}
+                autoCorrect={false}
+                autoCapitalize="words"
+                returnKeyType="search"
+                onSubmitEditing={() => settleAddress(typed)}
+              />
+              {/* Clears the box outright, so the next address starts from
+                  nothing — and clears what the last one settled with it,
+                  because a confirmed address under a half-typed new one is
+                  how the wrong property gets booked. */}
+              {clean(typed) ? (
+                <Pressable
+                  onPress={clearAddress}
+                  hitSlop={12}
+                  style={styles.clearBtn}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear the address"
+                >
+                  <Text style={styles.clearGlyph}>✕</Text>
+                </Pressable>
+              ) : null}
+            </View>
 
             {/* On file first — an address PJL already services announces
                 itself before anything new is created. */}
@@ -564,33 +866,15 @@ export default function BookScreen({ onSignIn }) {
                   </Text>
                 ) : null}
 
-                <Text style={styles.lead}>What are we booking?</Text>
-                {list.map((s) => {
-                  const note = seasonNote(s);
-                  const shut = seasonShut(s);
-                  return (
-                    <Pressable
-                      key={s.key}
-                      onPress={() => showDays(s.key)}
-                      disabled={loadingDays}
-                      style={({ pressed }) => [
-                        styles.option,
-                        shut && styles.optionShut,
-                        pressed && styles.pressed,
-                      ]}
-                    >
-                      <Text style={[styles.optionText, shut && styles.optionTextShut]}>
-                        {s.label}
-                      </Text>
-                      {/* Still tappable — Patrick can book work the public
-                          flow will not — but it says what will happen. */}
-                      <Text style={note ? styles.optionShutNote : styles.optionMeta}>
-                        {note || s.displayMinutes || `${s.minutes} min`}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-                {loadingDays ? <ActivityIndicator color={colors.brand} /> : null}
+                {/* And that is the whole slide. The service questions used
+                    to hang off the bottom of it, which made the one slide
+                    that must stay short the longest one in the app. */}
+                <Pressable
+                  onPress={() => go('service')}
+                  style={({ pressed }) => [styles.primary, pressed && styles.pressed]}
+                >
+                  <Text style={styles.primaryText}>What are we booking?</Text>
+                </Pressable>
               </>
             ) : (
               !checking && clean(typed) ? (
@@ -602,11 +886,100 @@ export default function BookScreen({ onSignIn }) {
           </>
         ) : null}
 
-        {/* ---- 2. The day ---------------------------------------------- */}
-        {step === 'when' ? (
+        {/* ---- 2. What we are booking ---------------------------------- */}
+        {step === 'service' ? (
           <>
             <Pressable onPress={() => setStep('address')} hitSlop={10}>
-              <Text style={styles.back}>‹ Address</Text>
+              <Text style={styles.back} numberOfLines={1}>
+                ‹ {verified?.address || 'Address'}
+              </Text>
+            </Pressable>
+            <Text style={styles.lead}>What are we booking?</Text>
+
+            {/* THREE ROWS AT MOST, and usually one. Nineteen services
+                became six questions; six questions became a row with the
+                answer written in it. */}
+            <SelectRow
+              label="Service"
+              value={category?.label}
+              note={category ? seasonNote(category) : null}
+              placeholder="Choose"
+              onPress={() => setSheet('service')}
+            />
+
+            {category?.follow === 'zones' ? (
+              <SelectRow
+                label="Zones"
+                value={band
+                  ? `${bandLabel(bands, band)} · ${band.commercial ? 'commercial' : 'residential'}`
+                  : ''}
+                placeholder="Which band?"
+                onPress={() => setSheet('band')}
+              />
+            ) : null}
+
+            {/* The exact number, once the band is chosen. Two answers
+                because they are two things: the band is what we are
+                selling, the count is what is in the ground. */}
+            {(category?.follow === 'zones' && band) || category?.follow === 'zones_only' ? (
+              <SelectRow
+                label="Exactly how many"
+                value={zoneCountLabel(zoneCount)}
+                placeholder="Count in the ground"
+                onPress={() => setSheet('zones')}
+              />
+            ) : null}
+
+            {category?.follow === 'issues' ? (
+              <SelectRow
+                label="Issues"
+                value={issueCountLabel(issueCount)}
+                placeholder="How many are we looking at?"
+                onPress={() => setSheet('issues')}
+              />
+            ) : null}
+
+            {/* Said here rather than discovered as an empty calendar. A
+                season whose dates are spent is still bookable by Patrick —
+                "after that i have control to open up further bookings" —
+                so this is a warning, not a block. */}
+            {category && seasonShut(category) ? (
+              <Text style={styles.hint}>
+                Those dates are past for this year, so the day list will come back
+                empty until the season is opened up.
+              </Text>
+            ) : null}
+
+            {/* Present from the start, lit when the questions are answered
+                — so the slide never changes height as it is filled in. */}
+            <Pressable
+              onPress={() => showDays(chosenServiceKey)}
+              disabled={!readyForDays || loadingDays}
+              style={({ pressed }) => [
+                styles.primary,
+                (!readyForDays || loadingDays) && styles.off,
+                pressed && styles.pressed,
+              ]}
+            >
+              {loadingDays
+                ? <ActivityIndicator color={colors.onBrand} size="small" />
+                : <Text style={styles.primaryText}>See available days</Text>}
+            </Pressable>
+          </>
+        ) : null}
+
+        {/* ---- 3. The day ---------------------------------------------- */}
+        {step === 'when' && verified ? (
+          <>
+            <Pressable onPress={() => setStep('service')} hitSlop={10}>
+              <Text style={styles.back} numberOfLines={1}>
+                {/* The CATEGORY, not the service. `service.label` is the
+                    server's own — "Fall winterization (5-6 zones
+                    residential)" — which is the whole line and then some
+                    on a back link. */}
+                ‹ {[category?.label, zoneCountLabel(zoneCount)].filter(Boolean).join(' · ')
+                   || 'What we are booking'}
+              </Text>
             </Pressable>
             <Text style={styles.lead}>Read them the days</Text>
             <Text style={styles.hint}>{verified.address} · {service?.label}</Text>
@@ -673,7 +1046,7 @@ export default function BookScreen({ onSignIn }) {
             ) : null}
 
             {slot ? (
-              <Pressable onPress={() => setStep('who')} style={styles.primary}>
+              <Pressable onPress={() => go('who')} style={styles.primary}>
                 <Text style={styles.primaryText}>
                   {slot.openBucket
                     ? "They'll take first available"
@@ -684,19 +1057,29 @@ export default function BookScreen({ onSignIn }) {
           </>
         ) : null}
 
-        {/* ---- 3. Who they are ----------------------------------------- */}
-        {step === 'who' ? (
+        {/* ---- 4. Who they are ----------------------------------------- */}
+        {step === 'who' && slot && verified ? (
           <>
             <Pressable onPress={() => setStep('when')} hitSlop={10}>
               <Text style={styles.back}>‹ Days</Text>
             </Pressable>
 
+            {/* Everything the earlier slides settled, in one card. It was
+                three separate read-only rows below the form, which is
+                150pt of a slide that is already long — and they read as
+                more fields to fill in rather than as a summary. */}
             <View style={styles.holding}>
               <Text style={styles.holdingWhen}>
                 {slot.openBucket ? 'First available' : `${slot.dayLabel}, ${slot.timeLabel}`}
               </Text>
               {/* Auto-populated from slide one — asked once, not twice. */}
               <Text style={styles.holdingWhere}>{verified.address}</Text>
+              <Text style={styles.holdingWhat}>
+                <Text style={styles.holdingKey}>Booking</Text>
+                {`  ${service?.label || '—'}`}
+                {clean(zoneCount) ? ` · ${zoneCountLabel(zoneCount)}` : ''}
+                {clean(issueCount) ? ` · ${issueCountLabel(issueCount)}` : ''}
+              </Text>
             </View>
 
             <Text style={styles.lead}>Their details</Text>
@@ -714,17 +1097,6 @@ export default function BookScreen({ onSignIn }) {
               optional
             />
             <Field label="Email" value={email} onChange={setEmail} keyboardType="email-address" />
-
-            <Text style={styles.lead}>Zones</Text>
-            <Text style={styles.hint}>
-              How many are actually in the ground. The band sets the price and the
-              visit length.
-            </Text>
-            <Field label="Zone count" value={zoneCount} onChange={onZones} keyboardType="number-pad" />
-            <View style={styles.band}>
-              <Text style={styles.bandLabel}>Band</Text>
-              <Text style={styles.bandValue}>{service?.label || '—'}</Text>
-            </View>
 
             <Text style={styles.lead}>Notes</Text>
             <TextInput
@@ -747,7 +1119,25 @@ export default function BookScreen({ onSignIn }) {
             </Pressable>
           </>
         ) : null}
+      </>); })()}
       </ScrollView>
+      ))}
+      </ScrollView>
+
+      {/* The app's one sheet. Which question it is asking is the only
+          thing that changes — so there is a single modal on this screen
+          rather than one per question, and they cannot open at once. */}
+      <PickerSheet
+        visible={Boolean(asking)}
+        title={asking?.title}
+        options={asking?.options || []}
+        selectedKey={asking?.selectedKey ?? null}
+        onClose={() => setSheet(null)}
+        onSelect={(item) => {
+          asking?.onSelect(item);
+          setSheet(null);
+        }}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -810,6 +1200,16 @@ const styles = StyleSheet.create({
   ok: { ...type.body, color: colors.brand, fontWeight: '600', paddingVertical: space.sm },
   checking: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingVertical: space.md },
 
+  addressField: { justifyContent: 'center' },
+  // Room for the ✕ so a long address never runs underneath it.
+  addressInput: { paddingRight: 44 },
+  clearBtn: {
+    position: 'absolute', right: 6,
+    width: 32, height: 32, borderRadius: radius.pill,
+    backgroundColor: colors.separator,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  clearGlyph: { color: colors.card, fontSize: 15, fontWeight: '700', lineHeight: 17 },
   input: {
     ...type.body, backgroundColor: colors.card, borderRadius: radius.card,
     borderWidth: StyleSheet.hairlineWidth, borderColor: colors.separator,
@@ -831,33 +1231,14 @@ const styles = StyleSheet.create({
   onFileWho: { ...type.caption, color: colors.brand, fontWeight: '600' },
   onFileNote: { ...type.caption, color: colors.brand, lineHeight: 19 },
 
-  option: {
-    backgroundColor: colors.card, borderRadius: radius.card,
-    paddingHorizontal: space.md, paddingVertical: space.md,
-    minHeight: 48, justifyContent: 'center', gap: 2,
-    borderWidth: 1, borderColor: colors.separator,
-  },
-  optionText: { ...type.body },
-  optionMeta: { ...type.caption },
-  optionShut: { backgroundColor: colors.ground, borderColor: colors.separator },
-  optionTextShut: { color: colors.textMuted },
-  optionShutNote: { ...type.caption, color: colors.warning, fontWeight: '600' },
-
   holding: {
     backgroundColor: colors.brandTint, borderRadius: radius.card,
     padding: space.md, gap: 2, marginBottom: space.sm,
   },
   holdingWhen: { ...type.body, fontWeight: '700', color: colors.brand },
   holdingWhere: { ...type.caption, color: colors.text },
-
-  band: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    gap: space.md, backgroundColor: colors.card, borderRadius: radius.card,
-    paddingHorizontal: space.md, paddingVertical: space.md, minHeight: 48,
-    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.separator,
-  },
-  bandLabel: { ...type.caption, color: colors.textMuted, fontWeight: '600' },
-  bandValue: { ...type.body, flexShrink: 1, textAlign: 'right' },
+  holdingWhat: { ...type.caption, color: colors.text, marginTop: 2, lineHeight: 18 },
+  holdingKey: { ...type.caption, color: colors.brand, fontWeight: '700' },
 
   emptyDays: {
     backgroundColor: colors.warningTint, borderRadius: radius.card,

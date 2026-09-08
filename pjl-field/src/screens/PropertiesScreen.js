@@ -20,8 +20,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  FlatList,
-  Modal,
   Pressable,
   RefreshControl,
   SectionList,
@@ -33,8 +31,11 @@ import {
 import { AuthRequiredError, listProperties } from '../api';
 import { townOf } from '../format';
 import { colors, radius, space, type } from '../theme';
+import { PickerSheet } from '../ui';
 
 const UNKNOWN_TOWN = 'Other';
+// The 'no filter' row needs a key of its own — `null` is not one.
+const ALL_TOWNS = '__all';
 
 export default function PropertiesScreen({ onOpen, onSignIn }) {
   const [all, setAll] = useState([]);
@@ -200,41 +201,21 @@ export default function PropertiesScreen({ onOpen, onSignIn }) {
         )}
       />
 
-      <Modal
+      {/* The app's one sheet, shared with the Book tab's selects — so the
+          two pickers cannot drift apart on the next change to either. */}
+      <PickerSheet
         visible={pickerOpen}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setPickerOpen(false)}
-      >
-        <Pressable style={styles.backdrop} onPress={() => setPickerOpen(false)} />
-        <View style={styles.sheet}>
-          <View style={styles.grabber} />
-          <Text style={styles.sheetTitle}>Filter by town</Text>
-          <FlatList
-            data={[{ key: '__all', name: null, label: 'All towns', count: decorated.length }]
-              .concat(towns.map((t) => ({ key: t.name, name: t.name, label: t.name, count: t.count })))}
-            keyExtractor={(item) => item.key}
-            style={styles.sheetList}
-            renderItem={({ item }) => {
-              const selected = town === item.name;
-              return (
-                <Pressable
-                  onPress={() => { setTown(item.name); setPickerOpen(false); }}
-                  style={({ pressed }) => [styles.sheetRow, pressed && styles.rowPressed]}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected }}
-                >
-                  <Text style={[styles.sheetRowText, selected && styles.sheetRowSelected]} numberOfLines={1}>
-                    {item.label}
-                  </Text>
-                  <Text style={styles.sheetRowCount}>{item.count}</Text>
-                  <Text style={[styles.check, !selected && styles.checkHidden]}>✓</Text>
-                </Pressable>
-              );
-            }}
-          />
-        </View>
-      </Modal>
+        title="Filter by town"
+        selectedKey={town || ALL_TOWNS}
+        onClose={() => setPickerOpen(false)}
+        onSelect={(item) => {
+          setTown(item.key === ALL_TOWNS ? null : item.key);
+          setPickerOpen(false);
+        }}
+        options={[{ key: ALL_TOWNS, label: 'All towns', meta: decorated.length }].concat(
+          towns.map((t) => ({ key: t.name, label: t.name, meta: t.count })),
+        )}
+      />
     </View>
   );
 }
@@ -277,37 +258,6 @@ const styles = StyleSheet.create({
   pickerCount: { ...type.caption, fontVariant: ['tabular-nums'] },
   pickerChevron: { color: colors.textFaint, fontSize: 15, marginTop: -3 },
 
-  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(17,24,28,0.35)' },
-  sheet: {
-    position: 'absolute',
-    left: 0, right: 0, bottom: 0,
-    maxHeight: '72%',
-    backgroundColor: colors.card,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    paddingBottom: space.xl,
-  },
-  grabber: {
-    width: 38, height: 4, borderRadius: 2,
-    backgroundColor: colors.separator,
-    alignSelf: 'center', marginTop: space.sm, marginBottom: space.md,
-  },
-  sheetTitle: { ...type.section, marginHorizontal: space.lg, marginBottom: space.sm },
-  sheetList: { flexGrow: 0 },
-  sheetRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.md,
-    paddingHorizontal: space.lg,
-    paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.separator,
-  },
-  sheetRowText: { flex: 1, ...type.body },
-  sheetRowSelected: { color: colors.brand, fontWeight: '600' },
-  sheetRowCount: { ...type.caption, fontVariant: ['tabular-nums'] },
-  check: { color: colors.brand, fontSize: 16, width: 16, textAlign: 'center' },
-  checkHidden: { opacity: 0 },
 
   sectionHeader: {
     flexDirection: 'row',
