@@ -110,15 +110,22 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.separator,
   },
   rowLast: { borderBottomWidth: 0 },
-  rowLabel: { ...type.label, flexShrink: 0 },
+  // The label SHRINKS. It used to be flexShrink: 0, which on a 320pt
+  // screen meant "I-2026-0042 · Sep 8, 2026" (~170pt) held its full width
+  // and the amount and its pill had ~78pt to fit ~148pt of content — so
+  // the pill wrapped to a second line or was clipped by Card's
+  // overflow: 'hidden'. At 390pt it landed on the boundary, so SOME rows
+  // in one list wrapped and others did not, which is the worst of the
+  // outcomes. It truncates with an ellipsis instead; the id is at the
+  // front, which is the part that identifies the row.
+  rowLabel: { ...type.label, flexShrink: 1, flexGrow: 0 },
   rowValue: { ...type.body, flex: 1, textAlign: 'right' },
   rowRight: {
-    flex: 1,
+    flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',
     gap: space.sm,
-    flexWrap: 'wrap',
   },
   pressed: { backgroundColor: colors.ground },
   note: {

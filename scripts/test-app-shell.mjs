@@ -88,7 +88,10 @@ check('every tab in the bar is rendered by the shell', () => {
 // ---- The open job, executed ---------------------------------------------
 
 check('a work order becomes the right kind of job', () => {
-  const jobForWorkOrder = lift(APP, 'jobForWorkOrder', "const JOB = { CLOSING: 'closing', WEB: 'web', INVOICE: 'invoice' };");
+  const jobForWorkOrder = lift(APP, 'jobForWorkOrder', `
+    const JOB = { CLOSING: 'closing', WEB: 'web', INVOICE: 'invoice' };
+    const TERMINAL_WO = new Set(['completed', 'cancelled', 'no_show']);
+  `);
 
   assert.deepEqual(
     jobForWorkOrder({ id: 'WO-1', type: 'fall_closing' }),
@@ -109,9 +112,30 @@ check('a work order becomes the right kind of job', () => {
   assert.equal(jobForWorkOrder(null), null);
   assert.equal(jobForWorkOrder({}), null);
   assert.equal(jobForWorkOrder({ type: 'fall_closing' }), null, 'a work order with no id became a job');
+
+  // A FINISHED visit is a record, not a form. Routing on `type` alone sent
+  // a completed fall closing back into the editable closing flow, where
+  // every stage is interactive and every tap calls patchWorkOrder — which
+  // the server refuses on a locked work order, so each tap produced
+  // "Didn't save" and a red "Not saved" header on a visit that was
+  // finished and invoiced.
+  for (const status of ['completed', 'cancelled', 'no_show']) {
+    assert.deepEqual(
+      jobForWorkOrder({ id: 'WO-9', type: 'fall_closing', status }),
+      { kind: 'web', url: '/admin/work-order/WO-9/tech', title: 'Work order' },
+      `a ${status} fall closing reopened the editable closing flow`,
+    );
+  }
+  // A live one still does open it.
+  for (const status of [undefined, 'scheduled', 'on_site', 'in_progress']) {
+    assert.equal(
+      jobForWorkOrder({ id: 'WO-8', type: 'fall_closing', status })?.kind, 'closing',
+      `a ${status} fall closing stopped opening the native flow`,
+    );
+  }
 });
 
-check('the overlay covers the tab bar and every arm has a way out', () => {
+check('the overlay covers the tab bar and every arm is handed a way out', () => {
   // Mid-closing, switching tabs is not a thing anyone means to do — and
   // the old arrangement let you, then hid where the closing went.
   assert.match(APP, /overlay: \{ \.\.\.StyleSheet\.absoluteFillObject/, 'the job overlay no longer covers the shell');
@@ -122,6 +146,109 @@ check('the overlay covers the tab bar and every arm has a way out', () => {
     assert.ok(block.includes(exit), `an overlay arm has no exit: expected ${exit}`);
   }
   assert.match(block, /<WebScreen path=\{job\.url\} onBack=\{closeJob\}/, 'the web work order is a trap door again');
+  // Covering the tab bar visually is only half of it. Without this a
+  // VoiceOver user swipes straight past the job into the tab bar
+  // underneath and switches tabs invisibly.
+  assert.match(block, /accessibilityViewIsModal/, 'the overlay is not modal to VoiceOver');
+  // The overlay has no tab bar, so it must not reuse the shell's white
+  // safe area — that painted a white band across the bottom inset under
+  // screens that draw on `ground`.
+  assert.match(APP, /overlaySafe: \{[^}]*backgroundColor: colors\.ground/, 'the overlay reuses the shell safe area');
+});
+
+// The assertion above proves App.js HANDS each arm an exit. That is not
+// the same as the arm rendering one, and the difference shipped three
+// screens you could only leave by force-quitting: ClosingScreen,
+// InvoiceScreen and WebScreen each rendered their exit only in the ready
+// state, and returned early — with no bar — while loading, while
+// unauthenticated, and on error. `getJson` has no timeout, so "while
+// loading" is not a moment, it is potentially forever.
+//
+// So this walks the AST of each overlay screen, finds every `return` in
+// the component's own top-level body, and asserts the returned JSX
+// mentions that screen's exit prop. Reading the source for the prop NAME
+// is what let this through the first time.
+function exitlessReturns(rel, componentName, exitProp) {
+  const requireFromApp = createRequire(path.join(ROOT, 'pjl-field/package.json'));
+  const babel = requireFromApp('@babel/core');
+  const ast = babel.parse(read(rel), {
+    filename: rel,
+    parserOpts: { sourceType: 'module', plugins: ['jsx'] },
+    babelrc: false,
+    configFile: false,
+    ast: true,
+    code: false,
+  });
+
+  let body = null;
+  for (const node of ast.program.body) {
+    const fn = node.type === 'ExportDefaultDeclaration' ? node.declaration : null;
+    if (fn && fn.type === 'FunctionDeclaration' && fn.id?.name === componentName) body = fn.body.body;
+  }
+  assert.ok(body, `${componentName} is no longer the default export of ${rel}`);
+
+  // A screen may hoist its bar into a local (`const exitBar = (...)`) and
+  // render `{exitBar}`. That is still an exit, so resolve those names —
+  // any top-level const in the component whose initialiser mentions the
+  // exit prop counts as carrying it.
+  const source = read(rel);
+  const carriers = new Set([exitProp]);
+  for (const stmt of body) {
+    if (stmt.type !== 'VariableDeclaration') continue;
+    for (const d of stmt.declarations) {
+      if (!d.init || d.id.type !== 'Identifier') continue;
+      if (source.slice(d.init.start, d.init.end).includes(exitProp)) carriers.add(d.id.name);
+    }
+  }
+
+  const offenders = [];
+  for (const stmt of body) {
+    // Top-level `return` and the `return` inside a top-level `if` — the
+    // early-exit shapes. A return nested inside a callback is not a
+    // render path.
+    const returns = [];
+    if (stmt.type === 'ReturnStatement') returns.push(stmt);
+    if (stmt.type === 'IfStatement') {
+      for (const branch of [stmt.consequent, stmt.alternate]) {
+        if (!branch) continue;
+        if (branch.type === 'ReturnStatement') returns.push(branch);
+        if (branch.type === 'BlockStatement') {
+          for (const inner of branch.body) if (inner.type === 'ReturnStatement') returns.push(inner);
+        }
+      }
+    }
+    for (const ret of returns) {
+      if (!ret.argument) continue;
+      const src = source.slice(ret.argument.start, ret.argument.end);
+      if (![...carriers].some((name) => src.includes(name))) offenders.push(`line ${ret.loc.start.line}`);
+    }
+  }
+  return offenders;
+}
+
+check('every overlay screen renders its exit in EVERY state, not just the ready one', () => {
+  for (const [rel, component, exitProp] of [
+    ['pjl-field/src/screens/ClosingScreen.js', 'ClosingScreen', 'onExit'],
+    ['pjl-field/src/screens/InvoiceScreen.js', 'InvoiceScreen', 'onBack'],
+  ]) {
+    const offenders = exitlessReturns(rel, component, exitProp);
+    assert.deepEqual(
+      offenders, [],
+      `${component} returns without ${exitProp} at ${offenders.join(', ')} — that state is a force-quit`,
+    );
+  }
+});
+
+check("WebScreen's error panel cannot cover its own Back bar", () => {
+  const WEB = read('pjl-field/src/screens/WebScreen.js');
+  // The panel is absoluteFillObject. While it was a sibling of the bar it
+  // filled the whole screen INCLUDING the bar, opaquely and without
+  // pointerEvents="none" — so it hid `‹ Back` and swallowed its taps. It
+  // has to be confined to its own region below the bar.
+  assert.match(WEB, /viewport: \{ flex: 1 \}/, 'the WebView has no region of its own');
+  const barAt = WEB.indexOf('styles.bar');
+  const viewportAt = WEB.indexOf('styles.viewport');
+  assert.ok(barAt > 0 && viewportAt > barAt, 'the overlays are not below the bar');
 });
 
 // ---- The card's three states --------------------------------------------
@@ -132,14 +259,24 @@ check('the day card names all three states of a work order', () => {
     const isOpenWorkOrder = (wo) => !!wo && !TERMINAL.includes(wo.status);
   `);
   assert.equal(label({}), 'Start WO', 'a row with no work order');
-  assert.equal(label({ workOrder: { status: 'draft' } }), 'Resume');
-  assert.equal(label({ workOrder: { status: 'on_site' } }), 'Resume');
-  assert.equal(label({ workOrder: { status: 'in_progress' } }), 'Resume');
+  assert.equal(label({ workOrder: { status: 'draft' } }), 'Resume WO');
+  assert.equal(label({ workOrder: { status: 'on_site' } }), 'Resume WO');
+  assert.equal(label({ workOrder: { status: 'in_progress' } }), 'Resume WO');
   // The old bug: these three read "Open WO", the same as a live one.
-  assert.equal(label({ workOrder: { status: 'completed' } }), 'Open work order');
-  assert.equal(label({ workOrder: { status: 'cancelled' } }), 'Open work order');
-  assert.equal(label({ workOrder: { status: 'no_show' } }), 'Open work order');
+  assert.equal(label({ workOrder: { status: 'completed' } }), 'View WO');
+  assert.equal(label({ workOrder: { status: 'cancelled' } }), 'View WO');
+  assert.equal(label({ workOrder: { status: 'no_show' } }), 'View WO');
   assert.equal(label(null), 'Start WO');
+
+  // One noun, one register, similar widths. "Start WO" / "Resume" /
+  // "Open work order" mixed an abbreviation, a bare verb and a spelled-out
+  // phrase on one button — and the 132pt variant re-wrapped the card's
+  // action row, so cards in one list came out different heights for a
+  // reason the tech could not see.
+  const labels = ['Start WO', 'Resume WO', 'View WO'];
+  for (const text of labels) assert.ok(text.endsWith(' WO'), `${text} breaks the button's register`);
+  const widths = labels.map((t) => t.length);
+  assert.ok(Math.max(...widths) - Math.min(...widths) <= 3, 'the labels are too different in width');
 });
 
 check('the screen uses that label rather than its own', () => {
@@ -147,9 +284,19 @@ check('the screen uses that label rather than its own', () => {
   assert.ok(!/label=\{b\.workOrder \? 'Open WO'/.test(TODAY), 'the two-state label survived');
 });
 
-check('a finished job is dimmed, not deleted', () => {
+check('a finished job reads as done, not as disabled', () => {
   assert.match(TODAY, /isFinishedRow\(b\) && styles\.cardDone/, 'a completed job no longer reads as done');
-  assert.match(TODAY, /cardDone: \{ opacity: 0\.72 \}/);
+  // NOT opacity. Dimming the whole Pressable dimmed the live primary
+  // button inside it, so a finished stop read as disabled while remaining
+  // fully tappable — and it sat 0.27 from the app's real disabled
+  // treatment (0.45), which is not a distance you can judge at arm's
+  // length in daylight. It also washed out cardFocused's brand border on
+  // exactly the card you had just tapped.
+  const at = TODAY.indexOf('cardDone: {');
+  assert.ok(at > 0, 'cardDone is gone');
+  const block = TODAY.slice(at, TODAY.indexOf('\n', at));
+  assert.ok(!/opacity/.test(block), 'a finished card is dimmed again, so it reads as disabled');
+  assert.match(block, /backgroundColor/, 'a finished card has no treatment at all');
 });
 
 // ---- Overdue is derived, in exactly one place ---------------------------
@@ -201,8 +348,9 @@ check('the status labels match the statuses the server can actually send', () =>
 
 // ---- Which invoice gets chased ------------------------------------------
 
-check('the payment link names one invoice, and it is the oldest owing', () => {
-  const invoiceToChase = lift(PROPERTY, 'invoiceToChase');
+check('the payment link names one invoice, and it is the oldest ISSUED one owing', () => {
+  const invoiceToChase = lift(PROPERTY, 'invoiceToChase',
+    "const CHASEABLE = new Set(['sent', 'partially_paid']);");
   const owing = { id: 'I-2', status: 'sent', balanceDue: 285, createdAt: '2026-04-01T00:00:00Z' };
   const newer = { id: 'I-3', status: 'sent', balanceDue: 100, createdAt: '2026-09-01T00:00:00Z' };
   const paid = { id: 'I-1', status: 'paid', balanceDue: 0, createdAt: '2026-01-01T00:00:00Z' };
@@ -215,20 +363,66 @@ check('the payment link names one invoice, and it is the oldest owing', () => {
   assert.equal(invoiceToChase(null), null);
   // A void invoice with a balance is the trap: it looks owed and is not.
   assert.equal(invoiceToChase([voided]), null, 'a voided invoice was chased');
+
+  // A DRAFT is a document the office has never reviewed or sent — and it
+  // is usually the OLDEST owing record on an address, so an
+  // exclude-void-and-paid filter selected exactly the wrong one.
+  // ensurePaymentToken has no status guard, so this would have minted a
+  // live payable link for a stale draft and texted the customer a figure
+  // nobody approved.
+  const draft = { id: 'I-D', status: 'draft', balanceDue: 400, createdAt: '2025-06-01T00:00:00Z' };
+  assert.equal(invoiceToChase([draft]), null, 'a draft invoice was chased');
+  assert.equal(invoiceToChase([draft, owing])?.id, 'I-2', 'a draft outranked an issued invoice');
+  // partially_paid is still owed and still chaseable.
+  const part = { id: 'I-P', status: 'partially_paid', balanceDue: 50, createdAt: '2026-02-01T00:00:00Z' };
+  assert.equal(invoiceToChase([part, owing])?.id, 'I-P', 'a part-paid invoice is not chaseable');
+
+  // Both sides of the comparison validated. The seed is owing[0], and the
+  // server sorts newest-first — so an unparseable createdAt there left the
+  // comparison NaN, every test false, and the NEWEST invoice winning
+  // permanently. That is the wrong-balance text this function exists to
+  // prevent.
+  const broken = { id: 'I-X', status: 'sent', balanceDue: 10, createdAt: 'not a date' };
+  assert.equal(invoiceToChase([broken, owing])?.id, 'I-2', 'an unparseable date on the seed won');
+  const noDate = { id: 'I-N', status: 'sent', balanceDue: 10 };
+  assert.equal(invoiceToChase([noDate, owing])?.id, 'I-2', 'a missing date on the seed won');
 });
 
 check('the chase button says which invoice it will send', () => {
-  assert.match(PROPERTY, /Text a payment link — \$\{chase\.id\}/,
+  assert.match(PROPERTY, /\{chase\.id\}/,
     'the button no longer names the invoice, so three unpaid invoices become a guess');
+  assert.match(PROPERTY, /Text a payment link/);
+  // No number, no button. It used to key on `chase` alone, so an address
+  // with no phone offered a button that opened nothing.
+  assert.match(PROPERTY, /chase && chaseTo \?/, 'the button renders without a recipient');
 });
 
-check('the payment text is a handoff, not a send', () => {
+check('the payment text is a handoff, not a send, and it reaches the right person', () => {
   // The server's payment-link route MINTS a url and sends nothing. A text
   // that leaves from Apple's Messages leaves from Patrick's own number,
   // which is a number the customer can reply to.
   assert.match(PROPERTY, /invoicePaymentLink\(chase\.id\)/);
-  assert.match(PROPERTY, /sms:\$\{to\}&body=/, 'the message body is not attached to the number');
-  assert.match(PROPERTY, /sms:&body=/, 'no fallback when the property has no phone');
+  // `?body=` is the one separator both platforms accept — `&body=` is
+  // iOS-only, and app.json declares an android target. Get it wrong and
+  // the composer opens empty, which reads as the link not attaching.
+  assert.match(PROPERTY, /sms:\$\{chaseTo\}\?body=/, 'the message body is not attached to the number');
+  assert.ok(!/sms:&body=/.test(PROPERTY), 'the iOS-only `&body=` separator is back');
+  assert.ok(!/sms:\$\{to\}&body=/.test(PROPERTY), 'the iOS-only `&body=` separator is back');
+
+  // The number on the INVOICE first. On a managed commercial site the
+  // payer is the billing entity while the property's siteContacts are the
+  // super — texting them the link shows a third party the billing name,
+  // billing email and full line-item pricing, and lets them pay it.
+  const at = PROPERTY.indexOf('const chaseTo');
+  assert.ok(at > 0, 'the recipient is no longer derived separately');
+  const block = PROPERTY.slice(at, PROPERTY.indexOf(';', at));
+  assert.ok(block.indexOf('billTo') < block.indexOf('|| phone'),
+    "the property's phone outranks the invoice's billing party");
+
+  // An open() that cannot reject cannot surface a failure. The mint
+  // failure was alerted and the OPEN failure was swallowed, so a handset
+  // that refused the URL produced no alert and no state change.
+  assert.match(PROPERTY, /Couldn't open Messages/, 'a failed handoff is silent again');
 });
 
 // ---- The primitive that carries a pill ----------------------------------
@@ -263,23 +457,142 @@ check('the invoice list is still staff-only', () => {
   assert.equal(needsAuth('POST', '/api/invoices/I-2026-0001/payment-link'), 'user');
 });
 
-check('propertyId filters the invoice list, and its absence changes nothing', () => {
+function invoiceListBlock() {
   const at = SERVER.indexOf('pathname === "/api/invoices"');
   assert.ok(at > 0, 'the invoice list route is gone');
-  const block = SERVER.slice(at, at + 1200);
+  return SERVER.slice(at, at + 2600);
+}
+
+check('propertyId filters the invoice list, and its absence changes nothing', () => {
+  const block = invoiceListBlock();
   assert.match(block, /const propertyId = url\.searchParams\.get\("propertyId"\);/);
-  assert.match(block, /if \(propertyId\) all = all\.filter\(\(i\) => i\.propertyId === propertyId\);/);
-  // The guard that makes this additive: no param, no filter. Every
-  // existing caller — the CRM's own invoice page among them — gets the
-  // response it got before.
-  assert.ok(
-    /if \(propertyId\)/.test(block),
-    'the property filter runs unconditionally and would empty the list for every other caller',
-  );
+  // `!== null`, not truthiness. `?propertyId=` (empty string) is falsy, so
+  // the truthy guard SKIPPED the filter and answered with every invoice in
+  // the business on a screen that had asked for one address's — a "this
+  // address has no invoices" list silently becoming the whole ledger.
+  assert.match(block, /if \(propertyId !== null\) all = all\.filter\(\(i\) => i\.propertyId === propertyId\);/);
+  assert.ok(!/if \(propertyId\) all = all\.filter/.test(block), 'the truthy guard is back');
+  // Absent is still `null` from searchParams.get, so an unfiltered call is
+  // unchanged. Every existing caller — the CRM's own invoice page among
+  // them — gets the list it got before.
+  assert.equal(new URL('https://x/api/invoices').searchParams.get('propertyId'), null);
+  assert.equal(new URL('https://x/api/invoices?propertyId=').searchParams.get('propertyId'), '');
   // And it filters the same way the two filters beside it do, rather
   // than introducing a second read path.
   assert.match(block, /if \(status\) all = all\.filter/);
   assert.match(block, /if \(woId\) all = all\.filter/);
+});
+
+check('the invoice list never hands out a bearer payment token', () => {
+  // paymentToken is a permanent, unexpiring, unrevocable password to an
+  // invoice: whoever holds it can read the customer's name, email, address
+  // and every line item, and can PAY it. portalToken is the same for the
+  // read-only view. Handing both to every caller of this list made the
+  // admin gate on POST /api/invoices/:id/payment-link — added on
+  // 2026-09-06 precisely so a tech could not mint payment links —
+  // decorative, because the pay URL is a fixed template around the token.
+  const block = invoiceListBlock();
+  assert.match(block, /const safe = all\.map\(\(\{ paymentToken, portalToken, \.\.\.rest \}\) => rest\);/,
+    'the list is no longer stripping its bearer tokens');
+  assert.match(block, /invoices: safe/, 'the unstripped list is being sent');
+  assert.ok(!/invoices: all \}/.test(block), 'the raw list is being sent again');
+  // Both fields really are on the hydrated record — if they stop being,
+  // this strip is dead code and should be revisited rather than left to
+  // look like protection.
+  const INVOICES_LIB = read('server/lib/invoices.js');
+  assert.match(INVOICES_LIB, /paymentToken: inv\?\.paymentToken \|\| null,/);
+  assert.match(INVOICES_LIB, /portalToken: inv\?\.portalToken \|\| null,/);
+});
+
+check('every work-order status the server can send has a label, in one place', () => {
+  // Two copies of this map lived in TodayScreen and PropertyProfileScreen
+  // and BOTH were missing the same five statuses, so a real work order
+  // rendered a pill reading `awaiting_approval` — lowercase, underscored,
+  // beside sentence-case pills, and too wide for the row.
+  const WO_LIB = read('server/lib/work-orders.js');
+  const order = WO_LIB.match(/const STATUS_ORDER = \[([^\]]+)\]/);
+  assert.ok(order, "the server's STATUS_ORDER moved — the app's labels need revisiting");
+  const terminal = WO_LIB.match(/const STATUS_TERMINAL = new Set\(\[([^\]]+)\]/);
+  assert.ok(terminal, "the server's STATUS_TERMINAL moved");
+  const statuses = [...order[1].matchAll(/"([a-z_]+)"/g), ...terminal[1].matchAll(/"([a-z_]+)"/g)]
+    .map((m) => m[1]);
+  assert.ok(statuses.length >= 9, 'the status list came back suspiciously short');
+
+  const at = ROUTING.indexOf('export const WO_STATUS_LABELS = {');
+  assert.ok(at > 0, 'the shared work-order label map is gone');
+  const block = ROUTING.slice(at, ROUTING.indexOf('};', at));
+  for (const status of statuses) {
+    assert.ok(block.includes(`${status}:`), `no label for the real work-order status ${status}`);
+  }
+  // Exactly one map. Two copies is how five statuses went missing twice.
+  for (const [name, source] of [['TodayScreen', TODAY], ['PropertyProfileScreen', PROPERTY]]) {
+    assert.ok(!/const WO_STATUS_LABELS = \{/.test(source),
+      `${name} grew its own copy of the work-order label map again`);
+  }
+  // A cancelled visit and a completed visit must not wear the same pill.
+  const tone = lift(ROUTING, 'workOrderStatusTone');
+  assert.equal(tone('completed'), 'good');
+  assert.equal(tone('cancelled'), 'danger');
+  assert.equal(tone('no_show'), 'danger');
+  assert.equal(tone('in_progress'), 'warn');
+  assert.notEqual(tone('cancelled'), tone('completed'), 'cancelled and completed look identical');
+});
+
+check('money shows the currency it is handed, and groups its thousands', () => {
+  // `export const money = (n, currency) => {...}` — an arrow, not a
+  // declaration, so lift() does not reach it.
+  const FORMAT = read('pjl-field/src/format.js');
+  const start = FORMAT.indexOf('export const money = ');
+  assert.ok(start > 0, 'money is no longer exported from format.js');
+  const end = FORMAT.indexOf('\n};', start);
+  assert.ok(end > start, 'could not find the end of money');
+  const money = new Function(
+    `${FORMAT.slice(start, end + 3).replace('export const', 'const')}\nreturn money;`,
+  )();
+  // The second argument was silently discarded, so the same invoice read
+  // "$285.00 CAD" on the invoice screen and "$285.00" on the property.
+  assert.equal(money(285, 'CAD'), '$285.00 CAD');
+  assert.equal(money(285), '$285.00');
+  // A five-figure commercial balance rendered "$12345.67" under a comment
+  // claiming the column lined up on the decimal.
+  assert.ok(/1,234/.test(money(1234.5)), 'thousands are not grouped');
+  // A string that slips through must not render as null — that reached a
+  // customer's text message as "(null)".
+  assert.equal(money('285'), '$285.00');
+  // A MISSING amount is not zero. Number(null), Number(undefined) and
+  // Number('') are all 0, so an unguarded coercion prints "$0.00" on a
+  // balance nobody knows — which reads as "nothing owing".
+  assert.equal(money(null), null);
+  assert.equal(money(undefined), null);
+  assert.equal(money(''), null);
+  assert.equal(money('nonsense'), null);
+  // Zero itself is a real, known amount and still prints.
+  assert.equal(money(0), '$0.00');
+});
+
+check('every "sign in" message names the tab that can actually sign you in', () => {
+  // Auth rides the WebView's cookie jar (src/api.js), so the WEB tab is
+  // the only surface that can sign you in. Today, Properties and the
+  // property profile are all native. With five tabs "any other tab" was
+  // three-fifths true; with three it names nothing that works.
+  const webTabs = [...APP.matchAll(/path: '([^']+)'/g)].map((m) => m[1]);
+  assert.ok(webTabs.length >= 1, 'there is no web tab left to sign in on');
+  for (const rel of [
+    'pjl-field/src/screens/PropertiesScreen.js',
+    'pjl-field/src/screens/TodayScreen.js',
+    'pjl-field/src/screens/PropertyProfileScreen.js',
+    'pjl-field/src/screens/ClosingScreen.js',
+    'pjl-field/src/screens/InvoiceScreen.js',
+  ]) {
+    const source = read(rel);
+    for (const line of source.split('\n')) {
+      if (!/sign in/i.test(line)) continue;
+      assert.ok(
+        /Messages/.test(line),
+        `${rel} tells the user to sign in somewhere that cannot sign them in: ${line.trim()}`,
+      );
+    }
+  }
 });
 
 // ---- These screens parse as the app will read them ----------------------
@@ -296,6 +609,11 @@ check('every screen this change touches parses with the app\'s own Babel', () =>
     'pjl-field/src/workorder-routing.js',
     'pjl-field/src/screens/PropertyProfileScreen.js',
     'pjl-field/src/screens/TodayScreen.js',
+    'pjl-field/src/screens/ClosingScreen.js',
+    'pjl-field/src/screens/InvoiceScreen.js',
+    'pjl-field/src/screens/WebScreen.js',
+    'pjl-field/src/format.js',
+    'pjl-field/src/theme.js',
   ]) {
     babel.parse(read(rel), {
       filename: rel,

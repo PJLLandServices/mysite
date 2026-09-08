@@ -51,9 +51,52 @@ export const canStartWorkOrder = (b) => !!(b?.workOrder || b?.leadId || b?.prope
 // Terminal work orders read "Open work order" rather than "Resume":
 // there is nothing to resume, and the card still has to reach the
 // record — that is where the invoice and the sign-off live.
+// The work-order statuses the SERVER can actually send, from
+// STATUS_ORDER + the terminal set in server/lib/work-orders.js, plus the
+// `draft` and `approved` that predate them. Every one of them, because a
+// status with no entry here fell through to the raw value and rendered a
+// pill reading `awaiting_approval` — lowercase, underscored, in a UI where
+// every other pill is sentence case, and too wide to fit besides.
+//
+// This lives here rather than in a screen because there were two copies of
+// it, in TodayScreen and PropertyProfileScreen, and both were missing the
+// same five statuses. One home, tested against the server's own list.
+export const WO_STATUS_LABELS = {
+  draft: 'Draft',
+  scheduled: 'Scheduled',
+  dispatched: 'Dispatched',
+  en_route: 'En route',
+  on_site: 'On site',
+  in_progress: 'In progress',
+  awaiting_approval: 'Awaiting approval',
+  approved: 'Approved',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
+  no_show: 'No show',
+};
+
+export function workOrderStatusLabel(status) {
+  if (!status) return null;
+  return WO_STATUS_LABELS[status] || String(status).replace(/_/g, ' ');
+}
+
+// A cancelled visit and a completed visit are not the same thing and must
+// not wear the same grey. Open work is amber because it is owed; done is
+// green; abandoned is red.
+export function workOrderStatusTone(status) {
+  if (status === 'completed' || status === 'approved') return 'good';
+  if (status === 'cancelled' || status === 'no_show') return 'danger';
+  return 'warn';
+}
+
 export function workOrderActionLabel(row) {
+  // One noun, one register, three verbs of similar width. "Start WO" /
+  // "Resume" / "Open work order" put an abbreviation, a bare verb and a
+  // spelled-out phrase on the same button — and the 132pt one re-wrapped
+  // the card's action row, so cards in one list were different heights for
+  // a reason the tech could not see.
   if (!row?.workOrder) return 'Start WO';
-  return isOpenWorkOrder(row.workOrder) ? 'Resume' : 'Open work order';
+  return isOpenWorkOrder(row.workOrder) ? 'Resume WO' : 'View WO';
 }
 
 // A finished visit stays on the day, dimmed, rather than vanishing — it

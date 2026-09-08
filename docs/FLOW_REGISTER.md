@@ -86,6 +86,93 @@ numbered on distinct stops, the timeline covering both, and `route-line` returni
 polyline where it used to 404; the ordinary plan day still renders. Full `build:check` green;
 Chromium confirms the booked row renders its number badge with a pin-linked `data-code`.
 
+**2026-09-08, same day (Three screens you could only leave by force-quitting — and a
+bearer token on the handset):** three senior review passes over the tab restructure before it
+was walked. The reviews found what the tests did not, and one finding is the reason the others
+were reachable.
+
+**The exit-less states.** `ClosingScreen`, `InvoiceScreen` and `WebScreen` each rendered their
+way out ONLY in the ready state. All three return early while loading, while unauthenticated,
+and on error — and `getJson` has no timeout, so "while loading" is not a moment. That was
+survivable when they lived in tabs, because the tab bar was still on screen. The overlay covers
+the tab bar. On the worst path `saveRecorded` records a payment, drops to `loading`, and a 401
+on the re-read stranded the tech on an exit-less screen having just taken a customer's card.
+WebScreen was its own case: the "Can't reach PJL" panel is `absoluteFillObject` and was a
+SIBLING of the Back bar, so it covered `‹ Back` opaquely and swallowed its taps — on the
+no-signal-in-a-driveway case the app exists for.
+
+**The test asserted the wrong thing, and that is the finding.** It proved App.js HANDED each
+arm `onExit`/`onBack` by grepping for the prop name. Passing a prop is not rendering an
+affordance. It now walks each screen's AST, collects every `return` in the component's own
+top-level body, and asserts the returned JSX reaches that screen's exit — resolving a hoisted
+`const exitBar` so the shape stays free. Same failure mode as the 2026-09-06 Terminal-token
+hole: an assertion that looked for a WORD while the thing it named was absent.
+
+**`GET /api/invoices` was handing out bearer payment tokens.** `paymentToken` is a permanent,
+unexpiring, unrevocable password to an invoice — hold it and you can read the customer's name,
+email, address and every line item, and pay it — and `portalToken` is the same for the
+read-only view. Both were in the list response, which made the admin gate added to
+`POST /api/invoices/:id/payment-link` on 2026-09-06 **decorative**: a tech was handed the token
+for every invoice and the pay URL is a fixed template. The public `/pay` route already strips
+`paymentToken` from its own response; the staff list did the opposite. Both fields are now
+stripped. Nothing on any client read them — every consumer is server-side (`notify-customer`,
+`invoice-pdf`, the portal routes). **The pre-existing exposure this made exploitable is
+recorded, not fixed here:** `/api/invoices` is fenced at `user`, so a tech who omits the filter
+still receives every invoice in the business. That is Patrick's call, not a side effect.
+
+**`?propertyId=` (empty) returned the whole ledger.** The guard was truthiness; an empty string
+is falsy, so the filter was skipped and a screen asking for one address's invoices would have
+been answered with every invoice PJL has ever raised. `!== null` now; absent is still `null`
+from `searchParams.get`, so an unfiltered call is byte-for-byte unchanged.
+
+**The chase button would have texted a payment link for a DRAFT.** `invoiceToChase` excluded
+void and paid, which leaves `draft` — a document the office has never reviewed or sent, and
+usually the OLDEST owing record on an address, so it was selected preferentially.
+`ensurePaymentToken` has no status guard and would have minted a live payable link for it.
+Restricted to `sent` / `partially_paid`. Two date bugs fixed in the same function: only the
+candidate side of the comparison was validated, so an unparseable `createdAt` on the seed (the
+NEWEST invoice, since the server sorts newest-first) left every comparison false and the newest
+winning; and a MISSING `createdAt` became `new Date(0)` — 1970 — and won "oldest" every time.
+
+**The link went to the property's phone, not the invoice's.** On a managed commercial site the
+payer is the billing entity c/o its management company, while the property's `siteContacts` are
+"the president / super / whoever PJL calls to schedule". Texting the super a payment link shows
+a third party the billing name, billing email and full line-item pricing, and lets them pay it.
+The recipient is now the invoice's billing party, with the property phone as the residential
+fallback, and the button does not render without one. The separator was iOS-only `&body=`
+against an app.json that declares an Android target; `?body=` works on both. And the open
+failure was silent — `open()` swallows its rejection, so a handset refusing the URL produced no
+alert and no state change.
+
+**A completed fall closing reopened the editable closing flow.** Routing was on `type` alone.
+Every stage is interactive and every change calls `patchWorkOrder`, which the server refuses on
+a locked work order — so each tap produced "Didn't save" and a red "Not saved" header on a
+visit that was finished and invoiced. Terminal statuses now go to the web record, where the
+sign-off and the invoice live.
+
+**Also fixed, from the appearance and correctness passes:** the day card, the finished dimming
+and the map's ticks all read a payload fetched BEFORE the job opened, so finishing a closing
+and dismissing it left the card still saying "Resume" — Today now reloads when a job closes.
+`WO_STATUS_LABELS` existed in TWO screens and both were missing the same five real statuses, so
+a live work order rendered a pill reading `awaiting_approval`; one shared map now, asserted
+against the server's own `STATUS_ORDER`. `money()` silently discarded the currency argument
+three call sites were passing and grouped no thousands, and a missing amount rendered as
+`null` — including inside a customer's text as "(null)". The overlay reused the shell's white
+safe area, painting a white band across the bottom inset under two grey screens. A finished
+card was dimmed to 0.72, which read as disabled while staying tappable. Row labels would not
+shrink, so at 320pt the status pill wrapped or was clipped. Work orders and Service history
+listed the same visits twice, back to back — the section is open work only now. Both new
+sections truncated silently while Service history twelve lines below said "Showing the 12 most
+recent of 47". A failed refresh blanked the invoice and work-order lists to `[]`, making "the
+request failed" identical to "this address has no invoices". The overlay was not
+`accessibilityViewIsModal`, so VoiceOver walked straight past it into the tab bar. And every
+"sign in on another tab" message named a NATIVE tab that cannot sign anyone in — auth rides the
+WebView cookie jar, so Messages is the only one that can.
+
+`scripts/test-app-shell.mjs` is 24 assertions now, all in `build:check`, green. **Two items are
+Patrick's, not mine:** the `user`-level fence on the whole invoice list, and whether an
+unexpiring bearer link should be minted per driveway visit into a personal SMS thread at all.
+
 **2026-09-08 (The app loses two tabs — a work order is not a place, and neither is an
 invoice):** Patrick: "The workorder situation... maybe we can merge that back into the
 'schedule' as well as the properties tab, and get rid of that completely. The invoice
