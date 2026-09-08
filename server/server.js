@@ -4102,10 +4102,32 @@ function applyCrmUpdate(lead, payload) {
 // Returns the array of active bookings extracted from the current leads file.
 // Each entry is { start, end, coords, leadId } in the shape availability.js
 // expects. Filters out cancelled (lost) and archived leads.
+// ONE definition of "this booking still occupies the calendar", used by
+// every pass below.
+//
+// It lived in only one of them before. The canonical bookings.json pass
+// skipped cancelled/completed/no_show; the lead-snapshot pass filtered
+// only archived and lost LEADS and never looked at the booking's own
+// status. Both cancel paths (portal and admin) mirror
+// `lead.booking.status = "cancelled"`, so a cancelled appointment kept
+// its slot: the customer got their confirmation email, the work order
+// cascaded, Patrick got paged — and the time never came back to the
+// calendar. Verified live before the fix: a day whose 8:00 booking was
+// cancelled still pushed the next customer to 9:00.
+//
+// Any new lifecycle state that should free a slot goes in this set, once.
+const DEAD_BOOKING_STATUSES = new Set(["cancelled", "completed", "no_show"]);
+function bookingHoldsItsSlot(status) {
+  return !DEAD_BOOKING_STATUSES.has(String(status || "").toLowerCase());
+}
+
 async function activeBookings() {
   const leads = await readLeads();
   const fromLeads = leads
-    .filter((lead) => !lead.archived && (lead.crm?.status || lead.status) !== "lost" && lead.booking)
+    .filter((lead) => !lead.archived
+      && (lead.crm?.status || lead.status) !== "lost"
+      && lead.booking
+      && bookingHoldsItsSlot(lead.booking.status))
     .map((lead) => ({
       start: lead.booking.start,
       end: lead.booking.end,
@@ -4149,7 +4171,7 @@ async function activeBookings() {
     }
     for (const b of bookingRecs) {
       if (!b.scheduledFor) continue;
-      if (b.status === "cancelled" || b.status === "completed" || b.status === "no_show") continue;
+      if (!bookingHoldsItsSlot(b.status)) continue;
       const dup = fromLeads.find((f) => f.leadId === b.leadId && f.start === b.scheduledFor);
       if (dup) continue;
       const startD = new Date(b.scheduledFor);
