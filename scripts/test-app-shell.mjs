@@ -62,7 +62,38 @@ function tabKeys() {
 }
 
 check('the bar carries exactly the tabs that have screens', () => {
-  assert.deepEqual(tabKeys(), ['today', 'properties', 'messages']);
+  assert.deepEqual(tabKeys(), ['today', 'properties', 'book', 'messages']);
+});
+
+check('Book does not exist for a tech, and is not merely disabled', () => {
+  // A locked tab teaches someone to press a thing that never works, and
+  // the app's opinion is only a hint anyway — the server is what refuses.
+  // So the rule is ABSENCE, and it is executed rather than read.
+  // The real TABS array, read out of App.js rather than restated here —
+  // a copy of the data would keep passing after the real one changed.
+  const start = APP.indexOf('const TABS = [');
+  const block = APP.slice(start, APP.indexOf('];', start) + 2);
+  const rows = [...block.matchAll(/\{[^}]*key:\s*'([a-z]+)'[^}]*\}/g)]
+    .map((m) => ({ key: m[1], admin: /admin:\s*true/.test(m[0]) }));
+  assert.ok(rows.some((r) => r.admin), 'no tab is admin-gated any more');
+
+  const tabsForRole = lift(APP, 'tabsForRole', `const TABS = ${JSON.stringify(rows)};`);
+  const keys = (role) => tabsForRole(role).map((t) => t.key);
+  assert.deepEqual(keys('admin'), ['today', 'properties', 'book', 'messages']);
+  assert.deepEqual(keys('tech'), ['today', 'properties', 'messages'], 'a tech can see Book');
+  // Signed out, and any unexpected role, get the tech view rather than
+  // the admin one — the gate fails CLOSED.
+  assert.deepEqual(keys(null), ['today', 'properties', 'messages']);
+  assert.deepEqual(keys(undefined), ['today', 'properties', 'messages']);
+  assert.deepEqual(keys('customer'), ['today', 'properties', 'messages']);
+  assert.deepEqual(keys('Admin'), ['today', 'properties', 'messages'], 'the role check is case-loose');
+
+  // And the shell renders the FILTERED list, not the raw one — a gate
+  // that computes the right answer and then ignores it is not a gate.
+  assert.ok(!/\{TABS\.map\(/.test(APP), 'the shell still renders every tab regardless of role');
+  assert.match(APP, /\{visibleTabs\.map\(/);
+  // Losing admin while Book is open must not strand a pane with no tab.
+  assert.match(APP, /if \(!visibleTabs\.some\(\(t\) => t\.key === active\)\) setActive\('today'\)/);
 });
 
 check('nothing is left reaching for the tabs that went', () => {
@@ -77,9 +108,12 @@ check('nothing is left reaching for the tabs that went', () => {
 
 check('every tab in the bar is rendered by the shell', () => {
   // A tab that renders nothing is a blank screen with a highlighted icon.
+  // All three are native now — Messages stopped being a WebScreen when the
+  // thread list and conversation were built, which is also what removed
+  // the last surface anyone could sign in on. See test-messages.mjs.
   for (const key of tabKeys()) {
     const rendered = key === 'messages'
-      ? /<WebScreen path=\{tab\.path\} \/>/.test(APP)   // the fallback arm
+      ? /<MessagesScreen/.test(APP)     // the fallback arm
       : new RegExp(`tab\\.key === '${key}'`).test(APP);
     assert.ok(rendered, `the ${key} tab has no branch that renders it`);
   }
@@ -570,13 +604,15 @@ check('money shows the currency it is handed, and groups its thousands', () => {
   assert.equal(money(0), '$0.00');
 });
 
-check('every "sign in" message names the tab that can actually sign you in', () => {
-  // Auth rides the WebView's cookie jar (src/api.js), so the WEB tab is
-  // the only surface that can sign you in. Today, Properties and the
-  // property profile are all native. With five tabs "any other tab" was
-  // three-fifths true; with three it names nothing that works.
-  const webTabs = [...APP.matchAll(/path: '([^']+)'/g)].map((m) => m[1]);
-  assert.ok(webTabs.length >= 1, 'there is no web tab left to sign in on');
+check('no screen tells the user to sign in on a tab', () => {
+  // Auth rides the WebView's cookie jar (src/api.js). While one tab
+  // happened to be a web page, "sign in on another tab" was true by
+  // accident; Messages going native removed the last one. Every screen
+  // now reaches a sign-in of its own — that surface, and the fact that
+  // every auth state can open it, is proved in test-messages.mjs. What
+  // this asserts is only that the OLD instruction is gone, because a
+  // message naming a tab that cannot sign you in is worse than no
+  // message at all.
   for (const rel of [
     'pjl-field/src/screens/PropertiesScreen.js',
     'pjl-field/src/screens/TodayScreen.js',
@@ -586,11 +622,10 @@ check('every "sign in" message names the tab that can actually sign you in', () 
   ]) {
     const source = read(rel);
     for (const line of source.split('\n')) {
+      if (line.trim().startsWith('//')) continue;
       if (!/sign in/i.test(line)) continue;
-      assert.ok(
-        /Messages/.test(line),
-        `${rel} tells the user to sign in somewhere that cannot sign them in: ${line.trim()}`,
-      );
+      assert.ok(!/\btab\b/i.test(line),
+        `${rel} sends the user to a tab to sign in: ${line.trim()}`);
     }
   }
 });

@@ -68,7 +68,7 @@ const longDate = (ymd) => {
   return d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 };
 
-export default function TodayScreen({ onOpenWorkOrder, refreshToken = 0 }) {
+export default function TodayScreen({ onOpenWorkOrder, refreshToken = 0, onSignIn }) {
   const [payload, setPayload] = useState(null);
   // The server's idea of today, learned from the first response rather
   // than assumed from the phone's clock — the schedule belongs to the
@@ -233,9 +233,9 @@ export default function TodayScreen({ onOpenWorkOrder, refreshToken = 0 }) {
       <View style={styles.centre}>
         <Text style={styles.centreTitle}>Not signed in</Text>
         <Text style={styles.centreBody}>
-          Open the Messages tab and sign in to PJL — this screen shares that session.
+          Sign in to PJL to see the day.
         </Text>
-        <Pressable onPress={() => load(selected)} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable>
+        <Pressable onPress={onSignIn} style={styles.retry}><Text style={styles.retryText}>Sign in</Text></Pressable>
       </View>
     );
   }

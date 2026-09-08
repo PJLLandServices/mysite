@@ -36,7 +36,7 @@ import { colors, radius, space, type } from '../theme';
 
 const UNKNOWN_TOWN = 'Other';
 
-export default function PropertiesScreen({ onOpen }) {
+export default function PropertiesScreen({ onOpen, onSignIn }) {
   const [all, setAll] = useState([]);
   const [state, setState] = useState('loading');
   const [error, setError] = useState('');
@@ -121,7 +121,8 @@ export default function PropertiesScreen({ onOpen }) {
     return (
       <View style={styles.centre}>
         <Text style={styles.centreTitle}>Not signed in</Text>
-        <Text style={styles.centreBody}>Open the Messages tab and sign in — this list shares that session.</Text>
+        <Text style={styles.centreBody}>Sign in to PJL to see the property book.</Text>
+        <Pressable onPress={onSignIn} style={styles.retry}><Text style={styles.retryText}>Sign in</Text></Pressable>
       </View>
     );
   }

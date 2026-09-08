@@ -99,7 +99,7 @@ export function invoiceToChase(invoices) {
 }
 
 
-export default function PropertyProfileScreen({ propertyId, onBack, onOpenWorkOrder, onOpenInvoice }) {
+export default function PropertyProfileScreen({ propertyId, onBack, onOpenWorkOrder, onOpenInvoice, onSignIn }) {
   const [property, setProperty] = useState(null);
   // Both loaded beside the property rather than inside it: the property
   // record carries neither, and the two departing tabs are what these
@@ -159,7 +159,8 @@ export default function PropertyProfileScreen({ propertyId, onBack, onOpenWorkOr
     return (
       <View style={styles.centre}>
         <Text style={styles.centreTitle}>Not signed in</Text>
-        <Text style={styles.centreBody}>Open the Messages tab and sign in — this screen shares that session.</Text>
+        <Text style={styles.centreBody}>Sign in to PJL to open this property.</Text>
+        <Pressable onPress={onSignIn} style={styles.retry}><Text style={styles.retryText}>Sign in</Text></Pressable>
       </View>
     );
   }

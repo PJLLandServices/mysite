@@ -34,7 +34,7 @@ const STAGES = [
   { key: 'signoff', label: 'Sign-off' },
 ];
 
-export default function ClosingScreen({ workOrderId, onExit, onFinished }) {
+export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignIn }) {
   const [wo, setWo] = useState(null);
   const [state, setState] = useState('loading');
   const [error, setError] = useState('');
@@ -222,7 +222,8 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished }) {
               web tab is the ONLY surface that can sign you in. "Any other
               tab" was three-fifths true when there were five tabs and is
               false now. */}
-          <Text style={styles.centreBody}>Go back, open the Messages tab, and sign in to PJL.</Text>
+          <Text style={styles.centreBody}>Sign in to PJL to open this closing.</Text>
+          <Pressable onPress={onSignIn} style={styles.retry}><Text style={styles.retryText}>Sign in</Text></Pressable>
         </View>
       </View>
     );
