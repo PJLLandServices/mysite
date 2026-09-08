@@ -1,7 +1,8 @@
 // The grouped-list primitives the screens are built from. Kept small and
 // dumb on purpose — layout only, no data knowledge.
 
-import { FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { FlatList, Keyboard, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, radius, space, type } from './theme';
 
 export function SectionHeader({ children, style }) {
@@ -131,7 +132,21 @@ export function SelectRow({
 // header the first time it changes, which is how the zone bands keep
 // residential and commercial apart without two lists.
 export function PickerSheet({ visible, title, options, selectedKey, onSelect, onClose }) {
-  const rows = options || [];
+  // A SHEET IS NEVER UNDER A KEYBOARD. This lives here rather than in each
+  // caller because the second caller forgot: the Properties tab opened its
+  // town list straight from the search box with the keyboard still up over
+  // the bottom of it.
+  useEffect(() => { if (visible) Keyboard.dismiss(); }, [visible]);
+
+  // iOS keeps a modal's children mounted through the slide-out animation
+  // (Modal only stops rendering them once it is fully closed). A caller
+  // that clears its options the moment it closes — which is exactly what
+  // "pick one and dismiss" does — leaves the list to vanish and a bare
+  // strip to slide away in its place. Hold the last set through the exit.
+  const held = useRef({ title, options: options || [], selectedKey });
+  if (visible) held.current = { title, options: options || [], selectedKey };
+  const shown = visible ? { title, options: options || [], selectedKey } : held.current;
+  const rows = shown.options;
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       {/* Tap anywhere off the sheet to dismiss it — the gesture everyone
@@ -144,14 +159,18 @@ export function PickerSheet({ visible, title, options, selectedKey, onSelect, on
       />
       <View style={styles.sheet}>
         <View style={styles.grabber} />
-        {title ? <Text style={styles.sheetTitle}>{title}</Text> : null}
+        {shown.title ? <Text style={styles.sheetTitle}>{shown.title}</Text> : null}
         <FlatList
           data={rows}
           keyExtractor={(item) => String(item.key)}
           style={styles.sheetList}
           keyboardShouldPersistTaps="handled"
+          // A sheet with a title over nothing is dismissible only by the
+          // backdrop, which reads as a broken screen rather than an empty
+          // list.
+          ListEmptyComponent={<Text style={styles.sheetEmpty}>Nothing to choose from.</Text>}
           renderItem={({ item, index }) => {
-            const selected = item.key === selectedKey;
+            const selected = item.key === shown.selectedKey;
             const heads = item.group && item.group !== rows[index - 1]?.group;
             return (
               <View>
@@ -287,7 +306,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
-    paddingBottom: space.xl,
+    // Clear of the home indicator (34pt), not merely of the screen edge —
+    // space.xl left the last row of a full list under it.
+    paddingBottom: 34,
   },
   grabber: {
     width: 38, height: 4, borderRadius: 2,
@@ -316,6 +337,7 @@ const styles = StyleSheet.create({
   sheetRowSelected: { color: colors.brand, fontWeight: '600' },
   sheetRowNote: { ...type.caption, color: colors.warning, fontWeight: '600' },
   sheetRowMeta: { ...type.caption, fontVariant: ['tabular-nums'] },
+  sheetEmpty: { ...type.caption, paddingHorizontal: space.lg, paddingVertical: space.lg },
   check: { color: colors.brand, fontSize: 16, width: 16, textAlign: 'center' },
   checkHidden: { opacity: 0 },
 

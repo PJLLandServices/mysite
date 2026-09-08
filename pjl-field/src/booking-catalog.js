@@ -141,6 +141,21 @@ export function serviceKeyFor(category, band) {
   return category.serviceKey || null;
 }
 
+// The issue counts offered. Past eight the number stops being useful to a
+// scheduler, and the specifics belong in the notes anyway — so the top of
+// the list is "more than 8" rather than a number pad that can take 99.
+// Not a number — the one entry in the list that is a sentinel, named so
+// the two places that have to recognise it cannot drift.
+export const MANY_ISSUES = '8+';
+export const ISSUE_COUNTS = ['1', '2', '3', '4', '5', '6', '7', '8', MANY_ISSUES];
+
+export function issueCountLabel(value) {
+  const v = String(value || '').trim();
+  if (!v) return '';
+  if (v === MANY_ISSUES) return 'More than 8';
+  return `${v} issue${v === '1' ? '' : 's'}`;
+}
+
 // The follow-up question, in the words it is asked in.
 export const FOLLOW_UPS = {
   zones: 'How many zones?',
@@ -157,7 +172,11 @@ export function catalogNotes({ category, zoneCount, issueCount }) {
   if (category?.key === 'residential_service' || category?.key === 'commercial_service') {
     const type = category.key === 'commercial_service' ? 'Commercial' : 'Residential';
     lines.push(`${type} service call.`);
-    if (issueCount) lines.push(`Issues reported: ${issueCount}.`);
+    // The sentinel spelled out; a real count left as the number, because
+    // "Issues reported: 3 issues." is the same word twice on a work order.
+    if (issueCount) {
+      lines.push(`Issues reported: ${issueCount === MANY_ISSUES ? 'more than 8' : issueCount}.`);
+    }
   }
   if (category?.follow === 'zones_only' && zoneCount) lines.push(`Zones: ${zoneCount}.`);
   return lines.join(' ');

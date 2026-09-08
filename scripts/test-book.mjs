@@ -218,6 +218,9 @@ check('no day is offered until the address has passed the booking gate', () => {
     'availability can be requested before the address is verified');
   assert.match(block, /address: verified\.address/,
     'availability uses the typed address, not the geocoded one');
+  // Including the keyboard's own return key, which did nothing at all.
+  assert.match(BOOK, /onSubmitEditing=\{\(\) => settleAddress\(typed\)\}/,
+    'the return key does not submit the address');
   // Every path to an address goes through settleAddress, which verifies.
   assert.match(BOOK, /onPress=\{\(\) => \{ setTyped\(s\.description\); settleAddress\(s\.description\); \}\}/,
     'a Google suggestion is taken without being verified');
@@ -405,10 +408,14 @@ check('the follow-up question depends on the category, and reaches the tech', ()
 
   // "How many issues" has no server field. Rather than invent one it is
   // written into the notes, labelled, where a tech will read it.
-  const catalogNotes = liftCatalog('catalogNotes', []);
+  const catalogNotes = liftCatalog('catalogNotes', ['MANY_ISSUES']);
   assert.match(catalogNotes({ category: by.commercial_service, issueCount: '3' }),
     /Commercial service call\. Issues reported: 3\./);
   assert.match(catalogNotes({ category: by.residential_service, issueCount: '1' }), /Residential/);
+  // '8+' is a sentinel, not a number. On a work order it has to read as
+  // words — "Issues reported: 8+." tells a tech nothing.
+  assert.match(catalogNotes({ category: by.residential_service, issueCount: '8+' }),
+    /Issues reported: more than 8\./);
   assert.match(catalogNotes({ category: by.hydrawise_retrofit, zoneCount: '9' }), /Zones: 9\./);
   // Nothing to say is nothing said — not an empty label on the record.
   assert.equal(catalogNotes({ category: by.site_visit }), '');
@@ -433,6 +440,13 @@ check('the address box can be cleared outright', () => {
   const block = BOOK.slice(at, BOOK.indexOf('\n  };', at));
   // What the box itself holds, and every answer that hung off it.
   for (const cleared of ['setTyped', 'setCategory', 'setBand', 'setServiceKey', 'setZoneCount', 'setIssueCount']) {
+    assert.ok(block.includes(cleared), `clearing the address leaves ${cleared} behind`);
+  }
+  // AND THE CONTACT. Taking a property from the book fills in its
+  // customer's name, phone and email. Clearing the box and typing a
+  // different address left them sitting there, and the booking went out
+  // under the last customer's name and number.
+  for (const cleared of ['setFirstName', 'setLastName', 'setPhone', 'setAltPhone', 'setEmail']) {
     assert.ok(block.includes(cleared), `clearing the address leaves ${cleared} behind`);
   }
   // And the verification, the days and the slot, via the same path an
@@ -483,6 +497,13 @@ check('the details step shows what the cascade asked, and does not ask again', (
   assert.ok(!/label="Zone count"/.test(block), 'the details step asks for zones again');
   assert.ok(!/onChange=\{onZones\}/.test(block), 'the details step edits the zone count again');
   assert.match(block, /Booking<\/Text>/, 'the details step does not say what is being booked');
+  // And it says it ONCE, in the summary card at the top — not as three
+  // more rows under the form, which read as fields left to fill in.
+  const card = block.slice(block.indexOf('styles.holding'), block.indexOf('Their details'));
+  for (const shown of ['verified.address', 'zoneCountLabel(zoneCount)', 'issueCountLabel(issueCount)']) {
+    assert.ok(card.includes(shown), `the summary card does not carry ${shown}`);
+  }
+  assert.ok(!/styles\.bandLabel/.test(block), 'the read-only rows are still under the form');
 });
 
 check("the server's own bands are the ones being matched", () => {
@@ -643,10 +664,22 @@ check('a service out of season says so, instead of showing an empty calendar', (
   assert.equal(seasonNote({ season: { name: 'fall', open: true } }), null, 'an open season is annotated');
   assert.equal(seasonNote({}), null, 'a year-round service is annotated');
   assert.equal(seasonNote(null), null);
+  const thisYear = new Date().getFullYear();
   assert.match(
-    seasonNote({ season: { name: 'fall', open: false, bookable: true, startsOn: '2026-09-28' } }),
+    seasonNote({ season: { name: 'fall', open: false, bookable: true, startsOn: `${thisYear}-09-28` } }),
     /^Dates from /,
   );
+  // A season starting in ANOTHER year says so. Read on 8 September, a bare
+  // "Dates from Mar 1" is next March — and reads like this March, which
+  // has been and gone.
+  const next = seasonNote({
+    season: { name: 'spring', open: false, bookable: true, startsOn: `${thisYear + 1}-03-01` },
+  });
+  assert.match(next, new RegExp(String(thisYear + 1)), 'a date in another year hides its year');
+  assert.ok(!new RegExp(String(thisYear)).test(
+    seasonNote({ season: { name: 'fall', open: false, bookable: true, startsOn: `${thisYear}-09-28` } })
+      .replace(/\d{1,2}\b/g, ''),
+  ), 'this year is spelled out needlessly');
   assert.equal(
     seasonNote({ season: { name: 'spring', open: false, bookable: false, closed: true } }),
     'Season is over for this year',
@@ -865,9 +898,41 @@ check('the keyboard goes away when the address is settled', () => {
   // Both ways in go through it: a Google suggestion and one from the book.
   assert.match(BOOK, /settleAddress\(s\.description\)/);
   assert.match(BOOK, /settleAddress\(takeProperty\(p\)\)/);
-  // And opening a question puts it away too — a sheet under a keyboard is
-  // half a sheet.
-  assert.match(BOOK, /const openSheet = \(which\) => \{\s*Keyboard\.dismiss\(\);/);
+  // And opening ANY sheet puts it away too. That rule lives in the sheet
+  // rather than in each caller, because the second caller forgot it: the
+  // Properties tab opened its town list straight from the search box with
+  // the keyboard still up over the bottom of it.
+  const UI = read('pjl-field/src/ui.js');
+  assert.match(UI, /useEffect\(\(\) => \{ if \(visible\) Keyboard\.dismiss\(\); \}, \[visible\]\);/,
+    'a sheet can open under a keyboard');
+});
+
+check('a reply for an address that has been replaced is dropped', () => {
+  // Both round trips outlive the address they were asked about. Clear the
+  // box while verify-address is in flight and the cleared address comes
+  // back a second later as confirmed; edit it while availability is in
+  // flight and you land on a day slide with nothing on it.
+  assert.match(BOOK, /const gen = useRef\(0\);/, 'there is no generation counter');
+  const bumped = BOOK.slice(BOOK.indexOf('const unsettle = () =>'), BOOK.indexOf('const clearAddress'));
+  assert.match(bumped, /gen\.current \+= 1;/, 'abandoning an address does not abandon its requests');
+  // BEFORE the "nothing to undo" early return. A verify started a second
+  // ago is exactly the case where nothing is settled yet — and the one
+  // reply that must not be allowed to land.
+  assert.ok(bumped.indexOf('gen.current += 1;') < bumped.indexOf('return;'),
+    'typing over an address mid-check lets the old one come back confirmed');
+
+  for (const [fn, take] of [
+    ['const settleAddress = async', 'const mine = ++gen.current;'],
+    ['const showDays = async', 'const mine = gen.current;'],
+  ]) {
+    const at = BOOK.indexOf(fn);
+    assert.ok(at > 0, `${fn} is gone`);
+    const block = BOOK.slice(at, BOOK.indexOf('\n  };', at));
+    assert.ok(block.includes(take), `${fn} does not record which address it is for`);
+    assert.match(block, /if \(mine !== gen\.current\) return;/, `${fn} applies a stale reply`);
+    assert.ok(block.indexOf('await') < block.indexOf('if (mine !== gen.current)'),
+      `${fn} checks before it waits, which checks nothing`);
+  }
 });
 
 check('the exact zone count is scoped to the band, so it cannot contradict it', () => {
@@ -906,6 +971,19 @@ check('the exact zone count is scoped to the band, so it cannot contradict it', 
   const block = BOOK.slice(at, BOOK.indexOf('\n  };', at));
   assert.match(block, /zoneOptionsFor\(bands, b\)\.includes\(n\)/);
   assert.match(block, /setZoneCount\(''\)/);
+
+  // The other direction too: a count can move the BAND, and moving the
+  // band changes the service, its price and its length. Left uncleaned,
+  // that re-pointed the booking while the day list and the chosen slot
+  // stayed alive — so "Book it" sent the new service against a slot sized
+  // for the old one.
+  const zonesAt = BOOK.indexOf('const onZones = (value) =>');
+  assert.ok(zonesAt > 0, 'onZones is gone');
+  const moves = BOOK.slice(zonesAt, BOOK.indexOf('\n  };', zonesAt));
+  assert.match(moves, /setServiceKey\(better\.key\)/);
+  for (const cleaned of ['setDays([])', 'setSlot(null)', "clamp('service')"]) {
+    assert.ok(moves.includes(cleaned), `moving the band from the count leaves ${cleaned} undone`);
+  }
 });
 
 check('a count reads as words, and "not sure" is a real answer', () => {
@@ -921,7 +999,7 @@ check('a count reads as words, and "not sure" is a real answer', () => {
   // And it still reaches the server as the value it understands.
   assert.match(BOOK, /zoneCount: clean\(zoneCount\) \|\| 'unsure'/);
 
-  const issueCountLabel = lift(BOOK, 'issueCountLabel');
+  const issueCountLabel = liftCatalog('issueCountLabel', ['MANY_ISSUES']);
   assert.equal(issueCountLabel('1'), '1 issue');
   assert.equal(issueCountLabel('3'), '3 issues');
   // Past eight the number stops helping a scheduler.
@@ -944,11 +1022,14 @@ check('no slide can be left reading a value that has been taken away', () => {
     ['const pickCategory = (c) =>', 'service'],
     ['const pickBand = (b) =>', 'service'],
     ['const showDays = async', 'service'],
+    ['const onZones = (value) =>', 'service'],
   ]) {
     const at = BOOK.indexOf(fn);
     assert.ok(at > 0, `${fn} is gone`);
     const block = BOOK.slice(at, BOOK.indexOf('\n  };', at));
-    if (!/setSlot\(null\)|setVerified\(null\)/.test(block)) continue;
+    // Nulling a value a later slide reads, or re-pointing which service is
+    // being booked — either one invalidates the slides after this step.
+    if (!/setSlot\(null\)|setVerified\(null\)|setServiceKey\(better/.test(block)) continue;
     assert.ok(block.includes(`clamp('${to}')`), `${fn} strands a later slide`);
   }
   // And the slides guard themselves, so a path nobody thought of is a
