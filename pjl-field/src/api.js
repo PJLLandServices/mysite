@@ -307,12 +307,6 @@ export const bookingAvailability = ({ service, address }) => {
     + `&address=${encodeURIComponent(address)}`
     + `&from=${encodeURIComponent(dateKey(from))}`
     + `&to=${encodeURIComponent(dateKey(to))}`
-    // This app is staff-only, and a staff booking is not a public one.
-    // The flag asks the server to gate on whether a truck rolls (the
-    // serviceable window) rather than on the public self-serve hold, and
-    // it is honoured ONLY with a real session — the server checks, we
-    // do not get to assert it.
-    + `&adminBypass=1`,
   );
 };
 

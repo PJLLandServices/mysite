@@ -8264,14 +8264,6 @@ async function handleApi(req, res, pathname) {
     // between one rule with two callers and two rules that will disagree.
     const today = new Date();
     const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    // Patrick booking someone over the phone is NOT the public. The
-    // public hold (fall 2026 opens Sep 28, so nobody self-books a date no
-    // truck is scheduled for) is not his constraint; his is whether a
-    // truck rolls at all. Asking the public question on his behalf told
-    // him "Booking opens September 28" on the 8th, a week after his own
-    // trucks started running.
-    const scope = (await requireUser(req)) ? "staff" : "public";
-
     const decorated = {};
     for (const [key, svc] of Object.entries(BOOKABLE_SERVICES)) {
       let season = null;
@@ -8280,7 +8272,7 @@ async function handleApi(req, res, pathname) {
         // Fails soft, the same posture the availability gate takes: a
         // broken seasons.json must degrade to an un-annotated list, never
         // take booking down.
-        try { season = seasonsLib.publicBookingStatus(name, todayKey, { scope }); }
+        try { season = seasonsLib.publicBookingStatus(name, todayKey); }
         catch (err) {
           console.warn("[booking/services] season lookup:", err?.message);
           season = null;
@@ -20478,8 +20470,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // enough — Patrick piloting the PUBLIC page while logged in must
       // see exactly what a customer sees, or the gate is untestable.
       const wantsAdminBypass = url.searchParams.get("adminBypass") === "1";
-      const adminSession = wantsAdminBypass ? await requireUser(req) : null;
-      if (!(wantsAdminBypass && adminSession)) {
+      if (!(wantsAdminBypass && await requireUser(req))) {
         const gateVerdict = await bookingGate.gate(geo, {
           travelMinutes: distanceLib.travelMinutes, base: PJL_BASE
         });
@@ -20507,23 +20498,14 @@ Customer signature captured at ${new Date().toISOString()}.`;
         hours: mergedHours,
         settings: mergedSettings,
         dayShapes,
-        diagnostics,
-        // A staff caller is gated by whether a TRUCK ROLLS, not by the
-        // public self-serve hold. Fall 2026 is serviceable from Sep 1 but
-        // public booking opens Sep 28 — that hold exists so a customer
-        // cannot self-book a September date no route is planned for, and
-        // it is not a constraint on Patrick booking someone by phone.
-        // Same shape the gate already reads, different window.
-        seasonWindows: adminSession
-          ? (season, year) => {
-              const cfg = seasonsLib.configFor(season, year);
-              if (!cfg) return null;
-              return {
-                publicBookingFrom: cfg.serviceableFrom || null,
-                publicBookingThrough: cfg.serviceableThrough || null
-              };
-            }
-          : null
+        diagnostics
+        // NOTE: no seasonWindows override, deliberately. The booking
+        // window is the range of DATES that may be scheduled — fall 2026
+        // is Sep 28 to Oct 30 — and it applies to staff exactly as it
+        // applies to the public. Patrick opens further dates himself when
+        // he chooses to; an admin flag that quietly widened it would put
+        // work on days he has not opened, which is the opposite of the
+        // control the window exists to give him.
       });
 
       const days = (fromDate && toDate)

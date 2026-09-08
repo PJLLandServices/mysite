@@ -118,21 +118,30 @@ itself, which is what it is for. Full `build:check` green.
 clears; reply and confirm the bubble says "Emailed"; sign out and confirm the Sign in button
 reaches the login and that every screen reloads afterwards.
 
-**2026-09-08, same day (Patrick is not the public — and the autocomplete was never deployed):**
-Two faults, both mine, both from the same habit of not checking where a thing actually runs.
+**2026-09-08, same day (I misread the booking window as permission, and started changing a
+rule that had been right since day one):**
 
-**"Booking opens September 28" told the owner he could not book his own trucks.** Fall 2026 is
-**serviceable from Sep 1** and **publicly bookable from Sep 28** — that hold exists so a
-customer cannot self-book a September date no route is planned for, and it is a rule about the
-WEBSITE. I asked the public question on Patrick's behalf and printed the public answer in a
-staff-only app, on the 8th, a week after his own trucks started running.
-`publicBookingStatus` now takes a **`scope`**: `"public"` reads the public bounds, `"staff"`
-reads the SERVICEABLE ones, because the only real constraint on an admin booking by phone is
-whether a truck rolls at all. `/api/booking/services` picks the scope from the session;
-`/api/booking/availability` passes the serviceable window through the `seasonWindows` hook the
-gate already accepts when `adminBypass=1` is honoured — and it is honoured only against a real
-session, which the server checks rather than the app asserting. Spring stays shut for both
-scopes: the staff scope is a different window, not a bypass.
+**What the window actually is.** Patrick, correcting me: *"booking can be made from Sept 1, but
+they can only schedule on Sept 28 - Oct 30. after that i have control to open up further
+bookings. This has been a real fucking rule since day one."* So `publicBookingFrom` /
+`publicBookingThrough` are the range of **DATES that may be scheduled** — not the dates on
+which a booking may be taken. `availability.js` had this right all along: the bounds gate which
+DAYS emit slots, inside the day loop.
+
+**What I did with that.** I read "opens Sep 28" as a permission gate, decided it could not
+apply to the owner, gave `publicBookingStatus` a staff scope reading the SERVICEABLE window
+(Sep 1 - Nov 6), and passed that through `seasonWindows` on the availability gate for any
+`adminBypass` caller. That would have let bookings land on days Patrick has not opened — the
+exact opposite of the control the window exists to give him. **Reverted in full:** no scope, no
+`seasonWindows` override, and the app no longer sends `adminBypass` at all. One window,
+everyone, unchanged from day one.
+
+**What was genuinely wrong was the WORDING, and only that.** The app printed *"Booking opens
+September 28"* on the 8th, when booking had been open since the 1st. `opensOn` is now
+**`startsOn`** and reads *"Dates from Sep 28"*, and the status carries a separate **`bookable`**
+flag so the two questions stop being one: a season whose dates begin later is ordinary bookable
+work — annotated, not greyed, and NOT sunk to the bottom of the list — while a season that has
+ended (spring, in September) is neither.
 
 **The address suggestions were failing because the route had never been deployed.** The app is
 built from a branch; the server it talks to is production, which runs `main`. Three server

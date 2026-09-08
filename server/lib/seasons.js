@@ -412,37 +412,43 @@ function hasExplicitYear(year) {
 //
 // Returns null for a season this file does not know, so callers can
 // treat "no answer" as "do not annotate" rather than as "closed".
-// `scope` decides WHICH window is being asked about, and it matters more
-// than it looks:
+// WHAT THIS ANSWERS, precisely: which DATES may be scheduled for this
+// season, and whether today is inside them.
 //
-//   "public" — the self-serve flow on the website. Fall 2026 holds this
-//              until Sep 28, the first planned route day, so a customer
-//              cannot self-book a September date no truck is scheduled
-//              to serve.
-//   "staff"  — Patrick, booking someone over the phone. He is not the
-//              public and that hold is not his: the real constraint on
-//              him is whether a truck rolls at all, which is the
-//              SERVICEABLE window (fall 2026: Sep 1 - Nov 6).
+// The distinction cost a round. Fall 2026's window is Sep 28 - Oct 30.
+// That is NOT "you may not book until Sep 28" — booking is open from
+// Sep 1. It is "the dates you may put work on run Sep 28 to Oct 30",
+// after which Patrick opens more himself. It applies to staff exactly as
+// it applies to the public, and an admin path that widened it would put
+// work on days he has not opened — the opposite of the control the
+// window exists to give him.
 //
-// Getting this wrong told him "Booking opens September 28" on the 8th
-// while his own trucks had been running for a week.
-function publicBookingStatus(season, todayKey, { years = 2, scope = "public" } = {}) {
+// So `open` here means "today falls inside the schedulable range", and a
+// caller must not read it as "bookable". A season whose dates start
+// three weeks out is perfectly bookable today; see `startsOn`.
+function publicBookingStatus(season, todayKey, { years = 2 } = {}) {
   const startYear = Number(String(todayKey).slice(0, 4));
   if (!Number.isFinite(startYear)) return null;
-  const staff = scope === "staff";
   let last = null;
   for (let i = 0; i < years; i++) {
     const cfg = configFor(season, startYear + i);
     if (!cfg) continue;
-    const from = (staff ? cfg.serviceableFrom : cfg.publicBookingFrom) || null;
-    const through = (staff ? cfg.serviceableThrough : cfg.publicBookingThrough) || null;
+    const from = cfg.publicBookingFrom || null;
+    const through = cfg.publicBookingThrough || null;
     if ((!from || todayKey >= from) && (!through || todayKey <= through)) {
-      return { name: season, open: true, from, through, scope };
+      return { name: season, open: true, bookable: true, from, through };
     }
+    // Dates ahead of us. `startsOn`, NOT "opens on": the service is
+    // bookable right now, its schedulable dates simply begin later. The
+    // old name said the opposite and put "Booking opens September 28" in
+    // front of the owner on the 8th, when booking had been open since
+    // the 1st.
     if (from && todayKey < from) {
-      return { name: season, open: false, opensOn: from, through, scope };
+      return { name: season, open: false, bookable: true, startsOn: from, through };
     }
-    last = { name: season, open: false, closed: true, through, scope };
+    // Behind us: the season's dates are spent for this year. Not
+    // bookable, and that is a different thing from "starts later".
+    last = { name: season, open: false, bookable: false, closed: true, through };
   }
   return last;
 }

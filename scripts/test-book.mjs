@@ -427,11 +427,11 @@ check('a service out of season says so, instead of showing an empty calendar', (
   assert.equal(seasonNote({}), null, 'a year-round service is annotated');
   assert.equal(seasonNote(null), null);
   assert.match(
-    seasonNote({ season: { name: 'fall', open: false, opensOn: '2026-09-28' } }),
-    /Booking opens .*September 28, 2026|Booking opens 28 September 2026/,
+    seasonNote({ season: { name: 'fall', open: false, bookable: true, startsOn: '2026-09-28' } }),
+    /^Dates from /,
   );
   assert.equal(
-    seasonNote({ season: { name: 'spring', open: false, closed: true } }),
+    seasonNote({ season: { name: 'spring', open: false, bookable: false, closed: true } }),
     'Season is over for this year',
   );
 
@@ -439,10 +439,10 @@ check('a service out of season says so, instead of showing an empty calendar', (
   // work the public flow will not, and hiding it is its own lie.
   const bookableList = lift(
     BOOK, 'bookableList',
-    BOOK.slice(BOOK.indexOf('export function seasonNote('), BOOK.indexOf('\n}\n', BOOK.indexOf('export function seasonNote(')) + 3).replace('export function', 'function'),
+    BOOK.slice(BOOK.indexOf('export function seasonShut('), BOOK.indexOf('\n}\n', BOOK.indexOf('export function seasonShut(')) + 3).replace('export function', 'function'),
   );
   const ordered = bookableList({
-    shut: { bookable: true, season: { open: false, closed: true } },
+    shut: { bookable: true, season: { open: false, bookable: false, closed: true } },
     open: { bookable: true, season: { open: true } },
     always: { bookable: true },
     hidden: { bookable: false },
@@ -451,7 +451,7 @@ check('a service out of season says so, instead of showing an empty calendar', (
   assert.ok(ordered.some((r) => r.key === 'shut'), 'an out-of-season service was hidden rather than labelled');
 
   // And the screen shows the note rather than the duration.
-  assert.match(BOOK, /\{shut \|\| s\.displayMinutes \|\| `\$\{s\.minutes\} min`\}/);
+  assert.match(BOOK, /\{note \|\| s\.displayMinutes \|\| `\$\{s\.minutes\} min`\}/);
 });
 
 check('the season status comes from the same authority the gate uses', () => {
@@ -461,7 +461,7 @@ check('the season status comes from the same authority the gate uses', () => {
   const block = SERVER.slice(at, at + 3000);
   // The route ASKS lib/seasons rather than comparing the bounds itself.
   // One rule, two callers — not two rules that will disagree.
-  assert.match(block, /seasonsLib\.publicBookingStatus\(name, todayKey, \{ scope \}\)/,
+  assert.match(block, /seasonsLib\.publicBookingStatus\(name, todayKey\)/,
     'the route decides the season itself again instead of asking lib/seasons');
   assert.match(block, /seasonsLib\.seasonForFamily\(svc\.family\)/,
     'the family mapping was copied back into the route');
@@ -502,42 +502,65 @@ check('the season status comes from the same authority the gate uses', () => {
   assert.equal(openOn('fall', asOf('2026-10-05')), true);
 });
 
-check('staff are not the public — the Sept 28 hold is not Patrick\'s', () => {
-  // Fall 2026 is SERVICEABLE from Sep 1 and PUBLICLY bookable from Sep 28:
-  // that hold exists so a customer cannot self-book a September date no
-  // route is planned for. Asking the public question on Patrick's behalf
-  // told him "Booking opens September 28" on the 8th, a week after his
-  // own trucks started running.
+check('the booking window is DATES, not permission — and it binds staff too', () => {
+  // Patrick: "booking can be made from Sept 1, but they can only schedule
+  // on Sept 28 - Oct 30. after that i have control to open up further
+  // bookings." The window is the range of days work may be put on, it has
+  // been the rule since day one, and it binds him exactly as it binds the
+  // public. An admin path that widened it would put work on days he has
+  // not opened — the opposite of the control it gives him.
   const requireRoot2 = createRequire(path.join(ROOT, 'package.json'));
   const seasonsLib2 = requireRoot2('./server/lib/seasons.js');
-  const staff = seasonsLib2.publicBookingStatus('fall', '2026-09-08', { scope: 'staff' });
-  const publik = seasonsLib2.publicBookingStatus('fall', '2026-09-08', { scope: 'public' });
-  assert.equal(staff.open, true, 'staff are still held to the public opening date');
-  assert.equal(publik.open, false, 'the public hold has been removed, which it should not be');
-  assert.equal(publik.opensOn, '2026-09-28');
-  // Spring really is over for everyone — the staff scope is not a bypass.
-  assert.equal(seasonsLib2.publicBookingStatus('spring', '2026-09-08', { scope: 'staff' }).open, false,
-    'the staff scope books a season that has genuinely ended');
 
-  // The services route asks the STAFF question for a signed-in caller.
-  const at = SERVER.indexOf('pathname === "/api/booking/services"');
-  const block = SERVER.slice(at, at + 3000);
-  assert.match(block, /const scope = \(await requireUser\(req\)\) \? "staff" : "public";/,
-    'the services route no longer distinguishes staff from the public');
+  const fallNow = seasonsLib2.publicBookingStatus('fall', '2026-09-08');
+  assert.equal(fallNow.open, false, 'the 8th reads as inside the schedulable range, which it is not');
+  assert.equal(fallNow.bookable, true, 'fall reads as unbookable on the 8th, when booking opened on the 1st');
+  assert.equal(fallNow.startsOn, '2026-09-28');
+  assert.equal(seasonsLib2.publicBookingStatus('fall', '2026-10-05').open, true);
+  const spring = seasonsLib2.publicBookingStatus('spring', '2026-09-08');
+  assert.equal(spring.bookable, true);
+  assert.equal(spring.startsOn, '2027-03-01');
 
-  // And availability gates staff on the SERVICEABLE window, via the
-  // seasonWindows hook the gate already accepts.
-  assert.match(SERVER, /seasonWindows: adminSession/, 'staff availability is gated on the public window again');
-  // Matched on the SERVICEABLE half only. test-season-config.mjs keeps a
-  // short allowlist of files that may name the public booking bounds, so
-  // that the rule has one home — and this file has no business joining it.
-  assert.match(SERVER, /cfg\.serviceableFrom \|\| null/, 'staff availability is not gated on the serviceable window');
-  assert.match(SERVER, /cfg\.serviceableThrough \|\| null/);
-  // The app identifies itself so the server can honour it — and the
-  // server still checks the session rather than trusting the flag.
-  assert.match(API, /&adminBypass=1/, 'the app no longer asks as staff');
-  assert.match(SERVER, /const adminSession = wantsAdminBypass \? await requireUser\(req\) : null;/,
-    'the admin flag is trusted without a session');
+  // NO admin widening anywhere. One window, everyone.
+  assert.ok(!/seasonWindows: adminSession/.test(SERVER), 'staff availability widens the window again');
+  assert.ok(!/cfg\.serviceableFrom \|\| null/.test(SERVER),
+    'the serviceable window is being used as the booking window again');
+  assert.ok(!/scope: "staff"/.test(SERVER), 'the services list answers a different question for staff');
+  assert.ok(!/adminBypass/.test(API), 'the app asks the server to bypass a gate again');
+
+  // The wording. "Booking opens September 28" on the 8th told the owner
+  // he could not do a thing he had been able to do for a week.
+  const seasonNote = lift(BOOK, 'seasonNote');
+  const note = seasonNote({ season: { open: false, bookable: true, startsOn: '2026-09-28' } });
+  assert.match(note, /^Dates from /, `the note still talks about permission: ${note}`);
+  // Comments stripped: the file EXPLAINS why it does not say this, and
+  // the explanation must not trip the check that enforces it.
+  const bookCode = BOOK.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/Booking opens/.test(bookCode), 'the "Booking opens" wording is back');
+  assert.equal(
+    seasonNote({ season: { open: false, bookable: false, closed: true } }),
+    'Season is over for this year',
+  );
+  assert.equal(seasonNote({ season: { open: true } }), null);
+
+  // A season whose dates start later is ORDINARY bookable work: annotated,
+  // but not greyed out and not sunk to the bottom.
+  const seasonShut = lift(BOOK, 'seasonShut');
+  assert.equal(seasonShut({ season: { open: false, bookable: true, startsOn: '2026-09-28' } }), false);
+  assert.equal(seasonShut({ season: { open: false, bookable: false, closed: true } }), true);
+  assert.equal(seasonShut({}), false);
+
+  const bookableList2 = lift(
+    BOOK, 'bookableList',
+    BOOK.slice(BOOK.indexOf('export function seasonShut('), BOOK.indexOf('\n}\n', BOOK.indexOf('export function seasonShut(')) + 3).replace('export function', 'function'),
+  );
+  const ordered2 = bookableList2({
+    over: { bookable: true, season: { open: false, bookable: false, closed: true } },
+    later: { bookable: true, season: { open: false, bookable: true, startsOn: '2026-09-28' } },
+    now: { bookable: true, season: { open: true } },
+  });
+  assert.deepEqual(ordered2.map((r) => r.key), ['later', 'now', 'over'],
+    'a season whose dates start later was sunk to the bottom with the dead ones');
 });
 
 // ---- 4. The gate fails closed -------------------------------------------
