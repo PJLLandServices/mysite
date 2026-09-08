@@ -19,6 +19,34 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-08, same day (A customer who books is still a "lead", and a booked property shows
+"0 zones"):** Patrick: "if the customer BOOKS an appointment - the customer is still coming in
+as a LEAD ... if they've booked an appointment they are active?" He was right, twice over.
+(1) `resolveCustomerForLead` creates every customer with `status: "lead"` hardcoded, and the
+ONLY other writers were the admin edit form and the archive path (`inactive`) — nothing on any
+booking path ever promoted anyone, so a customer who booked, paid and had the work done still
+read as a lead until Patrick edited them by hand. Fixed with `promoteCustomerOnBooking` in
+`lib/lead-customer.js` (promotes `lead`/`lost`/`inactive` → `active`; **never demotes** — a
+cancellation does not un-make a customer, and the deliberate way out is still the archive path;
+already-`active` is left untouched so the re-sync that runs on every booking edit is idempotent
+and costs no write). Per the lifecycle checklist the rule has ONE home and one caller:
+`syncBookingFromLead(lead)` in server.js now wraps `bookings.upsertFromLead` and does both
+halves of "they booked", and **all eight direct call sites were rewritten to use it**. Readers
+of `customer.status` walked: the CRM list pill (`server/customers.js`), the detail summary
+(`server/customer.js`) and the list filter (`lib/customers.js`) — display and filtering only,
+no capacity, pricing or billing logic keys off it, so promotion is safe. Deliberately NOT done:
+no backfill of customers who booked BEFORE this change (they still read "lead" until run —
+Patrick's call, and a separate write against live data), and no notification, because nothing
+customer-facing shows this field. Promotion can never take a booking down: it swallows its own
+errors. (2) The lead detail's property panel read `system.zones.length` only, so a property
+booked through the public form — which carries `system.zoneCount` and an EMPTY `system.zones`
+until someone walks it — read "0 zones" while its work order correctly scaffolded four. Same
+fix as `declaredZoneList()`: documented zones win, the declared count stands in, and the label
+reads "(declared)" so an unverified claim never passes for a survey. Coverage:
+`scripts/test-customer-active-on-booking.mjs`, 14 assertions, in `build:check`. The load-bearing
+one is a lint — nothing may call `bookings.upsertFromLead` outside the wrapper — which names all
+seven stray call sites when run against the old code. No PASS flow touched.
+
 **2026-09-08, same day (The delete bot failed in Patrick's hands: "CRM login required"):** The
 first cut reached the endpoint over HTTP and picked the session cookie out of
 `headers.get("set-cookie")` with `.split(";")[0]`. Node's fetch JOINS multiple `Set-Cookie`
