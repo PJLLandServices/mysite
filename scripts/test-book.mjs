@@ -310,6 +310,95 @@ check('the full contact is captured, including the second phone', () => {
     'validateLead stopped reading contact.name — the joined name would be dropped');
 });
 
+check('a full calendar is never a dead end — First available is always there', () => {
+  // The website's picker carries this card ALWAYS (allowOpenBucket: true
+  // in js/booking.js) and selecting it books NO slot: the customer joins
+  // the standby list and is placed onto a route day later. Without it,
+  // an address the corridor cannot place efficiently — past the
+  // 40-minute widening cap — reads as "there is no space", which is
+  // false and loses the job. That is exactly what Patrick hit.
+  assert.match(BOOK, /First available/, 'the open bucket is gone from the picker');
+  const openBucketAllowed = lift(BOOK, 'openBucketAllowed');
+  assert.equal(openBucketAllowed({ category: 'seasonal' }), true);
+  assert.equal(openBucketAllowed({ category: 'repair' }), true);
+  // The one exception, and the server enforces it too.
+  assert.equal(openBucketAllowed({ category: 'consult' }), false, 'a site visit was offered standby');
+  assert.equal(openBucketAllowed(null), false);
+  assert.match(SERVER, /code: "standby_unsupported"/, 'the server no longer refuses standby site visits');
+
+  // It is rendered UNCONDITIONALLY, not only when the list came back
+  // empty — some customers take it over a date three weeks out.
+  const at = BOOK.indexOf('{openBucketAllowed(service) ? (');
+  assert.ok(at > 0, 'the First available card is conditional on something');
+  const before = BOOK.slice(Math.max(0, at - 400), at);
+  assert.ok(!/noneBookable \?/.test(before), 'First available only appears when nothing else does');
+
+  // And it books as standby, with no slot.
+  assert.match(BOOK, /\.\.\.\(slot\.openBucket \? \{ standby: true \} : \{ slotStart: slot\.start \}\)/,
+    'the open bucket books a real slot, which does not exist');
+  assert.match(SERVER, /const isStandby = payload\.standby === true;/,
+    'the server no longer reads the standby flag');
+});
+
+check('"no space" is only said when it is true', () => {
+  // The server hands back a reason per day and they are not the same
+  // problem. Saying "fully booked" for an out-of-season service, or for
+  // an address outside that week's route area, is three lies wearing one
+  // sentence.
+  const whyNoDays = lift(
+    API, 'whyNoDays',
+    API.slice(API.indexOf('export const DAY_REASONS'), API.indexOf('};', API.indexOf('export const DAY_REASONS')) + 2)
+      .replace('export const', 'const'),
+  );
+  const day = (reason) => ({ slots: [], reason });
+  assert.equal(whyNoDays([day('season_closed'), day('season_closed')]), 'This service is out of season.');
+  assert.equal(whyNoDays([day('outside_route_area')]), 'Too far from the routes running that week.');
+  assert.equal(whyNoDays([day('no_availability')]), 'Fully booked.');
+  assert.equal(whyNoDays([day('season_not_open')]), 'Bookings for this service have not opened yet.');
+  // The dominant reason wins, not the first one seen.
+  assert.equal(
+    whyNoDays([day('no_availability'), day('season_closed'), day('season_closed')]),
+    'This service is out of season.',
+  );
+  // Past days and ordinary non-working days are not reasons anyone needs.
+  assert.equal(whyNoDays([day('past'), day('closed')]), 'No open days in the next six weeks.');
+  // And if there IS availability, there is nothing to explain.
+  assert.equal(whyNoDays([{ slots: [{ start: 'x' }] }]), null);
+
+  // The reason codes are the server's own — if they are renamed this
+  // stops matching and every empty day silently reads as "full" again.
+  const AVAIL = read('server/lib/availability.js');
+  for (const code of ['season_not_open', 'season_closed', 'outside_route_area', 'no_availability']) {
+    assert.ok(AVAIL.includes(`"${code}"`) || AVAIL.includes(`'${code}'`),
+      `the server no longer emits the day reason ${code}`);
+  }
+});
+
+check('availability is asked for a RANGE, so the reasons come back at all', () => {
+  // Without from/to the server groups only days that HAVE slots, and a
+  // screen showing nothing cannot tell full from out-of-season. The
+  // desktop picker asks for the range; so does this now.
+  assert.match(API, /&from=\$\{encodeURIComponent\(dateKey\(from\)\)\}/);
+  assert.match(API, /&to=\$\{encodeURIComponent\(dateKey\(to\)\)\}/);
+  assert.match(SERVER, /const fromDate = parseLocalDateKey\(fromParam\);/,
+    'the server no longer reads a from/to range');
+  assert.match(SERVER, /expandDaysToRange\(slots/, 'the server no longer expands to a full range');
+});
+
+check('missing address suggestions say why instead of looking broken', () => {
+  // geocode falls back to town centroids without a key, so verify-address
+  // still succeeds — which means "no suggestions" is NOT proof the app is
+  // broken, and silence here sends someone hunting the wrong fault.
+  const at = SERVER.indexOf('req.method === "GET" && pathname === "/api/admin/address-suggest"');
+  const block = SERVER.slice(at, at + 2200);
+  assert.match(block, /degraded: "no_key"/);
+  assert.match(block, /degraded: "upstream"/);
+  assert.match(API, /degraded: d\.degraded \|\| null/, 'the app throws the reason away');
+  assert.match(BOOK, /GOOGLE_MAPS_SERVER_KEY is not set/, 'a missing key is silent again');
+  assert.match(BOOK, /Type the address in full; it still books/,
+    'the screen does not say the booking still works without suggestions');
+});
+
 // ---- 4. The gate fails closed -------------------------------------------
 
 check('Book is admin-only, and the gate fails closed', () => {
