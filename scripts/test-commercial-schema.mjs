@@ -45,7 +45,10 @@ fs.mkdirSync(path.join(SANDBOX, "data"), { recursive: true });
 // three it requires only node builtins plus lazy relative siblings.
 // lead-customer.js is the intake resolver — the place the duplicate
 // management-company record was actually created. Same dependency profile.
-for (const file of ["customers.js", "properties.js", "billing-parties.js", "invoices.js", "lead-customer.js"]) {
+// atomic-json.js joined the list when customers/properties stopped using a
+// bare fs.writeFile — the sandbox copies whatever they require, or the
+// sandboxed module fails to load and the suite dies before its first check.
+for (const file of ["customers.js", "properties.js", "billing-parties.js", "invoices.js", "lead-customer.js", "atomic-json.js"]) {
   fs.copyFileSync(path.join(__dirname, "..", "server", "lib", file), path.join(SANDBOX_LIB, file));
 }
 
