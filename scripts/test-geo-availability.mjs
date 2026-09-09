@@ -609,6 +609,94 @@ ok("…it builds shapes from the bookings anyway",
   /buildDayShapes\(\{\s*\n?\s*plan: plan \|\| null/.test(dsBody)
   || dsBody.includes("plan: plan || null"));
 
+// ---- 10. THE AGGREGATE GUARD: no crossing the city inside one day ----
+//
+// Cause C-D. The per-booking check is MARGINAL — it asks "what does this
+// one stop add?" and never looks at the day as a whole. Worse, it is
+// ASYMMETRIC, because every route starts and ends at the Newmarket yard:
+//
+//   Thornhill into a morning holding Newmarket   +88 min  → refused
+//   Newmarket into a morning holding Thornhill    +4 min  → allowed
+//   Aurora into a day holding both                 +0 min → allowed
+//
+// So the barbell only ever forms one way round: the far cluster lands
+// first, then home-turf customers slot in at +4 apiece and every one of
+// them passes. That is why Patrick kept seeing Newmarket → Thornhill →
+// Newmarket after several rounds of corridor work.
+//
+// WHY NOT A TOTAL-DRIVE CAP, which the spec proposed at 150 minutes.
+// Measured on real coordinates:
+//
+//   Newmarket ×2                      commute 10, between stops  5
+//   Thornhill ×2 (far, but tight)     commute 94, between stops  5
+//   Newmarket → Thornhill             commute 52, between stops 46
+//
+// Total drive is 99 for the good Thornhill day and 98 for the barbell.
+// A total cap cannot tell them apart, and 150 admits both. Every cluster
+// pays to get out and back wherever it sits; what makes a day bad is
+// crossing the city INSIDE it. So the rule is the longest leg BETWEEN
+// consecutive stops, which is 5 for either tight day and 46 for the
+// barbell — and which is symmetric, so it catches Newmarket joining a
+// Thornhill day exactly as hard as the reverse.
+
+const NM_A = { lat: 44.056, lng: -79.462, source: "google" };   // Newmarket
+const NM_B = { lat: 44.048, lng: -79.480, source: "google" };   // Newmarket
+const TH_A = { lat: 43.815, lng: -79.420, source: "google" };   // Thornhill
+const TH_B = { lat: 43.806, lng: -79.437, source: "google" };   // Thornhill
+const AGG_DAY = "2026-09-25";
+
+const booked = (id, coords, hhmm) => ({
+  id, start: `${AGG_DAY}T${hhmm}:00`, coords, propertyId: id, status: "confirmed"
+});
+const shapesFor = (bookings) =>
+  geoFilter.buildDayShapes({ plan: null, propertiesByCode: new Map(), bookings });
+
+// The fixture that beats today's engine: a day already holding Thornhill.
+const thornhillDay = [booked("BK-TH1", TH_A, "08:00"), booked("BK-TH2", TH_B, "09:00")];
+
+// It passes the marginal check with room to spare — that is the bug.
+const marginal = await geoFilter.addedDriveMinutes(NM_A, [TH_A, TH_B]);
+ok("fixture: a Newmarket stop looks cheap against a Thornhill day",
+  marginal.minutes <= 15, `+${marginal.minutes} min — no longer cheap, fixture is stale`);
+
+const aggDates = datesOf(await listAvailableSlots({
+  ...baseArgs, customerCoords: NM_A, bookings: thornhillDay, dayShapes: shapesFor(thornhillDay),
+  now: new Date(2026, 8, 14, 9, 0, 0)
+}));
+ok("a Newmarket customer is NOT offered a Thornhill day",
+  !aggDates.has(AGG_DAY),
+  `offered ${AGG_DAY} — the barbell is still being composed`);
+
+// The mirror case must still be refused too — this half already worked,
+// and must keep working.
+const newmarketDay = [booked("BK-NM1", NM_A, "08:00"), booked("BK-NM2", NM_B, "09:00")];
+const mirrorDates = datesOf(await listAvailableSlots({
+  ...baseArgs, customerCoords: TH_A, bookings: newmarketDay, dayShapes: shapesFor(newmarketDay),
+  now: new Date(2026, 8, 14, 9, 0, 0)
+}));
+ok("…and a Thornhill customer is still not offered a Newmarket day",
+  !mirrorDates.has(AGG_DAY), `offered ${AGG_DAY}`);
+
+// A FAR BUT TIGHT DAY IS NOT THE PROBLEM. Patrick must still be able to
+// run a full Thornhill route: a second Thornhill customer joins the first.
+const tightDates = datesOf(await listAvailableSlots({
+  ...baseArgs, customerCoords: TH_B, bookings: [booked("BK-TH1", TH_A, "08:00")],
+  dayShapes: shapesFor([booked("BK-TH1", TH_A, "08:00")]),
+  now: new Date(2026, 8, 14, 9, 0, 0)
+}));
+ok("a Thornhill customer CAN join a Thornhill day, far from base though it is",
+  tightDates.has(AGG_DAY),
+  "the guard is banning legitimate far-side route days");
+
+// And the first booking on an empty day is never refused — somebody has
+// to seed a cluster, and a day with no stops has no spread to measure.
+const seedDates = datesOf(await listAvailableSlots({
+  ...baseArgs, customerCoords: TH_A, bookings: [], dayShapes: shapesFor([]),
+  now: new Date(2026, 8, 14, 9, 0, 0)
+}));
+ok("the first customer of the day is never refused for spread",
+  seedDates.size > 0, "an empty calendar is being closed down");
+
 // ---- Report ----------------------------------------------------------
 
 if (failures.length) {
