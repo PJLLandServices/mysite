@@ -41,7 +41,10 @@
       }
     },
     "updates": {
-      "url": "https://u.expo.dev/0e85ca2e-506f-436e-8814-0b3dd2086582"
+      "url": "https://u.expo.dev/0e85ca2e-506f-436e-8814-0b3dd2086582",
+      "requestHeaders": {
+        "expo-channel-name": "production"
+      }
     },
     "runtimeVersion": {
       "policy": "fingerprint"

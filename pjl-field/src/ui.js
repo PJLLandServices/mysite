@@ -2,7 +2,7 @@
 // dumb on purpose — layout only, no data knowledge.
 
 import { useEffect, useRef } from 'react';
-import { FlatList, Keyboard, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Keyboard, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors, radius, space, type } from './theme';
 
 export function SectionHeader({ children, style }) {
@@ -202,6 +202,57 @@ export function PickerSheet({ visible, title, options, selectedKey, onSelect, on
   );
 }
 
+// A sheet that asks for one line of text.
+//
+// NOT `Alert.prompt`, which is iOS-only and does nothing at all on
+// Android — app.json declares an android target, and a button that
+// silently does nothing on half the platforms it ships to is worse than
+// one that is not there. Same sheet furniture as PickerSheet so the two
+// read as one thing.
+export function PromptSheet({
+  visible, title, message, placeholder, value, onChangeText,
+  confirmLabel = 'Save', onConfirm, onCancel, busy, optional = true,
+}) {
+  useEffect(() => { if (!visible) Keyboard.dismiss(); }, [visible]);
+  const ready = optional || String(value || '').trim().length > 0;
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onCancel}>
+      <Pressable
+        style={styles.backdrop}
+        onPress={busy ? undefined : onCancel}
+        accessibilityRole="button"
+        accessibilityLabel="Close"
+      />
+      <View style={styles.sheet}>
+        <View style={styles.grabber} />
+        {title ? <Text style={styles.sheetTitle}>{title}</Text> : null}
+        <View style={styles.promptBody}>
+          {message ? <Text style={styles.promptMessage}>{message}</Text> : null}
+          <TextInput
+            style={styles.promptInput}
+            value={value}
+            onChangeText={onChangeText}
+            placeholder={placeholder}
+            placeholderTextColor={colors.textFaint}
+            autoFocus
+            multiline
+          />
+          <View style={styles.promptActions}>
+            <Pressable onPress={onCancel} disabled={busy} hitSlop={8}>
+              <Text style={styles.promptCancel}>Back</Text>
+            </Pressable>
+            <Pressable onPress={onConfirm} disabled={busy || !ready} hitSlop={8}>
+              <Text style={[styles.promptConfirm, (busy || !ready) && styles.promptOff]}>
+                {busy ? 'Saving…' : confirmLabel}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 export function Empty({ children }) {
   return <Text style={styles.empty}>{children}</Text>;
 }
@@ -338,6 +389,20 @@ const styles = StyleSheet.create({
   sheetRowNote: { ...type.caption, color: colors.warning, fontWeight: '600' },
   sheetRowMeta: { ...type.caption, fontVariant: ['tabular-nums'] },
   sheetEmpty: { ...type.caption, paddingHorizontal: space.lg, paddingVertical: space.lg },
+  promptBody: { paddingHorizontal: space.lg, paddingTop: space.sm, gap: space.md },
+  promptMessage: { ...type.caption, lineHeight: 19 },
+  promptInput: {
+    ...type.body, backgroundColor: colors.ground, borderRadius: radius.card,
+    paddingHorizontal: space.md, paddingVertical: space.sm,
+    minHeight: 76, textAlignVertical: 'top',
+  },
+  promptActions: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end',
+    gap: space.xl, paddingVertical: space.sm,
+  },
+  promptCancel: { ...type.body, color: colors.textMuted },
+  promptConfirm: { ...type.body, color: colors.brand, fontWeight: '700' },
+  promptOff: { color: colors.textFaint },
   check: { color: colors.brand, fontSize: 16, width: 16, textAlign: 'center' },
   checkHidden: { opacity: 0 },
 

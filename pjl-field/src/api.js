@@ -382,6 +382,22 @@ export const releaseHold = (holdToken) => (
     : Promise.resolve(null)
 );
 
+// Take a visit off the day, with a reason the record keeps.
+//
+// The same route the CRM's cancel button uses — fenced at `user`, so the
+// person on the driveway is the one who can do it. The SERVER decides the
+// outcome from the code (a cancellation, or a no-show); the phone only
+// says why. `note` is the free text "already done" asks for.
+//
+// Nothing needs to be done about the route afterwards: a booking that
+// stops holding its slot leaves the day and the driving order by itself.
+export const removeVisit = (bookingId, { reasonCode, note = '', notifyCustomer }) =>
+  sendJson(`/api/bookings/${encodeURIComponent(bookingId)}/cancel`, 'POST', {
+    reasonCode,
+    note,
+    ...(notifyCustomer === undefined ? {} : { notifyCustomer }),
+  });
+
 // Who is signed in. Book is admin-only — a tech booking work onto the
 // calendar is a business decision, not a field one — and the tab hides
 // itself rather than showing a locked door.
