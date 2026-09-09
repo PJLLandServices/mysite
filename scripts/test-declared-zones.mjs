@@ -143,5 +143,76 @@ const mappedCount = (property) => Array.isArray(property.system?.zones)
   eq([].length || null, null, "removing the last zone clears the count rather than leaving a stale 1");
 }
 
+// ---- The count has to REACH the property, or none of the above runs ----
+//
+// Patrick, on a work order for a seven-zone property showing "Zone 1 of 1":
+// "I believe there was a working fix for this, but it clearly doesn't look
+// delivered."
+//
+// It was delivered, and it did nothing. The chain above turns
+// system.zoneCount into real zones — but system.zoneCount was Patrick's
+// hand-filled field and the appointment page's, and NOTHING wrote it when
+// a booking was taken. A first-time property therefore reached
+// scaffoldZonesFromProperty() with an empty system, produced no zones, and
+// create() fell through to its one-zone placeholder. The register even
+// listed the walked test that would catch it — "book a new property
+// declaring a zone count, open its work order" — and it had not been run.
+{
+  const woLib = require("../server/lib/work-orders.js");
+  const SERVER = require("node:fs").readFileSync(
+    new URL("../server/server.js", import.meta.url), "utf8");
+
+  // Named rather than destructured, so their absence reads as one failed
+  // assertion instead of a stack trace that hides every check below it.
+  const declaredZonesFromBooking = woLib.declaredZonesFromBooking || (() => -1);
+  const canAdoptDeclaredZones = woLib.canAdoptDeclaredZones || (() => null);
+  ok(typeof woLib.declaredZonesFromBooking === "function"
+    && typeof woLib.canAdoptDeclaredZones === "function",
+    "a booked zone count has no way to reach the property — lib/work-orders.js does not describe one");
+
+  // What the booking form can actually send.
+  eq(declaredZonesFromBooking({ zoneCount: 7 }), 7, "seven zones booked is seven");
+  eq(declaredZonesFromBooking({ zoneCount: "7" }), 7, "a numeric string still counts");
+  eq(declaredZonesFromBooking({ zoneCount: 1 }), 1, "one zone is a real answer");
+  eq(declaredZonesFromBooking({ zoneCount: 50 }), 50, "the top of the accepted range");
+  // "unsure" is a real answer the form takes, and it is not a number. It
+  // must leave the property blank rather than claim a count nobody gave.
+  eq(declaredZonesFromBooking({ zoneCount: "unsure" }), 0, "'unsure' is not a zone count");
+  eq(declaredZonesFromBooking({ zoneCount: 0 }), 0, "zero zones is not a count");
+  eq(declaredZonesFromBooking({ zoneCount: 51 }), 0, "out of range is refused, as reserve refuses it");
+  eq(declaredZonesFromBooking({}), 0, "a booking without a count");
+  eq(declaredZonesFromBooking(null), 0, "no booking at all");
+
+  // It may only ever fill a BLANK.
+  ok(canAdoptDeclaredZones({ id: "p", system: {} }, { zoneCount: 7 }),
+    "a property with nothing on it takes the booked count");
+  ok(!canAdoptDeclaredZones({ id: "p", system: { zones: [{ number: 1 }] } }, { zoneCount: 7 }),
+    "documented zones are ground truth and a booking must not move them");
+  ok(!canAdoptDeclaredZones({ id: "p", system: { zoneCount: 4 } }, { zoneCount: 7 }),
+    "a count already on the record is Patrick's or the customer's, not a later booking's");
+  ok(!canAdoptDeclaredZones({ id: "p", system: {} }, { zoneCount: "unsure" }),
+    "'unsure' fills nothing in");
+
+  // THE FAILURE, end to end on the real functions: the property a booking
+  // creates, before and after the count reaches it.
+  const asBookingCreatesIt = { id: "p1", address: "330 Aztec Dr", system: {} };
+  eq(scaffoldZonesFromProperty(asBookingCreatesIt).length, 0,
+    "a booking-created property still has no zones of its own");
+  const withTheCount = { ...asBookingCreatesIt, system: { zoneCount: 7 } };
+  eq(scaffoldZonesFromProperty(withTheCount).length, 7,
+    "once the count is on the record, seven zones scaffold");
+
+  // And the route layer actually does the writing — the whole bug was a
+  // chain with no first link.
+  ok(/async function adoptDeclaredZoneCount\(property, booking\)/.test(SERVER),
+    "nothing writes a booked zone count onto a property");
+  ok(/await adoptDeclaredZoneCount\(linkResult\.property, result\.lead\.booking\)/.test(SERVER),
+    "taking a booking does not put its zone count on the property");
+  eq((SERVER.match(/materializeDeclaredZones\(property, lead\)/g) || []).length, 2,
+    "a work order is opened without offering the lead's booked count as a fallback");
+  ok(/property = await adoptDeclaredZoneCount\(property, lead\?\.booking\)/.test(SERVER),
+    "bookings taken before this shipped still scaffold one zone");
+}
+
 console.log(`\ndeclared-zones: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

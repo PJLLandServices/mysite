@@ -1109,6 +1109,28 @@ check('a hold is given back rather than left to rot', () => {
   assert.match(BOOK, /Held until \{clockOf\(hold\.expiresAt\)\}/, 'the ten minutes are invisible');
 });
 
+check('the questions are asked in words a customer would hear, not the price list\'s', () => {
+  // Patrick, on a screenshot of the zones row: "It's circled 'brand' —
+  // unfortunately that isn't the intended description of what is to be
+  // expected." The placeholder said "Which band?". `band` is what the
+  // service catalogue calls a zone tier; nobody says it out loud, and at a
+  // glance it reads as a typo for "brand".
+  //
+  // The two zone rows ask ABOUT how many, then EXACTLY how many. That is
+  // the whole distinction and it should need no glossary.
+  const at = BOOK.indexOf("{step === 'service' ?");
+  const block = BOOK.slice(at, BOOK.indexOf("{/* ---- 3.", at));
+  const shown = [...block.matchAll(/(?:placeholder|label)="([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(shown.length >= 6, `only found ${shown.length} labels and placeholders`);
+  for (const text of shown) {
+    assert.ok(!/\bbands?\b/i.test(text), `"${text}" says band — that is the price list's word`);
+    assert.ok(!/\bkey\b|\bslug\b|\btier\b/i.test(text), `"${text}" is internal vocabulary`);
+  }
+  // And the two rows still read as a pair, coarse then exact.
+  assert.ok(shown.includes('About how many?'), 'the zone range lost its plain-language prompt');
+  assert.ok(shown.includes('Exactly how many'), 'the exact-count row lost its label');
+});
+
 // ---- It parses ----------------------------------------------------------
 
 check('no slide can be left reading a value that has been taken away', () => {
