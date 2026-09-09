@@ -19,6 +19,35 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-09 (The overflow failed on arrival: the open bucket's hard-coded 13:00):** Spec item 4,
+D3. Patrick's rule is that we never turn a customer down — past the corridor cap they go into the
+open bucket and get picked up "on our way home". Ranking them against the upcoming route days
+worked; PLACING one did not. The Book + notify button hard-coded `13:00` as the anchor minute, so
+the placement collided with whatever already sat there and came back **409 `physical_conflict` on
+exactly the days the panel had just recommended**. The re-stamp shipped hours earlier made this
+deterministic rather than occasional: the afternoon now fills from 12:00 in half-hour steps, so
+13:00 is precisely where the third afternoon booking lands. It also performed no capacity or
+geography check of its own — a placement is a booking, and without those the open bucket is a
+side door into a full day.
+Fix: `POST /api/admin/open-bucket/slot` (admin) resolves where the customer actually fits by
+asking `listAvailableSlots`, so the placement **inherits** bucket capacity, bucket geography,
+hours and blocks rather than re-deriving any of them; it returns the first free AFTERNOON slot
+(the back half of the day is what "on our way home" means) or refuses with a named reason —
+`afternoon_full`, `day_unavailable`, `not_waiting`. The panel then books through the ordinary
+book-from-lead path, so the confirmation, the canonical mirror and the driving-order re-stamp all
+ride machinery that already works. **Deliberately a resolver, not a second booking path:**
+duplicating the booking write would have been a second definition of "book this customer", and
+the reserve handler re-validates under the booking lock anyway, so a slot taken between the two
+calls fails the same way any other race does. The customer is still told the 12–5 window and
+never a minute. Coverage: `scripts/test-open-bucket-placement.mjs`, 16 assertions, in
+`build:check` — it reproduces the 409 collision first, then drives the real two-step, and pins
+the CLIENT too (a resolver nobody calls fixes nothing). Both halves verified against broken code:
+restore the hard-coded anchor → 2 fail; remove the endpoint → 8 fail. One fixture correction
+worth recording: the first "full afternoon" case passed for the wrong reason, because with no
+season plan there is no `bucketCap` and slots remained — the fixture now fills every half-hour
+from noon to close, and the assertion says it is testing the engine's own "no room left" rather
+than the cap. No PASS flow touched.
+
 **2026-09-09, same day (The aggregate guard — the barbell stops being COMPOSED):** Spec priority
 3, causes C-D, and the last piece of the Newmarket → Thornhill → Newmarket problem. The
 per-booking check is marginal (what does THIS stop add?) and, because every route starts and
