@@ -19,6 +19,46 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-09, same day (Google decides how long the customer waits — and its guesses were
+kept as answers):** Spec item 6, the travel-time half. `lib/geocode.js` was hardened for
+Patrick's "we cannot have this fail" (4s timeout, one retry, town-centroid fallback, approximate
+coords that never persist); `lib/distance.js` — the other half of the same dependency, and the one
+the availability engine calls once per candidate slot — had neither protection.
+**Defect 1, no timeout:** `fetch(url)` carried no AbortSignal, so Google set the response time of a
+customer's booking request; the engine awaits these in sequence, so one hung call held the whole
+availability response open. Now 4s per attempt, one retry on a transient failure (timeout, network,
+`UNKNOWN_ERROR`), an ~8s worst case, then a straight-line estimate and a booking that still works.
+A definitive answer (`ZERO_RESULTS`, `REQUEST_DENIED`, `OVER_QUERY_LIMIT`) is not retried — it does
+not improve on a second ask.
+**Defect 2, guesses cached as answers:** every failure path wrote its Haversine estimate into
+`distance-cache.json` in the same shape as a real answer, and nothing re-checked it — so setting
+`GOOGLE_MAPS_SERVER_KEY` in Render changed nothing for any pair already guessed, and the geography
+filter went on measuring the corridor with straight lines. On this machine that file held 58
+entries and **every one was a guess**. Only a real Google answer is cached now, as
+`{ minutes, source: "google", at }`; an estimate is returned and forgotten (it is arithmetic —
+recomputing costs nothing). Entries written under the old rule carry no provenance and cannot be
+told apart from good ones after the fact, so they are dropped on load and the file is rewritten
+without them: a one-time re-bill of the pairs still in use, against a cache that would otherwise
+stay wrong forever. The two Google call sites (floored + unfloored) were also merged into one
+`askGoogleSeconds()` — two copies of a timeout and a retry rule is how only one of them ended up
+with the error handling right.
+Coverage: `scripts/test-distance-fail-open.mjs`, 22 assertions, in `build:check`, driving the real
+module with `fetch` replaced (no network, no key, no billing). Verified against broken code:
+**14 fail**, including the hang — the old call never returned at all — and the poisoned entry being
+served. No PASS flow touched.
+
+**2026-09-09, same day (Two writes in the same millisecond, and one of them threw):** Found while
+testing the above, and more serious than what it was found under. `lib/atomic-json.js` (PR #176)
+named its temp file `pid + Date.now()`. Two writes to one store in the same millisecond therefore
+picked the **same temp path**: both wrote it, the first renamed it away, and the second's rename
+failed `ENOENT` and **threw**. Measured: **372 of 600** concurrent writes failed. `writeLeads()`
+does not catch, so that is a lead or a booking lost to two requests landing in the same tick — and
+since this morning it covered `users.json` and `auth.json` too. Losing one writer's CHANGES to the
+other is this helper's documented behaviour (that is what `booking-lock.js` is for); losing the
+WRITE is not. Fix: six random bytes in the suffix. 372 failures → 0. Pinned in
+`scripts/test-session-stores-atomic.mjs` (now 11 assertions); against the old suffix, 114 of 180
+concurrent writes throw. No PASS flow touched.
+
 **2026-09-09, same day (The server refused the session cookie it had just issued):** Found while
 driving PR #184's CI to green — `test-booking-lifecycle` failed with four consecutive `ERR:401` on
 the tech's day list while the login assertion in the SAME block passed. Not this PR's change, and

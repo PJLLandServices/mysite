@@ -15,12 +15,23 @@
 
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 async function writeJsonAtomic(file, value) {
   const body = JSON.stringify(value, null, 2) + "\n";
   // Same directory, so rename() stays inside one filesystem. A temp file in
   // /tmp would make this a copy, and a copy is not atomic.
-  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
+  //
+  // The suffix carries RANDOM bytes, not just pid + clock. Two writes to
+  // one store in the same millisecond used to pick the same temp path:
+  // both wrote it, the first renamed it away, and the second's rename
+  // failed ENOENT and THREW — 372 of 600 concurrent writes, measured. The
+  // callers do not expect a write to fail (writeLeads() does not catch),
+  // so a booking could be lost to two requests landing in the same tick.
+  // Losing one writer's CHANGES to the other is the documented behaviour
+  // of this helper; losing the WRITE is not.
+  const tmp = path.join(path.dirname(file),
+    `.${path.basename(file)}.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString("hex")}.tmp`);
   try {
     await fs.writeFile(tmp, body, "utf8");
     await fs.rename(tmp, file);
