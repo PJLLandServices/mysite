@@ -559,6 +559,9 @@ function parseCookies(req) {
 // password fields (salt, passwordHash) were stripped during the
 // users.json migration; if an old install still has them we ignore them
 // here. Per-user credentials live in users.json — see lib/users.js.
+// Held for the life of the process — see the comment in readAuthConfig.
+let generatedSessionSecret = null;
+
 async function readAuthConfig() {
   await ensureStore();
   let parsed = {};
@@ -570,8 +573,21 @@ async function readAuthConfig() {
     // First-run safety net — generate a session secret if the file is
     // missing one. Without this, a fresh install can't sign cookies
     // until create-user runs. Persist so subsequent boots stay stable.
-    parsed.sessionSecret = crypto.randomBytes(32).toString("base64");
-    try { await fs.writeFile(AUTH_FILE, JSON.stringify({ sessionSecret: parsed.sessionSecret }, null, 2) + "\n", "utf8"); }
+    //
+    // ONE SECRET PER PROCESS, not one per call. This is read on every
+    // request that touches a session, and on a fresh store several arrive
+    // before the first write lands — each minting its OWN random secret,
+    // each writing it, last one winning. A cookie signed a millisecond
+    // earlier then fails its own signature check, which surfaces as the
+    // server refusing the session it just issued. The memo makes the
+    // racing callers agree on one value, so whichever write lands last
+    // writes the same bytes.
+    if (!generatedSessionSecret) generatedSessionSecret = crypto.randomBytes(32).toString("base64");
+    parsed.sessionSecret = generatedSessionSecret;
+    // Write the whole config back, not just this key. It used to persist
+    // `{ sessionSecret }` alone, so a first-run write threw away anything
+    // else auth.json was holding.
+    try { await fs.writeFile(AUTH_FILE, JSON.stringify(parsed, null, 2) + "\n", "utf8"); }
     catch { /* read-only filesystem in tests, etc. — fall through */ }
   }
   return parsed;

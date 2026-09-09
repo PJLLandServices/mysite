@@ -49,6 +49,15 @@
 // twice: everything the earlier slides settled is one summary card at the
 // top, not a second set of questions.
 //
+// THE SLOT IS HELD WHILE THE DETAILS ARE TAKEN. The server refuses a
+// standard booking that does not arrive holding its slot — otherwise two
+// people fill in the whole form for one time and only one of them can
+// have it. Its exemptions are all cases with no form being filled in, and
+// a booking taken on the phone is the opposite of that: it is the longest
+// form in the flow. So the hold is taken the moment a time is chosen, the
+// token rides on the reserve, and changing your mind releases the old one
+// rather than eating a second slot's worth of capacity.
+//
 // THE KEYBOARD GOES AWAY the moment an address is settled. It used to sit
 // over the confirmation and the button under it, so the next tap was
 // really two.
@@ -71,6 +80,8 @@ import {
 import {
   AuthRequiredError,
   bookingAvailability,
+  holdSlot,
+  releaseHold,
   whyNoDays,
   listProperties,
   listServices,
@@ -111,6 +122,13 @@ export function reachedSteps(furthest) {
 // The later of two steps, so going back never shortens the pager.
 export function laterStep(a, b) {
   return STEPS.indexOf(b) > STEPS.indexOf(a) ? b : a;
+}
+
+// The wall-clock time a hold runs out, in the form a watch shows it.
+export function clockOf(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
 // What the zone answer says out loud. 'unsure' is a real value the server
@@ -284,6 +302,10 @@ export default function BookScreen({ onSignIn }) {
   const [days, setDays] = useState([]);
   const [loadingDays, setLoadingDays] = useState(false);
   const [slot, setSlot] = useState(null);
+  // The ten-minute claim on `slot`: { token, expiresAt }. Null for the open
+  // bucket, which has no slot to hold.
+  const [hold, setHold] = useState(null);
+  const [holding, setHolding] = useState(false);
 
   // --- Slide 3: who they are -------------------------------------------
   const [firstName, setFirstName] = useState('');
@@ -383,6 +405,14 @@ export default function BookScreen({ onSignIn }) {
     setFurthest(to);
   };
 
+  // Give the slot back. Best-effort and never awaited into a flow: the
+  // hold lapses on its own in ten minutes, so the worst a failure costs is
+  // ten minutes of one slot's capacity.
+  const dropHold = () => {
+    if (hold?.token) releaseHold(hold.token);
+    setHold(null);
+  };
+
   // Typing over a settled address invalidates it — and with it the days
   // and the slot that were chosen for it. Left standing, the day slide
   // would be reading `verified.address` for an address that no longer
@@ -397,6 +427,7 @@ export default function BookScreen({ onSignIn }) {
     // Called on every keystroke. With nothing settled there is nothing to
     // take away, and `setDays([])` would hand React a new array each time.
     if (!verified && !picked && !slot && !days.length && furthest === 'address') return;
+    dropHold();
     setVerified(null);
     setPicked(null);
     setDays([]);
@@ -499,29 +530,89 @@ export default function BookScreen({ onSignIn }) {
     }
   };
 
+  // The one place that asks for days, so the two callers below cannot
+  // drift about what a stale reply means.
+  const fetchDays = async (key) => {
+    const mine = gen.current;
+    const res = await bookingAvailability({ service: key, address: verified.address });
+    // Swiping back and editing the address mid-request would otherwise drop
+    // the user onto a day slide with nothing on it.
+    return mine === gen.current ? (res.days || []) : null;
+  };
+
   const showDays = async (key) => {
     if (!verified || !key) return;
-    const mine = gen.current;
     setServiceKey(key);
     setLoadingDays(true);
     setDays([]);
     setSlot(null);
+    dropHold();
     // The slot just went. Asking for days again after swiping back left
     // the details slide mounted and reading `slot.dayLabel` off null,
     // which is a crash in the middle of a phone call.
     clamp('service');
     try {
-      const res = await bookingAvailability({ service: key, address: verified.address });
-      // Same race: swiping back and editing the address mid-request would
-      // otherwise drop the user onto a day slide with nothing on it.
-      if (mine !== gen.current) return;
-      setDays(res.days || []);
+      const fresh = await fetchDays(key);
+      if (fresh === null) return;
+      setDays(fresh);
       go('when');
     } catch (err) {
       if (err instanceof AuthRequiredError) setState('auth');
       else Alert.alert("Couldn't load available days", err?.message || 'Try again.');
     } finally {
       setLoadingDays(false);
+    }
+  };
+
+  // Back to a fresh day list without leaving the day slide — what happens
+  // when a time turns out to be gone. `clamp('when')` rather than
+  // 'service' so he is not bounced through a slide he did not ask for.
+  const reloadDays = async () => {
+    if (!verified || !serviceKey) return;
+    setSlot(null);
+    dropHold();
+    clamp('when');
+    setLoadingDays(true);
+    setDays([]);
+    try {
+      const fresh = await fetchDays(serviceKey);
+      if (fresh !== null) setDays(fresh);
+    } catch (err) {
+      if (err instanceof AuthRequiredError) setState('auth');
+    } finally {
+      setLoadingDays(false);
+    }
+  };
+
+  // Claim the time, THEN take their details — which is the order the hold
+  // exists to enforce. A slot that cannot be held is one that would be
+  // refused at "Book it" anyway, and finding out now costs the call
+  // nothing; finding out at the end costs it the customer.
+  const takeSlot = async () => {
+    if (!slot || holding) return;
+    // The open bucket has no slot to hold, and the server exempts it for
+    // exactly that reason.
+    if (slot.openBucket) { go('who'); return; }
+    setHolding(true);
+    try {
+      const res = await holdSlot({
+        serviceKey,
+        slotStart: slot.start,
+        address: verified.address,
+        // Changing your mind must not eat two units of capacity.
+        releaseToken: hold?.token,
+      });
+      setHold({ token: res.holdToken || null, expiresAt: res.expiresAt || null });
+      go('who');
+    } catch (err) {
+      if (err instanceof AuthRequiredError) { setState('auth'); return; }
+      Alert.alert(
+        err?.code === 'slot_taken' ? 'That time just went' : "Couldn't hold that time",
+        err?.message || 'Pick another time.',
+      );
+      reloadDays();
+    } finally {
+      setHolding(false);
     }
   };
 
@@ -557,7 +648,9 @@ export default function BookScreen({ onSignIn }) {
       await reserveBooking({
         serviceKey,
         // A standby booking has no slot — that is the whole point of it.
-        ...(slot.openBucket ? { standby: true } : { slotStart: slot.start }),
+        ...(slot.openBucket
+          ? { standby: true }
+          : { slotStart: slot.start, holdToken: hold?.token }),
         zoneCount: clean(zoneCount) || 'unsure',
         contact: {
           name,
@@ -575,6 +668,9 @@ export default function BookScreen({ onSignIn }) {
             .trim(),
         },
       });
+      // Reserve consumes the hold; keeping the token would mean trying to
+      // release one that no longer exists.
+      setHold(null);
       setDone({
         slot,
         text: confirmationText({
@@ -588,10 +684,18 @@ export default function BookScreen({ onSignIn }) {
     } catch (err) {
       if (err instanceof AuthRequiredError) setState('auth');
       else {
+        // These three all mean the same thing to the person on the phone:
+        // the time is not yours, pick again. Anything else leaves the form
+        // exactly as it is, because retyping a customer's details because
+        // the server hiccuped is unforgivable.
+        const lostTheSlot = err?.code === 'hold_expired'
+          || err?.code === 'hold_required'
+          || err?.code === 'slot_taken';
         Alert.alert(
-          "That slot didn't take",
+          lostTheSlot ? 'That time is no longer yours' : "That slot didn't take",
           err?.message || 'Nothing was booked. Pick another time, or try again.',
         );
+        if (lostTheSlot) reloadDays();
       }
     } finally {
       setBooking(false);
@@ -617,6 +721,7 @@ export default function BookScreen({ onSignIn }) {
     setFirstName(''); setLastName(''); setPhone(''); setAltPhone('');
     setEmail(''); setZoneCount(''); setNotes('');
     setSheet(null);
+    dropHold();
     clamp('address');
   };
 
@@ -1046,12 +1151,20 @@ export default function BookScreen({ onSignIn }) {
             ) : null}
 
             {slot ? (
-              <Pressable onPress={() => go('who')} style={styles.primary}>
-                <Text style={styles.primaryText}>
-                  {slot.openBucket
-                    ? "They'll take first available"
-                    : `They'll take ${slot.dayLabel}, ${slot.timeLabel}`}
-                </Text>
+              <Pressable
+                onPress={takeSlot}
+                disabled={holding}
+                style={({ pressed }) => [styles.primary, holding && styles.off, pressed && styles.pressed]}
+              >
+                {holding
+                  ? <ActivityIndicator color={colors.onBrand} size="small" />
+                  : (
+                    <Text style={styles.primaryText}>
+                      {slot.openBucket
+                        ? "They'll take first available"
+                        : `They'll take ${slot.dayLabel}, ${slot.timeLabel}`}
+                    </Text>
+                  )}
               </Pressable>
             ) : null}
           </>
@@ -1074,6 +1187,11 @@ export default function BookScreen({ onSignIn }) {
               </Text>
               {/* Auto-populated from slide one — asked once, not twice. */}
               <Text style={styles.holdingWhere}>{verified.address}</Text>
+              {/* Ten minutes is generous for a phone call and short enough
+                  to matter, so it is said rather than discovered. */}
+              {hold?.expiresAt ? (
+                <Text style={styles.heldUntil}>Held until {clockOf(hold.expiresAt)}</Text>
+              ) : null}
               <Text style={styles.holdingWhat}>
                 <Text style={styles.holdingKey}>Booking</Text>
                 {`  ${service?.label || '—'}`}
@@ -1238,6 +1356,7 @@ const styles = StyleSheet.create({
   holdingWhen: { ...type.body, fontWeight: '700', color: colors.brand },
   holdingWhere: { ...type.caption, color: colors.text },
   holdingWhat: { ...type.caption, color: colors.text, marginTop: 2, lineHeight: 18 },
+  heldUntil: { ...type.caption, color: colors.warning, fontWeight: '600', marginTop: 2 },
   holdingKey: { ...type.caption, color: colors.brand, fontWeight: '700' },
 
   emptyDays: {
