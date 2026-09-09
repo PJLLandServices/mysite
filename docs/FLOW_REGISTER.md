@@ -19,6 +19,41 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-09, same day (The tech's day list was in booking order, not driving order):** Spec 2.4
+and causes A-B. `/api/schedule/today` — the endpoint the FIELD APP reads, the one Patrick
+actually drives from — sorted by `booking.start`, and `booking.start` is only the first free
+30-minute mark in the bucket in the order people happened to book. Only the Season Plan page ever
+ran the sequencer. Reproduced: Newmarket 08:00 → Thornhill 09:30 → Newmarket 11:00, across the
+top of the city and back, because that is the order three strangers clicked in.
+Two halves, and shipping either alone would have been worse than neither. (1)
+`orderDayForDriving()` runs the day's rows through **`lib/resequence.sequenceDay` — the same
+sequencer the Season Plan uses**, reached the same way `sequenceDayWithBookings` does it, with
+synthetic codes standing in for rows that have no property code. One definition of driving
+order, two callers. (2) `restampDayInDrivingOrder()` hangs off `syncBookingFromLead` — the one
+wrapper every booking path already goes through — and re-cuts the whole day's start times in
+route order after each new booking. **Ordering without re-stamping would have handed the tech
+8:00, 11:00, 9:30: the right route with the times jumping around.** Patrick's rule makes this
+legitimate: "Start times inside a bucket are provisional" — the customer is promised Morning
+(8-12) or Afternoon (12-5) and never sees a minute. Because every reader sorts by `start`, the
+field app, Today, the iCal feed and the route sheet all agree without any of them changing;
+`orderDayForDriving` stays as the safety net for days whose stamps predate this.
+**Three things it will not do**, each a deliberate limit: it never moves a booking across the
+noon line (that is the promise the customer was given); it skips any day carrying
+`assignmentId`/`dayLocked`/`source: "assignment"` (once a day is sent out, the times in the
+customers' hands are the times); and it notifies nobody, because the bucket is unchanged. A
+re-stamp that throws leaves the booking exactly as it was.
+**The honest limit, worth stating because it is the next item:** ordering cannot fix a day whose
+MORNING is in Thornhill and whose AFTERNOON is in Newmarket. That day still drives out and back,
+and it must, because the alternative is moving a customer who was told "morning". That is a
+COMPOSITION problem for the aggregate geography guard (spec 2.3.2), not an ordering one —
+asserted explicitly in section 3 rather than left as a surprise.
+Coverage: `scripts/test-day-order.mjs`, 11 assertions, in `build:check`, driving the real
+endpoint and a real booking (seeding leads.json alone would not exercise the re-stamp, which
+hangs off the booking wrapper). Both halves verified against broken code independently: revert
+the sequencer → 2 fail naming the sandwich; revert the re-stamp → 1 fails. Timezone pinned to
+America/Toronto in the suite, or a UTC container reads a 09:00 Toronto booking as 13:00 and
+calls the morning the afternoon. No PASS flow touched.
+
 **2026-09-09, same day (Ten minutes to fill in the form, with the slot actually yours):** Spec
 2.5.1, the second half of D1. Reserve is atomic now, so two people can no longer both be told
 yes — but the loser still lost AFTER typing name, phone, address and zone count, because the
