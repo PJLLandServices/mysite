@@ -1334,6 +1334,37 @@ function declaredZoneList(property) {
   return zones;
 }
 
+// The zone count a customer gave when they booked, as a number or 0.
+//
+// `system.zoneCount` was Patrick's hand-filled field and the appointment
+// page's. NOTHING wrote it when a booking was taken — so on a first-time
+// property the chain below had nothing to work from: declaredZoneList()
+// read a count that was never set, scaffolding produced no zones, and
+// create() fell through to its one-zone placeholder. Priced for seven,
+// dispatched with one: the exact failure that fix was written to remove,
+// still reachable because nobody was feeding it.
+//
+// "unsure" is a real answer the booking form takes and it is not a number,
+// so it yields 0 and the property is left blank rather than claiming a
+// count nobody gave. Out-of-range values are refused for the same reason
+// the reserve route refuses them.
+function declaredZonesFromBooking(booking) {
+  const n = Math.floor(Number(booking?.zoneCount) || 0);
+  return n >= 1 && n <= 50 ? n : 0;
+}
+
+// Whether a booking's count is allowed to fill this property in. It may
+// only ever fill a BLANK: documented zones are ground truth walked by a
+// tech, and an existing count is either Patrick's own or a correction the
+// customer made from their appointment page. A later booking must not
+// silently move either.
+function canAdoptDeclaredZones(property, booking) {
+  if (!declaredZonesFromBooking(booking)) return false;
+  const documented = Array.isArray(property?.system?.zones) ? property.system.zones : [];
+  if (documented.length) return false;
+  return !(Number(property?.system?.zoneCount) > 0);
+}
+
 function scaffoldZonesFromProperty(property) {
   const documented = Array.isArray(property?.system?.zones) ? property.system.zones : [];
   const zones = documented.length ? documented : declaredZoneList(property);
@@ -2222,6 +2253,8 @@ module.exports = {
   templateForServiceKey,
   declaredZoneList,
   scaffoldZonesFromProperty,
+  declaredZonesFromBooking,
+  canAdoptDeclaredZones,
   canBuildOnSiteQuote,
   isScopeFrozen,
   findProtectedFieldTouched,
