@@ -19,6 +19,36 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-09 (Six people click the same slot; four are told yes and vanish):** Spec item D1,
+the one that had to land before the Sept 10 blast. `/api/booking/reserve` read leads.json,
+appended and wrote it back — then did the same for customers, properties and bookings — with
+nothing held in between. Reproduced against a booted server: **six simultaneous reserves on one
+slot returned six HTTP 201s and left 2 leads, 1 booking, 1 customer and 1 property on disk.**
+Four customers told they were booked who were not in the system at all. This is not a display
+bug; with ads live it is somebody standing in a driveway.
+Fix, in two parts. (1) `lib/booking-lock.js` — a promise-chain mutex serializing the WHOLE
+reserve request, because the check ("is this slot still free?") and the act ("take it") have to
+be one indivisible step or the check is a slower guess. It is held until the response closes
+rather than in an explicit `finally`: the handler returns from a dozen places and throws from
+more, and tying the release to the response covers the throwing paths without re-indenting
+several hundred lines of live booking code. A watchdog releases any holder that overruns 20s
+and logs loudly — a double-booking is bad, a booking page that has silently stopped accepting
+anyone during an ad campaign is worse. **Load-bearing assumption, stated out loud: one Node
+process. A second web instance makes this a real lock (O_EXCL lockfile or a database).**
+(2) `lib/atomic-json.js` — leads, bookings, customers and properties now write to a sibling
+temp file and rename over the target, so a crash or a Render redeploy mid-write can never leave
+a store truncated. Different failure from the race and worth closing separately.
+Coverage: `scripts/test-booking-concurrency.mjs`, 7 assertions, in `build:check`. Its assertion
+is arithmetic rather than a threshold — however many reserves return success, EXACTLY that many
+leads and canonical bookings must exist afterwards. Fails on the old code (3 said yes, 1 landed);
+with the lock removed but atomic writes kept it still fails, so the lock is provably the fix.
+After: 6 racers → 1 booked, 5 refused, 1 lead / 1 booking. **Regression caught and fixed in the
+same change:** four suites sandbox `customers.js`/`properties.js` into a temp dir and copy their
+requires by hand; the new `atomic-json.js` sibling had to join those lists or the sandboxed
+module fails to load. NOT in this change: the 10-minute slot hold (spec 2.5.1), which needs a
+new store, a sweeper and a `book.html` change — its own PR, per the spec's own one-change-per-PR
+rule. No PASS flow touched.
+
 **2026-09-09 (Why every corridor fix "still isn't taking": a missing season plan switched
 geography OFF):** Patrick, on a FRESH bot run against the corrected engine, looking at one day
 running Newmarket 8:00 → Thornhill 9:30 → Newmarket 12:00: "This does not work." He was right,

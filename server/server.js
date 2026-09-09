@@ -73,6 +73,8 @@ const appointmentActions = require("./lib/appointment-actions");
 const APPOINTMENT_PAGE_READY = true;
 const seasonsLib = require("./lib/seasons");
 const customers = require("./lib/customers");
+const { writeJsonAtomic } = require("./lib/atomic-json");
+const { createLock } = require("./lib/booking-lock");
 const purgeTestData = require("./lib/purge-test-data");
 const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
@@ -1887,8 +1889,14 @@ async function readLeads() {
   return JSON.parse(raw || "[]").map(hydrateLead);
 }
 
+// Serializes /api/booking/reserve. See lib/booking-lock.js for why the
+// single-process assumption is load-bearing.
+const bookingReserveLock = createLock("booking-reserve");
+
 async function writeLeads(leads) {
-  await fs.writeFile(LEADS_FILE, `${JSON.stringify(leads, null, 2)}\n`, "utf8");
+  // Atomic: temp file then rename, so a crash or a Render redeploy mid-write
+  // can never leave leads.json truncated. See lib/atomic-json.js.
+  await writeJsonAtomic(LEADS_FILE, leads);
 }
 
 function isLikelyDuplicate(leads, lead) {
@@ -20668,6 +20676,21 @@ Customer signature captured at ${new Date().toISOString()}.`;
   // Body: { serviceKey, slotStart, contact:{firstName,lastName,phone,email,
   //         address,notes}, addressLat, addressLng }
   if (req.method === "POST" && pathname === "/api/booking/reserve") {
+    // ONE BOOKING AT A TIME.
+    //
+    // Everything below — re-validating the slot, writing the lead, the
+    // customer, the property and the canonical booking — is one indivisible
+    // step. It was not, and six simultaneous reserves on one slot returned
+    // six 201s while leaving two leads and one booking on disk: four
+    // customers told they were booked who were not in the system at all
+    // (scripts/test-booking-concurrency.mjs, which fails on the old code).
+    //
+    // Held until the response closes rather than in an explicit finally,
+    // because this handler returns from a dozen places; tying the release to
+    // the response covers the throwing paths too. booking-lock's watchdog
+    // releases a holder that overruns, so a wedged request can never take the
+    // booking page down with it.
+    await bookingReserveLock.holdUntilResponse(res);
     try {
       const payload = await parseRequestBody(req);
 

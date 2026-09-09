@@ -54,7 +54,10 @@ function ok(cond, label) {
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "pjl-customer-delete-"));
 fs.mkdirSync(path.join(SANDBOX, "lib"), { recursive: true });
 fs.mkdirSync(path.join(SANDBOX, "data"), { recursive: true });
-for (const f of ["customers.js", "billing-parties.js"]) {
+// atomic-json.js joined the list when customers.js stopped using a bare
+// fs.writeFile — the sandbox copies whatever it requires, or the module
+// fails to load and the suite dies before its first check.
+for (const f of ["customers.js", "billing-parties.js", "atomic-json.js"]) {
   fs.copyFileSync(path.join(ROOT, "server", "lib", f), path.join(SANDBOX, "lib", f));
 }
 const require = createRequire(import.meta.url);

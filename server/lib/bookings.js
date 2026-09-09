@@ -43,6 +43,7 @@
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
+const { writeJsonAtomic } = require("./atomic-json");
 
 const FILE = path.join(__dirname, "..", "data", "bookings.json");
 
@@ -68,7 +69,7 @@ async function readAll() {
 
 async function writeAll(records) {
   await ensureFile();
-  await fs.writeFile(FILE, JSON.stringify(records, null, 2) + "\n", "utf8");
+  await writeJsonAtomic(FILE, records);
 }
 
 function blank() {

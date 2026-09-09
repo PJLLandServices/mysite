@@ -41,7 +41,10 @@ function ok(name, cond, detail = "") {
 // opened. properties.js pulls in only node builtins plus two siblings.
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "pjl-consent-"));
 fs.mkdirSync(path.join(SANDBOX, "lib"), { recursive: true });
-for (const file of ["properties.js", "billing-parties.js", "customers.js"]) {
+// atomic-json.js joined the list when customers/properties stopped using a
+// bare fs.writeFile — a sandbox copies whatever they require, or the module
+// fails to load and the suite dies before its first check.
+for (const file of ["properties.js", "billing-parties.js", "customers.js", "atomic-json.js"]) {
   fs.copyFileSync(path.join(ROOT, "server/lib", file), path.join(SANDBOX, "lib", file));
 }
 const properties = require(path.join(SANDBOX, "lib", "properties.js"));
