@@ -126,6 +126,30 @@ load-bearing guards verified against broken code (holds not counted → 3 fail; 
 sweeper → 1 fail). No PASS flow touched — FLOW-03 gains a step, and `book.html` fails OPEN if
 the hold call itself errors, because reserve re-validates regardless.
 
+**2026-09-09 (The server refused the session cookie it had just issued):** `test-purge-test-data`
+went red intermittently on CI, including on a run of `main` itself (run 517, `e9d0cad`), with
+"The server would not accept the session cookie it just issued." It was read as a flaky test. It
+was not: it is what a fresh install does.
+
+`readAuthConfig()` is called on EVERY request that touches a session, and it mints a session
+secret when `auth.json` has not got one. It minted a NEW random secret **per call**. On a store
+without a secret, several requests arrive before the first write lands — each generating its own,
+each writing it, the last write winning and retroactively invalidating every cookie signed with
+any of the others. Reproduced deterministically: ten concurrent logins on a secret-less store,
+and **1 of 10 cookies still verified**. Nine people handed a session that stopped working a
+moment later, with nothing in the log to say why. The same write also persisted
+`{ sessionSecret }` **alone**, so a first-run write threw away anything else `auth.json` held.
+
+Fix: the generated secret is held for the life of the process, so racing callers agree on one
+value and whichever write lands last writes the same bytes; and the write persists the whole
+parsed config instead of one key. Not a change to what a valid session is — signing, verifying,
+expiry and the gates are untouched — so no PASS flow is affected. Coverage:
+`scripts/test-auth-secret.mjs`, 5 assertions, in `build:check`, driving the real server over
+HTTP; both assertions verified against the unfixed server (fails 4 runs of 4; the fix passes 5
+of 5 assertions across 4 runs). The test triggers the first-run write with an explicit
+`/api/session` call, because booting the server does not read `auth.json` and neither does the
+public readiness probe — without it there is no first-run write to inspect.
+
 **2026-09-09 (The hold had a second caller nobody looked for — every app booking refused):**
 The hold entry above enumerated reserve's four exemptions carefully and wired `js/booking.js`
 to take a hold. It missed that `/api/booking/reserve` has TWO callers: the website's picker and
