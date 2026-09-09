@@ -1012,19 +1012,24 @@ export default function BookScreen({ onSignIn }) {
               onPress={() => setSheet('service')}
             />
 
+            {/* "Which band?" was the placeholder here, and "band" is the
+                price list's word, not one anybody says on a phone call —
+                it read as a typo for "brand". The two zone rows ask ABOUT
+                how many, then EXACTLY how many, and saying that plainly is
+                the whole distinction. */}
             {category?.follow === 'zones' ? (
               <SelectRow
                 label="Zones"
                 value={band
                   ? `${bandLabel(bands, band)} · ${band.commercial ? 'commercial' : 'residential'}`
                   : ''}
-                placeholder="Which band?"
+                placeholder="About how many?"
                 onPress={() => setSheet('band')}
               />
             ) : null}
 
-            {/* The exact number, once the band is chosen. Two answers
-                because they are two things: the band is what we are
+            {/* The exact number, once the range is chosen. Two answers
+                because they are two things: the range is what we are
                 selling, the count is what is in the ground. */}
             {(category?.follow === 'zones' && band) || category?.follow === 'zones_only' ? (
               <SelectRow

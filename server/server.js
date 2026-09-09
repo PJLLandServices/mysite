@@ -2275,7 +2275,32 @@ function sendTwiml(res, status, xml) {
 // Returns the property to scaffold from — updated when zones were written,
 // the original otherwise. Never throws: a tech is standing on the lawn and
 // a work order must open regardless.
-async function materializeDeclaredZones(property) {
+// Write the count the customer gave at booking onto the property, when the
+// property has nothing of its own to say. See declaredZonesFromBooking and
+// canAdoptDeclaredZones in lib/work-orders.js for why it may only fill a
+// blank. Lives here, at the route layer, for the same reason the zone-list
+// write does: lib/work-orders.js depends on nothing but node built-ins.
+//
+// Never throws — a booking must complete and a work order must open.
+async function adoptDeclaredZoneCount(property, booking) {
+  if (!property?.id || !workOrders.canAdoptDeclaredZones(property, booking)) return property;
+  const zoneCount = workOrders.declaredZonesFromBooking(booking);
+  try {
+    const updated = await properties.update(property.id, {
+      system: { ...(property.system || {}), zoneCount }
+    });
+    return updated || { ...property, system: { ...(property.system || {}), zoneCount } };
+  } catch (err) {
+    console.warn("[booking] declared zone count not written to property:", err?.message);
+    return { ...property, system: { ...(property.system || {}), zoneCount } };
+  }
+}
+
+async function materializeDeclaredZones(property, lead = null) {
+  // The count reaches the property when the booking is taken. This is the
+  // net for bookings already on the books when that started, and for any
+  // path that reaches a work order without passing through it.
+  property = await adoptDeclaredZoneCount(property, lead?.booking);
   const zones = workOrders.declaredZoneList(property);
   if (!property?.id || !zones.length) return property;
   try {
@@ -18054,7 +18079,7 @@ async function handleApi(req, res, pathname) {
 
       // Seasonal work orders scaffold their zones from the property, so
       // give it the list its declared count implies before we do.
-      property = await materializeDeclaredZones(property);
+      property = await materializeDeclaredZones(property, lead);
 
       let wo = await workOrders.create({
         type, lead, property, customId, quote: sourceQuote,
@@ -21599,6 +21624,12 @@ Customer signature captured at ${new Date().toISOString()}.`;
           coords: resolvedCoords
         });
         if (linkResult.property) {
+          // THE MISSING HOP. The 2026-09-01 chain turns a declared count
+          // into real zones, but nothing ever put that count ON the
+          // property, so a first-time booking scaffolded one zone for a
+          // seven-zone lawn. Written here so pricing, the season plan and
+          // the appointment page all read the same number from visit one.
+          await adoptDeclaredZoneCount(linkResult.property, result.lead.booking);
           applyLinkResultToLead(result.lead, linkResult);
           const liveLeads = await readLeads();
           const i = liveLeads.findIndex((l) => l.id === result.lead.id);
@@ -22091,7 +22122,7 @@ async function orderDayForDriving(rows) {
       }
       // Same as the admin create path: the property gets the zone list
       // its declared count implies before the work order scaffolds from it.
-      property = await materializeDeclaredZones(property);
+      property = await materializeDeclaredZones(property, lead);
       const wo = await workOrders.create({ type, lead, property, customId, quote: sourceQuote });
       if (sourceQuote) {
         try { await quotes.attachWorkOrder(sourceQuote.id, wo.id); }

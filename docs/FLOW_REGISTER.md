@@ -178,6 +178,40 @@ load-bearing guards verified against broken code (holds not counted → 3 fail; 
 sweeper → 1 fail). No PASS flow touched — FLOW-03 gains a step, and `book.html` fails OPEN if
 the hold call itself errors, because reserve re-validates regardless.
 
+**2026-09-09 (The declared-zone chain had no first link — every new property still got one
+zone):** Patrick, on a work order for a seven-zone property showing "Zone 1 of 1": "I believe
+there was a working fix for this, but it clearly doesn't look delivered." It was delivered. It
+did nothing, because nothing fed it.
+
+The 2026-09-01 entry above turns `system.zoneCount` into real zones at work-order creation. But
+`system.zoneCount` was Patrick's hand-filled field and the appointment page's — grep the whole
+server and the only writes are `appointment-actions.setZones` and its route. **Taking a booking
+never wrote it.** So a first-time property reached `scaffoldZonesFromProperty()` with an empty
+`system`, produced no zones, and `create()` fell through to its "always give the tech at least
+one zone" placeholder. Priced for seven, dispatched with one — the exact failure 2026-09-01 was
+written to remove, still reachable end to end because the chain had no first link. That entry's
+own **"What still needs Patrick"** named the walked test that would have caught it — book a new
+property declaring a count, open its work order — and it had not been run.
+
+Fixed at the point the record is created, which is Patrick's recorded call (the record should
+carry its zones from the first booking): `POST /api/booking/reserve`, right after
+`properties.attachLead`, writes the booked count onto the property, so pricing, the season plan,
+the appointment page and the work order all read one number from visit one. It may only ever
+fill a BLANK — documented zones are ground truth and an existing count is Patrick's own or the
+customer's correction, so a later booking never moves either — and `"unsure"` fills nothing in
+rather than claiming a count nobody gave. `materializeDeclaredZones()` takes the lead as a
+second argument and offers the same count as a fallback, which is the net for bookings already
+on the books when this shipped and for any path that reaches a work order without passing
+through reserve.
+
+The decision lives in `lib/work-orders.js` as two pure functions
+(`declaredZonesFromBooking`, `canAdoptDeclaredZones`) and the WRITE stays at the route layer,
+respecting the same invariant 2026-09-01 recorded: that module depends on nothing but node
+built-ins. Coverage: `scripts/test-declared-zones.mjs`, 41 → **53 assertions**, verified against
+the shipped server first — **15 fail**, including the end-to-end pair that scaffolds 0 zones from
+a booking-created property and 7 once the count is on it. No PASS flow touched; no change to
+what a valid session, gate or window is.
+
 **2026-09-09 (The server refused the session cookie it had just issued):** `test-purge-test-data`
 went red intermittently on CI, including on a run of `main` itself (run 517, `e9d0cad`), with
 "The server would not accept the session cookie it just issued." It was read as a flaky test. It
