@@ -43,6 +43,47 @@ load-bearing guards verified against broken code (holds not counted → 3 fail; 
 sweeper → 1 fail). No PASS flow touched — FLOW-03 gains a step, and `book.html` fails OPEN if
 the hold call itself errors, because reserve re-validates regardless.
 
+**2026-09-09 (Cancel → re-book lifecycle, spec §2.8 / D2 + D7, ship item 2):** Two readers
+disagreed with the calendar about what "cancelled" means. **D2:** `bookings.upsertFromLead`
+matched the canonical record on `leadId` alone and never wrote `status` on the existing branch,
+so when Patrick re-booked a customer whose earlier appointment was cancelled (book-from-lead
+replaces `lead.booking` with a fresh live envelope, then re-syncs), the re-booking landed ON the
+cancelled record — start moved, new WO appended, `status: "cancelled"` kept. The lead side held
+the slot; the portal, iCal feed, reminders, appointment links and the Today canonical union all
+read `status !== "confirmed"` and treated the live appointment as dead. **D7:**
+`/api/schedule/today`'s lead pass filtered on `archived` only, so a cancelled booking (which stays
+on the lead as a read cache with `status: "cancelled"`) was still a stop on the tech's day list —
+the field app's ONLY schedule source. **Fix.** (1) The dead-status rule now has ONE home:
+`bookings.holdsItsSlot` / `bookings.DEAD_STATUSES` in `lib/bookings.js`; server.js's
+`bookingHoldsItsSlot` delegates to it. (2) `upsertFromLead` reuses the existing record only while
+it holds its slot, or when the lead carries the SAME booking (same WO id or same start) — a re-sync
+of a completed job stays completed, nothing revives a finished appointment by accident. A lead
+carrying a NEW booking over a dead record gets a fresh confirmed record (`rebooked_from_lead`
+history naming the dead one); the dead record and its history are untouched. This is the spec's
+"or creates a new record when the existing one is dead" branch, chosen over "set status =
+confirmed on the existing record" precisely because the completion cascade re-syncs completed
+jobs through this same function. (3) The Today lead pass applies `bookingHoldsItsSlot`.
+**Readers of booking status walked (CLAUDE.md rule 1):** canonical-status readers that now see the
+re-booking correctly — `lib/ical-feed.js:345`, `lib/booking-reminders.js:64`,
+`lib/appointment-actions.js:81`, `/api/appointment/:token/calendar.ics` (server.js ~23174), the
+Today canonical union, the portal's admin `adminBookingId` resolver (server.js ~3924),
+`activeBookings()` both passes. Lead-side readers deliberately left as they are: the admin
+calendar (`server/schedule.js:191`) shows cancelled bookings WITH a `bookingStatus` badge — display,
+intentional; the portal `.ics` download (server.js ~6857) and `lib/job-finder.js` read
+`lead.booking` without a status check — the former is a customer's own cancelled event, the latter
+a diagnostic that says why a lead is or isn't on a day; neither drives the tech or capacity.
+`lib/day-schedule.js` is WO-based and already skips cancelled/no_show WOs. **Coverage:**
+`scripts/test-booking-lifecycle.mjs` 19 → 28 assertions: section 4 logs a throwaway admin in and
+asserts a LIVE booking is on `/api/schedule/today` and cancelled / completed / no_show are not;
+section 5 drives `upsertFromLead` against the same `bookings.json` — re-book over cancelled → new
+confirmed record, dead record untouched, history names it; same-booking re-sync onto completed →
+stays completed, creates nothing; live record reused as before. Against the code before this
+change: **9 of 28 fail** (the three Today rows and six re-book assertions). `build:check` green
+through every booking suite; the only stop is the pre-existing pjl-field "dependencies not
+installed" environmental check. **No PASS flow's route or payload touched:** FLOW-03's reserve
+path is unchanged; the change is the canonical mirror + one Today filter. Server change → ships on
+Render redeploy; no Xcode rebuild.
+
 **2026-09-09 (Six people click the same slot; four are told yes and vanish):** Spec item D1,
 the one that had to land before the Sept 10 blast. `/api/booking/reserve` read leads.json,
 appended and wrote it back — then did the same for customers, properties and bookings — with

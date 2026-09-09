@@ -72,6 +72,14 @@ async function writeAll(records) {
   await writeJsonAtomic(FILE, records);
 }
 
+// The ONE definition of "this booking still occupies the calendar".
+// server.js's bookingHoldsItsSlot delegates here; the two used to be
+// separate rules and drifted (see test-booking-lifecycle.mjs).
+const DEAD_STATUSES = new Set(["cancelled", "completed", "no_show"]);
+function holdsItsSlot(status) {
+  return !DEAD_STATUSES.has(String(status || "").toLowerCase());
+}
+
 function blank() {
   const created = new Date().toISOString();
   return {
@@ -160,12 +168,39 @@ async function listByProperty(propertyId) {
 // this after they create a lead.booking; the lead.booking stays as a
 // read cache for existing CRM/portal code, and the canonical record
 // lives here for new code (multi-WO links, prep notes, audit trail).
+//
+// LIFECYCLE (spec §2.8, D2). A lead keeps ONE embedded lead.booking, but
+// its canonical history can hold several records: a cancelled one and
+// the re-booking Patrick made from the lead card afterwards. The existing
+// branch below used to be chosen on leadId alone and never touched
+// status, so a re-book landed on the CANCELLED record — start moved, WO
+// appended, status still "cancelled" — and every canonical reader
+// (portal, iCal, Today, reminders, reschedule) treated the live
+// appointment as dead while the lead-side readers held its slot.
+//
+// Rule now: the existing record is reused only while it still holds its
+// slot. A DEAD record (cancelled / completed / no_show) is left exactly
+// as it is — its history is the audit trail — and a lead that carries a
+// NEW booking (a work-order id the record has never seen, or a different
+// start) gets a fresh confirmed record. A re-sync of the SAME booking
+// onto a dead record (the cascade re-syncing a completed job) is a
+// no-op on status: nothing revives a finished appointment by accident.
 async function upsertFromLead(lead) {
   if (!lead || !lead.booking) return null;
   const records = await readAll();
-  const existing = records.find((b) => b.leadId === lead.id);
   const now = new Date().toISOString();
   const booking = lead.booking;
+  const forLead = records.filter((b) => b.leadId === lead.id);
+  const live = forLead.find((b) => holdsItsSlot(b.status));
+  const dead = forLead.find((b) => !holdsItsSlot(b.status));
+  const woId = booking.workOrder?.id || null;
+  const isSameBooking = (rec) => Boolean(rec) && (
+    (woId && (rec.workOrderIds || []).includes(woId))
+    || (booking.start && rec.scheduledFor === booking.start)
+  );
+  // Reuse: the live record, else a dead record that IS this booking.
+  const existing = live || (dead && isSameBooking(dead) ? dead : null);
+  const rebookedOver = !existing && dead ? dead : null;
 
   // Admin force-booking marker. When the lead.booking was created via
   // the admin Custom-time override, we mirror the flag onto the
@@ -225,7 +260,14 @@ async function upsertFromLead(lead) {
   next.sourceQuoteId = lead.quoteId || null;
   if (carriesForceFlag) next.forcedByAdmin = true;
   if (booking.workOrder?.id) next.workOrderIds = [booking.workOrder.id];
-  next.history = [{ ts: now, action: "created_from_lead", by: "system", note: `Lead ${lead.id}` }];
+  next.history = [{
+    ts: now,
+    action: rebookedOver ? "rebooked_from_lead" : "created_from_lead",
+    by: "system",
+    note: rebookedOver
+      ? `Lead ${lead.id} — new booking after ${rebookedOver.status} record ${rebookedOver.id}`
+      : `Lead ${lead.id}`
+  }];
   if (carriesForceFlag) {
     next.history.push({
       ts: now,
@@ -744,6 +786,8 @@ async function attachWorkOrder(bookingId, woId) {
 }
 
 module.exports = {
+  holdsItsSlot,
+  DEAD_STATUSES,
   STATUSES,
   list,
   get,
