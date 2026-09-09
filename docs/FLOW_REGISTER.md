@@ -19,6 +19,39 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-09, same day (Nothing is ever sent to a load-test record):** Reported live by Patrick
+mid-session — "the gate that you may have set up to not send text messages to the customers
+numbers, and emails are still pushing through *** this is for the test appointments." He was right,
+and the shape of it is the point. The suppression that existed lived in **one place** — two call
+sites inside `POST /api/booking/reserve` — and silenced only the message sent at the moment of
+booking. Everything a test record touched afterwards went out normally: reschedules,
+cancellations, invoices, payment receipts, portal replies, quote-ready and quote-approval SMS, the
+AI-handoff SMS, review requests, warranty notices, and **the assignment blast itself**
+(`sendOutreachEmail` / `sendOutreachSms`). Measured: **19 Twilio send sites across 5 files, 5
+separate mail transports, and a gate on one of them.** The single exception was
+`lib/booking-reminders.js`, which carried its own private `PJLTEST-` check — and its being private
+is exactly why it stayed the only one.
+Fix: `server/lib/test-recipients.js`, one rule, asked where the message LEAVES. `guardTransport()`
+wraps a nodemailer transport so every message it carries is checked (applied to all 9 ad-hoc
+transports in server.js and to the three lib transports), and `isTestRecipient()` gates all 10
+customer-facing Twilio sites. The reminder's private copy now calls the shared rule.
+**Two deliberate design choices, both load-bearing.** (1) **The marker alone decides — never
+`PJL_TEST_KEY`.** The reserve bypass needs that variable because it GRANTS an exemption and an
+exemption should be hard to claim; this is a REFUSAL, and spec item 8 has Patrick deleting
+`PJL_TEST_KEY` from Render when the load test ends — if suppression hung off it, that deletion
+would silently start messaging every test record still in the store. (2) **It keys off the
+RECIPIENT, not the caller.** Senders hold a lead, an invoice, a work order, a booking, or a bare
+phone number from an AI handoff, and no field is common to all of them; an address or a number is.
+Matching there covers senders that do not exist yet, which a per-caller check cannot.
+**The cost, stated:** a test row carrying a real person's real number blocks that number until the
+rows are purged. Safe direction, and temporary — the delete bot removes the rows and the block with
+them. Coverage: `scripts/test-test-recipient-gate.mjs`, 28 assertions, in `build:check`: behaviour
+through the real `notifyCustomer()` with transport and `fetch` replaced, the PJL_TEST_KEY-
+independence assertion, and a lint that every transport and Twilio site is behind the guard —
+because the behaviour test covers the senders that exist and the lint covers the one added next
+month. Verified against broken code (module present, wiring reverted): **9 fail**, the first being
+the marked record's number actually being texted. No PASS flow touched.
+
 **2026-09-09, same day (One bookable minute per half-day, for every commercial customer):**
 Spec §2.9 / D6, ship item 7. The six commercial services carried `slotIncrementMinutes: 300`,
 documented as making the customer "see exactly TWO slots per day — 8:00 AM and 1:00 PM — instead of

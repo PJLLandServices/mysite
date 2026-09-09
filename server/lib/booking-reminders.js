@@ -27,6 +27,7 @@
 // Tested by scripts/test-booking-reminders.mjs.
 
 const bookings = require("./bookings");
+const testRecipients = require("./test-recipients");
 
 function localDateKey(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -89,8 +90,14 @@ async function sweepDayBefore({
       skip("no_contact");
       continue;
     }
-    // Load-test records (see /api/booking/reserve bypass) never get reminders.
-    if (String(contact.notes || lead?.contact?.notes || "").includes("PJLTEST-")) {
+    // Load-test records never get reminders. Asked through the shared
+    // rule (lib/test-recipients.js) rather than by matching the marker
+    // here: this was the ONLY sender in the codebase that checked at all,
+    // and its private copy is exactly why it stayed the only one.
+    if (await testRecipients.isTestRecipient({
+      email: contact.email, phone: contact.phone,
+      notes: contact.notes || lead?.contact?.notes
+    })) {
       skip("load_test");
       continue;
     }
