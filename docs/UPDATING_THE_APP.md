@@ -1,216 +1,186 @@
 # Getting a change onto your phone
 
-**Read the first table. It answers "what do I have to do?" for any change.**
+**You do not have to work out which kind of change it is. Ask the computer.**
 
----
-
-## 1. Which kind of change is it?
-
-Ask Claude this if it isn't obvious. Every change is one of three kinds, and
-they need different things from you.
-
-| Kind of change | What you do | How long |
-|---|---|---|
-| **App only** — screens, buttons, wording, layout | Pull + Run in Xcode | ~5 min |
-| **Server only** — data, rules, API, prices, availability | Merge the PR. That's it. | ~2 min |
-| **Both** | Merge the PR **and** pull + Run | ~7 min |
-
-**Why there are two:** the app on your phone is built from a branch on your
-Mac. The server it talks to is the live one, and the live server runs
-whatever is on `main`. A branch the live server has never seen might as well
-not exist. Anything server-side has to be merged before the app can use it —
-no amount of rebuilding will help.
-
-**Claude must tell you which kind it is before you start.** If it doesn't,
-ask.
-
----
-
-## 2. Server change: merge the PR
-
-Open the pull request link, press **Merge**. Render redeploys in a couple of
-minutes on its own. Nothing to rebuild, nothing to install.
-
----
-
-## 3. App change: pull and Run
-
-In Terminal, one line at a time:
+Open Terminal and run these three lines. That is the whole system.
 
 ```
-cd ~/Downloads/mysite-claude-pjl-field-taptopay
-```
-
-```
+cd <your mysite folder>/pjl-field
 git pull
+npm run send
 ```
 
-Then open the app project — **the workspace, not the project file**:
+> **Which folder?** The one you keep the site in. There is more than one
+> clone on this Mac — `mysite-claude-pjl-field-taptopay` is the Tap to Pay
+> one and is *not* the one to use for ordinary updates (see the bottom of
+> this page). Once you know the path, it never changes; write it on a
+> sticky note.
 
-```
-open pjl-field/ios/PJLField.xcworkspace
-```
+`npm run send` looks at what changed and does one of two things:
 
-> `.xcworkspace` is the white icon. `.xcodeproj` is the blue one and it opens
-> a broken, empty version with no targets. They sit next to each other and it
-> is an easy mis-click.
+- **"SENT"** — it published the update. Force-quit PJL Field on your phone
+  and open it again. Done, about 30 seconds.
+- **"THIS ONE NEEDS XCODE"** — it published nothing, because the phone
+  could not have installed it. It tells you to run `npm run rebuild`.
 
-Plug the phone in, unlock it, pick it from the dropdown at the top, press
-**Run** (▶).
+It cannot get this wrong and it cannot leave you guessing. Everything below
+is explanation you only need when something surprises you.
 
 ---
 
-## 3a. Over-the-air updates — when Xcode is not needed at all
+## The two commands
 
-Most of what changes in this app is JavaScript: a screen, some wording, a
-rule about what happens when you tap something. None of that needs Xcode.
-The app can fetch it itself.
+### `npm run send`
 
-**How it works.** On a cold start the app asks Expo whether there is a
-newer JavaScript bundle for it. If there is, it downloads it and reloads —
-about a second, once, and then it is running the new code. Force-quit and
-reopen; that is the whole procedure.
+The everyday one. After any merge, run it.
 
-**Why it never worked before.** The app was always built to do this. What
-it was never told is which *channel* to read — think of a channel as a
-named shelf on Expo's server. `eas.json` names the shelves, but only EAS
-reads that file, and you build by hand in Xcode. So the app asked for
-"nothing in particular", got nothing back, and carried on. Restarting it a
-hundred times would not have helped. `app.json` now names the shelf
-(`expo-channel-name: production`), so the app knows where to look.
+It compares the code you have against the build that is on your phone. If
+the two are compatible, the update goes over the air. If they are not, it
+stops and says so — publishing anyway would put a bundle on Expo's server
+that your phone quietly refuses, which looks exactly like "the update
+didn't work" and is much harder to diagnose than a message that says
+*needs Xcode*.
 
-### The one-time cost
-
-`app.json` is native configuration. It only reaches the app through a
-prebuild, which means **one more full Xcode round, including re-setting
-the signing team and the build configuration** — everything in §4 below.
-After that round, JS changes stop needing Xcode.
-
-Once, then never again for this class of change.
-
-### Publishing an update
-
-From the `pjl-field` folder, on a machine signed in to Expo:
+It also refuses if you have uncommitted edits, or if your checkout is
+behind `main`, because both of those send the phone the wrong code. Each
+refusal prints the one line that fixes it.
 
 ```
-npx eas update --branch production --message "what changed"
+npm run send                       publish, with the last commit as the note
+npm run send -- -m "what changed"  your own note instead
+npm run send -- --anyway           publish despite the git warnings
 ```
 
-Then force-quit the app on the phone and reopen it. Check the bottom of
-the **Today** tab: it reads *"App updated"* followed by the time the
-bundle was published, or *"shipped with the build"* if it is still running
-what Xcode installed.
+`--anyway` overrides the git checks only. It cannot override *needs
+Xcode*: that one is not a judgement call, it is the phone refusing.
 
-### What still needs a real build
+### `npm run rebuild`
 
-| Change | Over the air? |
+The occasional one. Run it when `send` tells you to, or when Xcode shows
+**no targets** and **"No Configurations Set"** (the iOS folder is damaged).
+
+It regenerates the Xcode project **and puts back the two settings that a
+rebuild always destroys** — the signing team and the Release
+configuration. You used to have to remember both. You no longer do.
+
+Then it tells you to plug the phone in and press Run.
+
+---
+
+## Why some changes need Xcode and some don't
+
+The app on your phone is two layers.
+
+**The native shell** — the app itself, its libraries, its permissions, its
+icon. Building that is what Xcode does, and it can only happen on your Mac
+with the phone plugged in.
+
+**The JavaScript** — every screen, every button, every rule about what
+happens when you tap something. That is the great majority of what changes,
+and the app can download a new copy of it by itself.
+
+So: change the JavaScript, it goes over the air. Change the shell, Xcode.
+
+**Expo enforces this with a fingerprint.** Every build carries a hash of
+its native shell, and an update will only install onto a build whose hash
+matches. That is a safety catch, not an obstacle — it stops a bundle
+written against a new library landing on a build that doesn't have it and
+crashing on launch. `npm run send` reads that same fingerprint, which is
+why its answer is reliable rather than a rule of thumb.
+
+| What changed | Over the air? |
 |---|---|
 | A screen, wording, a rule, a bug in the app's logic | **Yes** |
-| A new library, a new permission, an icon, the splash | No — §4 |
-| Anything in `app.json` itself, including this channel | No — §4 |
-| Server changes | Neither — §2, they are already live |
+| A new library, a new permission, the icon, the splash | No — Xcode |
+| Anything in `app.json` | No — Xcode |
+| Server: data, prices, availability, API | Neither — see below |
 
-### The fingerprint, and why it protects you
+---
 
-`runtimeVersion` is set to `fingerprint`, which means an update will only
-install onto a build whose **native code is identical**. That is a safety
-catch, not an obstacle: it is what stops a bundle written against a new
-library landing on a build that does not have it and crashing on launch.
+## Server changes are a different thing entirely
 
-The practical consequence: **the Tap to Pay build can never receive these
-updates.** It carries an extra native library, so its fingerprint differs
-and Expo will not offer it anything published from `main`. That is correct
-behaviour. If you are running a Tap to Pay build, Xcode is the only route.
+The app talks to the live server, and the live server runs whatever is on
+`main`. So anything server-side needs **the PR merged** and nothing else —
+no rebuild, no update, no phone. Render redeploys on its own in a couple of
+minutes.
 
-### If a bad update goes out
+A branch the live server has never seen might as well not exist. If a
+change is server-side, rebuilding the app a hundred times will not help.
 
-An update reaches every phone on that channel with nothing in between —
-there is no review step. Publish the previous bundle again to roll back:
+**Claude tells you which kind each change is.** If it doesn't, ask.
+
+---
+
+## Did my update actually land?
+
+Bottom of the **Today** tab:
+
+- **"App updated 4:12 PM"** — running a bundle published at that time.
+- **"shipped with the build"** — still running what Xcode installed.
+
+If it still says *shipped with the build* after a force-quit, the app
+either couldn't reach Expo or there was nothing newer for it.
+
+## Sending a bad update
+
+An update reaches every phone on the channel with nothing in between —
+there is no review step. Put the previous bundle back:
 
 ```
 npx eas update:republish --branch production
 ```
 
-The app picks it up on the next cold start, the same way it picked up the
+The phone picks it up on the next cold start, the same way it picked up the
 bad one.
 
-## 4. When the native project has to be rebuilt
+---
 
-Most pulls don't need this. You need it when Claude says a **native
-dependency** changed, or when Xcode shows **no targets** and **"No
-Configurations Set"** (which means the iOS folder is damaged).
+## Expect these after a rebuild
 
-```
-cd ~/Downloads/mysite-claude-pjl-field-taptopay/pjl-field
-```
+None of them is a fault.
 
-```
-npx expo prebuild -p ios --clean
-```
-
-Takes a few minutes. **It wipes the iOS folder and rebuilds it**, which
-resets two things you must put back:
-
-### 4a. Signing team
-
-In Xcode: click **PJLField** in the left sidebar → **Signing & Capabilities**
-→ click the **All** tab (not Debug, not Release) → **Team → Patrick Lalande**.
-
-> **The All tab matters.** Set it on Debug only and the Release build still
-> fails with "requires a development team", which looks like the fix didn't
-> work.
-
-### 4b. Build configuration
-
-**Product → Scheme → Edit Scheme → Run → Build Configuration → Release.**
-
-> Prebuild resets this to **Debug**. A Debug build loads its JavaScript live
-> from your Mac, so the moment you walk away from it the app dies with a red
-> `RCTFatal / handleBundleLoadingError` screen. Release bakes the JavaScript
-> in and needs nothing from the Mac. **Always Release.**
-
-Note: `pjl-field/ios` is not in the repo — it's generated on your Mac. So a
-`git pull` can never break it, and Claude can never fix it from its side.
-That folder is yours alone.
+1. **"Untrusted Developer"** on the phone — fresh certificate.
+   Settings → General → VPN & Device Management → Apple Development →
+   **Trust**. Reopen the app.
+2. **You're signed out.** Reinstalling wipes the stored session. Open any
+   tab, Sign in, use your CRM password.
+3. **Tap to Pay says "Not started yet."** Open it from Today's header and
+   let it warm up. Apple's terms sheet may reappear on a fresh install.
 
 ---
 
-## 5. First launch after a rebuild — expect these
+## The Tap to Pay build is a special case
 
-None of these are faults.
-
-1. **"Untrusted Developer"** on the phone. Fresh certificate.
-   Phone → **Settings → General → VPN & Device Management → Apple
-   Development: [your email] → Trust**. Reopen the app.
-2. **You're signed out.** Reinstalling wipes the app's stored session. Open
-   any tab, tap **Sign in**, use your CRM password.
-3. **Tap to Pay says "Not started yet."** Open it from Today's header and let
-   it warm up. Apple's terms sheet may appear again on a fresh install.
+It carries an extra native library, so its fingerprint differs from
+everything published off `main` and **it can never receive these updates**.
+That is correct behaviour, not a fault. If you are running a Tap to Pay
+build, Xcode is the only route until that work merges.
 
 ---
 
-## 6. Settings that live outside the code
+## Things no rebuild can fix
 
-Things that no amount of building will fix, because they aren't code.
+Because they aren't code.
 
 | Symptom | Where the fix is |
 |---|---|
-| *"Google refused the request — the Places API is probably not enabled"* | Google Cloud Console → **APIs & Services → Library → Places API** (the plain one, **not** "Places API (New)"). Then **Credentials → your key → API restrictions** — if the key is restricted, Places has to be on that list. |
+| *"Google refused the request — the Places API is probably not enabled"* | Google Cloud Console → **APIs & Services → Library → Places API** (the plain one, **not** "Places API (New)"). Then **Credentials → your key → API restrictions** — if the key is restricted, Places has to be on the list. |
 | *"GOOGLE_MAPS_SERVER_KEY is not set"* | Render → the service → **Environment** |
-| Address suggestions fine, but no map/route line | Same key, but it's a Geocoding or Distance Matrix problem — send Claude the screenshot |
+| Addresses suggest fine, but no map or route line | Same key, but a Geocoding or Distance Matrix problem — send Claude the screenshot |
 
 ---
 
-## 7. When something looks broken
+## When something looks broken
 
 Send Claude a screenshot. The app is built to say *why* rather than just
-failing, so the message on screen usually names the actual cause — including
+fail, so the message on screen usually names the real cause — including
 when the cause is a setting in Google or Render rather than the code.
 
 Two things that are **never** the cause, so don't chase them:
 
 - **The cable or the phone**, when Xcode says "No Destinations" and the
   TARGETS list is empty. There is nothing to build, so there is nowhere to
-  build it to. See section 4.
-- **A `git pull`**, when the iOS project is broken. That folder isn't in the
-  repo.
+  build it to. Run `npm run rebuild`.
+- **A `git pull`**, when the Xcode project is broken. `pjl-field/ios` is
+  not in the repo — it is generated on your Mac, so a pull cannot touch it
+  and Claude cannot fix it from its side. That folder is yours alone.
