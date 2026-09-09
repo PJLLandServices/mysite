@@ -4,10 +4,18 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, radius, space, type } from '../../theme';
 
-export function Section({ title, children, footer }) {
+// `action` is a NODE on the title line — an Edit / Save pair, usually.
+// A section that can be changed says so where its name is, rather than
+// growing a button underneath that reads as part of the content.
+export function Section({ title, action, children, footer }) {
   return (
     <View style={styles.section}>
-      {title ? <Text style={styles.sectionTitle}>{title}</Text> : null}
+      {title || action ? (
+        <View style={styles.sectionHead}>
+          <Text style={styles.sectionTitle}>{title || ''}</Text>
+          {action || null}
+        </View>
+      ) : null}
       <View style={styles.card}>{children}</View>
       {footer ? <Text style={styles.footer}>{footer}</Text> : null}
     </View>
@@ -104,7 +112,11 @@ const styles = StyleSheet.create({
   buttonDanger: { backgroundColor: colors.danger },
   buttonTextDangerGhost: { color: colors.danger },
   section: { gap: space.sm },
-  sectionTitle: { ...type.section, marginHorizontal: space.xs },
+  sectionHead: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    gap: space.md, marginHorizontal: space.xs,
+  },
+  sectionTitle: { ...type.section, flexShrink: 1 },
   card: { backgroundColor: colors.card, borderRadius: radius.card, overflow: 'hidden' },
   footer: { ...type.caption, marginHorizontal: space.xs, lineHeight: 19 },
 

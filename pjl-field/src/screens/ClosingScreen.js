@@ -15,7 +15,7 @@ import {
   ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View,
 } from 'react-native';
 import {
-  AuthRequiredError, completeWorkOrder, deferIssues, getWorkOrder,
+  AuthRequiredError, completeWorkOrder, deferIssues, getWorkOrder, patchProperty,
   patchWorkOrder, signatureBypass,
 } from '../api';
 import { colors, radius, space, type } from '../theme';
@@ -94,6 +94,40 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
       setSaving(false);
     }
   }, [workOrderId]);
+
+  // The system facts on the arrival screen belong to the PROPERTY, not to
+  // this visit — which is why correcting one on a driveway in October is
+  // still right the following April, and why it has to reach the CRM.
+  //
+  // Unlike save() above, a failure here PUTS THE OLD VALUE BACK. That is
+  // the opposite call and deliberately so: an unsaved work-order edit is
+  // still true of the visit in front of you, but a property fact that did
+  // not save is not recorded anywhere — leaving it on screen would tell
+  // the tech the office now knows something it does not.
+  const saveSystem = useCallback(async (patch) => {
+    const propertyId = wo?.property?.id;
+    if (!propertyId) return false;
+    const before = wo.property;
+    setWo((prev) => ({
+      ...prev,
+      property: { ...prev.property, system: { ...(prev.property?.system || {}), ...patch } },
+    }));
+    try {
+      const data = await patchProperty(propertyId, { system: patch });
+      if (data?.property) setWo((prev) => ({ ...prev, property: data.property }));
+      return true;
+    } catch (err) {
+      setWo((prev) => ({ ...prev, property: before }));
+      if (err instanceof AuthRequiredError) setState('auth');
+      else {
+        Alert.alert(
+          "Didn't save to the property",
+          err?.message || 'That went no further than the phone. Try again when you have signal.',
+        );
+      }
+      return false;
+    }
+  }, [wo]);
 
   const zones = useMemo(() => (Array.isArray(wo?.zones) ? wo.zones : []), [wo]);
 
@@ -241,7 +275,7 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
     );
   }
 
-  const shared = { wo, save, saving };
+  const shared = { wo, save, saveSystem, saving };
 
   return (
     <View style={styles.screen}>
