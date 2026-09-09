@@ -141,6 +141,11 @@ function blank() {
     address: "",
     status: "confirmed",
     prepNotes: "",
+    // Our own address lookup failed when this was booked — no Maps key, a
+    // timeout, quota. The booking was taken anyway (never turn a customer
+    // down over our outage) and flagged so the address gets a human's eye
+    // before a tech drives to it. Null on every normally-booked record.
+    verification: null,
     sourceQuoteId: null,
     workOrderIds: [],
     // Customer self-service guard. Bumped on every reschedule (admin
@@ -267,6 +272,10 @@ async function upsertFromLead(lead) {
     if (lead.quoteId && !existing.sourceQuoteId) existing.sourceQuoteId = lead.quoteId;
     const alreadyMirroredForce = Boolean(existing.forcedByAdmin);
     if (carriesForceFlag) existing.forcedByAdmin = true;
+    // Only ever set, never cleared here: a re-sync from a lead whose
+    // envelope has since been rewritten must not quietly clear a flag
+    // that says a human should look at this address.
+    if (booking.verification) existing.verification = booking.verification;
     existing.updatedAt = now;
     existing.history.push({ ts: now, action: "synced_from_lead", by: "system", note: "" });
     if (carriesForceFlag && !alreadyMirroredForce) {
@@ -298,6 +307,7 @@ async function upsertFromLead(lead) {
   next.status = booking.status || "confirmed";
   next.sourceQuoteId = lead.quoteId || null;
   if (carriesForceFlag) next.forcedByAdmin = true;
+  if (booking.verification) next.verification = booking.verification;
   if (booking.workOrder?.id) next.workOrderIds = [booking.workOrder.id];
   next.history = [{
     ts: now,

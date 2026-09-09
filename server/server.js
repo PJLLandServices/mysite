@@ -18094,17 +18094,30 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 422, { ok: false, errors: ["Pass leadId or propertyId."] });
       }
 
-      // Cancelled-booking guard (Brief B §3.4). A cancelled booking
-      // shouldn't spawn a WO — if the booking was killed for any reason
-      // (customer cancel, weather, double-book), creating a WO behind it
-      // would put a "ghost" tech run on the calendar with no real visit.
-      // Block at the lead.booking.status mirror so legacy callers that
-      // pass only a leadId are still gated.
-      if (lead?.booking?.status === "cancelled") {
-        return sendJson(res, 409, {
-          ok: false,
-          errors: ["This booking was cancelled — re-book before creating a work order."]
-        });
+      // Dead-booking guard (Brief B §3.4, widened 2026-09-09). A booking
+      // that no longer holds its slot must not spawn a work order — that
+      // would put a "ghost" tech run on the calendar with no real visit
+      // behind it. Blocked at the lead.booking.status mirror so legacy
+      // callers that pass only a leadId are still gated.
+      //
+      // It used to name `cancelled` alone, which left the other two dead
+      // states open: a COMPLETED booking already has its work order, so a
+      // second one is a duplicate job for a visit that already happened,
+      // and a NO_SHOW is a visit that did not happen and is not going to.
+      // Asked through the shared rule now, so a fourth dead state is
+      // covered the day it is added (CLAUDE.md, "define the rule once").
+      //
+      // The escape hatch for a genuine extra visit is unchanged and is
+      // the more honest record anyway: create the work order against the
+      // PROPERTY (propertyId, no lead), which this route already accepts.
+      if (lead?.booking && !bookingHoldsItsSlot(lead.booking.status)) {
+        const state = String(lead.booking.status || "").toLowerCase();
+        const why = state === "cancelled"
+          ? "This booking was cancelled — re-book before creating a work order."
+          : state === "no_show"
+            ? "That appointment was a no-show — re-book before creating a work order."
+            : "That appointment is already completed — create the work order against the property if another visit is needed.";
+        return sendJson(res, 409, { ok: false, code: `booking_${state}`, errors: [why] });
       }
 
       // Reuse the booking's customer-facing WO ID when one already
@@ -21118,6 +21131,25 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // our own geocode outages stand aside, flagged.
       const deliberateAdminAct = isAdmin
         && (payload.source === "admin_custom" || Boolean(normalizeString(payload.leadId, 40)));
+
+      // An address Google could not confirm FOR OUR REASONS — no key, a
+      // timeout, quota. The booking is taken anyway (Patrick's first
+      // rule: never turn a customer down, least of all over our own
+      // outage), but it must not then look like every other booking.
+      //
+      // Google SAYING the address is bad is the other case entirely and
+      // is refused above, with our phone number in the message — that is
+      // the "verified addresses are a requirement" half, and it already
+      // worked. This is the half where nobody was told.
+      //
+      // Carried onto the booking envelope so the record itself says so,
+      // and onto the label of the alerts Patrick already receives, so the
+      // text that lands on his phone for this booking reads UNVERIFIED
+      // instead of looking exactly like a good one. Deliberately NOT a
+      // new alert channel: he gets one message per booking today, and one
+      // per booking is what he should still get if the key ever falls out
+      // of Render and every address starts failing at once.
+      let addressUnverified = null;
       if (!deliberateAdminAct) {
         const gateVerdict = await bookingGate.gate(geo, {
           travelMinutes: distanceLib.travelMinutes, base: PJL_BASE
@@ -21132,8 +21164,17 @@ Customer signature captured at ${new Date().toISOString()}.`;
         }
         if (gateVerdict.degraded) {
           console.warn("[booking-gate] geocode degraded (", gateVerdict.reason, ") — reserve accepted ungated for:", address);
+          addressUnverified = {
+            state: "unverified",
+            reason: String(gateVerdict.reason || "unknown").slice(0, 80),
+            at: new Date().toISOString()
+          };
         }
       }
+      // "UNVERIFIED · " on the front of the alert label Patrick already
+      // reads. Empty string on the normal path, so a good booking's
+      // message is byte-identical to what it was.
+      const unverifiedTag = addressUnverified ? "UNVERIFIED · " : "";
       // customerCoords keeps the PJL-base fallback on purpose: the
       // availability engine needs an origin to compute drive time from, and
       // approximating an unresolvable address at the depot is the documented
@@ -21356,6 +21397,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
           bucketWindow: matched.bucketWindow || null,
           bucketLabel: matched.timeLabel || null,
           forcedByAdmin,
+          // Null unless our own address lookup failed — see the gate above.
+          verification: addressUnverified,
           serviceKey,
           serviceLabel: service.label,
           zoneCount,
@@ -21441,8 +21484,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
         if (isLoadTest) {
           console.log("[load-test] notifications suppressed for", lead.id);
         } else Promise.allSettled([
-          sendNewLeadEmail({ ...decorated, sourceLabel: `BOOKED · ${service.label} · ${matched.dayLabel} ${matched.timeLabel}` }, { baseUrl }),
-          sendNewLeadSms({ ...decorated, sourceLabel: `BOOKED ${matched.timeLabel}` }, { baseUrl }),
+          sendNewLeadEmail({ ...decorated, sourceLabel: `${unverifiedTag}BOOKED · ${service.label} · ${matched.dayLabel} ${matched.timeLabel}` }, { baseUrl }),
+          sendNewLeadSms({ ...decorated, sourceLabel: `${unverifiedTag}BOOKED ${matched.timeLabel}` }, { baseUrl }),
           notifyCustomer(boundIsSiteVisit ? "site_visit" : "booked", decorated, { baseUrl })
         ]).catch(() => {});
 
@@ -21605,6 +21648,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
         // Surfaces as a badge in admin UIs and as a history entry on the
         // canonical Booking record for audit.
         forcedByAdmin,
+        // Null unless our own address lookup failed — see the gate above.
+        verification: addressUnverified,
         serviceKey,
         serviceLabel: service.label,
         zoneCount,
@@ -21733,13 +21778,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
         console.log("[load-test] notifications suppressed for", result.lead.id);
       } else Promise.allSettled(isStandby
         ? [
-            sendNewLeadEmail({ ...decorated, sourceLabel: `OPEN BUCKET · ${service.label} · first available` }, { baseUrl }),
-            sendNewLeadSms({ ...decorated, sourceLabel: "OPEN BUCKET first available" }, { baseUrl }),
+            sendNewLeadEmail({ ...decorated, sourceLabel: `${unverifiedTag}OPEN BUCKET · ${service.label} · first available` }, { baseUrl }),
+            sendNewLeadSms({ ...decorated, sourceLabel: `${unverifiedTag}OPEN BUCKET first available` }, { baseUrl }),
             notifyCustomer("standby_joined", decorated, { baseUrl })
           ]
         : [
-            sendNewLeadEmail({ ...decorated, sourceLabel: `BOOKED · ${service.label} · ${matched.dayLabel} ${matched.timeLabel}` }, { baseUrl }),
-            sendNewLeadSms({ ...decorated, sourceLabel: `BOOKED ${matched.timeLabel}` }, { baseUrl }),
+            sendNewLeadEmail({ ...decorated, sourceLabel: `${unverifiedTag}BOOKED · ${service.label} · ${matched.dayLabel} ${matched.timeLabel}` }, { baseUrl }),
+            sendNewLeadSms({ ...decorated, sourceLabel: `${unverifiedTag}BOOKED ${matched.timeLabel}` }, { baseUrl }),
             notifyCustomer(isSiteVisit ? "site_visit" : "booked", decorated, { baseUrl })
           ]
       ).catch(() => {});
