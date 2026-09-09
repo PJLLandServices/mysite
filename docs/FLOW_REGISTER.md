@@ -218,6 +218,51 @@ load-bearing guards verified against broken code (holds not counted → 3 fail; 
 sweeper → 1 fail). No PASS flow touched — FLOW-03 gains a step, and `book.html` fails OPEN if
 the hold call itself errors, because reserve re-validates regardless.
 
+**2026-09-09 (A visit comes off the day, and the day still says so):** Patrick: "Customer calls
+throughout the day (or we go to house and already completed) we need a way ... to be able to
+'Remove visit' an architecture that allows us to obviously skip the home (remove it from the
+path) but record it somewhere."
+
+**Removing it from the path was already free.** `activeBookings()` and `/api/schedule/today`
+both filter on `bookingHoldsItsSlot()`, so a dead booking leaves the day, the route and the map
+without a line of resequencing code — the payoff from the 2026-09-09 lifecycle work above.
+What did not exist: any way to reach it from a phone, any structure to the reason, and — the
+gap — **any way to record a no-show at all.** Every reader honours `no_show`; nothing could set
+it. Only `cancel` had a route.
+
+`REMOVAL_REASONS` in `lib/bookings.js` is now the one place that says what the five reasons
+mean: customer cancelled, already done, nobody home, couldn't get access, weather. **The
+OUTCOME is derived from the reason server-side and never taken from the request** — a phone that
+can name its own status is a phone that can mark anything a no-show. `cancel()` takes a
+`reasonCode`, sets `status` to that outcome (so "nobody home" is a real `no_show`), and stores
+`removalCode` beside the free text: the text is what a human wrote, the code is what a query
+groups by next February. **"Already done" resolves to `cancelled`, never `completed`** — marking
+it complete would fire the completion cascade and draft an invoice for work this crew did not
+do — and defaults to NOT emailing the customer, because telling someone their visit was
+cancelled because it had already happened is a confusing email nobody needs. The lead mirror
+carries `cancelled.status`, not the literal string it used to hardcode; mirrored as "cancelled",
+a no-show was a no-show nothing downstream ever heard about.
+
+**A removed stop leaves the route and does not leave the screen.** `/api/schedule/today` returns
+`removed[]` alongside `bookings[]` — deliberately separate, because everything that drives, maps
+or counts the day reads the latter — and the phone shows them struck through under "Removed
+today" with the reason, the time and who did it. A stop that simply vanishes is the thing
+Patrick rings about at 4pm. The day rows also carry `bookingId` now; the lead's embedded
+booking is a read cache with no id of its own, so the button had nothing to call.
+
+Two smaller things. "Already done" asks what happened (Patrick's call — it is the one reason
+that means a double booking or a job closed without the calendar being told), and it asks in a
+new shared `PromptSheet`, **not `Alert.prompt`, which is iOS-only and does nothing whatever on
+Android** while `app.json` declares an android target. And the removal refetches the day rather
+than patching it locally: taking a stop out changes the driving order of everything after it,
+and the server owns that order.
+
+Coverage: `scripts/test-remove-visit.mjs`, 12 assertions, in `build:check`, **all 12 verified
+against the shipped code (0 passed, 12 failed)**. The load-bearing one compares the phone's
+reason list against the server's — two lists of the same thing in two files, and a code in one
+and not the other is a button that fails on a driveway. No PASS flow touched: the cancel route
+keeps its old free-text contract for the CRM, which sends no code and behaves exactly as before.
+
 **2026-09-09 (The arrival facts could be read and never written):** Patrick, on a work order
 showing Controller / Located / Shut Off / Blow-Out all reading "Not Recorded": "Please do me a
 favor and connect these from the properties profile... If the display information shows 'Not

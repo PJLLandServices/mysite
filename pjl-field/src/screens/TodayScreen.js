@@ -30,6 +30,7 @@ import {
   AuthRequiredError,
   createWorkOrderForProperty,
   getToday,
+  removeVisit,
   listPropertyWorkOrders,
   notifyOnRoute,
   openWorkOrder,
@@ -40,7 +41,8 @@ import DayMap from './DayMap';
 import MonthSheet from './MonthSheet';
 import { colors, radius, space, type } from '../theme';
 import { runningVersionLabel } from '../updates';
-import { Pill } from '../ui';
+import { Pill, PickerSheet, PromptSheet } from '../ui';
+import { REMOVAL_REASONS, reasonByCode, removalLabel, removalNote } from '../removal-reasons';
 import {
   canStartWorkOrder,
   existingWorkOrderFor,
@@ -70,6 +72,11 @@ const longDate = (ymd) => {
 
 export default function TodayScreen({ onOpenWorkOrder, refreshToken = 0, onSignIn }) {
   const [payload, setPayload] = useState(null);
+  // The job "Not today" is being asked about, and the reason picked for it.
+  const [removing, setRemoving] = useState(null);        // the job being taken off
+  const [asking, setAsking] = useState(null);            // { booking, reason }
+  const [why, setWhy] = useState('');
+  const [removingBusy, setRemovingBusy] = useState(false);
   // The server's idea of today, learned from the first response rather
   // than assumed from the phone's clock — the schedule belongs to the
   // server's day.
@@ -249,7 +256,49 @@ export default function TodayScreen({ onOpenWorkOrder, refreshToken = 0, onSignI
     );
   }
 
+  // Take the stop off the day. The server decides from the code whether
+  // that is a cancellation or a no-show, and whether the customer hears
+  // about it — the phone only says why.
+  const applyRemoval = useCallback(async (booking, reason, note) => {
+    if (!booking?.bookingId) {
+      Alert.alert(
+        "Can't remove this one",
+        'It has no booking record behind it — a job scheduled straight onto a property. '
+        + 'Take it off in the CRM.',
+      );
+      return;
+    }
+    setRemovingBusy(true);
+    try {
+      await removeVisit(booking.bookingId, { reasonCode: reason.code, note });
+      setRemoving(null);
+      // Refetch rather than patch: the removal changes the driving order
+      // of everything after it, and the server is the one that decides
+      // that order. Guessing it here is how the map and the list disagree.
+      await load(selected);
+    } catch (err) {
+      if (err instanceof AuthRequiredError) setState('auth');
+      else Alert.alert("Didn't remove it", err?.message || 'It is still on the day. Try again.');
+    } finally {
+      setRemovingBusy(false);
+    }
+  }, [load, selected]);
+
+  // "Already done" is the one reason that means something went wrong
+  // upstream — a double booking, or a job closed without the calendar
+  // being told. Patrick asked to be prompted, so the cause is findable in
+  // February rather than guessed at.
+  const pickReason = useCallback((booking, reason) => {
+    setRemoving(null);
+    if (!reason?.asksWhy) { applyRemoval(booking, reason, ''); return; }
+    // A sheet rather than Alert.prompt, which is iOS-only and does
+    // nothing at all on Android — app.json declares an android target.
+    setWhy('');
+    setAsking({ booking, reason });
+  }, [applyRemoval]);
+
   const bookings = payload?.bookings || [];
+  const removed = payload?.removed || [];
   // Changes whenever a row appears, disappears or finishes. That is
   // exactly when the map has to redraw — a completed work order is what
   // turns a numbered pin into a tick, and waiting for a pull-to-refresh
@@ -444,20 +493,89 @@ export default function TodayScreen({ onOpenWorkOrder, refreshToken = 0, onSignI
                 disabled={busy || !canStartWo}
                 primary
               />
+              {/* Last, so a thumb reaching for "Work order" never finds
+                  it first. Amber rather than red: taking a stop off the
+                  day is bookkeeping, not a disaster. */}
+              <Action
+                label="Not today"
+                onPress={() => setRemoving(b)}
+                disabled={busy || removingBusy || !b.bookingId}
+                warn
+              />
             </View>
           </Pressable>
         );
       })}
 
+      {/* WHAT CAME OFF, and why. The list above deliberately drops these
+          — nobody should be driven to a dead job — but a stop that simply
+          vanishes is the thing you ring about at 4pm. */}
+      {removed.length ? (
+        <>
+          <Text style={styles.removedHead}>
+            Removed today ({removed.length})
+          </Text>
+          {removed.map((r) => (
+            <View key={r.bookingId || r.leadId} style={styles.removedCard}>
+              <View style={styles.removedTop}>
+                <Text style={styles.removedWho} numberOfLines={1}>
+                  {r.customerName || 'Customer'}
+                </Text>
+                <Text style={styles.removedTag}>{removalLabel(r)}</Text>
+              </View>
+              {r.address ? (
+                <Text style={styles.removedAddr} numberOfLines={1}>{r.address}</Text>
+              ) : null}
+              <Text style={styles.removedWhy}>{removalNote(r)}</Text>
+              {/* The free text, when there is any — "already done" asks
+                  for it, and it is the half that says what went wrong. */}
+              {r.reason && reasonByCode(r.removalCode) && r.reason !== removalLabel(r) ? (
+                <Text style={styles.removedNote}>{r.reason}</Text>
+              ) : null}
+            </View>
+          ))}
+        </>
+      ) : null}
+
       {versionLabel ? (
         <Text style={styles.version}>App updated {versionLabel}</Text>
       ) : null}
       <View style={styles.footerSpace} />
+
+      <PickerSheet
+        visible={Boolean(removing)}
+        title={removing ? `Not today — ${removing.customerName || 'this stop'}` : ''}
+        options={REMOVAL_REASONS.map((r) => ({ key: r.code, label: r.label, note: r.hint }))}
+        selectedKey={null}
+        onClose={() => setRemoving(null)}
+        onSelect={(item) => {
+          const reason = reasonByCode(item.key);
+          if (reason && removing) pickReason(removing, reason);
+        }}
+      />
+
+      <PromptSheet
+        visible={Boolean(asking)}
+        title={asking?.reason?.whyPrompt || 'What happened?'}
+        message={'This is the one that usually means a double booking, or a job closed without '
+          + 'the calendar being told. Whatever you put here is what makes it findable later.'}
+        placeholder={asking?.reason?.whyPlaceholder || ''}
+        value={why}
+        onChangeText={setWhy}
+        confirmLabel="Remove"
+        busy={removingBusy}
+        onCancel={() => setAsking(null)}
+        onConfirm={() => {
+          const held = asking;
+          setAsking(null);
+          if (held) applyRemoval(held.booking, held.reason, why.trim());
+        }}
+      />
     </ScrollView>
   );
 }
 
-function Action({ label, onPress, disabled, primary }) {
+function Action({ label, onPress, disabled, primary, warn }) {
   return (
     <Pressable
       onPress={onPress}
@@ -465,11 +583,17 @@ function Action({ label, onPress, disabled, primary }) {
       style={({ pressed }) => [
         styles.action,
         primary && styles.actionPrimary,
+        warn && styles.actionWarn,
         disabled && styles.actionDisabled,
         pressed && !disabled && styles.actionPressed,
       ]}
     >
-      <Text style={[styles.actionText, primary && styles.actionTextPrimary, disabled && styles.actionTextDisabled]}>
+      <Text style={[
+        styles.actionText,
+        primary && styles.actionTextPrimary,
+        warn && styles.actionTextWarn,
+        disabled && styles.actionTextDisabled,
+      ]}>
         {label}
       </Text>
     </Pressable>
@@ -591,7 +715,35 @@ const styles = StyleSheet.create({
   actionDisabled: { opacity: 0.45 },
   actionText: { fontSize: 14, fontWeight: '600', color: colors.brand },
   actionTextPrimary: { color: '#fff' },
+  // Amber, not red. Taking a stop off the day is bookkeeping — a red
+  // button beside "Work order" reads as "delete the customer".
+  actionWarn: { backgroundColor: colors.warningTint },
+  actionTextWarn: { color: colors.warning },
   actionTextDisabled: { color: colors.textFaint },
+
+  removedHead: {
+    ...type.section, marginTop: space.xl, marginBottom: space.sm,
+    marginHorizontal: space.lg,
+  },
+  removedCard: {
+    backgroundColor: colors.card, borderRadius: radius.card,
+    marginHorizontal: space.md, marginBottom: space.sm,
+    paddingHorizontal: space.lg, paddingVertical: space.md, gap: 2,
+  },
+  removedTop: {
+    flexDirection: 'row', alignItems: 'baseline',
+    justifyContent: 'space-between', gap: space.md,
+  },
+  // Struck through, because it was on the day and is not any more —
+  // and left legible, because you may want to ring them.
+  removedWho: {
+    ...type.body, fontWeight: '600', color: colors.textMuted,
+    textDecorationLine: 'line-through', flexShrink: 1,
+  },
+  removedTag: { ...type.section, color: colors.warning, flexShrink: 0 },
+  removedAddr: { ...type.caption },
+  removedWhy: { ...type.caption, color: colors.textMuted, marginTop: 2 },
+  removedNote: { ...type.caption, color: colors.text, lineHeight: 19, marginTop: 2 },
 
   version: { ...type.caption, textAlign: 'center', paddingTop: space.md },
   footerSpace: { height: space.lg },

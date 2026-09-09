@@ -12075,13 +12075,34 @@ async function handleApi(req, res, pathname) {
       if (!session) return sendJson(res, 401, { ok: false, errors: ["Sign in required."] });
       const id = decodeURIComponent(cancelBookingMatch[1]);
       const payload = await parseRequestBody(req);
-      const reason = String(payload?.reason || "").trim().slice(0, 500);
+      // A structured reason when the caller has one — the app's "Not
+      // today" sheet always does. The CRM's older free-text cancel sends
+      // none and still works exactly as before.
+      const reasonCode = String(payload?.reasonCode || "").trim();
+      if (reasonCode && !bookings.isRemovalReason(reasonCode)) {
+        return sendJson(res, 422, { ok: false, errors: [`Unknown reason: ${reasonCode}`] });
+      }
+      const spec = reasonCode ? bookings.REMOVAL_REASONS[reasonCode] : null;
+      // The label stands in as the free text when a code was sent, so the
+      // required-reason rule below holds for both callers and the audit
+      // line reads as a sentence either way. A note the tech typed —
+      // "already done" asks what happened — is appended, not substituted.
+      const note = String(payload?.note || "").trim().slice(0, 300);
+      const reason = spec
+        ? [spec.label, note].filter(Boolean).join(" — ").slice(0, 500)
+        : String(payload?.reason || "").trim().slice(0, 500);
       if (!reason) {
         return sendJson(res, 422, { ok: false, errors: ["A reason is required so the audit trail captures why."] });
       }
-      const notify = payload?.notifyCustomer !== false; // default ON
+      // The reason decides whether the customer hears about it — telling
+      // someone their visit was cancelled because it had ALREADY BEEN DONE
+      // is a confusing email nobody needs. An explicit flag still wins.
+      const notify = payload?.notifyCustomer === undefined
+        ? (spec ? spec.notify !== false : true)
+        : payload.notifyCustomer !== false;
       const result = await bookings.cancel(id, {
         reason,
+        reasonCode,
         by: session.role === "admin" ? "admin" : "tech",
         actorName: session.uid || ""
       });
@@ -12096,9 +12117,14 @@ async function handleApi(req, res, pathname) {
           const allLeads = await readLeads();
           const lead = allLeads.find((l) => l.id === cancelled.leadId);
           if (lead && lead.booking) {
-            lead.booking.status = "cancelled";
+            // The OUTCOME, not the word "cancelled" — a no-show mirrored
+            // as a cancellation is a no-show the day list, the route and
+            // next year's planning never hear about.
+            lead.booking.status = cancelled.status;
             lead.booking.cancelledAt = cancelled.cancelledAt;
             lead.booking.cancellationReason = cancelled.cancellationReason;
+            lead.booking.removalCode = cancelled.removalCode || null;
+            lead.booking.removedBy = cancelled.cancelledBy || null;
             await writeLeads(allLeads);
           }
         }
@@ -21786,6 +21812,45 @@ async function orderDayForDriving(rows) {
     const allLeads = await readLeads();
     const allWos = await workOrders.list();
     const woByLeadId = new Map(allWos.map((w) => [w.leadId, w]));
+    // The canonical booking id per lead, so a row on the phone can name
+    // the record it wants removed. The lead's embedded booking is a read
+    // cache and carries no id of its own.
+    const bookingIdByLeadId = new Map();
+    try {
+      for (const b of await bookings.list()) {
+        if (b.leadId && !bookingIdByLeadId.has(b.leadId)) bookingIdByLeadId.set(b.leadId, b.id);
+      }
+    } catch (err) {
+      console.warn("[today] canonical booking ids unavailable:", err?.message);
+    }
+
+    // WHAT CAME OFF TODAY. The list above deliberately drops these — a tech
+    // must never be driven to a dead job — but a stop that simply vanishes
+    // is the thing Patrick rings about at 4pm. Returned separately so the
+    // day can show them, struck through, with the reason and who did it,
+    // and so nothing that reads `bookings` mistakes them for work.
+    const removedToday = allLeads
+      .filter((lead) => {
+        if (lead.archived) return false;
+        if (bookingHoldsItsSlot(lead.booking?.status)) return false;
+        if (lead.booking?.status === "completed") return false;   // finished, not removed
+        const start = lead.booking?.start ? new Date(lead.booking.start).getTime() : null;
+        if (!start || start < dayStart || start >= dayEnd) return false;
+        return Boolean(lead.booking?.cancelledAt);
+      })
+      .map((lead) => ({
+        leadId: lead.id,
+        bookingId: bookingIdByLeadId.get(lead.id) || null,
+        customerName: lead.contact?.name || lead.name || "",
+        address: lead.contact?.address || lead.contactExport?.address?.full || "",
+        start: lead.booking.start,
+        status: lead.booking.status,
+        removalCode: lead.booking.removalCode || null,
+        reason: lead.booking.cancellationReason || "",
+        removedAt: lead.booking.cancelledAt || null,
+        removedBy: lead.booking.removedBy || null,
+      }))
+      .sort((a, b) => String(a.removedAt || "").localeCompare(String(b.removedAt || "")));
 
     const dayBookings = allLeads
       .filter((lead) => {
@@ -21811,6 +21876,8 @@ async function orderDayForDriving(rows) {
         const town = lead.contact?.town || lead.contactExport?.address?.town || "";
         return {
           leadId: lead.id,
+          // The record "Not today" acts on.
+          bookingId: bookingIdByLeadId.get(lead.id) || null,
           // Where this row came from. A booking has a lead behind it (and
           // so can be notified-on-route); a "work_order" row appended by
           // mergeDaySchedule below is a job scheduled straight against a
@@ -21931,7 +21998,11 @@ async function orderDayForDriving(rows) {
       ok: true,
       date: new Date(dayStart).toISOString().slice(0, 10),
       bookings: ordered,
-      count: ordered.length
+      count: ordered.length,
+      // Separate from `bookings` on purpose: everything that drives, maps
+      // or counts the day reads that array, and a removed stop must not
+      // appear in any of them. This is for showing, and only for showing.
+      removed: removedToday
     });
   }
 
