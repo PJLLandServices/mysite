@@ -143,12 +143,20 @@ moment later, with nothing in the log to say why. The same write also persisted
 Fix: the generated secret is held for the life of the process, so racing callers agree on one
 value and whichever write lands last writes the same bytes; and the write persists the whole
 parsed config instead of one key. Not a change to what a valid session is — signing, verifying,
-expiry and the gates are untouched — so no PASS flow is affected. Coverage:
-`scripts/test-auth-secret.mjs`, 5 assertions, in `build:check`, driving the real server over
-HTTP; both assertions verified against the unfixed server (fails 4 runs of 4; the fix passes 5
-of 5 assertions across 4 runs). The test triggers the first-run write with an explicit
-`/api/session` call, because booting the server does not read `auth.json` and neither does the
-public readiness probe — without it there is no first-run write to inspect.
+expiry and the gates are untouched — so no PASS flow is affected.
+
+Coverage: `scripts/test-auth-secret.mjs`, 3 assertions, in `build:check`, driving the real
+server. **The property it pins is not "ten concurrent logins survive"** — the first draft
+asserted exactly that, passed locally, and then failed on CI reporting `0 of 10`, because a test
+of a race is a coin toss on a loaded box and it had picked up a dependency on the user store
+besides. What it pins instead is the thing underneath: **asking twice gives the same answer.**
+Empty the secret, ask, empty it again, ask again — same secret or the fix is not there. If two
+sequential asks agree, no number of concurrent ones can disagree; if they do not, racing callers
+eventually always will. Sequential, deterministic, no users, no login: fails on the unfixed
+server 5 runs of 5 (naming both secrets), passes 5 of 5 on the fix. The test triggers the
+first-run write with an explicit `/api/session` call, because booting the server does not read
+`auth.json` and neither does the public readiness probe — without it there is no first-run write
+to inspect.
 
 **2026-09-09 (The hold had a second caller nobody looked for — every app booking refused):**
 The hold entry above enumerated reserve's four exemptions carefully and wired `js/booking.js`

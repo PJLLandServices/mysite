@@ -4,38 +4,43 @@
 // "The server would not accept the session cookie it just issued."
 //
 // That line came out of `scripts/purge-test-data.mjs` on CI, intermittently,
-// on a run of main itself — and it is not a test artefact. It is what a
-// fresh install does.
+// including on a run of main itself (run 517, e9d0cad). It was read as a
+// flaky test. It is not: it is what a fresh install does.
 //
-// `readAuthConfig()` is read on EVERY request that touches a session, and
-// it mints a session secret when auth.json has not got one. It minted a
-// NEW random secret per call. On a fresh store several requests arrive
-// before the first write lands, so each generates its own, each writes it,
-// and the last write wins — retroactively invalidating every cookie signed
-// with any of the others. The user is handed a session that stops
-// verifying a moment later, with nothing in the logs to say why.
+// `readAuthConfig()` is called on EVERY request that touches a session, and
+// it mints a session secret when auth.json has not got one. It minted a NEW
+// random secret per call. On a store without one, several requests arrive
+// before the first write lands — each generating its own, each writing it,
+// the last write winning and retroactively invalidating every cookie signed
+// with any of the others.
 //
-// Two assertions, both driving the real server over HTTP:
-//   1. The first-run write keeps the rest of auth.json instead of
-//      replacing the file with a single key.
-//   2. Cookies issued concurrently, with no secret on disk, all still
-//      verify — they were all signed with the same one.
+// The fix is that the generated secret is held for the life of the process.
+// So the property to pin is not "ten concurrent logins survive" — that is a
+// race, and a test of a race is a coin toss on a loaded CI box. It is the
+// thing underneath: ASKING TWICE GIVES THE SAME ANSWER. If it does, no
+// number of concurrent callers can disagree; if it does not, they always
+// eventually will.
 //
-// Both fail on the unfixed server. Run:
+// Three assertions, all deterministic, all driving the real server:
+//   1. A secret-less store gets one written on the first request that
+//      touches a session.
+//   2. That write keeps the rest of auth.json instead of replacing the file
+//      with a single key.
+//   3. Emptying the secret and asking again returns the SAME secret.
+//
+// 2 and 3 both fail on the unfixed server. Run:
 //   node scripts/test-auth-secret.mjs   (also in `npm run build:check`)
 
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA = path.join(ROOT, "server", "data");
 const AUTH = path.join(DATA, "auth.json");
-const USERS = path.join(DATA, "users.json");
-const require2 = createRequire(path.join(ROOT, "package.json"));
 const PORT = 4799;
+const KEEP = "do not lose this";
 
 let passed = 0;
 const failures = [];
@@ -44,32 +49,40 @@ const ok = (name, cond, detail = "") => {
   failures.push(`${name}${detail ? ` — ${detail}` : ""}`);
 };
 
-// Anything we move aside goes back, pass or fail — this is the real data
-// directory, not a fixture copy.
-const saved = new Map();
-for (const f of [AUTH, USERS]) {
-  saved.set(f, fs.existsSync(f) ? fs.readFileSync(f, "utf8") : null);
-}
+// auth.json is the real one, not a fixture. Put it back exactly as found,
+// pass or fail.
+const original = fs.existsSync(AUTH) ? fs.readFileSync(AUTH, "utf8") : null;
 const restore = () => {
-  for (const [f, body] of saved) {
-    if (body === null) fs.rmSync(f, { force: true });
-    else fs.writeFileSync(f, body, "utf8");
-  }
+  if (original === null) fs.rmSync(AUTH, { force: true });
+  else fs.writeFileSync(AUTH, original, "utf8");
 };
 
-const EMAIL = "auth-race@local.test";
-const PASSWORD = "local-auth-race-pass-123";
+// A store that has everything EXCEPT a secret. The neighbouring key is how
+// assertion 2 catches the write that used to replace the whole file.
+const emptyTheSecret = () =>
+  fs.writeFileSync(AUTH, JSON.stringify({ keepMe: KEEP }, null, 2) + "\n", "utf8");
+
+// One request that reaches readAuthConfig, then wait for the write it
+// triggers. `/api/session` qualifies with no cookie at all — readSession
+// reads the config before it looks for one. Booting the server does NOT
+// read auth.json, and neither does the public readiness probe, so without
+// this there is no first-run write to inspect.
+async function touchSessionPath() {
+  await fetch(`http://127.0.0.1:${PORT}/api/session`);
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 50));
+    try {
+      const parsed = JSON.parse(fs.readFileSync(AUTH, "utf8"));
+      if (parsed.sessionSecret) return parsed;
+    } catch { /* mid-write — look again */ }
+  }
+  return null;
+}
 
 let server;
 try {
   fs.mkdirSync(DATA, { recursive: true });
-  fs.writeFileSync(USERS, "[]\n", "utf8");
-  // A fresh install: no secret yet, but the file is NOT empty — the
-  // neighbouring key is how assertion 2 catches the clobbering write.
-  fs.writeFileSync(AUTH, JSON.stringify({ keepMe: "do not lose this" }, null, 2) + "\n", "utf8");
-
-  const users = require2(path.join(ROOT, "server", "lib", "users.js"));
-  await users.create({ email: EMAIL, name: "Auth Race", role: "admin", password: PASSWORD });
+  emptyTheSecret();
 
   server = spawn("node", [path.join(ROOT, "server", "server.js")], {
     env: { ...process.env, PORT: String(PORT), NODE_ENV: "test" },
@@ -86,62 +99,29 @@ try {
   }
   if (!up) throw new Error("server never came up:\n" + logs.slice(-1500));
 
-  // ---- 1. The first-run write keeps the rest of the file -----------------
-  //
-  // Checked here, in the quiet after boot, rather than at the end: the
-  // second phase deliberately rewrites this file, and a test that reads it
-  // back while the server may be part-way through its own write is testing
-  // its own race, not the server's.
-  //
-  // ONE request first, and it has to be one that touches a session —
-  // booting the server does not read auth.json, and neither does the public
-  // readiness probe above, so without this the file is still untouched and
-  // there is no first-run write to inspect.
-  await fetch(`http://127.0.0.1:${PORT}/api/session`);
-  await new Promise((r) => setTimeout(r, 300));
-  const firstRun = JSON.parse(fs.readFileSync(AUTH, "utf8"));
-  ok("a session secret was persisted on first run",
-    typeof firstRun.sessionSecret === "string" && firstRun.sessionSecret.length > 0);
+  // ---- 1 + 2. The first-run write ----------------------------------------
+  const first = await touchSessionPath();
+  ok("a secret-less store gets one written on the first session request",
+    first !== null && typeof first.sessionSecret === "string" && first.sessionSecret.length > 0,
+    "no sessionSecret appeared in auth.json");
   ok("the first-run write keeps the rest of auth.json",
-    firstRun.keepMe === "do not lose this",
+    first !== null && first.keepMe === KEEP,
     "the generated secret was written over the whole file");
 
-  // ---- 2. Concurrent logins with no secret on disk -----------------------
+  // ---- 3. Asking twice gives the same answer -----------------------------
   //
-  // Empty the secret HERE, with the server already up and its first-run
-  // write settled — the readiness polls above are requests too, and one of
-  // them persisting a secret closes the window this is trying to open.
-  fs.writeFileSync(AUTH, JSON.stringify({ keepMe: "do not lose this" }, null, 2) + "\n", "utf8");
-  //
-  // Ten at once, because one at a time never races. Every cookie handed out
-  // has to still verify afterwards: they cannot have been signed with
-  // different secrets.
-  const logins = await Promise.all(Array.from({ length: 10 }, () => fetch(
-    `http://127.0.0.1:${PORT}/api/login`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email: EMAIL, password: PASSWORD })
-    }
-  )));
-  const cookies = logins.map((r) => (r.headers.get("set-cookie") || "").split(";")[0]).filter(Boolean);
-  ok("every concurrent login is answered with a session cookie",
-    cookies.length === 10, `${cookies.length} of 10`);
-
-  const verdicts = await Promise.all(cookies.map(async (cookie) => {
-    const res = await fetch(`http://127.0.0.1:${PORT}/api/session`, { headers: { cookie } });
-    const body = await res.json().catch(() => ({}));
-    return body.authenticated === true;
-  }));
-  const accepted = verdicts.filter(Boolean).length;
-  ok("the server accepts every session cookie it just issued",
-    accepted === cookies.length,
-    `${accepted} of ${cookies.length} verified — the rest were signed with a secret that was overwritten`);
-
-  // And the store settled on exactly one secret.
-  const after = JSON.parse(fs.readFileSync(AUTH, "utf8"));
-  ok("a session secret is on disk after the burst",
-    typeof after.sessionSecret === "string" && after.sessionSecret.length > 0);
+  // The whole bug in one assertion. Sequential, so there is no race to lose:
+  // if the second answer differs from the first, then two callers racing the
+  // first write get different secrets, and whichever writes last silently
+  // invalidates the other's cookies. The unfixed server mints a fresh
+  // random secret here every time.
+  emptyTheSecret();
+  const second = await touchSessionPath();
+  ok("asking again returns the secret already issued, not a new one",
+    first !== null && second !== null && second.sessionSecret === first.sessionSecret,
+    first && second
+      ? `first ${String(first.sessionSecret).slice(0, 8)}… then ${String(second.sessionSecret).slice(0, 8)}… — cookies signed with the first no longer verify`
+      : "no secret to compare");
 } catch (err) {
   failures.push(`harness: ${err.message}`);
 } finally {
