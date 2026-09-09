@@ -19,6 +19,29 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-09, same day (The server refused the session cookie it had just issued):** Found while
+driving PR #184's CI to green — `test-booking-lifecycle` failed with four consecutive `ERR:401` on
+the tech's day list while the login assertion in the SAME block passed. Not this PR's change, and
+not a flake: it is the other half of the defect `scripts/test-auth-secret.mjs` documents. That
+suite fixed racing MINTS of the session secret (one secret per process instead of one per call).
+The remaining hole is the WRITE, in the two stores every gated request reads.
+`requireUser()`/`requireAdmin()` re-read `users.json` on every request so a disabled account loses
+access immediately, and `/api/login` fires `users.recordLogin()` **without awaiting it** — so a
+write to `users.json` is in flight at exactly the moment the client makes its next request. A bare
+`fs.writeFile` truncates the destination and then fills it; a reader landing in that window gets
+`""`, `JSON.parse("" || "[]")` hands it an **empty user list**, and the gate reads that as "this
+user no longer exists" → **401 on a perfectly valid session**. `auth.json` had the same non-atomic
+write, and there a truncated read is worse than transient: `readAuthConfig()` sees no secret, mints
+one and WRITES it, invalidating every cookie already issued — the four-in-a-row shape.
+Fix: both stores now write through `lib/atomic-json.js` (temp file + rename), the same treatment
+`bookings.json`, `customers.json`, `properties.json` and `leads.json` got in PR #176 — these two
+were simply missed. Reproduced locally first: 3 of 720 gated requests came back 401 against the
+unfixed code. Coverage: `scripts/test-session-stores-atomic.mjs`, 8 assertions, in `build:check`.
+It pins a deterministic property rather than a race — **the update lands by RENAME**, so the
+destination file's inode changes across a write (an in-place truncate-and-fill keeps it) — plus
+the end-to-end symptom itself. Verified against broken code: 3 assertions fail on the old writes.
+No PASS flow touched; no behaviour changes for any caller.
+
 **2026-09-09 (The overflow failed on arrival: the open bucket's hard-coded 13:00):** Spec item 4,
 D3. Patrick's rule is that we never turn a customer down — past the corridor cap they go into the
 open bucket and get picked up "on our way home". Ranking them against the upcoming route days

@@ -587,7 +587,13 @@ async function readAuthConfig() {
     // Write the whole config back, not just this key. It used to persist
     // `{ sessionSecret }` alone, so a first-run write threw away anything
     // else auth.json was holding.
-    try { await fs.writeFile(AUTH_FILE, JSON.stringify(parsed, null, 2) + "\n", "utf8"); }
+    // Atomic: temp file then rename (lib/atomic-json.js). A bare writeFile
+    // truncates first, and readAuthConfig re-reads this file on EVERY
+    // request that touches a session. A reader landing in that window sees
+    // no secret, mints its own, and writes THAT — retroactively invalidating
+    // every cookie already issued. The per-process memo above makes racing
+    // MINTS agree; this makes racing READS safe.
+    try { await writeJsonAtomic(AUTH_FILE, parsed); }
     catch { /* read-only filesystem in tests, etc. — fall through */ }
   }
   return parsed;
