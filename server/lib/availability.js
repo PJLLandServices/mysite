@@ -235,7 +235,21 @@ const DEFAULT_SETTINGS = {
   // accepts 98.5%. Start tight: loosening is one edit, and un-annoying a
   // customer who was double-booked across the region is not.
   // Set to 0 or a negative number to disable the filter entirely.
-  geoMaxAddedDriveMinutes: 15
+  geoMaxAddedDriveMinutes: 15,
+  // THE AGGREGATE GUARD. The check above is marginal — it asks what ONE
+  // stop adds and never looks at the day as a whole — and it is asymmetric,
+  // because every route starts and ends at the Newmarket yard: a Newmarket
+  // stop costs +4 to insert into a Thornhill day, so home-turf customers
+  // were waved onto far days one after another and the barbell only ever
+  // formed one way round.
+  //
+  // This caps the longest leg BETWEEN consecutive stops, commute excluded.
+  // Measured: a tight day is 5 minutes whether it sits in Newmarket or in
+  // Thornhill; the barbell is 46. Total day drive cannot tell those apart
+  // (99 against 98), which is why this is a leg cap and not a day cap.
+  // 25 matches the first rung of the widen ladder.
+  // Set to 0 or a negative number to disable.
+  maxLegBetweenStopsMinutes: 25
 };
 
 // The corridor is elastic (Patrick, 2026-09-07: "as the dates fill up,
@@ -394,6 +408,7 @@ async function listAvailableSlots(opts = {}) {
   // slot keeps its true addedDriveMinutes, so the stars still steer
   // customers to the cheapest days first even on a widened calendar.
   const baseGeoMax = Number(cfg.geoMaxAddedDriveMinutes);
+  const maxLeg = Number(cfg.maxLegBetweenStopsMinutes);
   const geoLadder = (Number.isFinite(baseGeoMax) && baseGeoMax > 0)
     ? [baseGeoMax, ...GEO_WIDEN_TIERS.filter((t) => t > baseGeoMax)]
     : [baseGeoMax];
@@ -577,6 +592,32 @@ async function listAvailableSlots(opts = {}) {
               continue;
             }
             bucketAddedDrive = added && !added.emptyDay ? added.minutes : null;
+
+            // ---- Aggregate: how far apart is the day once they join? ----
+            // Cheapest insertion is blind to this. It scores the CHEAPEST
+            // place to slot someone in, so a Newmarket customer joining a
+            // Thornhill day is "+4 minutes" — true, and irrelevant, because
+            // the day still crosses the city and comes back. The leg cap
+            // asks the question the marginal check cannot, and asks it the
+            // same way round whichever cluster booked first.
+            if (Number.isFinite(maxLeg) && maxLeg > 0) {
+              const spread = await geoFilter.worstLegBetweenStops(customerCoords, scoreAgainst);
+              if (spread && spread.added > maxLeg) {
+                geoSuppressedCount += 1;
+                if (diagnostics && Array.isArray(diagnostics.geoSuppressed)) {
+                  diagnostics.geoSuppressed.push({
+                    date: dateKey(day),
+                    bucket: bucket.key,
+                    label: shape.label || "",
+                    addedDriveMinutes: added && !added.emptyDay ? added.minutes : 0,
+                    worstLegMinutes: spread.minutes,
+                    addedLegMinutes: spread.added,
+                    reason: "day_too_spread"
+                  });
+                }
+                continue;
+              }
+            }
           }
         }
 

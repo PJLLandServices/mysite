@@ -317,9 +317,92 @@ async function addedDriveMinutes(candidate, points, opts = {}) {
   };
 }
 
+// How far apart is a day, once this customer joins it?
+//
+// THE MEASURE, and why it is not the day's total drive. Every cluster pays
+// to get out of the yard and back, wherever it sits; a Thornhill route day
+// costs 94 minutes of commute before it has done any work. What makes a day
+// BAD is crossing the city inside it. Measured on real coordinates:
+//
+//   Newmarket x2                    commute 10, between stops  5
+//   Thornhill x2 (far, but tight)   commute 94, between stops  5
+//   Newmarket -> Thornhill          commute 52, between stops 46
+//
+// Total drive is 99 for the good Thornhill day and 98 for the barbell —
+// a total-drive cap cannot tell them apart. The longest leg BETWEEN
+// consecutive stops can: 5 against 46.
+//
+// And unlike cheapest-insertion it is SYMMETRIC. Inserting Newmarket into a
+// Thornhill day scores +4 because the yard is in Newmarket, so the marginal
+// check waved every home-turf customer onto a far day and the barbell only
+// ever formed one way round (Patrick, 2026-09-09: "it still isn't taking").
+// The gap between the two clusters is 46 whichever one arrives first.
+//
+// IT IS THE DELTA THAT MATTERS, not the absolute leg. A planned rural route
+// legitimately has long legs — the fall plan's R5 runs Etobicoke to
+// Mississauga to ACTON — and capping the absolute worst leg banned exactly
+// those days, which is the opposite of the point. So the question is what
+// this customer ADDS to the day's spread: a Mississauga caller joining R5
+// adds nothing (they are already on that line), while a Newmarket caller
+// joining a Thornhill day adds 41 minutes of city-crossing.
+//
+// Returns null when there is nothing to measure — no stops yet, or
+// coordinates we cannot use. A day nobody has booked has no spread, and
+// somebody has to seed a cluster.
+async function worstLegBetweenStops(candidate, points, opts = {}) {
+  if (!usable(candidate)) return null;
+  const stops = (points || []).filter(usable);
+  if (!stops.length) return null;
+
+  const base = opts.base || await routeOrigin();
+
+  // Order stops the way the day would actually be driven — nearest
+  // neighbour out of the yard, the greedy the sequencer opens with — so the
+  // legs measured are legs that would really be driven, not the order three
+  // strangers happened to book in.
+  const order = (list) => {
+    const remaining = list.slice();
+    const out = [];
+    let cursor = base;
+    while (remaining.length) {
+      let at = 0;
+      let best = Infinity;
+      for (let i = 0; i < remaining.length; i++) {
+        const cost = estimateMinutes(cursor, remaining[i]);
+        if (cost < best) { best = cost; at = i; }
+      }
+      cursor = remaining[at];
+      out.push(cursor);
+      remaining.splice(at, 1);
+    }
+    return out;
+  };
+
+  // Only the legs BETWEEN stops. The first and last are the commute, which
+  // is the price of where the cluster IS, not of how spread out it is.
+  const worstLeg = async (ordered) => {
+    let worst = 0;
+    for (let i = 1; i < ordered.length; i++) {
+      const leg = await travelMinutes(ordered[i - 1], ordered[i]);
+      if (leg > worst) worst = leg;
+    }
+    return worst;
+  };
+
+  const before = await worstLeg(order(stops));
+  const after = await worstLeg(order([...stops, candidate]));
+  return {
+    minutes: Math.round(after),
+    before: Math.round(before),
+    added: Math.max(0, Math.round(after - before)),
+    stops: stops.length + 1
+  };
+}
+
 module.exports = {
   buildDayShapes,
   addedDriveMinutes,
+  worstLegBetweenStops,
   coordsAreResolved,
   pointKey,
   localDateKey

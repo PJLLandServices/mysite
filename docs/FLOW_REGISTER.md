@@ -19,6 +19,42 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-09, same day (The aggregate guard — the barbell stops being COMPOSED):** Spec priority
+3, causes C-D, and the last piece of the Newmarket → Thornhill → Newmarket problem. The
+per-booking check is marginal (what does THIS stop add?) and, because every route starts and
+ends at the Newmarket yard, **asymmetric**: measured on Patrick's own addresses, Thornhill into
+a Newmarket morning is **+88 min** and refused, while Newmarket into a Thornhill morning is
+**+4** and allowed, and Aurora into a day holding both is **+0**. So the barbell only ever formed
+one way round — the far cluster landed first, then home-turf customers slotted in at +4 apiece
+and every one passed. That is why it survived several rounds of corridor work.
+**The spec proposed a total-day-drive cap (150 min). Measurement killed that design before it
+was written:** a barbell day totals **98** minutes and a perfectly good tight Thornhill route day
+totals **99** — indistinguishable, and 150 admits both. Every cluster pays to get out of the yard
+and back wherever it sits; what makes a day bad is crossing the city INSIDE it. Splitting commute
+from spread separates them cleanly: commute 10 / between-stops 5 for Newmarket ×2, commute 94 /
+between-stops **5** for a far-but-tight Thornhill day, commute 52 / between-stops **46** for the
+barbell.
+So the rule is `geoFilter.worstLegBetweenStops()` — the longest leg between consecutive stops,
+commute excluded, with stops ordered the way the day would actually be driven (nearest-neighbour
+from the yard, the greedy the sequencer opens with). New setting
+`maxLegBetweenStopsMinutes: 25`, matching the first rung of the widen ladder; 0 disables it.
+It is **symmetric**: 46 for Newmarket-joins-Thornhill, 45 for Thornhill-joins-Newmarket.
+**A first attempt capped the ABSOLUTE worst leg and was wrong** — it banned the fall plan's own R5
+(Etobicoke → Mississauga → **Acton**), a rural route that legitimately has long legs, which is
+the opposite of the point. The shipped rule caps the **delta**: what this customer ADDS to the
+day's spread. A Mississauga caller joining R5 adds ~0 because they are already on that line; a
+Newmarket caller joining a Thornhill day adds 41. Caught by the suite's existing acceptance
+criterion, not by inspection.
+Deliberate limits: a day with no stops has no spread and is never refused — somebody has to seed
+a cluster; the check runs only after the marginal one, so it costs nothing on days already
+refused; and a day that already exceeds the cap refuses NEW bookings without touching or moving
+anything existing, with the open bucket as the overflow (Patrick: "we NEVER turn down a
+customer"). Coverage: section 10 of `scripts/test-geo-availability.mjs` (70 → 75 assertions),
+which asserts the barbell is refused BOTH ways round, that a far-but-tight day and an empty day
+are untouched, and — as the fixture's own guard — that the Newmarket stop still looks cheap to
+the marginal check, so the test cannot quietly stop testing the thing it exists for. Disable the
+setting and exactly one assertion fails, naming the offered day. No PASS flow touched.
+
 **2026-09-09, same day (The tech's day list was in booking order, not driving order):** Spec 2.4
 and causes A-B. `/api/schedule/today` — the endpoint the FIELD APP reads, the one Patrick
 actually drives from — sorted by `booking.start`, and `booking.start` is only the first free
