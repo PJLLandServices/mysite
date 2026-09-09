@@ -114,18 +114,51 @@ const ok = (name, cond, detail = "") => {
       "client-side; the server re-checks the same rule on the route it calls"]
   ]);
 
+  // A LINE may also opt out, which server.js needs: it is far too big to
+  // exempt wholesale, and it holds one reader that legitimately names a
+  // single state AFTER asking the shared rule — /api/schedule/today's
+  // "what came off today" list, where `completed` means finished rather
+  // than removed. The marker sits on the line itself rather than in a
+  // list over here, so the reason travels with the code and a new
+  // exception has to be written on purpose.
+  const EXEMPT_LINE = /\/\/.*\bnot-liveness:/;
+
   const offenders = [];
   for (const rel of files) {
     if (ALLOWED.has(rel)) continue;
     const src = fs.readFileSync(path.join(ROOT, rel), "utf8");
-    src.split("\n").forEach((line, i) => {
+    const lines = src.split("\n");
+    lines.forEach((line, i) => {
       const code = line.replace(/\/\/.*$/, "");
       if (!BOOKING_RECEIVER.test(code)) return;
+      // The marker may sit on the line or in the comment block directly
+      // above it — a one-line reason is rarely a real one.
+      const window = lines.slice(Math.max(0, i - 4), i + 1).join("\n");
+      if (EXEMPT_LINE.test(window)) return;
       offenders.push(`${rel}:${i + 1} ${code.trim().slice(0, 90)}`);
     });
   }
   ok("no server-side reader spells out the dead-status list instead of asking the rule",
     offenders.length === 0, offenders.join(" | "));
+  // An exempt LINE only narrows an answer the shared rule already gave,
+  // so each one must sit within a few lines of a bookingHoldsItsSlot()
+  // call. A marker on a line that asks the question by itself is the
+  // copy this suite exists to catch, wearing a permission slip.
+  {
+    const bad = [];
+    for (const rel of files) {
+      if (ALLOWED.has(rel)) continue;
+      const lines = fs.readFileSync(path.join(ROOT, rel), "utf8").split("\n");
+      lines.forEach((line, i) => {
+        if (!EXEMPT_LINE.test(line)) return;
+        const near = lines.slice(Math.max(0, i - 8), i + 6).join("\n");
+        if (!near.includes("bookingHoldsItsSlot(")) bad.push(`${rel}:${i + 1}`);
+      });
+    }
+    ok("every exempt line still asks the shared rule first",
+      bad.length === 0, bad.join(", "));
+  }
+
   ok("every allow-listed exception still carries its reason",
     [...ALLOWED.values()].every((why) => typeof why === "string" && why.length > 30),
     [...ALLOWED.keys()].join(", "));

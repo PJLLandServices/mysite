@@ -75,6 +75,45 @@ async function writeAll(records) {
 // The ONE definition of "this booking still occupies the calendar".
 // server.js's bookingHoldsItsSlot delegates here; the two used to be
 // separate rules and drifted (see test-booking-lifecycle.mjs).
+// WHY A VISIT CAME OFF THE DAY, and what each answer means to the record.
+//
+// Patrick: "Customer calls throughout the day (or we go to house and
+// already completed) we need a way ... to be able to 'Remove visit' ...
+// but record it somewhere."
+//
+// Recording it somewhere IS the feature — dropping the stop is the easy
+// part, and already automatic (a dead booking stops holding its slot and
+// leaves the route without a line of resequencing code). What matters is
+// that six months later the difference between "they rang and cancelled"
+// and "nobody was home" is still on the record, because those are not the
+// same event and only one of them is chargeable.
+//
+// `outcome` is chosen HERE, from the reason, and never taken from the
+// caller: a phone deciding its own booking status is a phone that can mark
+// anything a no-show.
+const REMOVAL_REASONS = {
+  customer_cancelled: { label: "Customer cancelled", outcome: "cancelled", notify: true },
+  // NOT `completed`. Marking it complete would fire the completion cascade
+  // and draft an invoice for work this crew did not do. It is a
+  // cancellation with a note saying the work was already there.
+  already_done: { label: "Already done", outcome: "cancelled", notify: false, asksWhy: true },
+  no_answer: { label: "Nobody home", outcome: "no_show", notify: true },
+  no_access: { label: "Couldn't get access", outcome: "cancelled", notify: true },
+  weather: { label: "Weather", outcome: "cancelled", notify: true },
+};
+
+function isRemovalReason(code) {
+  return Object.prototype.hasOwnProperty.call(REMOVAL_REASONS, String(code || ""));
+}
+
+// The status a reason resolves to. Unknown codes fall back to a plain
+// cancellation rather than throwing: a visit that has to come off the day
+// comes off the day, and a tech on a driveway is not the person to debug
+// a vocabulary mismatch.
+function removalOutcome(code) {
+  return REMOVAL_REASONS[String(code || "")]?.outcome || "cancelled";
+}
+
 const DEAD_STATUSES = new Set(["cancelled", "completed", "no_show"]);
 function holdsItsSlot(status) {
   return !DEAD_STATUSES.has(String(status || "").toLowerCase());
@@ -463,7 +502,7 @@ async function reschedule(id, { scheduledFor, by = "admin", actorName = "", reas
 //                              already completed (no_show / completed are
 //                              terminal — re-cancel is rejected)
 //   { ok: true, booking }      on success
-async function cancel(id, { reason = "", by = "admin", actorName = "" } = {}) {
+async function cancel(id, { reason = "", reasonCode = "", by = "admin", actorName = "" } = {}) {
   const records = await readAll();
   const idx = records.findIndex((b) => b.id === id);
   if (idx === -1) return { ok: false, status: 404, errors: ["Booking not found."] };
@@ -475,19 +514,28 @@ async function cancel(id, { reason = "", by = "admin", actorName = "" } = {}) {
     return { ok: false, status: 409, errors: [`Can't cancel a ${current.status} booking.`] };
   }
   const now = new Date().toISOString();
+  const outcome = removalOutcome(reasonCode);
   const next = {
     ...current,
-    status: "cancelled",
+    status: outcome,
+    // These keep their names for every reader that already knows them,
+    // including a no-show: they are the audit fields for "this came off
+    // the day", and inventing a parallel set would mean two places to look
+    // and one of them eventually not updated.
     cancelledAt: now,
     cancelledBy: by,
     cancellationReason: reason || "",
+    // The structured half. The free text is what a human wrote; this is
+    // what a query can group by next February.
+    removalCode: String(reasonCode || "") || null,
     updatedAt: now,
     history: [...(current.history || []), {
       ts: now,
-      action: "cancelled",
+      action: outcome === "no_show" ? "no_show" : "cancelled",
       by,
       note: [
         actorName ? `${actorName} (${by})` : by,
+        reasonCode ? `why: ${reasonCode}` : "",
         reason ? `reason: ${reason}` : ""
       ].filter(Boolean).join(" · ")
     }]
@@ -788,6 +836,9 @@ async function attachWorkOrder(bookingId, woId) {
 module.exports = {
   holdsItsSlot,
   DEAD_STATUSES,
+  REMOVAL_REASONS,
+  isRemovalReason,
+  removalOutcome,
   STATUSES,
   list,
   get,

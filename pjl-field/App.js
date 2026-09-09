@@ -33,6 +33,7 @@ import { Platform, Pressable, SafeAreaView, StatusBar as RNStatusBar, StyleSheet
 import { StatusBar } from 'expo-status-bar';
 import PropertiesScreen from './src/screens/PropertiesScreen';
 import TodayScreen from './src/screens/TodayScreen';
+import AddStopScreen from './src/screens/AddStopScreen';
 import BookScreen from './src/screens/BookScreen';
 import ClosingScreen from './src/screens/ClosingScreen';
 import InvoiceScreen from './src/screens/InvoiceScreen';
@@ -70,7 +71,17 @@ export function tabsForRole(role) {
 //   { kind: 'closing', workOrderId }  — the native fall-closing flow
 //   { kind: 'web',     url, title }   — any other work order, on the web
 //   { kind: 'invoice', invoiceId }    — where a finished closing lands
-export const JOB = { CLOSING: 'closing', WEB: 'web', INVOICE: 'invoice', THREAD: 'thread' };
+//   { kind: 'addStop', day, dayBookings, fromAddress }
+//                                     — a customer who walked over
+//
+// addStop is an overlay for the same reason the rest are: it is three
+// questions asked on a driveway with someone watching, and switching
+// tabs half way through is not a thing anyone means to do. It ends by
+// REPLACING itself with the work order it just created, so the walk-up
+// lands exactly where a booking made three weeks ago would.
+export const JOB = {
+  CLOSING: 'closing', WEB: 'web', INVOICE: 'invoice', THREAD: 'thread', ADD_STOP: 'addStop',
+};
 
 // A work order becomes one of two things. Kept out of the component so
 // the routing decision can be tested without React Native — the same
@@ -192,6 +203,7 @@ export default function App() {
                   <TodayScreen
                     key={`today-${signedIn}`}
                     onOpenWorkOrder={openWorkOrder}
+                    onAddStop={(where) => setJob({ kind: JOB.ADD_STOP, ...where })}
                     refreshToken={jobsClosed}
                     onSignIn={openSignIn}
                   />
@@ -282,6 +294,19 @@ export default function App() {
                 invoiceId={job.invoiceId}
                 onBack={closeJob}
                 onSignIn={openSignIn}
+              />
+            ) : job.kind === JOB.ADD_STOP ? (
+              <AddStopScreen
+                key={`add-stop-${job.day || 'today'}-${signedIn}`}
+                day={job.day}
+                dayBookings={job.dayBookings}
+                fromAddress={job.fromAddress}
+                onExit={closeJob}
+                onSignIn={openSignIn}
+                // Straight into the paperwork. closeJob has already run,
+                // so Today reloads behind this and comes back with the new
+                // stop on it.
+                onOpenWorkOrder={openWorkOrder}
               />
             ) : job.kind === JOB.THREAD ? (
               <ThreadScreen
