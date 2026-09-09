@@ -60,6 +60,80 @@ Plug the phone in, unlock it, pick it from the dropdown at the top, press
 
 ---
 
+## 3a. Over-the-air updates — when Xcode is not needed at all
+
+Most of what changes in this app is JavaScript: a screen, some wording, a
+rule about what happens when you tap something. None of that needs Xcode.
+The app can fetch it itself.
+
+**How it works.** On a cold start the app asks Expo whether there is a
+newer JavaScript bundle for it. If there is, it downloads it and reloads —
+about a second, once, and then it is running the new code. Force-quit and
+reopen; that is the whole procedure.
+
+**Why it never worked before.** The app was always built to do this. What
+it was never told is which *channel* to read — think of a channel as a
+named shelf on Expo's server. `eas.json` names the shelves, but only EAS
+reads that file, and you build by hand in Xcode. So the app asked for
+"nothing in particular", got nothing back, and carried on. Restarting it a
+hundred times would not have helped. `app.json` now names the shelf
+(`expo-channel-name: production`), so the app knows where to look.
+
+### The one-time cost
+
+`app.json` is native configuration. It only reaches the app through a
+prebuild, which means **one more full Xcode round, including re-setting
+the signing team and the build configuration** — everything in §4 below.
+After that round, JS changes stop needing Xcode.
+
+Once, then never again for this class of change.
+
+### Publishing an update
+
+From the `pjl-field` folder, on a machine signed in to Expo:
+
+```
+npx eas update --branch production --message "what changed"
+```
+
+Then force-quit the app on the phone and reopen it. Check the bottom of
+the **Today** tab: it reads *"App updated"* followed by the time the
+bundle was published, or *"shipped with the build"* if it is still running
+what Xcode installed.
+
+### What still needs a real build
+
+| Change | Over the air? |
+|---|---|
+| A screen, wording, a rule, a bug in the app's logic | **Yes** |
+| A new library, a new permission, an icon, the splash | No — §4 |
+| Anything in `app.json` itself, including this channel | No — §4 |
+| Server changes | Neither — §2, they are already live |
+
+### The fingerprint, and why it protects you
+
+`runtimeVersion` is set to `fingerprint`, which means an update will only
+install onto a build whose **native code is identical**. That is a safety
+catch, not an obstacle: it is what stops a bundle written against a new
+library landing on a build that does not have it and crashing on launch.
+
+The practical consequence: **the Tap to Pay build can never receive these
+updates.** It carries an extra native library, so its fingerprint differs
+and Expo will not offer it anything published from `main`. That is correct
+behaviour. If you are running a Tap to Pay build, Xcode is the only route.
+
+### If a bad update goes out
+
+An update reaches every phone on that channel with nothing in between —
+there is no review step. Publish the previous bundle again to roll back:
+
+```
+npx eas update:republish --branch production
+```
+
+The app picks it up on the next cold start, the same way it picked up the
+bad one.
+
 ## 4. When the native project has to be rebuilt
 
 Most pulls don't need this. You need it when Claude says a **native
