@@ -126,6 +126,32 @@ load-bearing guards verified against broken code (holds not counted → 3 fail; 
 sweeper → 1 fail). No PASS flow touched — FLOW-03 gains a step, and `book.html` fails OPEN if
 the hold call itself errors, because reserve re-validates regardless.
 
+**2026-09-09 (The hold had a second caller nobody looked for — every app booking refused):**
+The hold entry above enumerated reserve's four exemptions carefully and wired `js/booking.js`
+to take a hold. It missed that `/api/booking/reserve` has TWO callers: the website's picker and
+the field app (`pjl-field/src/api.js` → `reserveBooking`). The app is none of the four
+exemptions — it is admin, but a plain grid booking, not `admin_custom` and not book-from-lead —
+so from the moment the hold shipped, **every standard booking made from the phone was refused**
+with `hold_required` ("Pick a time again and we'll hold it while you finish"), on a screen with
+no way to get a hold. Found by Patrick trying to book a real appointment. Only standby survived,
+because it is exempt. This is CLAUDE.md's "find every reader" rule, missed: the field app is a
+reader of this flow and greps for `/api/booking/reserve` would have shown it.
+
+Fixed app-side only; no server change, so no PASS flow is touched and the gate keeps binding
+the app exactly as it binds the public. `BookScreen` now takes the hold at the moment a time is
+confirmed — before the details slide, which is the form the hold exists to protect — hands
+`holdToken` to reserve, passes the previous token as `releaseToken` when the time changes, and
+releases on every path that abandons a slot (new address, new service, a different day, starting
+over). Booking consumes the hold, so it is cleared rather than released. `hold_expired`,
+`hold_required` and `slot_taken` at reserve all mean one thing to a man on the phone — the time
+is not yours — so they alone send him back to a freshly loaded day list; every other failure
+leaves the typed details alone. The ten minutes are shown ("Held until 8:12 PM") rather than
+discovered. The app's `sendJson` now carries `code` and `status` onto the thrown error, because
+a screen that only has the sentence has to match on English to tell those cases apart.
+Coverage: `scripts/test-book.mjs`, 40 assertions, both new checks verified against the unfixed
+app (5 fail). Unlike `book.html`, the app does NOT fail open when the hold call errors — with
+the hold now mandatory, failing open just moves the same refusal to the end of the form.
+
 **2026-09-09 (Cancel → re-book lifecycle, spec §2.8 / D2 + D7, ship item 2):** Two readers
 disagreed with the calendar about what "cancelled" means. **D2:** `bookings.upsertFromLead`
 matched the canonical record on `leadId` alone and never wrote `status` on the existing branch,

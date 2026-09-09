@@ -216,8 +216,15 @@ check('no day is offered until the address has passed the booking gate', () => {
   const block = BOOK.slice(showAt, BOOK.indexOf('\n  };', showAt));
   assert.match(block, /if \(!verified \|\| !key\) return;/,
     'availability can be requested before the address is verified');
-  assert.match(block, /address: verified\.address/,
+  // ONE place asks for days, so the two callers cannot drift about which
+  // address they are asking about.
+  const fetchAt = BOOK.indexOf('const fetchDays = async');
+  assert.ok(fetchAt > 0, 'fetchDays is gone');
+  const fetching = BOOK.slice(fetchAt, BOOK.indexOf('\n  };', fetchAt));
+  assert.match(fetching, /address: verified\.address/,
     'availability uses the typed address, not the geocoded one');
+  assert.equal((BOOK.match(/bookingAvailability\(/g) || []).length, 1,
+    'more than one place asks for days');
   // Including the keyboard's own return key, which did nothing at all.
   assert.match(BOOK, /onSubmitEditing=\{\(\) => settleAddress\(typed\)\}/,
     'the return key does not submit the address');
@@ -572,8 +579,15 @@ check('a full calendar is never a dead end — First available is always there',
   assert.ok(!/noneBookable \?/.test(before), 'First available only appears when nothing else does');
 
   // And it books as standby, with no slot.
-  assert.match(BOOK, /\.\.\.\(slot\.openBucket \? \{ standby: true \} : \{ slotStart: slot\.start \}\)/,
+  assert.match(BOOK, /slot\.openBucket\s*\?\s*\{ standby: true \}\s*:\s*\{ slotStart: slot\.start, holdToken: hold\?\.token \}/,
     'the open bucket books a real slot, which does not exist');
+  // And it takes no hold — there is no slot to hold, which is exactly why
+  // the server exempts standby from requiring one.
+  const takeAt = BOOK.indexOf('const takeSlot = async');
+  assert.ok(takeAt > 0, 'takeSlot is gone');
+  const taking = BOOK.slice(takeAt, BOOK.indexOf('\n  };', takeAt));
+  assert.match(taking, /if \(slot\.openBucket\) \{ go\('who'\); return; \}/,
+    'the open bucket tries to hold a slot that does not exist');
   assert.match(SERVER, /const isStandby = payload\.standby === true;/,
     'the server no longer reads the standby flag');
 });
@@ -923,14 +937,16 @@ check('a reply for an address that has been replaced is dropped', () => {
 
   for (const [fn, take] of [
     ['const settleAddress = async', 'const mine = ++gen.current;'],
-    ['const showDays = async', 'const mine = gen.current;'],
+    ['const fetchDays = async', 'const mine = gen.current;'],
   ]) {
     const at = BOOK.indexOf(fn);
     assert.ok(at > 0, `${fn} is gone`);
     const block = BOOK.slice(at, BOOK.indexOf('\n  };', at));
     assert.ok(block.includes(take), `${fn} does not record which address it is for`);
-    assert.match(block, /if \(mine !== gen\.current\) return;/, `${fn} applies a stale reply`);
-    assert.ok(block.indexOf('await') < block.indexOf('if (mine !== gen.current)'),
+    // Either shape of the comparison — one bails, the other returns null.
+    const compared = block.search(/mine\s*[!=]==\s*gen\.current/);
+    assert.ok(compared > 0, `${fn} applies a stale reply`);
+    assert.ok(block.indexOf('await') < compared,
       `${fn} checks before it waits, which checks nothing`);
   }
 });
@@ -1005,6 +1021,92 @@ check('a count reads as words, and "not sure" is a real answer', () => {
   // Past eight the number stops helping a scheduler.
   assert.equal(issueCountLabel('8+'), 'More than 8');
   assert.equal(issueCountLabel(''), '');
+});
+
+check('the app takes the ten-minute hold, or the booking is refused', () => {
+  // THE FAILURE THIS PINS. The server was given a slot hold: a standard
+  // booking that does not arrive holding its slot is refused outright with
+  // `hold_required`. Its four exemptions are all cases where no form is
+  // being filled in — standby, admin_custom, book-from-lead, load test —
+  // and booking from this app is none of them. The app never asked for a
+  // hold, so EVERY appointment it tried to book came back "Pick a time
+  // again and we'll hold it while you finish." Not some. Every one.
+  assert.match(SERVER, /code: holdToken \? "hold_expired" : "hold_required"/,
+    'the server no longer requires a hold — this test is guarding nothing');
+
+  // The app asks for one, at the moment a time is picked.
+  assert.match(API, /'\/api\/booking\/hold'/, 'the app cannot take a hold');
+  assert.match(API, /'\/api\/booking\/release-hold'/, 'the app cannot give a slot back');
+  const takeAt = BOOK.indexOf('const takeSlot = async');
+  assert.ok(takeAt > 0, 'nothing takes the hold');
+  const taking = BOOK.slice(takeAt, BOOK.indexOf('\n  };', takeAt));
+  assert.match(taking, /holdSlot\(\{/, 'the day is confirmed without holding it');
+  assert.match(taking, /slotStart: slot\.start/);
+  assert.match(taking, /address: verified\.address/);
+  // Changing your mind must not eat two units of capacity — the previous
+  // token rides along so the server can release it.
+  assert.match(taking, /releaseToken: hold\?\.token/, 'changing time leaks a held slot');
+  // And the hold has to be taken BEFORE the details slide, not after: it
+  // exists to protect the slot while the form is filled in.
+  // lastIndexOf, because the first `go('who')` in this function is the
+  // standby short-circuit above — the one that deliberately holds nothing.
+  assert.ok(taking.indexOf('holdSlot(') < taking.lastIndexOf("go('who')"),
+    'the details are taken before the slot is held, which is the wrong order');
+
+  // The token reaches reserve.
+  assert.match(BOOK, /holdToken: hold\?\.token/, 'the hold is taken and then not used');
+
+  // Losing the slot sends you back to a FRESH day list rather than leaving
+  // a dead time on screen.
+  const confirmAt = BOOK.indexOf('const confirm = async');
+  const confirming = BOOK.slice(confirmAt, BOOK.indexOf('\n  };', confirmAt));
+  for (const code of ['hold_expired', 'hold_required', 'slot_taken']) {
+    assert.ok(confirming.includes(`'${code}'`), `a ${code} refusal is not recognised`);
+  }
+  assert.match(confirming, /reloadDays\(\)/, 'a lost slot leaves a dead time on the screen');
+  // Anything else leaves the form alone — retyping a customer's details
+  // because the server hiccuped is unforgivable.
+  assert.match(confirming, /const lostTheSlot = /);
+  assert.match(confirming, /if \(lostTheSlot\) reloadDays\(\);/);
+
+  // None of that can work if the code is thrown away on the way up.
+  assert.match(API, /err\.code = \(data && data\.code\) \|\| null;/,
+    'the error code is dropped, so the screen has to match on English');
+});
+
+check('a hold is given back rather than left to rot', () => {
+  // Ten minutes of one slot's capacity, every time somebody changes their
+  // mind, on the busiest weeks of the year.
+  assert.match(BOOK, /const dropHold = \(\) => \{/, 'nothing releases a hold');
+  const at = BOOK.indexOf('const dropHold = () => {');
+  const block = BOOK.slice(at, BOOK.indexOf('\n  };', at));
+  assert.match(block, /releaseHold\(hold\.token\)/);
+  assert.match(block, /setHold\(null\)/);
+  // Every path that abandons the slot: a new address, a new service, a
+  // different day, and starting over.
+  for (const fn of [
+    'const unsettle = () =>',
+    'const showDays = async',
+    'const reloadDays = async',
+    'const reset = () =>',
+  ]) {
+    const a = BOOK.indexOf(fn);
+    assert.ok(a > 0, `${fn} is gone`);
+    assert.ok(BOOK.slice(a, BOOK.indexOf('\n  };', a)).includes('dropHold()'),
+      `${fn} abandons a held slot without giving it back`);
+  }
+  // Booking CONSUMES the hold — releasing it afterwards would be releasing
+  // something that no longer exists.
+  const confirmAt = BOOK.indexOf('const confirm = async');
+  const confirming = BOOK.slice(confirmAt, BOOK.indexOf('\n  };', confirmAt));
+  assert.match(confirming, /setHold\(null\);/);
+  assert.ok(!confirming.includes('dropHold()'), 'a consumed hold is released again');
+
+  // The clock is said out loud rather than discovered.
+  const clockOf = lift(BOOK, 'clockOf');
+  assert.equal(clockOf('not a date'), '');
+  assert.ok(clockOf('2026-10-03T13:45:00.000Z').length > 0);
+  assert.match(BOOK, /Held until \{clockOf\(hold\.expiresAt\)\}/, 'the ten minutes are invisible');
 });
 
 // ---- It parses ----------------------------------------------------------

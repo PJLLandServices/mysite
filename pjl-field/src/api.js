@@ -119,7 +119,15 @@ async function sendJson(path, method, body) {
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { throw new AuthRequiredError(); }
-  if (!res.ok) throw new Error((data && data.errors && data.errors[0]) || `Request failed (${res.status})`);
+  if (!res.ok) {
+    const err = new Error((data && data.errors && data.errors[0]) || `Request failed (${res.status})`);
+    // The CODE, not just the sentence. A screen that can only read the
+    // message has to match on English to tell "your ten minutes ran out"
+    // from "somebody else took it" — and those need different recoveries.
+    err.code = (data && data.code) || null;
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -344,6 +352,35 @@ export function whyNoDays(days) {
 // own rule, not ours.
 export const reserveBooking = (payload) =>
   sendJson('/api/booking/reserve', 'POST', payload);
+
+// THE TEN-MINUTE HOLD, and it is not optional.
+//
+// The server refuses a standard booking that does not arrive holding its
+// slot (`hold_required`), because otherwise two people can fill in the
+// whole form for the same time and only one of them can have it. Its four
+// exemptions are all cases where no form is being filled in — standby, an
+// admin force-book outside the grid, book-from-lead, and the load test —
+// and booking from this app is none of them.
+//
+// So: take the hold when the time is chosen, hand the token to reserve,
+// and pass the previous token as `releaseToken` when changing your mind,
+// so one person's indecision does not eat two slots' worth of capacity.
+export const holdSlot = ({ serviceKey, slotStart, address, releaseToken }) =>
+  sendJson('/api/booking/hold', 'POST', {
+    serviceKey,
+    slotStart,
+    address,
+    ...(releaseToken ? { releaseToken } : {}),
+  });
+
+// Giving a slot back. Best-effort by design — the hold lapses on its own
+// in ten minutes, so a failure here costs a slot ten minutes of capacity
+// and nothing else. Never let it throw into a booking flow.
+export const releaseHold = (holdToken) => (
+  holdToken
+    ? sendJson('/api/booking/release-hold', 'POST', { holdToken }).catch(() => null)
+    : Promise.resolve(null)
+);
 
 // Who is signed in. Book is admin-only — a tech booking work onto the
 // calendar is a business decision, not a field one — and the tab hides
