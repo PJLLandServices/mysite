@@ -133,6 +133,38 @@ try {
       sawMissing === 0, `${sawMissing} of ${reads} reads found no user`);
   }
 
+  // ---- 2b. two writes in the same tick both land ---------------------
+  // The temp file writeJsonAtomic renames into place used to be named
+  // pid + Date.now(). Two writes to one store in the same millisecond
+  // therefore picked the SAME temp path: both wrote it, the first renamed
+  // it away, and the second's rename failed ENOENT and threw. writeLeads()
+  // does not catch, so that is a lead or a booking lost to two requests
+  // landing in the same tick. Measured on the old suffix: 372 of 600.
+  {
+    const { writeJsonAtomic } = require2(path.join(ROOT, "server", "lib", "atomic-json.js"));
+    const scratch = path.join(DATA, "atomicity-probe-store.json");
+    let rejected = 0;
+    let writes = 0;
+    try {
+      for (let round = 0; round < 60; round++) {
+        const results = await Promise.allSettled([
+          writeJsonAtomic(scratch, { round, writer: "a" }),
+          writeJsonAtomic(scratch, { round, writer: "b" }),
+          writeJsonAtomic(scratch, { round, writer: "c" })
+        ]);
+        for (const r of results) { writes += 1; if (r.status === "rejected") rejected += 1; }
+      }
+      ok("concurrent writes to one store all succeed",
+        rejected === 0, `${rejected} of ${writes} writes threw`);
+      ok("…leaving one whole, parseable file",
+        Boolean(JSON.parse(fs.readFileSync(scratch, "utf8")).writer));
+      ok("…and no temp files behind",
+        fs.readdirSync(DATA).filter((f) => f.endsWith(".tmp")).length === 0);
+    } finally {
+      fs.rmSync(scratch, { force: true });
+    }
+  }
+
   // ---- 3. auth.json lands by rename ----------------------------------
   let up = false;
   for (let i = 0; i < 60 && !up; i++) {
