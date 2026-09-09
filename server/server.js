@@ -75,6 +75,7 @@ const seasonsLib = require("./lib/seasons");
 const customers = require("./lib/customers");
 const { writeJsonAtomic } = require("./lib/atomic-json");
 const { createLock } = require("./lib/booking-lock");
+const holds = require("./lib/booking-holds");
 const purgeTestData = require("./lib/purge-test-data");
 const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
@@ -2450,6 +2451,10 @@ const PUBLIC_API_PATHS = new Set([
   "/api/booking/availability",
   "/api/booking/verify-address",
   "/api/booking/reserve",
+  // The hold is how the public picker claims a slot while the customer fills
+  // in the form. Public for the same reason reserve is.
+  "/api/booking/hold",
+  "/api/booking/release-hold",
   // Pricing dictionary — public so any page (including pricing.html on
   // GitHub Pages) can fetch the live catalog and render from it.
   "/api/pricing",
@@ -4240,6 +4245,27 @@ async function activeBookings() {
     }
   } catch (err) {
     console.warn("[activeBookings] bookings.json union skipped:", err?.message);
+  }
+
+  // Live slot holds count as taken.
+  //
+  // A hold is a customer part-way through the form. If it only blocked the
+  // reserve write, the slot would still be OFFERED to everyone else and the
+  // second person would fill in the whole form before finding out. Counting
+  // it here — the one place the engine asks what a day already carries —
+  // means a held slot disappears from the picker AND takes part in the day's
+  // geography, exactly as the booking it is about to become.
+  //
+  // Expired holds are filtered on read, so a stalled sweeper cannot make the
+  // calendar look full.
+  try {
+    for (const row of holds.asBookingRows()) {
+      if (!row.start || !row.end) continue;
+      if (fromLeads.some((b) => b.start === row.start)) continue;
+      fromLeads.push({ ...row, coords: row.coords || PJL_BASE });
+    }
+  } catch (err) {
+    console.warn("[activeBookings] holds skipped:", err?.message);
   }
   return fromLeads;
 }
@@ -20675,6 +20701,82 @@ Customer signature captured at ${new Date().toISOString()}.`;
   // Public booking endpoint — creates a lead AND reserves the chosen slot.
   // Body: { serviceKey, slotStart, contact:{firstName,lastName,phone,email,
   //         address,notes}, addressLat, addressLng }
+  // Take a ten-minute claim on a slot the moment the customer picks it, so
+  // the form they are filling in is for a slot that is actually theirs.
+  // Public: the token IS the claim, and it buys ten minutes of one bucket
+  // unit. Rate-limited by the same anti-bot gate as reserve.
+  if (req.method === "POST" && pathname === "/api/booking/hold") {
+    await bookingReserveLock.holdUntilResponse(res);
+    try {
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const serviceKey = normalizeString(payload.serviceKey, 60);
+      const slotStart = normalizeString(payload.slotStart, 40);
+      const releaseToken = normalizeString(payload.releaseToken, 64);
+      const address = normalizeString(payload.address, 320);
+      const service = BOOKABLE_SERVICES[serviceKey];
+      if (!service) {
+        return sendJson(res, 422, { ok: false, code: "unknown_service", errors: ["Pick a service first."] });
+      }
+      const startDate = new Date(slotStart);
+      if (!slotStart || Number.isNaN(startDate.getTime())) {
+        return sendJson(res, 422, { ok: false, code: "bad_slot", errors: ["Pick a time first."] });
+      }
+      if (!address) {
+        return sendJson(res, 422, { ok: false, code: "address_missing", errors: ["Address is required."] });
+      }
+
+      // Hold only what the engine would actually give them. Without this the
+      // endpoint is a way to block any slot on the calendar by asking.
+      const geo = await geocode(address);
+      const customerCoords = geo.coords;
+      const [bookingsNow, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
+      const available = await listAvailableSlots({
+        serviceKey,
+        customerCoords,
+        bookings: bookingsNow,
+        blocks: scheduleData.blocks,
+        daysAhead: horizonToReach(startDate),
+        hours: { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) },
+        settings: { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) },
+        dayShapes: await dayShapesForSeason({ bookings: bookingsNow })
+      });
+      const match = available.find((sl) => sl.start === startDate.toISOString());
+      if (!match) {
+        return sendJson(res, 409, {
+          ok: false,
+          code: "slot_taken",
+          errors: ["That time was just taken. Please pick another."]
+        });
+      }
+
+      const hold = await holds.create({
+        slotStart: match.start,
+        slotEnd: match.end,
+        dateKey: String(match.start).slice(0, 10),
+        bucketKey: match.bucketKey || null,
+        serviceKey,
+        coords: customerCoords || null,
+        releaseToken
+      });
+      return sendJson(res, 201, {
+        ok: true,
+        holdToken: hold.token,
+        expiresAt: hold.expiresAt,
+        holdMinutes: holds.HOLD_MINUTES
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't hold that time."] });
+    }
+  }
+
+  // Give a slot back when the customer changes their mind or leaves the
+  // form. Best-effort — the hold lapses on its own in ten minutes anyway.
+  if (req.method === "POST" && pathname === "/api/booking/release-hold") {
+    const payload = await parseRequestBody(req).catch(() => ({}));
+    await holds.release(normalizeString(payload.holdToken, 64)).catch(() => null);
+    return sendJson(res, 200, { ok: true });
+  }
+
   if (req.method === "POST" && pathname === "/api/booking/reserve") {
     // ONE BOOKING AT A TIME.
     //
@@ -20912,6 +21014,42 @@ Customer signature captured at ${new Date().toISOString()}.`;
         forcedByAdmin = true;
       } else {
         // Standard path: re-validate against the bucket grid.
+        // ---- The hold ------------------------------------------------------
+        //
+        // A public standard booking must arrive holding the slot it is about to
+        // take. Without it, a customer can fill in the whole form for a slot
+        // somebody else is already part-way through claiming — which is the
+        // exact failure the hold exists to remove, and leaving it optional
+        // would mean the picker holds while a hand-rolled POST does not.
+        //
+        // Four deliberate exemptions, each because there is no form being
+        // filled in and therefore nothing to protect:
+        //   - standby / open bucket: no slot to hold in the first place
+        //   - admin_custom: Patrick force-booking a time outside the grid
+        //   - book-from-lead: Patrick on the phone, in the CRM
+        //   - load test: the bot posts reserve directly; PJL_TEST_KEY is
+        //     server-side and comes off Render after the blast
+        const holdToken = normalizeString(payload.holdToken, 64);
+        // Consumed BEFORE the re-validation below, not after: the holder's own
+        // hold counts as taken in activeBookings(), so leaving it in place
+        // means the engine tells them their own slot is gone. Releasing it
+        // first also means a re-validation that fails for some other reason
+        // leaves nothing stuck behind — they pick again with a clean calendar.
+        const consumedHold = holdToken ? await holds.consume(holdToken) : null;
+        const holdExempt = isStandby || claimsAdminCustom || deliberateAdminAct || isLoadTest;
+        if (!holdExempt && !consumedHold) {
+          return sendJson(res, 409, {
+            ok: false,
+            code: holdToken ? "hold_expired" : "hold_required",
+            message: holdToken
+              ? "Your ten minutes ran out — please pick a time again."
+              : "Please pick a time again.",
+            errors: [holdToken
+              ? "That time was only held for ten minutes. Pick a time again and we'll hold it."
+              : "Pick a time again and we'll hold it while you finish."]
+          });
+        }
+
         const [bookings, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
         const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
         const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
