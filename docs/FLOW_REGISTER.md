@@ -19,6 +19,53 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-09, same day (One bookable minute per half-day, for every commercial customer):**
+Spec §2.9 / D6, ship item 7. The six commercial services carried `slotIncrementMinutes: 300`,
+documented as making the customer "see exactly TWO slots per day — 8:00 AM and 1:00 PM — instead of
+a full half-hour grid". **That is not what it did.** The walk already emits at most ONE slot per
+bucket (the `emitted` flag), so the customer saw two slots either way. What the 300-minute step
+actually decided was how many START TIMES the engine was allowed to TRY inside a bucket: morning
+08:00-12:00 -> one candidate, 08:00; afternoon 12:00-17:00 -> one candidate, 12:00. So a busy 08:00
+did not push the offer to 08:30 — it cost the commercial customer **the whole morning**. The
+geographic re-stamp made the afternoon half deterministic rather than occasional: the afternoon now
+fills from 12:00 in half-hour steps, so 12:00 is exactly where the first afternoon booking sits.
+Same shape as the open bucket's hard-coded 13:00 earlier the same day — a single anchor minute
+standing in for a half-day. Fix: the six overrides are gone, and so is the per-service READ
+(`service.slotIncrementMinutes || cfg....`), so a config line cannot quietly bring it back; the
+"Morning or afternoon" label, which is all the customer ever saw, is untouched. Coverage:
+`scripts/test-commercial-slots.mjs`, 15 assertions, in `build:check` — it pins BOTH halves, because
+the risk in removing a config value is turning the commercial flow into the half-hour grid Patrick
+does not want: a later start IS offered when the first minute is taken, AND an empty day still
+shows exactly 08:00 and 12:00, one slot per bucket. Verified against broken code: 8 fail, naming
+the defect ("the whole morning was abandoned because 08:00 was busy"). No PASS flow touched.
+
+**2026-09-09, same day (Spec 2.8.3: every reader of `booking.status`, listed):** The grep the spec
+asks for after the lifecycle work, kept as `scripts/test-booking-status-readers.mjs` (19
+assertions) rather than as prose that rots. The rule is `DEAD_STATUSES` + `holdsItsSlot()` in
+`lib/bookings.js`, reached from server.js through `bookingHoldsItsSlot()`. **Five readers were
+asking it the long way** and are now on the shared rule:
+- `server.js:4083` — which canonical record is the lead's active booking (admin link target).
+- `server.js:4693` — the reschedule guard.
+- `server.js:12204` — the change-service-type guard.
+- `server.js:21856` — `/api/schedule/today`'s CANONICAL pass. Its lead pass already used the shared
+  rule, so this one endpoint held the rule once and a copy of it — **the exact shape of the defect
+  that let a cancelled booking keep its slot**, one drift away from repeating it.
+- `server.js:23398` — the appointment `.ics` route asked `status !== "confirmed"`, which is
+  NARROWER than the rule: `tentative` is a live status in the vocabulary. No live impact (the
+  assignment writer stamps `confirmed`), but a hand-set tentative appointment was refused its own
+  calendar file.
+**Four readers deliberately left alone, each named with its reason** (CLAUDE.md rule 3 — silence is
+how a half-built transition ships): `lib/appointment-actions.js` distinguishes cancelled from
+completed because they are two different sentences to the customer; `lib/outreach.js` counts a
+COMPLETED booking as served, so excluding it would start chasing customers who have already had
+their visit; `server/schedule.js` keeps cancelled rows so the calendar can draw them struck
+through, and its utilisation stats count completed work because it happened; `server/admin.js` is
+browser-side and cannot require the lib, and the server re-checks the same rule on every route it
+calls. **One flagged for Patrick, not changed:** the work-order guard at `server.js:18054` refuses
+a new WO for a `cancelled` booking only — a `completed` or `no_show` booking can still spawn one.
+Verified against broken code: 7 fail, and the lint names all four inline copies. No PASS flow
+touched.
+
 **2026-09-09, same day (Google decides how long the customer waits — and its guesses were
 kept as answers):** Spec item 6, the travel-time half. `lib/geocode.js` was hardened for
 Patrick's "we cannot have this fail" (4s timeout, one retry, town-centroid fallback, approximate

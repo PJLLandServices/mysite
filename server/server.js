@@ -4080,7 +4080,7 @@ async function portalPayloadForLead(lead, req) {
   if (viewerIsAdmin && lead.booking) {
     try {
       const recs = await bookings.listByLead(lead.id);
-      const active = recs.filter((b) => b.status !== "cancelled" && b.status !== "completed" && b.status !== "no_show");
+      const active = recs.filter((b) => bookingHoldsItsSlot(b.status));
       const exact = active.find((b) => b.scheduledFor === lead.booking.start);
       adminBookingId = (exact && exact.id) || (active[0] && active[0].id) || null;
     } catch { adminBookingId = null; }
@@ -4690,7 +4690,7 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
   }
   const bookingRec = await bookings.get(bookingId);
   if (!bookingRec) return { ok: false, status: 404, errors: ["Booking not found."] };
-  if (bookingRec.status === "cancelled" || bookingRec.status === "completed" || bookingRec.status === "no_show") {
+  if (!bookingHoldsItsSlot(bookingRec.status)) {
     return { ok: false, status: 409, code: "not_modifiable_status", errors: ["This appointment can't be rescheduled — its status is " + bookingRec.status + "."] };
   }
 
@@ -12201,7 +12201,11 @@ async function handleApi(req, res, pathname) {
 
       const booking = await bookings.get(bookingId);
       if (!booking) return sendJson(res, 404, { ok: false, errors: ["Booking not found."] });
-      if (booking.status === "cancelled" || booking.status === "completed" || booking.status === "no_show") {
+      // The dead-status list, asked the one way it is defined
+      // (lib/bookings.js). This used to spell out the three states
+      // inline — a second copy of the rule, and the kind that drifts the
+      // moment a fourth state is added (CLAUDE.md, "define the rule once").
+      if (!bookingHoldsItsSlot(booking.status)) {
         return sendJson(res, 409, { ok: false, errors: [`Can't change the type of a ${booking.status} booking.`] });
       }
       if (booking.serviceKey === serviceKey) {
@@ -21853,7 +21857,11 @@ async function orderDayForDriving(rows) {
       const bookingRecs = await bookings.list();
       const extras = bookingRecs.filter((b) => {
         if (!b || !b.scheduledFor) return false;
-        if (b.status === "cancelled" || b.status === "completed" || b.status === "no_show") return false;
+        // The lead pass above asks bookingHoldsItsSlot(); this pass used
+        // to spell the same three states out by hand. One endpoint, two
+        // passes, one rule and one copy of it — the exact shape of the
+        // defect that let a cancelled booking keep its slot.
+        if (!bookingHoldsItsSlot(b.status)) return false;
         const t = new Date(b.scheduledFor).getTime();
         if (Number.isNaN(t) || t < dayStart || t >= dayEnd) return false;
         const iso = new Date(b.scheduledFor).toISOString();
@@ -23395,7 +23403,12 @@ async function orderDayForDriving(rows) {
     try {
       if (action === "calendar.ics" && req.method === "GET") {
         const booking = await appointmentActions.findByToken(token);
-        if (!booking || booking.status !== "confirmed") {
+        // "Live" is the shared rule, not an equality test on one status.
+        // The assignment writer stamps `confirmed`, so in practice this
+        // is the same answer today — but `tentative` is a LIVE status in
+        // lib/bookings.js's vocabulary, and a hand-set one would have been
+        // refused its own calendar file for no reason.
+        if (!booking || !bookingHoldsItsSlot(booking.status)) {
           return sendJson(res, 404, { ok: false, errors: ["That link doesn't match a live appointment."] });
         }
         const event = calendarLinks.eventForBooking(booking, {

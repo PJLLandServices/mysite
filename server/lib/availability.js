@@ -69,11 +69,21 @@ const seasons = require("./seasons");
 // 4z / 5-7z / 8+z / commercial all live under "spring_opening"). Used by
 // book.html to filter the grid when arriving via a deep link.
 //
-// `slotIncrementMinutes` (optional) overrides the global slot increment for
-// this service only. Commercial uses 300 min so customers see exactly TWO
-// slots per day — 8:00 AM (morning) and 1:00 PM (afternoon) — instead of a
-// full half-hour grid. This matches Patrick's "morning or afternoon
-// appointment" preference for commercial work.
+// `displayMinutes: "Morning or afternoon"` is how a commercial service
+// presents itself — Patrick's preference is a half-day, not a time. That
+// is a LABEL, and the label is all it ever needed to be.
+//
+// It used to be a `slotIncrementMinutes: 300` override as well, on the
+// belief that the 300-minute step was what made a commercial customer see
+// two slots a day instead of a half-hour grid. It was not: the walk below
+// emits at most ONE slot per bucket whatever the step, so the customer saw
+// two either way. What the override actually decided was how many start
+// times the engine was allowed to TRY inside a bucket — exactly one. So a
+// busy 08:00 did not push the offer to 08:30; it cost the customer the
+// whole morning. Removed 2026-09-09 (spec §2.9, D6); see
+// scripts/test-commercial-slots.mjs, which pins both halves: a later start
+// is offered when the first minute is taken, AND an empty day still shows
+// exactly 08:00 and 12:00.
 //
 // `displayMinutes` (optional) is the human-readable duration shown in the UI.
 // For long jobs we display a range ("90-120 min") even though the engine
@@ -84,8 +94,8 @@ const seasons = require("./seasons");
 // label-vs-description-vs-price drift that plagued the old 3-bucket setup.
 //
 // Spring & fall: 5 residential tiers + 3 commercial tiers = 8 services per season.
-// All seasonal services use the slot increments below; only commercial gets
-// the morning/afternoon (slotIncrementMinutes: 300) treatment.
+// All seasonal services walk the same slot increment; commercial differs
+// only in the label it presents ("Morning or afternoon").
 const BOOKABLE_SERVICES = {
   // --- Spring opening (residential) ---
   spring_open_4z: {
@@ -119,21 +129,18 @@ const BOOKABLE_SERVICES = {
   spring_open_commercial: {
     label: "Spring opening — commercial (1-4 zones)",
     minutes: 60, displayMinutes: "Morning or afternoon",
-    slotIncrementMinutes: 300,
     requiresAddress: true, bookable: true,
     category: "seasonal", family: "spring_opening"
   },
   spring_open_commercial_8z: {
     label: "Spring opening — commercial (5-8 zones)",
     minutes: 90, displayMinutes: "Morning or afternoon",
-    slotIncrementMinutes: 300,
     requiresAddress: true, bookable: true,
     category: "seasonal", family: "spring_opening"
   },
   spring_open_commercial_9plus: {
     label: "Spring opening — commercial (9+ zones — custom quote)",
     minutes: 120, displayMinutes: "Morning or afternoon",
-    slotIncrementMinutes: 300,
     requiresAddress: true, bookable: true,
     category: "seasonal", family: "spring_opening"
   },
@@ -170,21 +177,18 @@ const BOOKABLE_SERVICES = {
   fall_close_commercial: {
     label: "Fall winterization — commercial (1-4 zones)",
     minutes: 60, displayMinutes: "Morning or afternoon",
-    slotIncrementMinutes: 300,
     requiresAddress: true, bookable: true,
     category: "seasonal", family: "fall_closing"
   },
   fall_close_commercial_8z: {
     label: "Fall winterization — commercial (5-8 zones)",
     minutes: 90, displayMinutes: "Morning or afternoon",
-    slotIncrementMinutes: 300,
     requiresAddress: true, bookable: true,
     category: "seasonal", family: "fall_closing"
   },
   fall_close_commercial_9plus: {
     label: "Fall winterization — commercial (9+ zones — custom quote)",
     minutes: 120, displayMinutes: "Morning or afternoon",
-    slotIncrementMinutes: 300,
     requiresAddress: true, bookable: true,
     category: "seasonal", family: "fall_closing"
   },
@@ -502,7 +506,13 @@ async function listAvailableSlots(opts = {}) {
       // each new caller sees a slot pushed later by travel + duration.
       // When the next candidate would run past bucket.to, the bucket is
       // effectively full and disappears from availability.
-      const incrementMin = service.slotIncrementMinutes || cfg.slotIncrementMinutes;
+      // ONE increment for every service. The per-service override that
+      // used to sit here is gone with the commercial 300 (spec §2.9):
+      // a service that may try only one start time per bucket loses the
+      // bucket the moment that minute is busy, and the label it wanted
+      // was never the walk's job. Removing the read as well as the six
+      // values means a config line cannot quietly bring it back.
+      const incrementMin = cfg.slotIncrementMinutes;
       const slotDuration = service.minutes;
 
       for (const bucket of BOOKING_BUCKETS) {
