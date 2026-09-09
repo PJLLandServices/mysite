@@ -1808,8 +1808,20 @@ const { resolveCustomerForLead, finishCustomerForLead, promoteCustomerOnBooking 
 //
 // Promotion never blocks the booking: promoteCustomerOnBooking swallows its
 // own errors, and the mirrored record is returned regardless.
+// The raw mirror, and the ONLY place allowed to call upsertFromLead.
+//
+// Splitting it out keeps the "no booking path mirrors behind the wrapper's
+// back" lint meaningful (scripts/test-customer-active-on-booking.mjs) while
+// giving the re-stamp an honest way in: re-cutting a start time is not a new
+// booking. The customer was promoted when they booked, and routing the
+// re-stamp through syncBookingFromLead would recurse, because that is what
+// schedules the re-stamp.
+async function mirrorBookingOnly(lead) {
+  return bookings.upsertFromLead(lead);
+}
+
 async function syncBookingFromLead(lead) {
-  const record = await bookings.upsertFromLead(lead);
+  const record = await mirrorBookingOnly(lead);
   if (record && lead?.customerId) {
     await promoteCustomerOnBooking(lead.customerId, {
       by: "booking",
@@ -1909,7 +1921,7 @@ async function restampDayInDrivingOrder(anyStartOnTheDay) {
   // reminders agree. upsertFromLead directly, not syncBookingFromLead: the
   // customer promotion already ran and re-entering here would recurse.
   for (const lead of onDay) {
-    await bookings.upsertFromLead(lead).catch(() => null);
+    await mirrorBookingOnly(lead).catch(() => null);
   }
   console.log(`[restamp] ${changed} stop(s) re-cut into driving order on ${new Date(dayStart).toDateString()}`);
   return changed;

@@ -97,19 +97,26 @@ try {
   ok("the booking paths share one wrapper", wrapperAt !== -1);
   const wrapperEnd = SERVER.indexOf("\n}", wrapperAt);
   const wrapperBody = wrapperAt === -1 ? "" : SERVER.slice(wrapperAt, wrapperEnd);
-  ok("the wrapper mirrors the booking", wrapperBody.includes("bookings.upsertFromLead("));
+  ok("the wrapper mirrors the booking", wrapperBody.includes("mirrorBookingOnly("));
   ok("…and promotes the customer in the same breath",
     wrapperBody.includes("promoteCustomerOnBooking("));
 
   // Count real calls outside the wrapper. Comments mentioning the name are
   // fine; a call is `bookings.upsertFromLead(`.
+  // upsertFromLead may be called from exactly ONE place: mirrorBookingOnly.
+  // Everything else goes through it, so no booking path can mirror a booking
+  // and forget the customer. Narrowing the allowed caller to a named
+  // three-line function is what lets the re-stamp reuse the mirror without
+  // punching a hole in this rule.
+  const mirrorAt = SERVER.indexOf("async function mirrorBookingOnly(lead) {");
+  ok("the raw mirror has one named home", mirrorAt !== -1);
+  const mirrorFirstLine = SERVER.slice(0, mirrorAt).split("\n").length;
+  const mirrorLastLine = SERVER.slice(0, SERVER.indexOf("\n}", mirrorAt)).split("\n").length;
   const strays = [];
   const lines = SERVER.split("\n");
-  const wrapperFirstLine = SERVER.slice(0, wrapperAt).split("\n").length;
-  const wrapperLastLine = SERVER.slice(0, wrapperEnd).split("\n").length;
   lines.forEach((line, i) => {
     const n = i + 1;
-    if (n >= wrapperFirstLine && n <= wrapperLastLine) return;
+    if (n >= mirrorFirstLine && n <= mirrorLastLine) return;
     if (line.trim().startsWith("//")) return;
     if (line.includes("bookings.upsertFromLead(")) strays.push(`${n}: ${line.trim()}`);
   });

@@ -47,6 +47,18 @@ MORNING is in Thornhill and whose AFTERNOON is in Newmarket. That day still driv
 and it must, because the alternative is moving a customer who was told "morning". That is a
 COMPOSITION problem for the aggregate geography guard (spec 2.3.2), not an ordering one —
 asserted explicitly in section 3 rather than left as a surprise.
+**Caught by our own lint, in CI, and fixed properly rather than around:** the re-stamp mirrors
+each re-cut booking back to `bookings.json`, which tripped
+`test-customer-active-on-booking`'s "nothing mirrors a booking behind the wrapper's back"
+rule — the rule that exists so no booking path can mirror and forget the customer promotion.
+The exception is legitimate (re-cutting a start time is not a new booking, and routing it
+through `syncBookingFromLead` would recurse, since that is what schedules the re-stamp) but the
+lint was right to refuse it. Fixed by extracting `mirrorBookingOnly()` as the ONE named home for
+`upsertFromLead`, with the lint narrowed to that function: the re-stamp reuses the mirror
+without punching a hole in the invariant, and a stray call anywhere else still fails.
+**Why local green missed it:** `build:check` stops at the first failure, and in this container
+that is the `pjl-field` npm-ci gap — so the suites after it never ran. Every suite past that
+point is now run explicitly before pushing.
 Coverage: `scripts/test-day-order.mjs`, 11 assertions, in `build:check`, driving the real
 endpoint and a real booking (seeding leads.json alone would not exercise the re-stamp, which
 hangs off the booking wrapper). Both halves verified against broken code independently: revert
