@@ -4301,11 +4301,18 @@ async function dayShapesForSeason({ bookings: activeList, season, year, now = ne
       resolvedYear += 1;
       plan = await seasonPlans.getPlan(resolvedSeason, resolvedYear);
     }
-    if (!plan) return null;
+    // A missing plan is NOT a reason to switch geography off. Returning
+    // null here is read by the availability engine as "no gate at all",
+    // which is how a fresh bot run put Thornhill in a morning already
+    // holding Newmarket — 88 minutes of added drive against a 15-minute
+    // cap, never checked (Patrick, 2026-09-09: "it still isn't taking
+    // whatsoever"). buildDayShapes now treats the plan as optional and
+    // shapes days from the bookings alone, which is all the gate ever
+    // needed: the plan adds routed stops, it does not switch the rule on.
     const all = await properties.list();
     const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
     return geoFilter.buildDayShapes({
-      plan,
+      plan: plan || null,
       propertiesByCode: byCode,
       bookings: activeList || []
     });
