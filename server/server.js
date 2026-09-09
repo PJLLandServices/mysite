@@ -44,7 +44,7 @@ const voicemailStore = require("./lib/voicemail-store");
 const { geocode, PJL_BASE, isConfigured: geocodeIsConfigured } = require("./lib/geocode");
 const bookingGate = require("./lib/booking-gate");
 const distanceLib = require("./lib/distance");
-const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, GEO_WIDEN_TIERS, listAvailableSlots, groupByDay, expandDaysToRange, recommendDays, parseLocalDateKey } = require("./lib/availability");
+const { BOOKABLE_SERVICES, BOOKING_BUCKETS, DEFAULT_HOURS, DEFAULT_SETTINGS, GEO_WIDEN_TIERS, listAvailableSlots, groupByDay, expandDaysToRange, recommendDays, parseLocalDateKey, parseHHmmToMinutes } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
 const { mergeDaySchedule } = require("./lib/day-schedule");
 const jobFinder = require("./lib/job-finder");
@@ -1808,15 +1808,123 @@ const { resolveCustomerForLead, finishCustomerForLead, promoteCustomerOnBooking 
 //
 // Promotion never blocks the booking: promoteCustomerOnBooking swallows its
 // own errors, and the mirrored record is returned regardless.
+// The raw mirror, and the ONLY place allowed to call upsertFromLead.
+//
+// Splitting it out keeps the "no booking path mirrors behind the wrapper's
+// back" lint meaningful (scripts/test-customer-active-on-booking.mjs) while
+// giving the re-stamp an honest way in: re-cutting a start time is not a new
+// booking. The customer was promoted when they booked, and routing the
+// re-stamp through syncBookingFromLead would recurse, because that is what
+// schedules the re-stamp.
+async function mirrorBookingOnly(lead) {
+  return bookings.upsertFromLead(lead);
+}
+
 async function syncBookingFromLead(lead) {
-  const record = await bookings.upsertFromLead(lead);
+  const record = await mirrorBookingOnly(lead);
   if (record && lead?.customerId) {
     await promoteCustomerOnBooking(lead.customerId, {
       by: "booking",
       reason: `Booked ${lead.booking?.serviceLabel || lead.booking?.serviceKey || "an appointment"}`
     });
   }
+  // The day this booking landed on has a new shape, so its times are re-cut
+  // in driving order. Best-effort: a re-stamp that fails leaves the booking
+  // exactly as it was, which is the old behaviour and not a broken one.
+  if (record && lead?.booking?.start) {
+    await restampDayInDrivingOrder(lead.booking.start).catch((err) => {
+      console.warn("[restamp] skipped:", err?.message);
+    });
+  }
   return record;
+}
+
+// Re-cut a day's start times so they run in driving order.
+//
+// Patrick, 2026-09-09: "Start times inside a bucket are provisional." The
+// customer is promised Morning (8-12) or Afternoon (12-5) and never sees a
+// precise minute; the exact stamp was only ever the first free 30-minute mark
+// in the order people happened to book. Leaving it that way is what put
+// Newmarket 08:00, Thornhill 09:30, Newmarket 12:00 on one day.
+//
+// Every reader sorts by `start`, so re-stamping in route order makes the
+// field app, the Today page, the iCal feed and the route sheet agree without
+// any of them changing. orderDayForDriving() in /api/schedule/today stays as
+// a safety net for days whose stamps predate this.
+//
+// WHAT IT WILL NOT DO:
+//   - move a booking out of its bucket. That is the promise the customer was
+//     given, and tidying a route is not a reason to break it.
+//   - touch a day that has been assigned or locked. Once Patrick has sent a
+//     day out, the times in the customers' hands are the times.
+//   - notify anyone. The bucket is unchanged, so there is nothing to tell.
+async function restampDayInDrivingOrder(anyStartOnTheDay) {
+  const when = new Date(anyStartOnTheDay);
+  if (Number.isNaN(when.getTime())) return 0;
+  const dayStart = new Date(when.getFullYear(), when.getMonth(), when.getDate()).getTime();
+  const dayEnd = dayStart + 86400000;
+
+  const allLeads = await readLeads();
+  const onDay = allLeads.filter((l) => {
+    if (!l || l.archived || !l.booking?.start) return false;
+    if (!bookingHoldsItsSlot(l.booking.status)) return false;
+    const t = new Date(l.booking.start).getTime();
+    return t >= dayStart && t < dayEnd;
+  });
+  if (onDay.length < 2) return 0;
+
+  // A day Patrick has already sent out is his, not the optimiser's.
+  if (onDay.some((l) => l.booking.assignmentId || l.booking.dayLocked || l.booking.source === "assignment")) {
+    return 0;
+  }
+
+  const byCode = new Map();
+  const day = { morning: [], afternoon: [] };
+  onDay.forEach((l, i) => {
+    const coords = l.booking.coords;
+    if (!coords || coords.lat == null) return;
+    const code = `__lead:${i}`;
+    byCode.set(code, { code, id: code, coords });
+    day[new Date(l.booking.start).getHours() < 12 ? "morning" : "afternoon"].push(code);
+  });
+  if (!day.morning.length && !day.afternoon.length) return 0;
+
+  const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode });
+
+  // Lay the ordered stops back down from the top of their own bucket. Thirty
+  // minutes a stop keeps the arithmetic honest against the 30-minute grid the
+  // engine offers slots on; the customer is told the bucket either way.
+  const SLOT_MINUTES = 30;
+  let changed = 0;
+  for (const bucket of BOOKING_BUCKETS) {
+    const order = (sequenced && sequenced[bucket.key]) || [];
+    const openMin = parseHHmmToMinutes(bucket.from);
+    order.forEach((code, position) => {
+      const idx = Number(String(code).split(":")[1]);
+      const lead = onDay[idx];
+      if (!lead) return;
+      const startMs = dayStart + (openMin + position * SLOT_MINUTES) * 60000;
+      const durationMs = lead.booking.end
+        ? Math.max(0, new Date(lead.booking.end) - new Date(lead.booking.start))
+        : SLOT_MINUTES * 60000;
+      const nextStart = new Date(startMs).toISOString();
+      if (nextStart === lead.booking.start) return;
+      lead.booking.start = nextStart;
+      lead.booking.end = new Date(startMs + durationMs).toISOString();
+      changed += 1;
+    });
+  }
+  if (!changed) return 0;
+
+  await writeLeads(allLeads);
+  // Mirror into the canonical records so bookings.json, the iCal feed and the
+  // reminders agree. upsertFromLead directly, not syncBookingFromLead: the
+  // customer promotion already ran and re-entering here would recurse.
+  for (const lead of onDay) {
+    await mirrorBookingOnly(lead).catch(() => null);
+  }
+  console.log(`[restamp] ${changed} stop(s) re-cut into driving order on ${new Date(dayStart).toDateString()}`);
+  return changed;
 }
 
 // "This building already belongs to an existing account" — the manual-create
@@ -21551,6 +21659,62 @@ Customer signature captured at ${new Date().toISOString()}.`;
   // Cancelled / archived leads are filtered out — we don't surface them
   // to the field tech. Site visits show alongside paid services since
   // they're real on-site appointments too.
+// Put a day's stops in driving order.
+//
+// THE BUG THIS REPLACES. /api/schedule/today sorted by booking.start, and
+// booking.start is the first free 30-minute mark in the bucket in the order
+// people happened to book. Only the Season Plan page ever ran the sequencer,
+// so the field app — the one Patrick actually drives from — showed Newmarket
+// 08:00, Thornhill 09:30, Newmarket 12:00: across the top of the city and
+// back, because that is the order three strangers clicked in.
+//
+// Same sequencer as the Season Plan (lib/resequence.js), reached the same way
+// sequenceDayWithBookings does it: synthetic codes standing in for rows that
+// have no property code of their own. One definition of "driving order", two
+// callers.
+//
+// BUCKETS ARE A PROMISE. Stops are ordered WITHIN morning and within
+// afternoon, never across them. A customer told "morning" is not slid into
+// the afternoon to tidy a route — which does mean a day whose morning is in
+// Thornhill and whose afternoon is in Newmarket still drives out and back.
+// That is a composition problem for the geography gate, not an ordering one,
+// and no re-sort can fix it without breaking what the customer was told.
+//
+// Rows with no coordinates keep their place rather than being dropped, and
+// any failure falls back to the time order that was there before: a day sheet
+// that is merely in the old order beats a day sheet that fails to render.
+async function orderDayForDriving(rows) {
+  try {
+    const withCoords = rows.filter((r) => r && r.coords && r.coords.lat != null);
+    if (withCoords.length < 2) return rows;
+
+    const byCode = new Map();
+    const day = { morning: [], afternoon: [] };
+    rows.forEach((row, i) => {
+      if (!row || !row.coords || row.coords.lat == null) return;
+      const code = `__row:${i}`;
+      byCode.set(code, { code, id: code, coords: row.coords });
+      const hour = row.start ? new Date(row.start).getHours() : 12;
+      day[hour < 12 ? "morning" : "afternoon"].push(code);
+    });
+
+    const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode });
+    const order = [...(sequenced?.morning || []), ...(sequenced?.afternoon || [])];
+    if (!order.length) return rows;
+
+    const indexOf = new Map(order.map((code, position) => [code, position]));
+    const placed = rows.map((row, i) => ({ row, i, at: indexOf.get(`__row:${i}`) }));
+    // An unroutable row has no place in the sequence — keep it where it was
+    // relative to the rows around it rather than sweeping it to the end.
+    const routed = placed.filter((p) => p.at != null).sort((a, b) => a.at - b.at);
+    const unrouted = placed.filter((p) => p.at == null);
+    return [...routed, ...unrouted].map((p) => p.row);
+  } catch (err) {
+    console.warn("[schedule/today] driving order failed, showing time order:", err?.message);
+    return rows;
+  }
+}
+
   if (req.method === "GET" && pathname === "/api/schedule/today") {
     const url = new URL(req.url, baseUrlFromReq(req));
     const dateParam = url.searchParams.get("date");
@@ -21707,12 +21871,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
     // merge is additive: every row above renders exactly as before, and
     // a work order already named by a row is never listed twice.
     const merged = mergeDaySchedule(dayBookings, allWos, dayStart, dayEnd);
+    const ordered = await orderDayForDriving(merged);
 
     return sendJson(res, 200, {
       ok: true,
       date: new Date(dayStart).toISOString().slice(0, 10),
-      bookings: merged,
-      count: merged.length
+      bookings: ordered,
+      count: ordered.length
     });
   }
 
