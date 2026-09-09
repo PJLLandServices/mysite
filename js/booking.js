@@ -28,8 +28,64 @@
     propertyType: "residential", // toggle on the seasonal-service grid: "residential" or "commercial"
     sessionToken: null, // pre-booking session (AI handoff) — passed back on reserve
     sessionPayload: null, // diagnosis + customer hints loaded from the session
-    customerFirstName: "" // captured from session handoff, used to personalize copy
+    customerFirstName: "", // captured from session handoff, used to personalize copy
+    // Slot hold (spec §2.5). Taken the moment a time is picked, carried
+    // onto reserve, released on abandon. Ten minutes server-side.
+    holdToken: null,
+    holdExpiresAt: null
   };
+
+  // Give a hold back. Fire-and-forget: the server sweeps expired holds
+  // anyway, this just returns the slot sooner. `beacon` is for pagehide,
+  // where a fetch would be cancelled with the page.
+  function releaseHold({ beacon = false } = {}) {
+    const token = state.holdToken;
+    if (!token) return;
+    state.holdToken = null;
+    state.holdExpiresAt = null;
+    const url = (window.PJL_API_BASE || "") + "/api/booking/hold/release";
+    const body = JSON.stringify({ holdToken: token });
+    try {
+      if (beacon && navigator.sendBeacon) {
+        navigator.sendBeacon(url, new Blob([body], { type: "application/json" }));
+        return;
+      }
+      fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => {});
+    } catch (_) { /* best effort */ }
+  }
+  window.addEventListener("pagehide", () => releaseHold({ beacon: true }));
+
+  // Take (or move) the hold for the slot the customer just picked. Resolves
+  // true when the slot is ours for ten minutes; false when it was taken in
+  // the meantime — the caller refreshes the calendar in that case.
+  async function takeHold(slot) {
+    const payload = {
+      serviceKey: state.serviceKey,
+      address: state.formattedAddress || state.address,
+      slotStart: slot.start,
+      previousHoldToken: state.holdToken || null
+    };
+    const response = await fetch((window.PJL_API_BASE || "") + "/api/booking/hold", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      // The previous hold (if any) is gone either way — the server
+      // replaces or refuses, it never keeps two.
+      state.holdToken = null;
+      state.holdExpiresAt = null;
+      const err = new Error(data.code === "slot_taken"
+        ? "That time was just taken by someone else. Here's the refreshed calendar — please pick another."
+        : (data.errors || []).join(" ") || "Couldn't hold that time. Please pick again or call (905) 960-0181.");
+      err.code = data.code || "hold_failed";
+      throw err;
+    }
+    state.holdToken = data.holdToken;
+    state.holdExpiresAt = data.expiresAt || null;
+    return true;
+  }
 
   // Families where confirming the customer's zone count adds value to the
   // booking. Repair/Hydrawise/Site-visit don't gate on zone count, so we
@@ -607,7 +663,8 @@
           + `?service=${encodeURIComponent(state.serviceKey)}`
           + `&address=${encodeURIComponent(state.address)}`
           + `&from=${encodeURIComponent(from)}`
-          + `&to=${encodeURIComponent(to)}`;
+          + `&to=${encodeURIComponent(to)}`
+          + (state.holdToken ? `&hold=${encodeURIComponent(state.holdToken)}` : "");
         const response = await fetch(url, { cache: "no-store" });
         const data = await response.json();
         if (!response.ok || !data.ok) {
@@ -620,6 +677,7 @@
       },
       onSelect: (iso, slotMeta) => {
         if (slotMeta && slotMeta.source === "open_bucket") {
+          releaseHold();
           state.selectedSlot = {
             openBucket: true,
             start: null,
@@ -648,12 +706,22 @@
           bucketKey: slotMeta.bucketKey || null,
           bucketWindow: slotMeta.bucketWindow || null
         };
-        // Brief debounce so the visual "selected" state lands before the
-        // contact step swaps in — matches the previous flow's feel.
-        setTimeout(() => {
-          renderContactSummary();
-          showStep("contact");
-        }, 200);
+        // Hold the slot for ten minutes BEFORE the contact step, so the
+        // time the customer is typing towards is theirs. A refused hold
+        // (someone else got there first) refreshes the calendar in place.
+        whenError.hidden = true;
+        takeHold(state.selectedSlot).then(() => {
+          // Brief debounce so the visual "selected" state lands before the
+          // contact step swaps in — matches the previous flow's feel.
+          setTimeout(() => {
+            renderContactSummary();
+            showStep("contact");
+          }, 200);
+        }).catch((error) => {
+          loadAvailability();
+          whenError.textContent = error.message;
+          whenError.hidden = false;
+        });
       }
     });
   }
@@ -736,6 +804,7 @@
         },
         zoneCount: state.zoneCount || null,
         sessionToken: state.sessionToken || null,
+        holdToken: state.holdToken || null,
         pageUrl: window.location.href,
         userAgent: navigator.userAgent
       };
@@ -765,13 +834,21 @@
           slot_invalid: "That time didn't look right. Please pick a slot from the calendar.",
           address_missing: "Please enter the service address before booking.",
           slot_taken: "That slot was just taken. Please pick another time.",
+          hold_required: "Your time wasn't held. Please pick a time again.",
+          hold_expired: "Your 10-minute hold on that time ran out. Please pick a time again — the calendar has been refreshed.",
+          hold_mismatch: "That time didn't match your hold. Please pick a time again.",
           validation_failed: (data.errors || []).join(" ") || "A required field is missing — please review and try again."
         };
         var customer = CUSTOMER_COPY[data.code]
           || (data.errors || []).join(" ")
           || "Couldn't reserve. Please try a different slot or call (905) 960-0181.";
-        throw new Error(customer);
+        var reserveError = new Error(customer);
+        reserveError.code = data.code || "";
+        throw reserveError;
       }
+      // Booked — the hold was consumed server-side.
+      state.holdToken = null;
+      state.holdExpiresAt = null;
       // Success — personalize the confirmation copy with the name they
       // just typed in the contact step (or that was prefilled from the
       // session handoff). Falls back to a generic greeting if somehow
@@ -823,10 +900,22 @@
       } catch (e) { /* non-fatal — booking already succeeded */ }
       showStep("confirm");
     } catch (error) {
-      contactError.textContent = error.message || "Couldn't reserve. Please try a different slot or call (905) 960-0181.";
-      contactError.hidden = false;
       confirmBtn.disabled = false;
       confirmBtn.textContent = originalText;
+      // The slot is gone (taken, or the hold lapsed): the fix is a fresh
+      // calendar, not a retry of the same Confirm. Send them back to the
+      // time step with the day refreshed and the reason on screen.
+      if (["slot_taken", "hold_required", "hold_expired", "hold_mismatch"].includes(error.code)) {
+        state.holdToken = null;
+        state.holdExpiresAt = null;
+        showStep("when");
+        loadAvailability();
+        whenError.textContent = error.message;
+        whenError.hidden = false;
+        return;
+      }
+      contactError.textContent = error.message || "Couldn't reserve. Please try a different slot or call (905) 960-0181.";
+      contactError.hidden = false;
     }
   });
 

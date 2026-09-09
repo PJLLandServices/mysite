@@ -112,6 +112,14 @@ const proposalTemplates = require("./lib/proposal-templates");
 const rateLimit = require("./lib/rate-limit");
 const adminActions = require("./lib/admin-actions");
 const antiBot = require("./lib/anti-bot");
+// Slot holds + the one booking mutex (spec §2.5, Patrick 2026-09-09).
+const bookingHolds = require("./lib/booking-holds");
+const { withBookingLock } = require("./lib/booking-lock");
+const { writeJsonAtomic } = require("./lib/atomic-json");
+// A customer picking times on the calendar takes a hold per pick. 30 per
+// 10 minutes per IP is generous for a person and a wall for a scraper.
+const HOLD_RATE_LIMIT = 30;
+const HOLD_RATE_WINDOW_MS = 10 * 60 * 1000;
 const bulkActions = require("./lib/bulk-actions");
 const { sendCustomerLoginLink, sendAdminPasswordResetLink } = require("./lib/notify-customer");
 const mailerLog = require("./lib/mailer-log");
@@ -1887,8 +1895,11 @@ async function readLeads() {
   return JSON.parse(raw || "[]").map(hydrateLead);
 }
 
+// Atomic (stage + rename). Concurrent WRITERS are serialised by
+// withBookingLock on the booking paths; this guarantees each write is
+// all-or-nothing so a reader never parses a truncated leads.json.
 async function writeLeads(leads) {
-  await fs.writeFile(LEADS_FILE, `${JSON.stringify(leads, null, 2)}\n`, "utf8");
+  await writeJsonAtomic(LEADS_FILE, leads);
 }
 
 function isLikelyDuplicate(leads, lead) {
@@ -2442,6 +2453,8 @@ const PUBLIC_API_PATHS = new Set([
   "/api/booking/availability",
   "/api/booking/verify-address",
   "/api/booking/reserve",
+  "/api/booking/hold",
+  "/api/booking/hold/release",
   // Pricing dictionary — public so any page (including pricing.html on
   // GitHub Pages) can fetch the live catalog and render from it.
   "/api/pricing",
@@ -4164,7 +4177,15 @@ function bookingHoldsItsSlot(status) {
   return !DEAD_BOOKING_STATUSES.has(String(status || "").toLowerCase());
 }
 
-async function activeBookings() {
+// `includeHolds`: union the live slot holds (lib/booking-holds.js) as
+// booking-shaped obstacles, so the availability engine and the reserve
+// re-validation both see a held slot as taken. OPT-IN on purpose: only
+// the three capacity-deciding callers (availability, hold, reserve) pass
+// it. Every other reader — Today, Season Plan, physical-conflict checks,
+// reminders — wants real appointments only, and a hold is not one.
+// `excludeHoldToken` drops the caller's own hold: a customer's hold must
+// never block the customer it was taken for.
+async function activeBookings({ includeHolds = false, excludeHoldToken = "" } = {}) {
   const leads = await readLeads();
   const fromLeads = leads
     .filter((lead) => !lead.archived
@@ -4232,6 +4253,15 @@ async function activeBookings() {
     }
   } catch (err) {
     console.warn("[activeBookings] bookings.json union skipped:", err?.message);
+  }
+  if (includeHolds) {
+    try {
+      for (const h of await bookingHolds.listActive({ excludeToken: excludeHoldToken })) {
+        fromLeads.push({ ...h, coords: h.coords || PJL_BASE });
+      }
+    } catch (err) {
+      console.warn("[activeBookings] holds union skipped:", err?.message);
+    }
   }
   return fromLeads;
 }
@@ -20616,7 +20646,14 @@ Customer signature captured at ${new Date().toISOString()}.`;
         }
       }
       const customerCoords = geo.coords;
-      const [bookings, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
+      // Live holds count as taken — except the caller's own (`hold=`),
+      // so a customer stepping back to the calendar still sees the time
+      // they are holding.
+      const ownHold = normalizeString(url.searchParams.get("hold"), 80);
+      const [bookings, scheduleData] = await Promise.all([
+        activeBookings({ includeHolds: true, excludeHoldToken: ownHold }),
+        scheduleStore.read()
+      ]);
 
       const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
       const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
@@ -20661,6 +20698,123 @@ Customer signature captured at ${new Date().toISOString()}.`;
       });
     } catch (error) {
       return sendJson(res, 500, { ok: false, errors: [error.message || "Availability lookup failed."] });
+    }
+  }
+
+  // Slot hold (spec §2.5). The customer picked a time on the calendar;
+  // keep that start for HOLD_TTL (10 min) while they type their contact
+  // details. The hold is validated by the SAME engine call reserve uses,
+  // under the SAME lock, so two customers who pick one slot in the same
+  // second get one hold and one 409 — not two 201s at Confirm.
+  //
+  // /release gives the hold back early (abandon, "change time", pagehide
+  // beacon). Both are public: the token is the only handle, and a hold
+  // is worth nothing but ten minutes of one slot.
+  if (req.method === "POST" && (pathname === "/api/booking/hold" || pathname === "/api/booking/hold/release")) {
+    try {
+      const payload = await parseRequestBody(req);
+      const ip = callerIp(req);
+      if (pathname === "/api/booking/hold/release") {
+        const token = normalizeString(payload.holdToken, 80);
+        const released = token ? await withBookingLock(() => bookingHolds.release(token)) : false;
+        return sendJson(res, 200, { ok: true, released });
+      }
+
+      // Same load-test bypass as reserve (PJL_TEST_KEY) so the booking
+      // bot can hold + reserve from one machine.
+      const testKey = String(process.env.PJL_TEST_KEY || "");
+      const isLoadTest = Boolean(testKey && String(req.headers["x-pjl-test-key"] || "") === testKey);
+      if (!isLoadTest) {
+        const rlKey = `booking-hold:${ip}`;
+        if (!rateLimit.check(rlKey, HOLD_RATE_LIMIT, HOLD_RATE_WINDOW_MS)) {
+          return sendJson(res, 429, {
+            ok: false,
+            code: "rate_limit",
+            message: "Too many hold attempts from this address.",
+            errors: ["Too many attempts. Please wait a minute and try again."]
+          });
+        }
+        rateLimit.record(rlKey);
+      }
+
+      const serviceKey = normalizeString(payload.serviceKey || payload.service, 60);
+      const service = BOOKABLE_SERVICES[serviceKey];
+      if (!service) {
+        return sendJson(res, 422, { ok: false, code: "service_unknown", message: "Unknown service key.", errors: ["Unknown service."] });
+      }
+      const address = normalizeString(payload.address, 320);
+      if (!address) {
+        return sendJson(res, 422, { ok: false, code: "address_missing", message: "Address is required to hold a slot.", errors: ["Address is required."] });
+      }
+      const startDate = new Date(normalizeString(payload.slotStart, 40));
+      if (Number.isNaN(startDate.getTime())) {
+        return sendJson(res, 422, { ok: false, code: "slot_invalid", message: "Slot start time is missing or invalid.", errors: ["Invalid slot time."] });
+      }
+      const previousToken = normalizeString(payload.previousHoldToken, 80);
+
+      // Geocode + gate OUTSIDE the lock — network work must not hold the
+      // queue. Same gate as availability; our own outages stand aside.
+      const geo = await geocode(address);
+      const gateVerdict = await bookingGate.gate(geo, { travelMinutes: distanceLib.travelMinutes, base: PJL_BASE });
+      if (!gateVerdict.ok) {
+        return sendJson(res, 422, { ok: false, code: gateVerdict.code, message: gateVerdict.message, errors: [gateVerdict.message] });
+      }
+      const customerCoords = geo.coords;
+
+      const hold = await withBookingLock(async () => {
+        const [bookings, scheduleData] = await Promise.all([
+          activeBookings({ includeHolds: true, excludeHoldToken: previousToken }),
+          scheduleStore.read()
+        ]);
+        const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
+        const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
+        const slots = await listAvailableSlots({
+          serviceKey,
+          customerCoords,
+          bookings,
+          blocks: scheduleData.blocks,
+          daysAhead: horizonToReach(startDate),
+          hours: mergedHours,
+          settings: mergedSettings,
+          dayShapes: await dayShapesForSeason({ bookings })
+        });
+        const matched = slots.find((s) => s.start === startDate.toISOString());
+        if (!matched) return null;
+        return bookingHolds.create({
+          serviceKey,
+          serviceLabel: service.label,
+          date: startDate.toLocaleDateString("en-CA"),
+          bucketKey: matched.bucketKey || null,
+          bucketWindow: matched.bucketWindow || null,
+          start: matched.start,
+          end: matched.end,
+          coords: customerCoords,
+          address: customerCoords.formattedAddress || address,
+          ip,
+          previousToken
+        });
+      });
+      if (!hold) {
+        return sendJson(res, 409, {
+          ok: false,
+          code: "slot_taken",
+          message: "Requested slot is no longer available.",
+          errors: ["That slot was just taken. Please pick another time."]
+        });
+      }
+      return sendJson(res, 201, {
+        ok: true,
+        holdToken: hold.token,
+        expiresAt: hold.expiresAt,
+        holdMinutes: Math.round(bookingHolds.ttlMs() / 60000),
+        start: hold.start,
+        end: hold.end,
+        bucketKey: hold.bucketKey,
+        bucketWindow: hold.bucketWindow
+      });
+    } catch (error) {
+      const msg = error.message || "Hold failed.";
+      return sendJson(res, 400, { ok: false, code: "hold_failed", message: msg, errors: [msg] });
     }
   }
 
@@ -20811,6 +20965,56 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const claimsAdminCustom = payload.source === "admin_custom";
       const useAdminCustom = claimsAdminCustom && isAdmin && !isStandby;
 
+      // ---- Slot hold (spec §2.5) ---------------------------------------
+      // A public standard-slot reserve must present the hold it took when
+      // the customer picked the time. Exempt: the open bucket (no slot),
+      // admin custom-time, and any admin session — the admin schedule
+      // modal, book-from-lead, the Season Plan placement and the field
+      // app's Book tab all post here without a hold step, and they are
+      // serialised by the lock below regardless. (Spec §2.5.2 named only
+      // standby + admin_custom; widening the exemption to every admin
+      // session is deliberate — otherwise four staff surfaces break.)
+      const holdToken = normalizeString(payload.holdToken, 80);
+      const holdRequired = !isStandby && !useAdminCustom && !isAdmin;
+      let hold = null;
+      if (holdRequired) {
+        if (!holdToken) {
+          return sendJson(res, 409, {
+            ok: false,
+            code: "hold_required",
+            message: "No slot hold on this request — pick the time again.",
+            errors: ["Please pick your time again."]
+          });
+        }
+        hold = await bookingHolds.get(holdToken);
+        if (!hold) {
+          return sendJson(res, 409, {
+            ok: false,
+            code: "hold_expired",
+            message: "The 10-minute slot hold expired or was released.",
+            errors: ["Your 10-minute hold on that time expired. Please pick a time again."]
+          });
+        }
+        if (hold.start !== startDate.toISOString()) {
+          return sendJson(res, 409, {
+            ok: false,
+            code: "hold_mismatch",
+            message: "The hold is for a different slot than the one requested.",
+            errors: ["That time doesn't match your hold. Please pick a time again."]
+          });
+        }
+      } else if (holdToken) {
+        hold = await bookingHolds.get(holdToken);
+      }
+
+      // ---- The critical section ------------------------------------------
+      // Everything from "is the slot still free" to the last JSON write
+      // runs under ONE process-wide mutex. Two concurrent reserves used to
+      // both see the slot free and both write; the later leads.json write
+      // dropped the earlier lead (6 concurrent POSTs → 6×201, 2 leads,
+      // 1 booking, reproduced 2026-09-09). The body below is unchanged
+      // and keeps its original indentation to keep the diff reviewable.
+      return await withBookingLock(async () => {
       let matched = null;
       let forcedByAdmin = false;
       if (isStandby) {
@@ -20889,7 +21093,10 @@ Customer signature captured at ${new Date().toISOString()}.`;
         forcedByAdmin = true;
       } else {
         // Standard path: re-validate against the bucket grid.
-        const [bookings, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
+        const [bookings, scheduleData] = await Promise.all([
+          activeBookings({ includeHolds: true, excludeHoldToken: holdToken }),
+          scheduleStore.read()
+        ]);
         const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
         const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
         const stillAvailable = await listAvailableSlots({
@@ -21067,6 +21274,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
           sendNewLeadSms({ ...decorated, sourceLabel: `BOOKED ${matched.timeLabel}` }, { baseUrl }),
           notifyCustomer(boundIsSiteVisit ? "site_visit" : "booked", decorated, { baseUrl })
         ]).catch(() => {});
+
+        if (hold) await bookingHolds.consume(hold.token).catch(() => {});
 
         return sendJson(res, 201, {
           ok: true,
@@ -21360,6 +21569,9 @@ Customer signature captured at ${new Date().toISOString()}.`;
           ]
       ).catch(() => {});
 
+      // The slot is booked; the hold has done its job.
+      if (hold) await bookingHolds.consume(hold.token).catch(() => {});
+
       return sendJson(res, 201, {
         ok: true,
         leadId: result.lead.id,
@@ -21367,6 +21579,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
         standby: isStandby || undefined,
         portalUrl: decorated.portalUrl
       });
+      }); // withBookingLock
     } catch (error) {
       const msg = error.message || "Booking failed.";
       return sendJson(res, 400, {
@@ -25078,7 +25291,7 @@ server.listen(PORT, HOST, () => {
   // nothing, and every failure names its lead in the log.
   const sweepLeadBookings = async () => {
     try {
-      const result = await bookings.healFromLeads(await readLeads());
+      const result = await withBookingLock(async () => bookings.healFromLeads(await readLeads()));
       if (result.healed) {
         console.log(`[bookings] lead-booking sweep healed ${result.healed} canonical record${result.healed === 1 ? "" : "s"}`);
       }
@@ -25091,6 +25304,18 @@ server.listen(PORT, HOST, () => {
   };
   sweepLeadBookings();
   setInterval(sweepLeadBookings, 10 * 60 * 1000);
+
+  // Expired slot holds are ignored on every read; this just keeps
+  // holds.json at "holds in flight" (spec §2.5.1).
+  const sweepHolds = async () => {
+    try {
+      const n = await withBookingLock(() => bookingHolds.sweep());
+      if (n) console.log(`[booking-holds] swept ${n} expired hold${n === 1 ? "" : "s"}`);
+    } catch (err) {
+      console.warn("[booking-holds] sweep failed:", err?.message);
+    }
+  };
+  setInterval(sweepHolds, 60 * 1000).unref();
 
   // Day-before reminder sweep for SELF-BOOKED appointments. Assignment
   // customers get theirs from the cadence's step 6; the customer who

@@ -27,6 +27,7 @@
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
+const { writeJsonAtomic } = require("./atomic-json");
 const crypto = require("node:crypto");
 // Contact-id helpers only — the bill-to resolver itself is not used here.
 // Safe to require at load time: billing-parties.js requires no siblings.
@@ -105,9 +106,11 @@ async function readAll() {
   }
 }
 
+// Atomic (stage + rename): a crash or a concurrent reader never sees a
+// half-written file. Writer ORDERING is lib/booking-lock.js's job.
 async function writeAll(properties) {
   await ensureFile();
-  await fs.writeFile(FILE, JSON.stringify(properties, null, 2) + "\n", "utf8");
+  await writeJsonAtomic(FILE, properties);
 }
 
 // ---- Helpers ---------------------------------------------------------

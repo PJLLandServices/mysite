@@ -43,6 +43,55 @@ code). Run against the old bail-outs: 5 fail on the shapes, naming the offered d
 the server half. Not changed: `resolveSeasonPlan`'s own `if (!plan) return null` — that is the
 season-plan RENDERER, not the gate. No PASS flow touched.
 
+**2026-09-09 (Atomic reserve + 10-minute slot hold — spec §2.5 / D1, ship item 1 of the
+Corrected Process Spec):** Reproduced against a booted copy of the server: six simultaneous
+`POST /api/booking/reserve` on one slot → six HTTP 201, ONE lead and ONE booking on disk (the
+spec's count of "2 leads" was one run's luck; the suite measures one). Reserve is a chain of
+read-modify-write steps over leads.json → customers.json → properties.json → bookings.json, each
+`await` a place a second request interleaves; both see the slot free, both write, and the
+later leads.json write drops the earlier lead. Nothing held a slot between the calendar and
+Confirm either. **Fix, three parts.** (1) `lib/booking-lock.js` — ONE process-wide async mutex
+(`withBookingLock`, same promise-chain shape as parts.js's `withLock`). Reserve runs its whole
+critical section under it, from "is the slot still free" through the last JSON write; the hold
+route and the lead→booking heal sweep take the same lock. Geocode + gate stay OUTSIDE the lock
+so network latency never queues the calendar. NOT re-entrant — nothing inside may call it again.
+(2) `lib/atomic-json.js` — `writeJsonAtomic` (stage to a pid+counter-unique temp, rename over).
+`writeLeads`, `bookings.writeAll`, `properties.writeAll`, `customers.writeAll` and holds.json
+all go through it, so a crash or concurrent reader never sees a truncated store. (3)
+`lib/booking-holds.js` + `POST /api/booking/hold` / `/hold/release` — the customer picking a
+time on `/book.html` takes a 10-minute hold (`holds.json`, `{token, date, bucketKey, start, end,
+coords, expiresAt}`), validated by the SAME `listAvailableSlots` call reserve uses, under the
+SAME lock. A live hold is a booking-shaped obstacle to the engine, so it occupies bucket capacity
+and its exact start; `activeBookings({ includeHolds, excludeHoldToken })` is OPT-IN and only the
+three capacity-deciding callers (availability, hold, reserve) pass it — Today, Season Plan,
+physical-conflict and reminders never see a hold. `GET /api/booking/availability?hold=<token>`
+excludes the caller's own hold so stepping back to the calendar still shows the held time.
+Reserve REQUIRES a valid hold for a public standard slot (`409 hold_required` / `hold_expired` /
+`hold_mismatch`; the client sends the customer back to a refreshed calendar), consumes it on
+success, and never issues a hold-less 201 for a public slot again. Expired holds are ignored on
+every read and swept once a minute; `previousHoldToken` replaces a customer's earlier hold so one
+person holds one slot; `pagehide` beacons a release. **Deliberate deviations from spec §2.5.2:**
+the hold exemption is standby + admin custom-time + ANY admin session (not only admin_custom) —
+the admin schedule modal, book-from-lead, Season Plan placement and the field app's Book tab all
+post to reserve without a hold step and would otherwise break; they are serialised by the lock
+regardless. The load-test bypass (`PJL_TEST_KEY`) is honoured on `/hold` (skips its 30-per-10-min
+per-IP limit) but does NOT exempt reserve from the hold — the booking bot must take a hold before
+each reserve when it is re-run (spec ship item 8). The hold TTL is overridable ONLY via
+`PJL_HOLD_TTL_MS` for the test harness. **Coverage:** new `scripts/test-booking-concurrency.mjs`
+(40 assertions, in `build:check`) boots the real server and drives the public endpoints with real
+concurrent fetches: no-hold reserve refused; six concurrent holds on one slot → one 201 + five
+409; six concurrent reserves on that slot → exactly the holder's 201, leads.json and bookings.json
+counts equal the 201s; six concurrent reserves on six distinct slots → six 201s AND six leads AND
+six records (this is the lost-write case); expiry gives the slot back and refuses the stale
+token; release/replace/mismatch; standby needs no hold; no `.tmp` staging files survive. Run
+against unpatched `origin/main`: **25 of 40 fail**, headline "1 leads for 6 confirmations".
+`build:check` green. **FLOW-03 IS PASS AND WAS TOUCHED:** `/book.html` now takes a hold on slot
+pick (js/booking.js), carries `holdToken` on reserve, and returns to a refreshed calendar on any
+slot-family 409; the engine, buckets, geography, gate, pricing and notifications are unchanged;
+the admin/app reserve callers are unchanged. Server + static change → ships on Render redeploy;
+no Xcode rebuild (the field app's reserve payload is untouched). **Still owed:** the walked
+production booking FLOW-03 already owes, now through the hold step.
+
 **2026-09-08, same day (A customer who books is still a "lead", and a booked property shows
 "0 zones"):** Patrick: "if the customer BOOKS an appointment - the customer is still coming in
 as a LEAD ... if they've booked an appointment they are active?" He was right, twice over.

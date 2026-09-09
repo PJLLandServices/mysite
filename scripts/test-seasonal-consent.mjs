@@ -41,7 +41,7 @@ function ok(name, cond, detail = "") {
 // opened. properties.js pulls in only node builtins plus two siblings.
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "pjl-consent-"));
 fs.mkdirSync(path.join(SANDBOX, "lib"), { recursive: true });
-for (const file of ["properties.js", "billing-parties.js", "customers.js"]) {
+for (const file of ["properties.js", "billing-parties.js", "customers.js", "atomic-json.js"]) {
   fs.copyFileSync(path.join(ROOT, "server/lib", file), path.join(SANDBOX, "lib", file));
 }
 const properties = require(path.join(SANDBOX, "lib", "properties.js"));
