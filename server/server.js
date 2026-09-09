@@ -587,7 +587,13 @@ async function readAuthConfig() {
     // Write the whole config back, not just this key. It used to persist
     // `{ sessionSecret }` alone, so a first-run write threw away anything
     // else auth.json was holding.
-    try { await fs.writeFile(AUTH_FILE, JSON.stringify(parsed, null, 2) + "\n", "utf8"); }
+    // Atomic: temp file then rename (lib/atomic-json.js). A bare writeFile
+    // truncates first, and readAuthConfig re-reads this file on EVERY
+    // request that touches a session. A reader landing in that window sees
+    // no secret, mints its own, and writes THAT — retroactively invalidating
+    // every cookie already issued. The per-process memo above makes racing
+    // MINTS agree; this makes racing READS safe.
+    try { await writeJsonAtomic(AUTH_FILE, parsed); }
     catch { /* read-only filesystem in tests, etc. — fall through */ }
   }
   return parsed;
@@ -1196,6 +1202,7 @@ function needsAuth(method, pathname) {
   // Email-health view (JOB-008) — admin-cookie gated, admin only.
   if (pathname === "/api/admin/email-health") return "admin";
   if (pathname === "/api/admin/purge-test-data") return "admin";
+  if (pathname === "/api/admin/open-bucket/slot") return "admin";
   // Territory export download — ADMIN ONLY. De-identified, but it is still
   // customer geography (municipality + 2-decimal coordinates for every live
   // property). It must never be publicly reachable, and it is not a field
@@ -24064,6 +24071,90 @@ async function orderDayForDriving(rows) {
   // customer goes through POST /api/booking/reserve with their leadId
   // (the book-from-lead path), which books, notifies, and clears the
   // standby envelope in one move. Admin-only via path auth.
+  // Where does this standby customer actually fit on that day?
+  //
+  // The Book + notify button used to hard-code 13:00 as the anchor minute,
+  // which collided with whatever already sat at 13:00 and came back 409
+  // physical_conflict — on exactly the days the panel had just recommended.
+  // The geographic re-stamp made it worse rather than better: the afternoon
+  // now fills from 12:00 in half-hour steps, so 13:00 is precisely where the
+  // third afternoon booking lands.
+  //
+  // Asking the engine instead means the placement inherits everything a
+  // normal booking obeys — bucket capacity, bucket geography, hours, blocks
+  // — rather than re-deriving any of it here. The caller then books through
+  // the ordinary book-from-lead path, so the confirmation, the canonical
+  // mirror and the re-stamp all ride machinery that already works.
+  //
+  // Afternoon only, by design: an open-bucket pickup rides the back half of
+  // the day. That is what "on our way home" means.
+  if (req.method === "POST" && pathname === "/api/admin/open-bucket/slot") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const leadId = normalizeString(payload.leadId, 40);
+      const date = normalizeString(payload.date, 10);
+      if (!leadId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return sendJson(res, 422, { ok: false, code: "bad_request", errors: ["Pick a waiting customer and a day."] });
+      }
+
+      const leads = await readLeads();
+      const lead = openBucket.waitingLeads(leads).find((l) => l.id === leadId);
+      if (!lead) {
+        return sendJson(res, 404, {
+          ok: false, code: "not_waiting",
+          errors: ["That customer isn't in the open bucket any more — they may already be booked."]
+        });
+      }
+
+      const s = lead.standby || {};
+      let coords = s.coords || null;
+      if (!coords && lead.contact?.address) {
+        const geo = await geocode(lead.contact.address);
+        coords = geo?.coords || null;
+      }
+
+      const [bookingsNow, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
+      const endOfDay = new Date(`${date}T23:59:59`);
+      const slots = await listAvailableSlots({
+        serviceKey: s.serviceKey,
+        customerCoords: coords,
+        bookings: bookingsNow,
+        blocks: scheduleData.blocks,
+        daysAhead: horizonToReach(endOfDay),
+        hours: { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) },
+        settings: { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) },
+        dayShapes: await dayShapesForSeason({ bookings: bookingsNow })
+      });
+
+      const onDay = slots.filter((sl) => geoFilter.localDateKey(new Date(sl.start)) === date);
+      const afternoon = onDay.filter((sl) => new Date(sl.start).getHours() >= 12);
+      const pick = afternoon[0] || null;
+      if (!pick) {
+        return sendJson(res, 409, {
+          ok: false,
+          code: onDay.length ? "afternoon_full" : "day_unavailable",
+          message: onDay.length
+            ? "That day's afternoon is full — try another day from the list."
+            : "The engine won't put this customer on that day — try another from the list.",
+          errors: [onDay.length
+            ? "That day's afternoon is full. Pick another day."
+            : "That day isn't available for this customer. Pick another day."]
+        });
+      }
+
+      return sendJson(res, 200, {
+        ok: true,
+        slotStart: pick.start,
+        bucketKey: pick.bucketKey || "afternoon",
+        bucketWindow: pick.bucketWindow || "12 PM – 5 PM"
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't find a slot."] });
+    }
+  }
+
   if (req.method === "GET" && pathname === "/api/standby") {
     try {
       const leads = await readLeads();

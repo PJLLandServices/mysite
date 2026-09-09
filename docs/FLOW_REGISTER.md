@@ -19,6 +19,58 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-09, same day (The server refused the session cookie it had just issued):** Found while
+driving PR #184's CI to green — `test-booking-lifecycle` failed with four consecutive `ERR:401` on
+the tech's day list while the login assertion in the SAME block passed. Not this PR's change, and
+not a flake: it is the other half of the defect `scripts/test-auth-secret.mjs` documents. That
+suite fixed racing MINTS of the session secret (one secret per process instead of one per call).
+The remaining hole is the WRITE, in the two stores every gated request reads.
+`requireUser()`/`requireAdmin()` re-read `users.json` on every request so a disabled account loses
+access immediately, and `/api/login` fires `users.recordLogin()` **without awaiting it** — so a
+write to `users.json` is in flight at exactly the moment the client makes its next request. A bare
+`fs.writeFile` truncates the destination and then fills it; a reader landing in that window gets
+`""`, `JSON.parse("" || "[]")` hands it an **empty user list**, and the gate reads that as "this
+user no longer exists" → **401 on a perfectly valid session**. `auth.json` had the same non-atomic
+write, and there a truncated read is worse than transient: `readAuthConfig()` sees no secret, mints
+one and WRITES it, invalidating every cookie already issued — the four-in-a-row shape.
+Fix: both stores now write through `lib/atomic-json.js` (temp file + rename), the same treatment
+`bookings.json`, `customers.json`, `properties.json` and `leads.json` got in PR #176 — these two
+were simply missed. Reproduced locally first: 3 of 720 gated requests came back 401 against the
+unfixed code. Coverage: `scripts/test-session-stores-atomic.mjs`, 8 assertions, in `build:check`.
+It pins a deterministic property rather than a race — **the update lands by RENAME**, so the
+destination file's inode changes across a write (an in-place truncate-and-fill keeps it) — plus
+the end-to-end symptom itself. Verified against broken code: 3 assertions fail on the old writes.
+No PASS flow touched; no behaviour changes for any caller.
+
+**2026-09-09 (The overflow failed on arrival: the open bucket's hard-coded 13:00):** Spec item 4,
+D3. Patrick's rule is that we never turn a customer down — past the corridor cap they go into the
+open bucket and get picked up "on our way home". Ranking them against the upcoming route days
+worked; PLACING one did not. The Book + notify button hard-coded `13:00` as the anchor minute, so
+the placement collided with whatever already sat there and came back **409 `physical_conflict` on
+exactly the days the panel had just recommended**. The re-stamp shipped hours earlier made this
+deterministic rather than occasional: the afternoon now fills from 12:00 in half-hour steps, so
+13:00 is precisely where the third afternoon booking lands. It also performed no capacity or
+geography check of its own — a placement is a booking, and without those the open bucket is a
+side door into a full day.
+Fix: `POST /api/admin/open-bucket/slot` (admin) resolves where the customer actually fits by
+asking `listAvailableSlots`, so the placement **inherits** bucket capacity, bucket geography,
+hours and blocks rather than re-deriving any of them; it returns the first free AFTERNOON slot
+(the back half of the day is what "on our way home" means) or refuses with a named reason —
+`afternoon_full`, `day_unavailable`, `not_waiting`. The panel then books through the ordinary
+book-from-lead path, so the confirmation, the canonical mirror and the driving-order re-stamp all
+ride machinery that already works. **Deliberately a resolver, not a second booking path:**
+duplicating the booking write would have been a second definition of "book this customer", and
+the reserve handler re-validates under the booking lock anyway, so a slot taken between the two
+calls fails the same way any other race does. The customer is still told the 12–5 window and
+never a minute. Coverage: `scripts/test-open-bucket-placement.mjs`, 16 assertions, in
+`build:check` — it reproduces the 409 collision first, then drives the real two-step, and pins
+the CLIENT too (a resolver nobody calls fixes nothing). Both halves verified against broken code:
+restore the hard-coded anchor → 2 fail; remove the endpoint → 8 fail. One fixture correction
+worth recording: the first "full afternoon" case passed for the wrong reason, because with no
+season plan there is no `bucketCap` and slots remained — the fixture now fills every half-hour
+from noon to close, and the assertion says it is testing the engine's own "no room left" rather
+than the cap. No PASS flow touched.
+
 **2026-09-09, same day (The aggregate guard — the barbell stops being COMPOSED):** Spec priority
 3, causes C-D, and the last piece of the Newmarket → Thornhill → Newmarket problem. The
 per-booking check is marginal (what does THIS stop add?) and, because every route starts and

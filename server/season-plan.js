@@ -1876,11 +1876,29 @@
       btn.addEventListener("click", async () => {
         btn.disabled = true;
         try {
-          const [y, m, d] = select.value.split("-").map(Number);
-          // Afternoon by design: an open-bucket pickup rides the back
-          // half of the day — "on our way home". The customer is told
-          // the 12–5 window, never this anchor minute.
-          const slotStart = new Date(y, m - 1, d, 13, 0, 0).toISOString();
+          // Ask the engine where this customer actually fits.
+          //
+          // This used to hard-code 13:00 as the anchor minute, which
+          // collided with whatever already sat at 13:00 and came back 409
+          // physical_conflict — on exactly the days this panel had just
+          // recommended. The geographic re-stamp made that worse, not
+          // better: the afternoon fills from 12:00 in half-hour steps, so
+          // 13:00 is precisely where the third afternoon booking lands.
+          //
+          // The resolver returns an afternoon slot that is actually free and
+          // passes the day's capacity and corridor checks, or refuses with a
+          // reason. The customer is still told the 12–5 window and never a
+          // minute.
+          const slotRes = await fetch("/api/admin/open-bucket/slot", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ leadId: row.leadId, date: select.value })
+          });
+          const slotData = await slotRes.json().catch(() => ({}));
+          if (!slotRes.ok || !slotData.ok) {
+            throw new Error((slotData.errors || ["Couldn't find a slot on that day."]).join(" "));
+          }
+          const slotStart = slotData.slotStart;
           const response = await fetch("/api/booking/reserve", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
