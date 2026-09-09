@@ -43,6 +43,7 @@ import { colors, radius, space, type } from '../theme';
 import { runningVersionLabel } from '../updates';
 import { Pill, PickerSheet, PromptSheet } from '../ui';
 import { REMOVAL_REASONS, reasonByCode, removalLabel, removalNote } from '../removal-reasons';
+import { canAddStop, whereYouAre } from '../add-stop';
 import {
   canStartWorkOrder,
   existingWorkOrderFor,
@@ -70,7 +71,7 @@ const longDate = (ymd) => {
   return d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 };
 
-export default function TodayScreen({ onOpenWorkOrder, refreshToken = 0, onSignIn }) {
+export default function TodayScreen({ onOpenWorkOrder, onAddStop, refreshToken = 0, onSignIn }) {
   const [payload, setPayload] = useState(null);
   // The job "Not today" is being asked about, and the reason picked for it.
   const [removing, setRemoving] = useState(null);        // the job being taken off
@@ -142,6 +143,47 @@ export default function TodayScreen({ onOpenWorkOrder, refreshToken = 0, onSignI
     await load(selected);
     setRefreshing(false);
   }, [load, selected]);
+
+  // Take the stop off the day. The server decides from the code whether
+  // that is a cancellation or a no-show, and whether the customer hears
+  // about it — the phone only says why.
+  const applyRemoval = useCallback(async (booking, reason, note) => {
+    if (!booking?.bookingId) {
+      Alert.alert(
+        "Can't remove this one",
+        'It has no booking record behind it — a job scheduled straight onto a property. '
+        + 'Take it off in the CRM.',
+      );
+      return;
+    }
+    setRemovingBusy(true);
+    try {
+      await removeVisit(booking.bookingId, { reasonCode: reason.code, note });
+      setRemoving(null);
+      // Refetch rather than patch: the removal changes the driving order
+      // of everything after it, and the server is the one that decides
+      // that order. Guessing it here is how the map and the list disagree.
+      await load(selected);
+    } catch (err) {
+      if (err instanceof AuthRequiredError) setState('auth');
+      else Alert.alert("Didn't remove it", err?.message || 'It is still on the day. Try again.');
+    } finally {
+      setRemovingBusy(false);
+    }
+  }, [load, selected]);
+
+  // "Already done" is the one reason that means something went wrong
+  // upstream — a double booking, or a job closed without the calendar
+  // being told. Patrick asked to be prompted, so the cause is findable in
+  // February rather than guessed at.
+  const pickReason = useCallback((booking, reason) => {
+    setRemoving(null);
+    if (!reason?.asksWhy) { applyRemoval(booking, reason, ''); return; }
+    // A sheet rather than Alert.prompt, which is iOS-only and does
+    // nothing at all on Android — app.json declares an android target.
+    setWhy('');
+    setAsking({ booking, reason });
+  }, [applyRemoval]);
 
   const open = (url) => Linking.openURL(url).catch(() => {});
 
@@ -255,47 +297,6 @@ export default function TodayScreen({ onOpenWorkOrder, refreshToken = 0, onSignI
       </View>
     );
   }
-
-  // Take the stop off the day. The server decides from the code whether
-  // that is a cancellation or a no-show, and whether the customer hears
-  // about it — the phone only says why.
-  const applyRemoval = useCallback(async (booking, reason, note) => {
-    if (!booking?.bookingId) {
-      Alert.alert(
-        "Can't remove this one",
-        'It has no booking record behind it — a job scheduled straight onto a property. '
-        + 'Take it off in the CRM.',
-      );
-      return;
-    }
-    setRemovingBusy(true);
-    try {
-      await removeVisit(booking.bookingId, { reasonCode: reason.code, note });
-      setRemoving(null);
-      // Refetch rather than patch: the removal changes the driving order
-      // of everything after it, and the server is the one that decides
-      // that order. Guessing it here is how the map and the list disagree.
-      await load(selected);
-    } catch (err) {
-      if (err instanceof AuthRequiredError) setState('auth');
-      else Alert.alert("Didn't remove it", err?.message || 'It is still on the day. Try again.');
-    } finally {
-      setRemovingBusy(false);
-    }
-  }, [load, selected]);
-
-  // "Already done" is the one reason that means something went wrong
-  // upstream — a double booking, or a job closed without the calendar
-  // being told. Patrick asked to be prompted, so the cause is findable in
-  // February rather than guessed at.
-  const pickReason = useCallback((booking, reason) => {
-    setRemoving(null);
-    if (!reason?.asksWhy) { applyRemoval(booking, reason, ''); return; }
-    // A sheet rather than Alert.prompt, which is iOS-only and does
-    // nothing at all on Android — app.json declares an android target.
-    setWhy('');
-    setAsking({ booking, reason });
-  }, [applyRemoval]);
 
   const bookings = payload?.bookings || [];
   const removed = payload?.removed || [];
@@ -411,10 +412,31 @@ export default function TodayScreen({ onOpenWorkOrder, refreshToken = 0, onSignI
       />
 
       <View style={styles.head}>
-        <Text style={styles.date}>{longDate(payload?.date)}</Text>
-        <Text style={styles.count}>
-          {bookings.length ? `${bookings.length} ${bookings.length === 1 ? 'job' : 'jobs'}` : 'Nothing booked'}
-        </Text>
+        <View style={styles.headText}>
+          <Text style={styles.date}>{longDate(payload?.date)}</Text>
+          <Text style={styles.count}>
+            {bookings.length ? `${bookings.length} ${bookings.length === 1 ? 'job' : 'jobs'}` : 'Nothing booked'}
+          </Text>
+        </View>
+        {/* A walk-up is not an admin act — the person it happens to is
+            whoever is holding the phone on that street, which is usually
+            not Patrick. Patrick: "everyone can add a stop". Hidden on a
+            day that has already been driven, because backdating a job
+            onto a route nobody drove is not a thing anyone means to do. */}
+        {onAddStop && canAddStop(selected || payload?.date) ? (
+          <Pressable
+            onPress={() => onAddStop({
+              day: selected || payload?.date || null,
+              dayBookings: bookings,
+              fromAddress: whereYouAre(bookings),
+            })}
+            style={({ pressed }) => [styles.addStop, pressed && styles.todayBtnPressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Add a stop to this day"
+          >
+            <Text style={styles.addStopText}>＋ Add a stop</Text>
+          </Pressable>
+        ) : null}
       </View>
 
       {/* The route, above the list it belongs to. Only when there is a
@@ -645,7 +667,21 @@ const styles = StyleSheet.create({
   todayDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: 'transparent' },
   todayDotOn: { backgroundColor: colors.brand },
 
-  head: { paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.md },
+  head: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.md,
+    gap: space.md,
+  },
+  headText: { flexShrink: 1 },
+  // Quiet on purpose. It sits beside the day's headline because that is
+  // where "what is on today" is answered, but it is not competing with
+  // the jobs underneath it — nine days in ten nobody touches it.
+  addStop: {
+    backgroundColor: colors.brandTint, borderRadius: radius.pill,
+    paddingHorizontal: space.md, paddingVertical: 8, minHeight: 36,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  addStopText: { color: colors.brand, fontWeight: '600', fontSize: 13 },
   todayBtn: {
     backgroundColor: colors.brandTint,
     paddingHorizontal: space.md,

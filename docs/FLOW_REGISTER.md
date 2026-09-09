@@ -218,6 +218,56 @@ load-bearing guards verified against broken code (holds not counted → 3 fail; 
 sweeper → 1 fail). No PASS flow touched — FLOW-03 gains a step, and `book.html` fails OPEN if
 the hold call itself errors, because reserve re-validates regardless.
 
+**2026-09-09 (A customer walks over while you are on their neighbour's lawn):** Patrick:
+"Sometimes we are approached by customers while on a daily route, we try not to turn anyone
+down... we still want to remain professional and be able to tackle their closing as well, while
+still recording all paperwork, and then adding it into the daily flow **as it would have been.**"
+
+**No server code was written for this, and that is the finding.** The force-book path already
+does everything a walk-up needs: `source: "admin_custom"` skips the bucket grid, skips the
+service-area gate (`deliberateAdminAct`) and is exempt from the ten-minute hold — and its gate
+is `requireUser`, which admits a **tech**, not `requireAdmin`. So the whole feature is a screen
+that walks the ordinary booking path quickly: same lead, same customer, same property, same
+work order, same price off the same tier. It ends by opening the work order it just created, so
+the walk-up lands exactly where a booking made three weeks ago lands. Patrick's call: **"everyone
+can add a stop"** — the button carries no role test, which is why the suite pins the server's
+gate as `requireUser`; if that ever tightens to `requireAdmin` the button 403s for every tech
+and nothing else would say so.
+
+**Two deviations from the approved render, both forced, both recorded here rather than
+discovered later.** (1) There is no GPS "You are here": `lib/geocode.js` goes one way only, and
+reverse geocoding would mean a new dependency on a Google API that has refused us before — so
+the address box is prefilled with the STREET of the stop you are working (`whereYouAre` →
+`streetHint`), and the house number is one tap. (2) The stop lands **after the last stop of the
+day, not "now"** — reserve refuses a force-book that physically overlaps an active booking, and
+the job you are standing at is one of those, so a stop timed "now" returns 409 in front of the
+customer. The work order's own `arrivedAt` / `departedAt` record the real hours, which is the
+honest record either way.
+
+`nextFreeStart` is where that second deviation could have gone wrong quietly: `/api/schedule/today`
+sends `end: null` for a row that never had one, and treating such a row as ending when it STARTS
+produces a stop that begins inside a running job — a `physical_conflict` 409 on a driveway. It
+assumes a three-hour envelope for those instead. `canAddStop` hides the button on a day already
+driven; the day screen browses backwards freely and a job backdated onto a route nobody drove is
+not a thing anyone means to do.
+
+**A hooks-order crash was caught on the way in, and the guard that should have caught it had a
+hole.** `scripts/test-hooks-order.mjs` only recognised the ONE-LINE form of an early return, so
+`TodayScreen`'s two `useCallback`s under `if (state === 'loading') { return ... }` sailed past a
+green suite — React refuses the second render outright, which would have crashed the day screen
+the moment it finished loading, on a phone, in the field. The detector now tracks braces and
+finds a component's own returns at any indentation (returns inside a nested callback still do
+not count), and it covers `App.js` as well. Fixed by moving the two hooks above the returns.
+
+Coverage: `scripts/test-add-stop.mjs`, 30 assertions, in `build:check`, **verified against the
+shipped code (4 passed, 26 failed** — the four that pass are the server-drift guards, which are
+true today and are the point). The load-bearing one runs the SERVER'S OWN overlap predicate
+against the time the app picks, on the shapes a real day hands it, including the row with no end
+on it. `test-hooks-order.mjs` grew three assertions and was verified against the pre-fix
+`TodayScreen` (2 offenders found). No PASS flow touched: reserve, the hold and the conflict
+check are unchanged, and the app only calls a path the CRM has used since the schedule modal
+shipped.
+
 **2026-09-09 (A visit comes off the day, and the day still says so):** Patrick: "Customer calls
 throughout the day (or we go to house and already completed) we need a way ... to be able to
 'Remove visit' an architecture that allows us to obviously skip the home (remove it from the
