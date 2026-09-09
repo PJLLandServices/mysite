@@ -80,13 +80,27 @@ function coordsAreResolved(coords) {
 // shrinking the day's shape.
 function buildDayShapes({ plan, propertiesByCode, bookings = [] } = {}) {
   const shapes = {};
-  if (!plan || !plan.days) return shapes;
+  // NO PLAN IS NOT NO GEOGRAPHY.
+  //
+  // This used to `return shapes` empty the moment a plan was missing, and
+  // dayShapesForSeason turned that into `null`, which the availability
+  // engine reads as "geography off" — for every day, every customer, every
+  // booking. A fresh bot run put Thornhill in a morning that already held
+  // Newmarket: 88 minutes of added drive against a 15-minute cap, allowed
+  // because the gate was never consulted (Patrick, 2026-09-09).
+  //
+  // The bookings alone are enough to shape a day, which is exactly what the
+  // booking-only pass below already does INSIDE a plan. The plan adds routed
+  // stops; it was never what made geography apply. A day with no plan and no
+  // bookings still stays unshaped and open to everyone — someone has to book
+  // it first.
+  const planDays = (plan && plan.days) ? plan.days : {};
 
   const byCode = propertiesByCode instanceof Map
     ? propertiesByCode
     : new Map(Object.entries(propertiesByCode || {}));
 
-  for (const [dateKey, day] of Object.entries(plan.days)) {
+  for (const [dateKey, day] of Object.entries(planDays)) {
     const points = [];
     const index = new Set();
     const unresolved = [];
@@ -195,7 +209,7 @@ function buildDayShapes({ plan, propertiesByCode, bookings = [] } = {}) {
   // day). Booking-made shapes get the same bucketCap as every other
   // day; a day with no plan AND no bookings stays unshaped and open to
   // everyone, exactly as before — someone has to book it first.
-  const cap = Number(plan.bucketCap) > 0 ? Number(plan.bucketCap) : null;
+  const cap = Number(plan && plan.bucketCap) > 0 ? Number(plan.bucketCap) : null;
   for (const booking of bookings) {
     if (!booking || !booking.start) continue;
     const dateKey = localDateKey(new Date(booking.start));

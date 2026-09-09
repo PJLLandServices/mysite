@@ -19,6 +19,30 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-09 (Why every corridor fix "still isn't taking": a missing season plan switched
+geography OFF):** Patrick, on a FRESH bot run against the corrected engine, looking at one day
+running Newmarket 8:00 → Thornhill 9:30 → Newmarket 12:00: "This does not work." He was right,
+and none of the previous corridor work was at fault — the gate was never being consulted.
+`geoFilter.buildDayShapes` returned `{}` the moment `plan` was absent, and
+`dayShapesForSeason` turned that into `null`, which `listAvailableSlots` reads as "no geography
+at all" — every day, every customer, every booking. Measured on the actual addresses: inserting
+Thornhill into a morning already holding Newmarket costs **88 minutes** of added drive against a
+15-minute cap that widens to at most 40. The engine refuses it correctly the instant day shapes
+exist; with `dayShapes: null` it offers that morning. Fix: the plan is now OPTIONAL in
+`buildDayShapes` (the plan-days loop simply iterates nothing) and `dayShapesForSeason` builds
+shapes from the bookings regardless. **The bookings alone were always enough to shape a day** —
+that is precisely what the booking-only pass already did INSIDE a plan; the plan adds routed
+stops, it was never what made the rule apply. A day with no plan AND no booking still carries no
+shape and stays open to everyone, so an empty calendar is not closed down. Coverage: section 9
+of `scripts/test-geo-availability.mjs` (59 → 70 assertions), which pins BOTH halves — the shape
+construction and `dayShapesForSeason` no longer returning null — and carries a **control
+assertion** proving the refusal is not vacuous (with geography off the same day IS offered;
+without it, a day outside the horizon would read as "refused" and the test would silently stop
+testing anything, which is how an earlier assertion in this codebase passed against reverted
+code). Run against the old bail-outs: 5 fail on the shapes, naming the offered day, and 2 on
+the server half. Not changed: `resolveSeasonPlan`'s own `if (!plan) return null` — that is the
+season-plan RENDERER, not the gate. No PASS flow touched.
+
 **2026-09-08, same day (A customer who books is still a "lead", and a booked property shows
 "0 zones"):** Patrick: "if the customer BOOKS an appointment - the customer is still coming in
 as a LEAD ... if they've booked an appointment they are active?" He was right, twice over.

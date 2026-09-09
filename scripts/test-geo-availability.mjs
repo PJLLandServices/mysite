@@ -527,6 +527,88 @@ ok("a cross-region address still gets no days — open bucket is the overflow",
 ok("a calendar with enough days at the tight corridor never widens",
   diagnostics.geoWidenedTo === undefined);
 
+// ---- 9. A MISSING SEASON PLAN MUST NOT SWITCH GEOGRAPHY OFF ----------
+//
+// The hole that made every corridor fix look like it "wasn't taking."
+// buildDayShapes returned {} the moment a plan was absent, and
+// dayShapesForSeason turned that into null — which the engine reads as
+// "no gate at all." A fresh bot run put Thornhill in a morning that
+// already held Newmarket: 88 minutes of added drive against a 15-minute
+// cap, allowed because the rule was never consulted (Patrick, 2026-09-09,
+// looking at Newmarket → Thornhill → Newmarket on one day: "it still
+// isn't taking whatsoever").
+//
+// The bookings alone are enough to shape a day — that is exactly what the
+// booking-only pass already did INSIDE a plan. The plan adds routed stops;
+// it was never what made geography apply.
+
+const NEWMARKET_PT = { lat: 44.056, lng: -79.462, source: "google" };
+const THORNHILL_PT = { lat: 43.815, lng: -79.420, source: "google" };
+const GATE_DAY = "2026-09-23";        // inside the 20-day horizon, and a day the plan never routes
+const nmBooking = {
+  id: "BK-NM", start: `${GATE_DAY}T08:00:00`, coords: NEWMARKET_PT,
+  propertyId: "P-NM", status: "confirmed"
+};
+
+// The pair is far apart enough that no tier on the ladder reaches it.
+const nmToTh = await geoFilter.addedDriveMinutes(THORNHILL_PT, [NEWMARKET_PT]);
+ok("fixture: Thornhill into a Newmarket morning is way past every tier",
+  nmToTh.minutes > 40, `+${nmToTh.minutes} min`);
+
+// With NO plan at all, the day still gets a shape from its booking.
+const noPlanShapes = geoFilter.buildDayShapes({
+  plan: null, propertiesByCode: new Map(), bookings: [nmBooking]
+});
+ok("a booked day is shaped even with no season plan",
+  Boolean(noPlanShapes[GATE_DAY]), Object.keys(noPlanShapes).join(", ") || "(none)");
+ok("…and the booking is in it", (noPlanShapes[GATE_DAY]?.points || []).length === 1);
+ok("…in the morning bucket, where it was booked",
+  (noPlanShapes[GATE_DAY]?.bucketPoints?.morning || []).length === 1);
+
+// Non-vacuity first: with the gate genuinely off, this day IS offered.
+// Without this the refusal below would pass for the wrong reason — a day
+// outside the horizon is "not offered" too, and that is how an assertion
+// quietly stops testing anything.
+const gateOffDates = datesOf(await listAvailableSlots({
+  ...baseArgs, customerCoords: THORNHILL_PT, bookings: [nmBooking], dayShapes: null
+}));
+ok("control: with geography off, Thornhill IS offered the Newmarket day",
+  gateOffDates.has(GATE_DAY), `offered: ${[...gateOffDates].join(", ")}`);
+
+const gateSlots = await listAvailableSlots({
+  ...baseArgs, customerCoords: THORNHILL_PT, bookings: [nmBooking], dayShapes: noPlanShapes
+});
+const gateDates = datesOf(gateSlots);
+ok("with no season plan, geography STILL refuses the far booking",
+  !gateDates.has(GATE_DAY), `offered ${GATE_DAY}`);
+
+// An undefined plan must behave the same as a null one — dayShapesForSeason
+// can hand over either.
+const undefPlanShapes = geoFilter.buildDayShapes({
+  propertiesByCode: new Map(), bookings: [nmBooking]
+});
+ok("an absent plan argument shapes the day too", Boolean(undefPlanShapes[GATE_DAY]));
+
+// And the day nobody has booked stays open to everyone — the fix must not
+// close down an empty calendar.
+const untouched = "2026-09-24";
+ok("a day with no plan and no booking stays open to anyone",
+  !noPlanShapes[untouched], "an unbooked day should carry no shape");
+
+// The other half of the hole lived in server.js: dayShapesForSeason
+// returned null the moment getPlan came back empty, and null is read by
+// the engine as "no gate." Shapes built from bookings are worth nothing if
+// the caller never asks for them.
+const SERVER_SRC = fs.readFileSync(path.join(ROOT, "server", "server.js"), "utf8");
+const dsAt = SERVER_SRC.indexOf("async function dayShapesForSeason(");
+ok("dayShapesForSeason still exists", dsAt !== -1);
+const dsBody = dsAt === -1 ? "" : SERVER_SRC.slice(dsAt, SERVER_SRC.indexOf("\n}", dsAt));
+ok("a missing season plan no longer returns null instead of shapes",
+  !/if \(!plan\) return null;/.test(dsBody));
+ok("…it builds shapes from the bookings anyway",
+  /buildDayShapes\(\{\s*\n?\s*plan: plan \|\| null/.test(dsBody)
+  || dsBody.includes("plan: plan || null"));
+
 // ---- Report ----------------------------------------------------------
 
 if (failures.length) {
