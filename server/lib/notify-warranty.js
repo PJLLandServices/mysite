@@ -25,6 +25,7 @@
 
 const { resolvePublicBaseUrl } = require("./public-base-url");
 const { logSend } = require("./mailer-log");
+const testRecipients = require("./test-recipients");
 const { STATUS_LABELS, STATUS_CUSTOMER_TEXT } = require("./warranty-claims");
 
 let nodemailerCache = null;
@@ -35,15 +36,16 @@ function getNodemailer() {
 }
 
 let transporterCache = null;
+
 function getTransporter() {
   if (transporterCache) return transporterCache;
   const nodemailer = getNodemailer();
   if (!nodemailer) return null;
   if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) return null;
-  transporterCache = nodemailer.createTransport({
+  transporterCache = testRecipients.guardTransport(nodemailer.createTransport({
     service: "gmail",
     auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
-  });
+  }));
   return transporterCache;
 }
 

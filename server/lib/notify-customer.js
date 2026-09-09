@@ -24,6 +24,7 @@
 
 const { resolvePublicBaseUrl } = require("./public-base-url");
 const { logSend } = require("./mailer-log");
+const testRecipients = require("./test-recipients");
 // Invoice CC assembly (spouse + billing CC, deduped) lives with the rest of
 // the billing-party model. Pure helper — billing-parties.js requires no
 // siblings, so this is safe at load time.
@@ -53,15 +54,16 @@ function getNodemailer() {
 }
 
 let transporterCache = null;
+
 function getTransporter() {
   if (transporterCache) return transporterCache;
   const nodemailer = getNodemailer();
   if (!nodemailer) return null;
   if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) return null;
-  transporterCache = nodemailer.createTransport({
+  transporterCache = testRecipients.guardTransport(nodemailer.createTransport({
     service: "gmail",
     auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
-  });
+  }));
   return transporterCache;
 }
 
@@ -409,6 +411,12 @@ async function sendCustomerSms(event, lead) {
   const token = process.env.TWILIO_AUTH_TOKEN;
   const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
   const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  // Nothing goes to a load-test record, on any channel — see
+  // lib/test-recipients.js. Asked here rather than at the caller
+  // because this is where the number becomes a message.
+  if (await testRecipients.isTestRecipient({ phone: to })) {
+    return testRecipients.suppressed("sms", to);
+  }
   const payload = new URLSearchParams({
     To: to,
     From: process.env.TWILIO_FROM_NUMBER,
@@ -1428,6 +1436,12 @@ async function sendOutreachSms({
   const token = process.env.TWILIO_AUTH_TOKEN;
   const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
   const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  // Nothing goes to a load-test record, on any channel — see
+  // lib/test-recipients.js. Asked here rather than at the caller
+  // because this is where the number becomes a message.
+  if (await testRecipients.isTestRecipient({ phone: toNum })) {
+    return testRecipients.suppressed("sms", toNum);
+  }
   const payload = new URLSearchParams({
     To: toNum,
     From: process.env.TWILIO_FROM_NUMBER,
@@ -1565,6 +1579,12 @@ async function fireSpouseInvoiceSms(invoice, body, opts) {
   const token = process.env.TWILIO_AUTH_TOKEN;
   const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
   const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  // Nothing goes to a load-test record, on any channel — see
+  // lib/test-recipients.js. Asked here rather than at the caller
+  // because this is where the number becomes a message.
+  if (await testRecipients.isTestRecipient({ phone: recip.spousePhone })) {
+    return testRecipients.suppressed("sms", recip.spousePhone);
+  }
   const payload = new URLSearchParams({
     To: recip.spousePhone,
     From: process.env.TWILIO_FROM_NUMBER,
@@ -1725,6 +1745,12 @@ async function sendInvoiceReadySMS({ invoiceId, includeSpouse } = {}) {
   const token = process.env.TWILIO_AUTH_TOKEN;
   const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
   const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  // Nothing goes to a load-test record, on any channel — see
+  // lib/test-recipients.js. Asked here rather than at the caller
+  // because this is where the number becomes a message.
+  if (await testRecipients.isTestRecipient({ phone: to })) {
+    return testRecipients.suppressed("sms", to);
+  }
   const payload = new URLSearchParams({
     To: to,
     From: process.env.TWILIO_FROM_NUMBER,
@@ -1979,6 +2005,12 @@ async function sendInvoiceReminderSMS({ invoiceId, force, includeSpouse } = {}) 
   const token = process.env.TWILIO_AUTH_TOKEN;
   const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
   const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  // Nothing goes to a load-test record, on any channel — see
+  // lib/test-recipients.js. Asked here rather than at the caller
+  // because this is where the number becomes a message.
+  if (await testRecipients.isTestRecipient({ phone: to })) {
+    return testRecipients.suppressed("sms", to);
+  }
   const payload = new URLSearchParams({
     To: to,
     From: process.env.TWILIO_FROM_NUMBER,
@@ -2199,6 +2231,12 @@ async function sendInvoiceJunkMailWarningSMS({ invoiceId, force, includeSpouse }
   const token = process.env.TWILIO_AUTH_TOKEN;
   const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
   const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  // Nothing goes to a load-test record, on any channel — see
+  // lib/test-recipients.js. Asked here rather than at the caller
+  // because this is where the number becomes a message.
+  if (await testRecipients.isTestRecipient({ phone: to })) {
+    return testRecipients.suppressed("sms", to);
+  }
   const payload = new URLSearchParams({
     To: to,
     From: process.env.TWILIO_FROM_NUMBER,

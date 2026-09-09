@@ -38,6 +38,7 @@ const sharp = require("sharp");
 
 const { sendNewLeadEmail, sendVoicemailEmail } = require("./lib/notify-email");
 const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms } = require("./lib/notify-sms");
+const testRecipients = require("./lib/test-recipients");
 const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
 const voicemailStore = require("./lib/voicemail-store");
@@ -4080,7 +4081,7 @@ async function portalPayloadForLead(lead, req) {
   if (viewerIsAdmin && lead.booking) {
     try {
       const recs = await bookings.listByLead(lead.id);
-      const active = recs.filter((b) => b.status !== "cancelled" && b.status !== "completed" && b.status !== "no_show");
+      const active = recs.filter((b) => bookingHoldsItsSlot(b.status));
       const exact = active.find((b) => b.scheduledFor === lead.booking.start);
       adminBookingId = (exact && exact.id) || (active[0] && active[0].id) || null;
     } catch { adminBookingId = null; }
@@ -4690,7 +4691,7 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
   }
   const bookingRec = await bookings.get(bookingId);
   if (!bookingRec) return { ok: false, status: 404, errors: ["Booking not found."] };
-  if (bookingRec.status === "cancelled" || bookingRec.status === "completed" || bookingRec.status === "no_show") {
+  if (!bookingHoldsItsSlot(bookingRec.status)) {
     return { ok: false, status: 409, code: "not_modifiable_status", errors: ["This appointment can't be rescheduled — its status is " + bookingRec.status + "."] };
   }
 
@@ -11337,7 +11338,11 @@ async function handleApi(req, res, pathname) {
       const summary = `${builderLines.length} line${builderLines.length === 1 ? "" : "s"} — $${moneyCad(totals.total)} CAD incl. HST`;
 
       // SMS — keep within 160 chars where possible.
-      if (sendSms && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
+      // Nothing goes to a load-test record, on any channel — see
+      // lib/test-recipients.js.
+      const smsBlocked = await testRecipients.isTestRecipient({ phone: toPhone });
+      if (smsBlocked) testRecipients.suppressed("sms", toPhone, wo?.id || "");
+      if (sendSms && !smsBlocked && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
         const smsBody = `Hi ${firstName}, PJL: your tech recommends ${summary}. Review + approve here: ${approvalUrl}`;
         try {
           const sid = process.env.TWILIO_ACCOUNT_SID;
@@ -11368,6 +11373,8 @@ async function handleApi(req, res, pathname) {
               service: "gmail",
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
+            // Nothing goes to a load-test record — lib/test-recipients.js.
+            testRecipients.guardTransport(transporter);
             const lineRows = acceptedSnapshot.map((l) =>
               `<tr><td style="padding:6px 0;">${(l.label || l.key || "").replace(/</g, "&lt;")} × ${l.qty}</td><td style="text-align:right;padding:6px 0;font-variant-numeric:tabular-nums;">$${moneyCad(l.lineTotal)}</td></tr>`
             ).join("");
@@ -12227,7 +12234,11 @@ async function handleApi(req, res, pathname) {
 
       const booking = await bookings.get(bookingId);
       if (!booking) return sendJson(res, 404, { ok: false, errors: ["Booking not found."] });
-      if (booking.status === "cancelled" || booking.status === "completed" || booking.status === "no_show") {
+      // The dead-status list, asked the one way it is defined
+      // (lib/bookings.js). This used to spell out the three states
+      // inline — a second copy of the rule, and the kind that drifts the
+      // moment a fourth state is added (CLAUDE.md, "define the rule once").
+      if (!bookingHoldsItsSlot(booking.status)) {
         return sendJson(res, 409, { ok: false, errors: [`Can't change the type of a ${booking.status} booking.`] });
       }
       if (booking.serviceKey === serviceKey) {
@@ -15145,6 +15156,8 @@ async function handleApi(req, res, pathname) {
               service: "gmail",
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
+            // Nothing goes to a load-test record — lib/test-recipients.js.
+            testRecipients.guardTransport(transporter);
             await transporter.sendMail({
               from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
               to: scr.draftEmail.to,
@@ -15241,6 +15254,8 @@ async function handleApi(req, res, pathname) {
               service: "gmail",
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
+            // Nothing goes to a load-test record — lib/test-recipients.js.
+            testRecipients.guardTransport(transporter);
             const html = renderStatusUpdateHtml(entry.snapshot);
             await transporter.sendMail({
               from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
@@ -15311,6 +15326,8 @@ async function handleApi(req, res, pathname) {
             service: "gmail",
             auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
           });
+          // Nothing goes to a load-test record — lib/test-recipients.js.
+          testRecipients.guardTransport(transporter);
           const totalLabel = invoice ? `$${Number(invoice.total).toFixed(2)}` : "(no charge)";
           const subject = `[PJL] Project complete — ${project.name || project.id} — ${totalLabel}`;
           const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
@@ -15344,6 +15361,8 @@ async function handleApi(req, res, pathname) {
             service: "gmail",
             auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
           });
+          // Nothing goes to a load-test record — lib/test-recipients.js.
+          testRecipients.guardTransport(transporter);
 
           // Attach the invoice PDF if we have one.
           const attachments = [];
@@ -16533,7 +16552,11 @@ async function handleApi(req, res, pathname) {
       const results = { emailSent: false, emailError: null, smsSent: false, smsError: null, portalUrl, approveUrl };
 
       // SMS — keep within one segment where possible.
-      if (sendSms && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
+      // Nothing goes to a load-test record, on any channel — see
+      // lib/test-recipients.js.
+      const smsBlocked = await testRecipients.isTestRecipient({ phone: toPhone });
+      if (smsBlocked) testRecipients.suppressed("sms", toPhone, q?.id || "");
+      if (sendSms && !smsBlocked && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
         try {
           const smsBody = `Hi ${firstName}, PJL: your quote ${q.id} is ready — $${moneyCad(q.total)} CAD incl. HST. Review + sign here: ${approveUrl}`;
           const sid = process.env.TWILIO_ACCOUNT_SID;
@@ -16564,6 +16587,8 @@ async function handleApi(req, res, pathname) {
               service: "gmail",
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
+            // Nothing goes to a load-test record — lib/test-recipients.js.
+            testRecipients.guardTransport(transporter);
             const lineRows = (q.lineItems || []).map((l) =>
               `<tr><td style="padding:6px 0;">${(l.label || l.key || "").replace(/</g, "&lt;")} × ${l.qty}</td><td style="text-align:right;padding:6px 0;font-variant-numeric:tabular-nums;">$${moneyCad(l.lineTotal)}</td></tr>`
             ).join("");
@@ -16774,6 +16799,8 @@ async function handleApi(req, res, pathname) {
               service: "gmail",
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
+            // Nothing goes to a load-test record — lib/test-recipients.js.
+            testRecipients.guardTransport(transporter);
             // Phone-Gated Proposal Access (2026-07, rescoped Jul 13): the
             // gate exists ONLY when a custom HTML document is attached, so
             // the email branches on the same check the /approve routes use.
@@ -18751,6 +18778,8 @@ async function handleApi(req, res, pathname) {
           service: "gmail",
           auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
         });
+        // Nothing goes to a load-test record — lib/test-recipients.js.
+        testRecipients.guardTransport(transporter);
         const firstName = (wo.customerName || "").split(" ")[0] || "there";
         // Bypass reshape — when wo.signatureBypass exists, the customer did
         // not sign on-site. The legal posture is "verbal acceptance recorded
@@ -20598,7 +20627,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const results = { smsSent: false, smsError: null, emailSent: false, emailError: null };
 
       // SMS — short, link-forward.
-      if (payload.sendSms && phone && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
+      // Nothing goes to a load-test record, on any channel — see
+      // lib/test-recipients.js.
+      const smsBlocked = await testRecipients.isTestRecipient({ phone, email });
+      if (smsBlocked) testRecipients.suppressed("sms", phone, session?.id || "");
+      if (payload.sendSms && phone && !smsBlocked && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
         const smsBody = `Hi${firstName ? " " + firstName : ""}, this is PJL Land Services. ${summary ? summary + ". " : ""}Book your appointment here: ${bookingUrl}`;
         try {
           const sid = process.env.TWILIO_ACCOUNT_SID;
@@ -20629,6 +20662,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
               service: "gmail",
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
+            // Nothing goes to a load-test record — lib/test-recipients.js.
+            testRecipients.guardTransport(transporter);
             const safeFirst = firstName || "there";
             const html = `
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
@@ -21833,7 +21868,10 @@ async function orderDayForDriving(rows) {
       .filter((lead) => {
         if (lead.archived) return false;
         if (bookingHoldsItsSlot(lead.booking?.status)) return false;
-        if (lead.booking?.status === "completed") return false;   // finished, not removed
+        // not-liveness: the rule above already dropped every dead booking.
+        // This narrows what is left — a finished job is not a REMOVED one,
+        // and only removals belong on a list of what came off the day.
+        if (lead.booking?.status === "completed") return false;
         const start = lead.booking?.start ? new Date(lead.booking.start).getTime() : null;
         if (!start || start < dayStart || start >= dayEnd) return false;
         return Boolean(lead.booking?.cancelledAt);
@@ -21920,7 +21958,11 @@ async function orderDayForDriving(rows) {
       const bookingRecs = await bookings.list();
       const extras = bookingRecs.filter((b) => {
         if (!b || !b.scheduledFor) return false;
-        if (b.status === "cancelled" || b.status === "completed" || b.status === "no_show") return false;
+        // The lead pass above asks bookingHoldsItsSlot(); this pass used
+        // to spell the same three states out by hand. One endpoint, two
+        // passes, one rule and one copy of it — the exact shape of the
+        // defect that let a cancelled booking keep its slot.
+        if (!bookingHoldsItsSlot(b.status)) return false;
         const t = new Date(b.scheduledFor).getTime();
         if (Number.isNaN(t) || t < dayStart || t >= dayEnd) return false;
         const iso = new Date(b.scheduledFor).toISOString();
@@ -23466,7 +23508,12 @@ async function orderDayForDriving(rows) {
     try {
       if (action === "calendar.ics" && req.method === "GET") {
         const booking = await appointmentActions.findByToken(token);
-        if (!booking || booking.status !== "confirmed") {
+        // "Live" is the shared rule, not an equality test on one status.
+        // The assignment writer stamps `confirmed`, so in practice this
+        // is the same answer today — but `tentative` is a LIVE status in
+        // lib/bookings.js's vocabulary, and a hand-set one would have been
+        // refused its own calendar file for no reason.
+        if (!booking || !bookingHoldsItsSlot(booking.status)) {
           return sendJson(res, 404, { ok: false, errors: ["That link doesn't match a live appointment."] });
         }
         const event = calendarLinks.eventForBooking(booking, {
