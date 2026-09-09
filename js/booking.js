@@ -23,6 +23,8 @@
     formattedAddress: "",
     zoneCount: null,    // number 1-50 OR "unsure" (kept for booking notes)
     selectedSlot: null, // { start, end, timeLabel, dayLabel, durationMinutes }
+    holdToken: null,    // ten-minute claim on selectedSlot, taken on pick
+    holdExpiresAt: null,
     services: {},       // catalog from /api/booking/services
     familyFilter: null, // when set, only services with this `family` are shown
     propertyType: "residential", // toggle on the seasonal-service grid: "residential" or "commercial"
@@ -648,14 +650,60 @@
           bucketKey: slotMeta.bucketKey || null,
           bucketWindow: slotMeta.bucketWindow || null
         };
-        // Brief debounce so the visual "selected" state lands before the
-        // contact step swaps in — matches the previous flow's feel.
-        setTimeout(() => {
+        // Claim it before showing the form. Reserve was made atomic first,
+        // so two people can no longer both be told yes — but without a hold
+        // the loser only finds out after typing their name, phone, address
+        // and zone count. Ten minutes is enough to fill a form and short
+        // enough that an abandoned tab doesn't cost a real customer a slot.
+        holdSelectedSlot().then((held) => {
+          if (!held) return;   // holdSelectedSlot has already put the user back on the calendar
           renderContactSummary();
           showStep("contact");
-        }, 200);
+        });
       }
     });
+  }
+
+  // Returns true when the slot is ours for the next ten minutes. On failure
+  // it tells the customer why and sends them back to pick again — a slot that
+  // cannot be held is a slot that would fail at Confirm anyway, and finding
+  // out now costs them nothing.
+  async function holdSelectedSlot() {
+    if (!state.selectedSlot || state.selectedSlot.openBucket) return true;
+    try {
+      const response = await fetch((window.PJL_API_BASE || "") + "/api/booking/hold", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          serviceKey: state.serviceKey,
+          slotStart: state.selectedSlot.start,
+          address: state.formattedAddress || state.address,
+          // Changing your mind must not eat two units of capacity.
+          releaseToken: state.holdToken || undefined
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        state.holdToken = null;
+        state.holdExpiresAt = null;
+        state.selectedSlot = null;
+        showStep("when");
+        loadAvailability();
+        window.alert(data.code === "slot_taken"
+          ? "Sorry — someone just took that time. Please pick another."
+          : (data.errors && data.errors[0]) || "Couldn't hold that time. Please pick another.");
+        return false;
+      }
+      state.holdToken = data.holdToken || null;
+      state.holdExpiresAt = data.expiresAt || null;
+      return true;
+    } catch {
+      // A hold we could not take is not a reason to block the booking: the
+      // server re-validates at Confirm regardless, and reserve is atomic.
+      // Fail open and let Confirm be the judge.
+      state.holdToken = null;
+      return true;
+    }
   }
 
   function renderContactSummary() {
@@ -736,6 +784,7 @@
         },
         zoneCount: state.zoneCount || null,
         sessionToken: state.sessionToken || null,
+        holdToken: state.holdToken || undefined,
         pageUrl: window.location.href,
         userAgent: navigator.userAgent
       };

@@ -19,6 +19,30 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-09, same day (Ten minutes to fill in the form, with the slot actually yours):** Spec
+2.5.1, the second half of D1. Reserve is atomic now, so two people can no longer both be told
+yes — but the loser still lost AFTER typing name, phone, address and zone count, because the
+slot was never theirs while they worked. With ads live and several people on the page that is a
+form filled in for nothing. New `lib/booking-holds.js` + `POST /api/booking/hold` /
+`/api/booking/release-hold` (both public, both under the reserve mutex), and `js/booking.js`
+takes the hold the moment a time is picked. **A hold is counted by `activeBookings()`**, the one
+place the engine asks what a day already carries — so a held slot stops being OFFERED and takes
+part in the day's geography, rather than merely failing at the end. **Expiry is enforced on
+READ, not by the sweeper**: a cleanup job that is load-bearing for correctness is a cleanup job
+that takes bookings down the day it fails; the sweeper only keeps the file small. Reserve now
+requires a hold for public standard bookings, with four exemptions, each because no form is
+being filled in: standby/open bucket (no slot to hold), `admin_custom`, book-from-lead, and the
+`PJL_TEST_KEY` load-test path — Patrick's bot posts reserve directly and must keep running until
+the key comes off Render (spec item 8). **Bug found by the test and fixed:** the hold has to be
+consumed BEFORE the slot re-validation, not after — the holder's own hold counts as taken, so
+leaving it in place made the engine tell the customer their own slot was gone. Releasing first
+also means a re-validation that fails for another reason leaves nothing stuck behind.
+Re-picking passes the old token as `releaseToken` so changing your mind does not eat two units
+of capacity. Coverage: `scripts/test-booking-hold.mjs`, 19 assertions, in `build:check`; both
+load-bearing guards verified against broken code (holds not counted → 3 fail; expiry left to the
+sweeper → 1 fail). No PASS flow touched — FLOW-03 gains a step, and `book.html` fails OPEN if
+the hold call itself errors, because reserve re-validates regardless.
+
 **2026-09-09 (Six people click the same slot; four are told yes and vanish):** Spec item D1,
 the one that had to land before the Sept 10 blast. `/api/booking/reserve` read leads.json,
 appended and wrote it back — then did the same for customers, properties and bookings — with
