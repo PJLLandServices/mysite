@@ -178,6 +178,39 @@ load-bearing guards verified against broken code (holds not counted → 3 fail; 
 sweeper → 1 fail). No PASS flow touched — FLOW-03 gains a step, and `book.html` fails OPEN if
 the hold call itself errors, because reserve re-validates regardless.
 
+**2026-09-09 (The arrival facts could be read and never written):** Patrick, on a work order
+showing Controller / Located / Shut Off / Blow-Out all reading "Not Recorded": "Please do me a
+favor and connect these from the properties profile... If the display information shows 'Not
+Recorded' this should be editable in this screen... The information that is updated here MUST
+also follow over to the properties information thats on my CRM."
+
+The connection was already there — `StartStage` has read `wo.property.system` since it was
+written. What it could not do was CHANGE anything, so a tech standing in the garage looking at a
+Hunter HPC-400 held the answer the office had been missing for a year and had nowhere to put it,
+and every visit to that property reprinted "Not recorded". The rows edit in place now and save
+through `PATCH /api/properties/:id`, the same route the Properties tab uses — **fenced at
+`user`, so the tech who knows the answer is the one allowed to record it**, which is asserted
+rather than assumed. Notes (`system.notes`) join the four, and a commercial site's
+`siteContacts` are shown ABOVE them, read-only and only when the property has one: on a condo
+board's site the first question is who opens the door, and adding a board president from a truck
+is a CRM job while phoning him is not.
+
+**Unlike `ClosingScreen.save()`, a failed property write PUTS THE OLD VALUE BACK.** That is the
+opposite call to the one two lines above it and deliberate: an unsaved work-order edit is still
+true of the visit in front of you, but a property fact that did not save is recorded nowhere, so
+leaving it on screen tells the tech the office now knows something it does not.
+
+Two things fixed on the way. The labels were **reversed against the CRM** — the screen said
+"Controller" for the brand and "Located" for the place — and now read Controller then Location,
+the form's own words. And an empty record said "Not recorded" four times down a column; it says
+it once and the rows shrink to a ＋.
+
+Coverage: `scripts/test-arrival-facts.mjs`, 11 assertions, in `build:check`, verified against
+the shipped app first (**8 fail**). The load-bearing one reads the server's own `allowedSys`
+list and asserts every field the screen writes appears in it — the two lists are the same thing
+in two places, and a name in one and not the other is a box the tech fills, a save that
+succeeds, and a record that never changed. No PASS flow touched; no server change at all.
+
 **2026-09-09 (The declared-zone chain had no first link — every new property still got one
 zone):** Patrick, on a work order for a seven-zone property showing "Zone 1 of 1": "I believe
 there was a working fix for this, but it clearly doesn't look delivered." It was delivered. It
