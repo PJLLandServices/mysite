@@ -1,0 +1,105 @@
+{
+  "_doc": [
+    "Season-driven <title> / meta description for every sprinkler-service-*.html town page.",
+    "scripts/sync-seasonal-meta.mjs rewrites the @@PJL:seasonal-meta marker block in each",
+    "page's <head> from this file on every build, choosing fall / spring / off from the",
+    "`meta` windows in season.config.json. Never hand-edit inside the markers.",
+    "",
+    "  title            = 'Sprinkler Service {Town} — {titleSuffix}' + brand   (≤ 60 chars before brand)",
+    "  og/twitter title = the same without the brand suffix",
+    "  description      = '{evergreen} {sentence}'                              (140–160 chars)",
+    "",
+    "{{price:key}} placeholders resolve from pricing.json at build time. The page's tier is",
+    "NOT stored here — the script reads data-tier off each page's hero so there is one copy;",
+    "'same-day' is only allowed in the evergreen sentence when that tier is core."
+  ],
+  "brand": " | PJL Land Services",
+  "seasonal": {
+    "fall": {
+      "titleSuffix": "Fall Closing from ${{price:fall_close_4z}}",
+      "sentence": "Fall sprinkler closings from ${{price:fall_close_4z}} — book online before first frost."
+    },
+    "spring": {
+      "titleSuffix": "Spring Opening from ${{price:spring_open_4z}}",
+      "sentence": "Spring sprinkler openings from ${{price:spring_open_4z}} — book online before the May rush."
+    },
+    "off": {
+      "titleSuffix": "Repair & Seasonal Care",
+      "sentence": "Openings and closings from ${{price:fall_close_4z}}; booking opens each season."
+    }
+  },
+  "pages": {
+    "sprinkler-service-newmarket.html": {
+      "town": "Newmarket",
+      "evergreen": "Newmarket-based sprinkler repair, installs and Hydrawise upgrades — same-day in season."
+    },
+    "sprinkler-service-aurora.html": {
+      "town": "Aurora",
+      "evergreen": "Sprinkler repair, installs and Hydrawise upgrades across Aurora — same-day in season."
+    },
+    "sprinkler-service-king-city.html": {
+      "town": "King City",
+      "evergreen": "Estate sprinkler design, repair and Hydrawise systems in King City — same-day in season."
+    },
+    "sprinkler-service-east-gwillimbury.html": {
+      "town": "East Gwillimbury",
+      "evergreen": "Sharon, Holland Landing, Mount Albert sprinkler repair and installs, same-day in season."
+    },
+    "sprinkler-service-richmond-hill.html": {
+      "town": "Richmond Hill",
+      "evergreen": "Sprinkler repair, installs and Hydrawise upgrades in Richmond Hill — priority scheduling."
+    },
+    "sprinkler-service-stouffville.html": {
+      "town": "Stouffville",
+      "evergreen": "Sprinkler repair, installs and Hydrawise systems for Stouffville, Ballantrae and Vandorf."
+    },
+    "sprinkler-service-bolton.html": {
+      "town": "Bolton",
+      "evergreen": "Sprinkler repair, installs and Hydrawise systems in Bolton on a weekly Caledon route."
+    },
+    "sprinkler-service-vaughan.html": {
+      "town": "Vaughan",
+      "evergreen": "Sprinkler repair, installs and Hydrawise upgrades in Maple, Kleinburg and Woodbridge."
+    },
+    "sprinkler-service-markham.html": {
+      "town": "Markham",
+      "evergreen": "Sprinkler repair, installs and Hydrawise upgrades in Unionville, Angus Glen and Cornell."
+    },
+    "sprinkler-service-thornhill.html": {
+      "town": "Thornhill",
+      "evergreen": "Sprinkler repair, installs, Hydrawise and landscape lighting for Thornhill properties."
+    },
+    "sprinkler-service-toronto.html": {
+      "town": "Toronto",
+      "evergreen": "Sprinkler repair, installs and Hydrawise systems for Toronto homes with published pricing."
+    },
+    "sprinkler-service-north-york.html": {
+      "town": "North York",
+      "evergreen": "Sprinkler repair and Hydrawise installs in York Mills, Hoggs Hollow and Bayview Village."
+    },
+    "sprinkler-service-lawrence-park.html": {
+      "town": "Lawrence Park",
+      "evergreen": "Sprinkler repair and drip irrigation for Lawrence Park's large lots and mature gardens."
+    },
+    "sprinkler-service-forest-hill.html": {
+      "town": "Forest Hill",
+      "evergreen": "Discreet sprinkler, drip and lighting service for Forest Hill's established properties."
+    },
+    "sprinkler-service-orangeville.html": {
+      "town": "Orangeville",
+      "evergreen": "Sprinkler repair, installs and Hydrawise in Orangeville on a weekly Dufferin County route."
+    },
+    "sprinkler-service-erin.html": {
+      "town": "Erin",
+      "evergreen": "Sprinkler design and service for Erin acreage and equestrian properties on a weekly route."
+    },
+    "sprinkler-service-acton.html": {
+      "town": "Acton",
+      "evergreen": "Sprinkler design for Acton's escarpment clay, plus repair and Hydrawise on a weekly route."
+    },
+    "sprinkler-service-innisfil.html": {
+      "town": "Innisfil",
+      "evergreen": "Lake Simcoe waterfront sprinkler design, repair and Hydrawise service across Innisfil."
+    }
+  }
+}

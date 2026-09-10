@@ -1,0 +1,31 @@
+{
+  "_doc": [
+    "Season windows for the PUBLIC SITE's marketing copy — the one place they are written down.",
+    "",
+    "Two window sets per season, MM-DD, inclusive, in the visitor's local calendar:",
+    "  page  — when the town-page hero, price block and pillar hero lead with the season",
+    "          (read by js/season.js — the build stamps this file into it, see below).",
+    "  meta  — when each town page's <title> / meta description carry the seasonal",
+    "          suffix (read by scripts/sync-seasonal-meta.mjs at build time). Starts two",
+    "          weeks before `page` because Google needs 1–3 weeks to re-crawl and show",
+    "          the new snippet; ends the same day the hero flips.",
+    "Anything outside both windows is the off-season.",
+    "",
+    "Sub-phases the pillar page's hero controller keys off (js/season.js only):",
+    "  fall.preUntil   — last day of the 'pre-fall' phase inside the fall page window",
+    "                    (Aug 15 – preUntil = pre-fall, after = fall).",
+    "  spring.preFrom  — first day of the 'pre-spring' phase before the spring page",
+    "                    window (preFrom – Mar 14 = pre-spring). Nov 21 – preFrom-1 = winter.",
+    "  Jun 16 – Aug 14 (between the windows) = midseason.",
+    "",
+    "js/season.js runs synchronously in <head> so the hero paints in the right season with",
+    "no flash; it cannot fetch this file. scripts/sync-seasonal-meta.mjs copies this JSON",
+    "into js/season.js between its @@PJL:season-config markers on every build and the",
+    "--check mode fails if the two ever differ. Edit THIS file, then run npm run build.",
+    "",
+    "These are MARKETING windows. The operational season (first/last day a truck rolls,",
+    "public booking cut-offs) is a separate setting in seasons.json."
+  ],
+  "fall":   { "page": ["08-15", "11-20"], "meta": ["08-01", "11-20"], "preUntil": "09-04" },
+  "spring": { "page": ["03-15", "06-15"], "meta": ["03-01", "06-15"], "preFrom": "01-15" }
+}
