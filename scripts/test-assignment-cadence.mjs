@@ -111,7 +111,21 @@ ok("the blast REFUSES while the appointment page isn't live — no dead links to
 threw = null;
 try { await cadence.blast("fall", 2026, { deps, now: at(9, 10, 7), appointmentPageReady: true }); }
 catch (e) { threw = e.message; }
-ok("rule 7: the blast refuses outside 09:00–18:00 Toronto", /9:00/.test(threw || ""), threw);
+// Rule 7, asserted against the window the module actually holds rather
+// than hours written out here. Patrick moved the close from 6pm to 8pm on
+// 2026-09-10 after the old cutoff cost a day of the cadence; a suite that
+// hard-codes the hours turns his next such call into a test failure
+// instead of a config change. What must not change is that a send outside
+// the window is REFUSED, whatever the window is.
+ok("rule 7: the blast refuses outside the send window",
+  /Sends go out/.test(threw || ""), threw);
+ok("…and 7am is outside it", cadence.insideSendWindow(at(9, 10, 7)) === false);
+ok("…while the middle of the working day is inside",
+  cadence.insideSendWindow(at(9, 10, 12)) === true);
+ok("…the window closes where the module says it closes",
+  cadence.insideSendWindow(at(9, 10, cadence.SEND_WINDOW.toHour)) === false
+  && cadence.insideSendWindow(at(9, 10, cadence.SEND_WINDOW.toHour - 1)) === true,
+  JSON.stringify(cadence.SEND_WINDOW));
 
 ok("the sweep outside the window is a quiet no-op",
   (await cadence.sweepDue("fall", 2026, { deps, now: at(9, 20, 8), appointmentPageReady: true })).waiting === "send_window");

@@ -19,6 +19,33 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-10 (The blast that left no trace, and the hour that cost a day):** Patrick pressed
+"Send the blast" before 9am. The server refused it on the send window and threw; the refusal was
+written to a panel on the season-plan page, and the next page load erased it. Hours later the only
+honest answer to *"did anything send?"* came from reading his Gmail sent folder — **the most
+consequential button in the system left no trace of the refusal, of who would have been skipped, or
+even of having been pressed.** By the time the cause was found it was past 6pm and the window had
+closed again, so the rule had cost a full day of the assignment cadence for no customer-facing
+reason.
+Three changes, all at Patrick's call:
+**1. The window runs to 8pm** (`SEND_WINDOW.toHour` 18 → 20). It governs the blast AND automated
+steps 2–6; 8pm is a normal hour to reach a homeowner and sits inside Canadian contact-time norms.
+**2. Every attempt is recorded** — `server/data/assignment-blasts.json`, last + 20 of history per
+season, written through `atomic-json`. A refusal is an OUTCOME, not a non-event: it is recorded
+before it is thrown. The ledger never throws, because a note about a send must not be able to fail
+the send it describes.
+**3. The button refuses BEFORE it is armed.** `status()` now carries `canSendNow`, `sendWindow`,
+`sendWindowNote` and `lastBlast`, so the screen cannot say one thing while the server would do
+another; the button disables itself with the reason in its tooltip, and the durable status line
+carries the last attempt across reloads.
+Coverage: `scripts/test-blast-window-ledger.mjs`, 27 assertions, in `build:check`. Verified against
+the old code: **20 fail**, one of them reproducing the incident exactly — *"a send at 7:30pm now
+goes through — refused: Sends go out 9:00 AM – 6:00 PM"*.
+`test-assignment-cadence`'s rule 7 was rewritten to assert against the window the module holds
+rather than hours written into the suite — a hard-coded window turns Patrick's next such call into
+a test failure instead of a config change. What it still pins is that a send outside the window is
+refused, whatever the window is. No PASS flow touched.
+
 **2026-09-09, same day (Nobody was told the address could not be checked):** Spec §2.2.3 and
 decision 4, and Patrick's call on the alert channel: *"If there needs to be a notification round due
 to an address not being verified, yes that should be a notice made by text message."*

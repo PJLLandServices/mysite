@@ -1532,28 +1532,69 @@
       p.className = "sp-preflight-bad";
       p.textContent = error.message;
       out.appendChild(p);
+      // A refusal is recorded server-side; pull it back so the durable
+      // line shows it even after this panel is gone.
+      loadCadenceStatus();
     } finally {
       button.disabled = false;
     }
   });
 
+  // The status line, the blast button's own state, and the record of the
+  // last attempt — all from one read, so the screen can never say one
+  // thing while the server would do another.
   async function loadCadenceStatus() {
     const line = el("cadenceStatus");
+    const button = el("blastBtn");
     try {
       const response = await fetch(`/api/assignments/${seasonSelect.value}/${yearSelect.value}/cadence-status`,
         { cache: "no-store" });
       const data = await response.json();
-      if (!response.ok || !data.ok) { line.hidden = true; return; }
+      if (!response.ok || !data.ok) {
+        line.hidden = false;
+        line.textContent = "Couldn't read the sending status — reload, or sign in again.";
+        return;
+      }
       const s = data.summary;
       line.hidden = false;
-      if (!s.bookings) {
-        line.textContent = "No assignment bookings yet — nothing to message.";
-      } else {
-        line.textContent =
-          `${s.bookings} assigned · ${s.blasted} messaged · ${s.responded} responded`
-          + (data.appointmentPageReady ? "" : " · sending locked until the appointment page is live");
+
+      const bits = [];
+      bits.push(s.bookings
+        ? `${s.bookings} assigned · ${s.blasted} messaged · ${s.responded} responded`
+        : "No assignment bookings yet — nothing to message.");
+      if (!data.appointmentPageReady) bits.push("sending locked until the appointment page is live");
+      if (data.sendWindowNote) bits.push(data.sendWindowNote);
+
+      // The last attempt, kept. A refusal counts as an attempt — that is
+      // the whole point: "I pressed it this morning" now has an answer on
+      // the screen instead of in a mail client.
+      const lb = data.lastBlast;
+      if (lb) {
+        const when = new Date(lb.at).toLocaleString("en-CA",
+          { weekday: "short", hour: "numeric", minute: "2-digit" });
+        bits.push(lb.outcome === "refused"
+          ? `Last attempt ${when}: refused — ${lb.reason}`
+          : `Last send ${when}: ${lb.blasted} messaged`
+            + `${lb.alreadyBlasted ? `, ${lb.alreadyBlasted} already` : ""}`
+            + `${lb.skipped && lb.skipped.length ? `, ${lb.skipped.length} skipped` : ""}`
+            + `${lb.errors && lb.errors.length ? `, ${lb.errors.length} errors` : ""}`);
       }
-    } catch { line.hidden = true; }
+      line.textContent = bits.join(" · ");
+
+      // Say it on the button too. Arming a send the server will refuse is
+      // how a whole day got lost.
+      if (button) {
+        const blocked = !data.canSendNow || !data.appointmentPageReady || !s.bookings;
+        button.disabled = blocked;
+        button.title = blocked
+          ? (data.sendWindowNote
+            || (!s.bookings ? "Nothing assigned yet — run Assign first." : "Sending is locked."))
+          : "";
+      }
+    } catch {
+      line.hidden = false;
+      line.textContent = "Couldn't reach the server to read the sending status.";
+    }
   }
   loadCadenceStatus();
 
