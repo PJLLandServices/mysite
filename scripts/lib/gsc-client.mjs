@@ -124,6 +124,21 @@ export function parseServiceAccount(raw) {
   return account;
 }
 
+// The two env spellings the repo uses — GSC_SERVICE_ACCOUNT_FILE (a path,
+// what seo-gsc-pull.mjs documents for local runs) and GSC_SERVICE_ACCOUNT_JSON
+// (the key itself, what Render and GitHub secrets hold). JSON wins when both
+// are set, matching seo-gsc-pull.mjs.
+export function serviceAccountFromEnv(env = process.env) {
+  const json = String(env.GSC_SERVICE_ACCOUNT_JSON || "").trim();
+  if (json) return json;
+  const file = String(env.GSC_SERVICE_ACCOUNT_FILE || "").trim();
+  return file || "";
+}
+
+export function isConfigured(env = process.env) {
+  return Boolean(serviceAccountFromEnv(env));
+}
+
 function parseJson(text, label) {
   try {
     return JSON.parse(text);
@@ -200,13 +215,13 @@ export function createClient({
 } = {}) {
   const account =
     typeof serviceAccount === "string" || serviceAccount == null
-      ? parseServiceAccount(serviceAccount ?? process.env.GSC_SERVICE_ACCOUNT_JSON)
+      ? parseServiceAccount(serviceAccount ?? serviceAccountFromEnv())
       : serviceAccount;
   if (!account) {
-    throw new GscError("GSC_SERVICE_ACCOUNT_JSON is not set.", {
+    throw new GscError("GSC_SERVICE_ACCOUNT_JSON / GSC_SERVICE_ACCOUNT_FILE is not set.", {
       hint:
         "Put the service-account key JSON in GSC_SERVICE_ACCOUNT_JSON (Render env, GitHub secret, or " +
-        "the repo-root .env), or point that variable at the downloaded .json file for a local run.",
+        "the repo-root .env), or set GSC_SERVICE_ACCOUNT_FILE to the downloaded .json file for a local run.",
     });
   }
   if (typeof fetchImpl !== "function") throw new GscError("No fetch implementation available.");

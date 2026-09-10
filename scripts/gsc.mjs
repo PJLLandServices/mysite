@@ -12,9 +12,10 @@
 // Flags:  --json   raw API output instead of the table
 //         --site   override GSC_SITE_URL for one run
 //
-// Credentials come from GSC_SERVICE_ACCOUNT_JSON + GSC_SITE_URL (env, GitHub
-// secret, or the repo-root .env). Locally, GSC_SERVICE_ACCOUNT_JSON can simply
-// be the path to the downloaded key file. See scripts/lib/gsc-client.mjs.
+// Credentials come from GSC_SERVICE_ACCOUNT_JSON (the key) or
+// GSC_SERVICE_ACCOUNT_FILE (path to the downloaded key file) + GSC_SITE_URL,
+// via env, GitHub secret, or the repo-root .env — the same variables
+// scripts/seo-gsc-pull.mjs reads. See scripts/lib/gsc-client.mjs.
 //
 // Exit codes: 0 ok · 1 API refused something · 2 not configured / bad input.
 // submit-sitemap exits 0 with a notice when the key is absent so the CI
@@ -23,6 +24,7 @@
 import fs from "node:fs";
 import {
   createClient,
+  isConfigured,
   loadRepoEnv,
   readSitemapUrls,
   summarizeInspection,
@@ -156,7 +158,7 @@ async function cmdSitemaps() {
 }
 
 async function cmdSubmitSitemap() {
-  if (!String(process.env.GSC_SERVICE_ACCOUNT_JSON || "").trim()) {
+  if (!isConfigured()) {
     console.log("GSC_SERVICE_ACCOUNT_JSON is not set — skipping the Search Console sitemap ping.");
     return;
   }

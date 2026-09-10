@@ -18,7 +18,9 @@ import path from "node:path";
 import {
   buildAssertion,
   createClient,
+  isConfigured,
   parseServiceAccount,
+  serviceAccountFromEnv,
   summarizeInspection,
   GscError,
   SCOPE,
@@ -67,6 +69,13 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gsc-test-"));
 const keyPath = path.join(tmp, "key.json");
 fs.writeFileSync(keyPath, JSON.stringify(account));
 ok("file path", parseServiceAccount(keyPath).client_email === account.client_email);
+ok("GSC_SERVICE_ACCOUNT_FILE honoured", serviceAccountFromEnv({ GSC_SERVICE_ACCOUNT_FILE: keyPath }) === keyPath);
+ok(
+  "GSC_SERVICE_ACCOUNT_JSON wins over FILE",
+  serviceAccountFromEnv({ GSC_SERVICE_ACCOUNT_FILE: keyPath, GSC_SERVICE_ACCOUNT_JSON: "{}" }) === "{}"
+);
+ok("isConfigured false when both blank", isConfigured({ GSC_SERVICE_ACCOUNT_FILE: "  ", GSC_SERVICE_ACCOUNT_JSON: "" }) === false);
+ok("createClient reads FILE from env", createClient({ siteUrl: SITE, serviceAccount: keyPath, fetchImpl: async () => ({ ok: true, status: 200, text: async () => "{}" }) }).account.client_email === account.client_email);
 const escaped = { ...account, private_key: privatePem.replace(/\n/g, "\\n") };
 ok("literal \\n restored", parseServiceAccount(JSON.stringify(escaped)).private_key === privatePem);
 await throws("garbage rejected", () => parseServiceAccount("not-a-key"), /not JSON, base64 JSON, or a path/);
