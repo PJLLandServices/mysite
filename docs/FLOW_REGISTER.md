@@ -19,6 +19,44 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-09, same day (Nobody was told the address could not be checked):** Spec §2.2.3 and
+decision 4, and Patrick's call on the alert channel: *"If there needs to be a notification round due
+to an address not being verified, yes that should be a notice made by text message."*
+Two different failures had been treated as one. **Google saying the address is bad** — no such
+place, or resolved only to a town — is refused at the gate, with our phone number in the message.
+That half already worked and is now pinned. **Our own lookup failing** — no Maps key, a timeout,
+quota — takes the booking anyway (never turn a customer down over our own outage) and, until now,
+left nothing but a `console.warn`. The address sat on the calendar looking exactly like a good one,
+and the first person to find out was the tech, in the driveway.
+Fix: the gate verdict is hoisted out of its block and, when degraded, stamps
+`booking.verification = { state: "unverified", reason, at }` on the envelope, mirrored onto the
+canonical record (set-only: a later re-sync cannot silently clear a flag that says a human should
+look). The notice rides the **front of the alert label Patrick already receives** —
+`UNVERIFIED · BOOKED · …` — rather than a new alert channel. **That choice is the load-bearing
+one:** he gets one message per booking today, and if `GOOGLE_MAPS_SERVER_KEY` ever falls out of
+Render *every* address starts failing at once — one-per-booking stays one-per-booking, where a
+dedicated alert would have become a hundred texts at 2am. Null on every normal booking, so a good
+booking's message is byte-identical to what it was.
+Coverage: `scripts/test-unverified-address.mjs`, 18 assertions, in `build:check`. Walks the real
+public route — availability, the ten-minute hold, reserve — with no Maps key, using a seeded
+geocode cache as the verified control. Verified against broken code: **7 fail**, the detail line
+showing the exact text Patrick used to get for an unchecked address ("BOOKED Morning Appointment").
+No PASS flow touched.
+
+**2026-09-09, same day (A dead appointment could still put a job on a tech's day):** Patrick's call
+on the §2.8.3 sweep's one open item. `POST /api/work-orders` refused to build a work order behind a
+CANCELLED booking (Brief B §3.4) and named one state where there are three: a **completed** booking
+already has its work order, so a second is a duplicate job for a visit that already happened, and a
+**no_show** is the ghost run the guard exists to prevent, exactly. Now asked through
+`bookingHoldsItsSlot()`, so a fourth dead state is covered the day it is added, and the 409 names
+the state (`booking_cancelled` / `booking_completed` / `booking_no_show`) so the CRM can say why.
+The escape hatch is unchanged and is the more honest record anyway: a genuine extra visit on a
+finished job is created against the PROPERTY, which the route already accepts — asserted, so this
+change cannot have removed a real workflow instead of a phantom one.
+Coverage: `scripts/test-wo-dead-booking.mjs`, 17 assertions, in `build:check`, driving the real
+endpoint. Verified against broken code: **9 fail**, two of them showing real work orders created
+behind completed and no-show bookings. No PASS flow touched.
+
 **2026-09-09, same day (Nothing is ever sent to a load-test record):** Reported live by Patrick
 mid-session — "the gate that you may have set up to not send text messages to the customers
 numbers, and emails are still pushing through *** this is for the test appointments." He was right,
