@@ -37,6 +37,7 @@
 
 <title>Sprinkler Service Innisfil, Ontario — Alcona, Lefroy, Friday Harbour &amp; Lake Simcoe Waterfront | PJL Land Services</title>
 <link rel="stylesheet" href="style.css?v=cov3">
+<script src="js/season.js" data-hero-fall="fall-sprinkler-running" data-hero-spring="estate-sprinkler-hero" data-hero-ext=".jpg"></script>
 
 <script type="application/ld+json">
 {
@@ -81,24 +82,6 @@
 </script>
 
 <style>
-.area-hero{padding:156px 0 80px;background:radial-gradient(ellipse 60% 55% at 20% 20%,rgba(74,140,92,.30),transparent 60%),radial-gradient(ellipse 55% 50% at 85% 80%,rgba(224,123,36,.18),transparent 60%),linear-gradient(135deg,var(--dark) 0%,var(--green) 70%,var(--green-mid) 100%);position:relative;overflow:hidden;}
-.area-hero-inner{position:relative;z-index:2;max-width:820px;}
-.breadcrumbs{font-size:13px;color:rgba(255,255,255,.65);margin-bottom:18px;display:flex;gap:8px;flex-wrap:wrap;}
-.breadcrumbs a{color:rgba(255,255,255,.85);}.breadcrumbs a:hover{color:var(--amber-light);}
-.breadcrumbs span{color:rgba(255,255,255,.4);}
-.area-eyebrow{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:#fff;font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;padding:7px 16px;border-radius:99px;margin-bottom:20px;}
-.area-eyebrow::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--amber-light);box-shadow:0 0 0 3px rgba(245,155,74,.35);}
-.area-hero h1{color:#fff;font-size:clamp(38px,5.6vw,70px);line-height:1.04;letter-spacing:-.025em;margin-bottom:20px;}
-.area-hero h1 em{font-style:italic;background:linear-gradient(135deg,var(--amber-light) 0%,var(--amber) 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;}
-.area-hero p{color:rgba(255,255,255,.85);font-size:clamp(17px,1.9vw,20px);line-height:1.65;margin-bottom:28px;max-width:62ch;}
-.area-hero-actions{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:24px;}
-.area-hero-actions .btn-amber{display:inline-flex;align-items:center;gap:10px;background:var(--amber);color:#fff;padding:14px 26px;border-radius:99px;font-weight:700;transition:background .2s ease,transform .2s ease;box-shadow:0 8px 20px rgba(224,123,36,.35);}
-.area-hero-actions .btn-amber:hover{background:var(--amber-light);transform:translateY(-2px);}
-.area-hero-actions .btn-ghost{display:inline-flex;align-items:center;gap:10px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.16);color:#fff;padding:14px 22px;border-radius:99px;font-weight:600;}
-.area-hero-actions .btn-ghost:hover{background:rgba(255,255,255,.10);}
-.area-hero-meta{display:flex;flex-wrap:wrap;gap:14px 22px;color:rgba(255,255,255,.7);font-size:14px;}
-.area-hero-meta strong{color:#fff;font-weight:700;}
-
 .section{padding:clamp(56px,8vw,96px) 0;}
 .section.cream{background:var(--cream);}
 .section h2{font-size:clamp(28px,3.8vw,42px);color:var(--green);margin-bottom:18px;}
@@ -140,7 +123,7 @@
 .related-city p{margin:0 !important;font-size:13px !important;color:var(--text-muted) !important;line-height:1.4 !important;}
 
 @media(max-width:760px){.svc-grid{grid-template-columns:1fr;}.cta-strip-inner{flex-direction:column;align-items:flex-start;}}
-@media(max-width:640px){.area-hero{padding:var(--hero-nav-clearance) 0 56px;}}</style>
+</style>
   <link rel="stylesheet" href="css/chat-widget.css">
 <script type="application/ld+json">
 {
@@ -199,22 +182,77 @@
 </div>
 <!-- @@PJL:nav-END -->
 
-<!-- Hero -->
-<section class="area-hero">
-  <div class="container area-hero-inner">
-    <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><a href="coverage-map.html">Service Areas</a><span>›</span><span>Innisfil</span></div>
-    <span class="area-eyebrow">Innisfil · Lake Simcoe · Simcoe County</span>
-    <h1>Sprinkler service in <em>Innisfil,</em> Ontario.</h1>
-    <p>Lake Simcoe waterfront properties, Alcona and Lefroy subdivisions, Friday Harbour, Cookstown country lots — Hydrawise smart systems, sandy-soil cycle-and-soak programming, lake-intake-aware design, fall winterization from <span data-price="fall_close_4z">$90</span> and spring openings on a regular weekly route.</p>
-    <div class="area-hero-actions pjl-cta-row">
-      <a href="book.html?service=fall_close_4z" class="btn-amber">Book Innisfil fall closing <span aria-hidden="true">→</span></a>
-      <a href="book.html?service=sprinkler_repair" class="btn-ghost">Need a repair? Book online</a>
-      <a href="tel:+19059600181" class="btn-ghost">📞 (905) 960-0181</a>
+<!-- Hero — shared town-page component (.area-hero-v2 in style.css). The kicker,
+     primary CTA and scheduling stat are rendered by js/season.js from data-town /
+     data-tier; the static text below is the fall-season, no-JS fallback. The
+     photo is a static poster (no video on town pages). -->
+<section class="area-hero-v2 area-hero-v2--seasonal" data-town="Innisfil" data-tier="extended">
+  <div class="area-hero-v2__bg" aria-hidden="true"></div>
+  <div class="container">
+    <div class="area-hero-v2__card">
+      <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><a href="coverage-map.html">Service Areas</a><span>›</span><span>Innisfil</span></div>
+      <p class="page-eyebrow" data-season-kicker>Fall closing season · Now booking</p>
+      <h1>Sprinkler service in <em>Innisfil,</em> Ontario.</h1>
+      <p class="lede">Lake Simcoe waterfront properties, Alcona and Lefroy subdivisions, Friday Harbour, Cookstown country lots — Hydrawise smart systems, sandy-soil cycle-and-soak programming, lake-intake-aware design, fall winterization from <span data-price="fall_close_4z">$90</span> and spring openings on a regular weekly route.</p>
+      <div class="area-hero-v2__ctas cta-group">
+        <a class="btn btn-primary" data-season-cta data-seasonal-cta href="book.html?service=fall_close_4z&amp;zones=4">Book Fall Closing — From <span data-price="fall_close_4z">$90</span></a>
+        <a class="btn btn-outline" href="book.html?service=sprinkler_repair">Need a repair? Book online</a>
+      </div>
+      <a class="area-hero-v2__jump" href="#price">See your exact price by zone count ↓</a>
+      <ul class="area-hero-v2__stats">
+        <li>📍 <b>Innisfil &amp; Lake Simcoe</b></li>
+        <li>🚚 <b>~35-40 min</b> from Newmarket</li>
+        <li data-scheduling-stat>📅 <b>Scheduled route</b> · weekly in season</li>
+        <li>🛡️ <b>1-year guarantee</b> on repairs</li>
+      </ul>
     </div>
-    <div class="area-hero-meta">
-      <span>📍 <strong>Innisfil &amp; Lake Simcoe</strong></span>
-      <span>🚐 <strong>~35-40 min</strong> from Newmarket</span>
-      <span>🛡️ <strong>3-year warranty</strong></span>
+  </div>
+</section>
+
+<!-- Season block — green band, H2 and the shared zone-count calculator
+     (js/seasonal-tiers.js + js/seasonal-zone-calculator.js, tiers from
+     pricing.json). Season copy is rendered by js/season.js. -->
+<section class="season-block" id="price">
+  <div class="container">
+    <div class="season-block__band"><span class="display" data-season-band>🍂 Fall closing — Innisfil</span><small data-season-meta>From <span data-price="fall_close_4z">$90</span> · Booking September–November</small></div>
+    <div class="season-block__head">
+      <h2 data-season-h2>Fall closing season in Innisfil. Book before the freeze.</h2>
+      <p class="sub">Along Lake Simcoe the shoreline sand drains in minutes while the inland clay holds water for hours, and the lake keeps Innisfil's first frost a little later than Newmarket's. Tell us your property type and zone count and the price updates instantly.</p>
+    </div>
+
+    <div class="sprk-zone" data-seasonal-calc="auto">
+      <div class="sprk-zone__inputs">
+        <div class="sprk-zone__field">
+          <label class="sprk-zone__field-label">Property Type</label>
+          <div class="sprk-zone__toggle" role="tablist" aria-label="Property type">
+            <button type="button" class="sprk-zone__tab is-active" data-mode="residential" role="tab" aria-selected="true">🏡 Residential</button>
+            <button type="button" class="sprk-zone__tab" data-mode="commercial" role="tab" aria-selected="false">🏢 Commercial</button>
+          </div>
+        </div>
+        <div class="sprk-zone__field">
+          <label class="sprk-zone__field-label">Number of Zones</label>
+          <div class="sprk-zone__controls">
+            <button type="button" class="sprk-zone__btn" data-zone-dec aria-label="Decrease zones">−</button>
+            <div class="sprk-zone__value"><span data-zone-count>4</span><small>zones</small></div>
+            <button type="button" class="sprk-zone__btn" data-zone-inc aria-label="Increase zones">+</button>
+          </div>
+        </div>
+      </div>
+      <div class="sprk-zone__readout">
+        <div class="sprk-zone__readout-label">Your Estimate</div>
+        <div class="sprk-zone__amount">$<span data-zone-display>90</span><span class="sprk-zone__per">/service</span></div>
+        <div class="sprk-zone__tier-pill" data-zone-note>Residential • Up to 4 zones</div>
+        <div class="sprk-zone__services">
+          <span>🌱 Spring opening</span>
+          <span class="sprk-zone__services-sep">•</span>
+          <span>🍂 Fall closing</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="season-block__actions cta-group">
+      <a class="btn btn-primary" data-seasonal-cta href="book.html?service=fall_close_4z&amp;zones=4"><span data-season-calc-cta>Book fall closing</span> <span aria-hidden="true">→</span></a>
+      <a class="btn btn-outline-green" data-season-page-link href="sprinkler-fall-winterization.html">What a fall closing includes</a>
     </div>
   </div>
 </section>
@@ -335,6 +373,8 @@
 
 <script src="nav.js?v=2"></script>
   <script src="js/pricing-injector.js" defer></script>
+  <script src="js/seasonal-tiers.js" defer></script>
+  <script src="js/seasonal-zone-calculator.js" defer></script>
   <script src="js/chat-widget.js" defer></script>
 </body>
 </html>

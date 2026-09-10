@@ -1,7 +1,7 @@
 /* =============================================================
    PJL SEASONAL ZONE CALCULATOR
-   Shared by sprinkler-spring-opening.html and
-   sprinkler-fall-winterization.html.
+   Shared by sprinkler-spring-opening.html, sprinkler-fall-winterization.html
+   and every sprinkler-service-*.html town page (via data-seasonal-calc="auto").
 
    Renders the flat-rate seasonal price for the visitor's property type +
    zone count AND points every booking CTA on the page at the ?service=
@@ -30,8 +30,11 @@
      <div class="sprk-zone" data-seasonal-calc="fall"
           data-season-label="Fall winterization"> ... </div>
 
-       data-seasonal-calc   "spring" | "fall" — picks key_spring vs key_fall
-       data-season-label    service name used in the tier-pill copy
+       data-seasonal-calc   "spring" | "fall" — picks key_spring vs key_fall;
+                            "auto" resolves through window.PJLSeason
+                            (js/season.js, loaded in <head>) — the town pages
+       data-season-label    service name used in the tier-pill copy (defaults
+                            to "Fall closing" / "Spring opening")
 
      <a href="book.html?service=fall_close_4z" data-seasonal-cta>...</a>
 
@@ -60,8 +63,16 @@
   var root = document.querySelector("[data-seasonal-calc]");
   if (!root) return;
 
-  var season = root.getAttribute("data-seasonal-calc") === "fall" ? "fall" : "spring";
-  var SEASON_LABEL = root.getAttribute("data-season-label") || "Service";
+  // "auto" (the town pages) defers to js/season.js, which resolved the
+  // calendar in <head>: the current season in season, the NEXT season
+  // when it is off-season. The spring/fall service pages stay explicit.
+  var requested = root.getAttribute("data-seasonal-calc");
+  if (requested === "auto") {
+    requested = (window.PJLSeason && window.PJLSeason.calcSeason) || "fall";
+  }
+  var season = requested === "fall" ? "fall" : "spring";
+  var SEASON_LABEL = root.getAttribute("data-season-label") ||
+    (season === "fall" ? "Fall closing" : "Spring opening");
 
   // Where a custom-quote tier sends the visitor instead of book.html.
   // quote.html and estimate.html are both live and there is an open

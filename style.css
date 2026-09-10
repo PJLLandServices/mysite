@@ -3598,3 +3598,401 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
      for clean traffic). */
   min-height: 65px;
 }
+
+/* ══════════════════════════════════════════════════════════════
+   TOWN-PAGE HERO v2 + SEASON BLOCK  (sprinkler-service-*.html)
+
+   One definition for the 18 town pages. The pillar page
+   (sprinkler-systems.html) is the visual reference: same glass card,
+   overlay gradient, amber primary + white outline secondary. Static
+   photo only — no video on town pages (LCP on mobile).
+
+   Season copy inside these blocks is rendered by js/season.js; the
+   scheduling stat comes from its TIER_STATS table via data-tier.
+   ══════════════════════════════════════════════════════════════ */
+.area-hero-v2 {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  padding: 156px 0 clamp(52px, 6vw, 72px);
+  background: linear-gradient(135deg, var(--dark) 0%, var(--green) 100%);
+  color: #fff;
+}
+/* Photo layer. Per-town pages set --hero-img-sm / --hero-img-lg inline on
+   this element; fallback pages get them from .area-hero-v2--seasonal. */
+.area-hero-v2__bg {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  background-image: var(--hero-img-sm);
+  background-size: cover;
+  background-position: center 42%;
+  background-repeat: no-repeat;
+  filter: saturate(1.12) contrast(1.06);
+  pointer-events: none;
+}
+@media (min-width: 801px) {
+  .area-hero-v2__bg { background-image: var(--hero-img-lg); }
+}
+/* Season-keyed shared fallback (pages with no photo of their own).
+   js/season.js stamps <html data-pjl-season> in <head>, so this resolves
+   before first paint and only the right image is fetched. */
+.area-hero-v2--seasonal .area-hero-v2__bg {
+  --hero-img-sm: url('fall-sprinkler-running@800w.jpg');
+  --hero-img-lg: url('fall-sprinkler-running@1280w.jpg');
+}
+html[data-pjl-season="spring"] .area-hero-v2--seasonal .area-hero-v2__bg,
+html[data-pjl-season="off"] .area-hero-v2--seasonal .area-hero-v2__bg {
+  --hero-img-sm: url('estate-sprinkler-hero@800w.jpg');
+  --hero-img-lg: url('estate-sprinkler-hero@1280w.jpg');
+}
+/* Overlay gradient — identical to the pillar hero's so the card reads the
+   same everywhere. */
+.area-hero-v2::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(ellipse 60% 55% at 20% 20%, rgba(74,140,92,0.30), transparent 65%),
+    linear-gradient(135deg, rgba(15,31,20,0.66) 0%, rgba(27,77,46,0.52) 50%, rgba(45,106,66,0.42) 100%);
+}
+/* Frosted glass card, left-aligned — mirrors .page-hero-content. */
+.area-hero-v2__card {
+  position: relative;
+  z-index: 2;
+  max-width: 680px;
+  background: rgba(15, 31, 20, 0.48);
+  -webkit-backdrop-filter: blur(10px) saturate(1.15);
+  backdrop-filter: blur(10px) saturate(1.15);
+  padding: clamp(24px, 3.6vw, 40px) clamp(22px, 3.6vw, 40px);
+  border-radius: clamp(12px, 1.6vw, 20px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.20);
+}
+.area-hero-v2 .breadcrumbs {
+  font-size: 13px;
+  color: rgba(255,255,255,.65);
+  margin-bottom: 16px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.area-hero-v2 .breadcrumbs a { color: rgba(255,255,255,.85); }
+.area-hero-v2 .breadcrumbs a:hover { color: var(--amber-light); }
+.area-hero-v2 .breadcrumbs span { color: rgba(255,255,255,.4); }
+.area-hero-v2 .page-eyebrow { margin-bottom: 16px; }
+.area-hero-v2 h1 {
+  color: #fff;
+  font-size: clamp(36px, 5vw, 62px);
+  line-height: 1.04;
+  letter-spacing: -0.03em;
+  margin-bottom: 16px;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.40);
+}
+.area-hero-v2 h1 em {
+  font-style: italic;
+  background: linear-gradient(135deg, var(--amber-light) 0%, var(--amber) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: none;
+}
+.area-hero-v2 .lede {
+  color: rgba(255,255,255,0.85);
+  font-size: clamp(16px, 1.9vw, 18px);
+  line-height: 1.65;
+  max-width: 58ch;
+  margin-bottom: 24px;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.40);
+}
+.area-hero-v2__ctas { margin-bottom: 14px; }
+.area-hero-v2__ctas .btn { padding: 14px 26px; }
+.area-hero-v2__jump {
+  display: inline-block;
+  margin: 0 0 22px;
+  color: rgba(255,255,255,0.88);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(255,255,255,0.45);
+}
+.area-hero-v2__jump:hover { color: #fff; text-decoration-color: var(--amber-light); }
+.area-hero-v2__stats {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  color: rgba(255,255,255,0.74);
+  font-size: 14px;
+}
+.area-hero-v2__stats b { color: #fff; font-weight: 700; }
+@media (max-width: 640px) {
+  /* Mobile padding-top uses the shared nav-clearance token
+     (memory/hero_nav_clearance.md) — never a hardcoded number. */
+  .area-hero-v2 { padding: var(--hero-nav-clearance) 0 44px; }
+  .area-hero-v2__bg { background-position: center 30%; }
+  .area-hero-v2__card { max-width: none; }
+}
+
+/* ── Season block: green band → H2 → zone-count calculator → CTAs ── */
+.season-block {
+  padding: 0 0 clamp(56px, 8vw, 88px);
+  background: #fff;
+  scroll-margin-top: 96px;
+}
+.season-block__band {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px 18px;
+  padding: 16px 26px;
+  border-radius: 0 0 14px 14px;
+  color: #fff;
+  margin: 0 0 36px;
+  background: linear-gradient(135deg, #4A8C5C 0%, #2D6A42 100%);
+  box-shadow: 0 14px 32px -10px rgba(15, 31, 20, 0.28);
+}
+.season-block__band .display {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: clamp(18px, 1.8vw, 24px);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #fff;
+}
+.season-block__band small {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.9);
+  letter-spacing: 0.02em;
+}
+.season-block__head { text-align: center; max-width: 720px; margin: 0 auto 32px; }
+.season-block__head h2 {
+  font-size: clamp(28px, 3.8vw, 42px);
+  color: var(--green);
+  margin-bottom: 12px;
+  line-height: 1.1;
+}
+.season-block__head .sub {
+  font-size: 17px;
+  line-height: 1.7;
+  color: var(--text-mid);
+  margin: 0;
+}
+.season-block__actions { max-width: 840px; margin: 0 auto; }
+@media (max-width: 720px) {
+  .season-block__band { grid-template-columns: 1fr; padding: 14px 18px; }
+}
+
+/* ── Zone price estimator (split card) — shared by the pillar page and the
+   town pages' season block. Moved here from sprinkler-systems.html so there
+   is one definition; the spring/fall service pages still carry an identical
+   inline copy that overrides nothing. ── */
+/* Zone price estimator — split card */
+.sprk-zone {
+  max-width: 840px;
+  margin: 0 auto 40px;
+  background: #fff;
+  border: 1px solid rgba(74,140,92,0.18);
+  border-radius: var(--r-xl);
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  overflow: hidden;
+  box-shadow: 0 18px 48px rgba(27,77,46,0.12);
+}
+
+/* Left: inputs */
+.sprk-zone__inputs {
+  padding: 32px 32px 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  background: linear-gradient(180deg, #f7faf2 0%, #edf4e4 100%);
+}
+.sprk-zone__field {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sprk-zone__field-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Toggle */
+.sprk-zone__toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 4px;
+  gap: 2px;
+}
+.sprk-zone__tab {
+  border: none;
+  background: transparent;
+  padding: 11px 14px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-mid);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+  letter-spacing: 0.01em;
+}
+.sprk-zone__tab:hover { color: var(--green); }
+.sprk-zone__tab.is-active {
+  background: var(--green);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(27,77,46,0.22);
+}
+
+/* Zone stepper */
+.sprk-zone__controls {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px;
+}
+.sprk-zone__btn {
+  width: 42px; height: 42px;
+  border-radius: 9px;
+  border: none;
+  background: var(--green);
+  color: #fff;
+  font-size: 22px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.15s;
+  display: flex; align-items: center; justify-content: center;
+  line-height: 1;
+}
+.sprk-zone__btn:hover { background: var(--green-mid); transform: scale(1.04); }
+.sprk-zone__btn:disabled { background: var(--border); color: rgba(0,0,0,0.25); cursor: not-allowed; transform: none; }
+.sprk-zone__value {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1;
+}
+.sprk-zone__value span {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 32px;
+  font-weight: 800;
+  color: var(--green);
+  letter-spacing: -0.01em;
+}
+.sprk-zone__value small {
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin-top: 4px;
+  font-weight: 600;
+}
+
+/* Right: readout */
+.sprk-zone__readout {
+  padding: 36px 32px;
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(74,140,92,0.18) 0%, transparent 60%),
+    linear-gradient(160deg, var(--green) 0%, var(--green-mid) 100%);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 10px;
+  position: relative;
+  isolation: isolate;
+}
+.sprk-zone__readout::before {
+  content: '';
+  position: absolute;
+  inset: 0; z-index: -1;
+  background-image: radial-gradient(circle, rgba(255,255,255,0.06) 1px, transparent 1px);
+  background-size: 22px 22px;
+  opacity: 0.6;
+}
+.sprk-zone__readout-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.72);
+}
+.sprk-zone__amount {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: clamp(48px, 5vw, 64px);
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  text-shadow: 0 4px 18px rgba(0,0,0,0.22);
+}
+.sprk-zone__per {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.75);
+  margin-left: 6px;
+  letter-spacing: 0;
+  text-shadow: none;
+  vertical-align: middle;
+}
+.sprk-zone__tier-pill {
+  display: inline-block;
+  background: rgba(255,255,255,0.14);
+  border: 1px solid rgba(255,255,255,0.22);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 6px 14px;
+  border-radius: 99px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  margin-top: 4px;
+}
+.sprk-zone__services {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: rgba(255,255,255,0.88);
+  margin-top: 8px;
+  font-weight: 500;
+}
+.sprk-zone__services-sep { color: rgba(255,255,255,0.45); }
+
+/* Custom Quote state */
+.sprk-zone--quote .sprk-zone__amount {
+  font-size: clamp(30px, 3.5vw, 40px);
+  color: #FFD79A;
+}
+.sprk-zone--quote .sprk-zone__readout {
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(245,155,74,0.22) 0%, transparent 60%),
+    linear-gradient(160deg, #7a3710 0%, #5a2909 100%);
+}
+
+@media (max-width: 720px) {
+  .sprk-zone { grid-template-columns: 1fr; max-width: 480px; }
+  .sprk-zone__inputs { padding: 26px 22px; }
+  .sprk-zone__readout { padding: 30px 22px; }
+}
+
