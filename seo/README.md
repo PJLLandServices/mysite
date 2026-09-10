@@ -47,16 +47,35 @@ slash-invocable skills. `.gitignore` un-ignores that one directory
       permissions* → *Add user* → paste the service account's
       `client_email` (ends in `.iam.gserviceaccount.com`) → permission
       **Full** (Restricted also works for reads).
-   4. In `.env` (never committed):
+   4. Tell the script where the key is. Which way depends on where you run
+      Claude Code — and never paste the key's contents into a chat message;
+      conversations are stored.
+
+      **Claude Code on the web (claude.ai/code):** there is no file to edit.
+      Open *Environments* → the environment for this repo → *Environment
+      variables* and add two entries:
+
+      | Name | Value |
+      | --- | --- |
+      | `GSC_SITE_URL` | `sc-domain:pjllandservices.com` |
+      | `GSC_SERVICE_ACCOUNT_JSON` | the entire contents of the downloaded JSON key file (open it in Notepad, select all, copy, paste — one long line is fine) |
+
+      Save, then **start a new session** — variables only reach sessions
+      created after they are saved. The new session must also have this
+      folder's scripts: merge the PR that added them, or check out its branch.
+
+      **Claude Code on your own computer:** create a file named `.env` in the
+      repo folder (next to `.env.example`, never committed) containing:
       ```
       GSC_SITE_URL=sc-domain:pjllandservices.com
       GSC_SERVICE_ACCOUNT_FILE=/absolute/path/to/pjl-seo-key.json
       ```
-      If the property in Search Console is a URL-prefix property rather than
-      a domain property, use `GSC_SITE_URL=https://www.pjllandservices.com/`.
-      In a remote Claude Code session, paste the key's JSON into
-      `GSC_SERVICE_ACCOUNT_JSON` in the environment's variables instead of
-      using a file path.
+
+      Either way, check the property type first: in Search Console's top-left
+      dropdown, a property shown as `pjllandservices.com` is a domain property
+      (use the `sc-domain:` form above); one shown as
+      `https://www.pjllandservices.com/` is a URL-prefix property — use that
+      full URL as `GSC_SITE_URL` instead.
    5. Test: `npm run seo:gsc` should print "Saved seo/data/gsc-….json — N
       queries …". A 403 means step 3 was skipped.
 2. **Brand interview.** In Claude Code: *"Run the brand interview."* Eight
