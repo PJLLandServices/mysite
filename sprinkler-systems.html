@@ -37,6 +37,7 @@
 
 <title>Lawn Sprinkler Systems in GTA & York Region | PJL Land Services</title>
 <link rel="stylesheet" href="style.css?v=cov3">
+<script src="js/season.js"></script>
 
 <!-- Service schema referencing the homepage LocalBusiness via @id -->
 <script type="application/ld+json">
@@ -339,209 +340,7 @@
 .pricing-features li:last-child { border-bottom: none; }
 .pricing-features li::before { content: '✓'; color: var(--green); font-weight: 700; }
 
-/* Zone price estimator — split card */
-.sprk-zone {
-  max-width: 840px;
-  margin: 0 auto 40px;
-  background: #fff;
-  border: 1px solid rgba(74,140,92,0.18);
-  border-radius: var(--r-xl);
-  padding: 0;
-  display: grid;
-  grid-template-columns: 1.1fr 1fr;
-  overflow: hidden;
-  box-shadow: 0 18px 48px rgba(27,77,46,0.12);
-}
-
-/* Left: inputs */
-.sprk-zone__inputs {
-  padding: 32px 32px 34px;
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
-  background: linear-gradient(180deg, #f7faf2 0%, #edf4e4 100%);
-}
-.sprk-zone__field {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.sprk-zone__field-label {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-/* Toggle */
-.sprk-zone__toggle {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  background: #fff;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 4px;
-  gap: 2px;
-}
-.sprk-zone__tab {
-  border: none;
-  background: transparent;
-  padding: 11px 14px;
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--text-mid);
-  border-radius: 9px;
-  cursor: pointer;
-  transition: background 0.2s, color 0.2s, box-shadow 0.2s;
-  letter-spacing: 0.01em;
-}
-.sprk-zone__tab:hover { color: var(--green); }
-.sprk-zone__tab.is-active {
-  background: var(--green);
-  color: #fff;
-  box-shadow: 0 4px 12px rgba(27,77,46,0.22);
-}
-
-/* Zone stepper */
-.sprk-zone__controls {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 12px;
-  background: #fff;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 8px;
-}
-.sprk-zone__btn {
-  width: 42px; height: 42px;
-  border-radius: 9px;
-  border: none;
-  background: var(--green);
-  color: #fff;
-  font-size: 22px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 0.2s, transform 0.15s;
-  display: flex; align-items: center; justify-content: center;
-  line-height: 1;
-}
-.sprk-zone__btn:hover { background: var(--green-mid); transform: scale(1.04); }
-.sprk-zone__btn:disabled { background: var(--border); color: rgba(0,0,0,0.25); cursor: not-allowed; transform: none; }
-.sprk-zone__value {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  line-height: 1;
-}
-.sprk-zone__value span {
-  font-family: 'Barlow Condensed', sans-serif;
-  font-size: 32px;
-  font-weight: 800;
-  color: var(--green);
-  letter-spacing: -0.01em;
-}
-.sprk-zone__value small {
-  font-size: 10px;
-  color: var(--text-muted);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  margin-top: 4px;
-  font-weight: 600;
-}
-
-/* Right: readout */
-.sprk-zone__readout {
-  padding: 36px 32px;
-  background:
-    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(74,140,92,0.18) 0%, transparent 60%),
-    linear-gradient(160deg, var(--green) 0%, var(--green-mid) 100%);
-  color: #fff;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  gap: 10px;
-  position: relative;
-  isolation: isolate;
-}
-.sprk-zone__readout::before {
-  content: '';
-  position: absolute;
-  inset: 0; z-index: -1;
-  background-image: radial-gradient(circle, rgba(255,255,255,0.06) 1px, transparent 1px);
-  background-size: 22px 22px;
-  opacity: 0.6;
-}
-.sprk-zone__readout-label {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: rgba(255,255,255,0.72);
-}
-.sprk-zone__amount {
-  font-family: 'Barlow Condensed', sans-serif;
-  font-size: clamp(48px, 5vw, 64px);
-  font-weight: 800;
-  color: #fff;
-  letter-spacing: -0.02em;
-  line-height: 1;
-  text-shadow: 0 4px 18px rgba(0,0,0,0.22);
-}
-.sprk-zone__per {
-  font-family: 'DM Sans', sans-serif;
-  font-size: 14px;
-  font-weight: 500;
-  color: rgba(255,255,255,0.75);
-  margin-left: 6px;
-  letter-spacing: 0;
-  text-shadow: none;
-  vertical-align: middle;
-}
-.sprk-zone__tier-pill {
-  display: inline-block;
-  background: rgba(255,255,255,0.14);
-  border: 1px solid rgba(255,255,255,0.22);
-  color: #fff;
-  font-size: 12.5px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  padding: 6px 14px;
-  border-radius: 99px;
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  margin-top: 4px;
-}
-.sprk-zone__services {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 13px;
-  color: rgba(255,255,255,0.88);
-  margin-top: 8px;
-  font-weight: 500;
-}
-.sprk-zone__services-sep { color: rgba(255,255,255,0.45); }
-
-/* Custom Quote state */
-.sprk-zone--quote .sprk-zone__amount {
-  font-size: clamp(30px, 3.5vw, 40px);
-  color: #FFD79A;
-}
-.sprk-zone--quote .sprk-zone__readout {
-  background:
-    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(245,155,74,0.22) 0%, transparent 60%),
-    linear-gradient(160deg, #7a3710 0%, #5a2909 100%);
-}
-
-@media (max-width: 720px) {
-  .sprk-zone { grid-template-columns: 1fr; max-width: 480px; }
-  .sprk-zone__inputs { padding: 26px 22px; }
-  .sprk-zone__readout { padding: 30px 22px; }
-}
+/* Zone price estimator (.sprk-zone) — shared with the town pages; lives in style.css. */
 
 /* Seasonal star section */
 .sprk-seasonal__grid {
@@ -1579,25 +1378,9 @@ a.sprk-comp:focus-visible {
 </head>
 <body>
 
-<!-- Seasonal phase — single source of truth. Computed before first paint and
-     stamped on <html> as data-season-phase so (a) the bottom-of-body hero
-     controller reads it instead of recomputing, and (b) the mid-season
-     #repair promotion below can run CLS-free. Six phases; mirrors index.html's
-     mid-season window (Jun 15–Aug 24). -->
-<script>
-(function(){
-  var d = new Date(), m = d.getMonth(), day = d.getDate(), phase;
-  if (m === 7 && day >= 25)            phase = 'pre-fall';    // Aug 25–31
-  else if (m === 8 && day <= 4)        phase = 'pre-fall';    // Sep 1–4
-  else if (m === 0 && day >= 15)       phase = 'pre-spring';  // Jan 15–31
-  else if (m === 1)                    phase = 'pre-spring';  // Feb
-  else if ((m === 5 && day >= 15) || m === 6 || (m === 7 && day < 25))
-                                       phase = 'midseason';   // Jun 15–Aug 24
-  else if (m >= 8 || m === 0)          phase = 'fall';        // Sep 5–Jan 14
-  else                                 phase = 'spring';      // Mar 1–Jun 14
-  document.documentElement.setAttribute('data-season-phase', phase);
-})();
-</script>
+<!-- Seasonal phase: js/season.js (loaded in <head>) stamps <html data-season-phase>
+     before first paint. The #repair promotion below and the hero controller at the
+     bottom of the page read it; nothing here recomputes the calendar. -->
 
 <!-- @@PJL:nav-START {"loc": "Newmarket &amp; GTA", "status": "Fall closings booking now", "badge": "Book online · Newmarket &amp; GTA"} -->
 <nav class="nav nav-v2 nav-solid">
@@ -2608,27 +2391,25 @@ a.sprk-comp:focus-visible {
 (function(){
   // Six-phase seasonal hero logic. The H1 is STATIC — it names the page's
   // subject (the strongest on-page relevance signal) and is never rewritten.
-  // Seasonality lives in the eyebrow, subcopy and CTAs only:
-  //   spring     = Mar 1 – Jun 14  (spring openings booking)
-  //   midseason  = Jun 15 – Aug 24 (repairs promo; mirrors index.html's
-  //                mid-season window. System is running mid-summer, so keeps
-  //                the summer-spray video. Uses the $95 service_call price,
-  //                not the seasonal price, and swaps CTA hrefs to the
-  //                repair funnel.)
-  //   pre-fall   = Aug 25 – Sept 4 (fall closings booking — video still
-  //                summer because it IS still summer outside)
-  //   fall       = Sept 5 – Jan 14 (fall closings booking)
-  //   pre-spring = Jan 15 – Feb 28/29 (forward-looking, swap back to the
-  //                summer-spray video to back the "spring is coming" copy)
+  // Seasonality lives in the eyebrow, subcopy and CTAs only.
+  //
+  // The phase windows are a product setting owned by js/season.js (loaded in
+  // <head>, shared with every town page) — see the table at the top of that
+  // file. Read the phase from window.PJLSeason; never recompute it here:
+  //   pre-fall / fall     = fall closings booking (fall alone swaps the
+  //                         hero video to the blow-out clip)
+  //   winter              = Nov 21 – Jan 14, neutral copy, spring opening
+  //                         is the next thing to book
+  //   pre-spring          = forward-looking "spring is coming" copy
+  //   spring              = spring openings booking
+  //   midseason           = repairs promo; uses the $95 service_call price,
+  //                         swaps CTA hrefs to the repair funnel, and the
+  //                         #repair section is promoted above #seasonal
   //
   // Same-day repair claims are scoped to the York Region core (Newmarket,
   // Aurora, King City, East Gwillimbury) in every phase — never "the GTA".
-  //
-  // Phase is computed once by the inline script right after <body> and stamped
-  // on <html data-season-phase>. Read it here rather than recomputing, so the
-  // hero and the #repair promotion share one source of truth. Fall back to
-  // 'spring' if the attribute is somehow missing.
-  var phase = document.documentElement.getAttribute('data-season-phase') || 'spring';
+  var phase = (window.PJLSeason && window.PJLSeason.phase) ||
+              document.documentElement.getAttribute('data-season-phase') || 'spring';
 
   // Fall pricing applies to fall + pre-fall; spring pricing applies to
   // spring + pre-spring (pre-spring is selling spring opening).
@@ -2640,7 +2421,7 @@ a.sprk-comp:focus-visible {
   function priceLabel() {
     var key, fallback;
     if (phase === 'midseason') { key = 'service_call'; fallback = '$95'; }
-    else { key = fallMessaging ? 'fall_close_4z' : 'spring_open_4z'; fallback = '$90'; }
+    else { key = fallMessaging ? 'fall_close_4z' : 'spring_open_4z'; fallback = '$90'; } // winter + spring + pre-spring price the spring opening
     var p = window.__pjlPricing && window.__pjlPricing.items && window.__pjlPricing.items[key];
     return p && typeof p.price === 'number' ? '$' + p.price : fallback;
   }
@@ -2670,6 +2451,13 @@ a.sprk-comp:focus-visible {
       ctaSecondary = "See Repair Pricing →";
       hrefPrimary = "diagnose.html";
       hrefSecondary = "sprinkler-repair.html";
+    } else if (phase === 'winter') {
+      eyebrow = "Sprinkler Repair, Installs & Seasonal Service";
+      sub = "Design, install, repair, and seasonal service — one Newmarket crew, no franchise routing. Spring openings from " + price + " open for booking in March. Same-day repair across Newmarket, Aurora, King City and East Gwillimbury.";
+      ctaPrimary = "Book Spring Opening — From " + price;
+      ctaSecondary = "See Repair Pricing →";
+      hrefPrimary = "#seasonal";
+      hrefSecondary = "sprinkler-repair.html";
     } else { // fall + pre-fall share the booking-now message
       eyebrow = "Fall Closing Season · Now Booking";
       sub = "Design, install, repair, and seasonal service — one Newmarket crew, no franchise routing. Fall closings are booking now, from " + price + ". Book online in minutes across Newmarket, Aurora, King City and East Gwillimbury.";
@@ -2689,14 +2477,14 @@ a.sprk-comp:focus-visible {
     if (sec) { sec.textContent = ctaSecondary; sec.setAttribute('href', hrefSecondary); }
 
     // Hero background video — swap source based on phase. Spring,
-    // pre-fall and pre-spring all share the summer-look video (pre-fall
+    // midseason, pre-fall and pre-spring share the summer-look video (pre-fall
     // keeps summer because it IS still summer in late Aug / early Sept;
     // pre-spring uses it to back the forward-looking "spring is coming"
-    // copy). Only fall uses the blow-out clip.
+    // copy). Fall and winter use the blow-out clip.
     var videoEl = document.querySelector('.page-hero__bg');
     var sourceEl = videoEl && videoEl.querySelector('source');
     if (sourceEl) {
-      var attr = (phase === 'fall') ? 'data-season-fall-src' : 'data-season-spring-src';
+      var attr = (phase === 'fall' || phase === 'winter') ? 'data-season-fall-src' : 'data-season-spring-src';
       var nextSrc = sourceEl.getAttribute(attr);
       if (nextSrc && sourceEl.getAttribute('src') !== nextSrc) {
         sourceEl.setAttribute('src', nextSrc);
