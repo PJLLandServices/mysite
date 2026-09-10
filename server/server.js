@@ -23574,6 +23574,10 @@ async function orderDayForDriving(rows) {
       if (!action && req.method === "GET") {
         const booking = await appointmentActions.findByToken(token);
         if (!booking) return sendJson(res, 404, { ok: false, errors: ["That link doesn't match an appointment."] });
+        // The customer just opened their link. Recorded on the first view
+        // only, so "messaged · opened · responded" can tell a hesitant
+        // customer from one who never saw it. Never throws.
+        await appointmentActions.markSeen(booking);
         const summary = appointmentActions.summarize(booking);
         return sendJson(res, 200, {
           ok: true,

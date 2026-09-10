@@ -1560,7 +1560,8 @@
 
       const bits = [];
       bits.push(s.bookings
-        ? `${s.bookings} assigned · ${s.blasted} messaged · ${s.responded} responded`
+        ? `${s.bookings} assigned · ${s.blasted} messaged`
+          + `${s.seen != null ? ` · ${s.seen} opened` : ""} · ${s.responded} responded`
         : "No assignment bookings yet — nothing to message.");
       if (!data.appointmentPageReady) bits.push("sending locked until the appointment page is live");
       if (data.sendWindowNote) bits.push(data.sendWindowNote);

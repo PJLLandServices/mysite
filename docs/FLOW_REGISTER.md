@@ -19,6 +19,24 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-10, same day (Opened but never answered):** Patrick, on the blast: *"how do we
+confirm things got sent, and how do we track who's seen it, and what they have done?"* Sent and
+done were both already tracked — per booking, which of the six steps went out and when, and every
+action the customer took on their appointment page (confirm, cancel, a different window, a freed
+half-day, a corrected zone count), each with history. **Seen was not tracked at all**: opening
+`/a/<token>` served a static page and recorded nothing.
+That gap hides the group most worth chasing. A hesitant customer and a wrong phone number both
+looked like silence. `appointment-actions.markSeen()` now stamps `outreach.seenAt` on the FIRST
+view — once, because a timestamp that moves on every refresh cannot answer "did they ever look?" —
+and the count rides the status line Patrick already reads: **assigned · messaged · opened ·
+responded**.
+Best-effort by design, and that is the property that made it shippable mid-campaign: a note about a
+page view must never be able to fail the page, so a write that throws is swallowed and the caller
+gets its booking back. Customers open these links over hours and days, so landing this twenty
+minutes after a blast costs the opens in those minutes, not the campaign.
+Coverage: `scripts/test-appointment-seen.mjs`, 11 assertions, in `build:check`. Verified against the
+old code: **6 fail**. No PASS flow touched.
+
 **2026-09-10 (The blast that left no trace, and the hour that cost a day):** Patrick pressed
 "Send the blast" before 9am. The server refused it on the send window and threw; the refusal was
 written to a panel on the season-plan page, and the next page load erased it. Hours later the only

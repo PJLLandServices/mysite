@@ -528,12 +528,17 @@ async function status(season, year, { deps = {} } = {}) {
   const summary = {
     bookings: mine.length,
     blasted: 0,
+    // Opened their appointment link at least once. Sits between
+    // "messaged" and "responded" — the gap where a hesitant customer
+    // used to look identical to a wrong phone number.
+    seen: 0,
     responded: 0,
     steps: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 }
   };
   for (const b of mine) {
     const o = b.assignment.outreach || {};
     if (o.steps?.["1"]) summary.blasted += 1;
+    if (o.seenAt) summary.seen += 1;
     if (o.respondedAt) summary.responded += 1;
     for (const n of Object.keys(o.steps || {})) {
       if (summary.steps[n] != null) summary.steps[n] += 1;
