@@ -6,7 +6,10 @@
    page, sprinkler-systems.html. Nothing else on the site may compute the
    season from the calendar; read window.PJLSeason instead.
 
-   ── Windows (a product setting — edit here, nowhere else) ────
+   ── Windows (a product setting — season.config.json, nowhere else) ──
+   The dates live in season.config.json, shared with the build-time
+   title/meta switch (scripts/sync-seasonal-meta.mjs). The build stamps
+   that JSON into the CONFIG block below; the table here is documentation.
    Two views of one calendar. `season` is the three-way marketing answer
    the town pages render from; `phase` is the finer six-step view the
    pillar page's hero controller and #repair promotion key off. The
@@ -62,15 +65,32 @@
 (function (global) {
   "use strict";
 
+  // The windows live in season.config.json (shared with the build-time
+  // title/meta switch in scripts/sync-seasonal-meta.mjs). This script runs
+  // synchronously in <head> and cannot fetch, so the build stamps the JSON
+  // in here between the markers below and its --check mode fails on drift.
+  // Edit the JSON, not this block.
+  /* @@PJL:season-config-START */
+  // Generated from season.config.json by scripts/sync-seasonal-meta.mjs — edit the JSON.
+  var CONFIG = {"fall":{"page":["08-15","11-20"],"meta":["08-01","11-20"],"preUntil":"09-04"},"spring":{"page":["03-15","06-15"],"meta":["03-01","06-15"],"preFrom":"01-15"}};
+  /* @@PJL:season-config-END */
+
+  // MM-DD keys compare lexically. Windows are inclusive.
+  function key(d) {
+    var m = d.getMonth() + 1, day = d.getDate();
+    return (m < 10 ? "0" : "") + m + "-" + (day < 10 ? "0" : "") + day;
+  }
+  function within(k, w) { return k >= w[0] && k <= w[1]; }
+
   function resolvePhase(d) {
     d = d || new Date();
-    var m = d.getMonth() + 1, day = d.getDate();
-    if ((m === 8 && day >= 15) || (m === 9 && day <= 4)) return "pre-fall";
-    if ((m === 9 && day >= 5) || m === 10 || (m === 11 && day <= 20)) return "fall";
-    if ((m === 11 && day >= 21) || m === 12 || (m === 1 && day <= 14)) return "winter";
-    if ((m === 1 && day >= 15) || m === 2 || (m === 3 && day <= 14)) return "pre-spring";
-    if ((m === 3 && day >= 15) || m === 4 || m === 5 || (m === 6 && day <= 15)) return "spring";
-    return "midseason"; // Jun 16 – Aug 14
+    var k = key(d);
+    var fall = CONFIG.fall, spring = CONFIG.spring;
+    if (within(k, fall.page)) return k <= fall.preUntil ? "pre-fall" : "fall";
+    if (within(k, spring.page)) return "spring";
+    if (k >= spring.preFrom && k < spring.page[0]) return "pre-spring";
+    if (k > fall.page[1] || k < spring.preFrom) return "winter";
+    return "midseason"; // between the spring and fall page windows
   }
 
   // phase -> season. Only pre-fall/fall sell fall and only spring sells
