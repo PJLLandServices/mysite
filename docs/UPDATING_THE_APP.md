@@ -65,6 +65,20 @@ configuration. You used to have to remember both. You no longer do.
 
 Then it tells you to plug the phone in and press Run.
 
+### `npm run built` — once, probably never again
+
+`send` needs to know which build is on your phone, and `rebuild` records
+that itself. This covers the one case it can't: **an app you built by hand
+in Xcode**, the ordinary way, without going through `rebuild`.
+
+Run it once and `send` can answer from then on. Without it, the first
+`send` has to admit it doesn't know what your phone is running.
+
+It takes your word — nothing on the Mac can see your phone — so if the
+word is wrong, nothing breaks: the update simply won't install, and the
+Today tab keeps saying *"shipped with the build"*. If you see that, run
+`npm run rebuild` and the record fixes itself.
+
 ---
 
 ## Why some changes need Xcode and some don't

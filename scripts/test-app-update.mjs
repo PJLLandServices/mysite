@@ -54,6 +54,7 @@ const iosProject = use('iosProject');
 
 const SEND = readOr('pjl-field/scripts/send.mjs');
 const REBUILD = readOr('pjl-field/scripts/rebuild.mjs');
+const BUILT = readOr('pjl-field/scripts/built.mjs');
 const PKG = readOr('pjl-field/package.json');
 const IGNORE = readOr('pjl-field/.gitignore');
 const DOC = readOr('docs/UPDATING_THE_APP.md');
@@ -317,6 +318,40 @@ check('the build is recorded, or send can never answer again', () => {
 check('the recorded build stays on the Mac it describes', () => {
   // It is a fact about a build that exists in one place, like ios/ itself.
   assert.match(IGNORE, /^\.build-fingerprint$/m);
+});
+
+// ---- A build made by hand, before any of this existed --------------------
+
+check('no record does not send him to Xcode by default', () => {
+  // Patrick built the 2026-09-09 work from Xcode himself, the ordinary way,
+  // before these commands existed. His build is CURRENT. Answering "I have
+  // no record, go and rebuild" would have cost him an evening for nothing,
+  // which is the exact waste this whole thing was written to prevent.
+  const start = SEND.indexOf('no record of which build');
+  assert.ok(start > 0, 'send.mjs no longer handles a missing build record');
+  const message = SEND.slice(start, start + 900);
+  const built = message.indexOf('npm run built');
+  const rebuild = message.indexOf('npm run rebuild');
+  assert.ok(built > 0, 'the no-record path never offers to record the build he already has');
+  assert.ok(rebuild < 0 || built < rebuild, 'it offers a rebuild before offering to record');
+});
+
+check('recording a build by hand is possible at all', () => {
+  assert.ok(BUILT, 'pjl-field/scripts/built.mjs is missing');
+  assert.match(BUILT, /recordBuild\(/);
+  const scripts = JSON.parse(PKG || '{}').scripts || {};
+  assert.equal(scripts.built, 'node scripts/built.mjs');
+});
+
+check('it says what it is assuming rather than assuming quietly', () => {
+  // Nothing here can see his phone, so it is taking his word. Taking
+  // someone's word silently is how a wrong record becomes a mystery.
+  assert.match(BUILT, /built from this code|built from the code/i);
+  assert.match(BUILT, /shipped with the build/, 'it never says how he would know it was wrong');
+});
+
+check('recording the same build twice is not an error', () => {
+  assert.match(BUILT, /ALREADY RECORDED/);
 });
 
 // ---- The way in ---------------------------------------------------------

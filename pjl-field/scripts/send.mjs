@@ -75,15 +75,24 @@ const built = recordedBuild();
 const project = iosProject();
 
 if (!built) {
+  // Do NOT send him to Xcode by default here. A build made by hand,
+  // before these commands existed, is a perfectly current build — and
+  // telling its owner to rebuild it is exactly the wasted evening this
+  // whole thing was written to prevent.
   bail(
-    'I have no record of the build that is on your phone, so I cannot tell',
+    'I have no record of which build is on your phone, so I cannot yet tell',
     'whether this update can install onto it.',
     '',
-    project
-      ? 'That just means this is the first time using these commands.'
-      : 'There is no ios folder here yet, so nothing has been built on this Mac.',
+    'If the app on your phone was built from this code — you pulled, opened',
+    'Xcode and pressed Run — then nothing needs rebuilding. Just say so:',
     '',
-    `  ${c.bold('npm run rebuild')}   ${c.dim('build it once, then this command knows')}`,
+    `  ${c.bold('npm run built')}     ${c.dim('records it, then run send again')}`,
+    '',
+    project
+      ? 'If it was built from something older, or you are not sure:'
+      : 'There is no ios folder in this checkout, so if you are not sure:',
+    '',
+    `  ${c.bold('npm run rebuild')}   ${c.dim('build it fresh; this records itself')}`,
   );
 }
 

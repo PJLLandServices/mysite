@@ -8,7 +8,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "send": "node scripts/send.mjs",
-    "rebuild": "node scripts/rebuild.mjs"
+    "rebuild": "node scripts/rebuild.mjs",
+    "built": "node scripts/built.mjs"
   },
   "dependencies": {
     "expo": "~54.0.36",
