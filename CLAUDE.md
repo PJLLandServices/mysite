@@ -29,3 +29,20 @@ void, archived, no_show, standby, protected — walk this:
 `scripts/test-booking-lifecycle.mjs` is the worked example: it asserts a
 dead booking frees its slot through BOTH passes, and that the two passes
 can never answer differently for the same state.
+
+## SEO agent (recurring loop)
+
+`seo/README.md` is the entry point. Four skills under `.claude/skills/`
+(`seo-gap-finder`, `seo-competitor-intel`, `seo-brand-writer`,
+`seo-weekly-summary`) run a weekly loop on real Search Console data.
+Session-start protocol for any SEO task:
+
+1. Read the skill file for the task before acting.
+2. Read `seo/brand-voice.md` before any content task; if it is still
+   DRAFT, run the brand interview first.
+3. Check `seo/reports/` for this week's gap analysis before running a
+   downstream skill (competitor intel, content plan, summary).
+4. Numbers come from `seo/data/gsc-*.json` via the scripts, never from
+   memory. No credentials → say so and stop; do not fabricate a report.
+5. Prices in any draft are `pricing.json` keys, never literal dollars
+   (`scripts/lint-no-hardcoded-prices.mjs` is the gate).
