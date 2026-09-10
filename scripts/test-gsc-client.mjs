@@ -191,7 +191,7 @@ failNext = { status: 429, body: { error: { message: "Quota exceeded" } } };
 const err429 = await throws("429 surfaces", () => client.inspectUrl("https://www.pjllandservices.com/"), /Quota/);
 ok("429 hint names the quota", /2,000/.test(err429 && err429.hint));
 
-await throws("missing key → setup error, not a stack trace", () => createClient({ serviceAccount: "", fetchImpl: fakeFetch }), /GSC_SERVICE_ACCOUNT_JSON is not set/);
+await throws("missing key → setup error, not a stack trace", () => createClient({ serviceAccount: "", fetchImpl: fakeFetch }), /GSC_SERVICE_ACCOUNT_JSON \/ GSC_SERVICE_ACCOUNT_FILE is not set/);
 
 // ---- report ----------------------------------------------------------------
 
