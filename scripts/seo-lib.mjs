@@ -180,6 +180,26 @@ export function stripTags(html) {
     .trim();
 }
 
+// Brand affixes the site uses in <title>. Length limits apply to what is left
+// once these are removed — the same rule scripts/sync-seasonal-meta.mjs
+// enforces on the town pages (≤ 60 chars before the brand suffix).
+const BRAND_AFFIXES = [
+  /\s*[|—–-]\s*PJL Land Services(?:\s+Newmarket\s*&\s*GTA)?\s*$/i,
+  /\s*[|—–-]\s*PJL(?:\s+Land)?\s*$/i,
+  /^\s*PJL Land Services\s*[|—–-]\s*/i,
+];
+export function titleCore(title) {
+  let t = String(title || '').trim();
+  for (const re of BRAND_AFFIXES) t = t.replace(re, '');
+  return t.trim();
+}
+
+// On-page limits. Titles: ≤ 60 before the brand affix. Descriptions: ≤ 160
+// (Google's snippet cut-off; the town pages are additionally held to ≥ 140
+// by sync-seasonal-meta, which owns them).
+export const TITLE_MAX = 60;
+export const DESCRIPTION_MAX = 160;
+
 export function classifyPage(file) {
   if (/^blog-/.test(file)) return 'blog';
   if (/^sprinkler-service-/.test(file)) return 'area';
@@ -190,7 +210,9 @@ export function classifyPage(file) {
 
 // One page → one inventory record. `file` is the bare filename (about.html).
 export function inventoryFromHtml(file, html, { domain = 'https://www.pjllandservices.com' } = {}) {
-  const src = String(html);
+  // Commented-out markup is not on the page. Parse with comments removed so a
+  // retired hero left in a comment cannot register as a second <h1>.
+  const src = String(html).replace(/<!--(?!\s*@@PJL:)[\s\S]*?-->/g, '');
   const body = stripPartials(src);
   const pick = (re) => { const m = src.match(re); return m ? stripTags(m[1]).trim() : ''; };
   const title = pick(/<title[^>]*>([\s\S]*?)<\/title>/i);
@@ -228,7 +250,7 @@ export function inventoryFromHtml(file, html, { domain = 'https://www.pjllandser
 
   const url = file === 'index.html' ? `${domain}/` : `${domain}/${file}`;
   return {
-    file, url, type: classifyPage(file), title, titleLength: title.length,
+    file, url, type: classifyPage(file), title, titleLength: title.length, titleCoreLength: titleCore(title).length,
     description, descriptionLength: description.length, h1, h1Count, h2s,
     wordCount, noindex, canonical, datePublished, dateModified,
     links: [...links].sort(),

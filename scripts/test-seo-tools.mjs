@@ -16,7 +16,7 @@ import path from 'node:path';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const {
   parseDotEnv, flattenGscRow, aggregateByQuery, gapZone, movement, topicKey, clusters,
-  stripPartials, inventoryFromHtml, withInboundLinks, findPage, slugify, mdTable,
+  stripPartials, inventoryFromHtml, withInboundLinks, findPage, slugify, mdTable, titleCore,
 } = await import(`file://${path.join(ROOT, 'scripts/seo-lib.mjs')}`);
 const { buildJwt } = await import(`file://${path.join(ROOT, 'scripts/seo-gsc-pull.mjs')}`);
 const { buildInventory } = await import(`file://${path.join(ROOT, 'scripts/seo-site-inventory.mjs')}`);
@@ -133,6 +133,24 @@ check('inventoryFromHtml: title/description/h1 unescaped, body links only, self 
   assert.deepEqual(p.links, ['about.html', 'faq.html', 'index.html', 'sprinkler-repair.html']);
   assert.equal(p.url, 'https://www.pjllandservices.com/blog-a.html');
   assert.equal(inventoryFromHtml('index.html', html).url, 'https://www.pjllandservices.com/');
+});
+
+check('commented-out markup is not on the page: a retired hero in a comment is not a second h1', () => {
+  // The bug this pins: reviews.html keeps its original hero inside an HTML
+  // comment and was reported as having two <h1>s.
+  const html = page('reviews.html', '<!-- old hero\n<h1>Old</h1> <a href="faq.html">x</a> -->\n<p>live</p>');
+  const p = inventoryFromHtml('reviews.html', html);
+  assert.equal(p.h1Count, 1);
+  assert.equal(p.h1, 'Heading & more');
+  assert.deepEqual(p.links, [], 'a link inside a comment is not an internal link');
+});
+
+check('titleCore measures the title the way sync-seasonal-meta does: before the brand affix', () => {
+  assert.equal(titleCore('Sprinkler Service Acton — Fall Closing from $90 | PJL Land Services'), 'Sprinkler Service Acton — Fall Closing from $90');
+  assert.equal(titleCore('Hydrawise Controller Offline? How to Fix It | PJL Land'), 'Hydrawise Controller Offline? How to Fix It');
+  assert.equal(titleCore('Blog | Tips — PJL Land Services'), 'Blog | Tips');
+  assert.equal(titleCore('PJL Land Services | Sprinklers & Lighting, Newmarket & GTA'), 'Sprinklers & Lighting, Newmarket & GTA');
+  assert.equal(titleCore('No brand here'), 'No brand here');
 });
 
 check('withInboundLinks counts body links from other pages, never nav links', () => {

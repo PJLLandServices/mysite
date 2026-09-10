@@ -45,10 +45,10 @@ the data or the page; a bracket left generic is a failed recommendation.
 | --- | --- |
 | Landing page is `(none)`, `(not an authored page)`, or `index.html` catching a service/town query | **New page.** `[intent]`. Name the file to create (`blog-…html` or `sprinkler-service-….html`), the H1, and which existing page it should be linked from. |
 | Page exists, `Inbound body links` ≤ 1 | **Add internal links.** Name 3 specific source pages (highest-traffic related pages from the snapshot) and the anchor text to use. |
-| Page exists, title lacks what page 1 titles carry (town, year, price, "cost", "how to") | **Update the title.** Quote the current title, give the replacement (≤ 60 chars), say which page-1 element it now matches. Remember titles are also mirrored in `og:title` / `twitter:title`. |
+| Page exists, title lacks what page 1 titles carry (town, year, price, "cost", "how to") | **Update the title.** Quote the current title, give the replacement (≤ 60 chars before the `| PJL Land Services` suffix — the same rule `scripts/sync-seasonal-meta.mjs` enforces on town pages, whose titles it OWNS: change `seasonal-meta.json`, never the town page), say which page-1 element it now matches. Remember titles are also mirrored in `og:title` / `twitter:title`. |
 | Page exists, structure lags page 1 (no comparison table, no step list, no FAQ, no price block, thin — under ~800 words for a how-to) | **Restructure.** Name the missing element, where in the page it goes, and the section heading. |
 | Query family with 3+ variants across 2+ landing pages, or across town pages with no service hub | **Add a hub page** (or strengthen the existing service page as the hub) and point the variants at it. Name the hub file. |
-| CTR under 2% at position 5–10 | **Rewrite the snippet.** New meta description (≤ 155 chars) that leads with the price or the answer. `sync-meta-prices.mjs` owns prices in meta tags — use a `data-price` token in body copy, never a literal dollar amount on a town page (see `scripts/lint-no-hardcoded-prices.mjs`). |
+| CTR under 2% at position 5–10 | **Rewrite the snippet.** New meta description (≤ 160 chars; town pages 140–160 via `seasonal-meta.json`) that leads with the price or the answer. `sync-meta-prices.mjs` owns prices in meta tags — use a `data-price` token in body copy, never a literal dollar amount on a town page (see `scripts/lint-no-hardcoded-prices.mjs`). |
 
 Local-business specifics that change the call:
 

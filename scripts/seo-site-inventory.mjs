@@ -18,7 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { inventoryFromHtml, withInboundLinks, mdTable } from './seo-lib.mjs';
+import { inventoryFromHtml, withInboundLinks, mdTable, TITLE_MAX, DESCRIPTION_MAX } from './seo-lib.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(ROOT, 'seo', 'data', 'site-inventory.json');
@@ -76,8 +76,8 @@ function main() {
   const issues = [];
   for (const p of indexable) {
     if (p.h1Count !== 1) issues.push([p.file, `h1 count = ${p.h1Count}`]);
-    if (p.titleLength > 60) issues.push([p.file, `title ${p.titleLength} chars`]);
-    if (p.descriptionLength > 155) issues.push([p.file, `description ${p.descriptionLength} chars`]);
+    if (p.titleCoreLength > TITLE_MAX) issues.push([p.file, `title ${p.titleCoreLength} chars before the brand suffix (max ${TITLE_MAX})`]);
+    if (p.descriptionLength > DESCRIPTION_MAX) issues.push([p.file, `description ${p.descriptionLength} chars (max ${DESCRIPTION_MAX})`]);
     if (!p.description) issues.push([p.file, 'no meta description']);
   }
   console.log(`## On-page flags (${issues.length})\n`);
