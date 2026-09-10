@@ -1,11 +1,20 @@
-name: IndexNow notification
+name: IndexNow + Search Console notification
 
-# Ping Bing's IndexNow API every time main moves. Tells Bing (and any
-# IndexNow-participating engine) to re-crawl, so updates show up in search
-# within minutes instead of waiting for natural discovery.
+# Ping the search engines every time main moves:
 #
-# The IndexNow key is public by design (verified via the .txt file at the
-# site root) so no GitHub secret is needed.
+#   1. Bing's IndexNow API — tells Bing (and any IndexNow-participating
+#      engine) to re-crawl, so updates show up in search within minutes
+#      instead of waiting for natural discovery. The IndexNow key is public
+#      by design (verified via the .txt file at the site root) so no GitHub
+#      secret is needed.
+#
+#   2. Google Search Console — resubmits sitemap.xml through the API with
+#      the pjl-seo service account, the same as clicking "resubmit" in the
+#      Sitemaps report. Needs two repository secrets: GSC_SERVICE_ACCOUNT_JSON
+#      (the full key-file JSON) and GSC_SITE_URL (sc-domain:pjllandservices.com).
+#      Until they exist the step prints a notice and passes. Google still
+#      decides when to recrawl — "Request indexing" for a specific page stays
+#      a manual click in the Search Console UI (the API has no such call).
 
 on:
   push:
@@ -35,3 +44,11 @@ jobs:
 
       - name: Submit URLs to IndexNow
         run: node scripts/indexnow-submit.js
+
+      # Runs even if the IndexNow step failed — the two pings are independent.
+      - name: Resubmit sitemap.xml to Google Search Console
+        if: ${{ always() }}
+        env:
+          GSC_SERVICE_ACCOUNT_JSON: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+          GSC_SITE_URL: ${{ secrets.GSC_SITE_URL }}
+        run: node scripts/gsc.mjs submit-sitemap
