@@ -27,9 +27,13 @@ audit/.auth-state.json
 *.tmp
 *.log
 
-# Memory / Claude project files (don't commit private notes)
+# Memory / Claude project files (don't commit private notes).
+# Exception: .claude/skills/ holds the repo's own Claude Code skills (the
+# SEO agent — see seo/README.md) and IS committed; everything else under
+# .claude/ (settings.local.json, memory, scratch) stays private.
 memory/
-.claude/
+.claude/*
+!.claude/skills/
 
 # Backend runtime data — never commit. Contains the hashed admin password
 # (auth.json) and all real customer leads (leads.json). Wildcard-form so
@@ -61,3 +65,7 @@ _design/_smoke/
 
 # Scratch browser-walk harnesses (dotfile .mjs at the repo root)
 /.*.mjs
+
+# SEO agent: the site inventory is regenerated on every gap analysis; only the
+# dated Search Console snapshots and reports are the record worth keeping.
+seo/data/site-inventory.json
