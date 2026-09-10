@@ -58,6 +58,7 @@
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
+const { writeJsonAtomic } = require("./atomic-json");
 // Contact-id helpers only — the bill-to resolver itself is not used here.
 // Safe to require at load time: billing-parties.js requires no siblings.
 const { isContactId, coerceContactId } = require("./billing-parties");
@@ -108,7 +109,7 @@ async function readAll() {
 
 async function writeAll(records) {
   await ensureFile();
-  await fs.writeFile(FILE, JSON.stringify(records, null, 2) + "\n", "utf8");
+  await writeJsonAtomic(FILE, records);
 }
 
 // ---- Helpers ---------------------------------------------------------
@@ -627,50 +628,270 @@ async function remove(id, { by = "admin", note = "" } = {}) {
   );
 }
 
-// Hard-delete — actually removes the record from customers.json.
-// Refuses if any entity references this customer. Caller must use
-// merge() first when they want to combine duplicates, or accept
-// loss-of-link when nothing is yet attached (typical for test data
-// and accidental near-duplicates with no bookings/WOs/etc yet).
+// Stores carrying a customerId. Same list as mergeCustomers' re-point
+// pass — the two must stay in step: anything merge can re-point is
+// something delete has to account for.
 //
-// Returns { ok: true, customer } on success, or
-//         { ok: false, error, references } when blocked.
-async function hardDelete(id) {
-  const records = await readAll();
-  const idx = records.findIndex((c) => c.id === id);
-  if (idx === -1) return { ok: false, error: "Customer not found." };
+// deleted-invoices.json (the void-invoice tombstone log) is deliberately
+// absent — see the note on DELETED_FILE in lib/invoices.js.
+const CUSTOMER_LINK_FILES = [
+  "leads.json", "properties.json", "bookings.json",
+  "work-orders.json", "quotes.json", "invoices.json", "projects.json"
+];
 
+// A record in the Trash carries `deletedAt` (leads, quotes, properties,
+// work-orders all use that one marker; bookings and projects have no
+// soft-delete, and a deleted invoice leaves invoices.json entirely for
+// the tombstone log). It is gone from every index, so it is NOT a live
+// link — see the split in scanCustomerLinks().
+function isTrashed(record) {
+  return Boolean(record && typeof record.deletedAt === "string" && record.deletedAt);
+}
+
+// Split everything pointing at this customer into what is live and what
+// is already in the Trash. Both maps are { store: [ids] }, keyed by the
+// file's base name ("quotes", "work-orders", …).
+async function scanCustomerLinks(id) {
   const dataDir = path.join(__dirname, "..", "data");
-  const filesToCheck = [
-    "leads.json", "properties.json", "bookings.json",
-    "work-orders.json", "quotes.json", "invoices.json", "projects.json"
-  ];
-  const references = {};
-  for (const file of filesToCheck) {
+  const live = {};
+  const trashed = {};
+  for (const file of CUSTOMER_LINK_FILES) {
     const fullPath = path.join(dataDir, file);
     if (!fsSync.existsSync(fullPath)) continue;
     try {
       const raw = await fs.readFile(fullPath, "utf8");
       const arr = JSON.parse(raw || "[]");
       if (!Array.isArray(arr)) continue;
+      const store = file.replace(".json", "");
       const matches = arr.filter((r) => r && r.customerId === id);
-      if (matches.length) {
-        references[file.replace(".json", "")] = matches.map((r) => r.id).filter(Boolean);
-      }
+      const liveIds = matches.filter((r) => !isTrashed(r)).map((r) => r.id).filter(Boolean);
+      const trashedIds = matches.filter(isTrashed).map((r) => r.id).filter(Boolean);
+      if (liveIds.length) live[store] = liveIds;
+      if (trashedIds.length) trashed[store] = trashedIds;
     } catch (err) {
       console.warn(`[hardDelete] couldn't check ${file}:`, err.message);
     }
   }
-  if (Object.keys(references).length) {
+  return { live, trashed };
+}
+
+// Permanently remove the Trash records named in `trashed` ({ store: [ids] }).
+// Direct JSON-file ops for the same reason mergeCustomers uses them: this
+// is a bulk cross-store pass, not a granular per-entity patch. What it does
+// to each record is what the 30-day Trash purge does — splice it out, no
+// history (the record itself is going). Returns { store: [ids] } actually
+// removed.
+async function purgeTrashedLinks(id, trashed) {
+  const dataDir = path.join(__dirname, "..", "data");
+  const purged = {};
+  for (const [store, ids] of Object.entries(trashed)) {
+    const idSet = new Set(ids);
+    const fullPath = path.join(dataDir, `${store}.json`);
+    if (!fsSync.existsSync(fullPath)) continue;
+    const raw = await fs.readFile(fullPath, "utf8");
+    const arr = JSON.parse(raw || "[]");
+    if (!Array.isArray(arr)) continue;
+    // Re-assert both conditions at the moment of the write: only this
+    // customer's records, and only ones still in the Trash. A restore
+    // between the scan and here takes the record back out of scope.
+    const kept = arr.filter((r) => !(r && idSet.has(r.id) && r.customerId === id && isTrashed(r)));
+    const removedCount = arr.length - kept.length;
+    if (!removedCount) continue;
+    const removedIds = arr
+      .filter((r) => r && idSet.has(r.id) && r.customerId === id && isTrashed(r))
+      .map((r) => r.id);
+    await fs.writeFile(fullPath, JSON.stringify(kept, null, 2) + "\n", "utf8");
+    purged[store] = removedIds;
+  }
+  return purged;
+}
+
+// ---- Cascade delete (test-data cleanup) ------------------------------
+//
+// Patrick, 2026-09-08, resetting between load-test runs: "If there are any
+// of the above [invoices, work orders] attached to a property, or customer
+// it will not delete. Can we incorporate the reasonable fix for this so
+// that we continue to delete these test properties."
+//
+// The refusal below is right for the normal case and stays the default.
+// The cascade is the opt-in escape hatch: it deletes the customer AND
+// everything pointing at them. It is never implied — the caller has to ask
+// for it — because it destroys records the plain delete deliberately
+// protects.
+//
+// ONE THING IT WILL NOT DO. An invoice that was pushed to QuickBooks, or
+// that has money recorded against it, is not cleanup — it is accounting.
+// invoices.remove() makes you void it (in QBO too) with a written reason
+// for exactly that purpose, and a cleanup pass must not fake those steps.
+// So a protected invoice refuses the whole cascade and names itself.
+// Everything else a test customer accumulates goes: leads, properties,
+// bookings, quotes, work orders, projects, and draft/unpaid invoices.
+function invoiceIsProtected(inv) {
+  if (!inv) return false;
+  if (inv.quickbooksInvoiceId) return true;
+  const paid = Array.isArray(inv.payments)
+    ? inv.payments.reduce((sum, p) => sum + (Number(p && p.amount) || 0), 0)
+    : 0;
+  return paid > 0;
+}
+
+// Invoices belonging to this customer that the cascade must not touch.
+async function protectedInvoicesFor(id) {
+  const fullPath = path.join(__dirname, "..", "data", "invoices.json");
+  if (!fsSync.existsSync(fullPath)) return [];
+  try {
+    const arr = JSON.parse((await fs.readFile(fullPath, "utf8")) || "[]");
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((r) => r && r.customerId === id && invoiceIsProtected(r))
+      .map((r) => ({
+        id: r.id,
+        number: r.number || r.invoiceNumber || null,
+        status: r.status || null,
+        quickbooks: Boolean(r.quickbooksInvoiceId)
+      }));
+  } catch {
+    return [];
+  }
+}
+
+// Remove every record carrying this customerId, across all the stores the
+// merge pass re-points. Direct JSON ops for the same reason mergeCustomers
+// and purgeTrashedLinks use them: this is a bulk cross-store pass, not a
+// granular per-entity patch. Deleted invoices still get their tombstone —
+// the frozen snapshot is the audit trail, cascade or not.
+async function cascadeDeleteLinks(id, { by = "admin", reason = "" } = {}) {
+  const dataDir = path.join(__dirname, "..", "data");
+  const removed = {};
+  for (const file of CUSTOMER_LINK_FILES) {
+    const fullPath = path.join(dataDir, file);
+    if (!fsSync.existsSync(fullPath)) continue;
+    try {
+      const raw = await fs.readFile(fullPath, "utf8");
+      const arr = JSON.parse(raw || "[]");
+      if (!Array.isArray(arr)) continue;
+      const store = file.replace(".json", "");
+      const going = arr.filter((r) => r && r.customerId === id);
+      if (!going.length) continue;
+      if (store === "invoices") {
+        await appendInvoiceTombstones(going, { by, reason });
+      }
+      const kept = arr.filter((r) => !(r && r.customerId === id));
+      await fs.writeFile(fullPath, JSON.stringify(kept, null, 2) + "\n", "utf8");
+      removed[store] = going.map((r) => r.id).filter(Boolean);
+    } catch (err) {
+      console.warn(`[cascadeDelete] couldn't clear ${file}:`, err.message);
+    }
+  }
+  return removed;
+}
+
+// Same tombstone shape invoices.remove() writes, appended to the same log.
+// Written here rather than through lib/invoices so this module keeps no
+// dependency on it (and no import cycle); the file format is the contract.
+async function appendInvoiceTombstones(list, { by, reason }) {
+  const file = path.join(__dirname, "..", "data", "deleted-invoices.json");
+  let existing = [];
+  try {
+    if (fsSync.existsSync(file)) {
+      const parsed = JSON.parse((await fs.readFile(file, "utf8")) || "[]");
+      if (Array.isArray(parsed)) existing = parsed;
+    }
+  } catch { existing = []; }
+  const now = new Date().toISOString();
+  for (const inv of list) {
+    existing.push({
+      id: inv.id,
+      deletedAt: now,
+      deletedBy: by,
+      reason: reason || "Deleted with its customer (cascade delete).",
+      voidReason: inv.voidReason || "",
+      qbInvoiceId: inv.quickbooksInvoiceId || null,
+      qbVoidConfirmed: false,
+      cascadedFromCustomer: true,
+      snapshot: inv
+    });
+  }
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const tmp = file + ".tmp";
+  await fs.writeFile(tmp, JSON.stringify(existing, null, 2) + "\n", "utf8");
+  await fs.rename(tmp, file);
+}
+
+// Hard-delete — actually removes the record from customers.json.
+// Refuses if any LIVE entity references this customer. Caller must use
+// merge() first when they want to combine duplicates, or accept
+// loss-of-link when nothing is yet attached (typical for test data
+// and accidental near-duplicates with no bookings/WOs/etc yet).
+//
+// Records already in the Trash do not block (CRM-16). They are invisible
+// everywhere in the CRM — the customer page's own tabs are built from
+// list() calls that filter them out — so counting them made the refusal
+// name links the operator could not see and had no way to act on from
+// this page. But they cannot simply be ignored either: restoring one
+// after its customer is gone would strand it exactly the way CRM-15's
+// booking was stranded. So a Trash-only customer needs a second, explicit
+// confirm, and the delete then purges those Trash records with it. The
+// caller passes { purgeTrashed: true } for that confirm.
+//
+// Returns { ok: true, customer, purged } on success, or
+//         { ok: false, code, error, references, trashed } when blocked:
+//           code "linked"       — live links; Merge (or delete them) first
+//           code "trashed_only" — nothing live, N records in the Trash;
+//                                 re-call with purgeTrashed to go ahead
+async function hardDelete(id, { purgeTrashed = false, cascade = false, by = "admin", reason = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((c) => c.id === id);
+  if (idx === -1) return { ok: false, error: "Customer not found." };
+
+  const { live, trashed } = await scanCustomerLinks(id);
+
+  // Opt-in cascade: take the linked records with the customer instead of
+  // refusing. Protected invoices still stop it — see invoiceIsProtected.
+  if (cascade) {
+    const blocked = await protectedInvoicesFor(id);
+    if (blocked.length) {
+      return {
+        ok: false,
+        code: "protected",
+        error: blocked.some((i) => i.quickbooks)
+          ? "This customer has an invoice that was pushed to QuickBooks or has payments recorded against it. Void it in QBO and delete it from the invoice page first — a cleanup pass will not do that for you."
+          : "This customer has an invoice with payments recorded against it. Void and delete that invoice first — a cleanup pass will not do that for you.",
+        protectedInvoices: blocked
+      };
+    }
+    const cascaded = await cascadeDeleteLinks(id, { by, reason });
+    const removedCustomer = records.splice(idx, 1)[0];
+    await writeAll(records);
+    return { ok: true, customer: removedCustomer, cascaded, purged: {} };
+  }
+
+  if (Object.keys(live).length) {
     return {
       ok: false,
-      error: "Customer is referenced by other records. Use merge to combine them, or remove the references first.",
-      references
+      code: "linked",
+      error: "Customer is referenced by other records. Use merge to combine them, remove the references first, or delete everything together (cascade).",
+      references: live,
+      ...(Object.keys(trashed).length ? { trashed } : {})
     };
   }
+  if (Object.keys(trashed).length && !purgeTrashed) {
+    return {
+      ok: false,
+      code: "trashed_only",
+      error: "Nothing live is linked to this customer, but records in the Trash still are. Deleting the customer permanently deletes those Trash records too.",
+      trashed
+    };
+  }
+
+  // Purge BEFORE removing the customer: a failed write leaves the
+  // customer in place with its Trash records intact, which is a state the
+  // operator can retry from. The reverse order would strand them.
+  const purged = Object.keys(trashed).length ? await purgeTrashedLinks(id, trashed) : {};
+
   const removed = records.splice(idx, 1)[0];
   await writeAll(records);
-  return { ok: true, customer: removed };
+  return { ok: true, customer: removed, purged };
 }
 
 // ---- Matching --------------------------------------------------------
@@ -1009,6 +1230,7 @@ module.exports = {
   update,
   remove,
   hardDelete,
+  scanCustomerLinks,
   findByEmail,
   findByPhone,
   findByIdentifier,

@@ -27,6 +27,7 @@
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
+const { writeJsonAtomic } = require("./atomic-json");
 const crypto = require("node:crypto");
 // Contact-id helpers only — the bill-to resolver itself is not used here.
 // Safe to require at load time: billing-parties.js requires no siblings.
@@ -107,7 +108,7 @@ async function readAll() {
 
 async function writeAll(properties) {
   await ensureFile();
-  await fs.writeFile(FILE, JSON.stringify(properties, null, 2) + "\n", "utf8");
+  await writeJsonAtomic(FILE, properties);
 }
 
 // ---- Helpers ---------------------------------------------------------
@@ -321,10 +322,22 @@ function blankProperty() {
     commPrefs: {
       seasonalRemindersSMS: true,
       seasonalRemindersEmail: true,
+      // Decision I (docs/ASSIGNMENT_WRITER.md) — "no need to contact":
+      // Patrick coordinates with this customer directly (management
+      // companies whose sites carry no contact info of their own). The
+      // assignment writer BOOKS these; the cadence engine never
+      // messages them. Default false: everyone is contactable until
+      // said otherwise.
+      noContactNeeded: false,
+      // Review-request emails are their own consent channel (Jul 2026) —
+      // opting out of seasonal reminders doesn't kill review asks and
+      // vice versa, so the flag and its token get their own slots.
+      reviewRequestsEmail: true,
       optOutTokens: {
         seasonalSMS: null,
         seasonalEmail: null,
-        seasonalAll: null
+        seasonalAll: null,
+        reviewEmail: null
       }
     },
     // Bulk-operations soft state (admin CRM § Bulk operations).
@@ -503,13 +516,27 @@ function hydrate(p) {
     seasonalOutreach: (p?.seasonalOutreach && typeof p.seasonalOutreach === "object")
       ? p.seasonalOutreach
       : {},
+    // This block is rebuilt key by key, so anything missing from the
+    // list is DROPPED on every read — and readAll() writes hydrated
+    // records back, so an omission doesn't just hide a stored value,
+    // it deletes it. `reviewRequestsEmail` + `optOutTokens.reviewEmail`
+    // were missing until 2026-08-25: a review-email unsubscribe was
+    // erased on the next read (re-subscribing the customer) and the
+    // token in every review email already sent went dead. Keep this in
+    // step with COMM_PREF_KEYS below, and with the token slots
+    // mintOptOutTokensIfMissing() writes.
     commPrefs: {
       seasonalRemindersSMS: incomingCommPrefs.seasonalRemindersSMS !== false,
       seasonalRemindersEmail: incomingCommPrefs.seasonalRemindersEmail !== false,
+      reviewRequestsEmail: incomingCommPrefs.reviewRequestsEmail !== false,
+      // Opposite default from the three above: contact is assumed
+      // NEEDED unless the flag was explicitly set (Decision I).
+      noContactNeeded: incomingCommPrefs.noContactNeeded === true,
       optOutTokens: {
         seasonalSMS: typeof incomingTokens.seasonalSMS === "string" ? incomingTokens.seasonalSMS : null,
         seasonalEmail: typeof incomingTokens.seasonalEmail === "string" ? incomingTokens.seasonalEmail : null,
-        seasonalAll: typeof incomingTokens.seasonalAll === "string" ? incomingTokens.seasonalAll : null
+        seasonalAll: typeof incomingTokens.seasonalAll === "string" ? incomingTokens.seasonalAll : null,
+        reviewEmail: typeof incomingTokens.reviewEmail === "string" ? incomingTokens.reviewEmail : null
       }
     },
     deletedAt: typeof p?.deletedAt === "string" ? p.deletedAt : null,
@@ -1047,6 +1074,81 @@ async function get(id) {
   return properties.find((p) => p.id === id) || null;
 }
 
+// Remove one zone from a property's documented list, with a reason.
+//
+// Zone numbers are CONTROLLER STATIONS, not positions in a list: if the
+// box on the garage wall says Zone 5, it stays Zone 5 whatever happens to
+// Zone 3. So this deletes and never renumbers, and the survivors keep the
+// numbers a tech will read off the controller next spring.
+//
+// The reason is written here rather than accepted from the client. A
+// client-writable audit log is not an audit log — the whole value of the
+// entry is that the record, not the phone, decided what it says.
+//
+// Reasons are a closed set so the trail can be counted later; "other"
+// carries the note instead. Returns the updated property, or null when the
+// property or the zone does not exist.
+const ZONE_REMOVAL_REASONS = {
+  not_present: "not on this property",
+  merged: "merged into another zone",
+  mistake: "added in error",
+  other: ""
+};
+
+async function removeZone(propertyId, zoneNumber, { reason, note = "", by = "tech" } = {}) {
+  const num = Math.floor(Number(zoneNumber));
+  if (!Number.isFinite(num) || num <= 0) {
+    const err = new Error("Zone number must be a positive whole number.");
+    err.code = "BAD_ZONE";
+    throw err;
+  }
+  if (!Object.prototype.hasOwnProperty.call(ZONE_REMOVAL_REASONS, String(reason || ""))) {
+    const err = new Error("Pick a reason for removing the zone.");
+    err.code = "BAD_REASON";
+    throw err;
+  }
+  const trimmedNote = String(note || "").trim().slice(0, 500);
+  if (reason === "other" && trimmedNote.length < 4) {
+    const err = new Error("Say why, in a few words — it is the only record of what happened here.");
+    err.code = "NOTE_REQUIRED";
+    throw err;
+  }
+
+  const properties = await readAll();
+  const idx = properties.findIndex((p) => p.id === propertyId);
+  if (idx === -1) return null;
+  const target = properties[idx];
+  const zones = Array.isArray(target.system?.zones) ? target.system.zones : [];
+  const zone = zones.find((z) => Number(z.number) === num);
+  if (!zone) return null;
+
+  target.system = target.system || {};
+  target.system.zones = zones.filter((z) => Number(z.number) !== num);
+  // The declared count, if any, is now a claim the record has outlived.
+  // Leaving it would let it resurface as a fallback the day the last
+  // documented zone is removed.
+  if (target.system.zoneCount != null) {
+    target.system.zoneCount = target.system.zones.length || null;
+  }
+
+  const named = (zone.location || zone.label || "").trim();
+  const why = ZONE_REMOVAL_REASONS[reason] || trimmedNote;
+  if (!Array.isArray(target.history)) target.history = [];
+  target.history.push({
+    ts: new Date().toISOString(),
+    action: "zone_removed",
+    by,
+    note: `Zone ${num}${named ? ` (${named})` : ""} removed — ${why}${
+      reason !== "other" && trimmedNote ? `. ${trimmedNote}` : ""
+    }`
+  });
+
+  target.updatedAt = new Date().toISOString();
+  properties[idx] = target;
+  await writeAll(properties);
+  return target;
+}
+
 async function update(id, patch) {
   const properties = await readAll();
   const idx = properties.findIndex((p) => p.id === id);
@@ -1242,6 +1344,18 @@ async function bulkUpsert(records) {
           target.address = r.address;
           target.addressNormalized = addrNorm;
         }
+        // Coordinates, when the caller resolved them (the import route
+        // geocodes before calling us). Fill-only: an existing property that
+        // already has coords keeps them, exactly like every other field
+        // here. Import data never overwrites a curated value.
+        if (r.coords && r.coords.lat != null && r.coords.lng != null
+            && (!target.coords || target.coords.lat == null)) {
+          target.coords = {
+            lat: r.coords.lat,
+            lng: r.coords.lng,
+            formattedAddress: r.coords.formattedAddress || target.address || ""
+          };
+        }
         const sysIn = r.system || {};
         target.system = target.system || {};
         if (!target.system.controllerLocation) target.system.controllerLocation = sysIn.controllerLocation || "";
@@ -1269,6 +1383,15 @@ async function bulkUpsert(records) {
         created.customerPhone = r.customerPhone || "";
         created.address = r.address || "";
         created.addressNormalized = addrNorm;
+        // Was always left null here, which is what made every imported
+        // property invisible to proximity routing.
+        created.coords = (r.coords && r.coords.lat != null && r.coords.lng != null)
+          ? {
+              lat: r.coords.lat,
+              lng: r.coords.lng,
+              formattedAddress: r.coords.formattedAddress || created.address || ""
+            }
+          : null;
         const sysIn = r.system || {};
         created.system = {
           ...created.system,
@@ -1647,7 +1770,7 @@ async function findByOptOutToken(token, type) {
 // email, or both), who triggered the send, and the messageBatchId
 // shared by every recipient of a single bulk send. Lazy-initializes
 // the per-season entry on first touch.
-async function recordOutreachTouch(propertyId, { season, year, channels, by, messageBatchId }) {
+async function recordOutreachTouch(propertyId, { season, year, channels, by, messageBatchId, type, step }) {
   const records = await readAll();
   const idx = records.findIndex((p) => p.id === propertyId);
   if (idx === -1) return null;
@@ -1663,7 +1786,13 @@ async function recordOutreachTouch(propertyId, { season, year, channels, by, mes
     ts: new Date().toISOString(),
     channels: Array.isArray(channels) ? channels.slice() : [],
     by: String(by || "patrick"),
-    messageBatchId: messageBatchId || null
+    messageBatchId: messageBatchId || null,
+    // The stage-4 field the assignment writer was blocked on: without a
+    // type, an assignment send is forever indistinguishable from
+    // marketing outreach in the touch history. Optional and additive —
+    // legacy marketing touches (and legacy callers) simply carry null.
+    ...(type ? { type: String(type) } : {}),
+    ...(Number.isFinite(Number(step)) ? { step: Number(step) } : {})
   };
   target.seasonalOutreach[key].touches = [
     ...(target.seasonalOutreach[key].touches || []),
@@ -1731,6 +1860,61 @@ async function setSeasonalCommPref(propertyId, type, value) {
   return target;
 }
 
+// ---- Untrusted-patch sanitation for the consent flags ---------------
+//
+// The admin property page sends eligibility + comm prefs on the same
+// PATCH as the rest of the profile. The route can't pass them straight
+// to update(): `commPrefs.optOutTokens` are unsubscribe-link secrets
+// that must never be settable from a request body, and a consent flag
+// needs a coercion that respects BOTH directions.
+
+// Keys a client is allowed to set. optOutTokens is deliberately absent.
+const ELIGIBILITY_KEYS = ["springOpening", "fallClosing"];
+const COMM_PREF_KEYS = ["seasonalRemindersSMS", "seasonalRemindersEmail", "reviewRequestsEmail", "noContactNeeded"];
+
+// `false` is the meaningful value here — it IS the opt-out — so the
+// usual Boolean() coercion is the wrong tool: Boolean("false") is true,
+// which would silently re-subscribe someone who just asked to be left
+// alone. Take real booleans and the two spellings a form encoder can
+// produce; throw on anything else rather than guessing a consent state.
+function consentFlag(value, label) {
+  if (value === true || value === "true") return true;
+  if (value === false || value === "false") return false;
+  const err = new Error(`${label} must be true or false.`);
+  err.code = "BAD_CONSENT_FLAG";
+  throw err;
+}
+
+// Returns only the keys actually present in the payload, so a partial
+// patch stays partial and update()'s one-level merge preserves the rest.
+// Throws BAD_CONSENT_FLAG on an unparseable value.
+function sanitizeSeasonalConsent(payload) {
+  const src = (payload && typeof payload === "object") ? payload : {};
+  const out = {};
+
+  if (src.seasonalEligibility && typeof src.seasonalEligibility === "object") {
+    const elig = {};
+    for (const key of ELIGIBILITY_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(src.seasonalEligibility, key)) {
+        elig[key] = consentFlag(src.seasonalEligibility[key], key);
+      }
+    }
+    if (Object.keys(elig).length) out.seasonalEligibility = elig;
+  }
+
+  if (src.commPrefs && typeof src.commPrefs === "object") {
+    const prefs = {};
+    for (const key of COMM_PREF_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(src.commPrefs, key)) {
+        prefs[key] = consentFlag(src.commPrefs[key], key);
+      }
+    }
+    if (Object.keys(prefs).length) out.commPrefs = prefs;
+  }
+
+  return out;
+}
+
 // Toggle a single seasonal eligibility flag (springOpening / fallClosing).
 // When false, the property is excluded from outreach candidates lists
 // entirely for that season (not just opted out — it's marked as "this
@@ -1768,6 +1952,8 @@ async function auditMissingCustomerName() {
 }
 
 module.exports = {
+  removeZone,
+  ZONE_REMOVAL_REASONS,
   attachLead,
   relinkLead,
   findMatch,
@@ -1808,5 +1994,6 @@ module.exports = {
   setSeasonalOptOut,
   setSeasonalCommPref,
   setSeasonalEligibility,
+  sanitizeSeasonalConsent,
   auditMissingCustomerName
 };

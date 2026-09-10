@@ -170,4 +170,42 @@ async function finishCustomerForLead(customerId, lead, contact) {
   return customerId;
 }
 
-module.exports = { resolveCustomerForLead, finishCustomerForLead };
+// A booked appointment makes someone a customer.
+//
+// Patrick, 2026-09-08: "if the customer BOOKS an appointment - the customer
+// is still coming in as a LEAD ... if they've booked an appointment they are
+// active?" He is right, and nothing was moving them. resolveCustomerForLead
+// creates every record with status "lead" and the ONLY other writers were the
+// admin edit form and the archive path — so a customer who booked, paid and
+// had the work done still read as a lead in the CRM until Patrick edited them
+// by hand.
+//
+// The rule, in one place, called from the one wrapper every booking path goes
+// through (syncBookingFromLead in server.js). Same shape as
+// bookingHoldsItsSlot: a state test with more than one caller is a named
+// function or it drifts.
+//
+// PROMOTES, NEVER DEMOTES. A cancellation does not send anyone back to
+// "lead" — someone who booked once has still done business here, and the
+// deliberate way out is the archive path (status "inactive"). "lost" and
+// "inactive" DO promote: a customer who books again is, by definition,
+// neither. Only "active" is left alone, so this is idempotent and costs
+// nothing on the re-syncs that happen on every booking edit.
+async function promoteCustomerOnBooking(customerId, { by = "booking", reason = "" } = {}) {
+  if (!customerId) return null;
+  try {
+    const existing = await customers.get(customerId, { withProperties: false });
+    if (!existing || existing.status === "active") return existing || null;
+    return await customers.update(customerId, { status: "active" }, {
+      by,
+      note: reason || "Booked an appointment"
+    });
+  } catch (err) {
+    // Never let a status nicety take down a booking. The booking is the
+    // thing the customer is waiting on; the pill can be fixed later.
+    console.warn("[customers] promote-on-booking failed:", err?.message || err);
+    return null;
+  }
+}
+
+module.exports = { resolveCustomerForLead, finishCustomerForLead, promoteCustomerOnBooking };

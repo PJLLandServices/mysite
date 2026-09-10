@@ -123,7 +123,7 @@ button[data-tel]::after { content: none; }
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--pjl-text-muted, #7A7A72);
+  color: var(--pjl-text-muted, #6B6B63);
 }
 
 .pjl-contact-sheet-address {

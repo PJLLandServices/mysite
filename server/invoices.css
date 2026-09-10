@@ -33,7 +33,7 @@
 
 .invoices-empty {
   text-align: center;
-  color: #777;
+  color: #6B6B63;
   font-style: italic;
   padding: 40px 20px;
   background: #fff;
@@ -55,7 +55,7 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: #777;
+  color: #6B6B63;
   padding: 12px 14px;
   background: #FAFAF5;
   border-bottom: 1px solid #E5E5DD;
@@ -69,7 +69,7 @@
 .invoices-table a { color: #1B4D2E; text-decoration: none; font-weight: 600; }
 .invoices-table a:hover { text-decoration: underline; }
 .invoices-amount { font-variant-numeric: tabular-nums; font-weight: 600; }
-.invoices-row-sub { color: #999; font-size: 12px; }
+.invoices-row-sub { color: #6B6B63; font-size: 12px; }
 
 .invoices-status {
   display: inline-block;
@@ -86,7 +86,7 @@
    of it. Amber, matching the ledger rows on the invoice detail page. */
 .invoices-status--partially_paid { background: #FDF0DC; color: #8A5313; }
 .invoices-status--paid { background: #E8F4ED; color: #1B4D2E; }
-.invoices-status--void { background: #EFEFE5; color: #777; text-decoration: line-through; }
+.invoices-status--void { background: #EFEFE5; color: #6B6B63; text-decoration: line-through; }
 
 /* invoices.js relocates the bulk-checkbox wrap into the invoice-id <td>
  * and hides the leading bulk-cell/<th>, so on desktop the checkbox sits
@@ -145,7 +145,7 @@
   .invoices-table tbody td:nth-last-of-type(5) .invoices-row-sub {
     display: block;
     font-size: 12px;
-    color: #777;
+    color: #6B6B63;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -164,16 +164,16 @@
     grid-column: 1 / -1; grid-row: 3;
     justify-self: end;
     font-size: 12px;
-    color: #777;
+    color: #6B6B63;
   }
 }
 
 .invoices-status--accepted { background: #E8F4ED; color: #1B4D2E; }
 .invoices-status--partially_accepted { background: #FFF4E0; color: #7A5C00; }
 .invoices-status--declined { background: #FFE6E0; color: #8A2418; }
-.invoices-status--expired { background: #EFEFE5; color: #777; }
-.invoices-status--superseded { background: #EFEFE5; color: #999; text-decoration: line-through; }
-.invoices-status--cancelled { background: #EFEFE5; color: #999; }
+.invoices-status--expired { background: #EFEFE5; color: #6B6B63; }
+.invoices-status--superseded { background: #EFEFE5; color: #6B6B63; text-decoration: line-through; }
+.invoices-status--cancelled { background: #EFEFE5; color: #6B6B63; }
 
 .invoices-explainer {
   max-width: 850px;

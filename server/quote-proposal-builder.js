@@ -40,6 +40,7 @@
     scheduledDate: $("pbScheduledDate"),
     allowOnBehalf: $("pbAllowOnBehalf"),
     quoteNumber: $("pbQuoteNumber"),
+    preparedFor: $("pbPreparedFor"),
     scope: $("pbScope"),
     sectionList: $("pbSectionList"),
     addSection: $("pbAddSection"),
@@ -173,6 +174,7 @@
         lineItems: q.lineItems,
         pdfOptions: q.pdfOptions,
         quoteNumberDisplay: el.quoteNumber.value.trim(),
+        preparedForAddress: el.preparedFor.value.trim(),
         // Terms only — the server recomputes amount/balance and owns the
         // lifecycle fields. Only included once the deposit block has been
         // touched (configured), so opening an old draft doesn't rewrite it.
@@ -203,6 +205,7 @@
         return;
       }
       state.quote = data.quote;
+      schedulePreviewRefresh();
       state.isDirty = false;
       renderTotals();
       renderDelivery(); // branch change may have re-derived deliveryMode
@@ -265,6 +268,7 @@
     el.scheduledDate.value = q.scheduledServiceDate ? String(q.scheduledServiceDate).slice(0, 10) : "";
     el.allowOnBehalf.checked = q.allowOnBehalfAcceptance === true;
     el.quoteNumber.value = q.quoteNumberDisplay || "";
+    el.preparedFor.value = q.preparedForAddress || "";
     el.scope.value = q.scope || "";
 
     // PDF display options (Brief D). Missing → itemized/true/true.
@@ -278,7 +282,7 @@
     // Lock UI when not in draft.
     const locked = q.status !== "draft";
     [el.branch, el.billingMode, el.customerEmail, el.labourRate, el.validUntil,
-     el.quoteNumber, el.scope, el.sectionTitle, el.sectionBody, el.uploadInput,
+     el.quoteNumber, el.preparedFor, el.scope, el.sectionTitle, el.sectionBody, el.uploadInput,
      el.linePicker, el.customLine, el.anchorPicker, el.addSection,
      el.showAttachments, el.showProjectMap]
       .forEach((node) => { if (node) node.disabled = locked; });
@@ -525,17 +529,69 @@
     });
   }
 
+  // Line items in DISPLAY order (the sequence Patrick arranged), each paired
+  // with the index it occupies in the STORED array. Mirrors
+  // server/lib/line-item-order.js — a line's own `order` when it has one,
+  // array position otherwise, position as the tiebreaker — so the table, the
+  // PDF and the proposal page can never disagree. The stored index has to
+  // ride along because every row control addresses
+  // state.quote.lineItems[i] directly.
+  function orderedLinesWithIndex() {
+    const lines = state.quote.lineItems || [];
+    const key = (li, idx) => {
+      const n = Number(li && li.order);
+      return Number.isFinite(n) ? n : idx;
+    };
+    return lines
+      .map((li, idx) => ({ li, idx }))
+      .sort((a, b) => (key(a.li, a.idx) - key(b.li, b.idx)) || (a.idx - b.idx));
+  }
+
+  // Move a line one slot up (dir −1) or down (+1) by swapping its `order`
+  // with its neighbour in the displayed sequence — the same swap
+  // moveSection() uses for narrative sections. Display only: nothing here
+  // touches qty, price, lineTotal, the zone number or the zone label, and
+  // the totals are summed from the array, so no arrangement can move them.
+  function moveLineItem(storedIdx, dir) {
+    if (state.quote.status !== "draft") return;      // draft-only, like every lineItems edit
+    const ordered = orderedLinesWithIndex();
+    const at = ordered.findIndex((e) => e.idx === storedIdx);
+    const to = at + dir;
+    if (at < 0 || to < 0 || to >= ordered.length) return;   // clamp — no-op at the ends
+    const a = ordered[at], b = ordered[to];
+    // Normalize first: a legacy record whose lines have no `order` yet would
+    // otherwise swap two undefineds and appear to do nothing.
+    ordered.forEach((e, i) => { if (!Number.isFinite(Number(e.li.order))) e.li.order = i; });
+    const ao = Number(a.li.order), bo = Number(b.li.order);
+    a.li.order = bo; b.li.order = ao;
+    renderLineItems();
+    markDirty();
+  }
+
   function renderLineItems() {
     const lines = state.quote.lineItems || [];
+    const ordered = orderedLinesWithIndex();
+    const locked = state.quote.status !== "draft";
     const emptyEl = document.getElementById("pbLinesEmpty");
     if (emptyEl) emptyEl.hidden = lines.length > 0;
-    el.lineList.innerHTML = lines.map((li, idx) => {
+    el.lineList.innerHTML = ordered.map(({ li, idx }, pos) => {
       const sourceLabel = li.source === "pricing" ? "Pricing.json"
         : li.source === "project_rates" ? "Project rates"
         : li.source === "labour" ? "Labour"
         : "Custom";
+      // Reorder controls, mirroring the section list's ↑/↓ (disabled at the
+      // ends, hidden entirely once the proposal leaves draft).
+      const upDis = pos === 0 ? "disabled" : "";
+      const downDis = pos === ordered.length - 1 ? "disabled" : "";
+      const moveCell = locked
+        ? `<td class="pb-col-move"></td>`
+        : `<td class="pb-col-move" data-label="Order">` +
+          `<button type="button" class="pb-line-move" data-li-up="${idx}" ${upDis} aria-label="Move line up" title="Move up">↑</button>` +
+          `<button type="button" class="pb-line-move" data-li-down="${idx}" ${downDis} aria-label="Move line down" title="Move down">↓</button>` +
+          `</td>`;
       return `
         <tr class="pb-line-row" data-idx="${idx}">
+          ${moveCell}
           <td class="pb-col-desc" data-label="Component & detail">
             <input type="text" data-li-label="${idx}" value="${escapeAttr(li.label)}" placeholder="Component name">
             <input type="text" class="pb-line-detail" data-li-desc="${idx}" value="${escapeAttr(li.description || "")}" placeholder="Detail line — shown under the component">
@@ -603,6 +659,12 @@
         renderTotals();
         markDirty();
       });
+    });
+    el.lineList.querySelectorAll("[data-li-up]").forEach((btn) => {
+      btn.addEventListener("click", () => moveLineItem(Number(btn.dataset.liUp), -1));
+    });
+    el.lineList.querySelectorAll("[data-li-down]").forEach((btn) => {
+      btn.addEventListener("click", () => moveLineItem(Number(btn.dataset.liDown), 1));
     });
   }
 
@@ -826,7 +888,8 @@
   }
 
   function refreshPreviewLink() {
-    el.previewLink.href = `/api/admin/quote-folder/${encodeURIComponent(state.quote.id)}/pdf`;
+    el.previewLink.href = previewPdfUrl();
+    if (pv.open) pv.open.href = previewPdfUrl();
   }
 
   // ---- Catalog (project_rates) --------------------------------------
@@ -900,6 +963,7 @@
         return;
       }
       state.quote.attachments = [...(state.quote.attachments || []), data.attachment];
+      schedulePreviewRefresh();
       renderAttachments();
       renderActiveSection();
     } catch (err) {
@@ -921,6 +985,7 @@
         return;
       }
       state.quote.attachments = (state.quote.attachments || []).filter((a) => a.id !== attId);
+      schedulePreviewRefresh();
       for (const s of (state.quote.proposalSections || [])) {
         s.attachmentIds = (s.attachmentIds || []).filter((id) => id !== attId);
       }
@@ -1419,7 +1484,7 @@
 
   // ---- Top-bar inputs ----------------------------------------------
   el.billingMode.addEventListener("change", markDirty);
-  [el.customerEmail, el.labourRate, el.validUntil, el.quoteNumber, el.scope].forEach((node) => {
+  [el.customerEmail, el.labourRate, el.validUntil, el.quoteNumber, el.preparedFor, el.scope].forEach((node) => {
     node.addEventListener("input", markDirty);
   });
 
@@ -1450,6 +1515,7 @@
         return;
       }
       state.quote = data.quote;
+      schedulePreviewRefresh();
       setSaveState("Saved", null);
     } catch (err) {
       showError(err.message || "Save failed.");
@@ -1514,6 +1580,7 @@
         return;
       }
       state.quote = data.quote;
+      schedulePreviewRefresh();
       renderDelivery();
       renderProposalDoc();
       renderGeneratePanel();
@@ -1541,6 +1608,7 @@
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) { showError(data.errors?.[0] || "Couldn't re-seed sections."); return; }
       state.quote = data.quote;
+      schedulePreviewRefresh();
       state.activeSectionId = (state.quote.proposalSections[0] || {}).id || null;
       render();
     } catch (err) {
@@ -1549,6 +1617,9 @@
   }
 
   // ---- Send / Revise / Convert / Attest ----------------------------
+  // Send always passes through the email preview (Sep 2026): Patrick sees
+  // the exact from / to / subject / attachment / body, can add a note, and
+  // only then presses "Send now" inside the dialog.
   el.sendBtn.addEventListener("click", async () => {
     if (state.isDirty) await saveDraft();
     const email = state.quote.customerEmail;
@@ -1556,25 +1627,7 @@
       showError("Customer email is required before sending.");
       return;
     }
-    if (!confirm(`Send proposal ${state.quote.id} to ${email}? This locks the proposal.`)) return;
-    try {
-      const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/send-proposal-for-approval`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email, sendEmail: true, sendSms: false })
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok || !data.ok) {
-        showError(data.errors?.[0] || "Send failed.");
-        return;
-      }
-      state.quote = data.quote;
-      alert(`Sent. ${data.emailSent ? "Email delivered." : "Email NOT sent: " + (data.emailError || "?")}` +
-        `\n\nApproval URL:\n${data.approvalUrl}`);
-      render();
-    } catch (err) {
-      showError(err.message || "Send failed.");
-    }
+    openEmailDialog("send");
   });
 
   el.reviseBtn.addEventListener("click", async () => {
@@ -1624,11 +1677,466 @@
         return;
       }
       state.quote = data.quote;
+      schedulePreviewRefresh();
       render();
     } catch (err) {
       showError(err.message || "Attest failed.");
     }
   });
+
+  // ---- Live PDF preview (Sep 2026) ----------------------------------
+  // Right-hand column: the customer's PDF, re-rendered after every
+  // autosave / attachment change so spacing and page-break problems show
+  // up while editing, not after sending. Rendering goes through pdf.js
+  // (pages → <canvas>, all pages drawn off-screen then swapped in at once
+  // so the scroll position survives a refresh). If pdf.js didn't load
+  // (offline, CDN blocked) the same bytes go into a plain <iframe>.
+  // A sent quote renders its FROZEN bytes — exactly what the customer got.
+  const pv = {
+    workspace: $("pbWorkspace"),
+    panel: $("pbPreview"),
+    scroll: $("pbPreviewScroll"),
+    pages: $("pbPreviewPages"),
+    frame: $("pbPreviewFrame"),
+    empty: $("pbPreviewEmpty"),
+    state: $("pbPreviewState"),
+    note: $("pbPreviewNote"),
+    pagesLabel: $("pbPreviewPagesLabel"),
+    refresh: $("pbPreviewRefresh"),
+    open: $("pbPreviewOpen"),
+    hide: $("pbPreviewHide"),
+    show: $("pbPreviewShow")
+  };
+  const PREVIEW_PREF_KEY = "pb-pdf-preview";
+  const PDFJS_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  let previewSeq = 0;
+  let previewTimer = null;
+  let previewBusy = false;
+  let previewQueued = false;
+  let previewDoc = null;
+  let previewVisible = false;
+
+  function previewPdfUrl() {
+    return `/api/admin/quote-folder/${encodeURIComponent(state.quote.id)}/pdf`;
+  }
+
+  function previewPrefOn() {
+    try { return localStorage.getItem(PREVIEW_PREF_KEY) !== "off"; } catch (_) { return true; }
+  }
+
+  function setPreviewState(label, kind) {
+    if (!pv.state) return;
+    pv.state.textContent = label;
+    pv.state.classList.toggle("is-busy", kind === "busy");
+    pv.state.classList.toggle("is-error", kind === "error");
+  }
+
+  // persist=true only for an explicit Hide/Show click. The narrow-screen
+  // auto-hide at load must NOT write the preference, or one visit from a
+  // phone would switch the desktop preview off for good.
+  function setPreviewVisible(on, { persist = false } = {}) {
+    previewVisible = on === true;
+    if (!pv.workspace) return;
+    pv.workspace.classList.toggle("has-preview", previewVisible);
+    pv.panel.hidden = !previewVisible;
+    pv.show.hidden = previewVisible;
+    if (persist) {
+      try { localStorage.setItem(PREVIEW_PREF_KEY, previewVisible ? "on" : "off"); } catch (_) { /* fine */ }
+    }
+    if (previewVisible) schedulePreviewRefresh(0);
+  }
+
+  function schedulePreviewRefresh(delay = 350) {
+    if (!previewVisible || !state.quote) return;
+    if (previewTimer) clearTimeout(previewTimer);
+    previewTimer = setTimeout(refreshPreview, delay);
+  }
+
+  async function refreshPreview() {
+    previewTimer = null;
+    if (!previewVisible || !state.quote) return;
+    if (previewBusy) { previewQueued = true; return; }
+    previewBusy = true;
+    const seq = ++previewSeq;
+    setPreviewState("Rendering…", "busy");
+    try {
+      const r = await fetch(`${previewPdfUrl()}?ts=${Date.now()}`, { cache: "no-store" });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.errors?.[0] || `PDF render failed (${r.status})`);
+      }
+      const buf = await r.arrayBuffer();
+      if (seq !== previewSeq) return;
+      if (window.pdfjsLib) await renderPreviewPages(buf, seq);
+      else renderPreviewFrame(buf);
+      if (seq !== previewSeq) return;
+      pv.empty.hidden = true;
+      const q = state.quote;
+      const frozen = !(q.status === "draft" || q.status === "draft_preview");
+      const stamp = new Date().toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
+      setPreviewState(frozen ? `Frozen copy — what the customer received` : `Up to date · ${stamp}`, null);
+      pv.note.hidden = !frozen;
+      if (frozen) pv.note.textContent = "This quote has been sent, so the PDF is locked. Create a revision to change it.";
+    } catch (err) {
+      if (seq !== previewSeq) return;
+      setPreviewState("Preview failed", "error");
+      pv.empty.textContent = err.message || "Couldn't render the PDF.";
+      pv.empty.hidden = false;
+    } finally {
+      previewBusy = false;
+      if (previewQueued) { previewQueued = false; schedulePreviewRefresh(100); }
+    }
+  }
+
+  async function renderPreviewPages(buf, seq) {
+    const lib = window.pdfjsLib;
+    if (lib.GlobalWorkerOptions && !lib.GlobalWorkerOptions.workerSrc) {
+      lib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+    }
+    const doc = await lib.getDocument({ data: buf }).promise;
+    if (seq !== previewSeq) { doc.destroy(); return; }
+    const scrollTop = pv.scroll.scrollTop;
+    const width = Math.max(240, pv.scroll.clientWidth - 32);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const frag = document.createDocumentFragment();
+    for (let n = 1; n <= doc.numPages; n++) {
+      const page = await doc.getPage(n);
+      if (seq !== previewSeq) { doc.destroy(); return; }
+      const base = page.getViewport({ scale: 1 });
+      const scale = width / base.width;
+      const vp = page.getViewport({ scale: scale * dpr });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.floor(vp.width);
+      canvas.height = Math.floor(vp.height);
+      canvas.style.width = `${Math.floor(width)}px`;
+      canvas.style.height = `${Math.floor(vp.height / dpr)}px`;
+      await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+      if (seq !== previewSeq) { doc.destroy(); return; }
+      const wrap = document.createElement("div");
+      wrap.className = "pb-preview-page";
+      wrap.dataset.page = String(n);
+      wrap.appendChild(canvas);
+      const label = document.createElement("span");
+      label.className = "pb-preview-pageno";
+      label.textContent = `Page ${n} of ${doc.numPages}`;
+      wrap.appendChild(label);
+      frag.appendChild(wrap);
+    }
+    pv.pages.replaceChildren(frag);
+    pv.pages.hidden = false;
+    pv.frame.hidden = true;
+    pv.scroll.scrollTop = scrollTop;
+    pv.pagesLabel.textContent = `${doc.numPages} page${doc.numPages === 1 ? "" : "s"}`;
+    if (previewDoc) { try { previewDoc.destroy(); } catch (_) { /* fine */ } }
+    previewDoc = doc;
+  }
+
+  function renderPreviewFrame(buf) {
+    const url = URL.createObjectURL(new Blob([buf], { type: "application/pdf" }));
+    if (pv.frame.dataset.url) { try { URL.revokeObjectURL(pv.frame.dataset.url); } catch (_) { /* fine */ } }
+    pv.frame.dataset.url = url;
+    pv.frame.src = url;
+    pv.frame.hidden = false;
+    pv.pages.hidden = true;
+    pv.pagesLabel.textContent = "";
+  }
+
+  function initPreview() {
+    if (!pv.workspace) return;
+    pv.refresh.addEventListener("click", () => schedulePreviewRefresh(0));
+    pv.hide.addEventListener("click", () => setPreviewVisible(false, { persist: true }));
+    pv.show.addEventListener("click", () => setPreviewVisible(true, { persist: true }));
+    let resizeTimer = null;
+    window.addEventListener("resize", () => {
+      if (!previewVisible || !window.pdfjsLib) return;
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => schedulePreviewRefresh(0), 400);
+    });
+    // Wide screens only — below the breakpoint the CSS hides the column
+    // and the "Open PDF" link is the preview.
+    const wide = window.matchMedia("(min-width: 1200px)").matches;
+    setPreviewVisible(wide && previewPrefOn());
+  }
+
+  // ---- Email preview (Sep 2026) --------------------------------------
+  // GET /proposal-email-preview composes with the SAME server function the
+  // send uses, so this dialog shows exactly what the customer receives.
+  // "send" mode adds the Send-now button; "preview" mode is read-only.
+  const em = {
+    dialog: $("pbEmailDialog"),
+    title: $("pbEmailDialogTitle"),
+    close: $("pbEmailClose"),
+    cancel: $("pbEmailCancel"),
+    send: $("pbEmailSend"),
+    note: $("pbEmailNote"),
+    warn: $("pbEmailWarn"),
+    from: $("pbEmailFrom"),
+    to: $("pbEmailTo"),
+    subject: $("pbEmailSubject"),
+    files: $("pbEmailFiles"),
+    fileList: $("pbEmailFileList"),
+    filesTotal: $("pbEmailFilesTotal"),
+    frame: $("pbEmailFrame"),
+    status: $("pbEmailStatus"),
+    openBtn: $("pbEmailPreviewBtn")
+  };
+  let emailMode = "preview";
+  let emailSeq = 0;
+  let emailTimer = null;
+  let emailSending = false;
+  const noteKey = () => `pb-email-note:${QUOTE_ID}`;
+
+  function readStoredNote() {
+    try { return localStorage.getItem(noteKey()) || ""; } catch (_) { return ""; }
+  }
+  function storeNote(v) {
+    try {
+      if (String(v || "").trim()) localStorage.setItem(noteKey(), v);
+      else localStorage.removeItem(noteKey());
+    } catch (_) { /* fine */ }
+  }
+
+  function emailStatus(text, { retry = false } = {}) {
+    em.status.textContent = text;
+    if (retry) {
+      const a = document.createElement("a");
+      a.href = "#";
+      a.className = "pb-email-retry";
+      a.textContent = "Retry";
+      a.addEventListener("click", (e) => { e.preventDefault(); loadEmailPreview(); });
+      em.status.append(" · ", a);
+    }
+  }
+
+  // A brand-new sandboxed frame every time the body is (re)composed. Reusing
+  // one <iframe srcdoc> across dialog open/close left the body blank on the
+  // second open in at least one browser (Patrick, Sep 5 2026); a fresh
+  // element has no navigation history to get confused by.
+  function freshEmailFrame() {
+    const old = em.frame;
+    if (!old) return null;
+    const next = document.createElement("iframe");
+    next.className = old.className;
+    next.id = old.id;
+    next.title = old.title;
+    next.setAttribute("sandbox", "");
+    old.replaceWith(next);
+    em.frame = next;
+    return next;
+  }
+
+  async function loadEmailPreview() {
+    if (!state.quote) return;
+    const seq = ++emailSeq;
+    emailStatus("Composing…");
+    const note = em.note.value;
+    const ctl = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), 15000) : null;
+    try {
+      const r = await fetch(
+        `/api/quotes/${encodeURIComponent(state.quote.id)}/proposal-email-preview?note=${encodeURIComponent(note)}&ts=${Date.now()}`,
+        { cache: "no-store", ...(ctl ? { signal: ctl.signal } : {}) }
+      );
+      const d = await r.json().catch(() => ({}));
+      if (seq !== emailSeq) return;
+      if (!r.ok || !d.ok) {
+        emailStatus(d.errors?.[0] || `Preview failed (${r.status}).`, { retry: true });
+        return;
+      }
+      em.from.textContent = d.from || "—";
+      em.to.textContent = d.to || "— no customer email on the quote —";
+      em.to.classList.toggle("is-missing", !d.to);
+      em.subject.textContent = d.subject || "—";
+      renderEmailFiles(d);
+      const frame = freshEmailFrame();
+      if (frame) {
+        frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"></head>` +
+          `<body style="margin:0;padding:22px 18px;background:#ffffff;">${d.html || ""}</body></html>`;
+      }
+      const warns = [];
+      if (d.linkIsPlaceholder) warns.push("The “Review & sign” link is issued when you send — the preview shows a placeholder.");
+      if (!d.to) warns.push("Set the customer email in the top bar before sending.");
+      em.warn.textContent = warns.join(" ");
+      em.warn.hidden = warns.length === 0;
+      const stamp = new Date().toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
+      emailStatus(`${d.isRevision ? "Revision email · " : ""}Composed ${stamp}`);
+    } catch (err) {
+      if (seq !== emailSeq) return;
+      const timedOut = err && err.name === "AbortError";
+      emailStatus(timedOut ? "The preview took too long to compose." : (err.message || "Preview failed."), { retry: true });
+      if (typeof console !== "undefined") console.error("[proposal] email preview failed:", err);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  // The attachment manifest — every uploaded file with what happens to it,
+  // plus the proposal PDF itself. Derived server-side by the SAME function
+  // the send uses (quotes.emailAttachmentManifest), so this list IS what
+  // leaves. Fates: embedded (drawn inside the PDF), referenced (the PDF
+  // says "See attached" → file rides along by default), unanchored /
+  // excluded (in neither, unless ticked).
+  function fmtBytes(n) {
+    n = Number(n) || 0;
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)} MB`;
+    if (n >= 1_000) return `${Math.round(n / 1_000)} KB`;
+    return `${n} B`;
+  }
+  function fateLabel(m) {
+    const where = m.sectionTitles && m.sectionTitles.length ? ` (${m.sectionTitles.join(", ")})` : "";
+    switch (m.fate) {
+      case "embedded": return `Printed inside the proposal PDF${where}`;
+      case "referenced": return `Proposal says “See attached”${where}`;
+      case "unanchored": return "Not placed in any section — not in the PDF";
+      case "excluded": return "Its section is left out of the PDF";
+      default: return "";
+    }
+  }
+  function renderEmailFiles(d) {
+    if (!em.fileList) return;
+    const rows = [];
+    if (d.gated) {
+      rows.push(`<li class="pb-email-file is-none"><span class="pb-email-file-name">Nothing attached</span><span class="pb-email-file-fate">Phone-gated delivery — the customer opens everything from the link.</span></li>`);
+    } else if (d.attachmentFilename) {
+      rows.push(`<li class="pb-email-file is-on"><span class="pb-email-file-tick" aria-hidden="true">✓</span><span class="pb-email-file-name">📄 ${escapeHtml(d.attachmentFilename)}</span><span class="pb-email-file-fate">The proposal itself, frozen at send</span></li>`);
+    }
+    for (const m of (d.attachments || [])) {
+      const on = m.emailAttached === true;
+      const icon = m.isPdf ? "📄" : "🖼";
+      const control = d.gated
+        ? ""
+        : `<label class="pb-email-file-toggle"><input type="checkbox" data-att="${escapeAttr(m.id)}" ${on ? "checked" : ""} ${d.editable ? "" : "disabled"}> <span>Attach file</span></label>`;
+      const explicitNote = m.explicit ? ` · <a href="#" class="pb-email-file-reset" data-att="${escapeAttr(m.id)}" title="Back to the default for this file">reset to default</a>` : "";
+      rows.push(`<li class="pb-email-file ${on ? "is-on" : "is-off"}">` +
+        `<span class="pb-email-file-tick" aria-hidden="true">${on ? "✓" : "–"}</span>` +
+        `<span class="pb-email-file-name">${icon} ${escapeHtml(m.filename)} <small>${fmtBytes(m.sizeBytes)}</small></span>` +
+        `<span class="pb-email-file-fate">${escapeHtml(fateLabel(m))}${explicitNote}</span>` +
+        control +
+        `</li>`);
+    }
+    if (!rows.length) rows.push(`<li class="pb-email-file is-none"><span class="pb-email-file-name">Nothing attached</span></li>`);
+    em.fileList.innerHTML = rows.join("");
+    const count = (d.gated ? 0 : (d.attachmentFilename ? 1 : 0)) + (d.attachments || []).filter((m) => m.emailAttached).length;
+    const bytes = Number(d.attachedBytes) || 0;
+    em.filesTotal.textContent = d.gated ? "" : `${count} file${count === 1 ? "" : "s"}${bytes ? ` · ${fmtBytes(bytes)} + the PDF` : ""}`;
+    em.filesTotal.classList.toggle("is-heavy", bytes > 20_000_000);
+    if (bytes > 20_000_000) em.filesTotal.textContent += " — over Gmail's 25 MB limit, untick something";
+  }
+  async function patchEmailAttach(attId, value) {
+    try {
+      const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/attachments/${encodeURIComponent(attId)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ emailAttach: value })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) { showError(d.errors?.[0] || "Couldn't update the attachment."); return; }
+      if (d.quote) state.quote.attachments = d.quote.attachments || state.quote.attachments;
+      loadEmailPreview();
+    } catch (err) {
+      showError(err.message || "Couldn't update the attachment.");
+    }
+  }
+  if (em.fileList) {
+    em.fileList.addEventListener("change", (e) => {
+      const cb = e.target.closest("input[type=checkbox][data-att]");
+      if (!cb) return;
+      patchEmailAttach(cb.dataset.att, cb.checked);
+    });
+    em.fileList.addEventListener("click", (e) => {
+      const a = e.target.closest("a.pb-email-file-reset");
+      if (!a) return;
+      e.preventDefault();
+      patchEmailAttach(a.dataset.att, null);
+    });
+  }
+
+  function openEmailDialog(mode) {
+    if (!em.dialog || !state.quote) return;
+    emailMode = mode === "send" ? "send" : "preview";
+    em.send.hidden = emailMode !== "send";
+    em.cancel.textContent = emailMode === "send" ? "Not yet" : "Close";
+    em.title.textContent = emailMode === "send"
+      ? `Review the email, then send ${state.quote.id}`
+      : `Email preview — ${state.quote.id}`;
+    const alreadySent = state.quote.status !== "draft" && state.quote.status !== "draft_preview";
+    // A sent quote shows the note that went out with it (read-only); a
+    // draft restores whatever Patrick typed last time the dialog was open.
+    em.note.value = alreadySent ? (state.quote.approval?.note || "") : readStoredNote();
+    em.note.disabled = alreadySent;
+    em.status.textContent = "";
+    em.warn.hidden = true;
+    if (em.fileList) em.fileList.innerHTML = "";
+    if (em.filesTotal) em.filesTotal.textContent = "";
+    freshEmailFrame();
+    if (!em.dialog.open) {
+      try {
+        if (typeof em.dialog.showModal === "function") em.dialog.showModal();
+        else em.dialog.setAttribute("open", "");
+      } catch (_) {
+        em.dialog.setAttribute("open", "");
+      }
+    }
+    loadEmailPreview();
+  }
+
+  function closeEmailDialog() {
+    if (!em.dialog) return;
+    if (typeof em.dialog.close === "function" && em.dialog.open) em.dialog.close();
+    else em.dialog.removeAttribute("open");
+  }
+
+  if (em.dialog) {
+    em.openBtn.addEventListener("click", async () => {
+      if (state.isDirty) await saveDraft();
+      openEmailDialog("preview");
+    });
+    em.close.addEventListener("click", closeEmailDialog);
+    em.cancel.addEventListener("click", closeEmailDialog);
+    em.note.addEventListener("input", () => {
+      storeNote(em.note.value);
+      if (emailTimer) clearTimeout(emailTimer);
+      emailTimer = setTimeout(loadEmailPreview, 450);
+    });
+    em.send.addEventListener("click", async () => {
+      if (emailSending) return;
+      const email = state.quote.customerEmail;
+      if (!email) {
+        showError("Customer email is required before sending.");
+        return;
+      }
+      if (!confirm(`Send ${state.quote.id} to ${email} now? This locks the proposal.`)) return;
+      emailSending = true;
+      em.send.disabled = true;
+      em.status.textContent = "Sending…";
+      try {
+        const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/send-proposal-for-approval`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email, sendEmail: true, sendSms: false, note: em.note.value.trim() })
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) {
+          em.status.textContent = data.errors?.[0] || "Send failed.";
+          showError(data.errors?.[0] || "Send failed.");
+          return;
+        }
+        state.quote = data.quote;
+        storeNote("");
+        closeEmailDialog();
+        alert(`Sent. ${data.emailSent ? "Email delivered." : "Email NOT sent: " + (data.emailError || "?")}` +
+          `\n\nApproval URL:\n${data.approvalUrl}`);
+        render();
+        schedulePreviewRefresh(0);
+      } catch (err) {
+        em.status.textContent = err.message || "Send failed.";
+        showError(err.message || "Send failed.");
+      } finally {
+        emailSending = false;
+        em.send.disabled = false;
+      }
+    });
+  }
 
   // ---- Bootstrap -----------------------------------------------------
   async function bootstrap() {
@@ -1665,6 +2173,7 @@
       el.app.hidden = false;
       wireDepositEvents();
       render();
+      initPreview();
       loadProjectRates();
       loadGatePhones();
       loadDepositSettings();

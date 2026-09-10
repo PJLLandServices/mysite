@@ -26,7 +26,7 @@
 .crm-parts-cat-summary::after {
   content: "▾";
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
   transition: transform 160ms ease;
 }
 .crm-parts-cat[open] > .crm-parts-cat-summary::after { transform: rotate(180deg); }
@@ -40,7 +40,7 @@
 }
 .crm-parts-cat-meta {
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
   margin-left: auto;
   margin-right: 6px;
 }
@@ -74,7 +74,7 @@
 .crm-parts-sub-summary::after {
   content: "▾";
   font-size: 11px;
-  color: #7A7A72;
+  color: #6B6B63;
   transition: transform 160ms ease;
 }
 .crm-parts-sub[open] > .crm-parts-sub-summary::after { transform: rotate(180deg); }
@@ -84,7 +84,7 @@
 }
 .crm-parts-sub-meta {
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
   margin-left: auto;
   margin-right: 6px;
 }
@@ -190,7 +190,7 @@
 .crm-parts-pn {
   font-family: ui-monospace, "SFMono-Regular", monospace;
   font-size: 11px;
-  color: #7A7A72;
+  color: #6B6B63;
   white-space: nowrap;
 }
 
@@ -223,7 +223,7 @@
 }
 .crm-parts-custom-meta {
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .crm-parts-custom-help {
   margin: 0 0 8px;

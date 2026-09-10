@@ -71,9 +71,11 @@ const STATUSES = [
 // records but is no longer emitted; project_proposal supersedes it.
 const TYPES = ["ai_repair_quote", "formal_quote", "on_site_quote", "project_proposal"];
 
-// Branch taxonomy for project_proposal. Five real-world buckets that
-// share the skeleton but differ in templated narrative and
-// responsibility splits. Brief 1 §3.1A.
+// Branch taxonomy for project_proposal. Real-world buckets that share the
+// skeleton but differ in templated narrative and responsibility splits.
+// Brief 1 §3.1A seeded the first five; the list has grown since — count it,
+// don't trust a number written here. Mirrored by BRANCHES in lib/projects.js;
+// adding one here means adding it there too.
 const PROPOSAL_BRANCHES = [
   "gc_subcontract",
   "direct_residential",
@@ -87,12 +89,21 @@ const PROPOSAL_BRANCHES = [
   // are untouched. Carries behaviour, not just a label — see
   // PROPOSAL_BRANCH_DEFAULTS (five-section preset, 30-day expiry, T&M
   // billing, plain-PDF delivery).
-  "residential_repair"
+  "residential_repair",
+  // lighting_repair (2026-08) — repairs, troubleshooting and fixture
+  // replacement on an EXISTING landscape lighting system. Distinct from
+  // lighting_design (designing and installing a new one): this branch names
+  // fixing what is already in the ground. Additive; existing records are
+  // untouched. Deliberately label-only — it is ABSENT from
+  // PROPOSAL_BRANCH_DEFAULTS, so it keeps the historical behaviour (full
+  // nine-section skeleton, 90-day expiry, fixed_price billing, proposal_page
+  // delivery, "Proposal" as the customer-facing noun).
+  "lighting_repair"
 ];
 
 const BILLING_MODES = ["fixed_price", "time_and_material"];
 
-const ACCEPTANCE_METHODS = ["pending", "portal_esign", "pdf_return"];
+const ACCEPTANCE_METHODS = ["pending", "portal_esign", "pdf_return", "offline_signed_copy"];
 
 // Section kinds correspond to the McDonald's Hampshire estimate as the
 // reference real-world layout. The proposal builder UI offers these in
@@ -196,6 +207,87 @@ function customerDocNoun(quote) {
   };
 }
 
+// ---- Branch labels + work nature (2026-08-29) ------------------------
+//
+// PROPOSAL_BRANCH_LABELS is the ONE canonical label map. The browser
+// surfaces (quote folder card, project page, proposal-builder <select>)
+// each carry their own copy because they cannot require() a server module —
+// `scripts/test-branch-labels.mjs` pins every copy to this map, so adding or
+// rewording a label here fails the build until each surface matches. Same
+// arrangement the line-item order uses between the PDF and the browser
+// builder.
+//
+// "Residential Install" (was plain "Residential", 2026-08-29): the branch
+// names a NEW residential sprinkler system installation, and "Residential"
+// alone read as a customer category rather than the kind of work — easy to
+// confuse with residential_repair sitting two rows below it.
+const PROPOSAL_BRANCH_LABELS = {
+  gc_subcontract: "GC Subcontract",
+  direct_residential: "Residential Install",
+  lighting_design: "Lighting Design",
+  renovation_coordination: "Renovation Coordination",
+  change_order: "Change Order",
+  residential_repair: "Residential Repair",
+  lighting_repair: "Landscape Lighting Repairs"
+};
+
+// The branches whose work FIXES a system that already exists. Everything
+// else a project_proposal can be is installation / design-build work.
+// Declared as the exception list, not the inclusion list, deliberately: a
+// NEW branch is far more likely to be install-side, and if someone adds one
+// and forgets this set, they get the installation treatment (a confirmation
+// email the customer can act on) rather than silence.
+const REPAIR_BRANCHES = new Set(["residential_repair", "lighting_repair"]);
+
+function branchLabel(branch) {
+  return PROPOSAL_BRANCH_LABELS[branch] || branch || "";
+}
+
+// Is this quote for INSTALLATION work, as opposed to repair?
+//
+// Drives (a) whether the customer gets an acceptance-confirmation email
+// promising we'll be in touch to schedule, and (b) the wording of the
+// /approve page title + link preview.
+//
+// ai_repair_quote and on_site_quote are repair work by construction — the
+// on-site quote is a tech finding faults on a visit, and the AI quote prices
+// a repair from the diagnostic chat. Only a project_proposal can be an
+// installation, and then only on a non-repair branch.
+//
+// NOTE (Patrick's call, flagged 2026-08-29): the smart-controller upgrade
+// rides ai_repair_quote (narrativeKey "smart-controller") and is arguably an
+// installation. It is deliberately EXCLUDED here so this change does not
+// alter what an existing repair-side flow sends to customers. Move it by
+// adding a narrativeKey check, not by loosening the type test.
+function isInstallationQuote(quote) {
+  if (!quote || quote.type !== "project_proposal") return false;
+  return !REPAIR_BRANCHES.has(quote.branch);
+}
+
+// Customer-facing title for the /approve page and its link preview.
+//
+// This is what shows up as the description on a texted link. It said
+// "Approve repair quote" for every quote type, because the approval page was
+// built for the repair side of the business before proposals existed — so a
+// homeowner being sent a $20k sprinkler installation proposal got a text
+// preview calling it a repair quote.
+//
+// Carries the WORK TYPE and the document noun and nothing else: no customer
+// name, address, or price. Link previews are fetched by Apple/Google/Meta
+// servers and cached by them, so nothing here may be private.
+function approvePageTitle(quote) {
+  if (!quote) return "Approve your quote";
+  if (quote.type === "project_proposal") {
+    const noun = customerDocNoun(quote).lower; // "proposal" | "estimate"
+    return isInstallationQuote(quote)
+      ? `Approve your installation ${noun}`
+      : `Approve your repair ${noun}`;
+  }
+  // ai_repair_quote / on_site_quote — unchanged wording, it was correct for
+  // these all along.
+  return "Approve your repair quote";
+}
+
 // pdfOptions.lineItems enum (Brief D). An enum, not two booleans, so the
 // nonsense state "no descriptions AND no pricing" is unrepresentable.
 const PDF_LINE_ITEM_MODES = ["itemized", "descriptions_only", "summary"];
@@ -226,7 +318,10 @@ const ATTACHMENT_KINDS = [
   // Used internally when a customer uploads their signed PDF via the
   // /pdf-return flow — kept in the same attachments[] array but
   // displayed separately in the admin attestation UI.
-  "signed_pdf_return"
+  "signed_pdf_return",
+  // Admin-uploaded signed copy backing an offline on-site-quote acceptance
+  // (customer signed a printed copy; admin attaches the returned PDF/photo).
+  "signed_offline_acceptance"
 ];
 
 const ATTACHMENT_MIME_WHITELIST = new Set([
@@ -257,6 +352,9 @@ const SCOPE_PROTECTED_FIELDS = [
   "type",
   "pdfOptions",
   "quoteNumberDisplay",
+  // preparedForAddress is part of how the offer is addressed — draft-editable,
+  // frozen at send with the rest of the document (Brief B).
+  "preparedForAddress",
   // deliveryMode is part of the delivery contract the customer is sent under
   // (plain PDF vs phone-gated page) — draft-editable, frozen at send like the
   // pricing. A change after send is a revision, not an edit.
@@ -562,7 +660,7 @@ function blankQuote() {
     // (null/empty) for ai_repair_quote and on_site_quote so the existing
     // flows are untouched.
 
-    // Branch — five real-world buckets (see PROPOSAL_BRANCHES). Drives
+    // Branch — the real-world buckets in PROPOSAL_BRANCHES. Drives
     // the proposal builder's templated narrative and the PDF header tag.
     branch: null,
 
@@ -607,6 +705,15 @@ function blankQuote() {
     // frozen PDF file, /approve links, QuickBooks, and history. Presentation
     // only; draft-editable, frozen with the PDF at send (Brief B).
     quoteNumberDisplay: "",
+
+    // preparedForAddress — an OPTIONAL override for the address printed in
+    // the customer-facing PREPARED FOR block. Empty = the customer's OWN
+    // address (their billing address), never a project/site address. Set
+    // this when the document should be addressed somewhere other than the
+    // account's address — e.g. a GC's head office while the work happens
+    // at a site. Presentation only: it never touches the property record,
+    // the service address a crew works from, pricing, or QuickBooks.
+    preparedForAddress: "",
 
     // attachments — uploaded static media (Google Earth screenshots, CAD
     // drawings, manufacturer schematics). Files live on disk under
@@ -770,6 +877,7 @@ function hydrate(q) {
     // missing/odd value as the itemized default, belt-and-suspenders.
     pdfOptions: { ...base.pdfOptions, ...(q?.pdfOptions && typeof q.pdfOptions === "object" ? q.pdfOptions : {}) },
     quoteNumberDisplay: typeof q?.quoteNumberDisplay === "string" ? q.quoteNumberDisplay : "",
+    preparedForAddress: typeof q?.preparedForAddress === "string" ? q.preparedForAddress : "",
     customRates: { ...base.customRates, ...(q?.customRates || {}) },
     acceptanceMethod: typeof q?.acceptanceMethod === "string" ? q.acceptanceMethod : "pending",
     acceptanceEvidence: q?.acceptanceEvidence || null,
@@ -1287,6 +1395,18 @@ async function updateProposal(id, patch = {}, { by = "admin", note = "" } = {}) 
     q.quoteNumberDisplay = String(patch.quoteNumberDisplay == null ? "" : patch.quoteNumberDisplay)
       .replace(/[\u0000-\u001F\u007F]+/g, " ").trim().slice(0, 40);
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "preparedForAddress")) {
+    // Optional PREPARED-FOR address override. Newlines are legitimate in a
+    // postal address, so keep \n and strip only the other control chars;
+    // collapse runs of blank lines and cap at 200 so it can't push the
+    // cover block into the sections below it.
+    q.preparedForAddress = String(patch.preparedForAddress == null ? "" : patch.preparedForAddress)
+      .replace(/\r\n?/g, "\n")
+      .replace(/[\u0000-\u0009\u000B-\u001F\u007F]+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .split("\n").map((line) => line.trim()).join("\n")
+      .trim().slice(0, 200);
+  }
   if (Array.isArray(patch.proposalSections)) {
     const existingSections = Array.isArray(q.proposalSections) ? q.proposalSections : [];
     const existingById = new Map(existingSections.map((s) => [s.id, s]));
@@ -1342,7 +1462,7 @@ async function updateProposal(id, patch = {}, { by = "admin", note = "" } = {}) 
     q.proposalSections = incoming;
   }
   if (Array.isArray(patch.lineItems)) {
-    q.lineItems = patch.lineItems.map(normalizeProposalLineItem);
+    q.lineItems = normalizeProposalLineItems(patch.lineItems);
     const totals = computeProposalTotals(q.lineItems);
     q.subtotal = totals.subtotal;
     q.hst = totals.hst;
@@ -1397,7 +1517,7 @@ async function updateProposal(id, patch = {}, { by = "admin", note = "" } = {}) 
 // Line items on a proposal carry a `source` discriminator so the UI
 // knows whether they came from the public pricing catalog, the
 // internal project-rates catalog, or were authored ad-hoc.
-function normalizeProposalLineItem(raw) {
+function normalizeProposalLineItem(raw, idx) {
   if (!raw || typeof raw !== "object") raw = {};
   const source = ["pricing", "project_rates", "custom"].includes(raw.source) ? raw.source : "custom";
   const sourceKey = source === "custom" ? null : (typeof raw.sourceKey === "string" ? raw.sourceKey : null);
@@ -1416,8 +1536,62 @@ function normalizeProposalLineItem(raw) {
     qty: safeQty,
     price: safePrice,
     priceAtCreation: Number.isFinite(Number(raw.priceAtCreation)) ? Number(raw.priceAtCreation) : safePrice,
-    lineTotal: Math.round(safePrice * safeQty * 100) / 100
+    lineTotal: Math.round(safePrice * safeQty * 100) / 100,
+    // order — DISPLAY sequence on the quotation and the PDF, set by the
+    // reorder controls in the proposal builder. Presentation only: never read
+    // by the totals, the deposit figures, QuickBooks or the invoice, and it
+    // never renumbers a zone (see lib/line-item-order.js).
+    //
+    // Falls back to array position, so a record that pre-dates the field
+    // renders exactly as it always did and gets real values stamped on it by
+    // the next save. Called WITHOUT an index (projects.js seeding scope-change
+    // lines onto a revision) the key is omitted rather than defaulted to 0 —
+    // a line with no opinion about where it goes must not claim the top slot
+    // ahead of an already-arranged stack. normalizeProposalLineItems then
+    // appends it, and the renderers' positional fallback covers it meanwhile.
+    ...(Number.isFinite(Number(raw.order)) ? { order: Number(raw.order) }
+      : Number.isFinite(Number(idx)) ? { order: Number(idx) }
+        : {})
   };
+}
+
+// Normalize an incoming lineItems[] and settle its display order.
+//
+// Two things happen here that the per-item normalizer cannot do, because
+// both need to see the whole set:
+//
+//   1. A line arriving with NO order is APPENDED after the highest existing
+//      one rather than taking a position index that would collide with an
+//      arranged line. This is the case that matters in practice: a Site
+//      Builder re-sync adds a new zone to a stack Patrick has already
+//      arranged, and the new zone belongs at the end, not wherever it
+//      happened to land in the merge. Mirrors addSection's `maxOrder + 1`.
+//   2. Orders are renumbered densely to 0..n-1 by sorted position and the
+//      array is STORED in that order, so array position and `order` always
+//      agree. That keeps the stored record readable, leaves no gaps for
+//      repeated edits to drift into, and means any consumer that does not
+//      sort still sees the right sequence.
+function normalizeProposalLineItems(rawItems) {
+  const list = Array.isArray(rawItems) ? rawItems : [];
+  // Which entries carried an explicit order, before the per-item fallback
+  // masks the distinction.
+  const hadOrder = list.map((raw) => Number.isFinite(Number(raw && raw.order)));
+  const maxOrder = list.reduce(
+    (m, raw, i) => (hadOrder[i] ? Math.max(m, Number(raw.order)) : m),
+    Number.NEGATIVE_INFINITY
+  );
+  let appendAt = Number.isFinite(maxOrder) ? maxOrder + 1 : 0;
+
+  const normalized = list.map((raw, i) => {
+    const li = normalizeProposalLineItem(raw, i);
+    if (!hadOrder[i]) li.order = appendAt++;   // new lines land at the end, in arrival order
+    return li;
+  });
+
+  return normalized
+    .map((li, idx) => ({ li, idx }))
+    .sort((a, b) => (a.li.order - b.li.order) || (a.idx - b.idx))
+    .map((e, i) => { e.li.order = i; return e.li; });
 }
 
 function computeProposalTotals(lineItems) {
@@ -1487,6 +1661,59 @@ async function acceptWithSignature(id, {
     action: partial ? "partially_accepted" : "accepted",
     by,
     note: note || (partial ? "Customer accepted some line items, declined others." : "")
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
+// Record a quote as accepted from a returned SIGNED COPY (offline-acceptance
+// brief, Aug 2026). The on-site-quote sibling of the proposal PDF-return
+// path: flips status → accepted with acceptanceMethod "offline_signed_copy"
+// and a durable `offlineAcceptance` evidence block, in place of a drawn
+// signature. The signed copy itself lives on the work order (evidenceRef
+// points to it). Idempotent — a quote already accepted (any method) is
+// returned untouched.
+async function recordOfflineAcceptance(id, {
+  customerName = "",
+  decisions,
+  acceptedAt,
+  recordedBy = "admin",
+  note = "",
+  evidenceRef = null,
+  ip,
+  userAgent
+} = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  if (q.status === "accepted" || (q.signature && q.signature.signed)) return q; // idempotent
+
+  const ts = nowIso();
+  const acceptedIso = acceptedAt || ts;
+  q.status = "accepted";
+  q.acceptedAt = acceptedIso;
+  q.acceptanceMethod = "offline_signed_copy";
+  // NOT an on-screen signature — an honest record that the customer returned
+  // a hand-signed copy, recorded by an admin.
+  q.offlineAcceptance = {
+    method: "offline_signed_copy",
+    customerName: String(customerName || "").slice(0, 120),
+    acceptedAt: acceptedIso,
+    recordedBy: String(recordedBy || "admin").slice(0, 80),
+    note: String(note || "").slice(0, 2000),
+    evidenceRef: evidenceRef || null,
+    ip: String(ip || ""),
+    userAgent: String(userAgent || ""),
+    ts
+  };
+  if (Array.isArray(decisions)) q.decisions = decisions;
+  q.history.push({
+    ts,
+    action: "accepted",
+    by: recordedBy || "admin",
+    note: note ? `Accepted offline (signed copy) — ${note}` : "Accepted offline — customer returned a signed copy."
   });
   records[idx] = q;
   await writeAll(records);
@@ -1573,7 +1800,7 @@ async function ensureApprovalToken(id) {
   return token;
 }
 
-async function markSentForApproval(id, { token, channels = [], toEmail = "", toPhone = "", by = "tech", pdf = null } = {}) {
+async function markSentForApproval(id, { token, channels = [], toEmail = "", toPhone = "", by = "tech", pdf = null, note = "" } = {}) {
   if (!id || !token) throw new Error("markSentForApproval needs id + token");
   const records = await readAll();
   const idx = records.findIndex((q) => q.id === id);
@@ -1585,7 +1812,10 @@ async function markSentForApproval(id, { token, channels = [], toEmail = "", toP
     sentAt: ts,
     sentVia: Array.isArray(channels) ? channels.slice() : [],
     sentToEmail: String(toEmail || "").toLowerCase().trim(),
-    sentToPhone: String(toPhone || "").trim()
+    sentToPhone: String(toPhone || "").trim(),
+    // Patrick's optional personal note from the email preview — kept so
+    // the record shows what the customer was told alongside the document.
+    ...(String(note || "").trim() ? { note: String(note).trim().slice(0, 2000) } : {})
   };
   // Promote draft → sent on send. Also handle draft_preview → sent so
   // a tech who previewed first can flip the existing record without
@@ -2225,6 +2455,92 @@ async function removeAttachment(quoteId, attachmentId, { by = "admin" } = {}) {
   return { id: attachmentId };
 }
 
+// Per-attachment email flag (Sep 2026). `emailAttach` is a tri-state on
+// the attachment record: true / false = Patrick's explicit choice, missing
+// = the default the email manifest derives (PDF files the proposal points
+// at with "See attached" ride along; embedded images don't). Draft-only,
+// like every other attachment edit.
+async function updateAttachment(quoteId, attachmentId, { emailAttach, caption } = {}, { by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === quoteId);
+  if (idx === -1) throw new Error(`Quote ${quoteId} not found.`);
+  const q = records[idx];
+  if (q.type === "project_proposal" && isProposalLocked(q)) {
+    const err = new Error("Proposal is locked. Attachments can't be modified.");
+    err.code = "proposal_locked";
+    throw err;
+  }
+  const att = (q.attachments || []).find((a) => a.id === attachmentId);
+  if (!att) throw new Error(`Attachment ${attachmentId} not found.`);
+  if (emailAttach === true || emailAttach === false) att.emailAttach = emailAttach;
+  else if (emailAttach === null) delete att.emailAttach;
+  if (typeof caption === "string") att.caption = caption.slice(0, 400);
+  q.history.push({
+    ts: nowIso(),
+    action: "attachment_updated",
+    by,
+    note: `${attachmentId} emailAttach=${att.emailAttach === undefined ? "default" : att.emailAttach}`
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return att;
+}
+
+// What actually leaves with the approval email (Sep 2026). One derivation
+// for the preview manifest AND the send, so the list Patrick sees is the
+// list the customer gets. Each uploaded file gets a fate:
+//   embedded     — image anchored to an included section → drawn inside
+//                  the proposal PDF (not a separate file)
+//   referenced   — PDF file anchored to an included section → the proposal
+//                  prints "See attached: …", so the file itself must ride
+//                  along or the reference dangles (default: attach)
+//   unanchored   — not placed in any section → in neither the PDF nor the
+//                  email unless explicitly attached
+//   excluded     — anchored, but its section is out of the PDF or the
+//                  "Include attachments" / "Include project map" switch is off
+// `gated` (phone-gated delivery) → nothing attaches; everything lives
+// behind the gate.
+function emailAttachmentManifest(q, { gated = false } = {}) {
+  const rawOpts = q.pdfOptions && typeof q.pdfOptions === "object" ? q.pdfOptions : {};
+  const showAttachments = rawOpts.showAttachments !== false;
+  const showProjectMap = rawOpts.showProjectMap !== false;
+  const sections = Array.isArray(q.proposalSections) ? q.proposalSections : [];
+  const items = [];
+  for (const att of (q.attachments || [])) {
+    if (!att || att.kind === "signed_pdf_return") continue;
+    const isImage = att.mimeType === "image/png" || att.mimeType === "image/jpeg";
+    const isPdf = att.mimeType === "application/pdf";
+    const anchors = sections.filter((s) => Array.isArray(s.attachmentIds) && s.attachmentIds.includes(att.id));
+    const live = anchors.filter((s) => {
+      if (s.include === false) return false;
+      if (s.kind === "project_map") return showProjectMap;
+      return showAttachments;
+    });
+    let fate;
+    if (!anchors.length) fate = "unanchored";
+    else if (!live.length) fate = "excluded";
+    else fate = isImage ? "embedded" : "referenced";
+    const defaultAttach = fate === "referenced";
+    const chosen = att.emailAttach === true || att.emailAttach === false ? att.emailAttach : defaultAttach;
+    items.push({
+      id: att.id,
+      filename: att.filename || att.id,
+      mimeType: att.mimeType,
+      sizeBytes: Number(att.sizeBytes) || 0,
+      caption: att.caption || "",
+      kind: att.kind,
+      isImage,
+      isPdf,
+      fate,
+      sectionTitles: live.map((s) => s.title || s.kind),
+      defaultAttach,
+      explicit: att.emailAttach === true || att.emailAttach === false,
+      emailAttached: !gated && chosen
+    });
+  }
+  return items;
+}
+
 async function readAttachmentBuffer(quoteId, attachmentId) {
   const q = await get(quoteId);
   if (!q) return null;
@@ -2651,6 +2967,11 @@ module.exports = {
   resolveBranchDefaults,
   deliveryModeForBranch,
   customerDocNoun,
+  PROPOSAL_BRANCH_LABELS,
+  REPAIR_BRANCHES: [...REPAIR_BRANCHES],
+  branchLabel,
+  isInstallationQuote,
+  approvePageTitle,
   PROPOSAL_SECTION_KINDS,
   ATTACHMENT_KINDS,
   ATTACHMENT_MIME_WHITELIST,
@@ -2669,6 +2990,7 @@ module.exports = {
   create,
   accept,
   acceptWithSignature,
+  recordOfflineAcceptance,
   decline,
   expire,
   expireStaleQuotes,
@@ -2699,10 +3021,13 @@ module.exports = {
   defaultProposalSections,
   normalizeProposalSection,
   normalizeProposalLineItem,
+  normalizeProposalLineItems,
   computeProposalTotals,
   addAttachment,
   removeAttachment,
   readAttachmentBuffer,
+  updateAttachment,
+  emailAttachmentManifest,
   listAttachments,
   snapshotRatesFromCustomer,
   recordPortalSignAcceptance,

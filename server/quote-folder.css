@@ -65,7 +65,7 @@
   margin-left: 4px;
   font-size: 12px;
   font-weight: 500;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .qf-card__status {
   flex: 0 0 auto;
@@ -85,7 +85,7 @@
   overflow-wrap: anywhere;
 }
 .qf-card__type {
-  color: #7A7A72;
+  color: #6B6B63;
   margin-bottom: 8px;
 }
 .qf-card__customer {
@@ -94,18 +94,33 @@
   margin-top: 4px;
 }
 .qf-card__dates {
-  color: #7A7A72;
+  color: #6B6B63;
   margin-top: 2px;
 }
 .qf-card__materials {
-  color: #7A7A72;
+  color: #6B6B63;
   margin-top: 2px;
 }
 .qf-card__materials a {
-  color: #7A7A72;
+  color: #6B6B63;
   font-weight: 500;
 }
 .qf-card__materials a:hover { text-decoration: underline; }
+
+/* Quote View Tracker — whether the CUSTOMER opened the approval link.
+ * Three states, colour-coded by how much they need Patrick's attention:
+ * seen (neutral, informational), not opened (muted — nothing has gone
+ * wrong yet), blocked at the phone gate (orange — the customer tried and
+ * could not get in, which is the one that needs action). */
+.qf-card__viewed {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.qf-card__viewed--seen { color: #4A6741; font-weight: 500; }
+.qf-card__viewed--none { color: #6B6B63; }
+.qf-card__viewed--stuck { color: #C2610F; font-weight: 600; }
 
 .qf-card__actions {
   display: flex;
@@ -227,7 +242,7 @@
   font-weight: 500;
   text-transform: none;
   letter-spacing: 0;
-  color: #9A9A92;
+  color: #6B6B63;
 }
 .scq-field select {
   width: 100%;
@@ -292,7 +307,7 @@
    active button but greyed out + not interactive. */
 .qf-card__actions button[disabled],
 .qf-card__actions .is-disabled {
-  color: #9A9A92;
+  color: #6B6B63;
   cursor: not-allowed;
   pointer-events: none;
 }
@@ -326,5 +341,5 @@
 }
 .qf-deleted-toggle .qf-deleted-toggle-count {
   font-size: 12px;
-  color: #9A9A92;
+  color: #6B6B63;
 }

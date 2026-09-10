@@ -20,21 +20,12 @@ const invoices = require("./invoices");
 const workOrders = require("./work-orders");
 const woReportSnapshot = require("./wo-report-snapshot");
 
-// Warranty defaults by service type. Spec §4.3.4 says 1yr repairs / 3yr
-// installs. Map service_visit + spring/fall openings to "repair" tier;
-// install-style WO types (none yet) get the longer warranty.
-const WARRANTY_MONTHS = {
-  service_visit: 12,
-  spring_opening: 12,
-  fall_closing: 12,
-  install: 36
-};
-
-function addMonths(iso, months) {
-  const d = new Date(iso);
-  d.setUTCMonth(d.getUTCMonth() + months);
-  return d.toISOString();
-}
+// Warranty months + month arithmetic now live in lib/warranty.js (JOB-002
+// Part A) — the single authoritative policy table, shared with the
+// warrantyForWorkOrder() helper so the snapshot written here and any
+// later computation can never drift. Values are unchanged: 12mo for
+// service_visit / spring_opening / fall_closing, 36mo for installs.
+const { WARRANTY_MONTHS, addMonths } = require("./warranty");
 
 // Pull a one-line summary from the WO. Prefers tech notes, falls back to
 // type label + zone count.
@@ -51,7 +42,11 @@ function summarizeWo(wo) {
   };
   const base = labels[wo.type] || "Visit";
   if (issueCount) return `${base} — ${issueCount} issue${issueCount === 1 ? "" : "s"} found across ${zoneCount} zone${zoneCount === 1 ? "" : "s"}`;
-  return `${base} — ${zoneCount} zone${zoneCount === 1 ? "" : "s"} checked`;
+  // The verb says what the visit actually did — Patrick's review of his
+  // simulated closing flagged "4 zones checked" as the wrong word for a
+  // winterization.
+  const verbs = { fall_closing: "winterized", spring_opening: "inspected" };
+  return `${base} — ${zoneCount} zone${zoneCount === 1 ? "" : "s"} ${verbs[wo.type] || "checked"}`;
 }
 
 // Pull line items from the WO. Priority:
@@ -198,7 +193,12 @@ async function run(wo, deps = {}) {
     return { ok: true, serviceRecord: existing, invoice: existing.invoiceId ? await invoices.get(existing.invoiceId) : null, alreadyRan: true };
   }
 
-  const completedAt = new Date().toISOString();
+  // JOB-007 (CRM-11): honour the WO's own completion stamp. On the
+  // normal path completedAt was server-stamped by workOrders.update()
+  // milliseconds before this runs (JOB-002 Part A), so this is a no-op;
+  // on a BACK-DATED completion the service record and warranty derive
+  // from the actual visit date, not the day the record was closed out.
+  const completedAt = wo.completedAt || new Date().toISOString();
   const lineItems = lineItemsFromWo(wo);
   const summary = summarizeWo(wo);
   const warrantyMonths = WARRANTY_MONTHS[wo.type] || 12;
@@ -452,7 +452,11 @@ async function run(wo, deps = {}) {
   // scheduleForWo carries its own gates (feature enabled, customer
   // email present, per-property opt-out, one-per-customer-per-6-months,
   // idempotent per WO) and never throws into the cascade.
-  try {
+  // deps.suppressReviewRequest (JOB-007): back-dated completions skip
+  // the review ask entirely — a review request landing weeks after a
+  // months-old visit reads as spam, and anchoring it to the true date
+  // would fire it immediately, which is no better.
+  if (deps.suppressReviewRequest !== true) try {
     const reviewRequests = require("./review-requests");
     const rr = await reviewRequests.scheduleForWo(wo);
     if (rr?.scheduled) {

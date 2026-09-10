@@ -26,7 +26,7 @@
 }
 .ps-count {
   font-size: 13px;
-  color: #7A7A72;
+  color: #6B6B63;
   margin-left: auto;
 }
 
@@ -96,7 +96,7 @@
 }
 .ps-cat {
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
   white-space: nowrap;
 }
 .ps-cat strong {
@@ -402,7 +402,7 @@
 .ps-empty {
   padding: 30px;
   text-align: center;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 
 /* Deleted section */
@@ -590,7 +590,7 @@
 .ps-field-help {
   font-style: normal;
   font-weight: 400;
-  color: #7A7A72;
+  color: #6B6B63;
   font-size: 11px;
 }
 
@@ -864,7 +864,7 @@
 }
 .ps-group-count {
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
   font-weight: 600;
 }
 .ps-group-toggle:hover .ps-group-name { text-decoration: underline; }
@@ -882,7 +882,7 @@
 }
 .ps-sub-count {
   font-size: 11px;
-  color: #9A9A90;
+  color: #6B6B63;
   margin-left: 6px;
 }
 

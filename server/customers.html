@@ -45,6 +45,7 @@
       <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
       <a href="/admin">CRM</a>
       <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/season-plan">Season plan</a>
       <a href="/admin/handoff">Handoff</a>
       <a href="/admin/outreach">Outreach</a>
       <a href="/admin/review-requests">Reviews</a>
@@ -56,6 +57,7 @@
       <a href="/admin/work-orders">Work orders</a>
       <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
       <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/warranty-claims">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
       <a href="/admin/material-lists">Materials</a>
       <a href="/admin/chats">AI Chats</a>
       <a href="/admin/users">Users</a>
@@ -89,6 +91,16 @@
 
       <section class="customers-toolbar">
         <input type="search" id="customerSearch" placeholder="Search by name, email, or phone…">
+        <label class="crm-sort">
+          <span>Sort</span>
+          <select id="customerSort">
+            <option value="name-asc">Name A–Z</option>
+            <option value="name-desc">Name Z–A</option>
+            <option value="town-asc">Town A–Z</option>
+            <option value="town-desc">Town Z–A</option>
+            <option value="recent">Recently active</option>
+          </select>
+        </label>
         <span class="customers-count" id="customersCount">—</span>
         <button type="button" class="pjl-btn pjl-btn-primary" id="newCustomerBtn">+ New customer</button>
         <!-- Copies the public /new-customer URL to clipboard. Secondary
@@ -106,7 +118,22 @@
         <button type="button" class="customers-filter" data-status="lost">Lost</button>
       </nav>
 
-      <section class="customers-list" id="customersList"></section>
+      <!-- Data table. The header row names the columns and the body is
+           filled by customers.js; both read the same --crm-cols template
+           from customers.css, so they line up by construction rather than
+           by two hand-matched width lists. -->
+      <section class="crm-table customers-table" id="customersTable">
+        <div class="crm-table-head" role="row">
+          <span></span>
+          <span>Customer</span>
+          <span>Email</span>
+          <span>Phone</span>
+          <span>Town</span>
+          <span>Status</span>
+          <span></span>
+        </div>
+        <div class="customers-list" id="customersList"></div>
+      </section>
 
       <p class="customers-empty" id="customersEmpty" hidden>
         No customers match. Adjust your filters, or click "+ New customer".
@@ -143,6 +170,7 @@
     </div>
   </div>
 
+  <script src="/crm/crm-sort.js"></script>
   <script src="/crm/customers.js"></script>
   <script src="/crm/crm-contact.js" defer></script>
   <script src="/crm/nav-badges.js?v=1"></script>

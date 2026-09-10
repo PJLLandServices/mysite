@@ -92,30 +92,24 @@ function renderProjects() {
     const woCount = (p.workOrderIds || []).length;
     const mlCount = mlCountByProject.get(p.id) || 0;
     const customerLine = p.customerName || p.customerEmail || "—";
-    const addressLine = p.address ? ` &middot; ${escapeHtml(p.address)}` : "";
     return `
-      <li class="ml-card${p.status === "archived" ? " is-archived" : ""}">
-        <a class="ml-card-link" href="/admin/project/${encodeURIComponent(p.id)}">
-          <div class="ml-card-head">
-            <h3 class="ml-card-name">${escapeHtml(p.name || "(untitled project)")}</h3>
-            <span class="ml-card-id">${escapeHtml(p.id)}</span>
-            <span class="proj-status proj-status--${escapeHtml(p.status)}">${escapeHtml(STATUS_LABELS[p.status] || p.status)}</span>
-          </div>
-          <div class="ml-card-meta">
-            <strong>${escapeHtml(customerLine)}</strong>${addressLine}
-            <br>Updated ${escapeHtml(fmtDate(p.updatedAt))}${p.startedAt ? ` &middot; active since ${escapeHtml(fmtDate(p.startedAt))}` : ""}
-          </div>
-          <div class="proj-card-chips">
-            <span class="proj-chip">
-              <span class="proj-chip-num ${woCount === 0 ? "proj-chip-num--zero" : ""}">${woCount}</span>
-              ${woCount === 1 ? "work order" : "work orders"}
-            </span>
-            <span class="proj-chip">
-              <span class="proj-chip-num ${mlCount === 0 ? "proj-chip-num--zero" : ""}">${mlCount}</span>
-              ${mlCount === 1 ? "material list" : "material lists"}
-            </span>
-            ${p.sourceQuoteId ? `<span class="proj-chip">from ${escapeHtml(p.sourceQuoteId)}</span>` : ""}
-          </div>
+      <li class="crm-table-row ml-card${p.status === "archived" ? " is-archived" : ""}">
+        <a class="crm-row-link" href="/admin/project/${encodeURIComponent(p.id)}">
+          <span class="crm-cell ml-card-head">
+            <span class="crm-identity">
+            <span class="crm-cell-primary">${escapeHtml(p.name || "(untitled project)")}</span>
+            <span class="crm-cell-sub">${escapeHtml(p.id)}${p.sourceQuoteId ? ` &middot; from ${escapeHtml(p.sourceQuoteId)}` : ""}</span></span>
+          </span>
+          <span class="crm-cell ml-card-customer">
+            <span>${escapeHtml(customerLine)}</span>
+            ${p.address ? `<span class="crm-cell-sub">${escapeHtml(p.address)}</span>` : ""}
+          </span>
+          <span class="crm-cell crm-cell-muted">${escapeHtml(fmtDate(p.updatedAt))}</span>
+          <span class="crm-cell crm-cell-num${woCount === 0 ? " is-zero" : ""}">${woCount}</span>
+          <span class="crm-cell crm-cell-num${mlCount === 0 ? " is-zero" : ""}">${mlCount}</span>
+          <span class="crm-cell crm-cell-status">
+            <span class="crm-pill proj-status proj-status--${escapeHtml(p.status)}">${escapeHtml(STATUS_LABELS[p.status] || p.status)}</span>
+          </span>
         </a>
       </li>
     `;

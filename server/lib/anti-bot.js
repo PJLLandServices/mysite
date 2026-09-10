@@ -227,7 +227,7 @@ function rejectionResponse(reason) {
 // higher bar than Turnstile would). Returns:
 //   { ok: true, normalizedEmail }                     — pass
 //   { ok: false, status, responseBody, reason }       — block
-async function checkSubmission({ body, ip, userAgent, skipTurnstile = false }) {
+async function checkSubmission({ body, ip, userAgent, skipTurnstile = false, skipRateLimit = false }) {
   const { honeypot, ts, token } = readDefenseFields(body);
 
   // 1. Honeypot — cheapest check, runs first.
@@ -259,7 +259,7 @@ async function checkSubmission({ body, ip, userAgent, skipTurnstile = false }) {
   // bounce on Turnstile below) so a bot can't burn through Turnstile
   // verifications by failing them in a tight loop.
   const bucket = recordIpHit(ip);
-  if (isOverLimit(bucket)) {
+  if (isOverLimit(bucket) && !skipRateLimit) {
     await logBlocked({ ip, userAgent, reason: "rate_limit", payload: body });
     const r = rejectionResponse("rate_limit");
     return { ok: false, status: r.status, responseBody: r.body, reason: "rate_limit" };

@@ -4,7 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#1B4D2E">
-  <title>Approve repair quote — PJL Land Services</title>
+  <!-- Neutral by design. The server replaces this (and injects the OG tags)
+       with wording derived from the quote's own type + branch — see
+       renderApproveWithOg in server.js. This static text is only what a
+       BAD or missing token falls back to, i.e. the "link not found" page,
+       so it must not claim to be any particular kind of quote. It used to
+       say "Approve repair quote", which is what previewed on a customer's
+       phone for a residential installation proposal. -->
+  <title>Approve your quote — PJL Land Services</title>
   <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260518" />
   <link rel="shortcut icon" href="/favicon.ico?v=20260518" />

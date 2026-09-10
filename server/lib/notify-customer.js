@@ -23,10 +23,28 @@
 // subdomain.
 
 const { resolvePublicBaseUrl } = require("./public-base-url");
+const { logSend } = require("./mailer-log");
+const testRecipients = require("./test-recipients");
 // Invoice CC assembly (spouse + billing CC, deduped) lives with the rest of
 // the billing-party model. Pure helper — billing-parties.js requires no
 // siblings, so this is safe at load time.
 const { buildInvoiceCcList } = require("./billing-parties");
+const { documentFilename } = require("./format");
+
+// The invoice PDF's name, wherever this module attaches one. Same
+// convention as the download (server.js invoiceFilename) — deliberately
+// so: the file a customer saves out of the email and the one Patrick
+// downloads from the CRM must not be two different names for one
+// document. Dated from the invoice, never from send time, so a resend
+// cannot re-date an August document.
+function invoiceAttachmentName(invoice) {
+  return documentFilename({
+    date: invoice?.sentAt || invoice?.createdAt,
+    label: `${invoice?.id || "Invoice"} Invoice`,
+    customerName: invoice?.customerName,
+    address: invoice?.address
+  });
+}
 
 let nodemailerCache = null;
 function getNodemailer() {
@@ -36,15 +54,16 @@ function getNodemailer() {
 }
 
 let transporterCache = null;
+
 function getTransporter() {
   if (transporterCache) return transporterCache;
   const nodemailer = getNodemailer();
   if (!nodemailer) return null;
   if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) return null;
-  transporterCache = nodemailer.createTransport({
+  transporterCache = testRecipients.guardTransport(nodemailer.createTransport({
     service: "gmail",
     auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
-  });
+  }));
   return transporterCache;
 }
 
@@ -146,6 +165,35 @@ const TEMPLATES = {
       "If this new time doesn't work, call (905) 960-0181 — we'll find another slot.",
     sms: "{namePrefix}your PJL appointment moved to {dateStr} at {timeStr}. WO {workOrderId}. Details: {portalUrl}. Different time? (905) 960-0181"
   },
+  // Day-before reminder for SELF-BOOKED appointments (Patrick,
+  // 2026-09-02: assignment customers get a D−1 text from the cadence;
+  // ad customers who booked themselves got nothing the day before).
+  // Sent by the booking-reminders sweep — transactional, about their
+  // own appointment, so seasonal-marketing opt-outs don't block it;
+  // the "no need to contact" tick does.
+  day_before: {
+    subject: "Reminder: PJL comes tomorrow — {serviceLabel}",
+    headline: "We'll see you tomorrow.",
+    body:
+      "Hi {firstName}, a friendly reminder that PJL Land Services comes tomorrow, {dateStr}, " +
+      "for your {serviceLabel} — {timeStr}. Please make sure we can reach what we need to. " +
+      "If anything has changed, call or text (905) 960-0181.",
+    sms: "{namePrefix}reminder: PJL comes tomorrow ({dateStr}) for your {serviceLabel} — {timeStr}. Anything changed? (905) 960-0181. Details: {portalUrl}"
+  },
+  // "First available" — the customer joined the open bucket instead of
+  // picking a day. No date exists yet, so no {dateStr}/{timeStr}; the
+  // promise is the placement message they'll get when Patrick drops
+  // them onto a route day (which sends the normal "booked" template).
+  standby_joined: {
+    subject: "You're on our route list — {serviceLabel}",
+    headline: "You're on the list.",
+    body:
+      "Hi {firstName}, you're in! We've added your {serviceLabel} to our First Available list. " +
+      "The next time our crew is working in your neighbourhood, we'll fit you in and confirm your " +
+      "exact day ahead of time — usually within a couple of weeks. Nothing else to do for now. " +
+      "If any dates absolutely don't work, reply here or call (905) 960-0181 and we'll plan around them.",
+    sms: "{namePrefix}you're on PJL's First Available list for your {serviceLabel}. We'll confirm your exact day ahead of time when our crew is in your neighbourhood. Details: {portalUrl}"
+  },
   // Fired manually from the tech's daily-schedule view when they tap
   // "Notify on route" before driving over. Short, direct — the tech is
   // about to be at the door, the customer just needs to know.
@@ -208,7 +256,7 @@ function buildEmail(event, lead) {
   const portalUrl = lead.portalUrl || `${cleanBase}/portal/${lead.portal?.token || ""}`;
   const total = moneyText(lead.totals?.expectedTotal);
   const { dateStr, timeStr } = bookingDateTime(lead);
-  const serviceLabel = lead.booking?.serviceLabel || "your appointment";
+  const serviceLabel = lead.booking?.serviceLabel || lead.standby?.serviceLabel || "your appointment";
   const workOrderId = lead.booking?.workOrder?.id || "";
   const vars = { firstName, namePrefix, portalUrl, total, dateStr, timeStr, serviceLabel, workOrderId };
 
@@ -219,6 +267,42 @@ function buildEmail(event, lead) {
   // sources (the logo). Same resolver as the portal link above so the
   // logo and CTA always agree on host.
   const publicBaseUrl = cleanBase;
+
+  // "Add your appointment to your calendar" (Patrick, 2026-09-02) — on
+  // every email that names a scheduled visit. Google/Outlook open a
+  // prefilled event; the .ics link covers Apple Calendar and the rest,
+  // served by the tokened portal endpoint. The event carries the bucket
+  // window the customer was told, never an exact internal time
+  // (calendar-links.js owns that rule).
+  let calendarRowHtml = "";
+  let calendarRowText = "";
+  if (["booked", "rescheduled", "site_visit", "day_before"].includes(event) && lead.booking?.start) {
+    try {
+      const calendarLinks = require("./calendar-links");
+      const links = calendarLinks.linksForBooking({
+        id: lead.id,
+        start: lead.booking.start,
+        durationMinutes: lead.booking.durationMinutes,
+        bucketKey: lead.booking.bucketKey || null,
+        serviceLabel: lead.booking.serviceLabel || "",
+        address: lead.contact?.address || ""
+      }, { portalUrl });
+      const portalToken = lead.portal?.token || "";
+      const icsUrl = portalToken ? `${cleanBase}/api/portal/${encodeURIComponent(portalToken)}/calendar.ics` : "";
+      if (links) {
+        calendarRowHtml = `
+    <p style="margin: 0 0 18px; font-size: 14px;">
+      Add it to your calendar:
+      <a href="${escapeHtml(links.google)}" style="color: #1B4D2E; font-weight: 600;">Google</a> ·
+      <a href="${escapeHtml(links.outlook)}" style="color: #1B4D2E; font-weight: 600;">Outlook</a>${icsUrl ? ` ·
+      <a href="${escapeHtml(icsUrl)}" style="color: #1B4D2E; font-weight: 600;">Apple&nbsp;/&nbsp;other (.ics)</a>` : ""}
+    </p>`;
+        calendarRowText = `Add it to your calendar: ${links.google}${icsUrl ? `\nApple/other (.ics): ${icsUrl}` : ""}`;
+      }
+    } catch (err) {
+      console.warn("[customer-email] calendar links skipped:", err?.message);
+    }
+  }
 
   const html = `
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
@@ -241,7 +325,7 @@ function buildEmail(event, lead) {
     <p style="margin: 0 0 18px;">${escapeHtml(body)}</p>
     <p style="margin: 0 0 18px;">
       <a href="${escapeHtml(portalUrl)}" style="display: inline-block; padding: 11px 20px; background: #E07B24; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600;">Open your portal</a>
-    </p>
+    </p>${calendarRowHtml}
     <p style="margin: 24px 0 0; font-size: 13px; color: #777;">
       Questions? Call <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a> or reply to this email.
     </p>
@@ -260,10 +344,12 @@ function buildEmail(event, lead) {
     body,
     "",
     `Open your portal: ${portalUrl}`,
+    calendarRowText ? "" : null,
+    calendarRowText || null,
     "",
     "Questions? Call (905) 960-0181.",
     "PJL Land Services — Newmarket, Ontario"
-  ].join("\n");
+  ].filter((line) => line !== null).join("\n");
 
   return { subject, html, text };
 }
@@ -277,7 +363,7 @@ function buildSms(event, lead) {
   const portalUrl = lead.portalUrl || `${cleanBase}/portal/${lead.portal?.token || ""}`;
   const total = moneyText(lead.totals?.expectedTotal);
   const { dateStr, timeStr } = bookingDateTime(lead);
-  const serviceLabel = lead.booking?.serviceLabel || "your appointment";
+  const serviceLabel = lead.booking?.serviceLabel || lead.standby?.serviceLabel || "your appointment";
   const workOrderId = lead.booking?.workOrder?.id || "";
   return fill(tpl.sms, { namePrefix, portalUrl, total, dateStr, timeStr, serviceLabel, workOrderId });
 }
@@ -302,9 +388,11 @@ async function sendCustomerEmail(event, lead) {
       text: built.text
     });
     console.log(`[customer-email] event=${event} sent to=${to} id=${info.messageId}`);
+    await logSend({ kind: "stage_notice", to, ok: true, refId: lead.id });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error(`[customer-email] event=${event} failed:`, error.message);
+    await logSend({ kind: "stage_notice", to, ok: false, error: error.message, refId: lead.id });
     return { ok: false, error: error.message };
   }
 }
@@ -323,6 +411,12 @@ async function sendCustomerSms(event, lead) {
   const token = process.env.TWILIO_AUTH_TOKEN;
   const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
   const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  // Nothing goes to a load-test record, on any channel — see
+  // lib/test-recipients.js. Asked here rather than at the caller
+  // because this is where the number becomes a message.
+  if (await testRecipients.isTestRecipient({ phone: to })) {
+    return testRecipients.suppressed("sms", to);
+  }
   const payload = new URLSearchParams({
     To: to,
     From: process.env.TWILIO_FROM_NUMBER,
@@ -563,13 +657,25 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
       subject,
       html,
       text,
-      attachments: [{
-        filename: `${invoice.id || "invoice"}.pdf`,
-        content: pdfBuffer,
-        contentType: "application/pdf"
-      }]
+      // The invoice PDF always leads. `extraAttachments` carries the
+      // optional accompanying letter (a repair summary / written record)
+      // built by the caller; anything malformed is dropped rather than
+      // handed to nodemailer, so a bad attachment can never stop an
+      // invoice from reaching the customer.
+      attachments: [
+        {
+          filename: invoiceAttachmentName(invoice),
+          content: pdfBuffer,
+          contentType: "application/pdf"
+        },
+        ...(Array.isArray(opts.extraAttachments) ? opts.extraAttachments : [])
+          .filter((a) => a && a.filename && Buffer.isBuffer(a.content) && a.content.length > 0)
+      ]
     });
-    console.log(`[invoice-email] sent invoice=${invoice.id} to=${to}${ccList.length ? ` cc=${ccList.join(",")}` : ""} id=${info.messageId}${opts.resend ? " (resend)" : ""}`);
+    const extraCount = (Array.isArray(opts.extraAttachments) ? opts.extraAttachments : [])
+      .filter((a) => a && a.filename && Buffer.isBuffer(a.content) && a.content.length > 0).length;
+    console.log(`[invoice-email] sent invoice=${invoice.id} to=${to}${ccList.length ? ` cc=${ccList.join(",")}` : ""}${extraCount ? ` +${extraCount} attachment(s)` : ""} id=${info.messageId}${opts.resend ? " (resend)" : ""}`);
+    await logSend({ kind: "invoice", to, ok: true, refId: invoice.id });
     // Both flags report what actually shipped, not what was configured — an
     // address deduped away (spouse same as the primary recipient, bookkeeper
     // same as the spouse) was NOT copied, and saying otherwise would make the
@@ -585,6 +691,7 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
     };
   } catch (error) {
     console.error(`[invoice-email] failed for invoice=${invoice.id}:`, error.message);
+    await logSend({ kind: "invoice", to, ok: false, error: error.message, refId: invoice.id });
     throw new Error(`Email send failed: ${error.message}`);
   }
 }
@@ -685,7 +792,7 @@ async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
   const attachments = [];
   if (Buffer.isBuffer(pdfBuffer) && pdfBuffer.length > 0) {
     attachments.push({
-      filename: `${invoice.id || "invoice"}.pdf`,
+      filename: invoiceAttachmentName(invoice),
       content: pdfBuffer,
       contentType: "application/pdf"
     });
@@ -702,9 +809,11 @@ async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
       attachments
     });
     console.log(`[payment-receipt] sent invoice=${invoice.id} to=${to} id=${info.messageId}`);
+    await logSend({ kind: "receipt", to, ok: true, refId: invoice.id });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error(`[payment-receipt] failed for invoice=${invoice.id}:`, error.message);
+    await logSend({ kind: "receipt", to, ok: false, error: error.message, refId: invoice.id });
     throw new Error(`Receipt email send failed: ${error.message}`);
   }
 }
@@ -810,6 +919,92 @@ async function sendCustomerLoginLink(lead, magicLink) {
   }
 }
 
+// Quote-accepted confirmation — INSTALLATION work only (2026-08-29).
+//
+// When a customer accepts an installation proposal we now write back to
+// them: their approval landed, and we will be in touch to schedule. Before
+// this, accepting a proposal sent the customer NOTHING (only Patrick got the
+// alert, and only a deposit-enabled quote produced a customer email at all),
+// so a homeowner who had just committed to a five-figure installation got
+// silence and had no confirmation anything had registered.
+//
+// Repair work is deliberately excluded — the caller gates on
+// quotes.isInstallationQuote(). A repair quote accepted on site is followed
+// by the tech doing the work, not by a scheduling conversation, and Patrick
+// does not want an approval email going out on that path.
+//
+// Best-effort like every other notification on the acceptance path: the
+// caller wraps it, and a failure here must never disturb the acceptance
+// record the customer just created.
+async function sendQuoteAcceptedConfirmation(quote, {
+  toEmail = "",
+  customerName = "",
+  approveUrl = "",
+  depositAmountText = ""
+} = {}) {
+  const transporter = getTransporter();
+  const to = String(toEmail || quote?.customerEmail || "").trim();
+  if (!to) return { ok: false, skipped: true, reason: "no customer email" };
+  if (!transporter) {
+    console.warn(`[quote-accepted] Skipped (no Gmail config) — quoteId=${quote?.id}`);
+    await logSend({ kind: "stage_notice", to, ok: false, error: "no Gmail config", refId: quote?.id });
+    return { ok: false, skipped: true };
+  }
+
+  const rawName = String(customerName || "").trim().split(" ")[0];
+  const firstName = rawName || "there";
+  const displayId = (quote?.quoteNumberDisplay && String(quote.quoteNumberDisplay).trim()) || quote?.id || "";
+  // "proposal" / "estimate" — the same noun the document itself used, so the
+  // email doesn't rename the thing they just signed.
+  const noun = quote?.branch === "residential_repair" ? "estimate" : "proposal";
+
+  const depositHtml = depositAmountText
+    ? `<p style="margin: 0 0 12px;">A deposit invoice for <strong>${escapeHtml(depositAmountText)}</strong> is on its way in a separate email — the installation is scheduled once that's settled.</p>`
+    : "";
+  const depositText = depositAmountText
+    ? `A deposit invoice for ${depositAmountText} is on its way in a separate email — the installation is scheduled once that's settled.`
+    : "";
+
+  const { html, text } = brandedEmail({
+    headline: "Your approval is in — thank you",
+    bodyHtml: `
+      <p style="margin: 0 0 12px;">Hi ${escapeHtml(firstName)},</p>
+      <p style="margin: 0 0 12px;">We've received your signed approval for ${escapeHtml(noun)} <strong>${escapeHtml(displayId)}</strong>. It's on file and your installation is now in our queue.</p>
+      ${depositHtml}
+      <p style="margin: 0 0 12px;"><strong>What happens next:</strong> we'll be in touch shortly to book your installation dates and walk you through how the work will run on site. Nothing further is needed from you right now.</p>
+    `,
+    bodyText: [
+      `Hi ${firstName},`,
+      "",
+      `We've received your signed approval for ${noun} ${displayId}. It's on file and your installation is now in our queue.`,
+      depositText,
+      "",
+      "What happens next: we'll be in touch shortly to book your installation dates and walk you through how the work will run on site. Nothing further is needed from you right now."
+    ].filter(Boolean).join("\n"),
+    ctaLabel: "View your approved " + noun,
+    ctaUrl: approveUrl || resolvePublicBaseUrl(),
+    footerNote: `Questions before we start? Call us at <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a> or just reply to this email.`
+  });
+
+  try {
+    const info = await transporter.sendMail({
+      from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
+      to,
+      replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
+      subject: `Approval received — ${displayId} · we'll be in touch to schedule`,
+      html,
+      text
+    });
+    await logSend({ kind: "stage_notice", to, ok: true, refId: quote?.id });
+    console.log(`[quote-accepted] sent quoteId=${quote?.id} to=${to} id=${info.messageId}`);
+    return { ok: true, messageId: info.messageId };
+  } catch (error) {
+    await logSend({ kind: "stage_notice", to, ok: false, error: error.message, refId: quote?.id });
+    console.error(`[quote-accepted] failed quoteId=${quote?.id}:`, error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
 // Admin/tech password-reset email. Triggered from
 // POST /api/users/:id/reset-password. `user` is the public-shape user
 // record from lib/users.js; `magicLink` already embeds the token.
@@ -849,9 +1044,11 @@ async function sendAdminPasswordResetLink(user, magicLink) {
       text
     });
     console.log(`[admin-reset] sent userId=${user.id} to=${to} id=${info.messageId}`);
+    await logSend({ kind: "other", to, ok: true, refId: user.id });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error(`[admin-reset] failed userId=${user?.id}:`, error.message);
+    await logSend({ kind: "other", to, ok: false, error: error.message, refId: user?.id });
     return { ok: false, error: error.message };
   }
 }
@@ -923,9 +1120,11 @@ async function sendBookingCancellation(booking, { reason = "", notify = true } =
       text
     });
     console.log(`[booking-cancel] sent bookingId=${booking.id} to=${to} id=${info.messageId}`);
+    await logSend({ kind: "booking_cancel", to, ok: true, refId: booking.id });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error(`[booking-cancel] failed bookingId=${booking?.id}:`, error.message);
+    await logSend({ kind: "booking_cancel", to, ok: false, error: error.message, refId: booking?.id });
     return { ok: false, error: error.message };
   }
 }
@@ -974,9 +1173,11 @@ async function sendPortalMessageAlertEmail(lead, message) {
       text
     });
     console.log(`[portal-msg-alert] sent leadId=${lead.id} to=${to} id=${info.messageId}`);
+    await logSend({ kind: "other", to, ok: true, refId: lead.id });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error(`[portal-msg-alert] failed leadId=${lead?.id}:`, error.message);
+    await logSend({ kind: "other", to, ok: false, error: error.message, refId: lead?.id });
     return { ok: false, error: error.message };
   }
 }
@@ -1030,9 +1231,11 @@ async function sendPortalReplyToCustomer(lead, replyBody) {
       text
     });
     console.log(`[portal-reply] sent leadId=${lead.id} to=${to} id=${info.messageId}`);
+    await logSend({ kind: "portal_reply", to, ok: true, refId: lead.id });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error(`[portal-reply] failed leadId=${lead?.id}:`, error.message);
+    await logSend({ kind: "portal_reply", to, ok: false, error: error.message, refId: lead?.id });
     return { ok: false, error: error.message };
   }
 }
@@ -1091,7 +1294,11 @@ async function sendOutreachEmail({
   subject,
   emailBody,
   unsubscribeUrlEmail,
-  unsubscribeUrlAll
+  unsubscribeUrlAll,
+  // Button text for the portalLink CTA. Marketing outreach keeps the
+  // long-standing default; the assignment cadence passes "Open your
+  // appointment page" so the button matches where the link goes.
+  ctaLabel = "Open your portal"
 }) {
   const transporter = getTransporter();
   if (!transporter) {
@@ -1147,7 +1354,7 @@ async function sendOutreachEmail({
   </div>
   <div style="padding: 24px 28px; background: #FAFAF5; border: 1px solid #e5e5dd; border-top: none; border-radius: 0 0 8px 8px;">
     ${bodyHtml}
-    ${portalLink ? `<p style="margin: 0 0 18px;"><a href="${escapeHtml(portalLink)}" style="display: inline-block; padding: 11px 20px; background: #E07B24; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600;">Open your portal</a></p>` : ""}
+    ${portalLink ? `<p style="margin: 0 0 18px;"><a href="${escapeHtml(portalLink)}" style="display: inline-block; padding: 11px 20px; background: #E07B24; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600;">${escapeHtml(ctaLabel)}</a></p>` : ""}
     <p style="margin: 24px 0 0; font-size: 13px; color: #777;">
       Questions? Call <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a> or reply to this email.
     </p>
@@ -1178,9 +1385,11 @@ async function sendOutreachEmail({
       text
     });
     console.log(`[outreach-email] sent to=${toAddr} id=${info.messageId}`);
+    await logSend({ kind: "outreach", to: toAddr, ok: true });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error(`[outreach-email] failed:`, error.message);
+    await logSend({ kind: "outreach", to: toAddr, ok: false, error: error.message });
     return { ok: false, error: error.message };
   }
 }
@@ -1227,6 +1436,12 @@ async function sendOutreachSms({
   const token = process.env.TWILIO_AUTH_TOKEN;
   const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
   const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  // Nothing goes to a load-test record, on any channel — see
+  // lib/test-recipients.js. Asked here rather than at the caller
+  // because this is where the number becomes a message.
+  if (await testRecipients.isTestRecipient({ phone: toNum })) {
+    return testRecipients.suppressed("sms", toNum);
+  }
   const payload = new URLSearchParams({
     To: toNum,
     From: process.env.TWILIO_FROM_NUMBER,
@@ -1364,6 +1579,12 @@ async function fireSpouseInvoiceSms(invoice, body, opts) {
   const token = process.env.TWILIO_AUTH_TOKEN;
   const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
   const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  // Nothing goes to a load-test record, on any channel — see
+  // lib/test-recipients.js. Asked here rather than at the caller
+  // because this is where the number becomes a message.
+  if (await testRecipients.isTestRecipient({ phone: recip.spousePhone })) {
+    return testRecipients.suppressed("sms", recip.spousePhone);
+  }
   const payload = new URLSearchParams({
     To: recip.spousePhone,
     From: process.env.TWILIO_FROM_NUMBER,
@@ -1524,6 +1745,12 @@ async function sendInvoiceReadySMS({ invoiceId, includeSpouse } = {}) {
   const token = process.env.TWILIO_AUTH_TOKEN;
   const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
   const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  // Nothing goes to a load-test record, on any channel — see
+  // lib/test-recipients.js. Asked here rather than at the caller
+  // because this is where the number becomes a message.
+  if (await testRecipients.isTestRecipient({ phone: to })) {
+    return testRecipients.suppressed("sms", to);
+  }
   const payload = new URLSearchParams({
     To: to,
     From: process.env.TWILIO_FROM_NUMBER,
@@ -1778,6 +2005,12 @@ async function sendInvoiceReminderSMS({ invoiceId, force, includeSpouse } = {}) 
   const token = process.env.TWILIO_AUTH_TOKEN;
   const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
   const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  // Nothing goes to a load-test record, on any channel — see
+  // lib/test-recipients.js. Asked here rather than at the caller
+  // because this is where the number becomes a message.
+  if (await testRecipients.isTestRecipient({ phone: to })) {
+    return testRecipients.suppressed("sms", to);
+  }
   const payload = new URLSearchParams({
     To: to,
     From: process.env.TWILIO_FROM_NUMBER,
@@ -1998,6 +2231,12 @@ async function sendInvoiceJunkMailWarningSMS({ invoiceId, force, includeSpouse }
   const token = process.env.TWILIO_AUTH_TOKEN;
   const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
   const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  // Nothing goes to a load-test record, on any channel — see
+  // lib/test-recipients.js. Asked here rather than at the caller
+  // because this is where the number becomes a message.
+  if (await testRecipients.isTestRecipient({ phone: to })) {
+    return testRecipients.suppressed("sms", to);
+  }
   const payload = new URLSearchParams({
     To: to,
     From: process.env.TWILIO_FROM_NUMBER,
@@ -2065,6 +2304,8 @@ async function sendInvoiceJunkMailWarningSMS({ invoiceId, force, includeSpouse }
 
 module.exports = {
   notifyCustomer,
+  // Exposed for tests — the customer-facing wording is contract.
+  TEMPLATES,
   eventForTransition,
   sendBookingCancellation,
   sendPortalMessageAlertEmail,
@@ -2072,6 +2313,7 @@ module.exports = {
   sendInvoiceToCustomer,
   sendPaymentReceipt,
   sendCustomerLoginLink,
+  sendQuoteAcceptedConfirmation,
   sendAdminPasswordResetLink,
   sendOutreachEmail,
   sendOutreachSms,

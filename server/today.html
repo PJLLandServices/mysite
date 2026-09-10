@@ -29,6 +29,7 @@
       <a href="/admin/today" class="is-active">Today</a>
       <a href="/admin">CRM</a>
       <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/season-plan">Season plan</a>
       <a href="/admin/handoff">Handoff</a>
       <a href="/admin/outreach">Outreach</a>
       <a href="/admin/review-requests">Reviews</a>
@@ -40,6 +41,7 @@
       <a href="/admin/work-orders">Work orders</a>
       <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
       <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/warranty-claims">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
       <a href="/admin/material-lists">Materials</a>
       <a href="/admin/chats">AI Chats</a>
       <a href="/admin/users">Users</a>
@@ -90,7 +92,29 @@
       <a class="pjl-btn pjl-btn-primary" href="/admin/handoff">Send a booking link →</a>
     </section>
 
+    <!-- The day's route. Framed rather than reimplemented: the field
+         app's Today screen loads the same page in a band above its own
+         list, and one implementation is how the two stay identical. The
+         frame's src is set by today.js as the date changes. -->
+    <section class="today-map" id="todayMap" hidden>
+      <iframe id="todayMapFrame" title="Today's route" loading="lazy"></iframe>
+    </section>
+
     <ul class="today-list" id="todayList"></ul>
+
+    <!-- FLOW-32's lantern: when a job you expected isn't above, this
+         searches every store a date can live in and says, per record,
+         why it does or doesn't show on the selected day. -->
+    <details class="today-finder" id="todayFinder">
+      <summary>Missing a job? Search every record</summary>
+      <div class="today-finder-row">
+        <input type="search" id="finderQuery" placeholder="Customer, address, or property code…" maxlength="120">
+        <button type="button" class="today-action today-action--open" id="finderGo">
+          <span class="today-action-label">Search</span>
+        </button>
+      </div>
+      <div class="today-finder-results" id="finderResults" hidden></div>
+    </details>
     </main>
   </div><!-- /.pjl-app -->
 

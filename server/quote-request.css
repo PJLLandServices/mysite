@@ -71,7 +71,7 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .qr-meta-value {
   font-size: 14px;
@@ -145,7 +145,7 @@
 }
 .qr-line-unit {
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 /* Vendor's quoted unit price — read-only, Phase B fills it in. The tiny
    eyebrow keeps a bare dollar figure from reading as OUR price. */
@@ -164,7 +164,7 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 /* Phase B quick-grid cell — the vendor's returned price, entered as
    dollars text. Same eyebrow trick as the read-only cell so a bare dollar
@@ -183,7 +183,7 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .qr-line-quote-field {
   display: flex;
@@ -200,7 +200,7 @@
   outline: 2px solid rgba(27,77,46,0.15);
 }
 .qr-line-quote-prefix {
-  color: #7A7A72;
+  color: #6B6B63;
   font-size: 13px;
 }
 .qr-line-quote-input {
@@ -306,7 +306,7 @@
 .qr-apply-desc {
   grid-column: 1 / -1;
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
   line-height: 1.35;
 }
 .qr-apply-delta {
@@ -316,7 +316,7 @@
 .qr-apply-delta--up   { color: #8A2A1F; }   /* costs us more */
 .qr-apply-delta--down { color: #1B4D2E; }   /* costs us less */
 .qr-apply-delta--same {
-  color: #7A7A72;
+  color: #6B6B63;
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -326,7 +326,7 @@
   grid-column: 1 / -1;
   font-size: 11px;
   font-weight: 600;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .qr-apply-note--skip { color: #B23A2E; }
 
@@ -361,7 +361,7 @@
   color: #4A4A44;
 }
 .qr-history li:last-child { border-bottom: 0; }
-.qr-history-when { color: #7A7A72; }
+.qr-history-when { color: #6B6B63; }
 .qr-history-action {
   font-weight: 700;
   color: #1B4D2E;

@@ -146,6 +146,22 @@ function deriveSeasonalKey(woType, zoneCount = 0, commercial = false) {
   return isSpring ? (last.key_spring || null) : (last.key_fall || null);
 }
 
+// The one zone-count rule, shared by every tier lookup: zones the
+// technician DOCUMENTED (property.system.zones[]) always win; a
+// DECLARED count (property.system.zoneCount — the customer's own
+// number from booking or their appointment page, or a manual entry)
+// fills in only while nothing is mapped yet. assignments.zoneCountFor
+// and resequence.onSiteMinutes lean on this same helper so the tier a
+// customer is booked at, the price they are shown, and the minutes the
+// sequencer plans for them can never disagree about how many zones
+// they have.
+function effectiveZoneCount(property) {
+  const documented = Array.isArray(property?.system?.zones) ? property.system.zones.length : 0;
+  if (documented > 0) return documented;
+  const declared = Math.floor(Number(property?.system?.zoneCount) || 0);
+  return declared > 0 ? declared : 0;
+}
+
 // Resolve the canonical seasonal price for a property + service type.
 // Property override (property.seasonalPricing.springOpeningPrice or
 // fallClosingPrice) wins; falls back to the pricing.json tier lookup
@@ -202,11 +218,11 @@ function resolveSeasonalPrice(property, serviceType) {
       };
     }
   }
-  // Tier fallback. Zone count drives the bracket; missing zones bucket
-  // into the 1-4 tier (deriveSeasonalKey's existing behavior).
-  const zoneCount = Array.isArray(property?.system?.zones)
-    ? property.system.zones.length
-    : 0;
+  // Tier fallback. Zone count drives the bracket — documented zones
+  // first, the declared count when nothing is mapped (effectiveZoneCount
+  // above); missing both buckets into the 1-4 tier (deriveSeasonalKey's
+  // existing behavior).
+  const zoneCount = effectiveZoneCount(property);
   const key = deriveSeasonalKey(serviceType, zoneCount, false);
   if (!key || !PRICING?.items?.[key]) {
     // Defensive: pricing.json never has this state today, but guard so
@@ -237,4 +253,4 @@ function resolveSeasonalPrice(property, serviceType) {
   };
 }
 
-module.exports = { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice };
+module.exports = { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice, effectiveZoneCount };

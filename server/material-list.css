@@ -27,7 +27,7 @@
 
 .mlb-loading {
   text-align: center;
-  color: #7A7A72;
+  color: #6B6B63;
   padding: 40px 0;
 }
 .mlb-error {
@@ -58,7 +58,7 @@
 .mlb-header-id #mlbId {
   font-family: ui-monospace, "SFMono-Regular", monospace;
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .mlb-name-field {
   display: flex;
@@ -71,7 +71,7 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .mlb-name-field input {
   width: 100%;
@@ -160,7 +160,7 @@
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .mlb-parent-current strong {
   color: #1F2A22;
@@ -250,7 +250,7 @@
 }
 .mlb-parent-result-meta {
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
   font-family: ui-monospace, "SFMono-Regular", monospace;
 }
 .mlb-parent-results-empty {
@@ -259,7 +259,7 @@
   border: 1px dashed #C7C0A8;
   border-radius: 6px;
   text-align: center;
-  color: #7A7A72;
+  color: #6B6B63;
   font-size: 13px;
 }
 
@@ -331,7 +331,7 @@
 }
 .mlb-copy-result-meta {
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .mlb-copy-result-add {
   min-height: 36px;
@@ -348,7 +348,7 @@
   text-transform: uppercase;
 }
 .mlb-copy-result-add:hover { background: #15402b; }
-.mlb-copy-result-add.is-disabled { background: #fff; color: #7A7A72; border-color: #C7C0A8; cursor: not-allowed; }
+.mlb-copy-result-add.is-disabled { background: #fff; color: #6B6B63; border-color: #C7C0A8; cursor: not-allowed; }
 
 /* ---- Line items section ---- */
 .mlb-section-head {
@@ -369,7 +369,7 @@
 }
 .mlb-line-count {
   font-size: 13px;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .mlb-lines-section {
   margin-bottom: 22px;
@@ -380,7 +380,7 @@
   border-radius: 10px;
   padding: 18px 16px;
   text-align: center;
-  color: #7A7A72;
+  color: #6B6B63;
   font-size: 14px;
 }
 .mlb-lines {
@@ -423,7 +423,7 @@
   flex-wrap: wrap;
   gap: 4px 10px;
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .mlb-line-meta .mlb-line-sku {
   font-family: ui-monospace, "SFMono-Regular", monospace;
@@ -576,7 +576,7 @@
 .mlb-search-hint {
   margin: 8px 0 0;
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .mlb-search-results {
   display: flex;
@@ -609,7 +609,7 @@
 }
 .mlb-result-meta {
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .mlb-result-meta .mlb-line-sku {
   font-family: ui-monospace, "SFMono-Regular", monospace;
@@ -661,7 +661,7 @@
   content: "▾";
   margin-left: auto;
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
   transition: transform 160ms ease;
 }
 .mlb-browse[open] > summary::after { transform: rotate(180deg); }
@@ -691,13 +691,13 @@
 .mlb-browse-cat > summary::after {
   content: "▾";
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
   transition: transform 160ms ease;
 }
 .mlb-browse-cat[open] > summary::after { transform: rotate(180deg); }
 .mlb-browse-cat-meta {
   font-size: 11px;
-  color: #7A7A72;
+  color: #6B6B63;
   margin-left: auto;
   margin-right: 6px;
   font-weight: 500;
@@ -770,7 +770,7 @@
 }
 .mlb-savebar-savestate {
   font-size: 12px;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .mlb-savebar-savestate.is-saving { color: #C49A2A; }
 .mlb-savebar-savestate.is-saved  { color: #1B4D2E; }

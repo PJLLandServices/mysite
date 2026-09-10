@@ -720,6 +720,10 @@ function populateForm(property, seasonalPricingResolved) {
   if (propertyForm.elements.prefEmail) {
     propertyForm.elements.prefEmail.checked = prefs.seasonalRemindersEmail !== false;
   }
+  if (propertyForm.elements.prefNoContact) {
+    // Opposite default from the two above: contact is assumed needed.
+    propertyForm.elements.prefNoContact.checked = prefs.noContactNeeded === true;
+  }
   populateSeasonalPricing(property.seasonalPricing || {}, seasonalPricingResolved || null);
 }
 
@@ -829,7 +833,8 @@ function collectForm() {
     },
     commPrefs: {
       seasonalRemindersSMS: Boolean(propertyForm.elements.prefSms?.checked),
-      seasonalRemindersEmail: Boolean(propertyForm.elements.prefEmail?.checked)
+      seasonalRemindersEmail: Boolean(propertyForm.elements.prefEmail?.checked),
+      noContactNeeded: Boolean(propertyForm.elements.prefNoContact?.checked)
     },
     seasonalPricing: collectSeasonalPricing()
   };
@@ -1204,7 +1209,7 @@ init();
       return;
     }
     if (!matches.length) {
-      resultsEl.innerHTML = `<div style="padding: 12px; text-align: center; color: var(--crm-muted, #888); font-size: 13px;">No customers match. Use "Create a new customer" below.</div>`;
+      resultsEl.innerHTML = `<div style="padding: 12px; text-align: center; color: var(--crm-muted, #6B6B63); font-size: 13px;">No customers match. Use "Create a new customer" below.</div>`;
       resultsEl.style.display = "block";
       return;
     }

@@ -27,6 +27,7 @@ const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { writeJsonAtomic } = require("./atomic-json");
 
 const FILE = path.join(__dirname, "..", "data", "users.json");
 
@@ -54,9 +55,17 @@ async function readAll() {
   }
 }
 
+// Atomic: temp file then rename. The auth gates re-read this store on
+// EVERY request (so a disabled account loses access immediately), and
+// /api/login fires recordLogin() without awaiting it — so a write is in
+// flight at exactly the moment the client makes its next request. A bare
+// fs.writeFile truncates first, and a reader landing in that window gets
+// "" -> JSON.parse("[]") -> an empty user list, which the gate reads as
+// "this user no longer exists" and answers 401 on a valid session.
+// See lib/atomic-json.js and scripts/test-session-stores-atomic.mjs.
 async function writeAll(records) {
   await ensureFile();
-  await fs.writeFile(FILE, JSON.stringify(records, null, 2) + "\n", "utf8");
+  await writeJsonAtomic(FILE, records);
 }
 
 // ---- Helpers ---------------------------------------------------------

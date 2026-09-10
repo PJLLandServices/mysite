@@ -25,6 +25,7 @@
       <a href="/admin/messages">Messages</a>
       <a href="/admin">CRM</a>
       <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/season-plan">Season plan</a>
       <a href="/admin/handoff">Handoff</a>
       <a href="/admin/outreach">Outreach</a>
       <a href="/admin/review-requests">Reviews</a>
@@ -36,6 +37,7 @@
       <a href="/admin/work-orders">Work orders</a>
       <a href="/admin/quote-folder" class="is-active">Quotes</a>
       <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/warranty-claims">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
       <a href="/admin/material-lists">Materials</a>
       <a href="/admin/chats">AI Chats</a>
       <a href="/admin/trash">Trash</a>
@@ -65,6 +67,13 @@
       <p class="pb-error" id="pbError" role="alert" hidden></p>
 
       <section id="pbApp" hidden>
+      <!-- Live PDF preview (Sep 2026). The editor is the left column; the
+           right column is the customer's PDF, re-rendered after every
+           autosave so spacing / page-break problems show up while writing,
+           not after sending. Below 1200px the preview collapses to a
+           toggle (the "Open PDF" link still opens it in a new tab). -->
+      <div class="pb-workspace" id="pbWorkspace">
+      <div class="pb-editor">
         <!-- Top bar: identity + branch + billing -->
         <section class="pb-topbar">
           <div class="pb-id-block">
@@ -79,11 +88,12 @@
               <select id="pbBranch">
                 <option value="">(unset)</option>
                 <option value="gc_subcontract">GC Subcontract</option>
-                <option value="direct_residential">Residential</option>
+                <option value="direct_residential">Residential Install</option>
                 <option value="lighting_design">Lighting Design</option>
                 <option value="renovation_coordination">Renovation Coordination</option>
                 <option value="change_order">Change Order</option>
                 <option value="residential_repair">Residential Repair</option>
+                <option value="lighting_repair">Landscape Lighting Repairs</option>
               </select>
             </label>
             <label>
@@ -116,6 +126,10 @@
             <label>
               <span>Quote number on PDF</span>
               <input type="text" id="pbQuoteNumber" maxlength="40" placeholder="Blank = use the Q-… id">
+            </label>
+            <label class="pb-meta-wide">
+              <span>&ldquo;Prepared for&rdquo; address on PDF</span>
+              <textarea id="pbPreparedFor" rows="2" maxlength="200" placeholder="Blank = the customer's own address on file. This is who the proposal is addressed to — not the site the work happens at."></textarea>
             </label>
             <label class="pb-meta-wide">
               <span>Scope summary (one paragraph)</span>
@@ -314,6 +328,7 @@
           <table class="pb-lines-grid" id="pbLinesGrid" role="grid">
             <thead>
               <tr>
+                <th class="pb-col-move" aria-label="Display order"></th>
                 <th class="pb-col-desc">Component &amp; detail</th>
                 <th class="pb-col-source">Source</th>
                 <th class="pb-col-qty">Qty</th>
@@ -366,7 +381,8 @@
         <section class="pb-actions">
           <span class="pb-save-state" id="pbSaveState">Saved</span>
           <div class="pb-actions-buttons">
-            <a class="pjl-btn pjl-btn-outline" href="#" id="pbPreviewLink" target="_blank" rel="noopener">Preview PDF</a>
+            <a class="pjl-btn pjl-btn-outline" href="#" id="pbPreviewLink" target="_blank" rel="noopener">Open PDF</a>
+            <button type="button" class="pjl-btn pjl-btn-outline" id="pbEmailPreviewBtn">Preview email</button>
             <button type="button" class="pjl-btn pjl-btn-outline" id="pbReviseBtn" hidden>Create revision</button>
             <button type="button" class="pjl-btn pjl-btn-primary" id="pbSendBtn">Send for approval</button>
             <button type="button" class="pjl-btn pjl-btn-primary" id="pbConvertBtn" hidden>Convert to project</button>
@@ -387,10 +403,82 @@
             <button type="button" class="pjl-btn pjl-btn-primary" id="pbAttestConfirm">Confirm — accept proposal</button>
           </div>
         </section>
+      </div><!-- /.pb-editor -->
+
+      <aside class="pb-preview" id="pbPreview" aria-label="PDF preview">
+        <header class="pb-preview-head">
+          <div class="pb-preview-title">
+            <h3>PDF preview</h3>
+            <span class="pb-preview-state" id="pbPreviewState">Rendering…</span>
+          </div>
+          <div class="pb-preview-tools">
+            <span class="pb-preview-pages" id="pbPreviewPagesLabel"></span>
+            <button type="button" class="pb-preview-btn" id="pbPreviewRefresh" title="Re-render the PDF now">Refresh</button>
+            <a class="pb-preview-btn" id="pbPreviewOpen" href="#" target="_blank" rel="noopener" title="Open the PDF in a new tab">Open</a>
+            <button type="button" class="pb-preview-btn" id="pbPreviewHide" title="Hide the preview">Hide</button>
+          </div>
+        </header>
+        <p class="pb-preview-note" id="pbPreviewNote" hidden></p>
+        <div class="pb-preview-scroll" id="pbPreviewScroll">
+          <div class="pb-preview-pages" id="pbPreviewPages"></div>
+          <iframe class="pb-preview-frame" id="pbPreviewFrame" title="PDF preview" hidden></iframe>
+          <p class="pb-preview-empty" id="pbPreviewEmpty" hidden></p>
+        </div>
+      </aside>
+      </div><!-- /.pb-workspace -->
+
+      <button type="button" class="pb-preview-show" id="pbPreviewShow" hidden>Show PDF preview</button>
+
+      <!-- Email preview (Sep 2026). The exact email the customer gets —
+           from / to / subject / attachment / body — composed by the SAME
+           server function the send uses. "Send for approval" always passes
+           through here; the optional note is Patrick's personal paragraph
+           under the greeting (e.g. what changed in a revision). -->
+      <dialog class="pb-email-dialog" id="pbEmailDialog" aria-labelledby="pbEmailDialogTitle">
+        <form method="dialog" class="pb-email-form" id="pbEmailForm">
+          <header class="pb-email-head">
+            <h3 id="pbEmailDialogTitle">Email preview</h3>
+            <button type="button" class="pb-email-close" id="pbEmailClose" aria-label="Close">&times;</button>
+          </header>
+          <div class="pb-email-body">
+            <div class="pb-email-compose">
+              <label class="pb-email-field">
+                <span>Note to customer (optional)</span>
+                <textarea id="pbEmailNote" rows="4" maxlength="2000" placeholder="e.g. Updated version — I've added the sleeve measurements to the attached site plan and corrected the zone count."></textarea>
+              </label>
+              <p class="pb-email-hint">Plain text. Appears right under the greeting, before the proposal summary. Saved with the quote when you send.</p>
+              <p class="pb-email-warn" id="pbEmailWarn" hidden></p>
+            </div>
+            <div class="pb-email-client">
+              <div class="pb-email-meta">
+                <div><span>From</span><strong id="pbEmailFrom">—</strong></div>
+                <div><span>To</span><strong id="pbEmailTo">—</strong></div>
+                <div><span>Subject</span><strong id="pbEmailSubject">—</strong></div>
+              </div>
+              <div class="pb-email-files" id="pbEmailFiles">
+                <div class="pb-email-files-head">
+                  <span>Attached to this email</span>
+                  <span class="pb-email-files-total" id="pbEmailFilesTotal"></span>
+                </div>
+                <ul class="pb-email-file-list" id="pbEmailFileList"></ul>
+              </div>
+              <iframe class="pb-email-frame" id="pbEmailFrame" title="Email body preview" sandbox=""></iframe>
+            </div>
+          </div>
+          <footer class="pb-email-actions">
+            <span class="pb-email-status" id="pbEmailStatus"></span>
+            <div class="pb-email-buttons">
+              <button type="button" class="pjl-btn pjl-btn-outline" id="pbEmailCancel">Close</button>
+              <button type="button" class="pjl-btn pjl-btn-primary" id="pbEmailSend" hidden>Send now</button>
+            </div>
+          </footer>
+        </form>
+      </dialog>
       </section>
     </main>
   </div>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="/crm/crm-nav.js"></script>
   <script src="/crm/quote-proposal-builder.js"></script>
 </body>

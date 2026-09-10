@@ -32,23 +32,25 @@ const properties = require("./properties");
 const bookings = require("./bookings");
 const settings = require("./settings");
 const notify = require("./notify-customer");
+const seasons = require("./seasons");
 const { resolvePublicBaseUrl } = require("./public-base-url");
 
 // ---- Constants (brief §3.6 + §3.7) ---------------------------------
 
-// Hardcoded season windows. Move to settings.json if Patrick ever
-// wants to tweak (e.g. opening spring early in a mild year); for
-// now the constants are simpler than a configurable that nobody
-// edits. Inclusive on both ends. End dates are conservative:
-//   - Spring closes June 30 — captures late openings without
-//     spilling into summer service-call territory.
-//   - Fall closes Dec 15 — captures any late closings without
-//     spilling into the new year's data (Patrick wants 2026:fall
-//     touches to feel like 2026 work).
-const SEASON_WINDOWS = {
-  spring: { startMonth: 3, startDay: 1, endMonth: 6, endDay: 30 },
-  fall:   { startMonth: 9, startDay: 1, endMonth: 12, endDay: 15 }
-};
+// Season windows used to live here as a hardcoded SEASON_WINDOWS
+// constant. They now come from seasons.json via ./seasons, so the
+// seasonal gate planned for availability.js reads the same source
+// instead of carrying a second copy that drifts — when those two
+// drift, outreach nudges customers toward dates the booking
+// calendar refuses to offer.
+//
+// Still inclusive on both ends; still 1-indexed months. What
+// changed with the move: fall 2026 ends Nov 6, not Dec 15. The old
+// constant ran 39 days past safe frost, so "is this customer
+// already booked for fall?" counted appointments on days no truck
+// could roll. A year with no block in seasons.json inherits
+// defaults that end fall on the frost stop too — an unplanned year
+// should inherit a safe date, not a known-wrong one.
 
 // Service-key prefix matching for booking detection. A property
 // counts as "booked for the season" when at least one of its
@@ -114,13 +116,18 @@ function streetAddressOf(address) {
 
 // Is the given ISO timestamp inside the [startMonth/startDay,
 // endMonth/endDay] window for the given year? Uses local-month
-// math because seasons are calendar concepts, not UTC ones.
+// math because seasons are calendar concepts, not UTC ones —
+// honest because server.js pins process.env.TZ = America/Toronto
+// at boot, and scheduledFor is stored as a UTC Z timestamp (an
+// 8 PM Nov 6 appointment is 2026-11-07T01:00:00Z, and must still
+// read as Nov 6). The window itself is per-year now, so a season
+// whose dates move with the frost is judged against its own year.
 // Defensive against legacy bookings whose scheduledFor is null.
 function isInSeasonWindow(iso, season, year) {
   if (!iso) return false;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return false;
-  const win = SEASON_WINDOWS[season];
+  const win = seasons.windowFor(season, year);
   if (!win) return false;
   const targetYear = Number(year);
   if (d.getFullYear() !== targetYear) return false;
@@ -208,6 +215,48 @@ async function deriveBookingState(propertyId, season, year) {
     bookingId: candidate.id,
     scheduledDate: candidate.scheduledFor
   };
+}
+
+// Which seasonal service should a customer be offered right now?
+// Inside a season window, that season. Outside one — the gap between
+// the two windows, and again after fall closes until spring opens —
+// the NEXT window to open, because someone opening their portal in
+// August is thinking about fall, and the fall page itself tells them
+// to book in August.
+//
+// Reads the same seasons.json windows as the outreach candidate list
+// so the portal CTA, the candidate list and the season labels can
+// never drift apart on where a season starts or ends.
+//
+// NOTE — this moved with the fall 2026 correction. The old Dec 15
+// window meant a customer opening the portal on Nov 20 was offered a
+// Fall Closing; past hard frost that is work PJL cannot perform, so
+// they are now offered the coming Spring Opening instead. Decided
+// deliberately (season-config brief, decision A): the alternative was
+// a second fall end date living only in this function, which is the
+// drift the consolidation exists to prevent.
+//
+// `now` is injectable for tests. Returns "spring" | "fall".
+function seasonForBooking(now = new Date()) {
+  const month = now.getMonth() + 1;   // 1-indexed, matching the window shape
+  const day = now.getDate();
+  const year = now.getFullYear();     // windows are per-year in seasons.json
+  const springWin = seasons.windowFor("spring", year);
+  const fallWin = seasons.windowFor("fall", year);
+  const after = (m, d, win) =>
+    m > win.startMonth || (m === win.startMonth && d >= win.startDay);
+  const before = (m, d, win) =>
+    m < win.endMonth || (m === win.endMonth && d <= win.endDay);
+
+  for (const [season, win] of [["spring", springWin], ["fall", fallWin]]) {
+    if (after(month, day, win) && before(month, day, win)) return season;
+  }
+  // Not in either window. Spring opens before fall does, so the gap
+  // before spring belongs to spring and everything after it to fall,
+  // wrapping back to spring once fall's window has closed for the year.
+  if (!after(month, day, springWin)) return "spring";
+  if (!after(month, day, fallWin)) return "fall";
+  return "spring";
 }
 
 // ---- Public: candidate listing -----------------------------------
@@ -396,6 +445,75 @@ async function saveTemplate(season, patch, opts) {
 // Returns { batchId, sent, skipped[], errors[] }. Per-recipient
 // errors don't abort the batch — partial-failure reporting lets
 // Patrick retry just the failures.
+// ---------------------------------------------------------------------
+// Shared eligibility — ONE implementation for every path that decides
+// whether a property may be messaged about a season.
+//
+// sendBulk ran these checks inline. The assignment writer needs the same
+// verdicts for its preflight ("who WOULD be told, who would be skipped and
+// why"), and a preflight that re-implements the rules is a preflight that
+// drifts from the send it claims to predict. So the rules moved here and
+// both callers use them.
+//
+// assessEligibility is the gauntlet in sendBulk's original order, with the
+// original reason strings — those strings are API to the outreach screen's
+// skip report. bookingState is injectable so tests need no bookings file.
+async function assessEligibility(property, { season, year, bookingState } = {}) {
+  if (!property) return { ok: false, reason: "not_found" };
+  if (property.deletedAt || property.archivedAt) return { ok: false, reason: "inactive" };
+
+  const eligibilityKey = season === "spring" ? "springOpening" : "fallClosing";
+  if (property.seasonalEligibility?.[eligibilityKey] === false) {
+    return { ok: false, reason: "not_eligible" };
+  }
+
+  const customerName = String(property.customerName || "").trim();
+  if (!customerName) return { ok: false, reason: "missing_name" };
+
+  const seasonKey = properties.seasonKey(year, season);
+  if (property.seasonalOutreach?.[seasonKey]?.optOutThisSeason === true) {
+    return { ok: false, reason: "season_opt_out" };
+  }
+
+  const state = bookingState !== undefined
+    ? bookingState
+    : await deriveBookingState(property.id, season, year);
+  if (state?.hasBooking) {
+    return { ok: false, reason: "already_booked", bookingId: state.bookingId };
+  }
+
+  const portalToken = resolvePortalToken(property);
+  if (!portalToken) return { ok: false, reason: "no_property_id" };
+
+  return { ok: true, customerName, portalToken };
+}
+
+// Which channels COULD deliver, and for each dead one, why — in the same
+// reason strings sendBulk has always reported. Pure: reads the property,
+// touches nothing.
+function channelCapability(property) {
+  const phone = String(property?.customerPhone || "").trim();
+  const email = String(property?.customerEmail || "").trim();
+  const smsPossible = Boolean(phone) && property?.commPrefs?.seasonalRemindersSMS !== false;
+  const emailPossible = Boolean(email) && property?.commPrefs?.seasonalRemindersEmail !== false;
+  return {
+    phone,
+    email,
+    sms: {
+      possible: smsPossible,
+      reason: smsPossible ? null
+        : (!phone ? "no_phone"
+          : (property?.commPrefs?.seasonalRemindersSMS === false ? "opted_out_sms" : "sms_unavailable"))
+    },
+    emailChannel: {
+      possible: emailPossible,
+      reason: emailPossible ? null
+        : (!email ? "no_email"
+          : (property?.commPrefs?.seasonalRemindersEmail === false ? "opted_out_email" : "email_unavailable"))
+    }
+  };
+}
+
 async function sendBulk({
   propertyIds,
   season,
@@ -447,49 +565,19 @@ async function sendBulk({
         continue;
       }
 
-      // Eligibility check — defense in depth. The candidates
-      // list already filters but a direct API call could pass
-      // an ineligible id.
-      const eligibilityKey = season === "spring" ? "springOpening" : "fallClosing";
-      if (property.seasonalEligibility?.[eligibilityKey] === false) {
-        result.skipped.push({ propertyId, reason: "not_eligible" });
+      // Eligibility — the shared gauntlet (assessEligibility above), same
+      // checks in the same order with the same reason strings as when they
+      // lived inline here. The assignment preflight runs the identical
+      // function, which is what stops it drifting from this send.
+      const verdict = await assessEligibility(property, { season, year });
+      if (!verdict.ok) {
+        const skip = { propertyId, reason: verdict.reason };
+        if (verdict.bookingId) skip.bookingId = verdict.bookingId;
+        result.skipped.push(skip);
         continue;
       }
-
-      // Name invariant — outreach refuses any property without
-      // a name, so the OG card never reads "Hey there,".
-      const customerName = String(property.customerName || "").trim();
-      if (!customerName) {
-        result.skipped.push({ propertyId, reason: "missing_name" });
-        continue;
-      }
-
-      // Per-season opt-out.
-      const seasonKey = properties.seasonKey(year, season);
-      if (property.seasonalOutreach?.[seasonKey]?.optOutThisSeason === true) {
-        result.skipped.push({ propertyId, reason: "season_opt_out" });
-        continue;
-      }
-
-      // Already booked → don't pester. The candidates list
-      // already excludes by default, but a stale UI could send
-      // a request anyway; honour the booking either way.
-      const bookingState = await deriveBookingState(property.id, season, year);
-      if (bookingState?.hasBooking) {
-        result.skipped.push({ propertyId, reason: "already_booked", bookingId: bookingState.bookingId });
-        continue;
-      }
-
-      // Portal token — deterministic SHA-256 of property.id. Every
-      // property has a usable token the moment it's created, so a
-      // missing token here would mean a corrupted property record.
-      const portalToken = resolvePortalToken(property);
-      if (!portalToken) {
-        // Defensive — would only fire on a property with no id,
-        // which shouldn't be possible through the lib.
-        result.skipped.push({ propertyId, reason: "no_property_id" });
-        continue;
-      }
+      const customerName = verdict.customerName;
+      const portalToken = verdict.portalToken;
 
       // Mint opt-out tokens lazily — first send against this
       // property creates them, subsequent sends reuse.
@@ -502,14 +590,14 @@ async function sendBulk({
       // dispatch the channels that CAN go through and record the
       // others as skips. That matches the brief's per-channel
       // skip-reason behaviour.
-      const phone = String(property.customerPhone || "").trim();
-      const email = String(property.customerEmail || "").trim();
-      const smsAllowed = wantsSms
-        && phone
-        && (propertyWithTokens.commPrefs?.seasonalRemindersSMS !== false);
-      const emailAllowed = wantsEmail
-        && email
-        && (propertyWithTokens.commPrefs?.seasonalRemindersEmail !== false);
+      // Channel capability from the shared helper. Assessed on the
+      // token-minted record for exactness, though minting only writes
+      // optOutTokens and cannot change a commPref or a contact field.
+      const capability = channelCapability(propertyWithTokens);
+      const phone = capability.phone;
+      const email = capability.email;
+      const smsAllowed = wantsSms && capability.sms.possible;
+      const emailAllowed = wantsEmail && capability.emailChannel.possible;
 
       // Per-channel record-keeping. If neither channel can fire,
       // we record one composite skip with the most specific
@@ -518,14 +606,10 @@ async function sendBulk({
       // (kept inline in result.skipped).
       const channelSkips = [];
       if (wantsSms && !smsAllowed) {
-        const why = !phone ? "no_phone"
-                    : (propertyWithTokens.commPrefs?.seasonalRemindersSMS === false ? "opted_out_sms" : "sms_unavailable");
-        channelSkips.push({ propertyId, channel: "sms", reason: why });
+        channelSkips.push({ propertyId, channel: "sms", reason: capability.sms.reason });
       }
       if (wantsEmail && !emailAllowed) {
-        const why = !email ? "no_email"
-                    : (propertyWithTokens.commPrefs?.seasonalRemindersEmail === false ? "opted_out_email" : "email_unavailable");
-        channelSkips.push({ propertyId, channel: "email", reason: why });
+        channelSkips.push({ propertyId, channel: "email", reason: capability.emailChannel.reason });
       }
       if (!smsAllowed && !emailAllowed) {
         // No channel will deliver — record one consolidated
@@ -740,7 +824,8 @@ async function sendTest({
 // ---- Module exports -----------------------------------------------
 
 module.exports = {
-  SEASON_WINDOWS,
+  assessEligibility,
+  channelCapability,
   SEASONAL_SERVICE_PREFIXES,
   SEASON_LABEL,
   listCandidates,
@@ -756,6 +841,7 @@ module.exports = {
   seasonLabel: (season) => SEASON_LABEL[season] || "appointment",
   // Test/diagnostic surface.
   isInSeasonWindow,
+  seasonForBooking,
   firstNameOf,
   streetAddressOf,
   buildPortalLink,

@@ -1,7 +1,3653 @@
 # PJL Backend Flow Register
 
 **Source of truth for customer-facing backend processes.**
-Last updated: 2026-08-01 — supersedes the 2026-07-30 version.
+Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-08-09 (JOB-009 close):** CRM-04, CRM-05, CRM-06, MISC-01, MISC-02 CLOSED on walked
+acceptance. CRM-15 opened and closed the same day (booking-delete control). CRM-14 opened.
+**2026-08-13 (Site Plan Underlay):** FLOW-26 opened (Site Builder design → Quote + Material
+List) — UNMAPPED, awaiting a walked acceptance. Part 6 added to record architectural
+deviations DEV-01 / DEV-02 / DEV-03.
+**2026-08-18 (Prepared-for address):** QUOTE-01 opened and fixed under FLOW-20 — the
+proposal PDF addressed the customer at a SITE address belonging to a different project.
+FLOW-20 stays UNMAPPED; it was UNMAPPED before this change and no PASS flow was touched.
+**2026-08-18 (Line-item order):** QUOTE-02 opened under FLOW-20 — Patrick can arrange the
+display order of quotation line items, and it renders in that order on the PDF. Display
+only; FLOW-20 still UNMAPPED, no PASS flow touched.
+**2026-08-25 (Seasonal opt-out):** FLOW-29 opened — the seasonal-outreach consent chain had
+no registered flow. Two silent consent defects found and fixed (OUTREACH-01, OUTREACH-02).
+FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLOW-02's
+notification preferences are the customer portal's own route
+(`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
+property record's `commPrefs`.
+**2026-09-09, same day (Nobody was told the address could not be checked):** Spec §2.2.3 and
+decision 4, and Patrick's call on the alert channel: *"If there needs to be a notification round due
+to an address not being verified, yes that should be a notice made by text message."*
+Two different failures had been treated as one. **Google saying the address is bad** — no such
+place, or resolved only to a town — is refused at the gate, with our phone number in the message.
+That half already worked and is now pinned. **Our own lookup failing** — no Maps key, a timeout,
+quota — takes the booking anyway (never turn a customer down over our own outage) and, until now,
+left nothing but a `console.warn`. The address sat on the calendar looking exactly like a good one,
+and the first person to find out was the tech, in the driveway.
+Fix: the gate verdict is hoisted out of its block and, when degraded, stamps
+`booking.verification = { state: "unverified", reason, at }` on the envelope, mirrored onto the
+canonical record (set-only: a later re-sync cannot silently clear a flag that says a human should
+look). The notice rides the **front of the alert label Patrick already receives** —
+`UNVERIFIED · BOOKED · …` — rather than a new alert channel. **That choice is the load-bearing
+one:** he gets one message per booking today, and if `GOOGLE_MAPS_SERVER_KEY` ever falls out of
+Render *every* address starts failing at once — one-per-booking stays one-per-booking, where a
+dedicated alert would have become a hundred texts at 2am. Null on every normal booking, so a good
+booking's message is byte-identical to what it was.
+Coverage: `scripts/test-unverified-address.mjs`, 18 assertions, in `build:check`. Walks the real
+public route — availability, the ten-minute hold, reserve — with no Maps key, using a seeded
+geocode cache as the verified control. Verified against broken code: **7 fail**, the detail line
+showing the exact text Patrick used to get for an unchecked address ("BOOKED Morning Appointment").
+No PASS flow touched.
+
+**2026-09-09, same day (A dead appointment could still put a job on a tech's day):** Patrick's call
+on the §2.8.3 sweep's one open item. `POST /api/work-orders` refused to build a work order behind a
+CANCELLED booking (Brief B §3.4) and named one state where there are three: a **completed** booking
+already has its work order, so a second is a duplicate job for a visit that already happened, and a
+**no_show** is the ghost run the guard exists to prevent, exactly. Now asked through
+`bookingHoldsItsSlot()`, so a fourth dead state is covered the day it is added, and the 409 names
+the state (`booking_cancelled` / `booking_completed` / `booking_no_show`) so the CRM can say why.
+The escape hatch is unchanged and is the more honest record anyway: a genuine extra visit on a
+finished job is created against the PROPERTY, which the route already accepts — asserted, so this
+change cannot have removed a real workflow instead of a phantom one.
+Coverage: `scripts/test-wo-dead-booking.mjs`, 17 assertions, in `build:check`, driving the real
+endpoint. Verified against broken code: **9 fail**, two of them showing real work orders created
+behind completed and no-show bookings. No PASS flow touched.
+
+**2026-09-09, same day (Nothing is ever sent to a load-test record):** Reported live by Patrick
+mid-session — "the gate that you may have set up to not send text messages to the customers
+numbers, and emails are still pushing through *** this is for the test appointments." He was right,
+and the shape of it is the point. The suppression that existed lived in **one place** — two call
+sites inside `POST /api/booking/reserve` — and silenced only the message sent at the moment of
+booking. Everything a test record touched afterwards went out normally: reschedules,
+cancellations, invoices, payment receipts, portal replies, quote-ready and quote-approval SMS, the
+AI-handoff SMS, review requests, warranty notices, and **the assignment blast itself**
+(`sendOutreachEmail` / `sendOutreachSms`). Measured: **19 Twilio send sites across 5 files, 5
+separate mail transports, and a gate on one of them.** The single exception was
+`lib/booking-reminders.js`, which carried its own private `PJLTEST-` check — and its being private
+is exactly why it stayed the only one.
+Fix: `server/lib/test-recipients.js`, one rule, asked where the message LEAVES. `guardTransport()`
+wraps a nodemailer transport so every message it carries is checked (applied to all 9 ad-hoc
+transports in server.js and to the three lib transports), and `isTestRecipient()` gates all 10
+customer-facing Twilio sites. The reminder's private copy now calls the shared rule.
+**Two deliberate design choices, both load-bearing.** (1) **The marker alone decides — never
+`PJL_TEST_KEY`.** The reserve bypass needs that variable because it GRANTS an exemption and an
+exemption should be hard to claim; this is a REFUSAL, and spec item 8 has Patrick deleting
+`PJL_TEST_KEY` from Render when the load test ends — if suppression hung off it, that deletion
+would silently start messaging every test record still in the store. (2) **It keys off the
+RECIPIENT, not the caller.** Senders hold a lead, an invoice, a work order, a booking, or a bare
+phone number from an AI handoff, and no field is common to all of them; an address or a number is.
+Matching there covers senders that do not exist yet, which a per-caller check cannot.
+**The cost, stated:** a test row carrying a real person's real number blocks that number until the
+rows are purged. Safe direction, and temporary — the delete bot removes the rows and the block with
+them. Coverage: `scripts/test-test-recipient-gate.mjs`, 28 assertions, in `build:check`: behaviour
+through the real `notifyCustomer()` with transport and `fetch` replaced, the PJL_TEST_KEY-
+independence assertion, and a lint that every transport and Twilio site is behind the guard —
+because the behaviour test covers the senders that exist and the lint covers the one added next
+month. Verified against broken code (module present, wiring reverted): **9 fail**, the first being
+the marked record's number actually being texted. No PASS flow touched.
+
+**2026-09-09, same day (One bookable minute per half-day, for every commercial customer):**
+Spec §2.9 / D6, ship item 7. The six commercial services carried `slotIncrementMinutes: 300`,
+documented as making the customer "see exactly TWO slots per day — 8:00 AM and 1:00 PM — instead of
+a full half-hour grid". **That is not what it did.** The walk already emits at most ONE slot per
+bucket (the `emitted` flag), so the customer saw two slots either way. What the 300-minute step
+actually decided was how many START TIMES the engine was allowed to TRY inside a bucket: morning
+08:00-12:00 -> one candidate, 08:00; afternoon 12:00-17:00 -> one candidate, 12:00. So a busy 08:00
+did not push the offer to 08:30 — it cost the commercial customer **the whole morning**. The
+geographic re-stamp made the afternoon half deterministic rather than occasional: the afternoon now
+fills from 12:00 in half-hour steps, so 12:00 is exactly where the first afternoon booking sits.
+Same shape as the open bucket's hard-coded 13:00 earlier the same day — a single anchor minute
+standing in for a half-day. Fix: the six overrides are gone, and so is the per-service READ
+(`service.slotIncrementMinutes || cfg....`), so a config line cannot quietly bring it back; the
+"Morning or afternoon" label, which is all the customer ever saw, is untouched. Coverage:
+`scripts/test-commercial-slots.mjs`, 15 assertions, in `build:check` — it pins BOTH halves, because
+the risk in removing a config value is turning the commercial flow into the half-hour grid Patrick
+does not want: a later start IS offered when the first minute is taken, AND an empty day still
+shows exactly 08:00 and 12:00, one slot per bucket. Verified against broken code: 8 fail, naming
+the defect ("the whole morning was abandoned because 08:00 was busy"). No PASS flow touched.
+
+**2026-09-09, same day (Spec 2.8.3: every reader of `booking.status`, listed):** The grep the spec
+asks for after the lifecycle work, kept as `scripts/test-booking-status-readers.mjs` (19
+assertions) rather than as prose that rots. The rule is `DEAD_STATUSES` + `holdsItsSlot()` in
+`lib/bookings.js`, reached from server.js through `bookingHoldsItsSlot()`. **Five readers were
+asking it the long way** and are now on the shared rule:
+- `server.js:4083` — which canonical record is the lead's active booking (admin link target).
+- `server.js:4693` — the reschedule guard.
+- `server.js:12204` — the change-service-type guard.
+- `server.js:21856` — `/api/schedule/today`'s CANONICAL pass. Its lead pass already used the shared
+  rule, so this one endpoint held the rule once and a copy of it — **the exact shape of the defect
+  that let a cancelled booking keep its slot**, one drift away from repeating it.
+- `server.js:23398` — the appointment `.ics` route asked `status !== "confirmed"`, which is
+  NARROWER than the rule: `tentative` is a live status in the vocabulary. No live impact (the
+  assignment writer stamps `confirmed`), but a hand-set tentative appointment was refused its own
+  calendar file.
+**Four readers deliberately left alone, each named with its reason** (CLAUDE.md rule 3 — silence is
+how a half-built transition ships): `lib/appointment-actions.js` distinguishes cancelled from
+completed because they are two different sentences to the customer; `lib/outreach.js` counts a
+COMPLETED booking as served, so excluding it would start chasing customers who have already had
+their visit; `server/schedule.js` keeps cancelled rows so the calendar can draw them struck
+through, and its utilisation stats count completed work because it happened; `server/admin.js` is
+browser-side and cannot require the lib, and the server re-checks the same rule on every route it
+calls. **One flagged for Patrick, not changed:** the work-order guard at `server.js:18054` refuses
+a new WO for a `cancelled` booking only — a `completed` or `no_show` booking can still spawn one.
+Verified against broken code: 7 fail, and the lint names all four inline copies. No PASS flow
+touched.
+
+**2026-09-09, same day (Google decides how long the customer waits — and its guesses were
+kept as answers):** Spec item 6, the travel-time half. `lib/geocode.js` was hardened for
+Patrick's "we cannot have this fail" (4s timeout, one retry, town-centroid fallback, approximate
+coords that never persist); `lib/distance.js` — the other half of the same dependency, and the one
+the availability engine calls once per candidate slot — had neither protection.
+**Defect 1, no timeout:** `fetch(url)` carried no AbortSignal, so Google set the response time of a
+customer's booking request; the engine awaits these in sequence, so one hung call held the whole
+availability response open. Now 4s per attempt, one retry on a transient failure (timeout, network,
+`UNKNOWN_ERROR`), an ~8s worst case, then a straight-line estimate and a booking that still works.
+A definitive answer (`ZERO_RESULTS`, `REQUEST_DENIED`, `OVER_QUERY_LIMIT`) is not retried — it does
+not improve on a second ask.
+**Defect 2, guesses cached as answers:** every failure path wrote its Haversine estimate into
+`distance-cache.json` in the same shape as a real answer, and nothing re-checked it — so setting
+`GOOGLE_MAPS_SERVER_KEY` in Render changed nothing for any pair already guessed, and the geography
+filter went on measuring the corridor with straight lines. On this machine that file held 58
+entries and **every one was a guess**. Only a real Google answer is cached now, as
+`{ minutes, source: "google", at }`; an estimate is returned and forgotten (it is arithmetic —
+recomputing costs nothing). Entries written under the old rule carry no provenance and cannot be
+told apart from good ones after the fact, so they are dropped on load and the file is rewritten
+without them: a one-time re-bill of the pairs still in use, against a cache that would otherwise
+stay wrong forever. The two Google call sites (floored + unfloored) were also merged into one
+`askGoogleSeconds()` — two copies of a timeout and a retry rule is how only one of them ended up
+with the error handling right.
+Coverage: `scripts/test-distance-fail-open.mjs`, 22 assertions, in `build:check`, driving the real
+module with `fetch` replaced (no network, no key, no billing). Verified against broken code:
+**14 fail**, including the hang — the old call never returned at all — and the poisoned entry being
+served. No PASS flow touched.
+
+**2026-09-09, same day (Two writes in the same millisecond, and one of them threw):** Found while
+testing the above, and more serious than what it was found under. `lib/atomic-json.js` (PR #176)
+named its temp file `pid + Date.now()`. Two writes to one store in the same millisecond therefore
+picked the **same temp path**: both wrote it, the first renamed it away, and the second's rename
+failed `ENOENT` and **threw**. Measured: **372 of 600** concurrent writes failed. `writeLeads()`
+does not catch, so that is a lead or a booking lost to two requests landing in the same tick — and
+since this morning it covered `users.json` and `auth.json` too. Losing one writer's CHANGES to the
+other is this helper's documented behaviour (that is what `booking-lock.js` is for); losing the
+WRITE is not. Fix: six random bytes in the suffix. 372 failures → 0. Pinned in
+`scripts/test-session-stores-atomic.mjs` (now 11 assertions); against the old suffix, 114 of 180
+concurrent writes throw. No PASS flow touched.
+
+**2026-09-09, same day (The server refused the session cookie it had just issued):** Found while
+driving PR #184's CI to green — `test-booking-lifecycle` failed with four consecutive `ERR:401` on
+the tech's day list while the login assertion in the SAME block passed. Not this PR's change, and
+not a flake: it is the other half of the defect `scripts/test-auth-secret.mjs` documents. That
+suite fixed racing MINTS of the session secret (one secret per process instead of one per call).
+The remaining hole is the WRITE, in the two stores every gated request reads.
+`requireUser()`/`requireAdmin()` re-read `users.json` on every request so a disabled account loses
+access immediately, and `/api/login` fires `users.recordLogin()` **without awaiting it** — so a
+write to `users.json` is in flight at exactly the moment the client makes its next request. A bare
+`fs.writeFile` truncates the destination and then fills it; a reader landing in that window gets
+`""`, `JSON.parse("" || "[]")` hands it an **empty user list**, and the gate reads that as "this
+user no longer exists" → **401 on a perfectly valid session**. `auth.json` had the same non-atomic
+write, and there a truncated read is worse than transient: `readAuthConfig()` sees no secret, mints
+one and WRITES it, invalidating every cookie already issued — the four-in-a-row shape.
+Fix: both stores now write through `lib/atomic-json.js` (temp file + rename), the same treatment
+`bookings.json`, `customers.json`, `properties.json` and `leads.json` got in PR #176 — these two
+were simply missed. Reproduced locally first: 3 of 720 gated requests came back 401 against the
+unfixed code. Coverage: `scripts/test-session-stores-atomic.mjs`, 8 assertions, in `build:check`.
+It pins a deterministic property rather than a race — **the update lands by RENAME**, so the
+destination file's inode changes across a write (an in-place truncate-and-fill keeps it) — plus
+the end-to-end symptom itself. Verified against broken code: 3 assertions fail on the old writes.
+No PASS flow touched; no behaviour changes for any caller.
+
+**2026-09-09 (The overflow failed on arrival: the open bucket's hard-coded 13:00):** Spec item 4,
+D3. Patrick's rule is that we never turn a customer down — past the corridor cap they go into the
+open bucket and get picked up "on our way home". Ranking them against the upcoming route days
+worked; PLACING one did not. The Book + notify button hard-coded `13:00` as the anchor minute, so
+the placement collided with whatever already sat there and came back **409 `physical_conflict` on
+exactly the days the panel had just recommended**. The re-stamp shipped hours earlier made this
+deterministic rather than occasional: the afternoon now fills from 12:00 in half-hour steps, so
+13:00 is precisely where the third afternoon booking lands. It also performed no capacity or
+geography check of its own — a placement is a booking, and without those the open bucket is a
+side door into a full day.
+Fix: `POST /api/admin/open-bucket/slot` (admin) resolves where the customer actually fits by
+asking `listAvailableSlots`, so the placement **inherits** bucket capacity, bucket geography,
+hours and blocks rather than re-deriving any of them; it returns the first free AFTERNOON slot
+(the back half of the day is what "on our way home" means) or refuses with a named reason —
+`afternoon_full`, `day_unavailable`, `not_waiting`. The panel then books through the ordinary
+book-from-lead path, so the confirmation, the canonical mirror and the driving-order re-stamp all
+ride machinery that already works. **Deliberately a resolver, not a second booking path:**
+duplicating the booking write would have been a second definition of "book this customer", and
+the reserve handler re-validates under the booking lock anyway, so a slot taken between the two
+calls fails the same way any other race does. The customer is still told the 12–5 window and
+never a minute. Coverage: `scripts/test-open-bucket-placement.mjs`, 16 assertions, in
+`build:check` — it reproduces the 409 collision first, then drives the real two-step, and pins
+the CLIENT too (a resolver nobody calls fixes nothing). Both halves verified against broken code:
+restore the hard-coded anchor → 2 fail; remove the endpoint → 8 fail. One fixture correction
+worth recording: the first "full afternoon" case passed for the wrong reason, because with no
+season plan there is no `bucketCap` and slots remained — the fixture now fills every half-hour
+from noon to close, and the assertion says it is testing the engine's own "no room left" rather
+than the cap. No PASS flow touched.
+
+**2026-09-09, same day (The aggregate guard — the barbell stops being COMPOSED):** Spec priority
+3, causes C-D, and the last piece of the Newmarket → Thornhill → Newmarket problem. The
+per-booking check is marginal (what does THIS stop add?) and, because every route starts and
+ends at the Newmarket yard, **asymmetric**: measured on Patrick's own addresses, Thornhill into
+a Newmarket morning is **+88 min** and refused, while Newmarket into a Thornhill morning is
+**+4** and allowed, and Aurora into a day holding both is **+0**. So the barbell only ever formed
+one way round — the far cluster landed first, then home-turf customers slotted in at +4 apiece
+and every one passed. That is why it survived several rounds of corridor work.
+**The spec proposed a total-day-drive cap (150 min). Measurement killed that design before it
+was written:** a barbell day totals **98** minutes and a perfectly good tight Thornhill route day
+totals **99** — indistinguishable, and 150 admits both. Every cluster pays to get out of the yard
+and back wherever it sits; what makes a day bad is crossing the city INSIDE it. Splitting commute
+from spread separates them cleanly: commute 10 / between-stops 5 for Newmarket ×2, commute 94 /
+between-stops **5** for a far-but-tight Thornhill day, commute 52 / between-stops **46** for the
+barbell.
+So the rule is `geoFilter.worstLegBetweenStops()` — the longest leg between consecutive stops,
+commute excluded, with stops ordered the way the day would actually be driven (nearest-neighbour
+from the yard, the greedy the sequencer opens with). New setting
+`maxLegBetweenStopsMinutes: 25`, matching the first rung of the widen ladder; 0 disables it.
+It is **symmetric**: 46 for Newmarket-joins-Thornhill, 45 for Thornhill-joins-Newmarket.
+**A first attempt capped the ABSOLUTE worst leg and was wrong** — it banned the fall plan's own R5
+(Etobicoke → Mississauga → **Acton**), a rural route that legitimately has long legs, which is
+the opposite of the point. The shipped rule caps the **delta**: what this customer ADDS to the
+day's spread. A Mississauga caller joining R5 adds ~0 because they are already on that line; a
+Newmarket caller joining a Thornhill day adds 41. Caught by the suite's existing acceptance
+criterion, not by inspection.
+Deliberate limits: a day with no stops has no spread and is never refused — somebody has to seed
+a cluster; the check runs only after the marginal one, so it costs nothing on days already
+refused; and a day that already exceeds the cap refuses NEW bookings without touching or moving
+anything existing, with the open bucket as the overflow (Patrick: "we NEVER turn down a
+customer"). Coverage: section 10 of `scripts/test-geo-availability.mjs` (70 → 75 assertions),
+which asserts the barbell is refused BOTH ways round, that a far-but-tight day and an empty day
+are untouched, and — as the fixture's own guard — that the Newmarket stop still looks cheap to
+the marginal check, so the test cannot quietly stop testing the thing it exists for. Disable the
+setting and exactly one assertion fails, naming the offered day. No PASS flow touched.
+
+**2026-09-09, same day (The tech's day list was in booking order, not driving order):** Spec 2.4
+and causes A-B. `/api/schedule/today` — the endpoint the FIELD APP reads, the one Patrick
+actually drives from — sorted by `booking.start`, and `booking.start` is only the first free
+30-minute mark in the bucket in the order people happened to book. Only the Season Plan page ever
+ran the sequencer. Reproduced: Newmarket 08:00 → Thornhill 09:30 → Newmarket 11:00, across the
+top of the city and back, because that is the order three strangers clicked in.
+Two halves, and shipping either alone would have been worse than neither. (1)
+`orderDayForDriving()` runs the day's rows through **`lib/resequence.sequenceDay` — the same
+sequencer the Season Plan uses**, reached the same way `sequenceDayWithBookings` does it, with
+synthetic codes standing in for rows that have no property code. One definition of driving
+order, two callers. (2) `restampDayInDrivingOrder()` hangs off `syncBookingFromLead` — the one
+wrapper every booking path already goes through — and re-cuts the whole day's start times in
+route order after each new booking. **Ordering without re-stamping would have handed the tech
+8:00, 11:00, 9:30: the right route with the times jumping around.** Patrick's rule makes this
+legitimate: "Start times inside a bucket are provisional" — the customer is promised Morning
+(8-12) or Afternoon (12-5) and never sees a minute. Because every reader sorts by `start`, the
+field app, Today, the iCal feed and the route sheet all agree without any of them changing;
+`orderDayForDriving` stays as the safety net for days whose stamps predate this.
+**Three things it will not do**, each a deliberate limit: it never moves a booking across the
+noon line (that is the promise the customer was given); it skips any day carrying
+`assignmentId`/`dayLocked`/`source: "assignment"` (once a day is sent out, the times in the
+customers' hands are the times); and it notifies nobody, because the bucket is unchanged. A
+re-stamp that throws leaves the booking exactly as it was.
+**The honest limit, worth stating because it is the next item:** ordering cannot fix a day whose
+MORNING is in Thornhill and whose AFTERNOON is in Newmarket. That day still drives out and back,
+and it must, because the alternative is moving a customer who was told "morning". That is a
+COMPOSITION problem for the aggregate geography guard (spec 2.3.2), not an ordering one —
+asserted explicitly in section 3 rather than left as a surprise.
+**Caught by our own lint, in CI, and fixed properly rather than around:** the re-stamp mirrors
+each re-cut booking back to `bookings.json`, which tripped
+`test-customer-active-on-booking`'s "nothing mirrors a booking behind the wrapper's back"
+rule — the rule that exists so no booking path can mirror and forget the customer promotion.
+The exception is legitimate (re-cutting a start time is not a new booking, and routing it
+through `syncBookingFromLead` would recurse, since that is what schedules the re-stamp) but the
+lint was right to refuse it. Fixed by extracting `mirrorBookingOnly()` as the ONE named home for
+`upsertFromLead`, with the lint narrowed to that function: the re-stamp reuses the mirror
+without punching a hole in the invariant, and a stray call anywhere else still fails.
+**Why local green missed it:** `build:check` stops at the first failure, and in this container
+that is the `pjl-field` npm-ci gap — so the suites after it never ran. Every suite past that
+point is now run explicitly before pushing.
+Coverage: `scripts/test-day-order.mjs`, 11 assertions, in `build:check`, driving the real
+endpoint and a real booking (seeding leads.json alone would not exercise the re-stamp, which
+hangs off the booking wrapper). Both halves verified against broken code independently: revert
+the sequencer → 2 fail naming the sandwich; revert the re-stamp → 1 fails. Timezone pinned to
+America/Toronto in the suite, or a UTC container reads a 09:00 Toronto booking as 13:00 and
+calls the morning the afternoon. No PASS flow touched.
+
+**2026-09-09, same day (Ten minutes to fill in the form, with the slot actually yours):** Spec
+2.5.1, the second half of D1. Reserve is atomic now, so two people can no longer both be told
+yes — but the loser still lost AFTER typing name, phone, address and zone count, because the
+slot was never theirs while they worked. With ads live and several people on the page that is a
+form filled in for nothing. New `lib/booking-holds.js` + `POST /api/booking/hold` /
+`/api/booking/release-hold` (both public, both under the reserve mutex), and `js/booking.js`
+takes the hold the moment a time is picked. **A hold is counted by `activeBookings()`**, the one
+place the engine asks what a day already carries — so a held slot stops being OFFERED and takes
+part in the day's geography, rather than merely failing at the end. **Expiry is enforced on
+READ, not by the sweeper**: a cleanup job that is load-bearing for correctness is a cleanup job
+that takes bookings down the day it fails; the sweeper only keeps the file small. Reserve now
+requires a hold for public standard bookings, with four exemptions, each because no form is
+being filled in: standby/open bucket (no slot to hold), `admin_custom`, book-from-lead, and the
+`PJL_TEST_KEY` load-test path — Patrick's bot posts reserve directly and must keep running until
+the key comes off Render (spec item 8). **Bug found by the test and fixed:** the hold has to be
+consumed BEFORE the slot re-validation, not after — the holder's own hold counts as taken, so
+leaving it in place made the engine tell the customer their own slot was gone. Releasing first
+also means a re-validation that fails for another reason leaves nothing stuck behind.
+Re-picking passes the old token as `releaseToken` so changing your mind does not eat two units
+of capacity. Coverage: `scripts/test-booking-hold.mjs`, 19 assertions, in `build:check`; both
+load-bearing guards verified against broken code (holds not counted → 3 fail; expiry left to the
+sweeper → 1 fail). No PASS flow touched — FLOW-03 gains a step, and `book.html` fails OPEN if
+the hold call itself errors, because reserve re-validates regardless.
+
+**2026-09-09 (A customer walks over while you are on their neighbour's lawn):** Patrick:
+"Sometimes we are approached by customers while on a daily route, we try not to turn anyone
+down... we still want to remain professional and be able to tackle their closing as well, while
+still recording all paperwork, and then adding it into the daily flow **as it would have been.**"
+
+**No server code was written for this, and that is the finding.** The force-book path already
+does everything a walk-up needs: `source: "admin_custom"` skips the bucket grid, skips the
+service-area gate (`deliberateAdminAct`) and is exempt from the ten-minute hold — and its gate
+is `requireUser`, which admits a **tech**, not `requireAdmin`. So the whole feature is a screen
+that walks the ordinary booking path quickly: same lead, same customer, same property, same
+work order, same price off the same tier. It ends by opening the work order it just created, so
+the walk-up lands exactly where a booking made three weeks ago lands. Patrick's call: **"everyone
+can add a stop"** — the button carries no role test, which is why the suite pins the server's
+gate as `requireUser`; if that ever tightens to `requireAdmin` the button 403s for every tech
+and nothing else would say so.
+
+**Two deviations from the approved render, both forced, both recorded here rather than
+discovered later.** (1) There is no GPS "You are here": `lib/geocode.js` goes one way only, and
+reverse geocoding would mean a new dependency on a Google API that has refused us before — so
+the address box is prefilled with the STREET of the stop you are working (`whereYouAre` →
+`streetHint`), and the house number is one tap. (2) The stop lands **after the last stop of the
+day, not "now"** — reserve refuses a force-book that physically overlaps an active booking, and
+the job you are standing at is one of those, so a stop timed "now" returns 409 in front of the
+customer. The work order's own `arrivedAt` / `departedAt` record the real hours, which is the
+honest record either way.
+
+`nextFreeStart` is where that second deviation could have gone wrong quietly: `/api/schedule/today`
+sends `end: null` for a row that never had one, and treating such a row as ending when it STARTS
+produces a stop that begins inside a running job — a `physical_conflict` 409 on a driveway. It
+assumes a three-hour envelope for those instead. `canAddStop` hides the button on a day already
+driven; the day screen browses backwards freely and a job backdated onto a route nobody drove is
+not a thing anyone means to do.
+
+**A hooks-order crash was caught on the way in, and the guard that should have caught it had a
+hole.** `scripts/test-hooks-order.mjs` only recognised the ONE-LINE form of an early return, so
+`TodayScreen`'s two `useCallback`s under `if (state === 'loading') { return ... }` sailed past a
+green suite — React refuses the second render outright, which would have crashed the day screen
+the moment it finished loading, on a phone, in the field. The detector now tracks braces and
+finds a component's own returns at any indentation (returns inside a nested callback still do
+not count), and it covers `App.js` as well. Fixed by moving the two hooks above the returns.
+
+Coverage: `scripts/test-add-stop.mjs`, 30 assertions, in `build:check`, **verified against the
+shipped code (4 passed, 26 failed** — the four that pass are the server-drift guards, which are
+true today and are the point). The load-bearing one runs the SERVER'S OWN overlap predicate
+against the time the app picks, on the shapes a real day hands it, including the row with no end
+on it. `test-hooks-order.mjs` grew three assertions and was verified against the pre-fix
+`TodayScreen` (2 offenders found). No PASS flow touched: reserve, the hold and the conflict
+check are unchanged, and the app only calls a path the CRM has used since the schedule modal
+shipped.
+
+**2026-09-09 (A visit comes off the day, and the day still says so):** Patrick: "Customer calls
+throughout the day (or we go to house and already completed) we need a way ... to be able to
+'Remove visit' an architecture that allows us to obviously skip the home (remove it from the
+path) but record it somewhere."
+
+**Removing it from the path was already free.** `activeBookings()` and `/api/schedule/today`
+both filter on `bookingHoldsItsSlot()`, so a dead booking leaves the day, the route and the map
+without a line of resequencing code — the payoff from the 2026-09-09 lifecycle work above.
+What did not exist: any way to reach it from a phone, any structure to the reason, and — the
+gap — **any way to record a no-show at all.** Every reader honours `no_show`; nothing could set
+it. Only `cancel` had a route.
+
+`REMOVAL_REASONS` in `lib/bookings.js` is now the one place that says what the five reasons
+mean: customer cancelled, already done, nobody home, couldn't get access, weather. **The
+OUTCOME is derived from the reason server-side and never taken from the request** — a phone that
+can name its own status is a phone that can mark anything a no-show. `cancel()` takes a
+`reasonCode`, sets `status` to that outcome (so "nobody home" is a real `no_show`), and stores
+`removalCode` beside the free text: the text is what a human wrote, the code is what a query
+groups by next February. **"Already done" resolves to `cancelled`, never `completed`** — marking
+it complete would fire the completion cascade and draft an invoice for work this crew did not
+do — and defaults to NOT emailing the customer, because telling someone their visit was
+cancelled because it had already happened is a confusing email nobody needs. The lead mirror
+carries `cancelled.status`, not the literal string it used to hardcode; mirrored as "cancelled",
+a no-show was a no-show nothing downstream ever heard about.
+
+**A removed stop leaves the route and does not leave the screen.** `/api/schedule/today` returns
+`removed[]` alongside `bookings[]` — deliberately separate, because everything that drives, maps
+or counts the day reads the latter — and the phone shows them struck through under "Removed
+today" with the reason, the time and who did it. A stop that simply vanishes is the thing
+Patrick rings about at 4pm. The day rows also carry `bookingId` now; the lead's embedded
+booking is a read cache with no id of its own, so the button had nothing to call.
+
+Two smaller things. "Already done" asks what happened (Patrick's call — it is the one reason
+that means a double booking or a job closed without the calendar being told), and it asks in a
+new shared `PromptSheet`, **not `Alert.prompt`, which is iOS-only and does nothing whatever on
+Android** while `app.json` declares an android target. And the removal refetches the day rather
+than patching it locally: taking a stop out changes the driving order of everything after it,
+and the server owns that order.
+
+Coverage: `scripts/test-remove-visit.mjs`, 12 assertions, in `build:check`, **all 12 verified
+against the shipped code (0 passed, 12 failed)**. The load-bearing one compares the phone's
+reason list against the server's — two lists of the same thing in two files, and a code in one
+and not the other is a button that fails on a driveway. No PASS flow touched: the cancel route
+keeps its old free-text contract for the CRM, which sends no code and behaves exactly as before.
+
+**2026-09-09 (The arrival facts could be read and never written):** Patrick, on a work order
+showing Controller / Located / Shut Off / Blow-Out all reading "Not Recorded": "Please do me a
+favor and connect these from the properties profile... If the display information shows 'Not
+Recorded' this should be editable in this screen... The information that is updated here MUST
+also follow over to the properties information thats on my CRM."
+
+The connection was already there — `StartStage` has read `wo.property.system` since it was
+written. What it could not do was CHANGE anything, so a tech standing in the garage looking at a
+Hunter HPC-400 held the answer the office had been missing for a year and had nowhere to put it,
+and every visit to that property reprinted "Not recorded". The rows edit in place now and save
+through `PATCH /api/properties/:id`, the same route the Properties tab uses — **fenced at
+`user`, so the tech who knows the answer is the one allowed to record it**, which is asserted
+rather than assumed. Notes (`system.notes`) join the four, and a commercial site's
+`siteContacts` are shown ABOVE them, read-only and only when the property has one: on a condo
+board's site the first question is who opens the door, and adding a board president from a truck
+is a CRM job while phoning him is not.
+
+**Unlike `ClosingScreen.save()`, a failed property write PUTS THE OLD VALUE BACK.** That is the
+opposite call to the one two lines above it and deliberate: an unsaved work-order edit is still
+true of the visit in front of you, but a property fact that did not save is recorded nowhere, so
+leaving it on screen tells the tech the office now knows something it does not.
+
+Two things fixed on the way. The labels were **reversed against the CRM** — the screen said
+"Controller" for the brand and "Located" for the place — and now read Controller then Location,
+the form's own words. And an empty record said "Not recorded" four times down a column; it says
+it once and the rows shrink to a ＋.
+
+Coverage: `scripts/test-arrival-facts.mjs`, 11 assertions, in `build:check`, verified against
+the shipped app first (**8 fail**). The load-bearing one reads the server's own `allowedSys`
+list and asserts every field the screen writes appears in it — the two lists are the same thing
+in two places, and a name in one and not the other is a box the tech fills, a save that
+succeeds, and a record that never changed. No PASS flow touched; no server change at all.
+
+**2026-09-09 (The declared-zone chain had no first link — every new property still got one
+zone):** Patrick, on a work order for a seven-zone property showing "Zone 1 of 1": "I believe
+there was a working fix for this, but it clearly doesn't look delivered." It was delivered. It
+did nothing, because nothing fed it.
+
+The 2026-09-01 entry above turns `system.zoneCount` into real zones at work-order creation. But
+`system.zoneCount` was Patrick's hand-filled field and the appointment page's — grep the whole
+server and the only writes are `appointment-actions.setZones` and its route. **Taking a booking
+never wrote it.** So a first-time property reached `scaffoldZonesFromProperty()` with an empty
+`system`, produced no zones, and `create()` fell through to its "always give the tech at least
+one zone" placeholder. Priced for seven, dispatched with one — the exact failure 2026-09-01 was
+written to remove, still reachable end to end because the chain had no first link. That entry's
+own **"What still needs Patrick"** named the walked test that would have caught it — book a new
+property declaring a count, open its work order — and it had not been run.
+
+Fixed at the point the record is created, which is Patrick's recorded call (the record should
+carry its zones from the first booking): `POST /api/booking/reserve`, right after
+`properties.attachLead`, writes the booked count onto the property, so pricing, the season plan,
+the appointment page and the work order all read one number from visit one. It may only ever
+fill a BLANK — documented zones are ground truth and an existing count is Patrick's own or the
+customer's correction, so a later booking never moves either — and `"unsure"` fills nothing in
+rather than claiming a count nobody gave. `materializeDeclaredZones()` takes the lead as a
+second argument and offers the same count as a fallback, which is the net for bookings already
+on the books when this shipped and for any path that reaches a work order without passing
+through reserve.
+
+The decision lives in `lib/work-orders.js` as two pure functions
+(`declaredZonesFromBooking`, `canAdoptDeclaredZones`) and the WRITE stays at the route layer,
+respecting the same invariant 2026-09-01 recorded: that module depends on nothing but node
+built-ins. Coverage: `scripts/test-declared-zones.mjs`, 41 → **53 assertions**, verified against
+the shipped server first — **15 fail**, including the end-to-end pair that scaffolds 0 zones from
+a booking-created property and 7 once the count is on it. No PASS flow touched; no change to
+what a valid session, gate or window is.
+
+**2026-09-09 (The server refused the session cookie it had just issued):** `test-purge-test-data`
+went red intermittently on CI, including on a run of `main` itself (run 517, `e9d0cad`), with
+"The server would not accept the session cookie it just issued." It was read as a flaky test. It
+was not: it is what a fresh install does.
+
+`readAuthConfig()` is called on EVERY request that touches a session, and it mints a session
+secret when `auth.json` has not got one. It minted a NEW random secret **per call**. On a store
+without a secret, several requests arrive before the first write lands — each generating its own,
+each writing it, the last write winning and retroactively invalidating every cookie signed with
+any of the others. Reproduced deterministically: ten concurrent logins on a secret-less store,
+and **1 of 10 cookies still verified**. Nine people handed a session that stopped working a
+moment later, with nothing in the log to say why. The same write also persisted
+`{ sessionSecret }` **alone**, so a first-run write threw away anything else `auth.json` held.
+
+Fix: the generated secret is held for the life of the process, so racing callers agree on one
+value and whichever write lands last writes the same bytes; and the write persists the whole
+parsed config instead of one key. Not a change to what a valid session is — signing, verifying,
+expiry and the gates are untouched — so no PASS flow is affected.
+
+Coverage: `scripts/test-auth-secret.mjs`, 3 assertions, in `build:check`, driving the real
+server. **The property it pins is not "ten concurrent logins survive"** — the first draft
+asserted exactly that, passed locally, and then failed on CI reporting `0 of 10`, because a test
+of a race is a coin toss on a loaded box and it had picked up a dependency on the user store
+besides. What it pins instead is the thing underneath: **asking twice gives the same answer.**
+Empty the secret, ask, empty it again, ask again — same secret or the fix is not there. If two
+sequential asks agree, no number of concurrent ones can disagree; if they do not, racing callers
+eventually always will. Sequential, deterministic, no users, no login: fails on the unfixed
+server 5 runs of 5 (naming both secrets), passes 5 of 5 on the fix. The test triggers the
+first-run write with an explicit `/api/session` call, because booting the server does not read
+`auth.json` and neither does the public readiness probe — without it there is no first-run write
+to inspect.
+
+**2026-09-09 (The hold had a second caller nobody looked for — every app booking refused):**
+The hold entry above enumerated reserve's four exemptions carefully and wired `js/booking.js`
+to take a hold. It missed that `/api/booking/reserve` has TWO callers: the website's picker and
+the field app (`pjl-field/src/api.js` → `reserveBooking`). The app is none of the four
+exemptions — it is admin, but a plain grid booking, not `admin_custom` and not book-from-lead —
+so from the moment the hold shipped, **every standard booking made from the phone was refused**
+with `hold_required` ("Pick a time again and we'll hold it while you finish"), on a screen with
+no way to get a hold. Found by Patrick trying to book a real appointment. Only standby survived,
+because it is exempt. This is CLAUDE.md's "find every reader" rule, missed: the field app is a
+reader of this flow and greps for `/api/booking/reserve` would have shown it.
+
+Fixed app-side only; no server change, so no PASS flow is touched and the gate keeps binding
+the app exactly as it binds the public. `BookScreen` now takes the hold at the moment a time is
+confirmed — before the details slide, which is the form the hold exists to protect — hands
+`holdToken` to reserve, passes the previous token as `releaseToken` when the time changes, and
+releases on every path that abandons a slot (new address, new service, a different day, starting
+over). Booking consumes the hold, so it is cleared rather than released. `hold_expired`,
+`hold_required` and `slot_taken` at reserve all mean one thing to a man on the phone — the time
+is not yours — so they alone send him back to a freshly loaded day list; every other failure
+leaves the typed details alone. The ten minutes are shown ("Held until 8:12 PM") rather than
+discovered. The app's `sendJson` now carries `code` and `status` onto the thrown error, because
+a screen that only has the sentence has to match on English to tell those cases apart.
+Coverage: `scripts/test-book.mjs`, 40 assertions, both new checks verified against the unfixed
+app (5 fail). Unlike `book.html`, the app does NOT fail open when the hold call errors — with
+the hold now mandatory, failing open just moves the same refusal to the end of the form.
+
+**2026-09-09 (Cancel → re-book lifecycle, spec §2.8 / D2 + D7, ship item 2):** Two readers
+disagreed with the calendar about what "cancelled" means. **D2:** `bookings.upsertFromLead`
+matched the canonical record on `leadId` alone and never wrote `status` on the existing branch,
+so when Patrick re-booked a customer whose earlier appointment was cancelled (book-from-lead
+replaces `lead.booking` with a fresh live envelope, then re-syncs), the re-booking landed ON the
+cancelled record — start moved, new WO appended, `status: "cancelled"` kept. The lead side held
+the slot; the portal, iCal feed, reminders, appointment links and the Today canonical union all
+read `status !== "confirmed"` and treated the live appointment as dead. **D7:**
+`/api/schedule/today`'s lead pass filtered on `archived` only, so a cancelled booking (which stays
+on the lead as a read cache with `status: "cancelled"`) was still a stop on the tech's day list —
+the field app's ONLY schedule source. **Fix.** (1) The dead-status rule now has ONE home:
+`bookings.holdsItsSlot` / `bookings.DEAD_STATUSES` in `lib/bookings.js`; server.js's
+`bookingHoldsItsSlot` delegates to it. (2) `upsertFromLead` reuses the existing record only while
+it holds its slot, or when the lead carries the SAME booking (same WO id or same start) — a re-sync
+of a completed job stays completed, nothing revives a finished appointment by accident. A lead
+carrying a NEW booking over a dead record gets a fresh confirmed record (`rebooked_from_lead`
+history naming the dead one); the dead record and its history are untouched. This is the spec's
+"or creates a new record when the existing one is dead" branch, chosen over "set status =
+confirmed on the existing record" precisely because the completion cascade re-syncs completed
+jobs through this same function. (3) The Today lead pass applies `bookingHoldsItsSlot`.
+**Readers of booking status walked (CLAUDE.md rule 1):** canonical-status readers that now see the
+re-booking correctly — `lib/ical-feed.js:345`, `lib/booking-reminders.js:64`,
+`lib/appointment-actions.js:81`, `/api/appointment/:token/calendar.ics` (server.js ~23174), the
+Today canonical union, the portal's admin `adminBookingId` resolver (server.js ~3924),
+`activeBookings()` both passes. Lead-side readers deliberately left as they are: the admin
+calendar (`server/schedule.js:191`) shows cancelled bookings WITH a `bookingStatus` badge — display,
+intentional; the portal `.ics` download (server.js ~6857) and `lib/job-finder.js` read
+`lead.booking` without a status check — the former is a customer's own cancelled event, the latter
+a diagnostic that says why a lead is or isn't on a day; neither drives the tech or capacity.
+`lib/day-schedule.js` is WO-based and already skips cancelled/no_show WOs. **Coverage:**
+`scripts/test-booking-lifecycle.mjs` 19 → 28 assertions: section 4 logs a throwaway admin in and
+asserts a LIVE booking is on `/api/schedule/today` and cancelled / completed / no_show are not;
+section 5 drives `upsertFromLead` against the same `bookings.json` — re-book over cancelled → new
+confirmed record, dead record untouched, history names it; same-booking re-sync onto completed →
+stays completed, creates nothing; live record reused as before. Against the code before this
+change: **9 of 28 fail** (the three Today rows and six re-book assertions). `build:check` green
+through every booking suite; the only stop is the pre-existing pjl-field "dependencies not
+installed" environmental check. **No PASS flow's route or payload touched:** FLOW-03's reserve
+path is unchanged; the change is the canonical mirror + one Today filter. Server change → ships on
+Render redeploy; no Xcode rebuild.
+
+**2026-09-09 (Six people click the same slot; four are told yes and vanish):** Spec item D1,
+the one that had to land before the Sept 10 blast. `/api/booking/reserve` read leads.json,
+appended and wrote it back — then did the same for customers, properties and bookings — with
+nothing held in between. Reproduced against a booted server: **six simultaneous reserves on one
+slot returned six HTTP 201s and left 2 leads, 1 booking, 1 customer and 1 property on disk.**
+Four customers told they were booked who were not in the system at all. This is not a display
+bug; with ads live it is somebody standing in a driveway.
+Fix, in two parts. (1) `lib/booking-lock.js` — a promise-chain mutex serializing the WHOLE
+reserve request, because the check ("is this slot still free?") and the act ("take it") have to
+be one indivisible step or the check is a slower guess. It is held until the response closes
+rather than in an explicit `finally`: the handler returns from a dozen places and throws from
+more, and tying the release to the response covers the throwing paths without re-indenting
+several hundred lines of live booking code. A watchdog releases any holder that overruns 20s
+and logs loudly — a double-booking is bad, a booking page that has silently stopped accepting
+anyone during an ad campaign is worse. **Load-bearing assumption, stated out loud: one Node
+process. A second web instance makes this a real lock (O_EXCL lockfile or a database).**
+(2) `lib/atomic-json.js` — leads, bookings, customers and properties now write to a sibling
+temp file and rename over the target, so a crash or a Render redeploy mid-write can never leave
+a store truncated. Different failure from the race and worth closing separately.
+Coverage: `scripts/test-booking-concurrency.mjs`, 7 assertions, in `build:check`. Its assertion
+is arithmetic rather than a threshold — however many reserves return success, EXACTLY that many
+leads and canonical bookings must exist afterwards. Fails on the old code (3 said yes, 1 landed);
+with the lock removed but atomic writes kept it still fails, so the lock is provably the fix.
+After: 6 racers → 1 booked, 5 refused, 1 lead / 1 booking. **Regression caught and fixed in the
+same change:** four suites sandbox `customers.js`/`properties.js` into a temp dir and copy their
+requires by hand; the new `atomic-json.js` sibling had to join those lists or the sandboxed
+module fails to load. NOT in this change: the 10-minute slot hold (spec 2.5.1), which needs a
+new store, a sweeper and a `book.html` change — its own PR, per the spec's own one-change-per-PR
+rule. No PASS flow touched.
+
+**2026-09-09 (Why every corridor fix "still isn't taking": a missing season plan switched
+geography OFF):** Patrick, on a FRESH bot run against the corrected engine, looking at one day
+running Newmarket 8:00 → Thornhill 9:30 → Newmarket 12:00: "This does not work." He was right,
+and none of the previous corridor work was at fault — the gate was never being consulted.
+`geoFilter.buildDayShapes` returned `{}` the moment `plan` was absent, and
+`dayShapesForSeason` turned that into `null`, which `listAvailableSlots` reads as "no geography
+at all" — every day, every customer, every booking. Measured on the actual addresses: inserting
+Thornhill into a morning already holding Newmarket costs **88 minutes** of added drive against a
+15-minute cap that widens to at most 40. The engine refuses it correctly the instant day shapes
+exist; with `dayShapes: null` it offers that morning. Fix: the plan is now OPTIONAL in
+`buildDayShapes` (the plan-days loop simply iterates nothing) and `dayShapesForSeason` builds
+shapes from the bookings regardless. **The bookings alone were always enough to shape a day** —
+that is precisely what the booking-only pass already did INSIDE a plan; the plan adds routed
+stops, it was never what made the rule apply. A day with no plan AND no booking still carries no
+shape and stays open to everyone, so an empty calendar is not closed down. Coverage: section 9
+of `scripts/test-geo-availability.mjs` (59 → 70 assertions), which pins BOTH halves — the shape
+construction and `dayShapesForSeason` no longer returning null — and carries a **control
+assertion** proving the refusal is not vacuous (with geography off the same day IS offered;
+without it, a day outside the horizon would read as "refused" and the test would silently stop
+testing anything, which is how an earlier assertion in this codebase passed against reverted
+code). Run against the old bail-outs: 5 fail on the shapes, naming the offered day, and 2 on
+the server half. Not changed: `resolveSeasonPlan`'s own `if (!plan) return null` — that is the
+season-plan RENDERER, not the gate. No PASS flow touched.
+
+**2026-09-08, same day (A customer who books is still a "lead", and a booked property shows
+"0 zones"):** Patrick: "if the customer BOOKS an appointment - the customer is still coming in
+as a LEAD ... if they've booked an appointment they are active?" He was right, twice over.
+(1) `resolveCustomerForLead` creates every customer with `status: "lead"` hardcoded, and the
+ONLY other writers were the admin edit form and the archive path (`inactive`) — nothing on any
+booking path ever promoted anyone, so a customer who booked, paid and had the work done still
+read as a lead until Patrick edited them by hand. Fixed with `promoteCustomerOnBooking` in
+`lib/lead-customer.js` (promotes `lead`/`lost`/`inactive` → `active`; **never demotes** — a
+cancellation does not un-make a customer, and the deliberate way out is still the archive path;
+already-`active` is left untouched so the re-sync that runs on every booking edit is idempotent
+and costs no write). Per the lifecycle checklist the rule has ONE home and one caller:
+`syncBookingFromLead(lead)` in server.js now wraps `bookings.upsertFromLead` and does both
+halves of "they booked", and **all eight direct call sites were rewritten to use it**. Readers
+of `customer.status` walked: the CRM list pill (`server/customers.js`), the detail summary
+(`server/customer.js`) and the list filter (`lib/customers.js`) — display and filtering only,
+no capacity, pricing or billing logic keys off it, so promotion is safe. Deliberately NOT done:
+no backfill of customers who booked BEFORE this change (they still read "lead" until run —
+Patrick's call, and a separate write against live data), and no notification, because nothing
+customer-facing shows this field. Promotion can never take a booking down: it swallows its own
+errors. (2) The lead detail's property panel read `system.zones.length` only, so a property
+booked through the public form — which carries `system.zoneCount` and an EMPTY `system.zones`
+until someone walks it — read "0 zones" while its work order correctly scaffolded four. Same
+fix as `declaredZoneList()`: documented zones win, the declared count stands in, and the label
+reads "(declared)" so an unverified claim never passes for a survey. Coverage:
+`scripts/test-customer-active-on-booking.mjs`, 14 assertions, in `build:check`. The load-bearing
+one is a lint — nothing may call `bookings.upsertFromLead` outside the wrapper — which names all
+seven stray call sites when run against the old code. No PASS flow touched.
+
+**2026-09-08, same day (The delete bot failed in Patrick's hands: "CRM login required"):** The
+first cut reached the endpoint over HTTP and picked the session cookie out of
+`headers.get("set-cookie")` with `.split(";")[0]`. Node's fetch JOINS multiple `Set-Cookie`
+headers into that one string, so behind a proxy that sets a cookie of its own — which
+production is — the script forwarded the proxy's cookie and the auth gate answered 401 "CRM
+login required." It passed every local test because the test server sets exactly one cookie.
+Two fixes, and the second is the one that matters. (1) The cookie is now selected by name from
+`headers.getSetCookie()`, the login is sent with `redirect: "manual"` so a www-vs-bare-domain
+redirect is named instead of silently turning the POST into a GET, and the session is proved
+against `/api/session` (printing which admin it belongs to) BEFORE anything is asked to delete
+— "CRM login required" from the purge itself says nothing about which half broke. (2) **The
+purge logic moved to `server/lib/purge-test-data.js`** (`planPurge` / `applyPurge`), shared by
+the endpoint and the CLI, so `scripts/purge-test-data.mjs` now runs straight against
+`server/data` on the Render shell with no login at all — the default whenever no `--base` is
+given. A cleanup that depends on a login round-trip through a proxy is a cleanup that fails at
+the worst moment. Local mode backs up `leads.json` before rewriting it. The endpoint is now a
+thin wrapper: auth, the confirm token, and the shared call — still one definition of the rule,
+per the CLAUDE.md lifecycle checklist. Coverage grew 33 → 46 assertions, and the suite now
+boots a **proxy that injects its own `Set-Cookie` ahead of the session cookie**, reproducing
+the production shape: restore the naive `.split(";")[0]` and three assertions fail with
+Patrick's exact symptom. Local mode is driven end to end too, and asserted to reach the same
+counts and the same survivor as the endpoint. No PASS flow touched.
+
+**2026-09-08 (The delete bot — removing 123 load-test bookings and everything they created):**
+Patrick, after the bot filled the calendar to pilot the booking system: "can you build a delete
+bot that deletes all these booked appointments, and everything that they have created?
+(Properties, Customers, Work orders and Invoices.)" New: `POST /api/admin/purge-test-data`
+(admin-only) and `scripts/purge-test-data.mjs`, the runner he types. **The runner holds no
+delete logic** — it logs in and calls the endpoint, so there is exactly one definition of what
+a test record is (the CLAUDE.md "define the rule once" rule; two copies of this rule would
+drift, and the copy that drifts deletes a real customer). Anchored on the marker in
+`lead.contact.notes` (default `PJLTEST-`, refused under 4 characters — "P" would match
+everything). From each marked lead it sweeps `bookings`, `work-orders`, `invoices`, `quotes`,
+`projects` by `leadId || customerId || propertyId`, then the lead's customer and property.
+Three guards, each pinned by a test that was run against deliberately broken code first and
+observed to fail: (1) **dry run is the default** — a live purge needs
+`confirm: "PURGE TEST DATA"`; (2) **the short-marker refusal**; (3) **the survival guard** — a
+customer or property is removed only when EVERY lead naming it is itself in the purge, so a bot
+booking made against somebody real takes the booking and leaves the person. A booking anchored
+to no lead is left standing: nothing marks it as the bot's, and guessing is how a real
+appointment disappears. Walked per the lifecycle checklist — the purge is a hard delete, not a
+status, so there is no reader left to disagree; deliberately NOT done: no customer
+notification (these are fictitious contacts), no invoice tombstones (test invoices, never sent
+— the QuickBooks/paid protection in `customers.hardDelete` is a separate path and untouched),
+and no Trash round-trip, because the point is to get the records out of the calendar. Coverage:
+`scripts/test-purge-test-data.mjs`, 33 assertions, in `build:check` — it boots the real server,
+drives the real endpoint AND the real CLI, and its fixture includes a marked bot lead pointing
+at a real customer. No PASS flow touched.
+
+**2026-09-08 (The assignment page ignored geography — the one override left, on the page every
+blast customer gets):** Patrick, looking at three booked days before the Sept 10 blast — one running
+Newmarket → Vaughan → **Erin** → Newmarket → Markham at 213 min of driving, another Whitby →
+Oakville → Mississauga at 195 min: "this cannot happen when the bookings go out." Diagnosis first:
+the PUBLIC booking path is provably tight now (live probe: Erin offered **0** days with 21 refused
+`outside_route_area`; Vaughan 4 days at +15..+38, inside the 40-min cap; Markham 3 days at +13..+15).
+Those days are residue from bot runs made under the older engine — the corridor fixes govern new
+bookings, they cannot retro-move existing ones. But the diagnosis surfaced a genuine live hole:
+`/api/appointment/:token/availability` called `rescheduleAvailability` with
+`settingsOverride: { geoMaxAddedDriveMinutes: 0 }` — **the only geography-off override in the
+codebase**, sitting on the very page the assignment blast links to. Its original rationale (stage-5:
+"an off-route stop is an end-of-day addition") does not hold: the afternoon bucket runs 12–5 and the
+sequencer orders it geographically, so a far move lands MID-day and the crew drives out and back —
+exactly the Erin stop at 12:00. The override is removed; geography now applies there like everywhere
+else, afternoon-only and the season horizon unchanged, with the elastic corridor (25 → 40) still
+providing the give. A move is refused only when it would wreck the route, and then the customer
+calls — which the one-move-then-phone rule already expects. Second fix in the same page: the
+assignment-page cancel confirmed on screen and emailed only Patrick, while the portal's cancel has
+always emailed the customer; it now sends the same `sendBookingCancellation` template, so the two
+paths read identically in an inbox. Six assertions added to `test-appointment-page.mjs` (50 total)
+pinning the source: no route switches geography off, the branch passes no settingsOverride, it still
+offers afternoons only, and the cancel both emails the customer and pages Patrick. **The fail-first
+check earned its keep three times here:** the assertions passed against the reverted code twice
+before they were right — once because this suite's helper is `ok(name, cond)` and the arguments were
+reversed (a non-empty string is truthy, so every assertion passed unconditionally), and once because
+the new block had been appended AFTER the `if (failures.length)` gate, so its failures were recorded
+and never reported. Only on the third attempt did it fail correctly (3 failed, exit 1) on the old
+behaviour. A test that has never been seen to fail is a description, not a guard.
+
+**2026-09-08 (Cancelling gave the appointment back to the customer but not to the calendar):**
+Walking Patrick through the customer cancel/reschedule flows surfaced a live defect. Cancelling did
+everything except the thing that matters most operationally: the booking flipped to `cancelled`, the
+work order cascaded, the customer got their email, Patrick got paged — and the SLOT STAYED
+OCCUPIED. Cause: `activeBookings()` carried the "does this booking still hold its slot" rule
+TWICE. Its canonical bookings.json pass skipped `cancelled`/`completed`/`no_show`; its
+lead-snapshot pass filtered only archived and lost LEADS and never looked at
+`lead.booking.status`. Both cancel paths (portal `POST /api/portal/:token/cancel` and the admin
+path) mirror `lead.booking.status = "cancelled"`, so every cancellation on a lead-backed booking
+leaked capacity. Verified live before the fix: a day whose 08:00 booking was cancelled still pushed
+the next customer to 09:00, identical to the un-cancelled day. Fix: one exported-in-file definition,
+`bookingHoldsItsSlot(status)` over `DEAD_BOOKING_STATUSES`, called by BOTH passes — the drift is now
+unrepresentable rather than merely unlikely. New `scripts/test-booking-lifecycle.mjs` (12
+assertions, in `build:check`) boots the real server and drives the PUBLIC availability endpoint:
+a live booking holds its slot, cancelled/completed/no_show each give it back, both passes answer
+identically for the same state, and the day under test is DISCOVERED from the engine rather than
+hardcoded so the suite does not rot when a season closes. **The suite was run against the UNFIXED
+code first and failed 4 assertions** — including "a cancelled booking reads the same whether it
+lives on the lead or the record" — which is what makes it a regression test rather than a
+description. CLAUDE.md gained a "Lifecycle states: finish the workflow, not the write" checklist
+(find every reader, define the rule once, walk the whole workflow, pin it with a test that fails on
+the old code) because this is the third defect of the same shape. FLOW-03's route and payload are
+unchanged; what changed is which bookings the engine counts.
+
+**2026-09-08 (Cascade delete — test customers that invoices and work orders had pinned):**
+Patrick, resetting between load-test runs: "If there are any of the above [invoices, work orders]
+attached to a property, or customer it will not delete. Can we incorporate the reasonable fix for
+this so that we continue to delete these test properties." `customers.hardDelete()` refuses on any
+LIVE reference across leads/properties/bookings/work-orders/quotes/invoices/projects — correct for
+the normal case (CRM-15/CRM-16 built it), and it stays the DEFAULT. Added an opt-in `cascade`
+that deletes those linked records WITH the customer: `DELETE /api/customer/:id?cascade=1`,
+admin-only, surfaced on the customer page as a typed-DELETE prompt after the "linked" refusal
+(properties were never guarded and already deleted freely — this was only ever the customer path).
+**The one thing it will not do** is fake an accounting step: an invoice with a `quickbooksInvoiceId`
+or any recorded payment refuses the whole cascade with code `protected`, naming itself, because
+`invoices.remove()` requires a void (in QBO too) and a written reason for exactly that reason.
+Everything else goes, and every cascaded invoice still gets the same tombstone
+(`deleted-invoices.json`, frozen snapshot + `cascadedFromCustomer: true`) that `invoices.remove()`
+writes — the audit trail survives the cleanup. Tombstones are appended by customers.js directly
+rather than through lib/invoices to avoid an import cycle; the file format is the contract.
+`test-customer-delete-trashed.mjs` grew to 59 assertions: cascade clears every store and leaves a
+bystander customer's records byte-intact, the tombstone is written and attributed, a QuickBooks-
+pushed invoice AND a part-paid one each refuse the cascade with NOTHING deleted, and cascade on a
+clean customer still works. The pre-existing refusal paths are unchanged and still pinned. Full
+`build:check` green — including `test-admin-gates`, which correctly rejected the first version of
+the gate for calling `requireAdmin` inline instead of binding its answer.
+
+**2026-09-07 (The widening ladder stops at 40 minutes — past that, the open bucket):**
+Patrick, reading a live route day: three self-booked customers had landed on R6 "West of the 400",
+one of them in MARKHAM, and he asked how the algorithm allowed it. Diagnosis: not a bug — the
+elastic corridor from earlier today doing exactly what it was told. With the calendar starved by
+~104 load-test bookings, a Markham address found fewer than `GEO_WIDEN_MIN_DAYS` days at the tight
+15-minute corridor, so the ladder widened 25 → 40 → 60 → 90 and bought that customer a date at the
+cost of an hour of detour. (The two Aurora bookings on the same day passed honestly at ~+5 min.)
+His call: the open bucket "exists precisely for the customer we can't place efficiently yet", so
+`GEO_WIDEN_TIERS` is now `[25, 40]` — the ladder widens twice and stops. Past 40 minutes of added
+drive NO day is offered and the first-available card (always present on the picker) takes the
+customer. This does not turn anyone down and does not touch the booking GATE: anyone inside the
+90-minute service area still books, via the open bucket when the calendar cannot hold them
+efficiently. The season-plan probe's `widensAtMinutes` follows the same tiers, so a row that reads
+"when full (widens at N min)" can no longer promise a 60- or 90-minute placement, and its explainer
+now states the cap and the open-bucket fallback. `test-geo-availability.mjs` grew to 59 assertions
+with measured fixtures against the north route: Aurora (+17) still gets days via widening, Richmond
+Hill (+61) now gets NONE and reports no widening past the cap, Mississauga (+179) unchanged, and a
+calendar with enough cheap days still never widens. Full `build:check` green. FLOW-03 route and
+payload unchanged — same endpoint, same slot shape; only how far the corridor will stretch.
+
+**2026-09-07 (Bookings are route stops — the daily-mapping flow reaches the self-booked
+days):** Patrick, on a booking-only day showing amber "B" dots with no line and no numbers:
+"it does not show the route, and doesn't show stop numbers. I've requested that the same flow that
+process' the daily mapping be provided to the individual uploads. not the half assed shit." Before:
+`resolveSeasonPlan` sequenced only the PLAN codes; bookings were pinned on afterward as un-numbered
+amber dots, and a booking-only date was a synthetic day with `timeline: []`. The route-line
+endpoint 404'd for any date not in `plan.days`. Now two shared helpers — `gatherBookedRows` (the
+in-window, today-or-later, plan-stop-deduped bookings per date) and `sequenceDayWithBookings`
+(feeds each mappable booking into `resequence.sequenceDay` under a synthetic `__bk:` code, bucketed
+by its start hour) — run in BOTH the resolver and the route-line endpoint, so numbers and line come
+from one sequence. A booking-only day is now a first-class numbered route; a planned day's extra
+self-bookings interleave into its drive. The customer only ever saw an AM/PM bucket and the
+sequencer orders within a bucket, so the promise is kept. Client: `mappableStops` reads booked
+stops from the shared timeline (by `mapCode`), `drawDayMap` draws them as numbered amber pins on the
+one route line (the separate un-numbered "B" loop is gone), and `bookedBlock` leads each row with
+its amber stop-number badge wired to its pin. Booked rows carry `booked`/`stopNumber`/`arriveAt`/
+`mapCode`; an un-mappable booking (no coords) stays an un-numbered booked row and simply doesn't
+join the drive. **FLOW-03-adjacent (the Season Plan review is admin-only display, not the booking
+write path — no customer-facing route or payload changed).** Verified end-to-end against the real
+server (booted, real login): a two-booking unplanned day comes back `bookedOnly` with both rows
+numbered on distinct stops, the timeline covering both, and `route-line` returning a drawable
+polyline where it used to 404; the ordinary plan day still renders. Full `build:check` green;
+Chromium confirms the booked row renders its number badge with a pin-linked `data-code`.
+
+**2026-09-08 (Messages goes native — and the app nearly locked everyone out):** Patrick:
+"Messages in the app. Can we make this look similar to the imessage app on here?" and "Is any
+of this possible to duplicate what the iMessage shows? Or can we link the customers messages in
+this tab?" **The honest answer to the second question is no, and it is not a limitation of this
+app:** iOS gives an application no read access to SMS or iMessage content at any entitlement
+level, to anyone. What CAN be shown is the customer PORTAL thread — the conversation PJL owns a
+record of, the same one `/admin/messages` shows — and that is what this is. **Read-only on the
+server side: no route changed.** `GET/POST /api/admin/portal-messages*` are used exactly as the
+CRM page uses them, and they are fenced at `user`, so a tech reads and replies like an admin.
+
+**THE LOCKOUT, found while building and fixed here.** Authentication rides the WebView's cookie
+jar (`pjl-field/src/api.js`): a WebView with `sharedCookiesEnabled` puts `pjl_crm_session` in
+the system cookie store, and React Native's `fetch` reads the same store. Every "not signed in"
+state in this app therefore told you to open a tab that happened to be a web page. **Messages
+was the last one.** Making it native would have shipped an app that says "sign in on another
+tab" while having no tab that can — not a worse message, an app nobody could use once a session
+expired. `SignInScreen` now exists as a surface in its own right: the CRM's own `/login`, in a
+WebView, over everything including an open job, because a session can expire mid-closing. It is
+deliberately not a native form — that would be a second implementation of the most
+security-sensitive screen in the business, and it would still have to hand the cookie back to a
+WebView at the end. Success is detected by navigating AWAY from `/login`, on our own host;
+`isLoginUrl` and `isSignedInUrl` are exported and tested, including that an off-host page never
+counts as signed in.
+
+**THE LOOK IS iMESSAGE. THE TRUTH IS EMAIL.** A reply is committed to the thread and then
+emailed to the customer, fire-and-forget — the server does `.catch(() => {})` on the send, so a
+dead SMTP leaves the reply saved with nobody told. Dressed as iMessage, "Delivered" under a
+green bubble is a sentence this app cannot support, and the person reading it is standing in a
+driveway believing they texted. So the delivery note is **"Emailed"**, never "Sent" and never
+"Delivered"; the composer placeholder reads "Reply by email…"; and `deliveryNote()` is tested
+against those exact words. What it CAN say honestly is **"Read"** — the customer's portal marks
+admin replies read, so `readByCustomer` is a real receipt. The app's wording is pinned to the
+server's behaviour: the test reads the reply route and fails if it ever starts sending an SMS,
+because that would make "Emailed" the lie instead. When a real text is wanted, a **Text** button
+hands off to Apple's Messages app with the customer's number — the only route an iPhone app has
+to the SMS wire, and the right one, because the reply then comes back to the phone.
+
+**The cap is one number in two places, checked.** The server truncates a reply at 1500
+characters with `normalizeString` and says nothing. `REPLY_MAX` is exported from the app's api
+layer and the test reads the server's own literal out of the route and asserts they match — if
+they ever part company the tech sends half a sentence and is told it went.
+
+`scripts/test-messages.mjs`, 18 assertions, in `build:check`: the lockout (no tab is a web page,
+every screen that can be signed out reaches the sign-in, no "sign in on a tab" copy survives,
+the success/failure URL rules executed), the lie (the delivery words, the composer, the server's
+reply route still being a fire-and-forget email), the cap, the preview and day-divider and
+timestamp rules executed, the auth fence EXECUTED through `needsAuth`, and a ThreadScreen AST
+walk proving its exit renders in every state rather than only the ready one. `test-app-shell.mjs`
+was updated where Phase 1's assumptions were legitimately invalidated — it caught the change
+itself, which is what it is for. Full `build:check` green.
+
+**UNMAPPED — needs Patrick's walk:** open Messages, open a thread, confirm the unread dot
+clears; reply and confirm the bubble says "Emailed"; sign out and confirm the Sign in button
+reaches the login and that every screen reloads afterwards.
+
+**2026-09-08, later (Nineteen services become six questions, and the picker learns the
+season):** Patrick's housekeeping list after Book started working on the phone. **No backend
+change** — every service, band and season below is read from what the server already sends.
+
+**Six categories, not nineteen keys.** The server sells nineteen bookable services and each
+one names a season, a property type and a zone band at once — "Fall winterization (5-6 zones
+residential)". Nineteen buttons on a phone means the one you want is scrolled off, and reading
+them aloud to a customer is not a conversation anyone wants to have. His shape instead:
+**Fall Closing · Spring Opening · Residential Service · Commercial Service · Site Visit /
+Scope · Hydrawise Retrofit**, then a follow-up that depends on which — zones for the seasonal
+pair, "how many issues" for a service call, nothing for a site visit. `booking-catalog.js` is
+pure and holds the mapping; it is tested against the server's real service list rather than a
+copy of it.
+
+**The season in progress sorts first, and nothing is hardcoded to fall.** The category order
+reads the `season` the server now returns per service: dates running now first, year-round
+work next, a spent season last. In September that puts Fall Closing at the top; in March the
+same code puts Spring Opening there with nobody editing anything. A spent season still shows —
+Patrick books work the public flow will not — it just sinks and says why.
+
+**The bands are read, including the one that hides in its label.** `fall_close_commercial` is
+the 1-4 commercial tier and says so **only in its label**; reading the key alone dropped it,
+and the tier above then claimed the range beneath it — "1-8 zones" for a service that starts at
+5. Both are read now. Residential and commercial are listed apart because their tiers genuinely
+differ: residential splits 5-6 and 7-8 where commercial has one 5-8, at a different price. And
+typing an exact count moves the band **within the property type already chosen**, so a
+commercial site is never snapped into a residential tier.
+
+**"How many issues" has no server field.** Rather than invent one, it is written into the
+booking notes, labelled, where a tech will read it. Same for the retrofit's zone count.
+
+**Two smaller things from the same list.** The address box gained a **✕** that clears it — and
+clears what the address SETTLED with it: the verified address, the matched property, the
+category, the band, the day list. A confirmed address sitting under a half-typed new one is how
+the wrong property gets booked. And the three steps are now **swipeable**: one horizontal pager
+whose page and the `step` state drive each other, so the pips, the back links and the gesture
+cannot disagree; you cannot swipe to a day list before one exists.
+
+**The details step stopped asking twice.** Zones and issues were already answered on step one,
+so the last step shows them and asks only for the contact. Two prompts for one number is how
+the two answers end up disagreeing — which is what Patrick meant by the details tab going away.
+
+`scripts/test-book.mjs` is 31 assertions: the six categories checked to name real families and
+real services, the ordering run for both September and March, every band asserted against the
+live `BOOKABLE_SERVICES` (including the label-only commercial tier), the follow-ups and their
+notes, the clear button asserted to clear all eight pieces of state, and the pager asserted not
+to be swipeable past the step reached. Full `build:check` green; 32 app files parse.
+
+**2026-09-08, same day (I misread the booking window as permission, and started changing a
+rule that had been right since day one):**
+
+**What the window actually is.** Patrick, correcting me: *"booking can be made from Sept 1, but
+they can only schedule on Sept 28 - Oct 30. after that i have control to open up further
+bookings. This has been a real fucking rule since day one."* So `publicBookingFrom` /
+`publicBookingThrough` are the range of **DATES that may be scheduled** — not the dates on
+which a booking may be taken. `availability.js` had this right all along: the bounds gate which
+DAYS emit slots, inside the day loop.
+
+**What I did with that.** I read "opens Sep 28" as a permission gate, decided it could not
+apply to the owner, gave `publicBookingStatus` a staff scope reading the SERVICEABLE window
+(Sep 1 - Nov 6), and passed that through `seasonWindows` on the availability gate for any
+`adminBypass` caller. That would have let bookings land on days Patrick has not opened — the
+exact opposite of the control the window exists to give him. **Reverted in full:** no scope, no
+`seasonWindows` override, and the app no longer sends `adminBypass` at all. One window,
+everyone, unchanged from day one.
+
+**What was genuinely wrong was the WORDING, and only that.** The app printed *"Booking opens
+September 28"* on the 8th, when booking had been open since the 1st. `opensOn` is now
+**`startsOn`** and reads *"Dates from Sep 28"*, and the status carries a separate **`bookable`**
+flag so the two questions stop being one: a season whose dates begin later is ordinary bookable
+work — annotated, not greyed, and NOT sunk to the bottom of the list — while a season that has
+ended (spring, in September) is neither.
+
+**The address suggestions were failing because the route had never been deployed.** The app is
+built from a branch; the server it talks to is production, which runs `main`. Three server
+commits sat on a branch the live server had never seen, so the phone called
+`/api/admin/address-suggest`, got a 404, and reported it as an upstream failure — and the
+message "Google isn't answering" was true of every failure and useful for none of them. Merged
+as #167; verified live (`401 CRM login required` unauthenticated, which is the fence working).
+
+**The diagnostic hole that made it take three rounds.** Google answers **200 even when it is
+refusing**, with the reason in `status` — and the route was reading `predictions`, finding
+none, and returning a bare empty list. `REQUEST_DENIED` (the Places API not enabled on the
+project, or the key restricted to Geocoding and Distance Matrix, which is what the geocoder
+uses) looked identical to "no matches". The route now names Google's own status and message,
+and the screen prints it: *"Google refused the request — the Places API is probably not enabled
+for this key."* Every variant still ends "Type the address in full — it still books", because
+none of them blocks a booking.
+
+**Recorded for the process, not the code:** an app change ships when Patrick rebuilds in Xcode;
+a server change ships only when it reaches `main` and Render redeploys. Several changes need
+both, and saying which is part of delivering them.
+
+`scripts/test-book.mjs` is 24 assertions — the staff and public scopes RUN against the real
+seasons.json (fall staff open on 2026-09-08, fall public not until Sep 28, spring shut for
+both), the Google refusal asserted not to be swallowed, and every degraded message asserted to
+say the booking still works. `test-season-config.mjs`'s single-consumer guard passes: the test
+matches the serviceable half only, so this file stays off its allowlist. **No PASS flow
+modified** — `/api/booking/availability` changed only which window a staff caller is gated on,
+behind a session check that already existed.
+
+**2026-09-08, same day ("No space for any more appointments" was three different problems, and
+one of them was Spring in September):** Patrick, screenshot from the truck: 26 Portland
+Crescent, Newmarket, **Spring opening (7-8 zones residential)** — "it came back to me saying
+that there was no space for any more appointments." It had not. Spring 2026 ran **Mar 1 - Jun
+30** and had been over for ten weeks. The calendar was not full; the season was finished.
+
+**Three faults, in order of how badly they lied.**
+
+**1. There was no open bucket.** The website's picker carries a "First available" card
+ALWAYS (`allowOpenBucket: true`, js/booking.js): selecting it books no slot, the customer
+joins the standby list, and Patrick places them onto a route day from the Season Plan later.
+That is the whole reason a full or awkward calendar still takes the job — and it is what the
+2026-09-07 `GEO_WIDEN_TIERS = [25, 40]` decision explicitly leaned on ("the open bucket exists
+precisely for the customer we can't place efficiently yet"). The app had none, so an address
+past the 40-minute cap read as *no space*. The card is now on the picker unconditionally, and
+books with `standby: true` and no `slotStart`. Site visits are the documented exception and
+the server already refuses them (`standby_unsupported`), so the card hides for a consult.
+
+**2. The app asked the wrong shape of the availability question.** Without `from`/`to` the
+server groups only days that HAVE slots, so an empty screen cannot tell full from out-of-season
+from outside-the-route-area. It now asks for the six-week range the desktop picker asks for,
+and every empty day comes back carrying `expandDaysToRange`'s own reason code. The screen names
+the dominant one — *out of season*, *too far from the routes running that week*, *bookings have
+not opened yet*, *fully booked* — instead of one sentence covering four different situations.
+
+**3. Nothing said Spring was shut before it was picked.** `GET /api/booking/services` now
+returns a `season` per service and the picker sorts in-season first, greys the rest, and prints
+*"Booking opens 1 March 2027"* or *"Season is over for this year"* on the row. A closed service
+is still tappable — Patrick books work the public flow will not — but it can no longer be
+walked into blind.
+
+**The guard that made this right.** The first version compared `publicBookingFrom` /
+`publicBookingThrough` inside the route, and `scripts/test-season-config.mjs` failed it: *"no
+consumer of the public booking bounds beyond the season gate and its test."* That guard was
+correct — a second copy of the comparison is a second answer to the question. The decision now
+lives in `lib/seasons.js` as **`publicBookingStatus(season, todayKey)`**, beside the windows it
+reads, with **`seasonForFamily()`** next to it so the family mapping cannot drift from the
+gate's. The route asks; it does not decide. **No PASS flow modified** — `/api/booking/services`
+gained a field, `/api/booking/availability` and `/reserve` are untouched, and the season gate
+itself is unchanged.
+
+**Also:** the missing address suggestions were not a fault. `geocode` falls back to town
+centroids without `GOOGLE_MAPS_SERVER_KEY`, so verify-address succeeds either way and silence
+in the box sends someone hunting the wrong problem. The proxy already reported
+`degraded: "no_key" | "upstream"`; the app was discarding it, and now says which, and that the
+address still books typed in full.
+
+`scripts/test-book.mjs` is 23 assertions, including the season decision RUN against the real
+seasons.json — spring closed on 2026-09-08 and open on 2026-05-15, fall closed on 2026-09-08
+and open on 2026-10-05 — and the open-bucket card asserted to render unconditionally rather
+than only when the list is empty. Full `build:check` green, season-config's guard included.
+
+**2026-09-08, same day (Book, rebuilt in the order of a phone call — and I had built it from
+my own summary):** Patrick, on the first version: "the booking tab did not do what I wanted it
+to do. Please tell me what you were instructed to do." It did not, and the reason is worth
+recording: I built from a paraphrase of his brief instead of returning to his words. His words
+were a SEQUENCE, not a form —
+
+> - I open the app
+> - request that customers address (a place to type in address with autocomplete)
+> - it shows me JUST LIKE WHEN I search on desktop OR they go on the website
+> - Once i show them the booking dates, I select the date they accept
+> - I send them a text message with that EXACT BOOKING DAY for that appointment time
+
+**Three things were missing and one was backwards.** The steps ran customer → job → dates;
+they now run **address → days → who**, which is the order the call actually goes, and is why
+"Address (should auto populate from the previous slide)" made sense in his brief and had no
+referent in mine. There was no autocomplete — a "Check this address" button did the geocode
+half of the instruction and not the suggest half. There was no confirmation text at all, which
+is the last line of his sequence. And the alternate telephone was captured on screen and
+**dropped by the server**, so the form lied about what it collected.
+
+**The suggestion proxy.** `GET /api/admin/address-suggest` — Google Places, proxied, because a
+React Native screen has no browser to run the Places JS SDK in (the CRM's pages get
+autocomplete by binding that SDK to `.js-address-autocomplete` via coverage-checker.js).
+Deliberately in the **/api/admin tree and fenced at `user`**, NOT under `/api/booking/` which
+is public: it spends money per keystroke, and a Places proxy anyone can call is a Google bill
+anyone can run up. Debounced client-side, three characters minimum, `country:ca`, and a missing
+key or a dead upstream returns empty suggestions rather than failing the screen — the address
+box still works, it just stops suggesting. **Suggestions only:** whatever is picked still goes
+through `/api/booking/verify-address`, so the booking gate and the coordinates come from one
+place and a suggestion can never skip them.
+
+**`contact.altPhone`** is normalized in `validateLead`, written only when present (a lead
+without one is byte-for-byte the record it was), and surfaced in
+`proposalCustomerPhoneEntries` as "Lead contact (alternate)". A field that is stored and never
+shown is the same lie as one that is dropped.
+
+**The confirmation text is a handoff** naming the day, time, service and address, opened in
+Apple's Messages from Patrick's own number so the customer can reply to him. The screen also
+says outright that the system sends its own Twilio confirmation on booking, so nobody
+double-texts a customer without meaning to. **And the question he asked and I never answered:**
+the number cannot be extracted from the call in progress. iOS never exposes the remote party to
+an app at any entitlement level — CallKit reports that a call exists, never who is on it. It is
+typed, and the code says why.
+
+`scripts/test-book.mjs` is 17 assertions: the step order executed from the real `STEPS`, the
+book-before-Google ordering, every path to an address routed through verification, the fence
+run through the real `needsAuth`, the band boundaries against the server's own service keys,
+and the confirmation text asserted to name the day and time and never to print "undefined" at
+a customer. Full `build:check` green. **UNMAPPED — needs Patrick's walk:** take a booking the
+way he described, on the phone, start to finish.
+
+**2026-09-08 (Messages and Book: the app stops needing a web page to sign you in):**
+Patrick's brief — a native iMessage-shaped Messages tab, and a Book tab that sources
+existing customers before creating new ones. **No backend code changed.** Both tabs call
+endpoints that already exist: `/api/admin/portal-messages` (fenced at `user`, so a tech
+reads and replies on the same footing as an admin) and the public booking trio
+`verify-address` / `availability` / `reserve`.
+
+**The lockout this created, and the screen that answers it.** Authentication rides the
+WebView's cookie jar, so every "not signed in" state in this app pointed at whichever tab
+happened to be a web page. Making Messages native removed the last one — an app that says
+"sign in on another tab" while having no tab that can. `SignInScreen` is now a surface in
+its own right, and it loads the CRM's own `/login` rather than reimplementing the most
+security-sensitive form in the business.
+
+**It nearly shipped declaring success for people who never signed in.** The first version
+took "on our host and not `/login`" as proof. The login page carries two ordinary links —
+the PJL logo to `/`, and an orange "your portal sign-in" to `/portal/login` sitting
+directly above the email field, under the thumb. Tapping either navigated on-host, away
+from `/login`, and the app played its whole success animation and then showed "Not signed
+in" on every tab. Success is now REACHING `/admin`, an `onShouldStartLoadWithRequest`
+guard keeps the sheet on the form, and `startsWith(HOST)` was replaced with a real host
+check — it also matched `pjllandservices.com.attacker.tld`. It settles on load END rather
+than navigation start, because the session cookie's write-back from the WebView store to
+the one `fetch` reads is asynchronous and tearing the sheet down races it.
+
+**Messages is shaped like iMessage and does not lie about what a reply is.** A reply is
+committed to the thread and then EMAILED, fire-and-forget. So no bubble says "Delivered"
+or "Sent": it says **Emailed**, or **Read** when the customer's portal has marked it (a
+real receipt), or **"Saved — no email on file"** on a phone-only lead, where
+`sendPortalReplyToCustomer` returns `{ skipped: true }` and sends nothing. A real text is
+a **handoff** to Apple's Messages app — the only route an iPhone app has to the SMS wire,
+and iOS grants no read access to SMS or iMessage content at any entitlement level, so
+"show me the customer's texts" is not buildable by anyone.
+
+**Book: existing customers first, and the geocode before any date.** The search box is the
+default path and "New customer" sits under it, because the expensive mistake is a second
+property for an address PJL already services — that splits its history, invoices and work
+orders in two. Reuse is NOT by `leadId`: that path overwrites `lead.booking`, so pointing
+it at a won lead would wipe that visit's envelope. The customer's stored email and address
+go up instead and `properties.attachLead` binds the new lead to the property it already
+matches. The address passes `/api/booking/verify-address` — the real booking gate, junk
+and out-of-area refused — BEFORE a calendar is drawn, and availability is computed against
+Google's formatted address rather than what was typed. **Zones are two answers:** the
+service key carries the band (price and visit length), the count is what is in the ground,
+and typing 7 moves the band to 7-8 rather than leaving a contradiction on screen.
+**Admin-only, failing closed** — the tab is ABSENT for a tech rather than disabled, and
+every non-admin role including null and unknown gets the tech view.
+
+`scripts/test-messages.mjs` (21) and `scripts/test-book.mjs` (13) are in `build:check`,
+alongside app-shell at 25. The band boundaries are executed against the server's own
+service keys; the admin gate is executed against the real TABS array; the sign-in verdict
+is executed against the two links that broke it. Full `build:check` green, 31 app files
+parse. **UNMAPPED — needs Patrick's walk:** sign out, sign back in from each tab and
+confirm no loop; answer a customer and confirm the list updates; book an existing customer
+and confirm no second property appears.
+
+**2026-09-08, same day (Three screens you could only leave by force-quitting — and a
+bearer token on the handset):** three senior review passes over the tab restructure before it
+was walked. The reviews found what the tests did not, and one finding is the reason the others
+were reachable.
+
+**The exit-less states.** `ClosingScreen`, `InvoiceScreen` and `WebScreen` each rendered their
+way out ONLY in the ready state. All three return early while loading, while unauthenticated,
+and on error — and `getJson` has no timeout, so "while loading" is not a moment. That was
+survivable when they lived in tabs, because the tab bar was still on screen. The overlay covers
+the tab bar. On the worst path `saveRecorded` records a payment, drops to `loading`, and a 401
+on the re-read stranded the tech on an exit-less screen having just taken a customer's card.
+WebScreen was its own case: the "Can't reach PJL" panel is `absoluteFillObject` and was a
+SIBLING of the Back bar, so it covered `‹ Back` opaquely and swallowed its taps — on the
+no-signal-in-a-driveway case the app exists for.
+
+**The test asserted the wrong thing, and that is the finding.** It proved App.js HANDED each
+arm `onExit`/`onBack` by grepping for the prop name. Passing a prop is not rendering an
+affordance. It now walks each screen's AST, collects every `return` in the component's own
+top-level body, and asserts the returned JSX reaches that screen's exit — resolving a hoisted
+`const exitBar` so the shape stays free. Same failure mode as the 2026-09-06 Terminal-token
+hole: an assertion that looked for a WORD while the thing it named was absent.
+
+**`GET /api/invoices` was handing out bearer payment tokens.** `paymentToken` is a permanent,
+unexpiring, unrevocable password to an invoice — hold it and you can read the customer's name,
+email, address and every line item, and pay it — and `portalToken` is the same for the
+read-only view. Both were in the list response, which made the admin gate added to
+`POST /api/invoices/:id/payment-link` on 2026-09-06 **decorative**: a tech was handed the token
+for every invoice and the pay URL is a fixed template. The public `/pay` route already strips
+`paymentToken` from its own response; the staff list did the opposite. Both fields are now
+stripped. Nothing on any client read them — every consumer is server-side (`notify-customer`,
+`invoice-pdf`, the portal routes). **The pre-existing exposure this made exploitable is
+recorded, not fixed here:** `/api/invoices` is fenced at `user`, so a tech who omits the filter
+still receives every invoice in the business. That is Patrick's call, not a side effect.
+
+**`?propertyId=` (empty) returned the whole ledger.** The guard was truthiness; an empty string
+is falsy, so the filter was skipped and a screen asking for one address's invoices would have
+been answered with every invoice PJL has ever raised. `!== null` now; absent is still `null`
+from `searchParams.get`, so an unfiltered call is byte-for-byte unchanged.
+
+**The chase button would have texted a payment link for a DRAFT.** `invoiceToChase` excluded
+void and paid, which leaves `draft` — a document the office has never reviewed or sent, and
+usually the OLDEST owing record on an address, so it was selected preferentially.
+`ensurePaymentToken` has no status guard and would have minted a live payable link for it.
+Restricted to `sent` / `partially_paid`. Two date bugs fixed in the same function: only the
+candidate side of the comparison was validated, so an unparseable `createdAt` on the seed (the
+NEWEST invoice, since the server sorts newest-first) left every comparison false and the newest
+winning; and a MISSING `createdAt` became `new Date(0)` — 1970 — and won "oldest" every time.
+
+**The link went to the property's phone, not the invoice's.** On a managed commercial site the
+payer is the billing entity c/o its management company, while the property's `siteContacts` are
+"the president / super / whoever PJL calls to schedule". Texting the super a payment link shows
+a third party the billing name, billing email and full line-item pricing, and lets them pay it.
+The recipient is now the invoice's billing party, with the property phone as the residential
+fallback, and the button does not render without one. The separator was iOS-only `&body=`
+against an app.json that declares an Android target; `?body=` works on both. And the open
+failure was silent — `open()` swallows its rejection, so a handset refusing the URL produced no
+alert and no state change.
+
+**A completed fall closing reopened the editable closing flow.** Routing was on `type` alone.
+Every stage is interactive and every change calls `patchWorkOrder`, which the server refuses on
+a locked work order — so each tap produced "Didn't save" and a red "Not saved" header on a
+visit that was finished and invoiced. Terminal statuses now go to the web record, where the
+sign-off and the invoice live.
+
+**Also fixed, from the appearance and correctness passes:** the day card, the finished dimming
+and the map's ticks all read a payload fetched BEFORE the job opened, so finishing a closing
+and dismissing it left the card still saying "Resume" — Today now reloads when a job closes.
+`WO_STATUS_LABELS` existed in TWO screens and both were missing the same five real statuses, so
+a live work order rendered a pill reading `awaiting_approval`; one shared map now, asserted
+against the server's own `STATUS_ORDER`. `money()` silently discarded the currency argument
+three call sites were passing and grouped no thousands, and a missing amount rendered as
+`null` — including inside a customer's text as "(null)". The overlay reused the shell's white
+safe area, painting a white band across the bottom inset under two grey screens. A finished
+card was dimmed to 0.72, which read as disabled while staying tappable. Row labels would not
+shrink, so at 320pt the status pill wrapped or was clipped. Work orders and Service history
+listed the same visits twice, back to back — the section is open work only now. Both new
+sections truncated silently while Service history twelve lines below said "Showing the 12 most
+recent of 47". A failed refresh blanked the invoice and work-order lists to `[]`, making "the
+request failed" identical to "this address has no invoices". The overlay was not
+`accessibilityViewIsModal`, so VoiceOver walked straight past it into the tab bar. And every
+"sign in on another tab" message named a NATIVE tab that cannot sign anyone in — auth rides the
+WebView cookie jar, so Messages is the only one that can.
+
+`scripts/test-app-shell.mjs` is 24 assertions now, all in `build:check`, green. **Two items are
+Patrick's, not mine:** the `user`-level fence on the whole invoice list, and whether an
+unexpiring bearer link should be minted per driveway visit into a personal SMS thread at all.
+
+**2026-09-08 (The app loses two tabs — a work order is not a place, and neither is an
+invoice):** Patrick: "The workorder situation... maybe we can merge that back into the
+'schedule' as well as the properties tab, and get rid of that completely. The invoice
+interface is the same thing." Both tabs were showing whichever record you last opened —
+a tab whose contents depended on where you had been, and which said "Work" while showing
+one job from three weeks ago. The invoices tab was worse: it rendered `/admin/invoices`,
+a desktop page, at phone width with its sidebar hidden by injected CSS.
+
+**Three tabs now — Today, Properties, Messages — and an open job is an OVERLAY** laid over
+all of them, covering the tab bar deliberately: mid-closing, switching tabs is not a thing
+anyone means to do, and the old arrangement let you do it and then wonder where the closing
+went. `jobForWorkOrder()` in `pjl-field/App.js` is the whole routing decision and is exported
+so it can be tested without React Native — a fall closing opens the native flow, anything
+else opens `/admin/work-order/:id/tech`, and a finished closing lands on its invoice, or on
+the work order when the invoice cascade did not hand one back. Every overlay carries its own
+way out; there is no branch that renders without one.
+
+**Invoices and work orders now live on the property**, which is where "did we do this
+address in April" is actually asked. `PropertyProfileScreen` loads both AFTER the property
+and without blocking it, so a slow invoice list never holds up the address. `invoiceToChase()`
+picks the oldest invoice still owing (void and paid excluded) and is exported and tested.
+
+**ONE backend change, additive by construction:** `GET /api/invoices` accepts an optional
+`propertyId` filter, applied exactly the way `status` and `woId` already are
+(`server/server.js`). Absent, the response is byte-for-byte what it was — that is asserted in
+the test, not assumed. Without it the phone downloads every invoice in the business to show
+three. **No PASS flow was modified.**
+
+`scripts/test-app-shell.mjs`, 18 assertions, in `build:check`: the routing and label functions
+EXECUTED rather than read, the tab list, that nothing anywhere in the app still reaches for a
+removed tab, that every overlay branch has an exit, that the status label maps match the real
+`STATUSES` in `lib/invoices.js` (a status with no entry renders as nothing), that no second
+overdue rule exists beside `isOverdue`, that a Pill is never nested inside a Text, the additive
+filter, and a Babel parse of six app files with the app's own Babel. Full `build:check` green.
+
+**UNMAPPED — needs Patrick's walk:** open a job from Today and confirm it covers the tab bar
+and exits back to where you were; finish a closing and land on the invoice; open a property
+and confirm its invoices and work orders are its own; confirm no tab shows a stale record.
+
+**2026-09-07 (Today's route on a map, in the app and on the CRM):** Patrick, having just got
+Tap to Pay to Ready on the phone: "Can we possibly make the Day slide, interactive similar to
+what we have done on the web portal? Show the user stops, and numbers etc on an interactive map.
+This interactive map, as you are making your way through the day should also check off the
+completed homes." **Read-only, and additive by construction: `GET /api/schedule/today` is not
+touched, so FLOW-32 renders exactly as before.** New surfaces: `/admin/today/map`
+(`server/today-map.html` + `server/today-map.js`) and `POST /api/schedule/today/route-line`.
+
+**One map, two hosts.** The page draws the day; the CRM's Today page frames it and the field
+app's Today screen loads it in a band above its list (`pjl-field/src/screens/DayMap.js`). The
+alternative was a native map SDK in the app — a second implementation of the same picture, a
+new native dependency, and a build every time the map changed. The map reads the SAME endpoint
+the list beside it reads, in the same order, so stop numbers are positions in the day's own
+response and a pin cannot disagree with its card. A row with no coordinates KEEPS its number
+and is reported as skipped rather than renumbering the stops around it.
+
+**Completed stops tick off.** A stop whose work order is `completed` is drawn muted with a ✓
+instead of its number, and the app redraws the map on any status change rather than waiting for
+a pull-to-refresh — a tick that only appears after a manual refresh lies until someone pulls.
+
+**The line follows the numbers, and never carries minutes.** The endpoint is handed the ordered
+coordinates the pins were drawn from rather than re-deriving the day, because two
+implementations of "what is on today" is how a line ends up running through a house the map
+never drew. It answers with geometry only: every drive time on this system comes from Distance
+Matrix, and a second router printing its own would put two numbers for one leg on one screen
+(`lib/route-geometry.js`). A straight-hop fallback is drawn as dots and named on the screen.
+
+**Two defects found by the tests, both the same defect.** `Number(null)` and `Number("")` are
+both `0`, so a row whose coordinates came back empty would have been drawn — confidently,
+numbered — at 0,0 in the Gulf of Guinea, and the road line routed through it. Rejected before
+coercion on both sides of the wire. And the fence: `needsAuth` matches `/admin/today` EXACTLY
+and ends in `return null` for anything it does not name, so `/admin/today/map` would have been
+public. Named, and the rule is EXECUTED in the test rather than read — the 2026-09-06
+Terminal-token hole was exactly this shape.
+
+`scripts/test-today-map.mjs`, 21 assertions, in `build:check`: the fence run for real, the
+row-key rule extracted from BOTH the page and the app and run against the same rows (they must
+agree or every pin tap lands on nothing), numbering, the completed rule, the coordinate
+refusals, the geometry-only response, and a Babel parse of the two app screens with the app's
+own Babel. **UNMAPPED — needs Patrick's walk:** open Today on a booked day, confirm every card
+has a pin and the numbers match, tap a pin and land on its card, complete a work order and
+watch its pin tick without refreshing.
+
+**2026-09-07 (Bucket-coherent geography — one region per half-day, killing the double
+drive):** Patrick, reading the load-test bookings against the live board: "it really just let
+anyone book at any point throughout the schedule… it makes us drive all the way across the 401
+to get to the other side… one appointment is at 9:30 in the morning, and the other is at 3PM, so
+we do that drive twice." Root cause: the geography filter scored an incoming address against the
+WHOLE day's point set and applied one verdict to BOTH buckets. A caller could read "cheap" off an
+afternoon stop in their region and then book the MORNING, stranding an east job in a west morning
+(and vice-versa) — the barbell. Fix: `geo-filter.buildDayShapes` now emits `bucketPoints`
+`{morning, afternoon}` (planned codes split by their plan bucket; bookings split at noon, the
+system-wide bucket boundary — `BOOKING_BUCKETS` afternoon opens 12:00). `availability.listAvailableSlots`
+moved the geo gate OUT of the day loop and INTO the bucket loop: each bucket is scored against its
+OWN cluster (`bucketPoints[bucket.key]`); an empty bucket on a day that already has stops falls
+back to the whole-day points, so an empty half is NOT a free landing pad for a second region (the
+barbell guard); a day with no stops at all still has no shape and stays open. `diagnostics.geoSuppressed`
+entries gained a `bucket` field. Net effect: a region coalesces into the one half-day it already
+occupies, so the crew makes a single pass through it. Same endpoint, same slot shape, same
+per-slot `addedDriveMinutes` contract (now a per-bucket cost, which is what the stars/settle/standby
+already wanted); the elastic-corridor ladder from earlier today rides on top unchanged. Six new
+assertions in `test-geo-availability.mjs` (55 total) replay the exact Etobicoke/Whitby day: a
+Whitby caller is offered only the afternoon, an Etobicoke caller only the morning, and a far
+Keswick caller neither half. **FLOW-03 behaviour change, documented, re-verified:** full
+`build:check` green including `test-day-reschedule` (59) and `test-booking-guards` (35), which
+drive the same engine. NOTE — within-bucket minute ordering on booking-only days (the visible
+9:30-vs-3PM on the Season Plan) is a display concern the resequencer already handles for PLANNED
+days; booking-only days still show customer-picked times until a follow-up runs the sequencer over
+them. The customer only ever sees the AM/PM label, and Patrick drives the order on the board.
+
+**2026-09-07 (The corridor is elastic — drive times widen before a customer is turned
+away):** Patrick's load bot booked ~104 fall appointments and the calendar went dry; his call:
+"nope, we don't extend windows into November, as the dates fill up, we allow for drive times to
+widen. we NEVER turn down a customer." `listAvailableSlots` now scans in tiers: the configured
+`geoMaxAddedDriveMinutes` (15) is the OPENING corridor, and when a pass leaves an address fewer
+than `GEO_WIDEN_MIN_DAYS` (3) bookable days, it rescans at 25 → 40 → 60 → 90 added-drive minutes
+(90 = booking-gate `MAX_DRIVE_MINUTES`, the service-area edge — a gate-approved customer is never
+geo-refused into an empty calendar while any route day has room). Widening changes what is
+OFFERED, never what is RECOMMENDED: slots keep their true `addedDriveMinutes`, so the stars still
+rank the cheapest days first. The ladder stops early when geography suppressed nothing (scarcity
+is capacity — the open bucket is that overflow). Diagnostics gain `geoWidenedTo`; the season-plan
+probe now shows amber "when full (widens at N min)" rows and per-day `widensAtMinutes`. The public
+booking WINDOW (Sep 28–Oct 30) is untouched by his explicit instruction. Seven new assertions in
+`test-geo-availability.mjs` (49 total): widening admits a Richmond Hill address every-day-shaped
+fixture would have blanked, the widened tier is reported, true costs survive, the 90-minute bound
+still refuses (+179 min Mississauga), and a calendar with enough cheap days never widens.
+FLOW-03's route/payload unchanged — same endpoint, same slot shape, one new optional diagnostics
+field; reserve's re-validation runs the same ladder deterministically, so a widened slot re-books.
+
+**2026-09-01 (Lead-booking heal becomes a sweep — the two booking stores can't quietly
+disagree):** Patrick reported a customer's bookings on the schedule and his phone calendar but
+missing from /admin/bookings ("why are the Willowridge landscaping bookings not showing up on the
+bookings again?"). Root cause: a public-flow booking is born on its LEAD; the canonical
+bookings.json record — the only thing /admin/bookings reads — is materialized by
+`upsertFromLead`, and the sole whole-list heal lived INSIDE the iCal feed: it ran only when a
+calendar client fetched, and swallowed every failure (`catch (_)`), so a lead whose upsert failed
+was invisible on canonical surfaces forever, with no trace. The loop now lives once in
+`bookings.healFromLeads(leads)` — the feed calls it, and server.js runs it as the EIGHTH sweep
+(boot + 10 min), logging a count when it heals and NAMING each lead whose heal fails. Same
+"swept state, not human-triggered code paths" rule the assignment time sweep recorded. Feed
+semantics preserved exactly: a lead whose canonical record exists is left alone (no re-sync), a
+`lead.booking` without a start stays out. New `scripts/test-booking-heal.mjs` (10 assertions, in
+`build:check`): heals what's missing, idempotent, existing records untouched, a broken lead is
+reported by id without sinking the rest, empty input no-ops. **No PASS flow's route or payload
+changed** — the heal is additive materialization the feed already performed; FLOW-01/02/23
+untouched, FLOW-03's booking write path untouched.
+
+**2026-08-31 (Preflight names the no-zone stops):** Patrick asked which properties sit behind
+the `no_zone_count` skips and no screen could answer — only `assign()` checked zone counts, so
+Check-the-plan reported those stops ready and they vanished later. `assignments.preflight()` now
+runs the same `zoneCountFor` gate; the Season Plan's skip lists (preflight AND assign result,
+via one shared row renderer) print each stop with its address linked to `/admin/property/<id>`,
+where the count is filled in. Rows gained `propertyId`; `assign()` keeps its own check for the
+race between the two reads. Read-only reporting plus a link — no store, route or payload
+removal; writer suite 45 assertions (+3). No PASS flow touched.
+
+**2026-08-31 (Decision H — the customer's real zone count, from their appointment page):**
+Patrick's post-launch-review ask: profiles often hold only the booking class for the customer's
+category, not their actual system. The appointment page grew a "Your system" row and a zone-count
+editor (`POST /api/appointment/:token/zones` → `appointmentActions.setZones`): the count saves to
+the PROPERTY (`system.zoneCount`, the field Patrick fills by hand; `properties.update` merges
+`system` one level deep, so nothing else on the record moves), the booking's tier re-derives
+through the same `deriveSeasonalKey` the assignment writer booked with (serviceKey, label,
+durationMinutes), sequenced times re-anchor in the background when the bracket moved, and Patrick
+is paged only on a bracket move. NOT a response, no `rescheduleCount` bump, and tech-DOCUMENTED
+zones refuse the edit outright — they are ground truth. UNDERLYING FIX: zone-count precedence
+(documented wins, declared fills in) now lives once in `pricing.effectiveZoneCount`;
+`resolveSeasonalPrice` (shown price, `{price}` merge field, admin profile price lines) and
+`resequence.onSiteMinutes` (planned on-site minutes) previously counted ONLY documented zones —
+a declared count booked the right tier but showed the lowest-bracket price and sequenced at the
+smallest service minutes. All three consumers now read the same number. **No PASS flow touched:**
+FLOW-01/02 (portal) and FLOW-23 (payments) don't run through these helpers, and FLOW-03's booking
+path prices by `priceForBooking(serviceKey, zoneCount)` from the lead's own declared count —
+unchanged. Suites: appointment page 44 (+13), pricing 195 unchanged, resequence 39 unchanged,
+writer 42, day-reschedule 59, page smoke 9.
+
+**2026-08-31 (Assignment writer stage 6 — day-move re-notify; THE CONTRACT IS COMPLETE):** moving
+a route day no longer refuses when assignment bookings sit on it — they ride along. After
+`seasonPlans.moveDay` (STORE UNTOUCHED — its guard still takes the caller's count, and
+`test-day-reschedule`'s 59 assertions pass unchanged), `assignments.moveDayBookings` re-dates each
+assignment booking to its new sequenced arrival, resets response state per cadence rule 6 (old
+answer stashed in history), and queues a notice naming the change ("was Sept 28, now Oct 1" — new
+`daymove_email`/`daymove_sms` templates, Patrick-editable). The cadence sweep dispatches each
+notice once, in the send window, mark-before-send. Deliberate edges: no rescheduleCount bump (plan
+steering, not a booking touch); free-bucket customers move silently and keep their answer;
+unmessaged bookings get no notice; customer-self-moved bookings are untouched; a NON-assignment
+booking on the day still refuses the move (Patrick reschedules those from the calendar, which
+notifies, before the day slides). The day-move UI toast now reports "N bookings moved, M customers
+will be re-notified, K confirmations reset". Cadence suite 42 assertions, messages 77, day-reschedule
+59 unchanged; all six stages of docs/ASSIGNMENT_WRITER.md are done.
+
+**2026-08-31 (Appointment page live-review batch — eight changes from Patrick's walk of a real
+page):** full customer name (private link); price on the page and in the email (`{price}` merge
+field; `resolveSeasonalPrice` — profile override first); Patrick's routing-efficiency pitch as the
+email default AND on the page itself; customer reschedules now see EVERY day with room (geography
+filter off for customer moves — an off-route stop is an end-of-day addition), afternoon-only
+(12–5), through the season's end (capacity, conflicts and the season gate still apply — the
+`settingsOverride` seam on `rescheduleAvailability` carries the geo-off, so admin paths are
+untouched); the FREE BUCKET (flexible pool: booking keeps its anchor date and capacity seat,
+self-serve moves end, Patrick places it, tech calls an ETA, counts as a response, Patrick paged);
+customer AFTER/BEFORE time windows on the page, stored on the booking and fed into the sequencer's
+requestedWindows seam at every clock — assign, the time sweep, the plan screen, the map, the route
+line and stored-order resequencing all honour it (the seam from the time-windows PR finally has its
+intended caller; the customer's ask wins over the plan's standing guess, per that PR's contract);
+customer cancels and free-bucket choices now PAGE PATRICK (same alias path as customer
+reschedules); and response state is READ BACK on the schedule's manage panel ("confirmed via their
+link", "FREE BUCKET", "messaged — no response yet", the window) — the visible answer to "where does
+a confirm go?". Suites: appointment 31, writer 42, messages 64; both Playwright smokes green.
+
+**2026-08-31 (Assignment writer stage 5 — the appointment page; the send interlock opens):**
+`/a/<token>` is live: the public, token-addressed page (token = credential, like /portal and /rr)
+where an assigned customer confirms, picks a different day, or cancels — the one-link decision made
+real. Confirm records the response (first answer kept); cancel is 24-hour-gated, keeps the reason,
+and stops the whole cadence; reschedule reuses the shared `rescheduleBooking` /
+`rescheduleAvailability` helpers, so a customer's move runs the SAME `listAvailableSlots` +
+dayShapes validation as every other path — geography filter, season window and bucket capacity all
+compose by construction — is capped at one move, and re-anchors the cadence automatically.
+`APPOINTMENT_PAGE_READY` flipped to true in this same commit (the stage-4 contract); test-sends for
+real bookings now mint real tokens so the whole journey is walkable from a [TEST] text.
+**Latent bug fixed in the shared reschedule path:** the self-exclusion filter
+(`b.leadId !== bookingRec.leadId`) dropped EVERY assignment booking from the conflict math when the
+rescheduling booking was lead-less (null === null) — both call sites now match lead-less bookings by
+canonical id; lead-backed behaviour byte-identical. Patrick is now paged on customer-driven
+reschedules of lead-less bookings too. 21 assertions in `scripts/test-appointment-page.mjs`
+(in build:check) with the confirm/cancel cadence effects proven through the real engine, plus a
+Playwright smoke of the page. The page and API are PUBLIC by token; no admin surface changed.
+
+**2026-08-31 (Assignment writer stage 4 — the blast + cadence engine):** the sends exist. The
+blast (admin, two-press) fires step 1 to every live assignment booking that has never received it;
+the seventh server sweep (5-minute cadence) dispatches steps 2–6 — each at most once ever, only on
+its own day, only 09:00–18:00 Toronto. All nine Part-2 rules implemented literally: missed days
+skipped not backfilled; a response (portal action or the new one-tap mark on the schedule's manage
+panel) stops steps 2–5 and nothing stops step 6; a reschedule re-anchors automatically (due dates
+derive from live `scheduledFor`); cancellation stops all; opt-outs re-checked at every step. Touches
+gained the long-blocked `type` field (`type: "assignment"` + `step`) — additive, consent suite
+unchanged. **The stage-5 interlock**: every message links `/a/<token>` (minted per booking); blast
+and sweep refuse while `APPOINTMENT_PAGE_READY` in server.js is false, so no customer can receive a
+dead link; stage 5 flips it in the commit that builds the page. **Mark-before-send**: a step is
+recorded fired before dispatch, so a wire failure loses at most one message (recorded, visible,
+hand-retryable) and can never repeat one. Step 6 falls back to email for phones-less customers.
+[TEST] sends per template to NOTIFY_TO_EMAIL/PHONE from the messages page. Senders are
+notify-customer's outreach paths (branded email w/ appointment-page CTA, Twilio SMS with STOP line).
+29 assertions in `scripts/test-assignment-cadence.mjs` (in build:check), real stores, wire injected.
+FLOW-29 remains UNMAPPED; no PASS flow touched.
+
+**2026-08-31 (Assignment writer stage 3 — the messages):** the cadence's wording exists and is
+Patrick's to edit at /admin/assignment-messages (linked from the season-plan Assignment panel):
+email+SMS templates for the assignment blast, the D−15 follow-up and the D−10/−7/−5 nudge (his
+Part-3 escalation wording as the default, copy-edited with intent asserted in the suite), SMS-only
+for the D−1 reminder. Per-customer preview renders every template against a real assignment
+booking. Defaults live in code; edits layer in `server/data/assignment-templates.json` (persistent
+disk); saving is admin-only. **Two safety rules the send step inherits:** merge fields are a closed
+set — a template with a typo'd `{field}` is refused at save time, never rendered literally to a
+customer — and link fields render as loud bracketed placeholders until stages 4–5 build real URLs,
+with stage 4 required to refuse sending anything still carrying one. **Nothing sends** (asserted:
+no notify/mailer/sms/outreach require, no sendBulk). 48 assertions in
+`scripts/test-assignment-messages.mjs` (in build:check) + an 8-assertion Playwright smoke of the
+editor page. No PASS flow touched — new page, new endpoints (`GET/PUT /api/assignment-messages`,
+preview), nothing existing rewired.
+
+**2026-08-31 (Assignment time sync becomes a sweep):** the sequenced-arrival fix shipped but the
+live records still read 8:00/12:00 — re-anchoring required an operator trigger (an Assign press
+after the deploy, or a plan edit) that never fired. The sync is now the sixth server sweep:
+`syncAssignedTimes` for both current-year seasons on boot and every 10 minutes, so pristine
+assignment bookings converge on the route within minutes of ANY drift — plan edits, zone-count
+changes, travel-time changes, or code deploys — with no operator action. Steady state is free
+(cached travel matrix; zero writes when nothing moved). Reproduced end-to-end with real modules:
+three planted bucket-open records healed to 8:05 / 12:05 / 12:45 by the exact call the sweep makes.
+The inline endpoint hooks stay (instant on edit); the sweep is the guarantee behind them.
+
+**2026-08-31 (Assignment bookings carry the route's sequenced arrivals — Patrick's third live
+find):** the calendar showed every afternoon stop at 12:00 while the plan's route panel sequenced
+them 12:53 / 13:33 / 14:13 — and ties drew in reverse run order (bookings.json is newest-first).
+Assignment records now store the stop's sequenced arrival (`resequence.sequenceDay` timeline, the
+same walk the plan screen prints — SEQ-02's one-clock rule extended to a third surface), clamped
+inside the stop's bucket so an overrun morning can't shift a record into afternoon capacity
+attribution, with bucket-open as the fail-soft when a day can't sequence. New
+`assignments.syncAssignedTimes()` re-anchors pristine records (confirmed, unrescheduled, no WO,
+date still planned) after the three order-affecting plan edits (`/stop-order`, `/auto-order`,
+`/stop-window` — fire-and-forget after the store op) and at the end of every `assign()` run, so
+re-pressing Assign repairs times while creating nothing; a record a human or customer moved is
+never dragged back to the route. The calendar's waterfall now lays days out in true run order with
+real times. `test-assignment-writer.mjs` grows to 41 assertions (sequenced / fallback / clamped
+starts; re-anchor; no-op re-sync; rescheduled record untouched). The iCal feed inherits the real
+times for free.
+
+**2026-08-31 (Schedule calendar: same-start bookings drew as one pile — found by Patrick live):**
+with the union fix deployed, the calendar showed only "the first appointment for the morning, and
+first for the afternoon". All 18 bookings were present (the week counter said so); the day/week
+grid positions cards purely by time (1px = 1 minute), and every assignment booking in a bucket
+carries the bucket-open time — five 8:00 cards rendered at the same top in one perfect pile, only
+the top card visible. The grid was built in the one-customer-per-bucket era and had never drawn two
+events at the same instant. `layoutEvents()` now lays each day out as a WATERFALL: cards anchor to
+their start time but are pushed below the previous card's bottom edge when they would overlap, so a
+bucket's stops unroll down the day in run order while each card still prints its true time.
+Verified in the Playwright harness (9 assertions now): three same-start bookings render as three
+distinct, non-overlapping cards in start order; the earlier union/dedup/manage-panel assertions
+unchanged. Month view was already correct (pills + "+N more").
+
+**2026-08-31 (Assignment bookings reach the schedule — stage-2 defect, found by Patrick live):**
+after assigning the real plan, the new bookings showed on /admin/bookings but NOT on the
+/admin/schedule calendar or the tech day sheet. Cause: both surfaces mapped ONLY `lead.booking`
+(the calendar from `/api/quotes`, the day sheet inside `/api/schedule/today`) — assignment records
+are lead-less by design, so the surfaces that predate property-first bookings never saw them.
+Fix mirrors `activeBookings()`'s union rule in both places: canonical `bookings.json` records join
+the lead-mapped set, deduped by leadId + exact start so a lead's mirrored record never renders as a
+second appointment. Calendar events from canonical records carry `data-booking-id`; the manage
+panel works off that id directly (no lead lookup), with **Reschedule hidden** for lead-less
+bookings — the CRM reschedule modal is lead-keyed, and moving an assigned stop belongs to the
+season plan's day-move flow. Cancel/Delete/Change-type all operate on the canonical id and the
+cancel endpoint was verified lead-safe. Verified in a Playwright harness against the real
+schedule.js with stubbed data: two events render (the lead-mirror deduped), the assignment event
+carries its canonical id with no lead id, the panel opens, Reschedule hidden, Cancel available
+(7 assertions). The day sheet's canonical rows carry `leadId: ""` so today.js's lead-keyed taps
+(notify-on-route, open-WO) no-op instead of erroring — those actions become meaningful for
+assignment bookings in later stages.
+
+**2026-08-31 (Assignment writer stage 2 — the assignment record):** `assign()` turns a season
+plan's ready stops into real `confirmed` bookings — `source: "assignment"`, property-first canonical
+records with NO lead (the path `activeBookings()` was pre-wired for: coords resolve through
+propertyId, the iCal feed reads bookings.json). Verdicts are the preflight's own (assign runs it
+first and books only "ready"), so review-then-press cannot drift. **Sends nothing** — asserted in
+the suite: no notify/mailer/sms require, no sendBulk. Idempotent through the real modules: a created
+booking makes `deriveBookingState` report the property booked, so a second run creates zero. ONCE
+EVER per property per season: even a CANCELLED assignment booking blocks re-assignment
+(`assignment_declined`) — a cancellation is an answer. `unassign` reverses cleanly but only removes
+pristine records; anything rescheduled/cancelled/completed or carrying a WO is kept and listed.
+Admin-only endpoints (`POST /api/assignments/:season/:year/assign|unassign`); the season-plan panel
+gained two-press-armed Assign / Undo buttons. Scheduling shape: bucket-open start (08:00/12:00),
+SERVICE-minutes duration — deliberately not the bucket span, so a below-cap assigned day stays open
+to new customers (proven in the suite; an at-cap bucket closes via the stage-1 gate). The Part-5
+buffer trap is proven: day shapes and bucket loads byte-identical before/after a full assignment.
+34 assertions in `scripts/test-assignment-writer.mjs` (in build:check), sandbox-copied modules, no
+data file touched. **FLOW-03 code untouched this change** — the engine only sees the new records as
+ordinary bookings, which the stage-1 rows already covered; moveDay's bookedCount guard now correctly
+refuses moving an assigned day until stage 6 ships move+re-notify.
+
+**2026-08-31 (Booking window editable from the season-plan screen):** Patrick, the same day the
+gate shipped: "every time we update these dates I need to go into code." The public booking window
+(opens / closes) is now edited on /admin/season-plan. Edits are stored per season+year in
+`server/data/season-windows.json` — the persistent data disk, so deploys never reset them — and
+layered over `seasons.json` by `seasons.configFor()`, which is what the availability season gate
+already reads, so a saved date is live on the booking page immediately with no deploy.
+**The serviceable window is deliberately NOT editable.** It is the fence: the editor refuses an
+opening before `serviceableFrom`, a close past the frost stop, an empty window, a garbled or
+wrong-year date. `windowFor()` — what outreach classifies "already booked?" against — never sees
+overrides. A stored override is re-validated on every read, so a hand-edited store file or a
+later-shortened season degrades to `seasons.json` with a warning rather than offering days no truck
+rolls. Works for unplanned years too (fall 2027 can be set from the screen — no code for next
+season). New `GET/PATCH /api/seasons/:season/:year/booking-window` (admin/tech-gated like the rest
+of the plan screen). 18 new assertions in `test-season-config.mjs` (93 total), including a planted
+store surviving a fresh require and an invalid stored override being ignored. FLOW-03 unaffected in
+behaviour — the gate reads the same `configFor()`; only where the dates come from gained a layer.
+
+**2026-08-31 (Assignment writer stage 1 — bucket capacity + season gate, FLOW-03 re-verified):**
+`listAvailableSlots()` gained two refusals. **Bucket capacity:** the season plan's `bucketCap`
+(default 5) is now enforced at booking time — a bucket's load is its planned stops (unresolved codes
+included; capacity is about Patrick's day, not geocoding luck) plus any real booking in that half of
+the day that is NOT one of them. The accounting never charges one house twice: a planned customer who
+books converts their stop into a booking (same rounded coordinate, the shape's own 4-decimal rule),
+and a planned customer asking for their own bucket adds no load — the plan itself put them there.
+**Season gate:** the public booking window for seasonal services is now
+`[publicBookingFrom .. publicBookingThrough]` from `seasons.json`. The back is the frost-stop
+discipline (fall 2026: Oct 30, keeping Nov 1–6 for admin placement). The front — added the same day
+at Patrick's ask ("the customer also can't book before September 28th") — holds public booking until
+the routes actually run: fall 2026 opens **Sep 28**, the first planned route day, even though trucks
+are serviceable from Sep 1. `publicBookingFrom` is OPTIONAL in seasons.json and defaults to
+`serviceableFrom`, so spring and the year-agnostic defaults are unchanged; `seasons.js` refuses a
+`from` after the `through` (an empty window) at load. Repairs/retrofits/site visits book year-round
+and never consult any of it. A broken `seasons.json` fails SOFT to ungated availability, the same
+posture as `dayShapesForSeason`.
+Both gates live in the engine that every submission path re-validates through, so they gate
+submission too; admin custom-time bypasses by design. Suppressed days are diagnosable
+(`diagnostics.bucketFull` / `diagnostics.seasonClosed` naming the bound that was hit; day reasons
+`season_not_open` / `season_closed` beside `outside_route_area` — "booking opens Sep 28" and "the
+season has wrapped up" are different sentences). **The off switch is the data's absence** — no
+shape, no cap, or a pre-stage-1 shape returns byte-identical slots, asserted against a baseline in
+`scripts/test-booking-guards.mjs` (35 assertions, in build:check, including runs against the live
+config on both bounds); `test-geo-availability.mjs`'s 27 pass unchanged, with its fixtures now
+explicitly opting out of the season gate since its September fixture days sit before the real Sep 28
+opening — geography stays tested in isolation. The `test-season-config.mjs` sentinel now pins both
+bounds to exactly their two consumers. FLOW-03 is PASS and was touched: engine re-verified, see the
+status row dated 2026-08-31.
+
+**2026-08-31 (Assignment writer — spec locked, stage 0 shipped):** the assignment writer now has a
+locked spec at `docs/ASSIGNMENT_WRITER.md` — decisions A–G settled with Patrick, including his exact
+follow-up cadence (one blast at season start, then D−15/D−10/D−7/D−5 for non-responders with his
+escalation wording at D−10, a 24-hour text to everyone; steps fire once ever, within 09:00–18:00
+Toronto). Stage 0 (preflight) shipped: read-only "who would be told, who would be skipped and why"
+for every planned stop, as a panel on /admin/season-plan.
+**The load-bearing move is the extraction.** `outreach.sendBulk`'s inline eligibility gauntlet moved
+into shared `assessEligibility` / `channelCapability` and sendBulk was rewired onto them, so the
+preflight literally runs the send's own rules — a preflight with its own copy of the rules is one
+that drifts from the send it claims to predict. Same check order, same reason strings (they are API
+to the outreach screen's skip report); the consent suite (43) and seasonal-handoff suite (669)
+passed the refactor unchanged, which is the evidence of behaviour preservation. FLOW-29 remains
+UNMAPPED; no PASS flow touched.
+One verdict is assignment-specific: **already_booked preflights as "settled", not "skipped"** — a
+customer with their own seasonal booking made their appointment and the writer's job for them is
+already done. Partial-channel customers are counted and listed by name so the ready headline cannot
+hide the people who will silently miss the SMS half of the cadence.
+
+**2026-08-30 (Time window control — closed on touch, and read as a range):** reported from an
+iPhone: tapping "Time window" opened the picker and it closed immediately. Cause was not the picker.
+`linkRowsToPins()` bound a click handler to the WHOLE stop row that opened the marker's info window,
+so a tap on the time input — or the up/down arrows, or the Move select — also opened a Google info
+window behind the panel and panned the map. On iOS the native time picker is a modal sheet and that
+focus steal dismissed it instantly. The handler now ignores taps that land on a button, select,
+input, anchor, label or form; a tap on bare row text still selects the pin. Verified on a 390x844
+touch viewport by spying on `google.maps.event.trigger`: bare text fires it once, and the time
+input, the window button and an arrow each fire it zero further times.
+**The control also read wrong.** Two bare time inputs side by side looked like one range picker and
+implied both halves were required, when "after 10:00" and "before 12:00" are independent things a
+customer says and either can stand alone. Rebuilt as two labelled rows — AFTER and BEFORE — each
+with its own Clear, in a full-width row beneath the stop rather than inside the 168px meta column
+(an absolutely positioned popover would have been clipped by the panel's own scrolling). Inputs are
+40px+ so a thumb can hit them; the old 20px controls were a desktop assumption on a screen that gets
+read on a phone. No data-model change — the stored shape and the API are unchanged.
+
+**2026-08-30 (Time windows on a stop):** "not before 10:00" is a locked gate or a customer out
+until then; "not after 12:30" is a promise already made. Neither is visible to an optimiser that can
+only see driving minutes. Each stop now carries an optional window, set from the plan screen and
+stored on the day as `constraints[code]`.
+**SOFT, NOT REFUSED.** A window that cannot be met still gets sequenced and is flagged
+(`window_missed`, naming how many minutes late). Refusing would leave the day unsequenced, which is
+worse than a day that runs with one visible problem on it. A wait of 15 min or more raises
+`window_waiting` — a tight window can cost more than it is worth and should be visible.
+**WAITING IS MODELLED, because it is real.** Arriving before a gate opens means sitting in the
+truck, so the clock is held to `notBefore` and everything after it moves later — which means a
+window can now cause a genuine morning overrun, and it will show up as one.
+**The search became lexicographic** when any window exists: fewest missed windows, then least
+waiting, then least driving, then finishing nearest the yard. Driving drops to third on purpose — an
+order saving four minutes that arrives after the gate is locked has saved nothing.
+**When NO stop on a day has a window, the previous search runs completely untouched.** Every day in
+the current plan has none, so routing them through a new scorer to serve a case none of them have
+was not worth the risk; `test-resequence.mjs`'s 39 assertions still pass unchanged, which is the
+regression guarantee.
+**The clock walk was extracted into one `walk()` used by BOTH the search and the printed timeline.**
+Two implementations of "when does this day happen" is precisely how SEQ-02 printed times the route
+did not produce.
+**THE CUSTOMER SEAM IS BUILT AND UNUSED.** `sequenceDay(day, { requestedWindows })` merges a
+per-code window over the plan's own, and the customer's request wins — the plan entry is Patrick's
+standing guess about a property, the booking is what that customer actually asked for this time.
+Nothing in the booking flow supplies it yet; that flow does not exist. It is tested so that when the
+pool can take a request, the enabling is a wiring job and not a redesign.
+Above `EXACT_SEARCH_LIMIT` stops in a bucket the joint enumeration is not run, so windows cannot be
+optimised for; that case raises `windows_not_optimised` rather than letting the day look as though
+they were honoured. No bucket in the current plan is near it.
+`scripts/test-day-reschedule.mjs` grows to 59 assertions. The one the feature rests on: the same
+fixture WITHOUT the window arrives early, so the honoured-window assertion cannot pass for the wrong
+reason. Display and planning only — no PASS flow touched, though as with hand ordering the stored
+order feeds `buildDayShapes()`, so a window that changes the order also changes what the booking
+page can cheaply add to that day.
+
+**2026-08-30 (Hand ordering inside a bucket):** the optimiser is very good at the only thing it can
+see — driving minutes — and blind to everything it cannot: who is not home before ten, which gate is
+locked until nine, which north slope is better done before the frost comes off. There was nowhere to
+put that knowledge. Each stop now has up/down arrows within its bucket.
+**The first nudge sets `manualOrder` on the day and the sequencer then stops optimising it** — it
+walks the stored order and times it rather than searching for a better one. That is the only honest
+behaviour: an order Patrick set which the next re-sequence silently reverted would be worse than no
+feature at all. The day says "ordered by hand" on the card and offers "Back to automatic", which
+clears the flag AND re-optimises, so handing it back visibly does something.
+A manual day is unoptimised, not unchecked: it is still timed, the noon rule is still applied and an
+overrun is still flagged.
+**FLOW-03 CONSEQUENCE, and it is not display-only.** `geo-filter.js:buildDayShapes()` reads
+`day.morning`/`day.afternoon` IN STORED ORDER, and `addedDriveMinutes()` measures the gaps between
+consecutive stops — so **reordering a day changes which addresses the booking page can cheaply add
+to it**. That is not a defect: the filter is measuring the route that will actually be driven. But
+it means an operator action on the admin screen now moves what FLOW-03 offers, so the flag's message
+says so out loud. No FLOW-03 CODE was touched — `availability.js` and `/book.html` are unchanged —
+and the flow stays PASS; what is new is a way for the data it reads to be changed on purpose.
+Two traps handled: `validate()` rebuilds every day from scratch on save, so `manualOrder` had to be
+explicitly copied or it would have survived one write and vanished on the next; and the reorder
+endpoint deliberately does NOT call `resequencePlanForStorage()` afterwards, because re-running the
+optimiser over an order just set by hand is precisely what this exists to stop.
+`scripts/test-day-reschedule.mjs` grows to 41 assertions. The one the feature rests on: the same
+fixture WITHOUT the manual flag comes back reordered, so the manual assertion cannot pass for the
+wrong reason — the trap that produced two false-passing fixtures earlier in this work.
+**Constraints ("not before 10:00", "do this one first") are NOT in this change and are next.** They
+modify the search and the cost model rather than bypassing them, and `resequence.js` has produced
+three bugs already; it gets its own pass.
+
+**2026-08-30 (A route day can be re-dated):** the weather stays too warm to close systems down,
+a day cannot run, and it has to slide. `seasonPlans.moveDay()` re-keys one day to a new date and
+**only that day moves** — Patrick's call, on the grounds that a warm Monday does not mean a warm
+Friday. **The label travels with the day, not with the date:** R1 is the name of a set of properties
+in a territory and he talks about days that way, so renumbering on a move would make yesterday's
+sentence about R5 point somewhere else; the screen sorts by date instead. The day header now prints
+the date, which it never did — survivable when a day could not move, not now.
+Three guards, each asserted: a move onto an occupied date is refused and **names the day in the
+way**, because the operator's next decision is what to do with that day; a non-date or a Feb 31 is
+refused rather than rolled into March; and **a day carrying real bookings is refused outright**.
+That last one cannot fire today — nothing tells a customer their date yet — and is in now precisely
+because the moment the assignment writer lands, moving a day is a promise broken and a batch of
+emails. A planned stop is not a booking and never blocks a move; the endpoint counts real bookings
+from `activeBookings()` and hands the count in, so the store never reads bookings itself.
+Weekends are allowed but reported, because landing on a Saturday by arithmetic accident reads
+exactly like choosing one until somebody drives out on a Saturday.
+`scripts/test-day-reschedule.mjs`, 24 assertions, in `npm run build:check`. **Worth recording about
+the test itself:** `season-plans.js` resolves its file path at require time with no injectable
+location, so the first version of this test silently overwrote the real `season-plans.json`. It now
+snapshots and restores that file, and the restore is proven by planting a known file and checking it
+byte-for-byte afterwards. `build:check` is not part of the deploy build, so production was never at
+risk — but it is run locally against real data. No PASS flow touched.
+
+**2026-08-30 (Probe field gets address autocomplete):** the season-plan probe — "test an address
+against this plan" — was a bare text box, so a mistyped or half-written address reached the geocoder
+and came back as a miss the operator had to interpret. It now carries `js-address-autocomplete`, the
+same class the other ten admin address boxes use, driven by the same `coverage-checker.js` that has
+been in production on them; it was reused rather than rewritten so this field cannot drift from the
+rest. The page's single Maps JS load now asks for `libraries=places` (libraries cannot be added after
+load), and `initCoverageCheck()` is called once the API is ready — it skips its full-checker half
+when that markup is absent, which it is here. `mapsReady()` is also kicked off at page load rather
+than waiting for a day card to scroll into view, because the probe sits above the cards; that is the
+same memoised script load, started sooner, and loading the library is not a billable map load —
+only `new google.maps.Map` is. **Needs `Places API` added to `GOOGLE_MAPS_BROWSER_KEY`'s API
+restrictions**, alongside Maps JavaScript API. Display only, no PASS flow touched.
+
+**2026-08-30 (Season-plan day maps become live Google maps):** the day maps were flat Google
+Static Maps images stretched to the full card width, so one day filled the window and eleven were
+unreadable; and all eleven fired their map request in the same tick — two Google calls each,
+twenty-two at once — so the ones that lost the rate-limit race came back refused and the page
+finished half-drawn. Now a **live Maps JavaScript API map per day** in the Layout A shape: the map
+is the card body at a **fixed 400px** that never grows with the window, and the stops float over it
+in a scrollable panel. Maps are built by `IntersectionObserver` as a card scrolls into view, one at
+a time, so the burst cannot happen and days never looked at cost nothing.
+**Two intermediate versions were built and discarded the same day, both recorded because the
+research that justified them was wrong and the deployed page was what corrected it.** (1) Leaflet on
+CARTO Positron tiles — CARTO now requires an API key for raster basemaps, watermarks unauthenticated
+tiles "API KEY REQUIRED" across the whole map, and is retiring raster outright. (2) Leaflet on
+OpenStreetMap tiles desaturated in CSS — worked and cost nothing, but Patrick reads this screen at a
+glance and a muted substitute basemap made that harder. Google's own basemap is the product being
+paid for; use it.
+**Cost, checked rather than assumed:** Dynamic Maps bills $7/1,000 map loads with 10,000 free a
+month. Lazy building means a page open costs one load per day actually scrolled to, not eleven. At
+Patrick's usage (single figures of page opens a day) this is comfortably inside the free tier; it
+would take roughly 30 opens a day, every day, to leave it.
+**The road line is fetched SERVER-side and cached, never by the browser** (`server/lib/route-geometry.js`)
+— that keeps `GOOGLE_MAPS_SERVER_KEY` off the page and costs one Directions call per route CHANGE
+rather than one per page view. Google Directions first, OSRM second, straight hops last, and every
+router's own error text is carried so a failure names its own fix. `optimize` is never sent: the
+re-sequencer owns the order, and letting Google reshuffle would draw a route that disagrees with the
+arrival times the customer was told. **And the LINE ONLY, never the minutes** — every time on this
+screen comes from Google Distance Matrix and is what the customer was told; a second router printing
+its own drive times beside them would put two figures for one leg on one screen with no way to tell
+which the booking page believed. Cached on the ordered stops as `route-map.js` is, so a re-sequence
+refetches and a refresh is free; the reader also accepts the earlier bare-array cache format still
+on the deployed disk.
+`GOOGLE_MAPS_BROWSER_KEY` is served to signed-in admins by `GET /api/maps-config` rather than baked
+into the HTML — a browser key is visible to whoever loads the map by design, so the protection is an
+HTTP-referrer restriction on the key, not secrecy, but there is no reason to hand it to anonymous
+visitors too. Both failure paths were walked in a browser and name the actual fix: an unset variable
+says so by name; a referrer-rejected key says to check the referrer restriction and the key's API
+list. The stop list stays usable in both.
+Drawing our own markers also retires a real limit — Google's STATIC map markers take a SINGLE
+character, so on a nine-stop day the later stops silently lost their number.
+`scripts/test-route-geometry.mjs`, 47 assertions, in `npm run build:check` — including the polyline
+decoder checked against Google's published reference and round-tripped against `route-map.js`'s
+encoder, that a refused Directions key falls through to OSRM rather than to straight lines, that
+both routers' reasons survive when neither answers, that `optimize` is never sent, and that a
+reordered day misses the cache. Two bugs found by those tests and fixed: `Number(null)` is `0`, so a
+missing coordinate passed an `isFinite` check and would have routed a day through Null Island; and
+the cache write format changed without the reader, which would have silently refetched every day.
+**No PASS flow touched** — this is the admin screen only; FLOW-03 (`/book.html`) does not read these
+maps. `server/lib/route-map.js` and its Static Maps endpoint are left in place and still tested;
+nothing calls them now, and a printable PNG is the reason to keep them.
+
+**2026-08-30 (SEQ-04 finish-nearest-home, and SEQ-05 — the route anchor is a town centroid):**
+**SEQ-04.** On a tight cluster, total driving decides nothing: every order of R1's four
+south-Newmarket stops came out within **0.1 km** of every other, so "fewest kilometres" was choosing
+between them on rounding noise and the day ended wherever that noise landed. Patrick's stated rule —
+when the driving is a wash, finish nearest home — is now encoded as a lexicographic second objective:
+take the cheapest total, then among every order within `FINISH_NEAR_BASE_TOLERANCE_MINUTES` (3) of it,
+prefer the one whose last stop is closest to base. A property worth recording: a day is a closed
+tour, and a tour and its reverse cost the same, so whichever end is nearer base can almost always be
+made the finish for free — the tolerance rarely binds. The test asserts the guarantee that matters
+(never worse than optimal by more than the tolerance) rather than a contrived fixture, because
+reversal symmetry makes a "finishing near home costs real driving" case nearly unconstructible.
+**SEQ-05 — OPEN, and it invalidates every route number.** `PJL_BASE` in `server/lib/geocode.js` is
+not the yard. It is Newmarket town centre — `formattedAddress: "Newmarket, ON, Canada"`, a dot in the
+middle of town, carried since it was written as the geocode FALLBACK for addresses that will not
+resolve. The route optimiser then adopted it as the start-and-end anchor without anyone asking
+whether it was an address. Patrick: "Prospect Street would be furthest from home"; measured from the
+centroid it is the **nearest** stop at 0.67 km, against 3.5 km for the Creebridge pair. The anchor
+decides which stop opens each day, which closes it, and part of the added-drive figure the geography
+filter accepts or refuses customers on — so it is wrong for all 11 route days, not one.
+**Fix requires an input only Patrick has** (the real yard address) and should also SPLIT the two
+jobs this constant is doing: a real address for routing, and a deliberately vague town point for
+"we do not know where this is", so correcting the yard cannot change how unresolved addresses behave.
+**SEQ-05 CLOSED 2026-08-30.** Patrick supplied the yard: **1118 Cenotaph Blvd, Newmarket, ON L3X
+0A5** — the same L3X pocket as Creebridge and Ivsbridge, which is why he said Prospect St was the
+far end of town while the centroid maths called it the nearest stop at 0.67 km. New
+`server/lib/route-origin.js` holds the yard and keeps it strictly separate from `PJL_BASE`, which is
+unchanged and still means "we cannot resolve this address". **Configured as a street address, not
+coordinates**, and resolved through the same geocoder as everything else: a latitude nobody can check
+by eye is how a town centroid survived this long, whereas a wrong address is obvious on sight.
+Overridable via `PJL_ROUTE_ORIGIN` without a deploy. Fails soft and loudly — an unlocatable yard
+degrades to the centroid, but carries `resolved: false`, and the plan screen then says in red that
+routes are anchored to a guess. The anchor is now printed on the screen in every case, because a
+route pointed at the wrong start looks exactly like one pointed at the right start; silence is how
+this lasted eleven route days. Effect on R1's afternoon: 991 Creebridge → 970 → Ivsbridge → Prospect
+becomes **Prospect → Ivsbridge → 991 → 970 Creebridge**, finishing in the yard's own pocket.
+`scripts/test-route-origin.mjs`, 10 assertions, including one that fixes the anchor at two different
+points and asserts the day ends at a different stop each time — the property that makes a wrong
+anchor a correctness bug rather than a cosmetic one.
+
+**2026-08-30 (Route maps, inline on every day):** the re-sequencer's output is a list of addresses
+and times, and a list cannot be checked. Both routing defects found this session — a detour between
+two neighbours 40 m apart, and a morning that ran to Pickering before the afternoon came back west —
+were found by cross-referencing a day against a real map in another tool. Neither was visible in the
+list. Each route day on `/admin/season-plan` now carries its own map, in the card, no click:
+numbered markers in driving order, the yard marked `H`, and the road path between them.
+**Rendered server-side as a PNG** (`server/lib/route-map.js` + `GET /api/season-plans/:season/:year/
+route-map/:date`). A first attempt put an interactive widget behind a button; Patrick's answer was
+that a map you have to open is not a map in front of you. Eleven live map widgets on one page is
+eleven billable map loads per refresh, so the server draws images instead — one Directions call for
+the road geometry, one Static Maps render, both cached on disk. The page pays for one lazy `<img>`
+per day and nothing at all for days scrolled past. **No browser key**: the existing
+`GOOGLE_MAPS_SERVER_KEY` does this, and the key never reaches the browser.
+**The cache is keyed on the ROUTE, not the date** — a hash of the ordered stop coordinates plus the
+yard — so a re-sequence draws a new picture and a refresh costs nothing. A stale map showing the old
+order would be worse than no map, because it would look like confirmation. Stop order is read from
+the timeline, the same source the cards and stop numbers read (SEQ-02's lesson). Directions is asked
+for the path **without** `optimize`, so Google cannot reshuffle the stops and put the picture at odds
+with the time a customer was told; if Directions fails the polyline degrades to straight hops.
+Static Maps labels are one character, so stops past nine get an unlabelled dot rather than a marker
+reading "1" when it is stop 10 — no day in the fall plan reaches ten.
+`scripts/test-route-map.mjs`, 11 assertions, including the polyline encoder checked against Google's
+published reference and the cache key proven to change on a reorder. **No PASS flow touched:**
+display only, no booking route, no engine call, no stored field.
+
+**2026-08-30 (SEQ-01 reopened, and SEQ-03):** the SEQ-01 fix shipped and did not work — Patrick's
+screenshot still showed `100 Lavery → Morrish → 106 Lavery`. Two reasons, both mine.
+**SEQ-01 (reopened).** The distance tiebreak was the wrong instrument. Across a day's route it is
+worth about **0.004 of a minute**, so it can settle an exact tie and nothing else; the floor's
+distortion is measured in whole minutes, and a 5-minute floor over a 1-minute leg shifts whole
+candidate orders against each other. Properly fixed by ordering on **unfloored** road time:
+`distance.js` gains `travelMinutesRaw()` (own cache file — the existing cache holds already-floored
+values that cannot be un-floored after the fact), and the re-sequencer now keeps two clocks: raw for
+choosing the route, floored for the schedule the operator reads. `travelMinutes()` and its cache are
+untouched, so nothing the booking engine depends on moves.
+**SEQ-03 — the day was optimised in two greedy halves.** The morning was solved first as an
+open-ended path, then the afternoon from wherever it happened to end. A morning free to finish
+anywhere finishes where its own last leg is cheapest, knowing nothing about the hand-off: live, R10's
+morning ran out to Pickering and the afternoon came back west to Scarborough. The search is now
+**joint** over the whole day — base → morning → afternoon → base — which at a bucket cap of 5 is
+5!×5! = 14,400 orders of arithmetic over a precomputed matrix. The two-stage path remains for buckets
+too large to enumerate.
+**Test fixtures were also wrong, and passing for it.** They were collinear, and on a line every
+closed tour through the same points costs the same — so they could not distinguish a good route from
+a bad one, and the tie fixture injected only the floored clock, never exercising the fix at all. Now
+two-dimensional, with assertions that the fixture *reproduces the failure* (under the floor the split
+really is cheaper) before asserting the fix corrects it. 33 → 36 assertions.
+R10 now reads Cerise Manor → Nature Pathway → 106 Lavery → 100 Lavery → Morrish → Glenthorne.
+Season-wide: no pair of stops within **300 m** separated in any day's route; driving 25h 8m.
+
+**2026-08-30 (Two route-ordering defects found on the live screen):** the re-sequencer shipped and
+Patrick immediately spotted both on R10.
+**SEQ-01 — the five-minute floor decided the order.** `distance.js` wraps every answer in
+`Math.max(MIN_TRAVEL_MINUTES, …)`, real Google Distance Matrix results included. 100 and 106 Lavery
+Trail are **40 m** apart and 748 Morrish Rd is 1 km away; all three legs report "5 minutes", so every
+arrangement ties and the search picked arbitrarily among them — live, `100 Lavery → Morrish → 106
+Lavery`, a detour between two neighbours. The floor is correct for scheduling (parking, unloading, a
+door) and fatal for ordering. Fixed by comparing candidate orders on travel time **plus** a vanishing
+weight of straight-line distance (0.001 min/km): inside a tie the distance decides, against a genuine
+minute it cannot compete. The matrix now carries `minutes` (shown to the operator, unmodified) and
+`cost` (comparison only) separately, so the weight can never leak into a displayed arrival time.
+**SEQ-02 — the screen rendered the stored order against sequenced times.** `resolveSeasonPlan` drew
+rows from the stored bucket arrays while arrival times came from the sequencer, so any plan whose
+stored order was not already optimal displayed correct times in the wrong order: R10 read 11:18,
+10:30, 08:40, 09:55, 09:20 down the page. Both now come from the sequencer, and each stop carries a
+`stopNumber` (1..n, continuous across buckets — it is one drive, not two) generated there rather than
+counted from row position, which makes the mismatch unrepresentable instead of merely unlikely.
+**Note on the numbers:** season driving reads 25h 13m before and after SEQ-01. That is the floor
+again — the route genuinely improved, but every shortened hop still reports its five-minute minimum,
+so the saving is real on the road and invisible in the system's own units. Season-wide check after
+the fix: no pair of stops within 200 m is separated in any day's route. Tests extended to 33
+assertions, including a fixture that reproduces the floor so the tie is real rather than assumed.
+
+**2026-08-30 (Re-sequencer, SPEC §6):** `server/lib/resequence.js` — a route day's stop order is
+now recomputed whenever its stop set changes, on import and on every move, instead of being left
+wherever the last edit happened to put it. Hand-placing produced an R1 that drove to one corner of
+Newmarket in the morning and returned to the same corner in the afternoon, 0.7 km from where it had
+already been. Two rules are enforced and tested (`scripts/test-resequence.mjs`, 27 assertions, in
+`npm run build:check`): **order changes only WITHIN a bucket, never across** — a customer told
+"morning" stays in the morning, and the re-sequencer will not satisfy the noon rule by breaking this
+one — and **a morning that cannot finish by 12:00 in any order is FLAGGED**, not silently handed
+back as an overrun. What it may not fix, it reports: `suggestBucketMoves()` returns bucket changes
+that would save driving, as advice for Patrick, and mutates nothing. **Real drive times, not
+estimates:** the ordering search runs off a `travelMinutes()` matrix, because the straight-line
+estimator floors every trip at `MIN_TRAVEL_MINUTES` and reads a 0.7 km hop the same as a 3 km one —
+blind at exactly the neighbourhood scale this exists to get right. It runs at plan time only, never
+on a customer's booking request. **No PASS flow touched:** `availability.js` is not called, no
+booking route changes, and the plan file gains no new field — derived timing (arrival estimates,
+drive totals, the noon check) is recomputed on read and never stored, so it cannot drift against the
+zone counts it is calculated from. Against the live fall-2026 plan: 25h 13m of driving across 11
+days, one flagged morning (R10 at 12:03, 3 min over) and 7 bucket-move suggestions.
+
+**2026-08-30 (Geography-aware availability, FLOW-03 re-verified):** the booking engine now
+measures a customer against the day's *planned route* before offering it. New:
+`server/lib/season-plans.js` (the route seed, `server/data/season-plans.json`, keyed
+`<season>-<year>`), `server/lib/geo-filter.js` (day shapes + cheapest-insertion added drive),
+and `/admin/season-plan` (import, review, move a stop, probe an address).
+**FLOW-03 IS A PASS FLOW AND WAS TOUCHED** — `listAvailableSlots()` gained the filter, so it
+is re-verified below rather than assumed. Three defects were found and fixed on the way in,
+each of which would have made the filter useless or actively wrong:
+(1) **AVAIL-01** — `activeBookings()` stamped `coords: PJL_BASE` on every booking that lives
+only in `bookings.json`, telling the engine those appointments happen at the shop. That made
+the corridor math wrong in the customer's favour and would have made the geography filter
+inert for exactly the records the season assignment writer is going to create. Coordinates
+now resolve through `propertyId` → the property record, with the depot kept as the last
+resort it was meant to be.
+(2) **AVAIL-02** — the three slot *re-validation* call sites carried hardcoded horizons
+(30 / 60 / 30 days) while the availability *read* scans up to 120. A slot offered 40 days out
+therefore passed availability and failed reserve with "that slot was just taken" about a slot
+nobody had taken. All three now scan exactly far enough to reach the requested slot
+(`horizonToReach()`). The geography filter turns this from an edge case into the normal case,
+because filtering to the days we are actually in a customer's area is what pushes their only
+offered dates past 30 days.
+(3) **AVAIL-03** — a day suppressed by geography was indistinguishable from a day that is
+full. `expandDaysToRange()` now reports `reason: "outside_route_area"` so the booking page can
+say "we're in your area on these dates" instead of showing a bare empty calendar, which
+customers read as "they have no availability".
+**Invariants held:** admin force-book (`source: "admin_custom"`) never reaches
+`listAvailableSlots()` and is unaffected; an address that fails to geocode skips the filter
+entirely and gets normal availability; a season with no plan, an empty plan, or an unreadable
+plan file all degrade to the previous unfiltered behaviour — never to a refusal.
+
+**2026-08-27 (Customer delete vs. the Trash):** CRM-16 opened and fixed — `customers.js
+hardDelete()`'s referential guard counted soft-deleted records, so a quote deleted from the
+quote folder kept blocking its customer's deletion for the whole 30-day Trash retention
+while showing nowhere in the CRM. The guard now splits live links from Trash links: live
+links block as before, a Trash-only customer takes a second confirm and its Trash records
+are permanently deleted with it. **No PASS flow touched** — no route, payload or catalog
+change on FLOW-01 / FLOW-02, and nothing in `stripe.js`, `pay.js` or any payment route
+moves (FLOW-23's invariant). Invoices are deliberately outside the purge: a deleted invoice
+leaves `invoices.json` for the tombstone log, so any invoice reference is live and still
+blocks. Cover: `scripts/test-customer-delete-trashed.mjs` (35 assertions, in
+`build:check`).
+
+**2026-08-27 (Territory export as an admin download):** `GET /api/admin/territory-export`
+opened and registered under **INF — Admin data exports** (Part 1). The fall-closing
+territory export existed only as a repo-root CLI, so producing one needed shell access to
+the Render instance. It is now a link on `/admin/settings` as well. **No PASS flow touched**
+— a new path, a new lib and a new card; no existing route, payload or catalog changed, and
+nothing in `stripe.js`, `pay.js` or any payment route moves (FLOW-23's invariant). The
+superseded `territory-export.js` was deleted (its own replacement documents three ways it
+silently miscounts). Cover: `scripts/test-territory-export.mjs` (100 assertions, in
+`build:check`).
+
+**2026-08-30 (CRM-22 — the property merge becomes a route, and what the live records actually
+said):** CRM-19 shipped the merge as a CLI. That was the wrong shape: running it needs shell
+access to the Render instance, which Patrick does not have — the same problem the territory
+export hit on 2026-08-27 and solved the same way. `POST /api/properties/:id/merge-into` now
+does it from the CRM. The `:id` in the path is the KEEPER and the duplicate is named in the
+body, so an accidental swap can't be expressed as a URL alone.
+
+**What the live data actually said, which changed the job.** Reading the two records before
+touching them overturned the plan they were merged under:
+
+- The two properties do **not** have different addresses. Both read `21 Hill Country Dr,
+  Whitchurch-Stouffville, ON L4A 3T2, Canada`. The "different address" is on the INVOICE:
+  I-2026-0034 says **"21 Phil Country Drive, Stouffville, ON"** — *Phil* for *Hill*. That typo
+  is what failed the address match and the 50m geocode check, so `attachLead` minted a second
+  property exactly as spec §3.1 says it should. The property was corrected later; the paid
+  invoice keeps its frozen snapshot, correctly.
+- **The record we were told to keep was the weaker one.** P-2026-0040 carries 3 zones, two of
+  them `pendingReview` stubs literally named "Zone 3" and "Zone 5", and its work order
+  WO-PT79MEGF **404s — it has been deleted**. P-2026-0056 carries a 6-zone walked survey
+  ("Backyard open area rotors", "Left side backyard and large flower garden…"), a live work
+  order, the larger invoice, and **three live unsubscribe tokens** whose links are in the
+  customer's inbox.
+- **Zone count is money.** `resolveSeasonalPrice` tiers off documented zones; the server
+  returns $90 (`spring_open_4z`, zoneCount 3) for P-2026-0040 and $105 (`spring_open_6z`,
+  zoneCount 6) for P-2026-0056. Keeping the 3-zone record would have quietly billed Randy the
+  1-4 zone tier for both spring opening and fall closing — $30/year under, indefinitely — and
+  the merge would NOT have rescued it, because two non-empty zone lists are a conflict and the
+  keeper wins. **Direction reversed on that evidence: keep P-2026-0056, delete P-2026-0040.**
+
+**The route.** ADMIN ONLY, twice over: `needsAuth()` maps the path to `"admin"` and the route
+re-checks with `requireAdmin`. **The rule MUST sit above the generic `/api/properties` →
+`"user"` line** — `needsAuth` returns on first match. It was written below it at first, which
+would have let any tech delete a property; the source guard caught it before it shipped, and
+now pins the order (mutation: move it below, the build fails). Dry run is the default; an
+apply additionally requires `confirm: "MERGE"`, the same typed second factor as the bulk-delete
+routes. The lib's refusals surface as **422**, not 500 — they are guards, not faults. The merge
+is attributed via `actorLabel(req)` (CRM-21) and the request lands in the action log (CRM-20),
+including a refused attempt.
+
+**One implementation, two callers.** The merge core moved to `server/lib/property-merge.js`;
+`scripts/merge-properties.mjs` is now a thin CLI over it, and the route calls the same
+function — the arrangement `backfill-booking-customers.js` and `territory-export.js` already
+use. A test asserts neither caller holds a copy of the internals. The port was proved faithful
+by pointing the existing 110-assertion suite (mutation-tested against five broken states) at
+the new lib unchanged.
+
+**No PASS flow touched.** A new route and a file move; no existing route, payload or catalog
+changes, and nothing in `stripe.js`, `pay.js` or any payment route moves (FLOW-23's invariant).
+Cover: `scripts/test-property-merge-route.mjs` (31 assertions, in `build:check`) plus a
+21-assertion live-server walk with seeded admin and tech logins — anonymous 401, **tech 403**,
+apply-without-confirm 422, dry run writing nothing, a **paid** invoice re-pointed while keeping
+its issued address, the merge attributed to the admin's name, and both the success and the
+tech's refusal appearing in the action log.
+
+**WALKED LIVE 2026-08-30T00:38:01Z — the merge ran on production.** Dry run first, read, then
+applied with `confirm: "MERGE"`. Kept **P-2026-0056**, deleted **P-2026-0040**.
+
+**The dry run found a reference nobody knew about.** Reconnaissance over the HTTP API had
+counted three links to P-2026-0040; the tool found **four**, the extra being **Q-2026-0009**, an
+*accepted* `on_site_quote`. The API scan had missed it because `GET /api/quotes` returns LEADS,
+not quotes — so the manual check was reading the wrong payload, while the tool walks the data
+directory itself. Under a plain `DELETE /api/properties/:id` that accepted quote would have been
+silently orphaned. This is the case the tool exists for, and it did not come from a test fixture.
+
+Applied result, verified by independent re-read rather than from the response body:
+
+- 4 references re-pointed: `BK-2026-0010`, `I-2026-0008` (paid, $339), lead `d7ef10bb…`,
+  `Q-2026-0009` (accepted).
+- Properties 84 → 83. `GET` on the deleted id now 404s.
+- **Both invoices now hang off one property, each keeping the address it was ISSUED with** —
+  I-2026-0008 correct, I-2026-0034 still reading "21 Phil Country Drive, Stouffville, ON". That
+  typo is the original cause and it stays on the issued document, which is the correct outcome.
+- Zones: the conflict fired as designed — keeper 6, duplicate 3, keeper's kept. **Seasonal price
+  on the survivor resolves to $105 (`spring_open_6z`)**, not the $90 the 3-zone record produced.
+  That is the $30/year of silent underbilling avoided by reversing the direction.
+- `serviceRecords` 1 → 2, `leadIds` carried over.
+- History on the survivor: `property_merged … by Claude Admin` — CRM-21 attribution working on a
+  real record — plus the `mergedFrom` provenance block.
+- Backup written to `/opt/render/project/src/server/data/_merge-backups/2026-08-30T00-38-01-204Z`
+  (properties, bookings, invoices, leads, quotes). That is the undo.
+
+**One deliberate follow-up.** P-2026-0040's zone 5 carried a real finding — *"Inspect for non
+operational sprinkler head"* — on a stub zone that lost the conflict. Patrick chose to preserve
+it, so it was re-added to the survivor's zone 5 by PATCH immediately after the merge, tagged with
+where it came from. The lesson generalises: **when the zone conflict fires, the losing list can
+still hold findings**, and the tool's "NEEDS A LOOK AFTERWARDS" line is the prompt to go read it
+before the backup is the only copy.
+
+**FLOW-30-style caveat retired for CRM-20:** this walk is also the action log's first production
+exercise. `GET /api/admin/action-log` returned the whole sequence with real names — the 404 before
+deploy, the 422 probe, the dry run, the apply, the follow-up PATCH, all as `Claude Admin`, and
+`Patrick Lalande | POST 201 | /api/users` creating that account beforehand.
+
+**2026-08-29 (CRM-21 — the record history now names the operator):** The other half of CRM-20,
+and the gap that entry left open. Seventeen write paths in `server.js` stamped a hardcoded
+`by: "admin"` into the `history[]` they appended, so a customer edit, an ownership transfer, a
+work-order patch, a fee waiver and a verbal quote acceptance all recorded the literal string
+"admin" rather than the person. Every one of the seventeen is inside an authenticated request
+handler acting on a real operator's request — none was a system path — so in every case the
+information was available and thrown away.
+
+They now stamp `actorLabel(req)`.
+
+- **The value is a DISPLAY NAME, not a uid**, because `by` is rendered straight to the screen:
+  eight surfaces do `by ${h.by || "system"}`, and `work-order.js` passes it through
+  `HISTORY_ACTOR_LABELS[raw] || raw` — an identity fallback, so a real name renders verbatim
+  and an unknown key can't blank the row. A uid here would put `usr_a1b2c3` in front of
+  Patrick. The machine-stable half — uid, route, timestamp, outcome — is the action log's job
+  (CRM-20); the two are designed to be read together, and the tests assert both halves exist.
+- **`actorLabel()` cannot throw, and falls back to the exact literal it replaced.** The worst
+  case of this whole change is therefore today's behaviour: a history entry that says "admin".
+  That property is what makes changing seventeen live write paths in one go reasonable, and it
+  is pinned by test — every early exit returns the fallback, and the one resolving return is
+  itself `|| fallback` guarded so an empty name can't reach a record.
+- **Genuinely automated cascades still say `"system"`** (the deposit hook, the quote-accepted
+  cascade). Attributing a background job to whoever happened to trigger it would be a lie, not
+  an improvement.
+- **Tradeoff, recorded deliberately:** a display name is a snapshot of what someone was called
+  at the time, so renaming a user does not rewrite old history. That is the correct behaviour
+  for an audit trail, and there is a test that renames a user and asserts the old entries keep
+  the old name.
+
+**No PASS flow touched.** All seventeen sites are admin/tech CRM routes; none is in the
+customer portal (FLOW-01 / FLOW-02) or on a payment route (FLOW-23's invariant — nothing in
+`stripe.js`, `pay.js` or any payment route moves). No route's behaviour, status code or payload
+changes; the only difference is the string written into a history entry, and no consumer
+branches on that value (the one `.by ===` comparison in the codebase tests for `"customer"`).
+
+Cover: `scripts/test-actor-attribution.mjs` (21 assertions, in `build:check`) — source guards
+that fail the build if any `by: "admin"` literal returns, if the helper loses its try/catch or
+its fallback, if the resolution order stops preferring a name, or if the renderer it depends on
+stops passing an unmapped actor through. Plus a **live-server walk** (13 assertions) with two
+seeded operators: a customer created by an admin records `"Dana Okonkwo"`, the same record
+edited by a tech records `"Sam Whitfield"`, **two operators on one record are distinguishable
+afterwards** — which is the entire point — the action log carries the admin's uid for the same
+event, and a rename leaves existing history untouched.
+
+**Still open — a different and larger defect than this one.** Roughly fifty OTHER call sites
+stamp a raw `session.uid` into the same `by` field (`by: session?.uid || "admin"`), so those
+histories attribute correctly but render an unreadable id. They are not the CRM-21 defect —
+attribution is present, it is legibility that is missing — and several sit on money paths
+(`invoices.voidInvoice`, `invoices.remove`, `deposits.onQuoteAccepted`). Converting them to
+`actorLabel(req)` is mechanical and would make `by` a display name everywhere, but it is a
+fifty-site change through invoice code and wants its own reviewed pass, not a ride on this one.
+
+**2026-08-29 (CRM-20 — the admin action log):** The app had **no request log at all** — the
+same gap the FLOW-21 entry names ("no `viewedAt` field, no open tracking, no app-level request
+log"), which is true generally and not just for quote views. Per-record `history[]` arrays
+exist, but **17 call sites in `server.js` stamp a hardcoded `by: "admin"`** rather than the
+account that made the change. With one person on the CRM that is invisible. It stops being
+invisible the moment a second operator writes to the same account — a second tech, or an agent
+acting on Patrick's behalf from a job site — because then the records genuinely cannot say who
+did a thing. Opened when exactly that came up: standing agent access to the admin portal was
+proposed on the grounds that it would be "completely trackable", and it would not have been.
+
+`server/lib/admin-actions.js` is an append-only ledger of every state-changing request made by
+a signed-in staff account. It does **not** replace the per-record history — that stays the
+business-readable trail; this is the system-wide ledger underneath it.
+
+- **The hook lives in the auth gate**, which is the ONE place every guarded request passes
+  through with its session already resolved. Putting it there rather than in ~200 routes is
+  what stops it being forgotten on route 201. Fires on response `finish`, so the status code
+  is the real one; fire-and-forget, so a log write is never on the critical path; ip and
+  user-agent are read SYNCHRONOUSLY before the listener, the same trap `recordQuoteView()`
+  documents (a fire-and-forget call can outlive the socket and record a blank IP).
+- **JSONL, appended — not a JSON array read-modify-written.** Every other store here is a
+  whole-file read-modify-write with no lock, and `quote-views.js` already documents why a
+  high-frequency write must not live in one: interleaving a frequent write with a rare
+  important one can drop the important one. A request log is the highest-frequency write in
+  the system, so it gets one `appendFile` per entry — O(1), no read, nothing to interleave. A
+  torn line costs one entry and cannot corrupt an earlier one (asserted).
+- **It records what was called, never the payload.** Request bodies here carry names,
+  addresses, phone numbers, signature images and on some routes passwords; a log holding them
+  would be a second copy of the customer database with none of the handling the first copy
+  gets. Query strings are stripped (they carry status tokens and search terms). The actor is a
+  `uid` — the read API joins to users.json to render a name, so the ledger itself holds no
+  contact data. Identifying strings are seeded into the test fixtures so the privacy
+  assertions have something real to catch.
+- **A refused admin-only action is logged too**, with the actor who attempted it. That event
+  never reaches the success-path hook — the gate rejects first — so it has its own call. It is
+  also the single most audit-relevant thing the gate produces. The 401 case is deliberately
+  NOT logged: an unauthenticated request carries no actor to attribute, and logging it would
+  fill the ledger with rows naming nobody.
+- **Read via `GET /api/admin/action-log`** — ADMIN ONLY, twice over (`needsAuth()` maps the
+  path to `"admin"` and the route re-checks with `requireAdmin`), because it names every
+  operator's activity, which is not a tech's business. Filters: `?limit=` (default 200, max
+  2000), `?months=`, `?uid=`, `?ref=` (a record id), `?path=`.
+- **Monthly files** keep any one file bounded without ever rewriting or truncating history.
+  The module exports no delete, update, clear or truncate — asserted, because an audit log
+  with an edit path is not one.
+
+**No PASS flow touched.** The hook is additive inside the gate and changes no route's
+behaviour, status code or payload; nothing in `stripe.js`, `pay.js` or any payment route moves
+(FLOW-23's invariant). Cover: `scripts/test-admin-actions.mjs` (71 assertions, in
+`build:check`), mutation-tested against three broken states — query strings kept, an awaited
+log write, and the read route downgraded from admin to user — plus a **live-server walk** (28
+assertions) with separate seeded admin and tech logins: a real property POST logged against the
+real admin uid (not a hardcoded string) with a non-blank IP and no customer name, email or
+address in the line; a GET adding nothing; a tech's refused fee-waiver logged as 403 against
+the tech's own uid; and the read route 401 anonymous / 403 tech / 200 admin.
+
+**WALKED IN PRODUCTION 2026-08-30** (during the CRM-22 merge, see that entry).
+`GET /api/admin/action-log?limit=15` returned the real sequence with real names: the property
+merge dry run, the apply, the follow-up PATCH and two refused/early attempts, all attributed to
+`Claude Admin`, plus `Patrick Lalande | POST 201 | /api/users` creating that account beforehand.
+Reads did not appear, `ref` resolved the property id on every row, and no customer name, email or
+address appeared in any line. Nothing further outstanding on this entry.
+
+**The other half is still missing.** This says WHO made a request. It does not fix the 17
+hardcoded `by: "admin"` stamps inside the record histories — that means threading the acting
+user through existing write paths, which DOES touch flows that are currently PASS, so it wants
+to be its own reviewed change rather than being smuggled in here.
+
+**2026-08-29 (CRM-19 — merging a duplicate property):** A customer ended up with two
+property records for one address — a Dispatch-created invoice minted a second property
+because the address string it carried didn't match the one on file and there was no
+geocode hit within 50m (`properties.attachLead`, which is doing what spec §3.1 tells it
+to: *do NOT auto-merge*). The CRM had no way to undo that. `DELETE /api/properties/:id`
+clears `propertyId` on linked **leads and nothing else**, so deleting the duplicate by
+hand would leave its invoice, work order, quote, booking, project, review request and
+warranty claim all pointing at an id that no longer exists — and the invoice is the whole
+reason you'd want the property. `POST /api/leads/:id/link-property` moves one lead, not
+the money records.
+
+`scripts/merge-properties.mjs` re-points every reference to the duplicate, folds its
+property record into the keeper, then deletes it. Modelled on `customers.mergeCustomers()`
+— the same operation one level up — including its direct-JSON re-point pass, which is the
+right shape for a bulk cross-store id rewrite rather than a granular per-entity patch.
+
+- **Dry run by default.** Nothing is written without `--apply`; the plan names every
+  record that moves. `--apply` copies each file it touches to
+  `server/data/_merge-backups/<timestamp>/` before writing, and prints the restore path.
+  Nothing in the app scans that directory (no `readdir` over the data dir anywhere), so
+  the backups are inert.
+- **The re-point walks nested references.** Warranty claims carry theirs at
+  `link.propertyId`, not at the top level; a top-level-only rewrite would have silently
+  orphaned them. A mutation test pins this.
+- **Issued invoices are not retro-edited.** An invoice's `address` and `billTo` are the
+  envelope it was ISSUED with (Hard Rules 2 & 10; `invoices.update()` refuses a `billTo`
+  patch once `status !== "draft"`). The merge changes which property an invoice hangs off,
+  never what the customer already received. `--align-draft-invoice-addresses` rewrites the
+  service address on DRAFT invoices only, and only when asked. Append-only stores —
+  `deleted-invoices.json` (the void tombstone log) and `email-log.json` — are reported and
+  left exactly as they are: they describe what already happened.
+- **Consent survives the merge.** A `false` on EITHER record wins for
+  `seasonalEligibility` and `commPrefs` — merging must never re-subscribe someone who
+  opted out on the record being deleted (the OUTREACH-01/02 class of defect). An
+  unsubscribe token is adopted from the duplicate when the keeper has none, so a link
+  already in a customer's inbox keeps resolving; where both records have one the
+  duplicate's dies with it, and the tool says so rather than letting it be discovered.
+- **The walked system record is never invented.** Two non-empty `system.zones` or
+  `valveBoxes` lists are a CONFLICT reported for a human, not concatenated — concatenating
+  two versions of one physical system would manufacture hardware that isn't there.
+- **Refusals:** unknown property, a record merged into itself, a keeper that is in the
+  Trash or archived (merging into one would hide everything you just moved), and two
+  properties on different customers (that is a CUSTOMER merge first —
+  `--allow-different-customer` is an override, not a shortcut). None of them writes. A
+  TRASHED duplicate still merges — its linked records point at it either way.
+
+**No PASS flow touched, and by construction none can be** — this is a new script under
+`scripts/`, no route, payload, catalog or lib changed, and nothing in `stripe.js`, `pay.js`
+or any payment route moves (FLOW-23's invariant). Cover:
+`scripts/test-merge-properties.mjs` (110 assertions, in `build:check`), mutation-tested
+against five broken states — a top-level-only walk, a dropped opt-out, a rewritten
+tombstone log, concatenated zone lists, and a dry run that writes.
+
+**What still needs Patrick — not yet walked:** the tool has never been run against
+`server/data` on the live instance. Run it once without `--apply`, read the plan, then
+re-run with `--apply` while nothing else is touching the CRM (these are flat files with no
+lock; a concurrent request would be read-modify-write against the same JSON).
+
+**2026-08-29 (FLOW-30c — the fee waiver is ADMIN ONLY):** Patrick's ruling: *"Techs will have to
+reach out to admin in order to alleviate a warranty claim for free."* Waiving or restoring the
+$95 changes what the customer pays, and on a warranty work order it also decides whether a claim
+was honoured — so it is now an admin decision at the SERVER, not just a hidden button.
+
+`POST /api/work-orders/:id/service-fee-waiver` returns `"admin"` from `needsAuth()`. **The rule
+must stay ABOVE the generic `/api/work-orders` → `"user"` line — `needsAuth` returns on first
+match, so swapping the two silently hands every tech the control back.** A test pins the order
+(mutation-tested: moving it below fails the build). Same class of decision as `unlock`/`relock`,
+which were already admin-only — this makes the two consistent.
+
+Scalpel, not a lockout: a tech still reads the WO, patches notes/zones/photos, builds the on-site
+quote and takes the signature. Verified against a real tech account — GET, PATCH and
+`on-site-quote/build` all still 200; only the two waiver calls 403.
+
+UI follows the server rather than replacing it. A tech on the admin WO page still SEES the
+"Service call fee waived" banner and the whole warranty panel — they need to know the visit is
+free and what prior work it honours — but the waive offer, the Remove button and the convert
+control are hidden, replaced by a line telling them to contact the office. The role resolves
+async from `/api/session` AFTER the WO renders, so the controls default hidden (fail closed) and
+`resolveViewerRole()` re-renders them; without that re-render an admin would lose their own
+buttons.
+
+Cover: `scripts/test-warranty-claims.mjs` now 220 assertions, plus a 19-assertion live walk with
+separate admin and tech logins (including that a refused attempt leaves the waiver, the WO and
+the claim completely untouched — no phantom conversion) and a 10-assertion browser pass over both
+roles' views of the same work order.
+
+**2026-08-29 (FLOW-21b — Acceptance confirmation + the "repair quote" mislabel):** Three
+related fixes on the install side of the money path, all keyed off one new predicate,
+`quotes.isInstallationQuote()` — a project_proposal on any branch except `residential_repair`
+and `lighting_repair`. **(1) The customer now hears back when they accept.** Accepting a
+proposal previously sent the customer NOTHING — only Patrick got the alert, and only a
+deposit-enabled quote produced any customer email at all — so a homeowner who had just
+committed to a five-figure installation got silence. An installation acceptance now sends a
+confirmation naming the document, noting the deposit invoice when there is one, and saying
+we'll be in touch to schedule. Fires on BOTH acceptance paths (portal e-sign and the
+returned-signed-PDF attestation) and is best-effort, exactly like the deposit hook beside it:
+the signature is already durably written when it runs, and a send failure lands in the ledger
+as a customer-facing `stage_notice` rather than disturbing the acceptance. **Repair work is
+deliberately excluded** per Patrick — an on-site or AI repair quote is followed by the tech
+doing the work, not a scheduling conversation. **(2) The link preview said "Approve repair
+quote" for every quote type**, because `approve.html` predates proposals and carried a
+hardcoded title from when the whole quote system was the repair side of the business. Observed
+on a real send: a residential installation proposal texted to a customer previewed as a repair
+quote. The page is now served with its title rewritten from the quote's own type and branch,
+plus the Open Graph tags it never had; the static title is neutralized so even the bad-token
+fallback names no work type. Title and description carry the work type and nothing else — no
+name, address or price — because link previews are fetched and cached by Apple/Google/Meta.
+**(3) `direct_residential` is labelled "Residential Install"** (was bare "Residential", which
+read as a customer category rather than the kind of work, one row above "Residential Repair").
+The label map is now declared ONCE in `lib/quotes.js`; `quote-pdf.js` requires it and the three
+browser surfaces are pinned to it by test. Centralizing it immediately found real drift — the
+quote folder said "Renovation" where every other surface said "Renovation Coordination".
+Covered by `scripts/test-branch-labels.mjs` (61 assertions, in `build:check`) plus a live walk:
+an installation proposal and a repair proposal signed back to back produced exactly one
+confirmation attempt, for the installation, with the repair quote producing no ledger entry at
+all. **UNMAPPED — needs a walked acceptance.** No PASS flow was touched.
+
+**2026-08-29 (FLOW-21 — Quote View Tracker):** FLOW-21 is "Quote viewed → accepted" and the
+**viewed** half did not exist: nothing anywhere recorded that a customer had OPENED a quote.
+There was no `viewedAt` on the record, no open tracking, and no request log in the app — the
+only trace of a customer opening a proposal lived in Render's HTTP logs and, for FAILED phone-gate
+attempts only, in stdout. So "the customer says they approved it and we have nothing" was not
+answerable from the CRM. Opened after exactly that question came up on **Q-2026-0075**. A view
+ledger now records customer opens across all five approval surfaces and the quote folder shows
+the state on every row. **UNMAPPED — needs a walked acceptance** (see FLOW-21 in Part 4). No PASS
+flow was touched, and by construction none can be: view tracking writes to its OWN file and never
+to `quotes.json` (see the note below on why that separation is the whole safety argument).
+
+**2026-08-29 (FLOW-30b — Approved claim → repair work order → the warranty escape hatch):**
+Follow-up to FLOW-30. Approving a claim now RAISES the repair work order in the same action, and
+a warranty visit that turns out not to be covered can be converted to a chargeable service call
+on site. Two claim statuses added (`approved`, `converted`), taking the enum to ten.
+
+**Confirmation of the pre-existing workflow (asked for explicitly, checked before building).**
+The transition was already supported by the work-order model; nothing about it had to be
+redesigned:
+
+- `serviceFeeWaiver` with reason `warranty` already existed (`lib/service-fee-waiver.js`) and
+  already rendered to the customer as "Service call fee — WAIVED (Warranty visit)" via
+  `lib/issue-rollup.js` — a $0 line, so the credit is VISIBLE rather than the fee silently
+  vanishing.
+- `POST /api/work-orders/:id/service-fee-waiver` with `{ waived: false }` already restored the
+  $95 line from `pricing.json`, recomputed totals and appended WO history.
+- `serviceFeeWaiver` was already in `SCOPE_PROTECTED_FIELDS`, so it freezes at signature
+  (`wo.locked`) and is freely changeable before it — which IS the on-site window the conversion
+  needs. After signature the documented route back is `unlockWorkOrder()` (reason required,
+  signature record preserved).
+- The customer signature was already required independently: `POST /on-site-quote/accept`
+  refuses without customerName + a drawn image + acknowledgement, so converted (now chargeable)
+  work cannot be accepted unsigned.
+
+**What was missing, and is now built:** there was no way to raise a WO from a claim at all; a WO
+carried no warranty provenance, so a tech on site could not see which prior job was being
+honoured; lifting a waiver required NO reason and told the claim NOTHING — a claim would have sat
+at "approved, free repair" while the visit was invoiced. That last one was the audit hole.
+
+- `wo.warrantyClaim` added — `{ claimId, claimedInvoiceId, claimedWorkOrderId, summary,
+  approvedBy, approvedAt, converted }`. In `blank()`, `hydrate()`, `create()`, `update()` and
+  `SCOPE_PROTECTED_FIELDS`. `converted` is ADDED alongside the approval, never replacing it: the
+  pair is the audit trail.
+- `POST /api/warranty-claims/:id/approve` — creates the `service_visit` with the warranty waiver
+  and provenance, seeds the diagnosis from the customer's own words, links the WO to the claim,
+  and emails the customer. Refuses a second WO (409) and refuses with no linked property (422).
+- The conversion rides the EXISTING fee-waiver route rather than a parallel one, so there is one
+  code path for the money. On a WO with live warranty provenance, removing the waiver requires a
+  ≥10-char reason, stamps `converted`, moves the claim to `converted`, and emails the customer
+  the reason. The claim write-back happens AFTER the WO update so the money change is durable
+  first; a failed write-back is logged loudly and surfaced in the admin UI.
+- `converted` is terminal and NOT disputable — the customer authorised and signed on site.
+  `approved` is deliberately OPEN, so an accepted-but-unrepaired claim stays in the queue and the
+  reminder counts.
+- Surfaces: green "Warranty repair — no charge" panel on the admin WO (with the convert control)
+  and on the tech UI (read-only — lifting a customer's waiver is a desk decision against the full
+  claim, not a tap in a driveway; the tech is told to call the office). Both flip amber once
+  converted, and the tech's copy then says the customer must sign.
+- One UI defect found and fixed while walking it: the pre-existing "Remove" button on the waiver
+  banner gave a SECOND path to lifting the waiver, and on a warranty WO it would 422 and print
+  its error into the collapsed waiver form — an invisible error that reads as a dead button. It
+  is now hidden on a live warranty WO, and a refused fee change falls back to an alert when its
+  panel isn't visible.
+
+**No PASS flow touched.** Additive fields and new routes only. `lib/warranty.js` (the policy)
+stays read-only to the claim flow, and nothing in `stripe.js`, `pay.js` or any payment route
+moves (FLOW-23's invariant). Cover: `scripts/test-warranty-claims.mjs` now 209 assertions
+(mutation-tested against nine broken states), plus a live-server walk of the approve → quote →
+convert → sign → lock → unlock cycle (63 assertions across two phases, including that the
+subtotal rises by exactly the restored $95 and the repair lines are left untouched) and an
+18-assertion headless-Chromium pass over the admin and tech surfaces.
+
+**Still UNMAPPED, same reason as FLOW-30:** no email in this flow has been sent through live
+Gmail, and no one has walked a real warranty visit end to end on a phone in the field.
+
+**2026-08-29 (FLOW-30 — Warranty claims):** The "File a warranty claim" button on
+`warranty.html` pointed at `contact.html`, which is the general contact form — a warranty claim
+arrived as an ordinary lead with no invoice reference, no evidence, no claim number and no queue.
+FLOW-30 opened: a dedicated intake (`warranty-claim.html`), a claim store with Patrick's
+`YYYY-MM-DD-000YYYYNNNN` numbering, a customer status page, a CRM queue and per-claim tool, and
+the deny → dispute round trip. **UNMAPPED — needs a walked acceptance** (see FLOW-30 in Part 4
+for exactly what is unproven: every send in this flow has been exercised against builders and
+routes but never against live Gmail). **No PASS flow was touched** — all new paths, new libs and
+new pages; no existing route, payload shape or catalog changed, and nothing in `stripe.js`,
+`pay.js` or any payment route moves (FLOW-23's invariant). The one edit to an existing customer
+surface is additive: `portalPayloadForLead()` and the property-portal payload each gained a
+`warrantyClaims` array, and `nav-badges.js` gained a third badge fetch. `lib/warranty.js` (the
+warranty POLICY) is **read-only** here — the claim flow consumes `warrantyForWorkOrder()` and
+never redefines a term. Cover: `scripts/test-warranty-claims.mjs` (138 assertions, in
+`build:check`, mutation-tested against four broken states), plus a headless-Chromium pass over
+all four new pages at 1280px and 390px and a 101-assertion live-server walk of the HTTP surface.
+
+**2026-08-27 (Stale CRM assets):** Follow-up to CRM-16, found on Patrick's first live
+attempt. The fix deployed and the delete still refused: CRM **HTML** is `no-store` but
+`/crm/*.js` was `public, max-age=30` with no validators, so the page paired fresh markup
+with a cached `customer.js` that had no branch for the new 409 and printed its raw text
+instead of raising the confirm — the "old JS against new HTML" class documented up and down
+`tech-sw.js`, now hit on the desktop CRM. `serveStatic` serves `/crm/*.js` and `/crm/*.css`
+`no-cache` (revalidate every load; ~40–90 KB files, internal users only), `customer.js`
+carries a `?v=2` buster for copies already cached, and a confirmed delete that comes back
+refused now says the confirmation didn't reach the server rather than repeating it.
+`tech-sw.js` keeps `no-store`; public-site assets keep `max-age=30`; the service worker's
+own versioned precache is untouched.
+
+**2026-08-27 (CRM index sorting):** The customers and properties indexes gained a sort
+control — name/customer A–Z and Z–A, town A–Z and Z–A, plus the customers list's previous
+recently-active order, kept as an option. **Both now default to alphabetical:** the indexes
+are read as directories ("where is Vivian G"), and recency only helps when you already know
+someone was touched lately. The choice is remembered per page in localStorage. Town is
+DERIVED, not stored — properties carry one free-text `address`, so `lib/format.js`
+`townFromAddress()` reads it and `/api/properties` + `/api/customers` decorate their
+payloads (`town`, and `towns` on a customer, whose towns come from their properties since
+a customer has no address of their own — Hard Rule #10). Additive response fields only; no
+existing field changed meaning and no PASS flow is touched. `townFromAddress` splits on
+commas rather than reusing `parseCanadianAddress`'s street-suffix split, which knows "St"
+and "Blvd" but not "Rue", "Gate", "Grove" or "Green" — those addresses came back with no
+town at all. An address it can't read sorts under "no town" rather than guessing. Cover:
+`scripts/test-crm-sorting.mjs` (58 assertions, in `build:check`), plus a headless-Chromium
+walk of both pages (default order, every sort option, persistence across reload, sort with
+an active search, and 390px with no horizontal overflow).
+
+**2026-08-27 (AI chat transcripts — conversation read-back):** Read-side only. A chat is
+stored by `js/chat-widget.js` `buildTranscript()` as ONE flat string — `Customer: …` /
+`Patrick (AI): …` turns joined by a blank line — and both CRM surfaces printed that string
+straight out (`/admin/chats` into a pre-wrap div capped at 480px, the lead drawer into a
+`<pre>` capped at 360px), so a real conversation came back as one undifferentiated block.
+`server/crm-transcript.js` + `crm-transcript.css` now parse the string back into speaker
+turns and render them as bubbles on both surfaces; the scroll portholes are gone, an open
+transcript reads top to bottom. **The stored format is untouched** — nothing about the POST
+upsert, `normalizeTranscriptBody`, or what the widget writes moves, and a transcript with no
+recognisable labels falls back to its raw text behind a "Plain text" toggle rather than
+being guessed at. The one backend change is the *content* of the dashboard's `preview`
+field: every transcript opens with the widget's two scripted AI greetings, which are longer
+than the 240-char preview budget, so a head-of-string slice gave every row in the list an
+identical, useless line; `chatPreview()` now previews the first thing the **customer** said.
+That field is read by `server/chats.js` and nothing else. Two client-side defects fixed
+alongside: the 60s dashboard poll rebuilt the list and snapped any open transcript shut
+mid-read (open rows are remembered, and an unchanged poll skips the redraw entirely), and
+transcript HTML is escaped with `javascript:` links refused. **No PASS flow was touched** —
+no route, payload shape, or catalog change; FLOW-09 / FLOW-25 (AI diagnostic) are UNMAPPED
+and their hop chain is not involved, since this changes only how an already-stored
+transcript is displayed. Cover: `scripts/test-chat-transcript-view.mjs` (64 assertions, in
+`build:check`), plus a headless-Chromium pass over both surfaces. **Not walked:** Patrick
+has not yet read a live transcript through the new layout.
+
+**2026-08-28 (CRM-17 — pinned summary on a phone):** The customer profile's map pins
+painted on top of the Delete button and through the danger-zone text on mobile.
+`.customer-summary` is `position: sticky` so that on DESKTOP it stays in view beside a long
+tab column. The profile grid collapses to one column at 800px, but the summary stayed
+sticky — and stacked on a phone it is ~1760px tall against an ~840px viewport, so the
+browser pinned a box taller than the screen and everything below it (properties, bookings,
+work orders) scrolled straight through it. The pins were only the visible edge; the whole
+tab column was sliding over the summary card. Un-stuck at the same 800px breakpoint as the
+grid collapse. **The override has to sit AFTER the rule it overrides** — both are plain
+class selectors of equal specificity, so source order decides; the first attempt put it in
+the earlier media block and `position: sticky` simply won, rendering exactly as broken with
+the fix "in". Verified in headless Chromium at 390 / 430 / 768 / 1280: summary and tabs
+stack with no overlap, no address-over-control collision at any scroll position, no
+horizontal overflow, and desktop keeps its sticky sidebar. **A sweep of all 23 CRM pages at
+390px found no other element sticky-and-taller-than-the-viewport** — this was the only one.
+Cover: `scripts/test-crm-mobile-layout.mjs` (7 assertions, in `build:check`) — source-level
+by design, since proving geometry needs a browser and a booted server and `build:check` is
+node-only (same call as CRM-15). It pins the override's existence, its position after the
+base rule, and that its breakpoint equals the grid-collapse breakpoint; mutation-tested
+against all three broken states, including the losing-source-order one.
+
+**2026-08-28 (CRM-18 — Customers / Properties index cleanup):** Both indexes were a stack
+of separately-bordered cards with no column headers and `fr`-sized columns, so on a wide
+screen the name column stretched and left the email stranded mid-row; at 20+ records it
+read as stripes rather than a list ("this looks so messy"). Rebuilt on one shared data-table
+primitive — `.crm-table` in `crm.css` — the pattern the trade CRMs use: one surface, a
+header row naming the columns, hairline dividers, content-sized columns. **The header row
+and the data rows are separate grids that read ONE column template** (`--crm-cols`, set per
+page), so they cannot drift; `scripts/test-crm-table.mjs` pins that parity because a
+mismatch shifts every value one column off its heading and reads as a glitch, not a typo.
+Customers: CUSTOMER / EMAIL / PHONE / TOWN / STATUS, email and phone split into their own
+columns. Properties: CUSTOMER / ADDRESS / TOWN / ZONES / VALVES / VISITS, the three counts
+as numeric columns instead of a "0 zones · 0 valve boxes · 0 bookings" sentence per card.
+Town is plain text in both (a chip beside the status pill made every row two competing
+badges) and the status pill is tinted rather than solid inside the table. **Two defects
+found while building it, both fixed:** search didn't cover town, so typing "King" against a
+visible King City column returned nothing; and in the properties Select mode the address's
+map affordance swallowed clicks meant to tick the row. ~150 lines of now-dead card CSS
+removed — stale layout rules are what sent the CRM-17 fix to the wrong place. Verified in
+headless Chromium: 18 interaction checks (header/row alignment on every row, row-click
+navigation, bulk bar, select-all, legacy Select mode, the bulk-selection toolbar's injected
+checkbox, sort, search, maps affordance) plus 1440px and 390px renders of both pages with
+no JS errors and no horizontal overflow. No API, route or payload change — presentation
+only, no PASS flow touched.
+
+**2026-08-31 (CRM-20 — dark-ground text wearing the body's near-black):** Patrick reported
+two places where text was rendering too dark to read against a dark background: the
+work-order page's completion banner ("Visit bypass-locked and completed." plus the draft-invoice
+line) and the assignment-messages test-send toast ("Test sent to ... Saved wording was used.").
+Both are **one root cause.** crm.css carries two blanket rules over the whole admin shell —
+`.pjl-crm-body p { color: var(--pjl-text-mid) }` and `.pjl-crm-body a { color: inherit }` — each
+at specificity (0,1,1). A component that paints a dark pill and sets `color: #fff` on a single
+class is (0,1,0), so the blanket wins; and a component that sets the colour on a WRAPPER and
+expects its children to inherit loses too, because an inherited value is beaten by ANY rule
+matching the child directly. Measured in headless Chromium against the real stylesheets, both
+reported fixtures came out **#4A4A4A on #1B4D2E — 1.10:1**, and are now **9.78:1**. A sweep of
+all 38 CRM pages found **three more of the same shape**, all likewise #1A1A1A on a dark pill:
+`settings.html` `.settings-save` (the CSV-export and Connect-to-QuickBooks links — the
+`<button>` instances were always fine, only the `<a>` ones broke), `work-order.html`
+`.wo-tech-mode-btn`, and `warranty-claim.html` `.wcd-status-link` (1.78–1.99:1, now 9.78 /
+8.74:1). Each is fixed by scoping the component's own rule to `.pjl-crm-body` (0,2,0) so the
+component wins its own colour back; the banner's two text lines re-assert `color: inherit`
+above the blanket, which restores the four state rules as the banner's single source of truth
+— the other three states had silently lost their tints to the same grey. `scripts/test-crm-contrast.mjs`
+(20 assertions, in `build:check`) computes selector specificity rather than reading
+declarations, because this bug's whole character is that the source looks right and only the
+resolved cascade is wrong; it was confirmed to FAIL on the pre-fix CSS before being kept.
+**Not changed, reported instead:** five white-on-amber controls (`#E07B24`, 2.99:1 — "Send to
+customer", "Complete project", "End session") are below AA, but that is the brand amber and a
+design decision rather than a defect. CSS only — no API, route, payload or template change; no
+PASS flow touched.
+
+**2026-08-31 (CRM-21 — muted text too light to read comfortably):** the second half of what
+Patrick reported. Separate from CRM-20's dark-on-dark: this text was visible but straining —
+muted labels, table headings, hint lines and stat captions. The CRM had drifted into **seven
+spellings of "muted grey"** (`#7A7A72`, `#777`, `#888`, `#9A9A90`, `#9A9A92`, `#9A9A8E`,
+`#8A8A80`), plus two green-greys (`#8FA093`, `#6B756E`) and an amber pill (`#8A6D3B`). **None
+of the greys cleared 4.5:1 on a white card** — the worst, `#8FA093` on the review-requests
+table headings, read at **2.40:1**; the shared `--pjl-text-muted` token at **3.77:1**. They are
+collapsed onto **three** deliberate values: `--pjl-text-muted: #6B6B63` (4.69:1 worst case),
+the green-grey `#616D64` (4.72:1), and the amber pill text `#7E6234` (4.97:1) — each solved
+against every light surface the shell actually paints (white, cream `#FAFAF5`, panel `#F4F2EC`,
+green-pale `#EAF3DE`, amber-pale `#FDF0E4`, pill `#F4EFE4`), not just white. 265 colour
+declarations across 31 stylesheets and 14 HTML/JS files. **Only `color:` declarations were
+rewritten** — `schedule.css` still paints a swatch background with `#7A7A72`, which has no
+contrast floor to meet. `pay.css` and `portal.css` carry the customer's own copy of the token
+under a different name and were moved in step, since letting them drift is how one grey became
+three. **Two boundaries drawn deliberately.** (a) `#555` (7.46:1) and `#666` (5.74:1) already
+clear the floor and are UNTOUCHED — an over-broad first pass swept them in with the rest and
+made that text *lighter*, the opposite of the fix; it was reverted before it was committed,
+and the guard's retired list now spells out why they are absent. (b) The greys inside
+`server.js` are customer EMAIL templates, a different surface from the admin portal Patrick
+reported, so they were reverted too and are left for a separate decision. `unsubscribe.html`'s
+footer note (`#999`, 2.85:1) IS fixed — it is a real page, not an email. **Measurement method changed, and it mattered:** the first sweep reasoned about
+backgrounds from `getComputedStyle` and produced **1146 findings, ~1000 of them phantom** —
+it read only `backgroundColor`, so the sidebar's `linear-gradient` looked transparent and
+every nav link scored white-on-white; averaging gradient stops then mis-scored translucent
+overlays; and boxes measured before the blocked webfont settled described a layout the
+screenshot no longer showed. The method that holds: **render the page, hide the text, and read
+the pixel actually painted behind it.** That gives 56 real findings, now 0.
+`scripts/test-crm-contrast.mjs` grows to 30 assertions — it computes the ratios rather than
+describing them, and its retired-grey guard caught 15 inline `style=` and `<style>` usages in
+HTML that the stylesheet pass had missed. CSS/markup only — no API, route, payload or template
+change; no PASS flow touched.
+
+**2026-08-31 (CRM-22 — the components the sweep could not see):** Patrick pushed back that more
+had been missed, and he was right. **The CRM-21 verification had a structural blind spot:** the
+rendered sweep measured only what was on screen at page load and *deliberately skipped `[hidden]`
+elements* — so every toast, modal, status pill, badge, chip and dropdown in the CRM was never
+measured. That is most of the app's state-carrying UI. The earlier claim of "five white-on-amber
+controls" came from that sweep and was wrong; the real number is 22.
+**The check that sees them doesn't render at all:** any rule declaring BOTH a background and a text
+colour carries its own contrast and can be audited from source, visible or not. Over every
+stylesheet and every inline `<style>`, that found **41 components below 4.5:1**. **19 are fixed
+here**, each darkened against *its own* ground with hue preserved so the semantic colour coding
+survives — booked stays green (3.95→4.59), install blue (4.28→4.61), consult purple (4.32→4.61),
+repair amber (2.63→4.61); calendar other-month days were **1.65:1**, chat status pills 2.94 and
+3.73, the portal's danger button 3.79, `.tech-signoff-submit[data-blocked]` 2.99 (amber as INK
+needs to be darker than amber as a FILL — new `--tech-amber-ink: #B0611C` records why).
+**Correction to CRM-21:** that entry called `schedule.css`'s `#7A7A72` "a swatch background with no
+contrast floor to meet." Wrong — it is `.event-cancelled-pill`, which carries white text, and it
+was 4.33:1. Now 4.58:1. **22 white-on-brand-amber buttons are NOT changed** — the fix is a visible
+identity change either way (dark text on the same amber, or a darker amber under white text), so it
+is Patrick's call; the suite allowlists them explicitly, by value, so they stay visible and the
+count can only go down. `scripts/test-crm-contrast.mjs` grows to 32 assertions and now audits the
+whole class rather than named fixtures. **Known residual limit:** the source audit only sees rules
+declaring both colours; text that inherits its ground from an ancestor still needs rendering, and
+rendering still cannot see hidden elements — neither method alone is complete, and the two are
+run together. Method note: an over-broad search-and-replace had to be reverted a third time (it
+caught borders and a pill background), so the fixes here are spliced inside each rule's own braces.
+CSS/markup only — no API, route, payload or template change; no PASS flow touched.
+
+**2026-09-02 (DOC-01 — one naming rule for every customer-facing document):** Patrick asked for
+this on 2026-08-21 alongside the invoice work-order-report attachment; it was agreed and then
+overlooked. Verified missing on `eb66c32` before starting — `format.js` exported no naming helper
+and all 26 download sites still named themselves: `I-2026-0065.pdf`, `Q-2026-0007.pdf`,
+`PJL-Service-Report-WO-2026-0100-2026-08-21.pdf`, `${po.id}.csv`. Now
+`2026-08-21 - I-2026-0065 Invoice - Kristen Holmes - 90 Oriole Dr.pdf`: date on the document, what
+it is, who it is for, which address. One helper (`format.js documentFilename`) behind
+`invoiceFilename` / `invoiceLetterFilename` / `quoteFilename` (server.js), `reportFilename`
+(wo-report-pdf.js) and `invoiceAttachmentName` (notify-customer.js).
+**Scope: the three customer-facing types only** — invoice, service/inspection report, quote.
+Supplier documents (PO, RFQ and their CSVs) keep their id names deliberately, not by omission: a
+supplier files by PO number, not by our customer's address. **Three rules, each a silent failure
+mode.** (1) *The date is the document's, never the clock* — invoice issue date (`sentAt ||
+createdAt`), report visit date (`arrivedAt || scheduledFor || createdAt`), quote sent date. The
+old `reportFilename` had a `|| new Date()` tail; it is gone, so a WO with no dates yields a name
+WITHOUT a date rather than one stamped today. Re-downloading an August invoice in December must
+still say August, and the drift would be invisible unless you compared two copies. (2) *Accents
+survive the wire* — `contentDisposition()` emits BOTH `filename="…"` (accents folded to base
+letters, ASCII as the RFC requires) and `filename*=UTF-8''…` (RFC 5987); modern clients take the
+second, older ones the first. (3) *Storage is untouched* — frozen quotes and report snapshots stay
+on disk as `<id>.pdf`, looked up and sha256'd by that path; only the DISPLAY name follows the
+convention, and the suite guards `path.join(dir, \`${snapshotId}.pdf\`)` directly. A stored
+snapshot's own `filename` field is likewise never rewritten — the download name is recomputed from
+the work order at serve time, so reports frozen before this convention come down under it while the
+record keeps saying what it said. **Street address only:** `parseCanadianAddress().streetAddress`
+splits a single line on a street-SUFFIX list, so "Rue", "Gate" and a highway address left the town
+glued on ("8 Rue Principale, Montréal"); splitting on the first comma instead fixes those and
+breaks "Unit 4, 17 Elm St, King City" down to "Unit 4". `streetLine()` takes the parser's answer
+and drops a trailing segment unless the leading one is a unit designator — both shapes covered by
+the suite. **PASS flow touched, deliberately and narrowly:** the invoice PDF attached to the
+PAYMENT RECEIPT (`sendPaymentReceipt`, FLOW-23 **PASS**) is the same document as the invoice email's
+and now shares its name. Only the filename string changed; no payment route, `stripe.js`, `pay.js`,
+`finalizeStripeInvoicePayment` or ledger path was edited, and none of the seven HANDOFF_STRIPE_PAYMENTS
+§6 invariants concerns an attachment name. This follows the JOB-008 precedent exactly (that change
+also touched `sendPaymentReceipt` alone), so **FLOW-23 carries the pending-recheck flag until the
+next real payment** — receipt arrives, ledger shows `receipt ok`, and the attachment is named by the
+convention. **FLOW-22's own invariant re-asserted, not weakened:** `test-invoice-letter.mjs`'s "the
+invoice PDF is always the first attachment" guard matched the old literal; it now matches
+`invoiceAttachmentName(invoice)` and still pins the invoice ahead of the letter and the report.
+**Live walk on a sandboxed server** (isolated data dir, seeded user, accented customer "Renée
+Côté"): `GET /api/invoices/:id/pdf` → `inline; filename="2026-09-02 - I-2026-0003 Invoice - Renee
+Cote - 90 Oriole Dr.pdf"; filename*=UTF-8''…Ren%C3%A9e%20C%C3%B4t%C3%A9…`, `?download=1` → the same
+name as `attachment`, `letter.pdf` → `… Letter …`, all 200 with real PDF bytes; decoding the
+RFC 5987 parameter yields the accented name a browser saves. `scripts/test-document-filenames.mjs`
+(45 assertions, in `build:check`) was confirmed to FAIL on a reintroduced clock fallback and on the
+receipt attachment reverted to a bare id before being kept. **A scope bug was found and fixed
+mid-change:** hoisting the download name to the snapshot-serve header referenced `wo`/`mode` from
+inside an `if` block on one route and from a handler that has neither on another — a ReferenceError
+on every snapshot download, invisible to `node --check`. Both fixed and re-read. Presentation only:
+no API, route, payload, schema or PDF-content change.
+
+**2026-08-28 (CRM-19 — the rest of the record lists):** Bookings, Work orders, Projects,
+Material lists and Suppliers rebuilt on the same `.crm-table` primitive as CRM-18. Invoices
+was already a real table and is untouched. Each page sets its own `--crm-cols`; the guard in
+`scripts/test-crm-table.mjs` now covers all seven (58 assertions). **Three alignment traps
+found and fixed, all the same shape — the header and the rows are SEPARATE grids, so any
+track whose width depends on content resolves differently in each:** `max-content` on the
+status column sized the header to the word "STATUS" and the rows to "Awaiting approval";
+`auto` on the work-order action column collapsed in the header while expanding in the rows
+the moment a recovery filter rendered a button, shifting all seven columns by up to 73px;
+and `border-left: 3px` on `.ml-card.is-stuck` moved every cell in a stuck row 3px right.
+Only fixed and `fr` tracks resolve identically in both grids — recorded in the CSS. Where a
+table genuinely cannot fit, both grids take the same `--crm-min` floor so it scrolls in
+lockstep rather than clipping. **One deliberate information change:** the work-order list
+drops its Address column and its truncated diagnosis line; the address moves under the type,
+which is the more useful of the two for identifying a job in a list, and the full diagnosis
+stays on the detail page. Verified in headless Chromium: column alignment measured on every
+row of every list including both recovery filters, row-click navigation, Select mode, the
+bulk-selection checkbox, in-place supplier actions, and 390px with no horizontal overflow on
+any of the five. No API, route or payload change; no PASS flow touched.
+
+**2026-08-31 (Work-order report on the invoice email):** The invoice can now carry the
+visit's service/inspection report as a third attachment, alongside the accompanying letter.
+Built on the letter's architecture because Patrick asked for it by that comparison:
+`invoice.woReport = { enabled, woId, snapshotId }`, a card above the letter on
+`/admin/invoice/:id`, and one more entry in `extraAttachments`. **Send order is invoice →
+report → letter**, Patrick's call. **Off unless ticked**, and a tick with no snapshot behind
+it does not count as on — that pairing would send an invoice believed to carry a report that
+carries nothing. **The CUSTOMER render is attached, never the internal one** (the internal
+copy carries notes that were never meant to leave the office), and it is the FROZEN snapshot
+rather than a fresh render, so the copy on the invoice email is byte-identical to the one the
+customer received at completion. A ticked report whose snapshot has gone missing warns rather
+than sending silently short. The picker labels each copy by the date ON the report — the
+visit — not by when the snapshot was frozen; those differ whenever a snapshot is taken after
+the fact. `GET /api/invoices/:id/wo-reports` lists the candidates; the existing admin
+snapshot route gained `?audience=customer` so "preview the customer's copy" shows what will
+actually be sent (default unchanged, so every existing caller is untouched). A manual invoice
+with no work order says so instead of showing a dead control. Attachment does not lock at
+send — a resend can carry a report the first send didn't — but void refuses, matching the
+letter. Cover: `scripts/test-invoice-wo-report.mjs` (21 assertions, in `build:check`) plus a
+headless-Chromium walk: off by default, tick saves itself, the record holds it, the preview
+serves a real customer-render PDF, untick remembers the choice, and the manual-invoice case.
+No PASS flow touched — FLOW-23's payment path is untouched and the invoice PDF itself is
+unchanged.
+
+**2026-08-26 (Unwanted page scrolls):** Client-side only. `scrollIntoView({ block:
+"start" | "center" })` moves the page even when the target is already fully visible, so
+`/book.html`'s step advances and both work-order pages' tap-to-jump handlers lurched on
+content that was already on screen — worst on a phone, where the throw is most of a screen
+height. Five call sites now go through a `revealIfOffscreen()` guard (`js/booking.js`,
+`server/work-order.js`, `server/work-order-tech.js`). **FLOW-03 is PASS and its hop chain
+is untouched** — no route, payload, or catalog change; the booking step machine still
+advances service → zones → address → when, re-verified by scroll measurement at 390x700
+and 1440x900, not by a walked booking. If the PASS stamp is to carry a walked date, that
+walk is still Patrick's to make.
+**2026-08-26 (Season config + fall 2026 dates):** The fall season window was hardcoded in
+`server/lib/outreach.js` as Sep 1 – **Dec 15**; the real fall 2026 season ends **Nov 6**
+(hard frost). The last 39 days were not serviceable, so `deriveBookingState` counted
+Nov 7 – Dec 15 appointments as "booked for fall" and `/admin/outreach` classified its
+Booked / Not-booked rows on them. Dates now live in **`seasons.json`** at the repo root,
+read through **`server/lib/seasons.js`**, so the seasonal gate planned for
+`availability.js` reads one source instead of a second copy that drifts. **Production
+audit before the change: 42 bookings, 0 in the Nov 7 – Dec 15 window — no customer was
+reclassified.** Comparison logic, inclusivity (both ends), eligibility semantics
+(`fallClosing !== false`), copy, and send behaviour are all unchanged. A year with no
+block in `seasons.json` inherits year-agnostic defaults, and **those default fall to the
+Nov 6 frost stop, not the old Dec 15** — an unplanned year inherits a safe date rather
+than a known-wrong one, so fall 2027 cannot silently reacquire this defect while waiting
+to be planned. Spring's defaults are its long-standing Mar 1 – Jun 30, unchanged. **One deliberate behaviour
+change, recorded under FLOW-28 below:** `seasonForBooking()` reads the same window, so
+between Nov 7 and Dec 15 the portal CTA now offers the coming Spring Opening instead of a
+Fall Closing that cannot be performed. **No PASS flow was touched** — no route, payload,
+or catalog change, and the CTA that moved is FLOW-28's (UNMAPPED). `publicBookingThrough`
+(fall 2026: Oct 30) is defined in the config for the future gate and is deliberately
+consumed by nothing, pinned by a source guard. Cover:
+`scripts/test-season-config.mjs` (66 assertions, in `build:check`).
+**2026-09-03 (Season Plan review: bookings visible, any-date moves, bigger maps):** Patrick,
+against the Sept 10 blast: "the maps are miniture, it only shows day which have bookings
+[planned], and any new bookings you cannot see on the map... I cannot change individual
+customers bookings. Ive had requests to keep the closings to the very end of the year."
+Three changes, all scoped to the review screen and the plan store:
+(1) **Real bookings join the review.** `resolveSeasonPlan` now attaches every active booking
+in the season window (fall: Aug–Dec of the plan year) to its day — on a planned day as an
+amber "Booked appointments" group in the panel and amber "B" pins on the map, DEDUPED against
+the plan stop it fulfils (post-blast, an assignment booking and its plan stop are one row,
+not two); a date the plan never routed (the Oct 1 ad customer) becomes its own "Booked day"
+card with pins and no route line. Bookings never enter the sequencer's timeline or the
+day's stop counts — they carry their own promised bucket. Rows link to
+/admin/property/<id> (or /admin/customer/<leadId>) where the actual reschedule control lives.
+(2) **"Any other date…" on every stop's Move menu.** `seasonPlans.moveStop` now GROWS a new,
+empty route day when the target date is not in the plan (it used to refuse), so an
+end-of-November request is one dropdown + one date pick; the new day then behaves like any
+other — geo shape, Assign, writer, resequence. New `scripts/test-season-plan-moves.mjs`
+(13 assertions, in `build:check`): creates the day exactly once, stop leaves its source,
+existing-day moves unchanged, impossible dates and unknown codes still refused with no
+orphan day, re-save keeps the hand-grown day.
+(3) **Maps are maps again.** `.sp-daybody` height 400px → clamp(480px, 62vh, 720px); mobile
+340px. **No PASS flow's code touched**: FLOW-03's engine and endpoints unchanged (a
+hand-created plan day reaching the geo shapes is the same mechanism as any plan day);
+resolveSeasonPlan feeds only this screen's endpoints. **Needs Patrick's walk:** the Oct 1
+booking shows as a "Booked day" card; move one stop to a late-November date and see the new
+day appear; maps readable without squinting.
+
+**2026-09-02 (The call-out shows right away, whatever month is on screen):** Patrick, after
+merging the loud stars: "itll only display this if they are on the exact same Month as the
+booking is, we should populate this right away... at the top of the page." Correct read — the
+banner was scoped to the visible month, so a September visitor whose best day is Oct 5 saw
+nothing until they paged forward. Now the picker fires ONE background look-ahead fetch
+(today → +90 days, inside the endpoint's existing 120-day cap) after the first month loads,
+merges those day rows without overwriting month data, and the call-out names the single best
+day across everything loaded (cheapest added drive, earliest date breaking ties) the moment
+the page settles. The banner also grew a jump button — "★ Take me to Monday, October 5" when
+that day is off-screen, "★ Pick Monday, October 5" when in view — which navigates the
+calendar to that month, selects the day, and opens its time buckets in one tap. Copy
+rewritten to Patrick's pitch, customer-voiced: "Our crew is already booked near your address
+on {day}. Choose that day and we'll be right around the corner — one tight route through your
+neighbourhood means an on-time arrival and the smoothest visit for you." Still hidden
+entirely for addresses with no starred day anywhere. FLOW-03 surface, client-side only: the
+look-ahead is a second GET to the same /api/booking/availability contract (from/to already
+supported and capped server-side); no server change, engine untouched, suites green. Verified
+in headless Chromium: September view with stars only in October shows the banner immediately;
+the jump lands on October with Oct 5 selected and buckets open.
+
+**2026-09-02 (Best-day stars get loud):** Patrick on the shipped stars: "This isn't big enough
+to make a customer realize, it should be a very big star, and a big call out." Display-only
+follow-up, no server change. The starred day cell now fills with the amber gradient the booking
+button already wears — big white ★ stacked above the date, white bold number — instead of a
+thin ring and corner star; a selected starred day flips to the solid selection green (star
+kept). The small legend line under the grid is replaced by a call-out banner ABOVE the grid:
+amber-bordered box, 34px star, "WE'RE ALREADY IN YOUR NEIGHBOURHOOD!" headline, and a body line
+that NAMES the customer's top pick ("Monday, September 14 is the top pick" — cheapest added
+drive among the month's starred days, earliest date breaking ties), still hidden whenever no
+starred day is visible in the month. FLOW-03 surface, presentation only: `renderGrid` reads the
+same `recommended`/`addedDriveMinutes` keys #121 added; no request, payload, or engine change —
+geo/booking suites unchanged and green. Verified in headless Chromium against the real
+stylesheet at 375px and 720px: banner, amber cells, selected-state precedence (a hover-beats-
+selected specificity bug was caught and fixed in the same pass: the hover rule now excludes
+`.is-selected`).
+
+**2026-09-02 (Customer best-day stars on the public picker):** Patrick, closing the loop on the
+probe's "Best days for this address": "we never suggest to customers the best possible day for
+them to book. Can we build that too?" The engine already prices every offered day for the
+geography gate (`addedDriveMinutes` on each slot — until now admin-facing only); new pure
+`availability.recommendDays(days, {max:3})` ranks the day rows by that cost and marks the top
+three `recommended: true`. **Only days that HAVE a cost qualify** — a day with an existing
+route or booking nearby is genuinely cheap for the customer's neighbourhood; a day with no
+shape at all (nothing scheduled) costs a dedicated trip and gets NO star, so an empty calendar
+never fakes popularity. `/api/booking/availability` calls it after composing day rows; the
+shared time-picker paints starred days (amber ★ + amber ring on the cell,
+title/aria "Best day for your address") and shows a one-line legend ("our crew is already
+scheduled in your neighbourhood") only when a starred day is visible in the month.
+**FLOW-03 IS PASS AND WAS TOUCHED — additively:** `listAvailableSlots` unchanged, no day
+added or removed, no route/payload field removed; day rows gain optional
+`recommended`/`addedDriveMinutes` keys, and admin callers of the same endpoint simply ignore
+them. Engine re-verified: test-geo-availability grows to 42 (+7: through the REAL engine the
+Mississauga caller's booking-made day and planned west day are both starred with the booked
+day at least as cheap, an empty day is offered but never starred, a suppressed day row is
+untouched; in isolation the three-cheapest cap, in-place annotation, and empty/slotless-input
+safety). **Needs Patrick's walk:** open /book.html with a real address whose neighbourhood has
+a routed day — that day shows the ★ and the legend line; a remote address shows plain days
+and no legend.
+
+**2026-09-02 (Day-before reminder for self-booked + add-to-calendar):** two customer-facing
+additions on Patrick's ask. (1) **Self-booked appointments now get a day-before reminder** —
+assignment customers had the cadence's step 6, ad customers had nothing. New
+`lib/booking-reminders.js` sweep (boot + 5 min in server.js), borrowing the cadence's hard-won
+rules: mark-BEFORE-send (`bookings.markReminderSent`), once ever, 09:00–18:00 Toronto window,
+missed days stay missed, ASSIGNMENT bookings excluded so nobody is texted twice. Posture is
+transactional (it is about their own appointment, so seasonal-marketing opt-outs don't block it
+— same rule as booking confirmations), but decision I's "no need to contact" tick and archived
+properties DO block it. Delivery rides notify-customer's new `day_before` template through
+`notifyCustomer()`, so it wears the same brand frame, spouse-recipient logic, and
+bucket-not-exact-time rule as every notice. (2) **"Add it to your calendar"** — new pure
+`lib/calendar-links.js` (Google/Outlook prefilled-compose URLs + single-VEVENT `.ics` for Apple
+and the rest). THE EVENT CARRIES THE BUCKET WINDOW the customer was told (8–12 / 12–5), never
+the sequenced internal arrival — a calendar block reading 8:13 would be a promise the
+optimiser breaks daily; legacy no-bucket bookings fall back to exact start + duration.
+Surfaces: the booked/rescheduled/site-visit/day-before EMAILS gain a "Add it to your calendar:
+Google · Outlook · Apple (.ics)" row; the appointment page (/a/:token) gains the same row with
+`GET /api/appointment/:token/calendar.ics`; self-booked customers' ics is
+`GET /api/portal/:token/calendar.ics` (lead token → their booking; property token → the
+property's next upcoming booking; token is the credential, same as the portal itself).
+Suites: `test-booking-reminders.mjs` (12 — window gate, once-ever, mark-before-send survives a
+failed send without a double text, assignment exclusion, decision I) and
+`test-calendar-links.mjs` (20 — bucket rule, EDT/EST UTC conversion, RFC 5545 escaping, the
+three formats), both in `build:check`. **No PASS flow's route changed shape** — the email
+additions are additive rows in existing notices; new endpoints only. **Needs Patrick's walk:**
+book a test appointment for tomorrow, get the reminder after 9 AM; tap all three calendar
+links from the confirmation email and the appointment page.
+
+**2026-09-02 (Booked days join the geography — the probe becomes a phone-booking tool):**
+Patrick, with Google Ads live: a customer booked Oct 1 (a day the fall plan never routed) and
+the season-plan address tester didn't show it — he wants to type a caller's address and offer
+the best day. Root cause: `geoFilter.buildDayShapes` iterated ONLY `plan.days`, so a day whose
+only contents are real bookings had no shape — invisible to the probe, and (worse) carrying no
+geography on the LIVE booking page either: two ad customers 80 km apart could seed the same
+empty day, and no bucket cap applied there. Now `buildDayShapes` grows a `bookingsOnly` shape
+for any date with a resolvable booking and no plan entry: the day's points are its bookings,
+it inherits the plan's `bucketCap`, planned days are byte-identical (asserted), and a date with
+no plan AND no bookings stays unshaped and open to everyone — someone has to book it first.
+The probe inherits it (rows labeled "Booked day") and gains the phone answer: **"Best days for
+this address"** — the three cheapest offered days with added-drive minutes and stop counts.
+**FLOW-03 IS PASS AND ITS GEOGRAPHY GATE NOW COVERS MORE DAYS:** `listAvailableSlots` is
+unchanged; what changed is which days carry shapes. New behavior only on booked-but-unplanned
+days — previously offered to anyone at any distance and uncapped, now geo-gated and capped
+like every route day. Engine re-verified: test-geo-availability grows to 35 (+8: the
+booking-made shape, cap inheritance, planned-days byte-identity, unresolved-booking and
+same-point dedup, and through the REAL engine a Mississauga caller offered the booked day
+while a Keswick caller is suppressed with the day named in diagnostics); booking-guards 35,
+day-reschedule 59, season-config 93 unchanged. **Needs Patrick's walk:** probe his Oct 1
+booker's address (Oct 1 should list as "Booked day" with a small added-drive number), then a
+far-away address (Oct 1 offered "no").
+
+**2026-09-02 (Geocode failure posture — "we cannot have this fail"):** Patrick probed an Erin
+address on the season plan and got EVERY route day offered: the geocode failed, fell back to
+the depot pin, and the geography filter — fail-soft by design — switched itself off for that
+address. Worse, the same happens on the live booking page's availability, and if
+`GOOGLE_MAPS_SERVER_KEY` is missing in Render it happens for EVERY address, silently. Three
+layers now: (1) `geocode()` is tougher — 4s timeout, one retry on network errors and Google's
+transient UNKNOWN_ERROR. (2) **Town-centroid parachute** (`lib/town-centroids.js`, ~60 hand-kept
+Ontario town centres): a failed lookup whose address names a recognizable town answers from
+that town's approximate centre, `source "town-centroid"`, which `coordsAreResolved` accepts —
+the filter stays ON and Erin still reads as an hour away. The result stays `ok:false`, and
+every path that persists coordinates requires `ok:true` (audited: geocodeForRecord + four
+server.js sites), so an approximation can steer availability but never pin a record. Only an
+address with no recognizable town still skips the filter. (3) **Loudness**: a boot-time banner
+in the server log when the key is missing; the probe now echoes the address Patrick TYPED (it
+previously showed the fallback's own "Newmarket, ON, Canada" label — a failure dressed as the
+wrong address), distinguishes exact / approximate-town / unplaceable, and shows a red alarm
+when the server has no key ("the filter is degraded for EVERYONE"). **FLOW-03 IS PASS AND ITS
+GEOCODE HOP IS TOUCHED:** `listAvailableSlots` itself is byte-unchanged (the change is upstream
+in what coords a FAILED geocode yields), resolved addresses behave identically, and the change
+only affects addresses that previously fell through fail-open — those now get filtered
+approximately instead of not at all. Engine re-verified: geo-availability 27, booking-guards
+35, day-reschedule 59, season-config 93 all pass unchanged. New
+`scripts/test-geocode-fallback.mjs` (15 assertions, in `build:check`): the town matcher
+(whole-word, longest-name-wins), fallback order, the ok:false persistence invariant, and the
+outcome itself — Erin +68 min suppressed, Aurora +4 min offered, through the real filter math.
+**Residual, said out loud:** an address with NO recognizable town still fails open (offered
+every day). Fail-closed for those would block legitimate rural customers on a Google hiccup —
+Patrick's call if he wants it flipped.
+
+**2026-09-01 (Completion email + service report, Patrick's simulated-closing review):** three
+fixes from his walk of a real completed work order. (1) **The email names the service**:
+subject "PJL Fall Closing Summary — please review" (was the generic "visit summary"), headline
+to match, and Patrick's lead copy for the seasonal services ("PJL has successfully completed
+the fall closing of your sprinkler system… we observe your system for potential issues and
+note them for next year's spring opening — anything the technician flagged is in your Service
+Report"); "attached summary" wording corrected — the report is a portal link, never an
+attachment. (2) **Warranty paragraph removed from the email** on his instruction; the warranty
+itself is untouched — the record still stamps, the portal still shows coverage, claims (FLOW-30)
+unaffected. Summary verb fixed too: "4 zones winterized" for a closing / "inspected" for an
+opening, not "checked". (3) **The report's checkmarks are DRAWN, not typed**: "✓" (U+2713)
+exists in neither Barlow Condensed nor built-in Helvetica, so every completed checklist line
+printed "?" on the customer's signed document. `drawCheckmark()` strokes two vector lines —
+no font to fall back through. Verified by stream inspection of a rendered fixture: exactly 5
+stroked marks for 3 checked steps + 2 answer lines, zero "?" glyphs. **FLOW-31's historical
+invariant untouched** — checklist KEYS and `checklistKeysForWorkOrder()` unchanged; only how a
+mark is painted. wo suites: fall-closing 31, completedat 39, unlock 56, invoice-wo-report 21,
+mailer-log 18 — all pass unchanged. No PASS flow touched.
+
+**2026-09-01 (Decision I — "no need to contact" customers; the Willowridge hunt's true
+ending):** the finder + preflight finally named it: all 14 Willowridge stops skipped as
+`no_contact` — correctly, by the truck-never-surprises-a-house rule, but wrongly for a
+management company Patrick coordinates with directly ("these are non need to contact
+bookings"). New property flag `commPrefs.noContactNeeded` ("No need to contact" tick on the
+property page). Preflight: **ready (silent)**, counted and listed under "Will book WITHOUT
+messages" so the send arithmetic stays visible; assign books them like anyone else; the
+cadence engine refuses EVERY send through the one `cadenceGates` gate (reason
+`no_contact_needed`) — blast, steps 2–6, day-move notices. Persistence trap honoured:
+`hydrate()` rebuilds commPrefs key by key and DELETES unlisted keys on the next read (the
+2026-08-25 reviewRequestsEmail lesson), so the flag is in the blank default, the hydrate list,
+and COMM_PREF_KEYS. Suites: preflight 31, writer 46, cadence 45; full `build:check` exit 0.
+**No PASS flow touched** — FLOW-01/02/03/23 don't read these gates; the flag defaults false so
+every existing property behaves byte-identically until Patrick ticks it.
+
+**2026-09-01 (The job finder — the data gets a voice):** Patrick reported the Willowridge
+symptom STILL alive after the FLOW-32 restore deployed. Three real fixes in (bookings-page heal,
+preflight naming, work-order union), each found by code reading, and the live symptom outlived
+them all — so the fourth move is not a fourth guess. Two things shipped: (1) **hardening** —
+`day-schedule.parseStored` treats a date-only `scheduledFor` ("2026-10-02") as LOCAL midnight;
+`new Date()` alone would land it at UTC midnight, the evening of Oct 1 in Toronto, silently
+shifting the job to the wrong day (day-schedule suite 41, +5). (2) **The finder** —
+`server/lib/job-finder.js` + `GET /api/schedule/find-jobs?q=&date=` + a "Missing a job? Search
+every record" box on the Today page: searches EVERY store a job's date can live in (leads,
+canonical bookings, work orders, properties, season-plan stops), reaches records **by property
+link** when their own name field is blank (the standard shape of a WO raised against a
+property), and issues one plain-sentence verdict per record against the selected day — "NO
+scheduled date at all — open the work order and set it", "stored as a date with no time —
+counted as local midnight", "planned but NEVER BOOKED — run preflight", "ARCHIVED — never
+shows". Read-only; judges dates with day-schedule's own parser so its verdicts cannot drift
+from the schedule's behaviour. `scripts/test-job-finder.mjs` (17 assertions, in `build:check`).
+**No PASS flow touched.** The acceptance IS the use: Patrick types "Willowridge" on the Today
+page and the next message in this hunt is whatever the finder says, not another hypothesis.
+
+**2026-09-01 (FLOW-32 — directly-scheduled work orders reach Today; the reverted fix
+restored):** Patrick's third report of the same live symptom — Willowridge Landscaping absent
+from the Today page — after both #111 and #112 deployed. The field-app merge had DROPPED the
+work-order union built for exactly this ("a lead-less scheduled work order cannot presently
+exist" — see the corrected entry below): wrong, because the work-order page's schedule/backdate
+input PATCHes `scheduledFor` on any work order, and because existing records keep their dates
+regardless of current write paths. `server/lib/day-schedule.js` + `scripts/test-day-schedule.mjs`
+(36 assertions) restored from the reverted commit, with the revert history written into the
+module header; `/api/schedule/today` now unions all THREE date homes — `lead.booking.start`,
+canonical `bookings.json`, `workOrder.scheduledFor` — additive, re-sorted, deduped on
+`workOrder.id`. New over the original: canonical (assignment) rows now NAME their linked work
+order from `booking.workOrderIds`, so the card shows "already opened · status" and the dedup
+covers a WO spawned from an assignment booking. The CRM Today client renders lead-less rows
+live (Notify omitted — nothing to message from; Open WO links straight to the WO); the field
+app already handled these rows since #111 and needs no update. **No PASS flow touched** — the
+endpoint is FLOW-32's own (UNMAPPED, needs Patrick's walk: open Today on a day Willowridge is
+scheduled, confirm every property listed with the right times, tap through to a work order,
+and confirm no row that showed before has stopped showing).
+
+**2026-09-01 (Fall closing on the field app):** FLOW-31 opened — the fall-closing visit as
+performed on the iPhone app. Opened as FLOW-28 on a branch cut 2026-08-18 and renumbered on
+merge: FLOW-28 and FLOW-29 were both taken by work that landed on main in the interim. No
+PASS flow touched. Found and prevented a latent regression in the customer report on the
+way — see the entry.
+**2026-09-01 (A diagnosis recorded because it was WRONG):** while chasing "Willowridge's
+properties are missing from the app's Today tab", a fix was written on the branch to union
+work orders with a `scheduledFor` into `/api/schedule/today`, on the reasoning that a work
+order raised against a property carries a date no booking knows about. It was **dropped
+unmerged**, for two reasons worth keeping: (1) main already unions lead-less canonical
+`bookings.json` records — the assignment writer's — which is the real mechanism by which a
+management company's route days get scheduled; and (2) a work order's `scheduledFor` is only
+ever written from `lead.booking.start` at creation or back-filled at completion
+(`lib/work-orders.js`), and no admin surface sets it, so a lead-less work order with a future
+date **cannot presently exist**. The fix addressed a case the codebase cannot produce. The
+root cause of the wrong diagnosis was reading a two-week-stale `origin/main`. If a
+property-first work order ever does get a schedulable date, this is the gap that opens.
+**Correction, 2026-09-01, hours later:** the ORIGINAL diagnosis was right and the drop was the
+error — see FLOW-32 above. Premise (2) was false on both halves: the work-order page carries a
+schedule/backdate input (`server/work-order.js` ~502) that PATCHes `scheduledFor` on any work
+order (`scheduledFor` is in `lib/work-orders.js`'s PATCH allow-list), and existing records keep
+whatever date they carry regardless of what today's code writes. Patrick confirmed the gap
+live: Willowridge still missing from Today after both deploys. The durable lesson is the
+opposite of the one first recorded: a fix verified against a live symptom is not "for a case
+the codebase cannot produce" just because the write path is hard to find — data outranks code
+reading, and the bar for removing the union again is a walked Today page, not an argument.
+
+**2026-09-06 (The gate that let everything through — three holes, same hour):** Patrick
+re-piloted after the booking gate merged: "it is still letting anything through... it still
+allows to populate to the next street, filter out the riffraff at 'wheres the property?'"
+Three real defects, all fixed: (1) **His own admin cookie bypassed the gate.** Availability
+bypassed on ANY admin session — and Patrick pilots the public page in the same browser as
+the CRM, so his tests (and only his) sailed through; the gate was untestable by its owner.
+The bypass now has to be ASKED FOR: availability honours it only with `adminBypass=1` (sent
+by the three admin surfaces — admin.js, crm-followup.js, schedule.js) AND a session; reserve
+skips only a DELIBERATE admin act (`admin_custom` or a bound leadId), never a bare cookie.
+(2) **The cache grandfathered junk.** Pre-gate test addresses ("toronto") sat in
+geocode-cache.json without the streetLevel flag and the gate passed flag-less entries;
+geocode() now re-verifies a flag-less hit once and rewrites the entry with its true nature
+(still served as-is when no key — our-fault posture unchanged). (3) **The refusal came a
+step too late.** The address step advanced on any non-empty text; the gate only answered at
+the calendar. New public `POST /api/booking/verify-address` runs the same gate, and
+book.html's "See available times" now verifies BEFORE advancing — junk stays on "Where's
+the property?" with the reason inline under the input; availability and reserve keep the
+same gate as backstops for direct-API spam. Suite grows to 22 (+3): a flag-less cached
+entry is re-verified not grandfathered, the rewritten entry carries its flag, and the
+re-verified town is refused. FLOW-03 posture unchanged from the entry below — this makes
+that entry TRUE. **Needs Patrick's walk (logged in, same browser):** "Toronto" now refuses
+AT the address step; a picked address advances; Ottawa refuses with minutes; the +Book
+modal still bypasses.
+
+**2026-09-06 (The booking gate — full addresses only, inside the service area only):**
+Patrick, piloting before the blast: "a massive issue that might insinuate a ton of
+potential spam. And i believe in a different prompt i requested that 'only full address
+selections can be approved to move forward' — unfortunately that isnt the case. Also, we
+need to put a lock on 'who can book' — it needs to be within our service areas." He is
+right that the rule never got built; this builds it, SERVER-SIDE, where spam cannot route
+around the autocomplete. New `lib/booking-gate.js` (`gate(geo, {travelMinutes, base})`),
+applied to `/api/booking/availability` and the public path of `/api/booking/reserve`
+(standby/open-bucket joins included): (1) **full addresses only** — geocode.js now captures
+`streetLevel` (a street_number component, or Google typing the result street_address /
+premise / subpremise) and the gate refuses a result that resolved only to a town, route or
+postal area (`address_incomplete`), or did not resolve at all (`address_unverified`, on
+ZERO_RESULTS); legacy cache entries lack the flag and PASS — they are real, served
+addresses, only an explicit false refuses. (2) **the service-area lock** — the customer's
+coords must sit within 90 driving minutes of the Newmarket base, the same TIER_EXTENDED
+"confirmed coverage" outer bound the public coverage checker advertises
+(`outside_service_area` past it, with the drive named and the phone offered);
+`distance.js` answers even offline via Haversine, so the measurement cannot wedge.
+(3) **our faults stand aside** — a geocode failure that is OURS (no key, REQUEST_DENIED,
+quota, network) allows the booking and logs `[booking-gate] degraded`; invariant 5, a PJL
+outage never blocks a customer, and the anti-bot gate still stands. This RESOLVES the
+fail-open-vs-fail-closed residual from the geocode-posture entry: the public flow now
+fails CLOSED on definitively bad addresses and open only on our own outages. **Admin
+outranks the gate everywhere** (availability with an admin session, reserve with isAdmin
+— same philosophy as admin_custom), so Patrick's +Book modal and phone bookings are
+untouched. Refusal codes carry customer-readable copy client-side (booking.js
+CUSTOMER_COPY) and server-side. **FLOW-03 IS PASS AND WAS TOUCHED — a deliberate new
+refusal on Patrick's explicit direction**, not a regression: slot math, payloads and every
+previously-valid street-level in-area booking are unchanged; engine suites green in the
+full chain. Cover: `scripts/test-booking-gate.mjs` (19 assertions, in `build:check`) —
+town-level refused, street-level books, legacy cache passes, the 90-minute tier inclusive
+at the boundary, drive-measurement failure never refuses, all four our-fault reasons
+allowed-and-flagged, ZERO_RESULTS refused, streetLevelFrom reads Google's shapes.
+**Needs Patrick's walk:** on /book.html try "Toronto" (refused as incomplete), a real
+picked address (books), and an Ottawa address (refused as outside the area with the
+minutes named).
+
+**2026-09-06 (Season Plan becomes the dispatch cockpit):** Patrick, after two rounds of
+reorganizing the vertical page: "still extremely conflicted with the layout... not
+completely fluent in terms of my accessibility for planning." Rather than a third guess,
+two full layout mockups went to him (dispatch cockpit vs month calendar) and he picked the
+cockpit. The page is now ONE SCREEN, three panes, nothing scrolls away: the season down a
+LEFT RAIL (every day as a dense row — label, date, territory, stops count and a fill bar,
+red when over cap, amber for booked-only days; past days in a fold at the rail's foot), the
+SELECTED day's live map filling the CENTRE STAGE (header carries the day's chips,
+Reschedule, notes and Open route), and its stops in driving order down the RIGHT PANE (the
+same bucket blocks, move/window/nudge controls, and booked-appointments group as before).
+Planning is by SELECTING, never scrolling: a rail click swaps the stage; the customer
+finder sits in the top toolbar and a hit selects the day and lights the exact row; every
+tool (probe, open bucket with a waiting-count badge, needs-attention, assignment + booking
+window + import) docks in the toolbar and opens as a DRAWER over the cockpit, one at a
+time. One map draw per day selected — the same one-request-per-day-looked-at discipline
+every prior layout held. Selection survives re-renders (moves, reschedules), defaulting to
+today's day else the first day ahead. Presentation only: no endpoint, payload, engine or
+store change; the same day-row data renders in new furniture; full `build:check` green.
+Verified in headless Chromium against the real page with a fixture season: default
+selection lands on the first day ahead, a rail click swaps the stage and stops, the finder
+selects a booked ad customer's day and lights their row, the bucket drawer opens with its
+badge count. **Needs Patrick's walk:** the real season loads as the cockpit; plan a day
+end-to-end (select, move a stop, reschedule) without scrolling.
+
+**2026-09-05 (The open bucket — "first available" standby appointments):** Patrick: "an
+'open bucket' first next available type situation that allows us to collect open non
+actually booked appointments, and throw it in our day... if it's 'on our way home' we can
+pick it up at the end of all the calls." Built end to end:
+(1) **Customer side (FLOW-03 IS PASS AND WAS TOUCHED — additively).** The public picker
+(customer mode, opt-in `allowOpenBucket` so portal-reschedule and admin pickers are
+untouched) grows a "FIRST AVAILABLE — skip the calendar, we'll fit you in" card above the
+calendar. Choosing it sends `standby: true` to `/api/booking/reserve` with NO slot: the
+endpoint's new branch (gated on the explicit flag; absent it, byte-identical behaviour)
+skips every slot-shaped step and builds the lead exactly as a booked one EXCEPT
+`lead.standby` replaces `lead.booking` — so no capacity is used, nothing lands on
+Today/iCal, no reminders fire. Customer + property records resolve as normal; the customer
+gets the new `standby_joined` message ("you're on our First Available list — we'll confirm
+your exact day ahead of time"; deliberately no date placeholders), Patrick gets an OPEN
+BUCKET lead alert. Site visits are refused (a consult needs a time). Status is "won" — a
+committed customer, not an untriaged lead; the MISSING booking is what marks them waiting.
+(2) **Admin side.** New `GET /api/standby` (path-auth "user") lists waiting standbys
+oldest-first and ranks each against the upcoming day shapes with
+`open-bucket.rankDaysForCoords` — geoFilter's own cheapest-insertion math, the literal "on
+our way home" number; past days and empty days never rank, unpinpointed addresses list
+unranked with a warning. The Season Plan grows an "Open bucket — first available" panel:
+each row shows who/where/service/waiting-time and a top-3 day select; **Book + notify**
+posts to the EXISTING reserve book-from-lead path (admin custom time at 13:00 → afternoon
+bucket, the back half of the day) which books, mirrors canonically, sends the normal
+"booked" confirmation with calendar links, and now also CLEARS the standby envelope with a
+"Placed from the open bucket" activity entry — one click, whole story, no new booking
+machinery. (3) **Cover:** `scripts/test-open-bucket.mjs` (14 assertions, in `build:check`)
+pins ranking order/past/empty/cap/unresolved, the FIFO waiting filter, and the templates
+(standby_joined exists, dateless; booked untouched). Engine re-verified: geo-availability
+42, booking-guards, heal, reminders all green in the full chain. UI verified in headless
+Chromium: the card renders on the booking page and emits the standby selection; the panel
+renders ranked and unranked rows. **Needs Patrick's walk:** book a test "First available"
+from /book.html, see yourself in the Open bucket panel, place yourself onto a day, get the
+normal confirmation with calendar links.
+
+**2026-09-05 (Probe: a refused key stops masquerading as a bad address; no past or empty
+"best days"):** Patrick probed 45 Alamosa Dr, North York — "a readily known address" — and
+got "Google couldn't pinpoint it... (approximate)" ON EVERY SEARCH, with best-days listing
+Jul 21 (past) and an Oct 31 with 0 stops at +0 min. Three defects: (1) **The probe blamed
+the address for a key-level failure.** geocode() already returns Google's real status; the
+screen showed the same "couldn't pinpoint" for ZERO_RESULTS (genuinely no such address) and
+for REQUEST_DENIED (Google rejecting the KEY — every address degraded). A failure on every
+known-good address with the key configured is the latter: classically an HTTP-REFERRER-
+restricted (browser) key pasted into GOOGLE_MAPS_SERVER_KEY — server calls carry no
+referrer, so Google denies them all. renderProbe now raises a red alarm for any non-
+ZERO_RESULTS reason, naming the status and the three usual causes (referrer restriction →
+use an IP-restricted or unrestricted key; Geocoding API not enabled; billing off), and the
+head line says "Google refused the lookup", never "couldn't pinpoint". (2) **The probe
+offered the past.** It walked every day-shape date; old booked days carry shapes (correct
+for history), so July surfaced as a bookable answer. The endpoint now skips dates before
+today. (3) **Empty days headlined best-days.** A shape with 0 mappable points costs +0 min
+by definition; the client ranking now requires points > 0 — "we're already nearby" must
+mean something is actually there. Probe endpoint + probe rendering only; engine, booking
+page and writer untouched. Verified in headless Chromium with a REQUEST_DENIED fixture:
+red alarm with the status, honest head line, best-days lists only the day with real stops.
+**Patrick's fix on his side once merged:** probe once — if the red alarm names
+REQUEST_DENIED, create a NEW Google Cloud key with no referrer restriction (IP-restrict it
+to Render if desired), enable Geocoding API on it, put it in Render's
+GOOGLE_MAPS_SERVER_KEY, redeploy, probe again: the alarm goes and addresses pinpoint.
+
+**2026-09-05 (Season Plan organized: closed day rows, jump bar, customer finder, past off
+the board):** Patrick on the merged #134 screen: "way too scattered. It shows every booked
+appointment from the past... Please organize that page entirely. Search a customers
+appointment from that page." Four changes, review screen + its payload only:
+(1) **Past stays past.** `resolveSeasonPlan` only attaches bookings dated today or later —
+a completed appointment belongs to Bookings/Today, not a forward route plan; past PLAN days
+still exist but render inside a closed "N past days — done and off the board" fold at the
+bottom. (2) **One row per day, closed by default.** The day card's header became a
+clickable row (label · weekday-date, Reschedule, stat chips); the notes strip, map and stop
+panel live in a fold that opens on click, and the map draws on FIRST OPEN (replacing the
+draw-on-scroll IntersectionObserver — same one-request-per-day-looked-at discipline). Fixed
+in passing: every title printed its date twice ("Monday, Sep 28, Sep 28") because
+`day.weekday` already carries the date and the renderer appended `prettyDate` again.
+(3) **Jump bar.** One chip per upcoming day (label · date · stops+booked; amber ring for
+booked-only, red for morning-overrun, amber glow for today) — click opens the day and lands
+on it. (4) **Find a customer's appointment.** A search box above the board matches name,
+address, town or property code across plan stops AND booked appointments in the loaded
+season; a hit opens the day, scrolls to it, and lights the exact row for ~2.5s. The
+no-match row points at Today's job finder, which searches every record. **No PASS flow
+touched** — client presentation plus a read-path filter in `resolveSeasonPlan`, which feeds
+only this screen's endpoints; `moveStop`, the engine and the writer are unchanged
+(`test-season-plan-moves` still green). Verified in headless Chromium against the real
+page HTML/CSS/JS with a fixture payload: rows closed on load, chips correct (booked-only
+shows "+1", not "0+1"), past day folded, "cerise" finds the Oct 1 ad booking, click opens
+Oct 1 and highlights the row. **Needs Patrick's walk:** the real plan loads as a tidy list;
+type a customer's street into the finder and land on their day.
+
+**2026-09-05 (Field app records on-site payments; the money display stops guessing — PR
+#135, recorded here after the fact):** merged from the field-app session without a register
+entry; recorded now so the ledger-touching surfaces stay accounted for. Patrick's call: start
+collecting on the driveway THIS week with no new build — the card tap happens in **Stripe's
+own app**, and the invoice screen in pjl-field grew "**Record a payment I took**": a sheet
+pre-filled with the balance still owing (editable, so a part payment works), methods Card /
+Cash / Cheque / e-Transfer, posting to the EXISTING `POST /api/invoices/:id/payments` — **no
+server change**. Card taps record as `card_qb` deliberately: it is already the general card
+method (the pay page records its own Stripe charges as it, it renders as "Card", reversing
+one warns "refund in Stripe first"), so tap revenue files as card, not Other. The app
+re-reads the invoice after recording rather than patching locally — `amountPaid`,
+`balanceDue` and status are derived server-side — and the screen gained a "Still owing" row
+plus a "Part paid" status. **Bug fixed in the same file:** the app's `money()` guessed
+dollars-vs-cents ("an integer ≥ 1000 must be cents"), so a **$1,000.00 invoice rendered as
+$10.00** — on the very screen the collected amount is read from. Every invoice money field
+is dollars end to end, so the guess is gone; a missing value now renders "—" instead of
+"$0.00" (which reads as "nothing owing", the opposite of "unknown"). Never bit at closing
+prices ($90–$400); would have bitten on the first big job. **No registered flow touched** —
+app display plus an existing endpoint; FLOW-23 (payments) unchanged on the server. Ships
+over the air. **Still open if wanted:** true Tap to Pay inside pjl-field (Stripe Terminal
+SDK, Apple entitlement, TestFlight build). **Needs Patrick's walk:** reopen the app, finish
+a closing, record a driveway payment, and see the invoice status follow.
+
+**2026-09-05 (Tap to Pay — the approvals started, the server half shipped):** Patrick
+asked for "Take payment now" to open the Stripe app ready to charge. **It cannot be built
+that way** — checked rather than assumed: Stripe publishes no URL scheme for their Dashboard
+app that accepts a preset amount (third-party apps like Payment for Stripe do; the official
+one does not). What he is describing is **Tap to Pay on iPhone inside pjl-field**, and he
+chose to start it. **Told to him before he chose, because it changes the value of the whole
+project:** many Canadian cards are offline-PIN only, which Tap to Pay cannot process — the
+card must be inserted — so Stripe's own guidance here is to ask for another card or fall
+back to the payment link. Tap to Pay is the fast path, not the only one; the link and the
+record-a-payment control both stay. **Shipped now, ahead of the approvals:** `POST
+/api/terminal/connection-token`, staff-gated, minting a short-lived Terminal connection
+token. That single route is the only place the field app is ever allowed near Stripe, and it
+is what lets the standing "the app never talks to Stripe" rule survive Tap to Pay — card data
+goes from the card to Apple's secure element to Stripe and never touches our code, which is
+what keeps this out of PCI scope. `test-stripe.mjs` grew to 36 assertions pinning that the
+route exists, is staff-gated, never hands out the secret key, and that no Stripe key of any
+kind ships in the app bundle; the gate assertion was verified by deleting the gate and
+watching it fail. **The sequencing matters and is written into `docs/TAP_TO_PAY.md`: the SDK
+goes in LAST.** `@stripe/stripe-terminal-react-native` is a native module, so the moment it
+enters `package.json` the fingerprint moves and the publish workflow will correctly refuse
+every over-the-air update until a matching build is installed — every unrelated fix would
+queue behind a TestFlight round trip. Approvals → SDK → build → publish. **What needs
+Patrick, and only him:** Apple's Tap to Pay development entitlement (then a second
+distribution entitlement before it ships), and Stripe enabling Terminal on the account. Apple
+also requires a "How to Tap" overlay in the app before review — that is code, on the list,
+and not optional.
+
+**2026-09-05, same day (Apple's entitlement requested — Case-ID 22041657):** Patrick
+submitted the Tap to Pay development entitlement request; Apple acknowledged from
+`ttpoientitlements@apple.com` and it is queued for review in the order received, no ETA.
+The request names **Stripe** as PSP, **Canada**, and internal distribution. **One answer
+needs correcting and is recorded because a stale "it's submitted" would hide it:** "how many
+new apps that use this entitlement will you distribute in the next 12 months" was answered
+*None*, when the true answer is *1* — pjl-field itself. (*None* was correct for the
+preceding question, which asks about apps already on the App Store.) As submitted it asks
+for an entitlement no app will use while requesting up to 99 devices, which is the
+contradiction a reviewer would query; the fix is a reply on the thread quoting the Case-ID,
+**not confirmed sent**. Also recorded as a wrong turn taken first: registering an Apple
+**Merchant ID** (`merchant.com.pjllandservices.field`) is the **Apple Pay** path and is not
+part of Tap to Pay — Terminal readers associate with a Stripe Location at connect time, not
+with an Apple identifier registered in advance. Searching "accept payments on iPhone" lands
+on Apple Pay first, which is how the detour happened. **No code changed** — `docs/TAP_TO_PAY.md`
+now carries a status table so the gate state is readable without re-deriving it.
+
+**2026-09-06 (Apple granted the development entitlement — and the requirements changed the
+plan):** Case-ID 22041657 granted with the development distribution restriction, along with
+two documents (App & Marketing Requirements and Review Guide v1.7, and the App Review
+Requirements Checklist v1.7). Audited row by row into `docs/TAP_TO_PAY_REQUIREMENTS.md`.
+**Honest state: we meet none of the app requirements, and could not — there is no Tap to Pay
+code in pjl-field**; its dependencies are still expo/image-picker/location/status-bar/updates
+/react/react-native/webview. **Two findings that move the plan, both read off Apple's own
+text rather than assumed:** (1) **the PUBLISHING entitlement is what gates TestFlight**, not
+just the App Store — a development entitlement supports only development provisioning
+profiles on registered devices, so `field-app-build.yml`'s build → auto-submit → TestFlight
+pipeline cannot carry this build at all, and the order is build → three videos → publishing
+entitlement → TestFlight. (2) Same bundle ID means one install, so a development Tap to Pay
+build would REPLACE the app Patrick runs on real closings, and the moment the SDK lands on
+`main` his installed app stops receiving OTA fixes; the recommendation is a long-lived
+branch with its own build profile and `main` kept SDK-free until publishing is granted.
+**Canada-specific, now an Apple requirement rather than our own caution:** CA is on the
+Fallback Payment Method list and in PIN-Entry-in-Education (all regions except JP/TW), so the
+app must carry an alternative payment method (we have two), a *seamless* transition to it
+from the Tap to Pay UI (missing), and education covering both PIN entry and the fallback —
+with Apple's verbatim copy if we write our own screens. **Scope items that were invisible
+before reading the documents:** a configuration progress indicator (3.9.1), reading T&C
+acceptance from Apple instead of local state (1.6), reader warm-up on foreground (1.5, which
+is what makes the one-second requirement 5.6 achievable), a settings surface for enabling and
+for education (3.6/4.3 — the app has no settings screen at all), a receipt sendable on a
+DECLINED transaction (5.10), and **push notifications** for an outcome seen after the app is
+closed (5.12 — pjl-field has no push capability whatsoever, so that is another native module
+and an APNs setup). **What falls away:** the whole onboarding section (2.x) under Apple's own
+escape clause for apps without a signup path distributed as Unlisted/Custom/ADEP, which is
+what the entitlement request already told them; and marketing (6.x), since Patrick is the
+sole merchant — both to be declared with reasons, not left blank. **No code changed** — docs
+only, and the SDK still goes in last.
+
+**2026-09-06 (Distribution decided: UNLISTED — and one thing I had understated):** Patrick's
+call, matching what the entitlement request already told Apple. Against **Apple's Tap to Pay
+checklist** it waives §2 onboarding outright, drops §4 education to strongly-recommended,
+makes §6 marketing moot (he is the sole merchant), and relaxes the 1.8/1.9 conditionals —
+while **§5 Checking Out still applies in full** ("These requirements are applicable for all
+apps"), which is the largest section. **The correction:** "unlisted" is not "unreviewed", and
+the earlier framing let that slide. Verified against Apple's own unlisted-distribution support
+page and App Store Connect help: an unlisted app goes through **full App Store Review**, plus
+the special Tap to Pay review the guide describes; unlisted only means not discoverable and
+link-only. Two mechanics that bite in order: (1) **the request is declined if the app has not
+been submitted to App Review or is in a beta/prerelease state** — pjl-field is on TestFlight
+and has never shipped, which is exactly the state that gets declined, so it cannot be made
+unlisted from where it sits; the app must be submitted to review first, with a Review Note
+saying unlisted is intended, and (2) **the conversion is permanent** — an unlisted app cannot
+be returned to public distribution. Also resolved by the decision: 3.8.2 (Apple Business
+Connect acceptance) is **likely N/A**, since it applies where no Apple Account is in use on
+the device and Patrick accepts on his own iPhone with his own — to be confirmed with Stripe,
+not assumed. **No code changed** — docs only.
+
+**2026-09-06 (Merchant education resolved — 4.1 is buildable, and Stripe support's answer
+needed correcting):** Patrick asked Stripe about `ProximityReaderDiscovery`; their support
+assistant answered about the **payment** framework (`ProximityReader`, which the Terminal SDK
+wraps) rather than the **education** API of nearly the same name, so it did not answer the
+question. Resolved from Stripe's and Apple's own documentation instead. **The finding:**
+`ProximityReaderDiscovery` is Apple's API, iOS 18.0+, a two-step native call
+(`content(for:)` then `presentContent(_:from:)`), and is **not exposed as a JavaScript
+method by `@stripe/stripe-terminal-react-native`**. It is still the right route and a cheap
+one — `ProximityReader` is a system framework **already linked by the Terminal SDK**, so
+reaching it costs a small local Expo native module and **no new dependency**, against the
+alternative of writing and maintaining our own education screens carrying Apple's verbatim
+PIN and fallback copy. **New scope item, conditional:** because 4.1 is iOS 18+, any phone
+taking payment on an earlier iOS needs our own education screens after all — so the iOS
+version on Patrick's iPhone and any crew phone is now an open question with a real
+consequence. **One claim from the support answer deliberately not carried forward:** "the SDK
+manages reader connection tokens through Stripe's direct relationship with Apple" — connection
+tokens are minted by OUR server with OUR secret key, which is precisely what
+`POST /api/terminal/connection-token` (PR #137) exists for; the SDK requests a token from a
+provider we supply. Read the other way that sentence would retire the server route, and the
+server route is the only thing keeping a Stripe key out of the app bundle. The same answer
+also listed requesting the entitlement as a next step, which was already granted. **No code
+changed** — docs only.
+
+**2026-09-06 (iOS 18+ confirmed — a screen set drops out of the build):** Patrick's iPhone is
+on iOS 18 or later, which closes two checklist rows rather than one. **4.1:**
+`ProximityReaderDiscovery` is iOS 18+, so Apple's own merchant education covers it — and
+through it 4.4, 4.6, 4.7 and 4.8 — meaning the fallback education screens we would otherwise
+have had to write, carrying Apple's verbatim PIN and fallback copy, **are not needed at all**.
+**1.1** (iPhone XS or later) is met as a consequence rather than by a model lookup: iOS 18
+does not install on anything older than an iPhone XR/XS, so being on 18 proves the device
+floor. **1.4** (handling `osVersionNotSupported` below iOS 17.6) stays on the list even
+though it should never fire for him: it is Required, and it is what protects a future crew
+phone on an older iOS. **The condition worth remembering instead of the conclusion:** all of
+this holds while every phone taking payment is on iOS 18+; add an older crew phone and the
+fallback screens and their verbatim-copy obligation come back. **No code changed** — docs only.
+
+**2026-09-06 (Terminal is on, and the Location turns out to be a build input):** Patrick's
+Stripe Dashboard shows Terminal active with exactly one Location — "PJL Land Services",
+Newmarket ON. That clears the last external blocker, and surfaced a requirement **neither
+Apple document mentions**: a Tap to Pay reader is not registered in the Dashboard ahead of
+time, it is **associated with a Location at CONNECT time**, so without the Location id the app
+cannot bring the reader up at all. `POST /api/terminal/connection-token` therefore now
+returns `locationId` beside the secret, resolved by `resolveTerminalLocationId()`:
+`STRIPE_TERMINAL_LOCATION_ID` when set (trimmed, so a stray space in a Render env var does
+not read as configured), otherwise the single Location on the account — which is the real
+shape of a one-truck business and saves an env var that could only hold the one obvious value.
+**Zero or several Locations are refused with the fix named, never guessed at:** an account with
+two Locations that silently took the first would file a driveway payment against the wrong
+site, which surfaces at reconciliation rather than at the door. Both halves are fetched in the
+one call because the app cannot connect with only one of them and a second round trip on a
+driveway is a second chance to fail. Deliberately **not cached** — tokens are minted at reader
+connect, not per transaction, so the extra call is rare, while a cache would serve a stale id
+after the Location is renamed. The id is configuration, not a secret, but still comes from the
+server: hard-coded in a bundle it could not be changed without a TestFlight round trip, and
+TestFlight is precisely what is unavailable until the publishing entitlement lands.
+`test-stripe.mjs` **36 → 46**, and the two assertions that matter were verified by breaking
+the code: weakening `length === 1` to `>= 1` and dropping the `.trim()` each failed exactly
+one named assertion and nothing else. **FLOW-23 (payments) untouched** — this is a new route's
+response shape, no ledger path altered. **Needs a Render deploy**, along with #133 and #137.
+
+**2026-09-07 (Tap to Pay is BLOCKED on Apple, and the app code is not why):** a full day walked
+end to end with Patrick on a phone and a Windows PC. **The finding, established by experiment
+rather than inference: Apple's development-restricted entitlement only goes into a DEVELOPMENT
+provisioning profile, and EAS cloud builds can only produce `IOS_APP_ADHOC`,
+`IOS_APP_INHOUSE` or `IOS_APP_STORE` — the CLI has no `IOS_APP_DEVELOPMENT` at all.** Those
+two facts do not meet, so the GitHub-button pipeline cannot carry this build. **The first two
+attempts were confounded and the third was not**, which is the only reason this is a finding
+and not a guess: attempt one had the capability unconfirmed; attempt two deleted the profile
+"from your project", which unlinks it from EAS but leaves it on Apple's portal, so EAS found
+the same profile and reused it (same name, same timestamp); attempt three deleted it **on
+Apple's Developer Portal**, produced `AdHoc 1788797529920` against the old
+`AdHoc 1788795456931`, and failed identically. **The app code is correct and the error proves
+it** — Xcode only complains that a profile lacks an entitlement when the app REQUESTS it, which
+it does because `app.json` declares it; a missing declaration produces silence. **The route
+that works is Xcode on a Mac**, which makes development profiles automatically — build to the
+registered iPhone, record the three videos, obtain the publishing entitlement, after which the
+entitlement stops being development-restricted and **the EAS pipeline works again
+permanently**. Patrick has an M2 Mac; that is now the plan. **Nothing set up today is wasted:**
+the device registered with Apple AND imported into EAS (they keep SEPARATE lists, which cost
+an hour to discover), the distribution certificate, the ad-hoc credentials, the App Store
+Connect API key, and `field-app-taptopay-build.yml`. **Two traps recorded because they will
+recur:** `EXPO_NO_CAPABILITY_SYNC=1` is required on every run — EAS PATCHes the capability to
+ON when Apple already has it ON and Apple answers "relationship with an invalid value" — and on
+Windows `set` lasts only for that terminal window; and `@stripe/stripe-terminal-react-native`
+ships `"postinstall": "rm -rf …"`, a Unix command, so `npm install` fails on Windows and needs
+`--ignore-scripts` (CI is unaffected, it runs on Linux). **Also corrected in passing:** an
+Apple **Merchant ID** and the **Apple Pay Payment Processing** capability are the Apple Pay
+path and are NOT part of Tap to Pay; the latter was found enabled with zero merchant IDs and
+turned off. **No app code changed** — docs only.
+
+**2026-09-06 (Apple correction sent — an unknown recorded as unknown, now closed):** Patrick
+confirmed the reply to Case-ID 22041657 has gone, correcting the new-app count from *None* to
+*1*. Recorded because `TAP_TO_PAY.md` deliberately carried "**not known to be sent** — check
+the thread before assuming it was", and a note like that is only worth writing if it is
+actually closed when the fact arrives; left standing it trains the next reader to ignore the
+next one. The substance is kept rather than deleted, because **the same answers carry into the
+PUBLISHING entitlement review**, which is a separate submission: app count *1*, PSP Stripe,
+region Canada, distribution unlisted. **No code changed** — docs only.
+
+**2026-09-06 (SECURITY — the Terminal token route was open to the internet, and the test that
+covered it was green):** the Render deploy went out; the first thing done with it was an
+UNAUTHENTICATED `curl -X POST /api/terminal/connection-token`, which returned **HTTP 200 with
+a live `pst_live_…` Stripe Terminal connection token and the location id**. Mine, from #137.
+**Two independent defects had to line up:** (1) **the fence** — `needsAuth(method, pathname)`
+decides whether a request is challenged at all and ends in `return null` (NO AUTH) for any
+path it does not name; the route was never added, and the file's own comments say the pattern
+is "the gate is the fence, the route check is the lock"; (2) **the lock** — `requireAdmin(req)`
+**RETURNS NULL on failure, it does not throw**, so the route's `await requireAdmin(req);`
+was a no-op with the shape of a gate. **Why the test did not catch it, which is the durable
+lesson:** the assertion was `/requireAdmin\(req\)/.test(routeBlock)` — does the source
+mention the call. It did. It was green the whole time, and deleting the line failed it, which
+made the check look verified by mutation. **A source-text assertion cannot tell a gate from a
+no-op.** `scripts/test-admin-gates.mjs` (new, 9 assertions, in build:check) instead **lifts
+`needsAuth` out of server.js and runs it**, asserting what it RETURNS for the route, and
+bans any bare `await requireAdmin(req)` whose result is discarded; test-stripe's assertion
+was rewritten to check the binding-and-rejecting shape rather than the words. Both were
+mutation-verified: removing the fence entry and reverting the route each failed the specific
+named assertions and nothing else. **Two more routes had the same no-op lock** —
+`POST /api/invoices/:id/payment-link` and `DELETE /api/properties/:id/zones/:n` — both
+**saved from anonymous callers by the fence** (`/api/invoices` and `/api/properties` are
+fenced at "user") but reachable by a signed-in TECH for what are admin actions; probed with
+non-existent ids, both returned 401, confirming no anonymous exposure. Both fixed the same
+way. **Deliberately NOT changed:** `needsAuth`'s open-by-default, which is pinned by a test
+so it stays a decision rather than an oversight — flipping it would silently fence the pay
+pages, the iCal feed and the unsubscribe link, and that is a change to make with each one
+walked. **Observed, not fixed:** eighteen routes bind `requireAdmin`'s result only for
+attribution (`by: session?.uid || "admin"`) on surfaces fenced at "user", so a tech's action
+is stamped "admin" — an attribution weakness, not an access one, and pre-existing.
+
+**2026-09-05 (The closing stops asking for a note it does not need):** Patrick reached
+sign-off on a real fall closing and was stopped by "Add a note about what you did at this
+visit". His call, and it is the right one: that note belongs to **openings and service
+calls**, not closings. **Why:** the note is the customer-facing NARRATIVE on the service
+report. On an opening or a service call the work varies with what was found and the customer
+reads it to learn what happened to their system. A fall closing is the same job at every
+property — blow the zones out, shut the water off, drain — and its report already carries the
+four-step checklist, who shut the water off, whether a back-flush was needed, and the
+per-zone findings, with the zone note field taking anything worth knowing next spring. A
+required free-text box that always says "blew out the system" is not a record; it is a field
+people learn to type through, at the end of a cold visit. **Shaped like the rule it sits
+next to:** `CUSTOMER_NOTE_REQUIRED_BY_TYPE` in `lib/work-orders.js`, directly below
+`PHOTO_REQUIREMENT_BY_TYPE`, which already says `fall_closing: 0` for exactly the same
+reason (a winterized system has nothing left to photograph). **Unknown types default to
+REQUIRED** — a new service mode has to opt out deliberately rather than lose the narrative by
+omission. **Enforced in four places** (library, the server's
+`computeServerSidePreSignFailures`, tech mode, the desk work-order page), which is the shape
+the photo requirement already has and the shape that drifts: `test-signoff-gates.mjs` grew to
+38 assertions and now reads the map out of each of the four copies and fails if any disagrees
+— verified by flipping tech mode's `fall_closing` to `true` and watching it fail, then
+restoring it. **Not a PASS flow:** no registered flow covers the walk-out gates, so nothing
+required re-verification; openings, service calls and builds are untouched. **What still
+needs Patrick:** reach sign-off on a closing and confirm it no longer asks, then open a
+spring opening or service call next season and confirm it still does.
+
+**2026-09-03 (The update that published into the void, twice — and the check that ends
+it):** the GitHub publishing workflow ran for the first time on the merge of PR #124,
+reported success at every step, and delivered the sign-off screens to **nothing**. Same
+failure as the previous day, different trigger, and that repetition is the entry's point.
+**What happened:** `runtimeVersion` is on the `fingerprint` policy, and an update only
+reaches a phone whose installed build carries the SAME runtime. `eas.json` is in the hashed
+source set (`"reasons":["easBuild"]`). Build 9 was made at ~13:00 from `2b59815`; at 18:46
+`c471c31` added four lines of `submit.production.ios.ascAppId` to `eas.json` — a setting that
+configures **App Store submission** and cannot affect the compiled binary in any way — and
+that moved the iOS runtime. The merge published to `40890188…`; build 9 listens on something
+else. Verified locally, not inferred: `expo-updates fingerprint:generate` on this checkout
+reproduces `40890188…` exactly (so the runner and a laptop agree — that was never the
+problem), and the same command with `eas.json` reverted to `2b59815` produces a different
+hash, with `git diff --stat` confirming `eas.json` is the ONLY hashed input that changed
+between them. **Why it keeps costing a day:** publishing to a runtime nothing is listening on
+is not an error in any tool. No command fails, no warning prints, the dashboard shows a
+healthy update. It is indistinguishable from success, and the only symptom is a tech standing
+on a driveway with yesterday's app. Twice now that has been diagnosed from scratch. **Fixed
+by making it impossible to miss, not by weakening the fingerprint:** before publishing, the
+workflow computes the runtime this checkout would publish to and checks whether any finished
+iOS build is listening on it — the real question, since an update reaches ANY build with a
+matching runtime, not merely the newest. No match means no publish, a red X, and a message
+naming the fix. The gate fails **closed** on a missing, empty or malformed answer, since an
+unreadable check is the exact condition the last two outages hid inside. **The comparison is
+done in the workflow, not by `build:list --runtime-version`**, and the first version of this
+guard got that wrong: pushing the match onto a server-side filter makes the check's behaviour
+invisible to the thing depending on it, and a filter that silently stopped matching would
+block every publish forever — a failure as quiet as the one being fixed. The build's runtime
+is read as `runtime.version`, the field name taken from eas-cli's own `BuildFragment` rather
+than guessed; the first version read `runtimeVersion`, which does not exist and printed `?`
+for every build in the live run. **Proven both ways before shipping:** the step body runs
+verbatim against a stubbed `npx` and blocks when nothing listens, **passes when a matching
+build exists**, and fails closed on unparseable output. That middle case is the one that
+matters — a guard nobody has watched succeed is a guard that may never let anything through
+again. **A rebuild is now a button:** `.github/workflows/field-app-build.yml`
+builds and auto-submits to TestFlight from `workflow_dispatch`, runnable from the GitHub app
+on a phone — the two times this was needed, Patrick was not at a desk. It prints the runtime
+the build will listen on, which is the number the update workflow compares against.
+**Deliberately NOT done:** adding `eas.json` to a fingerprint ignore list. It would have made
+this exact recurrence free, and would have traded a visible cost for an invisible one — a
+build profile's `env` or `channel` genuinely does reach the binary, and the failure mode of
+getting that wrong is another silent outage. The honest position is that some edits need a
+build; the defect was never the rebuild, it was the silence. **Also fixed in passing:** the
+publish step interpolated `github.event.head_commit.message` directly into a shell command;
+it now travels through the environment, where a quote in a commit message is text rather than
+syntax. **What still needs Patrick:** run "Field app — build for TestFlight" once (this is
+required — build 9 cannot receive the sign-off work), install it from TestFlight, then re-run
+the publish workflow and watch it go green for the right reason.
+
+**2026-09-02 (The closing ends in the app — sign-off and invoice):** FLOW-31's last
+handoff is gone. A fall closing now finishes natively and lands on its invoice. **Patrick's
+four decisions, taken 2026-09-02:** sign-off ASKS who is there rather than defaulting —
+"Customer is here" or "Nobody home", because on a seasonal closing neither is the exception;
+payment and the return visit are two explicit buttons each, never defaulted, because a
+default is an answer nobody gave; Finish goes straight to the invoice; and the invoice offers
+**Send** and **Take payment now** side by side. (The return-visit question was not put to him
+directly — it was matched to his payment answer and is his to change.) **How it completes:**
+a signature is one PATCH carrying `signature` + `status: completed`, which locks scope and
+awaits the cascade; a bypass is two calls, `POST /signature-bypass` then the completion —
+deliberately in that order, so a failure between them leaves a visit recorded as accepted and
+completable from the desk rather than a completed visit with no record of how it was
+accepted. A `presign_gate_unmet` refusal renders the server's own `gateFailures` list, since
+every one of them is something the tech can still fix standing there. **The signature pad is
+a WebView canvas** — `react-native-webview` is already a dependency, so it ships over the air;
+any native drawing library would have changed the fingerprint and cost a TestFlight round
+trip for a box you draw a line in. **One server addition:** `POST
+/api/invoices/:id/payment-link` mints the public payment token without sending anything.
+`ensurePaymentToken` had only ever run at send time, which is right for the emailed link and
+wrong on a driveway — a tech standing with the customer should not have to email them first
+to take their money. Idempotent, so it never invalidates a link already in an inbox. **The
+app never talks to Stripe:** Take payment opens the customer's own page on the server's
+domain, where the intent is minted and where the double-charge and stale-amount protections
+already live. **Coverage:** `scripts/test-signoff-gates.mjs` (19 assertions, in
+`build:check`), which reads the gate list out of `computeServerSidePreSignFailures` rather
+than restating it, and pins what a fall closing does not have to answer — photo minimum zero,
+materials auto-confirmed, never quotes on site. **What still needs Patrick:** walk one, end
+to end, both ways — once with a signature and once with nobody home — and confirm the invoice
+that appears is right, that Send reaches the customer, and that Take payment opens a page that
+can actually be paid.
+
+**2026-09-01 (Add and remove zones from the app):** the other half of the declared-count
+work. A tech who arrives to five zones where the customer said six can now fix it on the
+spot — add appends a zone to the visit and the property; remove takes it off both, behind a
+confirm and a **reason**. Patrick's call that removal is destructive and that is fine: "if
+someone tells me their system is 6 zones and I arrive to only 5, deleting isn't that big of a
+deal." **Two things the implementation is careful about.** Zone numbers are CONTROLLER
+STATIONS, not list positions — removing Zone 3 leaves 1,2,4,5,6, never renumbering a survivor
+onto a station it does not own, because next spring a tech reads those numbers off the box on
+the garage wall. And the reason is written by the SERVER (`properties.removeZone()`, reached
+by `DELETE /api/properties/:id/zones/:n`) rather than sent as a history entry by the phone: a
+client-writable audit log is not an audit log. Reasons are a closed set — not on this
+property / merged / added in error / other-with-a-note — so the trail can be counted later,
+and `system.zoneCount` follows the surviving list so a stale declared count can never
+resurface as a fallback. **Coverage:** `scripts/test-declared-zones.mjs` grew to 33
+assertions. **What still needs Patrick:** remove a zone from a six-zone property and confirm
+the remaining five keep their original numbers on both the work order and the property, and
+that the reason shows up in the property's history.
+
+**2026-09-01 (A declared zone count now becomes real zones):** a customer books a fall
+closing saying they have eight zones; pricing has always honoured that (`effectiveZoneCount()`
+reads documented zones first, then `system.zoneCount`), so they are charged the 7-8 zone tier.
+But `scaffoldZonesFromProperty()` read the documented list ONLY, which on a first-time property
+is empty, so `create()` fell through to its "always give the tech at least one zone"
+placeholder. **Priced for eight, dispatched with one** — the tech arrives at an eight-zone lawn
+holding a one-zone work order. Two functions asking the same question and one of them not
+knowing about the fallback. **Fixed:** `declaredZoneList()` describes the list a declared count
+implies, `scaffoldZonesFromProperty()` falls back to it, and the seasonal create routes write
+that list onto the PROPERTY first (Patrick's call — the record should carry its zones from the
+first booking) so the work order and the property agree from visit one. The write lives at the
+route layer on purpose: `lib/work-orders.js` depends on nothing but node built-ins and two test
+suites sandbox it alone, an invariant this change briefly broke and then respected. Zones land
+`pendingReview: true`, the flag `applySystemUpdates()` already uses for zones discovered in the
+field, because a number typed into a booking form is a claim, not a survey. **A consequence
+handled with it:** the appointment page refuses a customer's zone-count correction once the
+property has documented zones ("our technicians have already mapped your system"), so
+materializing zones would have locked customers out with a message that wasn't true — that
+check now counts only zones a human confirmed, and naming a zone in the app clears the flag.
+**Coverage:** `scripts/test-declared-zones.mjs` (27 assertions, in `build:check`). **What still
+needs Patrick:** book a new property declaring a zone count, open its work order, and confirm
+the right number of zones appear on both the work order and the property; then confirm the
+customer can still correct that count until a tech names a zone.
+
+**2026-09-01 (The zone rename, second pass — and a data-loss risk found on the way):** the
+first fix carried the property along with the work order, and it still failed on Zone 3 with
+"the property record doesn't list any zones to rename" — on a property whose work order had
+scaffolded four zones FROM that list, so the zones plainly existed. Two causes, stacked.
+**(a)** `ClosingScreen.save()` replaced the whole work order with the PATCH response, which
+returns the work order ALONE — so the `property` the initial GET attached was thrown away by
+the first save. It worked on Zone 1 and was gone by Zone 2. Decorations are now carried
+forward. **(b)** The deeper problem, found while fixing (a): `properties.update()` merges
+`system` only ONE LEVEL DEEP, so the `zones` array in a PATCH **replaces** the stored array
+outright. Patching from a work-order copy is therefore unsafe by construction — a copy taken
+before Zone 1's rename still carries Zone 1's old name, and sending it reverts that rename;
+an empty copy erases the property's zone list entirely. (The empty-list guard that produced
+the confusing message was preventing exactly that, which is why it stays.) The rename now
+**fetches the property fresh** immediately before patching, so the array it sends is provably
+current, and writes both `location` and `label` because older records key off one and newer
+off the other while the CRM reads `location || label` — writing one and leaving the other
+stale shows the old name on whichever surface reads the other. **What still needs Patrick:**
+rename two different zones in one visit, then open the property and confirm BOTH new names
+are there and no zone has gone missing.
+
+**2026-09-01 (Three faults found walking a live fall closing):** Patrick ran a real closing
+on the app and hit three, all app-side, all under FLOW-31. **(1) Photos refused.** The server
+verifies a photo's declared mediaType against its MAGIC BYTES; `photos.js` hardcoded
+`image/jpeg` on every payload while its own header comment claimed images were re-encoded to
+JPEG on device. Nothing did that. An iPhone library photo is HEIC and a screenshot is PNG, so
+the server saw JPEG in the envelope and something else in the bytes: *"File 1 doesn't look
+like a real image/jpeg."* Intermittent, because a camera capture often IS a JPEG — it worked
+in testing and failed on a driveway with the water already off. Now declares what the file
+actually is, from the asset's `mimeType` or its extension, and can only emit a type the
+server's own whitelist accepts. **(2) Thumbnails blank.** The stored photo record carries `n`,
+not a `url`; both closing screens read `p.url`, got undefined, and rendered grey boxes for
+photos that had uploaded fine. Now built from `n` against
+`/api/work-orders/:id/photo/:n`. **(3) A zone rename never reached the property.**
+`GET /api/work-orders/:id` returns `{ workOrder, property, lead }` with property a SIBLING of
+the work order; `getWorkOrder()` returned `d.workOrder` alone and dropped it. `ZoneStage` read
+`wo.property.system.zones`, got undefined, mapped an empty array, and the (correct) "don't
+wipe the zone list" guard swallowed it — silently, which is why it looked like nothing
+happened. The property now travels with the work order, and the guard says which case it hit
+instead of nodding. **Coverage:** `scripts/test-media-type.mjs` (19 assertions, in
+`build:check`), which checks every type the app can emit against the server's OWN
+`WO_MEDIA_MIME_WHITELIST` so the two cannot drift. **What still needs Patrick:** attach a
+photo from the library (not just the camera) and confirm it lands and shows a thumbnail;
+rename a zone and confirm the new name appears on the property afterwards.
+
+**2026-09-01 (Start WO on a lead-less booking — found on a driveway):** Patrick opened the
+app on a real Willowridge stop and tapped **Start WO**: *"Couldn't open — API endpoint not
+found."* Cause: the app built `/api/leads/${leadId}/open-wo` unconditionally, and an
+assignment booking's `leadId` arrives as `""`, so the path collapsed to `/api/leads//open-wo`
+— which matches no route (`([^/]+)` needs a character) and fell through to the catch-all 404.
+Every lead booking on the same screen worked, which is why it read as a Willowridge problem.
+**Fixed:** a row with no lead now raises its work order against its PROPERTY, via the same
+`POST /api/work-orders { type, propertyId }` the CRM's property page uses, with the service
+key mapped to a template exactly as the server maps it. **Look before creating** — that
+endpoint has no upsert, so an unguarded second tap raises a second work order for the same
+visit: two documents and two invoices for one lawn. The property's existing work orders are
+read first and an unfinished one of the same type is reopened instead. A row with neither a
+lead nor a property cannot start one, and says so by disabling the button rather than
+failing at the server. Routing logic lives in `pjl-field/src/workorder-routing.js` (out of
+the screen so it is testable without React Native); `scripts/test-wo-routing.mjs` (38
+assertions, in `build:check`) pins that a lead-less row never routes through the lead
+endpoint, that duplicates are refused, and — checked against `BOOKABLE_SERVICES` and the
+server's own `templateForServiceKey` — that the app's template mapping cannot silently drift
+from the server's. **What still needs Patrick:** tap Start WO on a Willowridge stop, confirm
+it opens a fall closing; back out and tap it again, confirming it reopens the SAME work
+order rather than making a second; and confirm an ordinary residential row still starts
+normally.
+
+**2026-09-01 (Field app, assignment bookings):** the app's native Today screen honours the
+lead-less rows the assignment writer produces — Notify and Start WO disable rather than
+posting an empty lead id, and the card keys off `bookingId`. This matches, and does not
+change, the deliberate no-op recorded in the stage-2 defect entry below; the web day sheet
+is untouched.
+
+**2026-09-05 (Builder live PDF preview + email preview):** QUOTE-04 opened under FLOW-20 —
+the proposal builder now shows the customer PDF beside the editor (re-rendered on every
+autosave) and "Send for approval" passes through a preview of the exact email, with an
+optional note to the customer. One server composer feeds both the preview and the send.
+Revision emails (version > 1) now say "updated proposal" in headline + subject. FLOW-20
+stays UNMAPPED and needs a walked acceptance (steps under QUOTE-04); no PASS flow touched.
+**2026-09-05 (Email attachment manifest, same day):** QUOTE-05 opened and fixed under FLOW-20 —
+the approval email only ever carried the proposal PDF; an uploaded PDF drawing anchored to a
+section printed "See attached" in the proposal but was never attached. The email preview now
+lists every file with its fate and a per-file toggle, and the send attaches that same list.
+FLOW-20 still UNMAPPED; no PASS flow touched.
 
 If a flow isn't in here with a status, it is not known to work.
 Update this file, not a chat thread.
@@ -43,12 +3689,138 @@ Update this file, not a chat thread.
 
 Domain authentication is correctly configured. This is why mail reaches inbox, not spam.
 
+**Email health surface (JOB-008, 2026-08-03):** `GET /api/admin/email-health`
+(admin-cookie gated) + a section on `/admin` — last-7-day sent/failed counts by
+kind, the 20 most recent failures with masked recipients, and the timestamp of
+the last successful send (overall and per kind). Backed by the send ledger in
+`server/lib/mailer-log.js`; customer-facing failures additionally trigger a
+digest-limited (max one per hour) SMS alert via the existing Twilio plumbing.
+
 | ID | Severity | Finding |
 |---|---|---|
 | INF-01 | Medium | App sends `From: info@`, Google rewrites to `patrick@` (proof: header `X-Google-Original-From`). Cause: `info@` is not a verified send-as alias on the authenticating account. Fix: verify `info@` as a send-as identity, or authenticate SMTP as `info@`. |
-| INF-02 | **High** | **Single point of failure.** All customer email — login links, quote notifications, invoices, receipts — depends on one Workspace mailbox and its app password. Password rotation, 2FA change, revoked app password, or a Google flag stops all customer email at once. Unknown whether failures are logged or silent. |
+| INF-02 | **High** | **Single point of failure.** All customer email — login links, quote notifications, invoices, receipts — depends on one Workspace mailbox and its app password. Password rotation, 2FA change, revoked app password, or a Google flag stops all customer email at once. **Phase one complete — failures visible (JOB-008, 2026-08-03):** every send attempt lands in the ledger (`server/lib/mailer-log.js` → `server/data/email-log.json`, 90 d / 5 000-entry self-pruning), customer-facing failures page Patrick by SMS (one digest per hour), and Admin → Email health shows 7-day sent/failed by kind, recent failures (masked recipients), and the last-successful-send timestamp overall + per kind — a total outage no longer looks like a quiet day. Controlled-failure acceptance steps 2–4 run **locally with test env vars** per Patrick's 2026-08-03 ruling (no deliberate outage window on production); recorded as locally verified in the JOB-008 file. Stays open until phase two resolves the single-transport risk (INF-01 / send-as alias, transport resilience). |
 | INF-03 | Low | DMARC is `p=NONE` — monitoring only, not enforcing. No spoofing protection. |
 | INF-04 | Low | Workspace SMTP has a daily send cap. Not a constraint now, but a known ceiling before any bulk/seasonal sending. |
+
+## INF — Admin data exports
+
+Read-only, admin-gated surfaces that hand Patrick a file. Not customer-facing: nothing
+here sends, charges, schedules or writes. Listed so a new one is registered rather than
+appearing unannounced.
+
+**Territory export (2026-08-27):** `GET /api/admin/territory-export` — the fall-closing
+territory export as a browser download. Same payload the CLI at
+`territory-export-corrected.js` prints; both call `server/lib/territory-export.js`, so the
+two cannot drift. Opened because running the CLI needs shell access to the Render instance,
+which Patrick does not have. Reachable from **Admin → Settings → Territory export**
+("Download territory export (JSON)"). `?year=YYYY` selects the season year for the
+per-season opt-out flag, matching the CLI's `--year`; omitted, it is the current UTC year.
+
+- **Gate — ADMIN ONLY, twice over.** `needsAuth()` maps the path to `"admin"`, and the
+  route re-checks with `requireAdmin`. Verified against a live local server, not read
+  off the middleware: no cookie → **401**; a forged/tampered cookie → **401**; a signed-in
+  **tech** → **403**; a signed-in admin → **200**. De-identified is not public — the
+  payload is still every live property's municipality and rough location.
+- **Read-only.** `buildTerritoryExport()` only ever `readFile`s `properties.json` and
+  `customers.json`. It deliberately does **not** require `server/lib/properties`, whose
+  `readAll()` calls `ensureFile()` and can persist one-time id/code backfills — a write.
+  Verified by checksumming every file in `server/data/` before and after four exports:
+  byte-identical, nothing created.
+- **The three correctness guards are preserved exactly** — they are the reason the
+  corrected version exists, and each is asserted through the HTTP response, not just in
+  the lib: (1) soft-deleted and archived properties are excluded, matching
+  `properties.list()`; (2) depot pins (`PJL_BASE`, 44.0592 / -79.4613, or
+  `coords.source === "pjl-base"`) are reported as missing coordinates and their
+  "Newmarket, ON, Canada" label suppressed, not counted as a downtown cluster; (3)
+  xlsx-imported string coordinates are coerced, not dropped as missing.
+- **Privacy unchanged from the CLI.** No names, emails, phone numbers or street
+  addresses. Property ids are replaced by a per-run salted pseudonym (so two exports do
+  not line up), and coordinates are rounded to 2 decimals (~1.1 km).
+- **Response.** `Content-Type: application/json; charset=utf-8`,
+  `Content-Disposition: attachment; filename="territory-export-YYYY-MM-DD.json"`,
+  `Cache-Control: no-store`.
+- **Cover:** `scripts/test-territory-export.mjs` (100 assertions, in `build:check`),
+  including source guards that fail the build if the path leaves the admin gate, if the
+  route stops calling `requireAdmin`, if the response stops being an attachment, if the
+  lib acquires a write call, or if the CLI grows its own copy of any guard.
+- **The superseded `territory-export.js` was deleted.** Its own replacement documents
+  three ways it silently produces wrong numbers, and it sat next to the corrected file
+  under the shorter, more obvious name.
+
+**What still needs Patrick — not yet walked:** sign in, go to **Settings**, tap
+**Download territory export (JSON)**, and confirm a file named
+`territory-export-<today>.json` lands on the device and opens as JSON. That is the whole
+acceptance test; nothing here writes, so there is nothing to undo if it misbehaves.
+
+## INF — Admin action log
+
+**Who did what, when.** `server/data/admin-actions-YYYY-MM.jsonl`, written by
+`server/lib/admin-actions.js` from a hook inside the auth gate in `server.js`. Append-only;
+the module exposes no way to edit or delete an entry.
+
+Records every **state-changing** request (POST / PATCH / PUT / DELETE) by a signed-in staff
+account, plus any admin-only action a signed-in operator was REFUSED. Reads are not recorded.
+Each line: `{ ts, uid, role, method, path, ref, status, ok, ms, ip, ua }` — `ref` is the record
+id lifted from the path (`P-2026-0040`, `I-2026-0093`, a uuid), which is what makes
+"everything that happened to this invoice" answerable.
+
+**It holds no customer data by construction** — no request bodies, no query strings, no
+emails. The actor is a uid; names are joined in at read time. Treat that as an invariant: the
+moment this file holds contact data it becomes a second customer database with none of the
+handling the first one gets.
+
+Read it at **`GET /api/admin/action-log`** — admin only, twice over. Filters: `?limit=`
+(default 200, max 2000), `?months=` (default 3), `?uid=`, `?ref=`, `?path=`.
+
+Cover: `scripts/test-admin-actions.mjs` (71 assertions, in `build:check`), including source
+guards that fail the build if the hook leaves the auth gate, if the log write becomes awaited,
+if ip/user-agent stop being captured synchronously, or if the read route loses its admin gate.
+
+**Its other half is the record history itself** (CRM-21): the seventeen write paths that used
+to stamp `by: "admin"` now stamp the operator's display NAME via `actorLabel(req)`. Name in the
+record for reading, uid in this ledger for auditing — the two are meant to be used together,
+and neither is sufficient alone. If this ledger is ever removed, the naming change needs
+revisiting, because a display name is not stable across a user rename.
+
+**Known gap:** roughly fifty further call sites stamp a raw `session.uid` into `by`, which
+attributes correctly but renders an unreadable id. Converting those to `actorLabel(req)` is
+mechanical but crosses invoice and deposit code, so it needs its own reviewed pass.
+
+---
+
+## INF — Data repair CLIs
+
+Tools that WRITE to `server/data` outside the app. Listed so a destructive one is
+registered rather than appearing unannounced. Every tool here is dry-run by default and
+backs up what it touches before writing.
+
+**Property merge (2026-08-29, CRM-19):** `scripts/merge-properties.mjs` — folds a
+duplicate property into the one that survives and deletes it.
+
+```
+node scripts/merge-properties.mjs --keep P-2026-0040 --delete P-2026-0056           # plan
+node scripts/merge-properties.mjs --keep P-2026-0040 --delete P-2026-0056 --apply   # write
+```
+
+Accepts a `P-YYYY-NNNN` code or a raw id for either side. Standing invariants, each pinned
+by `scripts/test-merge-properties.mjs`:
+
+- Re-points every `propertyId` in `server/data/*.json`, at any depth (warranty claims carry
+  theirs at `link.propertyId`). Re-points are written BEFORE the duplicate is removed, so an
+  interruption leaves records pointing at a property that still exists.
+- Never rewrites an issued invoice's `address` or `billTo`, and never touches an
+  append-only store (`deleted-invoices.json`, `email-log.json`).
+- An opt-out on either record wins; unsubscribe tokens are preserved where they can be.
+- Two non-empty zone or valve-box lists conflict for a human instead of concatenating.
+- Refuses two properties on different customers unless explicitly overridden — that case
+  is a customer merge (`customers.mergeCustomers`) first — and refuses a keeper that is in
+  the Trash or archived.
+- `--apply` copies every file it touches to `server/data/_merge-backups/<timestamp>/`
+  first. To undo: copy them back and restart the service.
+
+Run it when nothing else is touching the CRM. These are flat files with no lock, so a
+concurrent request is a read-modify-write against the same JSON.
 
 ---
 
@@ -56,7 +3828,21 @@ Domain authentication is correctly configured. This is why mail reaches inbox, n
 
 ## FLOW-01 — Existing customer portal login — **PASS**
 
-Verified end to end 2026-07-30.
+Verified end to end 2026-07-30. **Re-verified 2026-08-02** after JOB-002 Part B changed hop 7:
+the portal now renders customer-wide data (service history, projects) and the magic link lands
+on the newest lead with a booking. Hops 1–6 unchanged in code; walked anyway — link arrives,
+30-minute expiry and single-use behaviour confirmed intact.
+
+**JOB-008 re-verification (2026-08-03) — PARTIAL, locally verified.** Hop 5 gained
+observability only: the send attempt now lands in the email ledger, and a resolved
+`{ok:false}` from `sendCustomerLoginLink` — previously returned to nobody — is routed to the
+ledger + SMS digest alert. Token generation, expiry, single-use, the generic "If we found
+you…" response, and every other hop are untouched. Verified locally per the amended JOB-008
+acceptance test (steps 2–4): induced send failure → customer response unchanged (generic
+`{ok:true}`), exactly ONE digest SMS dispatched, both failures visible in Email health with
+masked recipients, and the success path advances the last-successful-send timestamp.
+**Live re-verify pending:** amended steps 1 and 6 (a real portal-login request and lead-alert
+delivery on both channels) remain Patrick's walk — hop 5's live send was not re-walked.
 
 | # | Hop | Result |
 |---|---|---|
@@ -78,6 +3864,24 @@ Verified end to end 2026-07-30.
 
 ## FLOW-02 — Portal in-session actions — **PASS** (one MANUAL dependency)
 
+**Re-verified 2026-08-02** after JOB-002 Part B: "Send PJL a Message" still delivers to phone
+and email; notification preferences still save and persist across reload.
+
+**JOB-005 re-verification (2026-08-02) — PARTIAL, walked states only.** JOB-005 rewrote the
+page's header/stage/rail rendering. Walked live: scheduled-state (Gullo) and complete-state
+(Ravka) portals render correctly with history intact and past-appointment actions suppressed.
+**Deferred, not passed:** the message-send + notification-prefs regression (JOB-005 acceptance
+step 7), the mid-project state (step 3 — no active project existed to test), and the
+virgin-lead intake state (step 4). Those are covered by seeded browser tests only until walked.
+
+**JOB-006 re-verification (2026-08-03) — PARTIAL, walked states only.** JOB-006 replaced the
+page's card set (Next-visit card, intake-only snapshots, thank-you retired). Walked live:
+Paolo Gullo's scheduled-state portal, steps 1–4 (see CRM-12 closure). **Deferred, not
+passed:** steps 5–8 — no-upcoming card-hidden state, intake-customer card visibility,
+live-quote accept card, and the message-send + prefs regression. The deferred FLOW-02
+regression from JOB-005 therefore remains outstanding across both jobs; one walked
+message-send + prefs pass would clear it for both.
+
 | Action | Result |
 |---|---|
 | "Send PJL a Message" → submit | PASS — notification to phone **and** email |
@@ -92,6 +3896,23 @@ being ignored, from the customer's side.
 |---|---|---|
 | UI-01 | Low | Empty unlabeled input above "Your Zones" in the "Your System" card. Orphaned field, origin unknown. Find what writes to it before deleting. |
 
+## FLOW-23 — Payment captured → receipt → marked paid — **PASS**
+
+Verified 2026-08-02 during the Stripe migration (see `docs/HANDOFF_STRIPE_PAYMENTS.md` §7:
+5 live captures, ~$2,300 CAD, zero declines, webhook 200s, ledger entries automatic).
+**Re-verified 2026-08-02** during JOB-002 Part B acceptance: one live payment captured through
+the existing token link, no discrepancies. The invariants in the handoff §6 are binding on any
+payment-adjacent change. (This section was intended by the 2026-08-02 handoff commit but the
+register row was left in Part 4 — corrected here.)
+
+**JOB-008 note (2026-08-03) — re-verification PENDING the next real payment.** The receipt
+send gained ledger log lines inside `sendPaymentReceipt` only (success and failure paths);
+`finalizeStripeInvoicePayment`, `stripe.js`, `pay.js`, and every payment route are untouched
+per handoff §6 (Patrick's ruling 2026-08-03). Per the amended JOB-008 acceptance step 5, the
+next real payment through the token link is the re-verification: receipt arrives, ledger shows
+`receipt ok`, ledger and payment record agree. Until that payment lands this flow's PASS
+carries the pending-recheck flag, not a regression.
+
 ---
 
 # Part 3 — Intake
@@ -104,9 +3925,9 @@ not 50 flows. Fix the destination and every door is fixed.
 
 | ID | Destination | Placement |
 |---|---|---|
-| FLOW-03 | `/book.html` — Book Online, real-time availability | Contact page, footer |
-| FLOW-04 | `/quote.html` — 4-step Sprinkler Quote Builder | Header + footer, **sitewide** |
-| FLOW-05 | `/estimate.html` — Free Installation Estimate | Footer |
+| FLOW-03 | `/book.html` — Book Online, real-time availability | Contact page, footer, **and since 2026-08-02 the sitewide header + footer "Get a Free Estimate" CTA** |
+| FLOW-04 | `/quote.html` — 4-step Sprinkler Quote Builder | In-body links only (held header + footer sitewide until 2026-08-02; that CTA now points to `/book.html`) |
+| FLOW-05 | `/estimate.html` — Free Installation Estimate | In-body links only (held a footer link until 2026-08-02; that link now points to `/book.html`) |
 | FLOW-06 | `/contact.html` — enquiry form | Nav, sitewide |
 | FLOW-07 | `/new-customer` — self-intake (unlisted, sent by Patrick) | Private link |
 | FLOW-08 | `/commercial-new-customer` — commercial self-intake (unlisted) | Private link |
@@ -122,6 +3943,17 @@ Commercial · AI Diagnostic Chat · General Contact · Spring Opening · Fall Cl
 **Commercial tagging works** — records show Customer Self Intake + Commercial together.
 Previously logged as a change order; **closed, already built.**
 
+**JOB-001 verified 2026-08-02** — both acceptance tests walked by Patrick against live data:
+
+| ID | Status | What was walked |
+|---|---|---|
+| FLOW-07 | **PASS** | Self-intake walked end to end. Existing email → existing record updated, no duplicate, alert says "existing record updated". Unknown email → new lead tagged Customer Self Intake, alert says "new record". Commercial variant (`/commercial-new-customer`, FLOW-08) same behaviour, Commercial tag retained. |
+| FLOW-04 | **PASS** — walked 2026-08-03 | Quote-builder flow walked end to end: `/quote.html` submits successfully and the lead **reaches the CRM tagged "New Sprinkler Quote."** (Page live + CTA repointed to `/book.html` verified 2026-08-02.) |
+| FLOW-05 | **PARTIAL** — submission walked 2026-08-03 | Page live, footer link repointed to `/book.html` (2026-08-02). **Submission walked 2026-08-03: `/estimate.html` submits successfully but routes to an external quotation combination rather than the CRM** — leads from this path never appear in the CRM, which explains the "no identifiable records" evidence from the JOB-001 export. It is an old form-builder flow. **Capability gap noted:** it produces a generated quotation the portal's own quote-request flow doesn't have. For future consideration; deliberately no job scoped (2026-08-03). |
+| FLOW-03 | **PASS** (re-verified) | Real booking completed through `/book.html` after the CTA change: $105 Spring Opening, work order WO-ZDQL272C, correct source tag and dollar value in CRM, phone + email notifications fired. |
+| FLOW-03 | **PASS — engine re-verified 2026-08-30, awaiting a walked booking** | Geography filter added to `listAvailableSlots()`. Automated acceptance in `scripts/test-geo-availability.mjs` (27 assertions, in `npm run build:check`): a Mississauga address is offered the Etobicoke–Mississauga route day and not the Newmarket one; a day with no planned route is untouched; a failed geocode is offered every day; the filter's off switch works; and with no `dayShapes` the engine returns byte-identical results to before, with every pre-existing slot field intact. Verified against the **real** fall-2026 plan and live property coordinates: all 11 route days resolve with zero unresolved stops, and each test address matches exactly one day — Mississauga R5 (+1 min, next best +66), Scarborough R10 (+5, next +33), Orangeville R3 (+3, next +34). **Known and accepted:** a Newmarket address is cheap on every day, because every route begins and ends at the Newmarket base, so a home-turf customer is genuinely reachable on any of them. Geography does not constrain home turf; capacity does, and bucket-capacity enforcement is not in this change. **Still owed:** a real booking walked through `/book.html` on production against a loaded plan. |
+| FLOW-03 | **PASS — engine re-verified 2026-08-31, awaiting a walked booking** | Bucket capacity + season gate added to `listAvailableSlots()` (assignment writer stage 1 — the capacity enforcement the 2026-08-30 row named as missing). Automated acceptance in `scripts/test-booking-guards.mjs` (35 assertions, in `npm run build:check`): a bucket whose planned stops + unplanned bookings reach `bucketCap` disappears from availability while its neighbour bucket survives; a planned customer is never refused their own bucket, and their own booking is not double-counted against it; an unresolved planned code still holds its space; days outside `seasons.json`'s public booking window emit nothing for seasonal services — fall 2026 opens **Sep 28** (`publicBookingFrom`, the first route day, added at Patrick's ask) and closes **Oct 30** (`publicBookingThrough`, reserving Nov 1–6 for admin placement) — and repairs are never season-gated. **The off switch is the data's absence**: with no `dayShapes`, a plan without `bucketCap`, or a pre-stage-1 shape, the engine returns byte-identical slots — asserted against a baseline run — and `test-geo-availability.mjs`'s 27 assertions pass unchanged. A broken `seasons.json` fails soft to ungated availability. Both gates run inside `listAvailableSlots()`, which every submission path re-validates through with `dayShapes` attached, so gating the engine gates submission; admin custom-time bypasses by design. **Still owed:** the same real walked booking as the row above. |
+
 ## Evidence — CRM export, 56 records, 2026-04-30 to 2026-07-29
 
 | Path | Records | Won | Revenue |
@@ -135,29 +3967,213 @@ Previously logged as a change order; **closed, already built.**
 
 | ID | Severity | Finding |
 |---|---|---|
-| CRM-01 | **High** | **Self-intake creates duplicates.** Sending `/new-customer` to someone already in the CRM creates a second lead instead of matching the existing record. 14 of 16 self-intake records are frozen at "new", $0, permanently — the real job lives on a separate booking record. Confirmed pairs: Ravka, Dhesi, Gullo, Schwarz, Schafler, Mangos, Leung. **Untested consequence:** portal login matches on email; with two records per email, the magic link may open the empty record instead of real history. |
-| CRM-02 | **High** | **`/quote.html` is the weakest path despite the strongest placement.** Sitewide header + footer button; 4 leads in 3 months; one is Patrick's own test; zero converted. `/estimate.html` produced no identifiable records at all. Three competing estimate paths, one of which earns nothing. |
+| CRM-01 | **CLOSED** 2026-08-02 | **Self-intake creates duplicates.** Was: sending `/new-customer` to someone already in the CRM created a second lead instead of matching the existing record; 14 of 16 self-intake records frozen at "new", $0. **Fixed by JOB-001 Task A:** `/api/new-customer` (both residential and commercial) now matches submissions against existing lead records by email (case-insensitive, trimmed) and updates the matched record + logs activity instead of creating a duplicate; notifications state updated-vs-created. Acceptance test run by Patrick against live data 2026-08-02 — all three scenarios passed (56 → 57 records, exactly one new lead from the unknown-email case). The portal-login consequence for the seven pre-existing duplicate pairs is now tracked as CRM-07. |
+| CRM-02 | **CLOSED** 2026-08-02 | **`/quote.html` was the weakest path despite the strongest placement.** 4 leads in 3 months (one Patrick's own test), zero converted; `/estimate.html` produced no identifiable records. **Fixed by JOB-001 Task B:** the sitewide header + footer "Get a Free Estimate" CTA now points to `/book.html` on every page (83 templated pages + `quote-legacy.html`). `/quote.html` and `/estimate.html` remain live at their URLs — no redirects — and keep their in-body links (inventoried in the JOB-001 report). Acceptance test passed 2026-08-02: CTA verified on three page types, both old pages load, and a real booking completed end to end ($105 Spring Opening, WO-ZDQL272C, correct source tag, notifications fired). |
 | CRM-03 | Medium | **Follow-up and owner fields never used.** Zero of 56 records have a follow-up date or owner assigned. Mechanism is built and unused — directly related to the six-day-stale request found 2026-07-30. |
-| CRM-04 | Low | Test data live in pipeline: `John Charette — "Test booking with a fake address"`, site_visit, since 2026-04-30. |
-| CRM-05 | Low | Two SEO-spam submissions via contact form. Honeypot catches bots, not human-sent spam. |
-| CRM-06 | Low | `/commercial-new-customer` serves the residential canonical tag, title, and meta description. Page content differs (rendered client-side); metadata was never differentiated. |
+| CRM-04 | **CLOSED 2026-08-09** — pipeline clear of test data. **Deleted in two passes.** The test *leads* (John Charette, Jeff John, `+`-tagged JOB-001 acceptance-run leads) went during Patrick's JOB-009 acceptance walk **2026-08-07**, through the CRM's bulk delete → Trash flow. The residue — booking `BK-2026-0014` and the John Charette *customer* record — went **2026-08-09**, once CRM-15 shipped the control that made the stranded booking reachable. Patrick confirmed both gone. **Worth keeping on record:** the 08-09 residue existed *because* the lead was deleted first (that is CRM-15), and `scripts/find-test-leads.js` reported "pipeline is clean" the whole time — correctly, since it scans leads only and skips Trash, but indistinguishably from an empty or wrong file. That ambiguity cost several round trips and is now fixed in the scanner (it prints path, record totals and live-vs-Trash counts before any verdict, and takes `--include-trashed`). The lesson generalises: a cleanup tool that reports absence must say what it looked at. |
+| CRM-05 | **CLOSED 2026-08-09** — both deliverables done: the spam records are gone and the report is written. The two SEO-spam leads were deleted in Patrick's 2026-08-07 acceptance walk; **Kelly Dorji**, the one that had also minted a customer record, is confirmed fully removed from every store (checked 2026-08-09). **The flag-don't-block recommendation below is an open *decision*, not an open defect** — like CRM-03, it needs Patrick's word on whether to build it, and closure here does not presume the answer. **No CAPTCHA or intake gating was added**, per the standing instruction. Original finding and report: Two SEO-spam submissions via contact form. **Register premise was out of date:** the intake gate is `checkSubmission()` in `server/lib/anti-bot.js:230`, running ahead of any disk write or Twilio fan-out. **Four blocking checks** — honeypot (233), time-trap (240; 2.5 s–30 d), per-IP rate limit (258; 5 per 10 min), Turnstile (268) — with rejections logged to `server/data/bot-blocked.log`. The often-cited "fifth layer", email normalization (292), is **not a reject path**: its own comment says informational, it only computes a dedupe key. Wired at exactly two call sites: `server.js:4448` (`POST /api/quotes` — the contact form's endpoint, so CRM-05's path) and `server.js:17607` (booking). **None of it stops a human typing an SEO pitch at human speed, which is what these two were.** Recommendation (JOB-009, awaiting Patrick's decision): content heuristics that **flag, don't block** — reuse the scanner's vocabulary at intake to set the lead schema's existing `botFlagged`, so suspect leads arrive pre-flagged instead of posing as leads. No customer is ever blocked. Stricter Turnstile levels taxes every real customer and still doesn't stop humans — not recommended. **No CAPTCHA or gating added** per the standing instruction. At two submissions total the honest answer is option 1 or nothing. **Turnstile confirmed armed 2026-08-09** — Patrick verified `TURNSTILE_SECRET_KEY` and `TURNSTILE_SITE_KEY` both present in the Render environment. Worth recording *why* that check mattered: a **missing** secret disables layer 4 silently (`anti-bot.js:272` falls through with no error and no log line), whereas a **wrong** one fails closed and blocks every submission — so a silent hole was the only failure mode that could hide, and it is ruled out. |
+| CRM-14 | Low — **OPEN, found 2026-08-09, no job scoped** | **`POST /api/new-customer` has no anti-bot gate at all.** Found while sourcing the CRM-05 claims. The self-intake handler (`server/server.js:4745`) — behind both `/new-customer` (FLOW-07) and `/commercial-new-customer` (FLOW-08) — never calls `antiBot.checkSubmission()`: no honeypot, no time-trap, no rate limit, no Turnstile. It is a public POST that writes to `leads.json` and fires notifications. Exposure is genuinely lower than the contact form's — the URL is unlisted and sent directly by Patrick, not linked from any page or in `sitemap.xml` — which is likely why it was never wired. But "unlisted" is not "unreachable", and the gate is already written and takes one call to attach (the booking endpoint at `:17607` shows the pattern, including how to skip Turnstile for a trusted path). **Not fixed:** JOB-009 scoped no intake-handler change, and FLOW-07/FLOW-08 are PASS — touching them means re-verifying them. Patrick decides whether this earns a job. |
+| CRM-15 | **CLOSED 2026-08-09 — fix shipped and walked live the same day.** Patrick deleted the stranded `BK-2026-0014` through the new control and then deleted the John Charette customer record, which the booking had been blocking — the exact failure this defect describes, resolved end to end on production. That also unblocked CRM-04. | **Deleting a lead strands its booking with no UI left to delete it.** The schedule canvas builds its booking list from **leads**, not the canonical store — `schedule.js:185-189` fetches `/api/quotes` and reads `(bookingsResp.leads \|\| [])`, rendering each `lead.booking`. That canvas holds the **only** booking-delete control in the CRM (`schedule.js:1497` → `DELETE /api/bookings/:id`); `server/bookings.js` has no delete path at all. So once a lead is deleted, its booking is invisible on the schedule and unreachable from every screen — while still counting against `customers.js hardDelete()`'s reference check, which blocks deleting the customer. The delete handler documents the coupling in the opposite direction (`server.js:9472` strips `lead.booking` so the canvas "stops rendering the ghost") but nothing handles lead-first ordering. **Hit live:** JOB-009's own acceptance test instructed deleting the test leads, which stranded John Charette's `BK-2026-0014` and left his customer record undeletable with no UI remedy. Workarounds, both verified against the code: call `DELETE /api/bookings/:id` directly (same endpoint, guards and admin check as the button), or restore the lead from `/admin/trash` within the 30-day window so the booking renders again. **FIXED 2026-08-09 — "Delete this booking" on the booking detail page** (`/admin/booking/:id`), the page you land on from the Bookings list. That list is fed by `GET /api/bookings` → `bookings.list()`, the **canonical store**, so an orphaned booking is visible and now actionable there even with no lead. Admin-only (`deleteZone` revealed from `/api/session`, failing closed to hidden; the server enforces it independently via `requireAdmin`), native `confirm()` carrying the booking summary — same friction as the schedule canvas's delete — and the server's own refusal is surfaced verbatim, naming the linked WO id when an in-progress work order blocks it. Success redirects to `/admin/bookings`. **No server change: the endpoint already existed and is untouched**, so no intake, booking, or payment path moves — this is the missing UI for a route that shipped long ago. Verified in headless Chromium against a seeded orphan (booking present, lead deleted): detail page loads, no JS errors, zone visible for admin and hidden for tech, click deletes and redirects, record gone from the store — 8/8. **Deliberately not wired into `build:check`** (it needs a browser and a booted server; the suite is node-only). Patrick's walk: open the stranded booking, delete it, then delete the customer. |
+| CRM-16 | **CLOSED 2026-08-27 — fix shipped, verified end to end against a booted server.** **A quote in the Trash blocked its customer's deletion, invisibly.** Same shape as CRM-15, one store over: `customers.js hardDelete()` filtered every store for `customerId` and refused if *anything* matched, with no regard for `deletedAt`. A quote soft-deleted from the quote folder stays in `quotes.json` for its 30-day Trash retention, so it kept the customer undeletable — while the customer page's own Quotes tab, built from `quotes.list()`, filters the Trash out and showed zero. The refusal read "linked to 1 quotes" next to a tab reading 0, naming a link Patrick could neither see nor act on from that page, and Merge — the remedy the message offered — was the wrong tool for a record already deleted. Live for Vivian G (`19931887`). Hit the same way for a lead, property, or work order in the Trash; bookings and projects have no soft-delete and were never affected. **Fixed:** the guard splits links into live and Trash (`scanCustomerLinks()`). Live links block exactly as before, and the refusal now names only the live ones. Trash-only comes back as `409 code:"trashed_only"` listing what is in the Trash; the customer page turns that into a second confirm naming what will be permanently deleted, and re-issues `DELETE ?purgeTrashed=1`, which removes those Trash records and then the customer. Deleting nothing until the confirm is what keeps the restore case honest — a record restored between the refusal and the confirm is live again and re-blocks, re-checked at the moment of the write, not just at scan time. **Invoices never purge this way:** a deleted invoice leaves `invoices.json` entirely for the append-only tombstone log, so an invoice reference is by construction live and still blocks — the money line JOB-011 specced holds here for free. Purge order is Trash records first, customer second: a failed write leaves a state Patrick can retry from rather than stranding the records. Also fixed in passing: the refusal pluralises ("1 quote", not "1 quotes"). **Verified:** 35 assertions in `scripts/test-customer-delete-trashed.mjs` (in `build:check`) covering live-blocks, trash-only, the confirmed purge touching no other customer's records — Trash records included — the restore race, the no-soft-delete stores, and the clean-customer path; plus a live run against a booted server with a seeded trashed quote (409 `trashed_only` → confirm → 200, quote and customer both gone, nothing else moved). **Not JOB-011:** that job's full cross-store purge (magic-tokens, review-requests, backup snapshots, the money-line preview) is still unscoped work. This is the narrower defect — the guard was counting records that are not links. |
+| CRM-06 | **CLOSED 2026-08-09 — walked live.** `/commercial-new-customer` served the residential canonical tag, title, and meta description; page content differs (rendered client-side) but metadata was never differentiated. **Fixed in `serveStatic`:** the commercial route serves the same single-source `new-customer.html` with `<title>`, canonical, meta description — and, per Patrick's 2026-08-07 addendum ruling, the `<h1>` — rewritten to commercial variants. Exact-string replacement, so a drifted source string no-ops rather than breaking the page. **Patrick confirmed on production 2026-08-09: the hero reads "New commercial customer intake"**, which proves the rewrite branch executes on the live route. The three head tags were verified against the deployed `main` the same day — all rewritten on the commercial route, and `/new-customer` byte-identical to the file on disk. **Re-verified after PR #47** (The PJL Water Promise), which touched `new-customer.html`: its edit was confined to the footer block and one appended script tag, leaving all four exact-match source strings intact — the no-op risk this design carries, checked rather than assumed. The page is `noindex, nofollow`, so this was always about the browser tab, bookmarks and link shares, not ranking. |
+| CRM-07 | Low (demoted from High 2026-08-02) | **Duplicate-pair lead records — residual admin hygiene only.** Was: portal login landed the seven duplicate-pair customers (Ravka, Dhesi, Gullo, Schwarz, Schafler, Mangos, Leung) on the frozen $0 self-intake record. **Resolved customer-side by JOB-002 Part B:** login lands on the newest lead with a booking, and the portal renders the customer-wide union of history whichever lead the token opens — verified in Part B acceptance (step 2, duplicate-pair login shows full history; no empty portal). What remains is admin-side: doubled records clutter the CRM list, and portal message threads are split per lead (a reply sent on the old record's thread doesn't surface on the landed one). A merge/cleanup job is optional housekeeping, not a customer fix. CRM-01 stops new pairs forming. |
+| CRM-08 | **CLOSED** 2026-08-02 | **Completed work orders not visible in the customer portal.** Observed three times; one property with two work orders showed the invoice apparently linked to the spring opening rather than the correct work order, forcing manual PDF delivery. Root cause verified in code 2026-08-02, three layers, same underlying flaw as CRM-07: **(1)** the portal is lead-scoped and renders at most ONE work order — the `lead.booking.workOrder` envelope embedded in the single lead the portal token opens (server.js `buildPortalPayload`); a customer with two visits has the second WO on a different lead (public bookings mint a lead each) or overwritten in place (admin book-from-lead replaces `lead.booking` wholesale). **(2)** Nothing ever writes back to that envelope after booking — no code path updates its `status`/`documentReady`/`documentUrl` when the canonical WO (work-orders.json) completes, so even the right lead's portal card reads "Scheduled" forever with no report. **(3)** Invoices never appear in the main portal at all — `invoices.json` records carry the correct `woId`, but the only customer-facing surface is the separate token-gated `/portal/invoice/:id` link; inside the portal the only WO card the customer can see is whichever lead they landed on (the newest, per CRM-07), so the invoice "appears linked to" that visit. The data layer is correctly linked throughout — this was purely a portal-surface scoping problem. **Fixed by JOB-002 Part B** (portal renders by customer: full service history live from the canonical stores, warranty labels, report + invoice downloads on every visit including expired warranty, projects at stage level). **CLOSED 2026-08-02 — acceptance test passed, all 14 steps**, including duplicate-pair and multi-visit logins, expired-WO PDF download, read-only invoices with no pay controls, no internal data in the project view, and a live payment through the token link (FLOW-23 re-verified). |
+| CRM-09 | **CLOSED** 2026-08-02 | **Portal hero/stage rail reflected lead-level booking state only, never completed work.** **Fixed by JOB-005:** headline, current-stage card, and follow-up line derive from canonical stores in priority order (project underway > quote ready > scheduled > complete > closed-quiet > request open); "upcoming" = future-dated booking envelope OR any pre-terminal work order, dateless included (12 of 14 open WOs measured dateless — the normal advance-booking shape); the intake rail renders only during intake and is otherwise replaced by the derived current-stage card (Task 3: replace); Change/Cancel suppressed on past-dated appointments; the stale "quote accepted" thank-you gated out of complete/closed states. **Acceptance record:** steps 1 (Gullo — scheduled via dateless Fall Closing, rail retired, past-appointment buttons suppressed), 2, 5, 6 (Ravka — complete, rail retired, history intact) passed live 2026-08-02. **Steps 3 (mid-project), 4 (virgin lead + intake rail), and 7 (FLOW-02 message/prefs regression) DEFERRED — not passed:** no active project existed to test, and the virgin-lead and regression runs were postponed. Those three states are verified in seeded browser tests only. The page-level contradiction that remains (frozen Work Order card vs Service History) is CRM-12, deliberately NOT covered by this closure. | Verified 2026-08-02 with a seeded customer whose only visit completed three months prior, nothing upcoming: header reads "Hi &lt;name&gt;, your service is scheduled" with "before we arrive" copy; the timeline rail ends at "Booked"; the stage card reads "Service Confirmed / PJL will follow up"; and the work-order card shows the completed visit as "SCHEDULED" for its months-past date with live Change/Cancel-appointment buttons and an "appointment already underway — please call us" notice. All four surfaces read from the lead's frozen `booking.workOrder` envelope and `crm.status` — the same never-updated snapshot behind CRM-08 — while the Part B service-history card directly below correctly shows the same WO as Completed with warranty. The page contradicts itself. Fix direction: derive hero/stage/WO-card state from the canonical stores (completedAt, upcoming bookings) like the history card does; suppress Change/Cancel controls when nothing is upcoming. |
+| CRM-10 | Low — fix shipped 2026-08-02 | **"Work Order Document" placeholder panel removed from the portal's appointment card.** It promised "your detailed work order will be available here closer to your appointment" with no mechanism ever delivering one (the envelope's `documentReady` has no writer — confirmed in the CRM-08 investigation). Verified on three customer portals 2026-08-02. Completed service reports now live in the Service History card (JOB-002 Part B). Panel + driving JS removed; card verified rendering cleanly without it. Close on next portal view. |
+| CRM-11 | **CLOSED** 2026-08-03 | **Work orders stranded in non-terminal statuses.** Measured live 2026-08-02: 14 open (non-terminal) WOs, **12 dateless** — dateless advance seasonal bookings are the normal shape, not an edge case — and several parked in `on_site` for 1–2 months (WO-B52YWHWY since Jun 1, WO-AZABTKPH since Jul 23). A WO that never reaches `completed` never fires the completion cascade: no property service record, no invoice draft, no `completedAt`, **no warranty start date**. The JOB-005 derived portal state deliberately counts these as "upcoming" (Patrick's ruling: a stale "scheduled" is a truthful nag; a wrong "complete" is the CRM-09 defect class) — so stranded WOs are customer-visible as perpetually-scheduled work. **Resolved by JOB-007 + audited cleanup 2026-08-03:** 14 open → 6, every remaining record legitimately open (Paolo Gullo's advance Fall Closing; four build days under two active GreenTree projects; one commercial service visit genuinely in progress — YRSCC No. 1233). Four closed by hand (including the accidental customer-notification completion that motivated JOB-007), four closed via `scripts/complete-backdated-wo.js --apply --close-only` with true dates, zero invoices/service records created, zero notifications sent (WO-8YB6GM4Y, WO-T3ZA2ZC9, WO-8PEHUSGF, WO-GCSZ6G3P — each backed up pre-write). Permanent tooling now in the repo: `scripts/audit-stranded-wos.js` (read-only triage with a/b/c/d suggestions) and the back-dated completion script (cascade honours `completedAt`; customer email + review-request suppressible; `--close-only` for already-papered work). Re-run the audit periodically — the register's "assume nothing works" rule applies to WO hygiene too. Accepted trade recorded: WO-GCSZ6G3P (Aviva Bushuev, paid $242.95) closed without a service record, so that visit carries no warranty label in her portal history. |
+| CRM-13 | **OPEN — shipped 2026-08-06, acceptance test NOT yet run** | **A locked work order could never be corrected.** WO-BF86TWRW (Faramarz / service visit) was bypass-locked at end of visit with the **$95 service call missing from scope**. Because `lineItemsFromWo` returns `[]` when the on-site builder is empty, the completion cascade had nothing to invoice — so no invoice was ever drafted and the fee was never charged. There was no route back: no unlock endpoint, no admin control, and the only latent lever (`PATCH {locked:false}` — `locked` is in `allowedTop` and is not scope-protected) worked on bypass-locked WOs but did **nothing** on signature-locked ones, because the dispatcher guard independently checked `signature.signed`. **Shipped:** admin-only `POST /api/work-orders/:id/unlock` (reason ≥10 chars, required) and `/relock`, gated twice (`needsAuth` → "admin", above the generic `/api/work-orders` "user" rule, **plus** `requireAdmin` in the handler); `isScopeFrozen(wo)` in `lib/work-orders.js` makes `wo.locked` the single freeze authority, replacing 14 `locked || signature.signed` guards in server.js; unlock **preserves** the signature/bypass record (Patrick's ruling 2026-08-06 — flip the flag, keep the record) and writes a `wo_unlocked` history entry carrying the reason, who, and which path held the lock; Unlock/Re-lock buttons on the WO editor (admin only, role from `/api/session`); an **Unlocked** filter on `/admin/work-orders` because unlock clears `locked` and would otherwise drop a WO out of both existing recovery filters — the CRM-11 lesson (a state nothing surfaces is a state nobody fixes). Deliberately **not** touched: the two customer-facing portal guards (`locked \|\| signatureBypass`) so an unlock never re-opens a stale approval/remote-sign link; and **nothing payment-adjacent** — unlock never touches an invoice. 56 automated assertions in `scripts/test-wo-unlock.mjs` (wired into `build:check`); full round trip verified against a live local server (tech→403, short reason→422, locked edit→409, unlock→200 with bypass intact, edit→200, double-unlock→409, relock→200 with edit surviving, edit→409). **Still requires Patrick's walked acceptance test — see the job file.** |
+| CRM-12 | **CLOSED** 2026-08-03 | **Stale lead-scoped intake cards contradict the derived state.** Observed live on Paolo Gullo's portal 2026-08-02: the Work Order card shows WO-KXZNWGP4 as SCHEDULED for Tuesday July 14 while Service History on the same page shows that visit Completed and its invoice Paid — plus a permanent "quote accepted" thank-you and a fossilized "Project request / $95 estimated value" card from the July intake. Root cause: the portal is two generations of cards — derived/canonical (JOB-005/Part B: hero, stage, history, projects) and frozen lead-scoped intake snapshots (Work Order envelope card, accept thank-you, project request, project activity) that render forever. Full audit + proposed visibility matrix in the 2026-08-02 session: rebuild the WO card as a "Next visit" card (upcoming/dateless-booked work only, hidden otherwise); retire the won-state thank-you entirely; make Project request + Project activity intake-only (same predicate as the rail); "date to be confirmed" copy for dateless history rows. **Fixed by JOB-006** exactly per that matrix, plus the "When" row label. **Acceptance walked live 2026-08-03 on Paolo Gullo's portal (steps 1–4):** appointment card shows WO-AJAUTCH7 Fall Closing with "date to be confirmed"; the July 14 visit appears only in Service History as completed and paid with its warranty label; thank-you, Project request, and Project activity cards all gone. **Steps 5–8 DEFERRED, not passed** (no-upcoming customer card-hidden check, intake-customer card visibility, live-quote accept card, FLOW-02 message/prefs regression) — covered by seeded browser tests only until walked. |
+
+## Warranty policy — authoritative (recorded 2026-08-02, JOB-002)
+
+| Work order type | Warranty |
+|---|---|
+| `build` (installation) | **3 years** |
+| `service_visit` | 1 year |
+| `spring_opening` | 1 year |
+| `fall_closing` | 1 year |
+
+**The CLAIM against this policy is FLOW-30 (Part 4), added 2026-08-29.** This section stays the
+single source of the policy; `lib/warranty-claims.js` is the claim record and never restates a
+term. `warrantyForWorkOrder()` is read-only to the claim flow.
+
+Installations carry 3 years; everything else 1 year. Hydrawise controller retrofits are
+**service**, not installation — their `service_visit` typing is correct and must not be changed.
+Parts replaced during a service call inherit the service warranty; warranty attaches to the work
+order, not to individual components. Expiry is computed from the work order's `completedAt` +
+type — single implementation in `server/lib/warranty.js` (`warrantyForWorkOrder`), shared with
+the completion cascade's snapshot so the two cannot drift.
+
+**JOB-002 Part A (completedAt foundation) — COMPLETE, acceptance test passed 2026-08-02.**
+`completedAt` is a first-class field, server-stamped in `workOrders.update()` on every
+completion path (tech UI, admin status change, bulk) at the same instant as the `status_change`
+history entry; not client-patchable; preserved once set. Backfill applied on Render 2026-08-02
+via `scripts/backfill-wo-completedat.js`: **25 records promoted from history timestamps, 0
+unrecoverable** (all 25 completed records — the field was new, so every one qualified, not only
+the 10 that also lacked `departedAt`). Backup:
+`server/data-backup-2026-08-02T15-44-55-816Z-wo-completedat/`. Post-apply count verified:
+completed 25, missing `completedAt` 0. Write-path verified live on both branches of the old
+gap: tech-flow completion (WO-PEDFQN32) stamped `completedAt` + `departedAt`; admin status
+change (WO-PJNZKTWP) stamped `completedAt` with `departedAt` null — the server-side stamp
+works. CRM-07 and CRM-08 stay open — Part A is a prerequisite, not a fix; Part B (portal
+rebuild) consumes it.
+
+**JOB-002 Part B (portal renders by customer) — COMPLETE, acceptance test passed 2026-08-02,
+all 14 steps.** The portal payload carries `serviceHistory` (every non-build work order for the
+customer, live from work-orders.json, newest first, warranty labels from `warrantyForWorkOrder`,
+report PDF + read-only invoice per line — full history, no retention cut-off) and `projects`
+(stage rail Accepted→Deposit→Scheduled→Complete→Invoiced, day count, percent complete, project
+invoices — no dailyLog/notes/materials/crew data, verified by sentinel leak-test and confirmed
+in acceptance step 11). Magic-link landing prefers the newest lead WITH a booking. Token-gated
+downloads: `/api/portal/:token/wo-report-snapshot/:woId` with customer-union authorization +
+live customer-audience render fallback for pre-snapshot completions;
+`/api/portal/:token/invoice/:invoiceId/pdf` (drafts/voids never serve; cross-customer 403).
+Payments untouched per HANDOFF_STRIPE_PAYMENTS §6 — verified live in acceptance step 9.
+Outcomes: CRM-08 closed; CRM-07 demoted to Low; FLOW-01, FLOW-02, FLOW-23 re-verified PASS.
+Follow-ups spun out: CRM-09 (stale hero/stage/appointment cards), CRM-10 (placeholder panel —
+fix already shipped).
+
+---
+
+# Part 3.5 — Verification debt (parked 2026-08-03)
+
+Everything shipped-but-not-walked, in one place so it stops living in chat threads.
+Tick items off here as they're confirmed; nothing below blocks new work.
+
+## Do soon — small and real
+
+| # | Check | Why it matters | Effort |
+|---|---|---|---|
+| VD-1 | ~~Review-request queue check (WO-AZABTKPH / Adam Sorrenti)~~ | **DONE 2026-08-03** — nothing queued, nothing to cancel | ✓ |
+| VD-2 | ~~Submit one test quote through `/quote.html`~~ | **DONE 2026-08-03** — submits, reaches CRM tagged "New Sprinkler Quote"; FLOW-04 → PASS | ✓ |
+| VD-3 | ~~Submit one test through `/estimate.html`~~ | **DONE 2026-08-03** — submits, but routes to an external quotation, NOT the CRM; finding + capability gap on FLOW-05 | ✓ |
+| VD-11 | **AI chat transcript read-back** (2026-08-27) — `/admin/chats` and the CRM lead drawer now render a stored transcript as speaker turns instead of one block. Display only; storage, the POST upsert and the widget are untouched, and an unparseable transcript falls back to raw text. Verified in headless Chromium on both surfaces (turn attribution, escaping, mobile, open-row survives the 60s poll) and by 64 assertions in `build:check`. | Patrick to open one real conversation on `/admin/chats` and confirm it reads the way he wanted — and that the row previews now tell the chats apart. | Small |
+| VD-10 | **Google Ads conversion tracking — confirm live** (2026-08-06, touches FLOW-03 + FLOW-10). Ads conversion tracking was never installed: the site configured GA4 only, no `AW-` line anywhere, so 2 conversions recorded across $1,959 of spend. Now added: `gtag('config','AW-11358637592')` in `_partials/analytics.html` (84 pages via `node build.js`), a booking conversion in `js/booking.js` on the success path only, and a delegated capture-phase phone-click listener. **Verified automatically** in headless Chromium (booking success fires exactly one conversion after the confirm step renders; a failed reserve fires none and leaves the customer on the contact step with a retryable button; runtime-injected `tel:` links are tracked; GA4 config untouched). **Not verifiable in CI:** the outbound ping to Google — `googletagmanager.com` is unreachable from the build sandbox. | Patrick to confirm on the live site: DevTools → Network shows `AW-11358637592`; a phone tap shows `CTBKCOOulN0cEJicnKgq`; a real test booking shows `YtmLCOCulN0cEJicnKgq`. Then, ≤24h later, both conversion actions move Inactive → Active and the "Book appointment" goal Misconfigured → Active. **FLOW-03 stays PASS on its existing walk — this change is additive and guarded, but re-walk one booking to close it out.** |
+
+## Self-verifying — let normal business tick these off, just record when it happens
+
+| # | Check | Ticks itself off when… |
+|---|---|---|
+| VD-4 | FLOW-02 message-send + prefs regression (JOB-005 step 7 / JOB-006 step 8) | the next real customer sends a portal message and Patrick's phone+email both ring |
+| VD-5 | Live accept card renders + works post-JOB-006 (JOB-006 step 7) | the next real quote goes out and the customer accepts online |
+| VD-6 | "Your project is underway" state (JOB-005 step 3) | GreenTree (active PROJ-2026-0002/0003) next opens their portal — or mint a token any time |
+| VD-7 | No-upcoming customer: appointment card hidden entirely (JOB-006 step 5) | any completed-only customer's portal is next viewed (Ravka) |
+| VD-8 | Virgin-lead intake state: "request is open" + rail + request/activity cards (JOB-005 step 4 / JOB-006 step 6) | the next genuine new lead arrives and their portal is glanced at |
+| VD-9 | CRM-10 close-on-sight: "Work Order Document" panel gone | already observable on Paolo's walked portal — close on Patrick's say-so |
+
+## Parked — real jobs, not debt
+
+- FLOW-01 edge cases: unrecognised email, expired token, reused token (listed untested since 2026-07-30).
+- Part 4 unmapped chains: FLOW-20/21/22 (quote → delivered → accepted — the money path upstream of verified payments), FLOW-24 (form-failure alerting), FLOW-25 (AI diagnostic + its financial promise). **MISC-01 and MISC-02 both closed 2026-08-09** — footer taps and sitemap counters walked live; they are no longer parked.
 
 ---
 
 # Part 4 — Unmapped
 
+## FLOW-30 — Warranty claim intake → CRM queue → resolution — **UNMAPPED** (opened 2026-08-29)
+
+**Hop chain (as built):**
+
+1. Customer taps *File a warranty claim* on `warranty.html` → `warranty-claim.html`.
+2. Form POSTs JSON to `POST /api/warranty-claims` (**public**; anti-bot gate first — honeypot,
+   `_ts` time-trap, per-IP 5/10min, Turnstile). Files ride as base64 and are magic-byte verified
+   by `validatePhotos(..., { mode: "wo" })` — the validator that already accepts PDF alongside
+   images. Every field is mandatory server-side; the invoice copy is mandatory.
+3. `warrantyClaims.create()` allocates the claim number inside the same read-modify-write as the
+   append, so two simultaneous submissions cannot collide. Files land at
+   `server/data/warranty-claim-files/<claimNumber>/<n>.<ext>`.
+4. `warrantyClaimLink.crossCheck()` resolves customer (email → phone) → their invoices → the
+   invoice named → property → work order → warranty window via `lib/warranty.js`. Result stored
+   on the claim as `link`; the fuller read-side `context` is rebuilt on every CRM read so an
+   edited customer record never shows stale on the page Patrick decides from.
+5. Fan-out: customer acknowledgement + team alert to `info@` with the customer's files attached.
+6. Patrick works it at `/admin/warranty-claims` → `/admin/warranty-claim/<number>`. Six actions:
+   under review, contact customer, return email with questions, book for service call, resolved,
+   denied. Each emails the customer, subject `RE: Warranty Claim File Number — <number>`.
+7. Denied → the customer's status page offers a dispute gated on accepting the service-call-fee
+   condition → claim re-opens as `disputed` and the team is alerted.
+8. **Approved** (FLOW-30b) → `POST /api/warranty-claims/:id/approve` raises a `service_visit` at
+   the linked property carrying `serviceFeeWaiver { reason: "warranty" }` and `wo.warrantyClaim`
+   provenance. Claim goes to `approved` (still OPEN — the repair is owed) and the customer is
+   emailed that there is no charge.
+9. Tech attends. The WO shows a green "Warranty repair — no charge" banner naming the claim and
+   the prior invoice / work order being honoured.
+10. **The escape hatch.** If the fault isn't what the claim described, removing the waiver via
+    the existing `POST /api/work-orders/:id/service-fee-waiver` requires a written reason,
+    restores the $95 service call, stamps `wo.warrantyClaim.converted`, moves the claim to
+    `converted` (terminal, not disputable — they signed on site) and emails the customer the
+    reason. `POST /on-site-quote/accept` still demands a drawn signature + acknowledgement, so
+    the now-chargeable work cannot be accepted unsigned. After the completion signature the WO
+    locks and any further change needs `unlockWorkOrder()`.
+
+**Numbering:** `YYYY-MM-DD-000YYYYNNNN` — filed date, then `000` + year + a four-digit per-year
+sequence that resets each January. e.g. `2026-08-29-00020260001`. The sequence is derived from
+the max already issued in the store, not from a counter file, so a restored backup cannot
+re-issue a number. The number is the record id and the on-disk directory name, and is validated
+against `CLAIM_NUMBER_RE` at every filesystem and route boundary.
+
+**Two credentials, never mixed:** the CRM API is admin/tech-gated in `needsAuth()`; the
+customer's routes carry the claim's own 32-hex `statusToken` in the query string, checked
+against the claim number in the path so one claim's token cannot open another. The claim number
+is sequential and therefore guessable — it identifies, it does not authorize.
+
+**Reminders:** open claims drive a nav badge on every admin page; open-and-untouched-for-24h
+claims drive a band at the top of the queue and a 12-hourly digest to the team. The digest sends
+NOTHING when nothing is stale, and does not run on boot (a deploy would re-send it).
+
+**What is verified:** 138 node assertions in `build:check` (mutation-tested); a 101-assertion
+live-server walk covering validation, magic-byte rejection, anti-bot, numbering and sequence,
+token scoping, cross-claim token isolation, path traversal, admin gating, the deny → dispute →
+book → resolve cycle, and the cross-check against seeded customer/property/WO/invoice records;
+headless Chromium over all four new pages at 1280px and 390px (no console errors, no horizontal
+overflow).
+
+**What is NOT verified — the walked acceptance still owed:**
+
+- **No email has been sent through live Gmail.** Every template is asserted at the builder
+  level and every route's send path is exercised, but `getTransporter()` returns null without
+  `GMAIL_USER` / `GMAIL_APP_PASSWORD`, so no message has actually left the box. Send one real
+  claim end to end and read all four emails (acknowledgement, team alert with attachments,
+  a status update, a denial) in a real inbox before trusting this.
+- Turnstile is exercised only in its test-key configuration.
+- The booking hand-off mints a session and the session resolves with the claim's context, but
+  no one has walked it through to a confirmed booking and an opened work order.
+- The 24h reminder digest has not been observed firing on a real clock.
+
+**Status:** UNMAPPED until the above is walked. The flow is complete and defensible in code; it
+has not been proven against live third parties.
+
+---
+
+
 Nothing below has been walked. Assume nothing works until verified.
 
 | ID | Flow | Note |
 |---|---|---|
-| FLOW-20 | Quote written → delivered to customer | Money moves here |
-| FLOW-21 | Quote viewed → accepted | |
-| FLOW-22 | Invoice generated → delivered | |
-| FLOW-23 | Payment captured → receipt → marked paid | |
+| FLOW-20 | Quote written → delivered to customer | Money moves here. **QUOTE-01 (found + fixed 2026-08-18, still UNMAPPED — needs a walked acceptance):** the customer-facing **PREPARED FOR** block on the proposal PDF took its address from the SERVICE-address chain in `quoteRenderParties` (`server/server.js:2697`) — property → lead → most recent lead/work order by email → billing address — and `quote-pdf.js` then re-applied the same bias with `property.address \|\| customer.address`. Every rung above the last is a project/site address, so the customer's own address could never win. On an account with several concurrent sites the document was addressed to whichever OTHER site had been adopted or worked most recently. **Observed on Q-2026-0067:** a Norwood site address (`4293 ON-7`) printed on a Dundalk McDonald's proposal for GreenTree Construction Inc.; the NAME was correct, only the address was wrong. **Not a regression** — `git log -L` puts both the renderer block and the resolver at the repo's root commit (`a9f17de`, 2026-08-01) with no edit since; the recent `80d12b0` touched only a `BRANCH_LABELS` entry. It is a latent design flaw that only surfaces once a customer has more than one site. **Fixed:** a new draft-editable `quote.preparedForAddress` field, resolved by `billingParties.resolvePreparedForAddress()` in the inverse order — explicit override → the customer's OWN address → the service address only as a last resort, never a property record. Presentation only: no change to the service address a crew works from, pricing, totals, HST, QuickBooks, or the frozen-PDF contract. Draft-only (in `SCOPE_PROTECTED_FIELDS`), so it freezes at send with the rest of the document. Covered by `scripts/test-prepared-for-address.mjs` (23 assertions, in `build:check`). **What still needs Patrick:** open Q-2026-0067 in the builder, confirm the field defaults to GreenTree's own address, and download the PDF to see the Norwood address gone. **QUOTE-02 (added 2026-08-18, needs a walked acceptance):** line items now carry an integer `order` and the quotation renders by it — ↑/↓ controls on each row in the proposal builder, mirroring the narrative-section reorder. **Why a field and not array position:** `mergeQuoteLines()` (`sitebuilder.html:5250`) rebuilds `lineItems` in canonical order (mainline, controller, Zone 1..N, then manual lines) on EVERY "Generate quote" re-sync, so order held as array position is destroyed by the next sync; held as a property it survives, because the merge carries a matched line's own fields across. **Display only, asserted not assumed:** `computeProposalTotals` sums `lineTotal` across the array — a sum, not a scan — so no arrangement moves the subtotal, HST or total, and qty/unit price/line total travel with the line. **Zone labels are NOT position-derived and are left alone:** `Zone ${i+1} — ${name}` is generated once from the Site Builder's own zones array (`sitebuilder.html:5170`) and is a frozen string by the time it reaches `lineItems`, so moving a line cannot renumber a zone. Draft-only — `lineItems` is already in `SCOPE_PROTECTED_FIELDS`, which also keeps the positional `decisions[].lineItemIdx` pointers (`server.js:9270`, `:16685`, `:16983`) safe, since those are only written at accept time. One shared sort (`server/lib/line-item-order.js`) serves the PDF and the HTML proposal page; the browser builder carries its own comparator and a test pins the two together. Covered by `scripts/test-line-item-order.mjs` (47 assertions, in `build:check`). **What still needs Patrick:** arrange a real stack in the builder — flow meter to the top — download the PDF, and confirm the sequence matches and the totals did not move. **QUOTE-03 (found + fixed 2026-08-28, needs a walked acceptance):** the generated HTML proposal page (`proposal-html.js` + `proposal-assets/*-theme.css`) had **no side margin on a phone** — reported from a screenshot of Q-2026-0074, where "HOW THE SYSTEM WORKS", its lead paragraph and the card stack all started at x=0 while the green hero above them kept its gutter. **Cause: a cascade collision, not a missing rule.** The page's one wrapper is `.wrap { max-width:1180px; margin:0 auto; padding:0 var(--gut) }` and sections are emitted as `class="sec wrap"`; `.sec` is declared LATER in the same stylesheet at equal specificity and used the `padding` SHORTHAND (`padding:clamp(52px,8vw,100px) 0`), whose `0` horizontal component silently overwrote the gutter. Same defect on `.close` in the lighting + combined themes (`class="close wrap"`); the hero was never affected because `.hero-in` declares no padding. **Why desktop looked fine:** above 1180px the wrapper's max-width + auto margins still leave ~130px of empty page each side, so the section merely sat 64px out of alignment with the hero — the gutter only becomes load-bearing once the viewport is narrower than 1180px. **Fixed:** `.sec` / `.close` converted to `padding-top` / `padding-bottom` longhands in all three themes (sprinkler, lighting, combined) so they can never touch the inline axis. **Presentation only** — CSS in the theme assets; no change to `proposal-html.js`, the data adapter, pricing, totals, the PDF renderer, or the frozen-PDF contract (the PDF is pdfkit and shares none of this CSS). **Measured in headless Chromium** at 320/360/390/430/768/900/1180/1440px, sprinkler + lighting + combined + smart-controller: section heading left edge went 0px → the gutter at every width below 1180, and the hero, sections and closing block now land on the same left edge at all widths, with no horizontal overflow. Guarded by `scripts/test-proposal-gutter.mjs` (17 assertions, in `build:check`), which reads which classes the generator actually pairs with `wrap` and fails on any `padding` shorthand declared after `.wrap` — so a future theme or section that reintroduces the collision fails the build instead of shipping to a customer's phone. **What still needs Patrick:** open a real proposal link on a phone and confirm the left margin is there from the hero all the way down. **QUOTE-04 (added 2026-09-05, needs a walked acceptance):** the builder (`/admin/quote/<id>/proposal`) renders the customer PDF in a sticky right-hand column (pdf.js pages, scroll position kept across refreshes; plain `<iframe>` fallback when the CDN is unreachable) and re-renders it after every autosave / attachment change, so spacing and page-break problems show while writing rather than after sending. Sent quotes render the FROZEN bytes — the same `GET /api/admin/quote-folder/:id/pdf` route, no new PDF path. **Send for approval** now opens an email preview — from / to / subject / attachment / body — with an optional plain-text **note to the customer** rendered under the greeting; "Send now" lives inside that dialog and still confirms. **One composer, not two:** the email HTML moved out of the send route into `buildProposalApprovalEmail()` (`server/server.js`), used by both the new admin route `GET /api/quotes/:id/proposal-email-preview?note=` and the real send, so the preview cannot drift from what the customer receives. The note is stored on `quote.approval.note` by `markSentForApproval`. **Copy change, deliberate:** a revision (`version > 1`) reads "Your **updated** proposal — ready for review" and the subject gains "updated"; v1 wording is unchanged. No change to pricing, totals, HST, QuickBooks, the phone gate, or the frozen-PDF contract. **Verified headless 2026-09-05 (Playwright, admin session):** draft renders on load; a section edit re-renders within ~2 s with "Up to date · time"; the email preview fills all four headers and shows the note in the body within a second; Send for approval opens the same dialog with Send now; a sent quote shows "Frozen copy" and the note read-only with the real approval link; no console errors; below 1200 px the column collapses and the Open PDF link stands in. **What still needs Patrick:** on a real draft — (1) edit a section and watch the PDF update without losing scroll; (2) Preview email, type a note, see it under the greeting; (3) Send for approval → Send now; (4) confirm the inbox copy matches the preview exactly (subject, note, attachment, link); (5) reopen the builder and see the frozen preview. **QUOTE-05 (found + fixed 2026-09-05, needs a walked acceptance):** what leaves with the approval email was never stated anywhere and was wrong for one file type. The send attached exactly one file — the proposal PDF. Anchored PNG/JPEG uploads are drawn inside that PDF (`renderAttachmentInline`, fit to half a page), but an anchored PDF upload (a technical drawing) only produced a "See attached: <caption>" line in the proposal and the file itself was NOT attached — a dangling reference on the customer's side; uploads not placed in any section reached the customer nowhere (the /approve page also renders only anchored files). **Fixed:** `quotes.emailAttachmentManifest(q, { gated })` derives each upload's fate — `embedded` (image in an included section → inside the PDF), `referenced` (PDF file in an included section → the proposal says "See attached", so the file rides along by DEFAULT), `unanchored`, `excluded` (section out of the PDF, or the Include attachments / project map switch off) — and whether it attaches; a per-file `emailAttach` tri-state on the attachment record (`PATCH /api/quotes/:id/attachments/:attId`, draft-only) overrides the default, with a "reset to default" link. The preview route returns the manifest, the send route reads the SAME function and attaches those buffers next to the frozen PDF, and the email body gains an "Also attached: …" line naming them. Gated delivery attaches nothing, as before. The dialog shows the file count, total bytes, and a warning past 20 MB (Gmail's cap is 25 MB). **Verified headless 2026-09-05:** anchored JPEG → embedded, not attached; anchored PDF → referenced, attached by default; loose JPEG → unanchored, off until ticked, then attached and named in the body; a local send carried both; the sent quote shows the list read-only. `build:check` green (test-crm-contrast included — the first preview commit had reintroduced the retired `#9A9A90`; the manifest CSS uses `#6B6B63`). **What still needs Patrick:** on a real proposal with a drawing PDF, open Preview email and confirm the list matches what arrives in the inbox, file for file. |
+| FLOW-21 | Quote viewed → accepted | **Quote View Tracker added 2026-08-29 — UNMAPPED, needs a walked acceptance.** The "viewed" half of this flow had no implementation at all: no `viewedAt` field, no open tracking, no app-level request log. `server/lib/quote-views.js` is an append-only ledger at `server/data/quote-views.json` recording CUSTOMER opens at five points — `gate_challenge` (the phone gate was shown), `gate_unlocked` (they passed it), `document` (the designed proposal page was served), `sign_page` (the standard accept page loaded), `pdf` (they downloaded the print-to-sign copy). **Why a separate file and not a field on the quote — this is the load-bearing decision:** `quotes.js` is read-modify-write over the whole `quotes.json` with no lock, and a page view is a high-frequency customer-triggered write. Interleaving one with `recordPortalSignAcceptance()` could drop an acceptance. Worst case here is a lost VIEW, never a lost signature. **Staff are never recorded** — `recordQuoteView()` (`server/server.js`) drops the call when `requireUser()` resolves, so Patrick previewing his own proposal does not register as a customer open; it also reads ip + user-agent SYNCHRONOUSLY before its first await, because the fire-and-forget call can otherwise outlive the socket and record a blank IP. Repeat views of the same kind from the same IP inside 30 minutes fold into one entry with a `repeats` counter — one person reading for twenty minutes is one view, not forty. Surfaced on every quote-folder row in three states: *Opened N× · last <when>*, *Not opened yet*, and **Blocked at phone gate** — that third one is the point of the feature, since "they tried and could not get in" previously looked identical to "they never bothered". Read via `GET /api/admin/quote-folder/views` (all) and `GET /api/admin/quote-folder/:id/views` (one, with raw events); both inherit the existing staff gate on that path prefix. Covered by `scripts/test-quote-views.mjs` (41 assertions, in `build:check`) plus a live-server walk: anonymous customer views recorded with IP and user-agent, three authenticated staff views recorded nothing, both endpoints 401 anonymous / 200 authenticated. **What still needs Patrick:** send a real proposal, open it as the customer from a phone off the office wifi, and confirm the row moves from *Not opened yet* to *Opened*; then open the same link while logged into the CRM and confirm the count does NOT move. **Acceptance methods:** the `pdf_return` path (customer prints, signs, returns the PDF; admin attests via `confirm-pdf-acceptance`) is reported by Patrick as walked and working, 2026-08-29 — recorded as his report, not as an observed walk. The `portal_esign` path is still unwalked. |
+| FLOW-22 | Invoice generated → delivered | **Accompanying letter added 2026-08-20 — needs a walked acceptance.** An invoice can now carry an optional letter (repair summary / written record) that ships with the invoice email as a **second PDF** on PJL letterhead. Composed in a formatting editor on the invoice page; stored on the record as `invoice.letter` = `{enabled, subject, body, updatedAt, updatedBy}`. **Presentation only** — it never touches line items, totals, tax, the payment ledger or the QuickBooks push, and `scripts/test-invoice-letter.mjs` (33 assertions, in `build:check`) pins that with source guards: the renderer carries no currency formatter and no financial field, and every `HST` in it is the GST/HST registration rather than a tax calculation. **The invoice always wins:** the invoice PDF is the first attachment, a letter that fails to render is caught and reported as a warning while the invoice still goes out, and a malformed attachment is dropped before nodemailer sees it. Body is a plain string in the **same markup vocabulary `quote-pdf.js` already parses** (`**bold**`, `__underline__`, `*italic*`, `- ` bullets, `1.` numbered) — `server/lib/letter-pdf.js` reuses `parseSectionBody` rather than carrying a second dialect, so the stored record never becomes a rich-text schema. The editor is a `contenteditable` with a toolbar that serializes to that markup on save; paste is taken as plain text. Round trip verified in Chromium across 15 cases including styled spans, `&nbsp;`, `<div>` blocks, `<br>` and empty trailing nodes. The letter is dated from the **invoice**, not from render time, so a resend cannot re-date an August document. Editable while the invoice is not void (unlike `billTo`, which locks at draft) — it is a report, not part of the issued financial document. **NOT frozen at send:** a resend re-renders from the current record, so an edited letter resends changed. That matches how invoice PDFs already behave (see below) and is recorded here as a known property, not an oversight. **What still needs Patrick — see the acceptance test in the commit.** |
+| FLOW-22a | **Invoice PDFs are re-rendered on demand, never frozen** — **OPEN, no fix shipped** | Found 2026-08-20 during the letterhead investigation (`docs/LETTERHEAD_REFACTOR_INVESTIGATION.md`). Unlike POs, WO reports and quotes — all three of which freeze their customer-facing PDF to disk with a recorded path — invoices carry **no `pdfPath`**. All six call sites (customer email, portal view, admin download, Stripe receipt, deposits, project-complete) call `generateInvoicePdf` and render fresh from the live record. **A reprint of a paid invoice can therefore differ from what the customer was sent**, and any future change to `invoice-pdf.js` retroactively restyles every invoice ever issued. Freezing them is a separate architectural decision, not a refactor — recorded here so it is a known risk with an owner rather than a surprise. |
 | FLOW-24 | Form failure → does anything alert Patrick? | Contact page shows "Your message didn't send." Unknown whether that failure is logged anywhere. |
 | FLOW-25 | AI diagnostic tool (`/sprinkler-repair.html`) | Carries a financial promise: "correct diagnosis = 1 hr labour free." Runs on Cloudflare Worker + API key — a dependency chain separate from Render and from email. |
-| MISC-01 | Footer links to Toronto, North York, Lawrence Park, Forest Hill are absent from `sitemap.html`. Four taps to confirm whether they 404. Sitewide footer links. |
-| MISC-02 | `sitemap.html` section counters stale: "Services · 10 pages" lists 11; "Book / Quote / Estimate · 3 pages" lists 4. |
+| FLOW-27 | **Material List → RFQ → cheapest price → PO** — **UNMAPPED** (opened 2026-08-16) | Hop chain: **ML-… `need` lines → shop or split → RFQ-… per supplier → send (PDF+CSV, no prices) → vendor replies → `recordQuotedPrices` → compare by SKU → apply cheapest to the parts catalog → ML reprices → PO-…**. The supplier half of the money path, and it had **no registered flow and no test coverage at all** before this. `scripts/test-rfq-shopping.mjs` (39 assertions, in `build:check`) now covers the pure logic, and a live-API walk covered the routes: shop mode gives every supplier the whole list including SKUs with no supplier assigned; an outgoing line carries no price of ours and its frozen CSV names no other supplier, no material list and no price column; two suppliers each win different SKUs; **applying a quote dearer than one already recorded for the same list is refused with a 409 naming the SKUs** (this was silently overwriting the cheaper price before); apply-cheapest writes the winner of each SKU with the source RFQ attributed; and asking for quotes never moves a line off `need`. **What is NOT covered and needs Patrick:** the email leg (this sandbox has no SMTP credentials, so `markSent` was called directly), a real two-supplier round trip with genuine replies, and confirming the resulting PO prices against an invoice. |
+| FLOW-32 | **A job reaches today's schedule** — **UNMAPPED** (opened 2026-09-01; the FLOW-29-that-wasn't, restored after the revert proved wrong live) | Hop chain: **job scheduled (public booking → `lead.booking.start` · assignment writer → canonical `bookings.json` · CRM new-WO form or the work-order page's schedule/backdate input → `workOrder.scheduledFor`) → `GET /api/schedule/today` unions all three (`server/lib/day-schedule.js`) → the CRM's Today page AND the field app's Today tab → tap through to the work order**. Additive by identity: every lead and canonical row renders exactly as before; work orders in the local-day window append, deduped on `workOrder.id` (canonical rows name their linked WO from `booking.workOrderIds`, so a WO spawned from an assignment booking can't list twice); `cancelled`/`no_show` skipped, `completed` still shows. Lead-less rows: Notify not offered (no lead to message from), Open WO links straight to the WO. Coverage: `scripts/test-day-schedule.mjs`, 36 assertions, in `build:check`. **Needs Patrick's walk:** Today on a day Willowridge is scheduled — every property listed at the right time, tap one through to its WO, and no previously-showing row gone. |
+| FLOW-31 | **Fall closing performed on the field app** — **UNMAPPED** (opened 2026-08-31 as FLOW-28, renumbered on merge 2026-09-01 — FLOW-28 and FLOW-29 were both claimed by work that landed on main while this branch was out) | Hop chain: **Start Service (status → `on_site`, stamps `arrivedAt` + new `arrivalLocation`) → water-off screen (`waterShutoffBy`, optional photo) → one page per zone (findings, notes, photo, explicit Done, and a zone label edit that writes back to `property.system.zones[].location`) → close-out (four ticks + `backFlush`) → signature or bypass → completion cascade → invoice**. The closing is the highest-volume visit PJL performs and had **no registered flow**. This pass is schema only — no field screens yet. **Shipped:** `zone_revamp` added to `ZONE_ISSUE_TYPES` (a zone needing redoing is a different job from replacing a part in it, and next spring should read that way rather than hide under `other`); `SERVICE_CHECKLISTS.fall_closing` cut from six ticks to the four Patrick actually performs; `waterShutoffBy` (`customer` \| `tech` — one or the other, never both) and `backFlush` (`yes` \| `no` — an answer, where "no" is complete, not a task left undone) as validated top-level fields rather than forced into a boolean checklist; `arrivalLocation` stored but never trusted — an impossible reading becomes an absent stamp rather than a refused PATCH, because a confused GPS must not stop a tech starting a job. **A latent regression found and prevented, which is the reason this entry is worth reading:** `lib/wo-report-pdf.js` rendered the service checklist from a **hardcoded duplicate** of the definition in `lib/work-orders.js`. Shortening the fall-closing list would therefore have silently deleted two lines — `compressor_connected`, `zones_blown_clear` — from the customer report of **every closing already signed**, including one regenerated years later for a warranty claim, against a document the customer signed. Fixed by importing the definition (one source of truth) and rendering `checklistKeysForWorkOrder()`, the union of the current definition and whatever that work order actually stored. The past keeps saying what it said. The report also now states who shut the water off and whether a back-flush was needed, omitted entirely when unanswered. **Coverage:** `scripts/test-fall-closing.mjs` (31 assertions, in `build:check`), which asserts the historical-report invariant directly; full `build:check` green including `test-wo-unlock` (56) and `test-wo-completedat` (39), the two suites that exercise `work-orders.js` hardest. **What still needs Patrick:** walk a real fall closing end to end once the screens exist; regenerate the report for a closing completed BEFORE 2026-08-31 and confirm it still prints all six of its original lines; and confirm the two new report statements read correctly to a customer. |
+| FLOW-26 | **Site Builder design → Quote + Material List** — **UNMAPPED** (opened 2026-08-13, Site Plan Underlay brief) | Hop chain: **traced geometry → `compute()` → `desiredQuoteLines()` → `syncQuoteFromDesign()` → Q-… → `generateMaterialList()` → ML-…**. This is the design half of the money path and it feeds **FLOW-20** (quote written → delivered), also UNMAPPED. Every hop exists in code and each was exercised in a scripted browser walk of `/admin/sitebuilder` (see the acceptance notes below), but **that is not a walked flow** — mark PASS only after Patrick has walked it end to end and observed each hop with a real tender. **What the scripted walk did establish, on a synthetic known-scale sheet:** a 100.0 ft × 60.0 ft rectangle uploads, calibrates and traces to **6,000.0 sq ft (0.000% error)**; the same drawing exported at a different DPI calibrates to the same real-world dimensions; a deliberately 2×-mistyped calibration dimension produces a **failed** verification and **blocks tracing**; the stated-scale cross-check agrees on a to-scale sheet and flags a fit-to-page export; traced geometry flows into head count, zone count and GPM; the design saves and restores across a reload; recalibrating a traced-over sheet is refused naming the dependent area; and the customer quote sheet renders the traced geometry with **no underlay**. **Master plan (added Aug 2026):** the same scripted-walk standard — every traced area renders on one sheet in the calibrated frame coloured by its real valve; drip beds sharing a valve resolve to ONE colour; the point of connection, manifolds and mainline place by click, drag in sheet feet, measure to the hand-computed length (300.000 ft over two legs), tee to the nearest point on the run rather than back to the start, assign every valve to its nearest manifold with none lost or double-counted, survive a save + reload at blob `version: 5`, and — checked explicitly — **a 1,400 ft mainline does not move a single line of the material list**. **Laterals (layer 3):** each valve's run is verified to be the true minimum spanning tree from its manifold (91.623 ft on a four-head lawn where a pipe-per-head would be 107.781), the branches leaving a manifold sum to exactly the valve's flow with no segment carrying more than it delivers, a drip bed taps the point on its outline nearest the manifold, sizes never fall below the 3/4" actually stocked, a bed split across several valves draws one distinct path per valve rather than three lines on top of each other, and moving manifolds 700 ft apart still moves nothing in the material list. **Tees and control wire (layer 4):** a branching mainline measures each leg once (100+80+80) rather than doubling back through the branch; deleting a node mid-branch splices it out and reattaches its children; the wire trunk carries every valve while each branch carries only its own box; conductors round up to real spool sizes; a mainline stub past the last box carries no wire; gauge steps 18→16→14→12 AWG with run length; a version-5 chain migrates to parent `i-1` and measures the same run it always did; a circular parent re-roots to the POC rather than dropping pipe; and 2,100 ft of main and wire still moves nothing in the material list. **Valve-to-box assignment (layer 5):** a valve defaults to its nearest box and can be overridden by hand; the override is stored against the box's **id**, so deleting a *different* box does not silently hand the valve to whichever box inherits that array position; inserting an area renumbers the valve list without moving any assignment; dragging a box does not assign the selected valve while clicking it does; deleting a box warns and releases its valves; an assignment pointing at a vanished box is reported and falls back to nearest rather than being obeyed; one for a valve that no longer exists is dropped on save; a version-6 sheet gets ids minted on load and starts fully automatic; and re-assigning valves between boxes moves nothing in the material list. **What is NOT covered and needs Patrick:** a real multi-page tender PDF (thumbnail legibility, sheet choice, underlay readability at working zoom); a traced area against a **hand-measured real bed** agreeing within 2%; and the full hop out to a live Q-… and ML-… on a real project. |
+| FLOW-28 | **Portal "Book your seasonal service" → booked appointment** — **UNMAPPED** (opened 2026-08-19) | Hop chain: **property portal button → `POST /api/portal/:token/begin-booking` → `bookingSessions.createSession({ suggestedService, customerHints })` → redirect to `/book.html?session=…` → `js/booking.js` `applySessionPrefill()` → service locked in via `fromSessionHandoff` → `bestLandingStep()` skips to the first empty step**. This is the existing-customer express path and it had no registered flow. **Defect found and fixed 2026-08-19 (seasonal CTA brief):** `begin-booking` composed the tier key by hand as `` `${season}_${zoneCount}z` ``, which is a real key for **only 4 of 50 zone counts** (4, 6, 8, 15). Every other count produced a key `BOOKABLE_SERVICES` does not contain; `booking.js` honours `suggestedService` only when it resolves, and otherwise falls through **in silence** — so the handoff collapsed to the generic unfiltered catalog (spring cards first, whatever the season) with no error anywhere. It survived because 4 and 8 are the counts anyone would spot-check. Now resolved through `deriveSeasonalKey()` (pricing.json `seasonal_tiers`), which the same file already imported. **Second defect fixed in the same change:** the key was always residential, so a **commercial** customer was handed a residential tier — and because a session handoff *locks the service in*, they would be booked at the residential price with no chance to correct it. That was live for commercial properties with exactly 4 zones. The endpoint now reads `customer.accountType` via `property.customerId` and picks the matching tier table. `scripts/test-seasonal-handoff.mjs` (584 assertions, in `build:check`) pins every zone count 1–50 × both seasons × both account types to a bookable key in the right bracket, and a source guard fails the build if a seasonal key is ever composed by interpolation again. **Entry point — read this before testing.** The Book button lives ONLY on the **property portal**, which is a different surface from the customer portal. `GET /api/portal/:token` resolves the token as a **lead** first (→ `portal` payload → `renderPortal()`, the normal customer portal, which has **no booking CTA of any kind**) and only falls back to matching a **property** token (→ `propertyPortal` payload → `renderPropertyPortal()`, which has the button). The property-token link is minted by the seasonal outreach engine (`server/lib/outreach.js` `buildPortalLink()` → `<base>/portal/<propertyToken>?season=spring|fall`) and reaches the customer by email from `/admin/outreach`. **Opening a customer's portal from the CRM will never show this button** — that is the wrong door, not a bug in this flow.
+
+**Patrick's acceptance test — not yet walked:** (1) go to `/admin/outreach`, pick a candidate whose property has a zone count that is **not** 4, 6, 8 or 15 — 7 or 12 is ideal, since 4/6/8/15 are the only counts the old code got right and prove nothing — and either copy that row's portal link or use **Send test** to mail it to yourself; (2) open the link and confirm the property portal renders with the Book button; (3) tap it and confirm book.html opens on that customer's season showing **only** that season's cards, with the tier matching their zone count pre-selected, not the full 19-service menu; (4) confirm the zone count and address are pre-filled and the flow lands on the time picker, not step 1; (5) repeat for a **commercial** account and confirm a commercial tier is chosen, not the residential one; (6) complete one real booking and confirm the work order carries the tier and price you expected. Mark PASS only after all six.
+
+**Second entry point added 2026-08-19 — customer portal.** The customer portal had no route into booking at all: its `service_complete` state said *"Book again any time."* and the page carried no link to `book.html`, seasonal or generic. It now renders a **Book a service** card with one row per property the customer owns (`portalPayloadForLead` → `bookableProperties`, scoped by `customerId`). A property with a zone count on file, not already booked for the season, gets the seasonal express CTA — the same handoff the outreach email gives; one with no zone count, or already booked, gets a plain link to `book.html` rather than a guessed tier. Season comes from `outreach.seasonForBooking()` (inside a window, that season; between windows, the next one to open) so the portal CTA and the outreach candidate list can't disagree about when a season starts. **Updated 2026-08-26 (season config):** the window it reads moved from the hardcoded `SEASON_WINDOWS` constant to `seasons.json` via `server/lib/seasons.js`, and fall 2026 now ends Nov 6 rather than Dec 15. That coupling was documented here as intentional and still is — it is what keeps the two surfaces agreeing — but it has a consequence worth stating plainly: **between Nov 7 and Dec 15 both CTAs (property portal and customer portal) now offer the coming Spring Opening rather than a Fall Closing.** Past hard frost a fall closing is work PJL cannot perform, so offering it was the defect, not the fix; taken as a deliberate decision rather than preserving it behind a second fall end date living only in `seasonForBooking()`. Zone-count tier resolution, ownership checks, and the handoff itself are untouched.
+
+`POST /api/portal/:token/begin-booking` now accepts **both** token shapes, resolving lead-first exactly like the GET route: a **property** token works as before (no `propertyId`, outreach path untouched), and a **lead** token requires `?propertyId=` and is checked against the token holder's `customerId`. **The property's own portal token is never sent to the browser** — the customer portal payload carries only `propertyId`, so a portal link can start a booking for that customer's properties and nothing else. An unowned property and a nonexistent one both answer `404 Property not found`, so the route can't be used to probe which ids are real. Both properties are pinned by source guards in `scripts/test-seasonal-handoff.mjs`, each verified to fail the build when the check is removed.
+
+**Verified against a live local server** (two seeded customers, three properties): Alice's portal lists her two properties and not Bob's; her 7-zone property mints `fall_close_8z` with the zone count and address pre-filled; Bob's **commercial** 12-zone property mints `fall_close_commercial_9plus`; booking Bob's property from Alice's token returns 404, as does a nonexistent id; a lead token with no `propertyId` returns 400; the property-token outreach path still mints a session unchanged. Walked in Chromium at 390 px and 1280 px — both CTAs render, no horizontal overflow, and tapping the seasonal one lands on **book.html step "Pick a time"** with the service locked in.
+
+**Patrick's acceptance test for this half — not yet walked:** (1) open a real customer's portal from the CRM and confirm the Book a service card lists **their** properties and only theirs; (2) tap the seasonal CTA on a property whose zone count is not 4/6/8/15 and confirm book.html opens on the time picker with the right tier; (3) confirm a property with no zone count on file offers the plain "Book a service" route instead of guessing; (4) confirm a property already booked for the season says so and offers the plain route; (5) complete one real booking and check the work order carries the tier and price you expected. **Touches FLOW-02 (PASS)** — re-verify portal messaging and preferences still work after this change. |
+| FLOW-29 | **Seasonal outreach opt-out → the customer stops being mailed** — **UNMAPPED** (opened 2026-08-25) | Hop chain: **property page checkbox → `collectForm()` → `PATCH /api/properties/:id` → route sanitizer → `properties.update()` → `properties.json` → `hydrate()` on every read → `outreach.listCandidates()` eligibility + per-channel gate → `outreach.send` per-recipient gate**. Reported by Patrick as "I cannot opt a customer out of seasonal outreach." **OUTREACH-01 (found + fixed 2026-08-25):** the PATCH route sanitizes the body against an allow-list (`customerName`, `customerPhone`, `address`, `billingEntity`, `billingCcEmail`, `siteContacts`, plus `system` and `seasonalPricing`) — and **neither `seasonalEligibility` nor `commPrefs` was on it**. The property page sent both on every Save profile; the route dropped them, returned `200 ok:true`, and `populateForm()` redrew the checkboxes from the unchanged record, so all four boxes visibly snapped back on. Nothing logged, nothing failed. `properties.setSeasonalEligibility()` existed in the lib with **zero callers** — the CRM-side write was never wired at all, and the only opt-out that ever worked was the customer's own unsubscribe link. The read side was always correct (`listCandidates` and the send loop both gate on `!== false`), so the moment the write lands the customer disappears from the list. Fixed via `properties.sanitizeSeasonalConsent()`, called from the route: it passes only the four consent flags plus `reviewRequestsEmail`, never `commPrefs.optOutTokens` (those are unsubscribe-link secrets and must not be settable from a request body), and it **rejects** a flag it can't read rather than coercing it — `Boolean("false") === true` would silently re-subscribe someone who just asked to be left alone. **OUTREACH-02 (found + fixed in the same change, separate defect):** `properties.hydrate()` rebuilds `commPrefs` key by key and omitted `reviewRequestsEmail` and `optOutTokens.reviewEmail`. `readAll()` writes hydrated records back, so this didn't merely hide those values — it **deleted** them. A customer who unsubscribed from review-request emails was re-subscribed by the next read, and because `mintOptOutTokensIfMissing()` then re-rolled the review token on every send, every unsubscribe link already sitting in a customer's inbox was dead. Both channels are CASL-relevant. `scripts/test-seasonal-consent.mjs` (43 assertions, in `build:check`) pins both directions of every flag, the token slots against clobbering and re-minting, and carries source guards that fail the build if the route stops calling the sanitizer or if `hydrate()` drops a `commPrefs` key again. **Verified against a live local server:** with the fix reverted, a PATCH with all four boxes unticked answers `ok:true` and echoes every flag back as `true`, and the property stays in the spring candidate list — the reported symptom exactly. With the fix in, the same PATCH stores `false`, survives a reload, and the property drops out of the candidate list while an opted-in neighbour stays. **Patrick's acceptance test — not yet walked:** (1) open a real property in the CRM, untick Spring Opening, Save profile, **reload the page** and confirm it is still unticked; (2) go to `/admin/outreach`, pick spring, and confirm that property is no longer in the candidate list; (3) untick only Seasonal SMS reminders on a second property and confirm it still appears but is email-only; (4) re-tick everything and confirm it comes back; (5) confirm an unsubscribe link from a **previously sent** review-request email still resolves rather than reading "link invalid". |
+| MISC-01 | **CLOSED 2026-08-09 — they do not 404. Never was a broken link.** **Acceptance walked by Patrick 2026-08-09: all four footer links tapped on the live site, all load, no 404s.** That closes the one gap the sandbox couldn't: outbound to the live host is blocked from the build environment, so JOB-009's evidence was four local 200s off a booted server plus the static facts — all four pages exist, each is referenced by **84 pages** (the sitewide footer), and all appear in `sitemap.xml`. Production now confirms it directly. The only real defect was that **`sitemap.html`** — the human-readable Site Map page, *not* `sitemap.xml` — omitted them from Service Areas; added in JOB-009 (footer ordering, descriptions from each page's own meta description). **`sitemap.xml` was never part of this defect** and has carried all 18 city URLs since ccf7604 (2026-07-15); it has no server route and ships as a static file. **Verified against production 2026-08-09** (Patrick supplied the live file as a PDF; outbound is blocked from the sandbox): **81 live URLs vs 81 in the repo, sets identical, all four cities present** — the live XML is not stale and never was. Worth keeping on record: checking the XML to verify an HTML-page fix is an easy wrong turn, and the four are easy to miss in it — the slugs are hyphenated (`lawrence-park`, not "Lawrence Park", so a find-in-page for the footer's label fails) and they sort alphabetically among the 18 rather than appearing as a new block. |
+| MISC-02 | **CLOSED 2026-08-09 — walked live.** `sitemap.html` section counters were stale: "Services · 10 pages" listed 11; "Book / Quote / Estimate · 3 pages" listed 4. Corrected in JOB-009 (Services 11, Book/Quote/Estimate 4, Service Areas 18 after the MISC-01 rows). **Patrick walked the live page 2026-08-09: every section counter matches its list.** Audited against the deployed file the same day — 6 / 12 / 4 / 18 / 15 / 4, all six matching. **Services now reads 12, not the 11 JOB-009 set:** PR #47 (The PJL Water Promise) added a service page and correctly bumped the counter with it — the discipline survived a change by another hand, which is the real test of this fix. Blog's 15 is a deliberately curated subset (~39 blog pages exist; `blog.html` is the full index), left as is. |
 
 ---
 
@@ -170,3 +4186,46 @@ The drift came from delegated jobs shipping changes nobody read or verified.
 3. **Every job ships with a written acceptance test** — the exact taps Patrick performs, as a customer.
 4. **A job is not done** until Patrick has run that test and updated this file.
 5. **No job touches a flow marked PASS** without re-verifying it afterward.
+
+---
+
+# Part 6 — Recorded architectural deviations
+
+Conscious departures from the codebase's own conventions. Recorded so they
+are decisions with owners rather than drift someone finds later.
+
+> **DEV-01 — Hardcoded install pricing (accepted 2026-08-13).**
+> `INSTALL_PRICING` in `server/sitebuilder.html` hardcodes `perZone: 549`,
+> base `585` / `749`, and controller `595` / `750` / `1195`, duplicating the
+> `pricing.json` keys `new_install_per_zone`, `new_install_t1_base`,
+> `new_install_t2_base`, `controller_1_4`, `controller_5_7`,
+> `controller_8_16`. **All six values re-verified against `pricing.json` on
+> 2026-08-13 and matching** (549 / 585 / 749 / 595 / 750 / 1195). Note separately
+> that the builder's `baseByZones` is `n<=4 ? 585 : 749`, so an 8+ zone job is
+> quoted the Tier 2 (5-7 zone) base — the code comments this ("8+ uses t2, edit in
+> quote") and it is priced by hand in the proposal, but it is a second way this
+> block can disagree with `pricing.json`, and not one the linter would catch either.
+> `scripts/lint-no-hardcoded-prices.mjs` scans **root-level `*.html` only**,
+> so `server/` sits outside the build gate and drift here will NOT be caught.
+> Any change to those `pricing.json` keys must be mirrored into that block by
+> hand. Remediation deferred by owner decision; the durable fix is to read
+> `pricing.json` at runtime and widen the linter's scope to `server/*.html`.
+> Untouched by the Site Plan Underlay work — recorded, not introduced, by it.
+
+> **DEV-02 — First vendored front-end library (accepted 2026-08-13).**
+> Mozilla **pdf.js 4.10.38** (legacy build) is vendored as a static asset at
+> `server/vendor/pdfjs/` to enable client-side PDF rasterization for the Site
+> Builder's site-plan underlay. It introduces **no build step, no npm runtime
+> dependency, and no server-side code path** — it executes only in the browser,
+> only in the upload dialog. The alternative, server-side rasterization,
+> requires a native binary (poppler / ghostscript) on Render Starter and was
+> judged materially worse. Version, file checksums and the re-verification
+> command are pinned in `server/vendor/pdfjs/VENDORED.md`; the tarball was
+> checked against the npm registry's own `dist.shasum` before vendoring.
+
+> **DEV-03 — `sitebuilder.html` is still monolithic (recorded 2026-08-13).**
+> It is the only admin page carrying its CSS and JS inline instead of split
+> into `.css` / `.js` siblings. The site-plan underlay work grew it rather
+> than splitting it: a split is the right change, but not one to make on a
+> tender deadline and not in the same commit as a new feature, where it would
+> hide the feature diff inside a whole-file move. Its own piece of work.

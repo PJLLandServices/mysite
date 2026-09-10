@@ -32,6 +32,11 @@
 // placeholder block instead of throwing.
 
 const PDFDocument = require("pdfkit");
+// The checklist definition lives in one place. This file used to carry
+// its own copy of the key lists, which is how a definition and a report
+// drift apart without anyone noticing.
+const { checklistKeysForWorkOrder } = require("./work-orders");
+const { documentFilename } = require("./format");
 const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -62,6 +67,21 @@ function logoBuffer() {
   return _logoBuf;
 }
 function fontHeading() { return barlowBuffer() ? "Barlow-Bold" : "Helvetica-Bold"; }
+
+// A checkmark DRAWN, never typed. The "✓" glyph (U+2713) exists in
+// neither Barlow Condensed nor the built-in Helvetica, so printing it
+// as text rendered "?" on every completed checklist line of the
+// customer's signed report (Patrick's 2026-09-01 review: "definitely a
+// questionable point"). Two stroked lines can't fall back to anything.
+function drawCheckmark(doc, x, y, size = 11, color = PJL_GREEN) {
+  doc.save();
+  doc.lineWidth(Math.max(1.8, size * 0.16)).lineCap("round").lineJoin("round").strokeColor(color);
+  doc.moveTo(x, y + size * 0.55)
+    .lineTo(x + size * 0.36, y + size * 0.88)
+    .lineTo(x + size, y + size * 0.12)
+    .stroke();
+  doc.restore();
+}
 
 const WO_PHOTOS_BASE = path.resolve(__dirname, "..", "data", "wo-photos");
 
@@ -114,6 +134,9 @@ const SERVICE_CHECKLIST_LABELS = {
   walkthrough_with_customer: "Walk-through with customer (if home)",
   controller_off: "Controller set to off / winter mode",
   water_off: "Water shut off at main",
+  // Retired from the fall-closing definition on 2026-08-31 but still
+  // present on every closing signed before then. The labels stay so those
+  // reports keep reading in English rather than falling back to raw keys.
   compressor_connected: "Compressor connected at blow-out",
   zones_blown_clear: "All zones blown clear",
   compressor_disconnected: "Compressor disconnected",
@@ -636,24 +659,46 @@ function generateWoReportPdf({ wo, property = {}, customer = {}, mode, audience 
 
   // ---- Service-specific checklist (service_report only) -------------
   if (mode === "service_report") {
-    const checklistDef = wo.type === "spring_opening"
-      ? ["water_on", "controller_programmed", "walkthrough_with_customer"]
-      : wo.type === "fall_closing"
-        ? ["controller_off", "water_off", "compressor_connected", "zones_blown_clear", "compressor_disconnected", "system_winterized"]
-        : [];
+    // Definition keys for this type, plus anything this particular work
+    // order actually stored. A closing signed against the old six-step
+    // list must still print those six lines when its report is
+    // regenerated years later for a warranty claim — the customer signed
+    // the document that said them.
+    const checklistDef = checklistKeysForWorkOrder(wo);
     if (checklistDef.length) {
       sectionHeading(doc, "Service Checklist");
       const sc = wo.serviceChecklist || {};
       checklistDef.forEach((key) => {
         ensureSpace(doc, 16);
         const checked = sc[key] === true;
-        const mark = checked ? "✓" : "—";
-        doc.font(fontHeading()).fontSize(11).fillColor(checked ? PJL_GREEN : PJL_MUTED);
-        doc.text(mark, 60, doc.y, { width: 18, continued: false });
-        const labelY = doc.y - 13;
+        const rowY = doc.y;
+        if (checked) {
+          drawCheckmark(doc, 61, rowY - 1, 12);
+        } else {
+          doc.font("Helvetica-Bold").fontSize(11).fillColor(PJL_MUTED);
+          doc.text("—", 60, rowY, { lineBreak: false });
+        }
         doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
-        doc.text(SERVICE_CHECKLIST_LABELS[key] || key, 84, labelY,
+        doc.text(SERVICE_CHECKLIST_LABELS[key] || key, 84, rowY,
           { width: doc.page.width - 60 - 84 });
+        doc.moveDown(0.15);
+      });
+
+      // Back-flush and who closed the water are answers, not ticks, so
+      // they render as statements. Omitted entirely when unanswered
+      // rather than printed as blanks — a report should not raise a
+      // question it doesn't answer.
+      const answers = [];
+      if (wo.waterShutoffBy === "customer") answers.push("Water shut off by the customer before arrival");
+      if (wo.waterShutoffBy === "tech") answers.push("Water shut off at the main by PJL");
+      if (wo.backFlush === "yes") answers.push("Back-flush performed");
+      if (wo.backFlush === "no") answers.push("Back-flush not required at this property");
+      answers.forEach((line) => {
+        ensureSpace(doc, 16);
+        const rowY = doc.y;
+        drawCheckmark(doc, 61, rowY - 1, 12);
+        doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
+        doc.text(line, 84, rowY, { width: doc.page.width - 60 - 84 });
         doc.moveDown(0.15);
       });
       doc.moveDown(0.4);
@@ -926,14 +971,27 @@ async function renderWoReportToFile(opts, destPath) {
   return { path: destPath, bytes: size };
 }
 
-// Filename builder — used by the snapshotter, the live-render route,
-// and email-attachment paths. Date component is YYYY-MM-DD pulled from
-// the WO's most-canonical visit date (arrival > scheduled > created).
+// Filename builder — used by the snapshotter, the live-render route, and
+// email-attachment paths. Now delegates to the shared convention in
+// lib/format.js so a saved report sorts and reads like every other PJL
+// document (see documentFilename there for the full rule).
+//
+// The date is the VISIT date, not render time: arrival if the tech
+// stamped one, else the scheduled slot, else when the WO was raised.
+// Regenerating a March report in December has to still say March. The
+// old `|| new Date()` tail is deliberately gone — a WO with no date at
+// all now yields a name without a date rather than one stamped today.
+//
+// This is the DISPLAY name only. Snapshots are stored on disk as
+// <snapshotId>.pdf and looked up by that path; nothing here touches
+// storage or the integrity hashes.
 function reportFilename({ wo, mode }) {
-  const tag = mode === "service_report" ? "Service-Report" : "Inspection-Report";
-  const visitIso = wo?.arrivedAt || wo?.scheduledFor || wo?.createdAt || new Date().toISOString();
-  const ymd = visitIso.slice(0, 10);
-  return `PJL-${tag}-${wo?.id || "WO"}-${ymd}.pdf`;
+  return documentFilename({
+    date: wo?.arrivedAt || wo?.scheduledFor || wo?.createdAt,
+    label: mode === "service_report" ? "Service Report" : "Inspection Report",
+    customerName: wo?.customerName,
+    address: wo?.address
+  });
 }
 
 module.exports = {

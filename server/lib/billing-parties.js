@@ -172,8 +172,44 @@ function resolveContactRoles(property, customer) {
   };
 }
 
+// ---- Prepared-for address ---------------------------------------------
+//
+// The address printed in the customer-facing PREPARED FOR block — WHO the
+// document is addressed to. Deliberately NOT the service address.
+//
+// The service address a quote resolves (property → lead → most recent
+// lead/work order by email → billing address) is a SITE address: it answers
+// "where does the crew go". On an account with several concurrent sites it
+// is the wrong answer to "who is this addressed to" — a GC's proposal for
+// one site would print whichever OTHER site happened to be adopted or worked
+// most recently. So this resolves in the inverse order and never consults a
+// property/site record:
+//
+//   1. quote.preparedForAddress — the explicit per-proposal override, set in
+//      the proposal builder. Draft-editable, frozen at send with the PDF.
+//   2. the customer's OWN address (customer.billingAddress).
+//   3. serviceAddress — last resort only, so an account with no address at
+//      all still prints a line instead of a blank, exactly as before.
+//
+// Presentation only: it never touches the property record, the address a
+// crew works from, pricing, or QuickBooks.
+function resolvePreparedForAddress(quote, customer, { serviceAddress = "" } = {}) {
+  const q = quote && typeof quote === "object" ? quote : {};
+  const cust = customer && typeof customer === "object" ? customer : {};
+  const explicit = s(q.preparedForAddress, 200);
+  if (explicit) return explicit;
+  // billingAddress is a plain string in the schema, but hand-edited and
+  // migrated records have carried an object — mirror the tolerance
+  // quoteRenderParties already applies rather than printing "[object Object]".
+  const raw = cust.billingAddress;
+  const own = s(raw && typeof raw === "object" ? (raw.formatted || raw.address) : raw, 400);
+  if (own) return own;
+  return s(serviceAddress, 400);
+}
+
 module.exports = {
   resolveBillTo,
+  resolvePreparedForAddress,
   resolveContactRoles,
   buildInvoiceCcList,
   isContactId,

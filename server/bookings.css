@@ -66,7 +66,7 @@
 .bk-card__status--confirmed { background: #E0EBFF; color: #2A4A8C; }
 .bk-card__status--tentative { background: #FFF4E0; color: #7A5C00; }
 .bk-card__status--completed { background: #E8F4ED; color: #1B4D2E; }
-.bk-card__status--cancelled { background: #EFEFE5; color: #999; }
+.bk-card__status--cancelled { background: #EFEFE5; color: #6B6B63; }
 .bk-card__status--no_show   { background: #E8E5D7; color: #4A4A44; }
 
 .bk-card__service,
@@ -84,7 +84,7 @@
   overflow-wrap: anywhere;
 }
 .bk-card__service {
-  color: #7A7A72;
+  color: #6B6B63;
   margin-bottom: 8px;
 }
 .bk-card__customer {
@@ -102,6 +102,6 @@
   font-variant-numeric: tabular-nums;
 }
 .bk-card__state {
-  color: #7A7A72;
+  color: #6B6B63;
   margin-top: 2px;
 }

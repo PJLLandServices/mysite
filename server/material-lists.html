@@ -30,6 +30,7 @@
       <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
       <a href="/admin">CRM</a>
       <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/season-plan">Season plan</a>
       <a href="/admin/handoff">Handoff</a>
       <a href="/admin/outreach">Outreach</a>
       <a href="/admin/review-requests">Reviews</a>
@@ -41,6 +42,7 @@
       <a href="/admin/work-orders">Work orders</a>
       <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
       <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/warranty-claims">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
       <a href="/admin/material-lists" class="is-active">Materials</a>
       <a href="/admin/chats">AI Chats</a>
       <a href="/admin/trash">Trash</a>
@@ -154,7 +156,21 @@
       </form>
 
       <p class="suppliers-empty" id="listsEmpty" hidden>No material lists yet. Create your first one above.</p>
-      <ul class="ml-cards" id="listsContainer" aria-label="Material lists"></ul>
+      <!-- Data table, same primitive as the Customers and Properties
+           indexes (.crm-table in crm.css). Header row and data rows read one
+           --crm-cols template, so they cannot drift out of register. -->
+      <section class="crm-table mllists-table">
+        <div class="crm-table-head" role="row">
+          <span>List</span>
+          <span>Customer</span>
+          <span class="is-num">Lines</span>
+          <span class="is-num">Need</span>
+          <span class="is-num">Have</span>
+          <span class="is-num">Value</span>
+          <span>Status</span>
+        </div>
+        <ul class="ml-cards" id="listsContainer" aria-label="Material lists"></ul>
+      </section>
     </main>
   </div>
 

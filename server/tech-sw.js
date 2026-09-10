@@ -413,7 +413,18 @@
 // /crm/crm-contact.js + /crm/crm-contact.css to STATIC_ASSETS so the tech page
 // keeps working offline (both launches need network and simply no-op offline,
 // which is acceptable). Touches work-order-tech.html + .js.
-const CACHE_VERSION = "pjl-tech-v50";
+// Bumped 2026-08-26 (v50 -> v51): unwanted-page-scroll fix. The pre-sign
+// checklist tap-to-jump and the gate sheet's Resolve both called
+// scrollIntoView({ block: "center" }) unconditionally, which re-aligns the
+// target even when it is already on screen — the page lurched on virtually
+// every work-order view, worst on the phone where the throw is most of a
+// screen height. Both now go through revealIfOffscreen(), which scrolls only
+// when the target genuinely is off-screen and clears the sticky .tech-header
+// when it does. Touches work-order-tech.js (in STATIC_ASSETS), so the cache
+// must invalidate or field phones keep running the pre-fix JS and the fix
+// looks like it failed. TECH_BUILD_VERSION bumped to "tech-v51" in the same
+// commit — the two were out of step (v48 vs v50) and now read alike.
+const CACHE_VERSION = "pjl-tech-v51";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",

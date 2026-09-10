@@ -4,6 +4,7 @@
 // other test-*.mjs scripts.
 import crypto from "node:crypto";
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 const require = createRequire(import.meta.url);
 const stripe = require("../server/lib/stripe.js");
 
@@ -144,6 +145,123 @@ function assert(cond, label) {
   delete process.env.STRIPE_SECRET_KEY;
   delete process.env.STRIPE_PUBLISHABLE_KEY;
   assert(stripe.isConfigured() === false, "keys: unset means not configured");
+}
+
+// ---- Terminal connection token ----------------------------------------
+//
+// The one route the field app is allowed to call. These are the properties
+// that keep Tap to Pay out of PCI scope and out of a tech's hands by
+// accident; the network call itself is Stripe's and is not exercised here.
+{
+  assert(typeof stripe.createTerminalConnectionToken === "function",
+    "terminal: the lib mints connection tokens");
+
+  // No key configured must FAIL, not fall through to an anonymous call.
+  const savedSecret = process.env.STRIPE_SECRET_KEY;
+  const savedPub = process.env.STRIPE_PUBLISHABLE_KEY;
+  delete process.env.STRIPE_SECRET_KEY;
+  delete process.env.STRIPE_PUBLISHABLE_KEY;
+  let refused = false;
+  try { await stripe.createTerminalConnectionToken(); }
+  catch (err) { refused = /not configured/i.test(err.message || ""); }
+  assert(refused, "terminal: refuses to mint without STRIPE_SECRET_KEY");
+  if (savedSecret) process.env.STRIPE_SECRET_KEY = savedSecret;
+  if (savedPub) process.env.STRIPE_PUBLISHABLE_KEY = savedPub;
+
+  // The route is the only Stripe surface the app may reach, and it is
+  // staff-gated. Read from server.js rather than restated, so deleting the
+  // gate fails here rather than in the field.
+  const serverSrc = readFileSync(new URL("../server/server.js", import.meta.url), "utf8");
+  // Anchored on the dispatch condition, not the bare path: needsAuth now
+  // names the same path and appears EARLIER in the file, so indexOf on the
+  // path alone reads the fence and not the route.
+  const routeAt = serverSrc.indexOf('pathname === "/api/terminal/connection-token" && req.method === "POST"');
+  assert(routeAt > 0, "terminal: the connection-token route exists");
+  const routeBlock = serverSrc.slice(routeAt, routeAt + 1600);
+  // NOT "does the source mention requireAdmin" — that assertion passed for
+  // a day while the route was open to the whole internet, because
+  // requireAdmin RETURNS NULL rather than throwing and the route discarded
+  // it. What is checked here is the shape that actually gates: bind the
+  // result, reject when it is null. The fence in needsAuth, and the rule
+  // across every call site, are in test-admin-gates.mjs.
+  assert(/const session = await requireAdmin\(req\);/.test(routeBlock)
+      && /if \(!session\) return sendJson\(res, 403/.test(routeBlock),
+    "terminal: the connection-token route checks requireAdmin's answer");
+  assert(!/secretKey|STRIPE_SECRET_KEY/.test(routeBlock),
+    "terminal: the route never hands out the secret key");
+
+  // The app must reach Stripe through this route and nothing else. A
+  // publishable key or a secret in the app bundle would mean card data or
+  // account credentials on a phone.
+  const appSrc = readFileSync(new URL("../pjl-field/src/api.js", import.meta.url), "utf8");
+  assert(!/sk_live|sk_test|pk_live|pk_test/.test(appSrc),
+    "terminal: no Stripe key is shipped in the app");
+}
+
+// ---- Terminal Location -------------------------------------------------
+//
+// A Tap to Pay reader is associated with a Location at CONNECT time, so
+// without this id the app cannot bring the reader up at all. The rule
+// worth pinning is the refusal: an account with several Locations must
+// NOT have one picked for it, because a payment filed against the wrong
+// site is a quiet error nobody catches until reconciliation.
+{
+  assert(typeof stripe.resolveTerminalLocationId === "function",
+    "location: the lib resolves a Terminal location");
+
+  const savedLoc = process.env.STRIPE_TERMINAL_LOCATION_ID;
+  const savedSecret = process.env.STRIPE_SECRET_KEY;
+
+  // Configured id wins, and short-circuits before any network call —
+  // which is also why this assertion can run with no key at all.
+  delete process.env.STRIPE_SECRET_KEY;
+  process.env.STRIPE_TERMINAL_LOCATION_ID = "tml_configured";
+  assert(await stripe.resolveTerminalLocationId() === "tml_configured",
+    "location: STRIPE_TERMINAL_LOCATION_ID is used when set");
+
+  // Whitespace-only is not a value. Without this, a stray space in a
+  // Render env var would look configured and be sent to Stripe as an id.
+  process.env.STRIPE_TERMINAL_LOCATION_ID = "   ";
+  let refusedBlank = false;
+  try { await stripe.resolveTerminalLocationId(); }
+  catch (err) { refusedBlank = /not configured/i.test(err.message || ""); }
+  assert(refusedBlank,
+    "location: a blank STRIPE_TERMINAL_LOCATION_ID falls through, it does not count as set");
+
+  // No key and no configured id must fail rather than call anonymously.
+  delete process.env.STRIPE_TERMINAL_LOCATION_ID;
+  let refused = false;
+  try { await stripe.resolveTerminalLocationId(); }
+  catch (err) { refused = /not configured/i.test(err.message || ""); }
+  assert(refused, "location: refuses to look up without STRIPE_SECRET_KEY");
+
+  if (savedLoc) process.env.STRIPE_TERMINAL_LOCATION_ID = savedLoc;
+  else delete process.env.STRIPE_TERMINAL_LOCATION_ID;
+  if (savedSecret) process.env.STRIPE_SECRET_KEY = savedSecret;
+
+  // The several-locations refusal, read from the source: it is the
+  // assertion that cannot be exercised without a live Stripe account,
+  // and the one whose absence would be silent and expensive.
+  const libSrc = readFileSync(new URL("../server/lib/stripe.js", import.meta.url), "utf8");
+  const fnAt = libSrc.indexOf("async function resolveTerminalLocationId");
+  assert(fnAt > 0, "location: the resolver exists in the lib");
+  const fnBlock = libSrc.slice(fnAt, fnAt + 1400);
+  assert(/locations\.length === 1/.test(fnBlock),
+    "location: exactly one Location is used without configuration");
+  assert(/STRIPE_TERMINAL_LOCATION_ID/.test(fnBlock),
+    "location: several Locations point the reader at the env var instead of guessing");
+  assert(!/locations\[0\]\.id;?\s*\n\s*}\s*$/.test(fnBlock),
+    "location: no unconditional first-location fallback");
+
+  // The route must hand back both halves. One without the other leaves
+  // the app holding a token it cannot connect with.
+  const serverSrc2 = readFileSync(new URL("../server/server.js", import.meta.url), "utf8");
+  const routeAt2 = serverSrc2.indexOf('pathname === "/api/terminal/connection-token" && req.method === "POST"');
+  const routeBlock2 = serverSrc2.slice(routeAt2, routeAt2 + 1600);
+  assert(/resolveTerminalLocationId\(\)/.test(routeBlock2),
+    "location: the connection-token route resolves the location");
+  assert(/locationId/.test(routeBlock2),
+    "location: the route returns locationId alongside the secret");
 }
 
 console.log(`\ntest-stripe: ${failed ? "FAIL" : "PASS"} — ${passed} passed, ${failed} failed`);

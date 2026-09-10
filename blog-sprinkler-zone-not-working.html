@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="google-site-verification" content="nwkYVX3vsxvqoDPYw--imtdeXQYaWrKSVRnNlRtkeDA">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="One sprinkler zone dead while the rest run fine? It's almost always the valve — solenoid, wiring or diaphragm — not the heads. How to find which, and the fix.">
+<meta name="description" content="One sprinkler zone won't turn on while the rest run fine? It's almost always the valve — solenoid, wiring or diaphragm — not the heads. Here's how to find it.">
 <meta name="keywords" content="sprinkler zone not working, one sprinkler zone won't turn on, dead sprinkler zone, zone no water, sprinkler solenoid, valve wiring">
 <meta name="author" content="Patrick Lalande — PJL Land Services">
 <meta name="robots" content="index, follow, max-image-preview:large">
@@ -184,27 +184,48 @@
 }
 </script>
 <!-- @@PJL:analytics-START -->
-<!-- Google Analytics 4 -->
+<!-- Google Analytics 4 + Google Ads conversion tracking -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-1B5RJLKKBR"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
   function gtag(){dataLayer.push(arguments);}
   gtag('js', new Date());
   gtag('config', 'G-1B5RJLKKBR');
+  // Google Ads conversion ID. Coexists with the GA4 property on the same
+  // tag — both IDs are configured on one gtag() setup, GA4 is unaffected.
+  gtag('config', 'AW-11358637592');
+
+  // ── "Website Phone Click" conversion ──
+  // Delegated on document (capture phase) instead of binding to
+  // a[href^="tel:"] at DOMContentLoaded, because not every phone link
+  // exists at load: coverage-checker.js writes call CTAs into its result
+  // panel, and the chat widget can emit tel: links in a reply. A one-time
+  // querySelectorAll pass would silently miss those.
+  // Never preventDefault or delay — the dial must start instantly.
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!t || typeof t.closest !== 'function') return;
+    if (!t.closest('a[href^="tel:"]')) return;
+    if (typeof gtag === 'function') {
+      gtag('event', 'conversion', {
+        'send_to': 'AW-11358637592/CTBKCOOulN0cEJicnKgq'
+      });
+    }
+  }, true);
 </script>
 <!-- @@PJL:analytics-END -->
 </head>
 <body>
 <div class="reading-progress" id="readingProgress"></div>
-<!-- @@PJL:nav-START {"loc": "Newmarket &amp; GTA", "status": "Same-day repair available", "badge": "Same-day repair · Newmarket &amp; GTA"} -->
+<!-- @@PJL:nav-START {"loc": "Newmarket &amp; GTA", "status": "Fall closings booking now", "badge": "Book online · Newmarket &amp; GTA"} -->
 <nav class="nav nav-v2 nav-solid">
-  <div class="nav-utility-strip"><div class="nav-utility-strip__inner"><span class="nav-utility-strip__location"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 14.5s5.5-5 5.5-9a5.5 5.5 0 1 0-11 0c0 4 5.5 9 5.5 9Z"/><circle cx="8" cy="5.5" r="2"/></svg></span>Newmarket &amp; GTA</span><span class="nav-utility-strip__same-day"><span class="nav-utility-strip__pulse" aria-hidden="true"></span>Same-day repair available</span><a href="tel:+19059600181" class="nav-utility-strip__phone"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="currentColor"><path d="M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.6 17.6 0 0 0 4.168 6.608 17.6 17.6 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.68.68 0 0 0-.58-.122l-2.19.547a1.75 1.75 0 0 1-1.657-.459L5.482 8.062a1.75 1.75 0 0 1-.46-1.657l.548-2.19a.68.68 0 0 0-.122-.58L3.654 1.328Z"/></svg></span><span>(905) 960-0181</span></a><a href="/portal/login" class="nav-utility-strip__login"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="6" r="2.5"/><path d="M3 13.5c0-2.485 2.239-4.5 5-4.5s5 2.015 5 4.5"/></svg></span><span>Customer Login</span></a><a href="/login" class="nav-utility-strip__login"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="10" height="7" rx="1.2"/><path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7"/></svg></span><span>PJL Login</span></a></div></div>
-  <div class="nav-inner"><a href="index.html" class="nav-logo"><img src="logo.svg" alt="PJL Land Services"></a><div class="nav-main"><ul class="nav-links"><li><a href="index.html">Home</a></li><li><a href="sprinkler-systems.html">Sprinklers</a></li><li><a href="landscape-lighting.html">Lighting</a></li><li><a href="about.html">About</a></li><li><a href="blog.html">Blog</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact</a></li></ul><a href="quote.html" class="nav-cta nav-cta--quote"><span>Get a Free Estimate</span><span class="nav-cta-arrow" aria-hidden="true">→</span></a></div><div class="nav-hamburger" role="button" tabindex="0" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="nav-mobile"><span></span><span></span><span></span></div></div>
+  <div class="nav-utility-strip"><div class="nav-utility-strip__inner"><span class="nav-utility-strip__location"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 14.5s5.5-5 5.5-9a5.5 5.5 0 1 0-11 0c0 4 5.5 9 5.5 9Z"/><circle cx="8" cy="5.5" r="2"/></svg></span>Newmarket &amp; GTA</span><span class="nav-utility-strip__same-day"><span class="nav-utility-strip__pulse" aria-hidden="true"></span>Fall closings booking now</span><a href="tel:+19059600181" class="nav-utility-strip__phone"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="currentColor"><path d="M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.6 17.6 0 0 0 4.168 6.608 17.6 17.6 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.68.68 0 0 0-.58-.122l-2.19.547a1.75 1.75 0 0 1-1.657-.459L5.482 8.062a1.75 1.75 0 0 1-.46-1.657l.548-2.19a.68.68 0 0 0-.122-.58L3.654 1.328Z"/></svg></span><span>(905) 960-0181</span></a><a href="/portal/login" class="nav-utility-strip__login"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="6" r="2.5"/><path d="M3 13.5c0-2.485 2.239-4.5 5-4.5s5 2.015 5 4.5"/></svg></span><span>Customer Login</span></a><a href="/login" class="nav-utility-strip__login"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="10" height="7" rx="1.2"/><path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7"/></svg></span><span>PJL Login</span></a></div></div>
+  <div class="nav-inner"><a href="index.html" class="nav-logo"><img src="logo.svg" alt="PJL Land Services"></a><div class="nav-main"><ul class="nav-links"><li><a href="index.html">Home</a></li><li><a href="sprinkler-systems.html">Sprinklers</a></li><li><a href="landscape-lighting.html">Lighting</a></li><li><a href="about.html">About</a></li><li><a href="blog.html">Blog</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact</a></li></ul><a href="book.html" class="nav-cta nav-cta--quote"><span>Get a Free Estimate</span><span class="nav-cta-arrow" aria-hidden="true">→</span></a></div><div class="nav-hamburger" role="button" tabindex="0" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="nav-mobile"><span></span><span></span><span></span></div></div>
 </nav>
 <div class="nav-mobile" id="nav-mobile">
-  <div class="nav-mobile__badge"><span class="nav-mobile__badge-pulse" aria-hidden="true"></span>Same-day repair · Newmarket &amp; GTA</div>
+  <div class="nav-mobile__badge"><span class="nav-mobile__badge-pulse" aria-hidden="true"></span>Book online · Newmarket &amp; GTA</div>
   <nav class="nav-mobile__nav"><a href="index.html" class="nav-mobile__link">Home</a><a href="sprinkler-systems.html" class="nav-mobile__link">Sprinklers</a><a href="landscape-lighting.html" class="nav-mobile__link">Lighting</a><a href="about.html" class="nav-mobile__link">About</a><a href="blog.html" class="nav-mobile__link">Blog</a><a href="faq.html" class="nav-mobile__link">FAQ</a><a href="contact.html" class="nav-mobile__link">Contact</a><a href="/portal/login" class="nav-mobile__link nav-mobile__link--login">Customer Login</a><a href="/login" class="nav-mobile__link nav-mobile__link--login">PJL Login</a></nav>
-  <div class="nav-mobile__actions"><a href="tel:+19059600181" class="nav-mobile__action nav-mobile__action--call">Call</a><a href="quote.html" class="nav-mobile__action nav-mobile__action--quote"><span>Get a Free Estimate</span></a></div>
+  <div class="nav-mobile__actions"><a href="tel:+19059600181" class="nav-mobile__action nav-mobile__action--call">Call</a><a href="book.html" class="nav-mobile__action nav-mobile__action--quote"><span>Get a Free Estimate</span></a></div>
 </div>
 <!-- @@PJL:nav-END -->
 
@@ -225,38 +246,45 @@
   <div class="container">
     <div class="post-body-grid">
       <aside class="post-toc"><h4>In this article</h4><ul>
-        <li><a href="#answer">The short version</a></li>
-        <li><a href="#one-or-all">One zone or the whole system?</a></li>
-        <li><a href="#step1">Step 1 — test at the controller</a></li>
-        <li><a href="#step2">Step 2 — listen at the valve</a></li>
-        <li><a href="#culprits">Step 3 — the usual culprits</a></li>
-        <li><a href="#not-heads">What it's usually NOT</a></li>
-        <li><a href="#cost">When to call a pro &amp; cost</a></li>
+        <li><a href="#answer">Why won't one zone turn on?</a></li>
+        <li><a href="#one-or-all">One zone, or the whole system?</a></li>
+        <li><a href="#step1">Controller, wire, or valve?</a></li>
+        <li><a href="#step2">What to listen for at the valve</a></li>
+        <li><a href="#culprits">What causes a zone to stop working?</a></li>
+        <li><a href="#stays-on">What if a zone won't shut off?</a></li>
+        <li><a href="#not-heads">Can a bad head kill a zone?</a></li>
+        <li><a href="#cost">What does the fix cost?</a></li>
       </ul></aside>
 
       <article class="post-content">
         <p class="post-lede">Every zone runs but one. That one comes up on the schedule and nothing happens — no water, no hiss, dry heads. It's one of the most common calls we get, and the good news is the fault is almost always in the same short list of places. Here's how to find it.</p>
 
-        <div class="quick-answer"><span class="qa-label">Quick answer</span><p>A single dead zone — while every other zone runs fine — is almost always the valve for that zone: a failed solenoid, a broken or corroded wire, or a stuck diaphragm. It's rarely the sprinkler heads. Work from the controller to the valve, in that order, and you'll usually find it fast.</p></div>
+        <h2 id="answer">Why won't one sprinkler zone turn on when the others work?</h2>
+        <div class="quick-answer"><span class="qa-label">Quick answer</span><p><strong>If every other zone runs and one stays dry, the fault is at that zone's valve — a burnt-out solenoid, a broken or corroded wire, or a diaphragm stuck shut. The heads are almost never the cause. Work from the controller outward.</strong></p></div>
 
         <figure class="post-portrait-figure">
           <img src="blog-sprinkler-zone-not-working-01-one-dry-zone.jpg" alt="A pop-up rotor sprinkler running on a healthy green lawn in front of a GTA home" loading="lazy" decoding="async" width="1500" height="2000">
           <figcaption>When every zone works, a healthy lawn looks like this. When one zone won't come on while the rest do, the fault is almost always at that zone's valve.</figcaption>
         </figure>
 
-        <h2 id="one-or-all">Is it one zone, or the whole system?</h2>
+        <h2 id="one-or-all">Is it one zone, or is the whole system not turning on?</h2>
+        <div class="quick-answer"><span class="qa-label">Quick answer</span><p><strong>If nothing runs at all, it isn't a zone fault. Check power at the controller, the main shut-off, and the water supply first. If every zone runs except one, the problem is isolated to that zone's valve or the wire feeding it.</strong></p></div>
         <p class="answer-lead"><strong>First, confirm it's really just one zone. If nothing runs at all, that's a controller, power, or water-supply problem, not a zone fault. If every zone works except one, the problem is specific to that zone's valve or the wire running to it — that's the case this guide walks through.</strong></p>
+        <p>A whole system that won't start usually comes down to three things: the controller has lost power or its programming, the main shut-off to the irrigation line is closed, or the system was never opened for the season. Check those before assuming a fault. If the controller is running its program and still nothing happens anywhere, the problem is upstream of the valves.</p>
 
-        <h2 id="step1">Step 1 — test the zone at the controller</h2>
+        <h2 id="step1">How do I tell if it's the controller, the wire, or the valve?</h2>
+        <div class="quick-answer"><span class="qa-label">Quick answer</span><p><strong>Start the dead zone manually at the controller. If the valve stays silent, measure resistance across that zone's terminal and common — a healthy Hunter solenoid reads roughly 20–60 ohms. An open circuit means a broken wire or burnt-out coil; a normal reading points at the station or the valve.</strong></p></div>
         <p class="answer-lead"><strong>Manually start the dead zone from the controller. On a Hydrawise system, watch for a wiring alert — it monitors the current to each valve and will often tell you the circuit's open. On any controller, if the manual start does nothing at the valve, you've narrowed it to the wire or the valve itself.</strong></p>
         <p>A Hydrawise controller's built-in current monitoring is a real advantage here: it measures the electrical draw on each zone and flags an open circuit or a shorted solenoid, so it often points you straight at the problem before you've lifted a valve-box lid.</p>
+        <p>Resistance is what separates a wire fault from a valve fault without digging anything up. At the controller, put a multimeter across the zone terminal and common. Roughly 20–60 ohms means the solenoid coil and the wire run are both intact, so the fault is either the station output or the valve itself. An open circuit means the wire is cut or the coil has burnt out. A near-zero reading means a short — usually a nicked wire or a corroded splice in a flooded box. If the resistance reads healthy and the zone still won't fire, move that wire to a terminal you know works: if it runs there, the original station output is dead.</p>
 
         <figure class="post-portrait-figure">
           <img src="blog-sprinkler-zone-not-working-02-controller-wiring-alert.jpg" alt="An irrigation system running across a landscaped estate lawn and garden beds" loading="lazy" decoding="async" width="1500" height="2000">
           <figcaption>Run the system and watch: the zones that spray are fine, so a single dead one points you straight at that zone's valve or the wire feeding it.</figcaption>
         </figure>
 
-        <h2 id="step2">Step 2 — go to the valve and listen</h2>
+        <h2 id="step2">What should I listen for at the valve?</h2>
+        <div class="quick-answer"><span class="qa-label">Quick answer</span><p><strong>Start the zone and listen at the valve box. A soft click or buzz means the solenoid is energizing — if there's still no water, suspect a stuck diaphragm or debris. No sound at all points to a dead solenoid or a broken wire.</strong></p></div>
         <p class="answer-lead"><strong>At the valve box for that zone, start the zone and listen for a soft click or buzz — that's the solenoid energizing. Click and buzz but no water usually means a stuck diaphragm or debris. No sound at all points to a dead solenoid or a broken wire.</strong></p>
 
         <figure class="post-inline-figure">
@@ -264,7 +292,8 @@
           <figcaption>Inside the valve box: the zone valves, their solenoids and the field wiring that feeds them — where a single dead zone is almost always traced.</figcaption>
         </figure>
 
-        <h2 id="culprits">Step 3 — the usual culprits</h2>
+        <h2 id="culprits">What causes a sprinkler zone to stop working?</h2>
+        <div class="quick-answer"><span class="qa-label">Quick answer</span><p><strong>In order of how often we find them: a failed solenoid, a broken or corroded wire, a stuck or torn diaphragm, and rarely a dead controller station. Flooded valve boxes and later digging account for most of the wire faults we see.</strong></p></div>
         <p>In rough order of how often we find them:</p>
         <ul>
           <li><strong>Failed solenoid</strong> — the electrical coil that opens the valve burns out. Common, and a clean fix.</li>
@@ -278,11 +307,17 @@
           <figcaption>A flooded valve box with the solenoid wiring sitting underwater — exactly where a corroded connection or a failed solenoid quietly kills one zone.</figcaption>
         </figure>
 
-        <h2 id="not-heads">What it's usually NOT — the heads</h2>
+        <h2 id="stays-on">What causes a sprinkler zone to stay on and not shut off?</h2>
+        <div class="quick-answer"><span class="qa-label">Quick answer</span><p><strong>A zone that won't shut off is usually the valve's manual bleed screw left open, or grit holding the diaphragm off its seat. Check the bleed screw first. If it's fully closed and water still runs, close the main shut-off and book a repair.</strong></p></div>
+        <p>It's the same valve, failing the other way. Start with the manual bleed screw: if it's been opened and not fully closed, the valve stays open no matter what the controller does, and closing it solves the problem outright. If the bleed screw is closed and the zone still runs, debris is holding the diaphragm off its seat. That won't clear from the surface — the valve has to come apart to be cleaned. A valve that sticks once tends to stick again, which is why we rebuild the whole manifold rather than chase one valve.</p>
+
+        <h2 id="not-heads">Can a bad sprinkler head cause a whole zone to fail?</h2>
+        <div class="quick-answer"><span class="qa-label">Quick answer</span><p><strong>No. If the whole zone is dead, no water is reaching the heads at all, so replacing them changes nothing. Head faults look different — spraying sideways, failing to pop up, or misting. That's a head problem, not a dead zone.</strong></p></div>
         <p class="answer-lead"><strong>If a whole zone is dead, the heads are almost never the cause. No water is reaching them at all, so swapping heads won't help. Head problems look different — a head that sprays sideways, won't pop up, or mists. If that's what you're seeing, it's a head issue, not a dead zone.</strong></p>
         <p>(For that case, see <a href="blog-sprinkler-head-not-spraying.html">sprinkler head not spraying</a>. If instead water is <em>pooling</em> when the system's off, that's a valve leak — see <a href="blog-water-pooling-around-sprinkler-head.html">water pooling around a sprinkler head</a>.)</p>
 
-        <h2 id="cost">When to call a pro — and what a valve fix costs</h2>
+        <h2 id="cost">What does it cost to fix a sprinkler zone that won't turn on?</h2>
+        <div class="quick-answer"><span class="qa-label">Quick answer</span><p><strong>A solenoid or wire repair is usually quick. If the valve itself needs replacing, PJL rebuilds the entire manifold in that box rather than a single valve — it's more reliable and it prevents the next failure. Everything is quoted before work starts.</strong></p></div>
         <p class="answer-lead"><strong>If it's a solenoid or a wire, it's often a quick repair. If the valve itself needs replacing, we rebuild the whole manifold in that box, not a single valve — it's more reliable and it prevents the next failure. Pricing is by manifold size plus the valves, quoted before any work.</strong></p>
         <p>When a valve in a box has failed, PJL replaces the full manifold and every valve in that box together: a <span data-price="manifold_3valve">$135</span> (1–3 valve) or <span data-price="manifold_6valve">$285</span> (4–6 valve) manifold rebuild, plus <span data-price="valve_hunter_pgv">$74.95</span> per Hunter PGV valve, plus the <span data-price="service_call">$95</span> service call. Everything's quoted up front.</p>
 
@@ -335,7 +370,7 @@
 <a href="tel:+19059600181" class="post-sticky-cta" id="postStickyCta" aria-label="Call PJL Land Services"><span class="post-sticky-cta-icon" aria-hidden="true">📞</span><span>Talk to PJL: <strong>(905) 960-0181</strong></span></a>
 
 <!-- @@PJL:footer-START -->
-<footer class="footer"><div class="container"><div class="footer-grid"><div class="footer-brand"><img src="logo.svg" alt="PJL Land Services"><p>Newmarket's trusted lawn sprinkler and landscape lighting experts. Serving Newmarket and the GTA with honest service, smart technology, and a 3-year warranty.</p><div class="footer-social"><a href="https://www.facebook.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Facebook" rel="noopener">f</a><a href="https://www.instagram.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Instagram" rel="noopener">in</a></div></div><div class="footer-col"><h5>Services</h5><ul><li><a href="sprinkler-spring-opening.html">Spring Openings</a></li><li><a href="sprinkler-fall-winterization.html">Fall Closings</a></li><li><a href="sprinkler-repair.html">Sprinkler Repair</a></li><li><a href="sprinkler-installation.html">New Installations</a></li><li><a href="sprinkler-hydrawise.html">Hydrawise Smart Controller</a></li><li><a href="water-cost-calculator.html">Water Cost Calculator</a></li><li><a href="drip-irrigation.html">Drip Irrigation</a></li><li><a href="commercial-irrigation.html">Commercial Irrigation</a></li><li><a href="warranty.html">Warranty</a></li><li><a href="process.html">How It Works</a></li><li><a href="pricing.html">Pricing</a></li><li><a href="coverage-map.html">Coverage Area</a></li><li><a href="landscape-lighting.html">Landscape Lighting</a></li></ul></div><div class="footer-col"><h5>Service Areas</h5><ul><li><a href="sprinkler-service-newmarket.html">Newmarket</a></li><li><a href="sprinkler-service-aurora.html">Aurora</a></li><li><a href="sprinkler-service-king-city.html">King City</a></li><li><a href="sprinkler-service-richmond-hill.html">Richmond Hill</a></li><li><a href="sprinkler-service-vaughan.html">Vaughan</a></li><li><a href="sprinkler-service-markham.html">Markham</a></li><li><a href="sprinkler-service-stouffville.html">Stouffville</a></li><li><a href="sprinkler-service-east-gwillimbury.html">East Gwillimbury</a></li><li><a href="sprinkler-service-thornhill.html">Thornhill</a></li><li><a href="sprinkler-service-toronto.html">Toronto</a></li><li><a href="sprinkler-service-north-york.html">North York</a></li><li><a href="sprinkler-service-lawrence-park.html">Lawrence Park</a></li><li><a href="sprinkler-service-forest-hill.html">Forest Hill</a></li><li><a href="sprinkler-service-bolton.html">Bolton</a></li><li><a href="sprinkler-service-orangeville.html">Orangeville</a></li><li><a href="sprinkler-service-erin.html">Erin</a></li><li><a href="sprinkler-service-acton.html">Acton</a></li><li><a href="sprinkler-service-innisfil.html">Innisfil</a></li><li><a href="coverage-map.html">All coverage</a></li></ul></div><div class="footer-col"><h5>Company</h5><ul><li><a href="index.html">Home</a></li><li><a href="about.html">About</a></li><li><a href="reviews.html">Reviews</a></li><li><a href="blog.html">Blog</a></li><li><a href="estimate.html">Get an Estimate</a></li><li><a href="book.html">Book Online</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact Us</a></li><li><a href="sitemap.html">Sitemap</a></li></ul></div><div class="footer-col"><h5>Contact</h5><div class="footer-contact-item"><span>📞</span><a href="tel:+19059600181" style="color:rgba(255,255,255,0.65)">(905) 960-0181</a></div><div class="footer-contact-item"><span>✉️</span><a href="mailto:info@pjllandservices.com" style="color:rgba(255,255,255,0.65)">info@pjllandservices.com</a></div><div class="footer-contact-item"><span>📍</span><span>Newmarket, Ontario</span></div></div></div><div class="footer-bottom"><p>© 2026 PJL Land Services. All rights reserved.</p><div class="footer-bottom-links"><a href="privacy-policy.html">Privacy Policy</a><a href="terms-of-service.html">Terms of Service</a><a href="accessibility-statement.html">Accessibility</a></div></div></div></footer>
+<footer class="footer"><div class="container"><div class="footer-grid"><div class="footer-brand"><img src="logo.svg" alt="PJL Land Services"><p>Newmarket's trusted lawn sprinkler and landscape lighting experts. Serving Newmarket and the GTA with honest service, smart technology, and a 3-year warranty.</p><div class="footer-social"><a href="https://www.facebook.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Facebook" rel="noopener">f</a><a href="https://www.instagram.com/pjllandservices" target="_blank" aria-label="PJL Land Services on Instagram" rel="noopener">in</a></div></div><div class="footer-col"><h5>Services</h5><ul><li><a href="sprinkler-spring-opening.html">Spring Openings</a></li><li><a href="sprinkler-fall-winterization.html">Fall Closings</a></li><li><a href="sprinkler-repair.html">Sprinkler Repair</a></li><li><a href="sprinkler-installation.html">New Installations</a></li><li><a href="sprinkler-hydrawise.html">Hydrawise Smart Controller</a></li><li><a href="water-cost-calculator.html">Water Cost Calculator</a></li><li><a href="drip-irrigation.html">Drip Irrigation</a></li><li><a href="commercial-irrigation.html">Commercial Irrigation</a></li><li><a href="warranty.html">Warranty</a></li><li><a href="water-promise.html">Our Water Promise</a></li><li><a href="process.html">How It Works</a></li><li><a href="pricing.html">Pricing</a></li><li><a href="coverage-map.html">Coverage Area</a></li><li><a href="landscape-lighting.html">Landscape Lighting</a></li></ul></div><div class="footer-col"><h5>Service Areas</h5><ul><li><a href="sprinkler-service-newmarket.html">Newmarket</a></li><li><a href="sprinkler-service-aurora.html">Aurora</a></li><li><a href="sprinkler-service-king-city.html">King City</a></li><li><a href="sprinkler-service-richmond-hill.html">Richmond Hill</a></li><li><a href="sprinkler-service-vaughan.html">Vaughan</a></li><li><a href="sprinkler-service-markham.html">Markham</a></li><li><a href="sprinkler-service-stouffville.html">Stouffville</a></li><li><a href="sprinkler-service-east-gwillimbury.html">East Gwillimbury</a></li><li><a href="sprinkler-service-thornhill.html">Thornhill</a></li><li><a href="sprinkler-service-toronto.html">Toronto</a></li><li><a href="sprinkler-service-north-york.html">North York</a></li><li><a href="sprinkler-service-lawrence-park.html">Lawrence Park</a></li><li><a href="sprinkler-service-forest-hill.html">Forest Hill</a></li><li><a href="sprinkler-service-bolton.html">Bolton</a></li><li><a href="sprinkler-service-orangeville.html">Orangeville</a></li><li><a href="sprinkler-service-erin.html">Erin</a></li><li><a href="sprinkler-service-acton.html">Acton</a></li><li><a href="sprinkler-service-innisfil.html">Innisfil</a></li><li><a href="coverage-map.html">All coverage</a></li></ul></div><div class="footer-col"><h5>Company</h5><ul><li><a href="index.html">Home</a></li><li><a href="about.html">About</a></li><li><a href="reviews.html">Reviews</a></li><li><a href="blog.html">Blog</a></li><li><a href="book.html">Get an Estimate</a></li><li><a href="book.html">Book Online</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact Us</a></li><li><a href="sitemap.html">Sitemap</a></li></ul></div><div class="footer-col"><h5>Contact</h5><div class="footer-contact-item"><span>📞</span><a href="tel:+19059600181" style="color:rgba(255,255,255,0.65)">(905) 960-0181</a></div><div class="footer-contact-item"><span>✉️</span><a href="mailto:info@pjllandservices.com" style="color:rgba(255,255,255,0.65)">info@pjllandservices.com</a></div><div class="footer-contact-item"><span>📍</span><span>Newmarket, Ontario</span></div></div></div><div class="footer-bottom"><p>© 2026 PJL Land Services. All rights reserved.</p><div class="footer-bottom-links"><a href="privacy-policy.html">Privacy Policy</a><a href="terms-of-service.html">Terms of Service</a><a href="accessibility-statement.html">Accessibility</a></div></div></div></footer>
 <!-- @@PJL:footer-END -->
 <script src="nav.js?v=2"></script>
 <script>

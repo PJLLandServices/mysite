@@ -85,14 +85,14 @@ const RULES = [
   // must be paired with one of these spring-specific lead-ins.
   {
     name: 'spring-from',
-    re: /\b((?:spring\s+(?:sprinkler\s+)?(?:opening|activation)\s+from\s+|spring\s+activation\s+from\s+|spring\s+service\s+from\s+|seasonal\s+(?:service|care)\s+(?:starts\s+at|from)\s+|opening\s+from\s+))(\$\d{1,3}(?:,\d{3})*)/gi,
+    re: /\b((?:spring\s+(?:sprinkler\s+)?(?:openings?|activation)\s+from\s+|spring\s+activation\s+from\s+|spring\s+service\s+from\s+|seasonal\s+(?:service|care)\s+(?:starts\s+at|from)\s+|opening\s+from\s+))(\$\d{1,3}(?:,\d{3})*)/gi,
     key: 'spring_open_4z'
   },
 
   // ----- Fall winterization — "from $90", "fall blow-out from $90", etc.
   {
     name: 'fall-from',
-    re: /\b((?:fall\s+(?:sprinkler\s+)?(?:winterization|blow-?out|closing|service)\s+(?:from\s+|starts?\s+at\s+)|winterization\s+from\s+|closing\s+from\s+|blow-?out\s+from\s+))(\$\d{1,3}(?:,\d{3})*)/gi,
+    re: /\b((?:fall\s+(?:sprinkler\s+)?(?:winterization|blow-?out|closings?|service)\s+(?:from\s+|starts?\s+at\s+)|winterization\s+from\s+|closings?\s+from\s+|blow-?out\s+from\s+))(\$\d{1,3}(?:,\d{3})*)/gi,
     key: 'fall_close_4z'
   },
 

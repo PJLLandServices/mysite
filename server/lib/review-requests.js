@@ -36,6 +36,8 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 
 const { resolvePublicBaseUrl } = require("./public-base-url");
+const { logSend } = require("./mailer-log");
+const testRecipients = require("./test-recipients");
 
 const FILE = path.join(__dirname, "..", "data", "review-requests.json");
 const TEMPLATE_1 = path.join(__dirname, "templates", "review-request-email-1.html");
@@ -258,15 +260,16 @@ function getNodemailer() {
 }
 
 let transporterCache = null;
+
 function getTransporter() {
   if (transporterCache) return transporterCache;
   const nodemailer = getNodemailer();
   if (!nodemailer) return null;
   if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) return null;
-  transporterCache = nodemailer.createTransport({
+  transporterCache = testRecipients.guardTransport(nodemailer.createTransport({
     service: "gmail",
     auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
-  });
+  }));
   return transporterCache;
 }
 
@@ -497,7 +500,11 @@ async function sendEmail(which, record, settings) {
     subject,
     html,
     text
+  }).catch(async (error) => {
+    await logSend({ kind: "review_ask", to: record.email, ok: false, error: error.message, refId: record.woId });
+    throw error;
   });
+  await logSend({ kind: "review_ask", to: record.email, ok: true, refId: record.woId });
   return { ok: true, messageId: info.messageId };
 }
 
@@ -580,6 +587,10 @@ async function sendReviewSms(record, url) {
   if (!smsConfigured()) return { ok: false, reason: "no_twilio_config" };
   const toNum = normalizePhone(record.phone);
   if (!toNum) return { ok: false, reason: "bad_phone" };
+  // Nothing goes to a load-test record, on any channel.
+  if (await testRecipients.isTestRecipient({ phone: toNum })) {
+    return testRecipients.suppressed("sms", toNum, record.id || "");
+  }
   let body = buildReviewSmsBody(record, url);
   if (!/\bSTOP\b/i.test(body)) body = `${body.trim()}\nReply STOP to opt out.`;
   const sid = process.env.TWILIO_ACCOUNT_SID;
@@ -1104,7 +1115,11 @@ async function sendTest({ which = 1, to = null } = {}) {
     subject: `[TEST] ${subject}`,
     html,
     text
+  }).catch(async (error) => {
+    await logSend({ kind: "other", to: recipient, ok: false, error: error.message });
+    throw error;
   });
+  await logSend({ kind: "other", to: recipient, ok: true });
   return { ok: true, to: recipient, messageId: info.messageId };
 }
 

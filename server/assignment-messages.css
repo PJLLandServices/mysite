@@ -1,0 +1,59 @@
+/* Assignment message templates — stage 3. Editing surface for the
+   wording the cadence will send; the page itself sends nothing. */
+
+.am-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+.am-head h1 { margin: 4px 0 8px; }
+.am-sub { margin: 0; max-width: 62ch; color: var(--pjl-text-mid); }
+
+.am-panel {
+  background: #fff; border: 1px solid var(--pjl-border); border-radius: 12px;
+  padding: 18px 20px; margin-bottom: 16px;
+}
+.am-panel-title {
+  margin: 0 0 10px; font-family: "Barlow Condensed", sans-serif;
+  font-size: 1.15rem; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--pjl-green);
+}
+.am-note { margin: 0 0 10px; font-size: 0.88rem; color: var(--pjl-text-muted); max-width: 70ch; }
+
+.am-fields { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; }
+.am-fields dt { font-family: ui-monospace, monospace; font-size: 0.85rem; color: var(--pjl-green); white-space: nowrap; }
+.am-fields dd { margin: 0; font-size: 0.85rem; color: var(--pjl-text-mid); }
+
+.am-preview-controls { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 8px; }
+.am-preview-customer select { min-width: 260px; }
+
+.am-editor { border-top: 1px solid var(--pjl-border); padding: 14px 0 6px; }
+.am-editor:first-of-type { border-top: 0; }
+.am-editor-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+.am-source { font-size: 0.8rem; color: var(--pjl-text-muted); }
+
+.am-label { display: block; margin-bottom: 10px; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--pjl-text-muted); }
+.am-label input, .am-label textarea {
+  display: block; width: 100%; box-sizing: border-box; margin-top: 4px;
+  padding: 10px 12px; font: inherit; font-size: 0.95rem; text-transform: none; letter-spacing: normal;
+  border: 1px solid var(--pjl-border); border-radius: 8px; background: #fff;
+  color: var(--pjl-text); line-height: 1.5;
+}
+.am-label textarea { resize: vertical; }
+
+.am-meter { margin: -4px 0 10px; font-size: 0.8rem; color: var(--pjl-text-muted); font-variant-numeric: tabular-nums; }
+.am-editor-actions { display: flex; gap: 10px; margin-bottom: 8px; }
+
+.am-preview summary { cursor: pointer; font-size: 0.85rem; color: var(--pjl-green); }
+.am-preview-box {
+  margin: 8px 0 0; padding: 12px 14px; background: var(--pjl-green-pale, #EFF5F0);
+  border-radius: 8px; font: inherit; font-size: 0.9rem; white-space: pre-wrap;
+  word-break: break-word; color: var(--pjl-text);
+}
+
+/* The toast is a <p>, so crm.css's blanket `.pjl-crm-body p` (0,1,1)
+   outranks a bare `.am-toast` (0,1,0) and repainted the text #4A4A4A on
+   the green pill — 1.10:1, the "Test sent to ..." confirmation was
+   unreadable. Scoping to the body class takes it to (0,2,0) and wins. */
+.pjl-crm-body .am-toast {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  padding: 10px 18px; border-radius: 999px; background: var(--pjl-green); color: #fff;
+  font-size: 0.9rem; z-index: 50;
+}
+.pjl-crm-body .am-toast.is-bad { background: #A33; }

@@ -82,7 +82,11 @@ const ZONE_CHECK_KEYS = ["operated", "pressureGood", "coverageGood", "noLeaks", 
 // pricing.json item categories: head_replacement, manifold rebuilds,
 // wire diagnostic / wire run, pipe break repair. "other" is the escape
 // hatch for anything that doesn't fit (custom on-site quote).
-const ZONE_ISSUE_TYPES = ["broken_head", "leak", "valve", "wire", "pipe", "controller", "other"];
+// zone_revamp added 2026-08-31 (fall-closing field flow). A zone that
+// needs redoing wholesale is a different job from replacing a part in it,
+// and next spring it should read as a zone-level job rather than hide
+// under "other" where it can't be counted or filtered.
+const ZONE_ISSUE_TYPES = ["broken_head", "leak", "valve", "wire", "pipe", "controller", "zone_revamp", "other"];
 
 // Photo categories per spec §4.3.2. Photos can be attached at the WO
 // level (pre/in/post-work documentation) or to a specific issue inside
@@ -103,6 +107,30 @@ const PHOTO_REQUIREMENT_BY_TYPE = {
   build:          0     // multi-day; photos accumulate naturally over days, no single-WO requirement
 };
 
+// Customer-visible note per service mode (Patrick, 2026-09-05).
+//
+// The note is the customer-facing NARRATIVE on the service report: what we
+// did at this visit. That is a real question on an opening or a service
+// call, where the work varies with what was found and the customer is
+// reading to learn what happened to their system.
+//
+// A fall closing does the same thing at every property: blow the zones out,
+// shut the water off, drain. The report already carries the four-step
+// checklist, who shut the water off, whether a back-flush was needed, and
+// per-zone findings — and the zone note field takes anything worth knowing
+// next spring. A required free-text box that always says "blew out the
+// system" is not a record; it is a field people learn to type through, and
+// it costs a tech standing in the cold at the end of every visit.
+//
+// Unknown types default to REQUIRED — a new service mode should have to opt
+// out deliberately rather than lose the narrative by omission.
+const CUSTOMER_NOTE_REQUIRED_BY_TYPE = {
+  spring_opening: true,   // what was found and fixed on the way back up
+  service_visit:  true,   // the repair narrative — the reason for the visit
+  fall_closing:   false,  // identical every time; the checklist IS the record
+  build:          true    // multi-day install; the customer is owed a summary
+};
+
 // Service-specific checklists per spec §4.3.2. Spring openings get a
 // 4-step "service-specific steps" block; fall closings get a 6-step
 // winterization block. Service visits (one-off repairs) have no
@@ -118,11 +146,21 @@ const SERVICE_CHECKLISTS = {
     { key: "controller_programmed",     label: "Controller programmed for season" },
     { key: "walkthrough_with_customer", label: "Walk-through with customer (if home)" }
   ],
+  // Revised 2026-08-31 to match the close-out Patrick actually performs.
+  // `compressor_connected` and `zones_blown_clear` are gone from the
+  // definition: the field flow now records the blow-out per zone, so a
+  // single "all zones blown clear" tick was a claim about work the zone
+  // pages evidence individually. Back-flush and who shut the water off
+  // are NOT here — they are three-state answers, not ticks, and live as
+  // `backFlush` and `waterShutoffBy` on the work order.
+  //
+  // Removing keys from this list does NOT erase them from work orders
+  // that stored them; serviceChecklist is a free-form map. Anything
+  // rendering a checklist must use checklistKeysForWorkOrder() below so
+  // historical closings keep the lines they were signed against.
   fall_closing: [
     { key: "controller_off",            label: "Controller set to off / winter mode" },
     { key: "water_off",                 label: "Water shut off at main" },
-    { key: "compressor_connected",      label: "Compressor connected at blow-out" },
-    { key: "zones_blown_clear",         label: "All zones blown clear" },
     { key: "compressor_disconnected",   label: "Compressor disconnected" },
     { key: "system_winterized",         label: "System winterized" }
   ],
@@ -131,6 +169,23 @@ const SERVICE_CHECKLISTS = {
   // notes block + task checklist drive the narrative instead.
   build: []
 };
+
+// The checklist keys to RENDER for a given work order: the current
+// definition for its type, followed by any key the work order actually
+// stored that the definition no longer carries.
+//
+// This exists because the definition changes over time and completed work
+// orders do not. A fall closing signed in 2025 recorded
+// `zones_blown_clear`; dropping that key from the list above must not
+// quietly delete a line from the customer report if it is regenerated for
+// a warranty claim two years later. Render the union, and the past keeps
+// saying what it said.
+function checklistKeysForWorkOrder(wo) {
+  const defined = (SERVICE_CHECKLISTS[wo?.type] || []).map((step) => step.key);
+  const stored = Object.keys(wo?.serviceChecklist || {});
+  const extra = stored.filter((key) => !defined.includes(key));
+  return [...defined, ...extra];
+}
 
 // Brief 2 — random 8-char base36 IDs for session / scope-change / etc.
 // Matches the iss_<random8>_<ts> + att_<random8> + sec_<random8> +
@@ -315,6 +370,30 @@ function blankWorkOrder() {
     // anything→completed stamps departedAt.
     arrivedAt: null,
     departedAt: null,
+    // Where the tech was when they tapped Start Service. arrivedAt records
+    // WHEN; without this there is no record of WHERE, which is the half
+    // that matters if a customer ever disputes that the visit happened.
+    // { lat, lng, accuracy, capturedAt } or null when the device refused
+    // or the tech declined the permission — never a blocker.
+    arrivalLocation: null,
+    // Fall closings: who actually shut the water off. One or the other,
+    // never both — a customer who already closed it leaves nothing for
+    // the tech to close, and nothing to photograph either, which is why
+    // the water-off photo is optional.
+    //   "" | "customer" | "tech"
+    waterShutoffBy: "",
+    // Fall closings: back-flush is a question, not a task. Not every
+    // property has one, so "no" is a complete answer and satisfies the
+    // close-out — unlike a checklist tick, where false reads as "not done
+    // yet".
+    //   "" | "yes" | "no"
+    backFlush: "",
+    // Completion timestamp (JOB-002 Part A). Server-stamped by update()
+    // the moment status transitions into "completed" — on EVERY path,
+    // unlike departedAt which only the tech UI supplies. Never patchable
+    // from a client (not in allowedTop); null until completed. Warranty
+    // expiry is computed from this + type via lib/warranty.js.
+    completedAt: null,
     // Materials packed checklist (spec §4.3.2). Map of sku → bool.
     // Populated as the tech taps each row in the materials list.
     materialsPacked: {},
@@ -340,6 +419,26 @@ function blankWorkOrder() {
     // Scope-protected — frozen once the WO is signed (the customer agreed
     // to the waived total).
     serviceFeeWaiver: null,
+    // Warranty-claim provenance (FLOW-30, 2026-08-29). Set when this WO
+    // was raised by approving a warranty claim, so the tech on site can
+    // see WHAT prior work they are honouring and WHY the service call is
+    // free. null on every WO not born from a claim.
+    //
+    //   {
+    //     claimId,              "2026-08-29-00020260001"
+    //     claimedInvoiceId,     the invoice the claim was made against
+    //     claimedWorkOrderId,   the WO behind that invoice (the prior work)
+    //     summary,              the customer's description of the fault
+    //     approvedBy, approvedAt,
+    //     converted: null | {   the scapegoat — see convertWarrantyToChargeable()
+    //       at, by, reason
+    //     }
+    //   }
+    //
+    // Scope-protected: this is the customer's contractual context ("we
+    // are here at no charge to fix X"), so it freezes with the rest of
+    // the scope once they sign.
+    warrantyClaim: null,
     // Payment captured on-site? (spec §4.3.2 Payment & Billing).
     //   false — "No, invoice to follow" (default — Patrick's stated
     //           real-world default. "we are highly unlikely to recieve
@@ -476,6 +575,30 @@ function hydrate(w) {
     serviceFeeWaiver: (w?.serviceFeeWaiver && typeof w.serviceFeeWaiver === "object" && w.serviceFeeWaiver.waived === true)
       ? { ...w.serviceFeeWaiver }
       : null,
+    // Warranty-claim provenance. hydrate() rebuilds this record key by
+    // key and readAll() writes the hydrated result back, so a key missing
+    // from here is not merely hidden — it is erased on the next read.
+    warrantyClaim: (w?.warrantyClaim && typeof w.warrantyClaim === "object" && w.warrantyClaim.claimId)
+      ? {
+          claimId: String(w.warrantyClaim.claimId),
+          claimedInvoiceId: w.warrantyClaim.claimedInvoiceId ? String(w.warrantyClaim.claimedInvoiceId) : null,
+          claimedWorkOrderId: w.warrantyClaim.claimedWorkOrderId ? String(w.warrantyClaim.claimedWorkOrderId) : null,
+          summary: String(w.warrantyClaim.summary || "").slice(0, 2000),
+          approvedBy: String(w.warrantyClaim.approvedBy || ""),
+          approvedAt: w.warrantyClaim.approvedAt || null,
+          // Set the moment the waiver is lifted on site. Once present the
+          // visit is a chargeable service call that BEGAN as a warranty
+          // visit — the pair is the audit trail, so `converted` is added
+          // alongside the original approval, never replacing it.
+          converted: (w.warrantyClaim.converted && typeof w.warrantyClaim.converted === "object")
+            ? {
+                at: w.warrantyClaim.converted.at || null,
+                by: String(w.warrantyClaim.converted.by || ""),
+                reason: String(w.warrantyClaim.converted.reason || "").slice(0, 2000)
+              }
+            : null
+        }
+      : null,
     onSiteQuote: {
       ...base.onSiteQuote,
       ...(w?.onSiteQuote || {}),
@@ -492,6 +615,7 @@ function hydrate(w) {
     completionReportSnapshotAt: typeof w?.completionReportSnapshotAt === "string"
       ? w.completionReportSnapshotAt
       : null,
+    completedAt: typeof w?.completedAt === "string" ? w.completedAt : null,
     // Brief 2 — build-mode pointers. parentProjectId stays null for
     // non-build WOs; dailyLog stays null until the WO is build-mode.
     parentProjectId: typeof w?.parentProjectId === "string" ? w.parentProjectId : null,
@@ -567,12 +691,39 @@ const SCOPE_PROTECTED_FIELDS = [
   // Fee waiver changes the customer's contractual total — freeze it once
   // the signed WO is the contract.
   "serviceFeeWaiver",
+  // Warranty provenance is the customer's contractual context for the
+  // visit ("no charge, we are honouring the April repair"). It freezes
+  // with the waiver it explains — converting a signed warranty visit to
+  // a chargeable one has to go through unlock, like any other post-
+  // signature scope change.
+  "warrantyClaim",
   // Customer-facing visit narrative — locks alongside scope so the
   // service-report snapshot at completion captures the same notes the
   // customer attested to at signature (Service Report brief, 2026-05-19).
   // techNotes remains UNlocked (admin-only, can be amended).
   "customerNotes"
 ];
+
+// Is this WO's scope frozen? `wo.locked` is the single authority.
+//
+// Every lock path sets it: drawn signature (server.js sets payload.locked
+// = true at fresh-sign) and admin signature bypass (captureSignatureBypass
+// sets next.locked = true). Guards used to read
+// `wo.locked || wo.signature?.signed` — belt-and-suspenders that was
+// always redundant, because a signed WO is a locked WO.
+//
+// It stopped being redundant when admin unlock landed (2026-08-06).
+// Unlock clears `locked` and PRESERVES the signature / signatureBypass
+// record as history (Patrick's ruling: flip the flag, keep the record).
+// Under the old OR-form a drawn-signature WO would stay frozen after an
+// unlock — the button would appear to work and change nothing. Reading
+// `locked` alone is what makes unlock mean something on both lock paths.
+//
+// Behaviour is identical for every WO that hasn't been explicitly
+// unlocked, which is every WO in the store before this shipped.
+function isScopeFrozen(wo) {
+  return wo?.locked === true;
+}
 
 // Returns the protected field path that a payload would touch on a
 // locked WO, or null if no protected fields are touched. Caller decides
@@ -630,6 +781,136 @@ function summarizeScopeAdditions(wo) {
     additionCount: additions.length,
     additionTotal: Math.round(additionTotal * 100) / 100
   };
+}
+
+// Record an on-site quote as accepted from a returned SIGNED COPY
+// (offline-acceptance brief, Aug 2026). The on-site-quote sibling of the
+// proposal PDF-return path: flips onSiteQuote.status → "accepted" and writes
+// durable acceptanceEvidence WITHOUT locking or completing the WO — the
+// completion sign-off stays a separate event (Faramarz signs "work done"
+// later). Direct read/write (not update()) so the scope-protected onSiteQuote
+// field can be set. Idempotent — a quote already accepted is returned as-is.
+// The signed copy is uploaded separately via the WO photos endpoint; its `n`
+// rides in as evidencePhotoN.
+async function recordOfflineQuoteAcceptance(woId, { acceptedByName, acceptedAt, note, evidencePhotoN, recordedBy } = {}, { ip, userAgent } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) {
+    const err = new Error("Work order not found.");
+    err.code = "wo_not_found";
+    throw err;
+  }
+  const current = records[idx];
+  if (current.signature && current.signature.signed === true) {
+    const err = new Error("Work order is already signed.");
+    err.code = "already_signed";
+    throw err;
+  }
+  if (current.onSiteQuote && current.onSiteQuote.status === "accepted") {
+    return current; // idempotent — already accepted
+  }
+  const builderLines = Array.isArray(current.onSiteQuote?.builderLineItems)
+    ? current.onSiteQuote.builderLineItems
+    : [];
+  if (!builderLines.length) {
+    const err = new Error("No on-site quote to accept — build the quote first.");
+    err.code = "no_quote";
+    throw err;
+  }
+
+  // Freeze the accepted scope/price into an immutable snapshot (same shape
+  // the bypass path writes). Acceptance does NOT lock the builder — that
+  // matches the remote-approval path; on-site changes tomorrow are scope
+  // additions billed on the completion sign-off.
+  const snapshotLines = builderLines.map((l) => JSON.parse(JSON.stringify(l)));
+  let subtotal = 0;
+  for (const l of snapshotLines) {
+    const qty = Number(l.qty) || 0;
+    const price = Number(l.overridePrice != null ? l.overridePrice : l.originalPrice) || 0;
+    subtotal += qty * price;
+  }
+  subtotal = Math.round(subtotal * 100) / 100;
+  const hst = Math.round(subtotal * 0.13 * 100) / 100;
+  const total = Math.round((subtotal + hst) * 100) / 100;
+
+  const now = new Date().toISOString();
+  const acceptedIso = (typeof acceptedAt === "string" && acceptedAt.trim()) ? acceptedAt.trim() : now;
+  const nPhoto = Number(evidencePhotoN);
+  const next = { ...current };
+  next.onSiteQuote = {
+    ...current.onSiteQuote,
+    status: "accepted",
+    acceptanceEvidence: {
+      method: "offline_signed_copy",
+      acceptedByName: String(acceptedByName || "").slice(0, 120),
+      acceptedAt: acceptedIso,
+      recordedBy: recordedBy || "admin",
+      note: String(note || "").slice(0, 2000),
+      evidencePhotoN: Number.isFinite(nPhoto) ? nPhoto : null,
+      ip: ip || "",
+      userAgent: userAgent || "",
+      ts: now
+    },
+    acceptedScopeSnapshot: { builderLineItems: snapshotLines, subtotal, hst, total }
+  };
+  next.updatedAt = now;
+  if (!Array.isArray(next.history)) next.history = [];
+  next.history.push({
+    ts: now,
+    action: "on_site_quote_accepted_offline",
+    by: recordedBy || "admin",
+    note: `On-site quote accepted offline (signed copy) — $${total.toFixed(2)}${acceptedByName ? ` by ${acceptedByName}` : ""}${note ? ` — ${note}` : ""}`
+  });
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// Reference the signed-copy attachment on the WO's on-site-quote acceptance
+// evidence (offline-acceptance brief, follow-up). The file itself lives as a
+// quote attachment (quote-attachments/<quoteId>/<attId>); this just records
+// the pointer so the WO page can render an "Open signed copy" link. Merges
+// into existing acceptanceEvidence when acceptance was already recorded, and
+// stands alone when it wasn't (attach-first flows). Replacing an earlier
+// signed copy is allowed — the newest pointer wins, history records both.
+async function attachSignedCopyRef(woId, { quoteId, attachmentId, filename, recordedBy } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) {
+    const err = new Error("Work order not found.");
+    err.code = "wo_not_found";
+    throw err;
+  }
+  const current = records[idx];
+  const now = new Date().toISOString();
+  const next = { ...current };
+  const existingEvidence = (current.onSiteQuote && typeof current.onSiteQuote.acceptanceEvidence === "object")
+    ? current.onSiteQuote.acceptanceEvidence
+    : null;
+  next.onSiteQuote = {
+    ...current.onSiteQuote,
+    acceptanceEvidence: {
+      ...(existingEvidence || { method: "offline_signed_copy", recordedBy: recordedBy || "admin" }),
+      signedCopy: {
+        quoteId: quoteId || null,
+        attachmentId: attachmentId || null,
+        filename: String(filename || "").slice(0, 200),
+        attachedAt: now,
+        attachedBy: recordedBy || "admin"
+      }
+    }
+  };
+  next.updatedAt = now;
+  if (!Array.isArray(next.history)) next.history = [];
+  next.history.push({
+    ts: now,
+    action: "signed_copy_attached",
+    by: recordedBy || "admin",
+    note: `Signed acceptance copy attached${filename ? ` — ${filename}` : ""}`
+  });
+  records[idx] = next;
+  await writeAll(records);
+  return next;
 }
 
 // Capture a signature bypass — absolute admin override (Patrick 2026-05-23).
@@ -738,6 +1019,142 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy }, { ip, 
       },
       locked: true
     }
+  });
+
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// ---- Admin unlock / re-lock (2026-08-06) ------------------------------
+//
+// Why this exists. WO-BF86TWRW completed without its $95 service call
+// charged, and it had been bypass-locked, so the scope was frozen with
+// the fee missing. Before this there was no way back: no unlock route, no
+// admin control, and the only workaround (PATCH locked:false) worked on
+// bypassed WOs but silently did nothing on signed ones. Patrick's call —
+// admin needs a real way in, even on a locked WO.
+//
+// What it does and doesn't do:
+//   - Flips `locked` and nothing else. The signature / signatureBypass
+//     record is PRESERVED verbatim (Patrick's ruling 2026-08-06) — the
+//     visit really was accepted, and erasing that record would lose the
+//     fact. `locked` carries the frozen-ness; the signature carries the
+//     history. isScopeFrozen() reads the former.
+//   - Never touches the invoice. A completed WO's invoice is a separate
+//     record with its own line items, copied at cascade time. Editing WO
+//     scope after unlock does NOT re-bill the customer — that's a
+//     deliberate boundary (HANDOFF_STRIPE_PAYMENTS §6: nothing here goes
+//     near payments). Re-cutting a bill stays a separate, explicit act.
+//   - Requires a reason. This is an override of a customer-accepted
+//     contract; an unexplained one is worse than none. The reason lands
+//     in WO history where the audit trail already lives.
+//
+// Admin-only is enforced at the route (requireAdmin + a needsAuth
+// "admin" entry), not here — this layer is reachable by CLI scripts too.
+const UNLOCK_MIN_REASON_LEN = 10;
+
+async function unlockWorkOrder(woId, { reason, unlockedBy } = {}, { ip, userAgent } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) {
+    const err = new Error("Work order not found.");
+    err.code = "wo_not_found";
+    throw err;
+  }
+  const current = records[idx];
+
+  if (current.locked !== true) {
+    const err = new Error(`Work order ${woId} is not locked.`);
+    err.code = "wo_not_locked";
+    throw err;
+  }
+
+  const trimmedReason = String(reason || "").trim();
+  if (trimmedReason.length < UNLOCK_MIN_REASON_LEN) {
+    const err = new Error(`Give a reason for unlocking (at least ${UNLOCK_MIN_REASON_LEN} characters) — it goes in the work order's history.`);
+    err.code = "reason_required";
+    throw err;
+  }
+
+  const now = new Date().toISOString();
+  const next = { ...current };
+  next.locked = false;
+  next.updatedAt = now;
+
+  // How it was locked, recorded so the history entry is readable years
+  // later without cross-referencing the signature blob.
+  const lockSource = current.signature?.signed === true
+    ? "customer signature"
+    : current.signatureBypass
+      ? `signature bypass (${current.signatureBypass.reason || "—"})`
+      : "locked with no signature record";
+
+  if (!Array.isArray(next.history)) next.history = [];
+  next.history.push({
+    ts: now,
+    action: "wo_unlocked",
+    by: unlockedBy || "admin",
+    note: `Unlocked for editing — ${trimmedReason} (was locked by ${lockSource})`,
+    before: { locked: true },
+    after: {
+      locked: false,
+      reason: trimmedReason.slice(0, 2000),
+      lockSource,
+      // The signature record is untouched — say so explicitly so a
+      // reader doesn't have to infer it from an absence.
+      signatureRetained: current.signature?.signed === true || !!current.signatureBypass,
+      ip: ip || "",
+      userAgent: userAgent || ""
+    }
+  });
+
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// Restore the lock after editing. Deliberately NOT a fresh acceptance —
+// it re-freezes scope against the signature/bypass record already on
+// file. A WO with no acceptance record on it was never locked by a
+// customer-facing event, so there's nothing to restore and this refuses;
+// use the signature or bypass path instead.
+async function relockWorkOrder(woId, { relockedBy } = {}, { ip, userAgent } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) {
+    const err = new Error("Work order not found.");
+    err.code = "wo_not_found";
+    throw err;
+  }
+  const current = records[idx];
+
+  if (current.locked === true) {
+    const err = new Error(`Work order ${woId} is already locked.`);
+    err.code = "wo_already_locked";
+    throw err;
+  }
+
+  const hasAcceptance = current.signature?.signed === true || !!current.signatureBypass;
+  if (!hasAcceptance) {
+    const err = new Error("This work order has no signature or bypass on file — capture one instead of re-locking.");
+    err.code = "no_acceptance_record";
+    throw err;
+  }
+
+  const now = new Date().toISOString();
+  const next = { ...current };
+  next.locked = true;
+  next.updatedAt = now;
+
+  if (!Array.isArray(next.history)) next.history = [];
+  next.history.push({
+    ts: now,
+    action: "wo_relocked",
+    by: relockedBy || "admin",
+    note: "Re-locked after admin edit — scope frozen again against the acceptance already on file",
+    before: { locked: false },
+    after: { locked: true, ip: ip || "", userAgent: userAgent || "" }
   });
 
   records[idx] = next;
@@ -883,8 +1300,74 @@ function hydrateIssue(issue) {
 // (location/sprinklerTypes/coverage) rather than referencing the
 // property — if Patrick later edits the property profile, the WO
 // keeps showing what was true at the time of the visit.
+// The zone list a property's DECLARED count implies, when nobody has
+// documented its zones yet.
+//
+// The count and the list were two different questions and only pricing
+// knew about both. Pricing reads documented zones first and falls back to
+// `system.zoneCount` — the "customer told us eight" number — so a
+// first-time property was PRICED for eight zones while its work order
+// scaffolded from an empty list and fell through to the single "Zone 1"
+// placeholder below. The tech arrived at an eight-zone lawn holding a
+// one-zone work order.
+//
+// Zones land `pendingReview: true` — the same flag applySystemUpdates()
+// puts on zones discovered in the field — because a number typed into a
+// booking form is a claim, not a survey. The flag is what lets a customer
+// still correct their own count from the appointment page, and what tells
+// Patrick these have never been walked. Naming a zone clears it.
+//
+// Returns [] when the property already has documented zones (they win) or
+// has declared nothing. Exported so the route that CREATES a work order
+// can write the same list to the property record itself — this module
+// deliberately depends on nothing but node built-ins, so it cannot write
+// to properties, and the tests that sandbox it rely on that.
+function declaredZoneList(property) {
+  const documented = Array.isArray(property?.system?.zones) ? property.system.zones : [];
+  if (documented.length) return [];
+  const declared = Math.floor(Number(property?.system?.zoneCount) || 0);
+  if (!(declared > 0)) return [];
+  const zones = [];
+  for (let n = 1; n <= declared; n++) {
+    zones.push({ number: n, location: "", label: "", notes: "", pendingReview: true });
+  }
+  return zones;
+}
+
+// The zone count a customer gave when they booked, as a number or 0.
+//
+// `system.zoneCount` was Patrick's hand-filled field and the appointment
+// page's. NOTHING wrote it when a booking was taken — so on a first-time
+// property the chain below had nothing to work from: declaredZoneList()
+// read a count that was never set, scaffolding produced no zones, and
+// create() fell through to its one-zone placeholder. Priced for seven,
+// dispatched with one: the exact failure that fix was written to remove,
+// still reachable because nobody was feeding it.
+//
+// "unsure" is a real answer the booking form takes and it is not a number,
+// so it yields 0 and the property is left blank rather than claiming a
+// count nobody gave. Out-of-range values are refused for the same reason
+// the reserve route refuses them.
+function declaredZonesFromBooking(booking) {
+  const n = Math.floor(Number(booking?.zoneCount) || 0);
+  return n >= 1 && n <= 50 ? n : 0;
+}
+
+// Whether a booking's count is allowed to fill this property in. It may
+// only ever fill a BLANK: documented zones are ground truth walked by a
+// tech, and an existing count is either Patrick's own or a correction the
+// customer made from their appointment page. A later booking must not
+// silently move either.
+function canAdoptDeclaredZones(property, booking) {
+  if (!declaredZonesFromBooking(booking)) return false;
+  const documented = Array.isArray(property?.system?.zones) ? property.system.zones : [];
+  if (documented.length) return false;
+  return !(Number(property?.system?.zoneCount) > 0);
+}
+
 function scaffoldZonesFromProperty(property) {
-  const zones = Array.isArray(property?.system?.zones) ? property.system.zones : [];
+  const documented = Array.isArray(property?.system?.zones) ? property.system.zones : [];
+  const zones = documented.length ? documented : declaredZoneList(property);
   const blankChecks = {};
   for (const key of ZONE_CHECK_KEYS) blankChecks[key] = false;
   return zones
@@ -941,7 +1424,7 @@ async function listByLead(leadId) {
 // quote propagates onto the WO so the tech sees the bonus-pending banner
 // in field mode (1 hr of repair labour pending — temporarily disabled
 // until the tech confirms the on-site diagnosis matches the AI scope).
-async function create({ type, lead, property, customId, quote = null, project = null, workDate = null, carryFromWoId = null, serviceFeeWaiver = null }) {
+async function create({ type, lead, property, customId, quote = null, project = null, workDate = null, carryFromWoId = null, serviceFeeWaiver = null, warrantyClaim = null }) {
   if (!TEMPLATES[type]) throw new Error(`Unknown work-order type: ${type}`);
   // Build-mode WOs are project-scoped and don't require a lead — the
   // proposal acceptance is the original handshake. Property is still
@@ -1069,6 +1552,13 @@ async function create({ type, lead, property, customId, quote = null, project = 
   // pre-validated, normalized waiver object (lib/service-fee-waiver.js) or
   // null. Only meaningful where a service_call is actually charged
   // (service_visit); harmless no-op on seasonal WOs.
+  // Warranty provenance, when this WO was raised by approving a claim.
+  // Stamped before the waiver below so the two always land together — a
+  // warranty WO with no waiver (or a waiver with no provenance) would be
+  // a WO nobody on site can explain.
+  if (warrantyClaim && typeof warrantyClaim === "object" && warrantyClaim.claimId) {
+    wo.warrantyClaim = { ...warrantyClaim, converted: null };
+  }
   if (serviceFeeWaiver && typeof serviceFeeWaiver === "object" && serviceFeeWaiver.waived === true) {
     wo.serviceFeeWaiver = { ...serviceFeeWaiver };
   }
@@ -1090,9 +1580,46 @@ async function update(id, patch) {
   // pointers — those are set at create time and shouldn't be edited from
   // the form.
   const next = { ...current };
-  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt", "followupOfWoId", "paidOnSite", "propertyEditsAppliedAt", "completionReportSnapshotAt", "needsReturnVisit", "labourHours", "parentProjectId", "dailyLog"];
+  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt", "arrivalLocation", "waterShutoffBy", "backFlush", "followupOfWoId", "paidOnSite", "propertyEditsAppliedAt", "completionReportSnapshotAt", "needsReturnVisit", "labourHours", "parentProjectId", "dailyLog"];
   for (const key of allowedTop) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
+  }
+  // The two fall-closing answers are closed sets, enforced here rather
+  // than trusted from the client — the field app is not the only thing
+  // that can PATCH a work order, and a typo that reaches disk becomes a
+  // wrong line on a customer's report.
+  if (Object.prototype.hasOwnProperty.call(patch, "waterShutoffBy")) {
+    const v = patch.waterShutoffBy;
+    if (!["", "customer", "tech"].includes(v)) {
+      throw new Error(`waterShutoffBy must be "customer" or "tech" (got "${v}").`);
+    }
+    next.waterShutoffBy = v;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "backFlush")) {
+    const v = patch.backFlush;
+    if (!["", "yes", "no"].includes(v)) {
+      throw new Error(`backFlush must be "yes" or "no" (got "${v}").`);
+    }
+    next.backFlush = v;
+  }
+  // Coordinates are stored, never trusted: a bad reading should be an
+  // absent stamp, not a work order that claims the tech was at latitude
+  // 900. Refusing the whole PATCH would be worse — it would block a tech
+  // from starting a job because their phone's GPS was confused.
+  if (Object.prototype.hasOwnProperty.call(patch, "arrivalLocation")) {
+    const loc = patch.arrivalLocation;
+    const lat = Number(loc?.lat);
+    const lng = Number(loc?.lng);
+    const usable = loc && Number.isFinite(lat) && Number.isFinite(lng)
+      && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+    next.arrivalLocation = usable
+      ? {
+          lat,
+          lng,
+          accuracy: Number.isFinite(Number(loc.accuracy)) ? Number(loc.accuracy) : null,
+          capturedAt: typeof loc.capturedAt === "string" ? loc.capturedAt : new Date().toISOString()
+        }
+      : null;
   }
   // Status forward-only enforcement (spec §4.3.3 rule #3 + #7). The
   // client UI also blocks the click but the server is authoritative.
@@ -1208,6 +1735,16 @@ async function update(id, patch) {
       ? { ...patch.serviceFeeWaiver }
       : null;
   }
+  // Warranty-claim provenance. Written once at create (from the claim
+  // approval) and then only by the conversion path, which stamps
+  // `converted`. Guarded the same way as the waiver it explains: the
+  // route checks wo.locked before calling, and warrantyClaim is in
+  // SCOPE_PROTECTED_FIELDS so a signed WO refuses the change.
+  if (Object.prototype.hasOwnProperty.call(patch, "warrantyClaim")) {
+    next.warrantyClaim = (patch.warrantyClaim && typeof patch.warrantyClaim === "object" && patch.warrantyClaim.claimId)
+      ? { ...patch.warrantyClaim }
+      : null;
+  }
   next.updatedAt = new Date().toISOString();
 
   // Status transition gets a free history entry — caller (dispatcher)
@@ -1223,6 +1760,17 @@ async function update(id, patch) {
       before: current.status,
       after: patch.status
     });
+    // completedAt (JOB-002 Part A) — stamped here, at the same moment as
+    // the status_change history entry, so every completion path gets it
+    // (tech UI, admin status change, bulk actions). Same ts as the
+    // history entry. Preserve-if-set: an already-stamped completedAt is
+    // never overwritten, matching the backfill's earliest-entry rule.
+    // ("completed" is terminal — the guard above throws on any attempt
+    // to leave it — so a re-completion can only follow a manual data
+    // edit, and the original date still wins.)
+    if (patch.status === "completed" && !current.completedAt) {
+      next.completedAt = next.updatedAt;
+    }
   }
   // Signature capture (lock flip) — a separate, distinct event from
   // status_change so the audit trail is unambiguous about WHEN the WO
@@ -1237,6 +1785,61 @@ async function update(id, patch) {
     });
   }
 
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// JOB-007 (CRM-11 cleanup) — complete a stranded WO with its ACTUAL
+// completion date instead of now. Server-side callers only (the CLI
+// backfill script); deliberately NOT reachable through the HTTP PATCH
+// route, so completedAt stays structurally un-patchable from clients
+// (JOB-002 Part A's guarantee).
+//
+// What it does, and why each piece:
+//   - scheduledFor / departedAt back-filled with the actual date when
+//     null, so the customer-visible report's "Conducted on" line and the
+//     history sort read the true visit date.
+//   - completedAt = the actual date (preserve-if-set, matching update()).
+//   - history entry records BOTH dates — the audit trail never pretends
+//     the entry was made back then.
+// The completion cascade is NOT run here — the caller runs it (with
+// customer notifications and the review-request suppressed) so dry-run
+// tooling can inspect the WO between the two steps.
+async function completeBackdated(id, { completedAt, by = "admin" } = {}) {
+  const ts = Date.parse(completedAt || "");
+  if (!Number.isFinite(ts)) throw new Error("completeBackdated needs a valid completedAt date.");
+  if (ts > Date.now()) throw new Error("Back-dated completion must not be in the future.");
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === id);
+  if (idx === -1) return null;
+  const current = hydrate(records[idx]);
+  const TERMINAL = new Set(["completed", "cancelled", "no_show"]);
+  if (TERMINAL.has(current.status)) {
+    throw new Error(`Work order is already terminal ("${current.status}").`);
+  }
+  // A completion before the WO existed is a data error, not a backfill.
+  // One day of slack covers timezone edges on same-day create+visit.
+  if (current.createdAt && ts < Date.parse(current.createdAt) - 86400000) {
+    throw new Error(`Completion date ${completedAt} is before the work order was created (${current.createdAt.slice(0, 10)}).`);
+  }
+  const iso = new Date(ts).toISOString();
+  const nowIso = new Date().toISOString();
+  const next = { ...current };
+  if (!next.scheduledFor) next.scheduledFor = iso;
+  if (!next.departedAt) next.departedAt = iso;
+  next.status = "completed";
+  next.completedAt = current.completedAt || iso;
+  next.updatedAt = nowIso;
+  if (!Array.isArray(next.history)) next.history = [];
+  next.history.push({
+    ts: nowIso,
+    action: "status_change",
+    by,
+    note: `Back-dated completion: actual completion ${iso.slice(0, 10)}, recorded ${nowIso.slice(0, 10)}.`,
+    before: current.status,
+    after: "completed"
+  });
   records[idx] = next;
   await writeAll(records);
   return next;
@@ -1640,15 +2243,27 @@ module.exports = {
   ZONE_CHECK_KEYS,
   ZONE_ISSUE_TYPES,
   SERVICE_CHECKLISTS,
+  checklistKeysForWorkOrder,
   WO_PHOTO_CATEGORIES,
   PHOTO_REQUIREMENT_BY_TYPE,
+  CUSTOMER_NOTE_REQUIRED_BY_TYPE,
   SCOPE_PROTECTED_FIELDS,
   BYPASS_REASONS,
+  UNLOCK_MIN_REASON_LEN,
   templateForServiceKey,
+  declaredZoneList,
+  scaffoldZonesFromProperty,
+  declaredZonesFromBooking,
+  canAdoptDeclaredZones,
   canBuildOnSiteQuote,
+  isScopeFrozen,
   findProtectedFieldTouched,
   summarizeScopeAdditions,
   captureSignatureBypass,
+  unlockWorkOrder,
+  relockWorkOrder,
+  recordOfflineQuoteAcceptance,
+  attachSignedCopyRef,
   appendReportSnapshot,
   patchReportSnapshot,
   appendHistory,
@@ -1658,6 +2273,7 @@ module.exports = {
   listByLead,
   create,
   update,
+  completeBackdated,
   remove,
   softDelete,
   restore,

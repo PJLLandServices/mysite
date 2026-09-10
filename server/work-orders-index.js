@@ -76,6 +76,17 @@ async function load() {
   render();
 }
 
+// Was this WO unlocked by an admin and left that way? Read from history
+// rather than from the signature record: history is the only field that
+// distinguishes "unlocked after acceptance" from "never signed in the
+// first place", and both look like locked===false on the record itself.
+// Last lock event wins — unlock → relock → unlock reads as unlocked.
+function isUnlockedByAdmin(wo) {
+  const events = (Array.isArray(wo?.history) ? wo.history : [])
+    .filter((h) => h && (h.action === "wo_unlocked" || h.action === "wo_relocked"));
+  return events.length > 0 && events[events.length - 1].action === "wo_unlocked";
+}
+
 function applyFilters(items) {
   let result = items;
   // Status filter — pill row.
@@ -93,6 +104,15 @@ function applyFilters(items) {
     // failed case (status="completed" but no invoice). Brief: WO
     // Field-Readiness §6.6.
     result = result.filter((w) => w.locked === true && !invoicedWoIds.has(w.id));
+  } else if (currentStatus === "unlocked") {
+    // "Unlocked" (2026-08-06) — WOs an admin unlocked for editing and
+    // hasn't re-locked. This filter exists because admin unlock created a
+    // new way for a WO to go quietly stranded: unlocking clears
+    // `locked`, which drops the WO out of BOTH recovery filters above
+    // (each requires locked===true). Without this, an unlocked contract
+    // left half-edited is invisible everywhere. Same lesson as CRM-11 —
+    // a state nothing surfaces is a state nobody fixes.
+    result = result.filter((w) => w.locked !== true && isUnlockedByAdmin(w));
   } else if (currentStatus) {
     result = result.filter((w) => w.status === currentStatus);
   } else {
@@ -129,7 +149,9 @@ function render() {
       ? "No stuck completions. Every signed work order has fired its cascade."
       : showNeedsInvoice
         ? "No signed work orders are missing an invoice. Cascade is healthy."
-        : "No work orders match the current filter.";
+        : currentStatus === "unlocked"
+          ? "Nothing left unlocked. Every accepted work order is locked."
+          : "No work orders match the current filter.";
     return;
   }
   els.empty.hidden = true;
@@ -139,45 +161,41 @@ function render() {
     const customer = wo.customerName || wo.customerEmail || "(no customer)";
     const addressLine = wo.address ? ` &middot; ${escapeHtml(wo.address)}` : "";
     const scheduled = wo.scheduledFor ? fmtDateTime(wo.scheduledFor) : "Not yet scheduled";
-    // Tag chips — locked, follow-up, photo count, intake guarantee.
-    const tags = [];
-    if (wo.locked) tags.push(`<span class="wo-card-tag is-locked">🔒 Locked</span>`);
-    if (wo.followupOfWoId) tags.push(`<span class="wo-card-tag is-followup">↪ Follow-up of ${escapeHtml(wo.followupOfWoId)}</span>`);
-    if (wo.intakeGuarantee && wo.intakeGuarantee.applies) tags.push(`<span class="wo-card-tag">AI guarantee</span>`);
+    // Locked / follow-up / photo count now ride in the identity cell's
+    // sub-line rather than a chip row, so every row stays one height.
     const photoCount = (wo.photos || []).length;
-    if (photoCount) tags.push(`<span class="wo-card-tag">${photoCount} photo${photoCount === 1 ? "" : "s"}</span>`);
     // Recovery action — visible on the "Stuck completions" + "Needs
     // invoice" filters. Both surface the same per-row Run cascade
     // button (idempotent — safe to re-run on already-cascaded WOs).
     // Disabled when the WO has no linked property since the cascade
     // short-circuits on that. Brief: WO Field-Readiness §6.6.
     const recoveryAction = showRunButton
-      ? `<div class="wo-card-stuck-action">
-           ${wo.propertyId
-             ? `<button type="button" class="pjl-btn pjl-btn-primary wo-card-run-cascade" data-wo-id="${escapeHtml(wo.id)}">Run cascade now</button>`
-             : `<a class="pjl-btn pjl-btn-outline" href="/admin/work-order/${encodeURIComponent(wo.id)}">Link property first</a>`}
-         </div>`
+      ? (wo.propertyId
+          ? `<button type="button" class="pjl-btn pjl-btn-primary wo-card-run-cascade" data-wo-id="${escapeHtml(wo.id)}">Run cascade</button>`
+          : `<a class="pjl-btn pjl-btn-outline" href="/admin/work-order/${encodeURIComponent(wo.id)}">Link property</a>`)
       : "";
     return `
-      <li class="ml-card${showRunButton ? " is-stuck" : ""}" data-wo-id="${escapeHtml(wo.id)}">
-        <a class="ml-card-link" href="/admin/work-order/${encodeURIComponent(wo.id)}">
-          <div class="ml-card-head">
-            <h3 class="ml-card-name">${escapeHtml(customer)}</h3>
-            <span class="ml-card-id">${escapeHtml(wo.id)}</span>
-            <span class="wo-status wo-status--${escapeHtml(wo.status)}">${escapeHtml(status)}</span>
-          </div>
-          <div class="ml-card-meta">
-            <strong>${escapeHtml(typeLabel)}</strong>${addressLine}
-            <br>Scheduled: ${escapeHtml(scheduled)}
-            ${wo.diagnosis ? `<br><span style="color:#7A7A72">${escapeHtml(String(wo.diagnosis).slice(0, 140))}${String(wo.diagnosis).length > 140 ? "…" : ""}</span>` : ""}
-          </div>
-          ${tags.length ? `<div class="wo-card-tags">${tags.join("")}</div>` : ""}
-          <div class="wo-card-meta-row">
-            <span>Updated ${escapeHtml(fmtDate(wo.updatedAt))}</span>
-            <span class="wo-card-id">${(wo.zones || []).length} zone${(wo.zones || []).length === 1 ? "" : "s"}</span>
-          </div>
+      <li class="crm-table-row ml-card${showRunButton ? " is-stuck" : ""}" data-wo-id="${escapeHtml(wo.id)}">
+        <a class="crm-row-link" href="/admin/work-order/${encodeURIComponent(wo.id)}">
+          <span class="crm-cell ml-card-head">
+            <span class="crm-identity">
+            <span class="crm-cell-primary">${escapeHtml(customer)}</span>
+            <span class="crm-cell-sub">${escapeHtml(wo.id)}${wo.locked ? " &middot; \uD83D\uDD12 locked" : ""}${wo.followupOfWoId ? ` &middot; \u21AA ${escapeHtml(wo.followupOfWoId)}` : ""}${photoCount ? ` &middot; ${photoCount} photo${photoCount === 1 ? "" : "s"}` : ""}${wo.intakeGuarantee && wo.intakeGuarantee.applies ? " &middot; AI guarantee" : ""}</span></span>
+          </span>
+          <span class="crm-cell wo-cell-type">
+            <span>${escapeHtml(typeLabel)}</span>
+            ${wo.address ? `<span class="crm-cell-sub" data-map-address="${escapeHtml(wo.address)}">${escapeHtml(wo.address)}</span>` : ""}
+          </span>
+          <span class="crm-cell wo-cell-when">
+            <span>${escapeHtml(scheduled)}</span>
+            <span class="crm-cell-sub">updated ${escapeHtml(fmtDate(wo.updatedAt))}</span>
+          </span>
+          <span class="crm-cell crm-cell-num">${(wo.zones || []).length}</span>
+          <span class="crm-cell crm-cell-status">
+            <span class="crm-pill wo-status wo-status--${escapeHtml(wo.status)}">${escapeHtml(status)}</span>
+          </span>
         </a>
-        ${recoveryAction}
+        <span class="crm-cell wo-cell-action">${recoveryAction}</span>
       </li>
     `;
   }).join("");

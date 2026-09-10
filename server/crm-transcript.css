@@ -1,0 +1,170 @@
+/* =============================================================
+   PJL CRM — AI chat transcript, rendered as a conversation.
+
+   Shared by the AI Chats dashboard (/admin/chats) and the lead
+   detail drawer (/admin). Transcripts arrive from the chat widget
+   as one flat string of "Customer: …" / "Patrick (AI): …" turns;
+   crm-transcript.js parses that back into turns and these styles
+   lay them out the way you'd read them in a messaging app —
+   one speaker per bubble, plenty of air between turns.
+
+   Everything here is scoped under .pjl-convo so it can drop into
+   any CRM page without colliding with crm.css.
+   ============================================================= */
+
+.pjl-convo {
+  --convo-ink: #23312a;
+  --convo-line: rgba(15, 31, 20, 0.10);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--convo-ink);
+}
+
+/* ---- One turn ---------------------------------------------- */
+
+.pjl-convo-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 82%;
+}
+.pjl-convo-turn.is-ai { align-self: flex-start; }
+.pjl-convo-turn.is-customer { align-self: flex-end; align-items: flex-end; }
+.pjl-convo-turn.is-unknown { align-self: stretch; max-width: 100%; }
+
+.pjl-convo-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: 'Outfit', 'DM Sans', system-ui, sans-serif;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+  padding: 0 4px;
+}
+.pjl-convo-turn.is-ai .pjl-convo-who { color: #1F4733; }
+.pjl-convo-turn.is-customer .pjl-convo-who { color: #B05E1D; }
+.pjl-convo-turn.is-unknown .pjl-convo-who { color: rgba(15, 31, 20, 0.5); }
+
+.pjl-convo-turn-no {
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  color: rgba(15, 31, 20, 0.35);
+}
+
+/* ---- The bubble -------------------------------------------- */
+
+.pjl-convo-bubble {
+  border-radius: 14px;
+  padding: 14px 18px;
+  border: 1px solid var(--convo-line);
+  /* Long URLs and unbroken strings must not blow out the column. */
+  overflow-wrap: anywhere;
+}
+.pjl-convo-turn.is-ai .pjl-convo-bubble {
+  background: #fff;
+  border-bottom-left-radius: 4px;
+}
+.pjl-convo-turn.is-customer .pjl-convo-bubble {
+  background: #EEF4EC;
+  border-color: rgba(31, 71, 51, 0.18);
+  border-bottom-right-radius: 4px;
+}
+.pjl-convo-turn.is-unknown .pjl-convo-bubble {
+  background: #FAF7EE;
+  border-style: dashed;
+}
+
+/* ---- Text inside a bubble ---------------------------------- */
+
+.pjl-convo-bubble > :first-child { margin-top: 0; }
+.pjl-convo-bubble > :last-child { margin-bottom: 0; }
+.pjl-convo-bubble p { margin: 0 0 12px; }
+.pjl-convo-bubble ul,
+.pjl-convo-bubble ol { margin: 0 0 12px; padding-left: 22px; }
+.pjl-convo-bubble li { margin: 0 0 5px; }
+.pjl-convo-bubble li:last-child { margin-bottom: 0; }
+.pjl-convo-bubble strong { font-weight: 700; color: #1F4733; }
+.pjl-convo-bubble a { color: #E07B24; text-decoration: underline; font-weight: 600; }
+
+/* Photo attachments are recorded in the transcript as a text marker
+   ("[attached 2 photos]"); the images themselves live on the lead. */
+.pjl-convo-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 4px 11px 4px 9px;
+  border-radius: 999px;
+  background: rgba(31, 71, 51, 0.09);
+  color: #1F4733;
+  font-family: 'Outfit', 'DM Sans', system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+.pjl-convo-attachment svg { flex-shrink: 0; }
+
+/* ---- Fallback: transcript we couldn't split into turns ------ */
+
+.pjl-convo-plain {
+  background: #fff;
+  border: 1px solid var(--convo-line);
+  border-radius: 12px;
+  padding: 16px 18px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pjl-convo-empty {
+  padding: 22px;
+  text-align: center;
+  color: rgba(15, 31, 20, 0.5);
+  font-style: italic;
+}
+
+/* ---- Toolbar (copy / raw toggle) --------------------------- */
+
+.pjl-convo-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.pjl-convo-toolbar .spacer { flex: 1 1 auto; }
+.pjl-convo-btn {
+  background: #fff;
+  border: 1.5px solid rgba(15, 31, 20, 0.14);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-family: 'Outfit', 'DM Sans', system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: #1F4733;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.pjl-convo-btn:hover { border-color: #1F4733; }
+.pjl-convo-btn.is-active { background: #1F4733; color: #FAFAF5; border-color: #1F4733; }
+.pjl-convo-tally {
+  font-family: 'Outfit', 'DM Sans', system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: rgba(15, 31, 20, 0.5);
+}
+
+@media (max-width: 700px) {
+  .pjl-convo { font-size: 14.5px; gap: 16px; }
+  .pjl-convo-turn { max-width: 100%; }
+  .pjl-convo-bubble { padding: 12px 14px; }
+}

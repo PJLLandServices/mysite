@@ -1,7 +1,25 @@
 // Quote Requests (RFQs) — the "ask for a price" sibling of a Purchase
-// Order ("commit to buy"). One RFQ per supplier, generated from a
-// material list's "need" lines, emailed as a PDF+CSV pair that shows
-// quantities and descriptions but NO prices — the supplier fills those in.
+// Order ("commit to buy"). Generated from a material list's "need" lines,
+// emailed as a PDF+CSV pair that shows quantities and descriptions but NO
+// prices — the supplier fills those in.
+//
+// TWO GENERATION MODES:
+//
+//   "assigned" (default) — one RFQ per supplier, each carrying only the
+//     lines that supplier is the primary for. Right when the buy is
+//     already decided and you just need current pricing.
+//
+//   "shop"               — the SAME whole list goes to EVERY named
+//     supplier, ignoring which supplier the catalog lists for each part.
+//     Right when the point is to find out who is cheaper. A part with no
+//     supplier assigned does NOT block this mode: not caring what the
+//     catalog says is the entire reason for using it.
+//
+// Nothing in the outgoing document names another supplier, says which
+// supplier a part is normally bought from, or names the job — it is a
+// vendor block, our contact details, and a table of SKU / description /
+// qty / unit. Two suppliers receiving the same shopped list cannot tell
+// from it that anyone else was asked.
 //
 // CORE DESIGN RULE: generating / sending / cancelling an RFQ NEVER
 // changes material-list line status. Lines stay "need" the whole time —
@@ -323,10 +341,52 @@ async function update(id, patch = {}) {
 // store no description, so this resolves from the catalog) and unit
 // (part.unit || "each"). NO price of any kind is read or stored —
 // pricing is exactly what we're asking the supplier for.
-function planFromMaterialList(list, partsMap) {
+// opts.shopSupplierIds — when a non-empty array is passed, EVERY need line
+// goes to EVERY one of those suppliers ("shop" mode) instead of being split
+// by the catalog's primary assignment. Omit it for the original behaviour.
+function planFromMaterialList(list, partsMap, opts = {}) {
   if (!list || !Array.isArray(list.lineItems)) {
-    return { ok: false, groups: [], missingSupplier: [], missingSupplierLines: [] };
+    return { ok: false, mode: "assigned", groups: [], missingSupplier: [], missingSupplierLines: [] };
   }
+  const shopIds = Array.isArray(opts.shopSupplierIds)
+    ? opts.shopSupplierIds.map((x) => String(x || "").trim()).filter(Boolean)
+    : [];
+  const shop = shopIds.length > 0;
+
+  const lineFor = (line) => {
+    const part = partsMap && partsMap[line.sku];
+    return {
+      sku: line.sku,
+      description: resolveLineDescription(line, partsMap),
+      quantity: Math.max(1, Math.floor(Number(line.qty) || 1)),
+      unit: (part && typeof part.unit === "string" && part.unit.trim()) ? part.unit.trim() : "each",
+      quotedPriceCents: null
+    };
+  };
+
+  if (shop) {
+    // Same list, every supplier. The catalog's supplier assignment is
+    // deliberately not consulted — including for parts that have none, so
+    // an unassigned SKU is shopped rather than silently left out of the
+    // comparison and then bought at whatever price nobody quoted.
+    const seen = new Set();
+    const lines = [];
+    for (const line of list.lineItems) {
+      if (line.status !== "need") continue;
+      lines.push(lineFor(line));
+      seen.add(line.sku);
+    }
+    const uniqueIds = Array.from(new Set(shopIds));
+    return {
+      ok: lines.length > 0 && uniqueIds.length > 0,
+      mode: "shop",
+      groups: uniqueIds.map((sid) => ({ supplierId: sid, lines: lines.map((l) => ({ ...l })) })),
+      // Nothing is blocked in shop mode, so nothing is reported as missing.
+      missingSupplier: [],
+      missingSupplierLines: []
+    };
+  }
+
   const groups = new Map();   // supplierId -> { supplierId, lines[] }
   const missingSupplier = new Set();
   const missingSupplierLines = [];
@@ -343,20 +403,78 @@ function planFromMaterialList(list, partsMap) {
     if (!groups.has(primary)) {
       groups.set(primary, { supplierId: primary, lines: [] });
     }
-    groups.get(primary).lines.push({
-      sku: line.sku,
-      description: resolveLineDescription(line, partsMap),
-      quantity: Math.max(1, Math.floor(Number(line.qty) || 1)),
-      unit: (part && typeof part.unit === "string" && part.unit.trim()) ? part.unit.trim() : "each",
-      quotedPriceCents: null
-    });
+    groups.get(primary).lines.push(lineFor(line));
   }
   return {
     ok: groups.size > 0 && missingSupplier.size === 0,
+    mode: "assigned",
     groups: Array.from(groups.values()),
     missingSupplier: Array.from(missingSupplier),
     missingSupplierLines
   };
+}
+
+// ---- Comparing what came back --------------------------------------------
+
+// Given every RFQ raised from one material list, line the quotes up by SKU
+// so the cheapest is a fact on the page rather than something to eyeball
+// across two PDFs.
+//
+// Only sent-and-answered RFQs count: a draft carries no reply, and a
+// cancelled one was withdrawn. An "applied" RFQ still counts — its prices
+// were real and are what the catalog is currently carrying.
+//
+// A tie keeps the FIRST supplier seen rather than flapping between equals.
+function compareQuotes(rfqs, { listId = null } = {}) {
+  const rows = new Map();   // sku -> { sku, description, unit, quantity, quotes[] }
+  const considered = [];
+  for (const rfq of Array.isArray(rfqs) ? rfqs : []) {
+    if (!rfq) continue;
+    if (listId && rfq.sourceMaterialListId !== listId) continue;
+    if (rfq.status !== "quoted" && rfq.status !== "applied") continue;
+    considered.push({ id: rfq.id, supplierId: rfq.supplierId, supplierName: rfq.supplierName || "", status: rfq.status });
+    for (const line of rfq.lines || []) {
+      if (!line || !line.sku) continue;
+      if (!rows.has(line.sku)) {
+        rows.set(line.sku, {
+          sku: line.sku,
+          description: line.description || "",
+          unit: line.unit || "each",
+          quantity: line.quantity || 0,
+          quotes: []
+        });
+      }
+      if (line.quotedPriceCents == null) continue;   // asked, not answered
+      rows.get(line.sku).quotes.push({
+        rfqId: rfq.id,
+        supplierId: rfq.supplierId,
+        supplierName: rfq.supplierName || "",
+        priceCents: line.quotedPriceCents
+      });
+    }
+  }
+
+  const out = [];
+  for (const row of rows.values()) {
+    let best = null;
+    for (const q of row.quotes) {
+      if (!best || q.priceCents < best.priceCents) best = q;
+    }
+    const spread = (row.quotes.length > 1 && best)
+      ? Math.max(...row.quotes.map((q) => q.priceCents)) - best.priceCents
+      : 0;
+    out.push({
+      ...row,
+      cheapest: best,
+      // Only meaningful once more than one supplier has answered — a
+      // single quote is not a comparison and must not be presented as one.
+      comparable: row.quotes.length > 1,
+      spreadCents: spread,
+      savingCents: spread * (row.quantity || 0)
+    });
+  }
+  out.sort((a, b) => b.savingCents - a.savingCents || String(a.sku).localeCompare(String(b.sku)));
+  return { rows: out, rfqs: considered };
 }
 
 // Persist a plan. Idempotency rule: for each (sourceMaterialListId,
@@ -378,8 +496,8 @@ function planFromMaterialList(list, partsMap) {
 // lines stay "need" regardless of what we persist here.
 //
 // Returns { created: [rfq], refreshed: [rfq], missingSupplier, missingSupplierLines }.
-async function generateFromMaterialList(list, partsMap, supplierById) {
-  const plan = planFromMaterialList(list, partsMap);
+async function generateFromMaterialList(list, partsMap, supplierById, opts = {}) {
+  const plan = planFromMaterialList(list, partsMap, opts);
   const created = [];
   const refreshed = [];
 
@@ -639,6 +757,7 @@ module.exports = {
   update,
   planFromMaterialList,
   generateFromMaterialList,
+  compareQuotes,
   markSent,
   markResent,
   recordQuotedPrices,

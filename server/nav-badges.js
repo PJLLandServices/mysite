@@ -47,4 +47,22 @@
       })
       .catch(() => { /* leave badge hidden — graceful failure */ });
   }
+
+  // Outstanding warranty-claims badge. The Warranty nav link on every
+  // admin page carries a [data-warranty-badge] span; populate it with the
+  // count of OPEN claims (not just the overdue ones) — an open claim is
+  // an answer owed to a customer whether or not its 24-hour clock has run
+  // out, and a badge that only appears once we're already late defeats
+  // the point. The queue page itself is where overdue claims get called
+  // out in red.
+  const warrantyBadge = document.querySelector("[data-warranty-badge]");
+  if (warrantyBadge) {
+    fetch("/api/warranty-claims/outstanding", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data || !data.ok) return;
+        applyCount(warrantyBadge, data.count);
+      })
+      .catch(() => { /* leave badge hidden — graceful failure */ });
+  }
 })();

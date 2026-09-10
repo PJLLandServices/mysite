@@ -38,19 +38,49 @@ const sharp = require("sharp");
 
 const { sendNewLeadEmail, sendVoicemailEmail } = require("./lib/notify-email");
 const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms } = require("./lib/notify-sms");
-const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer } = require("./lib/notify-customer");
+const testRecipients = require("./lib/test-recipients");
+const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
 const voicemailStore = require("./lib/voicemail-store");
-const { geocode, PJL_BASE } = require("./lib/geocode");
-const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, parseLocalDateKey } = require("./lib/availability");
+const { geocode, PJL_BASE, isConfigured: geocodeIsConfigured } = require("./lib/geocode");
+const bookingGate = require("./lib/booking-gate");
+const distanceLib = require("./lib/distance");
+const { BOOKABLE_SERVICES, BOOKING_BUCKETS, DEFAULT_HOURS, DEFAULT_SETTINGS, GEO_WIDEN_TIERS, listAvailableSlots, groupByDay, expandDaysToRange, recommendDays, parseLocalDateKey, parseHHmmToMinutes } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
+const { mergeDaySchedule } = require("./lib/day-schedule");
+const jobFinder = require("./lib/job-finder");
+const bookingReminders = require("./lib/booking-reminders");
+const calendarLinks = require("./lib/calendar-links");
 const { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice } = require("./lib/pricing");
 const { normalizeServiceFeeWaiver, friendlyWaiverReason } = require("./lib/service-fee-waiver");
 const bookingSessions = require("./lib/booking-sessions");
 const properties = require("./lib/properties");
+const seasonPlans = require("./lib/season-plans");
+const geoFilter = require("./lib/geo-filter");
+const resequence = require("./lib/resequence");
+const openBucket = require("./lib/open-bucket");
+const routeOriginLib = require("./lib/route-origin");
+const routeMap = require("./lib/route-map");
+const routeGeometry = require("./lib/route-geometry");
+const assignments = require("./lib/assignments");
+const assignmentMessages = require("./lib/assignment-messages");
+const assignmentCadence = require("./lib/assignment-cadence");
+const appointmentActions = require("./lib/appointment-actions");
+
+// THE STAGE-5 INTERLOCK, now open. Stage 4 refused to send while the
+// appointment page didn't exist; stage 5 built /a/<token> (page +
+// confirm/reschedule/cancel API below) and flips this in the same
+// commit, per the contract. Cadence messages may now carry live links.
+const APPOINTMENT_PAGE_READY = true;
+const seasonsLib = require("./lib/seasons");
 const customers = require("./lib/customers");
+const { writeJsonAtomic } = require("./lib/atomic-json");
+const { createLock } = require("./lib/booking-lock");
+const holds = require("./lib/booking-holds");
+const purgeTestData = require("./lib/purge-test-data");
 const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
+const quoteViews = require("./lib/quote-views");
 const invoices = require("./lib/invoices");
 const deposits = require("./lib/deposits");
 const completionCascade = require("./lib/completion-cascade");
@@ -65,6 +95,7 @@ const quoteNarratives = require("./lib/quote-narratives");
 const { generateInvoicePdf } = require("./lib/invoice-pdf");
 const { generateWoReportPdf, renderWoReportBuffer, reportFilename, ensurePhotoDerivatives } = require("./lib/wo-report-pdf");
 const woReportSnapshot = require("./lib/wo-report-snapshot");
+const { warrantyForWorkOrder } = require("./lib/warranty");
 const billingParties = require("./lib/billing-parties");
 const quickbooks = require("./lib/quickbooks");
 const stripe = require("./lib/stripe");
@@ -83,12 +114,56 @@ const proposalHtml = require("./lib/proposal-html");
 const proposalData = require("./lib/proposal-data");
 const proposalTemplates = require("./lib/proposal-templates");
 const rateLimit = require("./lib/rate-limit");
+const adminActions = require("./lib/admin-actions");
 const antiBot = require("./lib/anti-bot");
 const bulkActions = require("./lib/bulk-actions");
 const { sendCustomerLoginLink, sendAdminPasswordResetLink } = require("./lib/notify-customer");
+const mailerLog = require("./lib/mailer-log");
+const territoryExport = require("./lib/territory-export");
+const warrantyClaims = require("./lib/warranty-claims");
+const warrantyClaimLink = require("./lib/warranty-claim-link");
+const notifyWarranty = require("./lib/notify-warranty");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
 // alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
+// Geocode an address for PERSISTENCE — the canonical property record and
+// customer-matching. Returns real coordinates, or null. Never a guess.
+//
+// geocode() never returns null and never throws: on EVERY failure path (no
+// API key, ZERO_RESULTS, network error, over-quota) it returns ok:false with
+// coords set to PJL_BASE, Newmarket city centre. That fallback is correct for
+// the availability engine, which needs *some* origin to compute drive time
+// from — but writing it to a property is a silent data corruption. The
+// property is pinned at the depot, so it looks near every other job and gets
+// clustered into any day's route, and because city centre sits in the middle
+// of the service area no distance sanity-check will ever flag it. A missing
+// coordinate is visible and gets fixed; a depot pin is invisible and wrong.
+//
+// Callers that need the availability fallback keep using geocode() directly.
+async function geocodeForRecord(address) {
+  return (await geocodeForRecordDetailed(address)).coords;
+}
+
+// Same guard, but also reports whether the answer came from the disk cache.
+// The bulk-import path needs that so it only rate-limits real API calls —
+// a re-import of the same spreadsheet is then entirely cache-served and
+// costs no quota and no wall-clock.
+async function geocodeForRecordDetailed(address) {
+  const clean = String(address || "").trim();
+  if (!clean) return { coords: null, fromCache: false };
+  try {
+    const geo = await geocode(clean);
+    if (geo?.ok !== true || geo.skipped === true) return { coords: null, fromCache: false };
+    const c = geo.coords;
+    if (!c || c.source === "pjl-base") return { coords: null, fromCache: false };
+    if (c.lat == null || c.lng == null) return { coords: null, fromCache: false };
+    return { coords: c, fromCache: geo.fromCache === true };
+  } catch (err) {
+    console.warn("[geocode] persist-geocode failed for", clean, "-", err?.message || err);
+    return { coords: null, fromCache: false };
+  }
+}
+
 function makeWorkOrderId() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let id = "WO-";
@@ -124,8 +199,20 @@ const MAX_CHAT_BODY = 80_000; // ~50K-ish transcript + a few KB of metadata
 // If the booking is abandoned, no photo is ever persisted.
 const PHOTOS_DIR = path.join(DATA_DIR, "photos");
 const WO_PHOTOS_DIR = path.join(DATA_DIR, "wo-photos");
+// Customer-uploaded warranty-claim files (the invoice copy + evidence).
+// Same split as lead photos: bytes on disk, metadata on the record.
+const WARRANTY_FILES_DIR = path.join(DATA_DIR, "warranty-claim-files");
 const MAX_PHOTOS_PER_LEAD = 5;
 const MAX_PHOTOS_PER_WO = 150;
+// Longest-edge cap for a WO photo as it is STORED. A straight-from-camera
+// JPEG runs 4-12 MB at 4000px+; capped at 2400px it lands around 400-700 KB
+// with no visible loss on a phone, a laptop, or a printed report. 2400 sits
+// deliberately above the 1400px report derivative (lib/wo-report-pdf.js) so
+// that derivative is always downscaling and never upscaling, and it stays
+// generous enough to pinch-zoom a controller display or a nozzle in the
+// admin photo viewer.
+const WO_PHOTO_MAX_EDGE = 2400;
+const WO_PHOTO_QUALITY = 82;
 const MAX_PHOTO_BYTES = 1_500_000; // 1.5 MB per photo after client-side resize (lead intake)
 const QUOTE_POST_MAX_BYTES = 12_000_000; // 12 MB cap for the /api/quotes POST (5 photos × ~1.5MB base64 inflated)
 
@@ -137,6 +224,14 @@ const QUOTE_POST_MAX_BYTES = 12_000_000; // 12 MB cap for the /api/quotes POST (
 // constraints — chat intake is high-volume and bandwidth-sensitive.
 const MAX_WO_MEDIA_BYTES = 25_000_000;        // 25 MB per file
 const WO_UPLOAD_POST_MAX_BYTES = 40_000_000;  // ~33 MB base64 + JSON wrapper headroom
+
+// Site-plan page upload (Sprinkler System Builder underlay). A sheet is
+// rasterized IN THE BROWSER by the vendored pdf.js and posted as base64
+// PNG/JPEG — the original PDF is never uploaded. Base64 inflates by ~33%,
+// so the 16 MB per-sheet cap in lib/projects.js needs ~21.3 MB of body.
+// parseRequestBody defaults to 1 MB and would reject every real plan, so
+// this MUST be passed explicitly at the call site.
+const SITE_PLAN_POST_MAX_BYTES = 24 * 1024 * 1024;  // 24 MB
 const WO_MEDIA_MIME_WHITELIST = new Set([
   "image/jpeg",
   "image/png",
@@ -381,6 +476,9 @@ const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  // ES modules — the vendored pdf.js build (server/vendor/pdfjs/) ships .mjs.
+  // Both the dynamic import() and the module worker require a JS MIME type.
+  ".mjs": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".xml": "application/xml; charset=utf-8",
   ".txt": "text/plain; charset=utf-8",
@@ -462,6 +560,9 @@ function parseCookies(req) {
 // password fields (salt, passwordHash) were stripped during the
 // users.json migration; if an old install still has them we ignore them
 // here. Per-user credentials live in users.json — see lib/users.js.
+// Held for the life of the process — see the comment in readAuthConfig.
+let generatedSessionSecret = null;
+
 async function readAuthConfig() {
   await ensureStore();
   let parsed = {};
@@ -473,8 +574,27 @@ async function readAuthConfig() {
     // First-run safety net — generate a session secret if the file is
     // missing one. Without this, a fresh install can't sign cookies
     // until create-user runs. Persist so subsequent boots stay stable.
-    parsed.sessionSecret = crypto.randomBytes(32).toString("base64");
-    try { await fs.writeFile(AUTH_FILE, JSON.stringify({ sessionSecret: parsed.sessionSecret }, null, 2) + "\n", "utf8"); }
+    //
+    // ONE SECRET PER PROCESS, not one per call. This is read on every
+    // request that touches a session, and on a fresh store several arrive
+    // before the first write lands — each minting its OWN random secret,
+    // each writing it, last one winning. A cookie signed a millisecond
+    // earlier then fails its own signature check, which surfaces as the
+    // server refusing the session it just issued. The memo makes the
+    // racing callers agree on one value, so whichever write lands last
+    // writes the same bytes.
+    if (!generatedSessionSecret) generatedSessionSecret = crypto.randomBytes(32).toString("base64");
+    parsed.sessionSecret = generatedSessionSecret;
+    // Write the whole config back, not just this key. It used to persist
+    // `{ sessionSecret }` alone, so a first-run write threw away anything
+    // else auth.json was holding.
+    // Atomic: temp file then rename (lib/atomic-json.js). A bare writeFile
+    // truncates first, and readAuthConfig re-reads this file on EVERY
+    // request that touches a session. A reader landing in that window sees
+    // no secret, mints its own, and writes THAT — retroactively invalidating
+    // every cookie already issued. The per-process memo above makes racing
+    // MINTS agree; this makes racing READS safe.
+    try { await writeJsonAtomic(AUTH_FILE, parsed); }
     catch { /* read-only filesystem in tests, etc. — fall through */ }
   }
   return parsed;
@@ -543,6 +663,37 @@ async function requireAdmin(req) {
   const user = await users.get(session.uid);
   if (!user || user.disabled) return null;
   return session;
+}
+
+// The name to stamp into a record's `history[]` for whoever made this
+// request. Replaces the hardcoded `by: "admin"` that used to go into every
+// admin-initiated history entry — with more than one operator on the
+// account (a second tech, or an agent acting from the field) "admin" says
+// nothing about who actually did it.
+//
+// Returns a DISPLAY NAME, not an id, because `by` is rendered straight to
+// the screen in nine surfaces (`by ${h.by || "system"}`) and work-order.js
+// passes it through HISTORY_ACTOR_LABELS with an identity fallback. A uid
+// here would put "usr_a1b2c3" in front of Patrick. The machine-stable
+// attribution — uid, route, timestamp, outcome — is the action log's job
+// (lib/admin-actions.js); the two are meant to be read together.
+//
+// NEVER throws, and falls back to the exact literal it replaced. The worst
+// case for this whole change is therefore today's behaviour: a history
+// entry that says "admin". That property is what makes it safe to apply
+// across seventeen live write paths at once.
+async function actorLabel(req, fallback = "admin") {
+  try {
+    const session = await requireUser(req);
+    if (!session || !session.uid) return fallback;
+    const user = await users.get(session.uid);
+    if (!user) return fallback;
+    // Same 80-char cap the receiving libs apply, so what's stamped here is
+    // what gets stored rather than a silently truncated version of it.
+    return String(user.name || user.email || session.uid).slice(0, 80) || fallback;
+  } catch (_) {
+    return fallback;
+  }
 }
 
 async function requireCustomer(req) {
@@ -635,6 +786,12 @@ async function proposalCustomerPhoneEntries(q) {
     try {
       const lead = (await readLeads()).find((l) => l.id === q.leadId);
       if (lead?.contact?.phone) entries.push({ source: "lead", label: "Lead contact", value: lead.contact.phone });
+      // The second number the Book tab asks for. Listed beside the first
+      // rather than instead of it — a field that is stored and never
+      // shown is a field that lies about being captured.
+      if (lead?.contact?.altPhone) {
+        entries.push({ source: "lead", label: "Lead contact (alternate)", value: lead.contact.altPhone });
+      }
     } catch (_) { /* tolerate */ }
   }
   if (q?.propertyId) {
@@ -819,6 +976,173 @@ function injectProposalAcceptFooter(html, q, url) {
   return idx === -1 ? html + footer : html.slice(0, idx) + footer + html.slice(idx);
 }
 
+// ---- /approve link preview + page title (2026-08-29) -----------------
+//
+// approve.html shipped with a hardcoded `<title>Approve repair quote</title>`
+// because the approval page predates proposals — the whole quote system was
+// built for the repair side of the business first. The consequence was
+// customer-visible and embarrassing: text a homeowner a link to their
+// residential sprinkler INSTALLATION proposal and iMessage previewed it as
+// "Approve repair quote".
+//
+// This serves approve.html with the title rewritten from the quote's own
+// type + branch (quotes.approvePageTitle), plus the Open Graph tags the page
+// never had, so the preview card is right in Messages, WhatsApp and email.
+//
+// PRIVACY: the title and description carry the WORK TYPE and nothing else —
+// no customer name, address, or price. Link previews are fetched and cached
+// by Apple/Google/Meta servers, so nothing private may go in them. This also
+// does not weaken the phone gate: the gate protects the document body, which
+// is still fetched separately through the gated API.
+//
+// Falls back to the untouched static file (returning false) whenever the
+// quote can't be resolved, so a bad or missing token reveals nothing and
+// still renders the normal "Approval link not found" page.
+async function renderApproveWithOg(req, res, quoteId, url) {
+  try {
+    const token = url.searchParams.get("t") || "";
+    let q = null;
+    if (token) {
+      try { q = await quotes.getByApprovalToken(quoteId, token); } catch (_) { q = null; }
+    }
+    if (!q) {
+      // Staff previewing without a token still get the accurate title.
+      if (await requireUser(req)) {
+        try { q = await quotes.get(quoteId); } catch (_) { q = null; }
+      }
+    }
+    if (!q) return false; // unknown/!bad token — serve the static page as-is
+
+    const titleText = `${quotes.approvePageTitle(q)} — PJL Land Services`;
+    const description = "Review the scope and pricing, then approve and sign online. Takes about a minute on any device.";
+    const canonical = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}`;
+    const ogImage = `${resolvePublicBaseUrl()}/web-app-manifest-512x512.png`;
+
+    let html;
+    try { html = await fs.readFile(path.join(SERVER_DIR, "approve.html"), "utf8"); }
+    catch (_) { return false; }
+
+    const head = [
+      `<title>${escapeHtmlServer(titleText)}</title>`,
+      `<meta name="description" content="${escapeHtmlServer(description)}">`,
+      // Keep this page out of search results — it is a per-customer document
+      // behind a token, not a public page.
+      `<meta name="robots" content="noindex, nofollow">`,
+      `<meta property="og:type" content="website">`,
+      `<meta property="og:site_name" content="PJL Land Services">`,
+      `<meta property="og:title" content="${escapeHtmlServer(titleText)}">`,
+      `<meta property="og:description" content="${escapeHtmlServer(description)}">`,
+      `<meta property="og:url" content="${escapeHtmlServer(canonical)}">`,
+      `<meta property="og:image" content="${escapeHtmlServer(ogImage)}">`,
+      `<meta name="twitter:card" content="summary">`,
+      `<meta name="twitter:title" content="${escapeHtmlServer(titleText)}">`,
+      `<meta name="twitter:description" content="${escapeHtmlServer(description)}">`
+    ].join("\n  ");
+
+    // Replace the static <title> outright rather than appending a second one:
+    // scrapers differ on which of two titles wins, so leaving both is how you
+    // get the old wording back on someone's phone.
+    const replaced = html.replace(/<title>[\s\S]*?<\/title>/i, head);
+    if (replaced === html) return false; // template changed shape — don't guess
+
+    const body = Buffer.from(replaced, "utf8");
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "content-length": body.length,
+      // Per-customer + token-dependent; never let a shared cache hold it.
+      "cache-control": "no-store"
+    });
+    res.end(body);
+    return true;
+  } catch (err) {
+    console.warn("[approve-og] render failed:", err?.message);
+    return false; // always safe to fall through to the static page
+  }
+}
+
+// ---- Acceptance confirmation to the customer (2026-08-29) ------------
+//
+// Fires after an INSTALLATION quote is accepted, on either acceptance path
+// (portal e-sign and the returned-signed-PDF attestation), telling the
+// customer their approval landed and we'll be in touch to schedule.
+//
+// Repair work gets nothing — quotes.isInstallationQuote() is the gate, so an
+// on-site repair quote or an AI repair quote accepted by a customer keeps
+// behaving exactly as it did before this shipped.
+//
+// Best-effort by design, same contract as the deposit hook beside it: the
+// signature is already durably written by the time this runs, and an email
+// failure must never unwind it. Failures land in the send ledger (kind
+// "stage_notice", which is customer-facing, so a silent outage still pages
+// Patrick through the existing digest).
+async function maybeSendAcceptanceConfirmation(quote, { signerName = "" } = {}) {
+  try {
+    if (!quotes.isInstallationQuote(quote)) return null;
+
+    const toEmail = String(quote.approval?.sentToEmail || quote.customerEmail || "").trim();
+    if (!toEmail) return { skipped: "no_customer_email" };
+
+    // Greet the account holder where we can resolve them; the signer's name
+    // is the fallback (and is the right name anyway on a residential job
+    // where the homeowner signs for themselves).
+    let customerName = signerName;
+    try {
+      const parties = await quoteRenderParties(quote);
+      if (parties?.customer?.name) customerName = parties.customer.name;
+    } catch (_) { /* fall back to the signer's name */ }
+
+    const token = quote.approval?.token || "";
+    const approveUrl = token
+      ? `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(quote.id)}?t=${encodeURIComponent(token)}`
+      : resolvePublicBaseUrl();
+
+    // Mentioned only when the offer actually carries a deposit, so the two
+    // emails the customer receives explain each other instead of competing.
+    const depositAmount = Number(quote.deposit?.amount);
+    const depositAmountText = quote.deposit?.enabled === true && Number.isFinite(depositAmount) && depositAmount > 0
+      ? `$${moneyCad(depositAmount)}`
+      : "";
+
+    return await sendQuoteAcceptedConfirmation(quote, {
+      toEmail, customerName, approveUrl, depositAmountText
+    });
+  } catch (err) {
+    console.warn(`[quote-accepted] confirmation failed for ${quote?.id}:`, err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+// ---- Customer view tracking (Quote View Tracker, 2026-08-29) ---------
+//
+// Records that a CUSTOMER opened one of a quote's approval surfaces, so
+// "they say they signed and we have nothing" is answerable from the CRM
+// instead of from Render's HTTP logs. Feeds FLOW-21's "viewed" half.
+//
+// Two rules make this trustworthy:
+//   1. Staff are NEVER recorded. Patrick previewing his own proposal is
+//      not a customer view, and a tracker that counts his own opens is
+//      worse than no tracker at all.
+//   2. It is fire-and-forget into a SEPARATE ledger file (lib/quote-views
+//      → data/quote-views.json), never a field on the quote. A view can
+//      therefore never race, delay, or clobber the acceptance record, and
+//      a ledger failure never changes what the customer sees.
+async function recordQuoteView(req, quoteId, kind) {
+  try {
+    if (!quoteId) return;
+    // Read the request identity SYNCHRONOUSLY, before the first await.
+    // These calls are fire-and-forget, so by the time an awaited
+    // requireUser() resolves the response may already be sent and the
+    // socket detached — and callerIp()'s `req.socket.remoteAddress`
+    // fallback then yields "". Behind a proxy x-forwarded-for usually
+    // hides that; locally and on a direct connection it does not, and a
+    // blank IP costs us the "same device as the signature?" check.
+    const ip = callerIp(req);
+    const userAgent = req.headers["user-agent"] || "";
+    if (await requireUser(req)) return; // admin or tech — not a customer view
+    await quoteViews.logView({ quoteId, kind, ip, userAgent });
+  } catch (_) { /* tracking must never break a customer-facing page */ }
+}
+
 // If this /approve/<id> page request is for a project_proposal that HAS a
 // custom document AND the caller has passed the gate, serve the document
 // and return true. Otherwise return false so the caller falls through to
@@ -844,6 +1168,8 @@ async function serveProposalDocIfUnlocked(req, res, quoteId, url) {
   if ((await resolveProposalGate(req, q)) !== "allow") return false;
   let html;
   try { html = await fs.readFile(proposalDocPath(q.id), "utf8"); } catch (_) { return false; }
+  // They passed the gate and the designed document is going out to them.
+  void recordQuoteView(req, q.id, "document");
   const body = Buffer.from(injectProposalAcceptFooter(html, q, url), "utf8");
   res.writeHead(200, {
     "content-type": "text/html; charset=utf-8",
@@ -874,12 +1200,46 @@ function needsAuth(method, pathname) {
   // truth. Techs see a 403 if they hit these endpoints.
   if (pathname.startsWith("/api/admin/bulk/")) return "admin";
   if (pathname.startsWith("/api/admin/trash/")) return "admin";
+  // Email-health view (JOB-008) — admin-cookie gated, admin only.
+  if (pathname === "/api/admin/email-health") return "admin";
+  if (pathname === "/api/admin/purge-test-data") return "admin";
+  if (pathname === "/api/admin/open-bucket/slot") return "admin";
+  // Territory export download — ADMIN ONLY. De-identified, but it is still
+  // customer geography (municipality + 2-decimal coordinates for every live
+  // property). It must never be publicly reachable, and it is not a field
+  // tool, so techs don't get it either. The route also calls requireAdmin
+  // directly — the gate is the fence, the route check is the lock.
+  if (pathname === "/api/admin/territory-export") return "admin";
+  // WO unlock / re-lock — ADMIN ONLY, deliberately above the generic
+  // "/api/work-orders" → "user" rule further down (first match wins, and
+  // that rule would otherwise hand this to techs too). Overriding a
+  // customer-accepted contract is Patrick's call, not a field decision.
+  // The routes also call requireAdmin directly — the gate is the fence,
+  // the route check is the lock.
+  if (/^\/api\/work-orders\/[^/]+\/(unlock|relock)$/.test(pathname)) return "admin";
   if (pathname === "/admin/trash" || pathname === "/admin/trash/") return "admin";
   if (pathname === "/admin/smart-controller-photos" || pathname === "/admin/smart-controller-photos/") return "user";
   // CRM pages — admin OR tech.
   if (pathname === "/admin" || pathname === "/admin/") return "user";
   if (pathname === "/admin/today" || pathname === "/admin/today/") return "user";
+  // The day's route map. Named separately because the line above is an
+  // exact match and needsAuth defaults to NO AUTH for anything it does
+  // not name — the same shape as the 2026-09-06 Terminal-token hole.
+  if (pathname === "/admin/today/map" || pathname === "/admin/today/map/") return "user";
   if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") return "user";
+  // Season plan — the route seed the geography filter measures against.
+  // Admin/tech only: it decides which customers get offered which days.
+  if (pathname === "/admin/season-plan" || pathname === "/admin/season-plan/") return "user";
+  if (pathname.startsWith("/api/season-plans")) return "user";
+  // The open bucket — standby customers ranked against route days.
+  if (pathname === "/api/standby") return "user";
+  if (pathname === "/api/maps-config") return "user";
+  if (pathname.startsWith("/api/assignments")) return "user";
+  // Assignment message templates — reading is staff; saving re-checks admin.
+  if (pathname.startsWith("/api/assignment-messages")) return "user";
+  if (pathname === "/admin/assignment-messages" || pathname === "/admin/assignment-messages/") return "user";
+  // Season booking-window editor — it moves what the public can book.
+  if (pathname.startsWith("/api/seasons")) return "user";
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") return "user";
   if (pathname === "/admin/outreach" || pathname === "/admin/outreach/") return "user";
   if (pathname === "/admin/review-requests" || pathname === "/admin/review-requests/") return "user";
@@ -941,16 +1301,43 @@ function needsAuth(method, pathname) {
   // Schedule management is admin-only.
   if (pathname.startsWith("/api/schedule/")) return "user";
   // Manual handoff (admin sends booking link to customer) is admin-only.
+  // Admin action log — who changed what. ADMIN ONLY: it names every
+  // operator's activity, which is not a tech's business to read.
+  if (pathname === "/api/admin/action-log") return "admin";
   if (pathname === "/api/admin/send-booking-link") return "user";
   if (pathname === "/api/admin/features") return "user";
+  // Address suggestions for the app's Book tab. Deliberately in the
+  // /api/admin tree and fenced at `user`: it spends real money on every
+  // keystroke, and the rest of the booking flow is public. A Places proxy
+  // anyone can call is a Google bill anyone can run up.
+  if (pathname === "/api/admin/address-suggest") return "user";
   // Customers (the people PJL serves) — admin-only.
   if (pathname.startsWith("/api/customers")) return "user";
   if (pathname.startsWith("/api/customer/") || pathname === "/api/customer") return "user";
+  // Property merge — ADMIN ONLY. It deletes a property record and rewrites
+  // which property every linked invoice, work order and booking belongs to.
+  // Same class of decision as the service-fee waiver: it moves money
+  // records around, so it is a desk decision, not a tap in a driveway.
+  // **MUST stay ABOVE the generic /api/properties line below — needsAuth
+  // returns on FIRST match, so putting it after silently hands every tech
+  // the ability to delete a property.** A test pins the order; it was
+  // written below at first and the test caught it.
+  if (/^\/api\/properties\/[^/]+\/merge-into$/.test(pathname)) return "admin";
   // Properties (customer system profiles) are admin-only.
   if (pathname.startsWith("/api/properties")) return "user";
   // Work orders (tech-side per-visit records) are admin-only for now.
   // Phase 4 will add a customer-portal "approve quote" subset that's
   // public via a token, but that doesn't exist yet.
+  // Service-call fee waiver — ADMIN ONLY (Patrick's ruling, 2026-08-29).
+  // Waiving or restoring the $95 changes what the customer pays, and on a
+  // warranty work order it also decides whether a claim was honoured. A
+  // tech who finds a claim doesn't stack up reaches out to the office
+  // rather than changing the money at the door. Techs get a 403 here even
+  // though no tech surface offers the control — the server is the source
+  // of truth, the UI gating is convenience (same call as the bulk/Trash
+  // routes above). MUST stay ABOVE the generic /api/work-orders rule:
+  // needsAuth returns on first match.
+  if (/^\/api\/work-orders\/[^/]+\/service-fee-waiver$/.test(pathname)) return "admin";
   if (pathname.startsWith("/api/work-orders")) return "user";
   if (pathname.startsWith("/api/invoices")) return "user";
   if (pathname.startsWith("/api/settings")) return "user";
@@ -966,6 +1353,15 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/part-suppliers")) return "user";
   if (pathname.startsWith("/api/purchase-orders")) return "user";
   if (pathname.startsWith("/api/quote-requests")) return "user";
+  // Warranty claims. The CRM surface is admin/tech; the PUBLIC intake
+  // (POST /api/warranty-claims) and the customer's own token-gated
+  // status/dispute/file routes under /api/warranty-claim/* are not —
+  // the statusToken in the query string is the credential there, the
+  // same model as /api/outreach/unsubscribe above.
+  if (pathname === "/api/warranty-claims" && method === "POST") return null;
+  if (pathname === "/api/warranty-claims" || pathname.startsWith("/api/warranty-claims/")) return "user";
+  if (pathname === "/admin/warranty-claims" || pathname === "/admin/warranty-claims/") return "user";
+  if (/^\/admin\/warranty-claim\/[^/]+\/?$/.test(pathname)) return "user";
   // Per-lead property link/dismiss/attach + tech actions are admin-only.
   if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion|attach-property|notify-on-route|open-wo)$/.test(pathname)) return "user";
   // Bulk property import is admin-only.
@@ -978,6 +1374,15 @@ function needsAuth(method, pathname) {
   // public (the token in the URL IS the credential — same model
   // as the iCal feed). Everything else under /api/outreach/* is
   // admin/tech-only.
+  // Tap to Pay's connection token — ADMIN ONLY. It mints a LIVE Stripe
+  // Terminal credential, so an unlisted path here is not a missing
+  // convenience, it is an open one: needsAuth defaults to null (no auth)
+  // for anything it does not name, and this route sat unnamed while its
+  // own `await requireAdmin(req)` discarded the result. It handed a
+  // pst_live_ token to an unauthenticated curl. The route now checks the
+  // session too — the gate is the fence, the route check is the lock, and
+  // this needed both.
+  if (pathname === "/api/terminal/connection-token") return "admin";
   if (pathname === "/api/outreach/unsubscribe") return null;
   if (pathname.startsWith("/api/outreach/")) return "user";
   // Availability lookups + the public booking endpoint stay public.
@@ -1244,6 +1649,11 @@ function validateLead(payload) {
   const now = new Date().toISOString();
   const name = normalizeString(contact.name, 120);
   const phone = normalizePhone(contact.phone);
+  // A SECOND number, kept because a booking taken over the phone is
+  // often taken on a number that is not the one to call back on — the
+  // app's Book tab asks for it explicitly. Additive: absent, this is ""
+  // and every existing caller is unchanged.
+  const altPhone = normalizePhone(contact.altPhone);
   const email = normalizeEmail(contact.email);
   const address = normalizeString(contact.address, 240);
   const notes = normalizeString(contact.notes, 1000);
@@ -1268,7 +1678,9 @@ function validateLead(payload) {
       // writeLeads(). Stays null on the validate() output; set on the
       // returned lead just before persistence.
       customerId: null,
-      contact: { name, phone, email, address, notes },
+      // altPhone only when there is one, so a lead without a second
+      // number is byte-for-byte the record it was before.
+      contact: { name, phone, ...(altPhone ? { altPhone } : {}), email, address, notes },
       features,
       totals: {
         expectedTotal,
@@ -1282,7 +1694,7 @@ function validateLead(payload) {
         // AI-diagnose source carries the chat transcript so Patrick can read
         // what the AI told the customer. Capped at 50K chars (typical chat is
         // ~5K). Empty for non-AI sources.
-        transcript: normalizeString(payload && payload.transcript, 50000)
+        transcript: normalizeTranscriptBody(payload && payload.transcript)
       },
       crm: defaultCrm(now),
       portal: defaultPortal(id, now)
@@ -1406,7 +1818,138 @@ function parseCommercialPayload(raw) {
 //
 // Failures are logged but never block intake — a lead without
 // customerId is recoverable via `npm run migrate:customers --apply`.
-const { resolveCustomerForLead } = require("./lib/lead-customer");
+const { resolveCustomerForLead, finishCustomerForLead, promoteCustomerOnBooking } = require("./lib/lead-customer");
+
+// Every booking path goes through here, and none of them calls
+// bookings.upsertFromLead directly any more.
+//
+// Mirroring the lead's booking into the canonical record and marking the
+// person an active customer are two halves of ONE event: they booked. Split
+// across eight call sites they would drift, and seven of them would forget —
+// which is how a customer who booked, paid and had the work done still read
+// as a "lead" in the CRM (Patrick, 2026-09-08). The wrapper is what makes
+// "they booked" impossible to half-apply.
+//
+// Promotion never blocks the booking: promoteCustomerOnBooking swallows its
+// own errors, and the mirrored record is returned regardless.
+// The raw mirror, and the ONLY place allowed to call upsertFromLead.
+//
+// Splitting it out keeps the "no booking path mirrors behind the wrapper's
+// back" lint meaningful (scripts/test-customer-active-on-booking.mjs) while
+// giving the re-stamp an honest way in: re-cutting a start time is not a new
+// booking. The customer was promoted when they booked, and routing the
+// re-stamp through syncBookingFromLead would recurse, because that is what
+// schedules the re-stamp.
+async function mirrorBookingOnly(lead) {
+  return bookings.upsertFromLead(lead);
+}
+
+async function syncBookingFromLead(lead) {
+  const record = await mirrorBookingOnly(lead);
+  if (record && lead?.customerId) {
+    await promoteCustomerOnBooking(lead.customerId, {
+      by: "booking",
+      reason: `Booked ${lead.booking?.serviceLabel || lead.booking?.serviceKey || "an appointment"}`
+    });
+  }
+  // The day this booking landed on has a new shape, so its times are re-cut
+  // in driving order. Best-effort: a re-stamp that fails leaves the booking
+  // exactly as it was, which is the old behaviour and not a broken one.
+  if (record && lead?.booking?.start) {
+    await restampDayInDrivingOrder(lead.booking.start).catch((err) => {
+      console.warn("[restamp] skipped:", err?.message);
+    });
+  }
+  return record;
+}
+
+// Re-cut a day's start times so they run in driving order.
+//
+// Patrick, 2026-09-09: "Start times inside a bucket are provisional." The
+// customer is promised Morning (8-12) or Afternoon (12-5) and never sees a
+// precise minute; the exact stamp was only ever the first free 30-minute mark
+// in the order people happened to book. Leaving it that way is what put
+// Newmarket 08:00, Thornhill 09:30, Newmarket 12:00 on one day.
+//
+// Every reader sorts by `start`, so re-stamping in route order makes the
+// field app, the Today page, the iCal feed and the route sheet agree without
+// any of them changing. orderDayForDriving() in /api/schedule/today stays as
+// a safety net for days whose stamps predate this.
+//
+// WHAT IT WILL NOT DO:
+//   - move a booking out of its bucket. That is the promise the customer was
+//     given, and tidying a route is not a reason to break it.
+//   - touch a day that has been assigned or locked. Once Patrick has sent a
+//     day out, the times in the customers' hands are the times.
+//   - notify anyone. The bucket is unchanged, so there is nothing to tell.
+async function restampDayInDrivingOrder(anyStartOnTheDay) {
+  const when = new Date(anyStartOnTheDay);
+  if (Number.isNaN(when.getTime())) return 0;
+  const dayStart = new Date(when.getFullYear(), when.getMonth(), when.getDate()).getTime();
+  const dayEnd = dayStart + 86400000;
+
+  const allLeads = await readLeads();
+  const onDay = allLeads.filter((l) => {
+    if (!l || l.archived || !l.booking?.start) return false;
+    if (!bookingHoldsItsSlot(l.booking.status)) return false;
+    const t = new Date(l.booking.start).getTime();
+    return t >= dayStart && t < dayEnd;
+  });
+  if (onDay.length < 2) return 0;
+
+  // A day Patrick has already sent out is his, not the optimiser's.
+  if (onDay.some((l) => l.booking.assignmentId || l.booking.dayLocked || l.booking.source === "assignment")) {
+    return 0;
+  }
+
+  const byCode = new Map();
+  const day = { morning: [], afternoon: [] };
+  onDay.forEach((l, i) => {
+    const coords = l.booking.coords;
+    if (!coords || coords.lat == null) return;
+    const code = `__lead:${i}`;
+    byCode.set(code, { code, id: code, coords });
+    day[new Date(l.booking.start).getHours() < 12 ? "morning" : "afternoon"].push(code);
+  });
+  if (!day.morning.length && !day.afternoon.length) return 0;
+
+  const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode });
+
+  // Lay the ordered stops back down from the top of their own bucket. Thirty
+  // minutes a stop keeps the arithmetic honest against the 30-minute grid the
+  // engine offers slots on; the customer is told the bucket either way.
+  const SLOT_MINUTES = 30;
+  let changed = 0;
+  for (const bucket of BOOKING_BUCKETS) {
+    const order = (sequenced && sequenced[bucket.key]) || [];
+    const openMin = parseHHmmToMinutes(bucket.from);
+    order.forEach((code, position) => {
+      const idx = Number(String(code).split(":")[1]);
+      const lead = onDay[idx];
+      if (!lead) return;
+      const startMs = dayStart + (openMin + position * SLOT_MINUTES) * 60000;
+      const durationMs = lead.booking.end
+        ? Math.max(0, new Date(lead.booking.end) - new Date(lead.booking.start))
+        : SLOT_MINUTES * 60000;
+      const nextStart = new Date(startMs).toISOString();
+      if (nextStart === lead.booking.start) return;
+      lead.booking.start = nextStart;
+      lead.booking.end = new Date(startMs + durationMs).toISOString();
+      changed += 1;
+    });
+  }
+  if (!changed) return 0;
+
+  await writeLeads(allLeads);
+  // Mirror into the canonical records so bookings.json, the iCal feed and the
+  // reminders agree. upsertFromLead directly, not syncBookingFromLead: the
+  // customer promotion already ran and re-entering here would recurse.
+  for (const lead of onDay) {
+    await mirrorBookingOnly(lead).catch(() => null);
+  }
+  console.log(`[restamp] ${changed} stop(s) re-cut into driving order on ${new Date(dayStart).toDateString()}`);
+  return changed;
+}
 
 // "This building already belongs to an existing account" — the manual-create
 // dedup warning (commercial matching, Phase 0.5).
@@ -1479,8 +2022,14 @@ async function readLeads() {
   return JSON.parse(raw || "[]").map(hydrateLead);
 }
 
+// Serializes /api/booking/reserve. See lib/booking-lock.js for why the
+// single-process assumption is load-bearing.
+const bookingReserveLock = createLock("booking-reserve");
+
 async function writeLeads(leads) {
-  await fs.writeFile(LEADS_FILE, `${JSON.stringify(leads, null, 2)}\n`, "utf8");
+  // Atomic: temp file then rename, so a crash or a Render redeploy mid-write
+  // can never leave leads.json truncated. See lib/atomic-json.js.
+  await writeJsonAtomic(LEADS_FILE, leads);
 }
 
 function isLikelyDuplicate(leads, lead) {
@@ -1710,6 +2259,62 @@ function sendTwiml(res, status, xml) {
   res.end(`<?xml version="1.0" encoding="UTF-8"?>\n${xml}`);
 }
 
+// Give a property the zone list its declared count implies, before a work
+// order scaffolds from it.
+//
+// A customer who books saying "eight zones" is priced for eight — pricing
+// has always fallen back to system.zoneCount — but the property's zone
+// LIST stayed empty until a tech documented it, so the work order
+// scaffolded one placeholder zone. Writing the list here means the record
+// carries those zones from the first booking, and the work order and the
+// property agree from the first visit.
+//
+// Lives at the route layer because lib/work-orders.js deliberately depends
+// on nothing but node built-ins (two test suites sandbox it on its own),
+// so it can describe the list but cannot write it.
+//
+// Returns the property to scaffold from — updated when zones were written,
+// the original otherwise. Never throws: a tech is standing on the lawn and
+// a work order must open regardless.
+// Write the count the customer gave at booking onto the property, when the
+// property has nothing of its own to say. See declaredZonesFromBooking and
+// canAdoptDeclaredZones in lib/work-orders.js for why it may only fill a
+// blank. Lives here, at the route layer, for the same reason the zone-list
+// write does: lib/work-orders.js depends on nothing but node built-ins.
+//
+// Never throws — a booking must complete and a work order must open.
+async function adoptDeclaredZoneCount(property, booking) {
+  if (!property?.id || !workOrders.canAdoptDeclaredZones(property, booking)) return property;
+  const zoneCount = workOrders.declaredZonesFromBooking(booking);
+  try {
+    const updated = await properties.update(property.id, {
+      system: { ...(property.system || {}), zoneCount }
+    });
+    return updated || { ...property, system: { ...(property.system || {}), zoneCount } };
+  } catch (err) {
+    console.warn("[booking] declared zone count not written to property:", err?.message);
+    return { ...property, system: { ...(property.system || {}), zoneCount } };
+  }
+}
+
+async function materializeDeclaredZones(property, lead = null) {
+  // The count reaches the property when the booking is taken. This is the
+  // net for bookings already on the books when that started, and for any
+  // path that reaches a work order without passing through it.
+  property = await adoptDeclaredZoneCount(property, lead?.booking);
+  const zones = workOrders.declaredZoneList(property);
+  if (!property?.id || !zones.length) return property;
+  try {
+    const updated = await properties.update(property.id, {
+      system: { ...(property.system || {}), zones }
+    });
+    return updated || { ...property, system: { ...(property.system || {}), zones } };
+  } catch (err) {
+    console.warn("[wo create] declared-zone materialize failed:", err?.message);
+    return { ...property, system: { ...(property.system || {}), zones } };
+  }
+}
+
 // ----- Photo handling ----------------------------------------------------
 // Accepts client payload of the form: photos: [{ data: "<base64>", mediaType: "image/jpeg" }]
 // Returns a normalized + validated array of { buffer, mediaType, ext, meta }, or throws.
@@ -1862,6 +2467,52 @@ async function readPhotoFile(leadId, n) {
   return null;
 }
 
+// Downscale a field photo before it lands on the persistent disk.
+//
+// Re-encodes in the SAME format it arrived as, on purpose: the on-disk
+// extension, the stored mediaType, the serve/delete routes and the report
+// derivative lookup all agree on the format already, and quietly turning a
+// PNG into a JPEG would desync them.
+//
+// HEIC, GIF and PDF pass through untouched — pdfkit can't render HEIC
+// anyway (the report renderer placeholders it), and a customer receipt PDF
+// must stay byte-identical as evidence.
+//
+// Returns null whenever the original should be kept as-is. Any failure is
+// non-fatal by design: storing an oversized photo is a cost problem, but
+// losing a tech's only picture of a cracked backflow is a business problem.
+async function compressWoPhoto(photo) {
+  const type = String(photo?.mediaType || "").toLowerCase();
+  if (!/^image\/(jpeg|png|webp)$/.test(type)) return null;
+  if (!photo.buffer || !photo.buffer.length) return null;
+  try {
+    // rotate() with no argument bakes the camera's own EXIF orientation
+    // into the pixels and drops the tag — it never mirrors or crops, so the
+    // photo still LOOKS identical. Safe to do here: takenAt and geo come
+    // off the client payload (see validatePhotos), not out of EXIF, and the
+    // report derivative's own .rotate() becomes a no-op on the result.
+    const pipeline = sharp(photo.buffer, { failOn: "none" })
+      .rotate()
+      .resize({
+        width: WO_PHOTO_MAX_EDGE,
+        height: WO_PHOTO_MAX_EDGE,
+        fit: "inside",
+        withoutEnlargement: true
+      });
+    let out;
+    if (type === "image/png") out = await pipeline.png({ compressionLevel: 9 }).toBuffer();
+    else if (type === "image/webp") out = await pipeline.webp({ quality: WO_PHOTO_QUALITY }).toBuffer();
+    else out = await pipeline.jpeg({ quality: WO_PHOTO_QUALITY, mozjpeg: true }).toBuffer();
+    // An already-small or already-optimised photo can re-encode LARGER.
+    // Keep whichever is smaller so this can never inflate the disk.
+    if (!out || !out.length || out.length >= photo.buffer.length) return null;
+    return out;
+  } catch (err) {
+    console.warn(`[wo-photo] compress failed, storing original: ${err?.message || err}`);
+    return null;
+  }
+}
+
 // WO photo storage — same shape as lead photos but starting from a
 // caller-supplied baseN so multiple uploads append cleanly without
 // renumbering existing files. Files live at WO_PHOTOS_DIR/<woId>/<n>.<ext>.
@@ -1877,7 +2528,10 @@ async function savePhotosForWorkOrder(woId, photos, now, baseN, context = {}) {
     // filename rides on the meta record + serves as the
     // Content-Disposition value when browsers download the image.
     const onDiskFilename = `${n}.${photos[i].ext}`;
-    await fs.writeFile(path.join(dir, onDiskFilename), photos[i].buffer);
+    const originalBytes = photos[i].buffer.length;
+    const compressed = await compressWoPhoto(photos[i]);
+    const storedBuffer = compressed || photos[i].buffer;
+    await fs.writeFile(path.join(dir, onDiskFilename), storedBuffer);
     const filename = generatePhotoFilename({
       takenAt: photos[i].meta.takenAt,
       propertyCode: context.propertyCode,
@@ -1894,7 +2548,11 @@ async function savePhotosForWorkOrder(woId, photos, now, baseN, context = {}) {
       // §5.3). Older WO photos without a `kind` field default to image
       // in the client renderer (all pre-brief uploads were images).
       kind: photos[i].mediaType === "application/pdf" ? "pdf" : "image",
-      bytes: photos[i].buffer.length,
+      // `bytes` is what is actually on disk. `originalBytes` is only set
+      // when compression changed the file, so the admin UI can show "12.4 MB
+      // -> 0.5 MB" and older records (no such field) still read correctly.
+      bytes: storedBuffer.length,
+      ...(compressed ? { originalBytes } : {}),
       addedAt: now,
       filename,
       ...photos[i].meta
@@ -1948,7 +2606,12 @@ const PUBLIC_API_PATHS = new Set([
   // it's same-origin and CORS becomes a no-op. Either way, safe.
   "/api/booking/services",
   "/api/booking/availability",
+  "/api/booking/verify-address",
   "/api/booking/reserve",
+  // The hold is how the public picker claims a slot while the customer fills
+  // in the form. Public for the same reason reserve is.
+  "/api/booking/hold",
+  "/api/booking/release-hold",
   // Pricing dictionary — public so any page (including pricing.html on
   // GitHub Pages) can fetch the live catalog and render from it.
   "/api/pricing",
@@ -2003,8 +2666,55 @@ async function writeChats(chats) {
   await fs.writeFile(CHATS_FILE, `${JSON.stringify(chats, null, 2)}\n`, "utf8");
 }
 
-function normalizeTranscriptBody(value) {
-  return normalizeString(value, 50000);
+// A transcript is the one stored string whose LINE STRUCTURE carries meaning:
+// the blank line between turns is what separates one speaker from the next.
+// normalizeString() collapses every run of whitespace to a single space, so
+// routing a transcript through it flattened each conversation into one
+// unbroken line at write time — and no amount of CSS downstream could put the
+// turns back. Keep the newlines; normalise everything else exactly as before.
+// (Transcripts stored before this fix are already flat; crm-transcript.js
+// splits those on the speaker labels instead.)
+const TRANSCRIPT_MAX_CHARS = 50000;
+function normalizeTranscriptBody(value, maxLength = TRANSCRIPT_MAX_CHARS) {
+  return String(value || "")
+    .replace(/\r\n?/g, "\n")        // CRLF/CR -> LF
+    .replace(/[^\S\n]+/g, " ")      // collapse spaces + tabs, keep newlines
+    .replace(/ *\n */g, "\n")       // strip trailing/leading space per line
+    .replace(/\n{3,}/g, "\n\n")     // cap runs of blank lines
+    .trim()
+    .slice(0, maxLength);
+}
+
+// Row preview for the AI Chats dashboard. Every transcript opens with the
+// widget's two scripted greetings from the AI, so slicing the head of the
+// string gave all ~240 characters to boilerplate and made every row in the
+// list read identically. Preview the first thing the CUSTOMER actually
+// said — that is what tells the chats apart at a glance. Display only; the
+// stored transcript is untouched.
+const CHAT_PREVIEW_CHARS = 240;
+function chatPreview(transcript) {
+  const text = String(transcript || "").replace(/\r\n?/g, "\n").trim();
+  if (!text) return "";
+  // Find the first CUSTOMER turn. Split on the label rather than on a blank
+  // line: transcripts stored before normalizeTranscriptBody kept its newlines
+  // are one flat line, so there are no blank lines left to split on.
+  const label = /(?:^|\s)(Customer|Patrick \(AI\))[ \t]*:[ \t]*/g;
+  const hits = [];
+  let m;
+  while ((m = label.exec(text)) !== null) {
+    hits.push({ who: m[1], start: m.index, bodyStart: m.index + m[0].length });
+    label.lastIndex = m.index + m[0].length;
+  }
+  for (let i = 0; i < hits.length; i++) {
+    if (hits[i].who !== "Customer") continue;
+    const end = (i + 1 < hits.length) ? hits[i + 1].start : text.length;
+    const body = text.slice(hits[i].bodyStart, end).replace(/\s+/g, " ").trim();
+    if (body) return body.slice(0, CHAT_PREVIEW_CHARS);
+  }
+  // No customer turn yet (chat opened, nothing typed) — fall back to the
+  // opening line, minus its speaker label.
+  const head = hits.length ? text.slice(hits[0].bodyStart) : text;
+  return head.replace(/\s+/g, " ").trim().slice(0, CHAT_PREVIEW_CHARS);
 }
 
 // Mark / link a chat to a lead once the customer books. Returns updated chat
@@ -2711,10 +3421,21 @@ async function quoteRenderParties(q) {
   let address = String(property?.address || leadContact?.address || "").trim();
   if (!address) address = await lastKnownAddressForEmail(q?.customerEmail);
   if (!address) address = billingStr;
+  // preparedForAddress — the address printed in the customer-facing PREPARED
+  // FOR block, resolved SEPARATELY from the service `address` above (2026-08).
+  // `address` answers "where does the crew go"; this answers "who is this
+  // addressed to". Conflating them put a Norwood site address on a Dundalk
+  // proposal for the same GC (Q-2026-0067). See billing-parties.js for the
+  // precedence — explicit override → the customer's OWN address → the
+  // service address as a last resort, never a property/site record.
+  const preparedForAddress = billingParties.resolvePreparedForAddress(
+    q, custRecord, { serviceAddress: address }
+  );
   const customer = {
     name: property?.customerName || leadContact?.name || custRecord?.name || "",
     phone: property?.customerPhone || leadContact?.phone || custRecord?.phone || "",
     address,
+    preparedForAddress,
     email: q?.customerEmail || leadContact?.email || custRecord?.email || "",
     // Bill-to envelope, derived from the (property, customer) pair: a managed
     // commercial site shows its own legal entity with the management company
@@ -2783,10 +3504,100 @@ async function writeFrozenQuotePdf(q, buffer) {
 //                                re-render (a fabricated "snapshot" reads as
 //                                authoritative and isn't)
 // `opts` is the renderer options for the live/backfill render paths.
+// Proposal / estimate approval email — ONE composer shared by the real
+// send (POST /api/quotes/:id/send-proposal-for-approval) and the admin
+// preview (GET /api/quotes/:id/proposal-email-preview), so what Patrick
+// previews in the builder is exactly what the customer receives.
+//   parties     — quoteRenderParties(q) (customer name for the greeting)
+//   approvalUrl — the tokenized /approve link (preview passes a placeholder
+//                 when the draft has no token yet)
+//   gated       — phone-gated delivery → link only, no PDF attachment
+//   note        — Patrick's optional personal paragraph (plain text; escaped,
+//                 line breaks kept). Sits right under the greeting.
+//   extraFiles  — names of uploaded files attached alongside the PDF (from
+//                 quotes.emailAttachmentManifest); listed under the summary
+function buildProposalApprovalEmail(q, { parties = null, approvalUrl = "", gated = false, note = "", extraFiles = [] } = {}) {
+  const custName = String((parties && parties.customer && parties.customer.name) || "").trim();
+  const firstName = escapeHtmlServer(custName ? custName.split(/\s+/)[0] : "") || "there";
+  const displayNo = escapeHtmlServer((q.quoteNumberDisplay && String(q.quoteNumberDisplay).trim()) || q.id);
+  // Customer-facing document noun (residential_repair brief): a repair
+  // job reads as an "Estimate", every other branch as a "Proposal".
+  const docNoun = quotes.customerDocNoun(q);
+  const isRevision = (Number(q.version) || 1) > 1;
+  // "Sign ASAP to schedule" urgency (Jul 2026) — repair estimates only.
+  // Format a plain YYYY-MM-DD as a UTC calendar date so no timezone shift
+  // moves it a day.
+  const isRepairEmail = q.branch === "residential_repair";
+  const fmtSchedDate = (iso) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+    if (!m) return "";
+    const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    const WD = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const MO = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    return `${WD[dt.getUTCDay()]}, ${MO[dt.getUTCMonth()]} ${dt.getUTCDate()}`;
+  };
+  const schedLabel = isRepairEmail ? fmtSchedDate(q.scheduledServiceDate) : "";
+  const noteText = String(note || "").trim();
+  const noteHtml = noteText
+    ? `<div style="margin:0 0 16px;padding:12px 14px;background:#FFFFFF;border-left:3px solid #1B4D2E;border-radius:0 8px 8px 0;font-size:14px;color:#1a1a1a;white-space:pre-line;">${escapeHtmlServer(noteText)}</div>`
+    : "";
+  const safeUrl = escapeHtmlServer(approvalUrl);
+  const extraNames = (Array.isArray(extraFiles) ? extraFiles : []).map((f) => String(f || "").trim()).filter(Boolean);
+  const extraHtml = (!gated && extraNames.length)
+    ? `<p style="margin:0 0 14px;font-size:13px;color:#555;">Also attached: ${extraNames.map((n) => `<strong>${escapeHtmlServer(n)}</strong>`).join(", ")}.</p>`
+    : "";
+  const html = `
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55;">
+  <div style="padding:24px 28px;background:#1B4D2E;border-radius:8px 8px 0 0;">
+    <div style="color:#EAF3DE;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;font-weight:600;">PJL Land Services</div>
+    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;">Your ${isRevision ? "updated " : ""}${docNoun.lower} — ready for review.</h1>
+  </div>
+  <div style="padding:24px 28px;background:#FAFAF5;border:1px solid #e5e5dd;border-top:none;border-radius:0 0 8px 8px;">
+    <p style="margin:0 0 14px;">Hi ${firstName},</p>
+    ${noteHtml}
+    ${gated
+      ? `<p style="margin:0 0 14px;">Your detailed ${docNoun.lower} (<strong>${displayNo}</strong>) is ready to review at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>
+    <p style="margin:0 0 14px;padding:12px 14px;background:#EAF3DE;border:1px solid #C7E0A8;border-radius:8px;font-size:13px;color:#33502f;">To open it, you'll be asked for your phone number — the one we have on file for you. Any format is fine.</p>`
+      : `<p style="margin:0 0 14px;">Your detailed ${docNoun.lower} (<strong>${displayNo}</strong>) is attached and posted at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>`}
+    ${extraHtml}
+    ${isRepairEmail
+      ? `<p style="margin:0 0 14px;padding:12px 14px;background:#FFF4E5;border:1px solid #F0C88A;border-radius:8px;font-size:14px;color:#7A4E12;"><strong>Estimate must be signed ASAP to schedule.</strong>${schedLabel ? ` This repair is scheduled for <strong>${schedLabel}</strong> — please sign your estimate before then to keep that date.` : ""}</p>`
+      : ""}
+    <p style="margin:0 0 14px;font-size:13px;color:#555;">You can accept this ${docNoun.lower} in either of two ways:</p>
+    <ul style="margin:0 0 14px;padding-left:20px;font-size:13px;color:#333;line-height:1.7;">
+      <li><strong>Sign online</strong> — tap the button below, draw your signature, done.</li>
+      ${gated
+        ? `<li><strong>Print, sign, return</strong> — open the ${docNoun.lower}, download the PDF, sign by hand, scan or photograph it, and email it back to <a href="mailto:info@pjllandservices.com" style="color:#1B4D2E;">info@pjllandservices.com</a>.</li>`
+        : `<li><strong>Print, sign, return</strong> — print the attached PDF, sign by hand, scan or photograph it, and email it back to <a href="mailto:info@pjllandservices.com" style="color:#1B4D2E;">info@pjllandservices.com</a>.</li>`}
+    </ul>
+    <p style="margin:0 0 18px;text-align:center;">
+      <a href="${safeUrl}" style="display:inline-block;padding:14px 28px;background:#E07B24;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;">Review &amp; sign online</a>
+    </p>
+    <p style="margin:18px 0 0;font-size:13px;color:#777;">If the button doesn't work, paste this link:<br><span style="color:#1B4D2E;word-break:break-all;">${safeUrl}</span></p>
+    <p style="margin:24px 0 0;font-size:13px;color:#777;">Questions? Reply to this email or call <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a>.</p>
+  </div>
+  <p style="margin:16px 0 0;font-size:11px;color:#999;text-align:center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
+</div>`.trim();
+  const fromAddress = process.env.CUSTOMER_EMAIL || "info@pjllandservices.com";
+  return {
+    subject: `PJL ${docNoun.lower} ${displayNo} — your ${isRevision ? "updated " : ""}review and acceptance`,
+    html,
+    from: `"PJL Land Services" <${fromAddress}>`,
+    replyTo: fromAddress,
+    // Ungated → the frozen PDF rides along; gated → deliberately none (the
+    // PDF lives behind the phone gate).
+    attachmentFilename: gated ? null : `PJL-${docNoun.cap}-${q.id}.pdf`,
+    gated,
+    isRevision,
+    docNoun,
+    displayNo
+  };
+}
+
 async function serveQuotePdf(res, q, opts, { by = "system" } = {}) {
   const pdfHeaders = {
     "content-type": "application/pdf",
-    "content-disposition": `inline; filename="${q.id}.pdf"`,
+    "content-disposition": contentDisposition(quoteFilename(q, opts)),
     "cache-control": "no-store"
   };
   const isDraft = q.status === "draft" || q.status === "draft_preview";
@@ -2821,6 +3632,95 @@ async function serveQuotePdf(res, q, opts, { by = "system" } = {}) {
   renderQuotePdf(q, opts).pipe(res);
 }
 
+// ---- Accompanying invoice letter -------------------------------------
+// Optional prose that ships with an invoice as a second PDF on PJL
+// letterhead — a repair summary, a scope note, a written record to sit
+// alongside the numbers. Presentation only: it carries no financial
+// content and never touches line items, totals, tax, the payment ledger
+// or the QuickBooks push.
+//
+// Addressed from the invoice's own billTo snapshot so the letter and the
+// invoice can never name different parties.
+function letterOptsForInvoice(inv) {
+  const billTo = inv?.billTo && typeof inv.billTo === "object" ? inv.billTo : {};
+  const addressLines = String(billTo.address || inv?.address || "")
+    .split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  return {
+    heading: billTo.careOf ? `c/o ${billTo.careOf}` : "",
+    to: {
+      name: billTo.name || inv?.customerName || "",
+      lines: addressLines,
+      email: billTo.email || inv?.customerEmail || ""
+    },
+    // The letter is dated with the invoice, not with the moment the PDF
+    // happens to be rendered — a resend in November must not re-date an
+    // August document.
+    date: inv?.sentAt || inv?.issuedAt || inv?.createdAt || null,
+    reference: inv?.id ? `Invoice ${inv.id}` : "",
+    subject: inv?.letter?.subject || "",
+    body: inv?.letter?.body || "",
+    closing: "",
+    signer: { name: "Patrick Lalande", title: "PJL Land Services" }
+  };
+}
+
+// True when this invoice has a letter worth attaching — switched on AND
+// with something in it. An enabled-but-empty letter attaches nothing
+// rather than mailing a blank page.
+function invoiceHasLetter(inv) {
+  return Boolean(inv?.letter?.enabled) && String(inv?.letter?.body || "").trim().length > 0;
+}
+
+async function renderInvoiceLetterPdf(inv) {
+  const { generateLetterPdf } = require("./lib/letter-pdf");
+  return generateLetterPdf(letterOptsForInvoice(inv));
+}
+
+// Filename the customer sees on the attachment. Derived from the invoice
+// id so a saved copy is self-identifying in a download folder.
+// The invoice's own saved name, and its letter's. Both follow the shared
+// convention in lib/format.js: date on the document, what it is, who it is
+// for, which address. The DATE IS THE ISSUE DATE — sentAt if the invoice
+// has gone out, else when it was drafted — never render time, so
+// re-downloading an August invoice in December still names it August.
+// Shared document-naming convention — every customer-facing PDF this
+// server hands out or emails wears the same four-part name. See
+// lib/format.js documentFilename().
+const { documentFilename, contentDisposition } = require("./lib/format");
+
+// A quote's saved name. Party details are not on the quote record — they
+// are resolved by quoteRenderParties() and arrive in the renderer opts,
+// which is why this takes them rather than reading q alone.
+function quoteFilename(q, opts) {
+  return documentFilename({
+    date: q?.sentAt || q?.createdAt,
+    label: `${q?.id || "Quote"} Quote`,
+    customerName: opts?.customer?.name,
+    // The SITE address — which job this quote is for. Deliberately not
+    // preparedForAddress, which is who the offer is addressed TO and can
+    // be a management company three towns away (QUOTE-01).
+    address: opts?.property?.address || opts?.customer?.address
+  });
+}
+
+function invoiceFilename(inv) {
+  return documentFilename({
+    date: inv?.sentAt || inv?.createdAt,
+    label: `${inv?.id || "Invoice"} Invoice`,
+    customerName: inv?.customerName,
+    address: inv?.address
+  });
+}
+
+function invoiceLetterFilename(inv) {
+  return documentFilename({
+    date: inv?.sentAt || inv?.createdAt,
+    label: `${inv?.id || "Invoice"} Letter`,
+    customerName: inv?.customerName,
+    address: inv?.address
+  });
+}
+
 // Hydrate a decorated lead with its source Quote (if any) so the CRM
 // lead-detail pane can render the Quote card without a second fetch. The
 // list endpoint pre-builds a map for efficiency; single-lead responses
@@ -2835,6 +3735,299 @@ async function hydrateLeadQuote(decorated) {
     console.warn("[quotes] hydrate failed for", decorated.id, err?.message);
   }
   return decorated;
+}
+
+// JOB-002 Part B — customer-scoped portal sections (CRM-08). The portal's
+// unit of identity is the CUSTOMER: whatever lead the token opens, the
+// customer sees the union of their history, live from the canonical
+// stores, not the lead's booking-time snapshot.
+//
+// Union rule: a work order belongs to this portal's customer when its
+// customerId matches, OR its leadId is one of the customer's leads
+// (covers legacy WOs created before customerId existed). Without a
+// customerId the union collapses to just this lead's own WOs.
+//
+// What is deliberately NOT here (Part B §B2 — internal, unflagged):
+// dailyLog anything (dailyNotes, sessions/labourerNote, nextDay*,
+// materialsConsumed), project.notes, task notes/descriptions, techNotes.
+// Projects surface at stage level only. Build-day WOs are day-slices of
+// a project and carry that same internal data — they are represented by
+// their project's stage rail, never listed as individual visits.
+async function customerPortalSections(lead) {
+  const token = lead.portal?.token || portalTokenForId(lead.id);
+  const customerId = lead.customerId || null;
+
+  const leadIds = new Set([lead.id]);
+  const unionLeads = [lead];
+  if (customerId) {
+    try {
+      (await readLeads())
+        .filter((l) => l.customerId === customerId)
+        .forEach((l) => {
+          if (!leadIds.has(l.id)) unionLeads.push(l);
+          leadIds.add(l.id);
+        });
+    } catch (err) { console.warn("[portal] customer lead union failed:", err?.message); }
+  }
+
+  let allInvoices = [];
+  try { allInvoices = await invoices.list(); }
+  catch (err) { console.warn("[portal] invoices read failed:", err?.message); }
+  // Customer-visible invoice states only: drafts are internal working
+  // copies and voids are dead paper. Read-only display — the pay-online
+  // token link stays the ONLY payment path (Stripe handoff §6).
+  const visibleInvoice = (inv) => inv && inv.status !== "draft" && inv.status !== "void";
+  const invoiceView = (inv) => ({
+    id: inv.id,
+    total: inv.total,
+    amountPaid: inv.amountPaid,
+    balanceDue: inv.balanceDue,
+    status: inv.status,
+    createdAt: inv.createdAt,
+    pdfUrl: `/api/portal/${encodeURIComponent(token)}/invoice/${encodeURIComponent(inv.id)}/pdf`
+  });
+
+  // ---- Service history: every non-build WO, full history, newest first.
+  let serviceHistory = [];
+  try {
+    const wos = (await workOrders.list()).filter((w) =>
+      !w.deletedAt
+      && w.type !== "build"
+      && ((customerId && w.customerId === customerId) || (w.leadId && leadIds.has(w.leadId))));
+    wos.sort((a, b) => String(b.completedAt || b.scheduledFor || b.createdAt || "")
+      .localeCompare(String(a.completedAt || a.scheduledFor || a.createdAt || "")));
+    serviceHistory = wos.map((w) => {
+      const wr = warrantyForWorkOrder(w);
+      const inv = allInvoices
+        .filter((i) => i.woId === w.id && visibleInvoice(i))
+        .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0] || null;
+      return {
+        id: w.id,
+        type: w.type,
+        typeLabel: workOrders.TEMPLATES[w.type]?.label || "Service Visit",
+        status: w.status,
+        completedAt: w.completedAt || null,
+        scheduledFor: w.scheduledFor || null,
+        // Warranty is a LABEL, not a filter — expired WOs stay listed.
+        warranty: wr.ok ? { covered: wr.active, months: wr.months, expiresAt: wr.expiresAt } : null,
+        // Download on every completed WO regardless of warranty state —
+        // the route falls back to a live customer-audience render when
+        // no snapshot exists (legacy completions), so the link is
+        // present whenever there is a report to give.
+        reportUrl: (w.status === "completed" || (Array.isArray(w.reportSnapshots) && w.reportSnapshots.length))
+          ? `/api/portal/${encodeURIComponent(token)}/wo-report-snapshot/${encodeURIComponent(w.id)}`
+          : null,
+        invoice: inv ? invoiceView(inv) : null
+      };
+    });
+  } catch (err) { console.warn("[portal] service history build failed:", err?.message); }
+
+  // ---- Projects: stage level only.
+  let projectCards = [];
+  if (customerId) {
+    try {
+      const projs = (await projects.list({ includeArchived: false }))
+        .filter((p) => p.customerId === customerId && !p.deletedAt);
+      projectCards = await Promise.all(projs.map(async (p) => {
+        let metrics = null;
+        try { metrics = await projects.computeProjectMetrics(p.id); } catch (_) { metrics = null; }
+        const projInvoices = allInvoices
+          .filter((i) => i.projectId === p.id && visibleInvoice(i))
+          .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+        // Customer-facing stage rail. Derived, furthest-reached wins:
+        //   accepted  — project exists (converted from an accepted quote)
+        //   deposit   — a deposit invoice has been paid
+        //   scheduled — build underway or work orders attached
+        //   complete  — project status flipped to complete
+        //   invoiced  — a non-deposit invoice exists post-completion
+        const depositPaid = projInvoices.some((i) => i.invoiceRole === "deposit" && i.status === "paid");
+        const finalInvoiced = projInvoices.some((i) => i.invoiceRole !== "deposit");
+        const stage =
+          p.status === "complete" ? (finalInvoiced ? "invoiced" : "complete")
+          : (p.status === "active" || (metrics?.buildWoIds || []).length || (p.workOrderIds || []).length) ? "scheduled"
+          : depositPaid ? "deposit"
+          : "accepted";
+        return {
+          id: p.id,
+          name: p.name || "Your project",
+          stage,
+          stages: ["accepted", "deposit", "scheduled", "complete", "invoiced"],
+          daysLogged: metrics?.daysLogged || 0,
+          percentComplete: metrics?.percentComplete || 0,
+          totalTasks: metrics?.totalTasks || 0,
+          doneTasks: metrics?.doneTasks || 0,
+          invoices: projInvoices.map((i) => ({ ...invoiceView(i), role: i.invoiceRole || "standard" }))
+        };
+      }));
+    } catch (err) { console.warn("[portal] projects build failed:", err?.message); }
+  }
+
+  // JOB-005 (CRM-09) — facts for the derived header state, from the same
+  // canonical reads as the sections above. "Upcoming" means either:
+  //   1. a lead booking envelope whose end/start is still ahead of now
+  //      (public booking flow), or
+  //   2. any of the customer's work orders in a PRE-TERMINAL status
+  //      (admin-side advance bookings). Measured live 2026-08-02: 12 of
+  //      14 open WOs are dateless — dateless seasonal bookings are the
+  //      NORMAL shape, so a WO's mere pre-terminal status counts as
+  //      upcoming, date or no date. Past-dated stragglers count too
+  //      (Patrick's ruling, option (a)): booked work that never got
+  //      closed out is still pending work — a stale "scheduled" is a
+  //      truthful nag, a wrong "complete" is the CRM-09 defect class.
+  //      (Stranded non-terminal WOs themselves are tracked as CRM-11.)
+  // Never mere envelope existence — that was the original bug.
+  const nowMs = Date.now();
+  const envelopeUpcoming = unionLeads.some((l) => {
+    const t = Date.parse(l.booking?.end || l.booking?.start || "");
+    return Number.isFinite(t) && t >= nowMs;
+  });
+  const WO_TERMINAL = new Set(["completed", "cancelled", "no_show"]);
+  const woUpcoming = serviceHistory.some((w) => !WO_TERMINAL.has(w.status));
+  const derivedFacts = {
+    upcomingBooking: envelopeUpcoming || woUpcoming,
+    hasCompletedWork: serviceHistory.some((w) => w.status === "completed"),
+    projectUnderway: projectCards.some((p) => p.stage === "scheduled")
+  };
+
+  // JOB-006 (CRM-12) — the "Next visit" card, replacing the frozen
+  // booking-envelope Work Order card. Sourcing, in order:
+  //   1. A FUTURE-DATED booking envelope (public booking flow) — full
+  //      details; actionable (Change/Cancel + admin change-type) only
+  //      when it's the landing lead's own booking, because those
+  //      endpoints act on the token's lead.
+  //   2. Any pre-terminal canonical work order — future-dated shows its
+  //      date; dateless or past-dated-but-still-open (the normal
+  //      advance-booking shape, JOB-005 option (a)) shows "date to be
+  //      confirmed". Never a fabricated or empty date.
+  //   3. Nothing upcoming → null → the card hides. Completed work is
+  //      the disqualifier and lives in Service History only.
+  const envelopeVisit = (l) => {
+    const b = l.booking;
+    if (!b) return null;
+    const t = Date.parse(b.end || b.start || "");
+    if (!Number.isFinite(t) || t < nowMs) return null;
+    return {
+      source: "booking",
+      actionable: l.id === lead.id,
+      woId: b.workOrder?.id || null,
+      serviceLabel: b.serviceLabel || "Service visit",
+      start: b.start,
+      durationMinutes: b.durationMinutes || null,
+      bucketLabel: b.bucketLabel || null,
+      bucketWindow: b.bucketWindow || null,
+      priceLabel: b.workOrder?.priceLabel || null,
+      priceNote: b.workOrder?.priceNote || null,
+      dateTBC: false
+    };
+  };
+  let nextVisit = envelopeVisit(lead) || unionLeads.map(envelopeVisit).find(Boolean) || null;
+  if (!nextVisit) {
+    const open = serviceHistory.filter((w) => !WO_TERMINAL.has(w.status));
+    const future = open
+      .filter((w) => {
+        const t = Date.parse(w.scheduledFor || "");
+        return Number.isFinite(t) && t >= nowMs;
+      })
+      .sort((a, b) => String(a.scheduledFor).localeCompare(String(b.scheduledFor)));
+    const cand = future[0] || open[0] || null;
+    if (cand) {
+      nextVisit = {
+        source: "wo",
+        actionable: false,
+        woId: cand.id,
+        serviceLabel: cand.typeLabel,
+        start: future[0] ? cand.scheduledFor : null,
+        dateTBC: !future[0]
+      };
+    }
+  }
+
+  // ---- Bookable properties: one "Book a service" CTA per property.
+  // The customer portal used to tell people "Book again any time" and give
+  // them nothing to tap — no seasonal CTA, no link to book.html at all. The
+  // "Book your seasonal service" button lives only on the PROPERTY portal,
+  // which is a separate surface reached from a seasonal outreach email, so
+  // a customer who simply logs in had no route into booking.
+  //
+  // Scoped by customerId — a customer only ever sees their own properties.
+  // The property token is deliberately NOT sent to the browser: booking is
+  // started by POSTing this lead's own token plus a propertyId, and the
+  // server re-checks ownership there (see begin-booking below).
+  let bookableProperties = [];
+  try {
+    const season = outreach.seasonForBooking();
+    const year = new Date().getFullYear();
+    const all = await properties.list();
+    const owned = customerId
+      ? all.filter((prop) => prop.customerId === customerId)
+      : all.filter((prop) => prop.id && prop.id === lead.propertyId);
+    bookableProperties = await Promise.all(owned.map(async (prop) => {
+      const zoneCount = Array.isArray(prop.system?.zones) ? prop.system.zones.length : 0;
+      // Already booked for this season? Then a seasonal CTA would be
+      // nagging about work that's on the calendar — offer the plain
+      // "book a service" route instead, in case they want something else.
+      let booked = false;
+      try {
+        const st = await outreach.deriveBookingState(prop.id, season, year);
+        booked = Boolean(st && st.hasBooking);
+      } catch (err) {
+        console.warn("[portal] seasonal booking state failed:", err?.message);
+      }
+      return {
+        propertyId: prop.id,
+        address: String(prop.address || "").trim(),
+        zoneCount,
+        // A seasonal express handoff needs a zone count to resolve a tier.
+        // Without one, send them to the full menu rather than guess.
+        season: (zoneCount > 0 && !booked) ? season : null,
+        seasonLabel: (zoneCount > 0 && !booked) ? outreach.seasonLabel(season) : "",
+        alreadyBooked: booked
+      };
+    }));
+  } catch (err) {
+    console.warn("[portal] bookable properties build failed:", err?.message);
+    bookableProperties = [];
+  }
+
+  return { serviceHistory, projects: projectCards, derivedFacts, nextVisit, bookableProperties };
+}
+
+// Warranty claims belonging to one customer email, for the portal's
+// "Your warranty claims" card. Matched on the email the claim was FILED
+// with — that is the address the customer proved control of by receiving
+// the acknowledgement, and it is the same key the CRM cross-check starts
+// from.
+//
+// Each row carries its own statusToken in the URL: the portal token gets
+// the customer INTO the portal, but each claim link still authorizes
+// itself, so a claim link copied out of the portal keeps working and
+// nothing here widens what a portal token can read.
+async function warrantyClaimsForCustomerEmail(email) {
+  const target = String(email || "").trim().toLowerCase();
+  if (!target) return [];
+  try {
+    const all = await warrantyClaims.list();
+    const now = Date.now();
+    return all
+      .filter((c) => c.claimant?.email === target)
+      .map((c) => {
+        const d = warrantyClaims.decorate(c, now);
+        return {
+          id: d.id,
+          status: d.status,
+          statusLabel: d.statusLabel,
+          statusText: warrantyClaims.STATUS_CUSTOMER_TEXT[d.status] || "",
+          open: d.open,
+          createdAt: d.createdAt,
+          lastStatusAt: d.lastStatusAt,
+          invoiceRef: d.invoiceRef,
+          url: `/warranty-claim-status.html?c=${encodeURIComponent(d.id)}&t=${encodeURIComponent(d.statusToken)}`
+        };
+      });
+  } catch (err) {
+    console.warn("[warranty-claim] portal lookup failed:", err?.message || err);
+    return [];
+  }
 }
 
 async function portalPayloadForLead(lead, req) {
@@ -2888,14 +4081,41 @@ async function portalPayloadForLead(lead, req) {
   if (viewerIsAdmin && lead.booking) {
     try {
       const recs = await bookings.listByLead(lead.id);
-      const active = recs.filter((b) => b.status !== "cancelled" && b.status !== "completed" && b.status !== "no_show");
+      const active = recs.filter((b) => bookingHoldsItsSlot(b.status));
       const exact = active.find((b) => b.scheduledFor === lead.booking.start);
       adminBookingId = (exact && exact.id) || (active[0] && active[0].id) || null;
     } catch { adminBookingId = null; }
   }
 
+  const sections = await customerPortalSections(lead);
+  const facts = sections.derivedFacts || { upcomingBooking: false, hasCompletedWork: false, projectUnderway: false };
+  delete sections.derivedFacts;
+  // Priority order (JOB-005, adopted 2026-08-02 with Patrick's two
+  // additions): project underway > quote ready > scheduled > complete >
+  // closed (quiet) > request open.
+  const derived = {
+    state:
+      facts.projectUnderway ? "project_underway"
+      : status === "quoted" ? "quote_ready"
+      : facts.upcomingBooking ? "service_scheduled"
+      : facts.hasCompletedWork ? "service_complete"
+      : status === "lost" ? "closed"
+      : "request_open",
+    upcomingBooking: facts.upcomingBooking,
+    hasCompletedWork: facts.hasCompletedWork,
+    projectUnderway: facts.projectUnderway,
+    showIntakeRail: !facts.hasCompletedWork && !facts.upcomingBooking
+      && !facts.projectUnderway && status !== "lost"
+  };
+
+  // Warranty claims filed under this customer's email. Read-only here —
+  // the portal links out to each claim's own status page rather than
+  // duplicating the status UI in two places.
+  const portalWarrantyClaims = await warrantyClaimsForCustomerEmail(contact.email || lead.contact?.email);
+
   return {
     viewerIsAdmin,
+    warrantyClaims: portalWarrantyClaims,
     customer: {
       name: contact.fullName || lead.contact?.name || "PJL Customer",
       firstName: contact.firstName,
@@ -2974,7 +4194,27 @@ async function portalPayloadForLead(lead, req) {
     // zone list, controller / shutoff / blowout locations, valve boxes —
     // everything Patrick needs to remember about the system, the customer
     // also gets to see and verify is right.
-    property: propertyForCustomer
+    property: propertyForCustomer,
+    // JOB-002 Part B — customer-scoped history, live from the canonical
+    // stores. serviceHistory: every non-build WO for this customer with
+    // warranty label + report/invoice downloads. projects: stage-level
+    // cards only. Both read-only.
+    serviceHistory: sections.serviceHistory,
+    projects: sections.projects,
+    // JOB-006 (CRM-12) — genuinely-upcoming work for the Next-visit
+    // card; null hides the card. Past visits render in serviceHistory
+    // and nowhere else.
+    nextVisit: sections.nextVisit || null,
+    bookableProperties: sections.bookableProperties || [],
+    // JOB-005 (CRM-09) — the header/stage state, derived from canonical
+    // stores in priority order. The CRM stage field is untouched — it
+    // still drives the admin list, the accept-card gate (canAccept
+    // above), and the customer notification transitions; this block
+    // changes only what the portal RENDERS. showIntakeRail: the intake
+    // pipeline rail is meaningful only before first booking/completed
+    // work — afterwards the Current-stage card carries the derived
+    // state and the rail is retired.
+    derived
   };
 }
 
@@ -3075,10 +4315,32 @@ function applyCrmUpdate(lead, payload) {
 // Returns the array of active bookings extracted from the current leads file.
 // Each entry is { start, end, coords, leadId } in the shape availability.js
 // expects. Filters out cancelled (lost) and archived leads.
+// ONE definition of "this booking still occupies the calendar", used by
+// every pass below.
+//
+// It lived in only one of them before. The canonical bookings.json pass
+// skipped cancelled/completed/no_show; the lead-snapshot pass filtered
+// only archived and lost LEADS and never looked at the booking's own
+// status. Both cancel paths (portal and admin) mirror
+// `lead.booking.status = "cancelled"`, so a cancelled appointment kept
+// its slot: the customer got their confirmation email, the work order
+// cascaded, Patrick got paged — and the time never came back to the
+// calendar. Verified live before the fix: a day whose 8:00 booking was
+// cancelled still pushed the next customer to 9:00.
+//
+// Any new lifecycle state that should free a slot goes in this set, once.
+// One home: lib/bookings.js owns the dead-status set (spec §2.8).
+function bookingHoldsItsSlot(status) {
+  return bookings.holdsItsSlot(status);
+}
+
 async function activeBookings() {
   const leads = await readLeads();
   const fromLeads = leads
-    .filter((lead) => !lead.archived && (lead.crm?.status || lead.status) !== "lost" && lead.booking)
+    .filter((lead) => !lead.archived
+      && (lead.crm?.status || lead.status) !== "lost"
+      && lead.booking
+      && bookingHoldsItsSlot(lead.booking.status))
     .map((lead) => ({
       start: lead.booking.start,
       end: lead.booking.end,
@@ -3095,11 +4357,34 @@ async function activeBookings() {
   // bookings.json — those need to count against the calendar too. Match
   // is by exact start time + leadId; anything in bookings.json with a
   // different start than its lead's lead.booking adds to the schedule.
+  //
+  // COORDINATES. These records used to be stamped with PJL_BASE, which
+  // told the availability engine that every booking without a lead
+  // happens at the shop. That made the corridor math wrong in the
+  // customer's favour (any slot looks reachable from the depot) and would
+  // have made the geography filter inert for exactly the records the
+  // season assignment writer is going to create — property-first bookings
+  // with no lead behind them. The booking record carries propertyId, and
+  // the property carries real coordinates, so resolve through it and keep
+  // the depot only as the last resort it was meant to be.
   try {
     const bookingRecs = await bookings.list();
+    const needed = bookingRecs.some((b) => b && b.scheduledFor && b.propertyId);
+    let coordsByPropertyId = new Map();
+    if (needed) {
+      try {
+        const all = await properties.list();
+        coordsByPropertyId = new Map(
+          all.filter((p) => p && p.id && p.coords && p.coords.lat != null)
+             .map((p) => [p.id, p.coords])
+        );
+      } catch (err) {
+        console.warn("[activeBookings] property coords unavailable:", err?.message);
+      }
+    }
     for (const b of bookingRecs) {
       if (!b.scheduledFor) continue;
-      if (b.status === "cancelled" || b.status === "completed" || b.status === "no_show") continue;
+      if (!bookingHoldsItsSlot(b.status)) continue;
       const dup = fromLeads.find((f) => f.leadId === b.leadId && f.start === b.scheduledFor);
       if (dup) continue;
       const startD = new Date(b.scheduledFor);
@@ -3107,8 +4392,10 @@ async function activeBookings() {
       fromLeads.push({
         start: startD.toISOString(),
         end: endD.toISOString(),
-        coords: PJL_BASE,
+        coords: (b.propertyId && coordsByPropertyId.get(b.propertyId)) || PJL_BASE,
         leadId: b.leadId,
+        bookingId: b.id,
+        propertyId: b.propertyId || null,
         serviceKey: b.serviceKey,
         serviceLabel: b.serviceLabel
       });
@@ -3116,7 +4403,114 @@ async function activeBookings() {
   } catch (err) {
     console.warn("[activeBookings] bookings.json union skipped:", err?.message);
   }
+
+  // Live slot holds count as taken.
+  //
+  // A hold is a customer part-way through the form. If it only blocked the
+  // reserve write, the slot would still be OFFERED to everyone else and the
+  // second person would fill in the whole form before finding out. Counting
+  // it here — the one place the engine asks what a day already carries —
+  // means a held slot disappears from the picker AND takes part in the day's
+  // geography, exactly as the booking it is about to become.
+  //
+  // Expired holds are filtered on read, so a stalled sweeper cannot make the
+  // calendar look full.
+  try {
+    for (const row of holds.asBookingRows()) {
+      if (!row.start || !row.end) continue;
+      if (fromLeads.some((b) => b.start === row.start)) continue;
+      fromLeads.push({ ...row, coords: row.coords || PJL_BASE });
+    }
+  } catch (err) {
+    console.warn("[activeBookings] holds skipped:", err?.message);
+  }
   return fromLeads;
+}
+
+// How many days the engine must scan to reach a specific slot.
+//
+// THE BUG THIS REPLACES. The three re-validation call sites each carried
+// their own hardcoded horizon — 30, 60, 30 — while the availability READ
+// scans up to 120 days (the picker sends its visible range). A slot
+// legitimately offered 40 days out therefore passed availability and
+// failed re-validation, and the customer was told "that slot was just
+// taken" about a slot nobody had taken. The geography filter makes that
+// bite hard rather than occasionally: filtering to the days we are
+// actually in a customer's area is exactly what pushes their only
+// offered dates past 30 days.
+//
+// Scanning to the requested slot and no further is both correct and
+// cheaper than any constant.
+function horizonToReach(target, now = new Date()) {
+  const when = target instanceof Date ? target : new Date(target);
+  if (Number.isNaN(when.getTime())) return 30;
+  const days = Math.ceil((when.getTime() - now.getTime()) / 86400000) + 1;
+  return Math.min(120, Math.max(1, days));
+}
+
+// Reorder every bucket in a plan into driving order, ready to store.
+// Only the order changes: no stop moves day or bucket, so nothing a
+// customer has been told can be invalidated by this. Degrades to the
+// plan unchanged if properties cannot be read — a plan stored in a
+// slightly worse order beats an import that fails.
+async function resequencePlanForStorage(plan, season, year) {
+  try {
+    const all = await properties.list();
+    const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+    // sequencePlan's `days` is already storage-shaped: order only, no
+    // derived timing. Customer time windows join the ordering clock so
+    // the stored order honours what customers asked on their pages.
+    const requestedWindows = await assignments.requestedWindowsFor(season, year);
+    const { days } = await resequence.sequencePlan(plan, { propertiesByCode: byCode, season, requestedWindows });
+    return { ...plan, days };
+  } catch (err) {
+    console.warn("[season-plan] re-sequence skipped:", err?.message);
+    return plan;
+  }
+}
+
+// ---- Season plan → day shapes ---------------------------------------
+//
+// The geography filter needs to know what each route day is SHAPED like
+// before anyone books it. This resolves the current season's plan into
+// the point sets availability.js measures against.
+//
+// Everything here degrades to null, which the engine reads as "no plan,
+// behave exactly as before". No plan loaded, an unreadable plan file, a
+// season with no entry — all of them mean unfiltered availability, never
+// a refusal. Invariant 5.
+async function dayShapesForSeason({ bookings: activeList, season, year, now = new Date() } = {}) {
+  try {
+    const resolvedSeason = season || outreach.seasonForBooking(now);
+    // seasonForBooking wraps: in December it already answers "spring",
+    // meaning NEXT spring. Rather than restate that date logic here,
+    // look for this year's plan and fall forward one year if the season
+    // has already wrapped past it.
+    let resolvedYear = year || now.getFullYear();
+    let plan = await seasonPlans.getPlan(resolvedSeason, resolvedYear);
+    if (!plan && !year) {
+      resolvedYear += 1;
+      plan = await seasonPlans.getPlan(resolvedSeason, resolvedYear);
+    }
+    // A missing plan is NOT a reason to switch geography off. Returning
+    // null here is read by the availability engine as "no gate at all",
+    // which is how a fresh bot run put Thornhill in a morning already
+    // holding Newmarket — 88 minutes of added drive against a 15-minute
+    // cap, never checked (Patrick, 2026-09-09: "it still isn't taking
+    // whatsoever"). buildDayShapes now treats the plan as optional and
+    // shapes days from the bookings alone, which is all the gate ever
+    // needed: the plan adds routed stops, it does not switch the rule on.
+    const all = await properties.list();
+    const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+    return geoFilter.buildDayShapes({
+      plan: plan || null,
+      propertiesByCode: byCode,
+      bookings: activeList || []
+    });
+  } catch (err) {
+    console.warn("[dayShapes] season plan unavailable, availability unfiltered:", err?.message);
+    return null;
+  }
 }
 
 // Sync property.address (+ customer name/phone) into every lead and
@@ -3198,7 +4592,7 @@ async function cascadePropertyToLinkedRecords(property) {
 // Same contract as /api/booking/availability but service + address come
 // from the booking record (not query params), and the booking's own
 // current slot is removed from the conflict math.
-async function rescheduleAvailability(bookingId, { from, to } = {}) {
+async function rescheduleAvailability(bookingId, { from, to, settingsOverride } = {}) {
   const bookingRec = await bookings.get(bookingId);
   if (!bookingRec) return { ok: false, status: 404, errors: ["Booking not found."] };
   const serviceKey = bookingRec.serviceKey;
@@ -3211,10 +4605,20 @@ async function rescheduleAvailability(bookingId, { from, to } = {}) {
   if (!address) return { ok: false, status: 422, errors: ["Address missing on the booking."] };
   const geo = await geocode(address);
   const allActive = await activeBookings();
-  const otherBookings = allActive.filter((b) => b.leadId !== bookingRec.leadId);
+  // Exclude the booking's OWN slot from the conflict math. Lead-backed
+  // bookings match by leadId (unchanged); a lead-less assignment booking
+  // has leadId null, and matching on that would silently drop EVERY
+  // other assignment booking from the conflicts — so those match by
+  // their canonical booking id instead.
+  const otherBookings = allActive.filter((b) =>
+    bookingRec.leadId ? b.leadId !== bookingRec.leadId : b.bookingId !== bookingRec.id);
   const scheduleData = await scheduleStore.read();
   const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
-  const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
+  // settingsOverride wins last: the appointment page's reschedule picker
+  // switches the geography filter off (Patrick's call — a rescheduling
+  // customer may pick ANY day with room; an off-route stop is an
+  // end-of-day addition).
+  const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}), ...(settingsOverride || {}) };
   // When the picker supplies an explicit visible range, scan far enough to
   // reach the latest day in view. Otherwise fall back to the legacy 30-day
   // window the old reschedule modal used.
@@ -3225,6 +4629,8 @@ async function rescheduleAvailability(bookingId, { from, to } = {}) {
   if (toDate) {
     daysAhead = Math.min(120, Math.max(1, Math.ceil((toDate.getTime() - now.getTime()) / 86400000) + 1));
   }
+  const dayShapes = await dayShapesForSeason({ bookings: otherBookings, now });
+  const diagnostics = { geoSuppressed: [], seasonClosed: [] };
   const slots = await listAvailableSlots({
     serviceKey,
     customerCoords: geo.coords,
@@ -3232,10 +4638,12 @@ async function rescheduleAvailability(bookingId, { from, to } = {}) {
     blocks: scheduleData.blocks,
     daysAhead,
     hours: mergedHours,
-    settings: mergedSettings
+    settings: mergedSettings,
+    dayShapes,
+    diagnostics
   });
   const days = (fromDate && toDate)
-    ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now })
+    ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now, geoSuppressed: diagnostics.geoSuppressed, seasonClosed: diagnostics.seasonClosed })
     : groupByDay(slots);
   return {
     ok: true,
@@ -3283,7 +4691,7 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
   }
   const bookingRec = await bookings.get(bookingId);
   if (!bookingRec) return { ok: false, status: 404, errors: ["Booking not found."] };
-  if (bookingRec.status === "cancelled" || bookingRec.status === "completed" || bookingRec.status === "no_show") {
+  if (!bookingHoldsItsSlot(bookingRec.status)) {
     return { ok: false, status: 409, code: "not_modifiable_status", errors: ["This appointment can't be rescheduled — its status is " + bookingRec.status + "."] };
   }
 
@@ -3349,7 +4757,10 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
     if (!address) return { ok: false, status: 422, errors: ["Address missing on the booking — can't compute drive times."] };
     const geo = await geocode(address);
     const allActive = await activeBookings();
-    const otherBookings = allActive.filter((b) => b.leadId !== bookingRec.leadId);
+    // Same self-exclusion rule as rescheduleAvailability: leadId for
+    // lead-backed bookings, canonical id for lead-less ones.
+    const otherBookings = allActive.filter((b) =>
+      bookingRec.leadId ? b.leadId !== bookingRec.leadId : b.bookingId !== bookingRec.id);
     const scheduleData = await scheduleStore.read();
     const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
     const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
@@ -3358,9 +4769,10 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
       customerCoords: geo.coords,
       bookings: otherBookings,
       blocks: scheduleData.blocks,
-      daysAhead: 60,
+      daysAhead: horizonToReach(startDate),
       hours: mergedHours,
-      settings: mergedSettings
+      settings: mergedSettings,
+      dayShapes: await dayShapesForSeason({ bookings: otherBookings })
     });
     matched = candidateSlots.find((s) => s.start === startDate.toISOString());
     if (!matched) {
@@ -3421,16 +4833,19 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
     notifyCustomer("rescheduled", aliasLead, { baseUrl }).catch(() => {});
   }
 
-  // 5) Page Patrick when the customer drove the change.
-  if (actor === "customer" && lead) {
+  // 5) Page Patrick when the customer drove the change. A lead-less
+  //    assignment booking builds the page from the booking record itself
+  //    — an assigned customer moving their day is exactly the change
+  //    Patrick needs to hear about.
+  if (actor === "customer") {
     const aliasLead = {
-      id: lead.id,
+      id: lead ? lead.id : bookingRec.id,
       sourceLabel: "Customer rescheduled their appointment",
       contact: {
-        name: lead.contact?.name || "(unknown)",
-        phone: lead.contact?.phone || "",
-        email: lead.contact?.email || "",
-        address: lead.contact?.address || "",
+        name: lead?.contact?.name || bookingRec.customerName || "(unknown)",
+        phone: lead?.contact?.phone || bookingRec.customerPhone || "",
+        email: lead?.contact?.email || bookingRec.customerEmail || "",
+        address: lead?.contact?.address || bookingRec.address || "",
         notes: `Was: ${bookingRec.scheduledFor || "(unscheduled)"}. Now: ${startDate.toISOString()}.${reason ? " Reason: " + reason : ""}`
       }
     };
@@ -3764,9 +5179,23 @@ async function requestPortalMagicLink(identifier, ip) {
       try {
         const token = await magicTokens.issue("customer_login", subjectId, { requestIp: ip });
         const link = joinUrl(baseUrl, "/portal/login/verify", { t: token.id });
-        // Fire-and-forget. Failure is logged but never surfaced.
-        sendCustomerLoginLink(lead, link).catch((err) => {
+        // Fire-and-forget for the CUSTOMER — the response stays the generic
+        // "If we found you…" either way. But the resolved result is no longer
+        // returned to nobody (JOB-008 Task 2): sendCustomerLoginLink resolves
+        // {ok:false} instead of throwing, so a plain .catch() missed every
+        // real failure. Both the resolved failure and a thrown one now land
+        // in the send ledger, which raises the digest SMS alert.
+        sendCustomerLoginLink(lead, link).then((result) => {
+          if (result?.ok) {
+            return mailerLog.logSend({ kind: "magic_link", to: lead?.contact?.email || "", ok: true, refId: lead.id });
+          }
+          const error = result?.error
+            || (result?.skipped ? `skipped: ${result?.reason || "email not configured"}` : "unknown failure");
+          console.warn("[portal-login] send failed:", error);
+          return mailerLog.logSend({ kind: "magic_link", to: lead?.contact?.email || "", ok: false, error, refId: lead.id });
+        }).catch((err) => {
           console.warn("[portal-login] send failed:", err?.message);
+          return mailerLog.logSend({ kind: "magic_link", to: lead?.contact?.email || "", ok: false, error: err?.message, refId: lead.id });
         });
       } catch (err) {
         console.warn("[portal-login] issue failed:", err?.message);
@@ -3824,7 +5253,14 @@ async function handlePortalLoginApi(req, res, pathname) {
         const customerLeads = leads
           .filter((l) => l.customerId === subjectId)
           .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
-        lead = customerLeads[0] || null;
+        // JOB-002 Part B (CRM-07): land on the newest lead that carries a
+        // booking — a real engagement — before falling back to newest
+        // overall. For the duplicate-pair customers the newest lead is a
+        // frozen $0 self-intake record; landing there showed an empty
+        // portal. The portal now renders customer-wide history whichever
+        // lead it opens, but the lead-scoped cards (booking, messages)
+        // should anchor on the record with substance.
+        lead = customerLeads.find((l) => l.booking) || customerLeads[0] || null;
       } else {
         // subjectId is a lead id (legacy magic link, or a customer
         // whose record has since been renumbered/merged).
@@ -3952,6 +5388,716 @@ async function renderAndStoreProposalPage(q, { templateKey, session } = {}) {
   return { meta, previewUrl: `/approve/${encodeURIComponent(q.id)}`, quote: updated };
 }
 
+// ===================================================================
+// Warranty claims (feature-warranty-claim-brief, 2026-08-29).
+//
+// Public intake at POST /api/warranty-claims, a token-gated customer
+// status view, and the admin queue Patrick works it from. The store is
+// lib/warranty-claims.js; the CRM cross-check is lib/warranty-claim-
+// link.js; the email is lib/notify-warranty.js. This section is only
+// the HTTP surface.
+//
+// Two credentials, never mixed:
+//   - the CRM routes (/api/warranty-claims*) are admin/tech, gated in
+//     needsAuth() like every other /admin surface;
+//   - the customer routes (/api/warranty-claim/*) carry the claim's
+//     statusToken in the query string, which is the credential — the
+//     same model as /portal/<token> and the iCal feed. The claim NUMBER
+//     is sequential and therefore guessable, so it never authorizes on
+//     its own.
+// ===================================================================
+
+// Uploads: the invoice copy plus evidence photos/PDFs. Reuses the work-
+// order media validator (`mode: "wo"`), which is the one that already
+// accepts PDF alongside images AND magic-byte-checks the decoded buffer
+// — a warranty claim is evidence, so a file that lies about its type is
+// exactly what we don't want on disk.
+const MAX_WARRANTY_FILES = 12;
+// 12 files × 25 MB would be 300 MB of base64; in practice a claim is a
+// phone photo or two and a PDF invoice. 40 MB is generous for that and
+// bounded enough that the parse can't be used as a memory attack.
+const WARRANTY_POST_MAX_BYTES = 40_000_000;
+
+// Files live at WARRANTY_FILES_DIR/<claimNumber>/<n>.<ext>. The claim
+// number is validated against warrantyClaims.CLAIM_NUMBER_RE before it
+// ever reaches path.join — it is user-facing and appears in URLs, so it
+// is treated as untrusted input at every filesystem boundary.
+async function saveWarrantyClaimFiles(claimId, files, now) {
+  if (!files.length) return [];
+  if (!warrantyClaims.isValidClaimNumber(claimId)) throw new Error("Invalid claim number.");
+  const dir = path.join(WARRANTY_FILES_DIR, claimId);
+  await fs.mkdir(dir, { recursive: true });
+  const meta = [];
+  for (let i = 0; i < files.length; i++) {
+    const n = i + 1;
+    await fs.writeFile(path.join(dir, `${n}.${files[i].ext}`), files[i].buffer);
+    meta.push({
+      n,
+      kind: files[i].kind,
+      filename: files[i].filename || `${claimId}-${n}.${files[i].ext}`,
+      mediaType: files[i].mediaType,
+      ext: files[i].ext,
+      bytes: files[i].buffer.length,
+      addedAt: now
+    });
+  }
+  return meta;
+}
+
+async function readWarrantyClaimFile(claimId, n) {
+  if (!warrantyClaims.isValidClaimNumber(claimId)) return null;
+  const num = Number(n);
+  if (!Number.isFinite(num) || num < 1 || num > MAX_WARRANTY_FILES) return null;
+  const dir = path.join(WARRANTY_FILES_DIR, claimId);
+  for (const ext of ["pdf", "jpg", "png", "webp", "heic", "heif", "gif"]) {
+    try {
+      const data = await fs.readFile(path.join(dir, `${Math.floor(num)}.${ext}`));
+      return { data, ext };
+    } catch {}
+  }
+  return null;
+}
+
+// Read a claim's files back off disk as nodemailer attachments for the
+// team email. Best-effort per file: a missing file costs an attachment,
+// never the alert.
+async function warrantyAttachmentsForEmail(claim) {
+  const out = [];
+  for (const att of claim.attachments || []) {
+    try {
+      const file = await readWarrantyClaimFile(claim.id, att.n);
+      if (!file) continue;
+      out.push({
+        filename: att.filename || `${claim.id}-${att.n}.${att.ext}`,
+        content: file.data,
+        contentType: att.mediaType
+      });
+    } catch (_) { /* skip this attachment */ }
+  }
+  return out;
+}
+
+// Run the cross-check and persist it. Isolated so both the intake and the
+// admin "re-run" button share one code path, and so a cross-check throw
+// can never take a claim down with it.
+async function runWarrantyCrossCheck(claim) {
+  try {
+    const { link, context } = await warrantyClaimLink.crossCheck(claim);
+    const saved = await warrantyClaims.setLink(claim.id, link);
+    return { link, context, claim: saved.ok ? saved.claim : claim };
+  } catch (err) {
+    console.error("[warranty-claim] cross-check persist failed:", err?.message || err);
+    return { link: null, context: { error: err?.message || String(err) }, claim };
+  }
+}
+
+// The customer-safe projection. The status page must never leak the CRM
+// cross-check (which customer we think they are, which invoices they
+// have, what the warranty maths said) — only their own claim as they
+// filed it, its status, and what we've told them.
+function publicWarrantyClaim(claim) {
+  return {
+    id: claim.id,
+    status: claim.status,
+    statusLabel: warrantyClaims.STATUS_LABELS[claim.status] || claim.status,
+    statusText: warrantyClaims.STATUS_CUSTOMER_TEXT[claim.status] || "",
+    open: warrantyClaims.isOpen(claim),
+    createdAt: claim.createdAt,
+    lastStatusAt: claim.lastStatusAt,
+    claimant: {
+      name: claim.claimant.name,
+      firstName: claim.claimant.firstName,
+      email: claim.claimant.email,
+      phone: claim.claimant.phone,
+      address: claim.claimant.address
+    },
+    invoiceRef: claim.invoiceRef,
+    description: claim.description,
+    attachments: (claim.attachments || []).map((a) => ({
+      n: a.n, kind: a.kind, filename: a.filename, mediaType: a.mediaType, bytes: a.bytes
+    })),
+    denial: claim.denial ? { reason: claim.denial.reason, at: claim.denial.at } : null,
+    dispute: claim.dispute ? { raisedAt: claim.dispute.raisedAt, reason: claim.dispute.reason } : null,
+    canDispute: claim.status === "denied",
+    // Every status transition on the customer's OWN claim. Visibility is
+    // deliberately NOT gated on whether the notification email went out:
+    // Patrick can untick "email the customer", and a send can simply
+    // fail, and in both cases this page would otherwise show a stale
+    // history beside a current status badge — the denial reason and the
+    // dispute button would be on screen with nothing in the timeline
+    // explaining them. The customer is entitled to the status history of
+    // their own claim regardless of which channel carried it.
+    //
+    // What stays private is the NOTE, not the transition: internal notes
+    // are stripped below, and only the two notes written FOR the customer
+    // (the questions on info_requested, the explanation on denied) are
+    // passed through.
+    updates: (claim.history || [])
+      .filter((h) => h.to)
+      .map((h) => ({
+        ts: h.ts,
+        status: h.to,
+        label: warrantyClaims.STATUS_LABELS[h.to] || h.to,
+        text: warrantyClaims.STATUS_CUSTOMER_TEXT[h.to] || "",
+        // The note is shown only where it was written FOR the customer —
+        // the questions on info_requested and the denial explanation.
+        note: (h.to === "info_requested" || h.to === "denied" || h.by === "customer") ? h.note : ""
+      }))
+  };
+}
+
+async function handleWarrantyClaimsApi(req, res, pathname) {
+  // ---- Public intake --------------------------------------------------
+  if (req.method === "POST" && pathname === "/api/warranty-claims") {
+    try {
+      const payload = await parseRequestBody(req, { maxBytes: WARRANTY_POST_MAX_BYTES });
+
+      // Anti-bot before any disk write or send, same order as /api/quotes.
+      const verdict = await antiBot.checkSubmission({
+        body: payload,
+        ip: callerIp(req),
+        userAgent: req.headers["user-agent"] || ""
+      });
+      if (!verdict.ok) return sendJson(res, verdict.status, verdict.responseBody);
+
+      // Every field is mandatory — Patrick's rule is that a warranty claim
+      // is only accepted on complete, accurate information, so the server
+      // enforces it rather than trusting the form's `required`.
+      const firstName = normalizeString(payload?.firstName, 80);
+      const lastName = normalizeString(payload?.lastName, 80);
+      const email = normalizeString(payload?.email, 200);
+      const phone = normalizeString(payload?.phone, 40);
+      const invoiceRef = normalizeString(payload?.invoiceRef, 120);
+      const description = normalizeString(payload?.description, 8000);
+      const address = normalizeString(payload?.address, 300);
+
+      const errors = [];
+      if (!firstName) errors.push("First name is required.");
+      if (!lastName) errors.push("Last name is required.");
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push("A valid email address is required.");
+      // 10 digits — a North American number with or without the country
+      // code. Matches the leniency of the rest of the intake surface.
+      if (!phone || (phone.replace(/\D/g, "").length < 10)) errors.push("A valid phone number is required.");
+      if (!invoiceRef) errors.push("The invoice reference for the work you're claiming against is required.");
+      if (description.length < 20) errors.push("Please describe the issue in a little more detail (at least 20 characters).");
+      if (errors.length) return sendJson(res, 422, { ok: false, errors });
+
+      // Files. The invoice copy is required — it is the document the claim
+      // is assessed against — and is sent as its own field so the CRM can
+      // tell it apart from the fault photos without guessing.
+      let invoiceFiles = [];
+      let evidenceFiles = [];
+      try {
+        invoiceFiles = validatePhotos(payload?.invoiceFiles, 4, { mode: "wo" })
+          .map((f, i) => ({ ...f, kind: "invoice", filename: normalizeString(payload?.invoiceFiles?.[i]?.filename, 200) }));
+        evidenceFiles = validatePhotos(payload?.evidenceFiles, MAX_WARRANTY_FILES - 4, { mode: "wo" })
+          .map((f, i) => ({ ...f, kind: "evidence", filename: normalizeString(payload?.evidenceFiles?.[i]?.filename, 200) }));
+      } catch (fileErr) {
+        return sendJson(res, 422, { ok: false, errors: [fileErr.message] });
+      }
+      if (!invoiceFiles.length) {
+        return sendJson(res, 422, { ok: false, errors: ["A copy of the invoice you're claiming against is required (PDF, PNG or JPEG)."] });
+      }
+
+      // Create first, then write files under the claim number, then attach
+      // the metadata. A file write that fails leaves a claim with no
+      // attachments rather than losing the claim — the customer's words
+      // are the part we can't reconstruct.
+      const claim = await warrantyClaims.create({
+        firstName, lastName, email, phone, address, invoiceRef, description
+      });
+
+      let attachments = [];
+      try {
+        attachments = await saveWarrantyClaimFiles(claim.id, [...invoiceFiles, ...evidenceFiles], claim.createdAt);
+        await warrantyClaims.setAttachments(claim.id, attachments);
+      } catch (fileErr) {
+        console.error("[warranty-claim] file save failed:", fileErr?.message || fileErr);
+      }
+
+      // Cross-check, then notify. Both are awaited far enough to get the
+      // saved record, but the SENDS are fire-and-forget: the customer sees
+      // their claim number immediately and a slow Gmail handshake never
+      // holds up the response.
+      const fresh = (await warrantyClaims.get(claim.id)) || claim;
+      const { context } = await runWarrantyCrossCheck(fresh);
+      const stored = (await warrantyClaims.get(claim.id)) || fresh;
+
+      warrantyAttachmentsForEmail(stored).then((files) => Promise.allSettled([
+        notifyWarranty.sendClaimAck(stored),
+        notifyWarranty.sendClaimToTeam(stored, { context, files })
+      ])).then((results) => {
+        (results || []).forEach((r, i) => {
+          if (r.status === "rejected") {
+            console.error(`[warranty-claim] ${i === 0 ? "customer ack" : "team alert"} threw:`, r.reason?.message || r.reason);
+          }
+        });
+        // Mark the filing entry as notified only if the customer email
+        // actually went out — the status page reads this to decide what it
+        // may show as "we told you".
+        if (results?.[0]?.status === "fulfilled" && results[0].value?.ok) {
+          warrantyClaims.markNotified(stored.id, { historyIndex: 0 }).catch(() => {});
+        }
+      }).catch((err) => console.error("[warranty-claim] notify fan-out threw:", err?.message || err));
+
+      return sendJson(res, 201, {
+        ok: true,
+        claim: {
+          id: stored.id,
+          status: stored.status,
+          createdAt: stored.createdAt,
+          statusUrl: notifyWarranty.statusUrl(stored)
+        }
+      });
+    } catch (err) {
+      console.error("[warranty-claim] intake failed:", err?.message || err);
+      const tooBig = /too large/i.test(String(err?.message || ""));
+      return sendJson(res, tooBig ? 413 : 500, {
+        ok: false,
+        errors: [tooBig
+          ? "Those files are too large to upload together. Try fewer or smaller files, or email them to info@pjllandservices.com."
+          : "We couldn't file your warranty claim. Please try again, or call (905) 960-0181 and we'll take it over the phone."]
+      });
+    }
+  }
+
+  // ---- Customer status view (token-gated) -----------------------------
+  const publicClaimMatch = pathname.match(/^\/api\/warranty-claim\/([^/]+)$/);
+  if (publicClaimMatch && req.method === "GET") {
+    const id = decodeURIComponent(publicClaimMatch[1]);
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const token = String(url.searchParams.get("t") || "").trim();
+    const claim = await warrantyClaims.getByStatusToken(token);
+    // The token must resolve AND belong to the claim number in the path.
+    // Checking both means a valid token for claim A can't read claim B.
+    if (!claim || claim.id !== id) {
+      return sendJson(res, 404, { ok: false, errors: ["That warranty claim link isn't valid. Check the link in your email, or call (905) 960-0181."] });
+    }
+    return sendJson(res, 200, { ok: true, claim: publicWarrantyClaim(claim) });
+  }
+
+  // ---- Customer dispute of a denial ------------------------------------
+  const disputeMatch = pathname.match(/^\/api\/warranty-claim\/([^/]+)\/dispute$/);
+  if (disputeMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(disputeMatch[1]);
+      const payload = await parseRequestBody(req);
+      const token = String(payload?.t || "").trim();
+      const claim = await warrantyClaims.getByStatusToken(token);
+      if (!claim || claim.id !== id) {
+        return sendJson(res, 404, { ok: false, errors: ["That warranty claim link isn't valid."] });
+      }
+      const result = await warrantyClaims.raiseDispute(id, {
+        reason: normalizeString(payload?.reason, 4000),
+        feeAccepted: payload?.feeAccepted === true
+      });
+      if (!result.ok) return sendJson(res, 422, { ok: false, errors: [result.error] });
+
+      Promise.allSettled([
+        notifyWarranty.sendDisputeAck(result.claim),
+        notifyWarranty.sendDisputeAlert(result.claim)
+      ]).then((results) => {
+        if (results?.[0]?.status === "fulfilled" && results[0].value?.ok) {
+          warrantyClaims.markNotified(result.claim.id).catch(() => {});
+        }
+      }).catch(() => {});
+
+      return sendJson(res, 200, { ok: true, claim: publicWarrantyClaim(result.claim) });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: ["Couldn't record your dispute. Please call (905) 960-0181."] });
+    }
+  }
+
+  // ---- Customer's own file download (token-gated) ----------------------
+  const publicFileMatch = pathname.match(/^\/api\/warranty-claim\/([^/]+)\/file\/(\d+)$/);
+  if (publicFileMatch && req.method === "GET") {
+    const id = decodeURIComponent(publicFileMatch[1]);
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const claim = await warrantyClaims.getByStatusToken(String(url.searchParams.get("t") || "").trim());
+    if (!claim || claim.id !== id) {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      return res.end("Not found");
+    }
+    return serveWarrantyClaimFile(res, claim, publicFileMatch[2]);
+  }
+
+  // ---- Admin: list -----------------------------------------------------
+  if (req.method === "GET" && pathname === "/api/warranty-claims") {
+    const all = await warrantyClaims.list();
+    const now = Date.now();
+    return sendJson(res, 200, {
+      ok: true,
+      claims: all.map((c) => {
+        const d = warrantyClaims.decorate(c, now);
+        return {
+          id: d.id,
+          status: d.status,
+          statusLabel: d.statusLabel,
+          open: d.open,
+          stale: d.stale,
+          hoursSinceStatus: d.hoursSinceStatus,
+          claimant: d.claimant,
+          invoiceRef: d.invoiceRef,
+          // The queue row shows the opening of the description so Patrick
+          // can triage without opening every claim.
+          descriptionPreview: d.description.slice(0, 180),
+          attachmentCount: d.attachments.length,
+          link: d.link,
+          createdAt: d.createdAt,
+          lastStatusAt: d.lastStatusAt
+        };
+      }),
+      summary: await warrantyClaims.outstandingSummary(now)
+    });
+  }
+
+  // ---- Admin: outstanding count (nav badge) ----------------------------
+  if (req.method === "GET" && pathname === "/api/warranty-claims/outstanding") {
+    const summary = await warrantyClaims.outstandingSummary();
+    // `count` is the badge number: open claims, because an open claim is
+    // work owed to a customer whether or not the 24h clock has run out.
+    return sendJson(res, 200, { ok: true, count: summary.open, ...summary });
+  }
+
+  // ---- Admin: detail ----------------------------------------------------
+  const adminClaimMatch = pathname.match(/^\/api\/warranty-claims\/([^/]+)$/);
+  if (adminClaimMatch && req.method === "GET") {
+    const id = decodeURIComponent(adminClaimMatch[1]);
+    const claim = await warrantyClaims.get(id);
+    if (!claim) return sendJson(res, 404, { ok: false, errors: ["Claim not found."] });
+    // Context is rebuilt on every read rather than stored — a customer or
+    // invoice edited since the claim was filed must show its CURRENT state
+    // on the page Patrick is deciding from.
+    const { context } = await warrantyClaimLink.crossCheck(claim);
+    // The repair WO raised by approving this claim, read live so the card
+    // shows the CURRENT waiver state — if a tech lifted the waiver on
+    // site, the claim page must say so rather than still reading "free".
+    if (claim.workOrderId) {
+      try {
+        const wo = await workOrders.get(claim.workOrderId);
+        if (wo) {
+          context.workOrder = {
+            id: wo.id,
+            type: wo.type,
+            status: wo.status,
+            address: wo.address || "",
+            scheduledFor: wo.scheduledFor || null,
+            locked: wo.locked === true,
+            feeWaived: !!(wo.serviceFeeWaiver && wo.serviceFeeWaiver.waived === true),
+            waiverReason: wo.serviceFeeWaiver?.reason || null,
+            converted: wo.warrantyClaim?.converted || null
+          };
+        } else {
+          // The WO was deleted out from under the claim. Say so plainly —
+          // silently showing nothing would read as "never raised".
+          context.workOrderMissing = claim.workOrderId;
+        }
+      } catch (_) { /* leave the card hidden */ }
+    }
+    return sendJson(res, 200, {
+      ok: true,
+      claim: warrantyClaims.decorate(claim),
+      context,
+      statusUrl: notifyWarranty.statusUrl(claim),
+      statuses: warrantyClaims.STATUSES.map((s) => ({
+        key: s,
+        label: warrantyClaims.STATUS_LABELS[s],
+        noteRequired: warrantyClaims.NOTE_REQUIRED_STATUSES.has(s)
+      }))
+    });
+  }
+
+  // ---- Admin: status change --------------------------------------------
+  const patchMatch = pathname.match(/^\/api\/warranty-claims\/([^/]+)$/);
+  if (patchMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(patchMatch[1]);
+      const payload = await parseRequestBody(req);
+      const session = await readSession(req);
+      const by = session?.uid || "admin";
+      const nextStatus = normalizeString(payload?.status, 40);
+      const note = normalizeString(payload?.note, 4000);
+      // notifyCustomer defaults TRUE. Patrick asked that the customer be
+      // emailed on every status change; opting out is the deliberate act.
+      const shouldNotify = payload?.notifyCustomer !== false;
+
+      const before = await warrantyClaims.get(id);
+      if (!before) return sendJson(res, 404, { ok: false, errors: ["Claim not found."] });
+
+      const result = await warrantyClaims.setStatus(id, nextStatus, { note, by });
+      if (!result.ok) return sendJson(res, 422, { ok: false, errors: [result.error] });
+
+      let emailed = null;
+      if (shouldNotify) {
+        // Awaited, unlike the intake fan-out: Patrick just pressed a button
+        // and the UI must be able to tell him whether the customer was
+        // actually emailed. A failure here does NOT roll back the status —
+        // the claim moved, and the page offers a resend.
+        try {
+          const sent = await notifyWarranty.sendStatusUpdate(result.claim, { note, previousStatus: before.status });
+          emailed = sent;
+          if (sent.ok) await warrantyClaims.markNotified(id);
+        } catch (err) {
+          emailed = { ok: false, error: err?.message || String(err) };
+        }
+      }
+
+      const after = await warrantyClaims.get(id);
+      return sendJson(res, 200, {
+        ok: true,
+        claim: warrantyClaims.decorate(after),
+        emailed
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err?.message || "Couldn't update the claim."] });
+    }
+  }
+
+  // ---- Admin: re-run the cross-check ------------------------------------
+  const recheckMatch = pathname.match(/^\/api\/warranty-claims\/([^/]+)\/recheck$/);
+  if (recheckMatch && req.method === "POST") {
+    const id = decodeURIComponent(recheckMatch[1]);
+    const claim = await warrantyClaims.get(id);
+    if (!claim) return sendJson(res, 404, { ok: false, errors: ["Claim not found."] });
+    const { context, claim: updated } = await runWarrantyCrossCheck(claim);
+    return sendJson(res, 200, { ok: true, claim: warrantyClaims.decorate(updated), context });
+  }
+
+  // ---- Admin: approve the claim and raise the repair work order --------
+  //
+  // The warranty decision and the work order are ONE action on purpose. A
+  // claim approved without a WO is a promise with nothing behind it, and a
+  // warranty WO raised without a claim is a free visit nobody can explain
+  // on site — so this route either produces both or neither.
+  //
+  // The WO is a service_visit carrying:
+  //   - serviceFeeWaiver { reason: "warranty" }, which makes the pricing
+  //     rollup emit a $0 "Service call fee — WAIVED (Warranty visit)" line
+  //     instead of the $95 mobilization (lib/issue-rollup.js), so the
+  //     customer sees the credit rather than the fee silently vanishing;
+  //   - warrantyClaim provenance naming the claim, the invoice claimed
+  //     against and the WO behind it, so the tech on site knows exactly
+  //     which prior work is being honoured.
+  //
+  // A property is REQUIRED: workOrders.create() needs a lead or property,
+  // and a warranty visit with no address is not dispatchable. The
+  // cross-check usually supplies it; where it matched several properties
+  // (or none) the CRM asks Patrick to pick one and passes propertyId.
+  const approveMatch = pathname.match(/^\/api\/warranty-claims\/([^/]+)\/approve$/);
+  if (approveMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(approveMatch[1]);
+      const payload = await parseRequestBody(req);
+      const session = await readSession(req);
+      const by = session?.uid || "admin";
+
+      const claim = await warrantyClaims.get(id);
+      if (!claim) return sendJson(res, 404, { ok: false, errors: ["Claim not found."] });
+      if (claim.workOrderId) {
+        return sendJson(res, 409, {
+          ok: false,
+          errors: [`This claim already has work order ${claim.workOrderId}. Open that work order rather than raising a second one.`]
+        });
+      }
+
+      // Property: explicit choice wins over the cross-check's guess.
+      const propertyId = normalizeString(payload?.propertyId, 60) || claim.link?.propertyId || null;
+      if (!propertyId) {
+        return sendJson(res, 422, {
+          ok: false,
+          errors: ["This claim isn't linked to a property yet, so there's no address to send a tech to. Link a property first, then approve."]
+        });
+      }
+      const property = await properties.get(propertyId);
+      if (!property) return sendJson(res, 422, { ok: false, errors: ["That property no longer exists."] });
+
+      const note = normalizeString(payload?.note, 4000);
+      const now = new Date().toISOString();
+
+      // Waiver goes through the shared normalizer so the reason vocabulary
+      // and the customer-facing label can never drift from the rest of the
+      // system (lib/service-fee-waiver.js).
+      const waiverResult = normalizeServiceFeeWaiver(
+        { waived: true, reason: "warranty", notes: `Warranty claim ${claim.id}` },
+        { by, at: now }
+      );
+      if (waiverResult.error) {
+        return sendJson(res, 500, { ok: false, errors: [waiverResult.error] });
+      }
+
+      let wo;
+      try {
+        wo = await workOrders.create({
+          type: "service_visit",
+          property,
+          serviceFeeWaiver: waiverResult.waiver,
+          warrantyClaim: {
+            claimId: claim.id,
+            claimedInvoiceId: claim.link?.invoiceId || null,
+            claimedWorkOrderId: claim.link?.workOrderId || null,
+            summary: claim.description,
+            approvedBy: by,
+            approvedAt: now,
+            converted: null
+          }
+        });
+      } catch (err) {
+        return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't create the work order."] });
+      }
+
+      // Seed the diagnosis from the customer's own words so the tech opens
+      // the WO already knowing what they were told is wrong.
+      try {
+        await workOrders.update(wo.id, {
+          diagnosis: `Warranty claim ${claim.id}: ${claim.description}`.slice(0, 4000)
+        });
+        await workOrders.appendHistory(wo.id, {
+          action: "warranty_claim_approved",
+          by,
+          note: `Raised from warranty claim ${claim.id}. Service call fee waived (warranty).` +
+                (claim.link?.invoiceId ? ` Claimed against invoice ${claim.link.invoiceId}.` : "")
+        });
+      } catch (err) {
+        console.warn("[warranty-claim] WO seed failed:", err?.message || err);
+      }
+
+      const result = await warrantyClaims.setStatus(id, "approved", {
+        note: note || `Approved. Work order ${wo.id} raised — service call fee waived under warranty.`,
+        by,
+        action: "warranty_approved",
+        extra: { workOrderId: wo.id }
+      });
+      if (!result.ok) return sendJson(res, 422, { ok: false, errors: [result.error] });
+
+      let emailed = null;
+      if (payload?.notifyCustomer !== false) {
+        try {
+          emailed = await notifyWarranty.sendStatusUpdate(result.claim, {
+            note,
+            previousStatus: claim.status
+          });
+          if (emailed.ok) await warrantyClaims.markNotified(id);
+        } catch (err) {
+          emailed = { ok: false, error: err?.message || String(err) };
+        }
+      }
+
+      return sendJson(res, 200, {
+        ok: true,
+        claim: warrantyClaims.decorate((await warrantyClaims.get(id)) || result.claim),
+        workOrder: { id: wo.id, type: wo.type, status: wo.status, address: wo.address },
+        emailed
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err?.message || "Couldn't approve the claim."] });
+    }
+  }
+
+  // ---- Admin: book a warranty service call ------------------------------
+  //
+  // Mints a booking session pre-loaded with the claimant's details and
+  // tagged `warranty_claim`, emails the customer the link, and moves the
+  // claim to service_booked. Deliberately reuses the existing booking
+  // flow rather than growing a second scheduler: the customer picks a
+  // real slot against real availability, and the resulting lead / booking
+  // / work order are ordinary records the rest of the CRM already knows
+  // how to handle.
+  const bookMatch = pathname.match(/^\/api\/warranty-claims\/([^/]+)\/book$/);
+  if (bookMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(bookMatch[1]);
+      const payload = await parseRequestBody(req);
+      const session = await readSession(req);
+      const claim = await warrantyClaims.get(id);
+      if (!claim) return sendJson(res, 404, { ok: false, errors: ["Claim not found."] });
+
+      const note = normalizeString(payload?.note, 4000);
+      const bookingSession = await bookingSessions.createSession({
+        source: "warranty_claim",
+        diagnosis: claim.description,
+        diagnosisSummary: `Warranty claim ${claim.id}`,
+        suggestedService: normalizeString(payload?.serviceKey, 60) || "sprinkler_repair",
+        customerHints: {
+          firstName: claim.claimant.firstName,
+          lastName: claim.claimant.lastName,
+          email: claim.claimant.email,
+          phone: claim.claimant.phone,
+          address: claim.claimant.address,
+          // The claim number rides into the lead's notes so the work order
+          // the tech opens on site says which warranty claim it settles.
+          notes: `Warranty claim ${claim.id}${note ? ` — ${note}` : ""}`
+        }
+      });
+      const bookingUrl = joinUrl(resolvePublicBaseUrl(), "/book.html", { session: bookingSession.token });
+
+      const result = await warrantyClaims.setStatus(id, "service_booked", {
+        note: note || `Booking link sent to the customer.`,
+        by: session?.uid || "admin",
+        action: "service_call_booked",
+        extra: { bookingSessionToken: bookingSession.token }
+      });
+      if (!result.ok) return sendJson(res, 422, { ok: false, errors: [result.error] });
+
+      let emailed = null;
+      if (payload?.notifyCustomer !== false) {
+        try {
+          emailed = await notifyWarranty.sendStatusUpdate(result.claim, {
+            note: `${note ? `${note}\n\n` : ""}Please choose a time that suits you: ${bookingUrl}`,
+            previousStatus: claim.status
+          });
+          if (emailed.ok) await warrantyClaims.markNotified(id);
+        } catch (err) {
+          emailed = { ok: false, error: err?.message || String(err) };
+        }
+      }
+
+      return sendJson(res, 200, {
+        ok: true,
+        claim: warrantyClaims.decorate((await warrantyClaims.get(id)) || result.claim),
+        bookingUrl,
+        emailed
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err?.message || "Couldn't create the booking link."] });
+    }
+  }
+
+  // ---- Admin: file download ---------------------------------------------
+  const adminFileMatch = pathname.match(/^\/api\/warranty-claims\/([^/]+)\/file\/(\d+)$/);
+  if (adminFileMatch && req.method === "GET") {
+    const id = decodeURIComponent(adminFileMatch[1]);
+    const claim = await warrantyClaims.get(id);
+    if (!claim) {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      return res.end("Not found");
+    }
+    return serveWarrantyClaimFile(res, claim, adminFileMatch[2]);
+  }
+
+  return false;
+}
+
+// Shared by the admin and token-gated file routes — both have already
+// established that the caller may read THIS claim, so the only remaining
+// job is to find the bytes and send them with an honest content type.
+async function serveWarrantyClaimFile(res, claim, rawN) {
+  const meta = (claim.attachments || []).find((a) => a.n === Number(rawN));
+  const file = await readWarrantyClaimFile(claim.id, rawN);
+  if (!file) {
+    res.writeHead(404, { "Content-Type": "text/plain" });
+    return res.end("Not found");
+  }
+  res.writeHead(200, {
+    "Content-Type": meta?.mediaType || "application/octet-stream",
+    "Content-Length": file.data.length,
+    // inline so a photo previews in the browser tab; the filename is the
+    // descriptive one so a saved copy is identifiable on disk.
+    "Content-Disposition": `inline; filename="${(meta?.filename || `${claim.id}-${rawN}.${file.ext}`).replace(/["\\]/g, "")}"`,
+    "Cache-Control": "private, no-store"
+  });
+  return res.end(file.data);
+}
+
 async function handleApi(req, res, pathname) {
   // Identity + access flows — admin user management, password reset,
   // customer magic-link. Each helper returns false when it didn't handle
@@ -3962,6 +6108,12 @@ async function handleApi(req, res, pathname) {
   if (resetHandled !== false) return;
   const portalLoginHandled = await handlePortalLoginApi(req, res, pathname);
   if (portalLoginHandled !== false) return;
+
+  // Warranty claims — public intake, the token-gated customer status
+  // view, and the admin queue. Returns false when the path isn't one of
+  // its own, same contract as the handlers above.
+  const warrantyHandled = await handleWarrantyClaimsApi(req, res, pathname);
+  if (warrantyHandled !== false) return;
 
   // ===================================================================
   // Twilio call-forward voicemail (additive — does NOT touch the SMS
@@ -4458,6 +6610,10 @@ async function handleApi(req, res, pathname) {
   // Honeypot + per-IP rate limit guard against bots; the response is
   // intentionally always the same generic 200 on bot/limit hits so
   // attackers can't probe the gate.
+  // CRM-01: a submission whose email matches an existing lead record
+  // UPDATES that record (and logs activity) instead of creating a
+  // duplicate; only unmatched emails create a new lead. Patrick's
+  // email/SMS alert states which of the two happened.
   if (req.method === "POST" && pathname === "/api/new-customer") {
     const ip = callerIp(req);
     const rateKey = `new-customer:${ip}`;
@@ -4545,8 +6701,125 @@ async function handleApi(req, res, pathname) {
       rateLimit.record(rateKey);
 
       const fullName = `${firstName} ${lastName}`.trim();
-      const id = crypto.randomUUID();
       const now = new Date().toISOString();
+
+      // CRM-01 — self-intake duplicate guard. Match this submission against
+      // existing lead records by normalized email (normalizeEmail trims and
+      // lowercases both sides) BEFORE creating anything. A match means this
+      // is a contact already in the CRM: update their record and log the
+      // submission as activity instead of minting a second record that
+      // freezes at "new"/$0 while the real job runs elsewhere.
+      // Soft-deleted (Trash) records never match. Archived records match
+      // only when no live record does, and are un-archived so the update
+      // is visible in the CRM again.
+      const allLeads = await readLeads();
+      const emailMatches = allLeads.filter((l) => !l.deletedAt && normalizeEmail(l.contact?.email) === email);
+      const matched = emailMatches.find((l) => !l.archived) || emailMatches[0] || null;
+
+      if (matched) {
+        const lead = matched;
+        const changes = [];
+
+        const contact = lead.contact && typeof lead.contact === "object" ? lead.contact : {};
+        lead.contact = contact;
+        if (fullName && fullName !== (contact.name || "")) {
+          changes.push(`name "${contact.name || "—"}" → "${fullName}"`);
+          contact.name = fullName;
+          contact.firstName = firstName;
+          contact.lastName = lastName;
+        }
+        if (phone && phone !== (contact.phone || "")) {
+          changes.push(`phone "${contact.phone || "—"}" → "${phone}"`);
+          contact.phone = phone;
+        }
+        if (address && address !== (contact.address || "")) {
+          changes.push(`address "${contact.address || "—"}" → "${address}"`);
+          contact.address = address;
+        }
+        if (notes) {
+          contact.notes = contact.notes
+            ? `${contact.notes}\n\n[Self-intake ${now.slice(0, 10)}] ${notes}`
+            : notes;
+          changes.push("notes added");
+        }
+        if (commercialNoteStash) {
+          contact.notes = (contact.notes || "") + commercialNoteStash;
+        }
+
+        // The Commercial tag sticks: an update never removes it, and a
+        // commercial submission adds it to a record that lacked it. The
+        // commercial block itself is fill-empty only — a curated block on
+        // the record is never overwritten by a later intake.
+        if (accountType === "commercial") {
+          if (lead.accountType !== "commercial") {
+            lead.accountType = "commercial";
+            changes.push("account type → commercial");
+          }
+          if (commercialBlock && !lead.commercial) {
+            lead.commercial = commercialBlock;
+            changes.push("commercial details added");
+          }
+        }
+        // Billing envelope: same fill-empty rule as the customer record
+        // (billing-party brief §3.7).
+        if (billingResult.billing && !lead.billing) {
+          lead.billing = billingResult.billing;
+          changes.push("billing party added");
+        }
+
+        if (lead.archived) {
+          lead.archived = false;
+          changes.push("record un-archived");
+        }
+
+        lead.crm = lead.crm && typeof lead.crm === "object" ? lead.crm : defaultCrm(lead.createdAt || now);
+        lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
+        lead.crm.activity.unshift({
+          at: now,
+          type: "update",
+          text: `Customer self-intake submitted (${accountType}) — matched this record by email; no new lead created.`
+            + (changes.length ? ` Updated: ${changes.join("; ")}.` : " No field changes.")
+            + (notes ? `\nCustomer notes: ${notes}` : "")
+        });
+        lead.crm.lastUpdated = now;
+
+        // Log the outreach on the canonical customer record (and backfill
+        // customerId on legacy leads that predate it). Same soft-failure
+        // rule as the create path — never block intake.
+        try {
+          const leadForCustomer = { ...lead, createdAt: now, source: "self_serve" };
+          if (lead.customerId) {
+            await finishCustomerForLead(lead.customerId, leadForCustomer, { notes });
+          } else {
+            lead.customerId = await resolveCustomerForLead(leadForCustomer);
+          }
+        } catch (err) {
+          console.error("[new-customer] customer resolve on update failed:", err?.message || err);
+        }
+
+        await writeLeads(allLeads);
+
+        // Same alert pair as the create path, flagged so the email + SMS
+        // say an existing record was updated (no new lead). sourceLabel
+        // reflects the EVENT (a self-intake submission); the matched
+        // record's own source tag is unchanged.
+        const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+        const decorated = decorateLeadForAdmin(lead, req);
+        decorated.sourceLabel = SOURCES.self_serve.label;
+        decorated.intakeOutcome = "updated_existing";
+        sendNewLeadEmail(decorated, { baseUrl }).catch((err) => {
+          console.error("[new-customer] admin email failed:", err?.message || err);
+        });
+        sendNewLeadSms(decorated, { baseUrl }).catch((err) => {
+          console.error("[new-customer] admin SMS failed:", err?.message || err);
+        });
+
+        // Public response is byte-identical to the create path — whether
+        // an email is already in the CRM is never revealed to the browser.
+        return sendJson(res, 200, { ok: true });
+      }
+
+      const id = crypto.randomUUID();
       // Patrick reads the lead detail view; pin the property address at
       // the top of the notes block so it's the first thing he sees.
       const composedNotes = (notes
@@ -4607,6 +6880,11 @@ async function handleApi(req, res, pathname) {
       // Auto-link a property under this customer (creates a fresh one
       // when no match exists). Same helper /api/quotes uses.
       try {
+        // Geocode the self-intake address so the property lands with real
+        // coordinates. This path passed coords: null unconditionally, so
+        // every new-customer submission created a property the availability
+        // engine could not place — the same gap the xlsx import left.
+        // Non-blocking: a failed lookup leaves coords null, exactly as before.
         const linkResult = await properties.attachLead({
           leadId: lead.id,
           customerId: lead.customerId || null,
@@ -4614,7 +6892,7 @@ async function handleApi(req, res, pathname) {
           name: lead.contact.name,
           phone: lead.contact.phone,
           address: lead.contact.address,
-          coords: null
+          coords: await geocodeForRecord(lead.contact.address)
         });
         if (linkResult && linkResult.property) {
           applyLinkResultToLead(lead, linkResult);
@@ -4637,6 +6915,7 @@ async function handleApi(req, res, pathname) {
       // SMS body + email subject) + the CRM "Open in CRM" link target.
       const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
       const decorated = decorateLeadForAdmin(lead, req);
+      decorated.intakeOutcome = "created_new";
       sendNewLeadEmail(decorated, { baseUrl }).catch((err) => {
         console.error("[new-customer] admin email failed:", err?.message || err);
       });
@@ -4721,6 +7000,48 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, contact });
   }
 
+  // "Add to your calendar" for a self-booked customer — the ics leg of
+  // the links in their confirmation email. Same token-first resolution
+  // as the portal itself: a lead token serves that lead's booking; a
+  // property token serves the property's next upcoming booking. The
+  // event carries the bucket window the customer was told.
+  const portalCalMatch = pathname.match(/^\/api\/portal\/([^/]+)\/calendar\.ics$/);
+  if (portalCalMatch && req.method === "GET") {
+    const token = decodeURIComponent(portalCalMatch[1]);
+    const leads = await readLeads();
+    const lead = leads.find((item) => (item.portal?.token || portalTokenForId(item.id)) === token);
+    let eventSource = null;
+    if (lead?.booking?.start) {
+      eventSource = {
+        id: lead.id,
+        start: lead.booking.start,
+        durationMinutes: lead.booking.durationMinutes,
+        bucketKey: lead.booking.bucketKey || null,
+        serviceLabel: lead.booking.serviceLabel || "",
+        address: lead.contact?.address || ""
+      };
+    } else {
+      const property = (await properties.list()).find((p) => p.id && portalTokenForId(p.id) === token) || null;
+      if (property) {
+        const upcoming = (await bookings.list())
+          .filter((b) => b && b.propertyId === property.id && b.status === "confirmed"
+            && b.scheduledFor && new Date(b.scheduledFor).getTime() > Date.now())
+          .sort((a, b) => new Date(a.scheduledFor) - new Date(b.scheduledFor))[0];
+        if (upcoming) eventSource = { ...upcoming, address: upcoming.address || property.address || "" };
+      }
+    }
+    if (!eventSource) return sendJson(res, 404, { ok: false, errors: ["No upcoming appointment to add."] });
+    const event = calendarLinks.eventForBooking(eventSource, {
+      portalUrl: `${resolvePublicBaseUrl()}/portal/${encodeURIComponent(token)}`
+    });
+    if (!event) return sendJson(res, 404, { ok: false, errors: ["No upcoming appointment to add."] });
+    res.writeHead(200, {
+      "Content-Type": "text/calendar; charset=utf-8",
+      "Content-Disposition": 'attachment; filename="pjl-appointment.ics"'
+    });
+    return res.end(calendarLinks.icsText(event));
+  }
+
   const portalMatch = pathname.match(/^\/api\/portal\/([^/]+)$/);
   if (portalMatch && req.method === "GET") {
     const token = decodeURIComponent(portalMatch[1]);
@@ -4794,9 +7115,11 @@ async function handleApi(req, res, pathname) {
             description: String(sp.additionalFallBlowoutDescription || "").trim() || "Additional plumbing"
           }
         : null;
+      const propertyWarrantyClaims = await warrantyClaimsForCustomerEmail(property.customerEmail);
       return sendJson(res, 200, {
         ok: true,
         propertyPortal: {
+          warrantyClaims: propertyWarrantyClaims,
           customerName: fullName,
           firstName,
           address: String(property.address || "").trim(),
@@ -4831,20 +7154,78 @@ async function handleApi(req, res, pathname) {
   const beginBookingMatch = pathname.match(/^\/api\/portal\/([^/]+)\/begin-booking$/);
   if (beginBookingMatch && req.method === "POST") {
     const token = decodeURIComponent(beginBookingMatch[1]);
+    const url = new URL(req.url, baseUrlFromReq(req));
     const allProperties = await properties.list();
-    const property = allProperties.find((p) => p.id && portalTokenForId(p.id) === token) || null;
+
+    // Two token shapes reach this route, matching GET /api/portal/:token:
+    //
+    //   PROPERTY token — the seasonal outreach link. The token IS the
+    //     property, no propertyId needed. Original behaviour, unchanged.
+    //
+    //   LEAD token — the customer portal. One customer can have several
+    //     properties, so the caller names which one with ?propertyId=, and
+    //     we verify it belongs to the customer this token opens. The
+    //     property's own token is never sent to the browser, so a customer
+    //     portal link can only ever start a booking for that customer's
+    //     own properties.
+    //
+    // Lead first, so a lead token can never be misread as a property one.
+    let property = null;
+    const leads = await readLeads();
+    const lead = leads.find((item) => (item.portal?.token || portalTokenForId(item.id)) === token) || null;
+    if (lead) {
+      const propertyId = String(url.searchParams.get("propertyId") || "").trim();
+      if (!propertyId) {
+        return sendJson(res, 400, { ok: false, errors: ["Which property? propertyId is required."] });
+      }
+      const candidate = allProperties.find((p) => p.id === propertyId) || null;
+      const ownsIt = candidate && (
+        (lead.customerId && candidate.customerId === lead.customerId)
+        || (lead.propertyId && candidate.id === lead.propertyId)
+      );
+      if (!ownsIt) {
+        // Same 404 whether it doesn't exist or isn't theirs — a portal link
+        // must not become a way to probe which property ids are real.
+        return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
+      }
+      property = candidate;
+    } else {
+      property = allProperties.find((p) => p.id && portalTokenForId(p.id) === token) || null;
+    }
     if (!property) {
       return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
     }
-    const url = new URL(req.url, baseUrlFromReq(req));
     const seasonRaw = String(url.searchParams.get("season") || "").trim().toLowerCase();
     const season = (seasonRaw === "spring" || seasonRaw === "fall") ? seasonRaw : null;
     const fullName = String(property.customerName || "").trim();
     const firstName = fullName ? fullName.split(/\s+/)[0] : "";
     const lastName = fullName ? fullName.split(/\s+/).slice(1).join(" ") : "";
     const zoneCount = Array.isArray(property.system?.zones) ? property.system.zones.length : 0;
+    // Resolve the tier through deriveSeasonalKey (pricing.json seasonal_tiers)
+    // rather than composing `..._${zoneCount}z` by hand. Only 4/6/8/15 ever
+    // produced a real key that way — 46 of 50 zone counts built a key
+    // book.html cannot resolve, and an unresolvable suggestedService silently
+    // drops the customer on the unfiltered service catalog instead of the
+    // express handoff this endpoint exists to give them.
+    //
+    // accountType decides the tier table. It matters: booking.js LOCKS the
+    // service in on a session handoff, so a commercial customer suggested a
+    // residential key is booked at the residential price with no chance to
+    // correct it (live today for commercial properties with exactly 4 zones,
+    // the one count the old expression got "right").
+    let commercialAccount = false;
+    if (property.customerId) {
+      try {
+        const owner = await customers.get(property.customerId, { withProperties: false });
+        commercialAccount = owner?.accountType === "commercial";
+      } catch (err) {
+        // Unresolvable customer — fall back to residential, the same
+        // assumption every other deriveSeasonalKey caller makes.
+        console.warn("[begin-booking] accountType lookup failed:", err?.message || err);
+      }
+    }
     const suggestedService = (season && zoneCount > 0)
-      ? `${season === "spring" ? "spring_open" : "fall_close"}_${zoneCount}z`
+      ? (deriveSeasonalKey(season === "spring" ? "spring_opening" : "fall_closing", zoneCount, commercialAccount) || "")
       : "";
     try {
       const session = await bookingSessions.createSession({
@@ -5121,6 +7502,64 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // GET /api/admin/email-health — JOB-008 Task 4. Last-7-day sent/failed
+  // counts by kind, the 20 most recent failures (masked recipients), and
+  // the last-successful-send timestamps (overall + per kind) so a total
+  // outage is distinguishable from a quiet day. Admin-only (needsAuth).
+  if (pathname === "/api/admin/email-health" && req.method === "GET") {
+    try {
+      const summary = await mailerLog.healthSummary();
+      return sendJson(res, 200, { ok: true, ...summary });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error?.message || "Email health read failed." });
+    }
+  }
+
+  // GET /api/admin/territory-export — the fall-closing territory export as a
+  // browser download. Same payload the CLI at territory-export-corrected.js
+  // prints; both call server/lib/territory-export.js, so they cannot drift.
+  // Exists because running the CLI needs shell access to the Render instance,
+  // which Patrick doesn't have — this is a link he can tap from his phone.
+  //
+  // READ-ONLY. buildTerritoryExport() only ever readFile()s properties.json
+  // and customers.json; it deliberately avoids lib/properties, whose
+  // readAll() can persist id/code backfills. Nothing here writes to
+  // server/data/.
+  //
+  // ADMIN ONLY, twice over: needsAuth() maps this path to "admin" (above)
+  // and the route re-checks. De-identified is not public — it is still
+  // every live property's municipality and rough location.
+  //
+  // ?year=YYYY selects the season year for the per-season opt-out flag,
+  // matching the CLI's --year. Omitted → current UTC year.
+  if (pathname === "/api/admin/territory-export" && req.method === "GET") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const yearParam = new URL(req.url, baseUrlFromReq(req)).searchParams.get("year");
+      const payload = await territoryExport.buildTerritoryExport({
+        year: yearParam === null || yearParam === "" ? undefined : Number(yearParam)
+      });
+      const body = Buffer.from(JSON.stringify(payload, null, 2) + "\n", "utf8");
+      res.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "content-disposition": `attachment; filename="${territoryExport.exportFilename()}"`,
+        "content-length": body.length,
+        "cache-control": "no-store"
+      });
+      res.end(body);
+      return;
+    } catch (error) {
+      // A missing properties.json is the expected failure on any box that
+      // isn't holding live data — say so plainly rather than "500".
+      console.error("[territory-export] failed:", error?.message || error);
+      return sendJson(res, 500, {
+        ok: false,
+        errors: [error?.message || "Territory export failed."]
+      });
+    }
+  }
+
   // GET /api/admin/trash/:resource — list soft-deleted records for the
   // /admin/trash view. Each resource returns the records with deletedAt set.
   const trashListMatch = pathname.match(/^\/api\/admin\/trash\/([^/]+)\/?$/);
@@ -5265,7 +7704,7 @@ async function handleApi(req, res, pathname) {
           status: c.status,
           messageCount: c.messageCount,
           bookedLeadId: c.bookedLeadId,
-          preview: (c.transcript || "").slice(0, 240)
+          preview: chatPreview(c.transcript)
         }))
     });
   }
@@ -5416,29 +7855,65 @@ async function handleApi(req, res, pathname) {
       const leads = await readLeads();
       let lead = leads.find((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
       let propertyId = lead?.propertyId || null;
-      if (!propertyId) {
+      if (!lead && !propertyId) {
         // Try property-portal token (derived from property.id).
         const allProperties = await properties.list();
         const property = allProperties.find((p) => p.id && portalTokenForId(p.id) === token) || null;
         if (property) propertyId = property.id;
       }
-      if (!propertyId) {
+      if (!lead && !propertyId) {
         return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
       }
       const wo = await workOrders.get(woId);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.propertyId !== propertyId) {
+      // Authorization — the WO must belong to this portal's customer.
+      // Property match is the original rule; JOB-002 Part B adds the
+      // customer union (same customerId, or a WO on any of the customer's
+      // leads) so the customer-wide service history can download every
+      // report the customer is entitled to — and nothing else.
+      let authorized = Boolean(propertyId && wo.propertyId === propertyId);
+      if (!authorized && lead) {
+        authorized = wo.leadId === lead.id
+          || Boolean(lead.customerId && wo.customerId === lead.customerId);
+        if (!authorized && lead.customerId && wo.leadId) {
+          authorized = leads.some((l) => l.id === wo.leadId && l.customerId === lead.customerId);
+        }
+      }
+      if (!authorized) {
         return sendJson(res, 403, { ok: false, errors: ["Forbidden."] });
       }
       // Customer audience always — the portal is customer-facing. When no
       // snapshotId is pinned, serve the LATEST customer render.
-      const found = snapshotId
+      let found = snapshotId
         ? await woReportSnapshot.readSnapshot({ woId, snapshotId, audience: "customer" })
         : await woReportSnapshot.readLatestSnapshot({ woId, audience: "customer" });
+      // JOB-002 Part B: completed WOs from before the snapshot feature
+      // have no frozen copy — render live at CUSTOMER audience (internal
+      // notes and signature audit omitted by the renderer) so the
+      // download works on every completed WO, warranty state regardless.
+      // Only for pin-less requests: a pinned snapshotId that's missing is
+      // a real 404, never silently substituted.
+      // Hoisted out of the live-render branch below: the download name is
+      // needed on every path, including the one that serves a stored
+      // snapshot, and it is derived from the work order rather than from
+      // whatever string the snapshot froze — so reports frozen before the
+      // naming convention still download under it. The record's own
+      // `filename` field is left untouched.
+      const mode = wo.locked === true ? "service_report" : "inspection_report";
+      if (!found && !snapshotId && wo.status === "completed") {
+        let woProperty = null;
+        let woCustomer = null;
+        if (wo.propertyId) { try { woProperty = await properties.get(wo.propertyId); } catch (_) {} }
+        if (wo.customerId) { try { woCustomer = await customers.get(wo.customerId, { withProperties: false }); } catch (_) {} }
+        const buffer = await renderWoReportBuffer({
+          wo, property: woProperty || {}, customer: woCustomer || {}, mode, audience: "customer"
+        });
+        found = { buffer, record: { filename: reportFilename({ wo, mode }) } };
+      }
       if (!found) return sendJson(res, 404, { ok: false, errors: ["Snapshot not found."] });
       res.writeHead(200, {
         "content-type": "application/pdf",
-        "content-disposition": `inline; filename="${found.record.filename}"`,
+        "content-disposition": contentDisposition(reportFilename({ wo, mode })),
         // no-cache: a stable "latest" URL must never serve a stale
         // corrected report from an intermediary/browser cache.
         "cache-control": "private, no-cache, must-revalidate",
@@ -5448,6 +7923,62 @@ async function handleApi(req, res, pathname) {
       return;
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read snapshot."] });
+    }
+  }
+
+  // Customer-facing invoice PDF (JOB-002 Part B) —
+  //   GET /api/portal/<token>/invoice/<invoiceId>/pdf
+  // Read-only download for the portal's service-history and project
+  // cards. Token-gated to the invoice's OWN customer via the same union
+  // rule as the report route: matching customerId, an invoice on one of
+  // the customer's work orders/leads, or the customer's project. Drafts
+  // and voided invoices never serve (internal working copies). This is a
+  // DISPLAY surface only — the pay-online token link remains the only
+  // payment path (docs/HANDOFF_STRIPE_PAYMENTS.md §6).
+  const portalInvoicePdfMatch = pathname.match(/^\/api\/portal\/([^/]+)\/invoice\/([^/]+)\/pdf$/);
+  if (portalInvoicePdfMatch && req.method === "GET") {
+    try {
+      const token = decodeURIComponent(portalInvoicePdfMatch[1]);
+      const invId = decodeURIComponent(portalInvoicePdfMatch[2]);
+      const leads = await readLeads();
+      const lead = leads.find((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
+      if (!lead) return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
+      const inv = await invoices.get(invId);
+      if (!inv || inv.status === "draft" || inv.status === "void") {
+        return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      }
+      const customerId = lead.customerId || null;
+      const customerLeadIds = new Set(
+        customerId ? leads.filter((l) => l.customerId === customerId).map((l) => l.id) : [lead.id]
+      );
+      customerLeadIds.add(lead.id);
+      let authorized = Boolean(customerId && inv.customerId === customerId);
+      if (!authorized && inv.woId) {
+        try {
+          const wo = await workOrders.get(inv.woId);
+          authorized = Boolean(wo && (
+            (customerId && wo.customerId === customerId)
+            || (wo.leadId && customerLeadIds.has(wo.leadId))));
+        } catch (_) { /* stay unauthorized */ }
+      }
+      if (!authorized && inv.projectId && customerId) {
+        try {
+          const proj = await projects.get(inv.projectId);
+          authorized = Boolean(proj && proj.customerId === customerId);
+        } catch (_) { /* stay unauthorized */ }
+      }
+      if (!authorized) return sendJson(res, 403, { ok: false, errors: ["Forbidden."] });
+      const buffer = await generateInvoicePdf(inv);
+      res.writeHead(200, {
+        "content-type": "application/pdf",
+        "content-disposition": contentDisposition(invoiceFilename(inv)),
+        "content-length": buffer.length,
+        "cache-control": "private, no-cache, must-revalidate"
+      });
+      res.end(buffer);
+      return;
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate invoice PDF."] });
     }
   }
 
@@ -5741,6 +8272,45 @@ async function handleApi(req, res, pathname) {
   // Cap: 200 candidates per call. If more, returns first 200 + truncated:
   // true. Operator re-runs to continue.
   //
+  // GET /api/admin/action-log — read the admin action log.
+  //
+  // Answers "who changed this, and when" across every operator on the
+  // account. Query params: ?limit= (default 200, max 2000), ?months=
+  // (how far back to look, default 3), ?uid=, ?ref= (a record id, e.g.
+  // I-2026-0093), ?path= (substring).
+  //
+  // Actors are stored as a uid; the join to a name happens HERE rather
+  // than in the log, so the ledger itself carries no contact data. A uid
+  // whose user record is gone renders as the raw uid instead of vanishing
+  // — a deleted account must not erase what it did.
+  //
+  // Admin-gated twice: needsAuth() maps this path to "admin", and the
+  // route re-checks. Same pattern as the territory export.
+  if (req.method === "GET" && pathname === "/api/admin/action-log") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const logUrl = new URL(req.url, baseUrlFromReq(req));
+      const entries = await adminActions.list({
+        limit: Number(logUrl.searchParams.get("limit")) || 200,
+        months: Number(logUrl.searchParams.get("months")) || 3,
+        uid: logUrl.searchParams.get("uid") || null,
+        ref: logUrl.searchParams.get("ref") || null,
+        pathContains: logUrl.searchParams.get("path") || null
+      });
+      const allUsers = await users.list().catch(() => []);
+      const byId = new Map(allUsers.map((u) => [u.id, u]));
+      const decorated = entries.map((e) => {
+        const u = e.uid ? byId.get(e.uid) : null;
+        return { ...e, actorName: u ? (u.name || u.email) : (e.uid || "unknown") };
+      });
+      return sendJson(res, 200, { ok: true, entries: decorated, count: decorated.length });
+    } catch (err) {
+      console.error("[admin-action-log] read failed:", err?.message || err);
+      return sendJson(res, 500, { ok: false, errors: ["Couldn't read the action log."] });
+    }
+  }
+
   // Admin-gated via explicit requireAdmin call.
   if (req.method === "POST" && pathname === "/api/admin/backfill-customers") {
     const session = await requireAdmin(req);
@@ -5925,8 +8495,39 @@ async function handleApi(req, res, pathname) {
 
   // Public catalog of bookable services (used by the booking page UI).
   if (req.method === "GET" && pathname === "/api/booking/services") {
-    return sendJson(res, 200, { ok: true, services: BOOKABLE_SERVICES });
+    // Each service says whether the public flow will accept a booking for
+    // it TODAY, and if not, when it next will.
+    //
+    // WHY. Patrick picked "Spring opening" on 8 September and the picker
+    // came back empty. It was right to — spring 2026 ran Mar 1 to Jun 30
+    // and had been over for ten weeks — but nothing said so, and an empty
+    // calendar in front of a customer reads as "we're full", which is the
+    // opposite of the truth.
+    //
+    // The decision belongs to lib/seasons.js, which owns the windows.
+    // Asking it rather than comparing the bounds here is the difference
+    // between one rule with two callers and two rules that will disagree.
+    const today = new Date();
+    const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const decorated = {};
+    for (const [key, svc] of Object.entries(BOOKABLE_SERVICES)) {
+      let season = null;
+      const name = seasonsLib.seasonForFamily(svc.family);
+      if (name) {
+        // Fails soft, the same posture the availability gate takes: a
+        // broken seasons.json must degrade to an un-annotated list, never
+        // take booking down.
+        try { season = seasonsLib.publicBookingStatus(name, todayKey); }
+        catch (err) {
+          console.warn("[booking/services] season lookup:", err?.message);
+          season = null;
+        }
+      }
+      decorated[key] = season ? { ...svc, season } : svc;
+    }
+    return sendJson(res, 200, { ok: true, services: decorated });
   }
+
 
   // External handoff endpoint — AI chat agents (or any pre-booking tool)
   // POST a diagnosis + customer hints here, get back a session token, and
@@ -6001,8 +8602,16 @@ async function handleApi(req, res, pathname) {
   // Each property carries the canonical zone list + controller / shutoff /
   // valve box / blowout location data the technician needs on-site.
   if (req.method === "GET" && pathname === "/api/properties") {
+    const { townFromAddress } = require("./lib/format");
     const all = await properties.list();
-    return sendJson(res, 200, { ok: true, properties: all });
+    // `town` is derived, not stored — properties carry one free-text
+    // address. Deriving it here (not in the page) keeps the town the CRM
+    // sorts on identical to the town the customers index sorts on, and
+    // means a second surface can't grow its own parser.
+    return sendJson(res, 200, {
+      ok: true,
+      properties: all.map((p) => ({ ...p, town: townFromAddress(p.address) }))
+    });
   }
 
   // GET /api/admin/property-link-conflicts — list leads whose intake
@@ -6070,13 +8679,79 @@ async function handleApi(req, res, pathname) {
       }
       const updated = await properties.transferOwner(propertyId, {
         newCustomerId,
-        by: "admin",
+        by: await actorLabel(req),
         note: String(payload?.note || "").slice(0, 400)
       });
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
       return sendJson(res, 200, { ok: true, property: updated });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't transfer ownership."] });
+    }
+  }
+
+  // POST /api/properties/:id/merge-into — fold a duplicate property into
+  // this one, then delete the duplicate. The :id in the path is the KEEPER;
+  // the duplicate is named in the body. That ordering matches the CRM (you
+  // are on the record you intend to keep) and makes an accidental swap
+  // impossible to express as a URL alone.
+  //
+  // Body: { duplicateId, apply?, confirm?, allowDifferentCustomer?,
+  //         alignDraftInvoiceAddresses? }
+  //
+  // Dry run unless `apply === true`, and an apply additionally requires
+  // `confirm: "MERGE"` — the same second-factor pattern as the bulk-delete
+  // routes, re-checked here so a stray fetch from a forgotten tab can't
+  // delete a property.
+  //
+  // ADMIN ONLY, twice over: needsAuth() maps the path to "admin" and this
+  // route re-checks with requireAdmin. The work itself runs through
+  // server/lib/property-merge.js — the same implementation the CLI calls.
+  const propertyMergeMatch = pathname.match(/^\/api\/properties\/([^/]+)\/merge-into$/);
+  if (propertyMergeMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const keepId = decodeURIComponent(propertyMergeMatch[1]);
+      const payload = await parseRequestBody(req);
+      const duplicateId = normalizeString(payload?.duplicateId, 80);
+      if (!duplicateId) {
+        return sendJson(res, 422, { ok: false, errors: ["duplicateId is required."] });
+      }
+      const apply = payload?.apply === true;
+      if (apply && String(payload?.confirm || "") !== "MERGE") {
+        return sendJson(res, 422, {
+          ok: false,
+          errors: ['Type MERGE to confirm — an applied merge deletes a property record.']
+        });
+      }
+
+      const propertyMerge = require("./lib/property-merge");
+      const result = propertyMerge.mergeProperties({
+        keep: keepId,
+        remove: duplicateId,
+        apply,
+        allowDifferentCustomer: payload?.allowDifferentCustomer === true,
+        alignDraftInvoiceAddresses: payload?.alignDraftInvoiceAddresses === true,
+        by: await actorLabel(req)
+      });
+
+      if (!result.ok) {
+        // The lib's refusals are deliberate guards, not failures to route
+        // around — 422 so the caller sees them as "you asked for something
+        // that isn't safe", not as a server fault.
+        return sendJson(res, 422, { ok: false, errors: result.problems });
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        applied: result.applied,
+        plan: result.plan,
+        conflicts: result.conflicts,
+        notes: result.notes,
+        ...(result.applied ? { backupDir: result.backupDir, backedUp: result.backedUp } : {})
+      });
+    } catch (err) {
+      console.error("[property-merge] failed:", err?.message || err);
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't merge properties."] });
     }
   }
 
@@ -6139,12 +8814,56 @@ async function handleApi(req, res, pathname) {
       const records = Array.isArray(payload.records) ? payload.records : [];
       if (!records.length) return sendJson(res, 422, { ok: false, errors: ["No records to import."] });
       if (records.length > 5000) return sendJson(res, 422, { ok: false, errors: ["Too many records (>5000) — split into smaller batches."] });
+
+      // Geocode before upserting. This path historically wrote every
+      // imported property with coords: null, which left it invisible to
+      // the proximity routing the availability engine runs on — the whole
+      // reason ~29 records needed a manual backfill.
+      //
+      // Bounded on purpose: the route accepts up to 5000 rows and a live
+      // lookup costs ~200ms, so geocoding all of them inline could hold the
+      // request open for 15+ minutes and time the browser out. We resolve
+      // up to GEOCODE_BUDGET rows here and report the remainder, which
+      // scripts/backfill-property-coords.js finishes off — it is idempotent
+      // and targets exactly the rows left with empty coords.
+      //
+      // Cache hits don't sleep, so re-importing the same spreadsheet is
+      // effectively free.
+      const GEOCODE_BUDGET = 150;
+      const GEOCODE_SPACING_MS = 200;
+      let geocoded = 0;
+      let geocodeFailed = 0;
+      let geocodeSkipped = 0;
+      for (const record of records) {
+        if (!record || typeof record !== "object") continue;
+        if (!String(record.address || "").trim()) continue;
+        if (geocoded + geocodeFailed >= GEOCODE_BUDGET) { geocodeSkipped += 1; continue; }
+        const { coords, fromCache } = await geocodeForRecordDetailed(record.address);
+        if (coords) {
+          record.coords = coords;
+          geocoded += 1;
+        } else {
+          geocodeFailed += 1;
+        }
+        if (!fromCache) await new Promise((r) => setTimeout(r, GEOCODE_SPACING_MS));
+      }
+
       const summary = await properties.bulkUpsert(records);
+      const needsBackfill = geocodeFailed + geocodeSkipped;
       return sendJson(res, 200, {
         ok: true,
         created: summary.created,
         updated: summary.updated,
         errors: summary.errors,
+        // Coordinate outcome, so the import UI can say plainly how many
+        // rows still need attention rather than reporting a clean import
+        // that quietly left records unroutable.
+        geocoded,
+        geocodeFailed,
+        geocodeSkipped,
+        ...(needsBackfill
+          ? { geocodeNote: `${needsBackfill} record(s) have no coordinates — run scripts/backfill-property-coords.js to finish them.` }
+          : {}),
         // Don't echo the full property records back — keeps the response
         // tight and the UI doesn't need them (it'll refresh the list).
         total: summary.created + summary.updated
@@ -6189,6 +8908,7 @@ async function handleApi(req, res, pathname) {
   // POST   /api/customer/:id/communication — append a manual comm record
 
   if (req.method === "GET" && pathname === "/api/customers") {
+    const { townFromAddress } = require("./lib/format");
     const [allCustomers, allProperties, allWOs, allInvoicesList] = await Promise.all([
       customers.list(),
       properties.list(),
@@ -6209,11 +8929,33 @@ async function handleApi(req, res, pathname) {
     }
     for (const w of allWOs) bump(w.customerId, w.updatedAt || w.createdAt);
     for (const i of allInvoicesList) bump(i.customerId, i.updatedAt || i.createdAt);
-    const decorated = allCustomers.map((c) => ({
-      ...c,
-      propertyCount: propertyCount.get(c.id) || 0,
-      lastActivityAt: lastActivity.get(c.id) || c.updatedAt || c.createdAt
-    }));
+    // Towns a customer is in. A customer has no address of their own —
+    // the towns come from their properties (Hard Rule #10 keeps the two
+    // separate), so a customer with sites in three towns carries all
+    // three. `town` is the one shown on the row and sorted on: the
+    // alphabetically-first, so the sort is stable and doesn't depend on
+    // which property happened to be created first. `towns` carries the
+    // rest for the "+N" marker.
+    const townsByCustomer = new Map();
+    for (const p of allProperties) {
+      if (!p.customerId) continue;
+      const town = townFromAddress(p.address);
+      if (!town) continue;
+      const set = townsByCustomer.get(p.customerId) || new Set();
+      set.add(town);
+      townsByCustomer.set(p.customerId, set);
+    }
+    const decorated = allCustomers.map((c) => {
+      const towns = [...(townsByCustomer.get(c.id) || [])]
+        .sort((a, b) => a.localeCompare(b, "en-CA", { sensitivity: "base" }));
+      return {
+        ...c,
+        propertyCount: propertyCount.get(c.id) || 0,
+        lastActivityAt: lastActivity.get(c.id) || c.updatedAt || c.createdAt,
+        town: towns[0] || "",
+        towns
+      };
+    });
     decorated.sort((a, b) => String(b.lastActivityAt || "").localeCompare(String(a.lastActivityAt || "")));
     return sendJson(res, 200, { ok: true, customers: decorated });
   }
@@ -6224,7 +8966,7 @@ async function handleApi(req, res, pathname) {
       if (!payload || !String(payload.name || "").trim()) {
         return sendJson(res, 422, { ok: false, errors: ["Customer name is required."] });
       }
-      const created = await customers.create(payload, { by: "admin", note: "Created from admin UI" });
+      const created = await customers.create(payload, { by: await actorLabel(req), note: "Created from admin UI" });
       // Non-blocking dedup warning (commercial matching, Phase 0.5). If the
       // address the admin typed already belongs to an existing account,
       // say so — creating a second customer for a building PJL already
@@ -6267,7 +9009,7 @@ async function handleApi(req, res, pathname) {
     if (req.method === "PATCH") {
       try {
         const payload = await parseRequestBody(req);
-        const updated = await customers.update(id, payload, { by: "admin", note: "Edit from /admin/customer" });
+        const updated = await customers.update(id, payload, { by: await actorLabel(req), note: "Edit from /admin/customer" });
         if (!updated) return sendJson(res, 404, { ok: false, error: "Customer not found." });
         return sendJson(res, 200, { ok: true, customer: updated });
       } catch (err) {
@@ -6278,18 +9020,55 @@ async function handleApi(req, res, pathname) {
       }
     }
     if (req.method === "DELETE") {
-      // Hard-delete. The lib refuses if any entity still references this
-      // customer; the UI shows that response so Patrick can Merge first
-      // when the customer is linked to real bookings/WOs/etc. Test data
-      // and clean duplicates with no references go straight through.
-      const result = await customers.hardDelete(id);
+      // Hard-delete. The lib refuses if any LIVE entity still references
+      // this customer; the UI shows that response so Patrick can Merge
+      // first when the customer is linked to real bookings/WOs/etc. Test
+      // data and clean duplicates with no references go straight through.
+      //
+      // Records already in the Trash are the third case (CRM-16): they
+      // don't block, but they can't be left pointing at a deleted
+      // customer either, so the lib asks for an explicit second confirm
+      // and `?purgeTrashed=1` carries it back. The two 409 shapes are
+      // told apart by `code`, not by which key is present.
+      const deleteUrl = new URL(req.url, baseUrlFromReq(req));
+      const purgeTrashed = deleteUrl.searchParams.get("purgeTrashed") === "1";
+      // ?cascade=1 — delete the linked records WITH the customer instead
+      // of refusing (test-data cleanup, Patrick 2026-09-08). Opt-in and
+      // admin-only: it destroys what the plain delete protects. A
+      // QuickBooks-pushed or part-paid invoice still refuses it.
+      const cascade = deleteUrl.searchParams.get("cascade") === "1";
+      const cascadeSession = await requireAdmin(req);
+      if (cascade && !cascadeSession) {
+        return sendJson(res, 403, { ok: false, errors: ["Admin role required to delete a customer and its records."] });
+      }
+      const result = await customers.hardDelete(id, {
+        purgeTrashed,
+        cascade,
+        by: await actorLabel(req),
+        reason: "Deleted with customer " + id + " (cascade)."
+      });
       if (!result.ok) {
-        if (result.references) {
-          return sendJson(res, 409, { ok: false, error: result.error, references: result.references });
+        if (result.code === "linked" || result.code === "trashed_only" || result.code === "protected") {
+          return sendJson(res, 409, {
+            ok: false,
+            code: result.code,
+            error: result.error,
+            ...(result.references ? { references: result.references } : {}),
+            ...(result.trashed ? { trashed: result.trashed } : {}),
+            ...(result.protectedInvoices ? { protectedInvoices: result.protectedInvoices } : {})
+          });
         }
         return sendJson(res, 404, { ok: false, error: result.error });
       }
-      return sendJson(res, 200, { ok: true, deleted: { id: result.customer.id, name: result.customer.name } });
+      if (result.cascaded) {
+        console.log("[customer-delete] cascade removed", JSON.stringify(result.cascaded), "with", id);
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        deleted: { id: result.customer.id, name: result.customer.name },
+        purged: result.purged || {},
+        ...(result.cascaded ? { cascaded: result.cascaded } : {})
+      });
     }
   }
 
@@ -6306,7 +9085,7 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 422, { ok: false, errors: ["secondaryId is required."] });
       }
       const result = await customers.mergeCustomers(primaryId, secondaryId, {
-        by: "admin",
+        by: await actorLabel(req),
         note: String(payload?.note || "").slice(0, 400)
       });
       return sendJson(res, 200, { ok: true, ...result });
@@ -6611,6 +9390,36 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // DELETE a documented zone, with a reason. The field app calls this when
+  // a tech arrives to find the customer's declared count was wrong — six
+  // on the booking form, five on the ground.
+  //
+  // A dedicated route rather than a PATCH because the removal carries an
+  // audit entry, and the lib writes that entry itself: a client-writable
+  // history is not a history. Never renumbers — zone numbers are
+  // controller stations, not list positions.
+  const zoneRemoveMatch = pathname.match(/^\/api\/properties\/([^/]+)\/zones\/(\d+)$/);
+  if (zoneRemoveMatch && req.method === "DELETE") {
+    try {
+      // Same no-op again. /api/properties is fenced at "user", so this was
+      // never anonymous — but removing a controller station is an admin
+      // action, and a tech could do it.
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const payload = await parseRequestBody(req);
+      const updated = await properties.removeZone(
+        decodeURIComponent(zoneRemoveMatch[1]),
+        Number(zoneRemoveMatch[2]),
+        { reason: payload.reason, note: payload.note, by: await actorLabel(req) }
+      );
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["That zone isn't on this property."] });
+      return sendJson(res, 200, { ok: true, property: updated });
+    } catch (err) {
+      const status = ["BAD_ZONE", "BAD_REASON", "NOTE_REQUIRED"].includes(err.code) ? 422 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't remove the zone."] });
+    }
+  }
+
   const propertyMatch = pathname.match(/^\/api\/properties\/([^/]+)$/);
   if (propertyMatch && req.method === "GET") {
     const property = await properties.get(decodeURIComponent(propertyMatch[1]));
@@ -6711,6 +9520,18 @@ async function handleApi(req, res, pathname) {
         }
         sanitized.seasonalPricing = sp;
       }
+      // Seasonal outreach consent (feature-seasonal-outreach-brief.md
+      // §3.1 + §3.4). The property page sends `seasonalEligibility` and
+      // `commPrefs` on this same PATCH, but neither key was in the
+      // allow-list above — so every Save profile dropped them in
+      // silence, the save reported success, and populateForm() redrew
+      // the boxes from the unchanged record. Patrick could not opt a
+      // property out of spring/fall reminders from the CRM at all; the
+      // only working opt-out was the customer's own unsubscribe link.
+      // properties.sanitizeSeasonalConsent() keeps optOutTokens
+      // unsettable from a request body and rejects a flag it can't read
+      // rather than defaulting it to opted-in.
+      Object.assign(sanitized, properties.sanitizeSeasonalConsent(payload));
       let updated = await properties.update(id, sanitized);
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
 
@@ -6798,6 +9619,67 @@ async function handleApi(req, res, pathname) {
   // type it before the request leaves the browser; we re-check it on the
   // server so a stray fetch from a tab he forgot about can't wipe the
   // portfolio.
+  // ---- Purge load-test data ------------------------------------------
+  //
+  // Patrick's bot books through the real wizard and stamps every record
+  // it makes with "PJLTEST-" in the customer's notes. Those records then
+  // hold real calendar capacity and wreck the route maps, and deleting
+  // them one customer at a time through the CRM does not scale to a
+  // 126-row run.
+  //
+  // DRY RUN IS THE DEFAULT. With no confirm token this reports exactly
+  // what it WOULD remove and deletes nothing — the preview is the point,
+  // because this reaches into every store at once. Deleting requires
+  // confirm === "PURGE TEST DATA" on top of an admin session.
+  //
+  // The lead is the anchor: the marker lives on lead.contact.notes, and
+  // everything else (booking, work order, invoice, quote, project) is
+  // reachable from its leadId / customerId / propertyId. A customer or
+  // property is removed ONLY when every lead pointing at it is in the
+  // purge — a test booking against a REAL customer takes the booking and
+  // leaves the customer standing.
+  if (req.method === "POST" && pathname === "/api/admin/purge-test-data") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const dataDir = path.join(__dirname, "data");
+
+      // What counts as a test record, and what is safe to take with it,
+      // is defined once in lib/purge-test-data.js — shared with the CLI.
+      let plan;
+      try {
+        plan = purgeTestData.planPurge({
+          dataDir,
+          marker: payload?.marker || purgeTestData.DEFAULT_MARKER,
+          leads: await readLeads()
+        });
+      } catch (err) {
+        if (err instanceof purgeTestData.PurgeRefused) {
+          return sendJson(res, 422, { ok: false, errors: [err.message] });
+        }
+        throw err;
+      }
+
+      if (String(payload?.confirm || "") !== "PURGE TEST DATA") {
+        return sendJson(res, 200, {
+          ok: true,
+          dryRun: true,
+          marker: plan.marker,
+          counts: plan.counts,
+          sample: plan.sample,
+          note: 'Nothing was deleted. Re-send with confirm: "PURGE TEST DATA" to remove these.'
+        });
+      }
+
+      const counts = await purgeTestData.applyPurge({ dataDir, plan, writeLeads });
+      console.log("[purge-test-data] removed", JSON.stringify(counts), "by", session.uid || "admin");
+      return sendJson(res, 200, { ok: true, dryRun: false, marker: plan.marker, counts });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Purge failed."] });
+    }
+  }
+
   if (req.method === "POST" && pathname === "/api/properties/bulk-delete") {
     try {
       const payload = await parseRequestBody(req);
@@ -6870,7 +9752,7 @@ async function handleApi(req, res, pathname) {
           ? `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${q.approval.token}`
           : null,
         returnEmail: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"
-      }, { by: "admin" });
+      }, { by: await actorLabel(req) });
       return;
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate PDF."] });
@@ -6935,6 +9817,7 @@ async function handleApi(req, res, pathname) {
       // to be, provably, what we sent them (Brief B §3.5). serveQuotePdf
       // serves the snapshot from disk; the live resolution below only
       // feeds a draft preview or a legacy backfill render.
+      void recordQuoteView(req, q.id, "pdf");
       const parties = await quoteRenderParties(q);
       await serveQuotePdf(res, q, {
         customer: parties.customer,
@@ -7043,6 +9926,7 @@ async function handleApi(req, res, pathname) {
       // re-fetches and renders. renders + PDF are separate requests that
       // ride the same cookie, so they don't re-challenge.
       await setProposalUnlockCookie(req, res, q.id);
+      void recordQuoteView(req, q.id, "gate_unlocked");
       return sendJson(res, 200, { ok: true });
     } catch (err) {
       console.warn("[proposal-unlock] error", { ip, msg: err?.message });
@@ -7111,6 +9995,8 @@ async function handleApi(req, res, pathname) {
       // skipped silently. On a real failure (network, 401 after refresh,
       // etc.) we log + warn but keep going so the email still ships.
       let qbWarning = null;
+      // Set when a letter was meant to ride along but could not be built.
+      let letterWarning = null;
       let qbAction = null;
       let qbInvoiceId = inv.quickbooksInvoiceId || null;
       if (action === "send") {
@@ -7153,7 +10039,63 @@ async function handleApi(req, res, pathname) {
 
       // Send the email. If this throws, the call returns 500 and the
       // admin sees the underlying error. Status is NOT flipped on failure.
+      // Accompanying letter, when one is written and switched on. Built
+      // here so a failure is caught before the email goes out rather than
+      // half-way through it. Best-effort: a letter that fails to render
+      // must not stop the invoice itself from reaching the customer.
+      let reportWarning = null;
+      let letterAttachment = null;
+      if (invoiceHasLetter(renderInv)) {
+        try {
+          letterAttachment = {
+            filename: invoiceLetterFilename(renderInv),
+            content: await renderInvoiceLetterPdf(renderInv),
+            contentType: "application/pdf"
+          };
+        } catch (letterErr) {
+          console.warn(`[invoice-${action}] letter render failed for ${invId}:`, letterErr?.message);
+          letterWarning = `The invoice was sent, but its accompanying letter failed to render and was NOT attached: ${letterErr.message}`;
+        }
+      }
+
+      // Work-order report (Aug 2026) — only when Patrick ticked it on this
+      // invoice. The CUSTOMER render, never the internal one: the internal
+      // copy carries notes that were never meant to leave the office.
+      //
+      // The frozen snapshot is served as-is rather than re-rendered, so
+      // what lands in this email is byte-identical to the report the
+      // customer already received at completion. Two copies of one visit
+      // that disagree is worse than no second copy.
+      let reportAttachment = null;
+      if (renderInv?.woReport?.enabled) {
+        try {
+          const snap = await woReportSnapshot.readSnapshot({
+            woId: renderInv.woReport.woId,
+            snapshotId: renderInv.woReport.snapshotId,
+            audience: "customer"
+          });
+          if (snap && snap.buffer) {
+            reportAttachment = {
+              filename: snap.record?.filename || `${renderInv.woReport.woId}-report.pdf`,
+              content: snap.buffer,
+              contentType: "application/pdf"
+            };
+          } else {
+            // A ticked report whose snapshot has gone missing is a fact
+            // worth surfacing — silently sending without it is how the
+            // customer ends up asking for a report Patrick believes he sent.
+            reportWarning = `The invoice was sent, but the work-order report could not be found and was NOT attached (${renderInv.woReport.woId}).`;
+          }
+        } catch (reportErr) {
+          console.warn(`[invoice-${action}] report attach failed for ${invId}:`, reportErr?.message);
+          reportWarning = `The invoice was sent, but its work-order report failed to attach: ${reportErr.message}`;
+        }
+      }
+
       await sendInvoiceToCustomer(renderInv, pdfBuffer, {
+        // Order is deliberate and is Patrick's: invoice, report, letter.
+        // sendInvoiceToCustomer always puts the invoice PDF first.
+        extraAttachments: [reportAttachment, letterAttachment].filter(Boolean),
         resend: action === "resend",
         viewLink,
         includeSpouse
@@ -7189,7 +10131,7 @@ async function handleApi(req, res, pathname) {
         await invoices.update(invId, patch);
         updated = await invoices.appendHistory(invId, {
           action: "resent",
-          by: "admin",
+          by: await actorLabel(req),
           note: `Re-emailed to ${inv.customerEmail}.`
         });
       }
@@ -7218,7 +10160,9 @@ async function handleApi(req, res, pathname) {
         action,
         qbAction,
         qbInvoiceId,
-        warning: qbWarning
+        warning: [qbWarning, letterWarning, reportWarning].filter(Boolean).join(" ") || null,
+        letterAttached: Boolean(letterAttachment),
+        reportAttached: Boolean(reportAttachment)
       });
     } catch (err) {
       console.error(`[invoice-${action}] failed for ${invId}:`, err.message);
@@ -7893,69 +10837,83 @@ async function handleApi(req, res, pathname) {
       console.warn(`[stripe-webhook] rejected: ${sigErr.message}`);
       return sendJson(res, 400, { ok: false, errors: ["Signature verification failed."] });
     }
-    try {
-      const type = event?.type || "";
-      const intent = event?.data?.object;
-      const invoiceId = intent?.metadata?.invoiceId || "";
-      if (!type.startsWith("payment_intent.") || !invoiceId) {
-        return sendJson(res, 200, { ok: true, ignored: true });
-      }
-      const inv = await invoices.get(invoiceId);
-      if (!inv) {
-        console.warn(`[stripe-webhook] ${type} for unknown invoice "${invoiceId}"`);
-        return sendJson(res, 200, { ok: true, ignored: true });
-      }
-
-      if (type === "payment_intent.succeeded") {
-        // Re-retrieve rather than trusting the event body: gets the
-        // charge expanded for card facts, and means even a leaked
-        // signing secret can't forge a paid-flip — the intent must
-        // actually be succeeded at Stripe.
-        const { intent: fresh, requestId } = await stripe.retrievePaymentIntent(intent.id);
-        try {
-          const result = await finalizeStripeInvoicePayment(inv, fresh, requestId, { via: "webhook" });
-          return sendJson(res, 200, { ok: true, finalized: !result.alreadyPaid });
-        } catch (finErr) {
-          console.error(`[stripe-webhook] finalize refused for ${invoiceId}: ${finErr.message}`);
-          return sendJson(res, 200, { ok: true, refused: true });
+    // ACK FAST, PROCESS ASYNC (webhook-delivery hardening, Aug 2026).
+    // Stripe reported "errors while sending" on every delivery since the
+    // endpoint was created — and separately, the original inline handler
+    // did QBO + PDF + SMTP work BEFORE responding, which can outrun
+    // Stripe's delivery timeout on a slow email send. Now the 200 goes
+    // out the moment the signature verifies; the heavy work runs on the
+    // next tick with its own error logging.
+    //
+    // Trade-off, accepted deliberately: a crash mid-processing after the
+    // 200 means Stripe will NOT redeliver that event. The webhook is the
+    // BACKSTOP, not the primary path — the customer's confirm POST does
+    // the same finalize, and the payment-intent route re-finalizes any
+    // stray succeeded intent on the next page visit — so losing one
+    // redelivery is strictly better than the endpoint being disabled for
+    // chronic delivery failures (Stripe's Aug 8 2026 warning email).
+    sendJson(res, 200, { ok: true, accepted: true });
+    setImmediate(async () => {
+      try {
+        const type = event?.type || "";
+        const intent = event?.data?.object;
+        const invoiceId = intent?.metadata?.invoiceId || "";
+        if (!type.startsWith("payment_intent.") || !invoiceId) return;
+        const inv = await invoices.get(invoiceId);
+        if (!inv) {
+          console.warn(`[stripe-webhook] ${type} for unknown invoice "${invoiceId}"`);
+          return;
         }
-      }
 
-      if (type === "payment_intent.payment_failed") {
-        const lastError = intent?.last_payment_error;
-        const prior = (inv.paymentAttempts || []).slice(-1)[0];
-        if (lastError && !(prior && prior.paymentIntentId === intent.id && prior.errorCode === (lastError.code || null) && prior.outcome === "failure")) {
-          const phone = await paymentSupportPhone();
-          const mapped = describeChargeFailure({
-            errorCode: lastError.code || null,
-            declineCode: lastError.decline_code || null,
-            errorMessage: lastError.message || null
-          }, phone);
-          await invoices.appendPaymentAttempt(inv.id, {
-            outcome: "failure",
-            processor: "stripe",
-            amount: Number(inv.total) || 0,
-            currency: inv.currency || "CAD",
-            paymentIntentId: intent.id,
-            errorCode: lastError.code || null,
-            declineCode: lastError.decline_code || null,
-            errorMessage: String(lastError.message || "").slice(0, 500),
-            customerMessage: mapped.customerMessage,
-            cardBrand: lastError.payment_method?.card?.brand || null,
-            cardLast4: lastError.payment_method?.card?.last4 || null
-          }).catch((recordErr) => {
-            console.error(`[stripe-webhook] FAILED TO RECORD ATTEMPT on ${inv.id}: ${recordErr.message}`);
-          });
+        if (type === "payment_intent.succeeded") {
+          // Re-retrieve rather than trusting the event body: gets the
+          // charge expanded for card facts, and means even a leaked
+          // signing secret can't forge a paid-flip — the intent must
+          // actually be succeeded at Stripe.
+          const { intent: fresh, requestId } = await stripe.retrievePaymentIntent(intent.id);
+          try {
+            const result = await finalizeStripeInvoicePayment(inv, fresh, requestId, { via: "webhook" });
+            if (!result.alreadyPaid) console.log(`[stripe-webhook] finalized ${invoiceId} via webhook backstop`);
+          } catch (finErr) {
+            console.error(`[stripe-webhook] finalize refused for ${invoiceId}: ${finErr.message}`);
+          }
+          return;
         }
-        return sendJson(res, 200, { ok: true });
-      }
 
-      return sendJson(res, 200, { ok: true, ignored: true });
-    } catch (err) {
-      // Transient processing error — non-2xx so Stripe redelivers.
-      console.error(`[stripe-webhook] processing error:`, err);
-      return sendJson(res, 500, { ok: false });
-    }
+        if (type === "payment_intent.payment_failed") {
+          const lastError = intent?.last_payment_error;
+          const prior = (inv.paymentAttempts || []).slice(-1)[0];
+          if (lastError && !(prior && prior.paymentIntentId === intent.id && prior.errorCode === (lastError.code || null) && prior.outcome === "failure")) {
+            const phone = await paymentSupportPhone();
+            const mapped = describeChargeFailure({
+              errorCode: lastError.code || null,
+              declineCode: lastError.decline_code || null,
+              errorMessage: lastError.message || null
+            }, phone);
+            await invoices.appendPaymentAttempt(inv.id, {
+              outcome: "failure",
+              processor: "stripe",
+              amount: Number(inv.total) || 0,
+              currency: inv.currency || "CAD",
+              paymentIntentId: intent.id,
+              errorCode: lastError.code || null,
+              declineCode: lastError.decline_code || null,
+              errorMessage: String(lastError.message || "").slice(0, 500),
+              customerMessage: mapped.customerMessage,
+              cardBrand: lastError.payment_method?.card?.brand || null,
+              cardLast4: lastError.payment_method?.card?.last4 || null
+            }).catch((recordErr) => {
+              console.error(`[stripe-webhook] FAILED TO RECORD ATTEMPT on ${inv.id}: ${recordErr.message}`);
+            });
+          }
+        }
+      } catch (err) {
+        // Already 200'd — log loudly; the confirm-POST and intent-reuse
+        // paths are the recovery routes for anything lost here.
+        console.error(`[stripe-webhook] async processing error:`, err);
+      }
+    });
+    return;
   }
 
   // POST /api/webhooks/quickbooks-payments — receives async events
@@ -7987,6 +10945,90 @@ async function handleApi(req, res, pathname) {
   //
   // Auth: gated by isAdminPath() above (/api/invoices is admin-only).
   // Layout: server/lib/invoice-pdf.js, modeled on _design/invoice-pdf-preview.html.
+  // ---------- Work-order reports available to this invoice ------------
+  // GET /api/invoices/:id/wo-reports — what the invoice page offers in its
+  // "Attach work-order report" block: the frozen report snapshots on the
+  // work order this invoice came from.
+  //
+  // Reads the record, never re-renders: the point of the block is to
+  // choose among copies the customer has already been given.
+  const invoiceWoReportsMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/wo-reports$/);
+  if (invoiceWoReportsMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(invoiceWoReportsMatch[1]);
+      const inv = await invoices.get(id);
+      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      if (!inv.woId) {
+        // Not an error — a manual invoice legitimately has no work order.
+        // The page says so rather than showing an empty picker.
+        return sendJson(res, 200, { ok: true, woId: null, reason: "no_work_order", snapshots: [] });
+      }
+      const wo = await workOrders.get(inv.woId);
+      if (!wo) {
+        return sendJson(res, 200, { ok: true, woId: inv.woId, reason: "work_order_missing", snapshots: [] });
+      }
+      // documentDate is the date ON the report — the visit — not `ts`, which
+      // is when the copy happened to be frozen. Those differ whenever a
+      // snapshot is taken after the fact, and the visit date is the one
+      // Patrick is choosing by. Derived the same way lib/wo-report-pdf.js
+      // derives it for the filename, so the picker and the PDF agree.
+      const visitIso = wo.arrivedAt || wo.scheduledFor || wo.createdAt || null;
+      const snapshots = (wo.reportSnapshots || []).map((snap) => ({
+        snapshotId: snap.snapshotId,
+        triggerType: snap.triggerType,
+        frozenAt: snap.ts || null,
+        documentDate: visitIso,
+        mode: snap.mode,
+        filename: snap.filename
+      }));
+      return sendJson(res, 200, {
+        ok: true,
+        woId: inv.woId,
+        woStatus: wo.status,
+        reason: snapshots.length ? null : "no_report_yet",
+        snapshots
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't read work-order reports."] });
+    }
+  }
+
+  // ---------- Accompanying letter PDF (admin-gated) -------------------
+  // GET /api/invoices/:id/letter.pdf — render the invoice's accompanying
+  // letter so the admin can read exactly what the customer will receive
+  // before deciding to send it. ?download=1 for a save-as dialog.
+  //
+  // 409 when there is no body to render: previewing a blank letter would
+  // show a letterhead with nothing on it and read as a bug.
+  const invoiceLetterPdfMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/letter\.pdf$/);
+  if (invoiceLetterPdfMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(invoiceLetterPdfMatch[1]);
+      const inv = await invoices.get(id);
+      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      if (!String(inv.letter?.body || "").trim()) {
+        return sendJson(res, 409, {
+          ok: false, code: "letter_empty",
+          errors: ["This invoice has no letter written yet."]
+        });
+      }
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const isDownload = url.searchParams.get("download") === "1";
+      const buffer = await renderInvoiceLetterPdf(inv);
+      res.writeHead(200, {
+        "content-type": "application/pdf",
+        "content-disposition": contentDisposition(invoiceLetterFilename(inv), { download: isDownload }),
+        "content-length": buffer.length,
+        "cache-control": "no-store"
+      });
+      res.end(buffer);
+      return;
+    } catch (err) {
+      console.error("[invoice-letter-pdf] failed:", err.message);
+      return sendJson(res, 500, { ok: false, errors: ["Couldn't render the letter."] });
+    }
+  }
+
   const adminInvoicePdfMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/pdf$/);
   if (adminInvoicePdfMatch && req.method === "GET") {
     try {
@@ -7998,7 +11040,7 @@ async function handleApi(req, res, pathname) {
       const buffer = await generateInvoicePdf(inv);
       res.writeHead(200, {
         "content-type": "application/pdf",
-        "content-disposition": `${isDownload ? "attachment" : "inline"}; filename="${inv.id}.pdf"`,
+        "content-disposition": contentDisposition(invoiceFilename(inv), { download: isDownload }),
         "content-length": buffer.length,
         "cache-control": "no-store"
       });
@@ -8012,6 +11054,39 @@ async function handleApi(req, res, pathname) {
   // ---------- Admin Quote folder browser (Q-YYYY-NNNN records) -----
   // Distinct from the legacy /api/quotes (which lists leads-as-quotes).
   // Reads from quotes.json — the canonical Quote folder per spec §4.1.
+
+  // GET /api/admin/quote-folder/views — { quoteId: summary } for every
+  // quote a CUSTOMER has opened. One file read serves the whole folder
+  // listing rather than a fetch per row. Staff-gated by the existing
+  // "/api/admin/quote-folder/" prefix rule in needsAuth().
+  //
+  // Declared BEFORE the :id routes below: "views" is not a valid Q- id, and
+  // the sibling :id routes all carry a /pdf or /confirm-pdf-acceptance
+  // suffix, so there is no shadowing either way — but order makes it
+  // obvious rather than incidental.
+  if (req.method === "GET" && pathname === "/api/admin/quote-folder/views") {
+    try {
+      return sendJson(res, 200, { ok: true, views: await quoteViews.summaryMap() });
+    } catch (err) {
+      // A tracking failure must never take the quote folder down with it —
+      // the folder renders "no view data" and every other column still works.
+      console.warn("[quote-views] summary map failed:", err?.message);
+      return sendJson(res, 200, { ok: true, views: {} });
+    }
+  }
+
+  // GET /api/admin/quote-folder/:id/views — one quote's summary plus its
+  // raw event list (newest first) for the detail read: what was opened,
+  // when, how many times, from which IP and user-agent.
+  const quoteViewsMatch = pathname.match(/^\/api\/admin\/quote-folder\/([^/]+)\/views$/);
+  if (quoteViewsMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(quoteViewsMatch[1]);
+      return sendJson(res, 200, { ok: true, views: await quoteViews.summaryFor(id) });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err?.message || "Couldn't read view history."] });
+    }
+  }
 
   if (req.method === "GET" && pathname === "/api/admin/quote-folder") {
     const url = new URL(req.url, baseUrlFromReq(req));
@@ -8101,7 +11176,7 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
       }
       const builderLines = Array.isArray(wo.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
@@ -8263,7 +11338,11 @@ async function handleApi(req, res, pathname) {
       const summary = `${builderLines.length} line${builderLines.length === 1 ? "" : "s"} — $${moneyCad(totals.total)} CAD incl. HST`;
 
       // SMS — keep within 160 chars where possible.
-      if (sendSms && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
+      // Nothing goes to a load-test record, on any channel — see
+      // lib/test-recipients.js.
+      const smsBlocked = await testRecipients.isTestRecipient({ phone: toPhone });
+      if (smsBlocked) testRecipients.suppressed("sms", toPhone, wo?.id || "");
+      if (sendSms && !smsBlocked && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
         const smsBody = `Hi ${firstName}, PJL: your tech recommends ${summary}. Review + approve here: ${approvalUrl}`;
         try {
           const sid = process.env.TWILIO_ACCOUNT_SID;
@@ -8294,6 +11373,8 @@ async function handleApi(req, res, pathname) {
               service: "gmail",
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
+            // Nothing goes to a load-test record — lib/test-recipients.js.
+            testRecipients.guardTransport(transporter);
             const lineRows = acceptedSnapshot.map((l) =>
               `<tr><td style="padding:6px 0;">${(l.label || l.key || "").replace(/</g, "&lt;")} × ${l.qty}</td><td style="text-align:right;padding:6px 0;font-variant-numeric:tabular-nums;">$${moneyCad(l.lineTotal)}</td></tr>`
             ).join("");
@@ -8393,7 +11474,11 @@ async function handleApi(req, res, pathname) {
               subject: "PJL: please approve today's repair quote",
               html,
               ...(attachments.length ? { attachments } : {})
+            }).catch(async (err) => {
+              await mailerLog.logSend({ kind: "other", to: toEmail, ok: false, error: err.message, refId: wo.id });
+              throw err;
             });
+            await mailerLog.logSend({ kind: "other", to: toEmail, ok: true, refId: wo.id });
             results.emailSent = true;
           } else {
             results.emailError = "nodemailer not installed";
@@ -8451,7 +11536,7 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(woQuotePreviewMatch[1]);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is locked — preview not available."] });
       }
       const builderLines = Array.isArray(wo.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
@@ -8566,11 +11651,21 @@ async function handleApi(req, res, pathname) {
         // Valid token, no session/cookie → tell the page to show the phone
         // form. No quote data crosses the wire yet. `locked:true` reveals
         // nothing the token holder didn't already have.
-        if (gate === "challenge") return sendJson(res, 200, { ok: true, locked: true });
+        if (gate === "challenge") {
+          // They opened the link but have not passed the gate. Recording
+          // this is the whole point of the tracker: a quote stuck here is
+          // "the customer could not get in", not "the customer ignored us".
+          void recordQuoteView(req, q.id, "gate_challenge");
+          return sendJson(res, 200, { ok: true, locked: true });
+        }
       }
       // Bypass safety — if the WO this quote belongs to has been
       // admin-bypassed or locked, the visit is complete and this link
       // is stale. Surface the completed message instead of a signable page.
+      // Deliberately NOT isScopeFrozen() — this reads signatureBypass
+      // too, so an admin unlock (which preserves the acceptance record)
+      // never re-opens a stale customer approval link for a visit that
+      // already happened. Customer-facing staleness !51 admin editability.
       {
         const woIds = Array.isArray(q.workOrderIds) ? q.workOrderIds : [];
         for (const woId of woIds) {
@@ -8592,6 +11687,8 @@ async function handleApi(req, res, pathname) {
           accountHolderName = (parties.customer && parties.customer.name) || q.customerEmail || "";
         } catch (_) { accountHolderName = q.customerEmail || ""; }
       }
+      // Past every gate — the signable page is rendering for them.
+      void recordQuoteView(req, q.id, "sign_page");
       const safe = {
         id: q.id,
         type: q.type,
@@ -8697,6 +11794,10 @@ async function handleApi(req, res, pathname) {
       // to has been admin-bypassed or otherwise locked, the visit is
       // complete and this remote-sign link is stale. Reject before
       // capturing a signature that would conflict with the bypass record.
+      // Deliberately NOT isScopeFrozen() — this reads signatureBypass too,
+      // so an admin unlock (which preserves the acceptance record) never
+      // re-opens a stale remote-sign link for a visit that already
+      // happened. Customer-facing staleness ≠ admin editability.
       {
         const woIds = Array.isArray(q.workOrderIds) ? q.workOrderIds : [];
         for (const woId of woIds) {
@@ -8765,6 +11866,11 @@ async function handleApi(req, res, pathname) {
         depositWarning = depErr?.message || "Deposit invoice creation failed.";
         console.warn(`[approval-sign] deposit flow failed for ${updated.id}:`, depErr?.message);
       }
+
+      // Tell the customer their approval landed — installation work only.
+      // Awaited rather than fired-and-forgotten so a hard failure reaches
+      // the ledger before the response returns; it cannot throw.
+      await maybeSendAcceptanceConfirmation(updated, { signerName: customerName });
 
       // Find the WO this quote was attached to and flip its onSiteQuote
       // status so the tech UI shows "Customer approved at HH:MM."
@@ -8882,7 +11988,7 @@ async function handleApi(req, res, pathname) {
         const allLeads = await readLeads();
         const lead = allLeads.find((l) => l.id === leadId);
         if (lead && lead.booking) {
-          const upserted = await bookings.upsertFromLead(lead);
+          const upserted = await syncBookingFromLead(lead);
           if (upserted) all = [upserted];
         }
       } catch (err) {
@@ -8976,13 +12082,34 @@ async function handleApi(req, res, pathname) {
       if (!session) return sendJson(res, 401, { ok: false, errors: ["Sign in required."] });
       const id = decodeURIComponent(cancelBookingMatch[1]);
       const payload = await parseRequestBody(req);
-      const reason = String(payload?.reason || "").trim().slice(0, 500);
+      // A structured reason when the caller has one — the app's "Not
+      // today" sheet always does. The CRM's older free-text cancel sends
+      // none and still works exactly as before.
+      const reasonCode = String(payload?.reasonCode || "").trim();
+      if (reasonCode && !bookings.isRemovalReason(reasonCode)) {
+        return sendJson(res, 422, { ok: false, errors: [`Unknown reason: ${reasonCode}`] });
+      }
+      const spec = reasonCode ? bookings.REMOVAL_REASONS[reasonCode] : null;
+      // The label stands in as the free text when a code was sent, so the
+      // required-reason rule below holds for both callers and the audit
+      // line reads as a sentence either way. A note the tech typed —
+      // "already done" asks what happened — is appended, not substituted.
+      const note = String(payload?.note || "").trim().slice(0, 300);
+      const reason = spec
+        ? [spec.label, note].filter(Boolean).join(" — ").slice(0, 500)
+        : String(payload?.reason || "").trim().slice(0, 500);
       if (!reason) {
         return sendJson(res, 422, { ok: false, errors: ["A reason is required so the audit trail captures why."] });
       }
-      const notify = payload?.notifyCustomer !== false; // default ON
+      // The reason decides whether the customer hears about it — telling
+      // someone their visit was cancelled because it had ALREADY BEEN DONE
+      // is a confusing email nobody needs. An explicit flag still wins.
+      const notify = payload?.notifyCustomer === undefined
+        ? (spec ? spec.notify !== false : true)
+        : payload.notifyCustomer !== false;
       const result = await bookings.cancel(id, {
         reason,
+        reasonCode,
         by: session.role === "admin" ? "admin" : "tech",
         actorName: session.uid || ""
       });
@@ -8997,9 +12124,14 @@ async function handleApi(req, res, pathname) {
           const allLeads = await readLeads();
           const lead = allLeads.find((l) => l.id === cancelled.leadId);
           if (lead && lead.booking) {
-            lead.booking.status = "cancelled";
+            // The OUTCOME, not the word "cancelled" — a no-show mirrored
+            // as a cancellation is a no-show the day list, the route and
+            // next year's planning never hear about.
+            lead.booking.status = cancelled.status;
             lead.booking.cancelledAt = cancelled.cancelledAt;
             lead.booking.cancellationReason = cancelled.cancellationReason;
+            lead.booking.removalCode = cancelled.removalCode || null;
+            lead.booking.removedBy = cancelled.cancelledBy || null;
             await writeLeads(allLeads);
           }
         }
@@ -9102,7 +12234,11 @@ async function handleApi(req, res, pathname) {
 
       const booking = await bookings.get(bookingId);
       if (!booking) return sendJson(res, 404, { ok: false, errors: ["Booking not found."] });
-      if (booking.status === "cancelled" || booking.status === "completed" || booking.status === "no_show") {
+      // The dead-status list, asked the one way it is defined
+      // (lib/bookings.js). This used to spell out the three states
+      // inline — a second copy of the rule, and the kind that drifts the
+      // moment a fourth state is added (CLAUDE.md, "define the rule once").
+      if (!bookingHoldsItsSlot(booking.status)) {
         return sendJson(res, 409, { ok: false, errors: [`Can't change the type of a ${booking.status} booking.`] });
       }
       if (booking.serviceKey === serviceKey) {
@@ -9124,7 +12260,7 @@ async function handleApi(req, res, pathname) {
         serviceKey,
         serviceLabel: service.label,
         durationMinutes: newMinutes,
-        by: "admin"
+        by: await actorLabel(req)
       });
 
       // Mirror onto the lead.booking read-cache + WO envelope + lead status.
@@ -9781,9 +12917,10 @@ async function handleApi(req, res, pathname) {
             customerCoords: geo.coords,
             bookings: allActive,
             blocks: scheduleData.blocks,
-            daysAhead: 30,
+            daysAhead: horizonToReach(startDate),
             hours: mergedHours,
-            settings: mergedSettings
+            settings: mergedSettings,
+            dayShapes: await dayShapesForSeason({ bookings: allActive })
           });
           validatedSlot = candidates.find((s) => s.start === startDate.toISOString());
           if (!validatedSlot) {
@@ -9892,7 +13029,7 @@ async function handleApi(req, res, pathname) {
           source: forcedByAdmin ? "admin_custom" : "slot",
           createdAt: now,
           updatedAt: now,
-          history: [{ ts: now, action: "created_followup", by: "admin", note: `Follow-up to ${parent.id}${forcedByAdmin ? " (custom time)" : ""}` }]
+          history: [{ ts: now, action: "created_followup", by: await actorLabel(req), note: `Follow-up to ${parent.id}${forcedByAdmin ? " (custom time)" : ""}` }]
         };
         const allWithNew = [newBooking, ...allRec];
         try {
@@ -10001,7 +13138,7 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(woPullBaselineMatch[1]);
       const child = await workOrders.get(id);
       if (!child) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (child.locked || child.signature?.signed) {
+      if (workOrders.isScopeFrozen(child)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is signed and locked — can't modify line items."] });
       }
       if (!child.followupOfWoId) {
@@ -10116,7 +13253,7 @@ async function handleApi(req, res, pathname) {
       try {
         await workOrders.appendHistory(id, {
           action: "invoice_drafted",
-          by: "admin",
+          by: await actorLabel(req),
           note: `Manual: ${inv.id} ($${Number(inv.total).toFixed(2)})`
         });
       } catch (err) { console.warn("[wo-history] manual invoice entry failed:", err?.message); }
@@ -10187,7 +13324,7 @@ async function handleApi(req, res, pathname) {
       catch (err) { console.warn("[wo-report] derivative prep failed:", err?.message); }
       res.writeHead(200, {
         "content-type": "application/pdf",
-        "content-disposition": `inline; filename="${filename}"`,
+        "content-disposition": contentDisposition(filename),
         "cache-control": "no-store"
       });
       generateWoReportPdf({ wo, property: property || {}, customer: customer || {}, mode }).pipe(res);
@@ -10202,11 +13339,33 @@ async function handleApi(req, res, pathname) {
     try {
       const woId = decodeURIComponent(woReportSnapshotGetMatch[1]);
       const snapshotId = decodeURIComponent(woReportSnapshotGetMatch[2]);
-      const found = await woReportSnapshot.readSnapshot({ woId, snapshotId });
+      // ?audience=customer serves the customer render instead of the
+      // internal one. Added for the invoice page's "preview the customer's
+      // copy" link: previewing the internal copy before attaching the
+      // customer copy would show Patrick a document nobody is going to
+      // receive. Defaults to internal, so every existing caller is
+      // unchanged.
+      const snapUrl = new URL(req.url, baseUrlFromReq(req));
+      const audience = snapUrl.searchParams.get("audience") === "customer" ? "customer" : "internal";
+      const found = await woReportSnapshot.readSnapshot({ woId, snapshotId, audience });
       if (!found) return sendJson(res, 404, { ok: false, errors: ["Snapshot not found."] });
+      // Name the download from the work order so snapshots frozen before
+      // the naming convention still come down under it. The stored
+      // record's own filename is the fallback, never overwritten — if the
+      // WO can't be read for any reason the download still has a name.
+      let snapDownloadName = found.record?.filename;
+      try {
+        const snapWo = await workOrders.get(woId);
+        if (snapWo) {
+          snapDownloadName = reportFilename({
+            wo: snapWo,
+            mode: snapWo.locked === true ? "service_report" : "inspection_report"
+          });
+        }
+      } catch (_) { /* keep the stored name */ }
       res.writeHead(200, {
         "content-type": "application/pdf",
-        "content-disposition": `inline; filename="${found.record.filename}"`,
+        "content-disposition": contentDisposition(snapDownloadName),
         "cache-control": "no-store",
         "content-length": found.buffer.length
       });
@@ -10227,7 +13386,7 @@ async function handleApi(req, res, pathname) {
         : "manual";
       const quoteId = triggerType === "quote_send" ? (payload?.quoteId || null) : null;
       const record = await woReportSnapshot.createSnapshot({
-        woId, triggerType, quoteId, by: "admin"
+        woId, triggerType, quoteId, by: await actorLabel(req)
       });
       return sendJson(res, 201, { ok: true, snapshot: record });
     } catch (err) {
@@ -10438,7 +13597,7 @@ async function handleApi(req, res, pathname) {
       const currentStart = lead.booking.start ? new Date(lead.booking.start) : null;
       const tooLate = currentStart ? (currentStart.getTime() - Date.now()) < 24 * 60 * 60 * 1000 : false;
       let bookingRec = (await bookings.listByLead(lead.id))[0];
-      if (!bookingRec) bookingRec = await bookings.upsertFromLead(lead);
+      if (!bookingRec) bookingRec = await syncBookingFromLead(lead);
       const result = bookingRec
         ? await rescheduleAvailability(bookingRec.id, {
             from: url.searchParams.get("from"),
@@ -10491,7 +13650,7 @@ async function handleApi(req, res, pathname) {
       // Find the canonical Booking record for this lead (or upsert one if
       // the legacy lead.booking shape is the only thing present).
       let bookingRecord = (await bookings.listByLead(lead.id))[0];
-      if (!bookingRecord) bookingRecord = await bookings.upsertFromLead(lead);
+      if (!bookingRecord) bookingRecord = await syncBookingFromLead(lead);
       if (!bookingRecord) return sendJson(res, 422, { ok: false, errors: ["No bookable record on this appointment."] });
 
       const result = await rescheduleBooking({
@@ -10550,7 +13709,7 @@ async function handleApi(req, res, pathname) {
       }
 
       let bookingRec = (await bookings.listByLead(lead.id))[0];
-      if (!bookingRec) bookingRec = await bookings.upsertFromLead(lead);
+      if (!bookingRec) bookingRec = await syncBookingFromLead(lead);
 
       const currentStart = bookingRec?.scheduledFor ? new Date(bookingRec.scheduledFor) : null;
       const hoursUntil = currentStart ? (currentStart.getTime() - Date.now()) / (60 * 60 * 1000) : null;
@@ -10640,7 +13799,7 @@ async function handleApi(req, res, pathname) {
       }
 
       let bookingRec = (await bookings.listByLead(lead.id))[0];
-      if (!bookingRec) bookingRec = await bookings.upsertFromLead(lead);
+      if (!bookingRec) bookingRec = await syncBookingFromLead(lead);
       if (!bookingRec) return sendJson(res, 422, { ok: false, errors: ["No bookable record on this appointment."] });
 
       // Idempotent: cancelling an already-cancelled booking returns the
@@ -10787,11 +13946,36 @@ async function handleApi(req, res, pathname) {
     const url = new URL(req.url, baseUrlFromReq(req));
     const status = url.searchParams.get("status");
     const woId = url.searchParams.get("woId");
+    // The field app's property screen asks for one address's invoices.
+    // Filtered here, the same way `status` and `woId` already are, rather
+    // than making the phone download every invoice in the business to
+    // show three. Absent, the response is byte-for-byte what it was.
+    const propertyId = url.searchParams.get("propertyId");
     let all = await invoices.list();
     if (status) all = all.filter((i) => i.status === status);
     if (woId) all = all.filter((i) => i.woId === woId);
+    // `!== null` rather than truthiness: `?propertyId=` (empty) is falsy,
+    // so it skipped the filter and answered with EVERY invoice in the
+    // business on a screen asking for one address's. Absent is still
+    // `null` from searchParams.get, so an unfiltered call is unchanged.
+    if (propertyId !== null) all = all.filter((i) => i.propertyId === propertyId);
     all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    return sendJson(res, 200, { ok: true, invoices: all });
+    // The two BEARER tokens never leave the server on this route.
+    //
+    // `paymentToken` is a permanent, unexpiring, unrevocable password to
+    // an invoice: whoever holds it can read the customer's name, email,
+    // address and every line item, and can pay it. `portalToken` is the
+    // same for the read-only portal view. Both were being handed to every
+    // caller of this list — which made the admin gate on
+    // POST /api/invoices/:id/payment-link (added 2026-09-06, precisely so
+    // a tech could not mint payment links) decorative: the list handed a
+    // tech the token for every invoice, and the pay URL is a fixed
+    // template. The public /pay route already strips paymentToken from
+    // its own response for exactly this reason; the staff list was doing
+    // the opposite. Nothing on any client reads either field — every use
+    // is server-side (notify-customer, invoice-pdf, the portal routes).
+    const safe = all.map(({ paymentToken, portalToken, ...rest }) => rest);
+    return sendJson(res, 200, { ok: true, invoices: safe });
   }
 
   // ---- Invoice payment ledger ----------------------------------------
@@ -10856,6 +14040,75 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, invoice: result.invoice, removed: result.removed });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't reverse the payment."] });
+    }
+  }
+
+  // Mint (or return) the public payment link for an invoice, without
+  // sending anything.
+  //
+  // ensurePaymentToken has always run at SEND time, which is right for the
+  // emailed link but leaves a freshly drafted invoice with no payable URL.
+  // That is fine at a desk and wrong on a driveway: a tech standing with
+  // the customer, phone in hand, should not have to email them first to be
+  // able to take their money. Idempotent — the same invoice keeps the same
+  // token, so this never invalidates a link already in someone's inbox.
+  const invoicePayLinkMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/payment-link$/);
+  if (invoicePayLinkMatch && req.method === "POST") {
+    try {
+      // Same no-op as the Terminal route had. /api/invoices is fenced at
+      // "user", so this was never anonymous — but a TECH could mint a
+      // payment link for any invoice, which is an admin action.
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const id = decodeURIComponent(invoicePayLinkMatch[1]);
+      const inv = await invoices.ensurePaymentToken(id);
+      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      const publicBase = resolvePublicBaseUrl();
+      return sendJson(res, 200, {
+        ok: true,
+        url: `${publicBase}/pay/invoice/${encodeURIComponent(inv.id)}?t=${encodeURIComponent(inv.paymentToken)}`
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't build a payment link."] });
+    }
+  }
+
+  // Terminal connection token — what the Tap to Pay reader on the phone
+  // trades for the right to talk to Stripe directly.
+  //
+  // STAFF ONLY, and that is the whole point of the route existing. The
+  // token is short-lived and scoped to Terminal, but anyone holding one can
+  // drive a reader on this account, so it is minted behind the same gate as
+  // the rest of the money routes and never derived on the device.
+  //
+  // Card data does not pass through here, or through the app: it goes from
+  // the customer's card to Apple's secure element to Stripe. That is what
+  // keeps Tap to Pay out of our PCI scope, and why this single route is the
+  // only place the field app is allowed near Stripe.
+  //
+  // Returns Stripe's own error when Terminal is not yet enabled on the
+  // account, rather than a guess about why.
+  if (pathname === "/api/terminal/connection-token" && req.method === "POST") {
+    try {
+      // requireAdmin RETURNS NULL on failure — it does not throw. A bare
+      // `await requireAdmin(req)` is not a gate, it is a no-op with the
+      // shape of one.
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      // Both halves of what the reader needs to come up: the short-lived
+      // token it trades for the right to talk to Stripe, and the Location
+      // it has to be associated with at connect time. Fetched together
+      // because the app cannot connect with only one of them, and a
+      // second round trip on a driveway is a second chance to fail.
+      const token = await stripe.createTerminalConnectionToken();
+      const locationId = await stripe.resolveTerminalLocationId();
+      return sendJson(res, 200, { ok: true, secret: token.secret, locationId });
+    } catch (err) {
+      const status = err && err.statusCode === 401 ? 401 : 400;
+      return sendJson(res, status, {
+        ok: false,
+        errors: [err.message || "Couldn't get a Terminal connection token."]
+      });
     }
   }
 
@@ -11253,6 +14506,156 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 201, { ok: true, project: created });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create project."] });
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // Site plan — rasterized sheets + scale calibration
+  // ══════════════════════════════════════════════════════════════════
+  //
+  // Confidentiality (brief §3.8): a tender drawing received from a GC or
+  // consultant is a third party's document. The raster serve endpoint is
+  // SESSION-GATED ONLY. There is deliberately no tokenized public serve
+  // here — unlike quote attachments, which have one so the customer
+  // /approve flow can show them. Do not copy that part of the pattern:
+  // no site-plan raster may ever reach a customer-facing surface.
+
+  // POST /api/projects/:id/site-plan/pages — upload one rasterized page.
+  const sitePlanPagesMatch = pathname.match(/^\/api\/projects\/([^/]+)\/site-plan\/pages$/);
+  if (sitePlanPagesMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const projectId = decodeURIComponent(sitePlanPagesMatch[1]);
+      // Explicit maxBytes — the 1 MB default would reject every real plan.
+      const payload = await parseRequestBody(req, { maxBytes: SITE_PLAN_POST_MAX_BYTES });
+      const proj = await projects.get(projectId);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      const buffer = Buffer.from(String(payload.data || ""), "base64");
+      const page = await projects.addSitePlanPage(projectId, {
+        buffer,
+        mimeType: String(payload.mimeType || "").toLowerCase(),
+        label: payload.label || "",
+        pdfPageNumber: payload.pdfPageNumber,
+        rasterWidthPx: payload.rasterWidthPx,
+        rasterHeightPx: payload.rasterHeightPx,
+        renderScale: payload.renderScale,
+        sourceFilename: payload.sourceFilename || "",
+        sourceMimeType: payload.sourceMimeType || "",
+        uploadedBy: session.uid || "admin"
+      });
+      return sendJson(res, 201, { ok: true, page });
+    } catch (err) {
+      // "Request body is too large" from parseRequestBody must surface the
+      // ACTUAL limit — a generic failure leaves the user guessing whether
+      // to re-render at 80% or 20%.
+      const tooBig = /too large/i.test(err.message || "");
+      const status = err.code === "project_not_found" ? 404 : tooBig ? 413 : 400;
+      const msg = tooBig && /Request body/i.test(err.message || "")
+        ? `That upload is over the ${Math.round(SITE_PLAN_POST_MAX_BYTES / 1024 / 1024)} MB request limit ` +
+          `(sheets are capped at ${Math.round(projects.MAX_SITE_PLAN_PAGE_BYTES / 1024 / 1024)} MB each ` +
+          `before base64 encoding). Re-render this sheet at a lower resolution.`
+        : (err.message || "Couldn't save the site-plan page.");
+      return sendJson(res, status, { ok: false, errors: [msg] });
+    }
+  }
+
+  // GET /api/projects/:id/site-plan/pages/:pageId/raster — serve the image.
+  // Session-gated (admin OR tech), never public, never tokenized.
+  const sitePlanRasterMatch = pathname.match(/^\/api\/projects\/([^/]+)\/site-plan\/pages\/([^/]+)\/raster$/);
+  if (sitePlanRasterMatch && req.method === "GET") {
+    const session = await requireUser(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Sign-in required."] });
+    try {
+      const projectId = decodeURIComponent(sitePlanRasterMatch[1]);
+      const pageId = decodeURIComponent(sitePlanRasterMatch[2]);
+      // readSitePlanRaster validates both ids against anchored patterns
+      // before any path.join, and returns null on a missing file rather
+      // than throwing — the builder degrades to a plain grid on a 404.
+      const file = await projects.readSitePlanRaster(projectId, pageId);
+      if (!file) return sendJson(res, 404, { ok: false, errors: ["Site-plan image not found."] });
+      res.writeHead(200, {
+        "content-type": file.meta.mimeType || "application/octet-stream",
+        "content-length": file.buffer.length,
+        "cache-control": "private, max-age=300"
+      });
+      res.end(file.buffer);
+      return;
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read the site-plan image."] });
+    }
+  }
+
+  // PATCH /api/projects/:id/site-plan/pages/:pageId/calibration
+  // DELETE /api/projects/:id/site-plan/pages/:pageId
+  const sitePlanCalMatch = pathname.match(/^\/api\/projects\/([^/]+)\/site-plan\/pages\/([^/]+)\/calibration$/);
+  if (sitePlanCalMatch && req.method === "PATCH") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const projectId = decodeURIComponent(sitePlanCalMatch[1]);
+      const pageId = decodeURIComponent(sitePlanCalMatch[2]);
+      const payload = await parseRequestBody(req);
+      // NOTE: ftPerPx is DERIVED server-side from the clicked points by
+      // lib/site-plan-calibration.js. Any ftPerPx in the payload is ignored
+      // — the number a bid depends on is computed in one tested place.
+      const result = await projects.setSitePlanCalibration(projectId, pageId, {
+        p1: payload.p1,
+        p2: payload.p2,
+        // Distances may arrive as a typed string carrying its own unit
+        // ("18' 10\"", "5.75 m") or as a bare number of feet. Either way the
+        // conversion to feet happens server-side in
+        // lib/site-plan-calibration.js — see the note in setSitePlanCalibration.
+        knownDistance: payload.knownDistance,
+        knownFt: payload.knownFt,
+        verify: payload.verify,
+        statedScale: payload.statedScale,
+        acknowledge: payload.acknowledge === true
+      }, { by: session.uid || "admin" });
+      return sendJson(res, 200, { ok: true, page: result.page, changed: result.changed });
+    } catch (err) {
+      const status =
+        err.code === "calibration_locked" ? 409 :
+        err.code === "project_not_found" || err.code === "page_not_found" ? 404 :
+        err.code === "bad_id" ? 400 : 400;
+      return sendJson(res, status, {
+        ok: false,
+        code: err.code || null,
+        dependents: err.dependents || undefined,
+        residualPct: err.residualPct,
+        measuredFt: err.measuredFt,
+        errors: [err.message || "Couldn't save the calibration."]
+      });
+    }
+  }
+
+  const sitePlanPageMatch = pathname.match(/^\/api\/projects\/([^/]+)\/site-plan\/pages\/([^/]+)$/);
+  if (sitePlanPageMatch && req.method === "DELETE") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const projectId = decodeURIComponent(sitePlanPageMatch[1]);
+      const pageId = decodeURIComponent(sitePlanPageMatch[2]);
+      // handleApi() takes (req, res, pathname) — there is no `url` in scope
+      // here, so build one the same way the neighbouring handlers do.
+      const reqUrl = new URL(req.url, baseUrlFromReq(req));
+      const force = reqUrl.searchParams.get("force") === "1";
+      const result = await projects.removeSitePlanPage(projectId, pageId, {
+        force,
+        by: session.uid || "admin"
+      });
+      return sendJson(res, 200, { ok: true, removed: result.id, detached: result.detached });
+    } catch (err) {
+      const status =
+        err.code === "page_has_dependents" ? 409 :
+        err.code === "project_not_found" || err.code === "page_not_found" ? 404 :
+        err.code === "bad_id" ? 400 : 400;
+      return sendJson(res, status, {
+        ok: false,
+        code: err.code || null,
+        dependents: err.dependents || undefined,
+        errors: [err.message || "Couldn't delete the site-plan page."]
+      });
     }
   }
 
@@ -11753,13 +15156,19 @@ async function handleApi(req, res, pathname) {
               service: "gmail",
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
+            // Nothing goes to a load-test record — lib/test-recipients.js.
+            testRecipients.guardTransport(transporter);
             await transporter.sendMail({
               from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
               to: scr.draftEmail.to,
               replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
               subject: scr.draftEmail.subject,
               text: scr.draftEmail.body
+            }).catch(async (err) => {
+              await mailerLog.logSend({ kind: "other", to: scr.draftEmail.to, ok: false, error: err.message, refId: scrId });
+              throw err;
             });
+            await mailerLog.logSend({ kind: "other", to: scr.draftEmail.to, ok: true, refId: scrId });
           }
         } catch (err) {
           console.warn("[scope-change send] email failed:", err?.message);
@@ -11845,6 +15254,8 @@ async function handleApi(req, res, pathname) {
               service: "gmail",
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
+            // Nothing goes to a load-test record — lib/test-recipients.js.
+            testRecipients.guardTransport(transporter);
             const html = renderStatusUpdateHtml(entry.snapshot);
             await transporter.sendMail({
               from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
@@ -11852,7 +15263,11 @@ async function handleApi(req, res, pathname) {
               replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
               subject: `Project update — ${entry.snapshot.projectName} — ${new Date().toLocaleDateString("en-CA")}`,
               html
+            }).catch(async (err) => {
+              await mailerLog.logSend({ kind: "other", to: recipient.email, ok: false, error: err.message, refId: id });
+              throw err;
             });
+            await mailerLog.logSend({ kind: "other", to: recipient.email, ok: true, refId: id });
             emailSent = true;
           } else emailError = "nodemailer not installed";
         } catch (err) { emailError = err.message; }
@@ -11911,6 +15326,8 @@ async function handleApi(req, res, pathname) {
             service: "gmail",
             auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
           });
+          // Nothing goes to a load-test record — lib/test-recipients.js.
+          testRecipients.guardTransport(transporter);
           const totalLabel = invoice ? `$${Number(invoice.total).toFixed(2)}` : "(no charge)";
           const subject = `[PJL] Project complete — ${project.name || project.id} — ${totalLabel}`;
           const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
@@ -11929,7 +15346,11 @@ async function handleApi(req, res, pathname) {
             to: process.env.GMAIL_USER,
             subject,
             html
+          }).catch(async (err) => {
+            await mailerLog.logSend({ kind: "other", to: process.env.GMAIL_USER, ok: false, error: err.message, refId: project.id });
+            throw err;
           });
+          await mailerLog.logSend({ kind: "other", to: process.env.GMAIL_USER, ok: true, refId: project.id });
         },
         notifyCustomer: async ({ project, invoice }) => {
           if (!project.customerEmail) return;
@@ -11940,6 +15361,8 @@ async function handleApi(req, res, pathname) {
             service: "gmail",
             auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
           });
+          // Nothing goes to a load-test record — lib/test-recipients.js.
+          testRecipients.guardTransport(transporter);
 
           // Attach the invoice PDF if we have one.
           const attachments = [];
@@ -11987,7 +15410,11 @@ async function handleApi(req, res, pathname) {
             subject: `PJL: project complete — ${project.name || project.id}`,
             html,
             ...(attachments.length ? { attachments } : {})
+          }).catch(async (err) => {
+            await mailerLog.logSend({ kind: "completion", to: project.customerEmail, ok: false, error: err.message, refId: project.id });
+            throw err;
           });
+          await mailerLog.logSend({ kind: "completion", to: project.customerEmail, ok: true, refId: project.id });
         }
       };
 
@@ -12224,6 +15651,27 @@ async function handleApi(req, res, pathname) {
     } catch (err) {
       const status = err.code === "proposal_locked" ? 409 : 400;
       return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't remove attachment."] });
+    }
+  }
+
+  // PATCH /api/quotes/:id/attachments/:attId — admin, draft-only. Body:
+  // { emailAttach: true | false | null }. Sets the per-file "ride along
+  // with the approval email" choice the email preview shows; null clears
+  // it back to the derived default (see quotes.emailAttachmentManifest).
+  if (attachmentsGetMatch && req.method === "PATCH") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const quoteId = decodeURIComponent(attachmentsGetMatch[1]);
+      const attId = decodeURIComponent(attachmentsGetMatch[2]);
+      const payload = await parseRequestBody(req);
+      const raw = payload ? payload.emailAttach : undefined;
+      const emailAttach = raw === true || raw === false ? raw : (raw === null ? null : undefined);
+      const att = await quotes.updateAttachment(quoteId, attId, { emailAttach }, { by: session.uid || "admin" });
+      return sendJson(res, 200, { ok: true, attachment: att, quote: await quotes.get(quoteId) });
+    } catch (err) {
+      const status = err.code === "proposal_locked" ? 409 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't update attachment."] });
     }
   }
 
@@ -12712,7 +16160,10 @@ async function handleApi(req, res, pathname) {
               address: knownAddress,
               customerName: customer.name || "Customer",
               customerEmail: custEmail,
-              customerPhone: customer.phone || ""
+              customerPhone: customer.phone || "",
+              // Was omitted, so auto-created properties defaulted to
+              // coords: null and were invisible to proximity routing.
+              coords: await geocodeForRecord(knownAddress)
             });
             autoCreatedProperty = true;
             console.log(`[smart-controller-quote] auto-created property ${property.id} for ${custEmail} from prior service records (${knownAddress})`);
@@ -13101,7 +16552,11 @@ async function handleApi(req, res, pathname) {
       const results = { emailSent: false, emailError: null, smsSent: false, smsError: null, portalUrl, approveUrl };
 
       // SMS — keep within one segment where possible.
-      if (sendSms && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
+      // Nothing goes to a load-test record, on any channel — see
+      // lib/test-recipients.js.
+      const smsBlocked = await testRecipients.isTestRecipient({ phone: toPhone });
+      if (smsBlocked) testRecipients.suppressed("sms", toPhone, q?.id || "");
+      if (sendSms && !smsBlocked && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
         try {
           const smsBody = `Hi ${firstName}, PJL: your quote ${q.id} is ready — $${moneyCad(q.total)} CAD incl. HST. Review + sign here: ${approveUrl}`;
           const sid = process.env.TWILIO_ACCOUNT_SID;
@@ -13132,6 +16587,8 @@ async function handleApi(req, res, pathname) {
               service: "gmail",
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
+            // Nothing goes to a load-test record — lib/test-recipients.js.
+            testRecipients.guardTransport(transporter);
             const lineRows = (q.lineItems || []).map((l) =>
               `<tr><td style="padding:6px 0;">${(l.label || l.key || "").replace(/</g, "&lt;")} × ${l.qty}</td><td style="text-align:right;padding:6px 0;font-variant-numeric:tabular-nums;">$${moneyCad(l.lineTotal)}</td></tr>`
             ).join("");
@@ -13172,7 +16629,11 @@ async function handleApi(req, res, pathname) {
               subject: `PJL quote ${q.id} — ready for your review`,
               html,
               ...(attachments.length ? { attachments } : {})
+            }).catch(async (err) => {
+              await mailerLog.logSend({ kind: "other", to: toEmail, ok: false, error: err.message, refId: q.id });
+              throw err;
             });
+            await mailerLog.logSend({ kind: "other", to: toEmail, ok: true, refId: q.id });
             results.emailSent = true;
           } else {
             results.emailError = "nodemailer not installed";
@@ -13185,6 +16646,57 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, quote: await quotes.get(id), ...results });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't send quote."] });
+    }
+  }
+
+  // GET /api/quotes/:id/proposal-email-preview?note=… — admin-only dry
+  // run of the approval email. Composes with the SAME builder + gate check
+  // the send uses, so the builder's "Preview email" panel shows exactly what
+  // the customer will get: from / to / subject / attachment / body HTML.
+  // Nothing is sent, no token is minted, no state changes. A draft with no
+  // token yet gets a visibly-placeholder link (the real one is issued on
+  // send).
+  const proposalEmailPreviewMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/proposal-email-preview$/);
+  if (proposalEmailPreviewMatch && req.method === "GET") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(proposalEmailPreviewMatch[1]);
+      const q = await quotes.get(id);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Proposal not found."] });
+      if (!quoteCanCarryCustomDoc(q)) {
+        return sendJson(res, 422, { ok: false, errors: ["This quote can't be sent as a designed proposal."] });
+      }
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const note = String(url.searchParams.get("note") || "").trim().slice(0, 2000);
+      const toEmail = String(url.searchParams.get("email") || q.customerEmail || "").trim();
+      const parties = await quoteRenderParties(q);
+      const gated = q.deliveryMode === "plain_pdf" ? false : await proposalHasCustomDoc(q);
+      const hasToken = Boolean(q.approval && q.approval.token);
+      const approvalUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${hasToken ? q.approval.token : "issued-on-send"}`;
+      const manifest = quotes.emailAttachmentManifest(q, { gated });
+      const extraFiles = manifest.filter((m) => m.emailAttached).map((m) => m.filename);
+      const mail = buildProposalApprovalEmail(q, { parties, approvalUrl, gated, note, extraFiles });
+      return sendJson(res, 200, {
+        ok: true,
+        attachments: manifest,
+        attachedBytes: manifest.filter((m) => m.emailAttached).reduce((sum, m) => sum + m.sizeBytes, 0),
+        editable: q.status === "draft" || q.status === "draft_preview",
+        from: mail.from,
+        replyTo: mail.replyTo,
+        to: toEmail,
+        subject: mail.subject,
+        html: mail.html,
+        gated,
+        isRevision: mail.isRevision,
+        attachmentFilename: mail.attachmentFilename,
+        approvalUrl,
+        linkIsPlaceholder: !hasToken,
+        customerName: String((parties.customer && parties.customer.name) || "").trim(),
+        note
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't build the email preview."] });
     }
   }
 
@@ -13218,6 +16730,9 @@ async function handleApi(req, res, pathname) {
       const sendEmail = payload?.sendEmail !== false;
       const toEmail = String(payload?.email || q.customerEmail || "").trim();
       const toPhone = String(payload?.phone || "").trim();
+      // Optional personal note from the builder's email preview (plain
+      // text, capped). Rendered under the greeting; kept on approval.note.
+      const note = String(payload?.note || "").trim().slice(0, 2000);
       if (sendEmail && !toEmail) {
         return sendJson(res, 422, { ok: false, errors: ["Customer email is required for email delivery."] });
       }
@@ -13266,7 +16781,7 @@ async function handleApi(req, res, pathname) {
         }
       }
       await quotes.markSentForApproval(q.id, {
-        token, channels, toEmail, toPhone, by: sendBy,
+        token, channels, toEmail, toPhone, by: sendBy, note,
         ...(freezeMeta ? { pdf: freezeMeta } : {})
       });
       const approvalUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${token}`;
@@ -13284,89 +16799,56 @@ async function handleApi(req, res, pathname) {
               service: "gmail",
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
-            // Greet by the customer's real first name (resolved above),
-            // and show the display quote-number override on the PDF (falls
-            // back to the internal id).
-            const custName = String((parties.customer && parties.customer.name) || "").trim();
-            const firstName = (custName ? custName.split(/\s+/)[0] : "").replace(/</g, "&lt;") || "there";
-            const displayNo = (q.quoteNumberDisplay && String(q.quoteNumberDisplay).trim()) || q.id;
-            const branchLabel = q.branch || "project";
-            // Customer-facing document noun (residential_repair brief): a repair
-            // job reads as an "Estimate", every other branch as a "Proposal".
-            const docNoun = quotes.customerDocNoun(q);
-            // "Sign ASAP to schedule" urgency (Jul 2026) — repair estimates
-            // only. Format a plain YYYY-MM-DD as a UTC calendar date so no
-            // timezone shift moves it a day.
-            const isRepairEmail = q.branch === "residential_repair";
-            const fmtSchedDate = (iso) => {
-              const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
-              if (!m) return "";
-              const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
-              const WD = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-              const MO = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-              return `${WD[dt.getUTCDay()]}, ${MO[dt.getUTCMonth()]} ${dt.getUTCDate()}`;
-            };
-            const schedLabel = isRepairEmail ? fmtSchedDate(q.scheduledServiceDate) : "";
+            // Nothing goes to a load-test record — lib/test-recipients.js.
+            testRecipients.guardTransport(transporter);
             // Phone-Gated Proposal Access (2026-07, rescoped Jul 13): the
             // gate exists ONLY when a custom HTML document is attached, so
             // the email branches on the same check the /approve routes use.
             //   gated   → link only, NO PDF attachment (gating a document
             //             and then emailing it defeats the gate), plus the
             //             "you'll be asked for your phone" expectation.
-            //   ungated → the classic email, PDF attached, byte-identical
-            //             to pre-gate behaviour.
+            //   ungated → the classic email, PDF attached.
             // plain_pdf delivery (residential_repair brief) composes the
             // plain-PDF path unconditionally — it never consults the document
             // field, so a stray file could never gate a repair estimate the
             // customer already has a link to.
             const gated = q.deliveryMode === "plain_pdf" ? false : await proposalHasCustomDoc(q);
-            const html = `
-<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55;">
-  <div style="padding:24px 28px;background:#1B4D2E;border-radius:8px 8px 0 0;">
-    <div style="color:#EAF3DE;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;font-weight:600;">PJL Land Services</div>
-    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;">Your ${docNoun.lower} — ready for review.</h1>
-  </div>
-  <div style="padding:24px 28px;background:#FAFAF5;border:1px solid #e5e5dd;border-top:none;border-radius:0 0 8px 8px;">
-    <p style="margin:0 0 14px;">Hi ${firstName},</p>
-    ${gated
-      ? `<p style="margin:0 0 14px;">Your detailed ${docNoun.lower} (<strong>${displayNo}</strong>) is ready to review at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>
-    <p style="margin:0 0 14px;padding:12px 14px;background:#EAF3DE;border:1px solid #C7E0A8;border-radius:8px;font-size:13px;color:#33502f;">To open it, you'll be asked for your phone number — the one we have on file for you. Any format is fine.</p>`
-      : `<p style="margin:0 0 14px;">Your detailed ${docNoun.lower} (<strong>${displayNo}</strong>) is attached and posted at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>`}
-    ${isRepairEmail
-      ? `<p style="margin:0 0 14px;padding:12px 14px;background:#FFF4E5;border:1px solid #F0C88A;border-radius:8px;font-size:14px;color:#7A4E12;"><strong>Estimate must be signed ASAP to schedule.</strong>${schedLabel ? ` This repair is scheduled for <strong>${schedLabel}</strong> — please sign your estimate before then to keep that date.` : ""}</p>`
-      : ""}
-    <p style="margin:0 0 14px;font-size:13px;color:#555;">You can accept this ${docNoun.lower} in either of two ways:</p>
-    <ul style="margin:0 0 14px;padding-left:20px;font-size:13px;color:#333;line-height:1.7;">
-      <li><strong>Sign online</strong> — tap the button below, draw your signature, done.</li>
-      ${gated
-        ? `<li><strong>Print, sign, return</strong> — open the ${docNoun.lower}, download the PDF, sign by hand, scan or photograph it, and email it back to <a href="mailto:info@pjllandservices.com" style="color:#1B4D2E;">info@pjllandservices.com</a>.</li>`
-        : `<li><strong>Print, sign, return</strong> — print the attached PDF, sign by hand, scan or photograph it, and email it back to <a href="mailto:info@pjllandservices.com" style="color:#1B4D2E;">info@pjllandservices.com</a>.</li>`}
-    </ul>
-    <p style="margin:0 0 18px;text-align:center;">
-      <a href="${approvalUrl}" style="display:inline-block;padding:14px 28px;background:#E07B24;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;">Review &amp; sign online</a>
-    </p>
-    <p style="margin:18px 0 0;font-size:13px;color:#777;">If the button doesn't work, paste this link:<br><span style="color:#1B4D2E;word-break:break-all;">${approvalUrl}</span></p>
-    <p style="margin:24px 0 0;font-size:13px;color:#777;">Questions? Reply to this email or call <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a>.</p>
-  </div>
-  <p style="margin:16px 0 0;font-size:11px;color:#999;text-align:center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
-</div>`.trim();
-
+            // Same composer the builder's "Preview email" uses — the preview
+            // IS the send.
+            // Uploaded files that ride along — the SAME manifest the preview
+            // shows (quotes.emailAttachmentManifest), so the list Patrick
+            // approved is the list that goes. Gated → empty by construction.
+            const manifest = quotes.emailAttachmentManifest(q, { gated });
+            const extraAttachments = [];
+            for (const m of manifest) {
+              if (!m.emailAttached) continue;
+              const file = await quotes.readAttachmentBuffer(q.id, m.id);
+              if (!file) continue; // missing on disk: skip rather than fail the send
+              extraAttachments.push({ filename: m.filename, content: file.buffer, contentType: m.mimeType || "application/octet-stream" });
+            }
+            const mail = buildProposalApprovalEmail(q, {
+              parties, approvalUrl, gated, note, extraFiles: extraAttachments.map((a) => a.filename)
+            });
             // Ungated → attach the FROZEN bytes (Brief B), identical to the
             // admin download and the /approve print-to-sign page. Gated →
             // deliberately NO attachment; the PDF lives behind the gate.
-            const attachments = gated ? [] : [{
-              filename: `PJL-${docNoun.cap}-${q.id}.pdf`,
+            const attachments = mail.attachmentFilename ? [{
+              filename: mail.attachmentFilename,
               content: pdfBuffer,
               contentType: "application/pdf"
-            }];
+            }, ...extraAttachments] : [];
             await transporter.sendMail({
-              from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
+              from: mail.from,
               to: toEmail,
-              replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
-              subject: `PJL ${docNoun.lower} ${displayNo} — your review and acceptance`,
-              html,
+              replyTo: mail.replyTo,
+              subject: mail.subject,
+              html: mail.html,
               ...(attachments.length ? { attachments } : {})
+            }).catch(async (err) => {
+              await mailerLog.logSend({ kind: "other", to: toEmail, ok: false, error: err.message, refId: q.id });
+              throw err;
             });
+            await mailerLog.logSend({ kind: "other", to: toEmail, ok: true, refId: q.id });
             results.emailSent = true;
           } else {
             results.emailError = "nodemailer not installed";
@@ -13477,6 +16959,11 @@ async function handleApi(req, res, pathname) {
         depositWarning = depErr?.message || "Deposit invoice creation failed.";
         console.warn(`[confirm-pdf] deposit flow failed for ${id}:`, depErr?.message);
       }
+      // Attestation IS the acceptance on this path, so the customer
+      // confirmation fires here too — same installation-only gate.
+      await maybeSendAcceptanceConfirmation(updated, {
+        signerName: updated.acceptanceEvidence?.customerPrintedName || ""
+      });
       return sendJson(res, 200, { ok: true, quote: updated, depositWarning });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't confirm PDF acceptance."] });
@@ -13559,7 +17046,7 @@ async function handleApi(req, res, pathname) {
         // Project_proposal quotes get the full enrichment.
         proj = await projects.createFromProposal(quote, {
           customerName, customerEmail, customerPhone, address, propertyId,
-          by: "admin"
+          by: await actorLabel(req)
         });
       } else {
         // Auto-generate a project name from the customer + quote id. Patrick
@@ -14049,8 +17536,19 @@ async function handleApi(req, res, pathname) {
       const list = await materialLists.get(id);
       if (!list) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
       const partsMap = (PARTS && PARTS.parts) || {};
-      const plan = quoteRequests.planFromMaterialList(list, partsMap);
+      // The dialog can preview SHOP mode too, so what it shows is what
+      // Generate will actually do: ?shop=all, or ?shop=SUP-001,SUP-002.
+      const planUrl = new URL(req.url, baseUrlFromReq(req));
+      const shopParam = planUrl.searchParams.get("shop");
       const allSuppliers = await suppliers.list({ includeArchived: true });
+      let shopIds = null;
+      if (shopParam) {
+        const active = allSuppliers.filter((x) => !x.archived);
+        shopIds = shopParam === "all"
+          ? active.map((x) => x.id)
+          : active.filter((x) => shopParam.split(",").map((t) => t.trim()).includes(x.id)).map((x) => x.id);
+      }
+      const plan = quoteRequests.planFromMaterialList(list, partsMap, shopIds ? { shopSupplierIds: shopIds } : {});
       const supplierById = new Map(allSuppliers.map((s) => [s.id, s]));
       // Surface an existing draft per supplier so the modal can say
       // "refreshes RFQ-…" instead of implying a duplicate gets created.
@@ -14066,6 +17564,8 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, {
         ok: true,
         canGenerate: plan.ok,
+        mode: plan.mode,
+        supplierCount: allSuppliers.filter((x) => !x.archived).length,
         previews,
         missingSupplier: plan.missingSupplier,
         missingSupplierLines: plan.missingSupplierLines
@@ -14075,10 +17575,29 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // Which suppliers a shop-mode request goes to. `shopAll` means every
+  // active supplier on file; an explicit list is filtered against real,
+  // non-archived ids so a stale id from the browser cannot mint an RFQ
+  // addressed to nobody. Returns null when the caller did not ask to shop.
+  function resolveShopSupplierIds(body, allSuppliers) {
+    if (!body || typeof body !== "object") return null;
+    const active = allSuppliers.filter((x) => !x.archived);
+    if (body.shopAll === true) return active.map((x) => x.id);
+    if (!Array.isArray(body.shopSupplierIds) || !body.shopSupplierIds.length) return null;
+    const wanted = new Set(body.shopSupplierIds.map((x) => String(x || "").trim()).filter(Boolean));
+    return active.filter((x) => wanted.has(x.id)).map((x) => x.id);
+  }
+
   // POST /api/material-lists/:id/generate-quote-requests — create (or
-  // refresh) one draft RFQ per supplier. Idempotent: an existing DRAFT for
-  // (list, supplier) gets its lines replaced; non-drafts are never touched.
-  // The material list itself is NOT modified — lines stay "need".
+  // refresh) draft RFQs. Idempotent: an existing DRAFT for (list, supplier)
+  // gets its lines replaced; non-drafts are never touched. The material
+  // list itself is NOT modified — lines stay "need".
+  //
+  // Body { shopSupplierIds: [...] } or { shopAll: true } switches to SHOP
+  // mode: the same whole list to every named supplier, ignoring the
+  // catalog's per-part assignment, so the replies can be compared. In that
+  // mode an unassigned SKU is shopped rather than blocking, because not
+  // caring what the catalog lists is the point of asking.
   const listGenRfqMatch = pathname.match(/^\/api\/material-lists\/([^/]+)\/generate-quote-requests$/);
   if (listGenRfqMatch && req.method === "POST") {
     try {
@@ -14086,20 +17605,87 @@ async function handleApi(req, res, pathname) {
       const list = await materialLists.get(id);
       if (!list) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
       const partsMap = (PARTS && PARTS.parts) || {};
-      const plan = quoteRequests.planFromMaterialList(list, partsMap);
+      const body = await parseRequestBody(req).catch(() => ({}));
+      const allSuppliers = await suppliers.list({ includeArchived: true });
+      const shopSupplierIds = resolveShopSupplierIds(body, allSuppliers);
+      if (shopSupplierIds && shopSupplierIds.length === 1) {
+        return sendJson(res, 422, {
+          ok: false,
+          errors: ["Shopping a list needs at least two suppliers to compare — only one is available."]
+        });
+      }
+      const opts = shopSupplierIds ? { shopSupplierIds } : {};
+      const plan = quoteRequests.planFromMaterialList(list, partsMap, opts);
       if (!plan.ok) {
         return sendJson(res, 422, {
           ok: false,
-          errors: ["Cannot generate quote requests — some need-line SKUs have no supplier assigned."],
+          errors: [plan.mode === "shop"
+            ? "Nothing to shop — this list has no lines marked need."
+            : "Cannot generate quote requests — some need-line SKUs have no supplier assigned."],
           missingSupplier: plan.missingSupplier
         });
       }
-      const allSuppliers = await suppliers.list({ includeArchived: true });
       const supplierById = new Map(allSuppliers.map((s) => [s.id, s]));
-      const result = await quoteRequests.generateFromMaterialList(list, partsMap, supplierById);
-      return sendJson(res, 201, { ok: true, created: result.created, refreshed: result.refreshed });
+      const result = await quoteRequests.generateFromMaterialList(list, partsMap, supplierById, opts);
+      return sendJson(res, 201, { ok: true, mode: plan.mode, created: result.created, refreshed: result.refreshed });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate quote requests."] });
+    }
+  }
+
+  // GET /api/material-lists/:id/quote-comparison — every quote that came
+  // back for this list, lined up by SKU with the cheapest marked.
+  const listCmpMatch = pathname.match(/^\/api\/material-lists\/([^/]+)\/quote-comparison$/);
+  if (listCmpMatch && req.method === "GET") {
+    const id = decodeURIComponent(listCmpMatch[1]);
+    const list = await materialLists.get(id);
+    if (!list) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
+    const rfqs = await quoteRequests.list({ sourceMaterialListId: id });
+    const cmp = quoteRequests.compareQuotes(rfqs, { listId: id });
+    return sendJson(res, 200, { ok: true, ...cmp });
+  }
+
+  // POST /api/material-lists/:id/apply-cheapest-quotes — write the LOWEST
+  // quoted price per SKU into the parts catalog, across every RFQ raised
+  // from this list.
+  //
+  // This exists because applying RFQs one at a time is last-write-wins:
+  // apply the dearer supplier second and the catalog quietly carries the
+  // dearer price. Choosing per SKU is the only way "go with the cheapest"
+  // is actually true.
+  const listApplyCheapMatch = pathname.match(/^\/api\/material-lists\/([^/]+)\/apply-cheapest-quotes$/);
+  if (listApplyCheapMatch && req.method === "POST") {
+    if (!BASELINE_PARTS) return sendJson(res, 503, { ok: false, errors: ["Parts baseline not loaded."] });
+    try {
+      const id = decodeURIComponent(listApplyCheapMatch[1]);
+      const list = await materialLists.get(id);
+      if (!list) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
+      const rfqs = await quoteRequests.list({ sourceMaterialListId: id });
+      const cmp = quoteRequests.compareQuotes(rfqs, { listId: id });
+      const winners = cmp.rows.filter((r) => r.cheapest);
+      if (!winners.length) {
+        return sendJson(res, 422, { ok: false, errors: ["No quoted prices yet — record at least one supplier's reply first."] });
+      }
+      const applied = [], unchanged = [], skipped = [];
+      for (const row of winners) {
+        const toCents = row.cheapest.priceCents;
+        const current = PARTS && PARTS.parts && PARTS.parts[row.sku];
+        if (!current) { skipped.push(row.sku); continue; }
+        const fromCents = Number(current.priceCents);
+        if (fromCents === toCents) { unchanged.push(row.sku); continue; }
+        try {
+          await partsLib.update(BASELINE_PARTS, row.sku, { priceCents: toCents }, { allowedCategories: categoriesAllowedSet() });
+          applied.push({ sku: row.sku, fromCents: Number.isFinite(fromCents) ? fromCents : null, toCents,
+                         supplierId: row.cheapest.supplierId, rfqId: row.cheapest.rfqId });
+        } catch (err) {
+          console.warn(`[rfq-apply-cheapest] ${id}: ${row.sku} skipped — ${err.message}`);
+          skipped.push(row.sku);
+        }
+      }
+      if (applied.length) rebuildCatalogFromOverrides();
+      return sendJson(res, 200, { ok: true, applied, unchanged, skipped, rows: winners.length });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't apply the cheapest quotes."] });
     }
   }
 
@@ -14314,6 +17900,37 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 422, { ok: false, errors: [`Can only apply a quoted request. This one is "${rfq.status}".`] });
       }
 
+      // Applying RFQs one at a time is last-write-wins. If another RFQ from
+      // the same material list quoted a SKU CHEAPER, applying this one
+      // would quietly RAISE the catalog price and every bid built off it —
+      // the exact opposite of "go with the cheapest". Refuse and name the
+      // cheaper source. ?force=1 overrides deliberately; apply-cheapest-
+      // quotes takes the best of each instead.
+      if (rfq.sourceMaterialListId) {
+        const applyUrl = new URL(req.url, baseUrlFromReq(req));
+        const forced = applyUrl.searchParams.get("force") === "1";
+        const sibling = await quoteRequests.list({ sourceMaterialListId: rfq.sourceMaterialListId });
+        const cmp = quoteRequests.compareQuotes(sibling, { listId: rfq.sourceMaterialListId });
+        const dearer = [];
+        for (const row of cmp.rows) {
+          if (!row.cheapest || row.cheapest.rfqId === rfq.id) continue;
+          const mine = (rfq.lines || []).find((l) => l.sku === row.sku && l.quotedPriceCents != null);
+          if (mine && mine.quotedPriceCents > row.cheapest.priceCents) {
+            dearer.push({ sku: row.sku, thisCents: mine.quotedPriceCents,
+                          cheapestCents: row.cheapest.priceCents,
+                          cheapestRfqId: row.cheapest.rfqId,
+                          cheapestSupplierName: row.cheapest.supplierName });
+          }
+        }
+        if (dearer.length && !forced) {
+          return sendJson(res, 409, {
+            ok: false,
+            dearerThanBest: dearer,
+            errors: [`${dearer.length} SKU${dearer.length === 1 ? " on this quote is" : "s on this quote are"} dearer than a quote already recorded for the same material list. Use "Apply cheapest across all quotes", or re-send with force=1 to take this one anyway.`]
+          });
+        }
+      }
+
       // One price per SKU — last priced line wins if a degenerate record
       // carries duplicates. Unpriced (null) lines are simply not part of
       // the apply set; the vendor didn't quote them.
@@ -14477,17 +18094,30 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 422, { ok: false, errors: ["Pass leadId or propertyId."] });
       }
 
-      // Cancelled-booking guard (Brief B §3.4). A cancelled booking
-      // shouldn't spawn a WO — if the booking was killed for any reason
-      // (customer cancel, weather, double-book), creating a WO behind it
-      // would put a "ghost" tech run on the calendar with no real visit.
-      // Block at the lead.booking.status mirror so legacy callers that
-      // pass only a leadId are still gated.
-      if (lead?.booking?.status === "cancelled") {
-        return sendJson(res, 409, {
-          ok: false,
-          errors: ["This booking was cancelled — re-book before creating a work order."]
-        });
+      // Dead-booking guard (Brief B §3.4, widened 2026-09-09). A booking
+      // that no longer holds its slot must not spawn a work order — that
+      // would put a "ghost" tech run on the calendar with no real visit
+      // behind it. Blocked at the lead.booking.status mirror so legacy
+      // callers that pass only a leadId are still gated.
+      //
+      // It used to name `cancelled` alone, which left the other two dead
+      // states open: a COMPLETED booking already has its work order, so a
+      // second one is a duplicate job for a visit that already happened,
+      // and a NO_SHOW is a visit that did not happen and is not going to.
+      // Asked through the shared rule now, so a fourth dead state is
+      // covered the day it is added (CLAUDE.md, "define the rule once").
+      //
+      // The escape hatch for a genuine extra visit is unchanged and is
+      // the more honest record anyway: create the work order against the
+      // PROPERTY (propertyId, no lead), which this route already accepts.
+      if (lead?.booking && !bookingHoldsItsSlot(lead.booking.status)) {
+        const state = String(lead.booking.status || "").toLowerCase();
+        const why = state === "cancelled"
+          ? "This booking was cancelled — re-book before creating a work order."
+          : state === "no_show"
+            ? "That appointment was a no-show — re-book before creating a work order."
+            : "That appointment is already completed — create the work order against the property if another visit is needed.";
+        return sendJson(res, 409, { ok: false, code: `booking_${state}`, errors: [why] });
       }
 
       // Reuse the booking's customer-facing WO ID when one already
@@ -14508,10 +18138,14 @@ async function handleApi(req, res, pathname) {
       // payload up front so an incomplete waiver (checked with no reason,
       // or "other" with no note) 422s before we write a WO. Normalizes to
       // { waived, reason, notes, waivedBy, waivedAt } or null when off.
-      const waiverResult = normalizeServiceFeeWaiver(payload.serviceFeeWaiver, { by: "admin" });
+      const waiverResult = normalizeServiceFeeWaiver(payload.serviceFeeWaiver, { by: await actorLabel(req) });
       if (waiverResult.error) {
         return sendJson(res, 422, { ok: false, errors: [waiverResult.error] });
       }
+
+      // Seasonal work orders scaffold their zones from the property, so
+      // give it the list its declared count implies before we do.
+      property = await materializeDeclaredZones(property, lead);
 
       let wo = await workOrders.create({
         type, lead, property, customId, quote: sourceQuote,
@@ -14678,7 +18312,7 @@ async function handleApi(req, res, pathname) {
         if (lead?.booking?.start) sourceParts.push(`booking @ ${lead.booking.start}`);
         await workOrders.appendHistory(wo.id, {
           action: "created",
-          by: "admin",
+          by: await actorLabel(req),
           note: `${workOrders.TEMPLATES[type].label}${sourceParts.length ? ` from ${sourceParts.join(", ")}` : ""}`
         });
       } catch (err) { console.warn("[wo-history] create entry failed:", err?.message); }
@@ -14903,11 +18537,20 @@ async function handleApi(req, res, pathname) {
           fails.push({ key: "materialsConfirm", label: "Confirm materials packed" });
         }
         // Customer-visible notes for the report (Service Report brief,
-        // 2026-05-19). Required non-empty before signing — the service
-        // report PDF embeds this as the customer-facing narrative for
-        // the visit. Scope-protected at signature so the customer's
-        // copy can't be amended after sign-off.
-        if (typeof merged.customerNotes !== "string" || !merged.customerNotes.trim()) {
+        // 2026-05-19). The service report PDF embeds this as the
+        // customer-facing narrative for the visit, and it is
+        // scope-protected at signature so the customer's copy can't be
+        // amended after sign-off.
+        //
+        // BY TYPE since 2026-09-05, mirroring the lib's
+        // CUSTOMER_NOTE_REQUIRED_BY_TYPE (duplicated here for the same
+        // reason the photo map above is). A fall closing is the same job at
+        // every property and its report already carries the checklist, the
+        // water shut-off, the back-flush answer and the per-zone findings;
+        // requiring a narrative there produced a box people type through at
+        // the end of a cold visit. Unknown types stay required.
+        const noteRequired = { spring_opening: true, service_visit: true, fall_closing: false, build: true }[merged.type] ?? true;
+        if (noteRequired && (typeof merged.customerNotes !== "string" || !merged.customerNotes.trim())) {
           fails.push({ key: "customerNotes", label: "Add a note about what you did at this visit" });
         }
         return fails;
@@ -14961,7 +18604,7 @@ async function handleApi(req, res, pathname) {
       // dedicated route, materials, paidOnSite, departure stamp,
       // techNotes, serviceChecklist) keep flowing — the WO continues
       // operationally; only the scope is frozen.
-      if (existing.locked === true || existing.signature?.signed === true) {
+      if (workOrders.isScopeFrozen(existing)) {
         const touched = workOrders.findProtectedFieldTouched(payload);
         if (touched) {
           return sendJson(res, 409, {
@@ -15048,7 +18691,7 @@ async function handleApi(req, res, pathname) {
         try {
           await workOrders.appendHistory(id, {
             action: "patch",
-            by: "admin",
+            by: await actorLabel(req),
             note: `Updated: ${summary}`
           });
         } catch (err) { console.warn("[wo-history] patch entry failed:", err?.message); }
@@ -15148,6 +18791,8 @@ async function handleApi(req, res, pathname) {
           service: "gmail",
           auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
         });
+        // Nothing goes to a load-test record — lib/test-recipients.js.
+        testRecipients.guardTransport(transporter);
         const firstName = (wo.customerName || "").split(" ")[0] || "there";
         // Bypass reshape — when wo.signatureBypass exists, the customer did
         // not sign on-site. The legal posture is "verbal acceptance recorded
@@ -15171,9 +18816,12 @@ async function handleApi(req, res, pathname) {
         const totalLine = invoice && invoice.total > 0
           ? `<p style="margin: 0 0 14px;">Total for today's visit: <strong>$${moneyCad(invoice.total)} CAD</strong> (incl. HST). An invoice will follow.</p>`
           : "";
-        const warranty = serviceRecord.warrantyExpiresAt
-          ? `<p style="margin: 0 0 14px;">Today's work is covered under PJL's <strong>${serviceRecord.warrantyMonths}-month warranty</strong>, valid through ${new Date(serviceRecord.warrantyExpiresAt).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" })}.</p>`
-          : "";
+        // Warranty line REMOVED from this email on Patrick's 2026-09-01
+        // review ("you can abolish anything regarding warranty"). The
+        // warranty itself is unchanged — serviceRecord.warrantyExpiresAt
+        // still stamps, the portal's service history still shows
+        // coverage, and the claims flow still works. It just doesn't
+        // lead the completion email.
         // Service report — attached when the cascade produced a snapshot
         // (Service Report brief, 2026-05-19). The line goes in the body
         // so the customer knows what the attachment is.
@@ -15203,20 +18851,41 @@ async function handleApi(req, res, pathname) {
         const bypassFollowUp = isBypassed
           ? `<p style="margin: 0 0 14px;">If anything in the visit summary or invoice does not match your understanding of what was authorized, please contact us within 7 days at <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a> or by replying to this email.</p>`
           : "";
-        // Headline + greeting body diverge between the two paths. Signed
-        // WO: "Today's visit is complete." + visit summary. Bypassed WO:
-        // factual "Work was completed at your property…" framing that
-        // doesn't presuppose the customer was the one authorizing.
+        // The email leads with the SERVICE by name — Patrick's 2026-09-01
+        // review of his simulated closing: "visit summary" is too generic
+        // when the customer bought a fall closing. His copy for the lead
+        // paragraph, lightly polished; the seasonal services explain the
+        // on-site observation habit, everything else keeps the factual
+        // completed-at-your-property line. The Service Report is a portal
+        // link, never an attachment, so the copy says "in your Service
+        // Report", not "attached".
+        const typeLabel = ({
+          spring_opening: "Spring Opening",
+          fall_closing: "Fall Closing",
+          service_visit: "Service Visit",
+          build: "Install / Build"
+        })[wo.type] || "Visit";
+        const onDate = completedDateStr ? ` on ${completedDateStr.replace(/</g, "&lt;")}` : "";
+        const serviceIntro = wo.type === "fall_closing"
+          ? `PJL has successfully completed the fall closing of your sprinkler system${onDate}. While on site, we observe your system for potential issues and note them for next year's spring opening — anything the technician flagged is in your Service Report.`
+          : wo.type === "spring_opening"
+            ? `PJL has successfully completed the spring opening of your sprinkler system${onDate}. While on site, we observe your system for potential issues — anything the technician flagged is in your Service Report.`
+            : `Work was completed at your property${onDate}.`;
+        // Headline + greeting body still diverge between the two paths.
+        // Bypassed WO framing doesn't presuppose the customer was the one
+        // authorizing (Admin Signature Bypass brief §3.4).
         const headline = isBypassed
-          ? "Your visit summary"
-          : "Today's visit is complete.";
+          ? `Your ${typeLabel} summary`
+          : `Your ${typeLabel} is complete.`;
         const greetingBlock = isBypassed
           ? `
     <p style="margin: 0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
-    <p style="margin: 0 0 14px;">Work was completed at your property${completedDateStr ? ` on ${completedDateStr.replace(/</g, "&lt;")}` : ""}. Please review the attached summary and the invoice (which will follow separately).</p>
+    <p style="margin: 0 0 14px;">${serviceIntro}</p>
+    <p style="margin: 0 0 14px;">Please review the summary below — your invoice will follow separately.</p>
     <p style="margin: 0 0 14px;">${serviceRecord.summary.replace(/</g, "&lt;")}</p>`
           : `
     <p style="margin: 0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
+    <p style="margin: 0 0 14px;">${serviceIntro}</p>
     <p style="margin: 0 0 14px;">${serviceRecord.summary.replace(/</g, "&lt;")}</p>`;
         const html = `
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
@@ -15227,7 +18896,6 @@ async function handleApi(req, res, pathname) {
   <div style="padding: 24px 28px; background: #FAFAF5; border: 1px solid #e5e5dd; border-top: none; border-radius: 0 0 8px 8px;">${greetingBlock}
     ${reportLine}
     ${totalLine}
-    ${warranty}
     ${bypassFollowUp}
     <p style="margin: 0 0 18px;">
       <a href="${portalUrl}" style="display: inline-block; padding: 11px 20px; background: #E07B24; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600;">Open your portal</a>
@@ -15245,10 +18913,14 @@ async function handleApi(req, res, pathname) {
           to: wo.customerEmail,
           replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
           subject: isBypassed
-            ? "PJL visit summary — please review"
-            : "Your PJL visit is complete",
+            ? `PJL ${typeLabel} Summary — please review`
+            : `Your PJL ${typeLabel} is complete`,
           html
+        }).catch(async (err) => {
+          await mailerLog.logSend({ kind: "completion", to: wo.customerEmail, ok: false, error: err.message, refId: wo.id });
+          throw err;
         });
+        await mailerLog.logSend({ kind: "completion", to: wo.customerEmail, ok: true, refId: wo.id });
       }
 
       // Sign-time sweep: if THIS PATCH just signed the WO, find every
@@ -15433,7 +19105,7 @@ async function handleApi(req, res, pathname) {
       try {
         await workOrders.appendHistory(id, {
           action: "photo_delete",
-          by: "admin",
+          by: await actorLabel(req),
           note: `Removed photo #${n} (${photoMeta.category || "general"})`
         });
       } catch (err) { console.warn("[wo-history] photo delete entry failed:", err?.message); }
@@ -15570,6 +19242,59 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ======== Admin unlock / re-lock (2026-08-06) =========================
+  // POST /api/work-orders/:id/unlock   — clear wo.locked so scope can be
+  //                                      edited. Reason required.
+  // POST /api/work-orders/:id/relock   — re-freeze against the acceptance
+  //                                      record already on file.
+  //
+  // ADMIN ONLY, twice over: needsAuth() maps both paths to "admin" (above
+  // the generic /api/work-orders "user" rule) and each handler re-checks
+  // requireAdmin. Techs get 403, not a 404 — a tech hitting this has made
+  // an honest mistake and deserves to be told what happened.
+  //
+  // Motivating case: WO-BF86TWRW bypass-locked with the $95 service call
+  // missing from scope. Neither of these routes touches the WO's invoice
+  // — see the note on unlockWorkOrder() in lib/work-orders.js.
+  const woUnlockMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/(unlock|relock)$/);
+  if (woUnlockMatch && req.method === "POST") {
+    const action = woUnlockMatch[2];
+    try {
+      const session = await requireAdmin(req);
+      if (!session) {
+        return sendJson(res, 403, {
+          ok: false,
+          error: "admin_required",
+          errors: [`Only an admin can ${action === "unlock" ? "unlock" : "re-lock"} a work order.`]
+        });
+      }
+      const id = decodeURIComponent(woUnlockMatch[1]);
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
+      const userAgent = req.headers["user-agent"] || "";
+      const by = session.uid || "admin";
+
+      try {
+        const updated = action === "unlock"
+          ? await workOrders.unlockWorkOrder(id, { reason: payload?.reason, unlockedBy: by }, { ip, userAgent })
+          : await workOrders.relockWorkOrder(id, { relockedBy: by }, { ip, userAgent });
+        return sendJson(res, 200, { ok: true, workOrder: updated });
+      } catch (err) {
+        const code = err?.code || "";
+        if (code === "wo_not_found") return sendJson(res, 404, { ok: false, error: code, errors: [err.message] });
+        if (code === "wo_not_locked" || code === "wo_already_locked") {
+          return sendJson(res, 409, { ok: false, error: code, errors: [err.message] });
+        }
+        if (code === "reason_required" || code === "no_acceptance_record") {
+          return sendJson(res, 422, { ok: false, error: code, errors: [err.message] });
+        }
+        throw err;
+      }
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || `Couldn't ${action} work order.`] });
+    }
+  }
+
   // ======== AI Correct Diagnosis Bonus (Brief F / spec §4.3.3 r6) ========
   // Tech taps "Diagnosis matched" or "Didn't match" on the cheat-sheet
   // bonus card BEFORE customer signature. On match: credit a -1 hour
@@ -15583,7 +19308,7 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, {
           ok: false,
           errors: ["Work order is signed and locked. Bonus decision is final."],
@@ -15681,7 +19406,7 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(woOnSiteBuildMatch[1]);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is signed and locked. Unlock first to build a new quote."] });
       }
       if (!workOrders.canBuildOnSiteQuote(wo)) {
@@ -15724,6 +19449,135 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // POST /api/work-orders/:id/on-site-quote/accept-offline — admin records
+  // that the customer accepted the on-site quote via a returned SIGNED COPY
+  // (printed, signed by hand, returned as a photo/scan) instead of the remote
+  // e-sign link. Flips onSiteQuote.status → accepted + stores durable
+  // acceptanceEvidence, WITHOUT locking or completing the WO — the completion
+  // sign-off stays a separate event. The signed copy is uploaded FIRST via
+  // POST /photos; its `n` rides in here as evidencePhotoN. Offline-acceptance
+  // brief, Aug 2026 — the on-site-quote sibling of the proposal PDF-return.
+  const woOnSiteAcceptOfflineMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/on-site-quote\/accept-offline$/);
+  if (woOnSiteAcceptOfflineMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(woOnSiteAcceptOfflineMatch[1]);
+      const payload = await parseRequestBody(req);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      if (workOrders.isScopeFrozen(wo)) {
+        return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
+      }
+      const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
+      const userAgent = req.headers["user-agent"] || "";
+
+      let updated;
+      try {
+        updated = await workOrders.recordOfflineQuoteAcceptance(id, {
+          acceptedByName: typeof payload?.acceptedByName === "string" ? payload.acceptedByName.trim() : "",
+          acceptedAt: typeof payload?.acceptedAt === "string" ? payload.acceptedAt : "",
+          note: typeof payload?.note === "string" ? payload.note : "",
+          evidencePhotoN: payload?.evidencePhotoN,
+          recordedBy: session.uid || "admin"
+        }, { ip, userAgent });
+      } catch (err) {
+        const code = err?.code || "";
+        if (code === "wo_not_found") return sendJson(res, 404, { ok: false, errors: [err.message] });
+        if (code === "already_signed") return sendJson(res, 409, { ok: false, errors: [err.message] });
+        if (code === "no_quote") return sendJson(res, 422, { ok: false, errors: [err.message] });
+        return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record acceptance."] });
+      }
+
+      // Mirror the remote-approval side effects — MINUS lock/complete — so the
+      // CRM stays consistent. Both are failure-tolerant: a hiccup here must
+      // never un-accept the quote the customer already signed on paper.
+      const quoteId = updated?.onSiteQuote?.quoteId || null;
+      if (quoteId) {
+        try {
+          const q = await quotes.get(quoteId);
+          if (q) {
+            const decisions = (q.lineItems || []).map((_l, idx) => ({ lineItemIdx: idx, accepted: true, deferredId: null }));
+            const acceptedQuote = await quotes.recordOfflineAcceptance(quoteId, {
+              customerName: typeof payload?.acceptedByName === "string" ? payload.acceptedByName.trim() : "",
+              decisions,
+              acceptedAt: updated.onSiteQuote?.acceptanceEvidence?.acceptedAt,
+              recordedBy: session.uid || "admin",
+              note: typeof payload?.note === "string" ? payload.note : "",
+              evidenceRef: { woId: id, photoN: updated.onSiteQuote?.acceptanceEvidence?.evidencePhotoN ?? null },
+              ip, userAgent
+            });
+            try {
+              if (acceptedQuote) await deposits.onQuoteAccepted(acceptedQuote, { by: session.uid || "admin" });
+            } catch (depErr) {
+              console.warn(`[accept-offline] deposit flow failed for ${quoteId}:`, depErr?.message);
+            }
+          }
+        } catch (qErr) {
+          console.warn(`[accept-offline] linked quote flip failed for ${quoteId}:`, qErr?.message);
+        }
+      }
+
+      return sendJson(res, 200, { ok: true, workOrder: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record offline acceptance."] });
+    }
+  }
+
+  // POST /api/work-orders/:id/on-site-quote/attach-signed-copy — admin
+  // uploads the customer's returned signed copy (PDF or photo) as a QUOTE
+  // ATTACHMENT (quote-attachments/<quoteId>/), NOT a visit photo — the visit
+  // photo grid is an <img> gallery and can't present documents. Allowed at
+  // any quote status, including after acceptance, so an already-accepted
+  // quote can still get (or replace) its signed copy. Body:
+  // { filename, data: <base64>, mediaType }. Responds with the attachment
+  // meta + its admin URL for the "Open signed copy" link.
+  const woAttachSignedCopyMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/on-site-quote\/attach-signed-copy$/);
+  if (woAttachSignedCopyMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(woAttachSignedCopyMatch[1]);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      const quoteId = wo.onSiteQuote?.quoteId || null;
+      if (!quoteId) {
+        return sendJson(res, 422, { ok: false, errors: ["This work order has no quote record yet — send the quote for approval first, then attach the signed copy."] });
+      }
+      const payload = await parseRequestBody(req, { maxBytes: quotes.MAX_ATTACHMENT_BYTES + 10_000_000 });
+      const buffer = Buffer.from(String(payload?.data || ""), "base64");
+      if (!buffer.length) return sendJson(res, 422, { ok: false, errors: ["No file data received."] });
+      const mediaType = String(payload?.mediaType || "application/pdf").toLowerCase();
+      const filename = String(payload?.filename || `signed-${quoteId}.pdf`).slice(0, 200);
+
+      const meta = await quotes.addAttachment(quoteId, {
+        buffer,
+        mimeType: mediaType,
+        filename,
+        kind: "signed_offline_acceptance",
+        caption: "Signed quote acceptance (returned copy)",
+        uploadedBy: session.uid || "admin"
+      });
+
+      // Pointer on the WO so the editor renders the "Open signed copy" link.
+      const updated = await workOrders.attachSignedCopyRef(id, {
+        quoteId,
+        attachmentId: meta.id,
+        filename: meta.filename,
+        recordedBy: session.uid || "admin"
+      });
+
+      return sendJson(res, 201, {
+        ok: true,
+        workOrder: updated,
+        attachment: meta,
+        url: `/api/quotes/${encodeURIComponent(quoteId)}/attachments/${encodeURIComponent(meta.id)}`
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't attach the signed copy."] });
+    }
+  }
+
   // Set / clear the service-call fee waiver on an existing WO (Patrick
   // 2026-06-06). Lets him bypass the $95 on a WO that's already created —
   // regardless of which creation form spawned it (property page, handoff,
@@ -15739,16 +19593,53 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is signed and locked — the waiver can't change."] });
       }
 
       const waiving = payload?.waived === true;
+
+      // ---- The warranty escape hatch (FLOW-30) -------------------------
+      // A WO raised from an approved warranty claim promised the customer
+      // a free visit. Lifting that waiver on site — because the fault
+      // turned out not to be what the claim described — is the single most
+      // contested thing this system can do, so it is the one waiver change
+      // that cannot happen silently:
+      //
+      //   * a written reason is REQUIRED (it reaches the customer and
+      //     stays on both the WO and the claim);
+      //   * the claim is moved to `converted` so it can never sit at
+      //     "approved — free repair" while we invoice for the visit;
+      //   * the customer is emailed the reason.
+      //
+      // It stays a normal pre-signature edit: wo.locked already 409s above,
+      // so once the customer has signed, converting means an explicit
+      // unlock first — exactly like any other post-signature scope change.
+      const warrantyProvenance = (wo.warrantyClaim && wo.warrantyClaim.claimId) ? wo.warrantyClaim : null;
+      const isWarrantyConversion = Boolean(
+        !waiving &&
+        warrantyProvenance &&
+        !warrantyProvenance.converted &&
+        wo.serviceFeeWaiver &&
+        wo.serviceFeeWaiver.waived === true
+      );
+      const conversionReason = normalizeString(payload?.reason, 2000);
+      if (isWarrantyConversion && conversionReason.length < 10) {
+        return sendJson(res, 422, {
+          ok: false,
+          errors: [
+            `Work order ${wo.id} was raised free of charge under warranty claim ${warrantyProvenance.claimId}. ` +
+            "To charge for this visit instead, give the reason the warranty doesn't cover it — " +
+            "at least 10 characters. It goes to the customer and stays on the claim."
+          ]
+        });
+      }
+
       let waiver = null;
       if (waiving) {
         const norm = normalizeServiceFeeWaiver(
           { waived: true, reason: payload.reason, notes: payload.notes },
-          { by: "admin" }
+          { by: await actorLabel(req) }
         );
         if (norm.error) return sendJson(res, 422, { ok: false, errors: [norm.error] });
         waiver = norm.waiver;
@@ -15787,20 +19678,76 @@ async function handleApi(req, res, pathname) {
         }
       }
       const totals = issueRollup.recomputeTotals(lines);
-      const updated = await workOrders.update(id, {
+      const session = await readSession(req);
+      const actor = session?.uid || "admin";
+      const woPatch = {
         serviceFeeWaiver: waiver,
         onSiteQuote: { ...wo.onSiteQuote, builderLineItems: lines }
-      });
+      };
+      if (isWarrantyConversion) {
+        // `converted` is ADDED to the provenance, never replacing it: the
+        // pair "approved under claim X, then converted for reason Y" is
+        // the audit trail. Losing the approval half would leave a
+        // chargeable WO with no record it was ever a warranty visit.
+        woPatch.warrantyClaim = {
+          ...warrantyProvenance,
+          converted: { at: new Date().toISOString(), by: actor, reason: conversionReason }
+        };
+      }
+      const updated = await workOrders.update(id, woPatch);
       try {
         await workOrders.appendHistory(id, {
-          action: waiving ? "service_fee_waived" : "service_fee_waiver_removed",
-          by: "admin",
+          action: waiving
+            ? "service_fee_waived"
+            : (isWarrantyConversion ? "warranty_converted_to_chargeable" : "service_fee_waiver_removed"),
+          by: actor,
           note: waiving
             ? `Service call fee waived — ${friendlyWaiverReason(waiver)}${waiver.notes ? ` (${waiver.notes})` : ""}`
-            : "Service call fee waiver removed — fee restored"
+            : isWarrantyConversion
+              // Named in full: read back in a year, this line has to explain
+              // on its own why a visit promised free was invoiced.
+              ? `Warranty visit converted to a chargeable service call. Claim ${warrantyProvenance.claimId} was approved free of charge; on attending, the fault was found not to be covered. Service call fee restored. Reason: ${conversionReason}`
+              : "Service call fee waiver removed — fee restored"
         });
       } catch (err) { console.warn("[wo-history] waiver entry failed:", err?.message); }
-      return sendJson(res, 200, { ok: true, workOrder: updated, lineItems: lines, ...totals });
+
+      // Write the conversion back to the claim. Done AFTER the WO update
+      // so the money change is already durable: if this half fails, the
+      // customer is correctly charged and the claim is merely stale, which
+      // the queue surfaces. The reverse order could show a converted claim
+      // against a WO still marked free.
+      let claimConversion = null;
+      if (isWarrantyConversion) {
+        try {
+          const conv = await warrantyClaims.setStatus(warrantyProvenance.claimId, "converted", {
+            note: conversionReason,
+            by: actor,
+            action: "converted_to_paid_service_call"
+          });
+          if (conv.ok) {
+            claimConversion = { ok: true, claimId: warrantyProvenance.claimId };
+            try {
+              const sent = await notifyWarranty.sendStatusUpdate(conv.claim, {
+                note: conversionReason,
+                previousStatus: "approved"
+              });
+              if (sent.ok) await warrantyClaims.markNotified(warrantyProvenance.claimId);
+              claimConversion.emailed = sent;
+            } catch (mailErr) {
+              claimConversion.emailed = { ok: false, error: mailErr?.message || String(mailErr) };
+            }
+          } else {
+            claimConversion = { ok: false, error: conv.error };
+          }
+        } catch (err) {
+          claimConversion = { ok: false, error: err?.message || String(err) };
+        }
+        if (!claimConversion.ok) {
+          console.error(`[warranty-claim] WO ${id} converted to chargeable but claim ${warrantyProvenance.claimId} was NOT updated:`, claimConversion.error);
+        }
+      }
+
+      return sendJson(res, 200, { ok: true, workOrder: updated, lineItems: lines, ...totals, claimConversion });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update the fee waiver."] });
     }
@@ -15813,7 +19760,7 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
       }
       const inLines = Array.isArray(payload?.lineItems) ? payload.lineItems : null;
@@ -15914,7 +19861,7 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
       }
       if (!workOrders.canBuildOnSiteQuote(wo)) {
@@ -16195,7 +20142,7 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(woOnSiteDeclineAllMatch[1]);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
       }
       const builderLines = Array.isArray(wo.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
@@ -16306,7 +20253,7 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req).catch(() => ({}));
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
       }
       const propertyId = wo.propertyId || null;
@@ -16361,7 +20308,7 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
       }
       if (wo.type !== "fall_closing") {
@@ -16542,7 +20489,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
 
       const wo = await workOrders.get(woId);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
       }
       const propertyId = wo.propertyId;
@@ -16693,7 +20640,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const results = { smsSent: false, smsError: null, emailSent: false, emailError: null };
 
       // SMS — short, link-forward.
-      if (payload.sendSms && phone && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
+      // Nothing goes to a load-test record, on any channel — see
+      // lib/test-recipients.js.
+      const smsBlocked = await testRecipients.isTestRecipient({ phone, email });
+      if (smsBlocked) testRecipients.suppressed("sms", phone, session?.id || "");
+      if (payload.sendSms && phone && !smsBlocked && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
         const smsBody = `Hi${firstName ? " " + firstName : ""}, this is PJL Land Services. ${summary ? summary + ". " : ""}Book your appointment here: ${bookingUrl}`;
         try {
           const sid = process.env.TWILIO_ACCOUNT_SID;
@@ -16724,6 +20675,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
               service: "gmail",
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
+            // Nothing goes to a load-test record — lib/test-recipients.js.
+            testRecipients.guardTransport(transporter);
             const safeFirst = firstName || "there";
             const html = `
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
@@ -16750,7 +20703,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
               subject: "Your PJL booking link is ready",
               html,
               text
+            }).catch(async (err) => {
+              await mailerLog.logSend({ kind: "other", to: email, ok: false, error: err.message });
+              throw err;
             });
+            await mailerLog.logSend({ kind: "other", to: email, ok: true });
             results.emailSent = true;
           } else {
             results.emailError = "nodemailer not installed";
@@ -16769,6 +20726,105 @@ Customer signature captured at ${new Date().toISOString()}.`;
       });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't send link."] });
+    }
+  }
+
+  // The "Where's the property?" gate. book.html calls this BEFORE the
+  // address step advances, so the riffraff is filtered right there
+  // (Patrick, piloting) rather than at the calendar. Same booking-gate
+  // policy as availability/reserve — this is the front door, those are
+  // the locks behind it.
+  // GET /api/admin/address-suggest?q=<partial address>
+  //
+  // Google Places autocomplete, proxied. The CRM's own pages get this by
+  // loading the Places JS SDK in the browser and binding it to
+  // `.js-address-autocomplete` (coverage-checker.js). A React Native
+  // screen has no browser to do that in, so the same service is reached
+  // server-side with the key the geocoder already uses.
+  //
+  // Suggestions only — no geocode, no session token, no place details.
+  // The address the tech picks still goes through
+  // /api/booking/verify-address, so the booking gate and the coordinates
+  // come from exactly one place and a suggestion can never skip them.
+  if (req.method === "GET" && pathname === "/api/admin/address-suggest") {
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const q = normalizeString(url.searchParams.get("q"), 200);
+    // Two characters is every address in Ontario. Below that the call is
+    // spend with no signal.
+    if (q.length < 3) return sendJson(res, 200, { ok: true, suggestions: [] });
+    const key = process.env.GOOGLE_MAPS_SERVER_KEY;
+    if (!key) {
+      // Not an error the tech can act on: the address box still works,
+      // it just stops suggesting. Say so rather than failing the screen.
+      return sendJson(res, 200, { ok: true, suggestions: [], degraded: "no_key" });
+    }
+    try {
+      const api = new URL("https://maps.googleapis.com/maps/api/place/autocomplete/json");
+      api.searchParams.set("input", q);
+      api.searchParams.set("key", key);
+      // Addresses in Canada only — PJL does not service anywhere else,
+      // and an unrestricted box suggests Aurora, Colorado.
+      api.searchParams.set("types", "address");
+      api.searchParams.set("components", "country:ca");
+      const r = await fetch(api, { signal: AbortSignal.timeout(6000) });
+      const data = await r.json();
+      // Google answers 200 even when it is refusing. ZERO_RESULTS is an
+      // ordinary empty answer; everything else is a fault worth naming,
+      // and REQUEST_DENIED — the Places API not enabled on the project,
+      // or the key restricted to Geocoding and Distance Matrix only — is
+      // by far the likeliest. Reported rather than swallowed, because a
+      // silent empty list sends someone hunting the app instead of the
+      // Google console.
+      const status = String(data.status || "");
+      if (status && status !== "OK" && status !== "ZERO_RESULTS") {
+        console.warn("[address-suggest] Google says", status, data.error_message || "");
+        return sendJson(res, 200, {
+          ok: true,
+          suggestions: [],
+          degraded: "google",
+          googleStatus: status,
+          googleMessage: String(data.error_message || "")
+        });
+      }
+      const suggestions = Array.isArray(data.predictions)
+        ? data.predictions.slice(0, 6).map((p) => ({
+            id: String(p.place_id || p.description || ""),
+            description: String(p.description || "")
+          })).filter((p) => p.description)
+        : [];
+      return sendJson(res, 200, { ok: true, suggestions });
+    } catch (err) {
+      // A dead suggestion service must never block a booking — the tech
+      // types the address and verify-address still does the real work.
+      console.warn("[address-suggest]", err?.message);
+      return sendJson(res, 200, { ok: true, suggestions: [], degraded: "upstream" });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/booking/verify-address") {
+    try {
+      const body = await parseRequestBody(req);
+      const address = normalizeString(body.address, 320);
+      if (!address) {
+        return sendJson(res, 422, { ok: false, code: "address_missing", errors: ["Enter the property address."] });
+      }
+      const geo = await geocode(address);
+      const verdict = await bookingGate.gate(geo, {
+        travelMinutes: distanceLib.travelMinutes, base: PJL_BASE
+      });
+      if (!verdict.ok) {
+        return sendJson(res, 422, { ok: false, code: verdict.code, errors: [verdict.message] });
+      }
+      if (verdict.degraded) {
+        console.warn("[booking-gate] geocode degraded (", verdict.reason, ") — verify-address allowed:", address);
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        address: geo.coords?.formattedAddress || address,
+        minutes: verdict.minutes ?? null
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't verify that address."] });
     }
   }
 
@@ -16804,12 +20860,33 @@ Customer signature captured at ${new Date().toISOString()}.`;
       }
 
       const geo = await geocode(address);
+      // The booking gate (Patrick, piloting: spam + "who can book").
+      // Junk addresses and out-of-area addresses are refused BEFORE a
+      // calendar renders; our own geocode outages stand aside, flagged.
+      // The bypass must be ASKED FOR (adminBypass=1 from the admin
+      // pages) and backed by a session. A bare admin cookie is not
+      // enough — Patrick piloting the PUBLIC page while logged in must
+      // see exactly what a customer sees, or the gate is untestable.
+      const wantsAdminBypass = url.searchParams.get("adminBypass") === "1";
+      if (!(wantsAdminBypass && await requireUser(req))) {
+        const gateVerdict = await bookingGate.gate(geo, {
+          travelMinutes: distanceLib.travelMinutes, base: PJL_BASE
+        });
+        if (!gateVerdict.ok) {
+          return sendJson(res, 422, { ok: false, code: gateVerdict.code, errors: [gateVerdict.message] });
+        }
+        if (gateVerdict.degraded) {
+          console.warn("[booking-gate] geocode degraded (", gateVerdict.reason, ") — availability served ungated for:", address);
+        }
+      }
       const customerCoords = geo.coords;
       const [bookings, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
 
       const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
       const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
 
+      const dayShapes = await dayShapesForSeason({ bookings, now });
+      const diagnostics = { geoSuppressed: [], seasonClosed: [] };
       const slots = await listAvailableSlots({
         serviceKey,
         customerCoords,
@@ -16817,12 +20894,25 @@ Customer signature captured at ${new Date().toISOString()}.`;
         blocks: scheduleData.blocks,
         daysAhead,
         hours: mergedHours,
-        settings: mergedSettings
+        settings: mergedSettings,
+        dayShapes,
+        diagnostics
+        // NOTE: no seasonWindows override, deliberately. The booking
+        // window is the range of DATES that may be scheduled — fall 2026
+        // is Sep 28 to Oct 30 — and it applies to staff exactly as it
+        // applies to the public. Patrick opens further dates himself when
+        // he chooses to; an admin flag that quietly widened it would put
+        // work on days he has not opened, which is the opposite of the
+        // control the window exists to give him.
       });
 
       const days = (fromDate && toDate)
-        ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now })
+        ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now, geoSuppressed: diagnostics.geoSuppressed, seasonClosed: diagnostics.seasonClosed })
         : groupByDay(slots);
+      // Star the customer's best days — the ones where their address
+      // joins a route we're already driving (Patrick, 2026-09-02). Days
+      // with no route or bookings get no star: nothing to join.
+      recommendDays(days);
 
       return sendJson(res, 200, {
         ok: true,
@@ -16841,7 +20931,98 @@ Customer signature captured at ${new Date().toISOString()}.`;
   // Public booking endpoint — creates a lead AND reserves the chosen slot.
   // Body: { serviceKey, slotStart, contact:{firstName,lastName,phone,email,
   //         address,notes}, addressLat, addressLng }
+  // Take a ten-minute claim on a slot the moment the customer picks it, so
+  // the form they are filling in is for a slot that is actually theirs.
+  // Public: the token IS the claim, and it buys ten minutes of one bucket
+  // unit. Rate-limited by the same anti-bot gate as reserve.
+  if (req.method === "POST" && pathname === "/api/booking/hold") {
+    await bookingReserveLock.holdUntilResponse(res);
+    try {
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const serviceKey = normalizeString(payload.serviceKey, 60);
+      const slotStart = normalizeString(payload.slotStart, 40);
+      const releaseToken = normalizeString(payload.releaseToken, 64);
+      const address = normalizeString(payload.address, 320);
+      const service = BOOKABLE_SERVICES[serviceKey];
+      if (!service) {
+        return sendJson(res, 422, { ok: false, code: "unknown_service", errors: ["Pick a service first."] });
+      }
+      const startDate = new Date(slotStart);
+      if (!slotStart || Number.isNaN(startDate.getTime())) {
+        return sendJson(res, 422, { ok: false, code: "bad_slot", errors: ["Pick a time first."] });
+      }
+      if (!address) {
+        return sendJson(res, 422, { ok: false, code: "address_missing", errors: ["Address is required."] });
+      }
+
+      // Hold only what the engine would actually give them. Without this the
+      // endpoint is a way to block any slot on the calendar by asking.
+      const geo = await geocode(address);
+      const customerCoords = geo.coords;
+      const [bookingsNow, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
+      const available = await listAvailableSlots({
+        serviceKey,
+        customerCoords,
+        bookings: bookingsNow,
+        blocks: scheduleData.blocks,
+        daysAhead: horizonToReach(startDate),
+        hours: { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) },
+        settings: { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) },
+        dayShapes: await dayShapesForSeason({ bookings: bookingsNow })
+      });
+      const match = available.find((sl) => sl.start === startDate.toISOString());
+      if (!match) {
+        return sendJson(res, 409, {
+          ok: false,
+          code: "slot_taken",
+          errors: ["That time was just taken. Please pick another."]
+        });
+      }
+
+      const hold = await holds.create({
+        slotStart: match.start,
+        slotEnd: match.end,
+        dateKey: String(match.start).slice(0, 10),
+        bucketKey: match.bucketKey || null,
+        serviceKey,
+        coords: customerCoords || null,
+        releaseToken
+      });
+      return sendJson(res, 201, {
+        ok: true,
+        holdToken: hold.token,
+        expiresAt: hold.expiresAt,
+        holdMinutes: holds.HOLD_MINUTES
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't hold that time."] });
+    }
+  }
+
+  // Give a slot back when the customer changes their mind or leaves the
+  // form. Best-effort — the hold lapses on its own in ten minutes anyway.
+  if (req.method === "POST" && pathname === "/api/booking/release-hold") {
+    const payload = await parseRequestBody(req).catch(() => ({}));
+    await holds.release(normalizeString(payload.holdToken, 64)).catch(() => null);
+    return sendJson(res, 200, { ok: true });
+  }
+
   if (req.method === "POST" && pathname === "/api/booking/reserve") {
+    // ONE BOOKING AT A TIME.
+    //
+    // Everything below — re-validating the slot, writing the lead, the
+    // customer, the property and the canonical booking — is one indivisible
+    // step. It was not, and six simultaneous reserves on one slot returned
+    // six 201s while leaving two leads and one booking on disk: four
+    // customers told they were booked who were not in the system at all
+    // (scripts/test-booking-concurrency.mjs, which fails on the old code).
+    //
+    // Held until the response closes rather than in an explicit finally,
+    // because this handler returns from a dozen places; tying the release to
+    // the response covers the throwing paths too. booking-lock's watchdog
+    // releases a holder that overruns, so a wedged request can never take the
+    // booking page down with it.
+    await bookingReserveLock.holdUntilResponse(res);
     try {
       const payload = await parseRequestBody(req);
 
@@ -16860,6 +21041,23 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const adminSession = await requireUser(req);
       const isAdmin = Boolean(adminSession);
 
+      // Load-test bypass. Only honoured when ALL of:
+      //   - PJL_TEST_KEY env var is set on the server
+      //   - request carries X-PJL-Test-Key matching it
+      //   - notes start with "PJLTEST-" (so test records are findable
+      //     and deletable afterwards)
+      // Skips Turnstile + the per-IP rate limit so the booking bot can
+      // create 100+ bookings from one machine. Honeypot + time-trap still
+      // run. Unset PJL_TEST_KEY on Render to switch the bypass off.
+      const testKey = String(process.env.PJL_TEST_KEY || "");
+      const testNotes = String(payload?.contact?.notes || payload?.notes || "");
+      const isLoadTest = Boolean(
+        testKey &&
+        String(req.headers["x-pjl-test-key"] || "") === testKey &&
+        testNotes.includes("PJLTEST-")
+      );
+      if (isLoadTest) console.log("[load-test] anti-bot bypass for", testNotes.slice(0, 12));
+
       // Anti-bot gate. Honeypot + time-trap + rate-limit always run —
       // they're cheap and harmless for admin too. Turnstile is skipped
       // for admin sessions; the session itself is the bot filter.
@@ -16867,7 +21065,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
         body: payload,
         ip: callerIp(req),
         userAgent: req.headers["user-agent"] || "",
-        skipTurnstile: isAdmin
+        skipTurnstile: isAdmin || isLoadTest,
+        skipRateLimit: isLoadTest
       });
       if (!verdict.ok) return sendJson(res, verdict.status, verdict.responseBody);
 
@@ -16887,8 +21086,22 @@ Customer signature captured at ${new Date().toISOString()}.`;
           errors: ["Unknown service."]
         });
       }
-      const startDate = new Date(slotStart);
-      if (Number.isNaN(startDate.getTime())) {
+      // The open bucket ("first available"): no slot at all. The customer
+      // joins the standby list and Patrick places them onto a route day
+      // from the Season Plan later — everything slot-shaped below is
+      // skipped, and the lead is built exactly like a booked one minus
+      // the booking envelope. Additive: absent the flag, nothing changes.
+      const isStandby = payload.standby === true;
+      if (isStandby && service.category === "consult") {
+        return sendJson(res, 422, {
+          ok: false,
+          code: "standby_unsupported",
+          message: "Site visits need a scheduled time — pick a day.",
+          errors: ["Site visits need a scheduled time — please pick a day."]
+        });
+      }
+      const startDate = isStandby ? null : new Date(slotStart);
+      if (!isStandby && Number.isNaN(startDate.getTime())) {
         return sendJson(res, 422, {
           ok: false,
           code: "slot_invalid",
@@ -16910,7 +21123,68 @@ Customer signature captured at ${new Date().toISOString()}.`;
         });
       }
       const geo = await geocode(address);
+      // The booking gate — full street addresses inside the service area
+      // only (Patrick, piloting). Only a DELIBERATE admin act skips it —
+      // a custom-time force-book or a book-from-lead — never a bare
+      // admin cookie, so Patrick testing the public page while logged in
+      // is gated like any customer. The open bucket rides the same gate;
+      // our own geocode outages stand aside, flagged.
+      const deliberateAdminAct = isAdmin
+        && (payload.source === "admin_custom" || Boolean(normalizeString(payload.leadId, 40)));
+
+      // An address Google could not confirm FOR OUR REASONS — no key, a
+      // timeout, quota. The booking is taken anyway (Patrick's first
+      // rule: never turn a customer down, least of all over our own
+      // outage), but it must not then look like every other booking.
+      //
+      // Google SAYING the address is bad is the other case entirely and
+      // is refused above, with our phone number in the message — that is
+      // the "verified addresses are a requirement" half, and it already
+      // worked. This is the half where nobody was told.
+      //
+      // Carried onto the booking envelope so the record itself says so,
+      // and onto the label of the alerts Patrick already receives, so the
+      // text that lands on his phone for this booking reads UNVERIFIED
+      // instead of looking exactly like a good one. Deliberately NOT a
+      // new alert channel: he gets one message per booking today, and one
+      // per booking is what he should still get if the key ever falls out
+      // of Render and every address starts failing at once.
+      let addressUnverified = null;
+      if (!deliberateAdminAct) {
+        const gateVerdict = await bookingGate.gate(geo, {
+          travelMinutes: distanceLib.travelMinutes, base: PJL_BASE
+        });
+        if (!gateVerdict.ok) {
+          return sendJson(res, 422, {
+            ok: false,
+            code: gateVerdict.code,
+            message: gateVerdict.message,
+            errors: [gateVerdict.message]
+          });
+        }
+        if (gateVerdict.degraded) {
+          console.warn("[booking-gate] geocode degraded (", gateVerdict.reason, ") — reserve accepted ungated for:", address);
+          addressUnverified = {
+            state: "unverified",
+            reason: String(gateVerdict.reason || "unknown").slice(0, 80),
+            at: new Date().toISOString()
+          };
+        }
+      }
+      // "UNVERIFIED · " on the front of the alert label Patrick already
+      // reads. Empty string on the normal path, so a good booking's
+      // message is byte-identical to what it was.
+      const unverifiedTag = addressUnverified ? "UNVERIFIED · " : "";
+      // customerCoords keeps the PJL-base fallback on purpose: the
+      // availability engine needs an origin to compute drive time from, and
+      // approximating an unresolvable address at the depot is the documented
+      // behaviour. resolvedCoords is the same lookup WITHOUT that fallback,
+      // and is the only one allowed near the canonical property record.
       const customerCoords = geo.coords;
+      const resolvedCoords = geo.ok === true && geo.skipped !== true
+        && geo.coords && geo.coords.source !== "pjl-base" && geo.coords.lat != null
+        ? geo.coords
+        : null;
 
       // Admin Custom-time override (Brief A §3.2 + Brief B): the time
       // picker's Custom time block sends source: "admin_custom" for any
@@ -16918,11 +21192,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // request carries an admin session — public customer bookings
       // can't forge this and skip the slot check.
       const claimsAdminCustom = payload.source === "admin_custom";
-      const useAdminCustom = claimsAdminCustom && isAdmin;
+      const useAdminCustom = claimsAdminCustom && isAdmin && !isStandby;
 
-      let matched;
+      let matched = null;
       let forcedByAdmin = false;
-      if (useAdminCustom) {
+      if (isStandby) {
+        // No slot to validate — the whole point.
+      } else if (useAdminCustom) {
         // Physical-conflict check. Force-book bypasses corridor +
         // hours, but it must NOT silently double-book — overlapping
         // the same crew with another active booking would create a
@@ -16996,6 +21272,42 @@ Customer signature captured at ${new Date().toISOString()}.`;
         forcedByAdmin = true;
       } else {
         // Standard path: re-validate against the bucket grid.
+        // ---- The hold ------------------------------------------------------
+        //
+        // A public standard booking must arrive holding the slot it is about to
+        // take. Without it, a customer can fill in the whole form for a slot
+        // somebody else is already part-way through claiming — which is the
+        // exact failure the hold exists to remove, and leaving it optional
+        // would mean the picker holds while a hand-rolled POST does not.
+        //
+        // Four deliberate exemptions, each because there is no form being
+        // filled in and therefore nothing to protect:
+        //   - standby / open bucket: no slot to hold in the first place
+        //   - admin_custom: Patrick force-booking a time outside the grid
+        //   - book-from-lead: Patrick on the phone, in the CRM
+        //   - load test: the bot posts reserve directly; PJL_TEST_KEY is
+        //     server-side and comes off Render after the blast
+        const holdToken = normalizeString(payload.holdToken, 64);
+        // Consumed BEFORE the re-validation below, not after: the holder's own
+        // hold counts as taken in activeBookings(), so leaving it in place
+        // means the engine tells them their own slot is gone. Releasing it
+        // first also means a re-validation that fails for some other reason
+        // leaves nothing stuck behind — they pick again with a clean calendar.
+        const consumedHold = holdToken ? await holds.consume(holdToken) : null;
+        const holdExempt = isStandby || claimsAdminCustom || deliberateAdminAct || isLoadTest;
+        if (!holdExempt && !consumedHold) {
+          return sendJson(res, 409, {
+            ok: false,
+            code: holdToken ? "hold_expired" : "hold_required",
+            message: holdToken
+              ? "Your ten minutes ran out — please pick a time again."
+              : "Please pick a time again.",
+            errors: [holdToken
+              ? "That time was only held for ten minutes. Pick a time again and we'll hold it."
+              : "Pick a time again and we'll hold it while you finish."]
+          });
+        }
+
         const [bookings, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
         const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
         const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
@@ -17004,9 +21316,10 @@ Customer signature captured at ${new Date().toISOString()}.`;
           customerCoords,
           bookings,
           blocks: scheduleData.blocks,
-          daysAhead: 30,
+          daysAhead: horizonToReach(startDate),
           hours: mergedHours,
-          settings: mergedSettings
+          settings: mergedSettings,
+          dayShapes: await dayShapesForSeason({ bookings })
         });
         matched = stillAvailable.find((s) => s.start === startDate.toISOString());
         if (!matched) {
@@ -17020,7 +21333,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
       }
       // matched.end is the bucket end for standard bucket slots, or
       // start + service.minutes for admin-custom precise times.
-      const endDate = new Date(matched.end);
+      const endDate = isStandby ? null : new Date(matched.end);
 
       // ---- Admin: book from an EXISTING lead (Book-from-lead brief) --------
       // When an admin session supplies `leadId`, attach the booking to THAT
@@ -17039,7 +21352,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
       //     status (work-orders.js copies intakeGuarantee whenever the quote
       //     is linked), so it lands whether or not Patrick marks the quote
       //     accepted here.
-      const boundLeadId = isAdmin ? normalizeString(payload.leadId, 40) : "";
+      const boundLeadId = isAdmin && !isStandby ? normalizeString(payload.leadId, 40) : "";
       if (boundLeadId) {
         const all = await readLeads();
         const idx = all.findIndex((l) => l.id === boundLeadId);
@@ -17084,6 +21397,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
           bucketWindow: matched.bucketWindow || null,
           bucketLabel: matched.timeLabel || null,
           forcedByAdmin,
+          // Null unless our own address lookup failed — see the gate above.
+          verification: addressUnverified,
           serviceKey,
           serviceLabel: service.label,
           zoneCount,
@@ -17106,10 +21421,15 @@ Customer signature captured at ${new Date().toISOString()}.`;
         lead.crm = lead.crm || {};
         lead.crm.status = lead.status;
         lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
+        // Placing an open-bucket customer onto a day RESOLVES their
+        // standby — the envelope goes, so the bucket list stops showing
+        // them and the record reads as one story.
+        const wasStandby = Boolean(lead.standby);
+        if (wasStandby) delete lead.standby;
         lead.crm.activity.unshift({
           at: now,
           type: "update",
-          text: `${boundIsSiteVisit ? "Site visit booked" : "Service booked"} from lead: ${service.label} on ${matched.dayLabel} at ${matched.timeLabel}.`
+          text: `${wasStandby ? "Placed from the open bucket" : boundIsSiteVisit ? "Site visit booked" : "Service booked"}${wasStandby ? "" : " from lead"}: ${service.label} on ${matched.dayLabel} at ${matched.timeLabel}.`
         });
         lead.crm.lastUpdated = now;
         all[idx] = lead;
@@ -17122,7 +21442,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
         try {
           const liveLeads = await readLeads();
           const fresh = liveLeads.find((l) => l.id === lead.id);
-          if (fresh) canonicalBooking = await bookings.upsertFromLead(fresh);
+          if (fresh) canonicalBooking = await syncBookingFromLead(fresh);
         } catch (err) {
           console.warn("[bookings] upsertFromLead (book-from-lead) failed:", err?.message);
         }
@@ -17138,7 +21458,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
             await quotes.accept(lead.quoteId, {
               leadId: lead.id,
               bookingId: canonicalBooking ? canonicalBooking.id : null,
-              by: "admin",
+              by: await actorLabel(req),
               note: "Verbal acceptance recorded by admin at booking (phone)."
             });
             const acceptedLeads = await readLeads();
@@ -17161,9 +21481,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
         // Notify Patrick + the customer, same channels as the new-lead path.
         const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
         const decorated = decorateLeadForAdmin(lead, req);
-        Promise.allSettled([
-          sendNewLeadEmail({ ...decorated, sourceLabel: `BOOKED · ${service.label} · ${matched.dayLabel} ${matched.timeLabel}` }, { baseUrl }),
-          sendNewLeadSms({ ...decorated, sourceLabel: `BOOKED ${matched.timeLabel}` }, { baseUrl }),
+        if (isLoadTest) {
+          console.log("[load-test] notifications suppressed for", lead.id);
+        } else Promise.allSettled([
+          sendNewLeadEmail({ ...decorated, sourceLabel: `${unverifiedTag}BOOKED · ${service.label} · ${matched.dayLabel} ${matched.timeLabel}` }, { baseUrl }),
+          sendNewLeadSms({ ...decorated, sourceLabel: `${unverifiedTag}BOOKED ${matched.timeLabel}` }, { baseUrl }),
           notifyCustomer(boundIsSiteVisit ? "site_visit" : "booked", decorated, { baseUrl })
         ]).catch(() => {});
 
@@ -17286,6 +21608,28 @@ Customer signature captured at ${new Date().toISOString()}.`;
         capturedAt: prebooking.createdAt
       } : null;
 
+      if (isStandby) {
+        // First available: a commitment without a calendar entry. No
+        // lead.booking means no capacity used, no Today/iCal presence,
+        // no reminders — until Patrick places them from the Season
+        // Plan's Open bucket panel, which books through the
+        // book-from-lead path above and clears this envelope.
+        result.lead.standby = {
+          requestedAt: now,
+          serviceKey,
+          serviceLabel: service.label,
+          zoneCount,
+          coords: {
+            lat: customerCoords.lat,
+            lng: customerCoords.lng,
+            formattedAddress: customerCoords.formattedAddress || null
+          },
+          // Whether the coords are a REAL geocode. Unresolved standbys
+          // still join the bucket — the panel just can't rank them.
+          resolved: Boolean(resolvedCoords),
+          diagnosis: diagnosisBlock
+        };
+      } else {
       result.lead.booking = {
         start: startDate.toISOString(),
         end: endDate.toISOString(),
@@ -17304,6 +21648,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
         // Surfaces as a badge in admin UIs and as a history entry on the
         // canonical Booking record for audit.
         forcedByAdmin,
+        // Null unless our own address lookup failed — see the gate above.
+        verification: addressUnverified,
         serviceKey,
         serviceLabel: service.label,
         zoneCount,
@@ -17326,7 +21672,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
           createdAt: now
         }
       };
-      // Status starts at site_visit for consults, won for committed direct bookings.
+      }
+      // Status starts at site_visit for consults, won for committed direct
+      // bookings. A standby customer has committed too — "won" keeps them
+      // out of the untriaged-lead pile; the missing booking is what marks
+      // them as waiting.
       result.lead.status = isSiteVisit ? "site_visit" : "won";
       result.lead.crm.status = result.lead.status;
       // Replace the default "Quote request received." seed entry with booking-
@@ -17335,7 +21685,9 @@ Customer signature captured at ${new Date().toISOString()}.`;
       result.lead.crm.activity = [{
         at: now,
         type: "created",
-        text: `${isSiteVisit ? "Site visit booked" : "Service booked"}: ${service.label} on ${matched.dayLabel} at ${matched.timeLabel}.`
+        text: isStandby
+          ? `Joined the open bucket (first available): ${service.label}. Place them from the Season Plan.`
+          : `${isSiteVisit ? "Site visit booked" : "Service booked"}: ${service.label} on ${matched.dayLabel} at ${matched.timeLabel}.`
       }];
 
       const all = await readLeads();
@@ -17355,7 +21707,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
         // Same coords the property attach uses below, so the commercial
         // address anchor resolves identically in both (Phase 0.5).
         result.lead.customerId = await resolveCustomerForLead(result.lead, {
-          coords: customerCoords && customerCoords.lat != null ? customerCoords : null
+          coords: resolvedCoords
         });
         const liveLeads = await readLeads();
         const i = liveLeads.findIndex((l) => l.id === result.lead.id);
@@ -17375,9 +21727,15 @@ Customer signature captured at ${new Date().toISOString()}.`;
           name: result.lead.contact?.name,
           phone: result.lead.contact?.phone,
           address: result.lead.contact?.address,
-          coords: customerCoords && customerCoords.lat != null ? customerCoords : null
+          coords: resolvedCoords
         });
         if (linkResult.property) {
+          // THE MISSING HOP. The 2026-09-01 chain turns a declared count
+          // into real zones, but nothing ever put that count ON the
+          // property, so a first-time booking scaffolded one zone for a
+          // seven-zone lawn. Written here so pricing, the season plan and
+          // the appointment page all read the same number from visit one.
+          await adoptDeclaredZoneCount(linkResult.property, result.lead.booking);
           applyLinkResultToLead(result.lead, linkResult);
           const liveLeads = await readLeads();
           const i = liveLeads.findIndex((l) => l.id === result.lead.id);
@@ -17395,12 +21753,14 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // works unchanged; the canonical record carries prep notes,
       // multi-WO links, sourceQuoteId, and audit history. Best-effort
       // — failure here doesn't roll back the lead.
-      try {
-        const liveLeads = await readLeads();
-        const fresh = liveLeads.find((l) => l.id === result.lead.id);
-        if (fresh) await bookings.upsertFromLead(fresh);
-      } catch (err) {
-        console.warn("[bookings] upsertFromLead failed:", err?.message);
+      if (!isStandby) {
+        try {
+          const liveLeads = await readLeads();
+          const fresh = liveLeads.find((l) => l.id === result.lead.id);
+          if (fresh) await syncBookingFromLead(fresh);
+        } catch (err) {
+          console.warn("[bookings] upsertFromLead failed:", err?.message);
+        }
       }
 
       // If a pre-booking session backed this reservation, mark it consumed
@@ -17414,16 +21774,26 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // Notify Patrick (admin) and the customer.
       const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
       const decorated = decorateLeadForAdmin(result.lead, req);
-      Promise.allSettled([
-        sendNewLeadEmail({ ...decorated, sourceLabel: `BOOKED · ${service.label} · ${matched.dayLabel} ${matched.timeLabel}` }, { baseUrl }),
-        sendNewLeadSms({ ...decorated, sourceLabel: `BOOKED ${matched.timeLabel}` }, { baseUrl }),
-        notifyCustomer(isSiteVisit ? "site_visit" : "booked", decorated, { baseUrl })
-      ]).catch(() => {});
+      if (isLoadTest) {
+        console.log("[load-test] notifications suppressed for", result.lead.id);
+      } else Promise.allSettled(isStandby
+        ? [
+            sendNewLeadEmail({ ...decorated, sourceLabel: `${unverifiedTag}OPEN BUCKET · ${service.label} · first available` }, { baseUrl }),
+            sendNewLeadSms({ ...decorated, sourceLabel: `${unverifiedTag}OPEN BUCKET first available` }, { baseUrl }),
+            notifyCustomer("standby_joined", decorated, { baseUrl })
+          ]
+        : [
+            sendNewLeadEmail({ ...decorated, sourceLabel: `${unverifiedTag}BOOKED · ${service.label} · ${matched.dayLabel} ${matched.timeLabel}` }, { baseUrl }),
+            sendNewLeadSms({ ...decorated, sourceLabel: `${unverifiedTag}BOOKED ${matched.timeLabel}` }, { baseUrl }),
+            notifyCustomer(isSiteVisit ? "site_visit" : "booked", decorated, { baseUrl })
+          ]
+      ).catch(() => {});
 
       return sendJson(res, 201, {
         ok: true,
         leadId: result.lead.id,
-        booking: result.lead.booking,
+        booking: result.lead.booking || null,
+        standby: isStandby || undefined,
         portalUrl: decorated.portalUrl
       });
     } catch (error) {
@@ -17449,6 +21819,62 @@ Customer signature captured at ${new Date().toISOString()}.`;
   // Cancelled / archived leads are filtered out — we don't surface them
   // to the field tech. Site visits show alongside paid services since
   // they're real on-site appointments too.
+// Put a day's stops in driving order.
+//
+// THE BUG THIS REPLACES. /api/schedule/today sorted by booking.start, and
+// booking.start is the first free 30-minute mark in the bucket in the order
+// people happened to book. Only the Season Plan page ever ran the sequencer,
+// so the field app — the one Patrick actually drives from — showed Newmarket
+// 08:00, Thornhill 09:30, Newmarket 12:00: across the top of the city and
+// back, because that is the order three strangers clicked in.
+//
+// Same sequencer as the Season Plan (lib/resequence.js), reached the same way
+// sequenceDayWithBookings does it: synthetic codes standing in for rows that
+// have no property code of their own. One definition of "driving order", two
+// callers.
+//
+// BUCKETS ARE A PROMISE. Stops are ordered WITHIN morning and within
+// afternoon, never across them. A customer told "morning" is not slid into
+// the afternoon to tidy a route — which does mean a day whose morning is in
+// Thornhill and whose afternoon is in Newmarket still drives out and back.
+// That is a composition problem for the geography gate, not an ordering one,
+// and no re-sort can fix it without breaking what the customer was told.
+//
+// Rows with no coordinates keep their place rather than being dropped, and
+// any failure falls back to the time order that was there before: a day sheet
+// that is merely in the old order beats a day sheet that fails to render.
+async function orderDayForDriving(rows) {
+  try {
+    const withCoords = rows.filter((r) => r && r.coords && r.coords.lat != null);
+    if (withCoords.length < 2) return rows;
+
+    const byCode = new Map();
+    const day = { morning: [], afternoon: [] };
+    rows.forEach((row, i) => {
+      if (!row || !row.coords || row.coords.lat == null) return;
+      const code = `__row:${i}`;
+      byCode.set(code, { code, id: code, coords: row.coords });
+      const hour = row.start ? new Date(row.start).getHours() : 12;
+      day[hour < 12 ? "morning" : "afternoon"].push(code);
+    });
+
+    const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode });
+    const order = [...(sequenced?.morning || []), ...(sequenced?.afternoon || [])];
+    if (!order.length) return rows;
+
+    const indexOf = new Map(order.map((code, position) => [code, position]));
+    const placed = rows.map((row, i) => ({ row, i, at: indexOf.get(`__row:${i}`) }));
+    // An unroutable row has no place in the sequence — keep it where it was
+    // relative to the rows around it rather than sweeping it to the end.
+    const routed = placed.filter((p) => p.at != null).sort((a, b) => a.at - b.at);
+    const unrouted = placed.filter((p) => p.at == null);
+    return [...routed, ...unrouted].map((p) => p.row);
+  } catch (err) {
+    console.warn("[schedule/today] driving order failed, showing time order:", err?.message);
+    return rows;
+  }
+}
+
   if (req.method === "GET" && pathname === "/api/schedule/today") {
     const url = new URL(req.url, baseUrlFromReq(req));
     const dateParam = url.searchParams.get("date");
@@ -17466,10 +21892,57 @@ Customer signature captured at ${new Date().toISOString()}.`;
     const allLeads = await readLeads();
     const allWos = await workOrders.list();
     const woByLeadId = new Map(allWos.map((w) => [w.leadId, w]));
+    // The canonical booking id per lead, so a row on the phone can name
+    // the record it wants removed. The lead's embedded booking is a read
+    // cache and carries no id of its own.
+    const bookingIdByLeadId = new Map();
+    try {
+      for (const b of await bookings.list()) {
+        if (b.leadId && !bookingIdByLeadId.has(b.leadId)) bookingIdByLeadId.set(b.leadId, b.id);
+      }
+    } catch (err) {
+      console.warn("[today] canonical booking ids unavailable:", err?.message);
+    }
 
-    const bookings = allLeads
+    // WHAT CAME OFF TODAY. The list above deliberately drops these — a tech
+    // must never be driven to a dead job — but a stop that simply vanishes
+    // is the thing Patrick rings about at 4pm. Returned separately so the
+    // day can show them, struck through, with the reason and who did it,
+    // and so nothing that reads `bookings` mistakes them for work.
+    const removedToday = allLeads
       .filter((lead) => {
         if (lead.archived) return false;
+        if (bookingHoldsItsSlot(lead.booking?.status)) return false;
+        // not-liveness: the rule above already dropped every dead booking.
+        // This narrows what is left — a finished job is not a REMOVED one,
+        // and only removals belong on a list of what came off the day.
+        if (lead.booking?.status === "completed") return false;
+        const start = lead.booking?.start ? new Date(lead.booking.start).getTime() : null;
+        if (!start || start < dayStart || start >= dayEnd) return false;
+        return Boolean(lead.booking?.cancelledAt);
+      })
+      .map((lead) => ({
+        leadId: lead.id,
+        bookingId: bookingIdByLeadId.get(lead.id) || null,
+        customerName: lead.contact?.name || lead.name || "",
+        address: lead.contact?.address || lead.contactExport?.address?.full || "",
+        start: lead.booking.start,
+        status: lead.booking.status,
+        removalCode: lead.booking.removalCode || null,
+        reason: lead.booking.cancellationReason || "",
+        removedAt: lead.booking.cancelledAt || null,
+        removedBy: lead.booking.removedBy || null,
+      }))
+      .sort((a, b) => String(a.removedAt || "").localeCompare(String(b.removedAt || "")));
+
+    const dayBookings = allLeads
+      .filter((lead) => {
+        if (lead.archived) return false;
+        // A cancelled booking still lives on the lead as a read cache
+        // (the cancel routes mirror status there). Same rule as
+        // activeBookings() and the canonical union below — the tech must
+        // never be driven to a cancelled job (spec §2.8, D7).
+        if (!bookingHoldsItsSlot(lead.booking?.status)) return false;
         const start = lead.booking?.start ? new Date(lead.booking.start).getTime() : null;
         if (!start) return false;
         return start >= dayStart && start < dayEnd;
@@ -17486,6 +21959,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
         const town = lead.contact?.town || lead.contactExport?.address?.town || "";
         return {
           leadId: lead.id,
+          // The record "Not today" acts on.
+          bookingId: bookingIdByLeadId.get(lead.id) || null,
+          // Where this row came from. A booking has a lead behind it (and
+          // so can be notified-on-route); a "work_order" row appended by
+          // mergeDaySchedule below is a job scheduled straight against a
+          // property with no lead at all.
+          source: "booking",
           customerName: contact.name || lead.contact?.name || "",
           customerPhone: contact.telephone || lead.contact?.phone || "",
           customerEmail: contact.email || lead.contact?.email || "",
@@ -17514,12 +21994,199 @@ Customer signature captured at ${new Date().toISOString()}.`;
         };
       });
 
+    // Union canonical bookings.json records with no lead behind them —
+    // the assignment writer's records above all. Without this a fully
+    // assigned route day hands the tech an empty day sheet. Same dedup
+    // rule as activeBookings(): leadId + exact start means the lead row
+    // above already represents the record.
+    try {
+      const bookingRecs = await bookings.list();
+      const extras = bookingRecs.filter((b) => {
+        if (!b || !b.scheduledFor) return false;
+        // The lead pass above asks bookingHoldsItsSlot(); this pass used
+        // to spell the same three states out by hand. One endpoint, two
+        // passes, one rule and one copy of it — the exact shape of the
+        // defect that let a cancelled booking keep its slot.
+        if (!bookingHoldsItsSlot(b.status)) return false;
+        const t = new Date(b.scheduledFor).getTime();
+        if (Number.isNaN(t) || t < dayStart || t >= dayEnd) return false;
+        const iso = new Date(b.scheduledFor).toISOString();
+        return !dayBookings.some((row) => b.leadId && row.leadId === b.leadId && row.start === iso);
+      });
+      if (extras.length) {
+        let propsById = new Map();
+        try {
+          const allProps = await properties.list();
+          propsById = new Map(allProps.filter((p) => p && p.id).map((p) => [p.id, p]));
+        } catch (e) {
+          console.warn("[schedule/today] property lookup failed:", e?.message);
+        }
+        for (const b of extras) {
+          const p = b.propertyId ? propsById.get(b.propertyId) : null;
+          const start = new Date(b.scheduledFor);
+          const end = new Date(start.getTime() + (Number(b.durationMinutes) || 60) * 60 * 1000);
+          // A booking that already spawned a work order names it, so the
+          // tech sees "already opened, status" on the card — and so the
+          // work-order union below (mergeDaySchedule dedupes on wo.id)
+          // can never list that job a second time.
+          const linkedWo = (Array.isArray(b.workOrderIds) && b.workOrderIds.length)
+            ? allWos.find((w) => b.workOrderIds.includes(w.id)) || null
+            : null;
+          dayBookings.push({
+            leadId: b.leadId || "",
+            bookingId: b.id,
+            source: b.source || null,
+            customerName: b.customerName || "",
+            customerPhone: b.customerPhone || "",
+            customerEmail: b.customerEmail || "",
+            address: b.address || p?.address || "",
+            town: p?.town || "",
+            coords: p?.coords || null,
+            serviceKey: b.serviceKey,
+            serviceLabel: b.serviceLabel || "Appointment",
+            start: start.toISOString(),
+            end: end.toISOString(),
+            startLabel: start.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }),
+            endLabel: end.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }),
+            customerNotes: "",
+            internalNotes: b.prepNotes || "",
+            stage: b.status || "confirmed",
+            propertyId: b.propertyId || null,
+            workOrder: linkedWo ? {
+              id: linkedWo.id,
+              type: linkedWo.type,
+              status: linkedWo.status,
+              zoneCount: (linkedWo.zones || []).length
+            } : null,
+            onRouteNotifiedAt: null
+          });
+        }
+        dayBookings.sort((a, b) => new Date(a.start) - new Date(b.start));
+      }
+    } catch (err) {
+      console.warn("[schedule/today] bookings.json union skipped:", err?.message);
+    }
+
+    // Lead and canonical bookings are still only part of the day. A work
+    // order scheduled straight against a property — the CRM's new-WO form
+    // or the work-order page's own schedule/backdate input — has no lead
+    // booking and no canonical booking; its only date is scheduledFor on
+    // the work order itself. That is how a management company's
+    // properties get scheduled (one customer, many addresses, a WO per
+    // visit), which is how Willowridge could be booked for today and
+    // appear nowhere on this page (FLOW-32; see lib/day-schedule.js for
+    // why this union was here once, got reverted, and came back). The
+    // merge is additive: every row above renders exactly as before, and
+    // a work order already named by a row is never listed twice.
+    const merged = mergeDaySchedule(dayBookings, allWos, dayStart, dayEnd);
+    const ordered = await orderDayForDriving(merged);
+
     return sendJson(res, 200, {
       ok: true,
       date: new Date(dayStart).toISOString().slice(0, 10),
-      bookings,
-      count: bookings.length
+      bookings: ordered,
+      count: ordered.length,
+      // Separate from `bookings` on purpose: everything that drives, maps
+      // or counts the day reads that array, and a removed stop must not
+      // appear in any of them. This is for showing, and only for showing.
+      removed: removedToday
     });
+  }
+
+  // The road line for the day the map is drawing.
+  //
+  // The ORDERED coordinates are posted by the page, which took them from
+  // GET /api/schedule/today — the same rows, in the same order, that it
+  // drew the numbered pins from. Deriving the day a second time here
+  // would be a second implementation of "what is on today", and the
+  // first time the two disagreed the line would run through a house the
+  // map never drew. Same reasoning as the season plan's route-line
+  // endpoint: the line follows the numbers, it does not re-decide them.
+  //
+  // Staff-only — the /api/schedule/ prefix is fenced at "user" — and it
+  // answers with geometry and nothing else. No minutes: every drive time
+  // on this system comes from Distance Matrix and a second router
+  // printing its own would put two numbers for one leg on one screen
+  // (see lib/route-geometry.js). No addresses, no customer, nothing that
+  // was not already on the caller's own screen.
+  if (req.method === "POST" && pathname === "/api/schedule/today/route-line") {
+    try {
+      const payload = await parseRequestBody(req, { maxBytes: 16_000 });
+      const raw = Array.isArray(payload?.stops) ? payload.stops : [];
+      // Capped because each call can cost a Directions request. Google
+      // takes 25 waypoints; a day that long is not a day.
+      if (raw.length > 25) {
+        return sendJson(res, 422, { ok: false, errors: ["Too many stops to draw."] });
+      }
+      const stops = raw
+        .map((stop, index) => {
+          // Number(null) and Number("") are both 0. Coercing an absent
+          // coordinate would route the drive through 0,0 rather than
+          // refusing it, so absent is rejected before it can become zero.
+          const raw = (value) => (value === null || value === undefined || value === "" ? NaN : Number(value));
+          const lat = raw(stop?.lat);
+          const lng = raw(stop?.lng);
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+          if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+          return { number: index + 1, coords: { lat, lng } };
+        })
+        .filter(Boolean);
+      if (stops.length < 2) {
+        return sendJson(res, 422, { ok: false, errors: ["Need at least two stops to draw a line."] });
+      }
+
+      const origin = await routeOriginLib.routeOrigin();
+      const line = await routeGeometry.roadLine(origin, stops);
+      return sendJson(res, 200, {
+        ok: true,
+        coords: line.coords,
+        // "straight" is not an error the screen may ignore: it means the
+        // lines are hops, not roads, and the map has to say so.
+        source: line.source,
+        error: line.error || null,
+        origin: origin && origin.lat != null ? { lat: origin.lat, lng: origin.lng } : null
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't draw that route."] });
+    }
+  }
+
+  // "Why isn't this customer on the schedule?" — searches EVERY store a
+  // job's date can live in (leads, canonical bookings, work orders,
+  // properties, season-plan stops) and answers per record, in plain
+  // sentences, against the asked-about day. Read-only. Born from the
+  // Willowridge hunt (FLOW-32): three real fixes in, the symptom
+  // outlived the code-reading, and the data needed a way to speak.
+  if (req.method === "GET" && pathname === "/api/schedule/find-jobs") {
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const q = normalizeString(url.searchParams.get("q"), 120);
+    const dateKey = normalizeString(url.searchParams.get("date"), 10)
+      || new Date().toLocaleDateString("en-CA");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+      return sendJson(res, 422, { ok: false, errors: ["Bad date param."] });
+    }
+    if (!q) return sendJson(res, 422, { ok: false, errors: ["Type a name, address, or code to search for."] });
+    try {
+      const y = new Date().getFullYear();
+      const plans = [];
+      for (const season of ["fall", "spring"]) {
+        try {
+          const plan = await seasonPlans.getPlan(season, y);
+          if (plan) plans.push({ season, year: y, plan });
+        } catch { /* a season without a plan is simply not searched */ }
+      }
+      const result = jobFinder.findJobs(q, dateKey, {
+        leads: await readLeads(),
+        bookings: await bookings.list(),
+        workOrders: await workOrders.list(),
+        properties: await properties.list(),
+        plans
+      });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      console.error("[find-jobs]", err?.message);
+      return sendJson(res, 500, { ok: false, errors: ["The search failed — see the server log."] });
+    }
   }
 
   // Tech taps "Notify on route" on the today's-schedule view.
@@ -17611,6 +22278,9 @@ Customer signature captured at ${new Date().toISOString()}.`;
         try { sourceQuote = await quotes.get(lead.quoteId); }
         catch (err) { console.warn("[quotes] fetch on WO create failed:", err?.message); }
       }
+      // Same as the admin create path: the property gets the zone list
+      // its declared count implies before the work order scaffolds from it.
+      property = await materializeDeclaredZones(property, lead);
       const wo = await workOrders.create({ type, lead, property, customId, quote: sourceQuote });
       if (sourceQuote) {
         try { await quotes.attachWorkOrder(sourceQuote.id, wo.id); }
@@ -18259,6 +22929,1436 @@ Customer signature captured at ${new Date().toISOString()}.`;
     }
   }
 
+  // ---- Season plan (SPEC_seasonal_scheduling §3.1 / §10.1) ----------
+  //
+  // The plan is the seed the geography filter measures against: the route
+  // Patrick intends to drive, before anyone has booked it. These routes
+  // are the "plan review" surface — import it, see what it resolves to,
+  // move a stop that landed on the wrong day, and probe an address
+  // against it to see the filter's actual arithmetic.
+  //
+  // Admin/tech only (path-auth "user", registered above).
+
+  // Resolve the stored plan's property codes into live records. Anything
+  // that does not resolve is REPORTED, never dropped — a code with no
+  // property behind it is how a merged-away duplicate shows itself, and
+  // silently shrinking the day would hide exactly the problem this screen
+  // exists to catch.
+  // ---- Bookings are route stops -------------------------------------
+  //
+  // Patrick, 2026-09-07, on a booking-only day showing amber "B" dots with
+  // no line and no numbers: "it does not show the route, and doesn't show
+  // stop numbers. I've requested that the same flow that process' the
+  // daily mapping be provided to the individual uploads. not the half
+  // assed shit." So a self-booked customer is sequenced, numbered and
+  // drawn like any planned stop. The customer only ever saw an AM/PM
+  // bucket, and sequenceDay orders WITHIN a bucket, so every promise is
+  // kept while the crew gets one numbered route and one drawable line.
+
+  const SEASON_MONTHS_FOR_BOOKED = { spring: [0, 1, 2, 3, 4, 5, 6], fall: [7, 8, 9, 10, 11] };
+
+  // Every active booking that belongs on this season/year's board, grouped
+  // by date. Same filters the review has always used: this year, an
+  // in-season month, today-or-later, and a booking that FULFILS a plan
+  // stop is that stop (skipped — one row, not two). Shared by the plan
+  // resolver and the route-line endpoint so numbers and line never
+  // disagree. Returns Map<dateKey, row[]>.
+  async function gatherBookedRows({ plan, season, year, all, leads }) {
+    const months = SEASON_MONTHS_FOR_BOOKED[season] || SEASON_MONTHS_FOR_BOOKED.fall;
+    const now = new Date();
+    const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const codeByPropertyId = new Map(all.filter((p) => p && p.id && p.code).map((p) => [p.id, p.code]));
+    const propertyById = new Map(all.filter((p) => p && p.id).map((p) => [p.id, p]));
+    const leadById = new Map((leads || []).map((l) => [l.id, l]));
+    const plannedCodesByDate = new Map();
+    for (const [d, day] of Object.entries((plan && plan.days) || {})) {
+      plannedCodesByDate.set(d, new Set([...(day.morning || []), ...(day.afternoon || [])]));
+    }
+    const nearYard = (c) => c && c.lat != null
+      && Math.abs(Number(c.lat) - PJL_BASE.lat) < 1e-6 && Math.abs(Number(c.lng) - PJL_BASE.lng) < 1e-6;
+    const out = new Map();
+    for (const b of await activeBookings()) {
+      const startD = new Date(b.start);
+      if (Number.isNaN(startD.getTime())) continue;
+      if (startD.getFullYear() !== Number(year) || !months.includes(startD.getMonth())) continue;
+      const dateKey = `${startD.getFullYear()}-${String(startD.getMonth() + 1).padStart(2, "0")}-${String(startD.getDate()).padStart(2, "0")}`;
+      if (dateKey < todayKey) continue;
+      const lead = b.leadId ? leadById.get(b.leadId) : null;
+      const propertyId = b.propertyId || (lead && lead.propertyId) || null;
+      const property = propertyId ? propertyById.get(propertyId) : null;
+      const planCode = propertyId ? codeByPropertyId.get(propertyId) : null;
+      if (planCode && plannedCodesByDate.get(dateKey)?.has(planCode)) continue; // the booking IS the plan stop
+      const coords = (property && property.coords && property.coords.lat != null)
+        ? { lat: property.coords.lat, lng: property.coords.lng }
+        : (!nearYard(b.coords) && b.coords && b.coords.lat != null)
+          ? { lat: Number(b.coords.lat), lng: Number(b.coords.lng) }
+          : null;
+      const row = {
+        code: planCode || null,
+        customerName: (property && property.customerName)
+          || [lead?.contact?.firstName, lead?.contact?.lastName].filter(Boolean).join(" ")
+          || "",
+        address: (property && property.address) || lead?.contact?.address || "",
+        serviceLabel: b.serviceLabel || "",
+        start: b.start,
+        timeLabel: startD.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }),
+        bucket: startD.getHours() < 12 ? "morning" : "afternoon",
+        coords,
+        propertyId,
+        leadId: b.leadId || null,
+        bookingId: b.bookingId || null
+      };
+      if (!out.has(dateKey)) out.set(dateKey, []);
+      out.get(dateKey).push(row);
+    }
+    return out;
+  }
+
+  // Sequence a day's drive INCLUDING its bookings. `storedDay` is the plan
+  // day (or null for a booking-only day). Each mappable booked row is
+  // tagged with a synthetic `mapCode` that appears in the returned
+  // timeline, so stop numbers and the route line cover the bookings too.
+  // An unmappable booked row (no coords) is left un-numbered and simply
+  // does not join the drive. Returns { sequenced, rowByMapCode }.
+  async function sequenceDayWithBookings({ storedDay, bookedRows, byCode, season, requestedWindows }) {
+    const augByCode = new Map(byCode);
+    const extra = { morning: [], afternoon: [] };
+    const rowByMapCode = new Map();
+    (bookedRows || []).forEach((row, i) => {
+      if (!row.coords || row.coords.lat == null) { row.mapCode = null; return; }
+      const code = `__bk:${row.bookingId || row.leadId || `i${i}`}`;
+      row.mapCode = code;
+      augByCode.set(code, { code, id: code, coords: { lat: Number(row.coords.lat), lng: Number(row.coords.lng) } });
+      rowByMapCode.set(code, row);
+      extra[row.bucket === "morning" ? "morning" : "afternoon"].push(code);
+    });
+    const day = {
+      ...(storedDay || {}),
+      morning: [...((storedDay && storedDay.morning) || []), ...extra.morning],
+      afternoon: [...((storedDay && storedDay.afternoon) || []), ...extra.afternoon]
+    };
+    const sequenced = await resequence.sequenceDay(day, { propertiesByCode: augByCode, season, requestedWindows });
+    return { sequenced, rowByMapCode };
+  }
+
+  async function resolveSeasonPlan(season, year) {
+    const plan = await seasonPlans.getPlan(season, year);
+    if (!plan) return null;
+    const all = await properties.list();
+    const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+    const woType = season === "spring" ? "spring_opening" : "fall_closing";
+
+    const resolveStop = (code) => {
+      const property = byCode.get(code);
+      if (!property) {
+        return { code, resolved: false, problem: "No property with this code — merged away or deleted." };
+      }
+      const zones = Array.isArray(property.system?.zones) ? property.system.zones.length : 0;
+      const commercial = property.billingEntity?.accountType === "commercial";
+      const serviceKey = deriveSeasonalKey(woType, zones, commercial);
+      const service = serviceKey ? BOOKABLE_SERVICES[serviceKey] : null;
+      const hasCoords = Boolean(property.coords && property.coords.lat != null);
+      return {
+        code,
+        resolved: true,
+        propertyId: property.id,
+        customerName: property.customerName || "",
+        address: property.address || "",
+        town: property.town || "",
+        zones: zones || null,
+        zonesEstimated: zones === 0,
+        serviceKey,
+        serviceLabel: service ? service.label : "",
+        minutes: service ? service.minutes : null,
+        hasCoords,
+        coords: hasCoords ? { lat: property.coords.lat, lng: property.coords.lng } : null,
+        problem: hasCoords ? null : "No coordinates — contributes nothing to the day's shape."
+      };
+    };
+
+    // Arrival estimates, drive time and the noon check are recomputed on
+    // every read rather than stored: zone counts change, and a stored
+    // timeline would go quietly stale against them.
+    const days = [];
+    // Customers' own "after X / before Y" asks from their appointment
+    // pages ride into the same clock the plan screen prints — the
+    // requestedWindows seam, finally fed by its intended caller.
+    const customerWindows = await assignments.requestedWindowsFor(season, year);
+
+    // Gather the real bookings first, so they can be sequenced INTO each
+    // day's drive rather than pinned on afterward as un-numbered dots.
+    const leadsForBooked = await readLeads();
+    const bookedByDate = await gatherBookedRows({ plan, season, year, all, leads: leadsForBooked });
+
+    // Turn a sequenced timeline into a booked row's number + arrival, and
+    // give the row a booked flag so the card and the map draw it apart
+    // from a plan stop (amber pin, no plan controls).
+    const numberBookedRows = (rows, timeline) => {
+      const byMapCode = new Map((timeline || []).map((t) => [t.propertyCode, t]));
+      for (const row of rows || []) {
+        const t = row.mapCode ? byMapCode.get(row.mapCode) : null;
+        row.booked = true;
+        row.stopNumber = t ? t.stopNumber : null;
+        row.arriveAt = t ? t.arriveAt : null;
+      }
+      return (rows || []).slice().sort((a, b) =>
+        (a.stopNumber || 999) - (b.stopNumber || 999) || String(a.start).localeCompare(String(b.start)));
+    };
+
+    for (const date of Object.keys(plan.days).sort()) {
+      const day = plan.days[date];
+      const bookedRows = bookedByDate.get(date) || [];
+      bookedByDate.delete(date); // consumed — the rest become booking-only days
+      const { sequenced } = await sequenceDayWithBookings({
+        storedDay: day, bookedRows, byCode, season, requestedWindows: customerWindows
+      });
+
+      // RENDER THE SEQUENCED ORDER, NOT THE STORED ONE. These used to be
+      // allowed to differ: the rows came from the stored arrays and the
+      // arrival times from the sequencer, so any plan whose stored order
+      // was not already optimal — one imported before the re-sequencer
+      // existed, say — displayed correct times against rows in the wrong
+      // order. Live, R10 showed 11:18, 10:30, 08:40, 09:55, 09:20 down
+      // the page. Reading both from the sequencer makes the mismatch
+      // unrepresentable rather than merely unlikely.
+      const stopNumbers = new Map((sequenced.timeline || []).map((t) => [t.propertyCode, t.stopNumber]));
+      // The stop's time window travels with the row, so the control that
+      // sets it and the sequencer that honours it read the same value.
+      const windows = (day && day.constraints) || {};
+      const withNumber = (code) => ({
+        ...resolveStop(code),
+        stopNumber: stopNumbers.get(code) || null,
+        notBefore: (windows[code] && windows[code].notBefore) || null,
+        notAfter: (windows[code] && windows[code].notAfter) || null
+      });
+      // Plan stops only — the synthetic booked codes are dropped from the
+      // rendered bucket lists (they render as booked rows), but they DO
+      // keep their numbers in the shared timeline so the map draws them.
+      const isBooked = (code) => String(code).startsWith("__bk:");
+      const morning = (sequenced.morning || []).filter((c) => !isBooked(c)).map(withNumber);
+      const afternoon = (sequenced.afternoon || []).filter((c) => !isBooked(c)).map(withNumber);
+      const minutes = [...morning, ...afternoon].reduce((t, st) => t + (st.minutes || 0), 0);
+      const suggestions = await resequence.suggestBucketMoves(day, {
+        propertiesByCode: byCode, season, bucketCap: plan.bucketCap
+      });
+      const booked = numberBookedRows(bookedRows, sequenced.timeline);
+      days.push({
+        date,
+        label: day.label || "",
+        territory: day.territory || "",
+        frost: day.frost || "",
+        weekday: new Date(`${date}T12:00:00`).toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" }),
+        morning,
+        afternoon,
+        counts: { morning: morning.length, afternoon: afternoon.length, total: morning.length + afternoon.length },
+        onSiteMinutes: minutes,
+        timeline: sequenced.timeline,
+        morningEndsAt: sequenced.morningEndsAt,
+        dayEndsAt: sequenced.dayEndsAt,
+        homeAt: sequenced.homeAt,
+        driveMinutes: sequenced.driveMinutes,
+        flags: sequenced.flags,
+        suggestions,
+        booked: booked.length ? booked : undefined
+      });
+    }
+
+    // Booking-only days — dates the plan never routed, now first-class
+    // numbered routes built from their bookings alone.
+    for (const [date, bookedRows] of bookedByDate) {
+      const { sequenced } = await sequenceDayWithBookings({
+        storedDay: null, bookedRows, byCode, season, requestedWindows: customerWindows
+      });
+      const booked = numberBookedRows(bookedRows, sequenced.timeline);
+      days.push({
+        date,
+        label: "Booked day",
+        territory: "",
+        weekday: new Date(`${date}T12:00:00`).toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" }),
+        bookedOnly: true,
+        morning: [],
+        afternoon: [],
+        counts: { morning: 0, afternoon: 0, total: 0 },
+        onSiteMinutes: 0,
+        timeline: sequenced.timeline,
+        morningEndsAt: sequenced.morningEndsAt || null,
+        dayEndsAt: sequenced.dayEndsAt || null,
+        homeAt: sequenced.homeAt || null,
+        driveMinutes: sequenced.driveMinutes || null,
+        flags: sequenced.flags || [],
+        suggestions: [],
+        booked
+      });
+    }
+
+    // (Real bookings were sequenced INTO each day above — numbered stops
+    // with arrival times and a drawable route line, the same flow the
+    // planned days get. See gatherBookedRows / sequenceDayWithBookings.)
+    days.sort((a, b) => (a.date < b.date ? -1 : 1));
+
+    const problems = days.flatMap((d) => [...d.morning, ...d.afternoon]
+      .filter((st) => st.problem)
+      .map((st) => ({ date: d.date, label: d.label, code: st.code, problem: st.problem })));
+
+    return {
+      season, year,
+      generatedAt: plan.generatedAt || null,
+      updatedAt: plan.updatedAt || null,
+      updatedBy: plan.updatedBy || null,
+      source: plan.source || "",
+      bucketCap: plan.bucketCap,
+      dayCap: plan.dayCap,
+      // Every route day starts and ends here. Shown on the screen because
+      // this value being wrong is invisible in the output — a route
+      // anchored to the wrong point still looks like a route — and it was
+      // wrong for eleven days before anyone noticed.
+      routeOrigin: await routeOriginLib.routeOrigin(),
+      // Maps are rendered server-side as images, so no browser key is
+      // needed and none is sent. This says whether the server can draw
+      // them at all, so the page can explain a missing map rather than
+      // showing a broken picture.
+      routeMapsAvailable: routeMap.isConfigured(),
+      totalStops: days.reduce((t, d) => t + d.counts.total, 0),
+      driveMinutes: days.reduce((t, d) => t + (d.driveMinutes || 0), 0),
+      days,
+      problems,
+      // Days whose morning cannot finish by 12:00 in any order. Rule 2:
+      // flag rather than silently overrun, because the fix is a bucket or
+      // day change and only Patrick makes those.
+      overrunDays: days.filter((d) => (d.flags || []).some((f) => f.code === "morning_overruns"))
+        .map((d) => ({ date: d.date, label: d.label, endsAt: d.morningEndsAt }))
+    };
+  }
+
+  // The browser key for the Maps JavaScript API. It is served to signed-in
+  // admins rather than baked into the HTML: the key is necessarily visible to
+  // anyone who loads the map, but there is no reason to hand it to anonymous
+  // visitors as well. The real protection is an HTTP-referrer restriction on
+  // the key itself, not secrecy.
+  if (pathname === "/api/maps-config" && req.method === "GET") {
+    const key = process.env.GOOGLE_MAPS_BROWSER_KEY || "";
+    return sendJson(res, 200, {
+      ok: true,
+      key,
+      available: Boolean(key),
+      // Said out loud so the screen can name the missing variable instead of
+      // showing an empty grey box the operator has to guess at.
+      reason: key ? null : "GOOGLE_MAPS_BROWSER_KEY is not set on the server."
+    });
+  }
+
+  const seasonPlanMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})$/);
+  if (seasonPlanMatch && req.method === "GET") {
+    try {
+      const resolved = await resolveSeasonPlan(seasonPlanMatch[1], Number(seasonPlanMatch[2]));
+      if (!resolved) return sendJson(res, 404, { ok: false, code: "no_plan", errors: ["No plan loaded for that season."] });
+      return sendJson(res, 200, { ok: true, plan: resolved });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read the plan."] });
+    }
+  }
+
+  // Import / replace. Accepts either the bare plan object or the seed
+  // file's outer wrapper ({ "fall-2026": { ... } }) so the file that
+  // comes off the route planner can be pasted in without editing.
+  if (seasonPlanMatch && req.method === "PUT") {
+    try {
+      const session = await requireUser(req);
+      const season = seasonPlanMatch[1];
+      const year = Number(seasonPlanMatch[2]);
+      const body = await parseRequestBody(req);
+      const wrapperKey = seasonPlans.planKey(season, year);
+      const incoming = (body && body.days) ? body
+        : (body && body[wrapperKey] && body[wrapperKey].days) ? body[wrapperKey]
+        : (body && body.plan && body.plan.days) ? body.plan
+        : null;
+      if (!incoming) {
+        return sendJson(res, 422, {
+          ok: false,
+          errors: [`Couldn't find a plan in that JSON. Expected a "days" object, or a "${wrapperKey}" wrapper around one.`]
+        });
+      }
+      // Sequence before storing so the plan file always holds the order
+      // Patrick would actually drive. Ordering inside a bucket is never
+      // communicated to anyone, so this is free to do on his behalf; the
+      // bucket each customer sits in is untouched.
+      const sequencedIn = await resequencePlanForStorage(incoming, season, year);
+      const { warnings } = await seasonPlans.savePlan(season, year, sequencedIn, {
+        actor: session?.email || session?.name || "admin"
+      });
+      const resolved = await resolveSeasonPlan(season, year);
+      return sendJson(res, 200, { ok: true, plan: resolved, warnings });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't save the plan."] });
+    }
+  }
+
+  // Route map for one day, as a PNG.
+  //
+  // Rendered server-side so the Maps key stays here, and so the plan page
+  // can show every day's route inline without instantiating eleven
+  // interactive map widgets. The image is cached on disk against the
+  // ordered stops, so a re-sequence produces a new picture and a page
+  // refresh costs nothing.
+  const seasonPlanMapMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/route-map\/(\d{4}-\d{2}-\d{2})$/);
+  if (seasonPlanMapMatch && req.method === "GET") {
+    try {
+      const season = seasonPlanMapMatch[1];
+      const year = Number(seasonPlanMapMatch[2]);
+      const date = seasonPlanMapMatch[3];
+      const plan = await seasonPlans.getPlan(season, year);
+      const day = plan && plan.days ? plan.days[date] : null;
+      if (!day) return sendJson(res, 404, { ok: false, errors: ["No such route day."] });
+
+      const all = await properties.list();
+      const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+      const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode, season, requestedWindows: await assignments.requestedWindowsFor(season, year) });
+      const origin = await routeOriginLib.routeOrigin();
+
+      // Stops in DRIVING order, from the timeline — the same source the
+      // cards and the stop numbers read.
+      const stops = (sequenced.timeline || []).map((t) => {
+        const property = byCode.get(t.propertyCode);
+        if (!property || !property.coords || property.coords.lat == null) return null;
+        return { number: t.stopNumber, coords: { lat: property.coords.lat, lng: property.coords.lng } };
+      }).filter(Boolean);
+
+      if (!stops.length) return sendJson(res, 404, { ok: false, errors: ["Nothing to draw on this day."] });
+
+      const etag = `"${routeMap.cacheKey(origin, stops)}"`;
+      if (req.headers["if-none-match"] === etag) {
+        res.writeHead(304, { ETag: etag });
+        return res.end();
+      }
+
+      const image = await routeMap.routeMapImage(origin, stops);
+      if (!image || !image.buffer) {
+        // Say WHY. A picture that silently fails to appear is a bug
+        // report with no information in it, and the page has no other way
+        // to learn what Google objected to.
+        return sendJson(res, 502, {
+          ok: false,
+          code: "map_unavailable",
+          errors: [(image && image.error) || "Could not draw this route."],
+          detail: (image && image.detail) || null
+        });
+      }
+      res.writeHead(200, {
+        "Content-Type": image.contentType,
+        "Content-Length": image.buffer.length,
+        // Present only when the road path could not be fetched and the
+        // line is straight hops between stops.
+        ...(image.roadsError ? { "X-Route-Roads-Error": encodeURIComponent(image.roadsError) } : {}),
+        ETag: etag,
+        // The ETag carries the route, so revalidation is cheap and a
+        // re-sequenced day can never serve yesterday's picture.
+        "Cache-Control": "private, max-age=0, must-revalidate"
+      });
+      return res.end(image.buffer);
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't draw that route."] });
+    }
+  }
+
+  // Road geometry for one day, for the Leaflet map. Shape only — every
+  // minute the screen prints comes from Google, and a second router's
+  // times sitting beside them would be two answers to one question.
+  const seasonPlanLineMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/route-line\/(\d{4}-\d{2}-\d{2})$/);
+  if (seasonPlanLineMatch && req.method === "GET") {
+    try {
+      const season = seasonPlanLineMatch[1];
+      const year = Number(seasonPlanLineMatch[2]);
+      const date = seasonPlanLineMatch[3];
+      const plan = await seasonPlans.getPlan(season, year);
+      const storedDay = plan && plan.days ? plan.days[date] : null;
+
+      const all = await properties.list();
+      const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+      // Include the day's bookings in the drive — a booking-only day
+      // (storedDay null) is a real numbered route now, not a 404. Same
+      // helper the plan resolver uses, so the line matches the numbers.
+      const leads = await readLeads();
+      const bookedByDate = await gatherBookedRows({ plan, season, year, all, leads });
+      const bookedRows = bookedByDate.get(date) || [];
+      if (!storedDay && !bookedRows.length) {
+        return sendJson(res, 404, { ok: false, errors: ["No such route day."] });
+      }
+      const { sequenced, rowByMapCode } = await sequenceDayWithBookings({
+        storedDay, bookedRows, byCode, season, requestedWindows: await assignments.requestedWindowsFor(season, year)
+      });
+      const origin = await routeOriginLib.routeOrigin();
+
+      // Driving order, from the timeline — the same source the cards and
+      // the stop numbers read, so the line can never disagree with them.
+      // A code resolves to a plan property, or to a booked row's coords.
+      const stops = (sequenced.timeline || []).map((t) => {
+        const property = byCode.get(t.propertyCode);
+        if (property && property.coords && property.coords.lat != null) {
+          return { number: t.stopNumber, coords: { lat: property.coords.lat, lng: property.coords.lng } };
+        }
+        const row = rowByMapCode.get(t.propertyCode);
+        if (row && row.coords && row.coords.lat != null) {
+          return { number: t.stopNumber, coords: { lat: Number(row.coords.lat), lng: Number(row.coords.lng) } };
+        }
+        return null;
+      }).filter(Boolean);
+
+      if (!stops.length) return sendJson(res, 404, { ok: false, errors: ["Nothing to draw on this day."] });
+
+      const line = await routeGeometry.roadLine(origin, stops);
+      return sendJson(res, 200, {
+        ok: true,
+        coords: line.coords,
+        // "straight" is not an error the screen can ignore: it means the
+        // lines are hops, not roads, and it has to say so.
+        source: line.source,
+        error: line.error || null,
+        origin: origin && origin.lat != null ? { lat: origin.lat, lng: origin.lng } : null
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't draw that route."] });
+    }
+  }
+
+  // Assignment preflight — stage 0 of docs/ASSIGNMENT_WRITER.md. Read-only:
+  // who would be told, who would be skipped and why. Creates nothing.
+  const assignPreflightMatch = pathname.match(/^\/api\/assignments\/(spring|fall)\/(\d{4})\/preflight$/);
+  if (assignPreflightMatch && req.method === "GET") {
+    try {
+      await requireUser(req);
+      const result = await assignments.preflight(
+        assignPreflightMatch[1], Number(assignPreflightMatch[2]));
+      if (!result.ok) {
+        return sendJson(res, 404, { ok: false, errors: ["No plan loaded for that season — nothing to preflight."] });
+      }
+      // The reason sentences ride along so the screen renders words, not
+      // snake_case — and so client and server can never disagree on them.
+      return sendJson(res, 200, { ...result, outcomes: assignments.PREFLIGHT_OUTCOMES });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Preflight failed."] });
+    }
+  }
+
+  // Assignment writer stage 3 — the message templates. Reading and
+  // previewing are staff-level; SAVING wording that will reach customers
+  // is admin-only (Patrick has final edit, per the spec). Nothing here
+  // sends anything.
+  if (pathname === "/api/assignment-messages" && req.method === "GET") {
+    try {
+      await requireUser(req);
+      return sendJson(res, 200, {
+        ok: true,
+        templates: assignmentMessages.listTemplates(),
+        mergeFields: assignmentMessages.MERGE_FIELDS
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't load the templates."] });
+    }
+  }
+  const messageKeyMatch = pathname.match(/^\/api\/assignment-messages\/([a-z0-9_]+)$/);
+  if (messageKeyMatch && req.method === "PUT") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) {
+        return sendJson(res, 403, { ok: false, errors: ["Editing customer-facing wording needs an admin login."] });
+      }
+      const body = await parseRequestBody(req);
+      const saved = assignmentMessages.setTemplate(messageKeyMatch[1], {
+        subject: body.subject,
+        body: body.body
+      }, { actor: session?.email || session?.name || "admin" });
+      return sendJson(res, 200, { ok: true, template: saved });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't save that template."] });
+    }
+  }
+  // Preview: real assignment bookings for the season, and every message
+  // rendered against the chosen one. With none assigned yet, a sample
+  // customer keeps the screen usable.
+  const messagePreviewMatch = pathname.match(/^\/api\/assignment-messages\/preview\/(spring|fall)\/(\d{4})$/);
+  if (messagePreviewMatch && req.method === "GET") {
+    try {
+      await requireUser(req);
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const season = messagePreviewMatch[1];
+      const year = Number(messagePreviewMatch[2]);
+      const mine = (await bookings.list()).filter((b) =>
+        b && b.source === "assignment" && b.assignment
+        && b.assignment.season === season && Number(b.assignment.year) === year
+        && b.status === "confirmed");
+      mine.sort((a, b) => new Date(a.scheduledFor) - new Date(b.scheduledFor));
+      const wanted = url.searchParams.get("bookingId");
+      const chosen = (wanted && mine.find((b) => b.id === wanted)) || mine[0] || {
+        customerName: "Sample Customer",
+        address: "90 Oriole Drive, East Gwillimbury, ON",
+        scheduledFor: new Date(year, 8, 28, 8, 0).toISOString(),
+        assignment: { bucket: "morning" }
+      };
+      const rendered = assignmentMessages.renderAllForBooking(chosen);
+      return sendJson(res, 200, {
+        ok: true,
+        sample: !chosen.id,
+        chosenId: chosen.id || null,
+        candidates: mine.map((b) => ({
+          id: b.id,
+          customerName: b.customerName,
+          date: b.assignment.date,
+          bucket: b.assignment.bucket,
+          code: b.assignment.code
+        })),
+        ...rendered
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't render the preview."] });
+    }
+  }
+
+  // Assignment writer stage 5 — the customer's appointment page API.
+  // PUBLIC: the token is the credential, exactly like /portal/<token>.
+  // It addresses one booking and grants three actions on it.
+  const apptMatch = pathname.match(/^\/api\/appointment\/([A-Za-z0-9_-]{16,64})(?:\/(confirm|cancel|availability|reschedule|free-bucket|time-window|zones|calendar\.ics))?$/);
+  if (apptMatch) {
+    const token = apptMatch[1];
+    const action = apptMatch[2] || null;
+    // The customer's price rides on the summary: their profile override
+    // when set, the tier price otherwise. Private link — full detail.
+    const priceFor = async (booking) => {
+      try {
+        const property = booking.propertyId ? await properties.get(booking.propertyId) : null;
+        const family = String(booking.serviceKey || "").startsWith("spring") ? "spring_opening" : "fall_closing";
+        return resolveSeasonalPrice(property, family)?.label || null;
+      } catch { return null; }
+    };
+    // What we hold about their system — count, whether the techs mapped
+    // it (read-only) or it's just a declared number (editable). Rides on
+    // every summary so the page can offer the zone-count correction.
+    const zonesFor = async (booking, summary) => {
+      try {
+        const property = booking.propertyId ? await properties.get(booking.propertyId) : null;
+        return appointmentActions.zonesInfo(property, summary);
+      } catch { return null; }
+    };
+    // "Add to your calendar" — Google/Outlook are prefilled-compose
+    // URLs; the ics link below serves Apple Calendar and the rest. The
+    // event carries the BUCKET window the customer was told, never the
+    // sequenced internal time.
+    const calendarFor = (booking) => {
+      try {
+        const links = calendarLinks.linksForBooking(booking, {
+          portalUrl: `${resolvePublicBaseUrl()}/a/${token}`
+        });
+        return links ? { google: links.google, outlook: links.outlook, ics: `/api/appointment/${encodeURIComponent(token)}/calendar.ics` } : null;
+      } catch { return null; }
+    };
+    try {
+      if (action === "calendar.ics" && req.method === "GET") {
+        const booking = await appointmentActions.findByToken(token);
+        // "Live" is the shared rule, not an equality test on one status.
+        // The assignment writer stamps `confirmed`, so in practice this
+        // is the same answer today — but `tentative` is a LIVE status in
+        // lib/bookings.js's vocabulary, and a hand-set one would have been
+        // refused its own calendar file for no reason.
+        if (!booking || !bookingHoldsItsSlot(booking.status)) {
+          return sendJson(res, 404, { ok: false, errors: ["That link doesn't match a live appointment."] });
+        }
+        const event = calendarLinks.eventForBooking(booking, {
+          portalUrl: `${resolvePublicBaseUrl()}/a/${token}`
+        });
+        if (!event) return sendJson(res, 404, { ok: false, errors: ["This appointment has no date to add."] });
+        res.writeHead(200, {
+          "Content-Type": "text/calendar; charset=utf-8",
+          "Content-Disposition": 'attachment; filename="pjl-appointment.ics"'
+        });
+        return res.end(calendarLinks.icsText(event));
+      }
+      if (!action && req.method === "GET") {
+        const booking = await appointmentActions.findByToken(token);
+        if (!booking) return sendJson(res, 404, { ok: false, errors: ["That link doesn't match an appointment."] });
+        const summary = appointmentActions.summarize(booking);
+        return sendJson(res, 200, {
+          ok: true,
+          appointment: { ...summary, priceLabel: await priceFor(booking), zones: await zonesFor(booking, summary), calendar: calendarFor(booking) }
+        });
+      }
+      if (action === "confirm" && req.method === "POST") {
+        const result = await appointmentActions.confirm(token);
+        if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors });
+        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel: await priceFor(result.booking), zones: await zonesFor(result.booking, result.summary) } });
+      }
+      if (action === "zones" && req.method === "POST") {
+        const body = await parseRequestBody(req);
+        const result = await appointmentActions.setZones(token, { zoneCount: body.zoneCount });
+        if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors });
+        const priceLabel = await priceFor(result.booking);
+        if (result.tierChanged) {
+          // The real count moved the price bracket — new service minutes
+          // too, so re-anchor the day's sequenced times in the background
+          // (same follow-through as a time-window save)…
+          if (result.booking?.assignment) {
+            assignments.syncAssignedTimes(result.booking.assignment.season, result.booking.assignment.year)
+              .catch((e) => console.warn("[appointment] time sync after zone update failed:", e?.message));
+          }
+          // …and Patrick hears about it — the price on the profile is not
+          // what the customer was originally told.
+          const b = result.booking;
+          Promise.allSettled([
+            sendNewLeadEmail({
+              id: b.id, sourceLabel: "Customer updated their ZONE COUNT — price tier changed",
+              contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "",
+                notes: `Now ${b.zoneCount} zones — ${b.serviceLabel}${priceLabel ? ` (${priceLabel})` : ""}. Appointment ${b.scheduledFor}.` }
+            }, { baseUrl: baseUrlFromReq(req) }),
+            sendNewLeadSms({
+              id: b.id, sourceLabel: "Customer updated their ZONE COUNT — price tier changed",
+              contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "", notes: "" }
+            }, { baseUrl: baseUrlFromReq(req) })
+          ]).catch(() => {});
+        }
+        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel, zones: await zonesFor(result.booking, result.summary) } });
+      }
+      if (action === "free-bucket" && req.method === "POST") {
+        const result = await appointmentActions.freeBucket(token);
+        if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors });
+        // Patrick hears about it — a free-bucket customer is a routing
+        // opportunity he places by hand.
+        const b = result.booking;
+        Promise.allSettled([
+          sendNewLeadEmail({
+            id: b.id, sourceLabel: "Customer chose the FREE BUCKET",
+            contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "",
+              notes: `Anchored ${b.scheduledFor} — run whenever the crew is in the area; tech calls with an ETA.` }
+          }, { baseUrl: baseUrlFromReq(req) }),
+          sendNewLeadSms({
+            id: b.id, sourceLabel: "Customer chose the FREE BUCKET",
+            contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "", notes: "" }
+          }, { baseUrl: baseUrlFromReq(req) })
+        ]).catch(() => {});
+        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel: await priceFor(result.booking), zones: await zonesFor(result.booking, result.summary) } });
+      }
+      if (action === "time-window" && req.method === "POST") {
+        const body = await parseRequestBody(req);
+        const result = await appointmentActions.setWindow(token, {
+          notBefore: normalizeString(body.notBefore, 5),
+          notAfter: normalizeString(body.notAfter, 5)
+        });
+        if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors });
+        // The window moves the day's clock — re-anchor the sequenced
+        // times in the background so the plan and calendar follow.
+        if (result.booking?.assignment) {
+          assignments.syncAssignedTimes(result.booking.assignment.season, result.booking.assignment.year)
+            .catch((e) => console.warn("[appointment] time sync after window failed:", e?.message));
+        }
+        return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel: await priceFor(result.booking), zones: await zonesFor(result.booking, result.summary) } });
+      }
+      if (action === "cancel" && req.method === "POST") {
+        const body = await parseRequestBody(req);
+        const reason = normalizeString(body.reason, 300);
+        const result = await appointmentActions.cancel(token, { reason });
+        if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors });
+        const b = result.booking;
+        // Tell the CUSTOMER, not just Patrick. This page confirmed the
+        // cancellation on screen and then sent them nothing, while the
+        // portal's cancel has always emailed them — an asymmetry that
+        // existed only because the two pages were built months apart.
+        // Same template, so the two paths read identically in an inbox.
+        sendBookingCancellation(b, {
+          reason,
+          notify: true,
+          baseUrl: process.env.PUBLIC_BASE_URL || baseUrlFromReq(req)
+        }).catch(() => {});
+        Promise.allSettled([
+          sendNewLeadEmail({
+            id: b.id, sourceLabel: "Customer CANCELLED their assigned appointment",
+            contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "",
+              notes: `Was ${b.scheduledFor}.${reason ? ` Reason: ${reason}` : ""}` }
+          }, { baseUrl: baseUrlFromReq(req) }),
+          sendNewLeadSms({
+            id: b.id, sourceLabel: "Customer CANCELLED their assigned appointment",
+            contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "", notes: "" }
+          }, { baseUrl: baseUrlFromReq(req) })
+        ]).catch(() => {});
+        return sendJson(res, 200, { ok: true, appointment: result.summary });
+      }
+      if (action === "availability" && req.method === "GET") {
+        const booking = await appointmentActions.findByToken(token);
+        if (!booking) return sendJson(res, 404, { ok: false, errors: ["That link doesn't match an appointment."] });
+        const summary = appointmentActions.summarize(booking);
+        if (!summary.canReschedule) {
+          return sendJson(res, 409, { ok: false, errors: ["This appointment can't be rescheduled from this page — call us at (905) 960-0181."] });
+        }
+        // Rules for customer moves from the assignment page:
+        //   - AFTERNOON ONLY (12–5): a moved stop runs late in the day,
+        //     before the crew heads home.
+        //   - The horizon is the whole remaining season, not 30 days —
+        //     the engine's own season gate caps it at publicBookingThrough.
+        //   - GEOGRAPHY APPLIES, same as every other booking path.
+        //
+        // It used to be switched OFF here (`geoMaxAddedDriveMinutes: 0`),
+        // on the reasoning that an off-route stop is just an end-of-day
+        // addition. It is not. The afternoon bucket runs 12–5 and the
+        // sequencer orders it geographically, so a far move lands MID-day
+        // and the crew drives out and back: Patrick, 2026-09-08, looking
+        // at a booked day that ran Newmarket → Vaughan → Erin → Newmarket
+        // → Markham, 213 minutes of driving. "this cannot happen when the
+        // bookings go out."
+        //
+        // This was the ONLY geography-off override left in the codebase,
+        // and it sat on the page every assignment customer is about to be
+        // sent. The elastic corridor still applies here (it widens to 25
+        // then 40 added minutes when the customer is short of days), so a
+        // move is refused only when it would genuinely wreck the route —
+        // and then they call, which is what the one-move-then-phone rule
+        // already expects of them.
+        const now = new Date();
+        const seasonName = String(booking.serviceKey || "").startsWith("spring") ? "spring" : "fall";
+        let to = null;
+        try {
+          to = seasonsLib.configFor(seasonName, new Date(booking.scheduledFor).getFullYear())?.publicBookingThrough || null;
+        } catch { /* season gate inside the engine still governs */ }
+        const fromKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+        const result = await rescheduleAvailability(booking.id, { from: fromKey, to });
+        if (!result.ok) return sendJson(res, result.status || 422, { ok: false, errors: result.errors });
+        for (const day of result.data?.days || []) {
+          day.slots = (day.slots || []).filter((s) => s.bucketKey === "afternoon");
+        }
+        return sendJson(res, 200, result);
+      }
+      if (action === "reschedule" && req.method === "PATCH") {
+        const booking = await appointmentActions.findByToken(token);
+        if (!booking) return sendJson(res, 404, { ok: false, errors: ["That link doesn't match an appointment."] });
+        const summary = appointmentActions.summarize(booking);
+        if (!summary.canReschedule) {
+          return sendJson(res, 409, { ok: false, errors: [summary.insideCutoff
+            ? "Your appointment is less than 24 hours away — please call us at (905) 960-0181 to change it."
+            : "This appointment can't be rescheduled from this page — call us at (905) 960-0181."] });
+        }
+        const body = await parseRequestBody(req);
+        // The shared helper does the real work: slot re-validation
+        // through listAvailableSlots (geography filter, season window,
+        // bucket capacity all compose), the customer's one-move cap,
+        // WO locks, mirrors, and paging Patrick. Rule 4's re-anchoring
+        // is automatic — the cadence reads scheduledFor live.
+        const result = await rescheduleBooking({
+          bookingId: booking.id,
+          slotStart: String(body.start || ""),
+          actor: "customer",
+          actorName: booking.customerName || "",
+          reason: "moved from the appointment page",
+          req
+        });
+        if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors, code: result.code });
+        await bookings.markAssignmentResponded(booking.id, { via: "reschedule", by: "customer" });
+        const fresh = await bookings.get(booking.id);
+        return sendJson(res, 200, { ok: true, appointment: appointmentActions.summarize(fresh) });
+      }
+      return sendJson(res, 405, { ok: false, errors: ["Unsupported."] });
+    } catch (err) {
+      console.error("[appointment] action failed:", err?.message);
+      return sendJson(res, 500, { ok: false, errors: ["Something went wrong — call us at (905) 960-0181."] });
+    }
+  }
+
+  // Assignment writer stage 4 — the blast, the cadence status, the
+  // manual response mark, and the template test-send.
+
+  // The blast: step 1 to every live assignment booking that has never
+  // received it. ADMIN only, and interlocked until stage 5's page is
+  // live. The sweep in the boot section handles steps 2–6.
+  const blastMatch = pathname.match(/^\/api\/assignments\/(spring|fall)\/(\d{4})\/blast$/);
+  if (blastMatch && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) {
+        return sendJson(res, 403, { ok: false, errors: ["Sending the blast needs an admin login."] });
+      }
+      const result = await assignmentCadence.blast(blastMatch[1], Number(blastMatch[2]), {
+        by: session?.email || session?.name || "admin",
+        appointmentPageReady: APPOINTMENT_PAGE_READY
+      });
+      return sendJson(res, 200, result);
+    } catch (err) {
+      return sendJson(res, err?.code === "SEND_LOCKED" ? 409 : 422,
+        { ok: false, errors: [err.message || "The blast failed."] });
+    }
+  }
+
+  const cadenceStatusMatch = pathname.match(/^\/api\/assignments\/(spring|fall)\/(\d{4})\/cadence-status$/);
+  if (cadenceStatusMatch && req.method === "GET") {
+    try {
+      await requireUser(req);
+      const result = await assignmentCadence.status(cadenceStatusMatch[1], Number(cadenceStatusMatch[2]));
+      return sendJson(res, 200, { ...result, appointmentPageReady: APPOINTMENT_PAGE_READY });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't read the cadence."] });
+    }
+  }
+
+  // The one-tap manual mark (decision F): Patrick or a tech answered the
+  // phone; the customer said "yes, that works." Stops steps 2–5.
+  const markRespondedMatch = pathname.match(/^\/api\/assignments\/bookings\/([^/]+)\/mark-responded$/);
+  if (markRespondedMatch && req.method === "POST") {
+    try {
+      const session = await requireUser(req);
+      const id = decodeURIComponent(markRespondedMatch[1]);
+      const existing = await bookings.get(id);
+      if (!existing) return sendJson(res, 404, { ok: false, errors: ["Booking not found."] });
+      if (existing.source !== "assignment") {
+        return sendJson(res, 422, { ok: false, errors: ["Only assignment bookings carry a response state."] });
+      }
+      const updated = await bookings.markAssignmentResponded(id, {
+        via: "manual",
+        by: session?.email || session?.name || "admin"
+      });
+      return sendJson(res, 200, { ok: true, booking: updated });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't mark that."] });
+    }
+  }
+
+  // Test-send: one template, rendered for a chosen (or sample) customer,
+  // delivered to the ADMIN's own inbox/phone (NOTIFY_TO_EMAIL /
+  // NOTIFY_TO_PHONE — the same env the outreach test uses), stamped
+  // [TEST]. No touch is recorded, no state changes, placeholder links
+  // are allowed — it goes to Patrick, not a customer.
+  if (pathname === "/api/assignment-messages/test" && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Test sends need an admin login."] });
+      const body = await parseRequestBody(req);
+      const key = String(body.templateKey || "");
+      const meta = assignmentMessages.TEMPLATE_KEYS[key];
+      if (!meta) return sendJson(res, 422, { ok: false, errors: ["Unknown template."] });
+      let booking = body.bookingId ? await bookings.get(String(body.bookingId)) : null;
+      if (!booking) {
+        booking = {
+          customerName: "Sample Customer",
+          address: "90 Oriole Drive, East Gwillimbury, ON",
+          scheduledFor: new Date(new Date().getFullYear(), 8, 28, 8, 0).toISOString(),
+          assignment: { bucket: "morning" }
+        };
+      }
+      // A REAL booking gets its REAL appointment link (minted now if it
+      // doesn't have one), so Patrick can tap the link in his own test
+      // text and walk the whole journey. The synthetic sample keeps the
+      // loud placeholder — there is no page behind it.
+      let extra = {};
+      if (booking.id && booking.source === "assignment") {
+        const token = await appointmentActions.ensureToken(booking.id);
+        if (token) extra = { appointmentLink: assignmentCadence.appointmentLinkFor(token) };
+      }
+      const rendered = assignmentMessages.render(key, assignmentMessages.contextForBooking(booking, extra));
+      const result = { ok: true, sentTo: {}, channels: {} };
+      if (meta.channel === "email") {
+        const to = String(process.env.NOTIFY_TO_EMAIL || process.env.GMAIL_USER || "").trim();
+        if (!to) result.channels.email = { skipped: true, reason: "no_notify_email_env" };
+        else {
+          const emailResult = await require("./lib/notify-customer").sendOutreachEmail({
+            to,
+            firstName: "Patrick",
+            propertyAddress: "",
+            seasonName: "",
+            portalLink: "",
+            subject: `[TEST] ${rendered.subject || key}`.slice(0, 250),
+            emailBody: rendered.body,
+            unsubscribeUrlEmail: "",
+            unsubscribeUrlAll: ""
+          });
+          result.channels.email = emailResult;
+          if (emailResult.ok) result.sentTo.email = to;
+        }
+      } else {
+        const to = String(process.env.NOTIFY_TO_PHONE || "").trim();
+        if (!to) result.channels.sms = { skipped: true, reason: "no_notify_phone_env" };
+        else {
+          const smsResult = await require("./lib/notify-customer").sendOutreachSms({
+            to,
+            firstName: "Patrick",
+            propertyAddress: "",
+            seasonName: "",
+            portalLink: "",
+            smsBody: `[TEST] ${rendered.body}`
+          });
+          result.channels.sms = smsResult;
+          if (smsResult.ok) result.sentTo.phone = to;
+        }
+      }
+      return sendJson(res, 200, result);
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Test send failed."] });
+    }
+  }
+
+  // Assignment writer stage 2 — turn the plan into confirmed bookings.
+  // ADMIN ONLY (not tech): this writes real appointments onto real
+  // customers in one press. Sends nothing — messaging is stage 4.
+  // Idempotent: a created booking preflights as "settled" next run.
+  const assignRunMatch = pathname.match(/^\/api\/assignments\/(spring|fall)\/(\d{4})\/(assign|unassign)$/);
+  if (assignRunMatch && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) {
+        return sendJson(res, 403, { ok: false, errors: ["Assigning a season needs an admin login — techs can run the preflight but not the assignment."] });
+      }
+      const actor = session?.email || session?.name || "admin";
+      const season = assignRunMatch[1];
+      const year = Number(assignRunMatch[2]);
+      if (assignRunMatch[3] === "assign") {
+        const result = await assignments.assign(season, year, { actor });
+        if (!result.ok) {
+          return sendJson(res, 404, { ok: false, errors: ["No plan loaded for that season — nothing to assign."] });
+        }
+        return sendJson(res, 200, {
+          ...result,
+          outcomes: { ...assignments.PREFLIGHT_OUTCOMES, ...assignments.ASSIGN_OUTCOMES }
+        });
+      }
+      const result = await assignments.unassign(season, year, { actor });
+      return sendJson(res, 200, result);
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Assignment failed."] });
+    }
+  }
+
+  // The public booking window for a season — editable from the season-plan
+  // screen so opening/closing dates stop being a code change. Overrides
+  // live on the data disk (server/data/season-windows.json) and layer over
+  // seasons.json; the availability season gate reads the merged result.
+  const seasonWindowMatch = pathname.match(/^\/api\/seasons\/(spring|fall)\/(\d{4})\/booking-window$/);
+  if (seasonWindowMatch && req.method === "GET") {
+    try {
+      await requireUser(req);
+      const record = seasonsLib.publicWindowFor(seasonWindowMatch[1], Number(seasonWindowMatch[2]));
+      if (!record) return sendJson(res, 404, { ok: false, errors: ["Unknown season."] });
+      return sendJson(res, 200, { ok: true, ...record });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't read the booking window."] });
+    }
+  }
+  if (seasonWindowMatch && req.method === "PATCH") {
+    try {
+      const session = await requireUser(req);
+      const body = await parseRequestBody(req);
+      const record = seasonsLib.setPublicBookingWindow(
+        seasonWindowMatch[1], Number(seasonWindowMatch[2]),
+        {
+          publicBookingFrom: normalizeString(body.publicBookingFrom, 10),
+          publicBookingThrough: normalizeString(body.publicBookingThrough, 10)
+        },
+        { actor: session?.email || session?.name || "admin" }
+      );
+      return sendJson(res, 200, { ok: true, ...record });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't set the booking window."] });
+    }
+  }
+
+  // A stop's time window: "not before", "not after". Both optional; sending
+  // both empty clears it.
+  const seasonPlanWindowMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/stop-window$/);
+  if (seasonPlanWindowMatch && req.method === "PATCH") {
+    try {
+      const session = await requireUser(req);
+      const season = seasonPlanWindowMatch[1];
+      const year = Number(seasonPlanWindowMatch[2]);
+      const body = await parseRequestBody(req);
+      const result = await seasonPlans.setStopWindow(season, year, {
+        date: normalizeString(body.date, 10),
+        propertyCode: normalizeString(body.propertyCode, 40),
+        notBefore: normalizeString(body.notBefore, 5),
+        notAfter: normalizeString(body.notAfter, 5)
+      }, { actor: session?.email || session?.name || "admin" });
+      const plan = await resolveSeasonPlan(season, year);
+      // A time window changes the sequencing clock; re-anchor assigned
+      // bookings to the new arrivals in the background.
+      assignments.syncAssignedTimes(season, year)
+        .catch((e) => console.warn("[assignments] time sync after window change failed:", e?.message));
+      return sendJson(res, 200, { ok: true, plan, warnings: result.warnings, window: result.window });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't set that window."] });
+    }
+  }
+
+  // Hand ordering inside a bucket. Deliberately does NOT re-sequence for
+  // storage afterwards: re-running the optimiser over an order Patrick just
+  // set by hand is exactly the thing this feature exists to stop.
+  const seasonPlanOrderMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/stop-order$/);
+  if (seasonPlanOrderMatch && req.method === "PATCH") {
+    try {
+      const session = await requireUser(req);
+      const body = await parseRequestBody(req);
+      const result = await seasonPlans.reorderStop(
+        seasonPlanOrderMatch[1], Number(seasonPlanOrderMatch[2]),
+        {
+          date: normalizeString(body.date, 10),
+          bucket: normalizeString(body.bucket, 10),
+          propertyCode: normalizeString(body.propertyCode, 40),
+          direction: normalizeString(body.direction, 4)
+        },
+        { actor: session?.email || session?.name || "admin" }
+      );
+      const plan = await resolveSeasonPlan(
+        seasonPlanOrderMatch[1], Number(seasonPlanOrderMatch[2]));
+      // Assigned bookings mirror the route's sequenced arrivals; a
+      // reorder moved them, so re-anchor in the background. Best-effort:
+      // the reorder itself is already committed either way.
+      assignments.syncAssignedTimes(seasonPlanOrderMatch[1], Number(seasonPlanOrderMatch[2]))
+        .catch((e) => console.warn("[assignments] time sync after reorder failed:", e?.message));
+      return sendJson(res, 200, { ok: true, plan, warnings: result.warnings, reordered: result.reordered });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't reorder that stop."] });
+    }
+  }
+
+  // Hand the day back to the optimiser.
+  const seasonPlanAutoMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/auto-order$/);
+  if (seasonPlanAutoMatch && req.method === "PATCH") {
+    try {
+      const session = await requireUser(req);
+      const season = seasonPlanAutoMatch[1];
+      const year = Number(seasonPlanAutoMatch[2]);
+      const body = await parseRequestBody(req);
+      const actor = session?.email || session?.name || "admin";
+      await seasonPlans.clearManualOrder(season, year,
+        { date: normalizeString(body.date, 10) }, { actor });
+      // Now that the day is optimisable again, actually optimise it —
+      // otherwise "back to automatic" would leave the hand-set order in
+      // place and look like it had done nothing.
+      const stored = await seasonPlans.getPlan(season, year);
+      if (stored) {
+        await seasonPlans.savePlan(season, year,
+          await resequencePlanForStorage(stored, season, year), { actor });
+      }
+      const plan = await resolveSeasonPlan(season, year);
+      assignments.syncAssignedTimes(season, year)
+        .catch((e) => console.warn("[assignments] time sync after auto-order failed:", e?.message));
+      return sendJson(res, 200, { ok: true, plan });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't re-optimise that day."] });
+    }
+  }
+
+  // Re-date one route day. The weather stays warm, the day cannot run, it
+  // slides — and only it slides.
+  const seasonPlanDayMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/day$/);
+  if (seasonPlanDayMatch && req.method === "PATCH") {
+    try {
+      const session = await requireUser(req);
+      const season = seasonPlanDayMatch[1];
+      const year = Number(seasonPlanDayMatch[2]);
+      const body = await parseRequestBody(req);
+      const fromDate = normalizeString(body.fromDate, 10);
+      const toDate = normalizeString(body.toDate, 10);
+
+      // STAGE 6 changed what blocks a move. Assignment bookings ride
+      // along — moved, response-reset, re-notified (cadence rule 6) —
+      // so they no longer refuse the day. What still refuses is any
+      // OTHER booking on the day (a lead-backed appointment a customer
+      // made themselves): the writer has no standing to move those, so
+      // Patrick reschedules them from the calendar (which notifies)
+      // before the day can slide.
+      const actor = session?.email || session?.name || "admin";
+      // Same UTC-date slice the row filter below uses, so the two sets
+      // can never disagree about which day a booking sits on.
+      const assignmentIdsOnDay = new Set((await bookings.list())
+        .filter((b) => b && b.source === "assignment" && b.status === "confirmed"
+          && String(b.scheduledFor || "").slice(0, 10) === fromDate)
+        .map((b) => b.id));
+      const blocking = (await activeBookings()).filter((b) =>
+        String(b.start || "").slice(0, 10) === fromDate
+        && !(b.bookingId && assignmentIdsOnDay.has(b.bookingId))
+      ).length;
+
+      const result = await seasonPlans.moveDay(
+        season, year,
+        { fromDate, toDate, bookedCount: blocking },
+        { actor }
+      );
+      // The plan moved — now its bookings ride along: new sequenced
+      // times on the new date, response state reset, notices queued for
+      // the sweep to send inside the window.
+      let dayMove = null;
+      try {
+        dayMove = await assignments.moveDayBookings(season, year, { from: fromDate, to: toDate }, { actor });
+      } catch (err) {
+        console.error("[season-plan] day-move booking ride-along failed:", err?.message);
+        dayMove = { ok: false, errors: [err?.message] };
+      }
+      const plan = await resolveSeasonPlan(season, year);
+      return sendJson(res, 200, {
+        ok: true, plan, warnings: result.warnings, moved: result.moved, dayMove
+      });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't move that day."] });
+    }
+  }
+
+  const seasonPlanMoveMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/move$/);
+  if (seasonPlanMoveMatch && req.method === "PATCH") {
+    try {
+      const session = await requireUser(req);
+      const season = seasonPlanMoveMatch[1];
+      const year = Number(seasonPlanMoveMatch[2]);
+      const body = await parseRequestBody(req);
+      const { warnings, moved } = await seasonPlans.moveStop(season, year, {
+        propertyCode: normalizeString(body.propertyCode, 40),
+        toDate: normalizeString(body.toDate, 10),
+        toBucket: normalizeString(body.toBucket, 10)
+      }, { actor: session?.email || session?.name || "admin" });
+      // A move changes a day's stop set, which is exactly when the order
+      // has to be recomputed — otherwise the new stop simply lands at the
+      // end of whichever bucket it was dropped into.
+      const stored = await seasonPlans.getPlan(season, year);
+      if (stored) {
+        await seasonPlans.savePlan(season, year, await resequencePlanForStorage(stored, season, year), {
+          actor: session?.email || session?.name || "admin"
+        });
+      }
+      const resolved = await resolveSeasonPlan(season, year);
+      return sendJson(res, 200, { ok: true, plan: resolved, warnings, moved });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't move that stop."] });
+    }
+  }
+
+  // Probe — "what would the filter say about this address?"
+  //
+  // Answers, for every route day, the cheapest-insertion added drive and
+  // whether the day would be offered. This is the acceptance tool: a
+  // Mississauga address should read a couple of minutes against the
+  // Etobicoke–Mississauga day and over an hour against everything else.
+  // It runs the same geo-filter code path the booking page runs, so a
+  // green probe is evidence about the real engine, not about a mock.
+  const seasonPlanProbeMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/probe$/);
+  if (seasonPlanProbeMatch && req.method === "POST") {
+    try {
+      const season = seasonPlanProbeMatch[1];
+      const year = Number(seasonPlanProbeMatch[2]);
+      const body = await parseRequestBody(req);
+      const address = normalizeString(body.address, 320);
+      if (!address) return sendJson(res, 422, { ok: false, errors: ["Enter an address to test."] });
+
+      const plan = await seasonPlans.getPlan(season, year);
+      if (!plan) return sendJson(res, 404, { ok: false, code: "no_plan", errors: ["No plan loaded for that season."] });
+
+      const geo = await geocode(address);
+      const scheduleData = await scheduleStore.read();
+      const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
+      const threshold = Number(mergedSettings.geoMaxAddedDriveMinutes);
+
+      const active = await activeBookings();
+      const all = await properties.list();
+      const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+      const shapes = geoFilter.buildDayShapes({ plan, propertiesByCode: byCode, bookings: active });
+
+      const resolvedAddress = geoFilter.coordsAreResolved(geo.coords);
+      const days = [];
+      // Yesterday cannot be offered to anyone. Old booked days grow
+      // shapes like any other (that's correct for history), but the
+      // probe is a phone-booking tool — a July date in its "best days"
+      // line is an answer Patrick cannot give a caller.
+      const probeNow = new Date();
+      const probeTodayKey = `${probeNow.getFullYear()}-${String(probeNow.getMonth() + 1).padStart(2, "0")}-${String(probeNow.getDate()).padStart(2, "0")}`;
+      for (const date of Object.keys(shapes).sort()) {
+        if (date < probeTodayKey) continue;
+        const shape = shapes[date];
+        const added = resolvedAddress
+          ? await geoFilter.addedDriveMinutes(geo.coords, shape.points)
+          : null;
+        days.push({
+          date,
+          label: shape.label,
+          // A day the plan never routed but real bookings sit on —
+          // buildDayShapes now grows these, so the probe sees newly
+          // booked days (Patrick's ad-season ask) the moment the first
+          // customer lands on them.
+          bookingsOnly: Boolean(shape.bookingsOnly),
+          points: shape.points.length,
+          plannedCount: shape.plannedCount,
+          bookedCount: shape.bookedCount,
+          addedDriveMinutes: added ? added.minutes : null,
+          offered: !resolvedAddress || !shape.points.length
+            || !Number.isFinite(threshold) || threshold <= 0
+            || (added && added.minutes <= threshold),
+          // The corridor is elastic: when the tight corridor leaves a
+          // customer short of days, availability reruns at wider tiers.
+          // This is the first tier that would admit the day — null when
+          // even the 90-minute service bound would not.
+          widensAtMinutes: (added && added.minutes > threshold)
+            ? (GEO_WIDEN_TIERS.find((t) => added.minutes <= t) ?? null)
+            : null
+        });
+      }
+      // THE NUMBER THAT IS EASY TO MISREAD. This list covers ROUTE days
+      // only. Every other open day in the season has no planned shape,
+      // so the filter has no opinion and offers it to everybody. A
+      // Toronto address showing ten red rows here is not "shut out" —
+      // it still sees roughly forty bookable days. Report the route-day
+      // count and say what the rest do, so the screen cannot be read as
+      // the whole answer.
+      const offeredCount = days.filter((d) => d.offered).length;
+      return sendJson(res, 200, {
+        ok: true,
+        address: geo.coords?.formattedAddress || address,
+        // The address Patrick TYPED, always — showing only the geocoder's
+        // fallback label ("Newmarket, ON, Canada" for a failed Erin
+        // lookup) made a failure read like the wrong address was tested.
+        typedAddress: address,
+        geocodeOk: geo.ok === true,
+        // A recognized-town approximation (geocode failed but the town
+        // matched lib/town-centroids.js): the filter RAN, from the town
+        // centre.
+        approximate: geo.coords?.source === "town-centroid",
+        approximateTown: geo.coords?.source === "town-centroid" ? (geo.coords.town || "") : "",
+        geocodeReason: geo.ok === true ? null : (geo.reason || "unknown"),
+        // Without the server key the filter is degraded for EVERY
+        // address, not just this probe — the screen must say so in red.
+        keyConfigured: geocodeIsConfigured(),
+        // An address we could not place at all skips the filter entirely
+        // and is offered every day — say so plainly rather than showing a
+        // column of zeroes that looks like a perfect match.
+        filterSkipped: !resolvedAddress,
+        thresholdMinutes: threshold,
+        routeDaysOffered: offeredCount,
+        routeDaysTotal: days.length,
+        days
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Probe failed."] });
+    }
+  }
+
+  // ---- The open bucket (first available) ---------------------------
+  //
+  // Every waiting standby customer, ranked against the upcoming route
+  // days with the same cheapest-insertion drive math the geography
+  // filter runs — the "on our way home" number. Read-only; placing a
+  // customer goes through POST /api/booking/reserve with their leadId
+  // (the book-from-lead path), which books, notifies, and clears the
+  // standby envelope in one move. Admin-only via path auth.
+  // Where does this standby customer actually fit on that day?
+  //
+  // The Book + notify button used to hard-code 13:00 as the anchor minute,
+  // which collided with whatever already sat at 13:00 and came back 409
+  // physical_conflict — on exactly the days the panel had just recommended.
+  // The geographic re-stamp made it worse rather than better: the afternoon
+  // now fills from 12:00 in half-hour steps, so 13:00 is precisely where the
+  // third afternoon booking lands.
+  //
+  // Asking the engine instead means the placement inherits everything a
+  // normal booking obeys — bucket capacity, bucket geography, hours, blocks
+  // — rather than re-deriving any of it here. The caller then books through
+  // the ordinary book-from-lead path, so the confirmation, the canonical
+  // mirror and the re-stamp all ride machinery that already works.
+  //
+  // Afternoon only, by design: an open-bucket pickup rides the back half of
+  // the day. That is what "on our way home" means.
+  if (req.method === "POST" && pathname === "/api/admin/open-bucket/slot") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const leadId = normalizeString(payload.leadId, 40);
+      const date = normalizeString(payload.date, 10);
+      if (!leadId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return sendJson(res, 422, { ok: false, code: "bad_request", errors: ["Pick a waiting customer and a day."] });
+      }
+
+      const leads = await readLeads();
+      const lead = openBucket.waitingLeads(leads).find((l) => l.id === leadId);
+      if (!lead) {
+        return sendJson(res, 404, {
+          ok: false, code: "not_waiting",
+          errors: ["That customer isn't in the open bucket any more — they may already be booked."]
+        });
+      }
+
+      const s = lead.standby || {};
+      let coords = s.coords || null;
+      if (!coords && lead.contact?.address) {
+        const geo = await geocode(lead.contact.address);
+        coords = geo?.coords || null;
+      }
+
+      const [bookingsNow, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
+      const endOfDay = new Date(`${date}T23:59:59`);
+      const slots = await listAvailableSlots({
+        serviceKey: s.serviceKey,
+        customerCoords: coords,
+        bookings: bookingsNow,
+        blocks: scheduleData.blocks,
+        daysAhead: horizonToReach(endOfDay),
+        hours: { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) },
+        settings: { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) },
+        dayShapes: await dayShapesForSeason({ bookings: bookingsNow })
+      });
+
+      const onDay = slots.filter((sl) => geoFilter.localDateKey(new Date(sl.start)) === date);
+      const afternoon = onDay.filter((sl) => new Date(sl.start).getHours() >= 12);
+      const pick = afternoon[0] || null;
+      if (!pick) {
+        return sendJson(res, 409, {
+          ok: false,
+          code: onDay.length ? "afternoon_full" : "day_unavailable",
+          message: onDay.length
+            ? "That day's afternoon is full — try another day from the list."
+            : "The engine won't put this customer on that day — try another from the list.",
+          errors: [onDay.length
+            ? "That day's afternoon is full. Pick another day."
+            : "That day isn't available for this customer. Pick another day."]
+        });
+      }
+
+      return sendJson(res, 200, {
+        ok: true,
+        slotStart: pick.start,
+        bucketKey: pick.bucketKey || "afternoon",
+        bucketWindow: pick.bucketWindow || "12 PM – 5 PM"
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't find a slot."] });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/standby") {
+    try {
+      const leads = await readLeads();
+      const waiting = openBucket.waitingLeads(leads);
+      const now = new Date();
+      const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+      let shapes = null;
+      if (waiting.length) {
+        try {
+          const active = await activeBookings();
+          shapes = await dayShapesForSeason({ bookings: active, now });
+        } catch (err) {
+          console.warn("[standby] day shapes unavailable, listing unranked:", err?.message);
+        }
+      }
+      const rows = [];
+      for (const lead of waiting) {
+        const s = lead.standby;
+        const bestDays = (s.resolved && shapes)
+          ? await openBucket.rankDaysForCoords(s.coords, shapes, { max: 3, todayKey })
+          : [];
+        rows.push({
+          leadId: lead.id,
+          name: lead.contact?.name
+            || [lead.contact?.firstName, lead.contact?.lastName].filter(Boolean).join(" "),
+          phone: lead.contact?.phone || "",
+          address: lead.contact?.address || "",
+          serviceKey: s.serviceKey,
+          serviceLabel: s.serviceLabel,
+          zoneCount: s.zoneCount ?? null,
+          requestedAt: s.requestedAt,
+          resolved: Boolean(s.resolved),
+          bestDays
+        });
+      }
+      return sendJson(res, 200, { ok: true, waiting: rows.length, rows });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the open bucket."] });
+    }
+  }
+
   // ---- Seasonal outreach (feature-seasonal-outreach-brief.md) ----
   //
   // Bulk booking-nudge engine. Patrick visits /admin/outreach a few
@@ -18603,8 +24703,19 @@ function resolveStaticTarget(pathname) {
   if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") {
     return { dir: SERVER_DIR, relative: "/schedule.html" };
   }
+  if (pathname === "/admin/season-plan" || pathname === "/admin/season-plan/") {
+    return { dir: SERVER_DIR, relative: "/season-plan.html" };
+  }
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") {
     return { dir: SERVER_DIR, relative: "/handoff.html" };
+  }
+  if (pathname === "/admin/assignment-messages" || pathname === "/admin/assignment-messages/") {
+    return { dir: SERVER_DIR, relative: "/assignment-messages.html" };
+  }
+  // The customer's appointment page — public, token in the path; the
+  // page's own JS reads the token and talks to /api/appointment/<token>.
+  if (/^\/a\/[A-Za-z0-9_-]{16,64}\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/appointment.html" };
   }
   // Seasonal outreach (feature-seasonal-outreach-brief.md). Property-
   // driven bulk send page for the spring + fall booking nudge.
@@ -18613,6 +24724,13 @@ function resolveStaticTarget(pathname) {
   }
   // Today's Schedule — the tech's daily morning hub. Lists today's
   // confirmed bookings with navigate/notify/open-WO actions per row.
+  // The day's route as a map. Its own page because it is drawn in two
+  // places — framed by the CRM's Today page, and loaded by the field
+  // app's Today screen in a band above the list. One implementation,
+  // two hosts; the app carries no map SDK of its own.
+  if (pathname === "/admin/today/map" || pathname === "/admin/today/map/") {
+    return { dir: SERVER_DIR, relative: "/today-map.html" };
+  }
   if (pathname === "/admin/today" || pathname === "/admin/today/") {
     return { dir: SERVER_DIR, relative: "/today.html" };
   }
@@ -18649,6 +24767,14 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin/quote-folder" || pathname === "/admin/quote-folder/") {
     return { dir: SERVER_DIR, relative: "/quote-folder.html" };
+  }
+  // Warranty claim queue + per-claim detail. Both admin-only, gated in
+  // needsAuth above.
+  if (pathname === "/admin/warranty-claims" || pathname === "/admin/warranty-claims/") {
+    return { dir: SERVER_DIR, relative: "/warranty-claims.html" };
+  }
+  if (/^\/admin\/warranty-claim\/[^/]+\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/warranty-claim.html" };
   }
   // Project-proposal builder (Brief 1, May 2026). Per-quote editor with
   // section nav, line-items picker, attachments. Admin-only.
@@ -18950,6 +25076,39 @@ async function serveNotFound(req, res) {
 }
 
 async function serveStatic(req, res, pathname) {
+  // /commercial-new-customer serves the SAME new-customer.html as the
+  // residential route (one source of truth — the page picks commercial mode
+  // client-side from the URL path), which left it shipping the residential
+  // <title>, canonical, and meta description (CRM-06). Rewrite just those
+  // three head tags here. Exact-string matches: if the source page's tags
+  // ever drift, the replacements no-op and the page serves unmodified —
+  // never broken. The /new-customer route's bytes are untouched.
+  if (pathname === "/commercial-new-customer" || pathname === "/commercial-new-customer/") {
+    try {
+      const html = (await fs.readFile(path.join(SITE_DIR, "new-customer.html"), "utf8"))
+        .replace(
+          "<title>New customer intake — PJL Land Services</title>",
+          "<title>Commercial customer intake — PJL Land Services</title>")
+        .replace(
+          '<link rel="canonical" href="https://www.pjllandservices.com/new-customer">',
+          '<link rel="canonical" href="https://www.pjllandservices.com/commercial-new-customer">')
+        .replace(
+          '<meta name="description" content="New customer intake — share your contact and property details with PJL Land Services so we can get you set up.">',
+          '<meta name="description" content="Commercial customer intake — set up your condo corporation, retail plaza, church, or professional building for irrigation service with PJL Land Services.">')
+        .replace(
+          "<h1>New customer intake</h1>",
+          "<h1>New commercial customer intake</h1>");
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store"
+      });
+      res.end(req.method === "HEAD" ? undefined : html);
+      return;
+    } catch {
+      // Fall through to the generic path — worst case the page serves with
+      // residential metadata, exactly as it did before this rewrite existed.
+    }
+  }
   const { dir, relative } = resolveStaticTarget(pathname);
   // decodeURIComponent throws on a malformed percent-escape (e.g. a bare "%").
   // Treat that as an unmatched route → branded 404, rather than letting the
@@ -18985,6 +25144,20 @@ async function serveStatic(req, res, pathname) {
       // clients know we can serve partial content.
       "accept-ranges": "bytes"
     };
+    // CRM assets revalidate on every load. The HTML pages are no-store, so
+    // a 30-second window where fresh markup can pair with a cached script is
+    // enough to produce a page that looks deployed and behaves like it isn't:
+    // the CRM-16 delete fix landed and the customer page still ran the old
+    // customer.js against the new server's 409, printing the raw error
+    // instead of raising the confirm. The same class is documented up and
+    // down tech-sw.js ("ran old JS against new HTML"). These are a handful of
+    // internal-user files (customer.js 40 KB, crm.css 86 KB) on an office
+    // connection — correctness is worth more than the 30 seconds of caching.
+    // Public-site assets keep max-age=30, untouched.
+    if (pathname.startsWith("/crm/") && (ext === ".js" || ext === ".css")) {
+      headers["cache-control"] = "no-cache";
+    }
+
     // ServiceWorker scope override: tech-sw.js is served from /crm/ but
     // needs to control /admin/work-order/*/tech URLs. The Service-Worker-
     // Allowed header lets it claim a wider scope than its serving path.
@@ -19197,6 +25370,28 @@ const server = http.createServer(async (req, res) => {
           // techs see a helpful 403 instead of being bounced to /login.
           const anyUser = await requireUser(req);
           if (anyUser) {
+            // A signed-in operator REFUSED an admin-only action. This is
+            // the most audit-relevant event the gate produces, and it is
+            // the one the success path below can never see — the request
+            // is rejected here and never reaches it. Logged with the real
+            // actor, since we have one.
+            //
+            // Deliberately NOT logging the 401 case underneath: an
+            // unauthenticated request carries no actor to attribute, and
+            // an open endpoint being probed would fill the ledger with
+            // rows that name nobody.
+            if (adminActions.isMutating(req.method)) {
+              adminActions.record({
+                uid: anyUser.uid || null,
+                role: anyUser.role || null,
+                method: req.method,
+                pathname,
+                status: 403,
+                ms: 0,
+                ip: callerIp(req),
+                userAgent: req.headers["user-agent"] || null
+              });
+            }
             if (pathname.startsWith("/api/")) {
               return sendJson(res, 403, { ok: false, errors: ["Admin access is required for this action."] });
             }
@@ -19209,6 +25404,38 @@ const server = http.createServer(async (req, res) => {
           return sendJson(res, 401, { ok: false, errors: ["CRM login required."] });
         }
         return redirect(res, `/login?next=${encodeURIComponent(pathname)}`);
+      }
+
+      // Admin action log. This gate is the ONE place every guarded request
+      // passes through with its session already resolved, which is why the
+      // hook lives here rather than being sprinkled across ~200 routes
+      // (where it would be forgotten on the next one added).
+      //
+      // Records state-changing requests only, on response finish so the
+      // status code is real rather than assumed. Best-effort and
+      // fire-and-forget: a log failure must never affect the response, so
+      // nothing here is awaited and admin-actions.record() swallows its
+      // own errors. Reads ip + user-agent synchronously, before the
+      // listener can outlive the socket — the same trap recordQuoteView()
+      // documents, where a fire-and-forget call ends up logging a blank IP.
+      if (adminActions.isMutating(req.method)) {
+        const startedAt = Date.now();
+        const actorUid = session.uid || null;
+        const actorRole = session.role || null;
+        const actorIp = callerIp(req);
+        const actorUa = req.headers["user-agent"] || null;
+        res.once("finish", () => {
+          adminActions.record({
+            uid: actorUid,
+            role: actorRole,
+            method: req.method,
+            pathname,
+            status: res.statusCode,
+            ms: Date.now() - startedAt,
+            ip: actorIp,
+            userAgent: actorUa
+          });
+        });
       }
     }
 
@@ -19310,6 +25537,11 @@ const server = http.createServer(async (req, res) => {
             }
           } catch (_) { /* fall through to approve.html */ }
         }
+        // Generic approve.html — serve it with the title + OG tags rewritten
+        // from this quote's type and branch. Returns false (and falls through
+        // to the untouched static file) if the quote can't be resolved.
+        const titled = await renderApproveWithOg(req, res, decodeURIComponent(approvePageMatch[1]), url);
+        if (titled) return;
       }
     }
 
@@ -19365,6 +25597,19 @@ server.listen(PORT, HOST, () => {
   console.log(`PJL site + lead receiver running at http://${HOST}:${PORT}`);
   console.log(`  Public homepage:   http://${HOST}:${PORT}/`);
   console.log(`  CRM dashboard:     http://${HOST}:${PORT}/admin   (login: http://${HOST}:${PORT}/login)`);
+
+  // The geography filter's key, checked ONCE at boot where nobody can
+  // miss it. Without it every address is placed by town name only
+  // (lib/town-centroids.js), and an unrecognized town skips the filter
+  // — Patrick: "we cannot have this fail."
+  if (!geocodeIsConfigured()) {
+    console.error("=".repeat(72));
+    console.error("[geocode] GOOGLE_MAPS_SERVER_KEY IS NOT SET.");
+    console.error("[geocode] Exact drive-time geocoding is OFF. Addresses fall back to");
+    console.error("[geocode] approximate town centres; unknown towns skip the geography");
+    console.error("[geocode] filter entirely. Set the key in Render > Environment.");
+    console.error("=".repeat(72));
+  }
 
   // Quote auto-expire sweep — spec §4.1 default 30-day validity. Runs at
   // startup AND every 6 hours so stale "sent" quotes flip to "expired"
@@ -19426,6 +25671,116 @@ server.listen(PORT, HOST, () => {
   sweepReviewRequests();
   setInterval(sweepReviewRequests, 5 * 60 * 1000);
 
+  // Assignment time sync sweep. Assigned bookings mirror the season
+  // plan's sequenced arrival times, and the plan's clock moves — a
+  // reorder, a time window, a zone-count edit, a travel-time change all
+  // shift arrivals. The plan-edit endpoints re-anchor inline, but this
+  // sweep is the guarantee: pristine assignment records converge on the
+  // route within minutes of ANY drift, including records created before
+  // the sequenced-time change ever deployed (no operator action needed).
+  // Cheap at steady state: sequenceDay reads the cached travel matrix,
+  // and updated=0 writes nothing. Covers both seasons of the current
+  // year — the only plans the writer ever assigns.
+  const sweepAssignedTimes = async () => {
+    try {
+      const y = new Date().getFullYear();
+      for (const season of ["spring", "fall"]) {
+        const result = await assignments.syncAssignedTimes(season, y);
+        if (result?.updated) {
+          console.log(`[assignments] time sweep re-anchored ${result.updated}/${result.checked} ${season} ${y} bookings`);
+        }
+      }
+    } catch (err) {
+      console.warn("[assignments] time sweep failed:", err?.message);
+    }
+  };
+  sweepAssignedTimes();
+  setInterval(sweepAssignedTimes, 10 * 60 * 1000);
+
+  // Lead-booking heal sweep. A booking made through the public flow is
+  // born on its LEAD; the canonical bookings.json record is a mirror
+  // that upsertFromLead materializes. Until now the only whole-list
+  // heal lived inside the iCal feed — it ran only when a calendar
+  // client fetched, and swallowed failures — so a lead-held booking
+  // could sit on the schedule and the phone calendar while the
+  // /admin/bookings page (canonical-only) knew nothing about it
+  // (Patrick: "why are the Willowridge bookings not showing up on the
+  // bookings?"). Same rule as the assignment time sweep: swept state,
+  // not human-triggered code paths. Boot + 10 minutes; healed=0 writes
+  // nothing, and every failure names its lead in the log.
+  const sweepLeadBookings = async () => {
+    try {
+      const result = await bookings.healFromLeads(await readLeads());
+      if (result.healed) {
+        console.log(`[bookings] lead-booking sweep healed ${result.healed} canonical record${result.healed === 1 ? "" : "s"}`);
+      }
+      for (const f of result.failures) {
+        console.warn(`[bookings] lead-booking heal FAILED for ${f.leadId} (${f.name}): ${f.error} — this booking is on the lead but NOT on /admin/bookings`);
+      }
+    } catch (err) {
+      console.warn("[bookings] lead-booking sweep failed:", err?.message);
+    }
+  };
+  sweepLeadBookings();
+  setInterval(sweepLeadBookings, 10 * 60 * 1000);
+
+  // Day-before reminder sweep for SELF-BOOKED appointments. Assignment
+  // customers get theirs from the cadence's step 6; the customer who
+  // booked themselves (the ad traffic) got nothing the day before —
+  // Patrick, 2026-09-02: "add the day-before reminder for self booked."
+  // Same posture as the cadence: mark-before-send, once ever, 9–18
+  // Toronto window; assignment bookings excluded so nobody is texted
+  // twice. 5-minute cadence so it lands minutes after 9 AM.
+  const sweepBookingReminders = async () => {
+    try {
+      const result = await bookingReminders.sweepDayBefore({
+        leads: await readLeads(),
+        getProperty: (id) => properties.get(id),
+        notify: notifyCustomer,
+        portalUrlFor: (lead, b) => {
+          const base = resolvePublicBaseUrl();
+          const token = lead?.portal?.token || (b?.propertyId ? portalTokenForId(b.propertyId) : "");
+          return token ? `${base}/portal/${token}` : base;
+        }
+      });
+      if (result.sent || result.errors?.length) {
+        console.log(`[booking-reminders] day-before: sent ${result.sent}/${result.due} due, skipped ${result.skipped.length}, errors ${result.errors.length}`);
+      }
+      for (const e of result.errors || []) {
+        console.warn(`[booking-reminders] FAILED for ${e.bookingId}: ${e.error}`);
+      }
+    } catch (err) {
+      console.warn("[booking-reminders] sweep failed:", err?.message);
+    }
+  };
+  sweepBookingReminders();
+  setInterval(sweepBookingReminders, 5 * 60 * 1000);
+
+  // Assignment cadence sweep (stage 4) — dispatches steps 2–6 of the
+  // follow-up cadence for blasted bookings, each step at most once,
+  // only on its own day, only inside the 09:00–18:00 send window (the
+  // engine enforces all three; outside them this is a cheap no-op).
+  // 5-minute cadence like the review-request sweep, so a step lands
+  // minutes after 9 AM on its day. Interlocked until stage 5's
+  // appointment page is live — see APPOINTMENT_PAGE_READY.
+  const sweepAssignmentCadence = async () => {
+    try {
+      const y = new Date().getFullYear();
+      for (const season of ["spring", "fall"]) {
+        const result = await assignmentCadence.sweepDue(season, y, {
+          appointmentPageReady: APPOINTMENT_PAGE_READY
+        });
+        if (result?.sent || result?.errors) {
+          console.log(`[assignment-cadence] ${season} ${y}: sent ${result.sent}, skipped ${result.skipped}, errors ${result.errors}`);
+        }
+      }
+    } catch (err) {
+      console.warn("[assignment-cadence] sweep failed:", err?.message);
+    }
+  };
+  sweepAssignmentCadence();
+  setInterval(sweepAssignmentCadence, 5 * 60 * 1000);
+
   // Trash purge sweep (Session 2 brief). Hard-deletes records soft-deleted
   // more than 30 days ago. Runs at startup AND every 24 hours so the
   // operator never has to think about it. Audit log captures each purge.
@@ -19445,4 +25800,32 @@ server.listen(PORT, HOST, () => {
   // server was down. After that, every 24 hours.
   sweepTrash();
   setInterval(sweepTrash, 24 * 60 * 60 * 1000);
+
+  // Outstanding warranty-claim reminder. The brief asks to "constantly be
+  // reminded of outstanding warranty claims" — this is the push half of
+  // that; the pull half is the nav badge + the queue's "needs an update"
+  // section, which are always on.
+  //
+  // Sends ONLY when something is actually stale (open and untouched for
+  // more than 24h). A digest that arrives every day saying "0 outstanding"
+  // is a digest you stop reading, so an all-clear sends nothing at all.
+  //
+  // Deliberately NOT run on boot: a restart during a deploy would fire a
+  // duplicate digest for claims that were already chased this morning.
+  const sweepWarrantyClaims = async () => {
+    try {
+      const all = await warrantyClaims.list();
+      const now = Date.now();
+      const stale = all
+        .filter((c) => warrantyClaims.isStale(c, now))
+        .map((c) => warrantyClaims.decorate(c, now))
+        .sort((a, b) => Date.parse(a.lastStatusAt) - Date.parse(b.lastStatusAt));
+      if (!stale.length) return;
+      await notifyWarranty.sendOutstandingDigest(stale);
+      console.log(`[warranty-claim] reminder digest sent for ${stale.length} outstanding claim(s).`);
+    } catch (err) {
+      console.warn("[warranty-claim] reminder sweep failed:", err?.message);
+    }
+  };
+  setInterval(sweepWarrantyClaims, 12 * 60 * 60 * 1000);
 });

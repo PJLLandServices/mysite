@@ -18,7 +18,6 @@ const workOrderWhen = document.getElementById("workOrderWhen");
 const workOrderDuration = document.getElementById("workOrderDuration");
 const workOrderPrice = document.getElementById("workOrderPrice");
 const workOrderNote = document.getElementById("workOrderNote");
-const workOrderDocStatus = document.getElementById("workOrderDocStatus");
 const workOrderDiagnosis = document.getElementById("workOrderDiagnosis");
 const workOrderDiagnosisSource = document.getElementById("workOrderDiagnosisSource");
 const workOrderDiagnosisSummary = document.getElementById("workOrderDiagnosisSummary");
@@ -312,6 +311,10 @@ const BLOCK_REASON_COPY = {
 };
 
 let lastPreflight = null; // cached so reschedule/cancel handlers can read phoneFallback synchronously
+// JOB-005: true when the rendered appointment's date is in the past —
+// set by renderWorkOrder, read by applyPreflightToButtons so the async
+// preflight can never re-reveal action buttons on a past appointment.
+let appointmentPast = false;
 
 // Single round-trip on portal load. Decides which action buttons appear
 // active, greyed out, or hidden entirely on the work order card. The
@@ -336,6 +339,7 @@ async function loadBookingActions() {
 
 function applyPreflightToButtons(preflight) {
   if (!preflight || !preflight.hasBooking) return;
+  if (appointmentPast) return; // past appointment — actions stay removed
   const reschedule = document.getElementById("rescheduleBtn");
   const cancel = document.getElementById("cancelBtn");
   const blocked = document.getElementById("workOrderBlocked");
@@ -377,53 +381,74 @@ function applyPreflightToButtons(preflight) {
 }
 
 function renderWorkOrder(data) {
-  // Surface the work-order envelope when the lead came in via the booking
-  // flow. Older leads (Formspree-era contact requests) don't have one and
-  // the card stays hidden.
+  // JOB-006 (CRM-12): this card renders GENUINELY UPCOMING work from
+  // data.nextVisit (canonical-store derived, server-side), never the
+  // frozen booking envelope. No upcoming work → hidden; past visits
+  // live in Service History and nowhere else.
+  const nv = data.nextVisit;
   const wo = data.workOrder;
   const booking = data.booking;
-  if (!wo || !booking) {
+  if (!nv) {
     workOrderCard.hidden = true;
     return;
   }
-  workOrderId.textContent = wo.id || "WO-—";
-  workOrderStatus.textContent = (wo.status || "scheduled").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-  workOrderService.textContent = booking.serviceLabel || "—";
-  workOrderPrice.textContent = wo.priceLabel || (wo.total ? `$${wo.total}` : "Custom quote");
-  // Bucket-mode hides the on-site duration line in favour of the bucket
-  // window ("8 AM – 12 PM"). Legacy bookings without a bucket fall back
-  // to the old "<N> min" display.
-  workOrderDuration.textContent = booking.bucketWindow
-    || (booking.durationMinutes ? `${booking.durationMinutes} min` : "—");
+  // Actions (Change/Cancel) exist only for the landing lead's own
+  // future-dated booking — those endpoints act on this portal's lead.
+  // appointmentPast stays as a belt for the async preflight, but a
+  // rendered nextVisit is upcoming by construction.
+  appointmentPast = !nv.actionable;
+  const actionsEl = document.getElementById("workOrderActions");
+  const blockedEl = document.getElementById("workOrderBlocked");
+  if (actionsEl) actionsEl.hidden = !nv.actionable;
+  if (blockedEl && !nv.actionable) blockedEl.hidden = true;
 
-  if (booking.start) {
-    const start = new Date(booking.start);
-    if (booking.bucketLabel) {
+  workOrderId.textContent = nv.woId || "Booked";
+  workOrderStatus.textContent = nv.dateTBC ? "Booked" : "Scheduled";
+  workOrderService.textContent = nv.serviceLabel || "—";
+
+  // Duration + price rows: shown for booking-envelope visits (we know
+  // them), hidden for canonical-WO advance bookings (we don't — never
+  // render an empty field).
+  const durationRow = workOrderDuration ? workOrderDuration.parentElement : null;
+  const priceRow = workOrderPrice ? workOrderPrice.parentElement : null;
+  if (nv.source === "booking") {
+    if (durationRow) durationRow.hidden = false;
+    if (priceRow) priceRow.hidden = false;
+    workOrderPrice.textContent = nv.priceLabel || "Custom quote";
+    workOrderDuration.textContent = nv.bucketWindow
+      || (nv.durationMinutes ? `${nv.durationMinutes} min` : "—");
+  } else {
+    if (durationRow) durationRow.hidden = true;
+    if (priceRow) priceRow.hidden = true;
+  }
+
+  if (nv.dateTBC || !nv.start) {
+    workOrderWhen.textContent = "Date to be confirmed — we'll reach out to schedule your visit.";
+  } else {
+    const start = new Date(nv.start);
+    if (nv.bucketLabel) {
       // "Tuesday, May 14 — Morning Appointment"
       const dayPart = start.toLocaleDateString("en-CA", {
         weekday: "long", month: "long", day: "numeric"
       });
-      workOrderWhen.textContent = `${dayPart} — ${booking.bucketLabel}`;
+      workOrderWhen.textContent = `${dayPart} — ${nv.bucketLabel}`;
     } else {
-      // Legacy bookings (pre-bucket): still show precise time.
       workOrderWhen.textContent = start.toLocaleString("en-CA", {
         weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit"
       });
     }
-  } else {
-    workOrderWhen.textContent = "—";
   }
 
-  if (wo.priceNote) {
-    workOrderNote.textContent = wo.priceNote;
+  if (nv.source === "booking" && nv.priceNote) {
+    workOrderNote.textContent = nv.priceNote;
     workOrderNote.hidden = false;
   } else {
     workOrderNote.hidden = true;
   }
 
-  // Diagnosis block — present when this booking came from an AI-chat
-  // handoff or other pre-booking diagnostic flow. Hidden otherwise.
-  const diagnosis = wo.diagnosis;
+  // Diagnosis block — only meaningful on the landing lead's own booking
+  // (it hangs off that envelope's AI-handoff capture). Hidden otherwise.
+  const diagnosis = (nv.source === "booking" && nv.actionable && wo && booking) ? wo.diagnosis : null;
   if (diagnosis && (diagnosis.summary || diagnosis.text)) {
     const sourceLabel = (diagnosis.source || "ai_chat")
       .replace(/_/g, " ")
@@ -441,14 +466,14 @@ function renderWorkOrder(data) {
     workOrderDiagnosis.hidden = true;
   }
 
-  // Document state — placeholder messaging until we attach a real doc.
-  if (wo.documentReady && wo.documentUrl) {
-    workOrderDocStatus.innerHTML = `<a href="${wo.documentUrl}" target="_blank" rel="noopener">Open work order document →</a>`;
-  } else {
-    workOrderDocStatus.textContent = "Your detailed work order will be available here closer to your appointment.";
-  }
+  // CRM-10: the "Work order document" placeholder panel is gone — it
+  // promised a document nothing ever delivered (the envelope's
+  // documentReady never flips). Completed service reports surface in the
+  // Service History card instead.
 
-  renderPortalAdminChangeType(data);
+  // Admin-only change-appointment-type control operates on the landing
+  // lead's booking — only meaningful when that's what we're showing.
+  if (nv.source === "booking" && nv.actionable) renderPortalAdminChangeType(data);
 
   workOrderCard.hidden = false;
 }
@@ -539,7 +564,90 @@ async function savePortalServiceType() {
 
 if (portalAdminServiceSaveBtn) portalAdminServiceSaveBtn.addEventListener("click", savePortalServiceType);
 
+// JOB-002 Part B — customer-wide service history. One line per work
+// order: type, date, status, warranty label ("Covered until <Month Year>"
+// / "Warranty expired" — a label, never a filter), report download, and
+// the visit's invoice (amount, status, date, download). Strictly
+// read-only: no pay controls here, ever — paying happens only through
+// the invoice link PJL sends.
+function renderServiceHistory(items) {
+  const card = document.getElementById("historyCard");
+  const list = document.getElementById("historyList");
+  if (!card || !list) return;
+  const rows = Array.isArray(items) ? items : [];
+  if (!rows.length) { card.hidden = true; return; }
+  card.hidden = false;
+  const statusLabel = (s) => String(s || "scheduled").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  // NOT formatDate() — that helper expects date-only strings (it appends
+  // T12:00:00) and throws on the full ISO timestamps these records carry.
+  const isoDay = (iso) => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-CA", { dateStyle: "long" });
+  };
+  const monthYear = (iso) => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-CA", { month: "long", year: "numeric" });
+  };
+  list.innerHTML = rows.map((w) => {
+    const when = w.completedAt || w.scheduledFor;
+    const warranty = w.warranty
+      ? (w.warranty.covered
+          ? `<span class="portal-history-warranty is-covered">Covered until ${escapeHtml(monthYear(w.warranty.expiresAt))}</span>`
+          : `<span class="portal-history-warranty is-expired">Warranty expired</span>`)
+      : "";
+    const report = w.reportUrl
+      ? `<a class="portal-history-link" href="${escapeHtml(w.reportUrl)}" target="_blank" rel="noopener">Service report (PDF)</a>`
+      : "";
+    const inv = w.invoice
+      ? `<span class="portal-history-invoice">Invoice ${escapeHtml(w.invoice.id)} · ${escapeHtml(money.format(Number(w.invoice.total || 0)).replace("CA", "").trim())} · ${escapeHtml(statusLabel(w.invoice.status))} · ${escapeHtml(isoDay(w.invoice.createdAt))} · <a class="portal-history-link" href="${escapeHtml(w.invoice.pdfUrl)}" target="_blank" rel="noopener">Download</a></span>`
+      : "";
+    return `<li class="portal-history-item">
+      <div class="portal-history-main">
+        <strong>${escapeHtml(w.typeLabel || "Service Visit")}</strong>
+        <span class="portal-history-date">${when ? escapeHtml(isoDay(when)) : (["completed", "cancelled", "no_show"].includes(w.status) ? "—" : "date to be confirmed")}</span>
+        <span class="portal-history-status">${escapeHtml(statusLabel(w.status))}</span>
+        ${warranty}
+      </div>
+      <div class="portal-history-links">${report}${inv}</div>
+    </li>`;
+  }).join("");
+}
+
+// JOB-002 Part B — projects at stage level only: rail, day count, percent
+// complete, and the project's own invoices. Nothing from the daily logs
+// is ever sent to this page, so nothing internal can render here.
+function renderProjects(items) {
+  const card = document.getElementById("projectsCard");
+  const wrap = document.getElementById("projectsList");
+  if (!card || !wrap) return;
+  const rows = Array.isArray(items) ? items : [];
+  if (!rows.length) { card.hidden = true; return; }
+  card.hidden = false;
+  const STAGE_LABELS = { accepted: "Accepted", deposit: "Deposit", scheduled: "Scheduled", complete: "Complete", invoiced: "Invoiced" };
+  const statusLabel = (s) => String(s || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  wrap.innerHTML = rows.map((p) => {
+    const stages = Array.isArray(p.stages) && p.stages.length ? p.stages : ["accepted", "deposit", "scheduled", "complete", "invoiced"];
+    const reachedIdx = stages.indexOf(p.stage);
+    const rail = stages.map((s, i) =>
+      `<span class="portal-project-stage${i <= reachedIdx ? " is-reached" : ""}${s === p.stage ? " is-current" : ""}">${escapeHtml(STAGE_LABELS[s] || s)}</span>`
+    ).join(`<span class="portal-project-stage-sep" aria-hidden="true">→</span>`);
+    const invoicesHtml = (p.invoices || []).map((inv) =>
+      `<li class="portal-project-invoice">${escapeHtml(inv.role === "deposit" ? "Deposit invoice" : "Invoice")} ${escapeHtml(inv.id)} · ${escapeHtml(money.format(Number(inv.total || 0)).replace("CA", "").trim())} · ${escapeHtml(statusLabel(inv.status))} · <a class="portal-history-link" href="${escapeHtml(inv.pdfUrl)}" target="_blank" rel="noopener">Download</a></li>`
+    ).join("");
+    return `<div class="portal-project">
+      <div class="portal-project-head">
+        <strong>${escapeHtml(p.name || "Your project")}</strong>
+        <span class="portal-project-meta">${p.daysLogged ? `${escapeHtml(String(p.daysLogged))} day${p.daysLogged === 1 ? "" : "s"} on site · ` : ""}${escapeHtml(String(p.percentComplete || 0))}% complete</span>
+      </div>
+      <div class="portal-project-rail">${rail}</div>
+      <div class="portal-project-bar"><div class="portal-project-bar-fill" style="width:${Math.max(0, Math.min(100, Number(p.percentComplete) || 0))}%"></div></div>
+      ${invoicesHtml ? `<ul class="portal-project-invoices">${invoicesHtml}</ul>` : ""}
+    </div>`;
+  }).join("");
+}
+
 function renderPortal(data) {
+  renderPortalBooking(data.bookableProperties);
   const customer = data.customer || {};
   const project = data.project || {};
   const services = Array.isArray(project.services) ? project.services : [];
@@ -547,15 +655,49 @@ function renderPortal(data) {
   const hasBooking = Boolean(data.booking);
   customerFirstName = customer.firstName || "";
 
-  portalTitle.textContent = customerFirstName
-    ? (hasBooking
-        ? `Hi ${customerFirstName}, your service is scheduled.`
-        : `Hi ${customerFirstName}, your PJL request is open.`)
-    : (hasBooking ? "Your service is scheduled." : "Your PJL request is open.");
-  portalIntro.textContent = hasBooking
-    ? "Your appointment details are below. Anything you need to share before we arrive, drop us a message."
-    : "Track your project below. Anything you need to share, drop us a message and we'll get back to you.";
-  projectStatus.textContent = statusLabelFor(project.status, hasBooking);
+  // JOB-005 (CRM-09) — headline, current-stage card, and follow-up line
+  // derive from data.derived (canonical-store state computed server-side)
+  // instead of the frozen booking envelope + hand-advanced CRM stage.
+  // request_open keeps the hand-advanced intake labels — that's the one
+  // state where they are the truth. Falls back to the legacy binary if
+  // the payload predates the feature.
+  const derived = data.derived || null;
+  const HEADLINES = {
+    project_underway: { title: "your project is underway.", bare: "Your project is underway.",
+      intro: "Track progress on your project card below. Questions any time — just send a message.",
+      stage: "Project underway", follow: "Progress updates appear on your project card below." },
+    quote_ready: { title: "your quote is ready.", bare: "Your quote is ready.",
+      intro: "Review the scope and price below, and accept online when you're ready.",
+      stage: "Quote ready to review", follow: "Accept online below, or message us with any questions." },
+    service_scheduled: { title: "your service is scheduled.", bare: "Your service is scheduled.",
+      intro: "Your appointment details are below. Anything you need to share before we arrive, drop us a message.",
+      stage: "Service scheduled", follow: "Your appointment details are below." },
+    service_complete: { title: "your service is complete.", bare: "Your service is complete.",
+      intro: "Reports and invoices for every visit are in your Service History below. Book again any time.",
+      stage: "Service complete", follow: "Warranty and reports for every visit live in Service History below." },
+    closed: { title: "this request is closed.", bare: "This request is closed.",
+      intro: "No action needed. Call or message us any time and we'll pick things right back up.",
+      stage: "Closed", follow: "" },
+    request_open: { title: "your PJL request is open.", bare: "Your PJL request is open.",
+      intro: "Track your project below. Anything you need to share, drop us a message and we'll get back to you.",
+      stage: null, follow: null }
+  };
+  const view = derived && HEADLINES[derived.state] ? HEADLINES[derived.state] : null;
+  if (view) {
+    portalTitle.textContent = customerFirstName ? `Hi ${customerFirstName}, ${view.title}` : view.bare;
+    portalIntro.textContent = view.intro;
+    projectStatus.textContent = view.stage !== null ? view.stage : statusLabelFor(project.status, false);
+  } else {
+    portalTitle.textContent = customerFirstName
+      ? (hasBooking
+          ? `Hi ${customerFirstName}, your service is scheduled.`
+          : `Hi ${customerFirstName}, your PJL request is open.`)
+      : (hasBooking ? "Your service is scheduled." : "Your PJL request is open.");
+    portalIntro.textContent = hasBooking
+      ? "Your appointment details are below. Anything you need to share before we arrive, drop us a message."
+      : "Track your project below. Anything you need to share, drop us a message and we'll get back to you.";
+    projectStatus.textContent = statusLabelFor(project.status, hasBooking);
+  }
 
   // Personalize the secondary card headings when we know who they are.
   // The "Send PJL a message" + "Need to update something?" cards both work
@@ -573,7 +715,9 @@ function renderPortal(data) {
   }
   followUpText.textContent = project.nextFollowUp
     ? `Next follow-up: ${formatDate(project.nextFollowUp)}`
-    : "PJL will follow up as soon as your request is reviewed.";
+    : (view && view.follow !== null
+        ? view.follow
+        : "PJL will follow up as soon as your request is reviewed.");
   projectTotal.textContent = money.format(Number(project.total || 0)).replace("CA", "").trim();
   customerPhone.textContent = text(customer.phone) || "Not provided";
   // Tap-to-dial / tap-to-map the customer's own details (crm-contact.js).
@@ -602,24 +746,38 @@ function renderPortal(data) {
     serviceList.append(item);
   }
 
+  // JOB-006 (CRM-12): the permanent "quote accepted — Patrick will
+  // confirm your arrival window" thank-you variant is RETIRED — it
+  // rendered forever on won leads, attached to whatever engagement the
+  // landing lead happened to be. The card now exists only in its live
+  // form: a real quote awaiting action (canAccept, status === "quoted").
   acceptCard.hidden = !project.canAccept;
-  if (project.status === "won") {
-    acceptCard.hidden = false;
-    acceptCard.classList.add("is-accepted");
-    acceptCard.querySelector("h2").textContent = customerFirstName
-      ? `Thank you, ${customerFirstName} — quote accepted.`
-      : "Quote accepted — thank you";
-    const p = acceptCard.querySelector("p");
-    if (p) p.textContent = "Your project is booked. Patrick will confirm the exact arrival window with you directly.";
-    acceptButton.hidden = true;
-  }
 
-  renderTimeline(project.status);
+  // JOB-005 Task 3: the rail is an intake pipeline — meaningful only
+  // before the customer's first booking or completed work. Outside
+  // intake it is retired; the Current-stage card above carries the
+  // derived state in its place.
+  const inIntake = !derived || derived.showIntakeRail;
+  if (!inIntake) {
+    portalTimeline.hidden = true;
+  } else {
+    renderTimeline(project.status);
+  }
   renderPhotos(project.photos);
   renderActivity(project.activity);
+  // JOB-006 (CRM-12): the lead's intake snapshots — Project request
+  // (features + estimated value) and Project activity (intake
+  // breadcrumbs) — render only during intake, same predicate as the
+  // rail. Once bookings or completed work exist, Service History and
+  // invoices are the truth.
+  const requestCard = document.getElementById("projectRequestCard");
+  if (requestCard) requestCard.hidden = !inIntake;
+  if (!inIntake && activityCard) activityCard.hidden = true;
   renderMessageThread(Array.isArray(data.messages) ? data.messages : []);
   renderSystem(data.property);
   renderWorkOrder(data);
+  renderServiceHistory(data.serviceHistory);
+  renderProjects(data.projects);
   // Preflight for the work-order action buttons — runs in parallel with
   // recommendations and prefs. Decides which buttons appear active
   // (>24hrs out, never rescheduled, WO modifiable, single-WO booking)
@@ -629,7 +787,69 @@ function renderPortal(data) {
   // pre-authorize. Async; reveals the card when ready, hidden until then.
   loadRecommendations().catch((err) => console.warn("[recommendations]", err?.message));
 
+  renderPortalWarrantyClaims(data.warrantyClaims);
+
   portalContent.hidden = false;
+}
+
+
+// Warranty claims card. Fed by portal.warrantyClaims / propertyPortal.
+// warrantyClaims — the same array shape from both, so one renderer serves
+// both portal shapes. Hidden entirely when the customer has never filed a
+// claim; an empty "no claims" card is noise on a page about their project.
+function renderPortalWarrantyClaims(claims) {
+  const section = document.getElementById("portalWarrantySection");
+  const list = document.getElementById("portalWarrantyList");
+  if (!section || !list) return;
+  const rows = Array.isArray(claims) ? claims : [];
+  if (!rows.length) {
+    section.hidden = true;
+    return;
+  }
+  list.textContent = "";
+  rows.forEach((claim) => {
+    const li = document.createElement("li");
+    li.className = "portal-warranty-item" + (claim.open ? " is-open" : " is-closed");
+
+    const link = document.createElement("a");
+    // Server-built URL that already carries the claim's own status token.
+    // Assigned via .href on an element we created, so nothing from the
+    // payload is ever parsed as markup.
+    link.href = claim.url || "#";
+    link.className = "portal-warranty-link";
+
+    const num = document.createElement("strong");
+    num.className = "portal-warranty-number";
+    num.textContent = claim.id || "";
+    link.appendChild(num);
+
+    const badge = document.createElement("span");
+    badge.className = "portal-warranty-badge";
+    badge.dataset.status = claim.status || "";
+    badge.textContent = claim.statusLabel || claim.status || "";
+    link.appendChild(badge);
+
+    const meta = document.createElement("span");
+    meta.className = "portal-warranty-meta";
+    const filed = claim.createdAt ? new Date(claim.createdAt) : null;
+    const filedText = filed && !Number.isNaN(filed.getTime())
+      ? filed.toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" })
+      : "";
+    meta.textContent = [filedText ? `Filed ${filedText}` : "", claim.invoiceRef ? `Invoice ${claim.invoiceRef}` : ""]
+      .filter(Boolean).join(" \u00b7 ");
+    link.appendChild(meta);
+
+    if (claim.statusText) {
+      const text = document.createElement("span");
+      text.className = "portal-warranty-status-text";
+      text.textContent = claim.statusText;
+      link.appendChild(text);
+    }
+
+    li.appendChild(link);
+    list.appendChild(li);
+  });
+  section.hidden = false;
 }
 
 async function loadPortal() {
@@ -662,6 +882,95 @@ async function loadPortal() {
     portalTitle.textContent = "Portal unavailable";
     portalIntro.textContent = "Please contact PJL Land Services directly.";
   }
+}
+
+// Book-a-service card (customer portal). One row per property the
+// customer owns, each starting a booking for that property.
+//
+// Two shapes of row:
+//   • Seasonal express — the property has a zone count on file and isn't
+//     already booked for the season, so we POST begin-booking and land the
+//     customer on book.html with the right tier, zone count and address
+//     already filled in. Same handoff the outreach email gives, reached by
+//     simply logging in.
+//   • Plain — no zone count on file, or already booked for the season. A
+//     direct link to book.html where they pick from the menu. We do not
+//     guess a tier for a system we have no zone count for.
+//
+// The property's own portal token is never sent to the browser; the POST
+// carries THIS portal's token plus a propertyId and the server re-checks
+// that the property belongs to this customer.
+function renderPortalBooking(propertiesList) {
+  const section = document.getElementById("portalBookSection");
+  const list = document.getElementById("portalBookList");
+  const heading = document.getElementById("portalBookHeading");
+  if (!section || !list) return;
+
+  const rows = Array.isArray(propertiesList) ? propertiesList : [];
+  if (!rows.length) { section.hidden = true; return; }
+
+  const seasonal = rows.filter((r) => r.season);
+  heading.textContent = (rows.length === 1 && seasonal.length === 1)
+    ? `Book your ${seasonal[0].seasonLabel.toLowerCase()}`
+    : "Book a service";
+
+  list.innerHTML = "";
+  rows.forEach((row) => {
+    const li = document.createElement("li");
+    li.className = "portal-book-row";
+
+    const where = document.createElement("div");
+    where.className = "portal-book-where";
+    const addr = document.createElement("span");
+    addr.className = "portal-book-address";
+    addr.textContent = row.address || "Your property";
+    where.append(addr);
+
+    const meta = document.createElement("span");
+    meta.className = "portal-book-meta";
+    if (row.alreadyBooked) {
+      meta.textContent = "Already booked this season — book anything else here.";
+    } else if (row.zoneCount > 0) {
+      meta.textContent = `${row.zoneCount}-zone system on file`;
+    } else {
+      meta.textContent = "We'll confirm your zone count when you book.";
+    }
+    where.append(meta);
+    li.append(where);
+
+    const btn = document.createElement(row.season ? "button" : "a");
+    btn.className = "portal-btn portal-btn-primary";
+    if (row.season) {
+      btn.type = "button";
+      btn.textContent = `Book my ${row.seasonLabel.toLowerCase()} →`;
+      btn.onclick = async () => {
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Opening booking…";
+        try {
+          const token = tokenFromLocation();
+          const qs = `?season=${encodeURIComponent(row.season)}&propertyId=${encodeURIComponent(row.propertyId)}`;
+          const r = await fetch(`/api/portal/${encodeURIComponent(token)}/begin-booking${qs}`, {
+            method: "POST", cache: "no-store"
+          });
+          const d = await r.json();
+          if (!r.ok || !d.ok || !d.redirect) throw new Error("Booking session failed to start.");
+          window.location.assign(d.redirect);
+        } catch (err) {
+          // Never dead-end the customer: fall through to the plain booking
+          // page rather than leaving them on a button that did nothing.
+          window.location.assign("/book.html");
+        }
+      };
+    } else {
+      btn.href = "/book.html";
+      btn.textContent = "Book a service →";
+    }
+    li.append(btn);
+    list.append(li);
+  });
+
+  section.hidden = false;
 }
 
 // Property-portal render path (seasonal outreach). Swaps the hero
@@ -769,6 +1078,8 @@ function renderPropertyPortal(payload) {
       alert("Sorry, the booking page didn't load. Please call (905) 960-0181.");
     }
   };
+
+  renderPortalWarrantyClaims(payload.warrantyClaims);
 
   document.getElementById("portalPropertySection").hidden = false;
 }

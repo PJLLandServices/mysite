@@ -91,6 +91,35 @@
       <p class="tech-address" id="techAddress">—</p>
     </section>
 
+    <!-- Warranty banner (FLOW-30). Directly under the address because it
+         changes what the tech says at the door: this visit was promised
+         free, and here is the prior work it is honouring. The convert
+         control is deliberately NOT here — lifting a customer's waiver is
+         a desk decision made on the full claim, not a tap on a phone in
+         someone's driveway. The tech's job is to know, and to call it in. -->
+    <section class="tech-warranty" id="techWarranty" hidden>
+      <div class="tech-warranty-head">
+        <span class="tech-warranty-icon" aria-hidden="true">🛡️</span>
+        <strong id="techWarrantyTitle">Warranty repair — no charge</strong>
+      </div>
+      <p class="tech-warranty-claim" id="techWarrantyClaim"></p>
+      <p class="tech-warranty-prior" id="techWarrantyPrior" hidden></p>
+      <details class="tech-warranty-detail">
+        <summary>What the customer claimed</summary>
+        <p id="techWarrantySummary"></p>
+      </details>
+      <p class="tech-warranty-note" id="techWarrantyNote">
+        The call-out fee is already waived on this work order. If the fault isn't what the claim
+        describes, don't complete it as a warranty visit — call the office to convert it to a
+        chargeable service call first.
+      </p>
+      <div class="tech-warranty-converted" id="techWarrantyConverted" hidden>
+        <strong>Converted — this is now a CHARGEABLE service call</strong>
+        <span id="techWarrantyConvertedReason"></span>
+        <span class="tech-warranty-converted-sign">The customer must sign for the work before you complete it.</span>
+      </div>
+    </section>
+
     <!-- Brief 2: Build-mode cards. Only visible when wo.type === "build".
          Mobile-first order: session clock first (primary in-field action),
          project task checklist, photos, materials consumed, daily notes,
@@ -667,7 +696,7 @@
             style="width:120px;padding:10px;font-size:16px;border:1px solid #c9c6b8;border-radius:6px;">
           <span style="font-size:12px;color:#666;">Decimal hours (1.5 = 1h 30m)</span>
         </div>
-        <p id="techLabourHoursHint" style="margin:6px 0 0;font-size:12px;color:#888;" hidden></p>
+        <p id="techLabourHoursHint" style="margin:6px 0 0;font-size:12px;color:#6B6B63;" hidden></p>
       </div>
       <p class="tech-payment-invoice" id="techPayInvoiceLine">No draft invoice yet. One will be created when the visit is marked completed.</p>
     </section>

@@ -3,7 +3,7 @@
 
 .invoice-body { background: #FAFAF5; }
 .invoice-shell { padding: 24px clamp(16px, 3vw, 36px) 60px; }
-.invoice-loading { text-align: center; color: #777; font-style: italic; padding: 60px 20px; }
+.invoice-loading { text-align: center; color: #6B6B63; font-style: italic; padding: 60px 20px; }
 .invoice-back { margin: 0 0 14px; font-size: 13px; }
 .invoice-back a { color: #1B4D2E; text-decoration: none; font-weight: 600; }
 .invoice-back a:hover { text-decoration: underline; }
@@ -78,7 +78,7 @@
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
-  color: #777;
+  color: #6B6B63;
   text-transform: uppercase;
   margin-bottom: 8px;
 }
@@ -91,7 +91,7 @@
 .invoice-doc-sub {
   margin: 0;
   font-size: 13px;
-  color: #777;
+  color: #6B6B63;
   line-height: 1.5;
 }
 
@@ -105,7 +105,7 @@
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
-  color: #777;
+  color: #6B6B63;
   padding: 10px 8px;
   border-bottom: 2px solid #1B4D2E;
   text-transform: uppercase;
@@ -121,12 +121,12 @@
 .invoice-doc-line-note {
   display: block;
   margin-top: 4px;
-  color: #999;
+  color: #6B6B63;
   font-size: 12px;
 }
 .invoice-doc-line-empty {
   text-align: center !important;
-  color: #999 !important;
+  color: #6B6B63 !important;
   font-style: italic;
   padding: 24px !important;
 }
@@ -280,10 +280,10 @@
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
-  color: #777;
+  color: #6B6B63;
   text-transform: uppercase;
 }
-.invoice-action-meta { margin: 0; font-size: 12px; color: #777; }
+.invoice-action-meta { margin: 0; font-size: 12px; color: #6B6B63; }
 .invoice-action-meta a { color: #1B4D2E; font-weight: 600; text-decoration: none; }
 .invoice-action-meta a:hover { text-decoration: underline; }
 .invoice-action-status { margin: 0; font-size: 12px; }
@@ -505,7 +505,7 @@
   gap: 8px;
   margin: 0;
   font-size: 12px;
-  color: #777;
+  color: #6B6B63;
 }
 .invoice-action-link a {
   color: #1B4D2E;
@@ -514,3 +514,181 @@
   font-variant-numeric: tabular-nums;
 }
 .invoice-action-link a:hover { text-decoration: underline; }
+
+/* ---- Accompanying letter editor ------------------------------------
+   Full-width writing surface below the invoice/actions split. A
+   contenteditable rather than a textarea so formatting is applied to
+   selected text the way it is in a word processor, instead of the admin
+   typing markup by hand — the body is serialized to the same markup
+   vocabulary quote-pdf.js parses (**bold**, __underline__, *italic*,
+   "- " bullets, "1." numbered) on save. */
+.invoice-letter {
+  margin-top: 28px;
+  padding: 22px clamp(16px, 2.4vw, 28px) 20px;
+  background: #fff;
+  border: 1px solid var(--pjl-border, #e2e0d4);
+  border-radius: 10px;
+}
+.invoice-letter-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.invoice-letter-title {
+  margin: 0 0 4px;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--pjl-green, #1b4d2e);
+}
+.invoice-letter-sub {
+  margin: 0;
+  max-width: 62ch;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--pjl-muted, #6B6B63);
+}
+.invoice-letter-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1a1a1a;
+  background: #f4f8ee;
+  border: 1px solid #d9e5c8;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.invoice-letter-switch input { margin: 0; cursor: pointer; }
+
+.invoice-letter-subject {
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 14px;
+  color: #1a1a1a;
+  border: 1px solid var(--pjl-border, #e2e0d4);
+  border-radius: 6px;
+}
+.invoice-letter-subject:focus,
+.invoice-letter-body:focus {
+  outline: 2px solid var(--pjl-green, #1b4d2e);
+  outline-offset: -1px;
+}
+
+.invoice-letter-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  background: #faf9f4;
+  border: 1px solid var(--pjl-border, #e2e0d4);
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+}
+.invoice-letter-tool {
+  min-width: 32px;
+  padding: 5px 9px;
+  font-size: 13px;
+  line-height: 1.2;
+  color: #1a1a1a;
+  background: #fff;
+  border: 1px solid var(--pjl-border, #e2e0d4);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.invoice-letter-tool:hover { background: #f1efe4; }
+.invoice-letter-tool[aria-pressed="true"] {
+  background: var(--pjl-green, #1b4d2e);
+  border-color: var(--pjl-green, #1b4d2e);
+  color: #fff;
+}
+.invoice-letter-toolsep {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--pjl-border, #e2e0d4);
+}
+
+.invoice-letter-body {
+  min-height: 260px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 16px 18px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #1a1a1a;
+  background: #fff;
+  border: 1px solid var(--pjl-border, #e2e0d4);
+  border-radius: 0 0 6px 6px;
+}
+.invoice-letter-body:empty::before {
+  content: attr(data-placeholder);
+  color: var(--pjl-muted, #6B6B63);
+}
+.invoice-letter-body p { margin: 0 0 10px; }
+.invoice-letter-body ul,
+.invoice-letter-body ol { margin: 0 0 10px; padding-left: 24px; }
+.invoice-letter-body li { margin: 0 0 4px; }
+
+.invoice-letter-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+.invoice-letter-foot .invoice-action-status { margin: 0; }
+
+@media (max-width: 720px) {
+  .invoice-letter-head { flex-direction: column; }
+  .invoice-letter-body { min-height: 200px; }
+}
+
+/* ---- Work-order report attachment -----------------------------------
+   Shares the accompanying letter's frame (.invoice-letter) because they
+   are the same kind of thing to the operator: an optional second document
+   that rides along with the invoice. Only the picker is new. */
+
+.invoice-woreport-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 14px 0 0;
+}
+
+.invoice-woreport-label {
+  font-family: "Barlow Condensed", "DM Sans", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pjl-text-muted, #6B6B63);
+}
+
+.invoice-woreport-select {
+  font: inherit;
+  font-size: 14px;
+  padding: 9px 12px;
+  border: 1px solid var(--pjl-border, #E2E0D4);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--pjl-text, #1A1A1A);
+  max-width: 520px;
+}
+
+/* Why there is nothing to attach — a manual invoice, or a visit whose
+   report has not been generated yet. Stated rather than left as an empty
+   control the operator has to interpret. */
+.invoice-woreport-empty {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--pjl-text-muted, #6B6B63);
+}

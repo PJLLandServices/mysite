@@ -301,22 +301,16 @@ async function generateIcsForToken(token, { baseUrl = "https://pjllandservices.c
   if (!crypto.timingSafeEqual(a, b)) return { ok: false, status: 404 };
 
   // Heal: any lead with a real lead.booking that doesn't have a
-  // canonical bookings.json record gets upserted now. Idempotent — if
-  // the canonical record exists, upsertFromLead refreshes it without
-  // duplicating. Failures are swallowed so one bad lead doesn't break
-  // the feed for the rest.
-  let initialBookings = await bookings.list();
-  const canonicalByLead = new Set(initialBookings.map((b) => b.leadId).filter(Boolean));
-  let healed = false;
-  for (const lead of leads) {
-    if (!lead?.booking?.start) continue;
-    if (canonicalByLead.has(lead.id)) continue;
-    try {
-      const upserted = await bookings.upsertFromLead(lead);
-      if (upserted) healed = true;
-    } catch (_) { /* skip silently — feed still emits everything else */ }
+  // canonical bookings.json record gets upserted now — via the shared
+  // bookings.healFromLeads loop the boot sweep also runs, so the feed
+  // is a second chance rather than the only chance. One bad lead still
+  // doesn't break the feed for the rest, but its failure is now NAMED
+  // in the log instead of swallowed.
+  const heal = await bookings.healFromLeads(leads);
+  for (const f of heal.failures) {
+    console.warn(`[ical-feed] lead booking heal failed for ${f.leadId} (${f.name}): ${f.error}`);
   }
-  const all = healed ? await bookings.list() : initialBookings;
+  const all = await bookings.list();
 
   const leadById = new Map();
   for (const lead of leads) {

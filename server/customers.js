@@ -26,6 +26,7 @@ const listEl = document.getElementById("customersList");
 const emptyEl = document.getElementById("customersEmpty");
 const searchEl = document.getElementById("customerSearch");
 const countEl = document.getElementById("customersCount");
+const sortEl = document.getElementById("customerSort");
 const filterEls = Array.from(document.querySelectorAll(".customers-filter"));
 const newCustomerBtn = document.getElementById("newCustomerBtn");
 const modalEl = document.getElementById("newCustomerModal");
@@ -39,8 +40,30 @@ const bulkbarSelectAllEl = document.getElementById("customersBulkbarSelectAll");
 const bulkbarClearEl = document.getElementById("customersBulkbarClear");
 const bulkbarDownloadEl = document.getElementById("customersBulkbarDownload");
 
+// Sort options, keyed by the <select> values in customers.html.
+//
+// Alphabetical is the default: the list is a directory first — "where is
+// Vivian G" is the question it gets asked — and recency only helps when
+// you already know the person was touched lately. "Recently active" stays
+// on the menu because that WAS the behaviour, and it's the right lens
+// after a busy day; it just isn't the one you want when you're looking
+// someone up by name.
+//
+// Town sorts break ties on name so a screen of one town still reads
+// alphabetically instead of in whatever order the file happened to hold.
+const SORTS = {
+  "name-asc": { keys: ["name"] },
+  "name-desc": { keys: ["name"], direction: "desc" },
+  "town-asc": { keys: ["town"], tiebreak: "name" },
+  "town-desc": { keys: ["town"], direction: "desc", tiebreak: "name" },
+  "recent": { keys: ["lastActivityAt"], compare: PJLSort.compareRecent, tiebreak: "name" }
+};
+const SORT_STORAGE_KEY = "pjl.customers.sort";
+const DEFAULT_SORT = "name-asc";
+
 let customers = [];
 let statusFilter = "all";
+let sortKey = PJLSort.readStored(SORT_STORAGE_KEY, Object.keys(SORTS), DEFAULT_SORT);
 // Selected customer ids for bulk vCard download. Survives re-renders
 // (filter / search changes) so a selection made while filtered isn't
 // silently dropped when the filter is cleared.
@@ -63,17 +86,37 @@ function formatDate(iso) {
 }
 
 function searchable(c) {
+  // Town is in the list now, so it has to be searchable: typing "King"
+  // against a visible King City column and getting no results reads as a
+  // broken search, not as a field that happens not to be indexed.
   return [c.name, c.spouseName, c.email, c.spouseEmail, c.phone, c.spousePhone, c.id]
+    .concat(Array.isArray(c.towns) ? c.towns : [])
     .filter(Boolean).join(" ").toLowerCase();
+}
+
+// The town comes from the customer's properties, so it's blank for a lead
+// with nothing on file yet — say so rather than leaving a hole in the
+// column. A customer with sites in more than one town shows the first plus
+// a count, with the full list on hover.
+function townCell(c) {
+  const towns = Array.isArray(c.towns) ? c.towns : [];
+  if (!towns.length) {
+    return '<span class="crm-cell customers-town is-empty">no property</span>';
+  }
+  const extra = towns.length > 1 ? ` +${towns.length - 1}` : "";
+  return `<span class="crm-cell customers-town" title="${escapeHtml(towns.join(", "))}">${escapeHtml(towns[0])}${extra}</span>`;
 }
 
 function visibleCustomers() {
   const q = searchEl.value.trim().toLowerCase();
-  return customers.filter((c) => {
+  const filtered = customers.filter((c) => {
     if (statusFilter !== "all" && c.status !== statusFilter) return false;
     if (q && !searchable(c).includes(q)) return false;
     return true;
   });
+  // Sorting the filtered copy, never `customers` itself — that array backs
+  // the total in the count line and the bulk bar's select-all.
+  return PJLSort.sortRecords(filtered, SORTS[sortKey] || SORTS[DEFAULT_SORT]);
 }
 
 function render() {
@@ -93,33 +136,33 @@ function render() {
 
   for (const c of filtered) {
     const row = document.createElement("div");
-    row.className = "customer-row";
+    row.className = "crm-table-row";
     const idAttr = escapeHtml(c.id);
     const isChecked = selectedIds.has(c.id);
-    // The card link spans the middle column; checkbox + download anchor
-    // flank it on either side. Plain <a download> is enough for the
-    // per-row download — the server's Content-Disposition: attachment
-    // header turns it into a save dialog without leaving the page.
-    // Stat columns (propertyCount, lastActivity) dropped — they ate
-    // horizontal space on desktop and stacked awkwardly on iPhone, and
-    // the original brief didn't ask for them anyway.
+    if (isChecked) row.classList.add("is-selected");
+    // The <a> uses display:contents so the text cells sit directly in the
+    // row grid — wrapping them in a positioned box instead would put the
+    // name, email and phone in ONE grid cell and undo the column
+    // alignment this table exists for.
     row.innerHTML = `
-      <label class="customer-row-check" title="Select for bulk download">
+      <label class="crm-row-check" title="Select for bulk download">
         <input type="checkbox" data-customer-id="${idAttr}"${isChecked ? " checked" : ""}>
       </label>
-      <a class="customer-card" href="/admin/customer/${encodeURIComponent(c.id)}">
-        <div class="customer-card-name">
-          <strong>${escapeHtml(c.name) || "(unnamed)"}</strong>
-          ${c.spouseName ? `<span class="customer-card-id">+ ${escapeHtml(c.spouseName)}</span>` : ""}
-          <span class="customer-card-id">${idAttr}</span>
-        </div>
-        <div class="customer-card-contact">
-          <span>${escapeHtml(c.email) || "—"}</span>
-          ${c.phone ? `<span data-tel="${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</span>` : "<span>—</span>"}
-        </div>
-        <span class="customer-status is-${escapeHtml(c.status || "lead")}">${escapeHtml(c.status || "lead")}</span>
+      <a class="crm-row-link" href="/admin/customer/${encodeURIComponent(c.id)}">
+        <span class="crm-cell customers-name">
+          <span class="crm-cell-primary">${escapeHtml(c.name) || "(unnamed)"}</span>
+          <span class="crm-cell-sub">${idAttr}${c.spouseName ? ` &middot; + ${escapeHtml(c.spouseName)}` : ""}</span>
+        </span>
+        <span class="crm-cell customers-email">${escapeHtml(c.email) || "<span class=\"crm-cell-muted\">—</span>"}</span>
+        <span class="crm-cell customers-phone">${
+          c.phone ? `<span data-tel="${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</span>` : '<span class="crm-cell-muted">—</span>'
+        }</span>
+        ${townCell(c)}
+        <span class="crm-cell crm-cell-status">
+          <span class="crm-pill customer-status is-${escapeHtml(c.status || "lead")}">${escapeHtml(c.status || "lead")}</span>
+        </span>
       </a>
-      <a class="customer-row-download" href="/api/customer/${encodeURIComponent(c.id)}/vcard" title="Download vCard" aria-label="Download vCard for ${escapeHtml(c.name) || c.id}" download>⬇</a>
+      <a class="crm-row-action" href="/api/customer/${encodeURIComponent(c.id)}/vcard" title="Download vCard" aria-label="Download vCard for ${escapeHtml(c.name) || c.id}" download>&#11123;</a>
     `;
     listEl.appendChild(row);
   }
@@ -130,6 +173,9 @@ function render() {
       const id = cb.dataset.customerId;
       if (cb.checked) selectedIds.add(id);
       else selectedIds.delete(id);
+      // Tint the row while it's selected — with the per-row borders gone,
+      // the checkbox alone is a thin signal across a wide row.
+      cb.closest(".crm-table-row")?.classList.toggle("is-selected", cb.checked);
       updateBulkbar();
     });
   });
@@ -172,6 +218,15 @@ async function load() {
 }
 
 searchEl.addEventListener("input", render);
+
+if (sortEl) {
+  sortEl.value = sortKey;
+  sortEl.addEventListener("change", () => {
+    sortKey = SORTS[sortEl.value] ? sortEl.value : DEFAULT_SORT;
+    PJLSort.writeStored(SORT_STORAGE_KEY, sortKey);
+    render();
+  });
+}
 
 filterEls.forEach((btn) => {
   btn.addEventListener("click", () => {

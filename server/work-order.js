@@ -386,6 +386,21 @@ function woPhotoUrl(n) {
 }
 
 function photoThumbHtml(photo) {
+  // PDFs can't render in an <img> — a raw tile shows as a broken image and
+  // its delete × can become unclickable. Render documents as an openable
+  // file card instead; the × keeps the same delete wiring.
+  const isPdf = photo.kind === "pdf" || String(photo.mediaType || "").toLowerCase() === "application/pdf";
+  if (isPdf) {
+    return `
+    <div class="wo-photo-thumb" data-photo-n="${escapeHtml(String(photo.n))}" style="display:flex;align-items:center;justify-content:center;background:#f4f2ea;border:1px solid #dcd8cb;">
+      <a href="${escapeHtml(woPhotoUrl(photo.n))}" target="_blank" rel="noopener" style="display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px;text-decoration:none;color:#1B4D2E;max-width:100%;">
+        <span style="font-size:28px;line-height:1;" aria-hidden="true">📄</span>
+        <span style="font-size:10px;font-weight:600;text-align:center;word-break:break-word;overflow:hidden;max-height:3em;">${escapeHtml(photo.label || "PDF document")}</span>
+      </a>
+      <button type="button" class="wo-photo-thumb-remove" data-action="delete-photo" aria-label="Remove file">×</button>
+    </div>
+  `;
+  }
   return `
     <div class="wo-photo-thumb" data-photo-n="${escapeHtml(String(photo.n))}">
       <img src="${escapeHtml(woPhotoUrl(photo.n))}" alt="${escapeHtml(photo.label || ("Photo " + photo.n))}" loading="lazy">
@@ -417,6 +432,54 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+// ===== Scroll helpers =====
+// scrollIntoView({ block: "start" | "center" }) moves the page even when the
+// target is already fully visible — it re-aligns it to the top/centre of the
+// viewport. The tap-to-jump targets below are often already in front of the
+// tech — the checklist row they tapped sits right beside the section it
+// points at — so the re-alignment reads as an unprompted lurch. It is worst
+// on a phone: the distance thrown is the element's distance from the top of
+// the viewport, which on a ~700px handset is most of a screen height. Scroll
+// only when the target genuinely is off-screen.
+//
+// pinnedTopBarHeight measures whatever bar is pinned across the TOP of the
+// viewport at call time, so this tracks each page's own responsive
+// breakpoints instead of a hard-coded number that silently drifts.
+function pinnedTopBarHeight() {
+  let height = 0;
+  document.querySelectorAll(".nav, .pjl-app-topbar, .tech-header, header").forEach((el) => {
+    const position = window.getComputedStyle(el).position;
+    // Sticky counts: a pinned sticky bar (the CRM topbar, the tech header)
+    // overlaps scrolled content exactly as a fixed one does.
+    if (position !== "fixed" && position !== "sticky") return;
+    const rect = el.getBoundingClientRect();
+    // Only a bar actually spanning the top edge is overhead. This is what
+    // keeps the CRM's full-height fixed sidebar (.pjl-admin-nav is
+    // top:0;bottom:0) out of the measurement — it is pinned, but it sits
+    // beside the content, not above it, and counting it would report a
+    // viewport-tall "header" and make everything look off-screen.
+    if (rect.top > 4 || rect.bottom <= 0) return;
+    if (rect.height > window.innerHeight * 0.4) return;
+    height = Math.max(height, Math.round(rect.bottom));
+  });
+  return height;
+}
+
+function revealIfOffscreen(el, block) {
+  if (!el || typeof el.getBoundingClientRect !== "function") return;
+  const headerH = pinnedTopBarHeight();
+  const rect = el.getBoundingClientRect();
+  const LOWER_BOUND = window.innerHeight * 0.85;   // "still comfortably in view"
+  if (rect.top >= headerH && rect.top <= LOWER_BOUND) return;
+  // scroll-margin-top keeps block:"start" from parking the target underneath
+  // the pinned bar. Set rather than restored: it is idempotent, and any later
+  // scroll of this element wants the same clearance.
+  el.style.scrollMarginTop = headerH + "px";
+  const reduceMotion = window.matchMedia
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  el.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: block || "start" });
 }
 
 function formatDateTime(value) {
@@ -1054,7 +1117,10 @@ function renderServiceFeeWaiver(wo) {
 
   const w = wo && wo.serviceFeeWaiver;
   const isWaived = !!(w && w.waived === true);
-  const locked = !!(wo && (wo.locked === true || wo.signature?.signed === true || wo.signatureBypass));
+  // wo.locked alone — see the note in renderOnSiteQuote(). An unlocked
+  // WO must expose the waiver control again, or the admin can unlock and
+  // still not fix the fee.
+  const locked = wo?.locked === true;
   const applies = !!(wo && wo.type === "service_visit");
 
   if (!applies || (locked && !isWaived)) {
@@ -1068,18 +1134,156 @@ function renderServiceFeeWaiver(wo) {
     if (offer) offer.hidden = true;
     if (banner) banner.hidden = false;
     if (meta) meta.textContent = `(${woWaiverFriendlyReason(w)})`;
-    if (removeBtn) removeBtn.hidden = locked; // can't un-waive a signed WO
+    // Hidden on a signed WO (can't un-waive) AND on a live warranty WO:
+    // there, lifting the waiver has to capture a reason for the customer,
+    // which only the convert control collects. Leaving this button would
+    // give two paths to the same money change, one of which always 422s.
+    const liveWarranty = !!(wo && wo.warrantyClaim && wo.warrantyClaim.claimId && !wo.warrantyClaim.converted);
+    if (removeBtn) removeBtn.hidden = locked || liveWarranty || !viewerIsAdmin;
   } else {
-    if (offer) offer.hidden = false;
+    // Waiving is admin-only (server returns 403 for a tech). Hide the
+    // offer rather than showing a button that fails on click — the tech
+    // can still READ the banner above when a waiver is already on.
+    if (offer) offer.hidden = !viewerIsAdmin;
     if (banner) banner.hidden = true;
   }
 }
+
+// Warranty provenance panel (FLOW-30). Only rendered on a WO raised by
+// approving a warranty claim. Three states:
+//   * waived        — the normal warranty visit; offers the convert control
+//   * converted     — the escape hatch was used; shows who, when and why
+//   * locked        — signed, so nothing can change without an unlock
+function renderWorkOrderWarranty(wo) {
+  const panel = document.getElementById("woWarrantyPanel");
+  if (!panel) return;
+  const wc = wo && wo.warrantyClaim;
+  if (!wc || !wc.claimId) { panel.hidden = true; return; }
+  panel.hidden = false;
+
+  const claimEl = document.getElementById("woWarrantyClaim");
+  if (claimEl) {
+    claimEl.textContent = "";
+    const a = document.createElement("a");
+    a.href = "/admin/warranty-claim/" + encodeURIComponent(wc.claimId);
+    a.textContent = wc.claimId;
+    claimEl.appendChild(document.createTextNode("Claim "));
+    claimEl.appendChild(a);
+  }
+
+  const prior = document.getElementById("woWarrantyPrior");
+  if (prior) {
+    prior.textContent = "";
+    const bits = [];
+    if (wc.claimedInvoiceId) bits.push(["invoice", wc.claimedInvoiceId, "/admin/invoice/"]);
+    if (wc.claimedWorkOrderId) bits.push(["work order", wc.claimedWorkOrderId, "/admin/work-order/"]);
+    if (!bits.length) {
+      prior.textContent = "Not matched to a prior invoice — check the claim.";
+    } else {
+      bits.forEach(function (b, i) {
+        if (i) prior.appendChild(document.createTextNode(" · "));
+        prior.appendChild(document.createTextNode(b[0] + " "));
+        const link = document.createElement("a");
+        link.href = b[2] + encodeURIComponent(b[1]);
+        link.textContent = b[1];
+        prior.appendChild(link);
+      });
+    }
+  }
+
+  const summary = document.getElementById("woWarrantySummary");
+  if (summary) summary.textContent = wc.summary || "—";
+
+  // wo.locked alone, matching renderServiceFeeWaiver() — an unlocked WO
+  // must expose the convert control again or an admin can unlock and
+  // still not be able to make the visit chargeable.
+  const locked = wo.locked === true;
+  const converted = !!wc.converted;
+
+  const convertedBox = document.getElementById("woWarrantyConverted");
+  const convertControl = document.getElementById("woWarrantyConvertControl");
+  const lockedNote = document.getElementById("woWarrantyLocked");
+  const form = document.getElementById("woWarrantyConvertForm");
+  if (form) form.hidden = true;
+
+  if (convertedBox) convertedBox.hidden = !converted;
+  if (converted) {
+    const meta = document.getElementById("woWarrantyConvertedMeta");
+    if (meta) {
+      const at = wc.converted.at ? new Date(wc.converted.at) : null;
+      meta.textContent = (at && !isNaN(at.getTime()) ? at.toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" }) : "") +
+        (wc.converted.by ? " · by " + wc.converted.by : "");
+    }
+    const reason = document.getElementById("woWarrantyConvertedReason");
+    if (reason) reason.textContent = wc.converted.reason || "";
+  }
+
+  // The convert control is offered only while there is a live waiver to
+  // lift, and only on an unlocked WO.
+  const stillWaived = !!(wo.serviceFeeWaiver && wo.serviceFeeWaiver.waived === true);
+  // Converting changes what the customer pays, so it is admin-only and the
+  // server 403s a tech regardless. A tech sees the banner (they need to
+  // know the visit is free) and a line telling them to call the office.
+  const canConvert = viewerIsAdmin && !converted && !locked && stillWaived;
+  if (convertControl) convertControl.hidden = !canConvert;
+  const adminOnlyNote = document.getElementById("woWarrantyAdminOnly");
+  if (adminOnlyNote) adminOnlyNote.hidden = !(!viewerIsAdmin && !converted && stillWaived);
+  if (lockedNote) lockedNote.hidden = !(viewerIsAdmin && locked && !converted);
+}
+
+(function wireWarrantyConvert() {
+  const openBtn = document.getElementById("woWarrantyConvertOpenBtn");
+  const form = document.getElementById("woWarrantyConvertForm");
+  const cancelBtn = document.getElementById("woWarrantyConvertCancelBtn");
+  const confirmBtn = document.getElementById("woWarrantyConvertConfirmBtn");
+  const reasonEl = document.getElementById("woWarrantyConvertReason");
+  const errEl = document.getElementById("woWarrantyConvertErr");
+  if (!openBtn || !form || !confirmBtn) return;
+
+  openBtn.addEventListener("click", function () {
+    form.hidden = false;
+    if (errEl) errEl.hidden = true;
+    if (reasonEl) reasonEl.focus();
+  });
+  if (cancelBtn) cancelBtn.addEventListener("click", function () { form.hidden = true; });
+
+  confirmBtn.addEventListener("click", async function () {
+    const reason = (reasonEl && reasonEl.value ? reasonEl.value : "").trim();
+    // Mirrors the server's 10-char floor so the tech isn't made to wait on
+    // a round trip to be told the box is empty. The server re-checks.
+    if (reason.length < 10) {
+      if (errEl) {
+        errEl.textContent = "Give the reason this isn't covered — the customer reads it (at least 10 characters).";
+        errEl.hidden = false;
+      }
+      return;
+    }
+    if (!window.confirm(
+      "Convert this warranty visit to a chargeable service call?\n\n" +
+      "The $95 call-out is restored, the warranty claim is closed as converted, and the " +
+      "customer is emailed your reason. They must still sign for the work."
+    )) return;
+
+    confirmBtn.disabled = true;
+    const original = confirmBtn.textContent;
+    confirmBtn.textContent = "Converting…";
+    // Same route as every other fee change — one code path for the money.
+    await postServiceFeeWaiver({ waived: false, reason: reason });
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = original;
+  });
+})();
 
 // POST a waiver change and refresh the waiver control + on-site quote.
 async function postServiceFeeWaiver(body) {
   const id = getWorkOrderId();
   if (!id) return;
-  const errEl = document.getElementById("woWaiverFormErr");
+  // A conversion carries `reason`; surface its errors in the convert form
+  // the user is actually looking at, not the collapsed waiver form.
+  const convertErr = document.getElementById("woWarrantyConvertErr");
+  const errEl = (body && body.reason && convertErr)
+    ? convertErr
+    : document.getElementById("woWaiverFormErr");
   try {
     const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/service-fee-waiver`, {
       method: "POST",
@@ -1089,13 +1293,29 @@ async function postServiceFeeWaiver(body) {
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
       const msg = (data.errors && data.errors[0]) || `Couldn't update the waiver (HTTP ${r.status}).`;
-      if (errEl) { errEl.textContent = msg; errEl.hidden = false; }
-      else alert(msg);
+      // Un-hide FIRST, then test whether it actually became visible:
+      // offsetParent is null while any ANCESTOR is still hidden, and the
+      // waiver form collapses on every render. Checking before un-hiding
+      // would always read as invisible. Falling back to an alert stops a
+      // refused fee change from looking like a dead button.
+      if (errEl) {
+        errEl.textContent = msg;
+        errEl.hidden = false;
+      }
+      if (!errEl || errEl.offsetParent === null) alert(msg);
       return;
     }
     loadedWorkOrder = data.workOrder;
     renderServiceFeeWaiver(loadedWorkOrder);
+    renderWorkOrderWarranty(loadedWorkOrder);
     renderOnSiteQuote(loadedWorkOrder);
+    // The claim write-back is best-effort server-side; if it failed the
+    // money already changed, so say so rather than letting the claim sit
+    // at "approved — free repair" unnoticed.
+    if (data.claimConversion && data.claimConversion.ok === false) {
+      alert("The fee was restored on this work order, but the warranty claim could not be updated. " +
+            "Open the claim and set it to converted manually.");
+    }
   } catch (err) {
     if (errEl) { errEl.textContent = err.message; errEl.hidden = false; }
     else alert(err.message);
@@ -1176,7 +1396,7 @@ function renderIntakeGuarantee(wo) {
   if (source) {
     source.textContent = ig.sourceQuoteId ? `Source: ${ig.sourceQuoteId}` : "";
   }
-  const isLocked = wo.locked === true || wo.signature?.signed === true;
+  const isLocked = wo.locked === true;
   if (ig.matched === true) {
     banner.dataset.decision = "matched";
     if (eyebrow) eyebrow.textContent = "AI-Correct-Diagnosis Bonus — 1 Hour Labour Credited";
@@ -1252,6 +1472,7 @@ function populateForm(wo) {
   renderDiagnosis(wo);
   renderIntakeGuarantee(wo);
   renderServiceFeeWaiver(wo);
+  renderWorkOrderWarranty(wo);
   renderServiceChecklist(wo);
   renderWoPhotos(wo);
   renderSignoff(wo);
@@ -1260,7 +1481,7 @@ function populateForm(wo) {
   renderPostSigBanner(wo);
   renderHistory(wo);
   renderReportControls(wo);
-  applyLockState(wo.locked === true, wo.signature);
+  applyLockState(wo.locked === true, wo.signature, wo);
   // Build-WO chrome (work-order-build.js) re-applies its section hiding on
   // this event so it survives this re-render.
   document.dispatchEvent(new CustomEvent("wo:rendered"));
@@ -1272,6 +1493,14 @@ const WO_PHOTO_REQUIREMENT_BY_TYPE = {
   spring_opening: 1,
   service_visit:  1,
   fall_closing:   0
+};
+
+// Mirror of lib's CUSTOMER_NOTE_REQUIRED_BY_TYPE — keep in sync.
+const WO_CUSTOMER_NOTE_REQUIRED_BY_TYPE = {
+  spring_opening: true,
+  service_visit:  true,
+  fall_closing:   false,
+  build:          true
 };
 
 // Post-signature narrative banner (Brief E) — desktop mirror of tech
@@ -1428,7 +1657,12 @@ function renderOnSiteQuote(wo) {
   const isFallClosing = wo.type === "fall_closing";
   // "Signed" here means "locked by any path" — both drawn signature and
   // signature bypass freeze the on-site quote builder per hard rule §11.
-  const isSigned = wo.locked === true || wo.signature?.signed === true || !!wo.signatureBypass;
+  // Reads wo.locked ALONE (mirrors isScopeFrozen() server-side): both
+  // paths set it at capture, and an admin unlock clears it while keeping
+  // the signature record. Re-adding the signature/bypass terms here would
+  // leave the builder read-only after an unlock — which is the whole
+  // point of unlocking.
+  const isSigned = wo.locked === true;
   const lines = (wo.onSiteQuote && wo.onSiteQuote.builderLineItems) || [];
   const status = wo.onSiteQuote?.status;
   const quoteId = wo.onSiteQuote?.quoteId;
@@ -1502,7 +1736,45 @@ function renderOnSiteQuote(wo) {
   if (buildBtn) buildBtn.hidden = false;
   if (lines.length) {
     if (addBtn) addBtn.hidden = false;
-    if (remoteEl) remoteEl.hidden = false;
+    const previewBtn = document.getElementById("woOnSitePreviewBtn");
+    const sendBtn = document.getElementById("woOnSiteSendApprovalBtn");
+    const attachBtn = document.getElementById("woOnSiteAcceptOfflineBtn");
+    // Accepted (offline signed copy OR remote link) but not yet completed:
+    // show an acceptance banner with an "Open signed copy" link when one is
+    // on file, hide preview/send, but KEEP the attach control visible so the
+    // signed copy can be added or replaced after acceptance. Completion
+    // sign-off is a separate step further down the page.
+    if (status === "accepted") {
+      const ev = wo.onSiteQuote && wo.onSiteQuote.acceptanceEvidence;
+      const copy = ev && ev.signedCopy && ev.signedCopy.attachmentId ? ev.signedCopy : null;
+      if (statusEl) {
+        let when = "";
+        try { if (ev && ev.acceptedAt) when = ` · ${new Date(ev.acceptedAt).toLocaleDateString("en-CA")}`; } catch (_) { /* tolerate */ }
+        const baseText = (ev && ev.method === "offline_signed_copy")
+          ? `Quote accepted — signed copy${ev.acceptedByName ? ` · ${ev.acceptedByName}` : ""}${when}. Not yet completed.`
+          : `Quote accepted${quoteId ? ` · Quote ${quoteId} on file` : ""}. Not yet completed.`;
+        const copyLink = copy
+          ? ` <a href="/api/quotes/${encodeURIComponent(copy.quoteId || quoteId)}/attachments/${encodeURIComponent(copy.attachmentId)}" target="_blank" rel="noopener">📄 Open signed copy${copy.filename ? ` (${escapeHtml(copy.filename)})` : ""}</a>`
+          : "";
+        statusEl.innerHTML = escapeHtml(baseText) + copyLink;
+        statusEl.hidden = false;
+      }
+      if (remoteEl) remoteEl.hidden = false;
+      if (previewBtn) previewBtn.hidden = true;
+      if (sendBtn) sendBtn.hidden = true;
+      if (attachBtn) {
+        attachBtn.hidden = false;
+        attachBtn.textContent = copy ? "📎 Replace signed copy" : "📎 Attach signed copy";
+      }
+    } else {
+      if (remoteEl) remoteEl.hidden = false;
+      if (previewBtn) previewBtn.hidden = false;
+      if (sendBtn) sendBtn.hidden = false;
+      if (attachBtn) {
+        attachBtn.hidden = false;
+        attachBtn.textContent = "🖊️ Customer accepted offline? Record signed copy";
+      }
+    }
   }
   renderOnSiteLines(lines, { readonly: false });
   renderOnSiteTotals(lines);
@@ -2327,8 +2599,11 @@ function woSignGateBlockers() {
   }
   if (wo.paidOnSite !== true && wo.paidOnSite !== false) blockers.push(woSignGate("payment"));
   if (!wo.materialsConfirmedAt) blockers.push(woSignGate("materialsConfirm"));
-  const liveNotes = (document.getElementById("woCustomerNotes")?.value ?? wo.customerNotes ?? "").trim();
-  if (!liveNotes) blockers.push(woSignGate("customerNotes"));
+  // Required by type (mirror of lib's CUSTOMER_NOTE_REQUIRED_BY_TYPE).
+  if (WO_CUSTOMER_NOTE_REQUIRED_BY_TYPE[wo.type] ?? true) {
+    const liveNotes = (document.getElementById("woCustomerNotes")?.value ?? wo.customerNotes ?? "").trim();
+    if (!liveNotes) blockers.push(woSignGate("customerNotes"));
+  }
   return blockers;
 }
 
@@ -2436,7 +2711,7 @@ document.getElementById("woSignoffSubmit")?.addEventListener("click", async () =
     renderSignoff(data.workOrder);
     renderPostSigBanner(data.workOrder);
     renderHistory(data.workOrder);
-    applyLockState(data.workOrder.locked === true, data.workOrder.signature);
+    applyLockState(data.workOrder.locked === true, data.workOrder.signature, data.workOrder);
     // Status dropdown reflects the new completed state.
     const woStatus = document.getElementById("woStatus");
     if (woStatus && data.workOrder.status) woStatus.value = data.workOrder.status;
@@ -2492,7 +2767,11 @@ document.getElementById("woPhotoLightbox")?.addEventListener("click", () => {
 // Apply locked / unlocked state to the desktop form. The save and
 // delete buttons stay enabled — Patrick is admin-side and can always
 // override; the visual cue is the banner + greyed-out form sections.
-function applyLockState(locked, signature) {
+// `wo` is passed explicitly rather than read from loadedWorkOrder — the
+// unlock/re-lock buttons depend on the record's history and acceptance
+// fields, and every caller already has the WO in hand at this point.
+// Falls back to the module global for any caller that doesn't.
+function applyLockState(locked, signature, wo) {
   document.body.dataset.locked = locked ? "true" : "false";
   const banner = document.getElementById("woLockedBanner");
   const meta = document.getElementById("woLockedMeta");
@@ -2503,7 +2782,115 @@ function applyLockState(locked, signature) {
     if (signature.signedAt) parts.push(formatDateTime(signature.signedAt));
     meta.textContent = parts.length ? `· ${parts.join(" · ")}` : "";
   }
+  renderUnlockControls(wo || loadedWorkOrder);
 }
+
+// ---- Admin unlock / re-lock (2026-08-06) ------------------------------
+// Two buttons, never both: "Unlock for editing" on a locked WO, "Re-lock"
+// on one that's been unlocked but still carries an acceptance record.
+// Unlock is admin-only (viewerIsAdmin, resolved once from /api/session);
+// the server enforces it independently via requireAdmin — this just keeps
+// a button a tech can't use off their screen.
+let viewerIsAdmin = false;
+
+async function resolveViewerRole() {
+  try {
+    const r = await fetch("/api/session", { cache: "no-store", credentials: "same-origin" });
+    const data = await r.json().catch(() => ({}));
+    viewerIsAdmin = data?.role === "admin";
+  } catch (_) {
+    viewerIsAdmin = false; // fail closed — no button rather than a 403 on click
+  }
+  // The WO usually loads before this resolves; re-render so the buttons
+  // appear once the role is known. Harmless no-op if it hasn't loaded yet.
+  renderUnlockControls(loadedWorkOrder);
+  // Same for the money controls — they default to hidden (fail closed),
+  // so this is what reveals them for an admin.
+  if (loadedWorkOrder) {
+    renderServiceFeeWaiver(loadedWorkOrder);
+    renderWorkOrderWarranty(loadedWorkOrder);
+  }
+}
+
+function renderUnlockControls(wo) {
+  const unlockBtn = document.getElementById("woUnlockBtn");
+  const unlockedBanner = document.getElementById("woUnlockedBanner");
+  const unlockedMeta = document.getElementById("woUnlockedMeta");
+  if (!wo) {
+    if (unlockBtn) unlockBtn.hidden = true;
+    if (unlockedBanner) unlockedBanner.hidden = true;
+    return;
+  }
+
+  const locked = wo.locked === true;
+  const hasAcceptance = wo.signature?.signed === true || !!wo.signatureBypass;
+
+  // Unlock: admin, on a locked WO.
+  if (unlockBtn) unlockBtn.hidden = !(viewerIsAdmin && locked);
+
+  // Re-lock: admin, on an unlocked WO that WAS accepted. An ordinary
+  // never-signed WO isn't "unlocked" — it just hasn't been signed yet,
+  // and showing a re-lock button there would be nonsense.
+  const showRelock = viewerIsAdmin && !locked && hasAcceptance;
+  if (unlockedBanner) unlockedBanner.hidden = !showRelock;
+  if (showRelock && unlockedMeta) {
+    const lastUnlock = (Array.isArray(wo.history) ? wo.history : [])
+      .filter((h) => h && h.action === "wo_unlocked")
+      .pop();
+    unlockedMeta.textContent = lastUnlock
+      ? `· ${formatDateTime(lastUnlock.ts)}${lastUnlock.after?.reason ? ` · ${lastUnlock.after.reason}` : ""}`
+      : "";
+  }
+}
+
+async function postLockAction(action, body) {
+  const id = getWorkOrderId();
+  if (!id) return;
+  const btn = document.getElementById(action === "unlock" ? "woUnlockBtn" : "woRelockBtn");
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(body || {})
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || `Couldn't ${action} this work order.`);
+    if (data.workOrder) {
+      loadedWorkOrder = data.workOrder;
+      populateForm(data.workOrder);
+    }
+  } catch (err) {
+    alert(err.message || `Couldn't ${action} this work order.`);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+document.getElementById("woUnlockBtn")?.addEventListener("click", async () => {
+  if (!loadedWorkOrder || loadedWorkOrder.locked !== true) return;
+  const reason = prompt(
+    "Unlocking a signed/bypassed work order re-opens its scope for editing.\n"
+    + "The signature or bypass record is kept — only the lock is lifted.\n\n"
+    + "Why are you unlocking it? (recorded in the work order's history)",
+    ""
+  );
+  if (reason === null) return; // cancelled
+  if (String(reason).trim().length < 10) {
+    alert("Give a bit more detail — the reason is the audit trail for overriding a signed contract.");
+    return;
+  }
+  await postLockAction("unlock", { reason: String(reason).trim() });
+});
+
+document.getElementById("woRelockBtn")?.addEventListener("click", async () => {
+  if (!loadedWorkOrder || loadedWorkOrder.locked === true) return;
+  if (!confirm("Re-lock this work order? Scope freezes again against the signature/bypass already on file.")) return;
+  await postLockAction("relock", {});
+});
+
+resolveViewerRole();
 
 function collectForm() {
   const zones = Array.from(woZones.querySelectorAll(".wo-zone-row"))
@@ -3411,7 +3798,7 @@ document.getElementById("woGateList")?.addEventListener("click", (event) => {
   if (!sel) return;
   const target = document.querySelector(sel);
   if (!target) return;
-  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  revealIfOffscreen(target, "center");
   if (target.matches("input, textarea, select")) setTimeout(() => target.focus(), 250);
 });
 document.getElementById("woGateClose")?.addEventListener("click", () => closeWoGateModal({ dismissed: true }));
@@ -3521,6 +3908,148 @@ async function submitWoBypass(acknowledgeWarning) {
   }
 }
 
+// ---- Offline quote-acceptance modal (customer returned a signed copy) ----
+// Two-call flow: upload the signed copy through the existing WO photo
+// endpoint, then POST the acceptance referencing it. Records acceptance +
+// attaches the copy WITHOUT locking/completing the WO.
+function updateWoOfflineAcceptSubmitState() {
+  const submit = document.getElementById("woOfflineAcceptSubmit");
+  if (!submit) return;
+  const file = document.getElementById("woOfflineAcceptFile");
+  const ack = document.getElementById("woOfflineAcceptAck");
+  const hasFile = !!(file && file.files && file.files.length);
+  submit.disabled = !(hasFile && ack && ack.checked);
+}
+function openWoOfflineAcceptModal() {
+  if (!loadedWorkOrder) return;
+  if (loadedWorkOrder.locked || loadedWorkOrder.signature?.signed) return;
+  const modal = document.getElementById("woOfflineAcceptModal");
+  if (!modal) return;
+  const file = document.getElementById("woOfflineAcceptFile");
+  const name = document.getElementById("woOfflineAcceptName");
+  const date = document.getElementById("woOfflineAcceptDate");
+  const note = document.getElementById("woOfflineAcceptNote");
+  const ack = document.getElementById("woOfflineAcceptAck");
+  const err = document.getElementById("woOfflineAcceptError");
+  if (file) file.value = "";
+  if (name) name.value = loadedWorkOrder.customerName || "";
+  if (date) { try { date.value = new Date().toISOString().slice(0, 10); } catch (_) {} }
+  if (note) note.value = "";
+  if (ack) ack.checked = false;
+  if (err) { err.hidden = true; err.textContent = ""; }
+  modal.hidden = false;
+  updateWoOfflineAcceptSubmitState();
+}
+function closeWoOfflineAcceptModal() {
+  const modal = document.getElementById("woOfflineAcceptModal");
+  if (modal) modal.hidden = true;
+}
+// Convert any browser-decodable image (incl. iPhone HEIC) to a JPEG via a
+// canvas — the WO photo grid renders every tile as <img>, and browsers can't
+// display HEIC there, so a raw upload showed as a broken tile. Higher quality
+// + larger cap than the visit-photo pipeline, and no watermark, to keep a
+// signed document legible and unaltered.
+function imageFileToJpegBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Couldn't read that file."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Couldn't read that image — try photographing the signed page again."));
+      img.onload = () => {
+        const longest = Math.max(img.width, img.height) || 1;
+        const scale = longest > 2000 ? 2000 / longest : 1;
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        let dataUrl;
+        try { dataUrl = canvas.toDataURL("image/jpeg", 0.9); }
+        catch (e) { reject(new Error("Couldn't process that image.")); return; }
+        resolve({ base64: dataUrl.split(",", 2)[1] || "", mediaType: "image/jpeg" });
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+async function submitWoOfflineAccept() {
+  const submit = document.getElementById("woOfflineAcceptSubmit");
+  const err = document.getElementById("woOfflineAcceptError");
+  const fileEl = document.getElementById("woOfflineAcceptFile");
+  if (!submit) return;
+  const f = fileEl && fileEl.files && fileEl.files[0];
+  if (!f) { if (err) { err.hidden = false; err.textContent = "Attach the signed copy first."; } return; }
+  const id = getWorkOrderId();
+  const name = (document.getElementById("woOfflineAcceptName")?.value || "").trim();
+  const date = document.getElementById("woOfflineAcceptDate")?.value || "";
+  const note = (document.getElementById("woOfflineAcceptNote")?.value || "").trim();
+  let acceptedAt = "";
+  try { acceptedAt = date ? new Date(date + "T12:00:00").toISOString() : ""; } catch (_) { acceptedAt = ""; }
+
+  const orig = submit.textContent;
+  submit.disabled = true;
+  submit.textContent = "Recording…";
+  if (err) { err.hidden = true; err.textContent = ""; }
+
+  try {
+    // 1) If the quote isn't accepted yet, record the acceptance first.
+    //    (Already-accepted quotes skip straight to attaching the copy.)
+    const alreadyAccepted = loadedWorkOrder?.onSiteQuote?.status === "accepted";
+    if (!alreadyAccepted) {
+      const accRes = await fetch(`/api/work-orders/${encodeURIComponent(id)}/on-site-quote/accept-offline`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ acceptedByName: name, acceptedAt, note })
+      });
+      const accData = await accRes.json().catch(() => ({}));
+      if (!accRes.ok || !accData.ok) throw new Error((accData.errors && accData.errors[0]) || "Couldn't record acceptance.");
+      loadedWorkOrder = accData.workOrder;
+    }
+
+    // 2) Attach the signed copy as a QUOTE ATTACHMENT (not a visit photo) —
+    //    PDFs upload as-is; images convert to JPEG so they open everywhere.
+    let base64, mediaType, filename;
+    if (f.type === "application/pdf") {
+      const raw = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error("Couldn't read that file."));
+        reader.onload = () => resolve(String(reader.result || "").split(",", 2)[1] || "");
+        reader.readAsDataURL(f);
+      });
+      base64 = raw; mediaType = "application/pdf"; filename = f.name || "signed-acceptance.pdf";
+    } else {
+      const converted = await imageFileToJpegBase64(f);
+      base64 = converted.base64; mediaType = converted.mediaType;
+      filename = (f.name || "signed-acceptance").replace(/\.[a-z0-9]+$/i, "") + ".jpg";
+    }
+    const attRes = await fetch(`/api/work-orders/${encodeURIComponent(id)}/on-site-quote/attach-signed-copy`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename, data: base64, mediaType })
+    });
+    const attData = await attRes.json().catch(() => ({}));
+    if (!attRes.ok || !attData.ok) throw new Error((attData.errors && attData.errors[0]) || "Couldn't attach the signed copy.");
+
+    loadedWorkOrder = attData.workOrder;
+    closeWoOfflineAcceptModal();
+    populateForm(loadedWorkOrder);
+  } catch (e) {
+    if (err) { err.hidden = false; err.textContent = e?.message || "Network error. Try again."; }
+    submit.disabled = false;
+    submit.textContent = orig;
+  }
+}
+document.getElementById("woOnSiteAcceptOfflineBtn")?.addEventListener("click", openWoOfflineAcceptModal);
+document.getElementById("woOfflineAcceptClose")?.addEventListener("click", closeWoOfflineAcceptModal);
+document.getElementById("woOfflineAcceptCancel")?.addEventListener("click", closeWoOfflineAcceptModal);
+document.getElementById("woOfflineAcceptFile")?.addEventListener("change", updateWoOfflineAcceptSubmitState);
+document.getElementById("woOfflineAcceptAck")?.addEventListener("change", updateWoOfflineAcceptSubmitState);
+document.getElementById("woOfflineAcceptSubmit")?.addEventListener("click", submitWoOfflineAccept);
+
 document.getElementById("woBypassOpenBtn")?.addEventListener("click", openWoBypassModal);
 document.getElementById("woBypassClose")?.addEventListener("click", closeWoBypassModal);
 document.getElementById("woBypassCancel")?.addEventListener("click", closeWoBypassModal);
@@ -3545,7 +4074,7 @@ document.getElementById("woBypassRemoteApproval")?.addEventListener("click", () 
   closeWoBypassModal();
   const remoteBtn = document.getElementById("woOnSiteSendApprovalBtn");
   if (remoteBtn) {
-    remoteBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+    revealIfOffscreen(remoteBtn, "center");
     remoteBtn.focus();
   } else {
     alert("Open the on-site quote section and tap 'Send for remote approval'.");

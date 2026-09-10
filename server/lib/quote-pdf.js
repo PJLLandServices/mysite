@@ -14,6 +14,7 @@
 const PDFDocument = require("pdfkit");
 const fsSync = require("node:fs");
 const path = require("node:path");
+const { orderedLineItems } = require("./line-item-order");
 
 const PJL_GREEN = "#1B4D2E";
 const PJL_AMBER = "#E07B24";
@@ -462,14 +463,10 @@ function generateQuotePdf(quote, opts = {}) {
 //            lines for ink-sign + email-back. Both methods presented.
 //   Footer — small print, contact info.
 
-const BRANCH_LABELS = {
-  gc_subcontract: "GC Subcontract",
-  direct_residential: "Residential",
-  lighting_design: "Lighting Design",
-  renovation_coordination: "Renovation Coordination",
-  change_order: "Change Order",
-  residential_repair: "Residential Repair"
-};
+// Sourced from lib/quotes.js rather than copied — this is a server module,
+// so it can just require the canonical map. The browser surfaces are the
+// only ones that still need their own copy.
+const { PROPOSAL_BRANCH_LABELS: BRANCH_LABELS } = require("./quotes");
 
 function renderProjectProposalPdf(quote, opts = {}) {
   const customer = opts.customer || {};
@@ -520,8 +517,14 @@ function renderProjectProposalPdf(quote, opts = {}) {
   doc.fillColor(PJL_TEXT).font("Helvetica").fontSize(12);
   const billToName = customer.name || customer.customerName || quote.customerEmail || "Customer";
   doc.text(billToName, MARGIN_X, doc.y + 4);
-  if (property.address || customer.address) {
-    doc.fontSize(10).fillColor(PJL_MUTED).text(property.address || customer.address);
+  // PREPARED FOR address — the party the document is addressed to, NOT the
+  // site the work happens at. quoteRenderParties resolves it (explicit
+  // quote.preparedForAddress → the customer's own address → the service
+  // address as a last resort); the trailing fallback keeps direct callers
+  // that hand in bare {customer, property} rendering as they always did.
+  const preparedForAddress = customer.preparedForAddress || property.address || customer.address;
+  if (preparedForAddress) {
+    doc.fontSize(10).fillColor(PJL_MUTED).text(preparedForAddress);
   }
   const contactBits = [customer.phone || customer.customerPhone, quote.customerEmail].filter(Boolean);
   if (contactBits.length) {
@@ -892,7 +895,10 @@ function renderAttachmentInline(doc, att, quote, { MARGIN_X, contentWidth }) {
 }
 
 function renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth, heading = "ITEMIZED PRICING", mode = "itemized" }) {
-  const items = Array.isArray(quote.lineItems) ? quote.lineItems : [];
+  // Display order as arranged in the proposal builder (lib/line-item-order.js).
+  // Sequence only — the totals below are summed from the quote record and are
+  // unaffected by how the rows are arranged.
+  const items = orderedLineItems(quote);
   const showTable = mode !== "summary";  // Brief D: summary = no table, total only
   // Back-compat: a non-summary pricing section with no line items renders
   // nothing at all, exactly as before Brief D. Summary always shows the
@@ -1265,8 +1271,14 @@ function renderSmartControllerPdf(quote, opts = {}) {
   doc.fillColor(PJL_TEXT).font("Helvetica").fontSize(12);
   const billToName = customer.name || customer.customerName || quote.customerEmail || "Customer";
   doc.text(billToName, MARGIN_X, doc.y + 4);
-  if (property.address || customer.address) {
-    doc.fontSize(10).fillColor(PJL_MUTED).text(property.address || customer.address);
+  // PREPARED FOR address — the party the document is addressed to, NOT the
+  // site the work happens at. quoteRenderParties resolves it (explicit
+  // quote.preparedForAddress → the customer's own address → the service
+  // address as a last resort); the trailing fallback keeps direct callers
+  // that hand in bare {customer, property} rendering as they always did.
+  const preparedForAddress = customer.preparedForAddress || property.address || customer.address;
+  if (preparedForAddress) {
+    doc.fontSize(10).fillColor(PJL_MUTED).text(preparedForAddress);
   }
   const contactBits = [customer.phone || customer.customerPhone, quote.customerEmail].filter(Boolean);
   if (contactBits.length) {

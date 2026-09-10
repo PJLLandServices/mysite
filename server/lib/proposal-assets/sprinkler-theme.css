@@ -54,7 +54,14 @@
     letter-spacing:.01em; color:var(--on-green); }
 
   /* ---------- sections ---------- */
-  .sec { padding:clamp(52px,8vw,100px) 0; }
+  /* Vertical padding ONLY. `.sec` is always used as `class="sec wrap"` and is
+     declared AFTER `.wrap` at equal specificity, so a `padding` SHORTHAND here
+     silently zeroes `.wrap`'s `padding:0 var(--gut)` horizontal gutter. That
+     is invisible on desktop (the 1180px max-width + auto margins leave plenty
+     of whitespace) but on a phone every section ran flush to the screen edge
+     while the hero — `.hero-in wrap`, whose `.hero-in` sets no padding — kept
+     its gutter. Keep these as longhands so the gutter survives. */
+  .sec { padding-top:clamp(52px,8vw,100px); padding-bottom:clamp(52px,8vw,100px); }
   .sec.band { background:var(--panel-2); }
   .sec-h { font-family:var(--disp); font-weight:600; text-transform:uppercase; color:var(--green);
     font-size:clamp(28px,4.4vw,48px); line-height:1.02; margin:0 0 14px; letter-spacing:.01em;
@@ -131,7 +138,9 @@
   .clause li::before { content:''; position:absolute; left:0; top:9px; width:5px; height:5px; border-radius:50%; background:var(--amber); }
 
   /* ---------- close (deep green band) ---------- */
-  .close { padding:clamp(64px,9vw,120px) 0 clamp(56px,7vw,88px); text-align:center; margin-top:clamp(40px,7vw,90px);
+  /* Longhand for the same reason as `.sec` — `renderSprinklerClose` emits
+     `class="close wrap"`. */
+  .close { padding-top:clamp(64px,9vw,120px); padding-bottom:clamp(56px,7vw,88px); text-align:center; margin-top:clamp(40px,7vw,90px);
     position:relative;
     background:
       radial-gradient(50% 70% at 50% 0%, rgba(224,123,36,.22), transparent 62%),

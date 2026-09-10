@@ -1,0 +1,37 @@
+# Pin text files to LF in the repository.
+#
+# The repo has always been LF, but a Git-for-Windows clone with the default
+# core.autocrlf=true checks out CRLF, which produced ~420 phantom modified
+# files in `git status` (zero real content changes) and broke
+# scripts/test-line-item-order.mjs -- it extracts source by searching for the
+# literal "\n  }\n", which never matches CRLF text, so build:check failed with
+# `ReferenceError: orderedLinesWithIndex is not defined`.
+#
+# `text=auto` lets Git detect text vs. binary and normalize to LF in the
+# index; `eol=lf` forces LF on checkout regardless of core.autocrlf.
+#
+# NOTE: this is deliberately shipped WITHOUT `git add --renormalize`. Several
+# claude/* branches are open and a repo-wide renormalization would conflict
+# with all of them. Files normalize as they are next touched.
+* text=auto eol=lf
+
+# Binary formats -- never touch these, even if content detection guesses wrong.
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.webp   binary
+*.ico    binary
+*.mp4    binary
+*.mov    binary
+*.webm   binary
+*.pdf    binary
+*.xlsx   binary
+*.zip    binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.eot    binary
+
+# SVG is XML -- text, despite living with the images.
+*.svg    text eol=lf

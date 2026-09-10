@@ -118,7 +118,7 @@
   font-size: 13px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .cal-block-list {
   list-style: none; padding: 0; margin: 0;
@@ -135,7 +135,7 @@
 }
 .cal-block-list li.empty {
   font-style: italic;
-  color: #7A7A72;
+  color: #6B6B63;
   background: transparent;
 }
 .cal-block-list li strong {
@@ -148,7 +148,7 @@
 .cal-block-list li button {
   width: 24px; height: 24px;
   border: 0; background: transparent; cursor: pointer;
-  color: #7A7A72; font-size: 18px; line-height: 1;
+  color: #6B6B63; font-size: 18px; line-height: 1;
   border-radius: 4px;
   flex-shrink: 0;
 }
@@ -183,7 +183,7 @@
   text-align: center;
   font-size: 10px;
   font-weight: 600;
-  color: #7A7A72;
+  color: #6B6B63;
   letter-spacing: 0.04em;
   padding: 2px 0;
 }
@@ -198,7 +198,7 @@
   cursor: pointer;
 }
 .cal-mini-grid button:hover { background: rgba(27, 77, 46, 0.08); }
-.cal-mini-grid button.is-other-month { color: #C8C5B8; }
+.cal-mini-grid button.is-other-month { color: #74726B; }
 .cal-mini-grid button.is-today { background: rgba(224, 123, 36, 0.18); color: #1B4D2E; font-weight: 700; }
 .cal-mini-grid button.is-selected {
   background: #1B4D2E;
@@ -248,7 +248,7 @@
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #7A7A72;
+  color: #6B6B63;
   display: block;
 }
 .cal-tg-head-day .num {
@@ -282,7 +282,7 @@
   font-family: "Barlow Condensed", sans-serif;
   font-size: 11px;
   letter-spacing: 0.04em;
-  color: #7A7A72;
+  color: #6B6B63;
   border-top: 1px solid rgba(27, 77, 46, 0.06);
   position: relative;
   top: -7px;       /* lift label so it sits ABOVE the hour line */
@@ -393,7 +393,7 @@
   font-family: "Barlow Condensed", sans-serif;
   font-size: 10.5px;
   letter-spacing: 0.04em;
-  color: #7A7A72;
+  color: #6B6B63;
   margin-top: auto;       /* push time stamp to bottom of the card */
 }
 .cal-event.is-cancelled {
@@ -475,7 +475,7 @@
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .cal-month-row {
   display: grid;
@@ -493,7 +493,7 @@
 }
 .cal-month-cell:first-child { border-left: 0; }
 .cal-month-cell:hover { background: rgba(27, 77, 46, 0.03); }
-.cal-month-cell.is-other-month { background: #FAFAF5; color: #C8C5B8; }
+.cal-month-cell.is-other-month { background: #FAFAF5; color: #74726B; }
 .cal-month-cell.is-today .cal-month-cell-num {
   background: #1B4D2E;
   color: #fff;
@@ -523,15 +523,15 @@
 }
 .cal-month-event:hover { filter: brightness(0.95); }
 .cal-month-event.svc-spring   { background: #EAF3DE; color: #2D6A42; }
-.cal-month-event.svc-fall     { background: #FBE9DF; color: #C96A2A; }
-.cal-month-event.svc-repair   { background: #FFEED7; color: #E07B24; }
-.cal-month-event.svc-install  { background: #E0EAF8; color: #3E6DB3; }
-.cal-month-event.svc-consult  { background: #F1E4F6; color: #835C9C; }
+.cal-month-event.svc-fall     { background: #FBE9DF; color: #A25522; }
+.cal-month-event.svc-repair   { background: #FFEED7; color: #A3591A; }
+.cal-month-event.svc-install  { background: #E0EAF8; color: #3B68AB; }
+.cal-month-event.svc-consult  { background: #F1E4F6; color: #7E5896; }
 .cal-month-event.is-cancelled { text-decoration: line-through; opacity: 0.55; }
 .cal-month-more {
   display: block;
   font-size: 10px;
-  color: #7A7A72;
+  color: #6B6B63;
   margin-top: 2px;
   padding-left: 6px;
 }
@@ -1374,7 +1374,7 @@
   font-size: 12px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #7A7A72;
+  color: #6B6B63;
 }
 .booking-slot-times {
   display: flex;
@@ -1454,9 +1454,9 @@
 .schedule-booking.is-cancelled strong,
 .schedule-booking.is-cancelled > span {
   text-decoration: line-through;
-  color: #7A7A72;
+  color: #6B6B63;
 }
-.schedule-booking.is-cancelled .event-time { color: #7A7A72; }
+.schedule-booking.is-cancelled .event-time { color: #6B6B63; }
 .schedule-booking.is-cancelled .event-reschedule-hint { display: none; }
 .schedule-booking .event-cancelled-pill {
   display: inline-block;
@@ -1464,7 +1464,7 @@
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  background: #7A7A72;
+  background: #76766E;
   color: #fff;
   padding: 2px 8px;
   border-radius: 4px;
@@ -1511,7 +1511,7 @@
   font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #7A7A72;
+  color: #6B6B63;
   padding-top: 2px;
 }
 .booking-action-summary dd { margin: 0; color: #1A1A1A; }

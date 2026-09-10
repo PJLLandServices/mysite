@@ -65,6 +65,10 @@ Structure:
 
 **RFQ vs PO — ask vs commit.** A **Request for Quotation (`RFQ-YYYY-NNNN`)** is the "ask for a price" counterpart to the Purchase Order's "commit to buy at a known price." It launches from a material list ("Request quotation," beside "Generate purchase orders"), groups `need` lines by supplier exactly like PO generation — but **it never changes material-list line status** (lines stay `need`; nothing is on order) and its documents carry **no prices at all** (the PDF has an empty write-on Quoted Unit Price column; the CSV and email have no price columns). Lifecycle: draft → sent → quoted → applied (+ cancelled). The payoff loop: the vendor replies with pricing → Patrick enters it on the RFQ detail page's quick-grid (dollars in; partial quotes fine — unpriced lines simply leave the catalog untouched) → **Review & apply** shows current catalog price → quoted price per SKU before any write → confirming applies them to the **parts catalog** through the same edit path as a manual catalog price edit (one batched audit entry) → the still-live material list reflects them immediately → "Generate purchase orders" snapshots the fresh, real prices. Applying is one-way: a second apply is refused (no silent double-apply), and an applied RFQ can't be cancelled — its prices are already the catalog's provenance. An RFQ never becomes a PO directly. Two guardrails: (1) **don't use a $0 PO as a quote request anymore** — that workaround (e.g. the old PO-2026-0004) is retired by this entity; (2) the apply step writes `parts.json` **supplier-cost** data via the existing catalog-edit path — it never touches `pricing.json` (customer-facing service pricing), so it is not a pricing-rule violation.
 
+**Shopping a list — asking everyone, then taking the cheapest.** The supplier a part is *listed* against is a default, not a decision. When the point is to find out who is actually cheaper, "Request quotation" can **shop the whole list to every supplier** instead of splitting it by assignment: each supplier is asked about every `need` line, including the ones the catalog has assigned to someone else and the ones assigned to nobody. Neither request mentions the other supplier, says which supplier a part is normally bought from, or names the job — a vendor block, PJL's details, and a table of SKU / description / qty / unit is all that goes out, so no supplier can tell from the paperwork that anyone else was asked.
+
+When the prices come back, **Compare quotes** lines them up by SKU with the cheapest marked and says what taking the best of each is worth. That comparison is not decoration — it fixes a real trap. Applying quotes one at a time is last-write-wins, so applying the dearer supplier second used to quietly RAISE the catalog price, and the catalog is what every material list and every bid prices from. Now the per-quote apply refuses when a cheaper quote for the same list already exists (naming the SKUs), and **Apply cheapest** takes the winner of each SKU regardless of which supplier won it.
+
 **SKU → supplier mapping lives in `part-suppliers.json`, not `parts.json`.** Each part's `supplierIds[]` is resolved at request time from the runtime override file `server/data/part-suppliers.json` (first entry = the **primary** supplier that "Generate purchase orders" groups need-lines by); `parts.json`'s own `supplierIds` field is a hand-curated placeholder that is **never** the runtime source. Primary-supplier reassignment is a **category-grouped batch operation** on `/admin/parts-suppliers`: tick individual SKUs, a whole category (tri-state "select all"), or everything shown, pick a target supplier, confirm, and one `PATCH /api/part-suppliers` rewrites every selected SKU's mapping. It's supplier-only (manufacturer is separate), idempotent (re-running is a no-op), and affects **future** PO generation only — it never rewrites an already-drafted or sent PO. Introduced for the Central→SiteOne purchasing switch.
 
 **Status:** Catalog complete. ~50% of service mappings done. Repairs and controllers mapped. Seasonal services and new install zones intentionally left empty for a future pass. See "Open items" section below.
@@ -1129,6 +1133,119 @@ When tech taps "Complete":
 
 ---
 
+### 4.3b Site Builder → Quote + Material List
+
+**Where install designs actually come from.** `/admin/sitebuilder`
+(`server/sitebuilder.html`, staff-gated) is the internal design tool that
+turns a property's geometry into a priced system. It sits upstream of the
+Quote Folder for new installs and retrofits — the design is the thing the
+proposal is built from, not a separate artefact.
+
+```
+water supply  →  areas (dimensions, drawn shapes, or TRACED OVER A SITE PLAN)
+              →  head layout + arc-aware zone packing  →  GPM, zone count
+              →  bill of materials
+              →  MATERIAL LIST (ML-…)  +  project_proposal QUOTE (Q-…)
+```
+
+The design saves onto the project as `project.systemDesign`. Once a quote
+has been generated it stays **linked**: every save re-syncs it — zone names
+and added/removed zones flow through, **prices Patrick has edited are
+kept**, and a quote that has already been sent is never overwritten. This
+is the same "the record is the contract once it leaves" discipline as the
+signed work order.
+
+**Site plans (Aug 2026).** For a tendered job, Patrick uploads the supplied
+PDF or an image of the plan, calibrates each sheet against a dimension
+printed on it, **verifies that calibration against a second dimension**, and
+then traces beds, lawns and planters directly over the drawing. Areas,
+zone counts, GPM, the bill of materials, the material list and the linked
+proposal all flow from that traced geometry through machinery that already
+existed — the tool became scale-aware, it did not become a CAD program.
+
+Three operational rules, and they are not preferences:
+
+1. **No tracing on an uncalibrated sheet.** A hard block, not a warning.
+2. **One control measurement is not a measurement.** A second, independent
+   known dimension must agree before the sheet can be used. Over 2% out and
+   tracing stays blocked.
+3. **A number a bid depends on is never silently changed.** Re-scaling a
+   sheet that areas are already traced on is refused, naming them.
+
+The reason is commercial, not technical: a scale error does not look like a
+bug. It produces a plan that reads perfectly and a price that is half or
+double what it should be, and nobody finds out until the job is won at the
+wrong number.
+
+**The tender drawing is a third party's document.** It is stored internally,
+served only to a signed-in staff session, and never appears on the customer
+quote sheet, in the proposal PDF, in the portal, or in the `/approve` flow.
+The traced geometry does reach the customer — that is the point. The
+drawing underneath it does not.
+
+**Zones come out even, not filled-then-leftovers.** The builder used to load
+one valve up to its flow ceiling, start the next, and repeat — so the last
+valve got whatever was left. Ten heads under a four-head ceiling came out
+4 / 4 / 2: one valve doing half the work of its neighbours, watering
+unevenly and needing its own run time, purely because of the order the heads
+were in. It now works out the fewest valves the job needs and then spreads
+the heads across exactly that many, so the same ten come out 3 / 3 / 4. The
+valve count is unchanged, so nothing on the bid moves — this is the same
+split Patrick was doing by hand afterwards.
+
+One knock-on worth knowing: a balanced system has a **lower peak zone flow**,
+and the mainline is sized off the peak. So on some jobs the suggested
+mainline size will now come out a size smaller. That is correct — the peak
+really is lower — but it is a number that moved, so it is called out here
+rather than left to be noticed.
+
+**The master plan.** Because every traced area sits in the same calibrated
+frame, the whole job can be shown on one sheet: each area at its true
+position, drip runs and spray arcs drawn in, **coloured by the valve it
+actually runs on**. On top of that goes the supply route — the point of
+connection, the valve manifolds, and the mainline between them — and
+because the sheet is calibrated, the length of that mainline is a
+**measurement off the customer's own drawing**, not the usual "allow 200 ft
+of main". Each manifold shows how many valves land in it, so the boxes can
+be ordered and the trench can be dug from the same picture the design came
+from. Areas that were never traced are listed as off-plan; they are not
+drawn somewhere plausible-looking.
+
+From each manifold the **laterals** are routed out to the heads and beds
+that valve feeds — as a branching trunk, which is how it gets trenched, not
+a separate pipe to every head. Each segment is sized on the water actually
+passing through it, so the run leaves the box carrying the whole zone and
+arrives at the last head carrying one nozzle. A bed too big for one valve
+shows one supply line per valve, drawn side by side and named, rather than
+three pipes hidden under one line.
+
+The mainline **tees** — it is a branching run, not one line — and the
+**control wire** goes in beside it, because if we are measuring the trench
+we are measuring both. Each leg of wire only has to carry the valves beyond
+it: one shared common plus one switched leg per zone, so the branch out to a
+two-valve box is a three-core, not a cable sized for the whole property. The
+plan gives the footage per cable size and a gauge off the longest run to a
+valve, with the assumption it used printed next to it — a starting figure to
+argue with, not a number to trust blindly on someone else's solenoid.
+
+**Which valve goes in which box is a decision, not an accident.** The plan
+starts by putting every valve in its nearest box, which is right most of
+the time and wrong exactly when it matters — two boxes close together, or a
+zone that has to be manifolded with its neighbours for a reason the geometry
+cannot see. So a valve can be assigned: pick it, click the box. The house
+limit of four to a box is a warning, not a wall, because Patrick dabbles
+past it deliberately.
+
+The assignment shows its own cost immediately: put a lawn in the far box and
+its lateral stretches across the site on screen and in the footage. That is
+the point of doing it on a measured drawing rather than in your head.
+
+Rule 3 above applies to this too, and it is why the measured length is
+**shown but not pushed into the bill of materials**. Pipe and wire are still
+priced as an on-site figure, and the master plan says so on screen. Moving
+a measurement into the price is a decision Patrick makes, once, on purpose
+— not a side effect of dragging a line on a drawing.
+
 ### 4.4 Project Folder Execution (Brief 2, May 2026)
 
 A Project (`PROJ-YYYY-NNNN`) groups multi-day build work under a single accepted proposal. Brief 1 set up the proposal-to-project handshake; this section covers the execution loop.
@@ -1413,6 +1530,16 @@ gated at 3/hour per user.
        │
        └── (1+ properties per customer)
 
+
+  DESIGN (installs / retrofits / tenders)
+    SITE BUILDER  ──→ areas (typed, drawn, or traced over a calibrated site plan)
+                  ──→ zones + GPM + BOM
+                  ──→ MATERIAL LIST (ML-…) ──┐
+                                             ├──→ feeds the QUOTE below
+                  ──→ project_proposal  ──────┘   (stays linked; re-syncs on
+                                                   every save, keeps edited
+                                                   prices, never overwrites
+                                                   a sent quote)
 
   TRANSACTION FLOW
     LEAD ──→ QUOTE ──→ BOOKING ──→ WORK ORDER ──→ SERVICE RECORD ──→ INVOICE

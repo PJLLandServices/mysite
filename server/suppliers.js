@@ -53,38 +53,30 @@ function renderList() {
   els.empty.hidden = true;
   els.list.innerHTML = cachedSuppliers.map((s) => {
     const tel = telHref(s.phone);
-    const metaLines = [];
-    if (s.contactName) {
-      metaLines.push(`<div class="supplier-card-contact">${escapeHtml(s.contactName)}</div>`);
-    }
-    if (s.email) {
-      metaLines.push(`<div class="supplier-card-email"><a href="mailto:${escapeHtml(s.email)}">${escapeHtml(s.email)}</a></div>`);
-    }
-    if (s.phone) {
-      const phoneInner = tel
-        ? `<a href="${escapeHtml(tel)}">${escapeHtml(s.phone)}</a>`
-        : escapeHtml(s.phone);
-      metaLines.push(`<div class="supplier-card-phone">${phoneInner}</div>`);
-    }
-    if (s.address) {
-      metaLines.push(`<div class="supplier-card-address" data-map-address="${escapeHtml(s.address)}">${escapeHtml(s.address)}</div>`);
-    }
-    const metaHtml = metaLines.length
-      ? metaLines.join("")
-      : `<div class="supplier-card-empty"><em>No contact details yet.</em></div>`;
+    // Contact details become columns instead of a stacked meta block, so
+    // a phone number sits at the same left edge on every row. The
+    // "no contact details yet" line becomes an em dash per empty column —
+    // the gap is visible without a sentence explaining it.
+    const phoneCell = s.phone
+      ? (tel ? `<a href="${escapeHtml(tel)}">${escapeHtml(s.phone)}</a>` : escapeHtml(s.phone))
+      : '<span class="crm-cell-muted">—</span>';
     return `
-      <li class="supplier-card${s.archived ? " is-archived" : ""}" data-supplier-id="${escapeHtml(s.id)}">
-        <h3 class="supplier-card-name">
-          ${escapeHtml(s.name)}
-          <span class="supplier-card-id">${escapeHtml(s.id)}</span>
-          ${s.archived ? `<span class="supplier-card-archived-badge">Archived</span>` : ""}
-        </h3>
-        <div class="supplier-card-actions">
+      <li class="crm-table-row supplier-card${s.archived ? " is-archived" : ""}" data-supplier-id="${escapeHtml(s.id)}">
+        <span class="crm-cell supplier-card-name">
+        <span class="crm-identity">
+          <span class="crm-cell-primary">${escapeHtml(s.name)}</span>
+          <span class="crm-cell-sub">${escapeHtml(s.id)}${s.archived ? " &middot; archived" : ""}</span></span>
+        </span>
+        <span class="crm-cell supplier-card-contact">
+          ${s.contactName ? escapeHtml(s.contactName) : '<span class="crm-cell-muted">—</span>'}
+          ${s.email ? `<span class="crm-cell-sub"><a href="mailto:${escapeHtml(s.email)}">${escapeHtml(s.email)}</a></span>` : ""}
+        </span>
+        <span class="crm-cell supplier-card-phone">${phoneCell}</span>
+        <span class="crm-cell supplier-card-address"${s.address ? ` data-map-address="${escapeHtml(s.address)}"` : ""}>${s.address ? escapeHtml(s.address) : '<span class="crm-cell-muted">—</span>'}</span>
+        <span class="crm-cell supplier-card-actions">
           <button type="button" data-action="edit">Edit</button>
           <button type="button" data-action="archive" class="${s.archived ? "" : "is-danger"}">${s.archived ? "Restore" : "Archive"}</button>
-        </div>
-        <div class="supplier-card-meta">${metaHtml}</div>
-        ${s.notes ? `<p class="supplier-card-notes">${escapeHtml(s.notes)}</p>` : ""}
+        </span>
       </li>
     `;
   }).join("");

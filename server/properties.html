@@ -30,6 +30,7 @@
       <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
       <a href="/admin">CRM</a>
       <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/season-plan">Season plan</a>
       <a href="/admin/handoff">Handoff</a>
       <a href="/admin/outreach">Outreach</a>
       <a href="/admin/review-requests">Reviews</a>
@@ -41,6 +42,7 @@
       <a href="/admin/work-orders">Work orders</a>
       <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
       <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/warranty-claims">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
       <a href="/admin/material-lists">Materials</a>
       <a href="/admin/chats">AI Chats</a>
       <a href="/admin/trash">Trash</a>
@@ -82,6 +84,16 @@
 
     <section class="properties-toolbar">
       <input type="search" id="propertySearch" placeholder="Search by customer name, email, or address…">
+      <label class="crm-sort">
+        <span>Sort</span>
+        <select id="propertySort">
+          <option value="customer-asc">Customer A–Z</option>
+          <option value="customer-desc">Customer Z–A</option>
+          <option value="town-asc">Town A–Z</option>
+          <option value="town-desc">Town Z–A</option>
+          <option value="address-asc">Address A–Z</option>
+        </select>
+      </label>
       <span class="properties-count" id="propertiesCount">—</span>
       <button type="button" class="pjl-btn pjl-btn-outline" id="selectToggle" aria-pressed="false">Select</button>
       <a class="pjl-btn pjl-btn-primary" href="/admin/properties/import">Import customers →</a>
@@ -98,7 +110,20 @@
       <button type="button" class="pjl-btn pjl-btn-danger-outline" id="bulkDeleteAll">Delete ALL customers</button>
     </div>
 
-    <section class="properties-grid" id="propertiesGrid"></section>
+    <!-- Data table. Same primitive as the customers index (.crm-table in
+         crm.css); the column template lives in property.css so the header
+         and the rows read one definition. -->
+    <section class="crm-table properties-table" id="propertiesTable">
+      <div class="crm-table-head" role="row">
+        <span>Customer</span>
+        <span>Address</span>
+        <span>Town</span>
+        <span>Zones</span>
+        <span>Valves</span>
+        <span>Visits</span>
+      </div>
+      <div class="properties-grid" id="propertiesGrid"></div>
+    </section>
 
     <p class="properties-empty" id="propertiesEmpty" hidden>
       No properties yet. They'll appear here automatically as customers book.
@@ -122,6 +147,7 @@
     </div>
   </div>
 
+  <script src="/crm/crm-sort.js"></script>
   <script src="/crm/bulk-toast.js"></script>
   <script src="/crm/bulk-modal.js"></script>
   <script src="/crm/bulk-selection.js"></script>
