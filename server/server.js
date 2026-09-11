@@ -1203,7 +1203,7 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/admin/bulk/")) return "admin";
   if (pathname.startsWith("/api/admin/trash/")) return "admin";
   // Email-health view (JOB-008) — admin-cookie gated, admin only.
-  if (pathname === "/api/admin/email-health") return "admin";
+  if (pathname.startsWith("/api/admin/email-health")) return "admin";
   if (pathname === "/api/admin/purge-test-data") return "admin";
   if (pathname === "/api/admin/open-bucket/slot") return "admin";
   // Territory export download — ADMIN ONLY. De-identified, but it is still
@@ -4340,6 +4340,53 @@ function bookingHoldsItsSlot(status) {
 // The same one-home rule for the OTHER question a booking answers: not
 // "does it hold its slot" but "what has the customer done about it".
 // Stamped onto the API's records so every page shows the same word.
+// Rebuild and re-send one failed email. One named function per kind, in
+// one table, so "what can be resent" has a single answer and adding a kind
+// is one entry rather than a branch somewhere.
+//
+// Each sender writes its own ledger entry on the way out, so a retry that
+// works drops off the outstanding list by itself — there is no second
+// bookkeeping step here that could disagree with the ledger.
+const EMAIL_RESENDERS = {
+  // The customer's "your appointment is cancelled" note.
+  async booking_cancel(failure) {
+    const booking = failure.refId ? await bookings.get(failure.refId) : null;
+    if (!booking) return { ok: false, error: "that booking no longer exists" };
+    // The message must still be TRUE. If the booking came back to life
+    // since the send failed — un-cancelled, rebooked — then telling the
+    // customer it is cancelled would be a worse mistake than the silence
+    // we are fixing. Same named rule the rest of the system uses.
+    if (bookingHoldsItsSlot(booking.status)) {
+      return { ok: false, error: `that booking is ${booking.status} again — nothing to confirm` };
+    }
+    const outcome = await sendBookingCancellation(booking, {
+      reason: booking.cancellationReason || "",
+      notify: true,
+      baseUrl: resolvePublicBaseUrl()
+    });
+    if (outcome?.ok) return { ok: true, to: mailerLog.maskRecipient(booking.customerEmail || "") };
+    return { ok: false, error: outcome?.reason || outcome?.error || "the send failed again" };
+  },
+
+  // Patrick's own "new lead" alert. Goes to him, not to the customer, so
+  // there is nothing here that can embarrass anyone by arriving late.
+  async lead_alert(failure) {
+    if (!failure.refId) return { ok: false, error: "no lead on the record" };
+    const leads = await readLeads();
+    const lead = leads.find((l) => l.id === failure.refId);
+    if (!lead) return { ok: false, error: "that lead no longer exists" };
+    const outcome = await sendNewLeadEmail(lead, { baseUrl: resolvePublicBaseUrl() });
+    if (outcome?.ok) return { ok: true, to: mailerLog.maskRecipient(failure.to) };
+    return { ok: false, error: outcome?.error || "the send failed again" };
+  }
+};
+
+async function resendFailedEmail(failure) {
+  const resend = EMAIL_RESENDERS[failure.kind];
+  if (!resend) return { ok: false, error: `${failure.kind} can't be rebuilt automatically` };
+  return resend(failure);
+}
+
 function withCustomerState(booking) {
   if (!booking) return booking;
   return {
@@ -7524,9 +7571,68 @@ async function handleApi(req, res, pathname) {
   if (pathname === "/api/admin/email-health" && req.method === "GET") {
     try {
       const summary = await mailerLog.healthSummary();
-      return sendJson(res, 200, { ok: true, ...summary });
+      // What is still OUTSTANDING, as opposed to what has ever failed.
+      // "Recent failures" above is a log; this is a worklist — a failure
+      // that later went through drops off it by itself. Masked here, the
+      // same as the log: the real address stays server-side and the resend
+      // reads it from the ledger, so nothing is taken from the browser.
+      const outstanding = (await mailerLog.outstandingFailures()).map((f) => ({
+        id: f.id, ts: f.ts, kind: f.kind, refId: f.refId,
+        to: mailerLog.maskRecipient(f.to), error: f.error, resendable: f.resendable
+      }));
+      return sendJson(res, 200, { ok: true, ...summary, outstanding });
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: error?.message || "Email health read failed." });
+    }
+  }
+
+  // POST /api/admin/email-health/resend — send again the messages that
+  // never went out.
+  //
+  // 2026-09-11: a Google account password change revoked the app password
+  // every outbound email here shares, and 56 sends died on authentication
+  // inside an hour. Nothing retries and nothing queues, so without this the
+  // only way to make good on a customer's cancellation confirmation was to
+  // find them by hand.
+  //
+  // THE MESSAGE IS REBUILT, never replayed: the ledger keeps the fact of an
+  // attempt, not its body. So each kind is regenerated from the record that
+  // still exists, which also means a resend tells the customer what is true
+  // NOW rather than what was true when the send failed.
+  //
+  // The list of what may be resent is the ledger's (RESENDABLE_KINDS) —
+  // there is no second copy of that judgment here.
+  if (pathname === "/api/admin/email-health/resend" && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const body = await parseRequestBody(req);
+      const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+      const wantsAll = body.all === true;
+      if (!wantsAll && !ids.length) {
+        return sendJson(res, 400, { ok: false, errors: ["Nothing selected to resend."] });
+      }
+      // Re-read the worklist server-side rather than trusting the browser's
+      // copy of it: between the page loading and this call, one of these may
+      // have gone through on its own.
+      const outstanding = await mailerLog.outstandingFailures();
+      const targets = outstanding.filter((f) => f.resendable && (wantsAll || ids.includes(f.id)));
+      if (!targets.length) {
+        return sendJson(res, 200, { ok: true, results: [], note: "Nothing outstanding to resend." });
+      }
+
+      const results = [];
+      for (const failure of targets) {
+        try {
+          const outcome = await resendFailedEmail(failure);
+          results.push({ id: failure.id, kind: failure.kind, refId: failure.refId, ...outcome });
+        } catch (err) {
+          results.push({ id: failure.id, kind: failure.kind, refId: failure.refId, ok: false, error: err?.message || "resend failed" });
+        }
+      }
+      return sendJson(res, 200, { ok: true, results });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, errors: [error?.message || "Resend failed."] });
     }
   }
 

@@ -134,6 +134,18 @@
         Last successful send: <strong id="emailHealthLastOk">—</strong>
       </p>
       <div id="emailHealthKinds" style="font-size: 13px; color: #444; margin-bottom: 8px;"></div>
+      <!-- Still outstanding — a WORKLIST, not a log. A failure that later
+           went through drops off it on its own. Each line the system can
+           rebuild gets a Resend button; the rest are shown with their
+           error so a human can act. -->
+      <div id="emailHealthOutstandingWrap" hidden style="margin-bottom: 10px; padding: 10px 12px; background: #fff; border: 1px solid #d9a0a0; border-radius: 6px;">
+        <strong style="display:block; font-size: 13px; color: #8a1f1f; margin-bottom: 6px;">
+          Never went out (<span id="emailHealthOutCount">0</span>)
+          <button type="button" id="emailHealthResendAll" style="float: right; font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid #1B4D2E; background: #1B4D2E; color: #fff; border-radius: 5px; cursor: pointer;">Resend all</button>
+        </strong>
+        <div id="emailHealthOutstanding" style="display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: #4a4a44;"></div>
+        <p id="emailHealthResendNote" hidden style="margin: 8px 0 0; font-size: 12px; color: #1B4D2E;"></p>
+      </div>
       <details id="emailHealthFailWrap" hidden>
         <summary style="cursor: pointer; font-size: 13px; color: #8a1f1f; font-weight: 600;">Recent failures (<span id="emailHealthFailCount">0</span>)</summary>
         <div id="emailHealthFailures" style="display: flex; flex-direction: column; gap: 4px; margin-top: 8px; font-size: 12px; color: #6b1a1a;"></div>
@@ -152,6 +164,68 @@
           if (hrs < 48) return hrs + " h ago";
           return Math.floor(hrs / 24) + " days ago";
         }
+        function esc(t) {
+          var d = document.createElement("div");
+          d.textContent = String(t == null ? "" : t);
+          return d.innerHTML;
+        }
+        function note(text) {
+          var el = document.getElementById("emailHealthResendNote");
+          el.hidden = false;
+          el.textContent = text;
+        }
+        function renderOutstanding(list) {
+          var wrap = document.getElementById("emailHealthOutstandingWrap");
+          if (!list.length) { wrap.hidden = true; return; }
+          wrap.hidden = false;
+          document.getElementById("emailHealthOutCount").textContent = list.length;
+          // Nothing to resend automatically → hide the button rather than
+          // offer one that can only answer "nothing outstanding".
+          document.getElementById("emailHealthResendAll").hidden =
+            !list.some(function (f) { return f.resendable; });
+          document.getElementById("emailHealthOutstanding").innerHTML = list.map(function (f) {
+            return '<div data-id="' + esc(f.id) + '">' +
+              '<span style="color:#6B6B63;">' + esc(new Date(f.ts).toLocaleString("en-CA")) + '</span> &middot; ' +
+              '<strong>' + esc(f.kind) + '</strong> &middot; ' + esc(f.to) +
+              (f.refId ? ' &middot; ' + esc(f.refId) : '') +
+              (f.resendable
+                ? ' <button type="button" class="eh-resend" data-id="' + esc(f.id) + '" style="font:inherit;font-size:11px;padding:2px 8px;margin-left:6px;border:1px solid #1B4D2E;background:#fff;color:#1B4D2E;border-radius:5px;cursor:pointer;">Resend</button>'
+                : ' <span style="color:#8a1f1f;">— send by hand</span>') +
+              '</div>';
+          }).join("");
+        }
+        async function resend(payload, button) {
+          if (button) { button.disabled = true; button.textContent = "Sending…"; }
+          try {
+            var r = await fetch("/api/admin/email-health/resend", {
+              method: "POST",
+              credentials: "same-origin",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            var data = await r.json();
+            if (!r.ok || !data.ok) throw new Error((data.errors || ["Resend failed."]).join(" "));
+            var results = data.results || [];
+            var good = results.filter(function (x) { return x.ok; }).length;
+            var bad = results.filter(function (x) { return !x.ok; });
+            note(good + " sent" + (bad.length
+              ? ", " + bad.length + " still failing: " + bad.map(function (x) { return x.kind + " — " + x.error; }).join("; ")
+              : ". Reload to refresh the list."));
+          } catch (err) {
+            note(err.message);
+          } finally {
+            if (button) { button.disabled = false; button.textContent = "Resend"; }
+          }
+        }
+        document.getElementById("emailHealthOutstanding").addEventListener("click", function (e) {
+          var btn = e.target.closest ? e.target.closest(".eh-resend") : null;
+          if (!btn) return;
+          resend({ ids: [btn.dataset.id] }, btn);
+        });
+        document.getElementById("emailHealthResendAll").addEventListener("click", function (e) {
+          if (!window.confirm("Send every one of these again? They are rebuilt from the current records, so each says what is true now.")) return;
+          resend({ all: true }, e.target);
+        });
         fetch("/api/admin/email-health", { credentials: "same-origin" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (data) {
@@ -184,6 +258,7 @@
                 return "<div>" + div.textContent.replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</div>";
               }).join("");
             }
+            renderOutstanding(data.outstanding || []);
             var badge = document.getElementById("emailHealthBadge");
             if (totalFailed > 0) {
               badge.textContent = "· " + totalFailed + " failure" + (totalFailed === 1 ? "" : "s") + " (7d)";
