@@ -19,6 +19,73 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-10, same day (Schedule the blast instead of standing over it):** Patrick, after the send
+window had closed on him twice in one day: *"can we just do a scheduled send instead?"*
+**The pairing that failed:** the blast is the one cadence step that waits for a human to press a
+button, and the button only works inside a nine-hour window. He pressed it at 7am and was refused;
+by the time the reason was found it was past close. Nothing about the SEND needs him present — the
+wording is approved, the recipients are assigned. What needs him is the DECISION.
+So arming IS the decision, and the sweep that already dispatches steps 2–6 does the sending: it runs
+every five minutes, refuses outside the window, honours the appointment-page interlock and the send
+lock. A scheduled blast is that same machinery asked one question earlier — no new scheduler, no
+second send path. `POST/DELETE /api/assignments/:season/:year/blast/schedule` (admin) arms and
+cancels; armed state lives in the same ledger as the attempts, so *what is about to happen* and
+*what happened* are read from one place.
+**The property that matters most is that it fires ONCE.** The sweep runs every five minutes, so an
+arming that survived a half-failed send would message every customer again on the next tick. It is
+**disarmed before the send**, making the worst case a send that must be re-armed — never a second
+copy in a customer's inbox. `blast()` is itself idempotent per booking (rule 1 marks before it
+sends), so that trade is the safe one.
+Coverage: `scripts/test-blast-scheduled.mjs`, 21 assertions, in `build:check` — including the
+five-minutes-later sweep sending nothing, the interlock and window both holding an armed blast
+without consuming it, cancellation, and per-season isolation. Verified against the old code. No PASS
+flow touched.
+
+**2026-09-10, same day (Opened but never answered):** Patrick, on the blast: *"how do we
+confirm things got sent, and how do we track who's seen it, and what they have done?"* Sent and
+done were both already tracked — per booking, which of the six steps went out and when, and every
+action the customer took on their appointment page (confirm, cancel, a different window, a freed
+half-day, a corrected zone count), each with history. **Seen was not tracked at all**: opening
+`/a/<token>` served a static page and recorded nothing.
+That gap hides the group most worth chasing. A hesitant customer and a wrong phone number both
+looked like silence. `appointment-actions.markSeen()` now stamps `outreach.seenAt` on the FIRST
+view — once, because a timestamp that moves on every refresh cannot answer "did they ever look?" —
+and the count rides the status line Patrick already reads: **assigned · messaged · opened ·
+responded**.
+Best-effort by design, and that is the property that made it shippable mid-campaign: a note about a
+page view must never be able to fail the page, so a write that throws is swallowed and the caller
+gets its booking back. Customers open these links over hours and days, so landing this twenty
+minutes after a blast costs the opens in those minutes, not the campaign.
+Coverage: `scripts/test-appointment-seen.mjs`, 11 assertions, in `build:check`. Verified against the
+old code: **6 fail**. No PASS flow touched.
+
+**2026-09-10 (The blast that left no trace, and the hour that cost a day):** Patrick pressed
+"Send the blast" before 9am. The server refused it on the send window and threw; the refusal was
+written to a panel on the season-plan page, and the next page load erased it. Hours later the only
+honest answer to *"did anything send?"* came from reading his Gmail sent folder — **the most
+consequential button in the system left no trace of the refusal, of who would have been skipped, or
+even of having been pressed.** By the time the cause was found it was past 6pm and the window had
+closed again, so the rule had cost a full day of the assignment cadence for no customer-facing
+reason.
+Three changes, all at Patrick's call:
+**1. The window runs to 8pm** (`SEND_WINDOW.toHour` 18 → 20). It governs the blast AND automated
+steps 2–6; 8pm is a normal hour to reach a homeowner and sits inside Canadian contact-time norms.
+**2. Every attempt is recorded** — `server/data/assignment-blasts.json`, last + 20 of history per
+season, written through `atomic-json`. A refusal is an OUTCOME, not a non-event: it is recorded
+before it is thrown. The ledger never throws, because a note about a send must not be able to fail
+the send it describes.
+**3. The button refuses BEFORE it is armed.** `status()` now carries `canSendNow`, `sendWindow`,
+`sendWindowNote` and `lastBlast`, so the screen cannot say one thing while the server would do
+another; the button disables itself with the reason in its tooltip, and the durable status line
+carries the last attempt across reloads.
+Coverage: `scripts/test-blast-window-ledger.mjs`, 27 assertions, in `build:check`. Verified against
+the old code: **20 fail**, one of them reproducing the incident exactly — *"a send at 7:30pm now
+goes through — refused: Sends go out 9:00 AM – 6:00 PM"*.
+`test-assignment-cadence`'s rule 7 was rewritten to assert against the window the module holds
+rather than hours written into the suite — a hard-coded window turns Patrick's next such call into
+a test failure instead of a config change. What it still pins is that a send outside the window is
+refused, whatever the window is. No PASS flow touched.
+
 **2026-09-09, same day (Nobody was told the address could not be checked):** Spec §2.2.3 and
 decision 4, and Patrick's call on the alert channel: *"If there needs to be a notification round due
 to an address not being verified, yes that should be a notice made by text message."*
