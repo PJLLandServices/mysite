@@ -102,6 +102,108 @@ const REMOVAL_REASONS = {
   weather: { label: "Weather", outcome: "cancelled", notify: true },
 };
 
+// The reasons a CUSTOMER gives when they cancel from their own
+// appointment page.
+//
+// Separate from REMOVAL_REASONS above, deliberately: that is the TECH's
+// vocabulary for why a visit did not happen ("nobody home", "couldn't get
+// access"), and a customer cancelling in advance is answering a different
+// question. They share `already_done` on purpose, and BOTH write the same
+// `removalCode` field, so next February the answer is one query and not
+// two half-answers in different places.
+//
+// WHY THIS EXISTS AT ALL. The appointment page always had a cancel box —
+// a free-text textarea labelled "Anything we should know? (optional)".
+// Patrick, 2026-09-11, after the first assignment blast: "People came
+// back canceled. We need to prompt them to request why?" Nobody types
+// into an optional box. A short list they can tap is the difference
+// between a number you can act on and a column of blanks.
+const CUSTOMER_CANCEL_REASONS = Object.freeze({
+  already_done: { label: "I've already had it done" },
+  another_company: { label: "I'm using another company" },
+  selling: { label: "I'm selling / have sold the property" },
+  not_this_year: { label: "I don't need it this year" },
+  other: { label: "Something else" }
+});
+
+function isCustomerCancelReason(code) {
+  return Object.prototype.hasOwnProperty.call(CUSTOMER_CANCEL_REASONS, String(code || ""));
+}
+
+// The list the appointment page renders. The page must not carry its own
+// copy of these words: a label that drifts between the button a customer
+// tapped and the row Patrick reads is a reason nobody can trust.
+function customerCancelReasonList() {
+  return Object.entries(CUSTOMER_CANCEL_REASONS).map(([code, def]) => ({ code, label: def.label }));
+}
+
+// The label to show a human for a reason code, from either vocabulary.
+// One lookup so an alert, a CRM row and a report never disagree.
+function reasonLabel(code) {
+  const key = String(code || "");
+  return CUSTOMER_CANCEL_REASONS[key]?.label || REMOVAL_REASONS[key]?.label || "";
+}
+
+// ---- What the CUSTOMER has done about this booking --------------------
+//
+// A DIFFERENT QUESTION from `status`. `status` answers "does this still
+// hold its slot" — it is the engine's word, read by availability, the
+// cadence, the calendar and the tech's day list, and an assignment
+// booking is `confirmed` from the moment PJL books it because the truck
+// is coming whether or not the customer has replied.
+//
+// Patrick, 2026-09-11: "the bookings page shows 'confirmed' but i'd like
+// to see it maybe just say 'sent' first, and then once the customer
+// clicks confirm then it flicks over to confirm."
+//
+// He is right, and the answer is NOT to change `status` — renaming it
+// would stop the follow-up cadence dead, which selects on
+// `status === "confirmed"`. The acknowledgement is already recorded
+// separately (when they were messaged, when and how they answered), so
+// this reads it back. Defined once, here, rather than in the page that
+// happens to need it first (CLAUDE.md: two copies of a state test drift).
+//
+// A customer who booked THEMSELVES said yes by booking — there is no
+// acknowledgement to wait for, so those stay "Booked".
+const CUSTOMER_STATE_LABELS = Object.freeze({
+  assigned: "Assigned",
+  sent: "Sent",
+  confirmed: "Confirmed",
+  moved: "Moved",
+  window: "Time requested",
+  any_time: "Any time",
+  booked: "Booked",
+  cancelled: "Cancelled",
+  completed: "Completed",
+  no_show: "No-show"
+});
+
+const REPLY_STATES = Object.freeze({
+  confirm: "confirmed",
+  reschedule: "moved",
+  window: "window",
+  free_bucket: "any_time",
+  cancel: "cancelled"
+});
+
+function customerState(booking) {
+  if (!booking) return "booked";
+  const status = String(booking.status || "").toLowerCase();
+  // A dead booking's own state is the whole answer — what they did about
+  // it before it died is history, not status.
+  if (DEAD_STATUSES.has(status)) return status === "no_show" ? "no_show" : status;
+  if (booking.source !== "assignment") return "booked";
+  const outreach = booking.assignment?.outreach || null;
+  if (!outreach) return "assigned";
+  if (outreach.respondedAt) return REPLY_STATES[outreach.responseVia] || "confirmed";
+  if (outreach.steps && outreach.steps["1"]) return "sent";
+  return "assigned";
+}
+
+function customerStateLabel(booking) {
+  return CUSTOMER_STATE_LABELS[customerState(booking)] || "Booked";
+}
+
 function isRemovalReason(code) {
   return Object.prototype.hasOwnProperty.call(REMOVAL_REASONS, String(code || ""));
 }
@@ -845,8 +947,15 @@ async function attachWorkOrder(bookingId, woId) {
 
 module.exports = {
   holdsItsSlot,
+  customerState,
+  customerStateLabel,
+  CUSTOMER_STATE_LABELS,
+  CUSTOMER_CANCEL_REASONS,
+  isCustomerCancelReason,
+  reasonLabel,
   DEAD_STATUSES,
   REMOVAL_REASONS,
+  customerCancelReasonList,
   isRemovalReason,
   removalOutcome,
   STATUSES,

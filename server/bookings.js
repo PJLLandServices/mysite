@@ -45,6 +45,23 @@ function formatDateTime(iso) {
 
 // Header badge label (raw status). Map underscore → space-separated word
 // so "no_show" reads as "No-show" in uppercase rather than "NO_SHOW".
+// What the badge says. The server derives it (lib/bookings.js owns the
+// rule) and sends it on every record; this is the fallback for a record
+// that predates the field or arrives from somewhere else.
+//
+// WHY THE BADGE ISN'T JUST `status`. Patrick, 2026-09-11: "the bookings
+// page shows 'confirmed' but i'd like to see it maybe just say 'sent'
+// first, and then once the customer clicks confirm then it flicks over to
+// confirm." An assignment booking is `confirmed` from the moment he books
+// it — the truck is coming — so the engine's word and the customer's
+// acknowledgement were being shown as the same thing.
+function badgeLabel(b) {
+  return b.customerStateLabel || statusBadgeLabel(b.status || "confirmed");
+}
+function badgeState(b) {
+  return b.customerState || b.status || "confirmed";
+}
+
 function statusBadgeLabel(status) {
   const map = {
     confirmed: "Confirmed",
@@ -72,7 +89,11 @@ function searchable(b) {
 function visibleBookings() {
   const q = searchEl.value.trim().toLowerCase();
   return bookings.filter((b) => {
-    if (statusFilter !== "all" && b.status !== statusFilter) return false;
+    // Either word matches: the filters are mostly engine statuses, and
+    // "Sent" is a customer state. A sent booking is still confirmed on the
+    // calendar, so it belongs under both — that is not a contradiction,
+    // it is the two questions this page now answers.
+    if (statusFilter !== "all" && b.status !== statusFilter && badgeState(b) !== statusFilter) return false;
     if (q && !searchable(b).includes(q)) return false;
     return true;
   });
@@ -113,7 +134,7 @@ function render() {
       <span class="crm-cell bk-card__address"${b.address ? ` data-map-address="${esc(b.address)}"` : ""}>${esc(b.address) || '<span class="crm-cell-muted">—</span>'}</span>
       <span class="crm-cell bk-card__datetime">${esc(formatDateTime(b.scheduledFor))}</span>
       <span class="crm-cell crm-cell-status">
-        <span class="crm-pill bk-card__status bk-card__status--${esc(status)}">${esc(statusBadgeLabel(status))}</span>
+        <span class="crm-pill bk-card__status bk-card__status--${esc(badgeState(b))}">${esc(badgeLabel(b))}</span>
       </span>
     `;
     listEl.appendChild(card);

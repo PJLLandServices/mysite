@@ -22,6 +22,40 @@
     el("terminalBody").textContent = body;
   }
 
+  // Which reason the customer tapped. Empty until they pick one — the
+  // "Yes, cancel it" button stays disabled until then, because the whole
+  // reason this list exists is that an optional box got left blank every
+  // single time.
+  let cancelReasonCode = "";
+
+  // The reason list comes down with the appointment summary, so the words
+  // live in exactly one place on the server. A response that doesn't
+  // carry it (an action that returns a partial summary) leaves the list
+  // exactly as it was.
+  function renderCancelReasons(list) {
+    if (!Array.isArray(list)) return;
+    const box = el("cancelReasons");
+    box.innerHTML = "";
+    cancelReasonCode = "";
+    el("cancelConfirm").disabled = true;
+    for (const reason of list) {
+      const choice = document.createElement("label");
+      choice.className = "ap-choice";
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = "cancelWhy";
+      input.value = reason.code;
+      const text = document.createElement("span");
+      text.textContent = reason.label;
+      input.addEventListener("change", () => {
+        cancelReasonCode = input.value;
+        el("cancelConfirm").disabled = false;
+      });
+      choice.append(input, text);
+      box.appendChild(choice);
+    }
+  }
+
   function render(a) {
     el("loading").hidden = true;
     el("error").hidden = true;
@@ -65,6 +99,10 @@
     el("cancelBtn").hidden = !a.canCancel;
     el("windowBtn").hidden = !a.canSetWindow;
     fillWindowSelects(a.requestedWindow);
+    renderCancelReasons(a.cancelReasons);
+    // "The day doesn't work" is not "I don't want the service" — offer the
+    // move first, and only to someone who can still make one.
+    el("cancelToReschedule").hidden = !a.canReschedule;
     renderZones(a.zones);
     renderCalendar(a.calendar);
     el("reschedulePanel").hidden = true;
@@ -288,10 +326,15 @@
     el("cancelPanel").hidden = true;
     el("actions").hidden = false;
   });
+  el("cancelToReschedule").addEventListener("click", () => {
+    el("cancelPanel").hidden = true;
+    el("rescheduleBtn").click();
+  });
   el("cancelConfirm").addEventListener("click", async () => {
+    if (!cancelReasonCode) return;
     el("cancelConfirm").disabled = true;
     try {
-      await post("/cancel", { reason: el("cancelReason").value.trim() });
+      await post("/cancel", { reasonCode: cancelReasonCode, reason: el("cancelReason").value.trim() });
       terminal("Your appointment is cancelled.",
         "Thanks for letting us know. If anything changes, call or text us and we'll get you back on the route.");
     } catch (error) { fail(error.message); }
