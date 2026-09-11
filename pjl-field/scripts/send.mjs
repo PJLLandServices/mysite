@@ -13,10 +13,16 @@
 // Publishing when they do not match is worse than doing nothing: Expo
 // accepts the bundle, the phone declines it, and the update looks broken
 // when it was never installable. So that case refuses.
+//
+// THIS RUNS ANYWHERE. Only a rebuild needs macOS, because only a rebuild
+// needs Xcode. Publishing is a repo, Node and an Expo login — Patrick
+// works from a Windows PC as well as the Mac, and being told to go and
+// find the Mac for a change that never needed it (2026-09-11) is the
+// thing this file exists to stop.
 
 import { execFileSync } from 'node:child_process';
 import {
-  APP, banner, c, fingerprint, git, iosProject, recordedBuild, rule, say,
+  APP, banner, c, fingerprint, git, iosProject, NPX, recordedBuild, rule, say,
 } from './native.mjs';
 
 const args = process.argv.slice(2);
@@ -124,14 +130,14 @@ if (built.hash !== now) {
 // mean "the tool that does it is not installed" — a failure that reads
 // like a problem with the update itself.
 try {
-  execFileSync('npx', ['--no-install', 'eas', '--version'], { cwd: APP, stdio: 'ignore' });
+  execFileSync(NPX, ['--no-install', 'eas', '--version'], { cwd: APP, stdio: 'ignore' });
 } catch {
   bail(
-    'The EAS command-line tool is not installed on this Mac, so there is',
-    'nothing here that can publish an update.',
+    'The EAS command-line tool is not installed here, so there is nothing',
+    'on this computer that can publish an update.',
     '',
     `  ${c.bold('npm install -g eas-cli')}`,
-    `  ${c.bold('npx eas login')}          ${c.dim('then sign in, once per Mac')}`,
+    `  ${c.bold('npx eas login')}          ${c.dim('then sign in, once per computer')}`,
   );
 }
 
@@ -146,7 +152,7 @@ say('');
 
 try {
   execFileSync(
-    'npx',
+    NPX,
     ['eas', 'update', '--branch', 'production', '--message', message, '--non-interactive'],
     { cwd: APP, stdio: 'inherit' },
   );
@@ -155,7 +161,7 @@ try {
   banner('THE PUBLISH FAILED', c.red);
   say('');
   say('  Nothing reached the phone. The usual cause is not being signed in');
-  say('  to Expo on this Mac:');
+  say('  to Expo on this computer:');
   say('');
   say(`  ${c.bold('npx eas login')}`);
   say('');

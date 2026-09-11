@@ -34,6 +34,19 @@ export const c = {
   dim: (s) => `${E}2m${s}${E}0m`,
 };
 
+// npx, by the name the platform actually has for it.
+//
+// On Windows npx is `npx.cmd`, and execFileSync('npx', ...) throws ENOENT
+// looking for an extensionless file that is not there. That failure is
+// worse than it sounds: send.mjs reads it as "EAS is not installed" and
+// tells you to install a tool you already have. Patrick works from a
+// Windows PC as well as the Mac (2026-09-11), and none of this was ever
+// tried there.
+export const NPX = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+
+// Xcode does not exist off macOS, so a rebuild cannot even be attempted.
+export const CAN_BUILD_NATIVE = process.platform === 'darwin';
+
 export function say(...lines) { console.log(lines.join('\n')); }
 export function rule() { say(c.dim('-'.repeat(64))); }
 

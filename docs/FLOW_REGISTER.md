@@ -429,6 +429,30 @@ load-bearing guards verified against broken code (holds not counted → 3 fail; 
 sweeper → 1 fail). No PASS flow touched — FLOW-03 gains a step, and `book.html` fails OPEN if
 the hold call itself errors, because reserve re-validates regardless.
 
+**2026-09-11 (Half of this only ever ran on one operating system):** Patrick, after being sent
+looking for a folder with Mac commands: "theres literally nothing" — followed by a screenshot of
+**Windows PowerShell** at `C:\Users\patri>`, and then: "you said i didn't need to go n my mac."
+
+He was right on both counts. "No Xcode" was said over and over and the machine was never named,
+which amounts to the same misleading thing — and worse, the scripts would have failed on Windows
+in the most confusing way available. `execFileSync("npx", ...)` throws ENOENT there, because npx
+is `npx.cmd`; `send.mjs` catches that and reports **"the EAS command-line tool is not installed"**,
+which is false, and sends its reader off to install a tool they already have. Exactly the class of
+wrong-answer-stated-confidently this whole change was written to remove.
+
+Fixed at the root: `NPX` in `scripts/native.mjs` resolves the name per platform, and both callers
+use it. **Only `npm run rebuild` is genuinely Mac-only** — because only a rebuild needs Xcode — so
+it now checks `CAN_BUILD_NATIVE` and says "THIS ONE NEEDS THE MAC", pointing at `npm run send`,
+instead of letting prebuild fail with a toolchain error that reads like something to go and
+install. Publishing is a repo, Node and an Expo login, and every "on this Mac" string in `send`
+and `built` was wrong; they say "this computer" now. The doc leads with **which computer: either
+one**, and carries a find-the-folder line for each platform.
+
+Coverage: 4 more assertions in `scripts/test-app-update.mjs` (31 → 35), **verified against the
+pre-fix scripts (all 4 fail)**. One of them bans a bare `execFileSync('npx'` outright, and one
+bans the strings "this Mac" / "per Mac" from the two commands that run anywhere — the copy is
+where this went wrong before the code did.
+
 **2026-09-11 (Show me the day with them in it):** Patrick, after booking a day the engine
 suggested and then looking at the result: "I look at the map, and it has me driving from Pickering
 to North York as a suggestion. This can be a 45 minute drive depending on the time of day... I

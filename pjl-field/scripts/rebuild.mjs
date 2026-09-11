@@ -15,8 +15,8 @@
 
 import { execFileSync } from 'node:child_process';
 import {
-  APP, banner, c, fingerprint, iosProject, readTeam, recordBuild,
-  rule, say, schemePath, setRunConfiguration, writeTeam,
+  APP, banner, c, CAN_BUILD_NATIVE, fingerprint, iosProject, NPX, readTeam,
+  recordBuild, rule, say, schemePath, setRunConfiguration, writeTeam,
 } from './native.mjs';
 
 const args = process.argv.slice(2);
@@ -26,6 +26,24 @@ const teamArg = (() => {
 })();
 
 say('');
+
+// Xcode is macOS-only, so there is nothing here to attempt. Saying so is
+// the whole answer — letting prebuild fail on its own gives an error about
+// a missing toolchain, which reads like something to go and install.
+if (!CAN_BUILD_NATIVE) {
+  banner('THIS ONE NEEDS THE MAC', c.amber);
+  say('');
+  say('  Rebuilding the app means Xcode, and Xcode only runs on macOS.');
+  say('');
+  say(`  ${c.bold('npm run send')}    ${c.dim('works here — most changes go over the air')}`);
+  say('');
+  say('  Only a change to app.json, a new library, a new permission or the');
+  say('  icon needs this command, and that one has to happen on the Mac.');
+  say('');
+  rule();
+  process.exit(1);
+}
+
 say(c.bold('  Rebuilding the Xcode project.'));
 say('');
 
@@ -43,7 +61,7 @@ say(c.dim('  Running expo prebuild. This takes a few minutes.'));
 say('');
 
 try {
-  execFileSync('npx', ['expo', 'prebuild', '-p', 'ios', '--clean'], { cwd: APP, stdio: 'inherit' });
+  execFileSync(NPX, ['expo', 'prebuild', '-p', 'ios', '--clean'], { cwd: APP, stdio: 'inherit' });
 } catch {
   say('');
   banner('PREBUILD FAILED', c.red);

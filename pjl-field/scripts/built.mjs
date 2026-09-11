@@ -8,6 +8,8 @@
 // record of his phone and sent him back into an Xcode round he did not
 // need.
 //
+// It runs anywhere — it only reads the source and writes a file.
+//
 // It takes his word, because nothing here can see his phone. So it says
 // plainly what it is assuming, and how he will know within a minute if
 // the assumption was wrong: an update that does not match simply never
@@ -41,7 +43,7 @@ if (previous && previous.hash === hash) {
 // HERE, saying so is worth more than staying quiet.
 if (!project && !existsSync(path.join(APP, 'ios'))) {
   say(c.amber('  Note: there is no ios folder in this checkout, so the build on your'));
-  say(c.amber('  phone was made somewhere else. Recording it anyway — but the code'));
+  say(c.amber('  phone was made on another computer. Recording it anyway — but the code'));
   say(c.amber('  there and the code here have to be the same, or the first update'));
   say(c.amber('  will simply not install.'));
   say('');

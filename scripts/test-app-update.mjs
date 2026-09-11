@@ -55,6 +55,7 @@ const iosProject = use('iosProject');
 const SEND = readOr('pjl-field/scripts/send.mjs');
 const REBUILD = readOr('pjl-field/scripts/rebuild.mjs');
 const BUILT = readOr('pjl-field/scripts/built.mjs');
+const NATIVE = readOr('pjl-field/scripts/native.mjs');
 const PKG = readOr('pjl-field/package.json');
 const IGNORE = readOr('pjl-field/.gitignore');
 const DOC = readOr('docs/UPDATING_THE_APP.md');
@@ -352,6 +353,49 @@ check('it says what it is assuming rather than assuming quietly', () => {
 
 check('recording the same build twice is not an error', () => {
   assert.match(BUILT, /ALREADY RECORDED/);
+});
+
+// ---- It is not all Mac work ---------------------------------------------
+
+check('npx is spawned by the name the platform actually has for it', () => {
+  // On Windows npx is `npx.cmd`, and execFileSync('npx', ...) throws
+  // ENOENT for an extensionless file that is not there. send.mjs reads
+  // that as "EAS is not installed" and tells you to install a tool you
+  // already have — a false answer, which is worse than none. Patrick
+  // works from a Windows PC as well as the Mac (2026-09-11).
+  assert.match(NATIVE, /npx\.cmd/);
+  assert.match(NATIVE, /export const NPX/);
+  for (const [name, src] of [['send.mjs', SEND], ['rebuild.mjs', REBUILD]]) {
+    assert.doesNotMatch(src, /execFileSync\(\s*['"]npx['"]/,
+      `${name} still spawns a bare "npx", which cannot be found on Windows`);
+  }
+});
+
+check('publishing is never described as Mac-only work', () => {
+  // Only a REBUILD needs macOS, because only a rebuild needs Xcode.
+  // Publishing is a repo, Node and an Expo login. Telling someone to go
+  // and find the Mac for a change that never needed it is the whole
+  // failure this pins.
+  for (const [name, src] of [['send.mjs', SEND], ['built.mjs', BUILT]]) {
+    assert.doesNotMatch(src, /this Mac|per Mac/,
+      `${name} tells the reader they need the Mac for something that runs anywhere`);
+  }
+});
+
+check('a rebuild off macOS says so instead of failing at the toolchain', () => {
+  // Letting prebuild fail on its own gives an error about a missing
+  // toolchain, which reads like something to go and install.
+  assert.match(NATIVE, /CAN_BUILD_NATIVE/);
+  assert.match(NATIVE, /darwin/);
+  assert.match(REBUILD, /NEEDS THE MAC/);
+  const guard = REBUILD.indexOf('CAN_BUILD_NATIVE');
+  const prebuild = REBUILD.indexOf("'prebuild'");
+  assert.ok(guard > 0 && guard < prebuild, 'the guard runs after the prebuild is attempted');
+});
+
+check('…and points at the command that does work there', () => {
+  const start = REBUILD.indexOf('NEEDS THE MAC');
+  assert.match(REBUILD.slice(start, start + 600), /npm run send/);
 });
 
 // ---- The way in ---------------------------------------------------------
