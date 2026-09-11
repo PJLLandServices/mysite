@@ -69,6 +69,18 @@
 .bk-card__status--cancelled { background: #EFEFE5; color: #6B6B63; }
 .bk-card__status--no_show   { background: #E8E5D7; color: #4A4A44; }
 
+/* The customer-state half of the badge vocabulary. `confirmed`,
+   `completed`, `cancelled` and `no_show` are shared with the engine
+   statuses above and keep their colours. These are the states only a
+   customer can be in. */
+.bk-card__status--assigned  { background: #EFEFE5; color: #55604F; }
+.bk-card__status--sent      { background: #FBEBD8; color: #8A4B12; }
+.bk-card__status--moved     { background: #E8F0EA; color: #2F5C43; }
+.bk-card__status--window    { background: #E8F0EA; color: #2F5C43; }
+.bk-card__status--any_time  { background: #E8F0EA; color: #2F5C43; }
+/* Booked themselves — keeps the blue the engine's `confirmed` wore. */
+.bk-card__status--booked    { background: #E0EBFF; color: #2A4A8C; }
+
 .bk-card__service,
 .bk-card__customer,
 .bk-card__address,

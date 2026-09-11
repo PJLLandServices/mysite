@@ -4337,6 +4337,18 @@ function bookingHoldsItsSlot(status) {
   return bookings.holdsItsSlot(status);
 }
 
+// The same one-home rule for the OTHER question a booking answers: not
+// "does it hold its slot" but "what has the customer done about it".
+// Stamped onto the API's records so every page shows the same word.
+function withCustomerState(booking) {
+  if (!booking) return booking;
+  return {
+    ...booking,
+    customerState: bookings.customerState(booking),
+    customerStateLabel: bookings.customerStateLabel(booking)
+  };
+}
+
 async function activeBookings() {
   const leads = await readLeads();
   const fromLeads = leads
@@ -12003,13 +12015,19 @@ async function handleApi(req, res, pathname) {
       }
     }
     all.sort((a, b) => new Date(b.scheduledFor || 0) - new Date(a.scheduledFor || 0));
-    return sendJson(res, 200, { ok: true, bookings: all });
+    // What the CUSTOMER has done, derived server-side and sent alongside
+    // the engine's `status`. The two answer different questions — an
+    // assigned booking is `confirmed` the moment Patrick books it, because
+    // the truck is coming — and the list page shows the customer's half.
+    // Derived HERE rather than in the page: the rule lives in
+    // lib/bookings.js, and a browser copy of it would drift.
+    return sendJson(res, 200, { ok: true, bookings: all.map(withCustomerState) });
   }
   const bookingMatch = pathname.match(/^\/api\/bookings\/([^/]+)$/);
   if (bookingMatch && req.method === "GET") {
     const b = await bookings.get(decodeURIComponent(bookingMatch[1]));
     if (!b) return sendJson(res, 404, { ok: false, errors: ["Booking not found."] });
-    return sendJson(res, 200, { ok: true, booking: b });
+    return sendJson(res, 200, { ok: true, booking: withCustomerState(b) });
   }
   if (bookingMatch && req.method === "PATCH") {
     try {
@@ -23778,16 +23796,23 @@ async function orderDayForDriving(rows) {
       if (action === "cancel" && req.method === "POST") {
         const body = await parseRequestBody(req);
         const reason = normalizeString(body.reason, 300);
-        const result = await appointmentActions.cancel(token, { reason });
+        const reasonCode = normalizeString(body.reasonCode, 40);
+        const result = await appointmentActions.cancel(token, { reason, reasonCode });
         if (!result.ok) return sendJson(res, result.status || 409, { ok: false, errors: result.errors });
         const b = result.booking;
+        // What the customer actually said, assembled by the action layer:
+        // the tapped reason and any typed detail as one sentence. Patrick
+        // asked for this after the first blast came back with cancels and
+        // no reasons — an alert that only says "CANCELLED" is an alert he
+        // has to phone someone to understand.
+        const why = result.reasonText || reason;
         // Tell the CUSTOMER, not just Patrick. This page confirmed the
         // cancellation on screen and then sent them nothing, while the
         // portal's cancel has always emailed them — an asymmetry that
         // existed only because the two pages were built months apart.
         // Same template, so the two paths read identically in an inbox.
         sendBookingCancellation(b, {
-          reason,
+          reason: why,
           notify: true,
           baseUrl: process.env.PUBLIC_BASE_URL || baseUrlFromReq(req)
         }).catch(() => {});
@@ -23795,10 +23820,12 @@ async function orderDayForDriving(rows) {
           sendNewLeadEmail({
             id: b.id, sourceLabel: "Customer CANCELLED their assigned appointment",
             contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "",
-              notes: `Was ${b.scheduledFor}.${reason ? ` Reason: ${reason}` : ""}` }
+              notes: `Was ${b.scheduledFor}.${why ? ` Reason: ${why}` : ""}` }
           }, { baseUrl: baseUrlFromReq(req) }),
           sendNewLeadSms({
-            id: b.id, sourceLabel: "Customer CANCELLED their assigned appointment",
+            // The reason rides on the SMS too. It is the one Patrick reads
+            // first, and "why" is the whole point of the text.
+            id: b.id, sourceLabel: `Customer CANCELLED their assigned appointment${result.reasonLabel ? ` — ${result.reasonLabel}` : ""}`,
             contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "", notes: "" }
           }, { baseUrl: baseUrlFromReq(req) })
         ]).catch(() => {});

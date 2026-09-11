@@ -105,6 +105,11 @@ function summarize(booking, { now = new Date() } = {}) {
     canCancel: live && !insideCutoff,
     canFreeBucket: live && !insideCutoff && !booking.flexBucket,
     canSetWindow: live && !insideCutoff && !booking.flexBucket,
+    // The reasons the cancel panel offers. Sent WITH the summary rather
+    // than baked into the page so the vocabulary has exactly one
+    // definition (lib/bookings.js) — the customer's tap, the alert
+    // Patrick reads and next February's count all say the same words.
+    cancelReasons: bookings.customerCancelReasonList(),
     insideCutoff
   };
 }
@@ -153,7 +158,7 @@ async function markSeen(booking, { now = new Date(), setOutreach = bookings.setA
 // "I no longer need this." Gated at 24 hours like the portal; the
 // cancellation itself flips the booking's status, which is what stops
 // the whole cadence including the 24-hour reminder (rule 5).
-async function cancel(token, { reason = "", listBookings, cancelBooking = bookings.cancel, markResponded = bookings.markAssignmentResponded, now = new Date() } = {}) {
+async function cancel(token, { reason = "", reasonCode = "", listBookings, cancelBooking = bookings.cancel, markResponded = bookings.markAssignmentResponded, now = new Date() } = {}) {
   const booking = await findByToken(token, { listBookings });
   if (!booking) return { ok: false, status: 404, errors: ["That link doesn't match an appointment."] };
   const summary = summarize(booking, { now });
@@ -165,13 +170,35 @@ async function cancel(token, { reason = "", listBookings, cancelBooking = bookin
   }
   // The response mark goes FIRST: if the cancel write fails midway the
   // customer still counted as responded, which only ever errs quiet.
+  // WHY THE CODE IS VALIDATED HERE, and not just passed along.
+  // bookings.cancel() resolves the STATUS from the reason code, and the
+  // tech vocabulary it shares that lookup with contains `no_answer`,
+  // which resolves to `no_show`. A no-show is a chargeable fact about a
+  // visit that happened. Nothing a customer's phone posts may reach that
+  // lookup unchecked, so only the customer vocabulary gets through and
+  // anything else is dropped to a plain, uncoded cancellation.
+  const code = bookings.isCustomerCancelReason(reasonCode) ? String(reasonCode) : "";
+  const label = code ? bookings.reasonLabel(code) : "";
+  const detail = String(reason || "").slice(0, 300).trim();
+  // The human sentence, assembled once so the customer's email, Patrick's
+  // alert and the booking history can't tell three versions of it.
+  const reasonText = [label, detail].filter(Boolean).join(" — ")
+    || "cancelled from the appointment page";
   await markResponded(booking.id, { via: "cancel", by: "customer" });
   const result = await cancelBooking(booking.id, {
-    reason: String(reason || "cancelled from the appointment page").slice(0, 300),
+    reason: reasonText,
+    reasonCode: code,
     by: "customer"
   });
   if (!result.ok) return { ok: false, status: result.status || 409, errors: result.errors };
-  return { ok: true, booking: result.booking, summary: summarize(result.booking, { now }) };
+  return {
+    ok: true,
+    booking: result.booking,
+    summary: summarize(result.booking, { now }),
+    reasonCode: code,
+    reasonLabel: label,
+    reasonText
+  };
 }
 
 // THE FREE BUCKET — Patrick's flexible pool. The customer is normally

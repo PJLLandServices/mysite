@@ -115,11 +115,17 @@
         <div class="ap-panel" id="cancelPanel" hidden>
           <h2>Cancel this appointment?</h2>
           <p class="ap-note">If your plans have just shifted, picking a different day keeps your spot on our route.</p>
-          <label class="ap-label">Anything we should know? (optional)
+          <button type="button" class="ap-btn ap-btn-outline" id="cancelToReschedule" hidden>Pick a different day instead</button>
+          <p class="ap-ask">Before you go &mdash; can you tell us why? It's one tap, and it tells us whether to check back with you next season.</p>
+          <!-- Filled from the appointment summary: the reason words have
+               one home (server/lib/bookings.js) and the page never keeps
+               its own copy of them. -->
+          <div class="ap-choices" id="cancelReasons"></div>
+          <label class="ap-label">Anything else we should know? (optional)
             <textarea id="cancelReason" rows="2" maxlength="300"></textarea>
           </label>
           <div class="ap-actions">
-            <button type="button" class="ap-btn ap-btn-danger" id="cancelConfirm">Yes, cancel it</button>
+            <button type="button" class="ap-btn ap-btn-danger" id="cancelConfirm" disabled>Yes, cancel it</button>
             <button type="button" class="ap-btn ap-btn-quiet" id="cancelBack">Keep my appointment</button>
           </div>
         </div>
