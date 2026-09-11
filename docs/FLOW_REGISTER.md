@@ -429,6 +429,32 @@ load-bearing guards verified against broken code (holds not counted → 3 fail; 
 sweeper → 1 fail). No PASS flow touched — FLOW-03 gains a step, and `book.html` fails OPEN if
 the hold call itself errors, because reserve re-validates regardless.
 
+**2026-09-11 (The preview put every address at stop one):** Patrick, a minute after first using
+it: "It seems like the address that it's previewing for the day will only select as stop one.
+Where I want to to filter in where it's most capable of."
+
+**A second implementation of the day, which is the exact thing the endpoint's own comment warned
+against.** The map draws the day from `/api/schedule/today`. The endpoint measured the insertion
+point against a list it derived itself from `activeBookings()`. Two lists, two orders, and an
+index measured against one applied to the other — and where the two disagreed about which rows
+the day even holds (work-order rows and property-first bookings reach the day sheet by a path the
+booking union does not), the derived list came back short or empty, `addedDriveMinutes` answered
+`position: 0`, and every address landed at the front of the route.
+
+The refusal to accept stops from the caller was the cause, and it was reasoning applied in the
+wrong place: nothing here is written, gated or booked, so the worst a caller can do by lying about
+its own preview is mislead itself. The caller already holds the real day in driving order, because
+it just fetched it to draw it. It sends that now, and the pin lands where the measurement says.
+
+Also switched to `{ exact: true }` for days up to twelve stops. Cheapest insertion normally ranks
+gaps by straight line and measures only the winner — right for an engine scoring a season, wrong
+for one preview on demand, where the difference is "slots in at 3" against "hangs off the end".
+
+Coverage: `scripts/test-day-preview.mjs` 29 → 31, with the earlier assertion **reversed on
+purpose** — it used to pin that the caller could NOT supply the day, and that assertion was
+protecting the bug. Verified against the broken code (3 fail). The load-bearing one now bans
+`activeBookings()` from the handler outright, so the second implementation cannot come back.
+
 **2026-09-11 (Half of this only ever ran on one operating system):** Patrick, after being sent
 looking for a folder with Mac commands: "theres literally nothing" — followed by a screenshot of
 **Windows PowerShell** at `C:\Users\patri>`, and then: "you said i didn't need to go n my mac."

@@ -192,14 +192,42 @@ check('the preview endpoint is staff-only, not on a public booking path', () => 
   assert.match(SERVER, /pathname\.startsWith\("\/api\/schedule\/"\)\) return "user"/);
 });
 
-check('it measures the day server-side, not from stops the caller sends', () => {
-  // Otherwise a preview can be talked into flattering arithmetic by its
-  // own client, which is the one thing this screen must not do.
+check('it measures against the stops the map is drawing, in that order', () => {
+  // REVERSED ON 2026-09-11, and the reversal is the fix. This first
+  // derived its own list from activeBookings() so a client could not
+  // supply one. That looked careful and was wrong: the derived list was
+  // in a different order from the day the map draws, so an insertion
+  // index measured against one was applied to the other — and when the
+  // two sources disagreed about which rows the day had, the list came
+  // back short and every address landed at position 0. Patrick, within a
+  // minute of looking: "it will only select as stop one".
+  //
+  // Nothing is written, gated or booked on these coordinates. The worst
+  // a caller can do by lying is mislead itself about its own preview.
   const start = SERVER.indexOf('pathname === "/api/schedule/preview-stop"');
   assert.ok(start > 0, 'the preview endpoint is gone');
-  const body = SERVER.slice(start, start + 4200);
-  assert.match(body, /await activeBookings\(\)/);
-  assert.doesNotMatch(body, /payload\?\.stops|payload\.stops/, 'the caller can supply the day');
+  const body = SERVER.slice(start, start + 5200);
+  assert.match(body, /payload\?\.stops/, 'the endpoint no longer takes the drawn day');
+  assert.doesNotMatch(body, /await activeBookings\(\)/,
+    'the endpoint derives its own day again — that is the bug that put everything at stop one');
+});
+
+check('the map sends the very rows it is about to draw', () => {
+  // The two must be the same list or the index means nothing.
+  assert.match(MAP, /async function previewCandidate\(date, rows\)/);
+  assert.match(MAP, /previewCandidate\(date, rows\)/);
+  const fn = MAP.slice(MAP.indexOf('async function previewCandidate'), MAP.indexOf('async function draw()'));
+  assert.match(fn, /stops: stops/);
+  assert.match(fn, /row\.coords|row && row\.coords/);
+});
+
+check('the gaps are measured for real, not ranked by straight line', () => {
+  // One preview on demand can afford the exact answer, and the exact
+  // answer is the difference between "slots in at 3" and "hangs off the
+  // end".
+  const start = SERVER.indexOf('pathname === "/api/schedule/preview-stop"');
+  const body = SERVER.slice(start, start + 5200);
+  assert.match(body, /exact:/);
 });
 
 check('it books, holds and writes nothing', () => {
