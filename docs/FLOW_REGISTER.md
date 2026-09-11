@@ -19,6 +19,32 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-10, same day (Two half-days, not two half-days and a leftovers pile):** Patrick, looking
+at a route day: *"lets just display this as 'Morning Appointments' and 'Afternoon Appointments' …
+if you take a look at the Left Side, it shows 0/10 +1 … Just place 1/10 if there is 1 appointment,
+don't bother with the +1."*
+Two symptoms, one cause: the screen drew a line between stops the plan seeded and appointments
+customers booked themselves, and **that line exists nowhere else in the system**. The day's stops
+were two half-day blocks plus a third "Booked appointments" block holding every customer booking
+regardless of when in the day it fell — so a 9am booking sat below the afternoon plan and the
+morning looked emptier than it was — and the rail read `0/10 +1`, planned over the cap with
+bookings tacked on afterwards. The availability engine has always counted them together
+(`planned.count + extraBooked + incoming > shape.bucketCap`), so a day reading `0/10 +1` was a day
+the engine already considered to hold one job.
+Now: two blocks, **Morning Appointments** and **Afternoon Appointments**, each holding both kinds in
+driving order (both carry the shared sequencer's stop number, so a booked customer reads as "stop 2
+on this morning" rather than a floating extra), each counting one load against one cap. The rail,
+the stops header, the over-capacity styling and the fill bar all read that same single number. The
+COLOUR still says which is which — amber for customer-booked, green for allocated — which is the
+part that already worked and is untouched.
+A latent crash came out with it: the old `bucketBlock` read `day[bucket].length` unguarded and threw
+on a booking-only day, masked only because `renderStops` skipped it for exactly those days. The new
+block handles it, and the suite pins it.
+Coverage: `scripts/test-season-plan-buckets.mjs`, 17 assertions, in `build:check` — the function is
+lifted out of the shipped page source and run against a stub DOM (the `test-app-shell` pattern), so
+what is asserted is the real renderer. Verified against the old display: **14 fail**. No PASS flow
+touched; display only, no engine change.
+
 **2026-09-10, same day (Schedule the blast instead of standing over it):** Patrick, after the send
 window had closed on him twice in one day: *"can we just do a scheduled send instead?"*
 **The pairing that failed:** the blast is the one cadence step that waits for a human to press a

@@ -375,81 +375,95 @@
     return select;
   }
 
+  // A half-day: everything happening in it, planned and customer-booked
+  // alike.
+  //
+  // Patrick, 2026-09-10: "lets just display this as 'Morning Appointments'
+  // and 'Afternoon Appointments'. Personally booked Appointments are
+  // Orange, and our allocated appointments are Green. I am good with
+  // that."
+  //
+  // They used to be two separate lists — the two half-days, then a
+  // "Booked appointments" block underneath holding every customer booking
+  // regardless of when in the day it fell. That put a 9am booking below
+  // the afternoon plan and made the morning look emptier than it was. The
+  // COLOUR already says which is which, so the heading does not need to;
+  // what the heading needs to say is WHEN.
   function bucketBlock(day, bucket) {
-    const stops = day[bucket];
+    const stops = day[bucket] || [];
+    const booked = (day.booked || []).filter((b) => b.bucket === bucket);
     const wrap = document.createElement("div");
     wrap.className = "sp-bucket";
 
     const head = document.createElement("h4");
     head.className = "sp-bucket-head";
-    const over = stops.length > current.bucketCap;
-    head.innerHTML = `<span>${bucket === "morning" ? "Morning" : "Afternoon"}</span>`;
+    const load = stops.length + booked.length;
+    const over = load > current.bucketCap;
+    head.innerHTML = `<span>${bucket === "morning" ? "Morning" : "Afternoon"} Appointments</span>`;
     const count = document.createElement("span");
     count.className = `sp-count${over ? " is-over" : ""}`;
-    count.textContent = `${stops.length} / ${current.bucketCap}`;
+    // Planned and booked count against ONE cap — that is how the
+    // availability engine has always counted them.
+    count.textContent = `${load} / ${current.bucketCap}`;
     head.appendChild(count);
     wrap.appendChild(head);
 
-    if (!stops.length) {
+    if (!load) {
       const none = document.createElement("p");
       none.className = "sp-bucket-empty";
       none.textContent = "Open — room for standby or a new customer.";
       wrap.appendChild(none);
       return wrap;
     }
+
     const list = document.createElement("ul");
     list.className = "sp-stops";
     const arrivals = new Map((day.timeline || []).map((t) => [t.propertyCode, t]));
-    stops.forEach((stop) => list.appendChild(stopRow(stop, day.date, bucket, arrivals.get(stop.code))));
+    // One list in DRIVING order. Both kinds carry the stop number the
+    // shared sequencer gave them, so a booked customer reads as "stop 3
+    // on this morning" rather than as a floating extra.
+    const rows = [
+      ...stops.map((stop) => ({ n: stop.stopNumber, el: () => stopRow(stop, day.date, bucket, arrivals.get(stop.code)) })),
+      ...booked.map((b) => ({ n: b.stopNumber, el: () => bookedRow(b) }))
+    ].sort((a, b) => (a.n == null ? 1e9 : a.n) - (b.n == null ? 1e9 : b.n));
+    rows.forEach((r) => list.appendChild(r.el()));
     wrap.appendChild(list);
     return wrap;
   }
 
-  // Real bookings on this date — self-booked ad customers, follow-ups,
-  // anything on the calendar the plan did not seed. Shown so the screen
-  // matches what the trucks will actually do; changing one is a
+  // One customer-booked appointment, as a row. Self-booked ad customers,
+  // follow-ups, anything on the calendar the plan did not seed — shown so
+  // the screen matches what the trucks will actually do. Changing one is a
   // reschedule of the CUSTOMER's appointment, so the row links to the
   // record where that control lives.
-  function bookedBlock(day) {
-    const wrap = document.createElement("div");
-    wrap.className = "sp-bucket";
-    const head = document.createElement("h4");
-    head.className = "sp-bucket-head";
-    head.innerHTML = "<span>Booked appointments</span>";
-    const count = document.createElement("span");
-    count.className = "sp-count is-booked";
-    count.textContent = String(day.booked.length);
-    head.appendChild(count);
-    wrap.appendChild(head);
-    const list = document.createElement("ul");
-    list.className = "sp-stops";
-    for (const b of day.booked) {
+  //
+  // It used to be wrapped in a "Booked appointments" block of its own;
+  // now it sits in its own half-day beside the planned stops, told apart
+  // by colour (amber) and by the `booked` tag.
+  function bookedRow(b) {
       const li = document.createElement("li");
-      li.className = "sp-stop sp-stop-booked";
-      // The row's code is the sequencer mapCode so hovering it lights its
-      // numbered pin, exactly like a plan stop.
-      if (b.mapCode) li.dataset.code = b.mapCode;
-      const url = b.propertyId ? `/admin/property/${encodeURIComponent(b.propertyId)}`
-        : b.leadId ? `/admin/customer/${encodeURIComponent(b.leadId)}` : null;
-      const who = escapeHtml(b.customerName || b.address || "Booked customer");
-      // The stop number (from the shared drive order) leads the row, so a
-      // booked appointment reads as "stop 3 on today's route", not a
-      // floating amber dot. Un-numbered = no coordinates to route.
-      const numBadge = b.stopNumber
-        ? `<span class="sp-stop-num sp-stop-num-booked">${b.stopNumber}</span>`
-        : "";
-      li.innerHTML =
-        `<span class="sp-stop-lead">${numBadge}`
-        + `<span class="sp-booked-time">${escapeHtml(b.timeLabel || "")}</span></span>`
-        + `<span class="sp-stop-main">`
-        + (url ? `<a href="${url}" target="_blank" rel="noopener">${who}</a>` : who)
-        + `<span class="sp-stop-sub">${escapeHtml(b.address || "")}${b.serviceLabel ? ` · ${escapeHtml(b.serviceLabel)}` : ""}</span>`
-        + `</span>`
-        + `<span class="sp-tag is-booked">booked</span>`;
-      list.appendChild(li);
-    }
-    wrap.appendChild(list);
-    return wrap;
+    li.className = "sp-stop sp-stop-booked";
+    // The row's code is the sequencer mapCode so hovering it lights its
+    // numbered pin, exactly like a plan stop.
+    if (b.mapCode) li.dataset.code = b.mapCode;
+    const url = b.propertyId ? `/admin/property/${encodeURIComponent(b.propertyId)}`
+      : b.leadId ? `/admin/customer/${encodeURIComponent(b.leadId)}` : null;
+    const who = escapeHtml(b.customerName || b.address || "Booked customer");
+    // The stop number (from the shared drive order) leads the row, so a
+    // booked appointment reads as "stop 3 on today's route", not a
+    // floating amber dot. Un-numbered = no coordinates to route.
+    const numBadge = b.stopNumber
+      ? `<span class="sp-stop-num sp-stop-num-booked">${b.stopNumber}</span>`
+      : "";
+    li.innerHTML =
+      `<span class="sp-stop-lead">${numBadge}`
+      + `<span class="sp-booked-time">${escapeHtml(b.timeLabel || "")}</span></span>`
+      + `<span class="sp-stop-main">`
+      + (url ? `<a href="${url}" target="_blank" rel="noopener">${who}</a>` : who)
+      + `<span class="sp-stop-sub">${escapeHtml(b.address || "")}${b.serviceLabel ? ` · ${escapeHtml(b.serviceLabel)}` : ""}</span>`
+      + `</span>`
+      + `<span class="sp-tag is-booked">booked</span>`;
+    return li;
   }
 
   // ---- The cockpit: rail · stage · stops (Patrick's mockup A) --------
@@ -485,15 +499,24 @@
     const cap = document.createElement("span");
     cap.className = "sp-railrow-cap";
     const count = document.createElement("span");
-    count.className = `sp-railrow-count${overruns || day.counts.total > current.dayCap ? " is-over" : ""}`;
-    count.innerHTML = day.bookedOnly
-      ? `<i class="is-bk">+${bookedN} booked</i>`
-      : `${day.counts.total}/${current.dayCap}${bookedN ? ` <i class="is-bk">+${bookedN}</i>` : ""}`;
+    count.className = `sp-railrow-count${overruns || (day.counts.total + bookedN) > current.dayCap ? " is-over" : ""}`;
+    // Patrick, 2026-09-10: "Just place 1/10 if there is 1 appointment,
+    // don't bother with the +1 for a personally booked appointment."
+    //
+    // It used to read "0/10 +1" — planned stops over the cap, with
+    // customer bookings tacked on as a separate afterthought. That split
+    // is an implementation detail leaking onto the screen: the engine has
+    // ALWAYS counted planned + booked against the same cap (see
+    // availability.js, `planned.count + extraBooked + incoming`), so the
+    // rail was the only place in the system that pretended they were two
+    // different things. One number, the one the engine actually uses.
+    const dayLoad = day.counts.total + bookedN;
+    count.innerHTML = `${dayLoad}/${current.dayCap}`;
     cap.appendChild(count);
     const fill = document.createElement("span");
-    fill.className = `sp-railrow-fill${overruns || day.counts.total > current.dayCap ? " is-over" : ""}${day.bookedOnly ? " is-bk" : ""}`;
-    const pct = Math.min(100, Math.round(((day.counts.total + bookedN) / (current.dayCap || 10)) * 100));
-    fill.innerHTML = `<i style="width:${Math.max(pct, day.bookedOnly || day.counts.total ? 8 : 0)}%"></i>`;
+    fill.className = `sp-railrow-fill${overruns || (day.counts.total + bookedN) > current.dayCap ? " is-over" : ""}${day.bookedOnly ? " is-bk" : ""}`;
+    const pct = Math.min(100, Math.round((dayLoad / (current.dayCap || 10)) * 100));
+    fill.innerHTML = `<i style="width:${Math.max(pct, dayLoad ? 8 : 0)}%"></i>`;
     cap.appendChild(fill);
     row.appendChild(cap);
 
@@ -595,16 +618,16 @@
   function renderStops(day) {
     const bookedN = (day.booked || []).length;
     const firstArrival = (day.timeline || [])[0];
-    stopsHead.textContent = (day.bookedOnly
-      ? `${bookedN} booked appointment${bookedN === 1 ? "" : "s"}`
-      : `${day.counts.total} stop${day.counts.total === 1 ? "" : "s"}${bookedN ? ` + ${bookedN} booked` : ""}`)
+    // One total, planned and booked together — the same number the rail
+    // shows and the same one the engine counts against the cap.
+    const dayLoad = day.counts.total + bookedN;
+    stopsHead.textContent = `${dayLoad} appointment${dayLoad === 1 ? "" : "s"}`
       + (firstArrival && day.homeAt ? ` · ${firstArrival.arriveAt} – ${day.homeAt}` : "");
     stopsPane.innerHTML = "";
-    if (!day.bookedOnly) {
-      stopsPane.appendChild(bucketBlock(day, "morning"));
-      stopsPane.appendChild(bucketBlock(day, "afternoon"));
-    }
-    if (bookedN) stopsPane.appendChild(bookedBlock(day));
+    // Both half-days, always — a booking-only day has its bookings inside
+    // them now rather than in a block of its own.
+    stopsPane.appendChild(bucketBlock(day, "morning"));
+    stopsPane.appendChild(bucketBlock(day, "afternoon"));
   }
 
   // Select a day into the stage. One live map draw per selection — the
