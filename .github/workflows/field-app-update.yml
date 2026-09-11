@@ -39,6 +39,28 @@ on:
       - '.github/workflows/field-app-update.yml'
   # Publishing by hand, for a re-publish after a rollback or a rebuild.
   workflow_dispatch:
+    inputs:
+      # THE CHECK BELOW HAS A BLIND SPOT, and this is it.
+      #
+      # It asks EAS which builds exist. A build made in Xcode and run onto a
+      # phone over a cable is not one of them — EAS has never heard of it —
+      # so for anyone who builds locally the check refuses every publish
+      # forever, which is its own kind of silent failure.
+      #
+      # Patrick builds that way. On 2026-09-11 this blocked three merges'
+      # worth of work from a phone that was almost certainly listening on
+      # the right runtime the whole time.
+      #
+      # Ticking this says: I know a build is installed that this checkout
+      # publishes to, even though EAS cannot see it. The downside of being
+      # wrong is nil — Expo serves an update only to a matching runtime, so
+      # a mismatched one is simply never delivered and the phone keeps what
+      # it has. What it is NOT allowed to be is silent, so the run prints
+      # exactly how to tell within a minute whether it landed.
+      publish_to_local_build:
+        description: 'Publish even though EAS cannot see the installed build (a build made in Xcode)'
+        type: boolean
+        default: false
 
 # A newer merge supersedes an older one. Cancelling in flight is safe: an update
 # is a whole bundle, not an increment, so the last one to finish is the truth.
@@ -146,10 +168,29 @@ jobs:
           process.exit(1);
           JS
 
+          set +e
           npx eas-cli@23.2.0 build:list \
             --platform ios --status finished \
             --limit 20 --json --non-interactive \
             | UPDATE_RT="$update_rt" node "$RUNNER_TEMP/check-runtime.js"
+          verdict=$?
+          set -e
+
+          if [ "$verdict" -ne 0 ] && [ "${{ inputs.publish_to_local_build }}" = "true" ]; then
+            echo "::warning::No EAS build listens on $update_rt, and this run was asked to"
+            echo "::warning::publish anyway because the installed build was made in Xcode."
+            echo "::warning::EAS cannot see those, so its list proves nothing either way."
+            echo ""
+            echo "HOW TO TELL WHETHER THIS LANDED — do this, do not assume:"
+            echo "  1. Force-quit PJL Field on the phone and open it again."
+            echo "  2. Bottom of the Today tab."
+            echo "     \"App updated <time>\"     it worked."
+            echo "     \"shipped with the build\"  it did not - the installed build is"
+            echo "                                on a different runtime and needs a real"
+            echo "                                build through TestFlight."
+            exit 0
+          fi
+          exit "$verdict"
 
       - name: Publish the update
         working-directory: pjl-field
