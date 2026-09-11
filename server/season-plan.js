@@ -1543,6 +1543,41 @@
   // The status line, the blast button's own state, and the record of the
   // last attempt — all from one read, so the screen can never say one
   // thing while the server would do another.
+  // Schedule instead of stand over it. Same two-press arming as the send
+  // itself — this IS the send, decided earlier — and the same button
+  // cancels it while it is still pending.
+  armTwice(el("scheduleBlastBtn"), "Press again to SCHEDULE the blast", async () => {
+    const out = el("preflightOut");
+    const button = el("scheduleBlastBtn");
+    const cancelling = button.dataset.mode === "cancel";
+    button.disabled = true;
+    out.hidden = false;
+    out.textContent = cancelling ? "Cancelling…" : "Scheduling…";
+    try {
+      const response = await fetch(
+        `/api/assignments/${seasonSelect.value}/${yearSelect.value}/blast/schedule`,
+        { method: cancelling ? "DELETE" : "POST" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't schedule the blast."]).join(" "));
+      out.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "sp-preflight-summary";
+      p.textContent = cancelling
+        ? "Scheduled blast cancelled — nothing will go out on its own."
+        : `Blast scheduled. ${data.note || ""}`.trim();
+      out.appendChild(p);
+    } catch (error) {
+      out.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "sp-preflight-bad";
+      p.textContent = error.message;
+      out.appendChild(p);
+    } finally {
+      button.disabled = false;
+      loadCadenceStatus();
+    }
+  });
+
   async function loadCadenceStatus() {
     const line = el("cadenceStatus");
     const button = el("blastBtn");
@@ -1582,15 +1617,38 @@
       }
       line.textContent = bits.join(" · ");
 
+      // A scheduled blast is the most important thing on this panel when
+      // one is pending: it says what is ABOUT to happen without anybody
+      // pressing anything.
+      if (data.armed) {
+        const armedWhen = new Date(data.armed.at).toLocaleString("en-CA",
+          { weekday: "short", hour: "numeric", minute: "2-digit" });
+        bits.unshift(`SCHEDULED — armed ${armedWhen} by ${data.armed.by}`
+          + `, goes out ${data.canSendNow ? "within five minutes" : "when sending opens"}`);
+        line.textContent = bits.join(" · ");
+      }
+
       // Say it on the button too. Arming a send the server will refuse is
       // how a whole day got lost.
       if (button) {
-        const blocked = !data.canSendNow || !data.appointmentPageReady || !s.bookings;
+        const blocked = !data.canSendNow || !data.appointmentPageReady || !s.bookings || Boolean(data.armed);
         button.disabled = blocked;
-        button.title = blocked
-          ? (data.sendWindowNote
-            || (!s.bookings ? "Nothing assigned yet — run Assign first." : "Sending is locked."))
-          : "";
+        button.title = data.armed
+          ? "A blast is already scheduled — cancel it first to send by hand."
+          : blocked
+            ? (data.sendWindowNote
+              || (!s.bookings ? "Nothing assigned yet — run Assign first." : "Sending is locked."))
+            : "";
+      }
+
+      const schedule = el("scheduleBlastBtn");
+      if (schedule) {
+        schedule.dataset.mode = data.armed ? "cancel" : "arm";
+        schedule.textContent = data.armed ? "Cancel the scheduled blast" : "Schedule the blast";
+        schedule.disabled = !data.appointmentPageReady || !s.bookings;
+        schedule.title = !s.bookings
+          ? "Nothing assigned yet — run Assign first."
+          : data.armed ? "" : "Send it automatically the moment the window opens.";
       }
     } catch {
       line.hidden = false;

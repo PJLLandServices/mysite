@@ -19,6 +19,28 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-10, same day (Schedule the blast instead of standing over it):** Patrick, after the send
+window had closed on him twice in one day: *"can we just do a scheduled send instead?"*
+**The pairing that failed:** the blast is the one cadence step that waits for a human to press a
+button, and the button only works inside a nine-hour window. He pressed it at 7am and was refused;
+by the time the reason was found it was past close. Nothing about the SEND needs him present — the
+wording is approved, the recipients are assigned. What needs him is the DECISION.
+So arming IS the decision, and the sweep that already dispatches steps 2–6 does the sending: it runs
+every five minutes, refuses outside the window, honours the appointment-page interlock and the send
+lock. A scheduled blast is that same machinery asked one question earlier — no new scheduler, no
+second send path. `POST/DELETE /api/assignments/:season/:year/blast/schedule` (admin) arms and
+cancels; armed state lives in the same ledger as the attempts, so *what is about to happen* and
+*what happened* are read from one place.
+**The property that matters most is that it fires ONCE.** The sweep runs every five minutes, so an
+arming that survived a half-failed send would message every customer again on the next tick. It is
+**disarmed before the send**, making the worst case a send that must be re-armed — never a second
+copy in a customer's inbox. `blast()` is itself idempotent per booking (rule 1 marks before it
+sends), so that trade is the safe one.
+Coverage: `scripts/test-blast-scheduled.mjs`, 21 assertions, in `build:check` — including the
+five-minutes-later sweep sending nothing, the interlock and window both holding an armed blast
+without consuming it, cancellation, and per-season isolation. Verified against the old code. No PASS
+flow touched.
+
 **2026-09-10, same day (Opened but never answered):** Patrick, on the blast: *"how do we
 confirm things got sent, and how do we track who's seen it, and what they have done?"* Sent and
 done were both already tracked — per booking, which of the six steps went out and when, and every

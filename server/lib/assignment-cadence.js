@@ -139,6 +139,80 @@ async function recordBlastAttempt(season, year, entry) {
   }
 }
 
+// ---- Arming the blast ------------------------------------------------
+//
+// Patrick, 2026-09-10, after the window had closed on him twice in one
+// day: "can we just do a scheduled send instead?"
+//
+// The blast is the one step that waits for a human to press a button, and
+// the button only works inside a nine-hour window. That is a bad pairing:
+// he pressed it at 7am (refused), worked out why, and by then it was past
+// close. Nothing about the SEND needs him present — the wording is
+// already approved, the recipients are already assigned. What needs him
+// is the DECISION to send.
+//
+// So arming is the decision, and the sweep that already dispatches steps
+// 2–6 does the sending. It already runs every five minutes, already
+// refuses outside the window, already honours the appointment-page
+// interlock and the send lock. A scheduled blast is the same machinery
+// asked one question earlier.
+//
+// Armed state lives in the same ledger as the attempts, so "what is going
+// to happen" and "what happened" are read from one place.
+async function armBlast(season, year, { by = "patrick", now = new Date() } = {}) {
+  const log = await readBlastLog();
+  const key = `${season}-${Number(year)}`;
+  const entry = log[key] || {};
+  entry.armed = { at: now.toISOString(), by };
+  log[key] = entry;
+  await fs.mkdir(path.dirname(BLAST_LOG), { recursive: true });
+  await writeJsonAtomic(BLAST_LOG, log);
+  return entry.armed;
+}
+
+async function disarmBlast(season, year, { by = "patrick", reason = "cancelled" } = {}) {
+  const log = await readBlastLog();
+  const key = `${season}-${Number(year)}`;
+  const entry = log[key];
+  if (!entry?.armed) return null;
+  const was = entry.armed;
+  delete entry.armed;
+  entry.lastDisarm = { at: new Date().toISOString(), by, reason, armedAt: was.at };
+  log[key] = entry;
+  await writeJsonAtomic(BLAST_LOG, log);
+  return was;
+}
+
+async function armedBlastFor(season, year) {
+  const log = await readBlastLog();
+  return log[`${season}-${Number(year)}`]?.armed || null;
+}
+
+// Called by the sweep. Fires an armed blast the moment the window opens,
+// and DISARMS FIRST: if the send throws halfway, the arming must not
+// survive to fire again on the next five-minute tick and message
+// everyone twice. blast() is itself idempotent per booking (rule 1 marks
+// before it sends), so the cost of disarming first is at worst a send
+// that has to be re-armed — never a second copy in a customer's inbox.
+async function runArmedBlast(season, year, { deps = {}, now = new Date(), appointmentPageReady = false } = {}) {
+  const armed = await armedBlastFor(season, year);
+  if (!armed) return { ok: true, armed: false };
+  if (!appointmentPageReady) return { ok: true, armed: true, waiting: "appointment_page" };
+  if (!insideSendWindow(now)) return { ok: true, armed: true, waiting: "send_window" };
+  if (sendInProgress) return { ok: true, armed: true, waiting: "send_lock" };
+
+  await disarmBlast(season, year, { by: "cadence-sweep", reason: "fired" });
+  try {
+    const result = await blast(season, year, {
+      deps, by: `${armed.by} (scheduled)`, now, appointmentPageReady
+    });
+    return { ok: true, armed: true, fired: true, ...result };
+  } catch (err) {
+    console.warn("[assignment-cadence] armed blast failed:", err?.message);
+    return { ok: false, armed: true, fired: false, error: err?.message };
+  }
+}
+
 async function lastBlastFor(season, year) {
   const log = await readBlastLog();
   return log[`${season}-${Number(year)}`]?.last || null;
@@ -555,7 +629,8 @@ async function status(season, year, { deps = {} } = {}) {
     canSendNow: insideSendWindow(now),
     sendWindow: { fromHour: SEND_WINDOW.fromHour, toHour: SEND_WINDOW.toHour },
     sendWindowNote: sendWindowNote(now),
-    lastBlast: await lastBlastFor(season, year)
+    lastBlast: await lastBlastFor(season, year),
+    armed: await armedBlastFor(season, year)
   };
 }
 
@@ -572,6 +647,10 @@ module.exports = {
   insideSendWindow,
   sendWindowNote,
   lastBlastFor,
+  armBlast,
+  disarmBlast,
+  armedBlastFor,
+  runArmedBlast,
   appointmentLinkFor,
   cadenceGates
 };

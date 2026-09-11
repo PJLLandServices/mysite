@@ -23785,6 +23785,36 @@ async function orderDayForDriving(rows) {
     }
   }
 
+  // Schedule the blast instead of standing over it. Arming is the
+  // decision; the five-minute cadence sweep does the sending the moment
+  // the window opens. Admin-gated exactly like pressing it by hand,
+  // because it IS pressing it by hand — just earlier.
+  const armMatch = pathname.match(/^\/api\/assignments\/(spring|fall)\/(\d{4})\/blast\/schedule$/);
+  if (armMatch && (req.method === "POST" || req.method === "DELETE")) {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) {
+        return sendJson(res, 403, { ok: false, errors: ["Scheduling the blast needs an admin login."] });
+      }
+      const who = session?.email || session?.name || "admin";
+      const season = armMatch[1];
+      const year = Number(armMatch[2]);
+      if (req.method === "DELETE") {
+        const was = await assignmentCadence.disarmBlast(season, year, { by: who });
+        return sendJson(res, 200, { ok: true, cancelled: Boolean(was), was });
+      }
+      const armed = await assignmentCadence.armBlast(season, year, { by: who });
+      return sendJson(res, 200, {
+        ok: true,
+        armed,
+        note: assignmentCadence.sendWindowNote(new Date())
+          || "Sending is open now — it will go out within five minutes."
+      });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't schedule the blast."] });
+    }
+  }
+
   const cadenceStatusMatch = pathname.match(/^\/api\/assignments\/(spring|fall)\/(\d{4})\/cadence-status$/);
   if (cadenceStatusMatch && req.method === "GET") {
     try {
@@ -25771,6 +25801,16 @@ server.listen(PORT, HOST, () => {
     try {
       const y = new Date().getFullYear();
       for (const season of ["spring", "fall"]) {
+        // A scheduled blast goes first: step 1 has to precede steps 2–6,
+        // and the moment the window opens is the moment it should land.
+        const armedRun = await assignmentCadence.runArmedBlast(season, y, {
+          appointmentPageReady: APPOINTMENT_PAGE_READY
+        });
+        if (armedRun?.fired) {
+          console.log(`[assignment-cadence] ${season} ${y}: SCHEDULED BLAST fired —`
+            + ` ${armedRun.blasted} messaged, ${armedRun.alreadyBlasted} already,`
+            + ` ${armedRun.skipped?.length ?? 0} skipped, ${armedRun.errors?.length ?? 0} errors`);
+        }
         const result = await assignmentCadence.sweepDue(season, y, {
           appointmentPageReady: APPOINTMENT_PAGE_READY
         });
