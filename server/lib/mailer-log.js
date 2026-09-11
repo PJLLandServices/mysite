@@ -135,6 +135,98 @@ function logSend({ kind, to, ok, error, refId } = {}) {
   return writeChain;
 }
 
+// ---- Outstanding failures ---------------------------------------------
+//
+// A failure is OUTSTANDING when nothing has gone through SINCE, to the same
+// recipient, about the same thing. Anything else is history: a bad address
+// that later succeeded, or a retry that worked.
+//
+// Defined once, here, because two readers need the same answer and must
+// never disagree — the panel that counts them and the resend that acts on
+// them. A resend driven by a stale list is how a customer gets the same
+// email twice.
+//
+// WHY THIS EXISTS. 2026-09-11: Patrick changed his Google account password,
+// which silently revoked the app password every outbound email in this
+// system shares. 56 sends died on authentication in an hour — customer
+// cancellation confirmations among them. Nothing retries and nothing
+// queues, so this ledger was the only record those messages had ever been
+// attempted. It is now also the way to put them right.
+function outstandingKey(entry) {
+  return [
+    entry.kind,
+    entry.refId || "",
+    String(entry.to || "").trim().toLowerCase()
+  ].join("|");
+}
+
+// A stable name for one ledger entry, so the panel can hand the server back
+// exactly the failure a human picked. The timestamp is the entry's identity
+// (the ledger is append-only and one entry is written per attempt); the key
+// rides along so a tampered id can't point at a different message.
+function failureId(entry) {
+  return `${entry.ts}|${outstandingKey(entry)}`;
+}
+
+// The kinds a resend can faithfully REBUILD from a record that still
+// exists. Deliberately short, and everything left out is left out for a
+// reason rather than for now:
+//   magic_link  — a fresh link is a new credential with a new expiry.
+//                 Re-issuing one because an old send failed hands out a
+//                 login by way of an error log. The customer asks again.
+//   outreach    — a campaign step owned by the cadence, not by this
+//                 ledger. Resending one here would double-message someone
+//                 whose step the cadence still considers spent.
+//   invoice / receipt / completion / stage_notice / review_ask /
+//   portal_reply / supplier / other
+//               — each is generated inside its own flow with context this
+//                 ledger doesn't keep. They are listed for a human with
+//                 the full address and error, which is the honest answer
+//                 rather than a rebuild that quietly says something else.
+const RESENDABLE_KINDS = new Set(["booking_cancel", "lead_alert"]);
+
+// Failures still outstanding, newest first, one per thing (five failed
+// attempts at the same message are one problem, not five).
+//
+// Returns the REAL recipient — this is server-side data and the resend
+// needs it. Mask at the route.
+async function outstandingFailures({ sinceMs = 30 * 24 * 60 * 60 * 1000, now = Date.now() } = {}) {
+  const records = await readAll();
+  const cutoff = now - sinceMs;
+
+  // Latest success per key first, so one pass can answer "anything since?"
+  const lastOkByKey = new Map();
+  for (const r of records) {
+    if (!r.ok) continue;
+    const key = outstandingKey(r);
+    const prev = lastOkByKey.get(key);
+    if (!prev || r.ts > prev) lastOkByKey.set(key, r.ts);
+  }
+
+  const newestByKey = new Map();
+  for (const r of records) {
+    if (r.ok) continue;
+    if ((Date.parse(r.ts) || 0) < cutoff) continue;
+    const key = outstandingKey(r);
+    const okAt = lastOkByKey.get(key);
+    if (okAt && okAt > r.ts) continue;            // it went through later
+    const prev = newestByKey.get(key);
+    if (!prev || r.ts > prev.ts) newestByKey.set(key, r);
+  }
+
+  return [...newestByKey.values()]
+    .sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0))
+    .map((r) => ({
+      id: failureId(r),
+      ts: r.ts,
+      kind: r.kind,
+      to: r.to || "",
+      refId: r.refId || "",
+      error: r.error || "",
+      resendable: RESENDABLE_KINDS.has(r.kind)
+    }));
+}
+
 // Task 4 — aggregate view for /api/admin/email-health.
 // Returns last-7-day sent/failed counts by kind, the most recent 20
 // failures (masked recipient), and — per Patrick's 2026-08-03 ruling —
@@ -176,4 +268,8 @@ async function healthSummary() {
   return { last7d, recentFailures, lastSuccessAt, lastSuccessByKind };
 }
 
-module.exports = { logSend, healthSummary, maskRecipient, KINDS: [...KINDS], CUSTOMER_FACING: [...CUSTOMER_FACING] };
+module.exports = {
+  logSend, healthSummary, maskRecipient, outstandingFailures, failureId,
+  KINDS: [...KINDS], CUSTOMER_FACING: [...CUSTOMER_FACING],
+  RESENDABLE_KINDS: [...RESENDABLE_KINDS]
+};
