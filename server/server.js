@@ -4362,7 +4362,11 @@ const EMAIL_RESENDERS = {
     const outcome = await sendBookingCancellation(booking, {
       reason: booking.cancellationReason || "",
       notify: true,
-      baseUrl: resolvePublicBaseUrl()
+      baseUrl: resolvePublicBaseUrl(),
+      // The ledger entry this retry is making good, so the history says
+      // "sent again because the first attempt failed" rather than
+      // recording a second send with no explanation.
+      resendOf: failure.ts
     });
     if (outcome?.ok) return { ok: true, to: mailerLog.maskRecipient(booking.customerEmail || "") };
     return { ok: false, error: outcome?.reason || outcome?.error || "the send failed again" };
@@ -4375,7 +4379,7 @@ const EMAIL_RESENDERS = {
     const leads = await readLeads();
     const lead = leads.find((l) => l.id === failure.refId);
     if (!lead) return { ok: false, error: "that lead no longer exists" };
-    const outcome = await sendNewLeadEmail(lead, { baseUrl: resolvePublicBaseUrl() });
+    const outcome = await sendNewLeadEmail(lead, { resendOf: failure.ts });
     if (outcome?.ok) return { ok: true, to: mailerLog.maskRecipient(failure.to) };
     return { ok: false, error: outcome?.error || "the send failed again" };
   }
@@ -24067,6 +24071,44 @@ async function orderDayForDriving(rows) {
       });
     } catch (err) {
       return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't schedule the blast."] });
+    }
+  }
+
+  // POST /api/assignments/:season/:year/catch-up — send the messages the
+  // cadence attempted and never delivered.
+  //
+  // 2026-09-11: the app password died mid-campaign. The cadence marked its
+  // steps and every email failed on authentication, while the texts went
+  // out normally — so each of those customers is on record as having had
+  // their step, with only the SMS actually sent. The email was owed,
+  // knowable from the step record, and never going to be sent, because the
+  // sweep skips a step that is already marked.
+  //
+  // GET (dryRun) answers "who, and what do they still owe" without sending
+  // anything, so Patrick can look before he presses.
+  const catchUpMatch = pathname.match(/^\/api\/assignments\/(spring|fall)\/(\d{4})\/catch-up$/);
+  if (catchUpMatch && (req.method === "POST" || req.method === "GET")) {
+    try {
+      const season = catchUpMatch[1];
+      const year = Number(catchUpMatch[2]);
+      if (req.method === "GET") {
+        await requireUser(req);
+        const preview = await assignmentCadence.catchUpOwed(season, year, {
+          dryRun: true, appointmentPageReady: APPOINTMENT_PAGE_READY
+        });
+        return sendJson(res, 200, { ...preview, appointmentPageReady: APPOINTMENT_PAGE_READY });
+      }
+      const session = await requireAdmin(req);
+      if (!session) {
+        return sendJson(res, 403, { ok: false, errors: ["Sending the catch-up needs an admin login."] });
+      }
+      const who = session?.email || session?.name || "admin";
+      const result = await assignmentCadence.catchUpOwed(season, year, {
+        by: who, appointmentPageReady: APPOINTMENT_PAGE_READY
+      });
+      return sendJson(res, 200, result);
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't send the catch-up."] });
     }
   }
 

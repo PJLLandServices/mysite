@@ -1601,6 +1601,41 @@
     }
   });
 
+  // Send what the cadence owes. Two presses like every other send on this
+  // panel — it puts real messages in front of real customers.
+  armTwice(el("catchUpBtn"), "Press again to SEND the missed messages", async () => {
+    const out = el("preflightOut");
+    const button = el("catchUpBtn");
+    button.disabled = true;
+    out.hidden = false;
+    out.textContent = "Sending the messages that never went out…";
+    try {
+      const response = await fetch(
+        `/api/assignments/${seasonSelect.value}/${yearSelect.value}/catch-up`,
+        { method: "POST" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        throw new Error((data.errors || [data.note || "Couldn't send the catch-up."]).join(" "));
+      }
+      out.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "sp-preflight-summary";
+      const failed = (data.results || []).filter((r) => !r.sent.length).length;
+      p.textContent = `${data.sent} of ${data.owed} sent`
+        + (failed ? `, ${failed} still failing — check Admin → Email health.` : ".");
+      out.appendChild(p);
+    } catch (error) {
+      out.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "sp-preflight-bad";
+      p.textContent = error.message;
+      out.appendChild(p);
+    } finally {
+      button.disabled = false;
+      loadCadenceStatus();
+    }
+  });
+
   async function loadCadenceStatus() {
     const line = el("cadenceStatus");
     const button = el("blastBtn");
@@ -1662,6 +1697,23 @@
             ? (data.sendWindowNote
               || (!s.bookings ? "Nothing assigned yet — run Assign first." : "Sending is locked."))
             : "";
+      }
+
+      // What never went out. A number nobody could see until now: the
+      // cadence marked these steps and the mailer refused them, so the
+      // sweep considers them done and will never try again. The button
+      // appears only when something is actually owed.
+      const catchUp = el("catchUpBtn");
+      if (catchUp) {
+        const owed = Number(s.owed) || 0;
+        catchUp.hidden = owed === 0;
+        catchUp.textContent = `Send ${owed} message${owed === 1 ? "" : "s"} that never went out`;
+        catchUp.disabled = !data.canSendNow || !data.appointmentPageReady;
+        catchUp.title = !data.appointmentPageReady
+          ? "Sending is locked until the appointment page is live."
+          : (data.sendWindowNote || "");
+        if (owed) bits.push(`${owed} never went out`);
+        line.textContent = bits.join(" · ");
       }
 
       const schedule = el("scheduleBlastBtn");

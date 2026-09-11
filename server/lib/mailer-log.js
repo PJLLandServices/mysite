@@ -114,7 +114,7 @@ async function maybeAlert(records) {
 // ---- Public API -------------------------------------------------------
 
 // Record one send attempt. Never throws, never rejects.
-function logSend({ kind, to, ok, error, refId } = {}) {
+function logSend({ kind, to, ok, error, refId, resendOf } = {}) {
   const entry = {
     ts: new Date().toISOString(),
     kind: KINDS.has(kind) ? kind : "other",
@@ -123,6 +123,11 @@ function logSend({ kind, to, ok, error, refId } = {}) {
   };
   if (!entry.ok && error) entry.error = String(error).slice(0, 500);
   if (refId) entry.refId = String(refId);
+  // A resend says so, and names the attempt it is making good. Without
+  // this the ledger records a second send and nothing distinguishes it
+  // from an ordinary one — "why did this customer get two?" would have no
+  // answer in the only place that keeps the history.
+  if (resendOf) entry.resendOf = String(resendOf);
 
   writeChain = writeChain.then(async () => {
     const records = prune(await readAll());
