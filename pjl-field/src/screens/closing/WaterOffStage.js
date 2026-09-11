@@ -14,7 +14,7 @@ import { colors, radius, space, type } from '../../theme';
 import { pickPhoto, takePhoto } from '../../photos';
 import { Button, ChoiceRow, Section } from './parts';
 
-export default function WaterOffStage({ wo, save, saving, onNext }) {
+export default function WaterOffStage({ wo, save, saving, onNext, attachPhoto, photoUri }) {
   const [busy, setBusy] = useState(false);
   const photos = (wo?.photos || []).filter((p) => p.label === 'water_off');
 
@@ -23,8 +23,7 @@ export default function WaterOffStage({ wo, save, saving, onNext }) {
     try {
       const photo = await getter({ category: 'pre_work', label: 'water_off' });
       if (!photo) return;               // backed out — a normal outcome
-      const data = await uploadWoPhotos(wo.id, [photo]);
-      if (data?.workOrder) save({ photos: data.workOrder.photos });
+      await attachPhoto(photo);
     } catch (err) {
       Alert.alert("Photo didn't attach", err?.message || 'Try again.');
     } finally {
@@ -56,7 +55,7 @@ export default function WaterOffStage({ wo, save, saving, onNext }) {
             {photos.map((p) => (
               <Image
                 key={p.n}
-                source={{ uri: woPhotoUri(wo.id, p) }}
+                source={{ uri: photoUri(p) || woPhotoUri(wo.id, p) }}
                 style={styles.thumb}
                 resizeMode="cover"
               />

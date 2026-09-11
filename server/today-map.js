@@ -50,6 +50,14 @@
     return (row && (row.leadId || row.bookingId || (row.workOrder && row.workOrder.id) || row.start)) || "";
   }
 
+  // The preview splices in a row that is not a booking and therefore has
+  // none of the ids rowKey() looks for. It carries its own key instead.
+  // rowKey stays byte-for-byte the app's rule — test-today-map.mjs asserts
+  // that, and a preview must not be the reason it drifts.
+  function keyOf(row) {
+    return (row && row.previewKey) || rowKey(row);
+  }
+
   function isDone(row) {
     return !!(row && row.workOrder && row.workOrder.status === "completed");
   }
@@ -149,7 +157,7 @@
       var lng = coords ? num(coords.lng) : NaN;
       if (!isFinite(lat) || !isFinite(lng)) { skipped += 1; return; }
       stops.push({
-        key: rowKey(row),
+        key: keyOf(row),
         number: index + 1,
         coords: { lat: lat, lng: lng },
         done: isDone(row),
@@ -243,9 +251,50 @@
     }
   }
 
+  // "Show me the day with them in it."
+  //
+  // The preview asks the server only where the new stop goes — never for
+  // the day itself. The day below is the SAME fetch the real map makes, so
+  // a previewed Tuesday and a driven Tuesday cannot disagree about what is
+  // on it.
+  async function previewCandidate(date, rows) {
+    var address = param("address");
+    if (!address) return null;
+    // THE DAY AS DRAWN, IN DRIVING ORDER. The server used to derive its
+    // own list for this and the two disagreed — so an insertion index
+    // measured against one order was applied to another, and a short list
+    // put every address at stop one. These are the very rows about to be
+    // drawn, so the pin lands where the measurement says it does.
+    var stops = (rows || [])
+      .map(function (row) {
+        var c = row && row.coords;
+        var lat = c ? num(c.lat) : NaN;
+        var lng = c ? num(c.lng) : NaN;
+        return isFinite(lat) && isFinite(lng) ? { lat: lat, lng: lng } : null;
+      })
+      .filter(Boolean);
+    var response = await fetch("/api/schedule/preview-stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      cache: "no-store",
+      body: JSON.stringify({
+        address: address,
+        date: date,
+        stops: stops,
+        customerName: param("who"),
+        serviceLabel: param("service")
+      })
+    });
+    var data = await response.json();
+    if (!response.ok || !data.ok) throw new Error((data.errors || ["Could not place that address."])[0]);
+    return data;
+  }
+
   async function draw() {
     var date = param("date");
     var query = date ? "?date=" + encodeURIComponent(date) : "";
+    var previewing = param("preview") === "1";
 
     var rows;
     try {
@@ -259,6 +308,44 @@
     } catch (err) {
       note("Could not load the day.", true);
       return;
+    }
+
+    var previewKey = null;
+    var previewNote = "";
+    var previewBad = false;
+    if (previewing) {
+      var preview;
+      try {
+        preview = await previewCandidate(date, rows);
+      } catch (err) {
+        note(err.message || "Could not place that address.", true);
+        return;
+      }
+      if (!preview) {
+        note("No address to preview.", true);
+        return;
+      }
+      // An address we cannot place cannot be drawn, and a map quietly
+      // missing the expensive stop is the one way this screen could lie.
+      if (!preview.placed) {
+        previewNote = preview.keyConfigured === false
+          ? "The server has no Google Maps key, so this address cannot be placed on the map."
+          : "That address could not be placed, so the day below is WITHOUT it";
+        previewBad = true;
+      } else {
+        rows = rows.slice();
+        rows.splice(Math.min(preview.position, rows.length), 0, preview.candidate);
+        previewKey = preview.candidate.previewKey;
+        if (preview.stopsOnDay === 0) {
+          previewNote = "Nothing else is booked — this would be the only stop";
+        } else if (preview.worstLegMinutes != null) {
+          // The number cheapest-insertion cannot see. A day that crosses
+          // the city and comes back scores well on "minutes added" and
+          // badly here, which is the whole reason this screen exists.
+          previewNote = "Longest hop with this stop: " + preview.worstLegMinutes + " min";
+          previewBad = preview.worstLegMinutes >= 25;
+        }
+      }
     }
 
     var mapped = mappableStops(rows);
@@ -344,13 +431,18 @@
 
     state.map.fitBounds(bounds, 40);
 
+    // The orange ring the map already uses for "this is the one you are
+    // looking at". No new colour, and no new drawing code.
+    if (previewKey) focusStop(previewKey, false);
+
     var messages = [];
+    if (previewNote) messages.push(previewNote);
     if (mapped.skipped) {
       messages.push(mapped.skipped + (mapped.skipped === 1 ? " stop has" : " stops have") + " no map location");
     }
     if (path.length >= 2 && !isRoadLine(line.source)) messages.push("straight hops, not roads");
     if (path.length < 2) messages.push("no route line");
-    note(messages.join(" · "), false);
+    note(messages.join(" · "), previewBad);
 
     tellHost({ type: "ready", stops: mapped.stops.length, skipped: mapped.skipped });
   }

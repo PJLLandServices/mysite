@@ -41,6 +41,7 @@ import DayMap from './DayMap';
 import MonthSheet from './MonthSheet';
 import { colors, radius, space, type } from '../theme';
 import { runningVersionLabel } from '../updates';
+import { fieldDay } from '../offline/field';
 import { Pill, PickerSheet, PromptSheet } from '../ui';
 import { REMOVAL_REASONS, reasonByCode, removalLabel, removalNote } from '../removal-reasons';
 import { canAddStop, whereYouAre } from '../add-stop';
@@ -104,7 +105,7 @@ export default function TodayScreen({ onOpenWorkOrder, onAddStop, refreshToken =
 
   const load = useCallback(async (date) => {
     try {
-      const data = await getToday(date || undefined);
+      const data = await fieldDay(date || undefined);
       setPayload(data);
       if (!date && data?.date) {
         setServerToday(data.date);
@@ -417,6 +418,7 @@ export default function TodayScreen({ onOpenWorkOrder, onAddStop, refreshToken =
           <Text style={styles.count}>
             {bookings.length ? `${bookings.length} ${bookings.length === 1 ? 'job' : 'jobs'}` : 'Nothing booked'}
           </Text>
+          {payload?.offline ? <Text style={styles.count}>Saved schedule · offline · changes may be missing</Text> : null}
         </View>
         {/* A walk-up is not an admin act — the person it happens to is
             whoever is holding the phone on that street, which is usually

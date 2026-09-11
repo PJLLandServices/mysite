@@ -39,6 +39,7 @@ const sharp = require("sharp");
 const { sendNewLeadEmail, sendVoicemailEmail } = require("./lib/notify-email");
 const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms } = require("./lib/notify-sms");
 const testRecipients = require("./lib/test-recipients");
+const fieldPhotoUploads = require("./lib/field-photo-uploads");
 const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
 const voicemailStore = require("./lib/voicemail-store");
@@ -57,6 +58,7 @@ const bookingSessions = require("./lib/booking-sessions");
 const properties = require("./lib/properties");
 const seasonPlans = require("./lib/season-plans");
 const geoFilter = require("./lib/geo-filter");
+const dayPreview = require("./lib/day-preview");
 const resequence = require("./lib/resequence");
 const openBucket = require("./lib/open-bucket");
 const routeOriginLib = require("./lib/route-origin");
@@ -1405,7 +1407,7 @@ async function handleAuth(req, res, pathname) {
     } else if (session.role === "customer") {
       me = { id: session.uid, role: "customer" };
     }
-    return sendJson(res, 200, { ok: true, authenticated: true, role: session.role, user: me });
+    return sendJson(res, 200, { ok: true, authenticated: true, role: session.role, user: me, fieldOffline: { photoRetry: 1 } });
   }
 
   if (req.method === "POST" && pathname === "/api/login") {
@@ -2388,6 +2390,7 @@ function validatePhotos(rawPhotos, maxCount, opts = {}) {
       mediaType,
       ext,
       meta: {
+        ...(mode === "wo" && typeof p.clientUploadId === "string" ? { clientUploadId: p.clientUploadId } : {}),
         category: String(p.category || "general"),
         zoneNumber: Number.isFinite(Number(p.zoneNumber)) ? Number(p.zoneNumber) : null,
         issueId: typeof p.issueId === "string" ? p.issueId : null,
@@ -9472,6 +9475,10 @@ async function handleApi(req, res, pathname) {
       // when address changes those coords go stale and the iCal feed's
       // X-APPLE-STRUCTURED-LOCATION would point at the old pin.
       const before = await properties.get(id);
+      const propertyVersion = String(req.headers["if-match"] || "").replace(/^"|"$/g, "");
+      if (propertyVersion && before?.updatedAt && propertyVersion !== before.updatedAt) {
+        return sendJson(res, 409, { ok: false, error: "version_conflict", errors: ["This property was changed elsewhere. Your phone's correction is retained for review."] });
+      }
       const previousAddress = String(before?.address || "").trim();
       // Guard against the admin accidentally clobbering structural fields
       // (id, leadIds, customerEmail) — only allow profile / system edits.
@@ -19054,6 +19061,7 @@ async function handleApi(req, res, pathname) {
   if (woPhotosUploadMatch && req.method === "POST") {
     try {
       const id = decodeURIComponent(woPhotosUploadMatch[1]);
+      return await fieldPhotoUploads.run(id, async () => {
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
 
@@ -19063,12 +19071,16 @@ async function handleApi(req, res, pathname) {
       // field uploads can be straight-from-camera HEIC or customer PDFs.
       const payload = await parseRequestBody(req, { maxBytes: WO_UPLOAD_POST_MAX_BYTES });
       const existing = Array.isArray(wo.photos) ? wo.photos : [];
+      const freshPhotos = fieldPhotoUploads.newPhotos(payload.photos, existing);
+      if (Array.isArray(freshPhotos) && freshPhotos.length === 0 && payload.photos.length > 0) {
+        return sendJson(res, 200, { ok: true, workOrder: wo, added: [] });
+      }
       const remaining = MAX_PHOTOS_PER_WO - existing.length;
       if (remaining <= 0) {
         return sendJson(res, 422, { ok: false, errors: [`Work order already has the maximum ${MAX_PHOTOS_PER_WO} photos. Delete one before uploading more.`] });
       }
       let validated;
-      try { validated = validatePhotos(payload.photos, remaining, { mode: "wo" }); }
+      try { validated = validatePhotos(freshPhotos, remaining, { mode: "wo" }); }
       catch (err) { return sendJson(res, 422, { ok: false, errors: [err.message] }); }
 
       // Resolve the property code for the descriptive filename slug. When
@@ -19101,6 +19113,7 @@ async function handleApi(req, res, pathname) {
         });
       } catch (err) { console.warn("[wo-history] photo upload entry failed:", err?.message); }
       return sendJson(res, 201, { ok: true, workOrder: updated, added: newMeta });
+      });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't upload photos."] });
     }
@@ -22166,6 +22179,115 @@ async function orderDayForDriving(rows) {
       });
     } catch (err) {
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't draw that route."] });
+    }
+  }
+
+  // "Show me the day with them in it." — where a candidate address would
+  // land on a day, and what it costs.
+  //
+  // Patrick, 2026-09-11, after a booked day turned out to run Pickering to
+  // North York: "I want to temporarily see the whole day (WITH) that
+  // navigation map (actual drive line) inserted."
+  //
+  // THIS DOES NOT BUILD THE DAY. The map already fetches the real day from
+  // /api/schedule/today and draws it; asking a second endpoint for the same
+  // day would be a second implementation of "what is on this date", and the
+  // first time the two disagreed the preview would show a day nobody is
+  // driving. So this answers only the part the map cannot work out for
+  // itself: where the new stop goes, and what it does to the drive.
+  //
+  // The measurement is made SERVER-SIDE from the same date, not from stops
+  // the caller sends up, so a preview cannot be talked into flattering
+  // arithmetic by its own client.
+  //
+  // Nothing is booked, held or written. Staff-only by the /api/schedule/
+  // prefix, and it answers about a day the caller is already looking at.
+  if (req.method === "POST" && pathname === "/api/schedule/preview-stop") {
+    try {
+      const payload = await parseRequestBody(req, { maxBytes: 8_000 });
+      const address = normalizeString(payload?.address, 320);
+      const date = normalizeString(payload?.date, 10);
+      if (!address) return sendJson(res, 422, { ok: false, errors: ["An address is needed to preview it."] });
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return sendJson(res, 422, { ok: false, errors: ["A day is needed to preview against."] });
+      }
+
+      const geo = await geocode(address);
+      const coords = geo && geo.coords;
+      // An address we cannot place cannot be drawn. Saying so is the whole
+      // answer — a preview that silently omits the pin would show a day
+      // that looks fine because the expensive stop is invisible.
+      if (!geoFilter.coordsAreResolved(coords)) {
+        return sendJson(res, 200, {
+          ok: true,
+          placed: false,
+          reason: geo && geo.ok === false ? (geo.reason || "unknown") : "unresolved",
+          keyConfigured: geocodeIsConfigured(),
+          address: coords?.formattedAddress || address
+        });
+      }
+
+      // THE STOPS MUST BE THE ONES ON SCREEN, IN THE ORDER THEY ARE DRAWN.
+      //
+      // This first derived its own list from activeBookings(). That was
+      // wrong twice over and Patrick found it within a minute of looking:
+      // the list was built in a different order from the day the map
+      // draws, so an insertion index measured against one was applied to
+      // the other — and when the two sources disagreed about which rows
+      // the day even had, the list came back short or empty and every
+      // address landed at position 0. "It will only select as stop one"
+      // (2026-09-11).
+      //
+      // The caller has the real day, in driving order, because it just
+      // fetched it from /api/schedule/today to draw it. Measuring against
+      // anything else is the second implementation this file's own comment
+      // warns about.
+      //
+      // Yes, that means trusting coordinates the caller supplies. Nothing
+      // is written, gated or booked on them — the worst a caller can do
+      // with a lie here is mislead itself about its own preview. Being
+      // right about where the pin goes is worth more than being proof
+      // against a client fooling nobody but itself.
+      const sent = Array.isArray(payload?.stops) ? payload.stops : [];
+      const points = sent
+        .map((p) => ({ lat: Number(p?.lat), lng: Number(p?.lng) }))
+        .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng))
+        .slice(0, 30);
+
+      // Measure the gaps FOR REAL rather than ranking them by straight
+      // line. This is one preview on demand, not the availability engine
+      // scoring a whole season, so it can afford the exact answer — and
+      // the exact answer is the difference between "slots in at 3" and
+      // "hangs off the end".
+      const added = await geoFilter.addedDriveMinutes(coords, points, { exact: points.length <= 12 });
+      const spread = points.length
+        ? await geoFilter.worstLegBetweenStops(coords, points)
+        : null;
+
+      return sendJson(res, 200, {
+        ok: true,
+        placed: true,
+        // The row the map splices in, already wearing the shape every other
+        // row on that map wears.
+        candidate: dayPreview.candidateRow({
+          address: coords.formattedAddress || address,
+          town: coords.town || "",
+          customerName: normalizeString(payload?.customerName, 120),
+          serviceLabel: normalizeString(payload?.serviceLabel, 120),
+          coords: { lat: coords.lat, lng: coords.lng }
+        }),
+        // Where it goes, measured the same way availability measures it.
+        position: dayPreview.insertionIndex(added ? added.position : -1, points.length),
+        addedDriveMinutes: added && !added.emptyDay ? added.minutes : 0,
+        // The number that actually catches a day crossing the city and
+        // coming back — cheapest-insertion cannot see it.
+        worstLegMinutes: spread ? spread.minutes : null,
+        addedLegMinutes: spread ? spread.added : null,
+        stopsOnDay: points.length,
+        emptyDay: Boolean(added && added.emptyDay)
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't work out that day."] });
     }
   }
 
@@ -25282,6 +25404,9 @@ async function serveStatic(req, res, pathname) {
   }
 }
 
+// Flipped by the SIGTERM handler below so /healthz can report "draining".
+let shuttingDown = false;
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
   // Normalize the pathname before route matching. If the URL came in with
@@ -25297,6 +25422,20 @@ const server = http.createServer(async (req, res) => {
     const cleanUrl = pathname + (url.search || "");
     res.writeHead(301, { location: cleanUrl, "cache-control": "no-store" });
     res.end();
+    return;
+  }
+  // Health check for Render (Settings → Health Check Path = /healthz).
+  // Answered before redirects/auth so nothing can gate it. Reports 503
+  // once shutdown has begun so the load balancer stops sending traffic
+  // to an instance that is draining.
+  if (pathname === "/healthz" && (req.method === "GET" || req.method === "HEAD")) {
+    const body = shuttingDown ? "shutting down" : "ok";
+    res.writeHead(shuttingDown ? 503 : 200, {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "no-store",
+      "content-length": Buffer.byteLength(body),
+    });
+    res.end(req.method === "HEAD" ? undefined : body);
     return;
   }
   // Legacy Wix URL → current page. 301 so search engines and bookmarks
@@ -25653,6 +25792,49 @@ if (!String(process.env.PUBLIC_BASE_URL || "").trim()) {
     );
   }
 }
+
+// Graceful shutdown. Render sends SIGTERM on every deploy, then SIGKILL
+// after 30 s if the process is still alive. Without a handler we sat
+// through that whole 30 s window — and because the service has a
+// persistent disk (no zero-downtime deploys), customers saw Render's
+// 502 page for the full wait plus the new instance's boot time. Any
+// fs.writeFile in flight when SIGKILL landed could also leave a data
+// file half-written.
+//
+// On SIGTERM: stop accepting new connections, let in-flight requests
+// finish, drop idle keep-alive sockets so close() can actually resolve,
+// then exit. A hard cap well under Render's 30 s makes sure we never
+// wait for SIGKILL. The periodic sweeps are not awaited: each is
+// best-effort and re-runs on the next boot or interval.
+const SHUTDOWN_GRACE_MS = 8000;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} received — draining connections (max ${SHUTDOWN_GRACE_MS / 1000}s)`);
+  const forceExit = setTimeout(() => {
+    console.warn("[shutdown] grace period elapsed — closing remaining connections");
+    if (typeof server.closeAllConnections === "function") server.closeAllConnections();
+    process.exit(0);
+  }, SHUTDOWN_GRACE_MS);
+  forceExit.unref();
+  // Keep-alive sockets go idle as each in-flight response finishes;
+  // sweep them repeatedly so close() resolves right after the last one
+  // instead of waiting out Node's 5 s keepAliveTimeout.
+  const idleSweep = typeof server.closeIdleConnections === "function"
+    ? setInterval(() => server.closeIdleConnections(), 250)
+    : null;
+  if (idleSweep) idleSweep.unref();
+  server.close((err) => {
+    if (idleSweep) clearInterval(idleSweep);
+    if (err) console.warn("[shutdown] server.close:", err?.message);
+    else console.log("[shutdown] all connections closed — exiting");
+    clearTimeout(forceExit);
+    process.exit(0);
+  });
+  if (idleSweep) server.closeIdleConnections();
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 server.listen(PORT, HOST, () => {
   console.log(`PJL site + lead receiver running at http://${HOST}:${PORT}`);

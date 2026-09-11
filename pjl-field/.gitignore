@@ -39,3 +39,8 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Which build is on the phone. Written by `npm run rebuild`, read by
+# `npm run send` to decide whether an update can install over the air.
+# A fact about a build that exists only on one Mac, so it stays local.
+.build-fingerprint

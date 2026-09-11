@@ -1,8 +1,9 @@
 # PJL Land Services — System Overview
 
 A snapshot of the full stack for a specialist or new contributor coming
-in cold. Pairs with `PJL_OPERATIONS_DESIGN.md` (the canonical spec) and
-`WEBSITE_MAINTENANCE_AND_SEO_HANDOFF.md` (deployment + SEO context).
+in cold. Pairs with `PJL_OPERATIONS_DESIGN.md` (the canonical spec),
+`WEBSITE_MAINTENANCE_AND_SEO_HANDOFF.md` (deployment + SEO context) and
+`HANDOFF.md` (the short orientation, and the Tap to Pay sequence).
 
 ## What this is
 
@@ -14,6 +15,13 @@ invoices → materials & purchase orders → customer portal. There is no
 SPA framework, no React, no build step beyond a small partials/HTML
 sync. Plain HTML, plain CSS, vanilla JS, Node http server, JSON files
 on a persistent disk.
+
+**Alongside it, in the same repository, lives a third surface: `pjl-field/`,
+a native iPhone app** (Expo / React Native) that Patrick and the crew use in
+the truck. It is a *client* of this server — it has no database, no accounts
+and no business logic of its own — but it ships on a completely different
+cadence, and the rules that govern that cadence are unforgiving. See
+**The field app** below, and `HANDOFF.md` §4 and §6.
 
 ## Tech stack
 
@@ -31,6 +39,10 @@ on a persistent disk.
 - **Maps:** Google Maps JavaScript API + Places Autocomplete.
 - **Hosting:** Single Render Web Service ($7/mo Starter + 1 GB persistent
   disk). Domain `pjllandservices.com` via Squarespace DNS → Render IP.
+- **Field app:** Expo SDK 54 / React Native 0.81.5 (managed workflow),
+  in `pjl-field/`. Its own `package.json`, its own `node_modules`, its own
+  release channel — it is **not** part of the server's build or deploy. The
+  root `package.json` below describes the server only.
 
 Public deps (from `package.json`):
 
@@ -88,14 +100,38 @@ worker are both accepted.
 │   ├── voice-input.js                          (Web Speech API helper)
 │   └── crm-{nav,parts,reschedule,followup}.{js,css}  (shared admin components)
 │
+├── pjl-field/                                  ← the iPhone app (Expo / React Native)
+│   ├── App.js                                  (tab shell + the job overlay)
+│   ├── app.json                                (Expo config — EDITING THIS BREAKS OTA, see below)
+│   ├── eas.json                                (build profiles + channels)
+│   ├── package.json                            (the APP's deps — separate from the root)
+│   ├── AGENTS.md / CLAUDE.md                   ("Expo HAS CHANGED — read the v54 docs")
+│   ├── src/                                    (screens/, api.js, and pure rule modules)
+│   └── scripts/                                (send / rebuild / built — the update commands)
+│
+├── docs/                                       ← flow register + per-feature briefs
+│   ├── FLOW_REGISTER.md                        (READ BEFORE CHANGING BACKEND CODE)
+│   ├── UPDATING_THE_APP.md                     (the three commands, in plain words)
+│   ├── TAP_TO_PAY*.md                          (Apple entitlement audit + Mac build steps)
+│   └── APP_STORE_RELEASE.md, JOB-*.md, ...
+│
+├── seo/                                        (weekly SEO loop — data, reports, brand voice)
+├── .claude/skills/                             (the four SEO agent skills)
+├── .github/workflows/                          (CI + the app build/publish workflows)
+│
 ├── worker/                                     (Cloudflare Worker AI chat — not deployed here)
-├── scripts/                                    (price linters + worker prompt rebuilder)
+├── scripts/                                    (~115 linters + test suites — `npm run build:check`)
 └── images/, *.jpg, *.mp4, etc.                 (static assets)
 ```
 
 `server/` is the deployed app. Project root files are also served — Render
 configures the public site root to be `/` and the `server/` directory is
 mounted both as the Node entry point AND as `/crm/*` static assets.
+
+**`pjl-field/` is not deployed by Render and never touches it.** Merging to
+`main` puts the server live; it does **not** put the app on anyone's phone.
+Those are two separate acts, and confusing them is the most common mistake
+made in this repository.
 
 ## Server-side libraries (`server/lib/`)
 
@@ -310,6 +346,113 @@ Pages with their primary route + purpose:
 | `tech-sw.js` | ServiceWorker scoped to `/admin/work-order/`. Caches HTML/JS/CSS/pricing.json/parts.json (incl. `crm-contact.js`/`.css`). Network-first WO/property GETs with cache fallback. |
 | `offline-queue.js` | IndexedDB outbound queue. Synthesizes 202 on offline, replays FIFO on reconnect, fires a `drain` event the page uses to reconcile in place — **no reload**. The tech page defers any repaint while a field is focused, a dictation session is live, or a save debounce is pending (the human at the keyboard wins over a background server echo), and adopts the server's `updatedAt` in that window so its own replayed writes never trigger the 409 "reload now" conflict banner. |
 | `wo-materials.js` | Standalone embed for the WO desktop editor — lists material lists attached to that WO, "+ New material list" button. |
+
+## The field app (`pjl-field/`)
+
+The iPhone app the crew carries. **Expo SDK 54 / React Native 0.81.5**, managed
+workflow, bundle ID `com.pjllandservices.field`, EAS project
+`0e85ca2e-506f-436e-8814-0b3dd2086582`, release channel `production`. Three tabs
+— **Today**, **Properties**, **Book** (admin only) — plus **Messages**, with an
+open job rendered as an overlay *above* the tabs rather than filed under one.
+
+Its `package.json` is its own. Its dependencies are its own (`expo`,
+`expo-updates`, `expo-image-picker`, `expo-location`, `react-native-webview`).
+Nothing in `pjl-field/` is imported by the server and nothing in `server/` is
+imported by the app.
+
+### It is a client of this server, and that is the part that matters here
+
+There is **no app database, no app account system and no app-side business
+logic worth the name.** Every decision is still made by `server/`; the app
+renders the answer.
+
+**Auth rides the CRM session cookie.** `src/api.js` points at
+`https://www.pjllandservices.com`. The Today tab mounts a `WebView` with
+`sharedCookiesEnabled`, which puts `pjl_crm_session` into the system cookie
+store — and React Native's `fetch` reads that same store on iOS. Signing in
+once on Today authenticates every JSON call the app makes. There is no token
+handling of PJL's own, and no second credential model to keep in step with
+`server/lib/`'s. Before that first sign-in every call 401s, so screens treat
+`AuthRequiredError` as an ordinary state, not an error to report.
+
+**The endpoints it depends on** — change the shape of any of these and you
+change the app, whether or not you open `pjl-field/`:
+
+| Area | Endpoints |
+|---|---|
+| Session | `/api/session` |
+| Schedule | `/api/schedule/today` (and, from inside the map page, `/api/schedule/preview-stop`) |
+| Work orders | `/api/work-orders`, `/api/work-orders/:id`, `…/photos`, `…/photo/:n` |
+| Properties | `/api/properties`, `/api/properties/:id` |
+| Leads / invoices | `/api/leads/:id`, `/api/invoices`, `/api/invoices/:id` |
+| Booking | `/api/booking/services`, `/verify-address`, `/hold`, `/release-hold`, `/reserve` |
+| Messages | `/api/admin/portal-messages`, `…/:leadId` |
+| Addresses | `/api/admin/address-suggest` |
+| Map (WebView) | `/admin/today/map` |
+
+**The app carries no map SDK, deliberately.** Its route map is a `WebView` onto
+`server/today-map.js` — one implementation, two hosts (the CRM's Today page and
+the phone). That is why map work ships over the air and why the CRM's map and
+the phone's can never drift apart. **Do not add a native map.**
+
+### Its deploy cadence is not the server's
+
+The server goes live when you merge to `main` and Render redeploys. The app does
+not. Two different things can happen to it, and which one you need is decided by
+a hash, not by preference:
+
+- **A JavaScript change** (a screen, a rule module, copy, the map page it loads)
+  ships **over the air** — `npm run send` in `pjl-field`, from either computer,
+  and the phone picks it up on next launch.
+- **A native change** needs **Xcode on the Mac** — `npm run rebuild`, then a
+  build and install. Nothing reaches the phone until that happens.
+
+**`runtimeVersion` is on the `fingerprint` policy**, and this is the single most
+expensive thing in the repository to get wrong. An over-the-air update installs
+**only** onto a build whose native inputs hash identically. Edit `app.json`, add
+a dependency, add a permission, change the icon or the splash, and the
+fingerprint moves — at which point every phone already in the field is cut off
+from updates until it is physically rebuilt, **silently**. Expo accepts the
+publish; the phone declines it; the failure looks exactly like success. Adding a
+script to `package.json` does *not* move it.
+
+`npm run send` exists to make that failure loud: it compares the fingerprint of
+what it is about to publish against the build recorded as being on the phone,
+and when they differ it publishes nothing and says the word *Xcode*.
+
+`.github/workflows/field-app-update.yml` does the same job automatically on
+merges to `main` that touch `pjl-field/`, and refuses to publish when no EAS
+build is listening on the runtime — correct in general, and blind to builds made
+by hand in Xcode, which EAS has never heard of.
+
+**How to tell whether an update landed:** the bottom of the Today tab reads
+*"App updated \<time\>"* (it worked) or *"shipped with the build"* (it did not).
+
+Keystroke-level instructions are in **`docs/UPDATING_THE_APP.md`**; the wider
+orientation is **`HANDOFF.md`** §4 and §6.
+
+### Tap to Pay on iPhone — not built, and gated by Apple
+
+The development entitlement is granted (2026-09-06, Case-ID 22041657, Team ID
+`JBYT65U657`); the **publishing** entitlement is not applied for, and **no Tap to
+Pay code exists in the app** — not the Stripe Terminal SDK, not a screen.
+
+The ordering is the thing to know before planning any of it: Apple's guide makes
+the publishing entitlement a prerequisite for **TestFlight**, so the usual
+pipeline runs backwards — build on a registered device → record videos → obtain
+the entitlement → *then* TestFlight and App Review. Distribution is decided as
+**Unlisted**, which is a one-way conversion.
+
+`docs/TAP_TO_PAY_REQUIREMENTS.md` is the authority (a line-by-line audit of
+Apple's v1.7 documents); `docs/TAP_TO_PAY_MAC_BUILD.md` is the build procedure;
+`HANDOFF.md` §10 is the ordered list of the steps that are **Patrick's** rather
+than a contributor's.
+
+One consequence belongs here rather than there: the Tap to Pay build shares the
+bundle ID with the app Patrick uses on live closings, so it **replaces** it on
+the phone — and the moment `main` carries the Stripe SDK, his working app stops
+being able to receive over-the-air updates. That is why the SDK stays on a branch
+until the publishing entitlement is in hand.
 
 ## API surface (high level)
 
@@ -1475,6 +1618,7 @@ that subset.
 | **Google Geocoding** | Property coordinates + drive-time analysis (admin only) | Property creation, today schedule | `GOOGLE_MAPS_SERVER_KEY` |
 | **QuickBooks Online** | Push invoices, items, customers, and (Phase 4) estimates to QB. **Live** in production: invoice push fires during the admin "Send to customer" flow and writes the QB invoice ID + payment link back onto the local record. Configure HST tax code + default income account once in `/admin/settings` (hard-fails until set). | Invoice push: admin clicks "Send to customer" on `/admin/invoice/:id`. Item / customer push: manual triggers from `/admin/settings`. Auto-push toggles in `settings.quickbooks` (`invoiceAutoPushOnCascade`, `estimateAutoPushOnAccept`) gate any future fire-on-event behaviour. | `QB_CLIENT_ID`, `QB_CLIENT_SECRET`, optional `QB_ENVIRONMENT` (sandbox/production), optional `TOKEN_ENCRYPTION_KEY` |
 | **Twilio (customer SMS)** | Customer-facing SMS for lifecycle events (booking confirmed, on-the-way, rescheduled) and the invoice-ready nudge that fires ~5 min after WO completion. | Cascade-scheduled (`setTimeout` + sweep recovery) from `completion-cascade.js`; honors `customer.notificationPrefs.textReminders` and `settings.invoiceSms.enabled`. | Same Twilio creds as the admin row above. |
+| **Expo EAS / `expo-updates`** | Hosts and serves over-the-air updates to the `pjl-field` iPhone app on the `production` channel. Not used by the server at all — listed because it is the only way app code reaches a phone without Xcode, and because a build published against a moved fingerprint is accepted by Expo and silently refused by the phone. | `npm run send` in `pjl-field`, or a merge to `main` touching `pjl-field/` (`.github/workflows/field-app-update.yml`). | `EXPO_TOKEN` (GitHub Actions secret; local publishes use the developer's own `eas login`) |
 | **Stripe** | Card processing on `/pay/invoice/:id` (Payment Element, browser-side confirm; replaced QuickBooks Payments Jul 2026). QBO stays the ledger — the QBO Payment record is still created after each Stripe charge. Money lands in the Stripe balance and pays out to the bank on Stripe's payout schedule (batched, net of fees) — payouts do NOT auto-reconcile in QBO. | Customer pays on the pay page; webhook backstop finalizes missed confirms. | `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET` (see env-var block) |
 
 ### QuickBooks integration details (Customer + Item handling)
@@ -1611,6 +1755,19 @@ These have memory entries; surface them in any AI / specialist context.
   must use `var(--hero-nav-clearance)`. Never hardcode.
 - **Brand:** Logo is the full "PJL Land Services" lockup; don't strip
   the wordmark. Headings use Barlow Condensed.
+- **App fingerprint (`pjl-field`):** `runtimeVersion` is on the
+  `fingerprint` policy, so an over-the-air update installs **only** onto
+  a build whose native inputs hash identically. Changing `app.json`,
+  adding a dependency, adding a permission, or changing the icon or
+  splash moves that hash and **cuts every phone already in the field off
+  from updates until it is physically rebuilt on the Mac** — silently,
+  because Expo accepts the publish and the phone declines it. Never
+  change those inputs as a side effect of a JavaScript change. `npm run
+  send` refuses to publish across a moved fingerprint; do not work around
+  it.
+- **No native map in the app:** the route map is a WebView onto
+  `server/today-map.js` so the CRM's map and the phone's cannot drift.
+  One implementation, two hosts. Adding a map SDK would fork it.
 - **Site-plan scale (Site Plan Underlay brief, Aug 2026):** three rules,
   and they are correctness requirements, not preferences. **(1)** No
   tracing on an uncalibrated sheet — a hard gate, never a warning.
@@ -1682,6 +1839,20 @@ npm start                        # http://127.0.0.1:4173
 HTML, and rebuilds the AI worker prompt. `npm run build:check` exits
 non-zero if anything's out of sync — useful as a pre-push gate.
 
+The field app is a separate install with its own lockfile, and running it
+does **not** require the server to be running locally — `src/api.js` points
+at production:
+
+```bash
+cd pjl-field
+npm install
+npm start                        # Expo dev server; press i for the iOS simulator
+```
+
+Its three release commands (`npm run send`, `npm run built`, `npm run
+rebuild`) are documented in `docs/UPDATING_THE_APP.md`. Only `rebuild`
+requires macOS; it refuses to run anywhere else rather than half-working.
+
 ### Maintenance scripts
 
 - `npm run backfill-booking-customers` — dry-run that lists leads from a
@@ -1751,6 +1922,16 @@ bands, the factor-of-two catch, `version: 2` backward compatibility, the
 vertex/payload budget, and path-traversal rejection). Each suite copies the
 libs it exercises into a temp directory, so a build gate can never read or
 write real data.
+
+**It also gates the field app**, by source analysis rather than by running
+it — there is no simulator in CI. `test-hooks-order` enforces the React
+Rules of Hooks across every screen (a hook below an early return crashes the
+app in the truck with no console to read); `test-app-shell` covers the tab
+shell and the job overlay; `test-ota-channel` pins the update channel and
+`test-app-update` the three release commands, including the fingerprint
+refusal; `test-today-map` and `test-day-preview` cover the shared map page
+the app renders; `test-add-stop` covers the walk-up booking rules.
+`.github/workflows/ci.yml` runs the whole suite on every PR.
 
 ## Glossary of IDs
 

@@ -64,12 +64,12 @@ export default function CloseOutStage({ wo, save, saving, blockers, onFinish }) 
       ) : null}
 
       <Button
-        label="Finish Fall Closing"
+        label="Review & sign off"
         onPress={onFinish}
         disabled={!ready || saving}
       />
       <Text style={styles.after}>
-        Findings are saved to the property first, then you go to signature and the invoice.
+        Findings stay recorded with this visit until you finish while connected.
       </Text>
     </>
   );

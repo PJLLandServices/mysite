@@ -30,7 +30,8 @@ const BYPASS_REASONS = [
   { key: 'other', label: 'Other (say why)' },
 ];
 
-export default function SignOffStage({ wo, save, saving, onFinish, busy, onStrokeChange }) {
+export default function SignOffStage({ wo, save, saving, onFinish, busy, onStrokeChange, getDraft }) {
+  const recordedSignoff = getDraft?.('signoff');
   // null until asked. Not defaulted: which of these is "normal" is the
   // thing that varies, and guessing wrong makes the common case worse.
   const [who, setWho] = useState(null);          // 'customer' | 'nobody'
@@ -96,6 +97,11 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy, onStrok
 
   return (
     <>
+      {recordedSignoff ? (
+        <Section title="Sign-off recorded on this phone" footer="The visit is not complete until the server confirms it. Connect and retry to finish and create the invoice.">
+          <Button label="Retry recorded sign-off" onPress={() => onFinish(recordedSignoff)} disabled={busy || saving} />
+        </Section>
+      ) : null}
       <Section title="Who is signing?" footer="Most closings happen with nobody home. Either answer is normal.">
         <View style={styles.who}>
           <Button
