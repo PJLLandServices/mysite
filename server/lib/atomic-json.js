@@ -34,7 +34,16 @@ async function writeJsonAtomic(file, value) {
     `.${path.basename(file)}.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString("hex")}.tmp`);
   try {
     await fs.writeFile(tmp, body, "utf8");
-    await fs.rename(tmp, file);
+    // Windows can briefly deny replacement while a reader has the old
+    // file open. Retry the SAME atomic rename; never delete/truncate the
+    // destination to get around a sharing violation. Linux is unchanged.
+    for (let attempt = 0; ; attempt++) {
+      try { await fs.rename(tmp, file); break; }
+      catch (err) {
+        if (process.platform !== "win32" || !["EPERM", "EACCES", "EBUSY"].includes(err.code) || attempt >= 6) throw err;
+        await new Promise(resolve => setTimeout(resolve, 10 * (2 ** attempt)));
+      }
+    }
   } catch (err) {
     await fs.rm(tmp, { force: true }).catch(() => {});
     throw err;

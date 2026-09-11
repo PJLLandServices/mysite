@@ -4471,3 +4471,47 @@ are decisions with owners rather than drift someone finds later.
 > than splitting it: a split is the right change, but not one to make on a
 > tender deadline and not in the same commit as a new feature, where it would
 > hide the feature diff inside a whole-file move. Its own piece of work.
+
+## 2026-09-11 — FIELD-OFFLINE-01 (FLOW-31, awaiting iPhone acceptance)
+
+Native closing edits previously lived only in React state after a failed PATCH.
+An unrelated successful save could erase the failed note and clear its warning;
+parallel responses could restore older text. The native API had no persistent
+queue, while the browser's offline queue did not protect native fetches.
+
+The field app now records work-order edits, property-system corrections, zone
+drafts, captured sign-off, and pending photo bytes in owner-scoped SQLite.
+Uploads serialize, check the current account, reconcile a lost acknowledgement,
+and retain conflicts rather than silently replacing office edits. Zone drafts
+are separate from reviewed assessments. A cached open job restores on restart;
+cached schedules are labelled as offline. This is a new native dependency and
+requires a new compatible Xcode build; the existing fingerprint guard remains.
+
+Server changes: work-order photo uploads carry a clientUploadId and retry under
+a per-work-order upload lock. Repeating an accepted upload returns existing
+metadata. /api/session advertises photo-retry support so the native app refuses
+to upload against an old server. Property PATCH honours If-Match when supplied.
+Legacy clients without these optional fields retain their existing contract.
+
+Lifecycle boundary: no new server completion state, automatic payment retry,
+invoice-send retry, customer messaging, or background completion was added.
+Completion waits for visit/property edits to sync. The bulk finding transfer
+clears WO issues, so it runs at connected completion after the outbox drains,
+not when entering sign-off. Until then findings remain with the visit. The
+existing transfer endpoint's partial-failure behavior remains a separate risk
+and must be checked during acceptance. Invoice/cascade/report/warranty logic
+is otherwise unchanged. Adding/removing zones and creating new WOs still need
+connection; this release does not create provisional offline identities.
+
+Tests: initial new queue suite 0/10 (missing implementation), photo-retry suite
+0/4 (missing helper); completed suites cover 16 queue cases, four photo retry
+cases, and six native HTTP bridge cases. The earlier audit reproduced three
+save failures against the original callback. The existing Windows atomic-store
+test also failed with EPERM during concurrent reads; bounded retries of the
+same atomic rename now pass its 11 assertions. Linux behavior is unchanged.
+No truncation/delete fallback was introduced. Whole build:check and iOS Metro
+export are required before push; device acceptance is still outstanding.
+
+See docs/FIELD_OFFLINE_RELEASE.md for release order, limitations, the Mac/Xcode
+procedure, and airplane-mode/restart/signature/bypass checks. This entry does
+not mark FLOW-31 PASS or claim a production/iPhone walkthrough.

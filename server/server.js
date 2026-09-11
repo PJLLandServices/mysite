@@ -39,6 +39,7 @@ const sharp = require("sharp");
 const { sendNewLeadEmail, sendVoicemailEmail } = require("./lib/notify-email");
 const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms } = require("./lib/notify-sms");
 const testRecipients = require("./lib/test-recipients");
+const fieldPhotoUploads = require("./lib/field-photo-uploads");
 const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
 const voicemailStore = require("./lib/voicemail-store");
@@ -1406,7 +1407,7 @@ async function handleAuth(req, res, pathname) {
     } else if (session.role === "customer") {
       me = { id: session.uid, role: "customer" };
     }
-    return sendJson(res, 200, { ok: true, authenticated: true, role: session.role, user: me });
+    return sendJson(res, 200, { ok: true, authenticated: true, role: session.role, user: me, fieldOffline: { photoRetry: 1 } });
   }
 
   if (req.method === "POST" && pathname === "/api/login") {
@@ -2389,6 +2390,7 @@ function validatePhotos(rawPhotos, maxCount, opts = {}) {
       mediaType,
       ext,
       meta: {
+        ...(mode === "wo" && typeof p.clientUploadId === "string" ? { clientUploadId: p.clientUploadId } : {}),
         category: String(p.category || "general"),
         zoneNumber: Number.isFinite(Number(p.zoneNumber)) ? Number(p.zoneNumber) : null,
         issueId: typeof p.issueId === "string" ? p.issueId : null,
@@ -9461,6 +9463,10 @@ async function handleApi(req, res, pathname) {
       // when address changes those coords go stale and the iCal feed's
       // X-APPLE-STRUCTURED-LOCATION would point at the old pin.
       const before = await properties.get(id);
+      const propertyVersion = String(req.headers["if-match"] || "").replace(/^"|"$/g, "");
+      if (propertyVersion && before?.updatedAt && propertyVersion !== before.updatedAt) {
+        return sendJson(res, 409, { ok: false, error: "version_conflict", errors: ["This property was changed elsewhere. Your phone's correction is retained for review."] });
+      }
       const previousAddress = String(before?.address || "").trim();
       // Guard against the admin accidentally clobbering structural fields
       // (id, leadIds, customerEmail) — only allow profile / system edits.
@@ -19037,6 +19043,7 @@ async function handleApi(req, res, pathname) {
   if (woPhotosUploadMatch && req.method === "POST") {
     try {
       const id = decodeURIComponent(woPhotosUploadMatch[1]);
+      return await fieldPhotoUploads.run(id, async () => {
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
 
@@ -19046,12 +19053,16 @@ async function handleApi(req, res, pathname) {
       // field uploads can be straight-from-camera HEIC or customer PDFs.
       const payload = await parseRequestBody(req, { maxBytes: WO_UPLOAD_POST_MAX_BYTES });
       const existing = Array.isArray(wo.photos) ? wo.photos : [];
+      const freshPhotos = fieldPhotoUploads.newPhotos(payload.photos, existing);
+      if (Array.isArray(freshPhotos) && freshPhotos.length === 0 && payload.photos.length > 0) {
+        return sendJson(res, 200, { ok: true, workOrder: wo, added: [] });
+      }
       const remaining = MAX_PHOTOS_PER_WO - existing.length;
       if (remaining <= 0) {
         return sendJson(res, 422, { ok: false, errors: [`Work order already has the maximum ${MAX_PHOTOS_PER_WO} photos. Delete one before uploading more.`] });
       }
       let validated;
-      try { validated = validatePhotos(payload.photos, remaining, { mode: "wo" }); }
+      try { validated = validatePhotos(freshPhotos, remaining, { mode: "wo" }); }
       catch (err) { return sendJson(res, 422, { ok: false, errors: [err.message] }); }
 
       // Resolve the property code for the descriptive filename slug. When
@@ -19084,6 +19095,7 @@ async function handleApi(req, res, pathname) {
         });
       } catch (err) { console.warn("[wo-history] photo upload entry failed:", err?.message); }
       return sendJson(res, 201, { ok: true, workOrder: updated, added: newMeta });
+      });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't upload photos."] });
     }
