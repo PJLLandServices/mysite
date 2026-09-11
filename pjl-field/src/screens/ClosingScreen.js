@@ -10,7 +10,7 @@
 // looked at, and the winterization steps are done. Findings are counted
 // but never required — a property with nothing wrong is a valid closing.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View,
 } from 'react-native';
@@ -25,6 +25,7 @@ import ZoneStage from './closing/ZoneStage';
 import CloseOutStage from './closing/CloseOutStage';
 import SignOffStage from './closing/SignOffStage';
 import { CLOSEOUT_STEPS } from './closing/steps';
+import { openFieldWorkOrder, watchFieldQueue, flushBeforeFinish, pendingPhotoUri, fieldStatus } from '../offline/field';
 
 const STAGES = [
   { key: 'start', label: 'Start' },
@@ -42,6 +43,9 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
   const [zoneIndex, setZoneIndex] = useState(0);
   const [saving, setSaving] = useState(false);
   const [unsaved, setUnsaved] = useState(false);
+  const field = useRef(null);
+  const [syncState, setSyncState] = useState({ pending: 0, error: null });
+  const [fieldContext, setFieldContext] = useState(null);
   // True only while a finger is on the signature pad. The pad lives in a
   // WebView, and a WebView does not stop the ScrollView around it from taking
   // the drag -- so without this the page scrolls under the customer's hand
@@ -55,7 +59,10 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
 
   const load = useCallback(async () => {
     try {
-      setWo(await getWorkOrder(workOrderId));
+      const context = await openFieldWorkOrder(workOrderId);
+      field.current = context;
+      setFieldContext(context);
+      setWo(context.workOrder);
       setState('ready');
     } catch (err) {
       if (err instanceof AuthRequiredError) setState('auth');
@@ -65,45 +72,65 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
 
   useEffect(() => { load(); }, [load]);
 
-  // Optimistic: the screen shows the change immediately and the PATCH
-  // follows. A failure raises the flag rather than silently reverting —
-  // reverting under someone's thumb mid-visit is how you lose trust in a
-  // tool you're standing in a garden with.
+  useEffect(() => {
+    if (!fieldContext) return;
+    const { queue, key } = fieldContext;
+    const refresh = () => {
+      setWo(queue.view(key));
+      setSyncState(fieldStatus(queue, key));
+    };
+    refresh();
+    const unsubscribe = queue.subscribe(refresh);
+    const stop = watchFieldQueue(queue);
+    return () => { unsubscribe(); stop(); };
+  }, [fieldContext]);
+
+  // SQLite commits before the screen announces success. Uploading is a
+  // separate serialized operation, and its responses reapply pending edits.
   const save = useCallback(async (patch) => {
-    setWo((prev) => ({ ...prev, ...patch }));
     setSaving(true);
     try {
-      const data = await patchWorkOrder(workOrderId, patch);
-      // PATCH returns the work order alone. The GET that loaded this
-      // screen decorated it with `property` and `lead`, and replacing the
-      // whole object here threw those away on the first save — so a
-      // screen that read wo.property worked once and then silently
-      // stopped. Carry the decorations forward.
-      if (data?.workOrder) {
-        setWo((prev) => ({
-          ...data.workOrder,
-          property: prev?.property ?? null,
-          lead: prev?.lead ?? null,
-        }));
-      }
+      const { queue, key } = field.current;
+      queue.patch(key, patch);
+      queue.clearDraft(key, 'signoff');
       setUnsaved(false);
+      queue.flush().catch(() => {});
+      return true;
     } catch (err) {
       setUnsaved(true);
-      Alert.alert("Didn't save", err?.message || 'That change is on the phone but not on the server yet.');
+      Alert.alert("Couldn't record on this phone", err?.message || 'Keep this screen open and try again.');
+      return false;
     } finally {
       setSaving(false);
     }
   }, [workOrderId]);
 
+  const saveDraft = useCallback((name, value) => {
+    try {
+      field.current.queue.draft(field.current.key, name, value);
+      if (name.startsWith('zone:')) field.current.queue.clearDraft(field.current.key, 'signoff');
+      return true;
+    } catch (err) {
+      setUnsaved(true);
+      Alert.alert("Couldn't record on this phone", err?.message || 'Keep this screen open.');
+      return false;
+    }
+  }, []);
+  const getDraft = useCallback(name => field.current?.queue.getDraft(field.current.key, name), []);
+  const clearDraft = useCallback(name => field.current.queue.clearDraft(field.current.key, name), []);
+  const attachPhoto = useCallback(async photo => {
+    const { queue, key } = field.current;
+    queue.photo(key, photo);
+    queue.flush().catch(() => {});
+  }, []);
+  const photoUri = photo => pendingPhotoUri(field.current.queue, photo);
+
   // The system facts on the arrival screen belong to the PROPERTY, not to
   // this visit — which is why correcting one on a driveway in October is
   // still right the following April, and why it has to reach the CRM.
   //
-  // Unlike save() above, a failure here PUTS THE OLD VALUE BACK. That is
-  // the opposite call and deliberately so: an unsaved work-order edit is
-  // still true of the visit in front of you, but a property fact that did
-  // not save is not recorded anywhere — leaving it on screen would tell
-  // the tech the office now knows something it does not.
+  // A local-storage failure puts the old value back. A network failure
+  // leaves the correction recorded on the phone, with the pending banner.
   const saveSystem = useCallback(async (patch) => {
     const propertyId = wo?.property?.id;
     if (!propertyId) return false;
@@ -113,16 +140,18 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
       property: { ...prev.property, system: { ...(prev.property?.system || {}), ...patch } },
     }));
     try {
-      const data = await patchProperty(propertyId, { system: patch });
-      if (data?.property) setWo((prev) => ({ ...prev, property: data.property }));
+      const { queue } = field.current;
+      const key = `prop:${propertyId}`;
+      queue.patch(key, { system: { ...(queue.view(key)?.system || {}), ...patch } });
+      queue.flush().catch(() => {});
       return true;
     } catch (err) {
       setWo((prev) => ({ ...prev, property: before }));
       if (err instanceof AuthRequiredError) setState('auth');
       else {
         Alert.alert(
-          "Didn't save to the property",
-          err?.message || 'That went no further than the phone. Try again when you have signal.',
+          "Couldn't record the property correction",
+          err?.message || 'Keep the screen open and try again.',
         );
       }
       return false;
@@ -147,17 +176,14 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
   if (zones.length && zonesDone < zones.length) blockers.push(`${zones.length - zonesDone} zone${zones.length - zonesDone === 1 ? '' : 's'} still to do`);
   if (closeoutDone < closeoutTotal) blockers.push(`${closeoutTotal - closeoutDone} close-out step${closeoutTotal - closeoutDone === 1 ? '' : 's'} left`);
 
-  // Close-out's Finish banks the findings and moves to sign-off. It does
-  // NOT complete anything: findings move to the property FIRST, so that a
-  // closing abandoned at sign-off — nobody home, dead battery, a customer
-  // who wants to talk — still leaves next spring's work recorded. Losing
-  // that because of who was standing on the lawn would be the worst
-  // possible trade.
+  // Close-out preserves the findings with this visit and opens sign-off.
+  // The server transfer clears WO issues, so it must wait until all queued
+  // zone edits have landed. The transfer runs before connected completion.
   const toSignOff = useCallback(() => {
     Alert.alert(
       'Finish the walk-through?',
       findings
-        ? `${findings} finding${findings === 1 ? '' : 's'} will be saved to the property for next spring, then you'll go to sign-off.`
+        ? `${findings} finding${findings === 1 ? '' : 's'} are recorded with this visit. They move to the property when you finish while connected.`
         : "No findings recorded. You'll go straight to sign-off.",
       [
         { text: 'Cancel', style: 'cancel' },
@@ -166,7 +192,9 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
           onPress: async () => {
             setSaving(true);
             try {
-              if (findings) await deferIssues(workOrderId);
+              // Do not call the destructive server sweep while edits may
+              // still be pending. It clears WO issues after transferring
+              // them. Finish performs it once the outbox has drained.
               setStage('signoff');
             } catch (err) {
               Alert.alert("Couldn't save the findings", err?.message || 'Please try again.');
@@ -193,6 +221,11 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
   const finishSignOff = useCallback(async (result) => {
     setFinishing(true);
     try {
+      const { queue, key } = field.current;
+      queue.draft(key, 'signoff', result);
+      await flushBeforeFinish(queue, key);
+      const freshBeforeFinish = await getWorkOrder(workOrderId);
+      if (freshBeforeFinish.zones?.some(z => z.issues?.length)) await deferIssues(workOrderId);
       const nowIso = new Date().toISOString();
       let data;
       if (result.mode === 'customer') {
@@ -202,13 +235,18 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
           departedAt: wo?.departedAt ? null : nowIso,
         });
       } else {
-        await signatureBypass(workOrderId, { reason: result.reason, note: result.note });
+        // If the prior attempt lost its response after locking, continue
+        // from that accepted state rather than trying to bypass twice.
+        const current = await getWorkOrder(workOrderId);
+        if (!current.signatureBypass) await signatureBypass(workOrderId, { reason: result.reason, note: result.note });
         data = await completeWorkOrder(workOrderId, {
           arrivedAt: wo?.arrivedAt ? null : nowIso,
           departedAt: wo?.departedAt ? null : nowIso,
         });
       }
       const invoiceId = data?.cascade?.invoiceId || data?.cascade?.invoice?.id || null;
+      queue.clearDraft(key, 'signoff');
+      queue.seed(key, { ...wo, ...data?.workOrder });
       onFinished({ workOrder: data?.workOrder || wo, invoiceId });
     } catch (err) {
       // The server's own gate list, when it has one. These are the things
@@ -225,7 +263,7 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
     } finally {
       setFinishing(false);
     }
-  }, [workOrderId, wo, onFinished]);
+  }, [workOrderId, wo, onFinished, findings]);
 
   // The way out comes FIRST, and is rendered in every state including the
   // ones that render nothing else. This screen is an overlay now: it covers
@@ -275,7 +313,19 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
     );
   }
 
-  const shared = { wo, save, saveSystem, saving };
+  if (['completed', 'cancelled', 'no_show'].includes(wo?.status)) {
+    return (
+      <View style={styles.screen}>
+        {exitBar}
+        <View style={styles.centre}>
+          <Text style={styles.centreTitle}>This visit is closed</Text>
+          <Text style={styles.centreBody}>Return to the schedule to view its record.</Text>
+        </View>
+      </View>
+    );
+  }
+
+  const shared = { wo, save, saveSystem, saving, saveDraft, getDraft, clearDraft, attachPhoto, photoUri };
 
   return (
     <View style={styles.screen}>
@@ -283,9 +333,22 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
         <Pressable onPress={onExit} hitSlop={10}><Text style={styles.back}>‹ Back</Text></Pressable>
         <Text style={styles.woId} numberOfLines={1}>{wo?.id || 'Work order'}</Text>
         <Text style={[styles.saveState, unsaved && styles.saveStateBad]}>
-          {saving ? 'Saving…' : unsaved ? 'Not saved' : 'Saved'}
+          {saving ? 'Recording…' : unsaved ? 'Not recorded' : syncState.pending ? `On phone · ${syncState.pending} pending` : syncState.drafts ? 'Draft on phone' : 'Synced'}
         </Text>
       </View>
+
+      {syncState.pending > 0 ? (
+        <Pressable onPress={() => {
+          if (syncState.error?.code === 'auth') onSignIn();
+          else field.current.queue.flush({ retry: true }).catch(() => {});
+        }} style={styles.syncNotice}>
+          <Text style={styles.syncText}>
+            {syncState.error && syncState.error.code !== 'network'
+              ? syncState.error.message
+              : 'Recorded on this phone. Keep the app open when connected to sync. Tap to retry.'}
+          </Text>
+        </Pressable>
+      ) : null}
 
       <View style={styles.tabs}>
         {STAGES.map((s) => {
@@ -358,6 +421,8 @@ const styles = StyleSheet.create({
   woId: { ...type.label, flex: 1, textAlign: 'center', fontWeight: '600', color: colors.text },
   saveState: { ...type.caption, minWidth: 62, textAlign: 'right' },
   saveStateBad: { color: colors.danger, fontWeight: '600' },
+  syncNotice: { padding: space.md, backgroundColor: colors.warningTint },
+  syncText: { ...type.label, color: colors.warning },
 
   tabs: { flexDirection: 'row', backgroundColor: colors.card, paddingHorizontal: space.sm, paddingBottom: space.sm, gap: 6 },
   tab: { flex: 1, alignItems: 'center', paddingVertical: 7, borderRadius: radius.card, backgroundColor: colors.ground, gap: 1 },

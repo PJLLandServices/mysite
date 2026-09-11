@@ -51,7 +51,8 @@
     },
     "plugins": [
       "expo-image-picker",
-      "expo-location"
+      "expo-location",
+      "expo-sqlite"
     ]
   }
 }

@@ -99,11 +99,12 @@ export default function StartStage({ wo, save, saveSystem, saving, findings, onN
     // null and the visit starts anyway — arrivedAt still records when.
     const fix = await currentFix();
     try {
-      await save({
+      const recorded = await save({
         status: 'on_site',
         arrivedAt: new Date().toISOString(),
         arrivalLocation: fix,
       });
+      if (!recorded) return;
       if (!fix) {
         Alert.alert(
           'Started without a location',
@@ -172,8 +173,8 @@ export default function StartStage({ wo, save, saveSystem, saving, findings, onN
           )
         ) : null}
         footer={editing
-          ? 'Saving writes to the property, not just this visit.'
-          : 'Anything you correct here updates the property record too.'}
+          ? 'Recorded on this phone first, then synced to the property.'
+          : 'Corrections update the property when synced.'}
       >
         {editing ? (
           <>

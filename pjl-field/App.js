@@ -45,6 +45,7 @@ import WebScreen from './src/screens/WebScreen';
 import { getSession } from './src/api';
 import { colors, space } from './src/theme';
 import { applyPendingUpdate } from './src/updates';
+import { startFieldSync, restoreFieldWorkOrder, forgetOpenFieldWorkOrder } from './src/offline/field';
 
 // `admin: true` means the tab does not exist for a tech. Not disabled —
 // ABSENT. A locked tab teaches someone to press a thing that never works,
@@ -143,6 +144,14 @@ export default function App() {
   // it. Without this the app runs the previous bundle for one more
   // launch, which reads as "my update didn't work".
   useEffect(() => { applyPendingUpdate(); }, []);
+  useEffect(() => startFieldSync(), [signedIn]);
+  useEffect(() => {
+    let alive = true;
+    restoreFieldWorkOrder().then(wo => {
+      if (alive && wo && !TERMINAL_WO.has(wo.status)) setJob(current => current || jobForWorkOrder(wo));
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   // Re-asked on every sign-in, because the person signing in is not
   // necessarily the person who signed out.
@@ -165,6 +174,7 @@ export default function App() {
   }, []);
 
   const closeJob = useCallback(() => {
+    try { forgetOpenFieldWorkOrder(); } catch { /* Keep recovery pointer if storage is unavailable. */ }
     setJob(null);
     setJobsClosed((n) => n + 1);
   }, []);

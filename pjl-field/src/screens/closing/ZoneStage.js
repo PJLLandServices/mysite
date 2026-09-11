@@ -49,7 +49,7 @@ const REPAIR_TYPES = [
   { key: 'other', label: 'Other (use notes)' },
 ];
 
-export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, onDoneAll }) {
+export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, setZoneIndex, onDoneAll, saveDraft, getDraft, clearDraft, attachPhoto, photoUri }) {
   const zones = wo?.zones || [];
   const zone = zones[zoneIndex] || {};
   const total = zones.length;
@@ -69,11 +69,19 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
   // Re-seed when the page changes, so stepping to the next zone doesn't
   // carry the last one's answers across.
   useEffect(() => {
-    setLabel(zone.location || '');
-    setNotes(zone.notes || '');
-    setTypes((zone.issues || []).map((i) => i.type));
-    setRepairs((zone.issues || []).length > 0);
-  }, [zoneIndex, zone.location, zone.notes, zone.issues]);
+    const draft = getDraft(`zone:${zone.number}`);
+    setLabel(draft?.label ?? zone.location ?? '');
+    setNotes(draft?.notes ?? zone.notes ?? '');
+    setTypes(draft?.types ?? (zone.issues || []).map((i) => i.type));
+    setRepairs(draft?.repairs ?? (zone.issues || []).length > 0);
+  }, [zoneIndex, zone.number]);
+
+  const recordDraft = (patch) => {
+    const draft = { label, notes, types, repairs, ...patch };
+    if (!saveDraft(`zone:${zone.number}`, draft)) return false;
+    setLabel(draft.label); setNotes(draft.notes); setTypes(draft.types); setRepairs(draft.repairs);
+    return true;
+  };
 
   const writeZone = (patch) => {
     const next = zones.map((z, i) => (i === zoneIndex ? { ...z, ...patch } : z));
@@ -81,14 +89,17 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
   };
 
   const toggleType = (key) => {
-    setTypes((prev) => (prev.includes(key) ? prev.filter((t) => t !== key) : [...prev, key]));
+    recordDraft({ types: types.includes(key) ? types.filter(t => t !== key) : [...types, key] });
   };
 
   // Several types ticked become several issues, one per type. Fast to
   // capture, and next spring each arrives as its own line that can be
   // priced or declined on its own rather than one lump.
   const issuesFromSelection = () =>
-    (repairs ? types : []).map((t) => ({ type: t, qty: 1, notes: notes.trim() }));
+    (repairs ? types : []).map((t) => ({
+      id: zone.issues?.find(i => i.type === t)?.id || `iss_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+      type: t, subtype: zone.issues?.find(i => i.type === t)?.subtype || '', qty: 1, notes: notes.trim(),
+    }));
 
   const markDone = async () => {
     // status doubles as "this zone has been looked at" — the same test
@@ -96,27 +107,24 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
     const status = repairs && types.length ? 'repair_required'
       : notes.trim() ? 'other'          // looked at, something to say — e.g. couldn't reach it
       : 'working_well';
-    await writeZone({
+    const recorded = await writeZone({
       location: label.trim(),
       notes: notes.trim(),
       issues: issuesFromSelection(),
       status,
     });
+    if (!recorded) return;
+    clearDraft(`zone:${zone.number}`);
 
     // A corrected label belongs to the property, not just to today.
     //
-    // The property is FETCHED FRESH here rather than read off the work
-    // order, and that matters twice over. `PATCH /api/properties/:id`
-    // merges `system` only one level deep, so the `zones` array it
-    // receives REPLACES the stored one outright — send a stale copy and
-    // you revert every rename made earlier in this visit; send an empty
-    // one and you erase the property's zone list altogether. A work-order
-    // copy goes stale the moment the first zone is renamed, so it is not
-    // safe to patch from. One extra request, on an action a tech takes
-    // rarely, buys an array that is provably current.
+    // The property decoration now comes from the durable store, including
+    // earlier unsynced renames. The outbox compares against a fresh server
+    // read and sends If-Match before changing it; conflicts retain evidence
+    // instead of replacing a newer office zone list.
     if (wo?.propertyId && label.trim() && label.trim() !== (zone.location || '')) {
       try {
-        const fresh = await getProperty(wo.propertyId);
+        const fresh = wo.property;
         const propSystem = fresh?.system || {};
         const existing = Array.isArray(propSystem.zones) ? propSystem.zones : [];
         if (!existing.length) {
@@ -145,7 +153,7 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
               ? { ...z, location: label.trim(), label: label.trim(), pendingReview: false }
               : z
           );
-          await patchProperty(wo.propertyId, { system: { ...propSystem, zones: propZones } });
+          await saveSystem({ zones: propZones });
         }
       } catch (err) {
         // The visit record is right either way; the property just didn't
@@ -163,8 +171,7 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
     try {
       const photo = await getter({ category: 'issue', zoneNumber: zone.number, label: `zone_${zone.number}` });
       if (!photo) return;
-      const data = await uploadWoPhotos(wo.id, [photo]);
-      if (data?.workOrder) save({ photos: data.workOrder.photos });
+      await attachPhoto(photo);
     } catch (err) {
       Alert.alert("Photo didn't attach", err?.message || 'Try again.');
     } finally {
@@ -287,7 +294,7 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
       <Section title="Where is it?" footer="Correcting this updates the property record too, so the system gets better described every visit.">
         <TextInput
           value={label}
-          onChangeText={setLabel}
+          onChangeText={v => recordDraft({ label: v })}
           placeholder="e.g. Front lawn — north strip"
           placeholderTextColor={colors.textFaint}
           style={styles.input}
@@ -298,7 +305,7 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
         <CheckRow
           label="Repairs required for next year?"
           checked={repairs}
-          onToggle={() => setRepairs((v) => !v)}
+          onToggle={() => recordDraft({ repairs: !repairs })}
           last={!repairs}
         />
         {repairs ? (
@@ -313,7 +320,7 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
       <Section title="Notes" footer="Anything worth knowing next spring — including a zone you couldn't reach and why.">
         <TextInput
           value={notes}
-          onChangeText={setNotes}
+          onChangeText={v => recordDraft({ notes: v })}
           placeholder="Notes for this zone"
           placeholderTextColor={colors.textFaint}
           style={[styles.input, styles.textarea]}
@@ -327,7 +334,7 @@ export default function ZoneStage({ wo, save, saving, zoneIndex, setZoneIndex, o
             {zonePhotos.map((p) => (
               <Image
                 key={p.n}
-                source={{ uri: woPhotoUri(wo.id, p) }}
+                source={{ uri: photoUri(p) || woPhotoUri(wo.id, p) }}
                 style={styles.thumb}
                 resizeMode="cover"
               />
