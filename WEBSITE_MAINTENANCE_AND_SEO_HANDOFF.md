@@ -421,8 +421,24 @@ In priority order:
 
 After shipping a new page, **always**:
 1. Add a `<url>` entry to `sitemap.xml` with current `<lastmod>` date
-2. Resubmit the sitemap in [Google Search Console](https://search.google.com/search-console) (one click)
-3. Update `<lastmod>` on the affected page entry whenever you make a meaningful content change
+2. Update `<lastmod>` on the affected page entry whenever you make a meaningful content change
+
+The sitemap is resubmitted to Google automatically on every push to `main`
+(`.github/workflows/indexnow.yml`, via the `pjl-seo` service account and the
+`GSC_SERVICE_ACCOUNT_JSON` / `GSC_SITE_URL` repository secrets). "Request
+indexing" for a specific page is still a manual click in Search Console — the
+API has no equivalent and the UI quota is roughly 10/day.
+
+Search Console from the terminal (`.env` holds the two GSC variables, see
+`.env.example`):
+
+```bash
+node scripts/gsc.mjs sites                  # confirm the key can see the property
+node scripts/gsc.mjs inspect --sitemap      # index status of every sitemap URL
+node scripts/gsc.mjs inspect /sprinkler-service-forest-hill.html
+node scripts/gsc.mjs analytics --days 28    # clicks / impressions by page
+node scripts/gsc.mjs analytics --by query --days 7
+```
 
 ### How to add a new service page
 

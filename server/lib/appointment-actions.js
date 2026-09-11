@@ -123,6 +123,33 @@ async function confirm(token, { listBookings, markResponded = bookings.markAssig
   return { ok: true, booking: updated, summary: summarize(updated, { now }) };
 }
 
+// The customer opened their link. Stamped ONCE, on the first view: the
+// interesting fact is when they FIRST saw it, not when they last
+// refreshed, and a "seen" that moves every visit can't answer "did they
+// ever look?".
+//
+// WHY IT MATTERS. Until now the cadence could tell you who was messaged
+// and who acted, and nothing in between. The group worth chasing is the
+// one this reveals: opened it, didn't answer. Those are a different
+// problem from the ones who never saw the message at all — a bad phone
+// number and a hesitant customer both looked like silence.
+//
+// Best-effort and never throws: this is a note about a page view, and a
+// page view failing to record must not fail the page. Customers open
+// their links over hours and days, so a deploy that lands mid-campaign
+// starts collecting from that moment rather than losing the campaign.
+async function markSeen(booking, { now = new Date(), setOutreach = bookings.setAssignmentOutreach } = {}) {
+  try {
+    if (!booking || !booking.assignment) return booking;
+    if (booking.assignment.outreach?.seenAt) return booking;   // first view only
+    return await setOutreach(booking.id, { seenAt: now.toISOString() },
+      { action: "appointment_opened", by: "customer", note: "" }) || booking;
+  } catch (err) {
+    console.warn("[appointment] couldn't record the open:", err?.message);
+    return booking;
+  }
+}
+
 // "I no longer need this." Gated at 24 hours like the portal; the
 // cancellation itself flips the booking's status, which is what stops
 // the whole cadence including the 24-hour reminder (rule 5).
@@ -284,6 +311,7 @@ async function setZones(token, {
 }
 
 module.exports = {
+  markSeen,
   CHANGE_CUTOFF_HOURS,
   findByToken,
   ensureToken,

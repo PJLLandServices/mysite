@@ -19,6 +19,137 @@ FLOW-29 is UNMAPPED and needs a walked acceptance. No PASS flow was touched: FLO
 notification preferences are the customer portal's own route
 (`PATCH /api/portal/:token/preferences`, stored on the lead), a different surface from the
 property record's `commPrefs`.
+**2026-09-10, same day (Two half-days, not two half-days and a leftovers pile):** Patrick, looking
+at a route day: *"lets just display this as 'Morning Appointments' and 'Afternoon Appointments' …
+if you take a look at the Left Side, it shows 0/10 +1 … Just place 1/10 if there is 1 appointment,
+don't bother with the +1."*
+Two symptoms, one cause: the screen drew a line between stops the plan seeded and appointments
+customers booked themselves, and **that line exists nowhere else in the system**. The day's stops
+were two half-day blocks plus a third "Booked appointments" block holding every customer booking
+regardless of when in the day it fell — so a 9am booking sat below the afternoon plan and the
+morning looked emptier than it was — and the rail read `0/10 +1`, planned over the cap with
+bookings tacked on afterwards. The availability engine has always counted them together
+(`planned.count + extraBooked + incoming > shape.bucketCap`), so a day reading `0/10 +1` was a day
+the engine already considered to hold one job.
+Now: two blocks, **Morning Appointments** and **Afternoon Appointments**, each holding both kinds in
+driving order (both carry the shared sequencer's stop number, so a booked customer reads as "stop 2
+on this morning" rather than a floating extra), each counting one load against one cap. The rail,
+the stops header, the over-capacity styling and the fill bar all read that same single number. The
+COLOUR still says which is which — amber for customer-booked, green for allocated — which is the
+part that already worked and is untouched.
+A latent crash came out with it: the old `bucketBlock` read `day[bucket].length` unguarded and threw
+on a booking-only day, masked only because `renderStops` skipped it for exactly those days. The new
+block handles it, and the suite pins it.
+Coverage: `scripts/test-season-plan-buckets.mjs`, 17 assertions, in `build:check` — the function is
+lifted out of the shipped page source and run against a stub DOM (the `test-app-shell` pattern), so
+what is asserted is the real renderer. Verified against the old display: **14 fail**. No PASS flow
+touched; display only, no engine change.
+
+**2026-09-10, same day (Schedule the blast instead of standing over it):** Patrick, after the send
+window had closed on him twice in one day: *"can we just do a scheduled send instead?"*
+**The pairing that failed:** the blast is the one cadence step that waits for a human to press a
+button, and the button only works inside a nine-hour window. He pressed it at 7am and was refused;
+by the time the reason was found it was past close. Nothing about the SEND needs him present — the
+wording is approved, the recipients are assigned. What needs him is the DECISION.
+So arming IS the decision, and the sweep that already dispatches steps 2–6 does the sending: it runs
+every five minutes, refuses outside the window, honours the appointment-page interlock and the send
+lock. A scheduled blast is that same machinery asked one question earlier — no new scheduler, no
+second send path. `POST/DELETE /api/assignments/:season/:year/blast/schedule` (admin) arms and
+cancels; armed state lives in the same ledger as the attempts, so *what is about to happen* and
+*what happened* are read from one place.
+**The property that matters most is that it fires ONCE.** The sweep runs every five minutes, so an
+arming that survived a half-failed send would message every customer again on the next tick. It is
+**disarmed before the send**, making the worst case a send that must be re-armed — never a second
+copy in a customer's inbox. `blast()` is itself idempotent per booking (rule 1 marks before it
+sends), so that trade is the safe one.
+Coverage: `scripts/test-blast-scheduled.mjs`, 21 assertions, in `build:check` — including the
+five-minutes-later sweep sending nothing, the interlock and window both holding an armed blast
+without consuming it, cancellation, and per-season isolation. Verified against the old code. No PASS
+flow touched.
+
+**2026-09-10, same day (Opened but never answered):** Patrick, on the blast: *"how do we
+confirm things got sent, and how do we track who's seen it, and what they have done?"* Sent and
+done were both already tracked — per booking, which of the six steps went out and when, and every
+action the customer took on their appointment page (confirm, cancel, a different window, a freed
+half-day, a corrected zone count), each with history. **Seen was not tracked at all**: opening
+`/a/<token>` served a static page and recorded nothing.
+That gap hides the group most worth chasing. A hesitant customer and a wrong phone number both
+looked like silence. `appointment-actions.markSeen()` now stamps `outreach.seenAt` on the FIRST
+view — once, because a timestamp that moves on every refresh cannot answer "did they ever look?" —
+and the count rides the status line Patrick already reads: **assigned · messaged · opened ·
+responded**.
+Best-effort by design, and that is the property that made it shippable mid-campaign: a note about a
+page view must never be able to fail the page, so a write that throws is swallowed and the caller
+gets its booking back. Customers open these links over hours and days, so landing this twenty
+minutes after a blast costs the opens in those minutes, not the campaign.
+Coverage: `scripts/test-appointment-seen.mjs`, 11 assertions, in `build:check`. Verified against the
+old code: **6 fail**. No PASS flow touched.
+
+**2026-09-10 (The blast that left no trace, and the hour that cost a day):** Patrick pressed
+"Send the blast" before 9am. The server refused it on the send window and threw; the refusal was
+written to a panel on the season-plan page, and the next page load erased it. Hours later the only
+honest answer to *"did anything send?"* came from reading his Gmail sent folder — **the most
+consequential button in the system left no trace of the refusal, of who would have been skipped, or
+even of having been pressed.** By the time the cause was found it was past 6pm and the window had
+closed again, so the rule had cost a full day of the assignment cadence for no customer-facing
+reason.
+Three changes, all at Patrick's call:
+**1. The window runs to 8pm** (`SEND_WINDOW.toHour` 18 → 20). It governs the blast AND automated
+steps 2–6; 8pm is a normal hour to reach a homeowner and sits inside Canadian contact-time norms.
+**2. Every attempt is recorded** — `server/data/assignment-blasts.json`, last + 20 of history per
+season, written through `atomic-json`. A refusal is an OUTCOME, not a non-event: it is recorded
+before it is thrown. The ledger never throws, because a note about a send must not be able to fail
+the send it describes.
+**3. The button refuses BEFORE it is armed.** `status()` now carries `canSendNow`, `sendWindow`,
+`sendWindowNote` and `lastBlast`, so the screen cannot say one thing while the server would do
+another; the button disables itself with the reason in its tooltip, and the durable status line
+carries the last attempt across reloads.
+Coverage: `scripts/test-blast-window-ledger.mjs`, 27 assertions, in `build:check`. Verified against
+the old code: **20 fail**, one of them reproducing the incident exactly — *"a send at 7:30pm now
+goes through — refused: Sends go out 9:00 AM – 6:00 PM"*.
+`test-assignment-cadence`'s rule 7 was rewritten to assert against the window the module holds
+rather than hours written into the suite — a hard-coded window turns Patrick's next such call into
+a test failure instead of a config change. What it still pins is that a send outside the window is
+refused, whatever the window is. No PASS flow touched.
+
+**2026-09-09, same day (Nobody was told the address could not be checked):** Spec §2.2.3 and
+decision 4, and Patrick's call on the alert channel: *"If there needs to be a notification round due
+to an address not being verified, yes that should be a notice made by text message."*
+Two different failures had been treated as one. **Google saying the address is bad** — no such
+place, or resolved only to a town — is refused at the gate, with our phone number in the message.
+That half already worked and is now pinned. **Our own lookup failing** — no Maps key, a timeout,
+quota — takes the booking anyway (never turn a customer down over our own outage) and, until now,
+left nothing but a `console.warn`. The address sat on the calendar looking exactly like a good one,
+and the first person to find out was the tech, in the driveway.
+Fix: the gate verdict is hoisted out of its block and, when degraded, stamps
+`booking.verification = { state: "unverified", reason, at }` on the envelope, mirrored onto the
+canonical record (set-only: a later re-sync cannot silently clear a flag that says a human should
+look). The notice rides the **front of the alert label Patrick already receives** —
+`UNVERIFIED · BOOKED · …` — rather than a new alert channel. **That choice is the load-bearing
+one:** he gets one message per booking today, and if `GOOGLE_MAPS_SERVER_KEY` ever falls out of
+Render *every* address starts failing at once — one-per-booking stays one-per-booking, where a
+dedicated alert would have become a hundred texts at 2am. Null on every normal booking, so a good
+booking's message is byte-identical to what it was.
+Coverage: `scripts/test-unverified-address.mjs`, 18 assertions, in `build:check`. Walks the real
+public route — availability, the ten-minute hold, reserve — with no Maps key, using a seeded
+geocode cache as the verified control. Verified against broken code: **7 fail**, the detail line
+showing the exact text Patrick used to get for an unchecked address ("BOOKED Morning Appointment").
+No PASS flow touched.
+
+**2026-09-09, same day (A dead appointment could still put a job on a tech's day):** Patrick's call
+on the §2.8.3 sweep's one open item. `POST /api/work-orders` refused to build a work order behind a
+CANCELLED booking (Brief B §3.4) and named one state where there are three: a **completed** booking
+already has its work order, so a second is a duplicate job for a visit that already happened, and a
+**no_show** is the ghost run the guard exists to prevent, exactly. Now asked through
+`bookingHoldsItsSlot()`, so a fourth dead state is covered the day it is added, and the 409 names
+the state (`booking_cancelled` / `booking_completed` / `booking_no_show`) so the CRM can say why.
+The escape hatch is unchanged and is the more honest record anyway: a genuine extra visit on a
+finished job is created against the PROPERTY, which the route already accepts — asserted, so this
+change cannot have removed a real workflow instead of a phantom one.
+Coverage: `scripts/test-wo-dead-booking.mjs`, 17 assertions, in `build:check`, driving the real
+endpoint. Verified against broken code: **9 fail**, two of them showing real work orders created
+behind completed and no-show bookings. No PASS flow touched.
+
 **2026-09-09, same day (Nothing is ever sent to a load-test record):** Reported live by Patrick
 mid-session — "the gate that you may have set up to not send text messages to the customers
 numbers, and emails are still pushing through *** this is for the test appointments." He was right,

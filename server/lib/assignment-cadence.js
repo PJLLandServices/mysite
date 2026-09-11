@@ -47,6 +47,10 @@
 // server.js.
 
 const crypto = require("node:crypto");
+const fs = require("node:fs/promises");
+const fsSync = require("node:fs");
+const path = require("node:path");
+const { writeJsonAtomic } = require("./atomic-json");
 const bookings = require("./bookings");
 const properties = require("./properties");
 const outreach = require("./outreach");
@@ -64,7 +68,17 @@ const STEPS = Object.freeze([
   { n: 6, template: "reminder24", channels: ["sms"], daysBefore: 1, stopsOnResponse: false }
 ]);
 
-const SEND_WINDOW = Object.freeze({ fromHour: 9, toHour: 18 });   // 09:00–18:00 Toronto
+// Sends go out inside business-ish hours only, Toronto time (server.js
+// pins process.env.TZ on boot, so getHours() here is honest). This is a
+// courtesy rule about when a customer's phone lights up, and it governs
+// BOTH the blast and the automated steps 2–6.
+//
+// 18:00 → 20:00 on 2026-09-10, at Patrick's call. He pressed the blast
+// before 9am, was refused, and by the time we worked out why it was past
+// six — the rule had cost a whole day of the assignment cadence for no
+// customer-facing reason. 8pm is a normal hour to reach a homeowner and
+// sits well inside Canadian contact-time norms.
+const SEND_WINDOW = Object.freeze({ fromHour: 9, toHour: 20 });   // 09:00–20:00 Toronto
 
 let sendInProgress = false;
 
@@ -75,6 +89,133 @@ function localDateKey(d) {
 function insideSendWindow(now) {
   const h = now.getHours();
   return h >= SEND_WINDOW.fromHour && h < SEND_WINDOW.toHour;
+}
+
+// When the window next opens, as a sentence. The button says this instead
+// of letting Patrick arm a send that the server is going to refuse.
+function sendWindowNote(now = new Date()) {
+  if (insideSendWindow(now)) return null;
+  const h = now.getHours();
+  const opensToday = h < SEND_WINDOW.fromHour;
+  const hh = (n) => `${((n + 11) % 12) + 1}${n < 12 ? " AM" : " PM"}`;
+  return opensToday
+    ? `Sending opens at ${hh(SEND_WINDOW.fromHour)} today.`
+    : `Sending closed at ${hh(SEND_WINDOW.toHour)} — it opens again at ${hh(SEND_WINDOW.fromHour)} tomorrow.`;
+}
+
+// ---- The blast ledger ------------------------------------------------
+//
+// WHY THIS EXISTS. On 2026-09-10 Patrick pressed the blast before 9am,
+// the server refused it on the window, and the refusal was written to a
+// panel that the next page load erased. Hours later the only honest
+// answer to "did anything send?" came from reading his Gmail sent folder.
+// The most consequential button in the system left no trace — not of the
+// refusal, not of who was skipped and why, not even of having been
+// pressed. Every attempt is recorded here now, sent or refused.
+const BLAST_LOG = path.join(__dirname, "..", "data", "assignment-blasts.json");
+
+async function readBlastLog() {
+  try {
+    if (!fsSync.existsSync(BLAST_LOG)) return {};
+    const parsed = JSON.parse((await fs.readFile(BLAST_LOG, "utf8")) || "{}");
+    return (parsed && typeof parsed === "object" && !Array.isArray(parsed)) ? parsed : {};
+  } catch { return {}; }
+}
+
+// Never throws: a ledger write that fails must not fail the send it is
+// describing, and a send that happened is more important than the note
+// about it.
+async function recordBlastAttempt(season, year, entry) {
+  try {
+    const log = await readBlastLog();
+    const key = `${season}-${Number(year)}`;
+    const history = Array.isArray(log[key]?.history) ? log[key].history : [];
+    const row = { at: new Date().toISOString(), ...entry };
+    log[key] = { last: row, history: [row, ...history].slice(0, 20) };
+    await fs.mkdir(path.dirname(BLAST_LOG), { recursive: true });
+    await writeJsonAtomic(BLAST_LOG, log);
+  } catch (err) {
+    console.warn("[cadence] blast ledger write failed:", err?.message);
+  }
+}
+
+// ---- Arming the blast ------------------------------------------------
+//
+// Patrick, 2026-09-10, after the window had closed on him twice in one
+// day: "can we just do a scheduled send instead?"
+//
+// The blast is the one step that waits for a human to press a button, and
+// the button only works inside a nine-hour window. That is a bad pairing:
+// he pressed it at 7am (refused), worked out why, and by then it was past
+// close. Nothing about the SEND needs him present — the wording is
+// already approved, the recipients are already assigned. What needs him
+// is the DECISION to send.
+//
+// So arming is the decision, and the sweep that already dispatches steps
+// 2–6 does the sending. It already runs every five minutes, already
+// refuses outside the window, already honours the appointment-page
+// interlock and the send lock. A scheduled blast is the same machinery
+// asked one question earlier.
+//
+// Armed state lives in the same ledger as the attempts, so "what is going
+// to happen" and "what happened" are read from one place.
+async function armBlast(season, year, { by = "patrick", now = new Date() } = {}) {
+  const log = await readBlastLog();
+  const key = `${season}-${Number(year)}`;
+  const entry = log[key] || {};
+  entry.armed = { at: now.toISOString(), by };
+  log[key] = entry;
+  await fs.mkdir(path.dirname(BLAST_LOG), { recursive: true });
+  await writeJsonAtomic(BLAST_LOG, log);
+  return entry.armed;
+}
+
+async function disarmBlast(season, year, { by = "patrick", reason = "cancelled" } = {}) {
+  const log = await readBlastLog();
+  const key = `${season}-${Number(year)}`;
+  const entry = log[key];
+  if (!entry?.armed) return null;
+  const was = entry.armed;
+  delete entry.armed;
+  entry.lastDisarm = { at: new Date().toISOString(), by, reason, armedAt: was.at };
+  log[key] = entry;
+  await writeJsonAtomic(BLAST_LOG, log);
+  return was;
+}
+
+async function armedBlastFor(season, year) {
+  const log = await readBlastLog();
+  return log[`${season}-${Number(year)}`]?.armed || null;
+}
+
+// Called by the sweep. Fires an armed blast the moment the window opens,
+// and DISARMS FIRST: if the send throws halfway, the arming must not
+// survive to fire again on the next five-minute tick and message
+// everyone twice. blast() is itself idempotent per booking (rule 1 marks
+// before it sends), so the cost of disarming first is at worst a send
+// that has to be re-armed — never a second copy in a customer's inbox.
+async function runArmedBlast(season, year, { deps = {}, now = new Date(), appointmentPageReady = false } = {}) {
+  const armed = await armedBlastFor(season, year);
+  if (!armed) return { ok: true, armed: false };
+  if (!appointmentPageReady) return { ok: true, armed: true, waiting: "appointment_page" };
+  if (!insideSendWindow(now)) return { ok: true, armed: true, waiting: "send_window" };
+  if (sendInProgress) return { ok: true, armed: true, waiting: "send_lock" };
+
+  await disarmBlast(season, year, { by: "cadence-sweep", reason: "fired" });
+  try {
+    const result = await blast(season, year, {
+      deps, by: `${armed.by} (scheduled)`, now, appointmentPageReady
+    });
+    return { ok: true, armed: true, fired: true, ...result };
+  } catch (err) {
+    console.warn("[assignment-cadence] armed blast failed:", err?.message);
+    return { ok: false, armed: true, fired: false, error: err?.message };
+  }
+}
+
+async function lastBlastFor(season, year) {
+  const log = await readBlastLog();
+  return log[`${season}-${Number(year)}`]?.last || null;
 }
 
 // The date a step is due for a booking: D − daysBefore, as a local
@@ -363,16 +504,25 @@ async function cadenceBookings(season, year, listBookings) {
 async function blast(season, year, { deps = {}, by = "patrick", now = new Date(), appointmentPageReady = false } = {}) {
   const listBookings = deps.listBookings || bookings.list;
 
+  // A refusal is an OUTCOME, not a non-event: it is recorded before it is
+  // thrown, so "I pressed it and nothing happened" is answerable later.
+  const refuse = async (message, code) => {
+    await recordBlastAttempt(season, year, { by, outcome: "refused", reason: message });
+    const err = new Error(message);
+    if (code) err.code = code;
+    throw err;
+  };
+
   if (!appointmentPageReady) {
-    throw new Error("The appointment page isn't live yet — the links in these messages would lead nowhere. (Stage 5 flips this switch.)");
+    await refuse("The appointment page isn't live yet — the links in these messages would lead nowhere. (Stage 5 flips this switch.)");
   }
   if (!insideSendWindow(now)) {
-    throw new Error(`Sends go out 9:00 AM – 6:00 PM Toronto time — it's ${now.toLocaleTimeString("en-CA")} now.`);
+    const hh = (n) => `${((n + 11) % 12) + 1}${n < 12 ? " AM" : " PM"}`;
+    await refuse(`Sends go out ${hh(SEND_WINDOW.fromHour)} – ${hh(SEND_WINDOW.toHour)} Toronto time`
+      + ` — it's ${now.toLocaleTimeString("en-CA")} now.`);
   }
   if (sendInProgress) {
-    const err = new Error("Another assignment send is already running.");
-    err.code = "SEND_LOCKED";
-    throw err;
+    await refuse("Another assignment send is already running.", "SEND_LOCKED");
   }
   sendInProgress = true;
   try {
@@ -386,6 +536,15 @@ async function blast(season, year, { deps = {}, by = "patrick", now = new Date()
       else if (outcome.sent.length) result.blasted += 1;
       else result.errors.push({ bookingId: b.id, code: b.assignment.code, errors: outcome.errors });
     }
+    await recordBlastAttempt(season, year, {
+      by,
+      outcome: "sent",
+      blasted: result.blasted,
+      alreadyBlasted: result.alreadyBlasted,
+      considered: mine.length,
+      skipped: result.skipped,
+      errors: result.errors
+    });
     return { ok: true, ...result };
   } finally {
     sendInProgress = false;
@@ -443,18 +602,36 @@ async function status(season, year, { deps = {} } = {}) {
   const summary = {
     bookings: mine.length,
     blasted: 0,
+    // Opened their appointment link at least once. Sits between
+    // "messaged" and "responded" — the gap where a hesitant customer
+    // used to look identical to a wrong phone number.
+    seen: 0,
     responded: 0,
     steps: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 }
   };
   for (const b of mine) {
     const o = b.assignment.outreach || {};
     if (o.steps?.["1"]) summary.blasted += 1;
+    if (o.seenAt) summary.seen += 1;
     if (o.respondedAt) summary.responded += 1;
     for (const n of Object.keys(o.steps || {})) {
       if (summary.steps[n] != null) summary.steps[n] += 1;
     }
   }
-  return { ok: true, season, year: Number(year), summary };
+  const now = new Date();
+  return {
+    ok: true,
+    season,
+    year: Number(year),
+    summary,
+    // What the button needs to say "not now, and here's why" BEFORE it is
+    // armed, rather than after two presses and a round trip.
+    canSendNow: insideSendWindow(now),
+    sendWindow: { fromHour: SEND_WINDOW.fromHour, toHour: SEND_WINDOW.toHour },
+    sendWindowNote: sendWindowNote(now),
+    lastBlast: await lastBlastFor(season, year),
+    armed: await armedBlastFor(season, year)
+  };
 }
 
 module.exports = {
@@ -468,6 +645,12 @@ module.exports = {
   renderStep,
   dueDateKeyFor,
   insideSendWindow,
+  sendWindowNote,
+  lastBlastFor,
+  armBlast,
+  disarmBlast,
+  armedBlastFor,
+  runArmedBlast,
   appointmentLinkFor,
   cadenceGates
 };
