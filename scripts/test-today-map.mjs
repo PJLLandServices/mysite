@@ -82,7 +82,9 @@ function fromPage(names) {
   return new Function(`${parts.join('\n')}; return { ${names.join(', ')} };`)();
 }
 
-const page = fromPage(['rowKey', 'isDone', 'num', 'isMorning', 'mappableStops']);
+// keyOf is what mappableStops actually calls: rowKey for every real row,
+// and a preview row's own key for the one the booking preview splices in.
+const page = fromPage(['rowKey', 'keyOf', 'isDone', 'num', 'isMorning', 'mappableStops']);
 
 function appRowKey() {
   const line = APP_ROUTING.match(/export const rowKey = ([^;]+);/);
@@ -395,6 +397,17 @@ check('the screens this feature touches parse as the app will read them', () => 
       configFile: false,
     });
   }
+});
+
+check('a preview row keys as itself, and a real row keys as it always did', () => {
+  // The booking preview splices in a row that is not a booking and so has
+  // none of the ids rowKey looks for. It carries its own key — and that
+  // must not change the answer for any real row, because the app scrolls
+  // its list by matching these.
+  const real = { leadId: 'L1', bookingId: 'BK1', start: '2026-10-06T12:00:00Z' };
+  assert.equal(page.keyOf(real), page.rowKey(real));
+  assert.equal(page.keyOf({ previewKey: '__preview__' }), '__preview__');
+  assert.equal(page.keyOf({ ...real, previewKey: '__preview__' }), '__preview__');
 });
 
 console.log(`\ntoday-map: ${pass} passed, ${fail} failed`);

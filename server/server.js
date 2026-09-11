@@ -57,6 +57,7 @@ const bookingSessions = require("./lib/booking-sessions");
 const properties = require("./lib/properties");
 const seasonPlans = require("./lib/season-plans");
 const geoFilter = require("./lib/geo-filter");
+const dayPreview = require("./lib/day-preview");
 const resequence = require("./lib/resequence");
 const openBucket = require("./lib/open-bucket");
 const routeOriginLib = require("./lib/route-origin");
@@ -22103,6 +22104,94 @@ async function orderDayForDriving(rows) {
       });
     } catch (err) {
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't draw that route."] });
+    }
+  }
+
+  // "Show me the day with them in it." — where a candidate address would
+  // land on a day, and what it costs.
+  //
+  // Patrick, 2026-09-11, after a booked day turned out to run Pickering to
+  // North York: "I want to temporarily see the whole day (WITH) that
+  // navigation map (actual drive line) inserted."
+  //
+  // THIS DOES NOT BUILD THE DAY. The map already fetches the real day from
+  // /api/schedule/today and draws it; asking a second endpoint for the same
+  // day would be a second implementation of "what is on this date", and the
+  // first time the two disagreed the preview would show a day nobody is
+  // driving. So this answers only the part the map cannot work out for
+  // itself: where the new stop goes, and what it does to the drive.
+  //
+  // The measurement is made SERVER-SIDE from the same date, not from stops
+  // the caller sends up, so a preview cannot be talked into flattering
+  // arithmetic by its own client.
+  //
+  // Nothing is booked, held or written. Staff-only by the /api/schedule/
+  // prefix, and it answers about a day the caller is already looking at.
+  if (req.method === "POST" && pathname === "/api/schedule/preview-stop") {
+    try {
+      const payload = await parseRequestBody(req, { maxBytes: 8_000 });
+      const address = normalizeString(payload?.address, 320);
+      const date = normalizeString(payload?.date, 10);
+      if (!address) return sendJson(res, 422, { ok: false, errors: ["An address is needed to preview it."] });
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return sendJson(res, 422, { ok: false, errors: ["A day is needed to preview against."] });
+      }
+
+      const geo = await geocode(address);
+      const coords = geo && geo.coords;
+      // An address we cannot place cannot be drawn. Saying so is the whole
+      // answer — a preview that silently omits the pin would show a day
+      // that looks fine because the expensive stop is invisible.
+      if (!geoFilter.coordsAreResolved(coords)) {
+        return sendJson(res, 200, {
+          ok: true,
+          placed: false,
+          reason: geo && geo.ok === false ? (geo.reason || "unknown") : "unresolved",
+          keyConfigured: geocodeIsConfigured(),
+          address: coords?.formattedAddress || address
+        });
+      }
+
+      // The day's existing stops, from the same union the calendar counts.
+      const dayStart = new Date(`${date}T00:00:00`);
+      const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+      const onThatDay = (await activeBookings()).filter((b) => {
+        const t = b.start ? new Date(b.start).getTime() : NaN;
+        return Number.isFinite(t) && t >= dayStart.getTime() && t < dayEnd.getTime();
+      });
+      const points = onThatDay
+        .map((b) => b.coords)
+        .filter((c) => c && c.lat != null);
+
+      const added = await geoFilter.addedDriveMinutes(coords, points);
+      const spread = points.length
+        ? await geoFilter.worstLegBetweenStops(coords, points)
+        : null;
+
+      return sendJson(res, 200, {
+        ok: true,
+        placed: true,
+        // The row the map splices in, already wearing the shape every other
+        // row on that map wears.
+        candidate: dayPreview.candidateRow({
+          address: coords.formattedAddress || address,
+          town: coords.town || "",
+          customerName: normalizeString(payload?.customerName, 120),
+          serviceLabel: normalizeString(payload?.serviceLabel, 120),
+          coords: { lat: coords.lat, lng: coords.lng }
+        }),
+        // Where it goes, measured the same way availability measures it.
+        position: dayPreview.insertionIndex(added ? added.position : -1, points.length),
+        addedDriveMinutes: added && !added.emptyDay ? added.minutes : 0,
+        // The number that actually catches a day crossing the city and
+        // coming back — cheapest-insertion cannot see it.
+        worstLegMinutes: spread ? spread.minutes : null,
+        addedLegMinutes: spread ? spread.added : null,
+        stopsOnDay: points.length,
+        emptyDay: Boolean(added && added.emptyDay)
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't work out that day."] });
     }
   }
 

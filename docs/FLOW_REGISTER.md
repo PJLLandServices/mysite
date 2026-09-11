@@ -298,6 +298,55 @@ load-bearing guards verified against broken code (holds not counted → 3 fail; 
 sweeper → 1 fail). No PASS flow touched — FLOW-03 gains a step, and `book.html` fails OPEN if
 the hold call itself errors, because reserve re-validates regardless.
 
+**2026-09-11 (Show me the day with them in it):** Patrick, after booking a day the engine
+suggested and then looking at the result: "I look at the map, and it has me driving from Pickering
+to North York as a suggestion. This can be a 45 minute drive depending on the time of day... I
+want to temporarily see the whole day (WITH) that navigation map (actual drive line) inserted."
+
+**The map that answers it already existed; what it could not draw was a day that does not exist
+yet.** `server/today-map.js` is one implementation with two hosts — the CRM's Today page and the
+field app, which carries no map SDK of its own on purpose. So the preview is that page with two
+more parameters, which is also why it ships over the air with no Xcode round.
+
+**The preview does NOT build the day.** It fetches the real one from `/api/schedule/today`, the
+same call the real map makes, and asks the new `POST /api/schedule/preview-stop` only for the part
+the map cannot work out: where the candidate goes and what it costs. A second "what is on this
+date" would disagree with the first exactly when it mattered, and the suite asserts the day is
+fetched in one place only. The measurement is made **server-side from the date**, never from stops
+the caller sends up, so a preview cannot be talked into flattering arithmetic by its own client;
+it books, holds and writes nothing, and is staff-fenced by the `/api/schedule/` prefix rather than
+living on a public `/api/booking/` path.
+
+Two details carry the weight. **The number reported is the WORST LEG, not the minutes added** —
+cheapest insertion is blind to a day that crosses the city and comes back, which is precisely how
+the Pickering day scored well enough to be offered. And **an address the geocoder cannot place is
+said out loud**: it cannot be drawn, and a map quietly missing the far-off pin shows a tidy day
+and invites the exact booking this screen exists to prevent. The new stop wears the orange ring
+the map already uses for "this is the one you are looking at" (`focusStop`), so there is no new
+colour and no new drawing code. `rowKey` is untouched — the app/map key contract that
+`test-today-map.mjs` pins is unchanged, and a preview row carries its own `previewKey` instead.
+
+In the app it opens **per day, not per time** (the drive is a property of the day), only once
+there is a verified address to place, and as a pageSheet rather than a slide in the booking flow:
+backing out of a step feels like undoing something, and this is a glance. Tapping a time still
+picks it exactly as before — this adds a way to LOOK, not a new way to choose.
+
+Coverage: `scripts/test-day-preview.mjs`, 29 assertions, in `build:check`, **verified against the
+shipped code (1 passed, 28 failed)**. The load-bearing ones are the insertion index (reported in
+the GAPS of `[yard, ...stops, yard]`, right by one only if you think about it — both ends pinned),
+that the real day is never mutated or resequenced on the way through, and that an unplaceable
+candidate yields `coords: null` rather than `0,0`, which is a confident numbered pin in the Gulf
+of Guinea on a map of Newmarket. `test-today-map.mjs` gained the `keyOf` lift and one assertion
+that a preview row cannot change what a real row keys as (26 → 29). No PASS flow touched: the
+availability engine, the hold and the booking path are all unchanged.
+
+**Not fixed here, and it should be:** the day was offered in the first place. Two mechanisms
+produce that symptom — an address the geocoder cannot resolve skips the geography filter entirely
+(`filterSkipped`), and a day with no planned stops and no bookings has no shape for the filter to
+have an opinion about. The season plan's existing address probe reports both, plus whether
+`GOOGLE_MAPS_SERVER_KEY` is configured; Patrick has been asked to run it against the address he
+booked before anyone changes the engine.
+
 **2026-09-09 (Two commands instead of a decision tree):** Patrick: "i am so confused with
 this updating system. Can you make it as easy as possible, and update the 'updating the app' md
 for me please."

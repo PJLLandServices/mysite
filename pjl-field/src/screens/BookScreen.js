@@ -103,6 +103,7 @@ import {
 } from '../booking-catalog';
 import { colors, radius, space, type } from '../theme';
 import { PickerSheet, SelectRow } from '../ui';
+import DayPreview from './DayPreview';
 
 export const STEPS = ['address', 'service', 'when', 'who'];
 
@@ -274,6 +275,8 @@ export default function BookScreen({ onSignIn }) {
   const [furthest, setFurthest] = useState('address');
   // Which question's sheet is open, or null. One at a time, so one sheet.
   const [sheet, setSheet] = useState(null);
+  // The day being looked at, if any. Null means nobody is looking.
+  const [previewDay, setPreviewDay] = useState(null);
   const pagerRef = useRef(null);
   const [pageWidth, setPageWidth] = useState(0);
   const [state, setState] = useState('loading');
@@ -1110,9 +1113,29 @@ export default function BookScreen({ onSignIn }) {
 
             {days.filter((d) => d.slots && d.slots.length).map((day) => (
               <View key={day.date} style={styles.day}>
-                <Text style={styles.dayLabel}>
-                  {day.label}{day.recommended ? '  ★ on our route' : ''}
-                </Text>
+                <View style={styles.dayHead}>
+                  <Text style={styles.dayLabel} numberOfLines={1}>
+                    {day.label}{day.recommended ? '  ★ on our route' : ''}
+                  </Text>
+                  {/* Patrick, after a booked day turned out to run
+                      Pickering to North York: "I want to temporarily see
+                      the whole day (WITH) that navigation map (actual
+                      drive line) inserted." Per DAY, not per time — the
+                      drive is a property of the day. Tapping a time still
+                      picks it exactly as before; this adds a way to LOOK,
+                      it does not change the way to choose. */}
+                  {verified?.address ? (
+                    <Pressable
+                      onPress={() => setPreviewDay(day)}
+                      hitSlop={8}
+                      accessibilityRole="button"
+                      accessibilityLabel={`See the drive for ${day.label}`}
+                      style={({ pressed }) => [styles.seeDay, pressed && styles.pressed]}
+                    >
+                      <Text style={styles.seeDayText}>See the day</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
                 <View style={styles.slots}>
                   {day.slots.map((s) => (
                     <Pressable
@@ -1250,6 +1273,20 @@ export default function BookScreen({ onSignIn }) {
       {/* The app's one sheet. Which question it is asking is the only
           thing that changes — so there is a single modal on this screen
           rather than one per question, and they cannot open at once. */}
+      {/* A look at a day, over everything. It chooses nothing and holds
+          nothing, so it is deliberately NOT a slide in the flow — backing
+          out of a step feels like undoing something, and this is a
+          glance. */}
+      <DayPreview
+        visible={Boolean(previewDay)}
+        date={previewDay?.date}
+        dayLabel={previewDay?.label}
+        address={verified?.address}
+        customerName={[clean(firstName), clean(lastName)].filter(Boolean).join(' ')}
+        serviceLabel={service?.label}
+        onClose={() => setPreviewDay(null)}
+      />
+
       <PickerSheet
         visible={Boolean(asking)}
         title={asking?.title}
@@ -1379,7 +1416,19 @@ const styles = StyleSheet.create({
   bucketTitleOn: { color: colors.brand, fontWeight: '700' },
   bucketBody: { ...type.caption, lineHeight: 19 },
   day: { marginTop: space.md, gap: space.sm },
-  dayLabel: { ...type.label, color: colors.text, fontWeight: '600' },
+  dayHead: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    gap: space.sm,
+  },
+  dayLabel: { ...type.label, color: colors.text, fontWeight: '600', flexShrink: 1 },
+  // Quiet. Nine times in ten the day is obviously fine and this is not
+  // what the eye should land on.
+  seeDay: {
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.brand,
+    borderRadius: radius.pill, paddingHorizontal: space.md, paddingVertical: 5,
+    minHeight: 30, justifyContent: 'center',
+  },
+  seeDayText: { ...type.caption, color: colors.brand, fontWeight: '600' },
   slots: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
   slot: {
     backgroundColor: colors.card, borderRadius: radius.card,
