@@ -22197,18 +22197,39 @@ async function orderDayForDriving(rows) {
         });
       }
 
-      // The day's existing stops, from the same union the calendar counts.
-      const dayStart = new Date(`${date}T00:00:00`);
-      const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
-      const onThatDay = (await activeBookings()).filter((b) => {
-        const t = b.start ? new Date(b.start).getTime() : NaN;
-        return Number.isFinite(t) && t >= dayStart.getTime() && t < dayEnd.getTime();
-      });
-      const points = onThatDay
-        .map((b) => b.coords)
-        .filter((c) => c && c.lat != null);
+      // THE STOPS MUST BE THE ONES ON SCREEN, IN THE ORDER THEY ARE DRAWN.
+      //
+      // This first derived its own list from activeBookings(). That was
+      // wrong twice over and Patrick found it within a minute of looking:
+      // the list was built in a different order from the day the map
+      // draws, so an insertion index measured against one was applied to
+      // the other — and when the two sources disagreed about which rows
+      // the day even had, the list came back short or empty and every
+      // address landed at position 0. "It will only select as stop one"
+      // (2026-09-11).
+      //
+      // The caller has the real day, in driving order, because it just
+      // fetched it from /api/schedule/today to draw it. Measuring against
+      // anything else is the second implementation this file's own comment
+      // warns about.
+      //
+      // Yes, that means trusting coordinates the caller supplies. Nothing
+      // is written, gated or booked on them — the worst a caller can do
+      // with a lie here is mislead itself about its own preview. Being
+      // right about where the pin goes is worth more than being proof
+      // against a client fooling nobody but itself.
+      const sent = Array.isArray(payload?.stops) ? payload.stops : [];
+      const points = sent
+        .map((p) => ({ lat: Number(p?.lat), lng: Number(p?.lng) }))
+        .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng))
+        .slice(0, 30);
 
-      const added = await geoFilter.addedDriveMinutes(coords, points);
+      // Measure the gaps FOR REAL rather than ranking them by straight
+      // line. This is one preview on demand, not the availability engine
+      // scoring a whole season, so it can afford the exact answer — and
+      // the exact answer is the difference between "slots in at 3" and
+      // "hangs off the end".
+      const added = await geoFilter.addedDriveMinutes(coords, points, { exact: points.length <= 12 });
       const spread = points.length
         ? await geoFilter.worstLegBetweenStops(coords, points)
         : null;

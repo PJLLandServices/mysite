@@ -257,9 +257,22 @@
   // the day itself. The day below is the SAME fetch the real map makes, so
   // a previewed Tuesday and a driven Tuesday cannot disagree about what is
   // on it.
-  async function previewCandidate(date) {
+  async function previewCandidate(date, rows) {
     var address = param("address");
     if (!address) return null;
+    // THE DAY AS DRAWN, IN DRIVING ORDER. The server used to derive its
+    // own list for this and the two disagreed — so an insertion index
+    // measured against one order was applied to another, and a short list
+    // put every address at stop one. These are the very rows about to be
+    // drawn, so the pin lands where the measurement says it does.
+    var stops = (rows || [])
+      .map(function (row) {
+        var c = row && row.coords;
+        var lat = c ? num(c.lat) : NaN;
+        var lng = c ? num(c.lng) : NaN;
+        return isFinite(lat) && isFinite(lng) ? { lat: lat, lng: lng } : null;
+      })
+      .filter(Boolean);
     var response = await fetch("/api/schedule/preview-stop", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -268,6 +281,7 @@
       body: JSON.stringify({
         address: address,
         date: date,
+        stops: stops,
         customerName: param("who"),
         serviceLabel: param("service")
       })
@@ -302,7 +316,7 @@
     if (previewing) {
       var preview;
       try {
-        preview = await previewCandidate(date);
+        preview = await previewCandidate(date, rows);
       } catch (err) {
         note(err.message || "Could not place that address.", true);
         return;
