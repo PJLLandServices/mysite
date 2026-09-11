@@ -34,6 +34,12 @@ audit/.auth-state.json
 memory/
 .claude/*
 !.claude/skills/
+# The same rule one level down. `.claude/*` contains a slash, so git anchors
+# it to THIS directory and a nested one — pjl-field/.claude/settings.json,
+# which the editor writes when a plugin is enabled — was slipping past it and
+# being offered for commit on every run.
+**/.claude/*
+!**/.claude/skills/
 
 # Backend runtime data — never commit. Contains the hashed admin password
 # (auth.json) and all real customer leads (leads.json). Wildcard-form so
