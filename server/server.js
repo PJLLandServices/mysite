@@ -4372,18 +4372,58 @@ const EMAIL_RESENDERS = {
     return { ok: false, error: outcome?.reason || outcome?.error || "the send failed again" };
   },
 
-  // Patrick's own "new lead" alert. Goes to him, not to the customer, so
-  // there is nothing here that can embarrass anyone by arriving late.
+  // Patrick's own alert. Goes to him, not to the customer, so there is
+  // nothing here that can embarrass anyone by arriving late.
+  //
+  // TWO KINDS OF REF, and missing the second one is what made the first
+  // resend do nothing. `sendNewLeadEmail` is the alert channel for more
+  // than new leads: the appointment page raises one through it when a
+  // customer cancels, passing a SYNTHETIC lead whose id is the BOOKING's.
+  // So a lead_alert row can carry either a lead id or a BK- id, and
+  // looking only in leads.json answers "that lead no longer exists" for
+  // every cancellation alert — which is exactly the alert most worth
+  // getting back.
   async lead_alert(failure) {
-    if (!failure.refId) return { ok: false, error: "no lead on the record" };
+    if (!failure.refId) return { ok: false, error: "no record on the alert" };
     const leads = await readLeads();
     const lead = leads.find((l) => l.id === failure.refId);
-    if (!lead) return { ok: false, error: "that lead no longer exists" };
-    const outcome = await sendNewLeadEmail(lead, { resendOf: failure.ts });
+    if (lead) {
+      const outcome = await sendNewLeadEmail(lead, { resendOf: failure.ts });
+      if (outcome?.ok) return { ok: true, to: mailerLog.maskRecipient(failure.to) };
+      return { ok: false, error: outcome?.error || "the send failed again" };
+    }
+    const booking = await bookings.get(failure.refId);
+    if (!booking) return { ok: false, error: "no lead or booking with that id" };
+    const outcome = await sendNewLeadEmail(
+      alertShapeForBooking(booking),
+      { resendOf: failure.ts }
+    );
     if (outcome?.ok) return { ok: true, to: mailerLog.maskRecipient(failure.to) };
     return { ok: false, error: outcome?.error || "the send failed again" };
   }
 };
+
+// Rebuild the alert a BOOKING raises through the lead-alert channel. The
+// same shape the appointment-page cancel route builds inline — kept here
+// so a resent alert reads exactly like the one that failed, rather than
+// like a new lead.
+function alertShapeForBooking(booking) {
+  const dead = !bookingHoldsItsSlot(booking.status);
+  const why = booking.cancellationReason || "";
+  return {
+    id: booking.id,
+    sourceLabel: dead
+      ? `Customer CANCELLED their assigned appointment${booking.removalCode ? ` — ${bookings.reasonLabel(booking.removalCode)}` : ""}`
+      : "Assigned appointment update",
+    contact: {
+      name: booking.customerName || "(unknown)",
+      phone: booking.customerPhone || "",
+      email: booking.customerEmail || "",
+      address: booking.address || "",
+      notes: `Was ${booking.scheduledFor}.${why ? ` Reason: ${why}` : ""}`
+    }
+  };
+}
 
 async function resendFailedEmail(failure) {
   const resend = EMAIL_RESENDERS[failure.kind];

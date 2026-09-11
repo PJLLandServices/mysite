@@ -244,6 +244,51 @@ try {
   }
 }
 
+// ---- 10. The two bugs the first live press found ---------------------
+//
+// Patrick pressed "Resend all" against 55 outstanding rows and, as far as
+// the screen was concerned, nothing happened. Two separate defects.
+{
+  const server = read("server/server.js");
+
+  // BUG 1. Four of those rows were lead_alert with refIds like
+  // BK-2026-0131 — BOOKING ids. `sendNewLeadEmail` is the alert channel
+  // for more than new leads: the appointment page raises one through it
+  // when a customer cancels, passing a synthetic lead whose id is the
+  // booking's. Looking only in leads.json answered "that lead no longer
+  // exists" for every cancellation alert — the alert most worth getting
+  // back — so the resend genuinely sent nothing.
+  ok("a lead_alert falls back to the BOOKING when its ref isn't a lead",
+    /lead_alert\(failure\)[\s\S]{0,900}await bookings\.get\(failure\.refId\)/.test(server),
+    "a lead_alert carrying a booking id still resolves to nothing");
+  ok("…rebuilding the alert the booking actually raised",
+    /function alertShapeForBooking\(/.test(server), "no rebuilder for a booking-shaped alert");
+  ok("…which names the cancellation rather than reading as a new lead",
+    /Customer CANCELLED their assigned appointment/.test(server)
+    && /alertShapeForBooking[\s\S]{0,700}cancellationReason/.test(server),
+    "the rebuilt alert doesn't say what happened");
+  ok("…and still refuses when the id matches nothing at all",
+    /no lead or booking with that id/.test(server), "a dead ref would pass silently");
+
+  // BUG 2. The result line rendered at the BOTTOM of the box — under all
+  // 55 rows, a screen and a half below the button. Pressing Resend all
+  // changed nothing you could see.
+  const panel = read("server/admin.html");
+  const notePos = panel.indexOf('id="emailHealthResendNote"');
+  const listPos = panel.indexOf('id="emailHealthOutstanding"');
+  ok("the answer sits ABOVE the list, beside the button that causes it",
+    notePos > 0 && listPos > 0 && notePos < listPos,
+    `note at ${notePos}, list at ${listPos}`);
+  ok("…and says something the moment you press, not only when it finishes",
+    /note\("Sending…"\)/.test(panel), "the press has no immediate feedback");
+  ok("…and reports a run that resent nothing as a problem, not as success",
+    /if \(!results\.length\)[\s\S]{0,160}Nothing outstanding to resend/.test(panel),
+    "an empty run would read as '0 sent'");
+  ok("the button names how many it can actually rebuild",
+    /all\.textContent = "Resend " \+ canSend/.test(panel),
+    "'Resend all' over 55 rows promises more than it can do");
+}
+
 if (failures.length) {
   console.error(`\n✗ test-email-resend: ${failures.length} failed, ${pass} passed`);
   for (const f of failures) console.error(`  ✗ ${f}`);
