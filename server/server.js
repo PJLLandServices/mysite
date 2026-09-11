@@ -25377,6 +25377,9 @@ async function serveStatic(req, res, pathname) {
   }
 }
 
+// Flipped by the SIGTERM handler below so /healthz can report "draining".
+let shuttingDown = false;
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
   // Normalize the pathname before route matching. If the URL came in with
@@ -25392,6 +25395,20 @@ const server = http.createServer(async (req, res) => {
     const cleanUrl = pathname + (url.search || "");
     res.writeHead(301, { location: cleanUrl, "cache-control": "no-store" });
     res.end();
+    return;
+  }
+  // Health check for Render (Settings → Health Check Path = /healthz).
+  // Answered before redirects/auth so nothing can gate it. Reports 503
+  // once shutdown has begun so the load balancer stops sending traffic
+  // to an instance that is draining.
+  if (pathname === "/healthz" && (req.method === "GET" || req.method === "HEAD")) {
+    const body = shuttingDown ? "shutting down" : "ok";
+    res.writeHead(shuttingDown ? 503 : 200, {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "no-store",
+      "content-length": Buffer.byteLength(body),
+    });
+    res.end(req.method === "HEAD" ? undefined : body);
     return;
   }
   // Legacy Wix URL → current page. 301 so search engines and bookmarks
@@ -25748,6 +25765,49 @@ if (!String(process.env.PUBLIC_BASE_URL || "").trim()) {
     );
   }
 }
+
+// Graceful shutdown. Render sends SIGTERM on every deploy, then SIGKILL
+// after 30 s if the process is still alive. Without a handler we sat
+// through that whole 30 s window — and because the service has a
+// persistent disk (no zero-downtime deploys), customers saw Render's
+// 502 page for the full wait plus the new instance's boot time. Any
+// fs.writeFile in flight when SIGKILL landed could also leave a data
+// file half-written.
+//
+// On SIGTERM: stop accepting new connections, let in-flight requests
+// finish, drop idle keep-alive sockets so close() can actually resolve,
+// then exit. A hard cap well under Render's 30 s makes sure we never
+// wait for SIGKILL. The periodic sweeps are not awaited: each is
+// best-effort and re-runs on the next boot or interval.
+const SHUTDOWN_GRACE_MS = 8000;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} received — draining connections (max ${SHUTDOWN_GRACE_MS / 1000}s)`);
+  const forceExit = setTimeout(() => {
+    console.warn("[shutdown] grace period elapsed — closing remaining connections");
+    if (typeof server.closeAllConnections === "function") server.closeAllConnections();
+    process.exit(0);
+  }, SHUTDOWN_GRACE_MS);
+  forceExit.unref();
+  // Keep-alive sockets go idle as each in-flight response finishes;
+  // sweep them repeatedly so close() resolves right after the last one
+  // instead of waiting out Node's 5 s keepAliveTimeout.
+  const idleSweep = typeof server.closeIdleConnections === "function"
+    ? setInterval(() => server.closeIdleConnections(), 250)
+    : null;
+  if (idleSweep) idleSweep.unref();
+  server.close((err) => {
+    if (idleSweep) clearInterval(idleSweep);
+    if (err) console.warn("[shutdown] server.close:", err?.message);
+    else console.log("[shutdown] all connections closed — exiting");
+    clearTimeout(forceExit);
+    process.exit(0);
+  });
+  if (idleSweep) server.closeIdleConnections();
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 server.listen(PORT, HOST, () => {
   console.log(`PJL site + lead receiver running at http://${HOST}:${PORT}`);
