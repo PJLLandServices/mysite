@@ -47,7 +47,9 @@ have been answered. Photo previews can display before upload finishes.
 
 ## Release order
 
-1. Review the pull request and complete the remaining acceptance checks.
+1. Review the pull request and automated results. Plan the iPhone test window
+   before approving deployment; the new server support must be available for
+   the final sync test. Keep the existing app installed until the new build is ready.
 2. Merge the approved server/app changes. Wait for Render's deployment to
    finish. The server must support `fieldOffline.photoRetry` before this app
    will upload queued photos.
