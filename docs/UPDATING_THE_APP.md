@@ -10,11 +10,18 @@ git pull
 npm run send
 ```
 
+> **Which computer?** Either one. Publishing an update needs the repo,
+> Node and an Expo login — nothing Mac-specific. **Only `npm run rebuild`
+> needs the Mac**, because only a rebuild needs Xcode, and it says so
+> plainly if you run it anywhere else.
+>
 > **Which folder?** The one you keep the site in. There is more than one
-> clone on this Mac — `mysite-claude-pjl-field-taptopay` is the Tap to Pay
-> one and is *not* the one to use for ordinary updates (see the bottom of
-> this page). Once you know the path, it never changes; write it on a
-> sticky note.
+> clone — `mysite-claude-pjl-field-taptopay` is the Tap to Pay one and is
+> *not* the one to use for ordinary updates (see the bottom of this page).
+> Can't find it? On the Mac, `mdfind -name PJLField.xcworkspace`; on
+> Windows, `Get-ChildItem $HOME -Recurse -Directory -Filter pjl-field
+> -ErrorAction SilentlyContinue`. Once you know the path it never changes;
+> write it on a sticky note.
 
 `npm run send` looks at what changed and does one of two things:
 
@@ -28,7 +35,7 @@ is explanation you only need when something surprises you.
 
 ---
 
-## The two commands
+## The commands
 
 ### `npm run send`
 
@@ -54,10 +61,12 @@ npm run send -- --anyway           publish despite the git warnings
 `--anyway` overrides the git checks only. It cannot override *needs
 Xcode*: that one is not a judgement call, it is the phone refusing.
 
-### `npm run rebuild`
+### `npm run rebuild` — the Mac one
 
-The occasional one. Run it when `send` tells you to, or when Xcode shows
-**no targets** and **"No Configurations Set"** (the iOS folder is damaged).
+The occasional one, and **the only command here that needs macOS**. Run it
+when `send` tells you to, or when Xcode shows **no targets** and **"No
+Configurations Set"** (the iOS folder is damaged). Run anywhere else and it
+says so rather than failing halfway through with a toolchain error.
 
 It regenerates the Xcode project **and puts back the two settings that a
 rebuild always destroys** — the signing team and the Release
@@ -74,7 +83,7 @@ in Xcode**, the ordinary way, without going through `rebuild`.
 Run it once and `send` can answer from then on. Without it, the first
 `send` has to admit it doesn't know what your phone is running.
 
-It takes your word — nothing on the Mac can see your phone — so if the
+It takes your word — nothing on a computer can see your phone — so if the
 word is wrong, nothing breaks: the update simply won't install, and the
 Today tab keeps saying *"shipped with the build"*. If you see that, run
 `npm run rebuild` and the record fixes itself.
@@ -86,7 +95,7 @@ Today tab keeps saying *"shipped with the build"*. If you see that, run
 The app on your phone is two layers.
 
 **The native shell** — the app itself, its libraries, its permissions, its
-icon. Building that is what Xcode does, and it can only happen on your Mac
+icon. Building that is what Xcode does, and it can only happen on the Mac
 with the phone plugged in.
 
 **The JavaScript** — every screen, every button, every rule about what
