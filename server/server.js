@@ -24490,6 +24490,47 @@ async function orderDayForDriving(rows) {
     }
   }
 
+  // Unplanned — eligible for the season, on no route day. The list that
+  // ends the silence: a property created after the plan was imported used
+  // to be invisible to it.
+  const seasonPlanUnplannedMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/unplanned$/);
+  if (seasonPlanUnplannedMatch && req.method === "GET") {
+    try {
+      await requireUser(req);
+      const result = await assignments.unplanned(seasonPlanUnplannedMatch[1], Number(seasonPlanUnplannedMatch[2]));
+      return sendJson(res, 200, result);
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't list unplanned properties."] });
+    }
+  }
+
+  // Add — put an unplanned property on a day. Mirror of /move for a code
+  // the plan doesn't hold yet; resequenced afterwards for the same reason
+  // a move is.
+  const seasonPlanAddMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/add$/);
+  if (seasonPlanAddMatch && req.method === "POST") {
+    try {
+      const session = await requireUser(req);
+      const season = seasonPlanAddMatch[1];
+      const year = Number(seasonPlanAddMatch[2]);
+      const body = await parseRequestBody(req);
+      const actor = session?.email || session?.name || "admin";
+      const { warnings, added } = await seasonPlans.addStop(season, year, {
+        propertyCode: normalizeString(body.propertyCode, 40),
+        toDate: normalizeString(body.toDate, 10),
+        toBucket: normalizeString(body.toBucket, 10)
+      }, { actor });
+      const stored = await seasonPlans.getPlan(season, year);
+      if (stored) {
+        await seasonPlans.savePlan(season, year, await resequencePlanForStorage(stored, season, year), { actor });
+      }
+      const resolved = await resolveSeasonPlan(season, year);
+      return sendJson(res, 200, { ok: true, plan: resolved, warnings, added });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't add that stop."] });
+    }
+  }
+
   // Probe — "what would the filter say about this address?"
   //
   // Answers, for every route day, the cheapest-insertion added drive and
