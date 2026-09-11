@@ -429,6 +429,105 @@ load-bearing guards verified against broken code (holds not counted → 3 fail; 
 sweeper → 1 fail). No PASS flow touched — FLOW-03 gains a step, and `book.html` fails OPEN if
 the hold call itself errors, because reserve re-validates regardless.
 
+**2026-09-11 (Show me the day with them in it):** Patrick, after booking a day the engine
+suggested and then looking at the result: "I look at the map, and it has me driving from Pickering
+to North York as a suggestion. This can be a 45 minute drive depending on the time of day... I
+want to temporarily see the whole day (WITH) that navigation map (actual drive line) inserted."
+
+**The map that answers it already existed; what it could not draw was a day that does not exist
+yet.** `server/today-map.js` is one implementation with two hosts — the CRM's Today page and the
+field app, which carries no map SDK of its own on purpose. So the preview is that page with two
+more parameters, which is also why it ships over the air with no Xcode round.
+
+**The preview does NOT build the day.** It fetches the real one from `/api/schedule/today`, the
+same call the real map makes, and asks the new `POST /api/schedule/preview-stop` only for the part
+the map cannot work out: where the candidate goes and what it costs. A second "what is on this
+date" would disagree with the first exactly when it mattered, and the suite asserts the day is
+fetched in one place only. The measurement is made **server-side from the date**, never from stops
+the caller sends up, so a preview cannot be talked into flattering arithmetic by its own client;
+it books, holds and writes nothing, and is staff-fenced by the `/api/schedule/` prefix rather than
+living on a public `/api/booking/` path.
+
+Two details carry the weight. **The number reported is the WORST LEG, not the minutes added** —
+cheapest insertion is blind to a day that crosses the city and comes back, which is precisely how
+the Pickering day scored well enough to be offered. And **an address the geocoder cannot place is
+said out loud**: it cannot be drawn, and a map quietly missing the far-off pin shows a tidy day
+and invites the exact booking this screen exists to prevent. The new stop wears the orange ring
+the map already uses for "this is the one you are looking at" (`focusStop`), so there is no new
+colour and no new drawing code. `rowKey` is untouched — the app/map key contract that
+`test-today-map.mjs` pins is unchanged, and a preview row carries its own `previewKey` instead.
+
+In the app it opens **per day, not per time** (the drive is a property of the day), only once
+there is a verified address to place, and as a pageSheet rather than a slide in the booking flow:
+backing out of a step feels like undoing something, and this is a glance. Tapping a time still
+picks it exactly as before — this adds a way to LOOK, not a new way to choose.
+
+Coverage: `scripts/test-day-preview.mjs`, 29 assertions, in `build:check`, **verified against the
+shipped code (1 passed, 28 failed)**. The load-bearing ones are the insertion index (reported in
+the GAPS of `[yard, ...stops, yard]`, right by one only if you think about it — both ends pinned),
+that the real day is never mutated or resequenced on the way through, and that an unplaceable
+candidate yields `coords: null` rather than `0,0`, which is a confident numbered pin in the Gulf
+of Guinea on a map of Newmarket. `test-today-map.mjs` gained the `keyOf` lift and one assertion
+that a preview row cannot change what a real row keys as (26 → 29). No PASS flow touched: the
+availability engine, the hold and the booking path are all unchanged.
+
+**Not fixed here, and it should be:** the day was offered in the first place. Two mechanisms
+produce that symptom — an address the geocoder cannot resolve skips the geography filter entirely
+(`filterSkipped`), and a day with no planned stops and no bookings has no shape for the filter to
+have an opinion about. The season plan's existing address probe reports both, plus whether
+`GOOGLE_MAPS_SERVER_KEY` is configured; Patrick has been asked to run it against the address he
+booked before anyone changes the engine.
+
+**2026-09-09 (Two commands instead of a decision tree):** Patrick: "i am so confused with
+this updating system. Can you make it as easy as possible, and update the 'updating the app' md
+for me please."
+
+He was right to be confused, and rewriting the prose would not have fixed it. The doc asked him
+to CLASSIFY his own change — app / server / native — and then follow the matching branch. That
+is a judgement call about somebody else's diff, made at 7am, with a wrong answer that fails
+silently: publish an update whose native code does not match the build on the phone and Expo
+accepts the bundle, the phone declines it, and the result reads as "my update didn't work".
+
+**The classification is computable, so it is now computed.** `runtimeVersion` is already
+`fingerprint`, which means Expo installs an update only onto a build whose native code hashes
+the same. `@expo/fingerprint` computes that hash from the source, offline, in about a second —
+so `npm run send` compares the hash of what is about to be published against the hash recorded
+when `npm run rebuild` last ran, and answers **over the air** or **needs Xcode** from the same
+fact Expo itself uses. **The mismatch path publishes nothing and is not overridable**: `--anyway`
+exists for the git checks, which are judgement calls, and deliberately cannot reach the
+fingerprint gate, which is physics.
+
+`npm run rebuild` removes the other half of the confusion. `expo prebuild --clean` wipes two
+settings every time and each fails in a way that names something else — the signing team gives
+"requires a development team" on Release only, and the Run configuration reverts to Debug, which
+dies with a red `RCTFatal` the moment the phone leaves the Mac. Neither is a decision; they are
+the same answer every time. So the team is **read out of the project before the wipe** and
+written back to every configuration of the app target afterwards (Xcode's "All" tab — Debug
+alone is the version that looks fixed and is not), the Run action is set to Release, and the
+fingerprint of what was built is recorded so `send` can answer next time. A team that was never
+set is asked for by hand and never invented: a wrong Team ID fails unreadably.
+
+**Corrected the same evening, by Patrick: "all of the work from today is on my phone."** He had
+merged the day's work and built it from Xcode himself, the ordinary way — so his build was
+current, and the branch above contains no app-runtime code at all (scripts, a doc and a test).
+But it exposed a hole: `rebuild` records the fingerprint, and a build made BY HAND records
+nothing, so his first `npm run send` would have answered "I have no record of your phone" and
+sent him into an Xcode round he did not need — the exact wasted evening the whole change exists
+to prevent. `npm run built` closes it: it records the current fingerprint as the phone's, states
+what it is assuming (nothing on the Mac can see the phone, so it takes his word) and says how he
+will know within a minute if the assumption was wrong — a mismatched update simply never
+installs and the Today tab keeps reading "shipped with the build". The no-record path in `send`
+now offers that **before** it offers a rebuild.
+
+Coverage: `scripts/test-app-update.mjs`, 31 assertions, in `build:check`, **verified against the
+shipped code (1 passed, 26 failed)**. The fixtures are the real shapes `expo prebuild -p ios
+--clean` emits — generated by actually running it — because these scripts edit a live Xcode
+project and an automation that is only nearly right is worse than the manual step it replaces.
+The load-bearing ones: the publish sits behind the fingerprint gate, `--anyway` cannot reach it,
+the team is read BEFORE the prebuild (reading it after means losing it on every rebuild), and
+only the Run action moves — Test and Analyze keep their own configurations. No PASS flow
+touched: nothing here is server code, and `pjl-field/ios` remains outside the repo.
+
 **2026-09-09 (A customer walks over while you are on their neighbour's lawn):** Patrick:
 "Sometimes we are approached by customers while on a daily route, we try not to turn anyone
 down... we still want to remain professional and be able to tackle their closing as well, while
