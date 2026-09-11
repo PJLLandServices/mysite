@@ -281,10 +281,57 @@ function renderStep(booking, step, token, extra = {}) {
   return out;
 }
 
+// ---- What a step still OWES -------------------------------------------
+//
+// A step record is written twice: once BEFORE the sends (rule 1, so a
+// crash can never repeat a message) and once after, with what actually
+// went out. The gap between `attempted` and `sent` is a message somebody
+// never received.
+//
+// WHY THIS EXISTS. 2026-09-11: a Google account password change revoked
+// the app password every outbound email shares. The cadence ran, marked
+// its steps, and every email failed on authentication — while the texts
+// went out normally, because Twilio is a different provider. Each of those
+// customers is recorded as having had their step, with `sent: ["sms"]`,
+// and the sweep skips a step that exists. So the email was owed, knowable,
+// and never going to be sent.
+//
+// THREE STATES, and only one of them is owed:
+//
+//   no record            — the step never fired. Not owed; it is unsent,
+//                          and the sweep's own rules decide when it goes.
+//   record, no `sent`    — marked, result never written. THE CRASH WINDOW.
+//                          The wire may have been touched. Never retried —
+//                          that is the whole point of marking first, and
+//                          treating it as owed would hand back the
+//                          double-send that rule 1 exists to prevent.
+//   record with `sent`   — we know exactly what went and what didn't.
+//                          Anything attempted and not sent is owed.
+//
+// Defined once, here, because the count Patrick reads and the send that
+// acts on it must never answer differently (CLAUDE.md).
+function channelsOwed(stepRecord) {
+  if (!stepRecord || typeof stepRecord !== "object") return [];
+  if (!Array.isArray(stepRecord.sent)) return [];      // the crash window
+  const attempted = Array.isArray(stepRecord.attempted) ? stepRecord.attempted : [];
+  return attempted.filter((channel) => !stepRecord.sent.includes(channel));
+}
+
+// Every owed channel on one booking, as [{ step, channels }].
+function owedForBooking(booking) {
+  const steps = booking?.assignment?.outreach?.steps || {};
+  const out = [];
+  for (const step of STEPS) {
+    const owed = channelsOwed(steps[String(step.n)]);
+    if (owed.length) out.push({ step, channels: owed });
+  }
+  return out;
+}
+
 // Dispatch one step for one booking. The step is marked fired BEFORE
 // the sends go out (rule 1); the results are written after. Returns the
 // per-channel outcome. `deps` lets tests capture sends without a wire.
-async function sendStepForBooking(booking, step, { season, year, deps = {}, by = "cadence" }) {
+async function sendStepForBooking(booking, step, { season, year, deps = {}, by = "cadence", only = null }) {
   const getProperty = deps.getProperty || properties.get;
   const sendEmail = deps.sendEmail || notify.sendOutreachEmail;
   const sendSms = deps.sendSms || notify.sendOutreachSms;
@@ -329,16 +376,28 @@ async function sendStepForBooking(booking, step, { season, year, deps = {}, by =
   const attempted = [];
   if (wants.email && capability.emailChannel.possible) attempted.push("email");
   if (wants.sms && capability.sms.possible) attempted.push("sms");
-  if (!attempted.length) {
-    return { skipped: true, reason: "no_deliverable_channel" };
+  // CATCH-UP: re-send only the channels this step still owes. Narrowing
+  // here rather than in a second copy of the dispatch keeps one code path
+  // building the message, so a caught-up email is the same email.
+  const catchUp = Array.isArray(only);
+  const channels = catchUp ? attempted.filter((c) => only.includes(c)) : attempted;
+  if (!channels.length) {
+    return { skipped: true, reason: catchUp ? "nothing_owed_is_deliverable" : "no_deliverable_channel" };
   }
 
   // RULE 1: mark first. A crash after this line loses at most one
   // message and never repeats one.
-  await setOutreach(booking.id, {
-    token,
-    steps: { [String(step.n)]: { at: new Date().toISOString(), attempted } }
-  }, { action: `cadence_step_${step.n}`, by, note: attempted.join("+") });
+  //
+  // A catch-up does NOT re-mark: the step is already marked, and its
+  // record is what told us a channel was owed. Overwriting it here would
+  // erase the evidence before the send that depends on it.
+  const priorStep = booking.assignment?.outreach?.steps?.[String(step.n)] || null;
+  if (!catchUp) {
+    await setOutreach(booking.id, {
+      token,
+      steps: { [String(step.n)]: { at: new Date().toISOString(), attempted: channels } }
+    }, { action: `cadence_step_${step.n}`, by, note: channels.join("+") });
+  }
 
   const unsubscribe = property.optOutTokens
     ? outreach.buildUnsubscribeUrls(property)
@@ -346,7 +405,7 @@ async function sendStepForBooking(booking, step, { season, year, deps = {}, by =
 
   const sent = [];
   const errors = [];
-  if (attempted.includes("email")) {
+  if (channels.includes("email")) {
     const r = await sendEmail({
       to: capability.email,
       firstName: assignmentMessages.contextForBooking(booking).firstName,
@@ -357,12 +416,15 @@ async function sendStepForBooking(booking, step, { season, year, deps = {}, by =
       subject: messages.email.subject,
       emailBody: messages.email.body,
       unsubscribeUrlEmail: unsubscribe.email,
-      unsubscribeUrlAll: unsubscribe.all
+      unsubscribeUrlAll: unsubscribe.all,
+      // Whose message this is. Rides into the send ledger so a failed
+      // send is traceable to a booking, not to an address alone.
+      refId: booking.id
     });
     if (r.ok) sent.push("email");
     else errors.push({ channel: "email", error: r.error || r.reason || "failed" });
   }
-  if (attempted.includes("sms")) {
+  if (channels.includes("sms")) {
     const r = await sendSms({
       to: capability.phone,
       firstName: assignmentMessages.contextForBooking(booking).firstName,
@@ -375,12 +437,28 @@ async function sendStepForBooking(booking, step, { season, year, deps = {}, by =
     else errors.push({ channel: "sms", error: r.error || r.reason || "failed" });
   }
 
+  // The result write REPLACES the step record (setAssignmentOutreach
+  // merges the steps map, not the step), so a catch-up has to carry the
+  // original forward: the channel that went out yesterday is still sent.
+  const mergedSent = catchUp
+    ? [...new Set([...(Array.isArray(priorStep?.sent) ? priorStep.sent : []), ...sent])]
+    : sent;
+  const mergedAttempted = catchUp
+    ? [...new Set([...(Array.isArray(priorStep?.attempted) ? priorStep.attempted : []), ...channels])]
+    : channels;
   await setOutreach(booking.id, {
     steps: { [String(step.n)]: {
-      at: new Date().toISOString(), attempted, sent,
-      ...(errors.length ? { errors } : {})
+      at: priorStep?.at || new Date().toISOString(),
+      attempted: mergedAttempted,
+      sent: mergedSent,
+      ...(errors.length ? { errors } : {}),
+      ...(catchUp ? { caughtUpAt: new Date().toISOString() } : {})
     } }
-  }, { action: `cadence_step_${step.n}_result`, by, note: `sent ${sent.join("+") || "nothing"}` });
+  }, {
+    action: `cadence_step_${step.n}_${catchUp ? "catch_up" : "result"}`,
+    by,
+    note: `sent ${sent.join("+") || "nothing"}`
+  });
 
   if (sent.length) {
     await recordTouch(property.id, {
@@ -459,7 +537,10 @@ async function sendDayMoveForBooking(booking, { season, year, deps = {}, by = "c
       subject: messages.email.subject,
       emailBody: messages.email.body,
       unsubscribeUrlEmail: unsubscribe.email,
-      unsubscribeUrlAll: unsubscribe.all
+      unsubscribeUrlAll: unsubscribe.all,
+      // Whose message this is. Rides into the send ledger so a failed
+      // send is traceable to a booking, not to an address alone.
+      refId: booking.id
     });
     if (r.ok) sent.push("email");
     else errors.push({ channel: "email", error: r.error || r.reason || "failed" });
@@ -595,6 +676,74 @@ async function sweepDue(season, year, { deps = {}, now = new Date(), appointment
   }
 }
 
+// ---- Catch-up: send what the cadence still owes -----------------------
+//
+// Deliberately NOT folded into the sweep. The sweep's rule 1 — skip a step
+// that is already marked — is what makes a crash safe, and loosening it so
+// the sweep retries by itself would mean an outage silently re-sending to
+// everyone the moment mail came back. Patrick presses this.
+//
+// Everything else still applies: the send window, the send lock, and the
+// per-property gates (opt-out, no-contact, channel capability) all run
+// again, because a catch-up goes through sendStepForBooking like any other
+// send. Somebody who opted out between the failed send and this one does
+// not get caught up.
+async function catchUpOwed(season, year, { deps = {}, now = new Date(), by = "catch-up", appointmentPageReady = false, dryRun = false } = {}) {
+  const listBookings = deps.listBookings || bookings.list;
+  if (!appointmentPageReady) return { ok: false, waiting: "appointment_page", owed: 0, sent: 0 };
+  if (!dryRun && !insideSendWindow(now)) {
+    return { ok: false, waiting: "send_window", note: sendWindowNote(), owed: 0, sent: 0 };
+  }
+  if (!dryRun && sendInProgress) return { ok: false, waiting: "send_lock", owed: 0, sent: 0 };
+
+  const mine = await cadenceBookings(season, year, listBookings);
+  const work = [];
+  for (const booking of mine) {
+    for (const item of owedForBooking(booking)) {
+      work.push({ booking, step: item.step, channels: item.channels });
+    }
+  }
+  if (dryRun) {
+    return {
+      ok: true,
+      owed: work.length,
+      sent: 0,
+      detail: work.map((w) => ({
+        bookingId: w.booking.id,
+        code: w.booking.assignment.code,
+        customerName: w.booking.customerName || "",
+        step: w.step.n,
+        channels: w.channels
+      }))
+    };
+  }
+  if (!work.length) return { ok: true, owed: 0, sent: 0, results: [] };
+
+  sendInProgress = true;
+  try {
+    const results = [];
+    let sent = 0;
+    for (const w of work) {
+      const outcome = await sendStepForBooking(w.booking, w.step, {
+        season, year, deps, by, only: w.channels
+      });
+      if (outcome.sent && outcome.sent.length) sent += 1;
+      results.push({
+        bookingId: w.booking.id,
+        code: w.booking.assignment.code,
+        step: w.step.n,
+        owed: w.channels,
+        sent: outcome.sent || [],
+        skipped: outcome.skipped ? outcome.reason : null,
+        errors: outcome.errors || []
+      });
+    }
+    return { ok: true, owed: work.length, sent, results };
+  } finally {
+    sendInProgress = false;
+  }
+}
+
 // ---- Status — what the panel shows ------------------------------------
 async function status(season, year, { deps = {} } = {}) {
   const listBookings = deps.listBookings || bookings.list;
@@ -607,6 +756,11 @@ async function status(season, year, { deps = {} } = {}) {
     // used to look identical to a wrong phone number.
     seen: 0,
     responded: 0,
+    // Messages a step attempted and never delivered — the mailer was down,
+    // or one channel failed while the other went. Counted here so the
+    // number Patrick sees and the send that acts on it come from the same
+    // rule (channelsOwed), never from two.
+    owed: 0,
     steps: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 }
   };
   for (const b of mine) {
@@ -614,6 +768,7 @@ async function status(season, year, { deps = {} } = {}) {
     if (o.steps?.["1"]) summary.blasted += 1;
     if (o.seenAt) summary.seen += 1;
     if (o.respondedAt) summary.responded += 1;
+    summary.owed += owedForBooking(b).reduce((n, item) => n + item.channels.length, 0);
     for (const n of Object.keys(o.steps || {})) {
       if (summary.steps[n] != null) summary.steps[n] += 1;
     }
@@ -642,6 +797,9 @@ module.exports = {
   status,
   sendStepForBooking,
   sendDayMoveForBooking,
+  channelsOwed,
+  owedForBooking,
+  catchUpOwed,
   renderStep,
   dueDateKeyFor,
   insideSendWindow,

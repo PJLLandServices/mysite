@@ -1059,7 +1059,7 @@ async function sendAdminPasswordResetLink(user, magicLink) {
 // reason text the admin entered. `notify` defaults to true; when false
 // this returns { ok: true, skipped: true } without touching SMTP — used
 // when Patrick unchecks the "Notify customer by email" checkbox.
-async function sendBookingCancellation(booking, { reason = "", notify = true } = {}) {
+async function sendBookingCancellation(booking, { reason = "", notify = true, resendOf = "" } = {}) {
   if (!notify) return { ok: true, skipped: true, reason: "notify=false" };
   const transporter = getTransporter();
   if (!transporter) {
@@ -1120,11 +1120,11 @@ async function sendBookingCancellation(booking, { reason = "", notify = true } =
       text
     });
     console.log(`[booking-cancel] sent bookingId=${booking.id} to=${to} id=${info.messageId}`);
-    await logSend({ kind: "booking_cancel", to, ok: true, refId: booking.id });
+    await logSend({ kind: "booking_cancel", to, ok: true, refId: booking.id, resendOf });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error(`[booking-cancel] failed bookingId=${booking?.id}:`, error.message);
-    await logSend({ kind: "booking_cancel", to, ok: false, error: error.message, refId: booking?.id });
+    await logSend({ kind: "booking_cancel", to, ok: false, error: error.message, refId: booking?.id, resendOf });
     return { ok: false, error: error.message };
   }
 }
@@ -1298,7 +1298,14 @@ async function sendOutreachEmail({
   // Button text for the portalLink CTA. Marketing outreach keeps the
   // long-standing default; the assignment cadence passes "Open your
   // appointment page" so the button matches where the link goes.
-  ctaLabel = "Open your portal"
+  ctaLabel = "Open your portal",
+  // The record this message is ABOUT — a booking id from the assignment
+  // cadence, a property id from seasonal outreach. It rides into the
+  // ledger so a failed send can be traced back to whose message it was.
+  // Without it an outreach failure is an address and nothing else, which
+  // is not enough to make good on it.
+  refId = "",
+  resendOf = ""
 }) {
   const transporter = getTransporter();
   if (!transporter) {
@@ -1385,11 +1392,11 @@ async function sendOutreachEmail({
       text
     });
     console.log(`[outreach-email] sent to=${toAddr} id=${info.messageId}`);
-    await logSend({ kind: "outreach", to: toAddr, ok: true });
+    await logSend({ kind: "outreach", to: toAddr, ok: true, refId, resendOf });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error(`[outreach-email] failed:`, error.message);
-    await logSend({ kind: "outreach", to: toAddr, ok: false, error: error.message });
+    await logSend({ kind: "outreach", to: toAddr, ok: false, error: error.message, refId, resendOf });
     return { ok: false, error: error.message };
   }
 }

@@ -161,7 +161,7 @@ function buildLeadEmail(lead) {
   };
 }
 
-async function sendNewLeadEmail(lead) {
+async function sendNewLeadEmail(lead, { resendOf = "" } = {}) {
   const transporter = getTransporter();
   if (!transporter) {
     console.warn("[email] GMAIL_USER / GMAIL_APP_PASSWORD not set — skipping email notification (lead still saved).");
@@ -183,11 +183,11 @@ async function sendNewLeadEmail(lead) {
       text
     });
     console.log("[email] Sent lead notification:", info.messageId);
-    await logSend({ kind: "lead_alert", to, ok: true, refId: lead.id });
+    await logSend({ kind: "lead_alert", to, ok: true, refId: lead.id, resendOf });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error("[email] Failed to send notification:", error.message);
-    await logSend({ kind: "lead_alert", to, ok: false, error: error.message, refId: lead.id });
+    await logSend({ kind: "lead_alert", to, ok: false, error: error.message, refId: lead.id, resendOf });
     return { ok: false, error: error.message };
   }
 }

@@ -137,6 +137,10 @@
             <a class="pjl-btn pjl-btn-outline" href="/admin/assignment-messages">Edit the messages</a>
             <button type="button" class="pjl-btn pjl-btn-danger" id="blastBtn">Send the blast</button>
             <button type="button" class="pjl-btn pjl-btn-outline" id="scheduleBlastBtn">Schedule the blast</button>
+            <!-- Appears only when a step attempted a message and never
+                 delivered it — normally there is nothing owed and no
+                 button. -->
+            <button type="button" class="pjl-btn pjl-btn-danger" id="catchUpBtn" hidden>Send the messages that never went out</button>
           </div>
           <p class="sp-cadence-status" id="cadenceStatus" hidden></p>
           <div class="sp-preflight-out" id="preflightOut" hidden></div>
