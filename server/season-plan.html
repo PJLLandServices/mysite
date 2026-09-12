@@ -228,6 +228,45 @@
     </div>
   </div>
 
+  <!-- Day preview. The route day as it WOULD be with one more stop on
+       it: numbered by the same sequencer, the road line drawn through
+       it, and the drive / home-time change spelled out. Nothing is
+       added until the Add button. -->
+  <div class="sp-modal" id="previewModal" hidden>
+    <div class="sp-modal-card sp-preview-card" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
+      <header class="sp-modal-head">
+        <div>
+          <h2 id="previewTitle">Where does it fit?</h2>
+          <p class="sp-preview-sub" id="previewSub"></p>
+        </div>
+        <button type="button" class="sp-modal-close" id="previewClose" aria-label="Close">&times;</button>
+      </header>
+      <div class="sp-preview-controls">
+        <label>Day
+          <select id="previewDay" aria-label="Which day to look at"></select>
+        </label>
+        <label>Half
+          <select id="previewBucket" aria-label="Morning or afternoon">
+            <option value="morning">morning</option>
+            <option value="afternoon">afternoon</option>
+          </select>
+        </label>
+      </div>
+      <div class="sp-stage-chips sp-preview-chips" id="previewChips"></div>
+      <p class="sp-modal-error" id="previewError" hidden></p>
+      <div class="sp-preview-body">
+        <div class="sp-preview-mapwrap">
+          <div class="sp-preview-map" id="previewMap"></div>
+        </div>
+        <ol class="sp-preview-stops" id="previewStops"></ol>
+      </div>
+      <footer class="sp-modal-foot">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="previewCancel">Not this day</button>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="previewAdd" disabled>Add to this day</button>
+      </footer>
+    </div>
+  </div>
+
   <div class="sp-toast" id="toast" hidden role="status"></div>
 
   <script src="/coverage-checker.js"></script>

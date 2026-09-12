@@ -211,10 +211,13 @@ const OPTS = { threshold: 15, tiers: [25, 40], todayKey: "2026-09-12", base: { l
   ok("…and says plainly when it can't rank, instead of a bare picker",
     /no coordinates Google will resolve/.test(page), "an unrankable row looks like every other row");
   ok("the picker's options are in ROUTING order with their cost",
-    /function dayPickerFor\(code, ranked\)/.test(page) && /\+\$\{cost\.addedDriveMinutes\} min/.test(page),
+    /function dayPickerFor\(row, ranked\)/.test(page) && /\+\$\{cost\.addedDriveMinutes\} min/.test(page),
     "the picker is still a blind calendar");
-  ok("there is a place-on-best button per row",
-    /Place on best day/.test(page) && /placeOnBest\(\[row\.code\]/.test(page), "no per-row place button");
+  // 2026-09-12: the per-row blind "Place on best day" became "See it on
+  // the best day" — the map with the stop on it, then his decision.
+  // scripts/test-day-map-preview.mjs pins that flow.
+  ok("there is a see-it-on-the-best-day button per row",
+    /See it on the best day/.test(page) && /openPreview\(row, date, null\)/.test(page), "no per-row preview button");
   ok("…and one for the lot, armed twice like every send on this page",
     /armTwice\(el\("unplannedPlaceAll"\)/.test(page) && /placeOnBest\("all"/.test(page), "no place-all, or it fires on one press");
 

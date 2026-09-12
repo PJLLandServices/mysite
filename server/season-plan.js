@@ -850,6 +850,8 @@
           arriveAt: t.arriveAt,
           address: found.stop.address || t.address || "",
           customerName: found.stop.customerName || "",
+          // A previewed stop — the one being looked at, not yet added.
+          candidate: found.stop.candidate === true,
           coords: { lat: Number(found.stop.coords.lat), lng: Number(found.stop.coords.lng) }
         };
       }
@@ -893,15 +895,19 @@
   const HOT_AMBER = "#E07B24";
 
   function pinIcon(stop, hot) {
+    // The preview's candidate stop is always lit: it is the one question
+    // on the map, and it wears the same ring a hovered stop does rather
+    // than a new colour to learn.
+    const lit = Boolean(hot || (stop && stop.candidate));
     return {
       path: google.maps.SymbolPath.CIRCLE,
-      scale: hot ? 15 : 13,
+      scale: lit ? 15 : 13,
       // A booked appointment is amber so it reads apart from a planned
       // stop, but it is now a NUMBERED stop on the same route line.
       fillColor: stop.booked ? HOT_AMBER : (stop.bucket === "morning" ? AM_GREEN : PM_GREEN),
       fillOpacity: 1,
-      strokeColor: hot ? HOT_AMBER : "#ffffff",
-      strokeWeight: hot ? 3 : 2
+      strokeColor: lit ? HOT_AMBER : "#ffffff",
+      strokeWeight: lit ? 3 : 2
     };
   }
 
@@ -915,7 +921,10 @@
     };
   }
 
-  async function drawDayMap(mapBox, listRoot, day) {
+  // `line`, when given, is a road line the caller already holds (the day
+  // preview fetches its own, for a day that is not stored anywhere to be
+  // asked for by date). Without it the stored day's line is fetched.
+  async function drawDayMap(mapBox, listRoot, day, { line = null } = {}) {
     // One numbered, sequenced set — plan stops AND booked appointments.
     const stops = mappableStops(day);
     if (!stops.length) {
@@ -957,11 +966,11 @@
     const markers = new Map();
     for (const stop of stops) {
       const marker = new google.maps.Marker({
-        position: stop.coords, map, icon: pinIcon(stop, false), zIndex: stop.booked ? 3 : 2,
+        position: stop.coords, map, icon: pinIcon(stop, false), zIndex: stop.candidate ? 4 : stop.booked ? 3 : 2,
         // Two digits fit here. Google's STATIC map markers take a single
         // character, which is why stops past nine used to lose their number.
         label: { text: String(stop.number), color: "#ffffff", fontSize: "12px", fontWeight: "700" },
-        title: `${stop.booked ? "Booked · " : "Stop "}${stop.number} · ${stop.arriveAt || ""} · ${stop.address}`
+        title: `${stop.candidate ? "NEW · Stop " : stop.booked ? "Booked · " : "Stop "}${stop.number} · ${stop.arriveAt || ""} · ${stop.address}`
       });
       marker.addListener("click", () => {
         info.setContent(
@@ -979,8 +988,10 @@
 
     map.fitBounds(bounds, 48);
 
-    linkRowsToPins(listRoot, markers);
-    if (stops.length) {
+    if (listRoot) linkRowsToPins(listRoot, markers);
+    if (line) {
+      paintLine(map, mapBox, line);
+    } else if (stops.length) {
       drawRoadLine(map, day, mapBox);
     } else {
       note(mapBox, "Nothing on this day has coordinates to draw.", false);
@@ -1018,8 +1029,22 @@
     try {
       const response = await fetch(url, { cache: "no-store" });
       const data = await response.json();
-      if (!response.ok || !data.ok || !Array.isArray(data.coords) || data.coords.length < 2) {
+      if (!response.ok || !data.ok) {
         note(mapBox, (data.errors || ["Could not draw the drive for this day."]).join(" "), true);
+        return;
+      }
+      paintLine(map, mapBox, data);
+    } catch (error) {
+      note(mapBox, `Could not draw the drive — ${error.message}`, true);
+    }
+  }
+
+  // The line itself, from a route-line answer — the stored day's or the
+  // preview's, drawn identically.
+  function paintLine(map, mapBox, data) {
+    try {
+      if (!data || !Array.isArray(data.coords) || data.coords.length < 2) {
+        note(mapBox, "Could not draw the drive for this day.", true);
         return;
       }
       const straight = data.source !== "google" && data.source !== "osrm";
@@ -1378,20 +1403,213 @@
 
     const act = document.createElement("div");
     act.className = "sp-standby-act";
-    if (row.rankable && row.best) {
-      const go = document.createElement("button");
-      go.type = "button";
-      go.className = "pjl-btn pjl-btn-outline sp-standby-book is-best";
-      go.textContent = "Place on best day";
-      go.addEventListener("click", async () => {
-        go.disabled = true;
-        await placeOnBest([row.code], () => { go.disabled = false; });
-      });
-      act.appendChild(go);
-    }
-    act.appendChild(dayPickerFor(row.code, row.days));
+    // SEE IT, THEN DECIDE. Patrick, 2026-09-12: "Can you do something
+    // that allows me to see the map of what the day would look like
+    // with the appointment incorporated, and I choose whether or not I
+    // want to add it to that day?" The button opens the best day's map
+    // with this stop numbered into it; the day picker beside it opens
+    // any other day the same way. Nothing is added until he says so in
+    // that window.
+    const see = document.createElement("button");
+    see.type = "button";
+    see.className = "pjl-btn pjl-btn-outline sp-standby-book sp-see-on-map" + (row.rankable && row.best ? " is-best" : "");
+    see.textContent = row.rankable && row.best ? "See it on the best day" : "See it on a day";
+    see.addEventListener("click", () => {
+      const first = ((current && current.days) || []).find((d) => !d.bookedOnly);
+      const date = (row.rankable && row.best) ? row.best.date : (first ? first.date : null);
+      if (!date) { showToast("No route days on this plan yet — pick a date with 'Look at a day…'.", "bad"); return; }
+      openPreview(row, date, null);
+    });
+    act.appendChild(see);
+    act.appendChild(dayPickerFor(row, row.days));
     wrap.append(who, act);
     return wrap;
+  }
+
+  // ---- Day preview: the day as it would be, with this stop on it -------
+  const previewModal = el("previewModal");
+  const previewTitle = el("previewTitle");
+  const previewSub = el("previewSub");
+  const previewChips = el("previewChips");
+  const previewDaySel = el("previewDay");
+  const previewBucketSel = el("previewBucket");
+  const previewMap = el("previewMap");
+  const previewStops = el("previewStops");
+  const previewError = el("previewError");
+  const previewAdd = el("previewAdd");
+  let previewState = null;   // { row, date, bucket, data }
+  let previewSeq = 0;
+
+  function closePreview() {
+    if (!previewModal) return;
+    previewModal.hidden = true;
+    previewState = null;
+  }
+  if (previewModal) {
+    el("previewClose")?.addEventListener("click", closePreview);
+    el("previewCancel")?.addEventListener("click", closePreview);
+    previewModal.addEventListener("click", (event) => { if (event.target === previewModal) closePreview(); });
+    document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !previewModal.hidden) closePreview(); });
+    previewDaySel?.addEventListener("change", () => {
+      if (!previewState || !previewDaySel.value) return;
+      loadPreview(previewState.row, previewDaySel.value, null);
+    });
+    previewBucketSel?.addEventListener("change", () => {
+      if (!previewState) return;
+      loadPreview(previewState.row, previewState.date, previewBucketSel.value);
+    });
+    previewAdd?.addEventListener("click", async () => {
+      if (!previewState || !previewState.data) return;
+      const { row, date, bucket } = previewState;
+      previewAdd.disabled = true;
+      const added = await addToDay(row.code, date, bucket, () => { previewAdd.disabled = false; });
+      if (added) closePreview();
+    });
+  }
+
+  // Route days in ROUTING order for this property — cheapest first, each
+  // with what it costs — the same order the day picker shows.
+  function orderedDaysFor(ranked) {
+    const costByDate = new Map((ranked || []).map((d) => [d.date, d]));
+    const planDays = ((current && current.days) || []).filter((d) => !d.bookedOnly);
+    const ordered = costByDate.size
+      ? [...planDays].sort((a, b) => {
+          const ca = costByDate.get(a.date)?.addedDriveMinutes, cb = costByDate.get(b.date)?.addedDriveMinutes;
+          if (ca == null && cb == null) return a.date < b.date ? -1 : 1;
+          if (ca == null) return 1;
+          if (cb == null) return -1;
+          return ca - cb || (a.date < b.date ? -1 : 1);
+        })
+      : planDays;
+    return ordered.map((day) => {
+      const cost = costByDate.get(day.date);
+      const costText = cost && cost.addedDriveMinutes != null
+        ? ` · +${cost.addedDriveMinutes} min${cost.offered ? "" : " (over the allowance)"}`
+        : "";
+      return { date: day.date, text: `${day.label || day.date} · ${prettyDate(day.date)}${costText}` };
+    });
+  }
+
+  function openPreview(row, date, bucket) {
+    if (!previewModal) return;
+    previewModal.hidden = false;
+    previewTitle.textContent = `${row.customerName || row.code} — where does it fit?`;
+    previewSub.textContent = row.address || row.code;
+    // The day list: every route day, cheapest first; a date the plan
+    // doesn't hold yet (from "Any other date…") is added as its own entry.
+    previewDaySel.innerHTML = "";
+    const days = orderedDaysFor(row.days);
+    if (!days.some((d) => d.date === date)) days.push({ date, text: `${prettyDate(date)} · new day` });
+    for (const d of days) {
+      const opt = document.createElement("option");
+      opt.value = d.date;
+      opt.textContent = d.text;
+      previewDaySel.appendChild(opt);
+    }
+    loadPreview(row, date, bucket);
+  }
+
+  async function loadPreview(row, date, bucket) {
+    const seq = ++previewSeq;
+    previewState = { row, date, bucket, data: null };
+    previewDaySel.value = date;
+    previewError.hidden = true;
+    previewAdd.disabled = true;
+    previewChips.innerHTML = "";
+    previewStops.innerHTML = "";
+    const oldNote = previewMap.parentElement.querySelector(".sp-map-note");
+    if (oldNote) oldNote.remove();
+    previewMap.innerHTML = '<p class="sp-preview-loading">Working out the day…</p>';
+    try {
+      const q = new URLSearchParams({ code: row.code });
+      if (bucket) q.set("bucket", bucket);
+      const response = await fetch(`${base()}/preview/${date}?${q}`, { cache: "no-store" });
+      const data = await response.json();
+      if (seq !== previewSeq) return;   // he moved on to another day
+      if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't work out that day."]).join(" "));
+      previewState = { row, date, bucket: data.bucket, data };
+      previewBucketSel.value = data.bucket;
+      renderPreviewChips(data);
+      renderPreviewStops(data);
+      previewMap.innerHTML = "";
+      await drawDayMap(previewMap, previewStops, data.day, { line: data.line });
+      previewAdd.disabled = false;
+      previewAdd.textContent = `Add to ${prettyDate(date)} ${data.bucket}`;
+    } catch (error) {
+      if (seq !== previewSeq) return;
+      previewMap.innerHTML = "";
+      previewError.hidden = false;
+      previewError.textContent = error.message;
+    }
+  }
+
+  function renderPreviewChips(data) {
+    const chip = (text, cls = "") => {
+      const c = document.createElement("span");
+      c.className = `sp-tag${cls}`;
+      c.textContent = text;
+      previewChips.appendChild(c);
+    };
+    const b = data.before || {}, a = data.after || {};
+    const delta = data.addedDriveMinutes;
+    if (a.driveMinutes != null) {
+      chip(`Driving: ${b.driveMinutes != null ? `${b.driveMinutes} → ` : ""}${a.driveMinutes} min`
+        + (delta != null ? ` (${delta >= 0 ? "+" : ""}${delta})` : ""),
+      delta != null && delta > 15 ? " is-bad" : "");
+    }
+    if (a.homeAt) chip(`Home: ${b.homeAt && b.homeAt !== a.homeAt ? `${b.homeAt} → ` : ""}${a.homeAt}`);
+    chip(`${b.stops != null ? `${b.stops} → ` : ""}${a.stops} stop${a.stops === 1 ? "" : "s"}`,
+      current && current.dayCap && a.stops > current.dayCap ? " is-bad" : "");
+    if (data.candidate) chip(`New stop ${data.candidate.stopNumber}${data.candidate.arriveAt ? ` · arrives ${data.candidate.arriveAt}` : ""}`, " is-candidate");
+    for (const f of a.flags || []) chip(f, " is-bad");
+    if (data.isNewDay) chip("This would be a new route day", " is-booked");
+  }
+
+  function renderPreviewStops(data) {
+    const day = data.day || {};
+    const byCode = new Map();
+    for (const st of [...(day.morning || []), ...(day.afternoon || [])]) byCode.set(st.code, st);
+    for (const bk of day.booked || []) if (bk.mapCode) byCode.set(bk.mapCode, { ...bk, code: bk.mapCode });
+    for (const t of day.timeline || []) {
+      const st = byCode.get(t.propertyCode);
+      if (!st) continue;
+      const li = document.createElement("li");
+      li.className = "sp-stop sp-preview-stop" + (st.candidate ? " is-candidate" : st.booked ? " is-booked" : "");
+      li.dataset.code = t.propertyCode;
+      const n = document.createElement("span");
+      n.className = "sp-preview-n";
+      n.textContent = String(t.stopNumber);
+      const body = document.createElement("span");
+      body.innerHTML = `<strong>${escapeHtml(st.customerName || st.code || "")}</strong>`
+        + `${st.candidate ? ' <em class="sp-preview-new">NEW</em>' : ""}`
+        + `<br>${escapeHtml(st.address || "")}`
+        + `${t.arriveAt ? ` · ${escapeHtml(t.arriveAt)}` : ""}`;
+      li.append(n, body);
+      previewStops.appendChild(li);
+    }
+  }
+
+  // The one write: put the code on the day. Shared by the preview's Add
+  // and the "Any other date…" path.
+  async function addToDay(code, toDate, toBucket, revert) {
+    try {
+      const response = await fetch(`${base()}/add`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ propertyCode: code, toDate, toBucket })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't add that stop."]).join(" "));
+      showToast(`${code} added to ${prettyDate(toDate)} ${toBucket}. Run Assign to book it.`);
+      render(data.plan);
+      selectDay(toDate, { flashCode: code });
+      loadUnplanned();
+      return true;
+    } catch (error) {
+      showToast(error.message, "bad");
+      if (revert) revert();
+      return false;
+    }
   }
 
   // Place the named codes on their cheapest day, server-side, by the same
@@ -1420,38 +1638,25 @@
 
   // Same shape as the move picker: every route day × bucket, plus "any
   // other date" which grows a new day server-side.
-  function dayPickerFor(code, ranked) {
+  // Every day opens the PREVIEW for that day — the map with this stop on
+  // it — never a blind add. The one write is the Add button in that
+  // window.
+  function dayPickerFor(row, ranked) {
+    const code = row.code;
     const select = document.createElement("select");
-    select.setAttribute("aria-label", `Put ${code} on a day`);
+    select.setAttribute("aria-label", `Look at ${code} on a day`);
     const head = document.createElement("option");
     head.value = "";
-    head.textContent = "Put on…";
+    head.textContent = "Look at a day…";
     select.appendChild(head);
     // Options in ROUTING order when the row is ranked — cheapest day
     // first, each labelled with what it costs — so the list itself is
     // the routing advice. Unranked rows fall back to calendar order.
-    const costByDate = new Map((ranked || []).map((d) => [d.date, d]));
-    const planDays = ((current && current.days) || []).filter((d) => !d.bookedOnly);
-    const ordered = costByDate.size
-      ? [...planDays].sort((a, b) => {
-          const ca = costByDate.get(a.date)?.addedDriveMinutes, cb = costByDate.get(b.date)?.addedDriveMinutes;
-          if (ca == null && cb == null) return a.date < b.date ? -1 : 1;
-          if (ca == null) return 1;
-          if (cb == null) return -1;
-          return ca - cb || (a.date < b.date ? -1 : 1);
-        })
-      : planDays;
-    for (const day of ordered) {
-      const cost = costByDate.get(day.date);
-      const costText = cost && cost.addedDriveMinutes != null
-        ? ` · +${cost.addedDriveMinutes} min${cost.offered ? "" : " (over the allowance)"}`
-        : "";
-      for (const bucket of ["morning", "afternoon"]) {
-        const opt = document.createElement("option");
-        opt.value = `${day.date}|${bucket}`;
-        opt.textContent = `${day.label || day.date} · ${bucket}${costText}`;
-        select.appendChild(opt);
-      }
+    for (const day of orderedDaysFor(ranked)) {
+      const opt = document.createElement("option");
+      opt.value = day.date;
+      opt.textContent = day.text;
+      select.appendChild(opt);
     }
     const custom = document.createElement("option");
     custom.value = "__custom";
@@ -1459,21 +1664,9 @@
     select.appendChild(custom);
 
     const doAdd = async (toDate, toBucket, revert) => {
-      try {
-        const response = await fetch(`${base()}/add`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ propertyCode: code, toDate, toBucket })
-        });
-        const data = await response.json();
-        if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't add that stop."]).join(" "));
-        showToast(`${code} added to ${toDate} ${toBucket}. Run Assign to book it.`);
-        render(data.plan);
-        loadUnplanned();
-      } catch (error) {
-        showToast(error.message, "bad");
-        if (revert) revert();
-      }
+      openPreview(row, toDate, toBucket);
+      select.value = "";
+      if (revert) revert();
     };
 
     select.addEventListener("change", async () => {
@@ -1492,7 +1685,7 @@
         }
         const go = document.createElement("button");
         go.type = "button";
-        go.textContent = "Add";
+        go.textContent = "Look";
         const cancel = document.createElement("button");
         cancel.type = "button";
         cancel.className = "sp-move-cancel";
@@ -1509,9 +1702,9 @@
         });
         return;
       }
-      const [toDate, toBucket] = select.value.split("|");
+      const toDate = select.value;
       select.disabled = true;
-      await doAdd(toDate, toBucket, () => { select.disabled = false; select.value = ""; });
+      await doAdd(toDate, null, () => { select.disabled = false; select.value = ""; });
     });
     return select;
   }
