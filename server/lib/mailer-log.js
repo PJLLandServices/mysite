@@ -24,6 +24,10 @@ const rateLimit = require("./rate-limit");
 const { sendEmailFailureAlertSms } = require("./notify-sms");
 
 const FILE = path.join(__dirname, "..", "data", "email-log.json");
+// Failures Patrick has looked at and waved off — reached by phone, stale,
+// or handled some other way. Kept beside the ledger, never in it: the
+// ledger is what happened, this is what he decided about it.
+const DISMISSED_FILE = path.join(__dirname, "..", "data", "email-dismissed.json");
 
 const RETENTION_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 const MAX_ENTRIES = 5000;
@@ -195,9 +199,43 @@ const RESENDABLE_KINDS = new Set(["booking_cancel", "lead_alert"]);
 //
 // Returns the REAL recipient — this is server-side data and the resend
 // needs it. Mask at the route.
-async function outstandingFailures({ sinceMs = 30 * 24 * 60 * 60 * 1000, now = Date.now() } = {}) {
+async function readDismissed() {
+  try {
+    const raw = await fs.readFile(DISMISSED_FILE, "utf8");
+    const parsed = JSON.parse(raw || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+// Wave off failures by id. They stay in the ledger (the outage is still
+// history); they leave the "never went out" list. Returns how many were
+// newly dismissed.
+async function dismissFailures(ids, { by = "admin", note = "" } = {}) {
+  const wanted = [...new Set((Array.isArray(ids) ? ids : []).map(String).filter(Boolean))];
+  if (!wanted.length) return { ok: true, dismissed: 0 };
+  const current = await readDismissed();
+  const now = new Date().toISOString();
+  let dismissed = 0;
+  for (const id of wanted) {
+    if (current[id]) continue;
+    current[id] = { ts: now, by: String(by).slice(0, 120), ...(note ? { note: String(note).slice(0, 200) } : {}) };
+    dismissed += 1;
+  }
+  if (dismissed) {
+    await fs.mkdir(path.dirname(DISMISSED_FILE), { recursive: true });
+    await fs.writeFile(DISMISSED_FILE, JSON.stringify(current, null, 2) + "\n", "utf8");
+  }
+  return { ok: true, dismissed };
+}
+
+// `dismissed` may be handed in (a Set of failure ids) — tests do — else
+// it is read from the file beside the ledger.
+async function outstandingFailures({ sinceMs = 30 * 24 * 60 * 60 * 1000, now = Date.now(), dismissed = null } = {}) {
   const records = await readAll();
   const cutoff = now - sinceMs;
+  const waved = dismissed instanceof Set ? dismissed : new Set(Object.keys(await readDismissed()));
 
   // Latest success per key first, so one pass can answer "anything since?"
   const lastOkByKey = new Map();
@@ -220,6 +258,7 @@ async function outstandingFailures({ sinceMs = 30 * 24 * 60 * 60 * 1000, now = D
   }
 
   return [...newestByKey.values()]
+    .filter((r) => !waved.has(failureId(r)))
     .sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0))
     .map((r) => ({
       id: failureId(r),
@@ -275,6 +314,7 @@ async function healthSummary() {
 
 module.exports = {
   logSend, healthSummary, maskRecipient, outstandingFailures, failureId,
+  dismissFailures, readDismissed, DISMISSED_FILE,
   KINDS: [...KINDS], CUSTOMER_FACING: [...CUSTOMER_FACING],
   RESENDABLE_KINDS: [...RESENDABLE_KINDS]
 };

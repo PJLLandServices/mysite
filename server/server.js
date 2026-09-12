@@ -7646,11 +7646,37 @@ async function handleApi(req, res, pathname) {
       // that later went through drops off it by itself. Masked here, the
       // same as the log: the real address stays server-side and the resend
       // reads it from the ledger, so nothing is taken from the browser.
-      const outstanding = (await mailerLog.outstandingFailures()).map((f) => ({
+      const raw = await mailerLog.outstandingFailures();
+      const outstanding = raw.map((f) => ({
         id: f.id, ts: f.ts, kind: f.kind, refId: f.refId,
         to: mailerLog.maskRecipient(f.to), error: f.error, resendable: f.resendable
       }));
-      return sendJson(res, 200, { ok: true, ...summary, outstanding });
+      // Blast emails that never went out are the cadence's to re-send —
+      // its catch-up rebuilds each one from the booking and honours the
+      // send window — so the panel is told which season's catch-up
+      // covers them, rather than printing "send by hand" forty times.
+      // (Patrick, 2026-09-12, on that list: "how do we get rid of all
+      // this garbage.")
+      let catchUp = null;
+      try {
+        const seasons = new Map();
+        for (const f of raw) {
+          if (f.kind !== "outreach" || !f.refId) continue;
+          const b = await bookings.get(f.refId);
+          const a = b && b.assignment;
+          if (!a || !a.season || !a.year) continue;
+          const key = `${a.season}-${a.year}`;
+          seasons.set(key, (seasons.get(key) || 0) + 1);
+        }
+        const top = [...seasons.entries()].sort((x, y) => y[1] - x[1])[0];
+        if (top) {
+          const [season, year] = top[0].split("-");
+          catchUp = { season, year: Number(year), count: top[1] };
+        }
+      } catch (err) {
+        console.warn("[email-health] catch-up pointer skipped:", err?.message);
+      }
+      return sendJson(res, 200, { ok: true, ...summary, outstanding, catchUp });
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: error?.message || "Email health read failed." });
     }
@@ -7672,6 +7698,29 @@ async function handleApi(req, res, pathname) {
   //
   // The list of what may be resent is the ledger's (RESENDABLE_KINDS) —
   // there is no second copy of that judgment here.
+  // POST /api/admin/email-health/dismiss — wave off failures Patrick has
+  // dealt with some other way (phoned, stale, sent by hand). `ids` or
+  // `all: true` for everything currently outstanding. The ledger keeps
+  // the record; the list stops nagging.
+  if (pathname === "/api/admin/email-health/dismiss" && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const body = await parseRequestBody(req);
+      const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+      const wantsAll = body.all === true;
+      if (!wantsAll && !ids.length) {
+        return sendJson(res, 400, { ok: false, errors: ["Nothing selected to dismiss."] });
+      }
+      const outstanding = await mailerLog.outstandingFailures();
+      const targets = outstanding.filter((f) => wantsAll || ids.includes(f.id)).map((f) => f.id);
+      const result = await mailerLog.dismissFailures(targets, { by: session?.email || session?.name || "admin" });
+      return sendJson(res, 200, { ok: true, dismissed: result.dismissed, remaining: outstanding.length - targets.length });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't dismiss those."] });
+    }
+  }
+
   if (pathname === "/api/admin/email-health/resend" && req.method === "POST") {
     try {
       const session = await requireAdmin(req);
