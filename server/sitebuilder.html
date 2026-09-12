@@ -99,7 +99,8 @@
     body.mp-open:not(.lp-open) > *:not(#mpOverlay){display:none!important}
     body.mp-open:not(.lp-open) #mpOverlay{position:static;display:block;background:#fff;padding:0}
     body.mp-open:not(.lp-open) #mpOverlay .sk-panel{width:auto;max-width:100%;height:auto;max-height:none;border-radius:0;box-shadow:none}
-    body.mp-open:not(.lp-open) #mpOverlay .mp-bar, body.mp-open:not(.lp-open) #mpOverlay .sk-foot, body.mp-open:not(.lp-open) #mpOverlay .sk-under, body.mp-open:not(.lp-open) #mpOverlay .pz-ctrl{display:none!important}
+    body.mp-open:not(.lp-open) #mpOverlay .mp-rail, body.mp-open:not(.lp-open) #mpOverlay .mp-side, body.mp-open:not(.lp-open) #mpOverlay .sk-foot, body.mp-open:not(.lp-open) #mpOverlay .sk-under, body.mp-open:not(.lp-open) #mpOverlay .pz-ctrl{display:none!important}
+    body.mp-open:not(.lp-open) #mpOverlay .mp-work{display:block}
     body.mp-open:not(.lp-open) #mpOverlay svg{max-width:100%;height:auto}
     body.cust-open > *:not(#custOverlay){display:none!important}
     body.cust-open #custOverlay{position:static;display:block;background:#fff;padding:0}
@@ -252,28 +253,88 @@
   .sk-vcount.bad{color:var(--warn);font-weight:700}
   .lo-edge{fill:#fff;stroke:var(--z3);stroke-width:2;cursor:grab}
   .lo-rad{fill:var(--z3);stroke:#fff;stroke-width:2;cursor:grab}
-  .mp-legend{padding:8px 16px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;
-    gap:6px 14px;align-items:center;background:#fbfdfb;font-size:12px;max-height:96px;overflow:auto}
-  .mp-legend .mpz{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
-  .mp-legend button.mpz{background:none;border:1px solid transparent;border-radius:7px;
-    padding:3px 8px;min-height:0;font:inherit;font-size:12.5px;color:inherit;cursor:pointer}
-  .mp-legend button.mpz:hover{border-color:var(--line);background:#fff}
-  .mp-legend button.mpz.on{border-color:var(--green);background:var(--green-l)}
-  .mp-legend .mpz i{width:11px;height:11px;border-radius:3px;display:inline-block;flex:0 0 auto}
-  .mp-legend .mpz b{font-weight:700}
-  .mp-legend .mpz span{color:var(--muted)}
-  .mp-off{color:var(--warn);font-weight:600}
-  .mp-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
-          padding:7px 16px;border-bottom:1px solid var(--line);background:#fbfdfb}
-  .mp-bar .sk-tools button{min-height:32px;padding:5px 10px;font-size:12.5px}
-  .mp-route{font-size:12px;color:var(--muted);text-align:right}
+  /* ---- Master plan: editor layout (tool rail · canvas · layers/properties) ---- */
+  .mp-work{display:flex;flex:1 1 auto;min-height:0}
+  .mp-work .sk-body{flex:1 1 auto;min-width:0}
+  .mp-rail{flex:0 0 46px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 0;
+    background:#f1f5f2;border-right:1px solid var(--line);overflow:visible;position:relative;z-index:2}
+  .mp-rail hr{width:26px;border:0;border-top:1px solid var(--line);margin:4px 0}
+  .mp-rail button{position:relative;width:36px;height:36px;min-height:0;padding:0;margin:0;border:1px solid transparent;
+    border-radius:8px;background:none;color:var(--ink);cursor:pointer;display:flex;align-items:center;justify-content:center}
+  .mp-rail button svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+  .mp-rail button:hover{background:#fff;border-color:var(--line)}
+  .mp-rail button.on{background:var(--green);color:#fff;border-color:var(--green)}
+  .mp-rail button.off{color:#9aa5a0}
+  .mp-rail button.del:hover{color:var(--warn);border-color:var(--warn)}
+  .mp-rail button[data-tip]::after{content:attr(data-tip);position:absolute;left:calc(100% + 10px);top:50%;transform:translateY(-50%);
+    background:#1a2320;color:#fff;font-size:12px;line-height:1.35;padding:6px 9px;border-radius:6px;white-space:normal;width:max-content;
+    max-width:260px;text-align:left;pointer-events:none;opacity:0;transition:opacity .12s;z-index:20;box-shadow:0 4px 14px rgba(0,0,0,.25)}
+  .mp-rail button[data-tip]::before{content:"";position:absolute;left:calc(100% + 4px);top:50%;transform:translateY(-50%);
+    border:6px solid transparent;border-right-color:#1a2320;pointer-events:none;opacity:0;transition:opacity .12s;z-index:20}
+  .mp-rail button[data-tip]:hover::after,.mp-rail button[data-tip]:hover::before{opacity:1}
+  .mp-rail button[data-tip]::after b{display:block}
+  .mp-side{flex:0 0 300px;display:flex;flex-direction:column;min-height:0;border-left:1px solid var(--line);background:#fbfdfb;font-size:12.5px;overflow:auto}
+  .mp-sec{border-bottom:1px solid var(--line)}
+  .mp-sec>h4{margin:0;padding:7px 12px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+    background:#f1f5f2;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
+  .mp-sec>h4 .n{margin-left:auto;font-weight:400;letter-spacing:0;text-transform:none}
+  .mp-sec>h4::before{content:"▾";font-size:10px;width:10px}
+  .mp-sec.closed>h4::before{content:"▸"}
+  .mp-sec.closed>.mp-secbody{display:none}
+  .mp-secbody{padding:6px 10px 8px}
+  .mp-layers{display:flex;flex-direction:column;gap:1px;padding:4px 4px 6px}
+  .mp-layer{display:flex;align-items:center;gap:7px;padding:4px 6px;border-radius:7px;border:1px solid transparent;cursor:pointer;min-width:0}
+  .mp-layer:hover{background:#fff;border-color:var(--line)}
+  .mp-layer.on{background:var(--green-l);border-color:var(--green)}
+  .mp-layer.hid{opacity:.5}
+  .mp-layer.hid b{text-decoration:line-through;text-decoration-color:var(--muted)}
+  .mp-layer .eye{flex:0 0 22px;width:22px;height:22px;min-height:0;padding:0;margin:0;border:0;background:none;color:var(--ink);cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:5px}
+  .mp-layer .eye:hover{background:#e6ece8}
+  .mp-layer .eye svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .mp-layer .eye.off{color:#9aa5a0}
+  .mp-layer i{width:12px;height:12px;border-radius:3px;display:inline-block;flex:0 0 auto}
+  .mp-layer b{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1 1 auto}
+  .mp-layer span{color:var(--muted);white-space:nowrap;font-size:11.5px}
+  .mp-layer.grp{margin-top:6px;padding-top:6px;border-top:1px solid var(--line);border-radius:0}
+  .mp-layer.grp:hover{border-color:transparent;border-top-color:var(--line)}
+  .mp-off{color:var(--warn);font-weight:600;font-size:11.5px;padding:4px 8px;display:block}
+  .mp-kv{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;margin:4px 0 6px;font-size:12px}
+  .mp-kv dt{color:var(--muted);white-space:nowrap}
+  .mp-kv dd{margin:0;color:var(--ink);font-weight:600;min-width:0}
+  .mp-kv dd small{font-weight:400;color:var(--muted)}
+  .mp-sub{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:8px 0 3px;font-weight:600}
+  .mp-acts{display:flex;flex-wrap:wrap;gap:4px 6px;margin-top:6px}
+  .mp-acts .lnk,.mp-route .lnk{background:none;border:1px solid var(--line);border-radius:6px;padding:3px 8px;min-height:0;
+    font:inherit;font-size:12px;color:var(--green-d);cursor:pointer;width:auto}
+  .mp-acts .lnk:hover,.mp-route .lnk:hover{background:#fff;border-color:var(--green)}
+  .mp-acts .lnk.cur,.mp-route .lnk.cur{font-weight:700;border-color:var(--green);background:var(--green-l)}
+  .mp-acts .lnk.pri{background:var(--green);color:#fff;border-color:var(--green)}
+  .mp-acts .lnk.pri:hover{background:var(--green-d)}
+  .mp-boxes{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+  .mp-route{font-size:12px;color:var(--muted);display:block;line-height:1.5}
   .mp-route b{color:var(--ink);font-weight:700}
-  .mp-route .mp-size{font:inherit;font-size:11.5px;padding:1px 4px;border:1px solid var(--line);border-radius:6px;background:#fff;min-height:0;vertical-align:baseline}
-  .mp-route .lnk{background:none;border:0;padding:0 3px;min-height:0;font:inherit;
-    color:var(--green);text-decoration:underline;cursor:pointer}
-  .mp-route .lnk.cur{font-weight:700;text-decoration:none;
-    border:1px solid var(--green);border-radius:5px;background:var(--green-l)}
-  .mp-route .mp-warnpipe{color:var(--warn);font-weight:600}
+  .mp-route:empty{display:none}
+  .mp-route+.mp-route:not(:empty){margin-top:6px;padding-top:6px;border-top:1px dashed var(--line)}
+  .mp-size{font:inherit;font-size:12.5px;padding:5px 8px;border:1px solid var(--line);border-radius:7px;background:#fff;min-height:0;width:100%;margin:2px 0 4px}
+  .mp-warnpipe{color:var(--warn);font-weight:600}
+  .mp-runs{width:100%;border-collapse:collapse;font-size:11.5px;margin-top:2px}
+  .mp-runs td{padding:2px 4px;border-bottom:1px solid #eef2ef;white-space:nowrap}
+  .mp-runs td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+  .mp-runs tr.tot td{font-weight:700;border-bottom:0;border-top:1px solid var(--line)}
+  .mp-empty{color:var(--muted);font-style:italic;padding:2px 0 4px}
+  .mp-help{font-size:12px;color:var(--muted);line-height:1.5;margin:0}
+  .mp-help b{color:var(--ink)}
+  @media (max-width:900px){
+    .mp-work{flex-direction:column;min-height:0;overflow:hidden}
+    .mp-rail{flex:0 0 auto;flex-direction:row;flex-wrap:nowrap;justify-content:flex-start;gap:2px;overflow-x:auto;overflow-y:hidden;
+      border-right:0;border-bottom:1px solid var(--line);padding:4px 6px;order:0;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+    .mp-rail::-webkit-scrollbar{display:none}
+    .mp-rail button{flex:0 0 34px;width:34px;height:34px}
+    .mp-rail hr{flex:0 0 auto;width:0;height:24px;border-top:0;border-left:1px solid var(--line);margin:0 3px}
+    .mp-rail button[data-tip]::after,.mp-rail button[data-tip]::before{display:none}   /* no hover on touch */
+    .mp-work .sk-body{order:1;flex:1 1 auto;min-height:38vh}
+    .mp-side{order:2;flex:0 1 auto;max-height:34vh;border-left:0;border-top:1px solid var(--line)}
+  }
   .sk-vert{fill:#fff;stroke:var(--green-d);stroke-width:2;cursor:grab}
   .sk-handle{fill:var(--z3);stroke:#fff;stroke-width:2;cursor:grab}
   .sk-center{fill:var(--green-d);stroke:#fff;stroke-width:2;cursor:grab}
@@ -478,30 +539,64 @@
       </span>
       <span class="pz-ctrl"><button type="button" onclick="mpZoom(0.7)" aria-label="Zoom out">&minus;</button><button type="button" onclick="mpFit()">Fit</button><button type="button" onclick="mpZoom(1.4)" aria-label="Zoom in">+</button></span>
     </div>
-    <div class="mp-legend" id="mpLegend"></div>
-    <div class="mp-bar">
-      <div class="sk-tools" id="mpTools">
-        <button type="button" id="mpToolpan" class="on" onclick="mpSetTool('pan')">Move</button>
-        <button type="button" id="mpToolpoc" onclick="mpSetTool('poc')">Point of connection</button>
-        <button type="button" id="mpToolmanifold" onclick="mpSetTool('manifold')">Manifold</button>
-        <button type="button" id="mpToolbend" onclick="mpSetTool('bend')">Mainline bend</button>
-        <button type="button" id="mpToolsplit" onclick="mpSetTool('split')" title="Pick a zone, then draw a line across the driveway: the heads on each side get their own valve, wired as one station">Split zone</button>
-        <button type="button" id="mpTool3tree" onclick="mpSetTool('tree')" title="Pick a zone, then click the drawing to drop a tree — the lateral runs to each tree and tees">Tree</button>
-        <button type="button" id="mpToollat" onclick="mpSetTool('lat')" title="Pick a zone, then click to add bends to its lateral run — drag bends to move them, select a bend before clicking to tee off it, Delete removes one">Lateral bend</button>
-        <button type="button" class="ghost" onclick="mpAutoRoute()">Auto-route</button>
-        <button type="button" class="ghost" onclick="mpUndoPoint()">Undo point</button>
-        <button type="button" class="del" onclick="mpClearRouting()">Clear routing</button>
-        <button type="button" id="mpToolLat" class="on" onclick="mpToggleLaterals()">Laterals</button>
-        <button type="button" id="mpToolWire" class="on" onclick="mpToggleWire()">Wire</button>
+    <div class="mp-work">
+      <div class="mp-rail" id="mpTools" role="toolbar" aria-label="Master plan tools">
+        <button type="button" id="mpToolpan" class="on" onclick="mpSetTool('pan')" data-tip="Move — click a zone, head or pipe to work on it; drag any marker; Ctrl-drag or scroll to pan and zoom. Tap bare ground to show all." aria-label="Move">
+          <svg viewBox="0 0 24 24"><path d="M5 3l14 9-6.5 1.5L9 20z"/></svg></button>
+        <button type="button" id="mpToolpoc" onclick="mpSetTool('poc')" data-tip="Point of connection — click the meter or tap on the plan. The mainline starts here." aria-label="Point of connection">
+          <svg viewBox="0 0 24 24"><path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z"/><circle cx="12" cy="14" r="2"/></svg></button>
+        <button type="button" id="mpToolmanifold" onclick="mpSetTool('manifold')" data-tip="Manifold — click to drop a valve box. Zones go to the nearest box unless you put them somewhere else." aria-label="Manifold">
+          <svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="11" rx="2"/><path d="M8 7v11M12 7v11M16 7v11M2 12h2M20 12h2"/></svg></button>
+        <button type="button" id="mpToolbend" onclick="mpSetTool('bend')" data-tip="Mainline bend — click to run the mainline through a point. Select a node first to tee off it." aria-label="Mainline bend">
+          <svg viewBox="0 0 24 24"><path d="M3 20L9 8l6 8 6-12"/><circle cx="9" cy="8" r="1.6"/><circle cx="15" cy="16" r="1.6"/></svg></button>
+        <hr>
+        <button type="button" id="mpToollat" onclick="mpSetTool('lat')" data-tip="Lateral bend — with a zone selected: click on the pipe to bend it, off the pipe to branch out, or select a bend first to tee from it. Drag bends; Delete removes one." aria-label="Lateral bend">
+          <svg viewBox="0 0 24 24"><path d="M4 19h6v-7h10"/><path d="M10 12V5h6"/><circle cx="10" cy="12" r="1.6"/></svg></button>
+        <button type="button" id="mpToolsplit" onclick="mpSetTool('split')" data-tip="Split zone — with a zone selected, click two points to draw a line across it. Heads on each side get their own valve, wired as one station." aria-label="Split zone">
+          <svg viewBox="0 0 24 24"><path d="M4 4l16 16"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="17.5" cy="6.5" r="2.5"/><path d="M4 20l5-5M20 4l-5 5"/></svg></button>
+        <button type="button" id="mpTool3tree" onclick="mpSetTool('tree')" data-tip="Tree — with a drip or tree zone selected, click to drop a tree. The lateral runs to each tree and tees. Drag to move, Delete to remove." aria-label="Tree">
+          <svg viewBox="0 0 24 24"><path d="M12 3l6 8h-3l4 6H5l4-6H6z"/><path d="M12 17v4"/></svg></button>
+        <hr>
+        <button type="button" onclick="mpAutoRoute()" data-tip="Auto-route — run the mainline from the point of connection to every manifold in one go." aria-label="Auto-route">
+          <svg viewBox="0 0 24 24"><path d="M4 20l9-9"/><path d="M14 4l1.5 3 3 1.5-3 1.5L14 13l-1.5-3-3-1.5 3-1.5z"/><path d="M19 15l.8 1.7 1.7.8-1.7.8L19 20l-.8-1.7-1.7-.8 1.7-.8z"/></svg></button>
+        <button type="button" onclick="mpUndoPoint()" data-tip="Undo point — take back the last mainline node placed." aria-label="Undo point">
+          <svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
+        <button type="button" class="del" onclick="mpClearRouting()" data-tip="Clear routing — remove the point of connection, mainline and manifolds on this sheet." aria-label="Clear routing">
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+        <hr>
+        <button type="button" id="mpToolLat" class="on" onclick="mpToggleLaterals()" data-tip="Laterals layer — show or hide every zone's lateral pipe." aria-label="Toggle laterals">
+          <svg viewBox="0 0 24 24"><path d="M3 12h7l2-5 2 10 2-5h5"/></svg></button>
+        <button type="button" id="mpToolWire" class="on" onclick="mpToggleWire()" data-tip="Wire layer — show or hide the control wire runs." aria-label="Toggle wire">
+          <svg viewBox="0 0 24 24"><path d="M3 16c3 0 3-8 6-8s3 8 6 8 3-8 6-8"/></svg></button>
+        <hr>
+        <button type="button" onclick="mpToggleHelp()" data-tip="How this editor works" aria-label="Help">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .9-1 1.7"/><circle cx="12" cy="17" r=".6"/></svg></button>
       </div>
-      <span class="sk-grow"></span>
-      <span class="mp-route" id="mpRoute"></span>
-      <span class="mp-route" id="mpWireRead"></span>
-      <span class="mp-route" id="mpZoneSel"></span>
+      <div class="sk-body" id="mpBody"></div>
+      <div class="mp-side" id="mpSide">
+        <div class="mp-sec" id="mpSecLayers">
+          <h4 onclick="mpSecToggle(this)">Layers <span class="n" id="mpLayersN"></span></h4>
+          <div class="mp-secbody" style="padding:0"><div class="mp-layers" id="mpLegend"></div></div>
+        </div>
+        <div class="mp-sec" id="mpSecZone">
+          <h4 onclick="mpSecToggle(this)">Zone <span class="n" id="mpZoneN"></span></h4>
+          <div class="mp-secbody" id="mpZoneSel"></div>
+        </div>
+        <div class="mp-sec" id="mpSecSite">
+          <h4 onclick="mpSecToggle(this)">Site totals</h4>
+          <div class="mp-secbody">
+            <div class="mp-route" id="mpRoute"></div>
+            <div class="mp-route" id="mpWireRead"></div>
+          </div>
+        </div>
+        <div class="mp-sec closed" id="mpSecHelp">
+          <h4 onclick="mpSecToggle(this)">Help</h4>
+          <div class="mp-secbody"><p class="mp-help" id="mpHint">Every traced area on this sheet, at its true position, coloured by the valve it runs on. Pick a tool on the left, then click the plan to place the <b>point of connection</b>, a <b>manifold</b>, or a <b>mainline bend</b>; drag any marker to move it, Delete to remove the selected one. <b>Select a node before placing a bend to tee off it.</b> Click an area, head or lateral pipe to work on that valve alone; the eye in <b>Layers</b> hides a zone from the drawing. <b>Split zone:</b> with a zone selected, click two points to draw a line across the driveway — the heads on each side get their own valve (A / B) in whichever box you put them, wired together as one station. <b>Lateral bend:</b> with a zone selected — click <b>on the pipe</b> to put a bend in that run, click <b>off the pipe</b> to run a branch out to it, or select a bend first to <b>tee</b> off that exact point. Drag a bend to move it, Delete to remove it (the run splices back together). Heads, beds and <b>each tree</b> attach themselves to the nearest point on the pipe. <b>Tree:</b> with a drip or tree zone selected, click to drop a tree — the lateral runs to each one and tees; drag to move, Delete to remove. <b>Print zone sheet</b> prints that one valve — box, pipe with sizes and lengths, heads with model and arc — over a faded plan. Mainline, lateral and wire lengths are all measured off the calibrated sheet; laterals follow the inside of each outline and every segment is sized on the flow passing through it. Hold H to flash the drawing off. Scroll/pinch to zoom, Ctrl-drag to pan.</p></div>
+        </div>
+      </div>
     </div>
-    <div class="sk-body" id="mpBody"></div>
     <div class="sk-foot">
-      <p class="hint" id="mpHint">Every traced area on this sheet, at its true position, coloured by the valve it runs on. Pick a tool, then click the plan to place the <b>point of connection</b>, a <b>manifold</b>, or a <b>mainline bend</b>; drag any marker to move it, Delete to remove the selected one. <b>Select a node before placing a bend to tee off it.</b> Click an area or head to work on that valve alone. <b>Split zone:</b> with a zone selected, click two points to draw a line across the driveway — the heads on each side get their own valve (A / B) in whichever box you put them, wired together as one station. <b>Lateral bend:</b> with a zone selected — click <b>on the pipe</b> to put a bend in that run, click <b>off the pipe</b> to run a branch out to it, or select a bend first to <b>tee</b> off that exact point. Drag a bend to move it, Delete to remove it (the run splices back together). Heads, beds and <b>each tree</b> attach themselves to the nearest point on the pipe. <b>Tree:</b> with a drip or tree zone selected, click to drop a tree — the lateral runs to each one and tees; drag to move, Delete to remove. <b>Print zone sheet</b> prints that one valve — box, pipe with sizes and lengths, heads with model and arc — over a faded plan. Mainline, lateral and wire lengths are all measured off the calibrated sheet; laterals follow the inside of each outline and every segment is sized on the flow passing through it. Hold H to flash the drawing off. Scroll/pinch to zoom, Ctrl-drag to pan.</p>
+      <p class="hint" style="font-size:12px">Click a zone, head or pipe to work on it. Sizes and lengths are measured off the calibrated sheet; the BOM still treats laterals as an on-site figure.</p>
       <span class="sk-grow"></span>
       <div class="sk-tools">
         <button type="button" onclick="window.print()" class="ghost">Print</button>
@@ -2952,7 +3047,32 @@ async function calSave(){
 const mp = { pageId:null, page:null, svgId:'mpSvg', bodyId:'mpBody',
              ppf:1, panX:0, panY:0, _w:0, _h:0,
              planPage:null, underOpacity:0.45, underHidden:false,
-             tool:'pan', sel:null, laterals:true, wire:true, zoneSel:null, splitA:null };
+             tool:'pan', sel:null, laterals:true, wire:true, zoneSel:null, splitA:null,
+             // Zones switched off in the Layers panel, by zone key (indices
+             // move whenever compute() runs; keys do not). View state only —
+             // a hidden zone still counts in every total and in the BOM.
+             hiddenKeys:new Set() };
+
+function mpZoneVisible(zi){ const z=LAST_ZONES[zi]; return !(z && mp.hiddenKeys.has(z.key)); }
+function mpToggleZoneVis(zi, ev){
+  if(ev){ ev.stopPropagation(); ev.preventDefault(); }
+  const z=LAST_ZONES[zi]; if(!z) return;
+  if(mp.hiddenKeys.has(z.key)) mp.hiddenKeys.delete(z.key);
+  else { mp.hiddenKeys.add(z.key); if(mp.zoneSel===zi){ mp.zoneSel=null; mp.sel=null; if(mp.tool==='lat'||mp.tool==='split'||mp.tool==='tree'){ mp.tool='pan'; mp.splitA=null; mpPaintTools(); } } }
+  mpDraw();
+}
+function mpShowAllZones(){ mp.hiddenKeys.clear(); mpDraw(); }
+function mpSoloZone(zi){
+  // Photoshop's alt-click on an eye: this layer alone. Clicking solo again
+  // on the only visible zone brings everything back.
+  const z=LAST_ZONES[zi]; if(!z) return;
+  const others=LAST_ZONES.filter((x,i)=>i!==zi && !mp.hiddenKeys.has(x.key)).length;
+  if(!others && !mp.hiddenKeys.has(z.key)){ mp.hiddenKeys.clear(); }
+  else { mp.hiddenKeys=new Set(LAST_ZONES.filter(x=>x!==z).map(x=>x.key)); }
+  mpDraw();
+}
+function mpSecToggle(h){ const sec=h.parentElement; if(sec) sec.classList.toggle('closed'); }
+function mpToggleHelp(){ const sec=el('mpSecHelp'); if(!sec) return; sec.classList.toggle('closed'); if(!sec.classList.contains('closed')) sec.scrollIntoView({block:'nearest'}); }
 
 // Areas traced onto a given sheet, with their index.
 function mpAreasOn(pageId){
@@ -2972,7 +3092,7 @@ function openMasterPlan(pageId){
   mp.pageId=pageId; mp.page=pg; mp.planPage=pg; mp.underHidden=false;
   skProbeRaster(pg.id);
   pzInit(mp); mp._hooks=MP_HOOKS;
-  mp.tool='pan'; mp.sel=null; mp.laterals=true; mp.wire=true; mp.zoneSel=null; mp.splitA=null; mpPaintTools();
+  mp.tool='pan'; mp.sel=null; mp.laterals=true; mp.wire=true; mp.zoneSel=null; mp.splitA=null; mp.hiddenKeys=new Set(); mpPaintTools();
   el('mpOverlay').hidden=false; document.body.classList.add('mp-open');
   const op=el('mpUnderOpacity'); if(op) op.value=String(Math.round(mp.underOpacity*100));
   const pc=el('mpUnderPct'); if(pc) pc.textContent=Math.round(mp.underOpacity*100)+'%';
@@ -3044,10 +3164,15 @@ function mpZoneAt(fx, fy){
     const p=mpPlanFor(a);
     mpHeadsOf(a,p).forEach(h=>{
       const d=Math.hypot(h.x-fx, h.y-fy);
-      if(d < Math.max(4, 10/mp.ppf) && d<bd){ bd=d; best=zoneIndexOf(i, h.zone||0, h); }
+      if(d < Math.max(4, 10/mp.ppf) && d<bd){ const zi=zoneIndexOf(i, h.zone||0, h); if(zi>=0 && mpZoneVisible(zi)){ bd=d; best=zi; } }
     });
   }
   if(best!=null && best>=0) return best;
+  // A lateral pipe next — it is what you point at to change a zone's pipe
+  // size, and a pipe often runs outside its own outline (down a walk, out
+  // to a tree row).
+  const lz=mpLateralAt(fx, fy);
+  if(lz!=null) return lz;
   for(let i=areas.length-1;i>=0;i--){
     const a=areas[i];
     if(!a || !validPoly(a) || !(a.planRef && a.planRef.pageId===mp.pageId)) continue;
@@ -3057,13 +3182,26 @@ function mpZoneAt(fx, fy){
       const hs=mpHeadsOf(a,p);
       if(hs.length){
         let hb=hs[0], hd=Infinity;
-        hs.forEach(h=>{ const d=Math.hypot(h.x-fx, h.y-fy); if(d<hd){ hd=d; hb=h; } });
-        const zi=zoneIndexOf(i, hb.zone||0, hb); if(zi>=0) return zi;
+        hs.forEach(h=>{ const zi=zoneIndexOf(i, h.zone||0, h); if(zi>=0 && !mpZoneVisible(zi)) return; const d=Math.hypot(h.x-fx, h.y-fy); if(d<hd){ hd=d; hb=h; } });
+        const zi=zoneIndexOf(i, hb.zone||0, hb); if(zi>=0 && mpZoneVisible(zi)) return zi;
       }
-      const zi=zoneIndexOf(i, 0); if(zi>=0) return zi;
+      const zi=zoneIndexOf(i, 0); if(zi>=0 && mpZoneVisible(zi)) return zi;
     }
   }
   return null;
+}
+// The visible lateral run under the pointer (within ~9 screen px), or null.
+function mpLateralAt(fx, fy){
+  if(!mp.laterals) return null;
+  const tol=Math.max(0.8, 9/mp.ppf);
+  let best=null, bd=Infinity;
+  mpLateralPlan().runs.forEach(run=>{
+    if(!mpZoneVisible(run.zi)) return;
+    if(mp.zoneSel!=null && run.zi!==mp.zoneSel) return;     // only the selected zone's pipe is drawn
+    const p=nearestOnEdges(run.edges, fx, fy);
+    if(p && p.dist<=tol && p.dist<bd){ bd=p.dist; best=run.zi; }
+  });
+  return best;
 }
 function mpSelectZone(zi){
   mp.zoneSel = (mp.zoneSel===zi) ? null : zi;
@@ -3483,6 +3621,9 @@ function mpTap(fx, fy){
   // tapping bare ground clears both selections.
   mp.sel=null;
   const zi=mpZoneAt(fx, fy);
+  // Clicking the selected zone's own pipe keeps it selected — that click is
+  // "I want to change this pipe", not "show me everything again".
+  if(zi!=null && mp.zoneSel===zi && mpLateralAt(fx, fy)===zi) return;
   mp.zoneSel = (zi!=null && mp.zoneSel!==zi) ? zi : null;
 }
 
@@ -3845,7 +3986,20 @@ function mpRouteReadout(){
     }
   }
   bits.push('measured here, still an on-site figure in the BOM');
-  box.innerHTML=bits.join(' · ');
+  // Collective pipe: every run on this sheet, by size, plus the mainline —
+  // the trench total is what gets dug.
+  let table='';
+  if(mp.laterals || (r.poc && st.mainFt>0)){
+    const lat=mp.laterals ? mpLateralPlan() : {totalFt:0, bySize:{}};
+    const rows=[];
+    if(r.poc && st.mainFt>0) rows.push(`<tr><td>Mainline ${esc(pipeForGPM(peak))}</td><td>${Math.round(st.mainFt)} ft</td></tr>`);
+    if(st.teeFt>=0.5) rows.push(`<tr><td style="color:var(--muted);padding-left:12px">drops to boxes</td><td>${Math.round(st.teeFt)} ft</td></tr>`);
+    Object.keys(lat.bySize).sort((a,b)=>LATERAL_SIZES.indexOf(b)-LATERAL_SIZES.indexOf(a))
+      .forEach(s=>rows.push(`<tr><td>Lateral ${esc(s)}</td><td>${Math.round(lat.bySize[s])} ft</td></tr>`));
+    const trench=(r.poc?st.mainFt:0)+lat.totalFt;
+    if(rows.length) table=`<table class="mp-runs">${rows.join('')}<tr class="tot"><td>Pipe in the ground</td><td>${Math.round(trench)} ft</td></tr></table>`;
+  }
+  box.innerHTML=bits.map(b=>'<div>'+b+'</div>').join('')+table;
 
   const wbox=el('mpWireRead');
   if(wbox){
@@ -4592,6 +4746,7 @@ function mpLateralSvg(){
     // Working on one valve: the others' pipe is hidden outright, so the
     // one being routed reads against the drawing, not against a tangle.
     if(mp.zoneSel!=null && run.zi!==mp.zoneSel) return;
+    if(!mpZoneVisible(run.zi)) return;
     const sibs=perRoot.get(run.rootKey)||[run.zi];
     const off=(sibs.indexOf(run.zi)-(sibs.length-1)/2)*2.8;   // screen px, perpendicular
     const col=mpZoneColour(run.zi), dm=mpDim(run.zi);
@@ -4626,6 +4781,7 @@ function mpSplitSvg(){
   let g='<g>';
   LAST_ZONES.forEach((z,zi)=>{
     if(z.half!=='A') return;                       // one line per split, drawn off the A half
+    if(!mpZoneVisible(zi)) return;
     const sp=splitFor(z); if(!sp) return;
     const dm=(mp.zoneSel==null || LAST_ZONES[mp.zoneSel] && baseKey(LAST_ZONES[mp.zoneSel].key)===baseKey(z.key)) ? 1 : 0.25;
     const x1=SX(sp.ax), y1=SY(sp.ay), x2=SX(sp.bx), y2=SY(sp.by);
@@ -4787,6 +4943,7 @@ function mpDraw(){
   on.forEach(({a,i})=>{
     const pts=a.poly.map(p=>`${SX(p.x).toFixed(1)},${SY(p.y).toFixed(1)}`).join(' ');
     const zi=zoneIndexOf(i,0);
+    if(!mpZoneVisible(zi)) return;
     const col=mpZoneColour(zi), dm=mpDim(zi);
     g+=`<polygon points="${pts}" fill="${col}" fill-opacity="${(0.14*dm).toFixed(3)}" stroke="${col}" stroke-width="2" stroke-opacity="${dm.toFixed(2)}"/>`;
   });
@@ -4798,14 +4955,15 @@ function mpDraw(){
       const rowFt=Math.max((a.dripRowIn==null?18:a.dripRowIn)/12, 0.25);
       const zi=zoneIndexOf(i,0), col=mpZoneColour(zi), dm=mpDim(zi);
       const segs=dripRunSegments(a.poly, rowFt);
+      const vis=mpZoneVisible(zi);
       segs.forEach(r=>{
         dripFt += Math.hypot(r.x1-r.x0, r.y1-r.y0);
-        g+=`<line x1="${SX(r.x0).toFixed(1)}" y1="${SY(r.y0).toFixed(1)}" x2="${SX(r.x1).toFixed(1)}" y2="${SY(r.y1).toFixed(1)}" stroke="${col}" stroke-width="1.1" stroke-dasharray="4 3" stroke-opacity="${(0.85*dm).toFixed(3)}"/>`;
+        if(vis) g+=`<line x1="${SX(r.x0).toFixed(1)}" y1="${SY(r.y0).toFixed(1)}" x2="${SX(r.x1).toFixed(1)}" y2="${SY(r.y1).toFixed(1)}" stroke="${col}" stroke-width="1.1" stroke-dasharray="4 3" stroke-opacity="${(0.85*dm).toFixed(3)}"/>`;
       });
       return;
     }
     const trees=mpTreesOf(a);
-    if(trees.length){
+    if(trees.length && mpZoneVisible(zoneIndexOf(i,0))){
       const zi=zoneIndexOf(i,0), col=mpZoneColour(zi), dm=mpDim(zi);
       const mine = mp.zoneSel==null || mp.zoneSel===zi;
       trees.forEach(t=>{
@@ -4819,6 +4977,7 @@ function mpDraw(){
     hs.forEach(hd=>{
       heads++;
       const zi=zoneIndexOf(i, hd.zone||0, hd), col=mpZoneColour(zi>=0?zi:zoneIndexOf(i,0));
+      if(!mpZoneVisible(zi>=0?zi:zoneIndexOf(i,0))) return;
       const dm=mpDim(zi>=0?zi:zoneIndexOf(i,0));
       const cx=SX(hd.x), cy=SY(hd.y), rr=Math.max((hd.r||1)*U, 3);
       if(hd.arc>=360){
@@ -4840,70 +4999,180 @@ function mpDraw(){
   g+=`</svg>`;
   body.innerHTML=g;
 
-  // ---- legend + header stats ----
+  // ---- layers + header stats ----
   const used=new Set();
   on.forEach(({i})=>{ const z=zoneIndexOf(i,0); if(z>=0) used.add(z); });
   areas.forEach((a,i)=>{ mpHeadsOf(a, mpPlanFor(a)).forEach(hd=>{ const z=zoneIndexOf(i,hd.zone||0,hd); if(z>=0) used.add(z); }); });
-  const offPlan = areas.filter(a=>a && !(a.planRef && a.planRef.pageId===mp.pageId) && !( a.mode==='custom' && !validPoly(a) )).length;
-  el('mpLegend').innerHTML =
-    [...used].sort((x,y)=>x-y).map(zi=>{
-      const z=LAST_ZONES[zi]; if(!z) return '';
-      const on = mp.zoneSel===zi;
-      return `<button type="button" class="mpz${on?' on':''}" onclick="mpSelectZone(${zi})" aria-pressed="${on}"><i style="background:${mpZoneColour(zi)}"></i><b>${esc(z.name)}</b><span>${z.gpm.toFixed(1)} GPM${z.grouped?` · ${z.members.length} beds`:(z.headCount?` · ${z.headCount} heads`:'')}</span></button>`;
-    }).join('') +
-    (offPlan ? `<span class="mpz mp-off">${offPlan} area${offPlan===1?'':'s'} not traced on this sheet — not shown</span>` : '');
+  mpLayersPanel([...used].sort((x,y)=>x-y));
   el('mpStat').innerHTML =
     `${on.length} area${on.length===1?'':'s'} · ${heads} head${heads===1?'':'s'} · ${beds} drip bed${beds===1?'':'s'}` +
     (dripFt?` · ${Math.round(dripFt)} ft dripline`:'') +
     ` · ${used.size} valve${used.size===1?'':'s'}`;
   mpRouteReadout();
-  const zs=el('mpZoneSel');
-  if(zs){
-    const z = mp.zoneSel!=null ? LAST_ZONES[mp.zoneSel] : null;
-    if(!z){ zs.innerHTML=''; }
-    else {
-      const r=routingRO(mp.pageId);
-      const pinIdx=mpPinnedBoxOf(mp.zoneSel);
-      const asg2=mpManifoldAssign();
-      const inIdx=asg2.byManifold.findIndex(l=>l.includes(mp.zoneSel));
-      const where = inIdx>=0
-        ? (pinIdx>=0 ? `in <b>M${inIdx+1}</b> because you put it there`
-                     : `in <b>M${inIdx+1}</b> (nearest box)`)
-        : 'not in a box yet';
-      const boxes=(r.manifolds||[]).map((m,i)=>
-        `<button type="button" class="lnk${i===inIdx?' cur':''}" onclick="mpPinZone(${mp.zoneSel},${i})">M${i+1}</button>`).join(' ');
-      const twin = z.half ? LAST_ZONES.findIndex(x=>x!==z && baseKey(x.key)===baseKey(z.key)) : -1;
-      const splitBit = z.half
-        ? ` <span title="Both valves open together on one controller station">Station ${(z.station||0)+1}: valve ${z.half} of 2 · ${(z.stationGpm||z.gpm).toFixed(1)} GPM together.</span>`+
-          (twin>=0?` <button type="button" class="lnk" onclick="mpSelectZone(${twin})">go to valve ${z.half==='A'?'B':'A'}</button>`:'')+
-          ` <button type="button" class="lnk" onclick="mpRemoveSplit(${mp.zoneSel})">remove split</button>`
-        : (z.grouped && !z.stationGroup && (z.members||[]).length>1)
-          ? ` <button type="button" class="lnk" onclick="mpSetTool('split')" title="Give each bed its own valve, wired as one station">one valve per bed</button>`
-          : (mpSplitBlocked(mp.zoneSel) ? '' : ` <button type="button" class="lnk" onclick="mpSetTool('split')" title="Draw a line across the driveway; each side gets its own valve, wired as one station">split across two boxes</button>`);
-      const hasCustom = !!mpLateralNodes(mp.zoneSel);
-      const latBit = (inIdx>=0 || r.poc)
-        ? ` <button type="button" class="lnk${mp.tool==='lat'?' cur':''}" onclick="mpEditLaterals(${mp.zoneSel})">${hasCustom?'edit laterals':'draw laterals by hand'}</button>` +
-          (hasCustom?` <button type="button" class="lnk" onclick="mpResetLaterals(${mp.zoneSel})">back to auto route</button>`:'')
-        : '';
-      const forced=zoneForcedSize(z);
-      const sizeSel = `<select class="mp-size" title="Trunk is sized on the zone's full flow; branches drop to 3/4\". Pick a size to force the whole zone." onchange="mpSetZoneSize(${mp.zoneSel}, this.value)">` +
-        `<option value=""${forced?'':' selected'}>auto — ${esc(zoneTrunkSize(z))} trunk, 3/4" branches</option>` +
-        LATERAL_SIZES.map(sz=>`<option value="${esc(sz)}"${forced===sz?' selected':''}>all ${esc(sz)}</option>`).join('') +
-        `</select>`;
-      const nTrees=mpZoneTrees(z).length;
-      zs.innerHTML = `Working on <b>${esc(z.name)}</b> — ${z.gpm.toFixed(1)} GPM${nTrees?` · ${nTrees} tree${nTrees===1?'':'s'}`:''}, ${where} Pipe: ${sizeSel}.` +
-        (boxes?` Put it in: ${boxes}`:' Place a manifold to assign it.') +
-        (mpTreeAreaFor(mp.zoneSel)>=0?` <button type="button" class="lnk${mp.tool==='tree'?' cur':''}" onclick="mpSetTool('tree')">add trees</button>`:'') +
-        (pinIdx>=0?` <button type="button" class="lnk" onclick="mpUnpinZone(${mp.zoneSel})">back to nearest</button>`:'') +
-        splitBit + latBit +
-        ` <button type="button" class="lnk" onclick="lpOpen(${mp.zoneSel})"><b>Print zone sheet</b></button>` +
-        ` <button type="button" class="lnk" onclick="mpClearZoneSel()">show all</button>`;
-    }
-  }
+  mpZonePanel();
 
   const svg=el('mpSvg');
   svg.addEventListener('pointerdown', e=>pzDown(mp,e));
   svg.addEventListener('wheel', e=>pzWheel(mp,e), {passive:false});
+}
+
+/* ---- Layers panel: one row per valve, Photoshop-style ----
+   The eye hides a zone from the DRAWING only. Every total, the material
+   list and the quote still count it — hiding is for seeing one part of a
+   busy sheet, not for taking a zone out of the job. Alt-click an eye to
+   solo that zone. */
+const MP_EYE_ON  = '<svg viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const MP_EYE_OFF = '<svg viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 6.3A11 11 0 0 1 12 6c6.5 0 10 6 10 6a17 17 0 0 1-3.2 3.7"/><path d="M6.6 6.6A16 16 0 0 0 2 12s3.5 6 10 6a10 10 0 0 0 4.4-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+function mpLayersPanel(usedZis){
+  const box=el('mpLegend'); if(!box) return;
+  const rows=[];
+  const layerRow=(label, on, onclick, sub)=>
+    `<div class="mp-layer${on?'':' hid'}" onclick="${onclick}" title="Show or hide"><button type="button" class="eye${on?'':' off'}" aria-label="${on?'Hide':'Show'} ${esc(label)}" aria-pressed="${on}">${on?MP_EYE_ON:MP_EYE_OFF}</button><b>${esc(label)}</b>${sub?`<span>${sub}</span>`:''}</div>`;
+  rows.push(layerRow('Plan underlay', !mp.underHidden, 'mp.underHidden=!mp.underHidden; mpDraw()', Math.round(mp.underOpacity*100)+'%'));
+  rows.push(layerRow('Laterals', mp.laterals, 'mpToggleLaterals()', ''));
+  rows.push(layerRow('Wire', mp.wire, 'mpToggleWire()', ''));
+  let hiddenN=0;
+  usedZis.forEach(zi=>{
+    const z=LAST_ZONES[zi]; if(!z) return;
+    const on=mp.zoneSel===zi, vis=mpZoneVisible(zi);
+    if(!vis) hiddenN++;
+    const sub=`${z.gpm.toFixed(1)} GPM${z.grouped?` · ${z.members.length} beds`:(z.headCount?` · ${z.headCount} hd`:'')}`;
+    rows.push(`<div class="mp-layer${on?' on':''}${vis?'':' hid'}${zi===usedZis[0]?' grp':''}" onclick="mpSelectZone(${zi})" aria-selected="${on}">`+
+      `<button type="button" class="eye${vis?'':' off'}" onclick="if(event.altKey){event.stopPropagation();mpSoloZone(${zi});}else mpToggleZoneVis(${zi},event)" title="Show/hide this zone · Alt-click to solo" aria-label="${vis?'Hide':'Show'} ${esc(z.name)}" aria-pressed="${vis}">${vis?MP_EYE_ON:MP_EYE_OFF}</button>`+
+      `<i style="background:${mpZoneColour(zi)}"></i><b>${esc(z.name)}</b><span>${sub}</span></div>`);
+  });
+  const offPlan = areas.filter(a=>a && !(a.planRef && a.planRef.pageId===mp.pageId) && !( a.mode==='custom' && !validPoly(a) )).length;
+  if(offPlan) rows.push(`<span class="mp-off">${offPlan} area${offPlan===1?'':'s'} not traced on this sheet — not shown</span>`);
+  if(hiddenN) rows.push(`<div class="mp-acts" style="padding:4px 6px 2px"><button type="button" class="lnk" onclick="mpShowAllZones()">show all ${hiddenN} hidden</button></div>`);
+  box.innerHTML=rows.join('');
+  const n=el('mpLayersN'); if(n) n.textContent = usedZis.length+' valve'+(usedZis.length===1?'':'s')+(hiddenN?` · ${hiddenN} hidden`:'');
+}
+
+/* ---- Zone panel: what is selected, its pipe size, its box, and every
+   measurement that belongs to it. Sizes and lengths come straight from
+   mpLateralPlan(), the same numbers the BOM orders from. ---- */
+function mpFt(v){ return Math.round(v)+' ft'; }
+function mpZoneMeasure(zi){
+  const z=LAST_ZONES[zi]; if(!z) return null;
+  const lat=mpLateralPlan();
+  const run=lat.runs.find(x=>x.zi===zi);
+  const out={ run, totalFt:0, trunkFt:0, spurFt:0, bySize:{}, longestFt:0, pieces:0, bends:0, areas:[], bbox:null };
+  if(run){
+    const dist=new Map(); const key=p=>p.x.toFixed(3)+','+p.y.toFixed(3);
+    run.edges.forEach(e=>{
+      out.totalFt+=e.ft||0;
+      if(e.kind==='spur') out.spurFt+=e.ft||0; else out.trunkFt+=e.ft||0;
+      out.bySize[e.size]=(out.bySize[e.size]||0)+(e.ft||0);
+      const d=(dist.get(key(e.a))||0)+(e.ft||0);
+      dist.set(key(e.b), Math.max(dist.get(key(e.b))||0, d));
+      if(d>out.longestFt) out.longestFt=d;
+    });
+    out.pieces=run.edges.length;
+    out.bends=(mpLateralNodes(zi)||[]).length;
+  }
+  const grow=b=>{ out.bbox = out.bbox ? {minX:Math.min(out.bbox.minX,b.minX), minY:Math.min(out.bbox.minY,b.minY), maxX:Math.max(out.bbox.maxX,b.maxX), maxY:Math.max(out.bbox.maxY,b.maxY)} : Object.assign({},b); };
+  (z.parts||[]).forEach(pt=>{
+    const a=areas[pt.areaIdx];
+    if(!a || !(a.planRef && a.planRef.pageId===mp.pageId)) return;
+    const trees=mpTreesOf(a).length;
+    if(validPoly(a)){
+      const b=polyBBox(a.poly); grow(b);
+      let per=0; for(let i=0;i<a.poly.length;i++){ const p=a.poly[i], q=a.poly[(i+1)%a.poly.length]; per+=Math.hypot(q.x-p.x,q.y-p.y); }
+      const p=mpPlanFor(a);
+      const heads = (a.family==='drip'||a.family==='trees') ? 0 : mpZoneHeads(z, pt, a, p).length;
+      out.areas.push({name:a.name||'Area', w:b.maxX-b.minX, h:b.maxY-b.minY, sqft:polyArea(a.poly), per, heads, trees, family:a.family});
+    } else if(trees){
+      out.areas.push({name:a.name||'Trees', w:0, h:0, sqft:0, per:0, heads:0, trees, family:a.family});
+    }
+  });
+  return out;
+}
+function mpZonePanel(){
+  const zs=el('mpZoneSel'); if(!zs) return;
+  const zn=el('mpZoneN');
+  const z = mp.zoneSel!=null ? LAST_ZONES[mp.zoneSel] : null;
+  if(!z){
+    zs.innerHTML='<div class="mp-empty">Click a zone, a head or a lateral pipe on the plan, or pick one under Layers.</div>';
+    if(zn) zn.textContent='';
+    return;
+  }
+  const zi=mp.zoneSel;
+  const r=routingRO(mp.pageId);
+  const pinIdx=mpPinnedBoxOf(zi);
+  const asg2=mpManifoldAssign();
+  const inIdx=asg2.byManifold.findIndex(l=>l.includes(zi));
+  const boxes=(r.manifolds||[]).map((m,i)=>
+    `<button type="button" class="lnk${i===inIdx?' cur':''}" onclick="mpPinZone(${zi},${i})" title="Put this valve in box M${i+1}">M${i+1}</button>`).join(' ');
+  const where = inIdx>=0
+    ? `<b>M${inIdx+1}</b> <small>${pinIdx>=0?'(you put it there)':'(nearest box)'}</small>`
+    : '<span class="mp-warnpipe">not in a box yet</span>';
+  const twin = z.half ? LAST_ZONES.findIndex(x=>x!==z && baseKey(x.key)===baseKey(z.key)) : -1;
+  const hasCustom = !!mpLateralNodes(zi);
+  const canLat = (inIdx>=0 || r.poc);
+  const forced=zoneForcedSize(z);
+  const sizesDesc=LATERAL_SIZES.slice().reverse();
+  const sizeSel = `<select class="mp-size" title="Auto sizes the trunk on the zone's full flow and drops branches to 3/4&quot; where that is enough. Pick a size to force the whole zone." onchange="mpSetZoneSize(${zi}, this.value)">` +
+    `<option value=""${forced?'':' selected'}>Auto (reduce as required) — ${esc(zoneTrunkSize(z))} trunk</option>` +
+    sizesDesc.map(sz=>`<option value="${esc(sz)}"${forced===sz?' selected':''}>${esc(sz)} throughout</option>`).join('') +
+    `</select>`;
+  const m=mpZoneMeasure(zi);
+  const nTrees=mpZoneTrees(z).length;
+  let h='';
+  h+=`<div style="display:flex;align-items:center;gap:8px;margin:2px 0 6px"><i style="width:12px;height:12px;border-radius:3px;background:${mpZoneColour(zi)};flex:0 0 auto"></i><b style="font-size:13.5px">${esc(z.name)}</b></div>`;
+  h+=`<dl class="mp-kv">`;
+  h+=`<dt>Flow</dt><dd>${z.gpm.toFixed(1)} GPM${z.half?` <small>· valve ${z.half} of 2, station ${(z.station||0)+1} · ${(z.stationGpm||z.gpm).toFixed(1)} GPM together</small>`:''}</dd>`;
+  h+=`<dt>Runs on</dt><dd>${z.grouped?`${z.members.length} beds`:(z.headCount?`${z.headCount} head${z.headCount===1?'':'s'}`:'—')}${nTrees?` <small>· ${nTrees} tree${nTrees===1?'':'s'}</small>`:''}</dd>`;
+  h+=`<dt>Valve box</dt><dd>${where}</dd>`;
+  h+=`</dl>`;
+  if(boxes) h+=`<div class="mp-boxes"><span style="color:var(--muted)">Put it in:</span> ${boxes}${pinIdx>=0?` <button type="button" class="lnk" onclick="mpUnpinZone(${zi})">back to nearest</button>`:''}</div>`;
+  else h+=`<div class="mp-empty">Place a manifold to assign it.</div>`;
+
+  h+=`<div class="mp-sub">Zone pipe size</div>${sizeSel}`;
+  if(m && m.run){
+    const sizes=Object.keys(m.bySize).sort((a,b)=>LATERAL_SIZES.indexOf(b)-LATERAL_SIZES.indexOf(a));
+    h+=`<table class="mp-runs">`+
+      sizes.map(s=>`<tr><td>${esc(s)}</td><td>${mpFt(m.bySize[s])}</td></tr>`).join('')+
+      `<tr class="tot"><td>Lateral pipe</td><td>${mpFt(m.totalFt)}</td></tr></table>`;
+    h+=`<dl class="mp-kv">`+
+      `<dt>Trunk</dt><dd>${mpFt(m.trunkFt)}</dd>`+
+      (m.spurFt>0.5?`<dt>Spurs to heads</dt><dd>${mpFt(m.spurFt)}</dd>`:'')+
+      `<dt>Longest run</dt><dd>${mpFt(m.longestFt)} <small>from the box</small></dd>`+
+      `<dt>Pieces</dt><dd>${m.pieces}${m.run.custom?` <small>· ${m.bends} bend${m.bends===1?'':'s'} drawn by hand</small>`:' <small>· auto route</small>'}</dd>`+
+      `</dl>`;
+  } else {
+    h+=`<div class="mp-empty">${canLat?'No lateral run yet.':'Place a manifold or the point of connection to route this zone.'}</div>`;
+  }
+
+  if(m && (m.areas.length || m.bbox)){
+    h+=`<div class="mp-sub">Dimensions</div>`;
+    if(m.bbox && m.areas.length>1) h+=`<dl class="mp-kv"><dt>Zone extent</dt><dd>${Math.round(m.bbox.maxX-m.bbox.minX)} × ${Math.round(m.bbox.maxY-m.bbox.minY)} ft</dd></dl>`;
+    h+=`<table class="mp-runs">`+m.areas.map(a=>
+      a.w||a.h
+        ? `<tr><td title="${esc(a.name)}">${esc(a.name)}</td><td>${Math.round(a.w)} × ${Math.round(a.h)} ft</td></tr>`+
+          `<tr><td style="color:var(--muted);padding-left:12px">area · perimeter</td><td>${Math.round(a.sqft).toLocaleString()} ft² · ${mpFt(a.per)}</td></tr>`+
+          (a.heads||a.trees?`<tr><td style="color:var(--muted);padding-left:12px">${a.heads?`${a.heads} head${a.heads===1?'':'s'}`:''}${a.heads&&a.trees?' · ':''}${a.trees?`${a.trees} tree${a.trees===1?'':'s'}`:''}</td><td></td></tr>`:'')
+        : `<tr><td>${esc(a.name)}</td><td>${a.trees} tree${a.trees===1?'':'s'}</td></tr>`
+    ).join('')+`</table>`;
+  }
+
+  h+=`<div class="mp-acts">`;
+  if(canLat) h+=`<button type="button" class="lnk${mp.tool==='lat'?' cur':''}" onclick="mpEditLaterals(${zi})">${hasCustom?'edit laterals':'draw laterals by hand'}</button>`+
+    (hasCustom?`<button type="button" class="lnk" onclick="mpResetLaterals(${zi})">back to auto route</button>`:'');
+  if(mpTreeAreaFor(zi)>=0) h+=`<button type="button" class="lnk${mp.tool==='tree'?' cur':''}" onclick="mpSetTool('tree')">add trees</button>`;
+  if(z.half){
+    if(twin>=0) h+=`<button type="button" class="lnk" onclick="mpSelectZone(${twin})">go to valve ${z.half==='A'?'B':'A'}</button>`;
+    h+=`<button type="button" class="lnk" onclick="mpRemoveSplit(${zi})">remove split</button>`;
+  } else if(z.grouped && !z.stationGroup && (z.members||[]).length>1){
+    h+=`<button type="button" class="lnk" onclick="mpSetTool('split')" title="Give each bed its own valve, wired as one station">one valve per bed</button>`;
+  } else if(!mpSplitBlocked(zi)){
+    h+=`<button type="button" class="lnk${mp.tool==='split'?' cur':''}" onclick="mpSetTool('split')" title="Draw a line across the driveway; each side gets its own valve, wired as one station">split across two boxes</button>`;
+  }
+  h+=`<button type="button" class="lnk pri" onclick="lpOpen(${zi})">Print zone sheet</button>`;
+  h+=`<button type="button" class="lnk" onclick="mpClearZoneSel()">show all</button>`;
+  h+=`</div>`;
+  zs.innerHTML=h;
+  if(zn) zn.textContent=z.name;
+  const sec=el('mpSecZone'); if(sec) sec.classList.remove('closed');
 }
 
 /* ════════════════ Custom-shape sketch tool ════════════════ */
