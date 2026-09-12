@@ -292,10 +292,46 @@ async function requestedWindowsFor(season, year, listBookings = bookings.list) {
 // The sequenced arrival time for every stop of one plan day, as a
 // Map code -> "HH:MM". Fails soft to an empty map: a day that cannot be
 // sequenced books at bucket opens rather than not at all.
-async function arrivalsFor(day, byCode, season, seq, requestedWindows = {}) {
+// Sequence a day's drive INCLUDING its customer bookings. `storedDay` is
+// the plan day (or null for a booking-only day). Each mappable booked row
+// is tagged with a synthetic `mapCode` that appears in the returned
+// timeline, so stop numbers, the route line AND the arrival times cover
+// the bookings too. An unmappable row (no coords) is left un-numbered.
+//
+// ONE implementation, here, for the board, the route line, the preview
+// and the time sync: the assigned stops' calendar times used to be
+// computed without the self-booked customers on the day, so the board
+// (which had them) and the calendar (which didn't) printed different
+// minutes for the same stop.
+function sequenceWithBookings({ storedDay, bookedRows, byCode, season, requestedWindows, seq = resequence.sequenceDay }) {
+  const augByCode = new Map(byCode);
+  const extra = { morning: [], afternoon: [] };
+  const rowByMapCode = new Map();
+  (bookedRows || []).forEach((row, i) => {
+    if (!row || !row.coords || row.coords.lat == null) { if (row) row.mapCode = null; return; }
+    const code = `__bk:${row.bookingId || row.leadId || `i${i}`}`;
+    row.mapCode = code;
+    augByCode.set(code, { code, id: code, coords: { lat: Number(row.coords.lat), lng: Number(row.coords.lng) } });
+    rowByMapCode.set(code, row);
+    extra[row.bucket === "morning" ? "morning" : "afternoon"].push(code);
+  });
+  const day = {
+    ...(storedDay || {}),
+    morning: [...((storedDay && storedDay.morning) || []), ...extra.morning],
+    afternoon: [...((storedDay && storedDay.afternoon) || []), ...extra.afternoon]
+  };
+  return Promise.resolve(seq(day, { propertiesByCode: augByCode, season, requestedWindows }))
+    .then((sequenced) => ({ sequenced, rowByMapCode }));
+}
+
+// Arrival estimates for a day — plan stops by code, booked customers by
+// the mapCode sequenceWithBookings stamps on their row.
+async function arrivalsFor(day, byCode, season, seq, requestedWindows = {}, bookedRows = []) {
   const etaByCode = new Map();
   try {
-    const sequenced = await seq(day, { propertiesByCode: byCode, season, requestedWindows });
+    const { sequenced } = await sequenceWithBookings({
+      storedDay: day, bookedRows, byCode, season, requestedWindows, seq
+    });
     for (const t of sequenced.timeline || []) etaByCode.set(t.propertyCode, t.arriveAt);
   } catch (err) {
     console.warn("[assignments] sequencing unavailable — bucket-open times used:", err?.message);
@@ -728,18 +764,41 @@ async function drivenPlan(season, year, deps = {}) {
   return { stored, plan, gone, stateFor };
 }
 
+// `deps.bookedRowsByDate` (Map<date, row[]> — the self-booked customers
+// on each day, as gatherBookedRows shapes them) puts those customers INTO
+// the clock the assigned stops are timed by, and `deps.retimeBooking(row,
+// start, durationMinutes)` lets their own placeholder minute follow the
+// route too. Patrick, 2026-09-12: "instead of the time slot being a place
+// holder, can that also move around as well? The only place holder that
+// is contained is the 8–12, and 12–5." The half-day is the promise; the
+// minute inside it is the route's to set — scheduledStartFor clamps it
+// inside the half-day the customer was told. Nothing is sent: they were
+// never told a minute. Without those deps the customer pass is skipped
+// and the assignment pass runs as it always has.
 async function syncAssignedTimes(season, year, deps = {}) {
   const getPlan = deps.getPlan || seasonPlans.getPlan;
   const listProperties = deps.listProperties || properties.list;
   const listBookings = deps.listBookings || bookings.list;
   const updateBooking = deps.updateBooking || bookings.update;
   const seq = deps.sequenceDay || resequence.sequenceDay;
+  const bookedRowsByDate = deps.bookedRowsByDate instanceof Map ? deps.bookedRowsByDate : new Map();
+  const retimeBooking = typeof deps.retimeBooking === "function" ? deps.retimeBooking : null;
+  const todayKey = deps.todayKey || localDateKey(new Date().toISOString());
+  // `onlyDates` scopes both passes to the days that changed. A single
+  // booking re-times ITS day, not the season: every date costs a
+  // sequence, and a sequence costs Distance Matrix calls for any pair
+  // the cache has not seen.
+  const onlyDates = deps.onlyDates ? new Set([...deps.onlyDates].map(String)) : null;
+  const inScope = (date) => !onlyDates || onlyDates.has(String(date));
 
   // The DRIVEN day: a cancelled or moved stop must not lend its drive and
   // on-site minutes to the arrival times of the stops still on the day.
   const driven = await drivenPlan(season, year, { getPlan, listProperties, listBookings });
-  const plan = driven && driven.plan;
-  if (!plan || !plan.days) return { ok: true, checked: 0, updated: 0 };
+  // No plan is not no days: a season nobody imported a plan for still has
+  // customers booked on it, and their times follow the route from the
+  // yard alone.
+  const plan = (driven && driven.plan) || (bookedRowsByDate.size ? { days: {} } : null);
+  if (!plan || !plan.days) return { ok: true, checked: 0, updated: 0, customersChecked: 0, customersUpdated: 0 };
 
   const mine = (await listBookings()).filter((b) =>
     b && b.source === "assignment"
@@ -748,8 +807,8 @@ async function syncAssignedTimes(season, year, deps = {}) {
     && b.status === "confirmed"
     && (Number(b.rescheduleCount) || 0) === 0
     && !(Array.isArray(b.workOrderIds) && b.workOrderIds.length)
-    && plan.days[b.assignment.date]);
-  if (!mine.length) return { ok: true, checked: 0, updated: 0 };
+    && plan.days[b.assignment.date]
+    && inScope(b.assignment.date));
 
   const all = await listProperties();
   const byCode = new Map((all || []).filter((p) => p && p.code).map((p) => [p.code, p]));
@@ -762,9 +821,24 @@ async function syncAssignedTimes(season, year, deps = {}) {
 
   let checked = 0;
   let updated = 0;
-  const customerWindows = await requestedWindowsFor(season, year, listBookings);
+  let customersChecked = 0;
+  let customersUpdated = 0;
+  const customerWindows = (mine.length || bookedRowsByDate.size)
+    ? await requestedWindowsFor(season, year, listBookings) : {};
+  // One sequence per date, shared by both passes.
+  const etaCache = new Map();
+  const etasFor = async (date) => {
+    if (!etaCache.has(date)) {
+      etaCache.set(date, await arrivalsFor(
+        plan.days[date] || { morning: [], afternoon: [] }, byCode, season, seq, customerWindows,
+        bookedRowsByDate.get(date) || []
+      ));
+    }
+    return etaCache.get(date);
+  };
+
   for (const [date, records] of byDate) {
-    const etaByCode = await arrivalsFor(plan.days[date], byCode, season, seq, customerWindows);
+    const etaByCode = await etasFor(date);
     for (const b of records) {
       checked += 1;
       const want = scheduledStartFor(
@@ -775,7 +849,24 @@ async function syncAssignedTimes(season, year, deps = {}) {
       updated += 1;
     }
   }
-  return { ok: true, checked, updated };
+
+  // The customers' placeholders follow the route — on days still ahead
+  // (history is never re-timed), inside the half-day they were told.
+  if (retimeBooking) {
+    for (const [date, rows] of bookedRowsByDate) {
+      if (!date || date < todayKey || !inScope(date)) continue;
+      const etaByCode = await etasFor(date);
+      for (const row of rows || []) {
+        if (!row || !row.mapCode || !row.start) continue;
+        customersChecked += 1;
+        const duration = Math.max(1, Number(row.durationMinutes) || 60);
+        const want = scheduledStartFor(date, row.bucket, etaByCode.get(row.mapCode), duration);
+        if (want.toISOString() === new Date(row.start).toISOString()) continue;
+        if (await retimeBooking(row, want, duration)) customersUpdated += 1;
+      }
+    }
+  }
+  return { ok: true, checked, updated, customersChecked, customersUpdated };
 }
 
 // Reverse an assignment: remove the bookings assign() created for this
@@ -988,4 +1079,4 @@ module.exports = { preflight, assign,
   unplanned,
   lighterBucket,
   planStopState, stopIsGone, planAsDriven, drivenPlan, GONE_STATES,
-  priorAssignmentsFor, unassign, syncAssignedTimes, requestedWindowsFor, moveDayBookings, followPlanMoves, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };
+  priorAssignmentsFor, unassign, syncAssignedTimes, sequenceWithBookings, requestedWindowsFor, moveDayBookings, followPlanMoves, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };

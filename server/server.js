@@ -1904,91 +1904,34 @@ async function syncBookingFromLead(lead) {
   return record;
 }
 
-// Re-cut a day's start times so they run in driving order.
+// Re-cut a day's times so they run in driving order.
 //
 // Patrick, 2026-09-09: "Start times inside a bucket are provisional." The
 // customer is promised Morning (8-12) or Afternoon (12-5) and never sees a
-// precise minute; the exact stamp was only ever the first free 30-minute mark
-// in the order people happened to book. Leaving it that way is what put
-// Newmarket 08:00, Thornhill 09:30, Newmarket 12:00 on one day.
+// precise minute. And 2026-09-12: "instead of the time slot being a place
+// holder, can that also move around as well? The only place holder that is
+// contained is the 8–12, and 12–5."
 //
-// Every reader sorts by `start`, so re-stamping in route order makes the
-// field app, the Today page, the iCal feed and the route sheet agree without
-// any of them changing. orderDayForDriving() in /api/schedule/today stays as
-// a safety net for days whose stamps predate this.
-//
-// WHAT IT WILL NOT DO:
-//   - move a booking out of its bucket. That is the promise the customer was
-//     given, and tidying a route is not a reason to break it.
-//   - touch a day that has been assigned or locked. Once Patrick has sent a
-//     day out, the times in the customers' hands are the times.
-//   - notify anyone. The bucket is unchanged, so there is nothing to tell.
+// This used to be its own implementation: lead bookings only, laid down
+// on a 30-minute grid from the top of the half-day, refusing any day that
+// had been assigned. That left a self-booked customer on a route day at
+// her placeholder minute (10:30) while the route reached her at 08:20 —
+// and the assigned stops' calendar times were sequenced WITHOUT her in
+// the loop. Now it is the same sync every plan change runs
+// (syncRoutedTimes): plan stops, assigned bookings and self-booked
+// customers timed by ONE sequence, each minute clamped inside the
+// half-day the customer was told, both stores moved together, nothing
+// sent. A visit the tech has arrived at, or a locked day, is left alone.
 async function restampDayInDrivingOrder(anyStartOnTheDay) {
   const when = new Date(anyStartOnTheDay);
   if (Number.isNaN(when.getTime())) return 0;
-  const dayStart = new Date(when.getFullYear(), when.getMonth(), when.getDate()).getTime();
-  const dayEnd = dayStart + 86400000;
-
-  const allLeads = await readLeads();
-  const onDay = allLeads.filter((l) => {
-    if (!l || l.archived || !l.booking?.start) return false;
-    if (!bookingHoldsItsSlot(l.booking.status)) return false;
-    const t = new Date(l.booking.start).getTime();
-    return t >= dayStart && t < dayEnd;
-  });
-  if (onDay.length < 2) return 0;
-
-  // A day Patrick has already sent out is his, not the optimiser's.
-  if (onDay.some((l) => l.booking.assignmentId || l.booking.dayLocked || l.booking.source === "assignment")) {
-    return 0;
-  }
-
-  const byCode = new Map();
-  const day = { morning: [], afternoon: [] };
-  onDay.forEach((l, i) => {
-    const coords = l.booking.coords;
-    if (!coords || coords.lat == null) return;
-    const code = `__lead:${i}`;
-    byCode.set(code, { code, id: code, coords });
-    day[new Date(l.booking.start).getHours() < 12 ? "morning" : "afternoon"].push(code);
-  });
-  if (!day.morning.length && !day.afternoon.length) return 0;
-
-  const sequenced = await resequence.sequenceDay(day, { propertiesByCode: byCode });
-
-  // Lay the ordered stops back down from the top of their own bucket. Thirty
-  // minutes a stop keeps the arithmetic honest against the 30-minute grid the
-  // engine offers slots on; the customer is told the bucket either way.
-  const SLOT_MINUTES = 30;
-  let changed = 0;
-  for (const bucket of BOOKING_BUCKETS) {
-    const order = (sequenced && sequenced[bucket.key]) || [];
-    const openMin = parseHHmmToMinutes(bucket.from);
-    order.forEach((code, position) => {
-      const idx = Number(String(code).split(":")[1]);
-      const lead = onDay[idx];
-      if (!lead) return;
-      const startMs = dayStart + (openMin + position * SLOT_MINUTES) * 60000;
-      const durationMs = lead.booking.end
-        ? Math.max(0, new Date(lead.booking.end) - new Date(lead.booking.start))
-        : SLOT_MINUTES * 60000;
-      const nextStart = new Date(startMs).toISOString();
-      if (nextStart === lead.booking.start) return;
-      lead.booking.start = nextStart;
-      lead.booking.end = new Date(startMs + durationMs).toISOString();
-      changed += 1;
-    });
-  }
-  if (!changed) return 0;
-
-  await writeLeads(allLeads);
-  // Mirror into the canonical records so bookings.json, the iCal feed and the
-  // reminders agree. upsertFromLead directly, not syncBookingFromLead: the
-  // customer promotion already ran and re-entering here would recurse.
-  for (const lead of onDay) {
-    await mirrorBookingOnly(lead).catch(() => null);
-  }
-  console.log(`[restamp] ${changed} stop(s) re-cut into driving order on ${new Date(dayStart).toDateString()}`);
+  const { season, year } = seasonAndYearFor(when);
+  const dayKey = `${when.getFullYear()}-${String(when.getMonth() + 1).padStart(2, "0")}-${String(when.getDate()).padStart(2, "0")}`;
+  // ITS day only — a booking changes one day's shape, and a season-wide
+  // sequence on every booking is a Distance Matrix bill for nothing.
+  const result = await syncRoutedTimes(season, year, { dates: [dayKey] });
+  const changed = (result?.updated || 0) + (result?.customersUpdated || 0);
+  if (changed) console.log(`[restamp] ${changed} stop(s) re-timed into driving order (${season} ${year})`);
   return changed;
 }
 
@@ -23288,91 +23231,6 @@ async function orderDayForDriving(rows) {
   // bucket, and sequenceDay orders WITHIN a bucket, so every promise is
   // kept while the crew gets one numbered route and one drawable line.
 
-  const SEASON_MONTHS_FOR_BOOKED = { spring: [0, 1, 2, 3, 4, 5, 6], fall: [7, 8, 9, 10, 11] };
-
-  // Every active booking that belongs on this season/year's board, grouped
-  // by date. Same filters the review has always used: this year, an
-  // in-season month, today-or-later, and a booking that FULFILS a plan
-  // stop is that stop (skipped — one row, not two). Shared by the plan
-  // resolver and the route-line endpoint so numbers and line never
-  // disagree. Returns Map<dateKey, row[]>.
-  async function gatherBookedRows({ plan, season, year, all, leads }) {
-    const months = SEASON_MONTHS_FOR_BOOKED[season] || SEASON_MONTHS_FOR_BOOKED.fall;
-    const now = new Date();
-    const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    const codeByPropertyId = new Map(all.filter((p) => p && p.id && p.code).map((p) => [p.id, p.code]));
-    const propertyById = new Map(all.filter((p) => p && p.id).map((p) => [p.id, p]));
-    const leadById = new Map((leads || []).map((l) => [l.id, l]));
-    const plannedCodesByDate = new Map();
-    for (const [d, day] of Object.entries((plan && plan.days) || {})) {
-      plannedCodesByDate.set(d, new Set([...(day.morning || []), ...(day.afternoon || [])]));
-    }
-    const nearYard = (c) => c && c.lat != null
-      && Math.abs(Number(c.lat) - PJL_BASE.lat) < 1e-6 && Math.abs(Number(c.lng) - PJL_BASE.lng) < 1e-6;
-    const out = new Map();
-    for (const b of await activeBookings()) {
-      const startD = new Date(b.start);
-      if (Number.isNaN(startD.getTime())) continue;
-      if (startD.getFullYear() !== Number(year) || !months.includes(startD.getMonth())) continue;
-      const dateKey = `${startD.getFullYear()}-${String(startD.getMonth() + 1).padStart(2, "0")}-${String(startD.getDate()).padStart(2, "0")}`;
-      if (dateKey < todayKey) continue;
-      const lead = b.leadId ? leadById.get(b.leadId) : null;
-      const propertyId = b.propertyId || (lead && lead.propertyId) || null;
-      const property = propertyId ? propertyById.get(propertyId) : null;
-      const planCode = propertyId ? codeByPropertyId.get(propertyId) : null;
-      if (planCode && plannedCodesByDate.get(dateKey)?.has(planCode)) continue; // the booking IS the plan stop
-      const coords = (property && property.coords && property.coords.lat != null)
-        ? { lat: property.coords.lat, lng: property.coords.lng }
-        : (!nearYard(b.coords) && b.coords && b.coords.lat != null)
-          ? { lat: Number(b.coords.lat), lng: Number(b.coords.lng) }
-          : null;
-      const row = {
-        code: planCode || null,
-        customerName: (property && property.customerName)
-          || [lead?.contact?.firstName, lead?.contact?.lastName].filter(Boolean).join(" ")
-          || "",
-        address: (property && property.address) || lead?.contact?.address || "",
-        serviceLabel: b.serviceLabel || "",
-        start: b.start,
-        timeLabel: startD.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }),
-        bucket: startD.getHours() < 12 ? "morning" : "afternoon",
-        coords,
-        propertyId,
-        leadId: b.leadId || null,
-        bookingId: b.bookingId || null
-      };
-      if (!out.has(dateKey)) out.set(dateKey, []);
-      out.get(dateKey).push(row);
-    }
-    return out;
-  }
-
-  // Sequence a day's drive INCLUDING its bookings. `storedDay` is the plan
-  // day (or null for a booking-only day). Each mappable booked row is
-  // tagged with a synthetic `mapCode` that appears in the returned
-  // timeline, so stop numbers and the route line cover the bookings too.
-  // An unmappable booked row (no coords) is left un-numbered and simply
-  // does not join the drive. Returns { sequenced, rowByMapCode }.
-  async function sequenceDayWithBookings({ storedDay, bookedRows, byCode, season, requestedWindows }) {
-    const augByCode = new Map(byCode);
-    const extra = { morning: [], afternoon: [] };
-    const rowByMapCode = new Map();
-    (bookedRows || []).forEach((row, i) => {
-      if (!row.coords || row.coords.lat == null) { row.mapCode = null; return; }
-      const code = `__bk:${row.bookingId || row.leadId || `i${i}`}`;
-      row.mapCode = code;
-      augByCode.set(code, { code, id: code, coords: { lat: Number(row.coords.lat), lng: Number(row.coords.lng) } });
-      rowByMapCode.set(code, row);
-      extra[row.bucket === "morning" ? "morning" : "afternoon"].push(code);
-    });
-    const day = {
-      ...(storedDay || {}),
-      morning: [...((storedDay && storedDay.morning) || []), ...extra.morning],
-      afternoon: [...((storedDay && storedDay.afternoon) || []), ...extra.afternoon]
-    };
-    const sequenced = await resequence.sequenceDay(day, { propertiesByCode: augByCode, season, requestedWindows });
-    return { sequenced, rowByMapCode };
-  }
 
   // One plan stop, resolved against the property book. Shared by the
   // board (resolveSeasonPlan) and the day preview so a stop reads the
@@ -23963,7 +23821,7 @@ async function orderDayForDriving(rows) {
           // too, so re-anchor the day's sequenced times in the background
           // (same follow-through as a time-window save)…
           if (result.booking?.assignment) {
-            assignments.syncAssignedTimes(result.booking.assignment.season, result.booking.assignment.year)
+            syncRoutedTimes(result.booking.assignment.season, result.booking.assignment.year)
               .catch((e) => console.warn("[appointment] time sync after zone update failed:", e?.message));
           }
           // …and Patrick hears about it — the price on the profile is not
@@ -24012,7 +23870,7 @@ async function orderDayForDriving(rows) {
         // The window moves the day's clock — re-anchor the sequenced
         // times in the background so the plan and calendar follow.
         if (result.booking?.assignment) {
-          assignments.syncAssignedTimes(result.booking.assignment.season, result.booking.assignment.year)
+          syncRoutedTimes(result.booking.assignment.season, result.booking.assignment.year)
             .catch((e) => console.warn("[appointment] time sync after window failed:", e?.message));
         }
         return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel: await priceFor(result.booking), zones: await zonesFor(result.booking, result.summary) } });
@@ -24414,7 +24272,7 @@ async function orderDayForDriving(rows) {
       const plan = await resolveSeasonPlan(season, year);
       // A time window changes the sequencing clock; re-anchor assigned
       // bookings to the new arrivals in the background.
-      assignments.syncAssignedTimes(season, year)
+      syncRoutedTimes(season, year)
         .catch((e) => console.warn("[assignments] time sync after window change failed:", e?.message));
       return sendJson(res, 200, { ok: true, plan, warnings: result.warnings, window: result.window });
     } catch (err) {
@@ -24445,7 +24303,7 @@ async function orderDayForDriving(rows) {
       // Assigned bookings mirror the route's sequenced arrivals; a
       // reorder moved them, so re-anchor in the background. Best-effort:
       // the reorder itself is already committed either way.
-      assignments.syncAssignedTimes(seasonPlanOrderMatch[1], Number(seasonPlanOrderMatch[2]))
+      syncRoutedTimes(seasonPlanOrderMatch[1], Number(seasonPlanOrderMatch[2]))
         .catch((e) => console.warn("[assignments] time sync after reorder failed:", e?.message));
       return sendJson(res, 200, { ok: true, plan, warnings: result.warnings, reordered: result.reordered });
     } catch (err) {
@@ -24473,7 +24331,7 @@ async function orderDayForDriving(rows) {
           await resequencePlanForStorage(stored, season, year), { actor });
       }
       const plan = await resolveSeasonPlan(season, year);
-      assignments.syncAssignedTimes(season, year)
+      syncRoutedTimes(season, year)
         .catch((e) => console.warn("[assignments] time sync after auto-order failed:", e?.message));
       return sendJson(res, 200, { ok: true, plan });
     } catch (err) {
@@ -24571,6 +24429,8 @@ async function orderDayForDriving(rows) {
         follow = { ok: false, errors: [err?.message] };
       }
       const resolved = await resolveSeasonPlan(season, year);
+      syncRoutedTimes(season, year)
+        .catch((e) => console.warn("[assignments] time sync after move failed:", e?.message));
       return sendJson(res, 200, { ok: true, plan: resolved, warnings, moved, follow });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't move that stop."] });
@@ -24798,6 +24658,10 @@ async function orderDayForDriving(rows) {
         }
       }
       const resolved = await resolveSeasonPlan(season, year);
+      if (placed) {
+        syncRoutedTimes(season, year)
+          .catch((e) => console.warn("[assignments] time sync after place failed:", e?.message));
+      }
       return sendJson(res, 200, { ok: true, placed, considered: targets.length, results, plan: resolved });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't place those stops."] });
@@ -24825,6 +24689,8 @@ async function orderDayForDriving(rows) {
         await seasonPlans.savePlan(season, year, await resequencePlanForStorage(stored, season, year), { actor });
       }
       const resolved = await resolveSeasonPlan(season, year);
+      syncRoutedTimes(season, year)
+        .catch((e) => console.warn("[assignments] time sync after add failed:", e?.message));
       return sendJson(res, 200, { ok: true, plan: resolved, warnings, added });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't add that stop."] });
@@ -25950,6 +25816,147 @@ async function serveStatic(req, res, pathname) {
 // Flipped by the SIGTERM handler below so /healthz can report "draining".
 let shuttingDown = false;
 
+const SEASON_MONTHS_FOR_BOOKED = { spring: [0, 1, 2, 3, 4, 5, 6], fall: [7, 8, 9, 10, 11] };
+
+// Every active booking that belongs on this season/year's board, grouped
+// by date. Same filters the review has always used: this year, an
+// in-season month, today-or-later, and a booking that FULFILS a plan
+// stop is that stop (skipped — one row, not two). Shared by the plan
+// resolver and the route-line endpoint so numbers and line never
+// disagree. Returns Map<dateKey, row[]>.
+async function gatherBookedRows({ plan, season, year, all, leads }) {
+  const months = SEASON_MONTHS_FOR_BOOKED[season] || SEASON_MONTHS_FOR_BOOKED.fall;
+  const now = new Date();
+  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const codeByPropertyId = new Map(all.filter((p) => p && p.id && p.code).map((p) => [p.id, p.code]));
+  const propertyById = new Map(all.filter((p) => p && p.id).map((p) => [p.id, p]));
+  const leadById = new Map((leads || []).map((l) => [l.id, l]));
+  const plannedCodesByDate = new Map();
+  for (const [d, day] of Object.entries((plan && plan.days) || {})) {
+    plannedCodesByDate.set(d, new Set([...(day.morning || []), ...(day.afternoon || [])]));
+  }
+  const nearYard = (c) => c && c.lat != null
+    && Math.abs(Number(c.lat) - PJL_BASE.lat) < 1e-6 && Math.abs(Number(c.lng) - PJL_BASE.lng) < 1e-6;
+  const out = new Map();
+  for (const b of await activeBookings()) {
+    const startD = new Date(b.start);
+    if (Number.isNaN(startD.getTime())) continue;
+    if (startD.getFullYear() !== Number(year) || !months.includes(startD.getMonth())) continue;
+    const dateKey = `${startD.getFullYear()}-${String(startD.getMonth() + 1).padStart(2, "0")}-${String(startD.getDate()).padStart(2, "0")}`;
+    if (dateKey < todayKey) continue;
+    const lead = b.leadId ? leadById.get(b.leadId) : null;
+    const propertyId = b.propertyId || (lead && lead.propertyId) || null;
+    const property = propertyId ? propertyById.get(propertyId) : null;
+    const planCode = propertyId ? codeByPropertyId.get(propertyId) : null;
+    if (planCode && plannedCodesByDate.get(dateKey)?.has(planCode)) continue; // the booking IS the plan stop
+    const coords = (property && property.coords && property.coords.lat != null)
+      ? { lat: property.coords.lat, lng: property.coords.lng }
+      : (!nearYard(b.coords) && b.coords && b.coords.lat != null)
+        ? { lat: Number(b.coords.lat), lng: Number(b.coords.lng) }
+        : null;
+    const row = {
+      code: planCode || null,
+      customerName: (property && property.customerName)
+        || [lead?.contact?.firstName, lead?.contact?.lastName].filter(Boolean).join(" ")
+        || "",
+      address: (property && property.address) || lead?.contact?.address || "",
+      serviceLabel: b.serviceLabel || "",
+      start: b.start,
+      end: b.end || null,
+      durationMinutes: b.end ? Math.max(1, Math.round((new Date(b.end).getTime() - startD.getTime()) / 60000)) : null,
+      timeLabel: startD.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }),
+      bucket: startD.getHours() < 12 ? "morning" : "afternoon",
+      coords,
+      propertyId,
+      leadId: b.leadId || null,
+      bookingId: b.bookingId || null
+    };
+    if (!out.has(dateKey)) out.set(dateKey, []);
+    out.get(dateKey).push(row);
+  }
+  return out;
+}
+
+// Sequence a day's drive INCLUDING its bookings. `storedDay` is the plan
+// day (or null for a booking-only day). Each mappable booked row is
+// tagged with a synthetic `mapCode` that appears in the returned
+// timeline, so stop numbers and the route line cover the bookings too.
+// An unmappable booked row (no coords) is left un-numbered and simply
+// does not join the drive. Returns { sequenced, rowByMapCode }.
+async function sequenceDayWithBookings({ storedDay, bookedRows, byCode, season, requestedWindows }) {
+  return assignments.sequenceWithBookings({ storedDay, bookedRows, byCode, season, requestedWindows });
+}
+
+// A self-booked customer's placeholder minute follows the route (FLOW-43).
+// The half-day is the promise; the minute inside it is the route's. Both
+// stores that hold the time move together — the lead's embedded booking
+// and the bookings record, through mirrorBookingOnly, the one mirror —
+// plus any linked work order. A visit the tech has already arrived at, or
+// a day Patrick locked, is never re-timed. Nothing is sent: the customer
+// was never told a minute.
+async function retimeCustomerBooking(row, start, durationMinutes) {
+  const startIso = start.toISOString();
+  const endIso = new Date(start.getTime() + Math.max(1, Number(durationMinutes) || 60) * 60 * 1000).toISOString();
+  const label = (iso) => new Date(iso).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
+  const rec = row.bookingId ? await bookings.get(row.bookingId) : null;
+  const woIds = Array.isArray(rec?.workOrderIds) ? rec.workOrderIds : [];
+  const wos = (await Promise.all(woIds.map((id) => Promise.resolve(workOrders.get(id)).catch(() => null)))).filter(Boolean);
+  if (wos.some((w) => w && w.arrivedAt)) return false;
+
+  if (row.leadId) {
+    const all = await readLeads();
+    const idx = all.findIndex((l) => l && l.id === row.leadId);
+    if (idx === -1 || !all[idx].booking) return false;
+    const lead = all[idx];
+    if (lead.booking.dayLocked) return false;
+    const wasStart = lead.booking.start;
+    lead.booking.start = startIso;
+    lead.booking.end = endIso;
+    lead.crm = lead.crm || {};
+    lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
+    lead.crm.activity.unshift({
+      at: new Date().toISOString(), type: "update",
+      text: `Route timing: ${label(wasStart)} → ${label(startIso)} (arrival window unchanged).`
+    });
+    lead.crm.lastUpdated = new Date().toISOString();
+    all[idx] = lead;
+    await writeLeads(all);
+    await mirrorBookingOnly(lead).catch((err) => console.warn("[retime] mirror failed:", err?.message));
+  } else if (rec) {
+    await bookings.update(rec.id, { scheduledFor: startIso });
+  } else {
+    return false;
+  }
+  for (const wo of wos) {
+    try { await workOrders.update(wo.id, { scheduledFor: startIso }); }
+    catch (err) { console.warn(`[retime] WO ${wo.id} update failed:`, err?.message); }
+  }
+  return true;
+}
+
+// The time sync every plan or booking change runs: assigned stops AND the
+// self-booked customers on each day, timed by ONE sequence. A season with
+// no plan still has booked days, and they are timed from the yard alone.
+async function syncRoutedTimes(season, year, { dates = null } = {}) {
+  const driven = await assignments.drivenPlan(season, year);
+  const all = await properties.list();
+  const bookedRowsByDate = await gatherBookedRows({
+    plan: driven ? driven.plan : null, season, year, all, leads: await readLeads()
+  });
+  return assignments.syncAssignedTimes(season, year, {
+    bookedRowsByDate, retimeBooking: retimeCustomerBooking, onlyDates: dates || undefined
+  });
+}
+
+// The season (and its plan year) a booking on this date belongs to —
+// seasonForBooking's own rule, with its December → next spring wrap.
+function seasonAndYearFor(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  const season = outreach.seasonForBooking(d);
+  const year = d.getFullYear() + (season === "spring" && d.getMonth() >= 6 ? 1 : 0);
+  return { season, year };
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
   // Normalize the pathname before route matching. If the URL came in with
@@ -26471,9 +26478,10 @@ server.listen(PORT, HOST, () => {
     try {
       const y = new Date().getFullYear();
       for (const season of ["spring", "fall"]) {
-        const result = await assignments.syncAssignedTimes(season, y);
-        if (result?.updated) {
-          console.log(`[assignments] time sweep re-anchored ${result.updated}/${result.checked} ${season} ${y} bookings`);
+        const result = await syncRoutedTimes(season, y);
+        if (result?.updated || result?.customersUpdated) {
+          console.log(`[assignments] time sweep re-anchored ${result.updated}/${result.checked} assigned`
+            + ` and ${result.customersUpdated || 0}/${result.customersChecked || 0} self-booked ${season} ${y} bookings`);
         }
       }
     } catch (err) {
