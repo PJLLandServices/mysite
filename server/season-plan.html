@@ -188,6 +188,13 @@
         </section>
       </div>
 
+      <!-- Stops moved before their bookings learned to follow. Hidden
+           when the plan and the bookings agree. -->
+      <div class="sp-followbar" id="followPlanBar" hidden>
+        <span id="followPlanText"></span>
+        <button type="button" class="pjl-btn pjl-btn-danger" id="followPlanBtn">Move appointments to match</button>
+      </div>
+
       <div class="sp-cockpit" id="cockpit">
         <aside class="sp-rail" id="dayRail" aria-label="Route days"></aside>
         <section class="sp-stage">

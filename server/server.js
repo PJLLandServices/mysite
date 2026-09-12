@@ -23547,6 +23547,15 @@ async function orderDayForDriving(rows) {
     // planned days get. See gatherBookedRows / sequenceDayWithBookings.)
     days.sort((a, b) => (a.date < b.date ? -1 : 1));
     for (const d of days) d.dropped = driven.gone[d.date] || [];
+    // Stops whose booking has not followed a move yet — the board says
+    // so and offers the one button, rather than showing a stop on one day
+    // and its appointment on another.
+    let planMoves = [];
+    try {
+      planMoves = (await assignments.followPlanMoves(season, year, { dryRun: true })).rows;
+    } catch (err) {
+      console.warn("[season-plan] follow-plan check skipped:", err?.message);
+    }
 
     const problems = days.flatMap((d) => [...d.morning, ...d.afternoon]
       .filter((st) => st.problem)
@@ -23573,6 +23582,7 @@ async function orderDayForDriving(rows) {
       totalStops: days.reduce((t, d) => t + d.counts.total, 0),
       driveMinutes: days.reduce((t, d) => t + (d.driveMinutes || 0), 0),
       days,
+      planMoves,
       problems,
       // Days whose morning cannot finish by 12:00 in any order. Rule 2:
       // flag rather than silently overrun, because the fix is a bucket or
@@ -24547,10 +24557,42 @@ async function orderDayForDriving(rows) {
           actor: session?.email || session?.name || "admin"
         });
       }
+      // The stop moved — now its booking rides along, exactly as a
+      // whole-day move's do: new date and half, re-timed, response
+      // reset, notice queued for the sweep. (Patrick, 2026-09-12: the
+      // plan saved his moves; the appointments had stayed put.)
+      let follow = null;
+      try {
+        follow = await assignments.followPlanMoves(season, year, {
+          codes: [moved.propertyCode], actor: session?.email || session?.name || "admin"
+        });
+      } catch (err) {
+        console.error("[season-plan] stop-move booking ride-along failed:", err?.message);
+        follow = { ok: false, errors: [err?.message] };
+      }
       const resolved = await resolveSeasonPlan(season, year);
-      return sendJson(res, 200, { ok: true, plan: resolved, warnings, moved });
+      return sendJson(res, 200, { ok: true, plan: resolved, warnings, moved, follow });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't move that stop."] });
+    }
+  }
+
+  // Follow the plan — the bookings catch up with stops moved before the
+  // ride-along existed. GET is the list (what would move, who would be
+  // told); POST does it. Same permission as /move: it is the same act.
+  const seasonPlanFollowMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/follow-plan$/);
+  if (seasonPlanFollowMatch && (req.method === "GET" || req.method === "POST")) {
+    try {
+      const session = await requireUser(req);
+      const season = seasonPlanFollowMatch[1];
+      const year = Number(seasonPlanFollowMatch[2]);
+      const result = await assignments.followPlanMoves(season, year, {
+        dryRun: req.method === "GET", actor: session?.email || session?.name || "admin"
+      });
+      const plan = req.method === "POST" ? await resolveSeasonPlan(season, year) : undefined;
+      return sendJson(res, 200, { ...result, dryRun: req.method === "GET", plan });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't bring the bookings in line."] });
     }
   }
 

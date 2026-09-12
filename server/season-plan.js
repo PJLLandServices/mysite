@@ -324,7 +324,7 @@
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error((data.errors || ["Move failed."]).join(" "));
         render(data.plan);
-        showToast(`${stop.code} moved to ${toDate} ${toBucket}.`);
+        showToast(`${stop.code} moved to ${prettyDate(toDate)} ${toBucket}. ${followWords(data.follow)}`);
       } catch (error) {
         showToast(error.message, "bad");
         if (revert) revert();
@@ -1118,6 +1118,7 @@
 
   function render(plan) {
     current = plan;
+    renderFollowBar(plan);
     if (!plan) {
       planMeta.textContent = "No plan loaded for this season yet.";
       emptyState.hidden = false;
@@ -1456,6 +1457,52 @@
     wrap.append(who, act);
     return wrap;
   }
+
+  // What happened to the appointment behind a moved stop — said on the
+  // toast, so "moved" never again means "the plan file changed and
+  // nothing else did".
+  function followWords(follow) {
+    if (!follow || follow.ok === false) return "The appointment could NOT be moved — check the booking.";
+    if (!follow.checked) return "Not assigned yet — nothing to tell anyone.";
+    if (!follow.moved) return "The customer had already moved their own appointment; it stays where they put it.";
+    return "Appointment moved with it"
+      + (follow.noticesQueued ? " — the customer will be told at the next send" : "")
+      + (follow.responsesReset ? "; their confirmation is reset for the new date" : "")
+      + ".";
+  }
+
+  // The board's banner for stops moved BEFORE the ride-along existed:
+  // one button brings every straggling appointment to its stop's day.
+  const followBar = el("followPlanBar");
+  const followBtn = el("followPlanBtn");
+  const followText = el("followPlanText");
+  function renderFollowBar(plan) {
+    if (!followBar) return;
+    const rows = (plan && plan.planMoves) || [];
+    followBar.hidden = rows.length === 0;
+    if (!rows.length) return;
+    const told = rows.filter((r) => r.notice).length;
+    followText.textContent = `${rows.length} appointment${rows.length === 1 ? " is" : "s are"} still on the day `
+      + `${rows.length === 1 ? "its" : "their"} stop was moved FROM. Moving them re-times each one on its new day`
+      + (told ? ` and tells ${told} customer${told === 1 ? "" : "s"} at the next send` : "") + ".";
+    followBtn.textContent = `Move ${rows.length} appointment${rows.length === 1 ? "" : "s"} to match`;
+  }
+  armTwice(followBtn, "Press again to MOVE them", async () => {
+    followBtn.disabled = true;
+    try {
+      const response = await fetch(`${base()}/follow-plan`, { method: "POST" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't move them."]).join(" "));
+      showToast(`${data.moved} appointment${data.moved === 1 ? "" : "s"} moved to match the plan`
+        + (data.noticesQueued ? `; ${data.noticesQueued} customer${data.noticesQueued === 1 ? "" : "s"} will be told at the next send` : "")
+        + (data.responsesReset ? `; ${data.responsesReset} confirmation${data.responsesReset === 1 ? "" : "s"} reset` : "") + ".");
+      if (data.plan) render(data.plan);
+    } catch (error) {
+      showToast(error.message, "bad");
+    } finally {
+      followBtn.disabled = false;
+    }
+  });
 
   // ---- The tray: drag what's waiting onto a day -------------------------
   //
