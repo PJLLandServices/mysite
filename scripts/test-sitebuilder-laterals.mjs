@@ -92,9 +92,19 @@ check(grp1.stations === grp0.stations && grp1.valves === grp0.valves + 1, 'stati
 check(grp1.quote.some(l => /2 valves wired as one zone/.test(l) && /West bed/.test(l) && /East bed/.test(l)), 'quote: one line naming both beds on 2 valves');
 check(grp1.blob && grp1.blob['Front drip'] === 'station', 'mode saved in the design blob');
 
-// --- master plan: each bed valve lands in its own box --------------------
+// --- the Split zone button on a shared group offers per-bed valves -------
+await page.evaluate(() => setValveGroupMode('Front drip', ''));
 await page.evaluate(id => openMasterPlan(id), PAGE);
 await page.waitForSelector('#mpOverlay:not([hidden])');
+const offer = await page.evaluate(() => {
+  const zi = LAST_ZONES.findIndex(z => z.grouped);
+  const before = LAST_ZONES.length;
+  window.confirm = () => true;
+  mp.zoneSel = zi; mpSetTool('split');
+  return { before, after: LAST_ZONES.length, mode: valveGroupMode('Front drip'), sel: mp.zoneSel != null ? LAST_ZONES[mp.zoneSel].key : null, tool: mp.tool };
+});
+check(offer.mode === 'station' && offer.after === offer.before + 1, 'Split zone on a shared drip group switches it to one valve per bed');
+check(offer.sel && offer.sel.startsWith('g:Front drip:0:') && offer.tool === 'pan', 'and lands on the first bed\'s valve (' + offer.sel + ')');
 const boxes = await page.evaluate(() => {
   const asg = mpManifoldAssign();
   return asg.byManifold.map(l => l.map(zi => LAST_ZONES[zi].key));
@@ -103,6 +113,7 @@ check(boxes[0].some(k => k.endsWith(':a_bedw')) && boxes[1].some(k => k.endsWith
 
 // --- zoom + hide-others on legend pick ------------------------------------
 const lawnZi = await page.evaluate(() => LAST_ZONES.findIndex(z => z.key.startsWith('z:a_lawn')));
+await page.evaluate(() => mpClearZoneSel());
 const zoom = await page.evaluate(zi => {
   const before = { ppf: mp.ppf, lat: (el('mpBody').innerHTML.match(/class="mp-lat"/g) || []).length };
   mpSelectZone(zi);
