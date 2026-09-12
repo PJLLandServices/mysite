@@ -1377,12 +1377,37 @@ the manifold: those runs are fanned a few screen pixels apart and named in
 the readout, because three identical lines to one tap would otherwise read
 as one pipe while the footage counted three.
 
+**One station, two valves — the driveway split (Sept 2026).** A zone is one
+valve, except when the lateral would have to cross a driveway to reach the
+far heads: there it is cheaper to put a second valve in a box on the far
+side and land both valve wires on one controller terminal. On the master
+plan, pick the zone, pick **Split zone**, click two points across the
+driveway. The line is stored per sheet as `routing[page].splits[zoneKey] =
+{ax,ay,bx,by}` (sheet feet, `version: 8`); heads sort onto side A or B by
+which way they fall from it, so nudging a head never silently changes the
+split. `applyValveSplits()` turns that zone into two `LAST_ZONES` entries —
+`…· A` (the base key) and `…· B` (`key + '#B'`) — that share a `station`.
+Everything that counts VALVES (BOM valve hardware, box count, wire
+conductors, pins, laterals, the legend) sees two; everything that counts
+STATIONS (`stationCount()`, `stationZones()`: quote lines, controller
+sizing, the "total zones" tile, peak mainline flow via `peakStationGPM()`)
+sees one. Each half anchors on its own heads, so nearest-box assigns them
+to different boxes without a pin. Only a single-area sprinkler zone can be
+split; drip beds and shared drip groups are refused with the reason. A
+line that leaves every head on one side is refused rather than stored.
+Removing the split drops the line and the B half's pin. A version-7 blob
+has no `splits`, so every zone is one valve exactly as before. Walked by
+`scripts/test-sitebuilder-split.mjs` (`npm run test:sitebuilder`, headless
+Chromium with every API mocked): split → two halves in two boxes → one
+quote line, one more valve → save/reload byte-identical → unsplit restores
+the original.
+
 **Three builder-owned durable fields on the project record**, each capped
 independently and each written whole:
 
 | Field | Cap | What it holds |
 |---|---|---|
-| `systemDesign` | **512 KB** | The design blob — supply inputs, per-area spec, computed zones, BOM overrides, `linkedQuoteId`, and (v5) the master-plan `routing` per sheet. Opaque to the server. Now at `version: 5`; `version: 2` / `3` / `4` blobs load unchanged — v3 added `area.planRef`, v4 `area.valveGroup`, v5 `routing`, and an absent field means exactly what the older blob meant. |
+| `systemDesign` | **512 KB** | The design blob — supply inputs, per-area spec, computed zones, BOM overrides, `linkedQuoteId`, and (v5) the master-plan `routing` per sheet. Opaque to the server. Now at `version: 8`; older blobs load unchanged — v3 added `area.planRef`, v4 `area.valveGroup`, v5 `routing`, v6 mainline tree parents, v7 stable ids + `pins`, v8 `routing[page].splits`, and an absent field means exactly what the older blob meant. |
 | `waterCostEstimate` | **128 KB** | Standalone water-cost-by-town snapshot; opens as its own project-folder deliverable. |
 | `sitePlan` | **64 KB** | Site-plan **metadata only** — sheets, dimensions, and each sheet's calibration record with full provenance. Rasters live on disk (see Data files). Not writable through the generic `PATCH` (see below). |
 
