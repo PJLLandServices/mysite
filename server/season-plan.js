@@ -394,6 +394,9 @@
     const booked = (day.booked || []).filter((b) => b.bucket === bucket);
     const wrap = document.createElement("div");
     wrap.className = "sp-bucket";
+    wrap.dataset.date = day.date;
+    wrap.dataset.bucket = bucket;
+    wireDropTarget(wrap, () => ({ date: day.date, bucket }));
 
     const head = document.createElement("h4");
     head.className = "sp-bucket-head";
@@ -519,6 +522,12 @@
     fill.innerHTML = `<i style="width:${Math.max(pct, dayLoad ? 8 : 0)}%"></i>`;
     cap.appendChild(fill);
     row.appendChild(cap);
+
+    // Shown only while a chip is in the air: what this day costs for it.
+    const drop = document.createElement("span");
+    drop.className = "sp-railrow-drop";
+    row.appendChild(drop);
+    wireDropTarget(row, () => ({ date: day.date, bucket: null }));
 
     row.addEventListener("click", () => selectDay(day.date));
     return row;
@@ -1338,6 +1347,8 @@
       const data = await response.json();
       if (!response.ok || !data.ok) {
         if (unplannedToggle) unplannedToggle.hidden = true;
+        lastUnplanned = [];
+        renderTray();
         return;
       }
       const placeable = data.placeable || [];
@@ -1346,6 +1357,8 @@
         unplannedToggle.hidden = placeable.length === 0;
         unplannedBadge.textContent = String(placeable.length);
       }
+      lastUnplanned = placeable;
+      renderTray();
       unplannedList.innerHTML = "";
       unplannedNote.textContent = placeable.length
         ? `${placeable.length} propert${placeable.length === 1 ? "y is" : "ies are"} eligible for this season and on no route day. `
@@ -1442,6 +1455,213 @@
     act.appendChild(dayPickerFor(row, row.days));
     wrap.append(who, act);
     return wrap;
+  }
+
+  // ---- The tray: drag what's waiting onto a day -------------------------
+  //
+  // Patrick, 2026-09-12: "can the 'not on the plan' be somewhere on this
+  // page and I can just drag and drop them into a day.. There's too many
+  // avenues that you have to go down when choosing this. It should be the
+  // same for the 'Open Bucket' as well."
+  //
+  // So both lists live on the cockpit itself, as chips. Drag one onto a
+  // day in the rail (the lighter half-day is chosen, the same rule the
+  // server uses) or onto a half-day on the right. While a chip is in the
+  // air every rail row shows what that day costs for it, best in green —
+  // the routing answer rides along, it does not need a window. A property
+  // is added to the plan (nothing sent until Assign); an open-bucket
+  // customer is booked into the afternoon and told, exactly as the
+  // drawer's button does. The drawers stay for touch screens.
+  let lastUnplanned = [];
+  let lastStandby = [];
+  let dragging = null;   // { kind, id, row } while a chip is in the air
+  const cockpitEl = el("cockpit");
+  const placeTray = el("placeTray");
+
+  // The half-day a new stop lands in when the day was chosen but not the
+  // half: the lighter one by PLANNED stops, morning on a tie — the same
+  // rule as assignments.lighterBucket on the server, read from the same
+  // counts, so a drop on a day and a place-on-best agree.
+  function lighterBucketOf(day) {
+    const m = Number(day?.counts?.morning) || 0;
+    const a = Number(day?.counts?.afternoon) || 0;
+    return a < m ? "afternoon" : "morning";
+  }
+
+  // A chip's payload, as text on the drag. Anything malformed is nobody's
+  // drop.
+  function parseDragPayload(text) {
+    try {
+      const v = JSON.parse(String(text || ""));
+      if (!v || (v.kind !== "unplanned" && v.kind !== "standby") || !v.id) return null;
+      return { kind: v.kind, id: String(v.id) };
+    } catch { return null; }
+  }
+
+  function todayKey() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  function chipFor({ kind, id, title, sub, best, stuck, hint }) {
+    const chip = document.createElement("div");
+    chip.className = `sp-chip${kind === "standby" ? " is-standby" : ""}${stuck ? " is-stuck" : ""}`;
+    chip.draggable = !stuck;
+    chip.dataset.kind = kind;
+    chip.dataset.id = id;
+    chip.title = hint || "";
+    const b = document.createElement("b");
+    b.textContent = title;
+    const s1 = document.createElement("span");
+    s1.textContent = sub;
+    chip.append(b, s1);
+    if (best) {
+      const s2 = document.createElement("span");
+      s2.className = "sp-chip-best";
+      s2.textContent = best;
+      chip.appendChild(s2);
+    }
+    chip.addEventListener("dragstart", (event) => {
+      if (stuck) { event.preventDefault(); return; }
+      const payload = { kind, id };
+      event.dataTransfer.setData("text/plain", JSON.stringify(payload));
+      event.dataTransfer.effectAllowed = "move";
+      dragging = { ...payload, row: findWaiting(kind, id) };
+      chip.classList.add("is-dragging");
+      if (cockpitEl) cockpitEl.classList.add("is-dragging");
+      annotateRailForDrag();
+    });
+    chip.addEventListener("dragend", () => {
+      dragging = null;
+      chip.classList.remove("is-dragging");
+      if (cockpitEl) cockpitEl.classList.remove("is-dragging");
+      document.querySelectorAll(".is-dropover, .is-droprefused").forEach((n) => n.classList.remove("is-dropover", "is-droprefused"));
+    });
+    return chip;
+  }
+
+  function findWaiting(kind, id) {
+    return kind === "unplanned"
+      ? lastUnplanned.find((r) => r.code === id) || null
+      : lastStandby.find((r) => r.leadId === id) || null;
+  }
+
+  // What each rail day costs for the chip in the air.
+  function annotateRailForDrag() {
+    if (!dragging || !dragging.row) return;
+    const costs = new Map();
+    let bestDate = null;
+    if (dragging.kind === "unplanned") {
+      for (const d of dragging.row.days || []) costs.set(d.date, d);
+      bestDate = dragging.row.best ? dragging.row.best.date : null;
+    } else {
+      (dragging.row.bestDays || []).forEach((d, i) => { costs.set(d.date, { ...d, offered: true }); if (i === 0) bestDate = d.date; });
+    }
+    dayRail.querySelectorAll(".sp-railrow").forEach((r) => {
+      const badge = r.querySelector(".sp-railrow-drop");
+      if (!badge) return;
+      const c = costs.get(r.dataset.date);
+      badge.className = "sp-railrow-drop";
+      if (!c || c.addedDriveMinutes == null) { badge.textContent = "—"; return; }
+      badge.textContent = `+${c.addedDriveMinutes} min`;
+      if (r.dataset.date === bestDate) badge.classList.add("is-best");
+      else if (c.offered === false) badge.classList.add("is-over");
+    });
+  }
+
+  function renderTray() {
+    if (!placeTray) return;
+    const uChips = el("trayUnplannedChips");
+    const sChips = el("trayStandbyChips");
+    const uGroup = el("trayUnplanned");
+    const sGroup = el("trayStandby");
+    uChips.innerHTML = "";
+    for (const row of lastUnplanned) {
+      const street = String(row.address || "").split(",")[0] || row.code;
+      uChips.appendChild(chipFor({
+        kind: "unplanned", id: row.code,
+        title: row.customerName || row.code,
+        sub: `${street}${row.zoneCount ? ` · ${row.zoneCount} zones` : " · no zone count"}`,
+        best: row.rankable && row.best
+          ? `best ${row.best.label || prettyDate(row.best.date)} · +${row.best.addedDriveMinutes} min`
+          : (row.rankable ? "no day within the allowance" : "can't be ranked — drop by hand"),
+        hint: `${row.code} — drag onto a day, or click to see it on the map first`
+      }));
+      uChips.lastChild.addEventListener("click", () => {
+        const first = ((current && current.days) || []).find((d) => !d.bookedOnly);
+        const date = (row.rankable && row.best) ? row.best.date : (first ? first.date : null);
+        if (date) openPreview(row, date, null);
+      });
+    }
+    el("trayUnplannedCount").textContent = String(lastUnplanned.length);
+    uGroup.hidden = lastUnplanned.length === 0;
+
+    sChips.innerHTML = "";
+    for (const row of lastStandby) {
+      const stuck = !row.resolved;
+      const top = (row.bestDays || [])[0];
+      sChips.appendChild(chipFor({
+        kind: "standby", id: row.leadId,
+        title: row.name || row.address || row.leadId,
+        sub: `${row.serviceLabel || ""}${row.zoneCount ? ` · ${row.zoneCount} zones` : ""} · waiting ${waitingSince(row.requestedAt)}`,
+        best: stuck ? "address not pinpointed — place from the CRM"
+          : top ? `best ${top.label || prettyDate(top.date)} · +${top.addedDriveMinutes} min` : "no routed day near them yet",
+        stuck,
+        hint: stuck ? "" : "drag onto a day — books their afternoon and sends the confirmation"
+      }));
+    }
+    el("trayStandbyCount").textContent = String(lastStandby.length);
+    sGroup.hidden = lastStandby.length === 0;
+
+    placeTray.hidden = lastUnplanned.length === 0 && lastStandby.length === 0;
+  }
+
+  // A rail row or a half-day block takes a drop. `target()` says which
+  // day and (for a half-day) which bucket.
+  function wireDropTarget(node, target) {
+    node.addEventListener("dragover", (event) => {
+      if (!dragging) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      const why = dropRefusal(dragging, target());
+      node.classList.toggle("is-dropover", !why);
+      node.classList.toggle("is-droprefused", Boolean(why));
+    });
+    node.addEventListener("dragleave", () => node.classList.remove("is-dropover", "is-droprefused"));
+    node.addEventListener("drop", async (event) => {
+      event.preventDefault();
+      node.classList.remove("is-dropover", "is-droprefused");
+      const payload = parseDragPayload(event.dataTransfer.getData("text/plain")) || dragging;
+      if (!payload) return;
+      const t = target();
+      await dropOnDay({ kind: payload.kind, id: payload.id, row: findWaiting(payload.kind, payload.id) }, t.date, t.bucket);
+    });
+  }
+
+  // Why a drop can't happen here — or "" when it can. Said before the
+  // drop (red outline) and again on the drop (toast), never guessed past.
+  function dropRefusal(drag, { date, bucket }) {
+    if (!drag || !date) return "Nothing to place.";
+    if (date < todayKey()) return "That day has already happened.";
+    const day = ((current && current.days) || []).find((d) => d.date === date);
+    if (drag.kind === "standby") {
+      if (drag.row && !drag.row.resolved) return "Their address isn't pinpointed — place them from the CRM.";
+      if (bucket === "morning") return "Open-bucket pickups ride the afternoon — drop on the afternoon, or on the day.";
+    }
+    if (drag.kind === "unplanned" && day && day.bookedOnly) return "That's a booked-only day — drop on a route day.";
+    return "";
+  }
+
+  async function dropOnDay(drag, date, bucket) {
+    const why = dropRefusal(drag, { date, bucket });
+    if (why) { showToast(why, "bad"); return; }
+    if (drag.kind === "unplanned") {
+      const day = ((current && current.days) || []).find((d) => d.date === date);
+      await addToDay(drag.id, date, bucket || lighterBucketOf(day));
+      return;
+    }
+    if (!drag.row) { showToast("That customer is no longer waiting.", "bad"); loadStandby(); return; }
+    await bookStandby(drag.row, date);
   }
 
   // ---- Day preview: the day as it would be, with this stop on it -------
@@ -2488,8 +2708,65 @@
         + "Best days use the same added-drive math as the booking filter — placing one books them, "
         + "sends their confirmation, and takes them off this list.";
       for (const row of data.rows) standbyList.appendChild(standbyRow(row));
+      lastStandby = data.rows || [];
+      renderTray();
     } catch (error) {
       standbyNote.textContent = error.message;
+    }
+  }
+
+  // Put a waiting customer on a day: the engine picks the afternoon slot
+  // that is actually free, the reservation notifies them with the normal
+  // "booked" message and clears their standby envelope. One function for
+  // the drawer's button AND a drop on the cockpit, so both do exactly the
+  // same thing.
+  async function bookStandby(row, date) {
+    try {
+      // Ask the engine where this customer actually fits.
+      //
+      // This used to hard-code 13:00 as the anchor minute, which
+      // collided with whatever already sat at 13:00 and came back 409
+      // physical_conflict — on exactly the days this panel had just
+      // recommended. The geographic re-stamp made that worse, not
+      // better: the afternoon fills from 12:00 in half-hour steps, so
+      // 13:00 is precisely where the third afternoon booking lands.
+      //
+      // The resolver returns an afternoon slot that is actually free and
+      // passes the day's capacity and corridor checks, or refuses with a
+      // reason. The customer is still told the 12–5 window and never a
+      // minute.
+      const slotRes = await fetch("/api/admin/open-bucket/slot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: row.leadId, date })
+      });
+      const slotData = await slotRes.json().catch(() => ({}));
+      if (!slotRes.ok || !slotData.ok) {
+        throw new Error((slotData.errors || ["Couldn't find a slot on that day."]).join(" "));
+      }
+      const slotStart = slotData.slotStart;
+      const response = await fetch("/api/booking/reserve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          leadId: row.leadId,
+          serviceKey: row.serviceKey,
+          slotStart,
+          source: "admin_custom",
+          zoneCount: row.zoneCount || null,
+          contact: { address: row.address }
+        })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't place them."]).join(" "));
+      showToast(`${row.name || row.leadId} booked onto ${prettyDate(date)} — confirmation sent.`);
+      loadStandby();
+      await load();
+      selectDay(date);
+      return true;
+    } catch (error) {
+      showToast(error.message, "bad");
+      return false;
     }
   }
 
@@ -2532,51 +2809,8 @@
       btn.textContent = "Book + notify";
       btn.addEventListener("click", async () => {
         btn.disabled = true;
-        try {
-          // Ask the engine where this customer actually fits.
-          //
-          // This used to hard-code 13:00 as the anchor minute, which
-          // collided with whatever already sat at 13:00 and came back 409
-          // physical_conflict — on exactly the days this panel had just
-          // recommended. The geographic re-stamp made that worse, not
-          // better: the afternoon fills from 12:00 in half-hour steps, so
-          // 13:00 is precisely where the third afternoon booking lands.
-          //
-          // The resolver returns an afternoon slot that is actually free and
-          // passes the day's capacity and corridor checks, or refuses with a
-          // reason. The customer is still told the 12–5 window and never a
-          // minute.
-          const slotRes = await fetch("/api/admin/open-bucket/slot", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ leadId: row.leadId, date: select.value })
-          });
-          const slotData = await slotRes.json().catch(() => ({}));
-          if (!slotRes.ok || !slotData.ok) {
-            throw new Error((slotData.errors || ["Couldn't find a slot on that day."]).join(" "));
-          }
-          const slotStart = slotData.slotStart;
-          const response = await fetch("/api/booking/reserve", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              leadId: row.leadId,
-              serviceKey: row.serviceKey,
-              slotStart,
-              source: "admin_custom",
-              zoneCount: row.zoneCount || null,
-              contact: { address: row.address }
-            })
-          });
-          const data = await response.json();
-          if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't place them."]).join(" "));
-          showToast(`${row.name || row.leadId} booked onto ${select.value} — confirmation sent.`);
-          loadStandby();
-          load();
-        } catch (error) {
-          showToast(error.message, "bad");
-          btn.disabled = false;
-        }
+        const booked = await bookStandby(row, select.value);
+        if (!booked) btn.disabled = false;
       });
       act.append(select, btn);
     }
