@@ -141,7 +141,11 @@
       <div id="emailHealthOutstandingWrap" hidden style="margin-bottom: 10px; padding: 10px 12px; background: #fff; border: 1px solid #d9a0a0; border-radius: 6px;">
         <strong style="display:block; font-size: 13px; color: #8a1f1f; margin-bottom: 6px;">
           Never went out (<span id="emailHealthOutCount">0</span>)
-          <button type="button" id="emailHealthResendAll" style="float: right; font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid #1B4D2E; background: #1B4D2E; color: #fff; border-radius: 5px; cursor: pointer;">Resend all</button>
+          <span style="float: right; display: flex; gap: 6px;">
+            <button type="button" id="emailHealthCatchUp" hidden style="font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid #1B4D2E; background: #1B4D2E; color: #fff; border-radius: 5px; cursor: pointer;">Send the blast emails now</button>
+            <button type="button" id="emailHealthResendAll" style="font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid #1B4D2E; background: #1B4D2E; color: #fff; border-radius: 5px; cursor: pointer;">Resend all</button>
+            <button type="button" id="emailHealthDismissAll" style="font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid #d0d0c8; background: #fff; color: #4a4a44; border-radius: 5px; cursor: pointer;">Dismiss all</button>
+          </span>
         </strong>
         <!-- The result sits ABOVE the list, beside the button that causes
              it. Under the rows it was fifty-five lines below the fold: you
@@ -183,11 +187,21 @@
           // the answer can otherwise be a screen apart.
           if (el.scrollIntoView) el.scrollIntoView({ block: "nearest" });
         }
-        function renderOutstanding(list) {
+        var catchUpInfo = null;
+        function renderOutstanding(list, catchUp) {
           var wrap = document.getElementById("emailHealthOutstandingWrap");
           if (!list.length) { wrap.hidden = true; return; }
           wrap.hidden = false;
           document.getElementById("emailHealthOutCount").textContent = list.length;
+          // Blast emails are the cadence's to re-send: one press runs the
+          // season's catch-up (rebuilt from each booking, inside the send
+          // window) instead of forty "send by hand" lines.
+          catchUpInfo = catchUp || null;
+          var cu = document.getElementById("emailHealthCatchUp");
+          cu.hidden = !(catchUpInfo && catchUpInfo.count);
+          if (catchUpInfo && catchUpInfo.count) {
+            cu.textContent = "Send the " + catchUpInfo.count + " blast email" + (catchUpInfo.count === 1 ? "" : "s") + " now";
+          }
           // Nothing to resend automatically → hide the button rather than
           // offer one that can only answer "nothing outstanding".
           var canSend = list.filter(function (f) { return f.resendable; }).length;
@@ -204,7 +218,10 @@
               (f.refId ? ' &middot; ' + esc(f.refId) : '') +
               (f.resendable
                 ? ' <button type="button" class="eh-resend" data-id="' + esc(f.id) + '" style="font:inherit;font-size:11px;padding:2px 8px;margin-left:6px;border:1px solid #1B4D2E;background:#fff;color:#1B4D2E;border-radius:5px;cursor:pointer;">Resend</button>'
-                : ' <span style="color:#8a1f1f;">— send by hand</span>') +
+                : (f.kind === "outreach"
+                    ? ' <span style="color:#6B6B63;">— blast email; use the button above</span>'
+                    : ' <span style="color:#8a1f1f;">— send by hand</span>')) +
+              ' <button type="button" class="eh-dismiss" data-id="' + esc(f.id) + '" title="Dismiss — dealt with some other way" style="font:inherit;font-size:11px;padding:2px 7px;margin-left:4px;border:1px solid #d0d0c8;background:#fff;color:#6B6B63;border-radius:5px;cursor:pointer;">Dismiss</button>' +
               '</div>';
           }).join("");
         }
@@ -237,10 +254,70 @@
             if (button) { button.disabled = false; button.textContent = label; }
           }
         }
+        // Dismiss: the ledger keeps the record, the list stops nagging.
+        async function dismiss(payload, button) {
+          if (button) button.disabled = true;
+          try {
+            var r = await fetch("/api/admin/email-health/dismiss", {
+              method: "POST",
+              credentials: "same-origin",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            var data = await r.json();
+            if (!r.ok || !data.ok) throw new Error((data.errors || ["Dismiss failed."]).join(" "));
+            if (payload.all) {
+              renderOutstanding([], null);
+              note(data.dismissed + " dismissed. They stay in the ledger below.");
+            } else {
+              var row = document.querySelector('#emailHealthOutstanding [data-id="' + payload.ids[0] + '"]');
+              if (row) row.remove();
+              var left = document.querySelectorAll("#emailHealthOutstanding [data-id]").length;
+              document.getElementById("emailHealthOutCount").textContent = left;
+              if (!left) document.getElementById("emailHealthOutstandingWrap").hidden = true;
+            }
+          } catch (err) {
+            note(err.message, true);
+            if (button) button.disabled = false;
+          }
+        }
+        // The blast catch-up: the cadence rebuilds every owed message from
+        // its booking and sends inside the window; the ledger then shows
+        // the successes and these rows drop off on the next load.
+        async function sendCatchUp(button) {
+          if (!catchUpInfo) return;
+          var label = button.textContent;
+          button.disabled = true; button.textContent = "Sending…";
+          note("Sending the catch-up…");
+          try {
+            var r = await fetch("/api/assignments/" + catchUpInfo.season + "/" + catchUpInfo.year + "/catch-up", {
+              method: "POST", credentials: "same-origin"
+            });
+            var data = await r.json();
+            if (!r.ok) throw new Error((data.errors || ["Couldn't send the catch-up."]).join(" "));
+            if (data.ok === false && data.waiting === "send_window") throw new Error(data.note || "Sending is closed right now.");
+            if (data.ok === false) throw new Error(data.note || "The catch-up could not run (" + (data.waiting || "unknown") + ").");
+            note((data.sent || 0) + " sent, " + (data.owed || 0) + " were owed. Reload to refresh this list.", false);
+          } catch (err) {
+            note(err.message, true);
+          } finally {
+            button.disabled = false; button.textContent = label;
+          }
+        }
         document.getElementById("emailHealthOutstanding").addEventListener("click", function (e) {
+          var d = e.target.closest ? e.target.closest(".eh-dismiss") : null;
+          if (d) { dismiss({ ids: [d.dataset.id] }, d); return; }
           var btn = e.target.closest ? e.target.closest(".eh-resend") : null;
           if (!btn) return;
           resend({ ids: [btn.dataset.id] }, btn);
+        });
+        document.getElementById("emailHealthDismissAll").addEventListener("click", function (e) {
+          if (!window.confirm("Dismiss every one of these? Nothing is sent. They stay in the ledger; they just stop showing here.")) return;
+          dismiss({ all: true }, e.target);
+        });
+        document.getElementById("emailHealthCatchUp").addEventListener("click", function (e) {
+          if (!window.confirm("Send every blast message that never went out? Each is rebuilt from the booking as it is now and goes only inside the 9 AM – 8 PM window.")) return;
+          sendCatchUp(e.target);
         });
         document.getElementById("emailHealthResendAll").addEventListener("click", function (e) {
           if (!window.confirm("Send every one of these again? They are rebuilt from the current records, so each says what is true now.")) return;
@@ -278,7 +355,7 @@
                 return "<div>" + div.textContent.replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</div>";
               }).join("");
             }
-            renderOutstanding(data.outstanding || []);
+            renderOutstanding(data.outstanding || [], data.catchUp || null);
             var badge = document.getElementById("emailHealthBadge");
             if (totalFailed > 0) {
               badge.textContent = "· " + totalFailed + " failure" + (totalFailed === 1 ? "" : "s") + " (7d)";
