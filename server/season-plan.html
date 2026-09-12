@@ -200,6 +200,22 @@
           <div class="sp-stops-head" id="stopsHead">Stops · driving order</div>
           <div class="sp-stops-scroll" id="stopsPane"></div>
         </aside>
+        <!-- Waiting to be placed. Everything that needs a day — properties
+             not on the plan, and open-bucket customers — as chips you drag
+             onto a day in the rail or onto a half-day on the right. One
+             motion, no drawers. -->
+        <section class="sp-tray" id="placeTray" hidden aria-label="Waiting to be placed">
+          <div class="sp-tray-group" id="trayUnplanned" hidden>
+            <div class="sp-tray-head">Not on the plan <span class="sp-tool-badge" id="trayUnplannedCount"></span>
+              <span class="sp-tray-hint">drag onto a day · nothing is sent until Assign</span></div>
+            <div class="sp-tray-chips" id="trayUnplannedChips"></div>
+          </div>
+          <div class="sp-tray-group" id="trayStandby" hidden>
+            <div class="sp-tray-head">Open bucket <span class="sp-tool-badge" id="trayStandbyCount"></span>
+              <span class="sp-tray-hint">drag onto a day · books the afternoon and tells the customer</span></div>
+            <div class="sp-tray-chips" id="trayStandbyChips"></div>
+          </div>
+        </section>
       </div>
       <p class="sp-empty" id="emptyState" hidden></p>
     </main>
