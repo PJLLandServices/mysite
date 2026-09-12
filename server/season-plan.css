@@ -419,6 +419,41 @@
 .sp-modal-error { color: #A32020; font-size: 0.87rem; margin: 10px 0 0; }
 .sp-modal-foot { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
 
+/* Day preview — the map with the new stop on it, and the answer beside it. */
+.sp-preview-card { width: min(1040px, 100%); }
+.sp-preview-sub { margin: 2px 0 0; font-size: 0.86rem; color: var(--pjl-text-mid); }
+.sp-preview-controls { display: flex; gap: 14px; flex-wrap: wrap; margin: 12px 0 8px; }
+.sp-preview-controls label { display: flex; flex-direction: column; gap: 4px; font-size: 0.78rem; font-weight: 700; color: var(--pjl-text-mid); }
+.sp-preview-controls select {
+  font: inherit; font-size: 0.86rem; border: 1px solid var(--pjl-border);
+  border-radius: 8px; padding: 7px 8px; min-height: 38px; background: #fff; max-width: 420px;
+}
+.sp-preview-chips { margin: 0 0 10px; }
+.sp-tag.is-candidate { background: #FBEBD8; border-color: var(--pjl-amber); color: #8A4B12; }
+.sp-preview-body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; }
+.sp-preview-mapwrap { position: relative; }
+.sp-preview-map { height: 440px; border-radius: 10px; background: var(--pjl-cream); overflow: hidden; }
+.sp-preview-loading { margin: 0; padding: 18px; color: var(--pjl-text-muted); font-style: italic; }
+.sp-preview-stops { list-style: none; margin: 0; padding: 0; max-height: 440px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.sp-preview-stop {
+  display: flex; gap: 10px; align-items: flex-start; padding: 7px 9px;
+  border: 1px solid var(--pjl-border); border-radius: 8px; font-size: 0.82rem; line-height: 1.35; cursor: pointer;
+}
+.sp-preview-stop.is-hot { border-color: var(--pjl-amber); background: #FFF8F0; }
+.sp-preview-stop.is-candidate { border-color: var(--pjl-amber); background: #FBEBD8; }
+.sp-preview-stop.is-booked .sp-preview-n { background: var(--pjl-amber); }
+.sp-preview-n {
+  flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--pjl-green);
+  color: #fff; font-weight: 700; font-size: 0.78rem; display: grid; place-items: center;
+}
+.sp-preview-stop.is-candidate .sp-preview-n { box-shadow: 0 0 0 3px var(--pjl-amber); }
+.sp-preview-new { font-style: normal; font-weight: 800; color: #8A4B12; margin-left: 6px; font-size: 0.72rem; letter-spacing: 0.04em; }
+@media (max-width: 760px) {
+  .sp-preview-body { grid-template-columns: 1fr; }
+  .sp-preview-map { height: 320px; }
+  .sp-preview-stops { max-height: 240px; }
+}
+
 .sp-toast {
   position: fixed; right: 20px; bottom: 20px; z-index: 70;
   background: var(--pjl-dark); color: #fff; padding: 12px 16px;

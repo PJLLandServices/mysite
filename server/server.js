@@ -23370,40 +23370,142 @@ async function orderDayForDriving(rows) {
     return { sequenced, rowByMapCode };
   }
 
+  // One plan stop, resolved against the property book. Shared by the
+  // board (resolveSeasonPlan) and the day preview so a stop reads the
+  // same on both.
+  function resolvePlanStop(byCode, woType, code) {
+    const property = byCode.get(code);
+    if (!property) {
+      return { code, resolved: false, problem: "No property with this code — merged away or deleted." };
+    }
+    const zones = Array.isArray(property.system?.zones) ? property.system.zones.length : 0;
+    const commercial = property.billingEntity?.accountType === "commercial";
+    const serviceKey = deriveSeasonalKey(woType, zones, commercial);
+    const service = serviceKey ? BOOKABLE_SERVICES[serviceKey] : null;
+    const hasCoords = Boolean(property.coords && property.coords.lat != null);
+    return {
+      code,
+      resolved: true,
+      propertyId: property.id,
+      customerName: property.customerName || "",
+      address: property.address || "",
+      town: property.town || "",
+      zones: zones || null,
+      zonesEstimated: zones === 0,
+      serviceKey,
+      serviceLabel: service ? service.label : "",
+      minutes: service ? service.minutes : null,
+      hasCoords,
+      coords: hasCoords ? { lat: property.coords.lat, lng: property.coords.lng } : null,
+      problem: hasCoords ? null : "No coordinates — contributes nothing to the day's shape."
+    };
+  }
+
+  // Turn a sequenced timeline into a booked row's number + arrival, and
+  // give the row a booked flag so the card and the map draw it apart
+  // from a plan stop (amber pin, no plan controls).
+  function numberBookedRows(rows, timeline) {
+    const byMapCode = new Map((timeline || []).map((t) => [t.propertyCode, t]));
+    for (const row of rows || []) {
+      const t = row.mapCode ? byMapCode.get(row.mapCode) : null;
+      row.booked = true;
+      row.stopNumber = t ? t.stopNumber : null;
+      row.arriveAt = t ? t.arriveAt : null;
+    }
+    return (rows || []).slice().sort((a, b) =>
+      (a.stopNumber || 999) - (b.stopNumber || 999) || String(a.start).localeCompare(String(b.start)));
+  }
+
+  // ONE route day, resolved: sequenced, numbered, timed, flagged — the
+  // shape the Season Plan screen draws. The board builds every day
+  // through here, and the day preview builds a day that does not exist
+  // yet through the SAME function, so what the preview shows is what
+  // the board will show once the stop is added. `day` null is a
+  // booking-only date: a real numbered route built from its bookings.
+  async function resolvePlanDay({ date, day, bookedRows, byCode, season, bucketCap, requestedWindows, woType }) {
+    const { sequenced } = await sequenceDayWithBookings({
+      storedDay: day, bookedRows, byCode, season, requestedWindows
+    });
+    const weekday = new Date(`${date}T12:00:00`).toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" });
+    const booked = numberBookedRows(bookedRows || [], sequenced.timeline);
+
+    if (!day) {
+      return {
+        date,
+        label: "Booked day",
+        territory: "",
+        weekday,
+        bookedOnly: true,
+        morning: [],
+        afternoon: [],
+        counts: { morning: 0, afternoon: 0, total: 0 },
+        onSiteMinutes: 0,
+        timeline: sequenced.timeline,
+        morningEndsAt: sequenced.morningEndsAt || null,
+        dayEndsAt: sequenced.dayEndsAt || null,
+        homeAt: sequenced.homeAt || null,
+        driveMinutes: sequenced.driveMinutes || null,
+        flags: sequenced.flags || [],
+        suggestions: [],
+        booked
+      };
+    }
+
+    // RENDER THE SEQUENCED ORDER, NOT THE STORED ONE. These used to be
+    // allowed to differ: the rows came from the stored arrays and the
+    // arrival times from the sequencer, so any plan whose stored order
+    // was not already optimal — one imported before the re-sequencer
+    // existed, say — displayed correct times against rows in the wrong
+    // order. Live, R10 showed 11:18, 10:30, 08:40, 09:55, 09:20 down
+    // the page. Reading both from the sequencer makes the mismatch
+    // unrepresentable rather than merely unlikely.
+    const stopNumbers = new Map((sequenced.timeline || []).map((t) => [t.propertyCode, t.stopNumber]));
+    // The stop's time window travels with the row, so the control that
+    // sets it and the sequencer that honours it read the same value.
+    const windows = (day && day.constraints) || {};
+    const withNumber = (code) => ({
+      ...resolvePlanStop(byCode, woType, code),
+      stopNumber: stopNumbers.get(code) || null,
+      notBefore: (windows[code] && windows[code].notBefore) || null,
+      notAfter: (windows[code] && windows[code].notAfter) || null
+    });
+    // Plan stops only — the synthetic booked codes are dropped from the
+    // rendered bucket lists (they render as booked rows), but they DO
+    // keep their numbers in the shared timeline so the map draws them.
+    const isBooked = (code) => String(code).startsWith("__bk:");
+    const morning = (sequenced.morning || []).filter((c) => !isBooked(c)).map(withNumber);
+    const afternoon = (sequenced.afternoon || []).filter((c) => !isBooked(c)).map(withNumber);
+    const minutes = [...morning, ...afternoon].reduce((t, st) => t + (st.minutes || 0), 0);
+    const suggestions = await resequence.suggestBucketMoves(day, {
+      propertiesByCode: byCode, season, bucketCap
+    });
+    return {
+      date,
+      label: day.label || "",
+      territory: day.territory || "",
+      frost: day.frost || "",
+      weekday,
+      morning,
+      afternoon,
+      counts: { morning: morning.length, afternoon: afternoon.length, total: morning.length + afternoon.length },
+      onSiteMinutes: minutes,
+      timeline: sequenced.timeline,
+      morningEndsAt: sequenced.morningEndsAt,
+      dayEndsAt: sequenced.dayEndsAt,
+      homeAt: sequenced.homeAt,
+      driveMinutes: sequenced.driveMinutes,
+      flags: sequenced.flags,
+      suggestions,
+      booked: booked.length ? booked : undefined
+    };
+  }
+
   async function resolveSeasonPlan(season, year) {
     const plan = await seasonPlans.getPlan(season, year);
     if (!plan) return null;
     const all = await properties.list();
     const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
     const woType = season === "spring" ? "spring_opening" : "fall_closing";
-
-    const resolveStop = (code) => {
-      const property = byCode.get(code);
-      if (!property) {
-        return { code, resolved: false, problem: "No property with this code — merged away or deleted." };
-      }
-      const zones = Array.isArray(property.system?.zones) ? property.system.zones.length : 0;
-      const commercial = property.billingEntity?.accountType === "commercial";
-      const serviceKey = deriveSeasonalKey(woType, zones, commercial);
-      const service = serviceKey ? BOOKABLE_SERVICES[serviceKey] : null;
-      const hasCoords = Boolean(property.coords && property.coords.lat != null);
-      return {
-        code,
-        resolved: true,
-        propertyId: property.id,
-        customerName: property.customerName || "",
-        address: property.address || "",
-        town: property.town || "",
-        zones: zones || null,
-        zonesEstimated: zones === 0,
-        serviceKey,
-        serviceLabel: service ? service.label : "",
-        minutes: service ? service.minutes : null,
-        hasCoords,
-        coords: hasCoords ? { lat: property.coords.lat, lng: property.coords.lng } : null,
-        problem: hasCoords ? null : "No coordinates — contributes nothing to the day's shape."
-      };
-    };
 
     // Arrival estimates, drive time and the noon check are recomputed on
     // every read rather than stored: zone counts change, and a stored
@@ -23419,105 +23521,17 @@ async function orderDayForDriving(rows) {
     const leadsForBooked = await readLeads();
     const bookedByDate = await gatherBookedRows({ plan, season, year, all, leads: leadsForBooked });
 
-    // Turn a sequenced timeline into a booked row's number + arrival, and
-    // give the row a booked flag so the card and the map draw it apart
-    // from a plan stop (amber pin, no plan controls).
-    const numberBookedRows = (rows, timeline) => {
-      const byMapCode = new Map((timeline || []).map((t) => [t.propertyCode, t]));
-      for (const row of rows || []) {
-        const t = row.mapCode ? byMapCode.get(row.mapCode) : null;
-        row.booked = true;
-        row.stopNumber = t ? t.stopNumber : null;
-        row.arriveAt = t ? t.arriveAt : null;
-      }
-      return (rows || []).slice().sort((a, b) =>
-        (a.stopNumber || 999) - (b.stopNumber || 999) || String(a.start).localeCompare(String(b.start)));
-    };
-
+    const shared = { byCode, season, bucketCap: plan.bucketCap, requestedWindows: customerWindows, woType };
     for (const date of Object.keys(plan.days).sort()) {
-      const day = plan.days[date];
       const bookedRows = bookedByDate.get(date) || [];
       bookedByDate.delete(date); // consumed — the rest become booking-only days
-      const { sequenced } = await sequenceDayWithBookings({
-        storedDay: day, bookedRows, byCode, season, requestedWindows: customerWindows
-      });
-
-      // RENDER THE SEQUENCED ORDER, NOT THE STORED ONE. These used to be
-      // allowed to differ: the rows came from the stored arrays and the
-      // arrival times from the sequencer, so any plan whose stored order
-      // was not already optimal — one imported before the re-sequencer
-      // existed, say — displayed correct times against rows in the wrong
-      // order. Live, R10 showed 11:18, 10:30, 08:40, 09:55, 09:20 down
-      // the page. Reading both from the sequencer makes the mismatch
-      // unrepresentable rather than merely unlikely.
-      const stopNumbers = new Map((sequenced.timeline || []).map((t) => [t.propertyCode, t.stopNumber]));
-      // The stop's time window travels with the row, so the control that
-      // sets it and the sequencer that honours it read the same value.
-      const windows = (day && day.constraints) || {};
-      const withNumber = (code) => ({
-        ...resolveStop(code),
-        stopNumber: stopNumbers.get(code) || null,
-        notBefore: (windows[code] && windows[code].notBefore) || null,
-        notAfter: (windows[code] && windows[code].notAfter) || null
-      });
-      // Plan stops only — the synthetic booked codes are dropped from the
-      // rendered bucket lists (they render as booked rows), but they DO
-      // keep their numbers in the shared timeline so the map draws them.
-      const isBooked = (code) => String(code).startsWith("__bk:");
-      const morning = (sequenced.morning || []).filter((c) => !isBooked(c)).map(withNumber);
-      const afternoon = (sequenced.afternoon || []).filter((c) => !isBooked(c)).map(withNumber);
-      const minutes = [...morning, ...afternoon].reduce((t, st) => t + (st.minutes || 0), 0);
-      const suggestions = await resequence.suggestBucketMoves(day, {
-        propertiesByCode: byCode, season, bucketCap: plan.bucketCap
-      });
-      const booked = numberBookedRows(bookedRows, sequenced.timeline);
-      days.push({
-        date,
-        label: day.label || "",
-        territory: day.territory || "",
-        frost: day.frost || "",
-        weekday: new Date(`${date}T12:00:00`).toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" }),
-        morning,
-        afternoon,
-        counts: { morning: morning.length, afternoon: afternoon.length, total: morning.length + afternoon.length },
-        onSiteMinutes: minutes,
-        timeline: sequenced.timeline,
-        morningEndsAt: sequenced.morningEndsAt,
-        dayEndsAt: sequenced.dayEndsAt,
-        homeAt: sequenced.homeAt,
-        driveMinutes: sequenced.driveMinutes,
-        flags: sequenced.flags,
-        suggestions,
-        booked: booked.length ? booked : undefined
-      });
+      days.push(await resolvePlanDay({ date, day: plan.days[date], bookedRows, ...shared }));
     }
 
     // Booking-only days — dates the plan never routed, now first-class
     // numbered routes built from their bookings alone.
     for (const [date, bookedRows] of bookedByDate) {
-      const { sequenced } = await sequenceDayWithBookings({
-        storedDay: null, bookedRows, byCode, season, requestedWindows: customerWindows
-      });
-      const booked = numberBookedRows(bookedRows, sequenced.timeline);
-      days.push({
-        date,
-        label: "Booked day",
-        territory: "",
-        weekday: new Date(`${date}T12:00:00`).toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" }),
-        bookedOnly: true,
-        morning: [],
-        afternoon: [],
-        counts: { morning: 0, afternoon: 0, total: 0 },
-        onSiteMinutes: 0,
-        timeline: sequenced.timeline,
-        morningEndsAt: sequenced.morningEndsAt || null,
-        dayEndsAt: sequenced.dayEndsAt || null,
-        homeAt: sequenced.homeAt || null,
-        driveMinutes: sequenced.driveMinutes || null,
-        flags: sequenced.flags || [],
-        suggestions: [],
-        booked
-      });
+      days.push(await resolvePlanDay({ date, day: null, bookedRows, ...shared }));
     }
 
     // (Real bookings were sequenced INTO each day above — numbered stops
@@ -24568,6 +24582,104 @@ async function orderDayForDriving(rows) {
       return sendJson(res, 200, { ...result, keyConfigured: geocodeIsConfigured() });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't list unplanned properties."] });
+    }
+  }
+
+  // Preview — the day AS IT WOULD BE with one more stop on it.
+  //
+  // Patrick, 2026-09-12, on the "Best: … +4 min" line: "honestly, that's
+  // literally no help either. Can you do something that allows me to see
+  // the map of what the day would look like with the appointment
+  // incorporated, and I choose whether or not I want to add it to that
+  // day?" So: the route day, sequenced with the candidate numbered into
+  // it by the same sequencer the board uses, the road line drawn through
+  // it, and the two figures that change (drive, home time) before and
+  // after. Read-only — the add is his, on a separate button.
+  //
+  // Built through resolvePlanDay, the board's own day builder, so the
+  // preview cannot drift from what the board shows once he says yes.
+  const seasonPlanPreviewMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/preview\/(\d{4}-\d{2}-\d{2})$/);
+  if (seasonPlanPreviewMatch && req.method === "GET") {
+    try {
+      await requireUser(req);
+      const season = seasonPlanPreviewMatch[1];
+      const year = Number(seasonPlanPreviewMatch[2]);
+      const date = seasonPlanPreviewMatch[3];
+      const query = new URL(req.url, baseUrlFromReq(req)).searchParams;
+      const code = normalizeString(query.get("code"), 40);
+      const askedBucket = normalizeString(query.get("bucket"), 10);
+      if (!code) return sendJson(res, 422, { ok: false, errors: ["Which property? No code was given."] });
+
+      const plan = await seasonPlans.getPlan(season, year);
+      if (!plan) return sendJson(res, 404, { ok: false, code: "no_plan", errors: ["No plan loaded for that season."] });
+
+      const all = await properties.list();
+      const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+      const property = byCode.get(code);
+      if (!property) return sendJson(res, 404, { ok: false, errors: [`No property with code ${code}.`] });
+      if (seasonPlans.plannedCodes(plan).has(code)) {
+        return sendJson(res, 409, { ok: false, code: "already_planned", errors: [`${code} is already on the plan.`] });
+      }
+
+      // A property whose pin Google can't place can't be drawn, and a
+      // preview with the new stop invisible would show a day that looks
+      // fine because the expensive stop is missing. Try the geocoder once
+      // (disk-cached), then say so.
+      let coords = property.coords;
+      if (!geoFilter.coordsAreResolved(coords) && property.address) {
+        coords = await geocodeForRecord(property.address);
+      }
+      if (!geoFilter.coordsAreResolved(coords)) {
+        return sendJson(res, 422, {
+          ok: false, code: "unresolved", keyConfigured: geocodeIsConfigured(),
+          errors: [`${code} has no coordinates Google will resolve, so it can't be drawn on a day.`]
+        });
+      }
+      if (coords !== property.coords) byCode.set(code, { ...property, coords: { lat: coords.lat, lng: coords.lng } });
+
+      const storedDay = plan.days && plan.days[date] ? plan.days[date] : null;
+      const bucket = askedBucket === "morning" || askedBucket === "afternoon"
+        ? askedBucket
+        : assignments.lighterBucket(storedDay);
+      const leads = await readLeads();
+      const bookedRows = (await gatherBookedRows({ plan, season, year, all, leads })).get(date) || [];
+      const shared = {
+        date, byCode, season, bucketCap: plan.bucketCap,
+        requestedWindows: await assignments.requestedWindowsFor(season, year),
+        woType: season === "spring" ? "spring_opening" : "fall_closing"
+      };
+      // numberBookedRows mutates the rows it is given; each side gets its
+      // own copies so "before" cannot inherit "after"'s numbers.
+      const clone = (rows) => rows.map((r) => ({ ...r }));
+      const before = await resolvePlanDay({ ...shared, day: storedDay, bookedRows: clone(bookedRows) });
+      const hypothetical = dayPreview.planDayWithCandidate(storedDay || { label: "New day" }, code, bucket);
+      const after = await resolvePlanDay({ ...shared, day: hypothetical, bookedRows: clone(bookedRows) });
+      // The candidate wears a flag so the map lights it as the one being
+      // looked at — the same amber ring a hovered stop gets.
+      for (const list of [after.morning, after.afternoon]) {
+        for (const stop of list) if (stop.code === code) stop.candidate = true;
+      }
+      const placed = (after.timeline || []).find((t) => t.propertyCode === code) || null;
+
+      const origin = await routeOriginLib.routeOrigin();
+      const line = await routeGeometry.roadLine(origin, dayPreview.planLineStops(after));
+      const beforeSummary = dayPreview.daySummary(before);
+      const afterSummary = dayPreview.daySummary(after);
+      return sendJson(res, 200, {
+        ok: true,
+        date, code, bucket,
+        isNewDay: !storedDay,
+        property: { code, customerName: property.customerName || "", address: property.address || "" },
+        day: after,
+        before: beforeSummary,
+        after: afterSummary,
+        addedDriveMinutes: dayPreview.driveDelta(beforeSummary, afterSummary),
+        candidate: placed ? { stopNumber: placed.stopNumber, arriveAt: placed.arriveAt } : null,
+        line: { coords: line.coords, source: line.source, error: line.error || null },
+        origin: origin && origin.lat != null ? { lat: origin.lat, lng: origin.lng } : null
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't preview that day."] });
     }
   }
 

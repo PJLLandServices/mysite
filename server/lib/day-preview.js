@@ -101,10 +101,90 @@ function lineStops(rows) {
     .filter(Boolean);
 }
 
+// ---- The Season Plan side ------------------------------------------
+//
+// Patrick, 2026-09-12, on the "Best: Oct 6 · +4 min" line: "honestly,
+// that's literally no help either. Can you do something that allows me
+// to see the map of what the day would look like with the appointment
+// incorporated, and I choose whether or not I want to add it to that
+// day?"
+//
+// A number is not a route. The route day he would drive, WITH the new
+// stop numbered into it and the road line drawn through it, is the thing
+// he can judge; the decision stays his. These helpers build the stored
+// day as it would be, and read the two figures that change — nothing
+// here writes.
+
+// The stored day with one more code in one bucket. Everything else on
+// the day — the other bucket, the label, the time windows, a manual
+// order — is carried across untouched, so the preview is that day plus
+// one stop and not a day rebuilt from scratch. A code already on the day
+// is not added twice: the preview of "the day with it" is the day.
+function planDayWithCandidate(storedDay, code, bucket) {
+  const base = storedDay && typeof storedDay === "object" ? storedDay : {};
+  const morning = Array.isArray(base.morning) ? base.morning.slice() : [];
+  const afternoon = Array.isArray(base.afternoon) ? base.afternoon.slice() : [];
+  const wanted = String(code || "").trim();
+  const day = { ...base, morning, afternoon };
+  if (!wanted || morning.includes(wanted) || afternoon.includes(wanted)) return day;
+  (bucket === "morning" ? morning : afternoon).push(wanted);
+  return day;
+}
+
+// The figures that decide the question, read off a resolved day the
+// same way the board's chips read them. Stops are plan stops AND booked
+// appointments — the one total the rail shows.
+function daySummary(day) {
+  if (!day || typeof day !== "object") return null;
+  const planned = day.counts && Number.isFinite(day.counts.total) ? day.counts.total : 0;
+  const booked = Array.isArray(day.booked) ? day.booked.length : 0;
+  return {
+    driveMinutes: Number.isFinite(day.driveMinutes) ? day.driveMinutes : null,
+    homeAt: day.homeAt || null,
+    morningEndsAt: day.morningEndsAt || null,
+    stops: planned + booked,
+    flags: Array.isArray(day.flags) ? day.flags.map((f) => f && f.message).filter(Boolean) : []
+  };
+}
+
+// Minutes the day grows by. Null when either side has no drive figure —
+// "+?" is honest where "+0" would be a claim.
+function driveDelta(before, after) {
+  const a = before && Number.isFinite(before.driveMinutes) ? before.driveMinutes : null;
+  const b = after && Number.isFinite(after.driveMinutes) ? after.driveMinutes : null;
+  if (a == null || b == null) return null;
+  return b - a;
+}
+
+// The drawable stops of a RESOLVED plan day, in driving order: the
+// timeline decides the order, the bucket rows supply a plan stop's
+// coordinates and the booked rows supply a booking's, by its mapCode.
+// This is the page's mappableStops() read on the server, so the line
+// the preview draws follows the numbers the preview prints.
+function planLineStops(day) {
+  if (!day || typeof day !== "object") return [];
+  const byCode = new Map();
+  for (const stop of [...(day.morning || []), ...(day.afternoon || [])]) {
+    if (stop && stop.code) byCode.set(stop.code, stop);
+  }
+  for (const row of day.booked || []) {
+    if (row && row.mapCode) byCode.set(row.mapCode, row);
+  }
+  return (day.timeline || []).map((t) => {
+    const hit = t && byCode.get(t.propertyCode);
+    if (!hit || !hit.coords || hit.coords.lat == null) return null;
+    return { number: t.stopNumber, coords: { lat: Number(hit.coords.lat), lng: Number(hit.coords.lng) } };
+  }).filter(Boolean);
+}
+
 module.exports = {
   PREVIEW_KEY,
   insertionIndex,
   candidateRow,
   dayWithCandidate,
-  lineStops
+  lineStops,
+  planDayWithCandidate,
+  daySummary,
+  driveDelta,
+  planLineStops
 };
