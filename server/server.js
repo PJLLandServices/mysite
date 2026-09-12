@@ -74,6 +74,45 @@ const appointmentActions = require("./lib/appointment-actions");
 // confirm/reschedule/cancel API below) and flips this in the same
 // commit, per the contract. Cadence messages may now carry live links.
 const APPOINTMENT_PAGE_READY = true;
+
+// ---- Asset versioning ---------------------------------------------------
+//
+// Every CRM script and stylesheet URL in served HTML carries ?v=<stamp>, so
+// a deploy is a NEW URL and no cache anywhere can hand back the old file.
+//
+// WHY. The server already sends `no-cache` for /crm/*.js and *.css — and
+// Cloudflare's Browser Cache TTL overrides it to four hours on the wire.
+// 2026-09-11: three separate deploys shipped, and three times Patrick was
+// told what the screen should show while his browser ran the previous
+// day's season-plan.js. "It's not doing anything" was, each time, a stale
+// file. A version in the URL is the fix that does not depend on anyone's
+// CDN settings being right.
+//
+// The stamp is the deploy's commit when Render gives us one, else the
+// process start — a restart without a deploy costs one re-download and
+// nothing else. Stable for the life of the process, so the page and every
+// asset it names agree.
+const ASSET_VERSION = String(process.env.RENDER_GIT_COMMIT || "").slice(0, 10)
+  || String(Date.now()).slice(-8);
+
+// Stamp the CRM asset URLs in one HTML document. Pure; the static sender
+// calls it for every .html it serves from the CRM directory.
+//
+//   - only src=/href= attributes pointing at /crm/*.js or /crm/*.css
+//   - never tech-sw.js: a service worker's registration URL must not
+//     change between loads, or the browser installs a second worker
+//   - never a URL that already carries a query — it has its own reason
+//   - idempotent: stamping twice is one stamp
+function stampAssetVersions(html, version = ASSET_VERSION) {
+  const v = String(version || "").trim();
+  if (!v) return html;
+  return String(html).replace(
+    /\b(src|href)=(["'])(\/crm\/[^"'?#\s]+\.(?:js|css))\2/g,
+    (whole, attr, quote, url) => (url.endsWith("/tech-sw.js")
+      ? whole
+      : `${attr}=${quote}${url}?v=${v}${quote}`)
+  );
+}
 const seasonsLib = require("./lib/seasons");
 const customers = require("./lib/customers");
 const { writeJsonAtomic } = require("./lib/atomic-json");
@@ -25669,6 +25708,19 @@ async function serveStatic(req, res, pathname) {
     if (pathname === "/crm/tech-sw.js") {
       headers["service-worker-allowed"] = "/admin/work-order/";
       headers["cache-control"] = "no-store";
+    }
+
+    // A CRM page carries versioned asset URLs (see stampAssetVersions).
+    // Read whole and sent whole: HTML has no Range use, and the stamped
+    // body is not the file on disk, so the disk size can't be its length.
+    if (ext === ".html" && dir === SERVER_DIR) {
+      const raw = await fs.readFile(filePath, "utf8");
+      const body = stampAssetVersions(raw);
+      headers["content-length"] = Buffer.byteLength(body);
+      delete headers["accept-ranges"];
+      res.writeHead(200, headers);
+      res.end(req.method === "HEAD" ? undefined : body);
+      return;
     }
 
     // Parse Range header (RFC 7233). Supports "bytes=N-", "bytes=N-M",
