@@ -75,3 +75,17 @@ _design/_smoke/
 # SEO agent: the site inventory is regenerated on every gap analysis; only the
 # dated Search Console snapshots and reports are the record worth keeping.
 seo/data/site-inventory.json
+
+# Local-only scratch at the repo root — handoff notes, audits, patch sets,
+# generated PDFs/screenshots for customers, backups of live pages. None of
+# it belongs on GitHub; it kept showing red in `git status` (Sep 2026).
+/CLAUDE.local.md
+/*_HANDOFF.md
+/AUDIT_*.md
+/_phase0/
+/_to_delete/
+/outputs/
+/favicon.jpg
+/parts.backup-*.json
+/*.local-backup.html
+/sprinkler-maintenance.html
