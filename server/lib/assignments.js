@@ -310,6 +310,94 @@ function zoneCountFor(property) {
   return effectiveZoneCount(property);
 }
 
+// A property that EVER had an assignment booking this season is never
+// auto-booked again, whatever became of that booking. The eligibility
+// gauntlet can't carry this rule: deriveBookingState rightly reads a
+// cancelled booking as "unbooked" (outreach should nudge them to book),
+// but for the writer a cancelled ASSIGNMENT is a customer's explicit no,
+// and re-running assign must not overrule it. Once ever, like the cadence
+// steps.
+//
+// Named, and shared: assign() refuses on it, and the unplanned list
+// (below) reports on it. Two copies of "did they already have one" would
+// be two lists that eventually disagree about the same customer.
+async function priorAssignmentsFor(season, year, listBookings = bookings.list) {
+  const prior = new Map();
+  for (const b of await listBookings()) {
+    if (!b || b.source !== "assignment" || !b.assignment) continue;
+    if (b.assignment.season !== season || Number(b.assignment.year) !== Number(year)) continue;
+    if (b.propertyId && !prior.has(b.propertyId)) prior.set(b.propertyId, b);
+  }
+  return prior;
+}
+
+// Eligible for the season, and not on any route day.
+//
+// WHY THIS EXISTS. The plan is a once-a-season import and Assign books
+// only the codes already in a day. A property Patrick created AFTER the
+// import had no way into a route day — and, worse, no way to be noticed:
+// it was not skipped, not a problem, not a warning. It simply did not
+// exist to the plan. 2026-09-11: "Additional properties that I am adding
+// aren't backfilling on the Season Plan."
+//
+// The eligibility verdict is the outreach module's own (assessEligibility),
+// the same gauntlet preflight and assign run — so a property this list
+// offers is one Assign will accept, and one it refuses is named here with
+// the same reason rather than quietly left off.
+//
+// Two lists come back, on purpose. `placeable` is what the screen offers
+// a day picker for. `blocked` is everything eligible-looking that can't
+// be placed, WITH its reason — because "not on the list" is the exact
+// silence this exists to end.
+async function unplanned(season, year, deps = {}) {
+  const getPlan = deps.getPlan || seasonPlans.getPlan;
+  const listProperties = deps.listProperties || properties.list;
+  const listBookings = deps.listBookings || bookings.list;
+  const assess = deps.assessEligibility || outreach.assessEligibility;
+
+  const plan = await getPlan(season, year);
+  if (!plan) return { ok: false, reason: "no_plan", placeable: [], blocked: [] };
+
+  const planned = seasonPlans.plannedCodes(plan);
+  const prior = await priorAssignmentsFor(season, year, listBookings);
+  const all = await listProperties();
+
+  const placeable = [];
+  const blocked = [];
+  for (const property of all || []) {
+    if (!property) continue;
+    if (property.code && planned.has(property.code)) continue;   // on a day already
+    const row = {
+      code: property.code || "",
+      propertyId: property.id,
+      customerName: property.customerName || "",
+      address: property.address || "",
+      town: property.town || "",
+      zoneCount: zoneCountFor(property) || null,
+      hasCoords: Boolean(property.coords && property.coords.lat != null)
+    };
+    if (!property.code) { blocked.push({ ...row, reason: "no_code" }); continue; }
+    const verdict = await assess(property, { season, year });
+    if (!verdict.ok) {
+      // A customer who already booked their own appointment is settled,
+      // not a problem — the writer has nothing to do for them.
+      if (verdict.reason === "already_booked") continue;
+      blocked.push({ ...row, reason: verdict.reason });
+      continue;
+    }
+    const had = prior.get(property.id);
+    if (had) {
+      blocked.push({ ...row, reason: had.status === "cancelled" ? "assignment_declined" : "previously_assigned", bookingId: had.id });
+      continue;
+    }
+    placeable.push(row);
+  }
+  const byName = (a, b) => (a.customerName || "").localeCompare(b.customerName || "");
+  placeable.sort(byName);
+  blocked.sort(byName);
+  return { ok: true, season, year: Number(year), placeable, blocked };
+}
+
 async function assign(season, year, deps = {}) {
   const listProperties = deps.listProperties || properties.list;
   const listBookings = deps.listBookings || bookings.list;
@@ -328,19 +416,7 @@ async function assign(season, year, deps = {}) {
   const all = await listProperties();
   const byCode = new Map((all || []).filter((p) => p && p.code).map((p) => [p.code, p]));
 
-  // A property that EVER had an assignment booking this season is never
-  // auto-booked again, whatever became of that booking. The eligibility
-  // gauntlet can't carry this rule: deriveBookingState rightly reads a
-  // cancelled booking as "unbooked" (outreach should nudge them to book),
-  // but for the writer a cancelled ASSIGNMENT is a customer's explicit
-  // no, and re-running assign must not overrule it. Once ever, like the
-  // cadence steps.
-  const priorAssignment = new Map();
-  for (const b of await listBookings()) {
-    if (!b || b.source !== "assignment" || !b.assignment) continue;
-    if (b.assignment.season !== season || Number(b.assignment.year) !== Number(year)) continue;
-    if (b.propertyId && !priorAssignment.has(b.propertyId)) priorAssignment.set(b.propertyId, b);
-  }
+  const priorAssignment = await priorAssignmentsFor(season, year, listBookings);
 
   const batchId = deps.batchId || `AS-${crypto.randomUUID().slice(0, 8)}`;
   const assignedAt = new Date().toISOString();
@@ -627,4 +703,6 @@ async function moveDayBookings(season, year, { from, to }, deps = {}) {
   return { ok: true, from, to, ...summary };
 }
 
-module.exports = { preflight, assign, unassign, syncAssignedTimes, requestedWindowsFor, moveDayBookings, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };
+module.exports = { preflight, assign,
+  unplanned,
+  priorAssignmentsFor, unassign, syncAssignedTimes, requestedWindowsFor, moveDayBookings, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };

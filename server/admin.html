@@ -143,8 +143,12 @@
           Never went out (<span id="emailHealthOutCount">0</span>)
           <button type="button" id="emailHealthResendAll" style="float: right; font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid #1B4D2E; background: #1B4D2E; color: #fff; border-radius: 5px; cursor: pointer;">Resend all</button>
         </strong>
+        <!-- The result sits ABOVE the list, beside the button that causes
+             it. Under the rows it was fifty-five lines below the fold: you
+             pressed Resend all and, as far as the screen was concerned,
+             nothing happened. -->
+        <p id="emailHealthResendNote" hidden style="margin: 0 0 8px; padding: 7px 10px; border-radius: 5px; background: #EEF4EF; font-size: 13px; font-weight: 600; color: #1B4D2E;"></p>
         <div id="emailHealthOutstanding" style="display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: #4a4a44;"></div>
-        <p id="emailHealthResendNote" hidden style="margin: 8px 0 0; font-size: 12px; color: #1B4D2E;"></p>
       </div>
       <details id="emailHealthFailWrap" hidden>
         <summary style="cursor: pointer; font-size: 13px; color: #8a1f1f; font-weight: 600;">Recent failures (<span id="emailHealthFailCount">0</span>)</summary>
@@ -169,10 +173,15 @@
           d.textContent = String(t == null ? "" : t);
           return d.innerHTML;
         }
-        function note(text) {
+        function note(text, bad) {
           var el = document.getElementById("emailHealthResendNote");
           el.hidden = false;
           el.textContent = text;
+          el.style.background = bad ? "#FBEBD8" : "#EEF4EF";
+          el.style.color = bad ? "#8a1f1f" : "#1B4D2E";
+          // Bring it into view. On a long list the button you pressed and
+          // the answer can otherwise be a screen apart.
+          if (el.scrollIntoView) el.scrollIntoView({ block: "nearest" });
         }
         function renderOutstanding(list) {
           var wrap = document.getElementById("emailHealthOutstandingWrap");
@@ -181,8 +190,13 @@
           document.getElementById("emailHealthOutCount").textContent = list.length;
           // Nothing to resend automatically → hide the button rather than
           // offer one that can only answer "nothing outstanding".
-          document.getElementById("emailHealthResendAll").hidden =
-            !list.some(function (f) { return f.resendable; });
+          var canSend = list.filter(function (f) { return f.resendable; }).length;
+          var all = document.getElementById("emailHealthResendAll");
+          all.hidden = canSend === 0;
+          // Name the number. "Resend all" over a list of 55 where only 4 can
+          // be rebuilt reads like a promise the button can't keep.
+          all.textContent = "Resend " + canSend;
+          all.dataset.count = String(canSend);
           document.getElementById("emailHealthOutstanding").innerHTML = list.map(function (f) {
             return '<div data-id="' + esc(f.id) + '">' +
               '<span style="color:#6B6B63;">' + esc(new Date(f.ts).toLocaleString("en-CA")) + '</span> &middot; ' +
@@ -195,7 +209,9 @@
           }).join("");
         }
         async function resend(payload, button) {
+          var label = button ? button.textContent : "";
           if (button) { button.disabled = true; button.textContent = "Sending…"; }
+          note("Sending…");
           try {
             var r = await fetch("/api/admin/email-health/resend", {
               method: "POST",
@@ -208,13 +224,17 @@
             var results = data.results || [];
             var good = results.filter(function (x) { return x.ok; }).length;
             var bad = results.filter(function (x) { return !x.ok; });
-            note(good + " sent" + (bad.length
-              ? ", " + bad.length + " still failing: " + bad.map(function (x) { return x.kind + " — " + x.error; }).join("; ")
-              : ". Reload to refresh the list."));
+            if (!results.length) {
+              note(data.note || "Nothing outstanding to resend.", true);
+            } else {
+              note(good + " sent" + (bad.length
+                ? ", " + bad.length + " still failing: " + bad.map(function (x) { return x.kind + " — " + x.error; }).join("; ")
+                : ". Reload to refresh the list."), bad.length > 0);
+            }
           } catch (err) {
-            note(err.message);
+            note(err.message, true);
           } finally {
-            if (button) { button.disabled = false; button.textContent = "Resend"; }
+            if (button) { button.disabled = false; button.textContent = label; }
           }
         }
         document.getElementById("emailHealthOutstanding").addEventListener("click", function (e) {

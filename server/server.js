@@ -4372,18 +4372,58 @@ const EMAIL_RESENDERS = {
     return { ok: false, error: outcome?.reason || outcome?.error || "the send failed again" };
   },
 
-  // Patrick's own "new lead" alert. Goes to him, not to the customer, so
-  // there is nothing here that can embarrass anyone by arriving late.
+  // Patrick's own alert. Goes to him, not to the customer, so there is
+  // nothing here that can embarrass anyone by arriving late.
+  //
+  // TWO KINDS OF REF, and missing the second one is what made the first
+  // resend do nothing. `sendNewLeadEmail` is the alert channel for more
+  // than new leads: the appointment page raises one through it when a
+  // customer cancels, passing a SYNTHETIC lead whose id is the BOOKING's.
+  // So a lead_alert row can carry either a lead id or a BK- id, and
+  // looking only in leads.json answers "that lead no longer exists" for
+  // every cancellation alert — which is exactly the alert most worth
+  // getting back.
   async lead_alert(failure) {
-    if (!failure.refId) return { ok: false, error: "no lead on the record" };
+    if (!failure.refId) return { ok: false, error: "no record on the alert" };
     const leads = await readLeads();
     const lead = leads.find((l) => l.id === failure.refId);
-    if (!lead) return { ok: false, error: "that lead no longer exists" };
-    const outcome = await sendNewLeadEmail(lead, { resendOf: failure.ts });
+    if (lead) {
+      const outcome = await sendNewLeadEmail(lead, { resendOf: failure.ts });
+      if (outcome?.ok) return { ok: true, to: mailerLog.maskRecipient(failure.to) };
+      return { ok: false, error: outcome?.error || "the send failed again" };
+    }
+    const booking = await bookings.get(failure.refId);
+    if (!booking) return { ok: false, error: "no lead or booking with that id" };
+    const outcome = await sendNewLeadEmail(
+      alertShapeForBooking(booking),
+      { resendOf: failure.ts }
+    );
     if (outcome?.ok) return { ok: true, to: mailerLog.maskRecipient(failure.to) };
     return { ok: false, error: outcome?.error || "the send failed again" };
   }
 };
+
+// Rebuild the alert a BOOKING raises through the lead-alert channel. The
+// same shape the appointment-page cancel route builds inline — kept here
+// so a resent alert reads exactly like the one that failed, rather than
+// like a new lead.
+function alertShapeForBooking(booking) {
+  const dead = !bookingHoldsItsSlot(booking.status);
+  const why = booking.cancellationReason || "";
+  return {
+    id: booking.id,
+    sourceLabel: dead
+      ? `Customer CANCELLED their assigned appointment${booking.removalCode ? ` — ${bookings.reasonLabel(booking.removalCode)}` : ""}`
+      : "Assigned appointment update",
+    contact: {
+      name: booking.customerName || "(unknown)",
+      phone: booking.customerPhone || "",
+      email: booking.customerEmail || "",
+      address: booking.address || "",
+      notes: `Was ${booking.scheduledFor}.${why ? ` Reason: ${why}` : ""}`
+    }
+  };
+}
 
 async function resendFailedEmail(failure) {
   const resend = EMAIL_RESENDERS[failure.kind];
@@ -24447,6 +24487,47 @@ async function orderDayForDriving(rows) {
       return sendJson(res, 200, { ok: true, plan: resolved, warnings, moved });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't move that stop."] });
+    }
+  }
+
+  // Unplanned — eligible for the season, on no route day. The list that
+  // ends the silence: a property created after the plan was imported used
+  // to be invisible to it.
+  const seasonPlanUnplannedMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/unplanned$/);
+  if (seasonPlanUnplannedMatch && req.method === "GET") {
+    try {
+      await requireUser(req);
+      const result = await assignments.unplanned(seasonPlanUnplannedMatch[1], Number(seasonPlanUnplannedMatch[2]));
+      return sendJson(res, 200, result);
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't list unplanned properties."] });
+    }
+  }
+
+  // Add — put an unplanned property on a day. Mirror of /move for a code
+  // the plan doesn't hold yet; resequenced afterwards for the same reason
+  // a move is.
+  const seasonPlanAddMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/add$/);
+  if (seasonPlanAddMatch && req.method === "POST") {
+    try {
+      const session = await requireUser(req);
+      const season = seasonPlanAddMatch[1];
+      const year = Number(seasonPlanAddMatch[2]);
+      const body = await parseRequestBody(req);
+      const actor = session?.email || session?.name || "admin";
+      const { warnings, added } = await seasonPlans.addStop(season, year, {
+        propertyCode: normalizeString(body.propertyCode, 40),
+        toDate: normalizeString(body.toDate, 10),
+        toBucket: normalizeString(body.toBucket, 10)
+      }, { actor });
+      const stored = await seasonPlans.getPlan(season, year);
+      if (stored) {
+        await seasonPlans.savePlan(season, year, await resequencePlanForStorage(stored, season, year), { actor });
+      }
+      const resolved = await resolveSeasonPlan(season, year);
+      return sendJson(res, 200, { ok: true, plan: resolved, warnings, added });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't add that stop."] });
     }
   }
 

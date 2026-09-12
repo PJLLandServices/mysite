@@ -86,6 +86,10 @@
           <button type="button" class="sp-tool" data-drawer="drawerProbe">Probe an address</button>
           <button type="button" class="sp-tool is-bucket" data-drawer="drawerBucket">Open bucket<span class="sp-tool-badge" id="standbyBadge" hidden></span></button>
           <button type="button" class="sp-tool is-warned" data-drawer="drawerProblems" id="problemsToggle" hidden>Needs attention<span class="sp-tool-badge" id="problemsBadge"></span></button>
+          <!-- Eligible for the season, on no route day. Loud on purpose:
+               a property added after the plan was imported used to be
+               invisible to it — not skipped, not a problem, just absent. -->
+          <button type="button" class="sp-tool is-warned" data-drawer="drawerUnplanned" id="unplannedToggle" hidden>Not on the plan<span class="sp-tool-badge" id="unplannedBadge"></span></button>
           <button type="button" class="sp-tool" data-drawer="drawerAssign">Assignment ▾</button>
         </div>
       </div>
@@ -110,6 +114,14 @@
         <section class="sp-panel sp-drawer" id="drawerProblems" hidden>
           <h2 class="sp-panel-title">Needs attention</h2>
           <ul class="sp-problems" id="problemsList"></ul>
+        </section>
+
+        <section class="sp-panel sp-drawer" id="drawerUnplanned" hidden>
+          <h2 class="sp-panel-title">Not on the plan</h2>
+          <p class="sp-probe-note" id="unplannedNote">Loading…</p>
+          <div class="sp-standby" id="unplannedList"></div>
+          <h2 class="sp-panel-title sp-drawer-sub" id="unplannedBlockedHead" hidden>Can't be placed</h2>
+          <ul class="sp-problems" id="unplannedBlocked"></ul>
         </section>
 
         <!-- The open bucket — "first available" customers waiting to be

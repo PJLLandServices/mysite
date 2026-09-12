@@ -295,6 +295,65 @@ async function moveStop(season, year, { propertyCode, toDate, toBucket }, { acto
   return { plan: revalidated, warnings, moved: { propertyCode: code, from, to: { date: toDate, bucket: toBucket }, createdDay } };
 }
 
+// Put a property on a route day that it is not on yet.
+//
+// The plan was designed as a once-a-season import with exactly one edit —
+// moving a stop between days — on the reasoning that "the plan is
+// regenerated each season, so an editor beyond that is not worth
+// building". That held until Patrick was running a live season and adding
+// customers as he went: a property created AFTER the import had no way
+// into a route day, so it was never assigned, never messaged, and never
+// listed anywhere as missing. It did not fail; it did not exist.
+//
+// This is the one addition that reasoning left out. It is the mirror of
+// moveStop — same validation, same "any calendar date grows a day" rule —
+// and deliberately refuses a code that is already in the plan: putting a
+// planned stop somewhere else is a MOVE, and one operation per state is
+// how the two never disagree about what happened.
+async function addStop(season, year, { propertyCode, toDate, toBucket }, { actor = "admin" } = {}) {
+  const key = planKey(season, year);
+  const code = String(propertyCode || "").trim();
+  if (!code) throw new Error("propertyCode is required.");
+  if (!isRealDate(String(toDate || ""))) throw new Error(`Not a calendar date: "${toDate}".`);
+  if (!BUCKETS.includes(toBucket)) throw new Error(`Bucket must be one of: ${BUCKETS.join(", ")}.`);
+
+  const all = await read();
+  const plan = all[key];
+  if (!plan) throw new Error(`No ${key} plan to add to — import the plan first.`);
+
+  for (const [dateKey, day] of Object.entries(plan.days)) {
+    for (const bucket of BUCKETS) {
+      if ((day[bucket] || []).includes(code)) {
+        throw new Error(`${code} is already on ${dateKey} (${bucket}) — move it instead.`);
+      }
+    }
+  }
+
+  let createdDay = false;
+  if (!plan.days[toDate]) {
+    plan.days[toDate] = { label: "", morning: [], afternoon: [] };
+    createdDay = true;
+  }
+  plan.days[toDate][toBucket] = plan.days[toDate][toBucket] || [];
+  plan.days[toDate][toBucket].push(code);
+
+  const { plan: revalidated, warnings } = validate(plan);
+  revalidated.updatedAt = new Date().toISOString();
+  revalidated.updatedBy = String(actor || "admin").slice(0, 80);
+  all[key] = revalidated;
+  await writeAll(all);
+  return { plan: revalidated, warnings, added: { propertyCode: code, to: { date: toDate, bucket: toBucket }, createdDay } };
+}
+
+// Every code the plan holds, whatever day or bucket. The question "is this
+// property planned at all?" has one answer here, so the unplanned list and
+// addStop's refusal can never disagree.
+function plannedCodes(plan) {
+  const out = new Set();
+  for (const codes of codesByDate(plan).values()) for (const c of codes) out.add(c);
+  return out;
+}
+
 // Set or clear a stop's time window.
 //
 // "Not before 10:00" is a locked gate or a customer who is out until then;
@@ -514,5 +573,7 @@ module.exports = {
   savePlan,
   removePlan,
   moveStop,
+  addStop,
+  plannedCodes,
   codesByDate
 };

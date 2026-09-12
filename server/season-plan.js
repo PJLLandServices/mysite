@@ -1246,10 +1246,179 @@
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't load the plan."]).join(" "));
       render(data.plan);
+      // What the plan is MISSING, read alongside what it holds. A property
+      // added after the import has no other way to be seen.
+      loadUnplanned();
     } catch (error) {
       planMeta.textContent = error.message;
       render(null);
     }
+  }
+
+  // ---- Not on the plan --------------------------------------------
+  //
+  // Patrick, 2026-09-11: "Additional properties that I am adding aren't
+  // backfilling on the Season Plan." They couldn't: the plan is a
+  // once-a-season import and Assign only books codes already on a day,
+  // so a property created afterwards was not skipped, not a problem, not
+  // a warning — it simply did not exist to the plan. This is the list
+  // that ends that, and the picker that puts each one on a day.
+  const unplannedNote = el("unplannedNote");
+  const unplannedList = el("unplannedList");
+  const unplannedBlocked = el("unplannedBlocked");
+  const unplannedBlockedHead = el("unplannedBlockedHead");
+  const unplannedToggle = el("unplannedToggle");
+  const unplannedBadge = el("unplannedBadge");
+
+  const BLOCKED_WORDS = {
+    no_code: "no property code on the record",
+    inactive: "archived or deleted",
+    not_eligible: "not eligible for this season",
+    missing_name: "no customer name",
+    season_opt_out: "opted out of this season",
+    no_property_id: "corrupted record — no id",
+    previously_assigned: "already has an assignment this season",
+    assignment_declined: "cancelled their assignment — a no, not a gap"
+  };
+
+  async function loadUnplanned() {
+    if (!unplannedList || !unplannedNote) return;
+    try {
+      const response = await fetch(`${base()}/unplanned`, { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        if (unplannedToggle) unplannedToggle.hidden = true;
+        return;
+      }
+      const placeable = data.placeable || [];
+      const blocked = data.blocked || [];
+      if (unplannedToggle) {
+        unplannedToggle.hidden = placeable.length === 0;
+        unplannedBadge.textContent = String(placeable.length);
+      }
+      unplannedList.innerHTML = "";
+      unplannedNote.textContent = placeable.length
+        ? `${placeable.length} propert${placeable.length === 1 ? "y is" : "ies are"} eligible for this season and on no route day. `
+          + "Pick a day for each — then run Assign to book them. Nothing is sent until the blast."
+        : "Every eligible property is on a route day.";
+      for (const row of placeable) unplannedList.appendChild(unplannedRow(row));
+
+      unplannedBlocked.innerHTML = "";
+      unplannedBlockedHead.hidden = blocked.length === 0;
+      for (const row of blocked) {
+        const li = document.createElement("li");
+        li.innerHTML = `<strong>${escapeHtml(row.code || row.customerName || "?")}</strong> `
+          + `${escapeHtml(row.customerName || "")} — ${escapeHtml(BLOCKED_WORDS[row.reason] || row.reason)}`;
+        unplannedBlocked.appendChild(li);
+      }
+    } catch (error) {
+      unplannedNote.textContent = error.message;
+    }
+  }
+
+  function unplannedRow(row) {
+    const wrap = document.createElement("div");
+    wrap.className = "sp-standby-row";
+    const who = document.createElement("div");
+    who.className = "sp-standby-who";
+    const name = document.createElement("strong");
+    name.textContent = `${row.customerName || "(no name)"} · ${row.code}`;
+    const addr = document.createElement("span");
+    addr.textContent = row.address || "";
+    const meta = document.createElement("span");
+    meta.className = "sp-standby-meta";
+    meta.textContent = [
+      row.zoneCount ? `${row.zoneCount} zones` : "no zone count — Assign will refuse until it's filled in",
+      row.hasCoords ? "" : "no coordinates — won't shape the day"
+    ].filter(Boolean).join(" · ");
+    who.append(name, addr, meta);
+
+    const act = document.createElement("div");
+    act.className = "sp-standby-act";
+    act.appendChild(dayPickerFor(row.code));
+    wrap.append(who, act);
+    return wrap;
+  }
+
+  // Same shape as the move picker: every route day × bucket, plus "any
+  // other date" which grows a new day server-side.
+  function dayPickerFor(code) {
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", `Put ${code} on a day`);
+    const head = document.createElement("option");
+    head.value = "";
+    head.textContent = "Put on…";
+    select.appendChild(head);
+    for (const day of (current && current.days) || []) {
+      if (day.bookedOnly) continue;
+      for (const bucket of ["morning", "afternoon"]) {
+        const opt = document.createElement("option");
+        opt.value = `${day.date}|${bucket}`;
+        opt.textContent = `${day.label || day.date} · ${bucket}`;
+        select.appendChild(opt);
+      }
+    }
+    const custom = document.createElement("option");
+    custom.value = "__custom";
+    custom.textContent = "Any other date…";
+    select.appendChild(custom);
+
+    const doAdd = async (toDate, toBucket, revert) => {
+      try {
+        const response = await fetch(`${base()}/add`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ propertyCode: code, toDate, toBucket })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't add that stop."]).join(" "));
+        showToast(`${code} added to ${toDate} ${toBucket}. Run Assign to book it.`);
+        render(data.plan);
+        loadUnplanned();
+      } catch (error) {
+        showToast(error.message, "bad");
+        if (revert) revert();
+      }
+    };
+
+    select.addEventListener("change", async () => {
+      if (!select.value) return;
+      if (select.value === "__custom") {
+        const form = document.createElement("span");
+        form.className = "sp-move-custom";
+        const dateInput = document.createElement("input");
+        dateInput.type = "date";
+        dateInput.setAttribute("aria-label", `Date for ${code}`);
+        const bucketSel = document.createElement("select");
+        for (const b of ["morning", "afternoon"]) {
+          const o = document.createElement("option");
+          o.value = b; o.textContent = b;
+          bucketSel.appendChild(o);
+        }
+        const go = document.createElement("button");
+        go.type = "button";
+        go.textContent = "Add";
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "sp-move-cancel";
+        cancel.textContent = "✕";
+        cancel.setAttribute("aria-label", "Cancel");
+        form.append(dateInput, bucketSel, go, cancel);
+        select.replaceWith(form);
+        dateInput.focus();
+        cancel.addEventListener("click", () => { select.value = ""; form.replaceWith(select); });
+        go.addEventListener("click", async () => {
+          if (!dateInput.value) { dateInput.focus(); return; }
+          go.disabled = true;
+          await doAdd(dateInput.value, bucketSel.value, () => { go.disabled = false; });
+        });
+        return;
+      }
+      const [toDate, toBucket] = select.value.split("|");
+      select.disabled = true;
+      await doAdd(toDate, toBucket, () => { select.disabled = false; select.value = ""; });
+    });
+    return select;
   }
 
   // The probe is above the day cards, so it would otherwise have no
