@@ -43,7 +43,7 @@
     "backfill-booking-customers": "node scripts/backfill-booking-customers.js",
     "backfill-booking-customers:apply": "node scripts/backfill-booking-customers.js --apply",
     "audit:ui": "node scripts/ui-audit.js",
-    "test:sitebuilder": "node scripts/test-sitebuilder-split.mjs",
+    "test:sitebuilder": "node scripts/test-sitebuilder-split.mjs && node scripts/test-sitebuilder-laterals.mjs",
     "audit:commercial": "node scripts/audit-commercial-data.js",
     "test:commercial": "node scripts/test-commercial-schema.mjs",
     "test:invoice-balance": "node scripts/test-invoice-balance-surfaces.mjs",

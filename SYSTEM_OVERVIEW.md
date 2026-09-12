@@ -1402,12 +1402,53 @@ Chromium with every API mocked): split → two halves in two boxes → one
 quote line, one more valve → save/reload byte-identical → unsplit restores
 the original.
 
+**Shared drip group, one valve per bed (Sept 2026).** The same principle
+for beds that already share a valve group: when pavement sits between the
+beds, the area card's **Valve layout** select (`valveGroupModes[group] =
+'station'`, design-level, `version: 8`) builds the group as one valve PER
+BED on one station instead of one valve chained bed → bed. `computeZonePlan`
+emits one `LAST_ZONES` entry per bed (`key: 'g:<group>:<bin>:<aid>'`,
+`stationGroup`, `stationName`) and `applyValveSplits` gives every entry of
+a `stationGroup` the same `station`. Bin packing under the GPM ceiling is
+unchanged — the bin is still the unit that opens together. Each bed's
+valve anchors on its own bed, so nearest-box puts them in different boxes;
+the quote line says "N valves wired as one zone" and names the beds.
+
+**Hand-drawn laterals (Sept 2026).** The auto spine is a starting point;
+the sub who trenches the laterals needs the pipe where it will actually
+go. With a valve selected, **draw laterals by hand** / the **Lateral bend**
+tool: `mpEditLaterals()` adopts the auto run as a node tree
+(`mpAdoptAutoLaterals`, trunk segments → nodes, BFS from the point nearest
+the box) stored per sheet as `routing[page].laterals[valveKey] =
+[{x,y,p}]` — the mainline's shape, so bends add, tee (select a bend
+first), drag and splice (`mpSpliceNode`) the same way. Heads and beds are
+never part of the tree: `customLateralRun()` attaches each head by a spur
+to the nearest point on the trunk (`nearestOnEdges`) and each bed at the
+closest approach of trunk and outline, then accumulates flow from those
+attachment points up to the box, so every trunk segment is still sized on
+what passes through it. **back to auto route** deletes the override.
+Selecting a valve from the legend now frames it (`mpFitZone`) and hides
+the other valves' pipe; consecutive same-size segments are merged and
+labelled *size · length* (`lateralRunSvg`, shared with the print sheet),
+and heads show *model · arc · throw* (`headCaption`) once zoomed in.
+Still rule 3: none of it reaches the BOM.
+
+**Per-zone lateral sheet (Sept 2026).** **Print zone sheet** (`lpOpen`)
+prints one valve for the sub: title block (project, station, valve A/B or
+one-of-N, GPM, box, sheet, scale state), the drawing over a faded plan —
+its area, its box, its lateral with every piece labelled, every head
+numbered with model · arc · throw, a scale bar — and totals by pipe size.
+No mainline, wire or other valves. `body.lp-open` + `@page landscape`
+print CSS, same pattern as the customer sheet. The master plan's own
+Print button now prints the plan (`body.mp-open`) rather than the whole
+builder page. Walked by `scripts/test-sitebuilder-laterals.mjs`.
+
 **Three builder-owned durable fields on the project record**, each capped
 independently and each written whole:
 
 | Field | Cap | What it holds |
 |---|---|---|
-| `systemDesign` | **512 KB** | The design blob — supply inputs, per-area spec, computed zones, BOM overrides, `linkedQuoteId`, and (v5) the master-plan `routing` per sheet. Opaque to the server. Now at `version: 8`; older blobs load unchanged — v3 added `area.planRef`, v4 `area.valveGroup`, v5 `routing`, v6 mainline tree parents, v7 stable ids + `pins`, v8 `routing[page].splits`, and an absent field means exactly what the older blob meant. |
+| `systemDesign` | **512 KB** | The design blob — supply inputs, per-area spec, computed zones, BOM overrides, `linkedQuoteId`, and (v5) the master-plan `routing` per sheet. Opaque to the server. Now at `version: 8`; older blobs load unchanged — v3 added `area.planRef`, v4 `area.valveGroup`, v5 `routing`, v6 mainline tree parents, v7 stable ids + `pins`, v8 `routing[page].splits` + `routing[page].laterals` + `valveGroupModes`, and an absent field means exactly what the older blob meant. |
 | `waterCostEstimate` | **128 KB** | Standalone water-cost-by-town snapshot; opens as its own project-folder deliverable. |
 | `sitePlan` | **64 KB** | Site-plan **metadata only** — sheets, dimensions, and each sheet's calibration record with full provenance. Rasters live on disk (see Data files). Not writable through the generic `PATCH` (see below). |
 

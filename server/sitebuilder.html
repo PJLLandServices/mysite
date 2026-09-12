@@ -75,7 +75,32 @@
   .cust-note{font-size:11.5px;color:#7a5a12;background:#fff8ec;border:1px solid #f0d9a8;border-radius:8px;padding:9px 11px;margin-top:8px;line-height:1.5}
   .cust-actions{position:fixed;bottom:calc(22px + env(safe-area-inset-bottom));display:flex;gap:10px;z-index:10000}
   .cust-actions button{min-height:44px}
+  /* ---- per-zone lateral sheet (print) ---- */
+  .lp-sheet{background:#fff;width:min(1100px,96vw);max-height:94vh;overflow:auto;border-radius:12px;padding:18px 22px;box-shadow:0 12px 40px rgba(0,0,0,.3);font-size:12.5px;color:#1a2320}
+  .lp-head{display:flex;align-items:flex-start;gap:18px;border-bottom:2px solid var(--green-d);padding-bottom:8px;margin-bottom:8px}
+  .lp-head h2{margin:0;font-size:18px;color:var(--green-d)}
+  .lp-head .lp-sub{font-size:12px;color:#5b6b63;margin-top:2px}
+  .lp-head table{font-size:12px;border-collapse:collapse;margin-left:auto}
+  .lp-head td{padding:1px 8px 1px 0;white-space:nowrap}
+  .lp-head td:first-child{color:#5b6b63;text-transform:uppercase;font-size:10px;letter-spacing:.4px}
+  .lp-draw{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}
+  .lp-draw svg{display:block;width:100%;height:auto}
+  .lp-foot{display:flex;gap:22px;flex-wrap:wrap;margin-top:8px;font-size:12px}
+  .lp-foot b{color:var(--green-d)}
+  .lp-foot ul{margin:2px 0 0;padding-left:16px}
+  .lp-note{font-size:11px;color:#5b6b63;margin-top:6px}
   @media print{
+    @page{size:letter landscape;margin:8mm}
+    body.lp-open > *:not(#lpOverlay){display:none!important}
+    body.lp-open #lpOverlay{position:static;display:block;background:#fff;padding:0}
+    body.lp-open .lp-sheet{box-shadow:none;width:auto;max-width:100%;max-height:none;border-radius:0;padding:0;overflow:visible}
+    body.lp-open .lp-draw{page-break-inside:avoid}
+    body.lp-open .no-print{display:none!important}
+    body.mp-open:not(.lp-open) > *:not(#mpOverlay){display:none!important}
+    body.mp-open:not(.lp-open) #mpOverlay{position:static;display:block;background:#fff;padding:0}
+    body.mp-open:not(.lp-open) #mpOverlay .sk-panel{width:auto;max-width:100%;height:auto;max-height:none;border-radius:0;box-shadow:none}
+    body.mp-open:not(.lp-open) #mpOverlay .mp-bar, body.mp-open:not(.lp-open) #mpOverlay .sk-foot, body.mp-open:not(.lp-open) #mpOverlay .sk-under, body.mp-open:not(.lp-open) #mpOverlay .pz-ctrl{display:none!important}
+    body.mp-open:not(.lp-open) #mpOverlay svg{max-width:100%;height:auto}
     body.cust-open > *:not(#custOverlay){display:none!important}
     body.cust-open #custOverlay{position:static;display:block;background:#fff;padding:0}
     body.cust-open .cust-sheet{box-shadow:none;width:auto;max-width:100%;max-height:none;border-radius:0;padding:0;overflow:visible}
@@ -460,6 +485,7 @@
         <button type="button" id="mpToolmanifold" onclick="mpSetTool('manifold')">Manifold</button>
         <button type="button" id="mpToolbend" onclick="mpSetTool('bend')">Mainline bend</button>
         <button type="button" id="mpToolsplit" onclick="mpSetTool('split')" title="Pick a zone, then draw a line across the driveway: the heads on each side get their own valve, wired as one station">Split zone</button>
+        <button type="button" id="mpToollat" onclick="mpSetTool('lat')" title="Pick a zone, then click to add bends to its lateral run — drag bends to move them, select a bend before clicking to tee off it, Delete removes one">Lateral bend</button>
         <button type="button" class="ghost" onclick="mpAutoRoute()">Auto-route</button>
         <button type="button" class="ghost" onclick="mpUndoPoint()">Undo point</button>
         <button type="button" class="del" onclick="mpClearRouting()">Clear routing</button>
@@ -473,7 +499,7 @@
     </div>
     <div class="sk-body" id="mpBody"></div>
     <div class="sk-foot">
-      <p class="hint" id="mpHint">Every traced area on this sheet, at its true position, coloured by the valve it runs on. Pick a tool, then click the plan to place the <b>point of connection</b>, a <b>manifold</b>, or a <b>mainline bend</b>; drag any marker to move it, Delete to remove the selected one. <b>Select a node before placing a bend to tee off it.</b> Click an area or head to work on that valve alone. <b>Split zone:</b> with a zone selected, click two points to draw a line across the driveway — the heads on each side get their own valve (A / B) in whichever box you put them, wired together as one station. Mainline, lateral and wire lengths are all measured off the calibrated sheet; laterals follow the inside of each outline and every segment is sized on the flow passing through it. Hold H to flash the drawing off. Scroll/pinch to zoom, Ctrl-drag to pan.</p>
+      <p class="hint" id="mpHint">Every traced area on this sheet, at its true position, coloured by the valve it runs on. Pick a tool, then click the plan to place the <b>point of connection</b>, a <b>manifold</b>, or a <b>mainline bend</b>; drag any marker to move it, Delete to remove the selected one. <b>Select a node before placing a bend to tee off it.</b> Click an area or head to work on that valve alone. <b>Split zone:</b> with a zone selected, click two points to draw a line across the driveway — the heads on each side get their own valve (A / B) in whichever box you put them, wired together as one station. <b>Lateral bend:</b> with a zone selected, click along the trench route to add bends (select a bend first to tee off it, drag to move, Delete to remove); heads and beds attach themselves to the nearest point on the pipe. <b>Print zone sheet</b> prints that one valve — box, pipe with sizes and lengths, heads with model and arc — over a faded plan. Mainline, lateral and wire lengths are all measured off the calibrated sheet; laterals follow the inside of each outline and every segment is sized on the flow passing through it. Hold H to flash the drawing off. Scroll/pinch to zoom, Ctrl-drag to pan.</p>
       <span class="sk-grow"></span>
       <div class="sk-tools">
         <button type="button" onclick="window.print()" class="ghost">Print</button>
@@ -619,6 +645,14 @@
         <button type="button" onclick="trUse()">Use trees</button>
       </div>
     </div>
+  </div>
+</div>
+
+<div id="lpOverlay" class="sk-overlay" hidden>
+  <div class="lp-sheet" id="lpSheet"></div>
+  <div class="cust-actions no-print" style="right:24px">
+    <button type="button" onclick="window.print()">Print / Save PDF</button>
+    <button type="button" class="ghost" onclick="lpClose()">Close</button>
   </div>
 </div>
 
@@ -823,7 +857,7 @@ function toggleAreaCollapse(i){
   const card=el('areas').children[i]; if(!card) return;
   if(card.classList.toggle('collapsed')) collapsedZones.add(i); else collapsedZones.delete(i);
 }
-function startEmptyDesign(){ collapsedZones.clear(); areas=[]; routing={}; render(); }
+function startEmptyDesign(){ collapsedZones.clear(); areas=[]; routing={}; valveGroupModes={}; render(); }
 function addArea(){ collapsedZones.clear(); areas.push(newArea()); render(); markDirty(); }
 function delArea(i){ collapsedZones.clear(); areas.splice(i,1); render(); markDirty(); }
 function upd(i,k,v){
@@ -1226,7 +1260,7 @@ function plan(a){
       // flow-model note by LO_MIN_ARC — budgeting full flow is the
       // conservative side of a valve-sizing decision).
       const pct=loRadiusPct(mh);
-      heads.push({xft:mh.x-orig.x, yft:mh.y-orig.y, arc:mh.arc, dir:mh.dir||0, gpm:spec.gpm, r:spec.r*pct});
+      heads.push({xft:mh.x-orig.x, yft:mh.y-orig.y, arc:mh.arc, dir:mh.dir||0, gpm:spec.gpm, r:spec.r*pct, nz:spec.label});
     });
     const pk=packZones(heads,ceiling);
     // Arcs are free-form now, so bucket before counting. The buckets are the
@@ -1469,7 +1503,12 @@ function familyFieldsHtml(a,i){
             <option value="" ${!a.valveGroup?'selected':''}>— its own valve —</option>
             ${valveGroupsInUse().map(g=>`<option value="${esc(g)}" ${a.valveGroup===g?'selected':''}>${esc(g)}</option>`).join('')}
             <option value="__new__">+ New shared valve…</option>
-          </select></div>`;
+          </select></div>
+        ${a.valveGroup ? `<div class="fld"><label>Valve layout</label>
+          <select onchange="setValveGroupMode(${JSON.stringify(String(a.valveGroup))}, this.value)" title="One valve per bed when pavement or a driveway sits between the beds — each bed gets its own valve in its own box, and the valves are wired to one controller station so they still run together">
+            <option value="" ${valveGroupMode(a.valveGroup)!=='station'?'selected':''}>one valve for the group</option>
+            <option value="station" ${valveGroupMode(a.valveGroup)==='station'?'selected':''}>one valve per bed · wired as one station</option>
+          </select></div>` : ''}`;
   if(a.family==="trees") return `
         <div class="fld"><label>Ring dripline</label><select onchange="upd(${i},'dripProduct',this.value)">${optionList(DRIP_PRODUCTS,a.dripProduct)}</select></div>
         <div class="fld adv"><label>Overage %</label><input type="number" min="0" step="5" value="${a.overagePct==null?10:a.overagePct}" oninput="upd(${i},'overagePct',this.value)"></div>`;
@@ -1618,6 +1657,27 @@ function computeZonePlan(){
       bin.beds.push(b);
     });
     bins.forEach((bin, i) => {
+      if(valveGroupMode(g)==='station' && bin.beds.length > 1){
+        // One valve per bed, all on one station. The bin is still the GPM
+        // unit — these valves open together, so their flows add up.
+        const stationName = bins.length > 1 ? `${g} — station ${i+1} of ${bins.length}` : g;
+        bin.beds.forEach(b => {
+          zones.push({
+            name: `${stationName} · ${b.area.name || 'Area'}`,
+            family: 'drip',
+            gpm: b.plan.totalGPM,
+            dripFt: b.plan.dripLengthFt || 0,
+            headCount: 0,
+            members: [b.area.name || 'Area'],
+            parts: [{ areaIdx: areas.indexOf(b.area), localZone: 0 }],
+            key: 'g:' + g + ':' + i + ':' + (b.area.aid||'?'),
+            grouped: true,
+            stationGroup: 'g:' + g + ':' + i,
+            stationName
+          });
+        });
+        return;
+      }
       zones.push({
         name: bins.length > 1 ? `${g} — valve ${i+1} of ${bins.length}` : g,
         family: 'drip',
@@ -1658,7 +1718,15 @@ function computeZonePlan(){
 function applyValveSplits(zones){
   const out=[];
   let station=0;
+  const groupStation=new Map();     // stationGroup -> station number
   zones.forEach(z => {
+    if(z.stationGroup){
+      // Several valves, one station (a shared drip group in 'station' mode).
+      if(!groupStation.has(z.stationGroup)) groupStation.set(z.stationGroup, station++);
+      z.station = groupStation.get(z.stationGroup);
+      out.push(z);
+      return;
+    }
     z.station = station;
     const sp = splitFor(z);
     if(!sp){ out.push(z); station++; return; }
@@ -1708,14 +1776,16 @@ function mpZoneHeads(z, pt, a, p){
   return mpHeadsOf(a,p).filter(h => zoneFeedsHead(z, pt, h));
 }
 // Stations: the controller's view. Two split halves are one station.
-function stationCount(){ return LAST_ZONES.length ? (LAST_ZONES[LAST_ZONES.length-1].station+1) : 0; }
+function stationCount(){ return LAST_ZONES.reduce((m,z)=>Math.max(m,(z.station||0)+1), 0); }
 function stationZones(){
   const by=[];
-  LAST_ZONES.forEach(z=>{ const s=z.station||0; if(!by[s]) by[s]={station:s, name:baseName(z), family:z.family, grouped:z.grouped, members:z.members, dripFt:0, headCount:0, gpm:0, valves:0};
-    const e=by[s]; e.dripFt+=z.dripFt||0; e.headCount+=z.headCount||0; e.gpm+=z.gpm||0; e.valves++; });
-  return by;
+  LAST_ZONES.forEach(z=>{ const s=z.station||0;
+    if(!by[s]) by[s]={station:s, name:baseName(z), family:z.family, grouped:z.grouped, members:[], dripFt:0, headCount:0, gpm:0, valves:0};
+    const e=by[s]; e.dripFt+=z.dripFt||0; e.headCount+=z.headCount||0; e.gpm+=z.gpm||0; e.valves++;
+    (z.members||[]).forEach(m=>{ if(!e.members.includes(m)) e.members.push(m); }); });
+  return by.filter(Boolean);
 }
-function baseName(z){ return z.half ? z.name.replace(/ · [AB]$/, '') : z.name; }
+function baseName(z){ if(z.stationName) return z.stationName; return z.half ? z.name.replace(/ · [AB]$/, '') : z.name; }
 // Peak flow the mainline has to carry: one STATION at a time, and a split
 // station opens both its valves together.
 function peakStationGPM(){ const s=stationZones(); return s.length ? Math.max(...s.map(x=>x.gpm)) : 0; }
@@ -2901,12 +2971,12 @@ function openMasterPlan(pageId){
   skProbeRaster(pg.id);
   pzInit(mp); mp._hooks=MP_HOOKS;
   mp.tool='pan'; mp.sel=null; mp.laterals=true; mp.wire=true; mp.zoneSel=null; mp.splitA=null; mpPaintTools();
-  el('mpOverlay').hidden=false;
+  el('mpOverlay').hidden=false; document.body.classList.add('mp-open');
   const op=el('mpUnderOpacity'); if(op) op.value=String(Math.round(mp.underOpacity*100));
   const pc=el('mpUnderPct'); if(pc) pc.textContent=Math.round(mp.underOpacity*100)+'%';
   mpFit();
 }
-function mpCancel(){ el('mpOverlay').hidden=true; }
+function mpCancel(){ el('mpOverlay').hidden=true; document.body.classList.remove('mp-open'); }
 function mpZoom(f){ pzZoomBtn(mp,f); }
 function mpFit(){
   // Frame what is actually drawn, not the whole sheet — a bed cluster in one
@@ -2995,11 +3065,45 @@ function mpZoneAt(fx, fy){
 }
 function mpSelectZone(zi){
   mp.zoneSel = (mp.zoneSel===zi) ? null : zi;
+  if(mp.tool==='lat' || mp.tool==='split'){ mp.tool='pan'; mp.splitA=null; mpPaintTools(); }
+  mp.sel=null;
+  // From the legend, picking a valve frames it — that is the "zoom in on
+  // this zone" moment. Picking by clicking the plan leaves the view alone.
+  if(mp.zoneSel!=null) mpFitZone(mp.zoneSel); else mpFit();
   mpDraw();
 }
-function mpClearZoneSel(){ if(mp.zoneSel!=null){ mp.zoneSel=null; mpDraw(); } }
+function mpClearZoneSel(){ if(mp.zoneSel!=null){ mp.zoneSel=null; if(mp.tool==='lat'||mp.tool==='split'){ mp.tool='pan'; mp.splitA=null; mpPaintTools(); } mpFit(); } }
 // Opacity multiplier for anything belonging to valve `zi`.
-function mpDim(zi){ return (mp.zoneSel==null || mp.zoneSel===zi) ? 1 : 0.16; }
+function mpDim(zi){ return (mp.zoneSel==null || mp.zoneSel===zi) ? 1 : 0.1; }
+// Everything one valve touches on this sheet, in feet: its heads (with
+// throw), its beds, its box, its lateral run.
+function mpZoneBBox(zi){
+  const z=LAST_ZONES[zi]; if(!z) return null;
+  let bb=null;
+  const grow=(x,y)=>{ bb = bb ? {minX:Math.min(bb.minX,x), minY:Math.min(bb.minY,y), maxX:Math.max(bb.maxX,x), maxY:Math.max(bb.maxY,y)} : {minX:x,minY:y,maxX:x,maxY:y}; };
+  (z.parts||[]).forEach(pt=>{
+    const a=areas[pt.areaIdx];
+    if(!a || !validPoly(a) || !(a.planRef && a.planRef.pageId===mp.pageId)) return;
+    const p=mpPlanFor(a);
+    if(a.family==='drip' || a.family==='trees'){ a.poly.forEach(v=>grow(v.x,v.y)); return; }
+    // Heads, with a little of their throw — not the whole arc, which on a
+    // rotor lawn would frame 40 ft of neighbouring property on every side.
+    mpZoneHeads(z, pt, a, p).forEach(h=>{ const rr=(h.r||0)*0.35; grow(h.x-rr,h.y-rr); grow(h.x+rr,h.y+rr); });
+  });
+  const lat=mpLateralPlan();
+  const run=lat.runs.find(x=>x.zi===zi);
+  if(run) run.edges.forEach(e=>{ grow(e.a.x,e.a.y); grow(e.b.x,e.b.y); });
+  const asg=mpManifoldAssign(), r=routingRO(mp.pageId);
+  const mi=asg.byManifold.findIndex(l=>l.includes(zi));
+  if(mi>=0 && r.manifolds[mi]) grow(r.manifolds[mi].x, r.manifolds[mi].y);
+  return bb;
+}
+function mpFitZone(zi){
+  const bb=mpZoneBBox(zi);
+  if(!bb){ mpFit(); return; }
+  const pad=Math.max(8, (bb.maxX-bb.minX+bb.maxY-bb.minY)*0.06);
+  pzFit(mp, {minX:bb.minX-pad, minY:bb.minY-pad, maxX:bb.maxX+pad, maxY:bb.maxY+pad});
+}
 
 // Coloured by STATION, so the two valves of a split zone share a colour —
 // they are one zone to the controller and should read as one on the plan.
@@ -3031,14 +3135,15 @@ function mpZoneColour(zi){ const z=LAST_ZONES[zi]; return z ? `var(${ZC[(z.stati
    Wiring measured pipe into the bid is a separate, deliberate step.       */
 
 let routing = {};                       // pageId -> {poc, main[], manifolds[]}
-const EMPTY_ROUTING = Object.freeze({poc:null, main:Object.freeze([]), manifolds:Object.freeze([]), pins:Object.freeze({}), splits:Object.freeze({})});
+const EMPTY_ROUTING = Object.freeze({poc:null, main:Object.freeze([]), manifolds:Object.freeze([]), pins:Object.freeze({}), splits:Object.freeze({}), laterals:Object.freeze({})});
 function routingRO(pageId){ return (pageId && routing[pageId]) || EMPTY_ROUTING; }
 function routingFor(pageId){
   if(!pageId) return null;
-  if(!routing[pageId]) routing[pageId] = {poc:null, main:[], manifolds:[], pins:{}, splits:{}};
+  if(!routing[pageId]) routing[pageId] = {poc:null, main:[], manifolds:[], pins:{}, splits:{}, laterals:{}};
   const r=routing[pageId];
   if(!r.pins) r.pins={};
   if(!r.splits) r.splits={};
+  if(!r.laterals) r.laterals={};
   // Backfill ids for boxes placed before assignments existed, so an old
   // sheet can be hand-assigned without being re-drawn.
   (r.manifolds||[]).forEach(m=>{ if(!m.id) m.id=mintId('m_'); });
@@ -3055,9 +3160,16 @@ function mpNodePt(r, i){ return (i==null || i<0) ? r.poc : (r.main||[])[i]; }
 // circular is reattached to the poc rather than dropped, so a corrupt blob
 // degrades to a visible straight run instead of silently losing pipe.
 function mpMainEdges(r){
+  if(!r || !r.poc) return [];
+  return mpTreeEdges(r.poc, r.main||[]);
+}
+// Parent -> child segments of a node tree hung off `root`. Shared by the
+// mainline and the hand-drawn laterals, so both splice, tee and re-root the
+// same way.
+function mpTreeEdges(root, main){
   const out=[];
-  if(!r || !r.poc) return out;
-  const main=r.main||[];
+  if(!root) return out;
+  const r={poc:root, main};
   main.forEach((n,i)=>{
     // A node with no parent is a version-5 chain node, so it continues from
     // the one before it. restoreRouting() migrates the same way; defaulting
@@ -3213,8 +3325,29 @@ function mpOrphanPins(){
 /* ---- tools ---- */
 
 function mpSetTool(t){
+  if(t==='lat'){
+    if(mp.zoneSel==null){ alert('Click the zone whose laterals you want to draw first, then pick Lateral bend.'); return; }
+    mpEditLaterals(mp.zoneSel); return;
+  }
   if(t==='split'){
     if(mp.zoneSel==null){ alert('Click the zone you want to split first, then pick Split zone.'); return; }
+    // A shared drip group is split a different way: one valve per bed on
+    // one station. Offer that here rather than sending Patrick off to find
+    // the setting on the area card.
+    const zg=LAST_ZONES[mp.zoneSel];
+    if(zg && zg.grouped && !zg.stationGroup){
+      const a=areas[(zg.parts||[])[0] && zg.parts[0].areaIdx], g=a && a.valveGroup;
+      const n=(zg.members||[]).length;
+      if(g && n>1 && confirm('"'+g+'" is '+n+' beds on one shared valve.\n\nGive each bed its own valve (in whichever box you choose), wired together as one station? The quote stays one zone; the material list gets '+(n-1)+' more valve'+(n===2?'':'s')+'.')){
+        const k=zg.key;
+        setValveGroupMode(g, 'station');
+        // land on the first bed's valve so the box buttons are right there
+        const ni=LAST_ZONES.findIndex(x=>x.stationGroup && x.stationGroup===k);
+        mp.zoneSel = ni>=0 ? ni : null;
+        mp.tool='pan'; mp.sel=null; mpPaintTools(); mpDraw();
+      }
+      return;
+    }
     const why=mpSplitBlocked(mp.zoneSel);
     if(why){ alert(why); return; }
   }
@@ -3257,7 +3390,7 @@ function mpRemoveSplit(zi){
   mp.sel=null; mp.tool='pan'; mpPaintTools(); mpDraw();
 }
 function mpPaintTools(){
-  ['pan','poc','manifold','bend','split'].forEach(t=>{
+  ['pan','poc','manifold','bend','split','lat'].forEach(t=>{
     const b=el('mpTool'+t); if(b) b.classList.toggle('on', mp.tool===t);
   });
   const lb=el('mpToolLat'); if(lb) lb.classList.toggle('on', mp.laterals);
@@ -3269,6 +3402,20 @@ function mpTap(fx, fy){
   const r=routingFor(mp.pageId); if(!r) return;
   if(mp.tool==='poc'){ r.poc={x:fx, y:fy}; mp.sel='poc'; markDirty(); return; }
   if(mp.tool==='manifold'){ r.manifolds.push({x:fx, y:fy, id:mintId('m_')}); mp.sel='m'+(r.manifolds.length-1); markDirty(); return; }
+  if(mp.tool==='lat'){
+    const nodes = mp.zoneSel!=null ? mpLateralNodes(mp.zoneSel) : null;
+    if(!nodes){ mp.tool='pan'; mpPaintTools(); return; }
+    let parent;
+    if(mp.sel && mp.sel[0]==='l') parent=parseInt(mp.sel.slice(1),10);
+    else {
+      // continue from the nearest bend; with none yet, start at the box
+      parent=-1; let bd=Infinity;
+      nodes.forEach((n,i)=>{ const d=Math.hypot(n.x-fx, n.y-fy); if(d<bd){ bd=d; parent=i; } });
+    }
+    if(!(parent>=-1) || parent>=nodes.length) parent=-1;
+    nodes.push({x:fx, y:fy, p:parent});
+    mp.sel='l'+(nodes.length-1); markDirty(); return;
+  }
   if(mp.tool==='split'){
     if(mp.zoneSel==null || mpSplitBlocked(mp.zoneSel)){ mp.tool='pan'; mp.splitA=null; mpPaintTools(); return; }
     if(!mp.splitA){ mp.splitA={x:fx, y:fy}; return; }          // first end — wait for the second
@@ -3300,6 +3447,12 @@ function mpTap(fx, fy){
 function mpMoveHandle(h, fx, fy){
   const r=routingFor(mp.pageId); if(!r || !h) return;
   if(h==='poc'){ if(r.poc){ r.poc.x=fx; r.poc.y=fy; } return; }
+  if(h[0]==='l'){
+    const nodes = mp.zoneSel!=null ? mpLateralNodes(mp.zoneSel) : null;
+    const i=parseInt(h.slice(1),10);
+    if(nodes && nodes[i]){ nodes[i].x=fx; nodes[i].y=fy; }
+    return;
+  }
   if(h[0]==='s'){
     const zi=parseInt(h.slice(2),10), z=LAST_ZONES[zi], sp=z && r.splits && r.splits[baseKey(z.key)];
     if(!sp) return;
@@ -3314,17 +3467,23 @@ function mpMoveHandle(h, fx, fy){
 // Removing a node from the middle of a branch splices it out — its
 // children reattach to its parent — rather than cutting everything past
 // it loose. Deleting one bend should not silently delete the run beyond it.
-function mpRemoveMainNode(r, i){
-  const gone=r.main[i]; if(!gone) return;
+function mpRemoveMainNode(r, i){ mpSpliceNode(r.main, i); }
+function mpSpliceNode(arr, i){
+  const gone=arr[i]; if(!gone) return;
   const gp = (gone.p==null) ? -1 : gone.p;
-  r.main.forEach(n=>{ if(n.p===i) n.p=gp; });
-  r.main.splice(i,1);
+  arr.forEach(n=>{ if(n.p===i) n.p=gp; });
+  arr.splice(i,1);
   // indices above i shift down by one
-  r.main.forEach(n=>{ if(n.p!=null && n.p>i) n.p-=1; });
+  arr.forEach(n=>{ if(n.p!=null && n.p>i) n.p-=1; });
 }
 function mpDeleteSel(){
   const r=routingFor(mp.pageId); if(!r || !mp.sel) return;
   const h=mp.sel;
+  if(h[0]==='l'){
+    const nodes = mp.zoneSel!=null ? mpLateralNodes(mp.zoneSel) : null;
+    if(nodes){ mpSpliceNode(nodes, parseInt(h.slice(1),10)); }
+    mp.sel=null; markDirty(); mpDraw(); return;
+  }
   if(h[0]==='s'){ mpRemoveSplit(parseInt(h.slice(2),10)); return; }
   if(h==='poc'){
     if(r.main.length && !confirm('Removing the point of connection also drops the '+r.main.length+' mainline node'+(r.main.length===1?'':'s')+' that hang off it. Remove it?')) return;
@@ -3676,8 +3835,16 @@ function mpHeadsOf(a, p){
   // rectangle frame, not the sheet's, so they cannot honestly be placed.
   if(!p.poly || !p.orig) return [];
   const o=p.orig;
+  const base=headSpec(a);
   return p.heads.map(h=>({x:o.x+h.xft, y:o.y+h.yft, arc:h.arc, dir:h.dir||0,
-                          zone:h.zone||0, r:h.r, gpm:h.gpm}));
+                          zone:h.zone||0, r:h.r, gpm:h.gpm, nz:h.nz||base.label, family:a.family}));
+}
+// Short head caption for the plan and the print sheet: "PGP #4.0 · 180° · 35 ft".
+function headCaption(h){
+  const fam = h.family==='rotor' ? 'PGP' : h.family==='mp' ? 'MP' : h.family==='spray' ? 'Spray' : h.family==='strip' ? 'Strip' : '';
+  let nz = String(h.nz||'').replace(/^Hunter\s+/,'').replace(/^PGP\s+/,'').replace(/^RB\s+/,'').replace(/\s+(blue|grey|gray|green|red)$/i,'');
+  if(fam && nz.startsWith(fam)) nz = nz.slice(fam.length).trim();
+  return [fam, nz].filter(Boolean).join(' ') + ' · ' + Math.round(h.arc||360) + '° · ' + Math.round(h.r||0) + ' ft';
 }
 function mpPlanFor(a){ const e=LAST_PLANS.find(x=>x.area===a); return e?e.plan:null; }
 
@@ -3929,6 +4096,117 @@ function spineRun(poly, heads, root){
   return segs;
 }
 
+/* ── Hand-drawn laterals ───────────────────────────────────────────────────
+
+   The auto spine is a starting point. The sub who trenches the laterals
+   needs the pipe where it will actually go — round the bed, not through
+   it; along the walk, not under it. So a valve's run can be drawn by hand
+   as a node tree hung off its box, stored per sheet as
+   `routing[page].laterals[valveKey] = [{x,y,p}]`, the same shape as the
+   mainline (p = parent index, -1 = the box).
+
+   Heads and beds are NOT part of the drawn tree. Each head takes a spur to
+   the nearest point on the trunk, each bed taps the trunk where it comes
+   closest, so moving a bend never orphans a head. Flow is accumulated
+   from those attachment points up to the box, so each trunk segment is
+   still sized on what actually passes through it.                        */
+function customLateralRun(z, root, nodes){
+  const edges=mpTreeEdges(root, nodes);
+  const segs=[];
+  if(!edges.length) return {segs, nodes:0};
+  const load=new Map();                        // child node index -> GPM attached below it
+  const attach=(pt, gpm)=>{ const idx = pt.edge>=0 ? edges[pt.edge].bi : -1; if(idx>=0) load.set(idx, (load.get(idx)||0)+gpm); };
+  let n=0;
+  (z.parts||[]).forEach(pt=>{
+    const a=areas[pt.areaIdx];
+    if(!a || !validPoly(a) || !(a.planRef && a.planRef.pageId===mp.pageId)) return;
+    const p=mpPlanFor(a); if(!p || p.noShape) return;
+    if(p.family==='drip' || p.family==='trees'){
+      const ring=[...a.poly, a.poly[0]];
+      const gpm=(p.zoneGPM && p.zoneGPM[pt.localZone]!=null) ? p.zoneGPM[pt.localZone] : (p.totalGPM||0);
+      // closest approach between the trunk and the bed outline
+      let best=null;
+      const consider=(tp, edgeIdx)=>{ const q=nearestOnPath(ring, tp.x, tp.y); if(q && (!best || q.dist<best.dist)) best={from:{x:tp.x,y:tp.y}, to:{x:q.x,y:q.y}, dist:q.dist, edge:edgeIdx}; };
+      consider(root, -1); nodes.forEach((nd,i)=>{ const ei=edges.findIndex(e=>e.bi===i); consider(nd, ei); });
+      ring.forEach(v=>{ const q=nearestOnEdges(edges, v.x, v.y); if(q && (!best || q.dist<best.dist)) best={from:{x:q.x,y:q.y}, to:{x:v.x,y:v.y}, dist:q.dist, edge:q.edge}; });
+      if(best){ n++; if(best.dist>0.05) segs.push({a:best.from, b:best.to, gpm, kind:'drip'}); attach(best, gpm); }
+      return;
+    }
+    mpZoneHeads(z, pt, a, p).forEach(h=>{
+      const q=nearestOnEdges(edges, h.x, h.y); if(!q) return;
+      n++;
+      if(q.dist>0.05) segs.push({a:{x:q.x,y:q.y}, b:{x:h.x,y:h.y}, gpm:h.gpm||0, kind:'spur'});
+      attach(q, h.gpm||0);
+    });
+  });
+  // downstream flow per trunk segment: everything attached at or below its child
+  const kids=new Map(); edges.forEach(e=>{ if(!kids.has(e.ai)) kids.set(e.ai,[]); kids.get(e.ai).push(e.bi); });
+  const memo=new Map();
+  const flow=(i)=>{ if(memo.has(i)) return memo.get(i); let f=load.get(i)||0; (kids.get(i)||[]).forEach(c=>{ f+=flow(c); }); memo.set(i,f); return f; };
+  edges.forEach(e=>segs.push({a:{x:e.a.x,y:e.a.y}, b:{x:e.b.x,y:e.b.y}, gpm:flow(e.bi), kind:'trunk', node:e.bi}));
+  return {segs, nodes:n};
+}
+
+// Turn the auto run for a valve into an editable tree, so "edit laterals"
+// starts from what the system drew rather than from nothing. Trunk-type
+// segments (spine, feed, drip chain) become nodes; spurs are re-derived.
+function mpAdoptAutoLaterals(zi){
+  const lat=mpLateralPlan();
+  const run=lat.runs.find(x=>x.zi===zi);
+  if(!run || run.custom) return null;
+  const r=routingFor(mp.pageId); if(!r) return null;
+  const rootPt = run.rootKey==='poc' ? r.poc : r.manifolds[parseInt(run.rootKey.slice(1),10)];
+  if(!rootPt) return null;
+  const key=pt=>pt.x.toFixed(2)+','+pt.y.toFixed(2);
+  const pts=new Map(), adj=new Map();
+  const add=pt=>{ const k=key(pt); if(!pts.has(k)){ pts.set(k,{x:pt.x,y:pt.y}); adj.set(k,new Set()); } return k; };
+  run.edges.filter(e=>e.kind!=='spur').forEach(e=>{ const a=add(e.a), b=add(e.b); adj.get(a).add(b); adj.get(b).add(a); });
+  if(!pts.size) return null;
+  // walk out from the point nearest the box
+  let start=null, sd=Infinity;
+  pts.forEach((p,k)=>{ const d=Math.hypot(p.x-rootPt.x, p.y-rootPt.y); if(d<sd){ sd=d; start=k; } });
+  const nodes=[], index=new Map(), queue=[[start,-1]];
+  const seen=new Set([start]);
+  while(queue.length){
+    const [k,parent]=queue.shift();
+    const p=pts.get(k);
+    if(Math.hypot(p.x-rootPt.x, p.y-rootPt.y)<0.05 && parent===-1){ index.set(k,-1); }   // coincides with the box itself
+    else { nodes.push({x:p.x, y:p.y, p:parent}); index.set(k, nodes.length-1); }
+    adj.get(k).forEach(nk=>{ if(!seen.has(nk)){ seen.add(nk); queue.push([nk, index.get(k)]); } });
+  }
+  if(!nodes.length) return null;
+  if(!r.laterals) r.laterals={};
+  r.laterals[LAST_ZONES[zi].key]=nodes;
+  return nodes;
+}
+function mpLateralNodes(zi){
+  const r=routingRO(mp.pageId), z=LAST_ZONES[zi];
+  return (z && r.laterals && Array.isArray(r.laterals[z.key])) ? r.laterals[z.key] : null;
+}
+function mpResetLaterals(zi){
+  const r=routingFor(mp.pageId), z=LAST_ZONES[zi];
+  if(!r || !z || !r.laterals || !r.laterals[z.key]) return;
+  if(!confirm('Throw away the hand-drawn laterals for '+z.name+' and go back to the automatic route?')) return;
+  delete r.laterals[z.key];
+  if(mp.tool==='lat'){ mp.tool='pan'; mpPaintTools(); }
+  mp.sel=null; markDirty(); mpDraw();
+}
+function mpEditLaterals(zi){
+  if(zi==null) return;
+  mp.zoneSel=zi;
+  if(!mpLateralNodes(zi)){
+    const got=mpAdoptAutoLaterals(zi);
+    if(!got){
+      const r=routingFor(mp.pageId);
+      if(!r || (!r.manifolds.length && !r.poc)){ alert('Place a manifold (or the point of connection) first — the laterals start from the valve box.'); return; }
+      if(!r.laterals) r.laterals={};
+      r.laterals[LAST_ZONES[zi].key]=[];        // empty tree: first click starts it at the box
+    }
+    markDirty();
+  }
+  mp.tool='lat'; mp.sel=null; mp.splitA=null; mpPaintTools(); mpDraw();
+}
+
 function mpLateralPlan(){
   const r=routingRO(mp.pageId);
   const asg=mpManifoldAssign();
@@ -3943,6 +4221,22 @@ function mpLateralPlan(){
     if(!root) return;
     let segs=[], nodes=0;
     const taps=[];
+    // A hand-drawn route replaces the auto spine for this valve. Heads and
+    // beds still attach themselves — to the nearest point on the drawn
+    // trunk — so the sub gets the trench exactly where it was drawn and the
+    // spurs stay honest.
+    const custom = r.laterals && r.laterals[z.key];
+    if(Array.isArray(custom) && custom.length){
+      const run=customLateralRun(z, root, custom);
+      if(run.segs.length){
+        let ft=0;
+        run.segs.forEach(e=>{ e.ft=Math.hypot(e.b.x-e.a.x, e.b.y-e.a.y); ft+=e.ft;
+          const sz=lateralSizeForGPM(e.gpm); bySize[sz]=(bySize[sz]||0)+e.ft; });
+        totalFt+=ft;
+        runs.push({zi, edges:run.segs, ft, nodes:run.nodes, rootKey:(mi>=0?'m'+mi:'poc'), custom:true});
+      }
+      return;
+    }
     (z.parts||[]).forEach(pt=>{
       const a=areas[pt.areaIdx];
       if(!a || !validPoly(a) || !(a.planRef && a.planRef.pageId===mp.pageId)) return;
@@ -3980,9 +4274,61 @@ function mpLateralPlan(){
   return {runs, totalFt, bySize};
 }
 
+// One valve's run, drawn for any editor (screen or print sheet). Consecutive
+// segments of the same size are merged into one labelled piece, so a spine
+// that walks eight polygon vertices reads as "3/4\" · 42 ft" once, not
+// eight times. Labels are skipped on pieces too short to carry them.
+function lateralRunSvg(ed, run, col, dm, opts){
+  opts=opts||{};
+  const SX=x=>pzSX(ed,x), SY=y=>pzSY(ed,y);
+  const off=opts.offset||0, minLabelPx=opts.minLabelPx||56;
+  let g='';
+  const pieces=[];                    // {pts:[..], gpm, kind, ft}
+  run.edges.forEach(e=>{
+    const last=pieces[pieces.length-1];
+    if(last && last.kind===e.kind && e.kind!=='spur' && Math.abs(last.gpm-e.gpm)<1e-6 &&
+       Math.abs(last.pts[last.pts.length-1].x-e.a.x)<1e-6 && Math.abs(last.pts[last.pts.length-1].y-e.a.y)<1e-6){
+      last.pts.push(e.b); last.ft+=e.ft||0; return;
+    }
+    pieces.push({pts:[e.a,e.b], gpm:e.gpm, kind:e.kind, ft:e.ft||0});
+  });
+  const shift=(x1,y1,x2,y2)=>{ if(!off) return [x1,y1,x2,y2]; const dx=x2-x1, dy=y2-y1, L=Math.hypot(dx,dy)||1; const nx=-dy/L*off, ny=dx/L*off; return [x1+nx,y1+ny,x2+nx,y2+ny]; };
+  pieces.forEach(pc=>{
+    const w = pc.gpm>13 ? 3.2 : pc.gpm>8 ? 2.5 : pc.gpm>4 ? 1.9 : 1.4;
+    const ww = opts.printScale ? w*opts.printScale : w;
+    for(let i=0;i<pc.pts.length-1;i++){
+      const [x1,y1,x2,y2]=shift(SX(pc.pts[i].x),SY(pc.pts[i].y),SX(pc.pts[i+1].x),SY(pc.pts[i+1].y));
+      g+='<line x1="'+x1.toFixed(1)+'" y1="'+y1.toFixed(1)+'" x2="'+x2.toFixed(1)+'" y2="'+y2.toFixed(1)+
+         '" stroke="#fff" stroke-width="'+(ww+2.2).toFixed(1)+'" stroke-opacity="'+(0.7*dm).toFixed(3)+'" stroke-linecap="round"/>';
+      g+='<line class="mp-lat" x1="'+x1.toFixed(1)+'" y1="'+y1.toFixed(1)+'" x2="'+x2.toFixed(1)+'" y2="'+y2.toFixed(1)+
+         '" stroke="'+col+'" stroke-width="'+ww.toFixed(1)+'" stroke-opacity="'+(0.9*dm).toFixed(3)+'" stroke-linecap="round"'+(pc.kind==='spur'?' stroke-dasharray="3 2"':'')+'/>';
+    }
+  });
+  if(opts.labels){
+    pieces.forEach(pc=>{
+      // screen length of the whole piece
+      let px=0; for(let i=0;i<pc.pts.length-1;i++) px+=Math.hypot((pc.pts[i+1].x-pc.pts[i].x)*ed.ppf, (pc.pts[i+1].y-pc.pts[i].y)*ed.ppf);
+      if(px < (pc.kind==='spur' ? minLabelPx*0.8 : minLabelPx)) return;
+      // label at the piece's halfway point, along its own path
+      let half=px/2, ax=pc.pts[0].x, ay=pc.pts[0].y, bx=ax, by=ay, mx=SX(ax), my=SY(ay);
+      for(let i=0;i<pc.pts.length-1;i++){
+        const L=Math.hypot((pc.pts[i+1].x-pc.pts[i].x)*ed.ppf, (pc.pts[i+1].y-pc.pts[i].y)*ed.ppf);
+        if(half<=L){ const t=L>0?half/L:0; ax=pc.pts[i].x; ay=pc.pts[i].y; bx=pc.pts[i+1].x; by=pc.pts[i+1].y;
+          mx=SX(ax)+(SX(bx)-SX(ax))*t; my=SY(ay)+(SY(by)-SY(ay))*t; break; }
+        half-=L;
+      }
+      const dx=SX(bx)-SX(ax), dy=SY(by)-SY(ay), L=Math.hypot(dx,dy)||1;
+      const nx=-dy/L, ny=dx/L;
+      const size=opts.fontSize||10.5;
+      const txt=lateralSizeForGPM(pc.gpm)+' · '+Math.round(pc.ft)+' ft';
+      g+=mpHalo(mx+nx*(size+1), my+ny*(size+1)+size*0.35, txt, size, 'middle', opts.labelInk||col);
+    });
+  }
+  return g;
+}
+
 function mpLateralSvg(){
   if(!mp.laterals) return '';
-  const SX=x=>pzSX(mp,x), SY=y=>pzSY(mp,y);
   const lat=mpLateralPlan();
   if(!lat.runs.length) return '';
   // Runs sharing a manifold are fanned a couple of screen pixels apart.
@@ -3993,25 +4339,33 @@ function mpLateralSvg(){
   lat.runs.forEach(run=>{ const k=run.rootKey; if(!perRoot.has(k)) perRoot.set(k,[]); perRoot.get(k).push(run.zi); });
   let g='<g>';
   lat.runs.forEach(run=>{
+    // Working on one valve: the others' pipe is hidden outright, so the
+    // one being routed reads against the drawing, not against a tangle.
+    if(mp.zoneSel!=null && run.zi!==mp.zoneSel) return;
     const sibs=perRoot.get(run.rootKey)||[run.zi];
     const off=(sibs.indexOf(run.zi)-(sibs.length-1)/2)*2.8;   // screen px, perpendicular
     const col=mpZoneColour(run.zi), dm=mpDim(run.zi);
-    run.edges.forEach(e=>{
-      // Width tracks the pipe the segment needs, so the trunk reads heavier
-      // than the last hop to a single head.
-      const w = e.gpm>13 ? 3.2 : e.gpm>8 ? 2.5 : e.gpm>4 ? 1.9 : 1.4;
-      let x1=SX(e.a.x), y1=SY(e.a.y), x2=SX(e.b.x), y2=SY(e.b.y);
-      if(off){
-        const dx=x2-x1, dy=y2-y1, L=Math.hypot(dx,dy)||1;
-        const nx=-dy/L*off, ny=dx/L*off;
-        x1+=nx; y1+=ny; x2+=nx; y2+=ny;
-      }
-      g+='<line x1="'+x1.toFixed(1)+'" y1="'+y1.toFixed(1)+'" x2="'+x2.toFixed(1)+'" y2="'+y2.toFixed(1)+
-         '" stroke="#fff" stroke-width="'+(w+2.2).toFixed(1)+'" stroke-opacity="'+(0.7*dm).toFixed(3)+'" stroke-linecap="round"/>';
-      g+='<line class="mp-lat" x1="'+x1.toFixed(1)+'" y1="'+y1.toFixed(1)+'" x2="'+x2.toFixed(1)+'" y2="'+y2.toFixed(1)+
-         '" stroke="'+col+'" stroke-width="'+w.toFixed(1)+'" stroke-opacity="'+(0.9*dm).toFixed(3)+'" stroke-linecap="round"/>';
-    });
+    g+=lateralRunSvg(mp, run, col, dm, {offset:off, labels: mp.zoneSel===run.zi});
   });
+  // Bends of the selected valve's hand-drawn run, draggable.
+  if(mp.zoneSel!=null){
+    const nodes=mpLateralNodes(mp.zoneSel);
+    if(nodes){
+      const col=mpZoneColour(mp.zoneSel);
+      const SX=x=>pzSX(mp,x), SY=y=>pzSY(mp,y);
+      nodes.forEach((n,i)=>{
+        const sel=(mp.sel==='l'+i);
+        g+='<circle data-mph="l'+i+'" cx="'+SX(n.x).toFixed(1)+'" cy="'+SY(n.y).toFixed(1)+'" r="'+(sel?6:4.5)+'" fill="#fff" stroke="'+col+
+           '" stroke-width="'+(sel?3:2)+'" style="cursor:pointer"/>';
+      });
+      if(mp.tool==='lat' && !nodes.length){
+        const asg=mpManifoldAssign(), r=routingRO(mp.pageId);
+        const mi=asg.byManifold.findIndex(l=>l.includes(mp.zoneSel));
+        const root = mi>=0 ? r.manifolds[mi] : r.poc;
+        if(root) g+=mpHalo(SX(root.x), SY(root.y)-28, 'click where the pipe goes — it starts at this box', 10, 'middle', col);
+      }
+    }
+  }
   return g+'</g>';
 }
 
@@ -4030,11 +4384,10 @@ function mpSplitSvg(){
        '" stroke="#fff" stroke-width="6" stroke-opacity="'+(0.8*dm).toFixed(2)+'" stroke-linecap="round"/>';
     g+='<line x1="'+x1.toFixed(1)+'" y1="'+y1.toFixed(1)+'" x2="'+x2.toFixed(1)+'" y2="'+y2.toFixed(1)+
        '" stroke="'+MP_SPLIT+'" stroke-width="'+(sel?3:2.2)+'" stroke-dasharray="9 5" stroke-opacity="'+dm.toFixed(2)+'" stroke-linecap="round"/>';
-    // A / B on their own sides so the halves are named on the drawing.
-    const mx=(x1+x2)/2, my=(y1+y2)/2, dx=x2-x1, dy=y2-y1, L=Math.hypot(dx,dy)||1;
     // headHalf(): cross((b-a),(p-a)) >= 0 is side A. The point mid + (-dy,dx)
     // has cross = (dx²+dy²)/L > 0, so that side is A. Sheet and screen share
     // y-down, so no flip.
+    const mx=(x1+x2)/2, my=(y1+y2)/2, dx=x2-x1, dy=y2-y1, L=Math.hypot(dx,dy)||1;
     const nx=-dy/L, ny=dx/L;
     g+=mpHalo(mx+nx*14, my+ny*14, 'A', 11, 'middle', MP_SPLIT);
     g+=mpHalo(mx-nx*14, my-ny*14, 'B', 11, 'middle', MP_SPLIT);
@@ -4050,6 +4403,117 @@ function mpSplitSvg(){
   }
   return g+'</g>';
 }
+
+/* ── Per-zone lateral sheet — what the sub gets ───────────────────────────
+
+   One valve, printed on its own: the box it runs from, the lateral with a
+   size and a length on every piece, every head with its model, arc and
+   throw, over a faded copy of the plan for orientation. Nothing else — no
+   mainline, no wire, no other zones — because the person trenching this
+   valve's pipe does not need them and they hide the numbers.            */
+const lp = { ppf:1, panX:0, panY:0, _w:1040, _h:620, planPage:null, underOpacity:0.28, underHidden:false, quietUnderlay:true };
+
+function lpOpen(zi){
+  const z=LAST_ZONES[zi]; if(!z) return;
+  const bb=mpZoneBBox(zi);
+  if(!bb){ alert('Nothing of this valve is traced on this sheet.'); return; }
+  lp.planPage=mp.page;
+  const pad=Math.max(6, (bb.maxX-bb.minX+bb.maxY-bb.minY)*0.07);
+  const fb={minX:bb.minX-pad, minY:bb.minY-pad, maxX:bb.maxX+pad, maxY:bb.maxY+pad};
+  const bw=Math.max(fb.maxX-fb.minX,4), bh=Math.max(fb.maxY-fb.minY,4);
+  // Leave the bottom strip for the scale bar and a box caption.
+  const drawH=lp._h-56;
+  lp.ppf=Math.min(lp._w/bw, drawH/bh);
+  lp.panX=lp._w/2-((fb.minX+fb.maxX)/2)*lp.ppf; lp.panY=drawH/2-((fb.minY+fb.maxY)/2)*lp.ppf;
+  const SX=x=>pzSX(lp,x), SY=y=>pzSY(lp,y), U=lp.ppf;
+  const col=mpZoneColour(zi);
+  const r=routingRO(mp.pageId), asg=mpManifoldAssign();
+  const mi=asg.byManifold.findIndex(l=>l.includes(zi));
+  const box = mi>=0 ? r.manifolds[mi] : null;
+  const lat=mpLateralPlan(), run=lat.runs.find(x=>x.zi===zi);
+
+  let g=`<svg width="${lp._w}" height="${lp._h}" viewBox="0 0 ${lp._w} ${lp._h}" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">`;
+  g+=`<rect x="0" y="0" width="${lp._w}" height="${lp._h}" fill="#fff"/>`;
+  g+=underlaySvg(lp);
+
+  // this valve's areas
+  let heads=[], beds=0, dripFt=0;
+  (z.parts||[]).forEach(pt=>{
+    const a=areas[pt.areaIdx];
+    if(!a || !validPoly(a) || !(a.planRef && a.planRef.pageId===mp.pageId)) return;
+    const p=mpPlanFor(a);
+    const pts=a.poly.map(v=>`${SX(v.x).toFixed(1)},${SY(v.y).toFixed(1)}`).join(' ');
+    g+=`<polygon points="${pts}" fill="${col}" fill-opacity="0.10" stroke="${col}" stroke-width="2"/>`;
+    if(a.family==='drip'){
+      beds++;
+      const rowFt=Math.max((a.dripRowIn==null?18:a.dripRowIn)/12, 0.25);
+      dripRunSegments(a.poly, rowFt).forEach(sg=>{ dripFt+=Math.hypot(sg.x1-sg.x0, sg.y1-sg.y0);
+        g+=`<line x1="${SX(sg.x0).toFixed(1)}" y1="${SY(sg.y0).toFixed(1)}" x2="${SX(sg.x1).toFixed(1)}" y2="${SY(sg.y1).toFixed(1)}" stroke="${col}" stroke-width="1" stroke-dasharray="4 3" stroke-opacity="0.8"/>`; });
+      const c=polyCentroid(a.poly);
+      g+=mpHalo(SX(c.x), SY(c.y), esc(a.name||'Bed'), 12, 'middle', '#1a2320');
+      return;
+    }
+    if(a.family==='trees') return;
+    heads=heads.concat(mpZoneHeads(z, pt, a, p));
+  });
+  // laterals
+  if(run) g+=lateralRunSvg(lp, run, col, 1, {labels:true, minLabelPx:34, fontSize:11, labelInk:'#1a2320', printScale:1.25});
+  // heads with captions
+  heads.forEach((hd,k)=>{
+    const cx=SX(hd.x), cy=SY(hd.y), rr=Math.max((hd.r||1)*U, 3);
+    if(hd.arc>=360) g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="${col}" fill-opacity="0.08" stroke="${col}" stroke-opacity="0.5" stroke-width="0.8"/>`;
+    else { const half=(hd.arc*Math.PI/180)/2; g+=`<path d="${sector(cx,cy,rr,(hd.dir||0)-half,(hd.dir||0)+half)}" fill="${col}" fill-opacity="0.1" stroke="${col}" stroke-opacity="0.5" stroke-width="0.8"/>`; }
+    g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="4" fill="${col}" stroke="#fff" stroke-width="1.2"/>`;
+    g+=mpHalo(cx, cy-8, (k+1)+'. '+headCaption(hd), 10, 'middle', '#1a2320');
+  });
+  // the box
+  if(box){
+    const X=SX(box.x), Y=SY(box.y);
+    g+=`<rect x="${(X-14).toFixed(1)}" y="${(Y-10).toFixed(1)}" width="28" height="20" rx="4" fill="#fff" stroke="${MP_LINE}" stroke-width="2.6"/>`;
+    for(let k=0;k<3;k++){ const vx=X-7+k*7; g+=`<line x1="${vx.toFixed(1)}" y1="${(Y-5).toFixed(1)}" x2="${vx.toFixed(1)}" y2="${(Y+5).toFixed(1)}" stroke="${MP_LINE}" stroke-width="1.8"/>`; }
+    g+=mpHalo(X, Y+26, 'M'+(mi+1)+' · valve box', 11.5, 'middle', MP_LINE);
+  } else if(r.poc && run && run.rootKey==='poc'){
+    g+=mpHalo(SX(r.poc.x), SY(r.poc.y)-14, 'POC (no box placed)', 11, 'middle', MP_LINE);
+  }
+  g+=scaleBarSvg(lp);
+  g+=`</svg>`;
+
+  // title block + totals
+  const sizes = run ? (()=>{ const by={}; run.edges.forEach(e=>{ const k=lateralSizeForGPM(e.gpm); by[k]=(by[k]||0)+(e.ft||0); });
+    return Object.keys(by).sort((a,b)=>by[b]-by[a]).map(k=>`<li><b>${esc(k)}</b> poly — ${Math.round(by[k])} ft</li>`).join(''); })() : '';
+  const spurs = run ? run.edges.filter(e=>e.kind==='spur').length : 0;
+  const pg=mp.page, cal=pg.calibration||{}, ver=cal.verify||{};
+  const twin = z.half ? LAST_ZONES.find(x=>x!==z && baseKey(x.key)===baseKey(z.key)) : null;
+  const stationTxt = 'Station '+((z.station||0)+1)+(z.half?' — valve '+z.half+' of 2'+(twin?' (other valve: '+esc(twin.name)+')':''):(z.stationGroup?' — one of '+LAST_ZONES.filter(x=>x.stationGroup===z.stationGroup).length+' valves on this station':''));
+  const today=new Date().toLocaleDateString('en-CA');
+  el('lpSheet').innerHTML=`
+    <div class="lp-head">
+      <div>
+        <h2>Lateral layout — ${esc(z.name)}</h2>
+        <div class="lp-sub">PJL Land Services · ${esc(linkedProject ? (linkedProject.name||'') : 'Unlinked design')}${linkedProject && linkedProject.customerName ? ' · '+esc(linkedProject.customerName) : ''}${linkedProject && linkedProject.address ? ' · '+esc(linkedProject.address) : ''}</div>
+        <div class="lp-sub">${esc(stationTxt)} · ${z.gpm.toFixed(1)} GPM this valve${z.half||z.stationGroup?` · ${(z.stationGpm||stationZones()[z.station||0].gpm).toFixed(1)} GPM station`:''} · sheet: ${esc(pg.label||pg.id)} · ${today}</div>
+      </div>
+      <table>
+        <tr><td>Valve box</td><td><b>${box?'M'+(mi+1):'—'}</b></td></tr>
+        <tr><td>${beds?'Beds':'Heads'}</td><td><b>${beds||heads.length}</b>${dripFt?` · ${Math.round(dripFt)} ft dripline`:''}</td></tr>
+        <tr><td>Lateral pipe</td><td><b>${run?Math.round(run.ft)+' ft':'—'}</b>${run&&run.custom?' · hand-routed':''}</td></tr>
+        <tr><td>Scale</td><td>${cal.ftPerPx?cal.ftPerPx.toFixed(4)+' ft/px':'—'} · ${esc(ver.state||'—')}</td></tr>
+      </table>
+    </div>
+    <div class="lp-draw">${g}</div>
+    <div class="lp-foot">
+      <div><b>Pipe by size</b><ul>${sizes||'<li>no lateral run yet — place a manifold on the master plan</li>'}</ul></div>
+      <div><b>Reading the sheet</b><ul>
+        <li>Solid line = lateral trunk, labelled <i>size · length</i>. Dashed short lines = spurs to heads (${spurs}).</li>
+        <li>Each head: number, model, arc, throw. Numbers run in the order the heads were laid out.</li>
+        <li>Sizes are the minimum for the flow past that point; nothing under 3/4".</li>
+      </ul></div>
+    </div>
+    <div class="lp-note">Lengths are measured off the calibrated site plan and are for layout; confirm on site.${skRasterOk.get(pg.id)===false?' The plan image could not be loaded, so the drawing is shown on a plain grid.':''} Internal working drawing — not a customer document.</div>`;
+  document.body.classList.add('lp-open');
+  el('lpOverlay').hidden=false;
+}
+function lpClose(){ el('lpOverlay').hidden=true; document.body.classList.remove('lp-open'); }
 
 function mpToggleLaterals(){
   mp.laterals=!mp.laterals;
@@ -4103,6 +4567,7 @@ function mpDraw(){
         g+=`<path d="${sector(cx,cy,rr,(hd.dir||0)-half,(hd.dir||0)+half)}" fill="${col}" fill-opacity="${(0.15*dm).toFixed(3)}" stroke="${col}" stroke-opacity="${(0.45*dm).toFixed(3)}" stroke-width="0.8"/>`;
       }
       g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="2.6" fill="${col}" fill-opacity="${dm.toFixed(2)}" stroke="#fff" stroke-width="0.9" stroke-opacity="${dm.toFixed(2)}"/>`;
+      if(mp.zoneSel!=null && zi===mp.zoneSel && rr>=22) g+=mpHalo(cx, cy-7, headCaption(hd), 9.5, 'middle', col);
     });
   });
 
@@ -4151,11 +4616,19 @@ function mpDraw(){
         ? ` <span title="Both valves open together on one controller station">Station ${(z.station||0)+1}: valve ${z.half} of 2 · ${(z.stationGpm||z.gpm).toFixed(1)} GPM together.</span>`+
           (twin>=0?` <button type="button" class="lnk" onclick="mpSelectZone(${twin})">go to valve ${z.half==='A'?'B':'A'}</button>`:'')+
           ` <button type="button" class="lnk" onclick="mpRemoveSplit(${mp.zoneSel})">remove split</button>`
-        : (mpSplitBlocked(mp.zoneSel) ? '' : ` <button type="button" class="lnk" onclick="mpSetTool('split')" title="Draw a line across the driveway; each side gets its own valve, wired as one station">split across two boxes</button>`);
+        : (z.grouped && !z.stationGroup && (z.members||[]).length>1)
+          ? ` <button type="button" class="lnk" onclick="mpSetTool('split')" title="Give each bed its own valve, wired as one station">one valve per bed</button>`
+          : (mpSplitBlocked(mp.zoneSel) ? '' : ` <button type="button" class="lnk" onclick="mpSetTool('split')" title="Draw a line across the driveway; each side gets its own valve, wired as one station">split across two boxes</button>`);
+      const hasCustom = !!mpLateralNodes(mp.zoneSel);
+      const latBit = (inIdx>=0 || r.poc)
+        ? ` <button type="button" class="lnk${mp.tool==='lat'?' cur':''}" onclick="mpEditLaterals(${mp.zoneSel})">${hasCustom?'edit laterals':'draw laterals by hand'}</button>` +
+          (hasCustom?` <button type="button" class="lnk" onclick="mpResetLaterals(${mp.zoneSel})">back to auto route</button>`:'')
+        : '';
       zs.innerHTML = `Working on <b>${esc(z.name)}</b> — ${z.gpm.toFixed(1)} GPM, ${where}.` +
         (boxes?` Put it in: ${boxes}`:' Place a manifold to assign it.') +
         (pinIdx>=0?` <button type="button" class="lnk" onclick="mpUnpinZone(${mp.zoneSel})">back to nearest</button>`:'') +
-        splitBit +
+        splitBit + latBit +
+        ` <button type="button" class="lnk" onclick="lpOpen(${mp.zoneSel})"><b>Print zone sheet</b></button>` +
         ` <button type="button" class="lnk" onclick="mpClearZoneSel()">show all</button>`;
     }
   }
@@ -4466,6 +4939,7 @@ function underlaySvg(ed){
   const pg = ed.planPage;
   if(!pg || ed.underHidden) return '';
   if(skRasterOk.get(pg.id) === false){
+    if(ed.quietUnderlay) return '';            // the print sheet says so in its footer instead
     // Degrade to the plain grid with a visible notice rather than throwing
     // or, worse, silently showing nothing.
     const cx = ed._w/2;
@@ -5009,6 +5483,19 @@ let PARTS_MAP=null, partsLoading=null;
 // Put a drip bed on a shared valve. Several beds on one group = one valve,
 // packed under the GPM ceiling by computeZonePlan(). Each bed keeps its own
 // pressure regulator.
+// How a shared valve group is built in the ground. Default: the beds share
+// ONE valve and the lateral chains bed -> bed. 'station': every bed keeps its
+// own valve (in whichever box is handy — pavement between beds makes a
+// bed-to-bed lateral the expensive option) and the valves are wired to one
+// controller station so they still run together. Same station count, same
+// quote line, same GPM check; more valves in the material list.
+let valveGroupModes = {};
+function valveGroupMode(g){ return (g && valveGroupModes[String(g)]==='station') ? 'station' : 'shared'; }
+function setValveGroupMode(g, v){
+  if(!g) return;
+  if(v==='station') valveGroupModes[String(g)]='station'; else delete valveGroupModes[String(g)];
+  render(); markDirty();
+}
 function setValveGroup(i, v){
   if(v === '__new__'){
     const name = (prompt('Name this shared valve (e.g. "Drip A", "Bldg face drip"):', 'Drip '+String.fromCharCode(65+valveGroupsInUse().length)) || '').trim();
@@ -5377,7 +5864,7 @@ function desiredQuoteLines(){
   const zones=stationZones().map(z=>({
     name: z.name,
     detail: z.grouped
-      ? `${z.members.length} bed${z.members.length===1?'':'s'} on one valve — ${z.members.join(', ')} · ~${Math.round(z.dripFt)} ft dripline · ${z.gpm.toFixed(1)} GPM`
+      ? `${z.members.length} bed${z.members.length===1?'':'s'} on ${z.valves>1?z.valves+' valves wired as one zone':'one valve'} — ${z.members.join(', ')} · ~${Math.round(z.dripFt)} ft dripline · ${z.gpm.toFixed(1)} GPM`
       : zoneFamilyDetail(z.family, z.headCount) + (z.valves>1 ? ` · ${z.valves} valves wired as one zone` : '')
   }));
   const N=zones.length;
@@ -5890,8 +6377,10 @@ function serializeState(){
   const inputs = {};
   GLOBAL_INPUT_IDS.forEach(id=>{ const e = el(id); if(e) inputs[id] = e.value; });
   // version 8 adds `routing[page].splits` — a zone split across two valve
-  // boxes by a line drawn on the sheet (see applyValveSplits). A version-7
-  // blob has none, so every zone is one valve, exactly as it was.
+  // boxes by a line drawn on the sheet (see applyValveSplits) — and
+  // `valveGroupModes` — a shared drip group built as one valve per bed on
+  // one station. A version-7 blob has neither, so every zone is one valve
+  // and every group is one valve, exactly as it was.
   // version 7 gives every area a stable `aid` and every valve box an `id`,
   // and adds `routing[page].pins` — valve-to-box assignments made by hand.
   // Identity has to be stable because a pin outlives a recompute: array
@@ -5919,6 +6408,9 @@ function serializeState(){
     bomOverrides: JSON.parse(JSON.stringify(bomOverrides)),
     linkedQuoteId: linkedQuoteId || null,
     areas: serializeAreas(),
+    valveGroupModes: (()=>{ const live=valveGroupsInUse(), out={};
+      Object.keys(valveGroupModes).forEach(g=>{ if(live.includes(g) && valveGroupModes[g]==='station') out[g]='station'; });
+      return out; })(),
     routing: serializeRouting(),
     wcRunOverrides: JSON.parse(JSON.stringify(wcRunOverrides))
   };
@@ -5935,7 +6427,8 @@ function serializeRouting(){
     const main=Array.isArray(r.main)?r.main:[], man=Array.isArray(r.manifolds)?r.manifolds:[];
     const hasPins = r.pins && Object.keys(r.pins).length;
     const hasSplits = r.splits && Object.keys(r.splits).length;
-    if(!r.poc && !main.length && !man.length && !hasPins && !hasSplits) return;
+    const hasLats = r.laterals && Object.keys(r.laterals).some(k=>Array.isArray(r.laterals[k]) && r.laterals[k].length);
+    if(!r.poc && !main.length && !man.length && !hasPins && !hasSplits && !hasLats) return;
     out[id]={
       poc: r.poc ? {x:round3(r.poc.x), y:round3(r.poc.y)} : null,
       main: main.map((p,i)=>({x:round3(p.x), y:round3(p.y), p:(p.p==null?i-1:p.p)})),
@@ -5952,6 +6445,12 @@ function serializeRouting(){
         Object.keys(r.splits||{}).forEach(k=>{ const sp=r.splits[k];
           if(live.has(k) && sp && [sp.ax,sp.ay,sp.bx,sp.by].every(Number.isFinite))
             out[k]={ax:round3(sp.ax), ay:round3(sp.ay), bx:round3(sp.bx), by:round3(sp.by)}; });
+        return out; })(),
+      // Hand-drawn lateral trees, per valve key, for valves that still exist.
+      laterals: (()=>{ const live=new Set(LAST_ZONES.map(z=>z.key).filter(Boolean)), out={};
+        Object.keys(r.laterals||{}).forEach(k=>{ const nodes=r.laterals[k];
+          if(live.has(k) && Array.isArray(nodes) && nodes.length)
+            out[k]=nodes.map((n,i)=>({x:round3(n.x), y:round3(n.y), p:(n.p==null?i-1:n.p)})); });
         return out; })()
     };
   });
@@ -5991,7 +6490,16 @@ function restoreRouting(blob){
       Object.keys(r.splits).forEach(k=>{ const sp=r.splits[k];
         if(sp && [sp.ax,sp.ay,sp.bx,sp.by].every(v=>Number.isFinite(+v))) splits[k]={ax:+sp.ax, ay:+sp.ay, bx:+sp.bx, by:+sp.by}; });
     }
-    routing[id]={ poc: pt(r.poc), main, manifolds:man, pins, splits };
+    const laterals={};
+    if(r.laterals && typeof r.laterals==='object'){
+      Object.keys(r.laterals).forEach(k=>{ const raw=r.laterals[k]; if(!Array.isArray(raw)) return;
+        const nodes=[];
+        raw.forEach(n=>{ const q=pt(n); if(!q) return;
+          const parent=Number.isInteger(n && n.p) ? n.p : (nodes.length-1);
+          q.p=(parent>=0 && parent<raw.length) ? parent : -1; nodes.push(q); });
+        if(nodes.length) laterals[k]=nodes; });
+    }
+    routing[id]={ poc: pt(r.poc), main, manifolds:man, pins, splits, laterals };
   });
 }
 
@@ -6025,6 +6533,9 @@ function restoreState(blob){
       ? {edits:blob.bomOverrides.edits||{}, removed:blob.bomOverrides.removed||{}, custom:Array.isArray(blob.bomOverrides.custom)?blob.bomOverrides.custom:[]}
       : {edits:{},removed:{},custom:[]};
     if(Array.isArray(blob.areas)) areas = JSON.parse(JSON.stringify(blob.areas));
+    valveGroupModes = {};
+    if(blob.valveGroupModes && typeof blob.valveGroupModes==='object')
+      Object.keys(blob.valveGroupModes).forEach(g=>{ if(blob.valveGroupModes[g]==='station') valveGroupModes[g]='station'; });
     restoreRouting(blob.routing);
     if(blob.wcRunOverrides && typeof blob.wcRunOverrides === 'object'){
       Object.keys(wcRunOverrides).forEach(k=>delete wcRunOverrides[k]);
@@ -6183,7 +6694,7 @@ async function initApp(){
     return null;
   };
   window.addEventListener('keydown', (e)=>{
-    if(e.key==='Escape'){ if(!el('mpOverlay').hidden) mpCancel(); else if(!el('calOverlay').hidden) calCancel(); else if(!el('spOverlay').hidden) spCancel(); else if(!el('skOverlay').hidden) skCancel(); else if(!el('loOverlay').hidden) loCancel(); else if(!el('trOverlay').hidden) trCancel(); else if(!el('custOverlay').hidden) custClose(); }
+    if(e.key==='Escape'){ if(!el('lpOverlay').hidden) lpClose(); else if(!el('mpOverlay').hidden) mpCancel(); else if(!el('calOverlay').hidden) calCancel(); else if(!el('spOverlay').hidden) spCancel(); else if(!el('skOverlay').hidden) skCancel(); else if(!el('loOverlay').hidden) loCancel(); else if(!el('trOverlay').hidden) trCancel(); else if(!el('custOverlay').hidden) custClose(); }
     if((e.key==='h'||e.key==='H')
        && !/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement||{}).tagName||'')){
       const a=activeUnderlayEditor();
