@@ -36,7 +36,11 @@ const project = () => ({
       { aid: 'a_bedw', name: 'West bed', family: 'drip', mode: 'custom', planRef: { pageId: PAGE }, valveGroup: 'Front drip',
         poly: [{ x: 20, y: 90 }, { x: 50, y: 90 }, { x: 50, y: 100 }, { x: 20, y: 100 }] },
       { aid: 'a_bede', name: 'East bed', family: 'drip', mode: 'custom', planRef: { pageId: PAGE }, valveGroup: 'Front drip',
-        poly: [{ x: 70, y: 90 }, { x: 100, y: 90 }, { x: 100, y: 100 }, { x: 70, y: 100 }] }
+        poly: [{ x: 70, y: 90 }, { x: 100, y: 90 }, { x: 100, y: 100 }, { x: 70, y: 100 }] },
+      // A tree row with NO bed outline — trees are the only thing on it.
+      { aid: 'a_trees', name: 'Boulevard trees', family: 'trees', mode: 'custom', planRef: { pageId: PAGE },
+        poly: [{ x: 120, y: 20 }, { x: 124, y: 20 }, { x: 124, y: 24 }, { x: 120, y: 24 }],
+        trees: [{ x: 130, y: 30, type: 'rws' }, { x: 130, y: 50, type: 'rws' }, { x: 130, y: 70, type: 'rws' }] }
     ],
     routing: { [PAGE]: { poc: { x: 60, y: 130 }, main: [], manifolds: [{ x: 10, y: 110, id: 'm_west' }, { x: 110, y: 110, id: 'm_east' }], pins: {} } }
   }
@@ -136,10 +140,10 @@ const sizing = await page.evaluate(() => mpLateralPlan().runs.map(run => {
            want: lateralSizeForGPM(z.gpm) };
 }));
 console.log('sizing:', JSON.stringify(sizing));
-check(sizing.every(r => r.sizes.length === 1), 'every zone runs ONE pipe size end to end');
-check(sizing.every(r => r.size === r.want), "the size comes off the valve's full flow, not the flow past each piece");
+check(sizing.every(r => r.sizes.length <= 2), 'a zone runs at most two sizes — trunk and branches');
+check(sizing.every(r => r.size === r.want), "the trunk size comes off the valve's full flow, not the flow past each piece");
 const lawnRun = sizing.find(r => /Front lawn/.test(r.name));
-check(lawnRun && lawnRun.gpm > 8 && lawnRun.size === '1"', 'a ' + (lawnRun ? lawnRun.gpm : '?') + ' GPM zone comes out 1", not 3/4"');
+check(lawnRun && lawnRun.gpm > 8 && lawnRun.size === '1"', 'a ' + (lawnRun ? lawnRun.gpm : '?') + ' GPM zone trunks at 1", not 3/4"');
 const totals = await page.evaluate(() => mpLateralPlan().bySize);
 check(Object.keys(totals).every(k => sizing.some(r => r.size === k)), 'pipe-by-size totals only list sizes a zone actually runs (' + Object.keys(totals).join(', ') + ')');
 
@@ -172,6 +176,79 @@ const fallback = await page.evaluate(() => {
 check(!fallback.measured && (fallback.rolls['POPO75400'] || 0) > 0 && !fallback.rolls['POPO100300'],
       'an unrouted design still falls back to the old 3/4" estimate');
 
+// --- trees are points the lateral runs to, and tees ----------------------
+const treeZi = await page.evaluate(() => LAST_ZONES.findIndex(z => (z.parts || []).some(pt => areas[pt.areaIdx] && areas[pt.areaIdx].aid === 'a_trees')));
+check(treeZi >= 0, 'the tree row computed a valve of its own');
+const treeRun = await page.evaluate(zi => {
+  mpSelectZone(zi);
+  const z = LAST_ZONES[zi];
+  const run = mpLateralPlan().runs.find(r => r.zi === zi);
+  const trees = mpZoneTrees(z);
+  const drawn = (el('mpBody').innerHTML.match(/data-mph="t\d+_\d+"/g) || []).length;
+  // every tree should be an endpoint of some lateral segment
+  const fed = trees.filter(t => run && run.edges.some(e =>
+    (Math.abs(e.b.x - t.x) < 0.01 && Math.abs(e.b.y - t.y) < 0.01) ||
+    (Math.abs(e.a.x - t.x) < 0.01 && Math.abs(e.a.y - t.y) < 0.01))).length;
+  return { trees: trees.length, fed, ft: run ? Math.round(run.ft) : 0, gpm: +z.gpm.toFixed(2), drawnHandles: drawn };
+}, treeZi);
+console.log('trees:', JSON.stringify(treeRun));
+check(treeRun.trees === 3, 'all three trees are on the plan');
+check(treeRun.fed === 3, 'the lateral runs to every tree individually (' + treeRun.fed + '/3)');
+check(treeRun.ft > 0, 'the tree run measures real pipe (' + treeRun.ft + ' ft)');
+
+// place a fourth tree from the master plan, then delete it
+const placed = await page.evaluate(zi => {
+  window.alert = () => {};
+  if (mp.zoneSel !== zi) mpSelectZone(zi);
+  mpSetTool('tree');
+  const armed = mp.tool;
+  mpTap(130, 90);
+  const key = LAST_ZONES[mp.zoneSel] ? LAST_ZONES[mp.zoneSel].key : null;
+  const after = areas.find(a => a.aid === 'a_trees').trees.length;
+  const fedNow = mpZoneTrees(LAST_ZONES[mp.zoneSel]).length;
+  return { armed, after, fedNow, key, sel: mp.zoneSel, name: LAST_ZONES[mp.zoneSel] && LAST_ZONES[mp.zoneSel].name };
+}, treeZi);
+console.log('placed:', JSON.stringify(placed));
+check(placed.armed === 'tree' && placed.after === 4 && placed.fedNow === 4, 'the Tree tool drops a tree the lateral then feeds');
+const removed = await page.evaluate(() => {
+  const a = areas.find(x => x.aid === 'a_trees');
+  mp.sel = 't' + areas.indexOf(a) + '_3';
+  mpDeleteSel();
+  return areas.find(x => x.aid === 'a_trees').trees.length;
+});
+check(removed === 3, 'Delete removes a tree again');
+
+// --- trunk + branch sizing, and the manual override ----------------------
+const sizing2 = await page.evaluate(() => {
+  const zi = LAST_ZONES.findIndex(z => /Front lawn/.test(z.name));
+  const run = mpLateralPlan().runs.find(r => r.zi === zi);
+  const z = LAST_ZONES[zi];
+  const trunk = run.edges.filter(e => e.kind !== 'spur');
+  const spurs = run.edges.filter(e => e.kind === 'spur');
+  const atRoot = run.edges.slice().sort((a, b) => b.gpm - a.gpm)[0];
+  return { zi, gpm: +z.gpm.toFixed(1), trunkSize: zoneTrunkSize(z), atRoot: atRoot && atRoot.size,
+           trunkSizes: [...new Set(trunk.map(e => e.size))],
+           spurSizes: [...new Set(spurs.map(e => e.size))],
+           all: [...new Set(run.edges.map(e => e.size))] };
+});
+console.log('sizing2:', JSON.stringify(sizing2));
+check(sizing2.atRoot === sizing2.trunkSize, 'the pipe leaving the box is the trunk size (' + sizing2.atRoot + ')');
+check(sizing2.trunkSizes.every(s => s === sizing2.trunkSize || s === '3/4"'), 'the run reduces to 3/4" once the flow drops, and never to anything else (' + sizing2.trunkSizes.join(', ') + ')');
+check(sizing2.spurSizes.every(s => s === '3/4"'), 'branches drop to 3/4" (' + sizing2.spurSizes.join(', ') + ')');
+check(sizing2.all.length <= 2, 'never more than two sizes on one zone (' + sizing2.all.join(', ') + ')');
+const forced = await page.evaluate(({ zi, pageId }) => {
+  mpSetZoneSize(zi, '1-1/4"');
+  const run = mpLateralPlan().runs.find(r => r.zi === zi);
+  const sizes = [...new Set(run.edges.map(e => e.size))];
+  const saved = serializeState().routing[pageId].latSize;
+  mpSetZoneSize(zi, '');
+  const back = [...new Set(mpLateralPlan().runs.find(r => r.zi === zi).edges.map(e => e.size))];
+  return { sizes, saved, back };
+}, { zi: sizing2.zi, pageId: PAGE });
+check(forced.sizes.length === 1 && forced.sizes[0] === '1-1/4"', 'forcing a size puts the whole zone on it');
+check(forced.saved && Object.values(forced.saved)[0] === '1-1/4"', 'the forced size is saved with the design');
+check(forced.back.length <= 2 && forced.back.includes('3/4"'), 'clearing the override goes back to trunk + branches');
+
 // --- hand-drawn laterals -----------------------------------------------------
 const hand = await page.evaluate(zi => {
   const auto = mpLateralPlan().runs.find(r => r.zi === zi);
@@ -180,6 +257,18 @@ const hand = await page.evaluate(zi => {
   const nodes = mpLateralNodes(zi);
   const adopted = nodes ? nodes.length : 0;
   const run1 = mpLateralPlan().runs.find(r => r.zi === zi);
+  // Click ON an existing piece of pipe: it must BEND that run, not throw a
+  // new branch across the site. Midpoint of the first trunk segment.
+  const root0 = mpLateralRoot(zi);
+  const e0 = mpTreeEdges(root0, nodes)[0];
+  const midX = (e0.a.x + e0.b.x) / 2, midY = (e0.a.y + e0.b.y) / 2;
+  const childBefore = nodes[e0.bi] ? nodes[e0.bi].p : null;
+  const ftBeforeInsert = mpLateralPlan().runs.find(r => r.zi === zi).ft;
+  mp.sel = null;
+  mpTap(midX, midY + 0.2); mpDraw();
+  const insert = { n: nodes.length, newIdx: nodes.length - 1, newParent: nodes[nodes.length - 1].p,
+                   childNow: nodes[e0.bi] ? nodes[e0.bi].p : null, childBefore,
+                   ft: mpLateralPlan().runs.find(r => r.zi === zi).ft, ftBefore: ftBeforeInsert };
   // add a bend well away from the pipe, hanging off the last node
   mp.sel = 'l' + (nodes.length - 1);
   mpTap(60, 75); mpDraw();
@@ -196,7 +285,7 @@ const hand = await page.evaluate(zi => {
   const trunkGpmMax = Math.max(...run3.edges.filter(e => e.kind === 'trunk').map(e => e.gpm));
   const spurs = run3.edges.filter(e => e.kind === 'spur').length;
   const handles = (el('mpBody').innerHTML.match(/data-mph="l\d+"/g) || []).length;
-  return { autoFt, autoHeads, adopted, custom1: !!run1.custom, ft1: run1.ft, heads1: run1.nodes,
+  return { insert, autoFt, autoHeads, adopted, custom1: !!run1.custom, ft1: run1.ft, heads1: run1.nodes,
            nAfterAdd, ft2: run2.ft, moved, nAfterDel: nodes.length, ft3: run3.ft, heads3: run3.nodes,
            trunkSized, trunkGpmMax, zoneGpm: LAST_ZONES[zi].gpm, spurs, handles, tool: mp.tool };
 }, lawnZi);
@@ -206,7 +295,10 @@ check(hand.adopted >= 2, 'edit laterals adopts the auto route as bends (' + hand
 check(hand.custom1 && hand.heads1 === hand.autoHeads, 'adopted route still feeds every head (' + hand.heads1 + '/' + hand.autoHeads + ')');
 check(Math.abs(hand.ft1 - hand.autoFt) / hand.autoFt < 0.25, 'adopted route measures about the same as the auto route (' + Math.round(hand.ft1) + ' vs ' + Math.round(hand.autoFt) + ' ft)');
 check(hand.tool === 'lat', 'Lateral bend tool is armed');
-check(hand.nAfterAdd === hand.adopted + 1 && hand.ft2 > hand.ft1, 'a click adds a bend and the run gets longer');
+check(hand.insert.newParent === -1 || Number.isInteger(hand.insert.newParent), 'clicking on the pipe adds a bend');
+check(hand.insert.childNow === hand.insert.newIdx, 'the rest of the run reattaches to the new bend — the pipe bends, it does not branch away');
+check(Math.abs(hand.insert.ft - hand.insert.ftBefore) < 2, 'inserting a bend barely changes the length (' + Math.round(hand.insert.ftBefore) + ' -> ' + Math.round(hand.insert.ft) + ' ft)');
+check(hand.nAfterAdd === hand.adopted + 2 && hand.ft2 > hand.ft1, 'clicking off the pipe with a bend selected tees a branch out');
 check(hand.moved.x === 60 && hand.moved.y === 80, 'a bend can be dragged');
 check(hand.nAfterDel === hand.nAfterAdd - 1 && hand.heads3 === hand.autoHeads, 'deleting a bend splices the run — every head still fed');
 check(hand.trunkSized && Math.abs(hand.trunkGpmMax - hand.zoneGpm) < 0.01, 'trunk at the box carries the whole zone (' + hand.trunkGpmMax + ' of ' + hand.zoneGpm + ' GPM)');

@@ -268,6 +268,7 @@
   .mp-bar .sk-tools button{min-height:32px;padding:5px 10px;font-size:12.5px}
   .mp-route{font-size:12px;color:var(--muted);text-align:right}
   .mp-route b{color:var(--ink);font-weight:700}
+  .mp-route .mp-size{font:inherit;font-size:11.5px;padding:1px 4px;border:1px solid var(--line);border-radius:6px;background:#fff;min-height:0;vertical-align:baseline}
   .mp-route .lnk{background:none;border:0;padding:0 3px;min-height:0;font:inherit;
     color:var(--green);text-decoration:underline;cursor:pointer}
   .mp-route .lnk.cur{font-weight:700;text-decoration:none;
@@ -485,6 +486,7 @@
         <button type="button" id="mpToolmanifold" onclick="mpSetTool('manifold')">Manifold</button>
         <button type="button" id="mpToolbend" onclick="mpSetTool('bend')">Mainline bend</button>
         <button type="button" id="mpToolsplit" onclick="mpSetTool('split')" title="Pick a zone, then draw a line across the driveway: the heads on each side get their own valve, wired as one station">Split zone</button>
+        <button type="button" id="mpTool3tree" onclick="mpSetTool('tree')" title="Pick a zone, then click the drawing to drop a tree — the lateral runs to each tree and tees">Tree</button>
         <button type="button" id="mpToollat" onclick="mpSetTool('lat')" title="Pick a zone, then click to add bends to its lateral run — drag bends to move them, select a bend before clicking to tee off it, Delete removes one">Lateral bend</button>
         <button type="button" class="ghost" onclick="mpAutoRoute()">Auto-route</button>
         <button type="button" class="ghost" onclick="mpUndoPoint()">Undo point</button>
@@ -499,7 +501,7 @@
     </div>
     <div class="sk-body" id="mpBody"></div>
     <div class="sk-foot">
-      <p class="hint" id="mpHint">Every traced area on this sheet, at its true position, coloured by the valve it runs on. Pick a tool, then click the plan to place the <b>point of connection</b>, a <b>manifold</b>, or a <b>mainline bend</b>; drag any marker to move it, Delete to remove the selected one. <b>Select a node before placing a bend to tee off it.</b> Click an area or head to work on that valve alone. <b>Split zone:</b> with a zone selected, click two points to draw a line across the driveway — the heads on each side get their own valve (A / B) in whichever box you put them, wired together as one station. <b>Lateral bend:</b> with a zone selected, click along the trench route to add bends (select a bend first to tee off it, drag to move, Delete to remove); heads and beds attach themselves to the nearest point on the pipe. <b>Print zone sheet</b> prints that one valve — box, pipe with sizes and lengths, heads with model and arc — over a faded plan. Mainline, lateral and wire lengths are all measured off the calibrated sheet; laterals follow the inside of each outline and every segment is sized on the flow passing through it. Hold H to flash the drawing off. Scroll/pinch to zoom, Ctrl-drag to pan.</p>
+      <p class="hint" id="mpHint">Every traced area on this sheet, at its true position, coloured by the valve it runs on. Pick a tool, then click the plan to place the <b>point of connection</b>, a <b>manifold</b>, or a <b>mainline bend</b>; drag any marker to move it, Delete to remove the selected one. <b>Select a node before placing a bend to tee off it.</b> Click an area or head to work on that valve alone. <b>Split zone:</b> with a zone selected, click two points to draw a line across the driveway — the heads on each side get their own valve (A / B) in whichever box you put them, wired together as one station. <b>Lateral bend:</b> with a zone selected — click <b>on the pipe</b> to put a bend in that run, click <b>off the pipe</b> to run a branch out to it, or select a bend first to <b>tee</b> off that exact point. Drag a bend to move it, Delete to remove it (the run splices back together). Heads, beds and <b>each tree</b> attach themselves to the nearest point on the pipe. <b>Tree:</b> with a drip or tree zone selected, click to drop a tree — the lateral runs to each one and tees; drag to move, Delete to remove. <b>Print zone sheet</b> prints that one valve — box, pipe with sizes and lengths, heads with model and arc — over a faded plan. Mainline, lateral and wire lengths are all measured off the calibrated sheet; laterals follow the inside of each outline and every segment is sized on the flow passing through it. Hold H to flash the drawing off. Scroll/pinch to zoom, Ctrl-drag to pan.</p>
       <span class="sk-grow"></span>
       <div class="sk-tools">
         <button type="button" onclick="window.print()" class="ghost">Print</button>
@@ -3083,9 +3085,11 @@ function mpZoneBBox(zi){
   const grow=(x,y)=>{ bb = bb ? {minX:Math.min(bb.minX,x), minY:Math.min(bb.minY,y), maxX:Math.max(bb.maxX,x), maxY:Math.max(bb.maxY,y)} : {minX:x,minY:y,maxX:x,maxY:y}; };
   (z.parts||[]).forEach(pt=>{
     const a=areas[pt.areaIdx];
-    if(!a || !validPoly(a) || !(a.planRef && a.planRef.pageId===mp.pageId)) return;
+    if(!a || !(a.planRef && a.planRef.pageId===mp.pageId)) return;
+    if(!validPoly(a) && !(a.trees||[]).length) return;
     const p=mpPlanFor(a);
-    if(a.family==='drip' || a.family==='trees'){ a.poly.forEach(v=>grow(v.x,v.y)); return; }
+    mpTreesOf(a).forEach(t=>{ const rr=(t.dia||4)/2+2; grow(t.x-rr,t.y-rr); grow(t.x+rr,t.y+rr); });
+    if(a.family==='drip' || a.family==='trees'){ if(validPoly(a)) a.poly.forEach(v=>grow(v.x,v.y)); return; }
     // Heads, with a little of their throw — not the whole arc, which on a
     // rotor lawn would frame 40 ft of neighbouring property on every side.
     mpZoneHeads(z, pt, a, p).forEach(h=>{ const rr=(h.r||0)*0.35; grow(h.x-rr,h.y-rr); grow(h.x+rr,h.y+rr); });
@@ -3135,7 +3139,7 @@ function mpZoneColour(zi){ const z=LAST_ZONES[zi]; return z ? `var(${ZC[(z.stati
    Wiring measured pipe into the bid is a separate, deliberate step.       */
 
 let routing = {};                       // pageId -> {poc, main[], manifolds[]}
-const EMPTY_ROUTING = Object.freeze({poc:null, main:Object.freeze([]), manifolds:Object.freeze([]), pins:Object.freeze({}), splits:Object.freeze({}), laterals:Object.freeze({})});
+const EMPTY_ROUTING = Object.freeze({poc:null, main:Object.freeze([]), manifolds:Object.freeze([]), pins:Object.freeze({}), splits:Object.freeze({}), laterals:Object.freeze({}), latSize:Object.freeze({})});
 function routingRO(pageId){ return (pageId && routing[pageId]) || EMPTY_ROUTING; }
 function routingFor(pageId){
   if(!pageId) return null;
@@ -3144,6 +3148,7 @@ function routingFor(pageId){
   if(!r.pins) r.pins={};
   if(!r.splits) r.splits={};
   if(!r.laterals) r.laterals={};
+  if(!r.latSize) r.latSize={};
   // Backfill ids for boxes placed before assignments existed, so an old
   // sheet can be hand-assigned without being re-drawn.
   (r.manifolds||[]).forEach(m=>{ if(!m.id) m.id=mintId('m_'); });
@@ -3325,6 +3330,13 @@ function mpOrphanPins(){
 /* ---- tools ---- */
 
 function mpSetTool(t){
+  if(t==='tree'){
+    if(mp.zoneSel==null){ alert('Click the zone the trees belong to first, then pick Tree.'); return; }
+    if(mpTreeAreaFor(mp.zoneSel)<0){
+      alert('Trees go on a drip or tree zone traced on this sheet. Pick one of those zones first.');
+      return;
+    }
+  }
   if(t==='lat'){
     if(mp.zoneSel==null){ alert('Click the zone whose laterals you want to draw first, then pick Lateral bend.'); return; }
     mpEditLaterals(mp.zoneSel); return;
@@ -3390,8 +3402,8 @@ function mpRemoveSplit(zi){
   mp.sel=null; mp.tool='pan'; mpPaintTools(); mpDraw();
 }
 function mpPaintTools(){
-  ['pan','poc','manifold','bend','split','lat'].forEach(t=>{
-    const b=el('mpTool'+t); if(b) b.classList.toggle('on', mp.tool===t);
+  ['pan','poc','manifold','bend','split','lat','3tree'].forEach(t=>{
+    const b=el('mpTool'+t); if(b) b.classList.toggle('on', mp.tool===(t==='3tree'?'tree':t));
   });
   const lb=el('mpToolLat'); if(lb) lb.classList.toggle('on', mp.laterals);
   const wb=el('mpToolWire'); if(wb) wb.classList.toggle('on', mp.wire);
@@ -3402,16 +3414,46 @@ function mpTap(fx, fy){
   const r=routingFor(mp.pageId); if(!r) return;
   if(mp.tool==='poc'){ r.poc={x:fx, y:fy}; mp.sel='poc'; markDirty(); return; }
   if(mp.tool==='manifold'){ r.manifolds.push({x:fx, y:fy, id:mintId('m_')}); mp.sel='m'+(r.manifolds.length-1); markDirty(); return; }
+  if(mp.tool==='tree'){
+    const ai = mp.zoneSel!=null ? mpTreeAreaFor(mp.zoneSel) : -1;
+    if(ai<0){ mp.tool='pan'; mpPaintTools(); return; }
+    const a=areas[ai]; if(!Array.isArray(a.trees)) a.trees=[];
+    a.trees.push({x:fx, y:fy, type:'ring', dia:TREE_RING_DEFAULT_DIA});
+    mp.sel='t'+ai+'_'+(a.trees.length-1);
+    mpAfterTreeChange(LAST_ZONES[mp.zoneSel] && LAST_ZONES[mp.zoneSel].key);
+    return;
+  }
   if(mp.tool==='lat'){
     const nodes = mp.zoneSel!=null ? mpLateralNodes(mp.zoneSel) : null;
     if(!nodes){ mp.tool='pan'; mpPaintTools(); return; }
-    let parent;
-    if(mp.sel && mp.sel[0]==='l') parent=parseInt(mp.sel.slice(1),10);
-    else {
-      // continue from the nearest bend; with none yet, start at the box
-      parent=-1; let bd=Infinity;
-      nodes.forEach((n,i)=>{ const d=Math.hypot(n.x-fx, n.y-fy); if(d<bd){ bd=d; parent=i; } });
+    /* Three things a click can mean, in the order you actually mean them:
+
+       1. A bend is selected  -> TEE off that bend. Deliberate branching.
+       2. The click landed ON the pipe -> put a bend IN that run: the pipe
+          bends through the new point and everything past it stays attached.
+          This is the one that was missing — it used to hang a brand new
+          branch off the nearest bend, which threw a pipe across the site.
+       3. The click landed away from the pipe -> run a new branch out to it
+          from whichever bend is nearest. That is how you reach the next bed
+          or tree.                                                         */
+    const root=mpLateralRoot(mp.zoneSel);
+    if(mp.sel && mp.sel[0]==='l'){
+      let parent=parseInt(mp.sel.slice(1),10);
+      if(!(parent>=0) || parent>=nodes.length) parent=-1;
+      nodes.push({x:fx, y:fy, p:parent});
+      mp.sel='l'+(nodes.length-1); markDirty(); return;
     }
+    const edges = root ? mpTreeEdges(root, nodes) : [];
+    const onPipe = edges.length ? nearestOnEdges(edges, fx, fy) : null;
+    const tol = Math.max(1.2, 11/mp.ppf);             // ~11 screen px
+    if(onPipe && onPipe.dist <= tol){
+      const e=edges[onPipe.edge];
+      nodes.push({x:fx, y:fy, p:e.ai});               // new bend takes the parent's place
+      if(nodes[e.bi]) nodes[e.bi].p = nodes.length-1; // and the rest of the run hangs off it
+      mp.sel='l'+(nodes.length-1); markDirty(); return;
+    }
+    let parent=-1, bd=Infinity;
+    nodes.forEach((n,i)=>{ const d=Math.hypot(n.x-fx, n.y-fy); if(d<bd){ bd=d; parent=i; } });
     if(!(parent>=-1) || parent>=nodes.length) parent=-1;
     nodes.push({x:fx, y:fy, p:parent});
     mp.sel='l'+(nodes.length-1); markDirty(); return;
@@ -3447,6 +3489,12 @@ function mpTap(fx, fy){
 function mpMoveHandle(h, fx, fy){
   const r=routingFor(mp.pageId); if(!r || !h) return;
   if(h==='poc'){ if(r.poc){ r.poc.x=fx; r.poc.y=fy; } return; }
+  if(h[0]==='t' && h.indexOf('_')>0){
+    const [ai,ti]=h.slice(1).split('_').map(Number);
+    const a=areas[ai];
+    if(a && Array.isArray(a.trees) && a.trees[ti]){ a.trees[ti].x=fx; a.trees[ti].y=fy; }
+    return;
+  }
   if(h[0]==='l'){
     const nodes = mp.zoneSel!=null ? mpLateralNodes(mp.zoneSel) : null;
     const i=parseInt(h.slice(1),10);
@@ -3479,6 +3527,16 @@ function mpSpliceNode(arr, i){
 function mpDeleteSel(){
   const r=routingFor(mp.pageId); if(!r || !mp.sel) return;
   const h=mp.sel;
+  if(h[0]==='t' && h.indexOf('_')>0){
+    const [ai,ti]=h.slice(1).split('_').map(Number);
+    const a=areas[ai];
+    if(a && Array.isArray(a.trees) && a.trees[ti]){
+      a.trees.splice(ti,1);
+      mp.sel=null;
+      mpAfterTreeChange(mp.zoneSel!=null && LAST_ZONES[mp.zoneSel] ? LAST_ZONES[mp.zoneSel].key : null);
+    }
+    return;
+  }
   if(h[0]==='l'){
     const nodes = mp.zoneSel!=null ? mpLateralNodes(mp.zoneSel) : null;
     if(nodes){ mpSpliceNode(nodes, parseInt(h.slice(1),10)); }
@@ -3848,6 +3906,38 @@ function headCaption(h){
 }
 function mpPlanFor(a){ const e=LAST_PLANS.find(x=>x.area===a); return e?e.plan:null; }
 
+/* Trees are POINTS, not an area. A tree zone often has no bed outline at
+   all — just trees marked on the tender — so the lateral has to run to each
+   tree and tee, exactly like a bed cluster. `a.trees` is already stored in
+   the area's own frame, which IS sheet feet once the area is traced, so the
+   positions need no transform (same deal as heads).
+
+   Flow per tree mirrors computePlan's tree model: an RWS pair is two
+   bubblers, a ring is its loop length of dripline at the product's rate. */
+function mpTreesOf(a){
+  const list=Array.isArray(a && a.trees)?a.trees:[];
+  if(!list.length) return [];
+  const d=DRIP_PRODUCTS[a.dripProduct]||DRIP_PRODUCTS.xf09, emitFt=Math.max(d.emitterIn,1)/12;
+  return list.map((t,i)=>{
+    const type=t.type||'ring', dia=t.dia||TREE_RING_DEFAULT_DIA;
+    let gpm;
+    if(type==='rws') gpm=2*TREE_RWS_GPM_PER_UNIT;
+    else { const loop=Math.PI*dia+Math.PI*(dia/2); gpm=(loop/emitFt)*d.gph/60; }
+    return {x:t.x, y:t.y, type, dia, gpm, idx:i};
+  });
+}
+// What a zone feeds at a POINT rather than over an outline: its trees.
+// Only the trees of areas this valve actually carries, on this sheet.
+function mpZoneTrees(z){
+  const out=[];
+  (z && z.parts || []).forEach(pt=>{
+    const a=areas[pt.areaIdx];
+    if(!a || !(a.planRef && a.planRef.pageId===mp.pageId)) return;
+    mpTreesOf(a).forEach(t=>out.push(Object.assign({areaIdx:pt.areaIdx}, t)));
+  });
+  return out;
+}
+
 // What a valve physically feeds on this sheet, given where its manifold is.
 // A drip bed taps the point on its outline nearest the manifold, which is
 // where the supply would actually be cut in.
@@ -3920,7 +4010,41 @@ function lateralSizeForGPM(gpm){
    1-1/4" to 22. A 17 GPM zone therefore comes out 1-1/4", not 1" running
    fast. Per-segment flow is still carried on each edge (`gpm`) — the
    readout and the line weight use it — it just no longer picks the size. */
-function zoneLateralSize(z){ return lateralSizeForGPM((z && z.gpm) || 0); }
+const LATERAL_SIZES = ['3/4"', '1"', '1-1/4"', '1-1/2"', '2"'];
+
+/* Two sizes on a run, not four, and not one.
+
+   Per-segment sizing is right hydraulically and unbuildable — four sizes
+   down one lateral. One size for the whole zone is buildable and wrong for
+   a drip zone that tees out to nine beds: the trunk carries all 9 GPM and
+   every branch carries one. What actually goes in the ground is a TRUNK at
+   the zone's flow and BRANCHES at 3/4".
+
+   So each segment is sized on its own flow and then snapped to one of two
+   values: 3/4" if that is enough, otherwise the trunk size. A zone whose
+   trunk is 3/4" comes out all 3/4"; a 9.2 GPM drip zone comes out 1" trunk
+   with 3/4" branches; a 17 GPM lawn comes out 1-1/4" spine with 3/4"
+   spurs. `latSize` forces the whole zone to one size when Patrick says so. */
+function zoneTrunkSize(z){ return lateralSizeForGPM((z && z.gpm) || 0); }
+function zoneForcedSize(z){
+  const r=routingRO(mp.pageId);
+  const v = z && z.key && r.latSize ? r.latSize[baseKey(z.key)] : null;
+  return LATERAL_SIZES.includes(v) ? v : null;
+}
+function zoneLateralSize(z){ return zoneForcedSize(z) || zoneTrunkSize(z); }
+function segmentLateralSize(z, gpm){
+  const forced=zoneForcedSize(z); if(forced) return forced;
+  const need=lateralSizeForGPM(gpm||0);
+  return (LATERAL_SIZES.indexOf(need) <= 0) ? LATERAL_MIN_SIZE : zoneTrunkSize(z);
+}
+function mpSetZoneSize(zi, v){
+  const r=routingFor(mp.pageId), z=LAST_ZONES[zi];
+  if(!r || !z || !z.key) return;
+  if(!r.latSize) r.latSize={};
+  if(LATERAL_SIZES.includes(v)) r.latSize[baseKey(z.key)]=v;
+  else delete r.latSize[baseKey(z.key)];
+  markDirty(); mpDraw();
+}
 
 /* Lateral pipe as it is actually bought: the catalog roll for each size.
    1" comes on a 300 ft roll, not 400 — so switching a zone from 3/4" to 1"
@@ -4177,9 +4301,25 @@ function customLateralRun(z, root, nodes){
     const a=areas[pt.areaIdx];
     if(!a || !validPoly(a) || !(a.planRef && a.planRef.pageId===mp.pageId)) return;
     const p=mpPlanFor(a); if(!p || p.noShape) return;
+    const trees=mpTreesOf(a);
+    if(trees.length){
+      // Each tree takes its own short run from the nearest point on the
+      // drawn trunk, so teeing out to a row of trees is just bends.
+      trees.forEach(t=>{
+        const q=nearestOnEdges(edges, t.x, t.y); if(!q) return;
+        n++;
+        if(q.dist>0.05) segs.push({a:{x:q.x,y:q.y}, b:{x:t.x,y:t.y}, gpm:t.gpm, kind:'spur'});
+        attach(q, t.gpm);
+      });
+      if(!validPoly(a)) return;
+    }
     if(p.family==='drip' || p.family==='trees'){
+      if(!validPoly(a)) return;
       const ring=[...a.poly, a.poly[0]];
-      const gpm=(p.zoneGPM && p.zoneGPM[pt.localZone]!=null) ? p.zoneGPM[pt.localZone] : (p.totalGPM||0);
+      const treeGpm=trees.reduce((t,x)=>t+x.gpm,0);
+      const bedAll=(p.zoneGPM && p.zoneGPM[pt.localZone]!=null) ? p.zoneGPM[pt.localZone] : (p.totalGPM||0);
+      const gpm=(p.family==='drip') ? bedAll : Math.max(bedAll-treeGpm, 0);
+      if(!(gpm>0.01)) return;
       // closest approach between the trunk and the bed outline
       let best=null;
       const consider=(tp, edgeIdx)=>{ const q=nearestOnPath(ring, tp.x, tp.y); if(q && (!best || q.dist<best.dist)) best={from:{x:tp.x,y:tp.y}, to:{x:q.x,y:q.y}, dist:q.dist, edge:edgeIdx}; };
@@ -4235,6 +4375,37 @@ function mpAdoptAutoLaterals(zi){
   r.laterals[LAST_ZONES[zi].key]=nodes;
   return nodes;
 }
+/* A tree placed on the master plan belongs to an AREA — that is where trees
+   already live (`a.trees`, the same list the area's own tree editor edits),
+   so one tree is one tree everywhere: the plan, the prescription, the BOM.
+   Only a drip or tree area traced on this sheet can take one. */
+function mpTreeAreaFor(zi){
+  const z=LAST_ZONES[zi]; if(!z) return -1;
+  const parts=z.parts||[];
+  for(const pt of parts){
+    const a=areas[pt.areaIdx];
+    if(!a) continue;
+    if(a.family!=='trees' && a.family!=='drip') continue;
+    if(!(a.planRef && a.planRef.pageId===mp.pageId)) continue;
+    return pt.areaIdx;
+  }
+  return -1;
+}
+// Adding or moving a tree changes the zone's flow, so the zone plan is
+// rebuilt and the selection re-found by key rather than by index.
+function mpAfterTreeChange(key){
+  markDirty(); compute();
+  if(key){ const ni=LAST_ZONES.findIndex(x=>baseKey(x.key)===baseKey(key)); if(ni>=0) mp.zoneSel=ni; }
+  mpDraw();
+}
+
+// Where a valve's lateral starts: its box, or the POC when no box is placed.
+function mpLateralRoot(zi){
+  const r=routingRO(mp.pageId), asg=mpManifoldAssign();
+  const mi=asg.byManifold.findIndex(l=>l.includes(zi));
+  if(mi>=0 && r.manifolds[mi]) return r.manifolds[mi];
+  return r.poc || null;
+}
 function mpLateralNodes(zi){
   const r=routingRO(mp.pageId), z=LAST_ZONES[zi];
   return (z && r.laterals && Array.isArray(r.laterals[z.key])) ? r.laterals[z.key] : null;
@@ -4286,11 +4457,14 @@ function mpLateralPlan(){
       const run=customLateralRun(z, root, custom);
       if(run.segs.length){
         let ft=0;
-        const sz=zoneLateralSize(z);
-        run.segs.forEach(e=>{ e.ft=Math.hypot(e.b.x-e.a.x, e.b.y-e.a.y); e.size=sz; ft+=e.ft; });
-        bySize[sz]=(bySize[sz]||0)+ft;
+        run.segs.forEach(e=>{
+          e.ft=Math.hypot(e.b.x-e.a.x, e.b.y-e.a.y);
+          e.size=segmentLateralSize(z, e.gpm);
+          ft+=e.ft;
+          bySize[e.size]=(bySize[e.size]||0)+e.ft;
+        });
         totalFt+=ft;
-        runs.push({zi, edges:run.segs, ft, nodes:run.nodes, size:sz, rootKey:(mi>=0?'m'+mi:'poc'), custom:true});
+        runs.push({zi, edges:run.segs, ft, nodes:run.nodes, size:zoneLateralSize(z), rootKey:(mi>=0?'m'+mi:'poc'), custom:true});
       }
       return;
     }
@@ -4299,12 +4473,24 @@ function mpLateralPlan(){
       if(!a || !validPoly(a) || !(a.planRef && a.planRef.pageId===mp.pageId)) return;
       const p=mpPlanFor(a); if(!p || p.noShape) return;
       if(p.family==='drip' || p.family==='trees'){
-        // A bed is fed at one point on its edge; the dripline inside it is
-        // already drawn, so there is no spine to run.
-        const ring=[...a.poly, a.poly[0]];
-        const tap=nearestOnPath(ring, root.x, root.y);
-        if(tap) taps.push({x:tap.x, y:tap.y,
-          gpm:(p.zoneGPM && p.zoneGPM[pt.localZone]!=null) ? p.zoneGPM[pt.localZone] : (p.totalGPM||0)});
+        // Trees are fed ONE BY ONE — the pipe runs to each tree and tees,
+        // because that is the only way a tree gets water. A bed is fed at a
+        // single point on its edge; the dripline inside it is already drawn,
+        // so there is no spine to run.
+        const trees=mpTreesOf(a);
+        if(trees.length){
+          trees.forEach(t=>taps.push({x:t.x, y:t.y, gpm:t.gpm, tree:true}));
+          if(!validPoly(a)) return;               // trees only, no bed outline
+        }
+        if(!validPoly(a)) return;
+        const bedGpm=(p.zoneGPM && p.zoneGPM[pt.localZone]!=null) ? p.zoneGPM[pt.localZone] : (p.totalGPM||0);
+        const treeGpm=trees.reduce((t,x)=>t+x.gpm,0);
+        const rest=Math.max(bedGpm-treeGpm, 0);
+        if(p.family==='drip' || rest>0.01){
+          const ring=[...a.poly, a.poly[0]];
+          const tap=nearestOnPath(ring, root.x, root.y);
+          if(tap) taps.push({x:tap.x, y:tap.y, gpm:(p.family==='drip'?bedGpm:rest)});
+        }
         return;
       }
       const hs=mpZoneHeads(z, pt, a, p);
@@ -4320,15 +4506,14 @@ function mpLateralPlan(){
     }
     if(!segs.length) return;
     let ft=0;
-    const sz=zoneLateralSize(z);
     segs.forEach(e=>{
       e.ft=Math.hypot(e.b.x-e.a.x, e.b.y-e.a.y);
-      e.size=sz;
+      e.size=segmentLateralSize(z, e.gpm);
       ft+=e.ft;
+      bySize[e.size]=(bySize[e.size]||0)+e.ft;
     });
-    bySize[sz]=(bySize[sz]||0)+ft;
     totalFt+=ft;
-    runs.push({zi, edges:segs, ft, nodes, size:sz, rootKey:(mi>=0?'m'+mi:'poc')});
+    runs.push({zi, edges:segs, ft, nodes, size:zoneLateralSize(z), rootKey:(mi>=0?'m'+mi:'poc')});
   });
   return {runs, totalFt, bySize};
 }
@@ -4354,12 +4539,12 @@ function lateralRunSvg(ed, run, col, dm, opts){
     }
     pieces.push({pts:[e.a,e.b], gpm:e.gpm, kind:e.kind, ft:e.ft||0, size:e.size});
   });
-  // One weight for the run, off the size actually going in the ground.
+  // Weight off the size actually going in the ground, per piece.
   const SIZE_W={'3/4"':1.6, '1"':2.3, '1-1/4"':3.0, '1-1/2"':3.5, '2"':4.2};
-  const runW = SIZE_W[run.size] || 1.8;
   const shift=(x1,y1,x2,y2)=>{ if(!off) return [x1,y1,x2,y2]; const dx=x2-x1, dy=y2-y1, L=Math.hypot(dx,dy)||1; const nx=-dy/L*off, ny=dx/L*off; return [x1+nx,y1+ny,x2+nx,y2+ny]; };
   pieces.forEach(pc=>{
-    const w = pc.kind==='spur' ? Math.max(runW*0.7, 1.2) : runW;
+    const base = SIZE_W[pc.size] || 1.8;
+    const w = pc.kind==='spur' ? Math.max(base*0.75, 1.2) : base;
     const ww = opts.printScale ? w*opts.printScale : w;
     for(let i=0;i<pc.pts.length-1;i++){
       const [x1,y1,x2,y2]=shift(SX(pc.pts[i].x),SY(pc.pts[i].y),SX(pc.pts[i+1].x),SY(pc.pts[i+1].y));
@@ -4571,7 +4756,7 @@ function lpOpen(zi){
       <div><b>Reading the sheet</b><ul>
         <li>Solid line = lateral trunk, labelled <i>size · length</i>. Dashed short lines = spurs to heads (${spurs}).</li>
         <li>Each head: number, model, arc, throw. Numbers run in the order the heads were laid out.</li>
-        <li>The whole lateral goes in at <b>${esc(run?run.size:'—')}</b> — sized on this valve's full ${z.gpm.toFixed(1)} GPM at about 5 ft/sec. Nothing under 3/4".</li>
+        <li>Trunk <b>${esc(run?run.size:'—')}</b> — sized on this valve's full ${z.gpm.toFixed(1)} GPM at about 5 ft/sec; branches drop to 3/4". Nothing under 3/4".</li>
       </ul></div>
     </div>
     <div class="lp-note">Lengths are measured off the calibrated site plan and are for layout; confirm on site.${skRasterOk.get(pg.id)===false?' The plan image could not be loaded, so the drawing is shown on a plain grid.':''} Internal working drawing — not a customer document.</div>`;
@@ -4618,6 +4803,17 @@ function mpDraw(){
         g+=`<line x1="${SX(r.x0).toFixed(1)}" y1="${SY(r.y0).toFixed(1)}" x2="${SX(r.x1).toFixed(1)}" y2="${SY(r.y1).toFixed(1)}" stroke="${col}" stroke-width="1.1" stroke-dasharray="4 3" stroke-opacity="${(0.85*dm).toFixed(3)}"/>`;
       });
       return;
+    }
+    const trees=mpTreesOf(a);
+    if(trees.length){
+      const zi=zoneIndexOf(i,0), col=mpZoneColour(zi), dm=mpDim(zi);
+      const mine = mp.zoneSel==null || mp.zoneSel===zi;
+      trees.forEach(t=>{
+        const cx=SX(t.x), cy=SY(t.y), rr=Math.max((t.dia||4)/2*U, 4);
+        const hnd='t'+i+'_'+t.idx, sel=(mp.sel===hnd);
+        g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="none" stroke="${col}" stroke-width="1.2" stroke-opacity="${(0.8*dm).toFixed(3)}" stroke-dasharray="3 2"/>`;
+        g+=`<circle ${mine?`data-mph="${hnd}" style="cursor:pointer"`:''} cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${sel?5.5:3.6}" fill="${col}" fill-opacity="${dm.toFixed(2)}" stroke="#fff" stroke-width="${sel?2:1}"/>`;
+      });
     }
     const hs=mpHeadsOf(a, mpPlanFor(a));
     hs.forEach(hd=>{
@@ -4689,8 +4885,15 @@ function mpDraw(){
         ? ` <button type="button" class="lnk${mp.tool==='lat'?' cur':''}" onclick="mpEditLaterals(${mp.zoneSel})">${hasCustom?'edit laterals':'draw laterals by hand'}</button>` +
           (hasCustom?` <button type="button" class="lnk" onclick="mpResetLaterals(${mp.zoneSel})">back to auto route</button>`:'')
         : '';
-      zs.innerHTML = `Working on <b>${esc(z.name)}</b> — ${z.gpm.toFixed(1)} GPM on <b>${esc(zoneLateralSize(z))}</b> lateral, ${where}.` +
+      const forced=zoneForcedSize(z);
+      const sizeSel = `<select class="mp-size" title="Trunk is sized on the zone's full flow; branches drop to 3/4\". Pick a size to force the whole zone." onchange="mpSetZoneSize(${mp.zoneSel}, this.value)">` +
+        `<option value=""${forced?'':' selected'}>auto — ${esc(zoneTrunkSize(z))} trunk, 3/4" branches</option>` +
+        LATERAL_SIZES.map(sz=>`<option value="${esc(sz)}"${forced===sz?' selected':''}>all ${esc(sz)}</option>`).join('') +
+        `</select>`;
+      const nTrees=mpZoneTrees(z).length;
+      zs.innerHTML = `Working on <b>${esc(z.name)}</b> — ${z.gpm.toFixed(1)} GPM${nTrees?` · ${nTrees} tree${nTrees===1?'':'s'}`:''}, ${where} Pipe: ${sizeSel}.` +
         (boxes?` Put it in: ${boxes}`:' Place a manifold to assign it.') +
+        (mpTreeAreaFor(mp.zoneSel)>=0?` <button type="button" class="lnk${mp.tool==='tree'?' cur':''}" onclick="mpSetTool('tree')">add trees</button>`:'') +
         (pinIdx>=0?` <button type="button" class="lnk" onclick="mpUnpinZone(${mp.zoneSel})">back to nearest</button>`:'') +
         splitBit + latBit +
         ` <button type="button" class="lnk" onclick="lpOpen(${mp.zoneSel})"><b>Print zone sheet</b></button>` +
@@ -6515,7 +6718,8 @@ function serializeRouting(){
     const hasPins = r.pins && Object.keys(r.pins).length;
     const hasSplits = r.splits && Object.keys(r.splits).length;
     const hasLats = r.laterals && Object.keys(r.laterals).some(k=>Array.isArray(r.laterals[k]) && r.laterals[k].length);
-    if(!r.poc && !main.length && !man.length && !hasPins && !hasSplits && !hasLats) return;
+    const hasSizes = r.latSize && Object.keys(r.latSize).length;
+    if(!r.poc && !main.length && !man.length && !hasPins && !hasSplits && !hasLats && !hasSizes) return;
     out[id]={
       poc: r.poc ? {x:round3(r.poc.x), y:round3(r.poc.y)} : null,
       main: main.map((p,i)=>({x:round3(p.x), y:round3(p.y), p:(p.p==null?i-1:p.p)})),
@@ -6538,6 +6742,10 @@ function serializeRouting(){
         Object.keys(r.laterals||{}).forEach(k=>{ const nodes=r.laterals[k];
           if(live.has(k) && Array.isArray(nodes) && nodes.length)
             out[k]=nodes.map((n,i)=>({x:round3(n.x), y:round3(n.y), p:(n.p==null?i-1:n.p)})); });
+        return out; })(),
+      // Pipe size forced by hand for a zone, for zones that still exist.
+      latSize: (()=>{ const live=new Set(LAST_ZONES.map(z=>baseKey(z.key)).filter(Boolean)), out={};
+        Object.keys(r.latSize||{}).forEach(k=>{ if(live.has(k) && LATERAL_SIZES.includes(r.latSize[k])) out[k]=r.latSize[k]; });
         return out; })()
     };
   });
@@ -6586,7 +6794,10 @@ function restoreRouting(blob){
           q.p=(parent>=0 && parent<raw.length) ? parent : -1; nodes.push(q); });
         if(nodes.length) laterals[k]=nodes; });
     }
-    routing[id]={ poc: pt(r.poc), main, manifolds:man, pins, splits, laterals };
+    const latSize={};
+    if(r.latSize && typeof r.latSize==='object')
+      Object.keys(r.latSize).forEach(k=>{ if(LATERAL_SIZES.includes(r.latSize[k])) latSize[k]=r.latSize[k]; });
+    routing[id]={ poc: pt(r.poc), main, manifolds:man, pins, splits, laterals, latSize };
   });
 }
 
