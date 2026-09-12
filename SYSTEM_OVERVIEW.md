@@ -1316,7 +1316,7 @@ manifold tees off the *nearest point* on that polyline (`nearestOnPath()`),
 and every valve is assigned to its nearest manifold — valves whose geometry
 is not on this sheet are reported, not silently dropped. Mainline size comes
 from `pipeForGPM(peak single-zone GPM)`, the same function the Extras panel
-uses. **The measurement deliberately does not reach the BOM**: the material
+uses. **The mainline measurement deliberately does not reach the BOM**: the material
 list still prices pipe as an on-site figure, exactly as before, and the
 readout says so on screen. Wiring measured pipe and wire into the bid is a
 separate, deliberate step — see rule 3 under Site plan calibration.
@@ -1432,6 +1432,35 @@ the other valves' pipe; consecutive same-size segments are merged and
 labelled *size · length* (`lateralRunSvg`, shared with the print sheet),
 and heads show *model · arc · throw* (`headCaption`) once zoomed in.
 Still rule 3: none of it reaches the BOM.
+
+**One pipe size per zone (Sept 2026).** Per-segment sizing is right
+hydraulically and wrong for the trench: nobody lays four sizes down one
+lateral. `zoneLateralSize(z)` sizes the WHOLE run off the flow at the
+valve — `pipeForGPM`'s ~5 ft/sec rule (3/4" to 8 GPM, 1" to 13, 1-1/4" to
+22), floored at 3/4" — and `mpLateralPlan` stamps that one `size` on every
+edge of the run and adds the run's whole footage to `bySize` once. A 17
+GPM zone therefore reads 1-1/4" rather than 1" running fast, and a 12 GPM
+zone reads 1" end to end rather than a few feet of 1" fading to 3/4" at
+the last head. Per-segment `gpm` is still carried (the readout and line
+weight use it); it just no longer picks the size. Consecutive pipe merges
+into one labelled piece, and line weight now tracks the size in the
+ground. **The BOM still estimates lateral pipe as 3/4" (`POPO75400`) —
+deliberately unchanged here, and a known mismatch when a job runs 1".**
+
+**Lateral pipe reaches the BOM (Sept 2026, Patrick's ruling).** Rule 3 —
+"measured here, still an on-site figure in the BOM" — is now lifted for
+LATERAL pipe only. `measuredLateralsBySize()` walks every routed,
+traceable sheet (swapping `mp.pageId` inside one synchronous pass and
+restoring it), sums each zone's run under its own size, and `buildBOM`
+orders whole catalog rolls from `LATERAL_ROLL`: 3/4" POPO75400 400 ft,
+1" POPO100300 300 ft, 1-1/4" POPO125300 300 ft, 1-1/2" POPO150250 250 ft,
+2" POPO200200 200 ft. No percentage padding — rounding up to a whole roll
+is the slack, which is how it is bought. A design with nothing routed
+still falls back to the old head-count estimate ordered as 3/4", so
+nothing moves on a job that was never drawn. **The MAINLINE is deliberately
+unchanged and stays an on-site figure.** The BOM note says which of the two
+it is, and names the footage per size. Walked by
+`scripts/test-sitebuilder-laterals.mjs`.
 
 **Per-zone lateral sheet (Sept 2026).** **Print zone sheet** (`lpOpen`)
 prints one valve for the sub: title block (project, station, valve A/B or

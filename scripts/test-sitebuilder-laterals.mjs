@@ -128,6 +128,50 @@ check(zoom.after.inView, 'legend pick frames the valve — box, pipe and heads a
 check(zoom.after.lat < zoom.before.lat, 'other valves\' pipe is hidden while working on one (' + zoom.before.lat + ' → ' + zoom.after.lat + ' segments)');
 check(zoom.after.labels > 0, 'lateral pieces carry size · length labels (' + zoom.after.labels + ')');
 
+// --- one size per zone, on the valve's full flow -------------------------
+const sizing = await page.evaluate(() => mpLateralPlan().runs.map(run => {
+  const z = LAST_ZONES[run.zi];
+  return { name: z.name, gpm: +z.gpm.toFixed(1), size: run.size,
+           sizes: [...new Set(run.edges.map(e => e.size))],
+           want: lateralSizeForGPM(z.gpm) };
+}));
+console.log('sizing:', JSON.stringify(sizing));
+check(sizing.every(r => r.sizes.length === 1), 'every zone runs ONE pipe size end to end');
+check(sizing.every(r => r.size === r.want), "the size comes off the valve's full flow, not the flow past each piece");
+const lawnRun = sizing.find(r => /Front lawn/.test(r.name));
+check(lawnRun && lawnRun.gpm > 8 && lawnRun.size === '1"', 'a ' + (lawnRun ? lawnRun.gpm : '?') + ' GPM zone comes out 1", not 3/4"');
+const totals = await page.evaluate(() => mpLateralPlan().bySize);
+check(Object.keys(totals).every(k => sizing.some(r => r.size === k)), 'pipe-by-size totals only list sizes a zone actually runs (' + Object.keys(totals).join(', ') + ')');
+
+// --- the BOM orders the measured footage in the right sizes --------------
+const bom = await page.evaluate(() => {
+  const m = measuredLateralsBySize();
+  const b = buildBOM(PARTS_MAP || {});
+  const rolls = {};
+  b.lines.forEach(l => { if (/^POPO/.test(l.sku)) rolls[l.sku] = l.qty; });
+  return { measured: m.measured, totalFt: Math.round(m.totalFt), bySize: m.bySize,
+           bomFt: b.lateralFt, bomMeasured: b.lateralMeasured, bomBySize: b.lateralBySize, rolls };
+});
+console.log('bom:', JSON.stringify(bom));
+check(bom.measured && bom.bomMeasured, 'the BOM uses the measured lateral footage once the plan is routed');
+check(bom.bomFt === Math.ceil(bom.totalFt) || Math.abs(bom.bomFt - bom.totalFt) <= 1, 'BOM footage matches what the plan measured (' + bom.bomFt + ' ft)');
+const want34 = Math.ceil((bom.bySize['3/4"'] || 0) / 400), want1 = Math.ceil((bom.bySize['1"'] || 0) / 300);
+check((bom.rolls['POPO75400'] || 0) === want34, '3/4" ordered as ' + want34 + ' x 400 ft roll(s)');
+check((bom.rolls['POPO100300'] || 0) === want1, '1" ordered as ' + want1 + ' x 300 ft roll(s) — not as 3/4"');
+check(want1 > 0, 'the 1" zone actually put 1" pipe on the order');
+
+// --- with nothing routed it falls back to the old 3/4" estimate ----------
+const fallback = await page.evaluate(() => {
+  const keep = JSON.parse(JSON.stringify(routing));
+  routing = {};
+  const b = buildBOM(PARTS_MAP || {});
+  const rolls = {}; b.lines.forEach(l => { if (/^POPO/.test(l.sku)) rolls[l.sku] = l.qty; });
+  routing = keep;
+  return { measured: b.lateralMeasured, rolls };
+});
+check(!fallback.measured && (fallback.rolls['POPO75400'] || 0) > 0 && !fallback.rolls['POPO100300'],
+      'an unrouted design still falls back to the old 3/4" estimate');
+
 // --- hand-drawn laterals -----------------------------------------------------
 const hand = await page.evaluate(zi => {
   const auto = mpLateralPlan().runs.find(r => r.zi === zi);
