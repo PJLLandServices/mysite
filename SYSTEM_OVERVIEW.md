@@ -1507,6 +1507,25 @@ print CSS, same pattern as the customer sheet. The master plan's own
 Print button now prints the plan (`body.mp-open`) rather than the whole
 builder page. Walked by `scripts/test-sitebuilder-laterals.mjs`.
 
+**Master plan as an editor (Sept 2026).** The panel is laid out like a
+drawing app: a vertical rail of icon tools on the left (`.mp-rail`, each
+with a hover tooltip), the sheet in the middle, and a side panel
+(`.mp-side`) with three sections. **Layers** (`mpLayersPanel`) — one row
+per valve with an eye that hides it from the drawing (`mp.hiddenKeys`,
+keyed by zone key so it survives `compute()`; alt-click solos), plus rows
+for the plan underlay, laterals and wire. Hiding is view state only:
+every total, the BOM and the quote still count a hidden zone.
+**Zone** (`mpZonePanel`) — click a zone, a head or its lateral pipe
+(`mpLateralAt`) and it shows flow, box (with the M1/M2 buttons), the
+pipe-size menu (Auto reduces as required, or 2" down to 3/4"
+throughout — `mpSetZoneSize`), lateral pipe by size, trunk / spur /
+longest-run lengths and piece count (`mpZoneMeasure`), and each area's
+W × H, ft² and perimeter. Clicking the selected zone's own pipe keeps it
+selected. **Site totals** — the mainline/manifold readout plus a table of
+mainline, drops, laterals by size and pipe-in-the-ground. On phones the
+rail becomes a scrollable strip above the drawing and the panel sits
+below it. Print hides rail and panel.
+
 **Three builder-owned durable fields on the project record**, each capped
 independently and each written whole:
 
