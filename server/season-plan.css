@@ -487,7 +487,7 @@
 .sp-day-notes li.is-suggestion { border-left-color: var(--pjl-amber); }
 /* A stop that left the day — cancelled, no-show or moved. Grey, not red:
    it is the record, not a problem to fix. */
-.sp-day-notes li.is-dropped { border-left-color: #9A9A90; color: var(--pjl-text-muted); text-decoration: line-through; text-decoration-color: rgba(0,0,0,0.25); }
+.sp-day-notes li.is-dropped { border-left-color: var(--pjl-border); color: var(--pjl-text-muted); text-decoration: line-through; text-decoration-color: rgba(0,0,0,0.25); }
 
 /* Stop number + arrival, stacked so a long address never squeezes them. */
 .sp-stop-lead { display: flex; flex-direction: column; gap: 3px; align-items: center; }
