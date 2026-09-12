@@ -1524,7 +1524,29 @@ W × H, ft² and perimeter. Clicking the selected zone's own pipe keeps it
 selected. **Site totals** — the mainline/manifold readout plus a table of
 mainline, drops, laterals by size and pipe-in-the-ground. On phones the
 rail becomes a scrollable strip above the drawing and the panel sits
-below it. Print hides rail and panel.
+below it. Print hides rail and panel. The panel is sized to the screen
+(`.mp-panel`, up to 1800 × 1200), resizable by its bottom-right corner,
+with a maximize button; a `ResizeObserver` on the canvas redraws when it
+changes size.
+
+**Tree zones split, and drip beds go one valve per box (Sept 2026).**
+A tree zone splits on the same drawn line a lawn does — `splitFor` now
+allows `family:'trees'`, `applyValveSplits` sorts the TREES onto side A/B
+(each half takes its share of the zone's flow), and every reader of a
+zone's trees goes through `mpZoneTreesOf(z, a)`, which filters by side.
+Each half is its own valve in its own box, one station. For a shared drip
+group in `'station'` mode the rule changed from one valve per BED to one
+valve per VALVE BOX: `computeZonePlan` groups the beds by the box each is
+fed from (`bedBoxFor` — its hand-placed pin under the per-bed key
+`g:<group>:<bin>:<aid>`, else the nearest box on its sheet), and emits one
+valve per box, keyed `g:<group>:<bin>:@<manifoldId>` with `bedKeys`,
+`boxId` and `boxPage` on it. Pins stay per bed, so `mpPinBed` moves one
+bed to another box's valve and `mpPinZone` on such a valve moves every
+bed; `mpBoxesChanged` recomputes and re-finds the selection whenever a
+box is added, moved or removed. Save-time pin pruning and
+`mpOrphanPins` treat bed keys as live. A bed on a sheet with no boxes
+yet stays a valve of its own, as before. Walked by
+`scripts/test-sitebuilder-laterals.mjs`.
 
 **Three builder-owned durable fields on the project record**, each capped
 independently and each written whole:

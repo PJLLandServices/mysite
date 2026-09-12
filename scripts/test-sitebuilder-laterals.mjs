@@ -4,7 +4,9 @@
 // traced drip beds (with pavement between them, so they are put on ONE
 // station but a valve each), two valve boxes. Walks:
 //
-//   - shared drip group in 'station' mode → one valve per bed, one station
+//   - shared drip group in 'station' mode → one valve per valve box, one
+//     station; a bed moved to another box joins that box's valve
+//   - a tree zone splits across two boxes the way a lawn does
 //   - picking a valve from the legend zooms to it and hides the others' pipe
 //   - "draw laterals by hand" adopts the auto route as bends, a bend can be
 //     added / moved / deleted, heads re-attach to the nearest pipe, every
@@ -107,11 +109,11 @@ const offer = await page.evaluate(() => {
   mp.zoneSel = zi; mpSetTool('split');
   return { before, after: LAST_ZONES.length, mode: valveGroupMode('Front drip'), sel: mp.zoneSel != null ? LAST_ZONES[mp.zoneSel].key : null, tool: mp.tool };
 });
-check(offer.mode === 'station' && offer.after === offer.before + 1, 'Split zone on a shared drip group switches it to one valve per bed');
+check(offer.mode === 'station' && offer.after === offer.before + 1, 'Split zone on a shared drip group switches it to one valve per box (two boxes, two valves)');
 check(offer.sel && offer.sel.startsWith('g:Front drip:0:') && offer.tool === 'pan', 'and lands on the first bed\'s valve (' + offer.sel + ')');
 const boxes = await page.evaluate(() => {
   const asg = mpManifoldAssign();
-  return asg.byManifold.map(l => l.map(zi => LAST_ZONES[zi].key));
+  return asg.byManifold.map(l => l.map(zi => (LAST_ZONES[zi].bedKeys || [LAST_ZONES[zi].key]).join('+')));
 });
 check(boxes[0].some(k => k.endsWith(':a_bedw')) && boxes[1].some(k => k.endsWith(':a_bede')), 'west bed valve in M1, east bed valve in M2 (' + JSON.stringify(boxes) + ')');
 
@@ -217,6 +219,67 @@ const removed = await page.evaluate(() => {
   return areas.find(x => x.aid === 'a_trees').trees.length;
 });
 check(removed === 3, 'Delete removes a tree again');
+
+// --- a tree zone splits across two boxes, like a lawn --------------------
+// Trees sit at y = 30, 50, 70; a line across at y = 60 leaves two above and
+// one below. Each half is its own valve, on one station.
+const tsplit = await page.evaluate(zi => {
+  window.alert = () => {};
+  mpSelectZone(zi); if (mp.zoneSel !== zi) mpSelectZone(zi);
+  const blocked = mpSplitBlocked(zi);
+  mpSetTool('split');
+  const armed = mp.tool;
+  mpTap(120, 60); mpTap(140, 60); mpDraw();
+  const halves = LAST_ZONES.filter(z => z.key.startsWith('z:a_trees:'));
+  const a = halves.find(z => z.half === 'A'), b = halves.find(z => z.half === 'B');
+  const feeds = z => mpZoneTrees(z).length;
+  const runsFor = z => { const run = mpLateralPlan().runs.find(r => r.zi === LAST_ZONES.indexOf(z)); return run ? mpZoneTrees(z).filter(t => run.edges.some(e => Math.abs(e.b.x - t.x) < 0.01 && Math.abs(e.b.y - t.y) < 0.01)).length : -1; };
+  // put the B half in the east box
+  const bi = LAST_ZONES.indexOf(b); mpPinZone(bi, 1);
+  const asg = mpManifoldAssign();
+  const boxOfB = asg.byManifold.findIndex(l => l.includes(LAST_ZONES.indexOf(LAST_ZONES.find(z => z.key === b.key))));
+  const drawnHalves = (el('mpBody').innerHTML.match(/data-mph="sa\d+"/g) || []).length;
+  return { blocked, armed, n: halves.length, station: a && b && a.station === b.station, treesA: a && feeds(a), treesB: b && feeds(b),
+           fedA: a && runsFor(a), fedB: b && runsFor(b), gpmSum: a && b && +(a.gpm + b.gpm).toFixed(2), stationGpm: a && +a.stationGpm.toFixed(2), boxOfB, drawnHalves, key: b && b.key };
+}, treeZi);
+console.log('tree split:', JSON.stringify(tsplit));
+check(tsplit.blocked === null && tsplit.armed === 'split', 'a tree zone can be split');
+check(tsplit.n === 2 && tsplit.station, 'two valves, one station');
+check(tsplit.treesA + tsplit.treesB === 3 && tsplit.treesA > 0 && tsplit.treesB > 0, 'the trees are sorted onto the two valves (' + tsplit.treesA + ' / ' + tsplit.treesB + ')');
+check(tsplit.fedA === tsplit.treesA && tsplit.fedB === tsplit.treesB, 'each half runs pipe only to its own trees');
+check(tsplit.gpmSum === tsplit.stationGpm, 'the halves add up to the station flow');
+check(tsplit.boxOfB === 1 && tsplit.drawnHalves === 1, 'the B half sits in the east box; the split line is drawn once');
+const tunsplit = await page.evaluate(key => { window.confirm = () => true; const zi = LAST_ZONES.findIndex(z => z.key === key); mpRemoveSplit(zi);
+  return LAST_ZONES.filter(z => z.key.startsWith('z:a_trees:')).length; }, tsplit.key);
+check(tunsplit === 1, 'remove split puts the trees back on one valve');
+
+// --- beds of a shared group: one valve per box, beds movable between boxes
+const bedMove = await page.evaluate(() => {
+  const before = LAST_ZONES.filter(z => z.stationGroup === 'g:Front drip:0');
+  const west = before.find(z => (z.bedKeys || []).some(k => k.endsWith(':a_bedw')));
+  const westKey = west.bedKeys.find(k => k.endsWith(':a_bedw'));
+  mp.zoneSel = LAST_ZONES.indexOf(west); mpDraw();
+  const panelHasBeds = /Beds on this valve/.test(el('mpZoneSel').innerHTML);
+  mpPinBed(westKey, 1);                                   // west bed -> east box
+  const after = LAST_ZONES.filter(z => z.stationGroup === 'g:Front drip:0');
+  const merged = after.find(z => (z.bedKeys || []).length === 2);
+  const run = merged && mpLateralPlan().runs.find(r => r.zi === LAST_ZONES.indexOf(merged));
+  const asg = mpManifoldAssign();
+  const box = merged && asg.byManifold.findIndex(l => l.includes(LAST_ZONES.indexOf(merged)));
+  const sel = mp.zoneSel != null && LAST_ZONES[mp.zoneSel] === merged;
+  const saved = serializeState().routing[mp.pageId].pins[westKey];
+  // and back
+  mpUnpinZone(LAST_ZONES.indexOf(merged));
+  const again = LAST_ZONES.filter(z => z.stationGroup === 'g:Front drip:0').length;
+  return { valvesBefore: before.length, panelHasBeds, valvesAfter: after.length, members: merged && merged.members, box, oneRun: !!run && run.edges.length > 0,
+           gpm: merged && +merged.gpm.toFixed(2), sel, saved, again, orphans: mpOrphanPins().length };
+});
+console.log('bed move:', JSON.stringify(bedMove));
+check(bedMove.valvesBefore === 2 && bedMove.panelHasBeds, 'two beds, two boxes: two valves, and the panel lists the beds');
+check(bedMove.valvesAfter === 1 && bedMove.members && bedMove.members.length === 2 && bedMove.box === 1, 'moving the west bed to the east box merges both beds onto one valve there');
+check(bedMove.oneRun && bedMove.gpm === 6.6 && bedMove.sel, 'the merged valve runs one lateral, carries both beds, and is what is selected');
+check(bedMove.saved === 'm_east' && bedMove.orphans === 0, 'the bed assignment is saved per bed and is not an orphan');
+check(bedMove.again === 2, 'back to nearest splits them into two valves again');
 
 // --- trunk + branch sizing, and the manual override ----------------------
 const sizing2 = await page.evaluate(() => {
@@ -340,7 +403,7 @@ check(sheet.sizes, 'sheet totals pipe by size');
 if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: false });
 await page.evaluate(() => lpClose());
 // a drip valve sheet too
-const dripSheet = await page.evaluate(() => { const zi = LAST_ZONES.findIndex(z => z.key.endsWith(':a_bedw')); lpOpen(zi); const h = el('lpSheet').innerHTML; lpClose();
+const dripSheet = await page.evaluate(() => { const zi = LAST_ZONES.findIndex(z => (z.bedKeys || []).some(k => k.endsWith(':a_bedw'))); lpOpen(zi); const h = el('lpSheet').innerHTML; lpClose();
   return { bed: /West bed/.test(h), station: /one of 2 valves on this station/.test(h), drip: /ft dripline/.test(h) }; });
 check(dripSheet.bed && dripSheet.station && dripSheet.drip, 'a bed valve on a shared station prints with its station note');
 
