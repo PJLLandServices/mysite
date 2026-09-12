@@ -5006,18 +5006,28 @@ function buildBOM(parts){
   return {lines, subtotalCents, lateralFt:Math.ceil(lateralFt)};
 }
 
-// ── Component categories (Controller / Valves / Pipe / Heads / Fittings) ──
+// ── Component categories (Controller / Valves / Pipe / Heads / Drip / Fittings) ──
 const CATS = [
   {key:'controller', label:'Controller'},
   {key:'valves',     label:'Valves'},
   {key:'pipe',       label:'Pipe'},
   {key:'heads',      label:'Heads'},
+  {key:'drip',       label:'Drip'},
   {key:'fittings',   label:'Fittings'},
   {key:'other',      label:'Other'}
 ];
 const CAT_ORDER = CATS.reduce((m,c,i)=>(m[c.key]=i,m),{});
+// Catalog `category` (parts.json + parts-overrides.json, served by /api/parts)
+// is the source of truth for which BOM section a part lands in. The keyword
+// guess below is only a fallback for SKUs the catalog doesn't know.
+const CATALOG_TO_BOM = {
+  controllers:'controller', valves:'valves', pipe:'pipe',
+  sprinkler_heads:'heads', drip:'drip', fittings:'fittings', accessories:'other'
+};
 function partCategory(sku, desc){
   const s=(sku||'').toUpperCase(), d=(desc||'').toLowerCase();
+  const cat = sku && PARTS_MAP && PARTS_MAP[sku] && CATALOG_TO_BOM[PARTS_MAP[sku].category];
+  if(cat) return cat;
   if(/^HC/.test(s) || /controller|station|expansion module|hydrawise|pro-hc|\bhpc\b/.test(d)) return 'controller';
   if(/^PGV|^OVV|^PLDBV|^RBDPSIM|^VB|^DUVB/.test(s) || /valve box|pressure reg|ball valve|solenoid|boiler drain|dual check|backflow|\bvalve\b/.test(d)) return 'valves';
   if(/^HSPGP|^HSPROS|^RBN|^RWS/.test(s) || /rotor|spray head|spray extension|pop-?up|nozzle|rotator|root watering|sprinkler head|emitter|bubbler|xeri|\bpgp\b|\bmp[0-9]/.test(d)) return 'heads';
