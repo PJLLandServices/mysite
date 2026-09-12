@@ -3331,6 +3331,23 @@ function mpSetTool(t){
   }
   if(t==='split'){
     if(mp.zoneSel==null){ alert('Click the zone you want to split first, then pick Split zone.'); return; }
+    // A shared drip group is split a different way: one valve per bed on
+    // one station. Offer that here rather than sending Patrick off to find
+    // the setting on the area card.
+    const zg=LAST_ZONES[mp.zoneSel];
+    if(zg && zg.grouped && !zg.stationGroup){
+      const a=areas[(zg.parts||[])[0] && zg.parts[0].areaIdx], g=a && a.valveGroup;
+      const n=(zg.members||[]).length;
+      if(g && n>1 && confirm('"'+g+'" is '+n+' beds on one shared valve.\n\nGive each bed its own valve (in whichever box you choose), wired together as one station? The quote stays one zone; the material list gets '+(n-1)+' more valve'+(n===2?'':'s')+'.')){
+        const k=zg.key;
+        setValveGroupMode(g, 'station');
+        // land on the first bed's valve so the box buttons are right there
+        const ni=LAST_ZONES.findIndex(x=>x.stationGroup && x.stationGroup===k);
+        mp.zoneSel = ni>=0 ? ni : null;
+        mp.tool='pan'; mp.sel=null; mpPaintTools(); mpDraw();
+      }
+      return;
+    }
     const why=mpSplitBlocked(mp.zoneSel);
     if(why){ alert(why); return; }
   }
@@ -4599,7 +4616,9 @@ function mpDraw(){
         ? ` <span title="Both valves open together on one controller station">Station ${(z.station||0)+1}: valve ${z.half} of 2 · ${(z.stationGpm||z.gpm).toFixed(1)} GPM together.</span>`+
           (twin>=0?` <button type="button" class="lnk" onclick="mpSelectZone(${twin})">go to valve ${z.half==='A'?'B':'A'}</button>`:'')+
           ` <button type="button" class="lnk" onclick="mpRemoveSplit(${mp.zoneSel})">remove split</button>`
-        : (mpSplitBlocked(mp.zoneSel) ? '' : ` <button type="button" class="lnk" onclick="mpSetTool('split')" title="Draw a line across the driveway; each side gets its own valve, wired as one station">split across two boxes</button>`);
+        : (z.grouped && !z.stationGroup && (z.members||[]).length>1)
+          ? ` <button type="button" class="lnk" onclick="mpSetTool('split')" title="Give each bed its own valve, wired as one station">one valve per bed</button>`
+          : (mpSplitBlocked(mp.zoneSel) ? '' : ` <button type="button" class="lnk" onclick="mpSetTool('split')" title="Draw a line across the driveway; each side gets its own valve, wired as one station">split across two boxes</button>`);
       const hasCustom = !!mpLateralNodes(mp.zoneSel);
       const latBit = (inIdx>=0 || r.poc)
         ? ` <button type="button" class="lnk${mp.tool==='lat'?' cur':''}" onclick="mpEditLaterals(${mp.zoneSel})">${hasCustom?'edit laterals':'draw laterals by hand'}</button>` +
