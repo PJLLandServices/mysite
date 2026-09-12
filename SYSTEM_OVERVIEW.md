@@ -1433,10 +1433,45 @@ labelled *size · length* (`lateralRunSvg`, shared with the print sheet),
 and heads show *model · arc · throw* (`headCaption`) once zoomed in.
 Still rule 3: none of it reaches the BOM.
 
-**One pipe size per zone (Sept 2026).** Per-segment sizing is right
-hydraulically and wrong for the trench: nobody lays four sizes down one
-lateral. `zoneLateralSize(z)` sizes the WHOLE run off the flow at the
-valve — `pipeForGPM`'s ~5 ft/sec rule (3/4" to 8 GPM, 1" to 13, 1-1/4" to
+**Trees are points the lateral runs to (Sept 2026).** A tree zone often has
+no bed outline at all — just trees marked on the tender — so feeding it off
+"the nearest point on the outline" fed nothing. `a.trees` (the list the
+area's own tree editor already keeps, stored in the area's frame, which is
+sheet feet once traced) is now read by `mpTreesOf` / `mpZoneTrees`: every
+tree is drawn on the master plan and is its own lateral tap, so the run
+tees out to each one. The **Tree** tool drops a tree straight onto the
+master plan for the selected drip or tree zone (`mpTreeAreaFor` picks the
+area; `mpAfterTreeChange` recomputes, because a tree changes the zone's
+flow), and tree markers drag and Delete like any other handle. `mpZoneBBox`
+and the sheet frame include them, so a trees-only area is no longer
+"off-plan".
+
+**Trunk + branches, two sizes, with an override (Sept 2026).** Per-segment
+sizing is unbuildable (four sizes down one lateral) and one-size-per-zone is
+wrong for a drip zone teeing out to nine beds — the trunk carries all 9 GPM
+and every branch carries one. `segmentLateralSize(z, gpm)` sizes each
+segment on its own flow and then snaps it to one of TWO values: 3/4" if
+that is enough, otherwise `zoneTrunkSize(z)` (the valve's full flow on the
+~5 ft/sec rule). So a 3/4" zone is all 3/4", a 9.2 GPM drip zone is 1"
+trunk with 3/4" branches, a 17 GPM lawn is 1-1/4" spine with 3/4" spurs —
+and the spine itself steps down to 3/4" past the point the flow drops,
+which is the one reduction that actually gets installed.
+`routing[page].latSize[zoneKey]` forces a whole zone to one size from the
+picker in the master plan's zone line, and rides along in the design blob.
+
+**Lateral bend inserts into the run (Sept 2026).** Clicking used to hang a
+new branch off the nearest NODE, which threw a pipe across the site when
+what you meant was "bend this run here". A click now resolves in the order
+you mean it: a selected bend TEES off that exact point; a click landing on
+the pipe (within ~11 screen px, `nearestOnEdges`) SPLICES a bend into that
+segment and the rest of the run reattaches to it; a click away from the
+pipe runs a branch out from the nearest bend — which is how you reach the
+next bed or tree.
+
+**One pipe size per zone (Sept 2026, superseded above by trunk+branches).**
+Per-segment sizing is right hydraulically and wrong for the trench: nobody
+lays four sizes down one lateral. `zoneLateralSize(z)` sizes a run off the
+flow at the valve — `pipeForGPM`'s ~5 ft/sec rule (3/4" to 8 GPM, 1" to 13, 1-1/4" to
 22), floored at 3/4" — and `mpLateralPlan` stamps that one `size` on every
 edge of the run and adds the run's whole footage to `bySize` once. A 17
 GPM zone therefore reads 1-1/4" rather than 1" running fast, and a 12 GPM
