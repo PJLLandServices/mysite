@@ -4377,7 +4377,7 @@ const EMAIL_RESENDERS = {
     const booking = await bookings.get(failure.refId);
     if (!booking) return { ok: false, error: "no lead or booking with that id" };
     const outcome = await sendNewLeadEmail(
-      alertShapeForBooking(booking),
+      await alertShapeForBooking(booking),
       { resendOf: failure.ts }
     );
     if (outcome?.ok) return { ok: true, to: mailerLog.maskRecipient(failure.to) };
@@ -4389,22 +4389,68 @@ const EMAIL_RESENDERS = {
 // same shape the appointment-page cancel route builds inline — kept here
 // so a resent alert reads exactly like the one that failed, rather than
 // like a new lead.
-function alertShapeForBooking(booking) {
+// A booking's date the way the customer was told it: the day and the
+// half-day window, never the internal minute (and never an ISO stamp —
+// "Was: 2026-10-22T18:01:00.000Z" reached Patrick's inbox on 2026-09-12).
+function appointmentWhenLabel(iso) {
+  const d = new Date(iso);
+  if (!iso || Number.isNaN(d.getTime())) return "(unscheduled)";
+  const key = d.getHours() < 12 ? "morning" : "afternoon";
+  const bucket = (BOOKING_BUCKETS || []).find((b) => b.key === key);
+  const day = d.toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" });
+  return bucket ? `${day}, ${key === "morning" ? "Morning" : "Afternoon"} (${bucket.windowLabel})` : day;
+}
+
+// The lead-alert shell (sendNewLeadEmail / sendNewLeadSms) was written
+// for a fresh inquiry: it prints the lead's items and its estimated
+// total. Every alert about a BOOKING — rescheduled, cancelled, free
+// bucket, a resend — used to hand it a bare contact block, so Patrick
+// read "Estimated total $0.00 · No specific items selected" under a
+// customer whose closing is priced (2026-09-12, Adam Sorrenti). This is
+// the one shape for those alerts: the booking's service and its price by
+// the same rule the appointment page shows (resolveSeasonalPrice — the
+// property's override, else its zone-count tier; "Custom quote" when the
+// zone count is missing), the customer's contact from the lead when
+// there is one, and the note in the customer's own terms.
+async function bookingAlertLead(booking, { sourceLabel, notes = "", lead = null } = {}) {
+  let priced = null;
+  try {
+    const property = booking.propertyId ? await properties.get(booking.propertyId) : null;
+    const family = String(booking.serviceKey || "").startsWith("spring") ? "spring_opening" : "fall_closing";
+    priced = resolveSeasonalPrice(property, family);
+  } catch { priced = null; }
+  const contact = (lead && lead.contact) || {};
+  const custom = !priced || priced.custom;
+  return {
+    id: lead ? lead.id : booking.id,
+    sourceLabel,
+    portal: lead && lead.portal ? lead.portal : undefined,
+    contact: {
+      name: contact.name || booking.customerName || "(unknown)",
+      phone: contact.phone || booking.customerPhone || "",
+      email: contact.email || booking.customerEmail || "",
+      address: contact.address || booking.address || "",
+      notes
+    },
+    features: [{
+      label: booking.serviceLabel || "Seasonal service",
+      qty: 1,
+      price: custom ? 0 : priced.price,
+      quoteType: custom ? "custom" : "fixed"
+    }],
+    totals: { expectedTotal: custom ? 0 : priced.price }
+  };
+}
+
+async function alertShapeForBooking(booking) {
   const dead = !bookingHoldsItsSlot(booking.status);
   const why = booking.cancellationReason || "";
-  return {
-    id: booking.id,
+  return bookingAlertLead(booking, {
     sourceLabel: dead
       ? `Customer CANCELLED their assigned appointment${booking.removalCode ? ` — ${bookings.reasonLabel(booking.removalCode)}` : ""}`
       : "Assigned appointment update",
-    contact: {
-      name: booking.customerName || "(unknown)",
-      phone: booking.customerPhone || "",
-      email: booking.customerEmail || "",
-      address: booking.address || "",
-      notes: `Was ${booking.scheduledFor}.${why ? ` Reason: ${why}` : ""}`
-    }
-  };
+    notes: `Was ${appointmentWhenLabel(booking.scheduledFor)}.${why ? ` Reason: ${why}` : ""}`
+  });
 }
 
 async function resendFailedEmail(failure) {
@@ -4930,17 +4976,11 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
   //    — an assigned customer moving their day is exactly the change
   //    Patrick needs to hear about.
   if (actor === "customer") {
-    const aliasLead = {
-      id: lead ? lead.id : bookingRec.id,
+    const aliasLead = await bookingAlertLead(bookingRec, {
+      lead,
       sourceLabel: "Customer rescheduled their appointment",
-      contact: {
-        name: lead?.contact?.name || bookingRec.customerName || "(unknown)",
-        phone: lead?.contact?.phone || bookingRec.customerPhone || "",
-        email: lead?.contact?.email || bookingRec.customerEmail || "",
-        address: lead?.contact?.address || bookingRec.address || "",
-        notes: `Was: ${bookingRec.scheduledFor || "(unscheduled)"}. Now: ${startDate.toISOString()}.${reason ? " Reason: " + reason : ""}`
-      }
-    };
+      notes: `Was ${appointmentWhenLabel(bookingRec.scheduledFor)}. Now ${appointmentWhenLabel(startDate)}.${reason ? " Reason: " + reason : ""}`
+    });
     Promise.allSettled([
       sendNewLeadEmail(aliasLead, { baseUrl }),
       sendNewLeadSms(aliasLead, { baseUrl })
@@ -14077,17 +14117,11 @@ async function handleApi(req, res, pathname) {
       //    distinct sourceLabel so the alert reads "Customer cancelled
       //    their appointment" in the inbox rather than masquerading as a
       //    fresh inquiry.
-      const aliasLead = {
-        id: lead.id,
+      const aliasLead = await bookingAlertLead(bookingRec, {
+        lead,
         sourceLabel: "Customer cancelled their appointment",
-        contact: {
-          name: lead.contact?.name || "(unknown)",
-          phone: lead.contact?.phone || "",
-          email: lead.contact?.email || "",
-          address: lead.contact?.address || "",
-          notes: `Was: ${bookingRec.scheduledFor || "(unscheduled)"}. Reason: ${reason}`
-        }
-      };
+        notes: `Was ${appointmentWhenLabel(bookingRec.scheduledFor)}. Reason: ${reason}`
+      });
       Promise.allSettled([
         sendNewLeadEmail(aliasLead, { baseUrl }),
         sendNewLeadSms(aliasLead, { baseUrl })
@@ -23847,16 +23881,13 @@ async function orderDayForDriving(rows) {
         // Patrick hears about it — a free-bucket customer is a routing
         // opportunity he places by hand.
         const b = result.booking;
+        const alias = await bookingAlertLead(b, {
+          sourceLabel: "Customer chose the FREE BUCKET",
+          notes: `Anchored ${appointmentWhenLabel(b.scheduledFor)} — run whenever the crew is in the area; tech calls with an ETA.`
+        });
         Promise.allSettled([
-          sendNewLeadEmail({
-            id: b.id, sourceLabel: "Customer chose the FREE BUCKET",
-            contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "",
-              notes: `Anchored ${b.scheduledFor} — run whenever the crew is in the area; tech calls with an ETA.` }
-          }, { baseUrl: baseUrlFromReq(req) }),
-          sendNewLeadSms({
-            id: b.id, sourceLabel: "Customer chose the FREE BUCKET",
-            contact: { name: b.customerName || "(unknown)", phone: b.customerPhone || "", email: b.customerEmail || "", address: b.address || "", notes: "" }
-          }, { baseUrl: baseUrlFromReq(req) })
+          sendNewLeadEmail(alias, { baseUrl: baseUrlFromReq(req) }),
+          sendNewLeadSms({ ...alias, contact: { ...alias.contact, notes: "" } }, { baseUrl: baseUrlFromReq(req) })
         ]).catch(() => {});
         return sendJson(res, 200, { ok: true, appointment: { ...result.summary, priceLabel: await priceFor(result.booking), zones: await zonesFor(result.booking, result.summary) } });
       }
