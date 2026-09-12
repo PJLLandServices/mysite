@@ -606,6 +606,14 @@ async function assign(season, year, deps = {}) {
 
 const GONE_STATES = new Set(["moved", "cancelled", "no_show"]);
 
+// The ONE liveness rule, by the name every reader uses for it
+// (server.js delegates to the same function). Named here so the
+// status-reader lint can see the question asked before any state is
+// narrowed below.
+function bookingHoldsItsSlot(status) {
+  return bookings.holdsItsSlot(status);
+}
+
 // "YYYY-MM-DD" of an ISO instant in the server's local day (TZ is
 // America/Toronto in production and in every test). The same rule
 // moveDayBookings has always used to decide which bookings ride along.
@@ -629,7 +637,7 @@ function localDateKey(iso) {
 function planStopState({ date, bookingsForProperty, season, year }) {
   const rows = Array.isArray(bookingsForProperty) ? bookingsForProperty.filter(Boolean) : [];
   const onDay = rows.filter((b) => b.scheduledFor && localDateKey(b.scheduledFor) === date);
-  const liveOnDay = onDay.find((b) => bookings.holdsItsSlot(b.status));
+  const liveOnDay = onDay.find((b) => bookingHoldsItsSlot(b.status));
   if (liveOnDay) return { state: "on_day", bookingId: liveOnDay.id, status: liveOnDay.status };
   // not-liveness: the shared rule (holdsItsSlot) has already answered
   // above; here `completed` means FINISHED on this day — history that
@@ -640,7 +648,7 @@ function planStopState({ date, bookingsForProperty, season, year }) {
   const assigned = rows.filter((b) => b.source === "assignment" && b.assignment
     && b.assignment.season === season && Number(b.assignment.year) === Number(year));
   if (!assigned.length) return { state: "unassigned" };
-  const live = assigned.find((b) => bookings.holdsItsSlot(b.status));
+  const live = assigned.find((b) => bookingHoldsItsSlot(b.status));
   if (live) return { state: "moved", bookingId: live.id, status: live.status, toDate: localDateKey(live.scheduledFor) };
   const last = assigned.slice().sort((a, b) =>
     String(b.cancelledAt || b.updatedAt || "").localeCompare(String(a.cancelledAt || a.updatedAt || "")))[0];
