@@ -577,6 +577,157 @@ async function assign(season, year, deps = {}) {
 // record a human or customer moved is theirs now; the plan stops
 // steering it. A record whose assignment.date is no longer in the plan
 // is left where it is too — day moves are stage 6's business.
+// ---- The plan as it is DRIVEN -----------------------------------------
+//
+// Patrick, 2026-09-12, the morning after the blast: "there's some
+// appointments that were cancelled when we sent out the appointments
+// this morning. They are not reflecting on the map. Also there are
+// properties that we don't go to, they are still on the route. Can this
+// route not be updating like it was supposed to be?"
+//
+// He was right. The plan is a stored list of property codes per day. Assign
+// turns each code into a booking; from then on the BOOKING is the truth
+// (cancelled, moved, done) and the stored code is only the intent it
+// started from. But every reader — the board, the map, the route line,
+// the day shapes that gate what customers are offered, the unplanned
+// ranker, the probe, the calendar-time sync — read the stored codes as
+// if they were still the route. A cancelled stop kept its number, its
+// pin and its share of the drive; a customer who moved to Thursday was
+// drawn on Tuesday AND Thursday. Nothing ever took a code off the plan,
+// because nothing was ever meant to: the stored plan is the audit trail.
+//
+// So the rule is derived, never written: `planStopState` says, for one
+// code on one day, what the bookings make of it, and `drivenPlan` hands
+// every reader the plan WITH the gone stops removed and listed beside it
+// (`gone[date]`), so a day shows why a driveway is no longer on it rather
+// than silently shrinking. The stored plan is untouched — a customer who
+// changes their mind can be put back without anyone having to remember
+// where they were. CLAUDE.md, "finish the workflow, not the write".
+
+const GONE_STATES = new Set(["moved", "cancelled", "no_show"]);
+
+// The ONE liveness rule, by the name every reader uses for it
+// (server.js delegates to the same function). Named here so the
+// status-reader lint can see the question asked before any state is
+// narrowed below.
+function bookingHoldsItsSlot(status) {
+  return bookings.holdsItsSlot(status);
+}
+
+// "YYYY-MM-DD" of an ISO instant in the server's local day (TZ is
+// America/Toronto in production and in every test). The same rule
+// moveDayBookings has always used to decide which bookings ride along.
+function localDateKey(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// ONE stop on ONE day, judged by its property's bookings.
+//
+//   on_day      a live booking for the property IS on this day — the stop
+//               is driven (any source: the assignment, or a hand re-book).
+//   done        the booking on this day is completed — history, kept.
+//   unassigned  no assignment booking exists yet for this season — the
+//               plan is still the intent, and Assign will act on it.
+//   moved       the assignment booking lives on, on another day — drawn
+//               THERE as a booked stop, so it must leave this day.
+//   cancelled / no_show   the assignment booking is dead and nothing
+//               else for the property is on this day.
+function planStopState({ date, bookingsForProperty, season, year }) {
+  const rows = Array.isArray(bookingsForProperty) ? bookingsForProperty.filter(Boolean) : [];
+  const onDay = rows.filter((b) => b.scheduledFor && localDateKey(b.scheduledFor) === date);
+  const liveOnDay = onDay.find((b) => bookingHoldsItsSlot(b.status));
+  if (liveOnDay) return { state: "on_day", bookingId: liveOnDay.id, status: liveOnDay.status };
+  // not-liveness: the shared rule (holdsItsSlot) has already answered
+  // above; here `completed` means FINISHED on this day — history that
+  // stays on the board — as opposed to cancelled/no_show, which left it.
+  const doneOnDay = onDay.find((b) => b.status === "completed");
+  if (doneOnDay) return { state: "done", bookingId: doneOnDay.id, status: "completed" };
+
+  const assigned = rows.filter((b) => b.source === "assignment" && b.assignment
+    && b.assignment.season === season && Number(b.assignment.year) === Number(year));
+  if (!assigned.length) return { state: "unassigned" };
+  const live = assigned.find((b) => bookingHoldsItsSlot(b.status));
+  if (live) return { state: "moved", bookingId: live.id, status: live.status, toDate: localDateKey(live.scheduledFor) };
+  const last = assigned.slice().sort((a, b) =>
+    String(b.cancelledAt || b.updatedAt || "").localeCompare(String(a.cancelledAt || a.updatedAt || "")))[0];
+  return {
+    state: last.status === "no_show" ? "no_show" : "cancelled",
+    bookingId: last.id,
+    status: last.status,
+    reason: last.cancellationReason || "",
+    reasonCode: last.removalCode || null,
+    at: last.cancelledAt || null
+  };
+}
+
+function stopIsGone(stateInfo) {
+  return Boolean(stateInfo && GONE_STATES.has(stateInfo.state));
+}
+
+// The plan with every gone stop removed from its day, and those stops
+// listed per date with why. Pure; the stored plan is not touched.
+// `stateFor(code, date)` answers planStopState for that code.
+function planAsDriven(plan, stateFor) {
+  if (!plan || !plan.days) return { plan, gone: {} };
+  const days = {};
+  const gone = {};
+  for (const [date, day] of Object.entries(plan.days)) {
+    const next = { ...day };
+    for (const bucket of BUCKETS) {
+      const kept = [];
+      for (const code of day[bucket] || []) {
+        const info = stateFor(code, date) || { state: "unassigned" };
+        if (stopIsGone(info)) {
+          (gone[date] = gone[date] || []).push({ code, bucket, ...info });
+        } else {
+          kept.push(code);
+        }
+      }
+      next[bucket] = kept;
+    }
+    days[date] = next;
+  }
+  return { plan: { ...plan, days }, gone };
+}
+
+// The plan every READER should hold: stored codes minus the stops the
+// bookings say are no longer on that day. Returns null when there is no
+// plan. `stored` is the plan as written, for the write paths and the
+// "already on the plan" guards; `plan` is the one to sequence, draw,
+// shape and search.
+async function drivenPlan(season, year, deps = {}) {
+  const getPlan = deps.getPlan || seasonPlans.getPlan;
+  const listProperties = deps.listProperties || properties.list;
+  const listBookings = deps.listBookings || bookings.list;
+  const stored = await getPlan(season, year);
+  if (!stored) return null;
+
+  const all = (await listProperties()) || [];
+  const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+  const byPropertyId = new Map();
+  for (const b of (await listBookings()) || []) {
+    if (!b || !b.propertyId) continue;
+    if (!byPropertyId.has(b.propertyId)) byPropertyId.set(b.propertyId, []);
+    byPropertyId.get(b.propertyId).push(b);
+  }
+  const stateFor = (code, date) => {
+    const property = byCode.get(code);
+    if (!property) return { state: "unassigned" };
+    return planStopState({ date, bookingsForProperty: byPropertyId.get(property.id) || [], season, year });
+  };
+  const { plan, gone } = planAsDriven(stored, stateFor);
+  for (const list of Object.values(gone)) {
+    for (const g of list) {
+      const property = byCode.get(g.code);
+      g.customerName = (property && property.customerName) || "";
+      g.address = (property && property.address) || "";
+    }
+  }
+  return { stored, plan, gone, stateFor };
+}
+
 async function syncAssignedTimes(season, year, deps = {}) {
   const getPlan = deps.getPlan || seasonPlans.getPlan;
   const listProperties = deps.listProperties || properties.list;
@@ -584,7 +735,10 @@ async function syncAssignedTimes(season, year, deps = {}) {
   const updateBooking = deps.updateBooking || bookings.update;
   const seq = deps.sequenceDay || resequence.sequenceDay;
 
-  const plan = await getPlan(season, year);
+  // The DRIVEN day: a cancelled or moved stop must not lend its drive and
+  // on-site minutes to the arrival times of the stops still on the day.
+  const driven = await drivenPlan(season, year, { getPlan, listProperties, listBookings });
+  const plan = driven && driven.plan;
   if (!plan || !plan.days) return { ok: true, checked: 0, updated: 0 };
 
   const mine = (await listBookings()).filter((b) =>
@@ -732,4 +886,5 @@ async function moveDayBookings(season, year, { from, to }, deps = {}) {
 module.exports = { preflight, assign,
   unplanned,
   lighterBucket,
+  planStopState, stopIsGone, planAsDriven, drivenPlan, GONE_STATES,
   priorAssignmentsFor, unassign, syncAssignedTimes, requestedWindowsFor, moveDayBookings, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };

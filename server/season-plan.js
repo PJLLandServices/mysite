@@ -600,19 +600,37 @@
     }
     stageHead.appendChild(actions);
 
-    const notes = [...(day.flags || []), ...(day.suggestions || [])];
+    // OFF THIS DAY. A stop whose booking was cancelled, no-showed or moved
+    // is no longer sequenced, numbered or drawn — the server hands the
+    // day back without it — but it is not silently gone either: it reads
+    // here, with why, so the day matches the trucks AND the record.
+    // Patrick, 2026-09-12: "there's some appointments that were cancelled
+    // ... They are not reflecting on the map."
+    const dropped = (day.dropped || []).map((g) => ({ code: "dropped", message: droppedMessage(g) }));
+    const notes = [...(day.flags || []), ...(day.suggestions || []), ...dropped];
     if (notes.length) {
       const strip = document.createElement("ul");
       strip.className = "sp-day-notes sp-stage-notes";
       for (const n of notes) {
         const li = document.createElement("li");
         li.className = n.code === "morning_overruns" ? "is-bad"
-          : n.code === "bucket_move_suggested" ? "is-suggestion" : "";
+          : n.code === "bucket_move_suggested" ? "is-suggestion"
+          : n.code === "dropped" ? "is-dropped" : "";
         li.textContent = n.message;
         strip.appendChild(li);
       }
       stageHead.appendChild(strip);
     }
+  }
+
+  // One line per stop that left the day, in the customer's words where
+  // there are any.
+  function droppedMessage(g) {
+    const who = [String(g.address || "").split(",")[0], g.customerName].filter(Boolean).join(" · ") || g.code;
+    const why = g.state === "moved" ? `moved to ${g.toDate ? prettyDate(g.toDate) : "another day"}`
+      : g.state === "no_show" ? "nobody home"
+      : `customer cancelled${g.reason ? ` — ${g.reason}` : ""}`;
+    return `Off this day: ${who} — ${why}`;
   }
 
   function renderStops(day) {

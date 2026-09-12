@@ -195,7 +195,7 @@ const OPTS = { threshold: 15, tiers: [25, 40], todayKey: "2026-09-12", base: { l
   ok("…that chooses the day by the ranking and the bucket by the one rule",
     /row\.best\.date/.test(server) && /assignments\.lighterBucket\(/.test(server), "the place route routes its own way");
   ok("…re-reading the plan per stop so two properties see each other",
-    /for \(const row of targets\)[\s\S]{0,300}await seasonPlans\.getPlan\(season, year\)/.test(server),
+    /for \(const row of targets\)[\s\S]{0,400}await assignments\.drivenPlan\(season, year\)/.test(server),
     "the second stop can't see the first");
   ok("…adding through addStop, the one write path",
     /unplanned\\\/place[\s\S]{0,2500}seasonPlans\.addStop\(/.test(server), "the place route writes the plan some other way");
