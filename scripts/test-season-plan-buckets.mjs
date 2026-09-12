@@ -73,6 +73,9 @@ const STUBS = `
   const current = { bucketCap: 5, dayCap: 10 };
   const stopRow = (stop) => ({ kind: "plan", code: stop.code, n: stop.stopNumber });
   const bookedRow = (b) => ({ kind: "booked", code: b.mapCode, n: b.stopNumber });
+  // 2026-09-12: a half-day block is also a drop target for the tray
+  // (test-place-tray pins that); here it is inert.
+  const wireDropTarget = () => {};
 `;
 
 const lifted = lift("bucketBlock", DOM + STUBS);
