@@ -4,6 +4,13 @@
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
 **2026-08-09 (JOB-009 close):** CRM-04, CRM-05, CRM-06, MISC-01, MISC-02 CLOSED on walked
 acceptance. CRM-15 opened and closed the same day (booking-delete control). CRM-14 opened.
+**2026-09-12 (Lateral pipe → BOM):** FLOW-26's material-list hop changed by
+Patrick's ruling — lateral pipe is now ordered from the MEASURED master-plan
+footage at each zone's own size, in whole catalog rolls, instead of a
+head-count estimate all in 3/4". Mainline is untouched and stays an on-site
+figure. An unrouted design falls back to the old estimate. Re-verify the
+`generateMaterialList()` hop against a real tender before marking PASS.
+
 **2026-08-13 (Site Plan Underlay):** FLOW-26 opened (Site Builder design → Quote + Material
 List) — UNMAPPED, awaiting a walked acceptance. Part 6 added to record architectural
 deviations DEV-01 / DEV-02 / DEV-03.

@@ -3908,6 +3908,62 @@ function lateralSizeForGPM(gpm){
   return (s === '1/2"') ? LATERAL_MIN_SIZE : s;
 }
 
+/* ── One size per zone ────────────────────────────────────────────────────
+
+   Hydraulically every segment only needs to carry what passes through it,
+   so the tail out at the last head needs nothing but 3/4". That is true and
+   it is not how a lateral gets built: nobody trenches four sizes down one
+   run. The whole lateral for a valve goes in at ONE size, chosen on the
+   flow at the valve — which is what gets quoted and what gets bought.
+
+   pipeForGPM is the ~5 ft/sec velocity rule: 3/4" to 8 GPM, 1" to 13,
+   1-1/4" to 22. A 17 GPM zone therefore comes out 1-1/4", not 1" running
+   fast. Per-segment flow is still carried on each edge (`gpm`) — the
+   readout and the line weight use it — it just no longer picks the size. */
+function zoneLateralSize(z){ return lateralSizeForGPM((z && z.gpm) || 0); }
+
+/* Lateral pipe as it is actually bought: the catalog roll for each size.
+   1" comes on a 300 ft roll, not 400 — so switching a zone from 3/4" to 1"
+   changes both the count and the price per roll, which is exactly why the
+   BOM cannot go on ordering everything as 3/4". */
+const LATERAL_ROLL = {
+  '3/4"':   {sku:'POPO75400',  ft:400},
+  '1"':     {sku:'POPO100300', ft:300},
+  '1-1/4"': {sku:'POPO125300', ft:300},
+  '1-1/2"': {sku:'POPO150250', ft:250},
+  '2"':     {sku:'POPO200200', ft:200}
+};
+
+/* Measured lateral footage by size, across EVERY routed sheet — not just
+   the one the master plan happens to have open, because the BOM is built
+   from the whole design. mp.pageId is swapped and put back inside this one
+   synchronous pass; nothing redraws in between.
+
+   Sept 2026, Patrick's ruling: the measurement DOES now reach the BOM for
+   lateral pipe. It still does not for the mainline, which stays an on-site
+   figure. Whole rolls, no percentage padding — the round-up to a full roll
+   is the slack. */
+function measuredLateralsBySize(){
+  const bySize={}; let totalFt=0, sheets=0;
+  const saveId=mp.pageId, savePage=mp.page;
+  try{
+    Object.keys(routing||{}).forEach(pid=>{
+      const pg=spPage(pid);
+      if(!pg || !spTraceable(pg)) return;
+      const r=routing[pid];
+      if(!r || (!(r.manifolds||[]).length && !r.poc)) return;   // nothing to run from
+      mp.pageId=pid; mp.page=pg;
+      const lat=mpLateralPlan();
+      if(lat.totalFt<=0) return;
+      sheets++;
+      totalFt+=lat.totalFt;
+      Object.keys(lat.bySize).forEach(k=>{ bySize[k]=(bySize[k]||0)+lat.bySize[k]; });
+    });
+  } catch(_){ /* a half-built sheet must never break the BOM */ }
+  mp.pageId=saveId; mp.page=savePage;
+  return {bySize, totalFt, sheets, measured: sheets>0 && totalFt>0};
+}
+
 /* ── Spine + spurs: how a lateral is actually trenched ────────────────────
 
    A minimum spanning tree is the SHORTEST pipe, and it is the wrong shape.
@@ -4230,10 +4286,11 @@ function mpLateralPlan(){
       const run=customLateralRun(z, root, custom);
       if(run.segs.length){
         let ft=0;
-        run.segs.forEach(e=>{ e.ft=Math.hypot(e.b.x-e.a.x, e.b.y-e.a.y); ft+=e.ft;
-          const sz=lateralSizeForGPM(e.gpm); bySize[sz]=(bySize[sz]||0)+e.ft; });
+        const sz=zoneLateralSize(z);
+        run.segs.forEach(e=>{ e.ft=Math.hypot(e.b.x-e.a.x, e.b.y-e.a.y); e.size=sz; ft+=e.ft; });
+        bySize[sz]=(bySize[sz]||0)+ft;
         totalFt+=ft;
-        runs.push({zi, edges:run.segs, ft, nodes:run.nodes, rootKey:(mi>=0?'m'+mi:'poc'), custom:true});
+        runs.push({zi, edges:run.segs, ft, nodes:run.nodes, size:sz, rootKey:(mi>=0?'m'+mi:'poc'), custom:true});
       }
       return;
     }
@@ -4263,13 +4320,15 @@ function mpLateralPlan(){
     }
     if(!segs.length) return;
     let ft=0;
+    const sz=zoneLateralSize(z);
     segs.forEach(e=>{
       e.ft=Math.hypot(e.b.x-e.a.x, e.b.y-e.a.y);
+      e.size=sz;
       ft+=e.ft;
-      const sz=lateralSizeForGPM(e.gpm); bySize[sz]=(bySize[sz]||0)+e.ft;
     });
+    bySize[sz]=(bySize[sz]||0)+ft;
     totalFt+=ft;
-    runs.push({zi, edges:segs, ft, nodes, rootKey:(mi>=0?'m'+mi:'poc')});
+    runs.push({zi, edges:segs, ft, nodes, size:sz, rootKey:(mi>=0?'m'+mi:'poc')});
   });
   return {runs, totalFt, bySize};
 }
@@ -4283,18 +4342,24 @@ function lateralRunSvg(ed, run, col, dm, opts){
   const SX=x=>pzSX(ed,x), SY=y=>pzSY(ed,y);
   const off=opts.offset||0, minLabelPx=opts.minLabelPx||56;
   let g='';
-  const pieces=[];                    // {pts:[..], gpm, kind, ft}
+  // The whole run is ONE size now, so consecutive pipe merges into a single
+  // labelled piece — "1\" \u00b7 142 ft" once down the spine, rather than a new
+  // label every time the flow steps down at a head.
+  const pieces=[];                    // {pts:[..], gpm, kind, ft, size}
   run.edges.forEach(e=>{
     const last=pieces[pieces.length-1];
-    if(last && last.kind===e.kind && e.kind!=='spur' && Math.abs(last.gpm-e.gpm)<1e-6 &&
+    if(last && last.kind===e.kind && e.kind!=='spur' && last.size===e.size &&
        Math.abs(last.pts[last.pts.length-1].x-e.a.x)<1e-6 && Math.abs(last.pts[last.pts.length-1].y-e.a.y)<1e-6){
-      last.pts.push(e.b); last.ft+=e.ft||0; return;
+      last.pts.push(e.b); last.ft+=e.ft||0; last.gpm=Math.max(last.gpm, e.gpm); return;
     }
-    pieces.push({pts:[e.a,e.b], gpm:e.gpm, kind:e.kind, ft:e.ft||0});
+    pieces.push({pts:[e.a,e.b], gpm:e.gpm, kind:e.kind, ft:e.ft||0, size:e.size});
   });
+  // One weight for the run, off the size actually going in the ground.
+  const SIZE_W={'3/4"':1.6, '1"':2.3, '1-1/4"':3.0, '1-1/2"':3.5, '2"':4.2};
+  const runW = SIZE_W[run.size] || 1.8;
   const shift=(x1,y1,x2,y2)=>{ if(!off) return [x1,y1,x2,y2]; const dx=x2-x1, dy=y2-y1, L=Math.hypot(dx,dy)||1; const nx=-dy/L*off, ny=dx/L*off; return [x1+nx,y1+ny,x2+nx,y2+ny]; };
   pieces.forEach(pc=>{
-    const w = pc.gpm>13 ? 3.2 : pc.gpm>8 ? 2.5 : pc.gpm>4 ? 1.9 : 1.4;
+    const w = pc.kind==='spur' ? Math.max(runW*0.7, 1.2) : runW;
     const ww = opts.printScale ? w*opts.printScale : w;
     for(let i=0;i<pc.pts.length-1;i++){
       const [x1,y1,x2,y2]=shift(SX(pc.pts[i].x),SY(pc.pts[i].y),SX(pc.pts[i+1].x),SY(pc.pts[i+1].y));
@@ -4320,7 +4385,7 @@ function lateralRunSvg(ed, run, col, dm, opts){
       const dx=SX(bx)-SX(ax), dy=SY(by)-SY(ay), L=Math.hypot(dx,dy)||1;
       const nx=-dy/L, ny=dx/L;
       const size=opts.fontSize||10.5;
-      const txt=lateralSizeForGPM(pc.gpm)+' · '+Math.round(pc.ft)+' ft';
+      const txt=(pc.size||lateralSizeForGPM(pc.gpm))+' · '+Math.round(pc.ft)+' ft';
       g+=mpHalo(mx+nx*(size+1), my+ny*(size+1)+size*0.35, txt, size, 'middle', opts.labelInk||col);
     });
   }
@@ -4479,7 +4544,7 @@ function lpOpen(zi){
   g+=`</svg>`;
 
   // title block + totals
-  const sizes = run ? (()=>{ const by={}; run.edges.forEach(e=>{ const k=lateralSizeForGPM(e.gpm); by[k]=(by[k]||0)+(e.ft||0); });
+  const sizes = run ? (()=>{ const by={}; run.edges.forEach(e=>{ const k=e.size||lateralSizeForGPM(e.gpm); by[k]=(by[k]||0)+(e.ft||0); });
     return Object.keys(by).sort((a,b)=>by[b]-by[a]).map(k=>`<li><b>${esc(k)}</b> poly — ${Math.round(by[k])} ft</li>`).join(''); })() : '';
   const spurs = run ? run.edges.filter(e=>e.kind==='spur').length : 0;
   const pg=mp.page, cal=pg.calibration||{}, ver=cal.verify||{};
@@ -4506,7 +4571,7 @@ function lpOpen(zi){
       <div><b>Reading the sheet</b><ul>
         <li>Solid line = lateral trunk, labelled <i>size · length</i>. Dashed short lines = spurs to heads (${spurs}).</li>
         <li>Each head: number, model, arc, throw. Numbers run in the order the heads were laid out.</li>
-        <li>Sizes are the minimum for the flow past that point; nothing under 3/4".</li>
+        <li>The whole lateral goes in at <b>${esc(run?run.size:'—')}</b> — sized on this valve's full ${z.gpm.toFixed(1)} GPM at about 5 ft/sec. Nothing under 3/4".</li>
       </ul></div>
     </div>
     <div class="lp-note">Lengths are measured off the calibrated site plan and are for layout; confirm on site.${skRasterOk.get(pg.id)===false?' The plan image could not be loaded, so the drawing is shown on a plain grid.':''} Internal working drawing — not a customer document.</div>`;
@@ -4624,7 +4689,7 @@ function mpDraw(){
         ? ` <button type="button" class="lnk${mp.tool==='lat'?' cur':''}" onclick="mpEditLaterals(${mp.zoneSel})">${hasCustom?'edit laterals':'draw laterals by hand'}</button>` +
           (hasCustom?` <button type="button" class="lnk" onclick="mpResetLaterals(${mp.zoneSel})">back to auto route</button>`:'')
         : '';
-      zs.innerHTML = `Working on <b>${esc(z.name)}</b> — ${z.gpm.toFixed(1)} GPM, ${where}.` +
+      zs.innerHTML = `Working on <b>${esc(z.name)}</b> — ${z.gpm.toFixed(1)} GPM on <b>${esc(zoneLateralSize(z))}</b> lateral, ${where}.` +
         (boxes?` Put it in: ${boxes}`:' Place a manifold to assign it.') +
         (pinIdx>=0?` <button type="button" class="lnk" onclick="mpUnpinZone(${mp.zoneSel})">back to nearest</button>`:'') +
         splitBit + latBit +
@@ -5581,6 +5646,7 @@ function buildBOM(parts){
   // notably the Xeri pressure regulator — is still counted per area below,
   // because grouping beds onto one valve does NOT remove their regulators.
   let totalZones=LAST_ZONES.length, totalHeads=0, lateralFt=0;   // VALVES — a split zone is two
+  let lateralBySize={}, lateralMeasured=false;
   const totalStations=stationCount();                             // what the controller is sized on
   // Drip tube is bought for the WHOLE system, not per zone: accumulate all
   // footage by product, then buy rolls once (see roll math after the loop).
@@ -5687,7 +5753,23 @@ function buildBOM(parts){
   // Gear clamps: 1/head + 1/zone + 2/manifold (mainline)
   add(BOM_SKU.gearClamp, totalHeads + totalZones + 2*nManifolds);
 
-  if(lateralFt>0) add('POPO75400', Math.ceil(lateralFt/400));          // 3/4" lateral (estimate)
+  // Lateral pipe. Measured off the master plan when the design has been
+  // routed — each zone's own size, rounded up to whole catalog rolls. With
+  // nothing routed yet it falls back to the old head-count estimate, all
+  // 3/4", exactly as before.
+  const latM = measuredLateralsBySize();
+  if(latM.measured){
+    lateralFt = latM.totalFt;
+    lateralBySize = latM.bySize;
+    lateralMeasured = true;
+    Object.keys(latM.bySize).forEach(size=>{
+      const roll=LATERAL_ROLL[size]; if(!roll) return;
+      add(roll.sku, Math.ceil(latM.bySize[size]/roll.ft));
+    });
+  } else if(lateralFt>0){
+    lateralBySize = {'3/4"': lateralFt};
+    add('POPO75400', Math.ceil(lateralFt/400));                       // 3/4" lateral (estimate)
+  }
 
   if(totalStations>0){
     if(totalStations<=4) add('HCX2400',1);
@@ -5703,7 +5785,7 @@ function buildBOM(parts){
   }).sort((a,b)=>a.sku.localeCompare(b.sku));
   non.forEach(n=>lines.push({sku:'-', desc:n.label, qty:n.qty, priceCents:null, unit:'each'}));
   const subtotalCents=lines.reduce((s,l)=>s+(l.priceCents!=null?l.priceCents*l.qty:0),0);
-  return {lines, subtotalCents, lateralFt:Math.ceil(lateralFt)};
+  return {lines, subtotalCents, lateralFt:Math.ceil(lateralFt), lateralBySize, lateralMeasured};
 }
 
 // ── Component categories (Controller / Valves / Pipe / Heads / Drip / Fittings) ──
@@ -6016,7 +6098,7 @@ async function renderBOM(){
   wireBom();
   if(!LAST_PLANS.length){ tb.innerHTML='<tbody><tr><td class="zl">Add an area above to build the parts list.</td></tr></tbody>'; el('bomGrand').innerHTML=''; el('bomNote').textContent=''; return; }
   const parts=await loadParts();
-  const {lines:autoLines, lateralFt}=buildBOM(parts);
+  const {lines:autoLines, lateralFt, lateralBySize, lateralMeasured}=buildBOM(parts);
   // Merge auto lines with manual overrides → display lines.
   const disp=[];
   autoLines.forEach(l=>{
@@ -6067,7 +6149,12 @@ async function renderBOM(){
     (edited?`<a href="javascript:void(0)" onclick="resetBom()">reset to auto (${edited} edit${edited>1?'s':''})</a>. `:`edits are saved with the design. `)+
     `Priced live before tax, labour & mainline pipe. `+
     (missing?`<span style="color:var(--warn)">${missing} line(s) not in the catalog</span> — price separately. `:'')+
-    `Lateral pipe (${lateralFt} ft, 3/4") is a layout estimate; mainline in §5 — measure on site.`;
+    (lateralMeasured
+      ? `Lateral pipe <b>measured off the site plan</b> — ${lateralFt} ft (${
+          Object.keys(lateralBySize).sort((a,b)=>lateralBySize[b]-lateralBySize[a])
+            .map(k=>`${esc(k)} ${Math.round(lateralBySize[k])} ft`).join(' · ')
+        }), ordered as whole rolls. Mainline in §5 is still an on-site figure.`
+      : `Lateral pipe (${lateralFt} ft, 3/4") is a layout estimate — route the master plan to measure it; mainline in §5 — measure on site.`);
 }
 
 /* ════════════════ Customer-facing quote sheet (print / PDF) ════════════════ */
