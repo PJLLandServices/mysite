@@ -174,8 +174,10 @@ const ok = (name, cond, detail = "") => {
     calls >= 9, `${calls} references (definition + call sites)`);
 
   const expected = [
-    // The capacity readers, both passes — the original defect.
-    "if (!bookingHoldsItsSlot(l.booking.status)) return false;",
+    // The capacity readers, both passes — the original defect. (The
+    // driving-order re-stamp used to hold a third read of its own; since
+    // 2026-09-12 it delegates to syncRoutedTimes, whose bookings come
+    // through activeBookings — the two lines below.)
     "&& bookingHoldsItsSlot(lead.booking.status))",
     "if (!bookingHoldsItsSlot(b.status)) continue;",
     // The tech's day list, lead pass AND canonical pass (spec §2.8.2, D7).
