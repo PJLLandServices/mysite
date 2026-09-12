@@ -1281,6 +1281,13 @@
     assignment_declined: "cancelled their assignment — a no, not a gap"
   };
 
+  armTwice(el("unplannedPlaceAll"), "Press again to PLACE them all", async () => {
+    const button = el("unplannedPlaceAll");
+    button.disabled = true;
+    await placeOnBest("all", () => { button.disabled = false; });
+    button.disabled = false;
+  });
+
   async function loadUnplanned() {
     if (!unplannedList || !unplannedNote) return;
     try {
@@ -1302,6 +1309,25 @@
           + "Pick a day for each — then run Assign to book them. Nothing is sent until the blast."
         : "Every eligible property is on a route day.";
       for (const row of placeable) unplannedList.appendChild(unplannedRow(row));
+
+      // One press for the lot. Only offered when at least one row has a
+      // best day to go to; the count says exactly how many that is.
+      const placeAll = el("unplannedPlaceAll");
+      const placeAllNote = el("unplannedPlaceAllNote");
+      if (placeAll) {
+        const ready = placeable.filter((r) => r.rankable && r.best).length;
+        const stuck = placeable.length - ready;
+        placeAll.hidden = ready === 0;
+        placeAll.textContent = `Place ${ready} on their best day${ready === 1 ? "" : "s"}`;
+        if (placeAllNote) {
+          placeAllNote.hidden = !(ready && stuck);
+          placeAllNote.textContent = stuck ? `${stuck} can't be ranked and need a hand-picked day.` : "";
+        }
+        if (data.keyConfigured === false && placeAllNote) {
+          placeAllNote.hidden = false;
+          placeAllNote.textContent = "⚠ No Google Maps server key — drive times are by town centre only.";
+        }
+      }
 
       unplannedBlocked.innerHTML = "";
       unplannedBlockedHead.hidden = blocked.length === 0;
@@ -1328,33 +1354,102 @@
     const meta = document.createElement("span");
     meta.className = "sp-standby-meta";
     meta.textContent = [
-      row.zoneCount ? `${row.zoneCount} zones` : "no zone count — Assign will refuse until it's filled in",
-      row.hasCoords ? "" : "no coordinates — won't shape the day"
+      row.zoneCount ? `${row.zoneCount} zones` : "no zone count — Assign will refuse until it's filled in"
     ].filter(Boolean).join(" · ");
-    who.append(name, addr, meta);
+    // THE ROUTING ANSWER, on the row. The first cut had a bare day-picker
+    // here and Patrick's reply was the whole point of the system: the
+    // routes have to make sense. So the cheapest day reads first, with
+    // its cost, before he touches anything.
+    const best = document.createElement("span");
+    if (row.rankable && row.best) {
+      best.className = "sp-place-best";
+      best.textContent = `Best: ${prettyDate(row.best.date)}${row.best.label ? ` (${row.best.label})` : ""}`
+        + ` · +${row.best.addedDriveMinutes} min · ${row.best.points} stop${row.best.points === 1 ? "" : "s"}`;
+    } else if (row.rankable) {
+      best.className = "sp-place-best is-unranked";
+      best.textContent = "No route day within the drive allowance — pick a day by hand";
+    } else {
+      best.className = "sp-place-best is-unranked";
+      best.textContent = row.rankError
+        ? `Couldn't rank: ${row.rankError}`
+        : "Can't be placed on the map — no coordinates Google will resolve. Pick a day by hand.";
+    }
+    who.append(name, addr, meta, best);
 
     const act = document.createElement("div");
     act.className = "sp-standby-act";
-    act.appendChild(dayPickerFor(row.code));
+    if (row.rankable && row.best) {
+      const go = document.createElement("button");
+      go.type = "button";
+      go.className = "pjl-btn pjl-btn-outline sp-standby-book is-best";
+      go.textContent = "Place on best day";
+      go.addEventListener("click", async () => {
+        go.disabled = true;
+        await placeOnBest([row.code], () => { go.disabled = false; });
+      });
+      act.appendChild(go);
+    }
+    act.appendChild(dayPickerFor(row.code, row.days));
     wrap.append(who, act);
     return wrap;
   }
 
+  // Place the named codes on their cheapest day, server-side, by the same
+  // rule the rows show. One request for all of them; the plan is
+  // resequenced once at the end.
+  async function placeOnBest(codes, revert) {
+    try {
+      const response = await fetch(`${base()}/unplanned/place`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(codes === "all" ? { all: true } : { codes })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't place those stops."]).join(" "));
+      const missed = (data.results || []).filter((r) => !r.ok);
+      showToast(`${data.placed} of ${data.considered} placed on their best days.`
+        + (missed.length ? ` ${missed.length} need a hand-picked day.` : "")
+        + " Run Assign to book them.", missed.length && !data.placed ? "bad" : undefined);
+      if (data.plan) render(data.plan);
+      loadUnplanned();
+    } catch (error) {
+      showToast(error.message, "bad");
+      if (revert) revert();
+    }
+  }
+
   // Same shape as the move picker: every route day × bucket, plus "any
   // other date" which grows a new day server-side.
-  function dayPickerFor(code) {
+  function dayPickerFor(code, ranked) {
     const select = document.createElement("select");
     select.setAttribute("aria-label", `Put ${code} on a day`);
     const head = document.createElement("option");
     head.value = "";
     head.textContent = "Put on…";
     select.appendChild(head);
-    for (const day of (current && current.days) || []) {
-      if (day.bookedOnly) continue;
+    // Options in ROUTING order when the row is ranked — cheapest day
+    // first, each labelled with what it costs — so the list itself is
+    // the routing advice. Unranked rows fall back to calendar order.
+    const costByDate = new Map((ranked || []).map((d) => [d.date, d]));
+    const planDays = ((current && current.days) || []).filter((d) => !d.bookedOnly);
+    const ordered = costByDate.size
+      ? [...planDays].sort((a, b) => {
+          const ca = costByDate.get(a.date)?.addedDriveMinutes, cb = costByDate.get(b.date)?.addedDriveMinutes;
+          if (ca == null && cb == null) return a.date < b.date ? -1 : 1;
+          if (ca == null) return 1;
+          if (cb == null) return -1;
+          return ca - cb || (a.date < b.date ? -1 : 1);
+        })
+      : planDays;
+    for (const day of ordered) {
+      const cost = costByDate.get(day.date);
+      const costText = cost && cost.addedDriveMinutes != null
+        ? ` · +${cost.addedDriveMinutes} min${cost.offered ? "" : " (over the allowance)"}`
+        : "";
       for (const bucket of ["morning", "afternoon"]) {
         const opt = document.createElement("option");
         opt.value = `${day.date}|${bucket}`;
-        opt.textContent = `${day.label || day.date} · ${bucket}`;
+        opt.textContent = `${day.label || day.date} · ${bucket}${costText}`;
         select.appendChild(opt);
       }
     }
@@ -1642,10 +1737,17 @@
   // phone must never book (or delete) a season's appointments.
 
   function armTwice(button, armedLabel, run) {
-    const original = button.textContent;
+    if (!button) return;
+    // The label to restore is read when the button is ARMED, not when the
+    // handler is registered: the catch-up and place-all buttons rewrite
+    // their own text with a live count ("Send 48 messages…") long after
+    // registration, and reverting to the registration-time text put a
+    // stale label back after the 8-second timeout.
+    let original = button.textContent;
     let armed = null;
     button.addEventListener("click", async () => {
       if (!armed) {
+        original = button.textContent;
         button.textContent = armedLabel;
         button.classList.add("is-armed");
         armed = setTimeout(() => {

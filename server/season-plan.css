@@ -544,6 +544,20 @@
 }
 .sp-standby-book { min-height: 38px; padding: 7px 14px; font-size: 0.86rem; }
 
+/* Not-on-the-plan rows carry their routing answer. The best day reads
+   green like the probe's "best days" line; a row that can't be ranked
+   says so in amber rather than hiding it. */
+.sp-place-best {
+  display: inline-block; margin-top: 4px; padding: 3px 9px; border-radius: 6px;
+  background: var(--pjl-green-pale); border: 1px solid var(--pjl-green);
+  color: var(--pjl-green); font-size: 0.8rem !important; font-weight: 600;
+}
+.sp-place-best.is-unranked {
+  background: #FBEBD8; border-color: var(--pjl-amber); color: #8A4B12;
+}
+.sp-place-all-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; }
+.sp-standby-act .sp-standby-book.is-best { border-color: var(--pjl-green); }
+
 /* Assignment preflight — the action list is the skips, so they lead. */
 .sp-preflight-out { margin-top: 14px; }
 .sp-preflight-summary { margin: 0 0 10px; font-weight: 600; font-size: 0.92rem; }

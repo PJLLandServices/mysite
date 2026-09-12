@@ -24493,14 +24493,106 @@ async function orderDayForDriving(rows) {
   // Unplanned — eligible for the season, on no route day. The list that
   // ends the silence: a property created after the plan was imported used
   // to be invisible to it.
+  // The drive-time ranker the unplanned list and the place action share.
+  // Built ONCE per request: the plan's day shapes are the expensive part,
+  // and nineteen properties must not rebuild them nineteen times. A
+  // property with no stored coordinates is geocoded through the same
+  // disk-cached path the record importer uses, so a re-open costs nothing.
+  async function unplannedRanker(season, year) {
+    const plan = await seasonPlans.getPlan(season, year);
+    if (!plan) return null;
+    const scheduleData = await scheduleStore.read();
+    const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
+    const threshold = Number(mergedSettings.geoMaxAddedDriveMinutes);
+    const active = await activeBookings();
+    const all = await properties.list();
+    const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+    const shapes = geoFilter.buildDayShapes({ plan, propertiesByCode: byCode, bookings: active });
+    const rankDays = async (property) => {
+      let coords = property.coords;
+      if (!geoFilter.coordsAreResolved(coords) && property.address) {
+        coords = await geocodeForRecord(property.address);
+      }
+      return geoFilter.rankDaysForPoint(coords, shapes, { threshold, tiers: GEO_WIDEN_TIERS });
+    };
+    return { plan, rankDays };
+  }
+
   const seasonPlanUnplannedMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/unplanned$/);
   if (seasonPlanUnplannedMatch && req.method === "GET") {
     try {
       await requireUser(req);
-      const result = await assignments.unplanned(seasonPlanUnplannedMatch[1], Number(seasonPlanUnplannedMatch[2]));
-      return sendJson(res, 200, result);
+      const season = seasonPlanUnplannedMatch[1];
+      const year = Number(seasonPlanUnplannedMatch[2]);
+      const ranker = await unplannedRanker(season, year);
+      const result = await assignments.unplanned(season, year, ranker ? { rankDays: ranker.rankDays } : {});
+      return sendJson(res, 200, { ...result, keyConfigured: geocodeIsConfigured() });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't list unplanned properties."] });
+    }
+  }
+
+  // Place — put unplanned properties on their cheapest route day.
+  //
+  // Patrick, 2026-09-11, on the first cut's bare day-picker: "our entire
+  // implementation of this is so that we can efficiently have driving
+  // routes that make sense." So the system chooses: the cheapest OFFERED
+  // day by added drive (rankDaysForPoint), the lighter bucket on it
+  // (lighterBucket). Both are the same rules the list shows him, so what
+  // he read is what gets done. A property that can't be ranked — no
+  // coordinates Google will resolve — is reported, never guessed.
+  //
+  // `codes` names which; `all: true` takes every rankable row. Each stop
+  // is added through addStop (the one write path), and the plan is
+  // resequenced ONCE at the end rather than per stop.
+  const seasonPlanPlaceMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/unplanned\/place$/);
+  if (seasonPlanPlaceMatch && req.method === "POST") {
+    try {
+      const session = await requireUser(req);
+      const season = seasonPlanPlaceMatch[1];
+      const year = Number(seasonPlanPlaceMatch[2]);
+      const body = await parseRequestBody(req);
+      const actor = session?.email || session?.name || "admin";
+      const wanted = Array.isArray(body.codes) ? new Set(body.codes.map((c) => String(c || "").trim()).filter(Boolean)) : null;
+      const all = body.all === true;
+      if (!all && (!wanted || !wanted.size)) {
+        return sendJson(res, 400, { ok: false, errors: ["Nothing selected to place."] });
+      }
+      const ranker = await unplannedRanker(season, year);
+      if (!ranker) return sendJson(res, 404, { ok: false, code: "no_plan", errors: ["No plan loaded for that season."] });
+      const list = await assignments.unplanned(season, year, { rankDays: ranker.rankDays });
+      const targets = (list.placeable || []).filter((r) => all || wanted.has(r.code));
+
+      const results = [];
+      let placed = 0;
+      // Re-read the plan as it fills: two properties choosing the same day
+      // must see each other's stop when the bucket is chosen.
+      for (const row of targets) {
+        if (!row.rankable || !row.best) {
+          results.push({ code: row.code, ok: false, reason: row.rankable ? "no_offered_day" : "unrankable" });
+          continue;
+        }
+        const livePlan = await seasonPlans.getPlan(season, year);
+        const toDate = row.best.date;
+        const toBucket = assignments.lighterBucket(livePlan?.days?.[toDate]);
+        try {
+          await seasonPlans.addStop(season, year, { propertyCode: row.code, toDate, toBucket }, { actor });
+          placed += 1;
+          results.push({ code: row.code, ok: true, date: toDate, bucket: toBucket, addedDriveMinutes: row.best.addedDriveMinutes });
+        } catch (err) {
+          results.push({ code: row.code, ok: false, reason: err.message || "add failed" });
+        }
+      }
+      if (placed) {
+        const stored = await seasonPlans.getPlan(season, year);
+        if (stored) {
+          await seasonPlans.savePlan(season, year, await resequencePlanForStorage(stored, season, year), { actor });
+        }
+      }
+      const resolved = await resolveSeasonPlan(season, year);
+      return sendJson(res, 200, { ok: true, placed, considered: targets.length, results, plan: resolved });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't place those stops."] });
     }
   }
 

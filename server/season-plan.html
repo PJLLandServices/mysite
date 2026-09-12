@@ -119,6 +119,14 @@
         <section class="sp-panel sp-drawer" id="drawerUnplanned" hidden>
           <h2 class="sp-panel-title">Not on the plan</h2>
           <p class="sp-probe-note" id="unplannedNote">Loading…</p>
+          <!-- Routing, not a blind day-picker. Every row is ranked against
+               every route day by added drive time, the same measure the
+               probe and the booking page use; this places all of them on
+               their cheapest day in one press. -->
+          <div class="sp-place-all-row">
+            <button type="button" class="pjl-btn pjl-btn-danger" id="unplannedPlaceAll" hidden>Place all on their best days</button>
+            <span class="sp-probe-note" id="unplannedPlaceAllNote" hidden></span>
+          </div>
           <div class="sp-standby" id="unplannedList"></div>
           <h2 class="sp-panel-title sp-drawer-sub" id="unplannedBlockedHead" hidden>Can't be placed</h2>
           <ul class="sp-problems" id="unplannedBlocked"></ul>
