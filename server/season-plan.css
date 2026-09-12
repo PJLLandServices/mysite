@@ -136,6 +136,14 @@
 }
 .sp-cockpit[hidden] { display: none; }
 
+/* The follow-plan banner: appointments still on the day their stop left. */
+.sp-followbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin: 0 0 10px; padding: 10px 14px; border-radius: 10px;
+  background: #FBEBD8; border: 1px solid var(--pjl-amber); color: #8A4B12; font-size: 0.88rem; line-height: 1.4;
+}
+.sp-followbar[hidden] { display: none; }
+
 /* The tray — the fourth region: everything waiting for a day, as chips
    you drag onto the rail or onto a half-day. */
 .sp-tray {

@@ -883,8 +883,109 @@ async function moveDayBookings(season, year, { from, to }, deps = {}) {
   return { ok: true, from, to, ...summary };
 }
 
+// ---- The bookings follow the plan -------------------------------------
+//
+// Patrick, 2026-09-12, after moving "A BUNCH" of stops with "Move to…":
+// "tell me though is this automatically saving and keeping these dates
+// now??" The plan file saved. The appointments did not move: a single
+// stop's move touched the stored plan only, while a whole-day move
+// (moveDayBookings) had always carried its bookings along. So the
+// calendar, the customer and the day sheet still said the old date, and
+// the driven plan (FLOW-40) then judged the stop "moved" — back to where
+// its booking still was.
+//
+// This is the single-stop counterpart of moveDayBookings, by the same
+// rules: a confirmed assignment booking whose plan stop now sits on
+// another date or half-day than the booking does, AND which the customer
+// has not moved themselves (their own reschedule is theirs to keep —
+// FLOW-40 shows it on the day they chose), is moved to the plan's day and
+// half, re-timed from the day's sequence, its response reset and a
+// day-move notice queued when they were already messaged. `codes` limits
+// it to the stops just moved; `dryRun` only reports.
+async function followPlanMoves(season, year, { codes = null, dryRun = false, actor = "admin" } = {}, deps = {}) {
+  const getPlan = deps.getPlan || seasonPlans.getPlan;
+  const listProperties = deps.listProperties || properties.list;
+  const listBookings = deps.listBookings || bookings.list;
+  const moveBooking = deps.moveAssignmentDay || bookings.moveAssignmentDay;
+  const seq = deps.sequenceDay || resequence.sequenceDay;
+
+  const plan = await getPlan(season, year);
+  const summary = { ok: true, checked: 0, moved: 0, noticesQueued: 0, responsesReset: 0, flexibleMoved: 0, rows: [] };
+  if (!plan || !plan.days) return summary;
+
+  const wanted = Array.isArray(codes) && codes.length ? new Set(codes.map(String)) : null;
+  const all = (await listProperties()) || [];
+  const idByCode = new Map(all.filter((p) => p && p.code && p.id).map((p) => [p.code, p.id]));
+  const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+  const assignedByProperty = new Map();
+  for (const b of (await listBookings()) || []) {
+    if (!b || b.source !== "assignment" || !b.assignment || !b.propertyId) continue;
+    if (b.assignment.season !== season || Number(b.assignment.year) !== Number(year)) continue;
+    if (b.status !== "confirmed") continue;
+    if (!assignedByProperty.has(b.propertyId)) assignedByProperty.set(b.propertyId, b);
+  }
+
+  // Which stops disagree with their booking — grouped by date so the
+  // day is sequenced once for its arrival times.
+  const byDate = new Map();
+  for (const [date, day] of Object.entries(plan.days)) {
+    for (const bucket of BUCKETS) {
+      for (const code of day[bucket] || []) {
+        if (wanted && !wanted.has(String(code))) continue;
+        const propertyId = idByCode.get(code);
+        const b = propertyId ? assignedByProperty.get(propertyId) : null;
+        if (!b) continue;
+        summary.checked += 1;
+        const bookingDate = localDateKey(b.scheduledFor);
+        // The customer moved it themselves: the booking is not where the
+        // assignment put it. Theirs to keep.
+        if (bookingDate !== b.assignment.date) continue;
+        if (b.assignment.date === date && b.assignment.bucket === bucket) continue;
+        if (!byDate.has(date)) byDate.set(date, []);
+        byDate.get(date).push({ code, bucket, booking: b });
+      }
+    }
+  }
+
+  const customerWindows = byDate.size ? await requestedWindowsFor(season, year, listBookings) : {};
+  for (const [date, items] of byDate) {
+    const etaByCode = await arrivalsFor(plan.days[date], byCode, season, seq, customerWindows);
+    for (const { code, bucket, booking: b } of items) {
+      const flexible = Boolean(b.flexBucket);
+      const blasted = Boolean(b.assignment.outreach?.steps?.["1"]);
+      const hadResponse = Boolean(b.assignment.outreach?.respondedAt);
+      const row = {
+        code, bookingId: b.id,
+        from: { date: b.assignment.date, bucket: b.assignment.bucket },
+        to: { date, bucket },
+        notice: blasted && !flexible,
+        responseReset: hadResponse && !flexible,
+        customerName: b.customerName || ""
+      };
+      summary.rows.push(row);
+      if (dryRun) continue;
+      await moveBooking(b.id, {
+        toDate: date,
+        toBucket: bucket,
+        scheduledFor: scheduledStartFor(date, bucket, etaByCode.get(code), b.durationMinutes).toISOString(),
+        oldDate: b.assignment.date,
+        resetResponse: !flexible,
+        queueNotice: blasted && !flexible,
+        by: actor
+      });
+      summary.moved += 1;
+      if (flexible) summary.flexibleMoved += 1;
+      else {
+        if (blasted) summary.noticesQueued += 1;
+        if (hadResponse) summary.responsesReset += 1;
+      }
+    }
+  }
+  return summary;
+}
+
 module.exports = { preflight, assign,
   unplanned,
   lighterBucket,
   planStopState, stopIsGone, planAsDriven, drivenPlan, GONE_STATES,
-  priorAssignmentsFor, unassign, syncAssignedTimes, requestedWindowsFor, moveDayBookings, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };
+  priorAssignmentsFor, unassign, syncAssignedTimes, requestedWindowsFor, moveDayBookings, followPlanMoves, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };

@@ -735,7 +735,7 @@ async function setAssignmentOutreach(id, patch, { action = "cadence", by = "syst
 // inside the send window. A queued notice that hasn't gone out yet keeps
 // its ORIGINAL oldDate through further moves: the customer is told
 // "was Sept 28, now Oct 3", not a chain of intermediate hops.
-async function moveAssignmentDay(id, { toDate, scheduledFor, oldDate, resetResponse = true, queueNotice = false, by = "admin" } = {}) {
+async function moveAssignmentDay(id, { toDate, toBucket = null, scheduledFor, oldDate, resetResponse = true, queueNotice = false, by = "admin" } = {}) {
   const records = await readAll();
   const idx = records.findIndex((b) => b.id === id);
   if (idx === -1) return null;
@@ -761,15 +761,18 @@ async function moveAssignmentDay(id, { toDate, scheduledFor, oldDate, resetRespo
       queuedAt: now
     };
   }
+  // The half-day travels too when the caller names one (a single stop
+  // moved morning → afternoon is a new promise as much as a new date is).
+  const bucket = toBucket === "morning" || toBucket === "afternoon" ? toBucket : current.assignment.bucket;
   history.push({
     ts: now, action: "day_moved", by,
-    note: `${oldDate} → ${toDate} (route day moved)`
+    note: `${oldDate} → ${toDate}${bucket !== current.assignment.bucket ? ` (${current.assignment.bucket} → ${bucket})` : ""} (route day moved)`
   });
 
   const next = {
     ...current,
     scheduledFor: new Date(scheduledFor).toISOString(),
-    assignment: { ...current.assignment, date: toDate, outreach },
+    assignment: { ...current.assignment, date: toDate, bucket, outreach },
     updatedAt: now,
     history
   };
