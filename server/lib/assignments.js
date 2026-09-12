@@ -349,11 +349,24 @@ async function priorAssignmentsFor(season, year, listBookings = bookings.list) {
 // a day picker for. `blocked` is everything eligible-looking that can't
 // be placed, WITH its reason — because "not on the list" is the exact
 // silence this exists to end.
+// Which bucket a new stop should land in on a day: the lighter one, and
+// the morning on a tie. One rule, read by place-on-best and by anything
+// else that ever chooses a bucket for a stop nobody hand-placed.
+function lighterBucket(planDay) {
+  const m = (planDay?.morning || []).length;
+  const a = (planDay?.afternoon || []).length;
+  return a < m ? "afternoon" : "morning";
+}
+
 async function unplanned(season, year, deps = {}) {
   const getPlan = deps.getPlan || seasonPlans.getPlan;
   const listProperties = deps.listProperties || properties.list;
   const listBookings = deps.listBookings || bookings.list;
   const assess = deps.assessEligibility || outreach.assessEligibility;
+  // Drive-time ranking, injected by the route (it needs the plan's day
+  // shapes, the geocoder and the schedule settings — none of which this
+  // module should own). Absent → rows come back unranked, never wrong.
+  const rankDays = typeof deps.rankDays === "function" ? deps.rankDays : null;
 
   const plan = await getPlan(season, year);
   if (!plan) return { ok: false, reason: "no_plan", placeable: [], blocked: [] };
@@ -389,6 +402,19 @@ async function unplanned(season, year, deps = {}) {
     if (had) {
       blocked.push({ ...row, reason: had.status === "cancelled" ? "assignment_declined" : "previously_assigned", bookingId: had.id });
       continue;
+    }
+    if (rankDays) {
+      try {
+        const ranked = await rankDays(property);
+        row.rankable = Boolean(ranked?.rankable);
+        row.days = Array.isArray(ranked?.days) ? ranked.days : [];
+        row.best = ranked?.best || null;
+      } catch (err) {
+        row.rankable = false;
+        row.days = [];
+        row.best = null;
+        row.rankError = err?.message || "ranking failed";
+      }
     }
     placeable.push(row);
   }
@@ -705,4 +731,5 @@ async function moveDayBookings(season, year, { from, to }, deps = {}) {
 
 module.exports = { preflight, assign,
   unplanned,
+  lighterBucket,
   priorAssignmentsFor, unassign, syncAssignedTimes, requestedWindowsFor, moveDayBookings, PREFLIGHT_OUTCOMES, ASSIGN_OUTCOMES };

@@ -399,9 +399,81 @@ async function worstLegBetweenStops(candidate, points, opts = {}) {
   };
 }
 
+// ---- Rank every route day for one point --------------------------------
+//
+// "Additional properties that I am adding aren't backfilling on the Season
+// Plan" got a day-picker in the first cut, and Patrick's reply was the
+// whole point of the system: "our entire implementation of this is so that
+// we can efficiently have driving routes that make sense." A picker with no
+// drive times asks him to route by hand. This answers, for one property,
+// what the probe answers for a typed address — the cheapest-insertion added
+// drive against every route day — sorted so the best day reads first.
+//
+// One named rule. The unplanned list, the "best day" line and the
+// place-on-best action all read it; a second copy of "which day is
+// cheapest" would eventually disagree with the first.
+//
+//   coords   the property's resolved coordinates ({ lat, lng, source })
+//   shapes   buildDayShapes() output for the plan
+//   opts     { threshold, tiers, todayKey, base }
+//
+// Returns { rankable, days: [...sorted cheapest first], best }.
+//   rankable  false when the point can't be measured (no usable coords, or
+//             the depot fallback) — then `days` is unranked and `best` null.
+//   best      the cheapest OFFERED day that has stops on it, or null. An
+//             empty day at +0 is a blank calendar, not "we're nearby".
+async function rankDaysForPoint(coords, shapes, opts = {}) {
+  const threshold = Number(opts.threshold);
+  const tiers = Array.isArray(opts.tiers) ? opts.tiers : [];
+  const todayKey = opts.todayKey || localDateKey(new Date());
+  const rankable = coordsAreResolved(coords);
+  const days = [];
+  for (const date of Object.keys(shapes || {}).sort()) {
+    if (date < todayKey) continue;                 // yesterday is not an offer
+    const shape = shapes[date];
+    const added = rankable && shape.points.length
+      ? await addedDriveMinutes(coords, shape.points, { base: opts.base })
+      : null;
+    const minutes = added && !added.emptyDay ? added.minutes : (shape.points.length ? null : 0);
+    const gated = Number.isFinite(threshold) && threshold > 0 && rankable && shape.points.length > 0;
+    days.push({
+      date,
+      label: shape.label || "",
+      bookingsOnly: Boolean(shape.bookingsOnly),
+      points: shape.points.length,
+      addedDriveMinutes: minutes,
+      offered: !gated || (minutes != null && minutes <= threshold),
+      widensAtMinutes: gated && minutes != null && minutes > threshold
+        ? (tiers.find((t) => minutes <= t) ?? null)
+        : null
+    });
+  }
+  if (rankable) {
+    // Routing order: days WITH stops by added drive, cheapest first; then
+    // empty days, in date order; then anything unmeasurable. An empty day
+    // costs +0 and would otherwise headline the list — but +0 there means
+    // "nobody is anywhere near", not "we're already next door". The
+    // routing answer is the day whose route this property extends least.
+    days.sort((a, b) => {
+      const aEmpty = a.points === 0, bEmpty = b.points === 0;
+      if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+      const am = a.addedDriveMinutes, bm = b.addedDriveMinutes;
+      if (am == null && bm == null) return a.date < b.date ? -1 : 1;
+      if (am == null) return 1;
+      if (bm == null) return -1;
+      return am - bm || (a.date < b.date ? -1 : 1);
+    });
+  }
+  const best = rankable
+    ? (days.find((d) => d.offered && d.points > 0 && d.addedDriveMinutes != null) || null)
+    : null;
+  return { rankable, days, best };
+}
+
 module.exports = {
   buildDayShapes,
   addedDriveMinutes,
+  rankDaysForPoint,
   worstLegBetweenStops,
   coordsAreResolved,
   pointKey,
