@@ -631,6 +631,9 @@ function planStopState({ date, bookingsForProperty, season, year }) {
   const onDay = rows.filter((b) => b.scheduledFor && localDateKey(b.scheduledFor) === date);
   const liveOnDay = onDay.find((b) => bookings.holdsItsSlot(b.status));
   if (liveOnDay) return { state: "on_day", bookingId: liveOnDay.id, status: liveOnDay.status };
+  // not-liveness: the shared rule (holdsItsSlot) has already answered
+  // above; here `completed` means FINISHED on this day — history that
+  // stays on the board — as opposed to cancelled/no_show, which left it.
   const doneOnDay = onDay.find((b) => b.status === "completed");
   if (doneOnDay) return { state: "done", bookingId: doneOnDay.id, status: "completed" };
 
