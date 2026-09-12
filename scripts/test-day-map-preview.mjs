@@ -124,7 +124,7 @@ const lib = (name) => (typeof dayPreview[name] === "function"
     (block.match(/await resolvePlanDay\(/g) || []).length === 2, "the preview has its own day builder");
   ok("…the hypothetical day comes from planDayWithCandidate", /dayPreview\.planDayWithCandidate\(/.test(block), "the day is built some other way");
   ok("…it WRITES NOTHING", !/addStop\(|savePlan\(|moveStop\(/.test(block), "the preview writes to the plan");
-  ok("…a code already on the plan is refused, not doubled", /plannedCodes\(plan\)\.has\(code\)/.test(block) && /409/.test(block), "no already-planned guard");
+  ok("…a code already on the plan is refused, not doubled", /plannedCodes\(driven\.stored\)\.has\(code\)/.test(block) && /409/.test(block), "no already-planned guard");
   ok("…a pin Google can't place is said, not hidden", /coordsAreResolved\(coords\)/.test(block) && /"unresolved"/.test(block), "no unresolved guard");
   ok("…the candidate stop is flagged for the map", /stop\.candidate = true/.test(block), "the candidate is not marked");
   ok("…the line is drawn through the day as it would be",

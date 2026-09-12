@@ -4632,11 +4632,15 @@ async function dayShapesForSeason({ bookings: activeList, season, year, now = ne
     // look for this year's plan and fall forward one year if the season
     // has already wrapped past it.
     let resolvedYear = year || now.getFullYear();
-    let plan = await seasonPlans.getPlan(resolvedSeason, resolvedYear);
-    if (!plan && !year) {
+    // The plan AS DRIVEN: a stop whose booking was cancelled or moved must
+    // not shape the day it left, or customers are gated by a driveway
+    // nobody is visiting (assignments.drivenPlan).
+    let driven = await assignments.drivenPlan(resolvedSeason, resolvedYear);
+    if (!driven && !year) {
       resolvedYear += 1;
-      plan = await seasonPlans.getPlan(resolvedSeason, resolvedYear);
+      driven = await assignments.drivenPlan(resolvedSeason, resolvedYear);
     }
+    const plan = driven ? driven.plan : null;
     // A missing plan is NOT a reason to switch geography off. Returning
     // null here is read by the availability engine as "no gate at all",
     // which is how a fresh bot run put Thornhill in a morning already
@@ -22500,8 +22504,8 @@ async function orderDayForDriving(rows) {
       const plans = [];
       for (const season of ["fall", "spring"]) {
         try {
-          const plan = await seasonPlans.getPlan(season, y);
-          if (plan) plans.push({ season, year: y, plan });
+          const driven = await assignments.drivenPlan(season, y);
+          if (driven) plans.push({ season, year: y, plan: driven.plan });
         } catch { /* a season without a plan is simply not searched */ }
       }
       const result = jobFinder.findJobs(q, dateKey, {
@@ -23501,8 +23505,12 @@ async function orderDayForDriving(rows) {
   }
 
   async function resolveSeasonPlan(season, year) {
-    const plan = await seasonPlans.getPlan(season, year);
-    if (!plan) return null;
+    // The plan AS DRIVEN — stored codes minus the stops the bookings say
+    // have left their day (cancelled, no-show, moved). Each day carries
+    // its `dropped` list so the screen says why a driveway is gone.
+    const driven = await assignments.drivenPlan(season, year);
+    if (!driven) return null;
+    const plan = driven.plan;
     const all = await properties.list();
     const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
     const woType = season === "spring" ? "spring_opening" : "fall_closing";
@@ -23538,6 +23546,7 @@ async function orderDayForDriving(rows) {
     // with arrival times and a drawable route line, the same flow the
     // planned days get. See gatherBookedRows / sequenceDayWithBookings.)
     days.sort((a, b) => (a.date < b.date ? -1 : 1));
+    for (const d of days) d.dropped = driven.gone[d.date] || [];
 
     const problems = days.flatMap((d) => [...d.morning, ...d.afternoon]
       .filter((st) => st.problem)
@@ -23649,7 +23658,8 @@ async function orderDayForDriving(rows) {
       const season = seasonPlanMapMatch[1];
       const year = Number(seasonPlanMapMatch[2]);
       const date = seasonPlanMapMatch[3];
-      const plan = await seasonPlans.getPlan(season, year);
+      const driven = await assignments.drivenPlan(season, year);
+      const plan = driven && driven.plan;
       const day = plan && plan.days ? plan.days[date] : null;
       if (!day) return sendJson(res, 404, { ok: false, errors: ["No such route day."] });
 
@@ -23712,7 +23722,8 @@ async function orderDayForDriving(rows) {
       const season = seasonPlanLineMatch[1];
       const year = Number(seasonPlanLineMatch[2]);
       const date = seasonPlanLineMatch[3];
-      const plan = await seasonPlans.getPlan(season, year);
+      const driven = await assignments.drivenPlan(season, year);
+      const plan = driven && driven.plan;
       const storedDay = plan && plan.days ? plan.days[date] : null;
 
       const all = await properties.list();
@@ -24552,8 +24563,9 @@ async function orderDayForDriving(rows) {
   // property with no stored coordinates is geocoded through the same
   // disk-cached path the record importer uses, so a re-open costs nothing.
   async function unplannedRanker(season, year) {
-    const plan = await seasonPlans.getPlan(season, year);
-    if (!plan) return null;
+    const driven = await assignments.drivenPlan(season, year);
+    if (!driven) return null;
+    const plan = driven.plan;
     const scheduleData = await scheduleStore.read();
     const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
     const threshold = Number(mergedSettings.geoMaxAddedDriveMinutes);
@@ -24610,14 +24622,15 @@ async function orderDayForDriving(rows) {
       const askedBucket = normalizeString(query.get("bucket"), 10);
       if (!code) return sendJson(res, 422, { ok: false, errors: ["Which property? No code was given."] });
 
-      const plan = await seasonPlans.getPlan(season, year);
-      if (!plan) return sendJson(res, 404, { ok: false, code: "no_plan", errors: ["No plan loaded for that season."] });
+      const driven = await assignments.drivenPlan(season, year);
+      if (!driven) return sendJson(res, 404, { ok: false, code: "no_plan", errors: ["No plan loaded for that season."] });
+      const plan = driven.plan;
 
       const all = await properties.list();
       const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
       const property = byCode.get(code);
       if (!property) return sendJson(res, 404, { ok: false, errors: [`No property with code ${code}.`] });
-      if (seasonPlans.plannedCodes(plan).has(code)) {
+      if (seasonPlans.plannedCodes(driven.stored).has(code)) {
         return sendJson(res, 409, { ok: false, code: "already_planned", errors: [`${code} is already on the plan.`] });
       }
 
@@ -24723,7 +24736,9 @@ async function orderDayForDriving(rows) {
           results.push({ code: row.code, ok: false, reason: row.rankable ? "no_offered_day" : "unrankable" });
           continue;
         }
-        const livePlan = await seasonPlans.getPlan(season, year);
+        // The lighter bucket as DRIVEN — a cancelled stop must not count
+        // as load on the half-day it left.
+        const livePlan = (await assignments.drivenPlan(season, year))?.plan;
         const toDate = row.best.date;
         const toBucket = assignments.lighterBucket(livePlan?.days?.[toDate]);
         try {
@@ -24791,8 +24806,9 @@ async function orderDayForDriving(rows) {
       const address = normalizeString(body.address, 320);
       if (!address) return sendJson(res, 422, { ok: false, errors: ["Enter an address to test."] });
 
-      const plan = await seasonPlans.getPlan(season, year);
-      if (!plan) return sendJson(res, 404, { ok: false, code: "no_plan", errors: ["No plan loaded for that season."] });
+      const driven = await assignments.drivenPlan(season, year);
+      if (!driven) return sendJson(res, 404, { ok: false, code: "no_plan", errors: ["No plan loaded for that season."] });
+      const plan = driven.plan;
 
       const geo = await geocode(address);
       const scheduleData = await scheduleStore.read();
