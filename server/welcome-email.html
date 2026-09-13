@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>PJL — Welcome Email</title>
+  <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260518" />
+  <link rel="shortcut icon" href="/favicon.ico?v=20260518" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=20260518" />
+  <meta name="apple-mobile-web-app-title" content="PJL" />
+  <link rel="manifest" href="/site.webmanifest?v=20260518" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <style>
+    .we-shell { display: flex; flex-direction: column; gap: 20px; }
+    .we-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
+    .we-head h1 { margin: 0; }
+    .we-card {
+      background: #fff; border: 1px solid #E2E0D4; border-radius: 14px;
+      padding: 18px 20px;
+    }
+    .we-toggle-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .we-status-pill {
+      display: inline-block; padding: 4px 12px; border-radius: 999px;
+      font-size: 13px; font-weight: 600;
+    }
+    .we-status-pill.on { background: #E4F2E8; color: #1B4D2E; }
+    .we-status-pill.off { background: #F4EFE4; color: #7E6234; }
+    .we-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+    .we-note { font-size: 12.5px; color: #616D64; margin: 10px 0 0; line-height: 1.55; }
+    table.we-table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 640px; }
+    .we-table th {
+      text-align: left; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase;
+      color: #616D64; padding: 8px 10px; border-bottom: 1px solid #E2E0D4;
+    }
+    .we-table td { padding: 10px; border-bottom: 1px solid #F0EEE4; vertical-align: top; }
+    .we-table tr:last-child td { border-bottom: none; }
+    .we-table-wrap { overflow-x: auto; }
+    .we-chip {
+      display: inline-block; padding: 2px 10px; border-radius: 999px;
+      font-size: 12px; font-weight: 600; white-space: nowrap;
+    }
+    .we-chip.spring_opening { background: #E4F2E8; color: #1B4D2E; }
+    .we-chip.fall_closing   { background: #FDF0E4; color: #9a5416; }
+    .we-chip.service        { background: #E8F0FB; color: #23528f; }
+    .we-chip.installation   { background: #F4EFE4; color: #7E6234; }
+    .we-sub { display: block; font-size: 12px; color: #616D64; margin-top: 2px; }
+    .we-empty { padding: 26px 10px; text-align: center; color: #616D64; font-size: 14px; }
+    .we-select {
+      padding: 6px 8px; border: 1px solid #E2E0D4; border-radius: 8px; font: inherit;
+      font-size: 13px; background: #FAFAF5; color: #1a2a1e;
+    }
+    .we-send-btn {
+      background: none; border: 1px solid #1B4D2E; border-radius: 8px;
+      padding: 5px 12px; font: inherit; font-size: 12.5px; color: #1B4D2E; cursor: pointer; white-space: nowrap;
+    }
+    .we-send-btn:hover { background: #E4F2E8; }
+    .we-send-btn:disabled { opacity: .5; cursor: default; }
+    .we-row-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  </style>
+</head>
+<body class="pjl-crm-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/season-plan">Season plan</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/outreach">Outreach</a>
+      <a href="/admin/review-requests">Reviews</a>
+      <a href="/admin/welcome-email" class="is-active">Welcome</a>
+      <a href="/admin/bookings">Bookings</a>
+      <a href="/admin/customers">Customers</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
+      <a href="/admin/sitebuilder">System Builder</a>
+      <a href="/admin/work-orders">Work orders</a>
+      <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/warranty-claims">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
+      <a href="/admin/material-lists">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/users">Users</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Welcome Email</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="pjl-crm-shell we-shell">
+      <header class="we-head">
+        <div>
+          <p class="pjl-page-eyebrow">New customers</p>
+          <h1>Welcome Email</h1>
+        </div>
+      </header>
+
+      <!-- The master switch. While OFF nothing sends automatically; the
+           per-row buttons below still work — they are your hand, not the
+           robot's. -->
+      <section class="we-card" aria-label="Automation settings">
+        <div class="we-toggle-row">
+          <span class="we-status-pill off" id="statusPill">Automation OFF</span>
+          <label style="display:flex; align-items:center; gap:8px; font-size:14px; cursor:pointer;">
+            <input type="checkbox" id="enabledToggle">
+            <span>Send the welcome email to every new customer, 30 minutes after their first booking</span>
+          </label>
+        </div>
+        <div class="we-actions">
+          <button type="button" class="pjl-btn pjl-btn-primary" id="saveBtn">Save</button>
+        </div>
+        <p class="we-note">
+          One email per customer, ever. Spring and fall bookings get the full email; repairs get it
+          without the booking section; installation customers get theirs when the final project invoice
+          is sent. Test records never receive it. Manual sends below work whether the switch is on or off.
+        </p>
+        <p class="we-note" id="flash" hidden></p>
+      </section>
+
+      <!-- Backfill: customers with a first booking and no welcome yet. -->
+      <section class="we-card" aria-label="Backfill candidates">
+        <div class="we-toggle-row" style="justify-content:space-between;">
+          <strong style="font-size:15px;">Backfill candidates</strong>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="scanBtn">Refresh</button>
+        </div>
+        <p class="we-note">Customers whose first booking is on the books and who have never been sent the welcome. Pick the variant, then send.</p>
+        <div class="we-table-wrap" style="margin-top:14px;">
+          <table class="we-table">
+            <thead>
+              <tr>
+                <th>Customer</th>
+                <th>First booking</th>
+                <th>Variant</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="candBody"></tbody>
+          </table>
+          <div class="we-empty" id="candEmpty" hidden>Nobody is waiting on a welcome email.</div>
+        </div>
+      </section>
+
+      <!-- Sent -->
+      <section class="we-card" aria-label="Sent">
+        <strong style="font-size:15px;">Sent</strong>
+        <div class="we-table-wrap" style="margin-top:14px;">
+          <table class="we-table">
+            <thead>
+              <tr>
+                <th>Customer</th>
+                <th>Variant</th>
+                <th>Sent</th>
+                <th>By</th>
+                <th>Booking</th>
+              </tr>
+            </thead>
+            <tbody id="sentBody"></tbody>
+          </table>
+          <div class="we-empty" id="sentEmpty" hidden>No welcome emails sent yet.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    (function () {
+      const els = {
+        pill: document.getElementById("statusPill"),
+        enabled: document.getElementById("enabledToggle"),
+        saveBtn: document.getElementById("saveBtn"),
+        scanBtn: document.getElementById("scanBtn"),
+        flash: document.getElementById("flash"),
+        candBody: document.getElementById("candBody"),
+        candEmpty: document.getElementById("candEmpty"),
+        sentBody: document.getElementById("sentBody"),
+        sentEmpty: document.getElementById("sentEmpty")
+      };
+
+      const VARIANTS = ["spring_opening", "fall_closing", "service", "installation"];
+      const VARIANT_LABELS = {
+        spring_opening: "Spring opening",
+        fall_closing: "Fall closing",
+        service: "Service / repair",
+        installation: "Installation"
+      };
+
+      function flash(message, isError) {
+        els.flash.textContent = message;
+        els.flash.style.color = isError ? "#93392b" : "#1B4D2E";
+        els.flash.hidden = false;
+        clearTimeout(flash._t);
+        flash._t = setTimeout(() => { els.flash.hidden = true; }, 6000);
+      }
+
+      function fmtDate(iso) {
+        if (!iso) return "—";
+        try {
+          return new Date(iso).toLocaleString("en-CA", {
+            timeZone: "America/Toronto",
+            month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
+          });
+        } catch { return iso; }
+      }
+
+      function escapeText(value) {
+        const div = document.createElement("div");
+        div.textContent = String(value == null ? "" : value);
+        return div.innerHTML;
+      }
+
+      function renderSettings(s) {
+        els.enabled.checked = s.enabled === true;
+        els.pill.textContent = s.enabled ? "Automation ON" : "Automation OFF";
+        els.pill.classList.toggle("on", s.enabled === true);
+        els.pill.classList.toggle("off", s.enabled !== true);
+      }
+
+      function variantChip(v) {
+        return `<span class="we-chip ${escapeText(v)}">${escapeText(VARIANT_LABELS[v] || v)}</span>`;
+      }
+
+      function renderSent(rows) {
+        els.sentBody.innerHTML = "";
+        els.sentEmpty.hidden = rows.length > 0;
+        for (const r of rows) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>
+              ${escapeText(r.customerName || r.email || r.customerId)}
+              <span class="we-sub">${escapeText(r.email || "")} · ${escapeText(r.customerId)}</span>
+            </td>
+            <td>${variantChip(r.variant)}</td>
+            <td>${fmtDate(r.sentAt)}</td>
+            <td>${escapeText(r.by || "—")}</td>
+            <td><span class="we-sub" style="margin-top:0">${escapeText(r.bookingId || "—")}</span></td>
+          `;
+          els.sentBody.appendChild(tr);
+        }
+      }
+
+      function renderCandidates(rows) {
+        els.candBody.innerHTML = "";
+        els.candEmpty.hidden = rows.length > 0;
+        for (const c of rows) {
+          const tr = document.createElement("tr");
+          const options = VARIANTS.map((v) =>
+            `<option value="${v}" ${v === c.variant ? "selected" : ""}>${escapeText(VARIANT_LABELS[v])}</option>`
+          ).join("");
+          tr.innerHTML = `
+            <td>
+              ${escapeText(c.customerName || c.email || c.customerId)}
+              <span class="we-sub">${escapeText(c.email || "no email")} · ${escapeText(c.customerId)}</span>
+            </td>
+            <td>
+              ${fmtDate(c.bookingCreatedAt)}
+              <span class="we-sub">${escapeText(c.serviceLabel || c.serviceKey || "")} · ${escapeText(c.bookingId)}</span>
+            </td>
+            <td><select class="we-select" data-variant-for="${escapeText(c.bookingId)}">${options}</select></td>
+            <td><button type="button" class="we-send-btn" data-send="${escapeText(c.bookingId)}">Send welcome email</button></td>
+          `;
+          els.candBody.appendChild(tr);
+        }
+      }
+
+      async function load() {
+        const res = await fetch("/api/welcome-email");
+        const body = await res.json();
+        if (!res.ok || body.ok === false) {
+          flash((body.errors && body.errors[0]) || "Couldn't load welcome-email state.", true);
+          return;
+        }
+        renderSettings(body.settings || {});
+        renderSent(body.recent || []);
+      }
+
+      async function scan() {
+        els.scanBtn.disabled = true;
+        try {
+          const res = await fetch("/api/welcome-email/backfill-candidates");
+          const body = await res.json();
+          if (!res.ok || body.ok === false) throw new Error((body.errors && body.errors[0]) || "Scan failed.");
+          renderCandidates(body.candidates || []);
+        } catch (err) {
+          flash(err.message, true);
+        } finally {
+          els.scanBtn.disabled = false;
+        }
+      }
+
+      els.saveBtn.addEventListener("click", async () => {
+        els.saveBtn.disabled = true;
+        try {
+          const res = await fetch("/api/welcome-email/settings", {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ enabled: els.enabled.checked })
+          });
+          const body = await res.json();
+          if (!res.ok || body.ok === false) throw new Error((body.errors && body.errors[0]) || "Save failed.");
+          renderSettings(body.settings || {});
+          flash(body.settings && body.settings.enabled ? "Automation is ON." : "Automation is OFF.");
+        } catch (err) {
+          flash(err.message, true);
+        } finally {
+          els.saveBtn.disabled = false;
+        }
+      });
+
+      els.scanBtn.addEventListener("click", scan);
+
+      els.candBody.addEventListener("click", async (event) => {
+        const btn = event.target.closest("[data-send]");
+        if (!btn) return;
+        const bookingId = btn.dataset.send;
+        const select = els.candBody.querySelector(`[data-variant-for="${CSS.escape(bookingId)}"]`);
+        const variant = select ? select.value : undefined;
+        if (!confirm(`Send the ${VARIANT_LABELS[variant] || variant} welcome email for ${bookingId} now?`)) return;
+        btn.disabled = true;
+        const original = btn.textContent;
+        btn.textContent = "Sending…";
+        try {
+          const res = await fetch("/api/welcome-email/send", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ bookingId, variant })
+          });
+          const body = await res.json();
+          if (!res.ok || body.ok === false) throw new Error((body.errors && body.errors[0]) || "Send failed.");
+          flash(body.suppressed ? `Test record — nothing sent to ${body.to}.` : `Welcome email sent to ${body.to}.`);
+          await Promise.all([load(), scan()]);
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = original;
+          flash(err.message, true);
+        }
+      });
+
+      load().then(scan).catch((err) => flash(err.message || "Couldn't load.", true));
+    })();
+  </script>
+  <script src="/crm/crm-nav.js"></script>
+  <script src="/crm/nav-badges.js?v=1"></script>
+</body>
+</html>

@@ -35,7 +35,7 @@ const MAX_ENTRIES = 5000;
 const KINDS = new Set([
   "magic_link", "invoice", "receipt", "completion", "stage_notice",
   "review_ask", "portal_reply", "booking_cancel", "lead_alert",
-  "outreach", "supplier", "other"
+  "outreach", "supplier", "welcome", "other"
 ]);
 
 // Failures of these kinds page Patrick (digest-limited). Admin-facing and
@@ -43,7 +43,7 @@ const KINDS = new Set([
 // own SMS redundancy, and interactive sends surface errors in the admin UI.
 const CUSTOMER_FACING = new Set([
   "magic_link", "invoice", "receipt", "completion", "stage_notice",
-  "review_ask", "portal_reply", "booking_cancel"
+  "review_ask", "portal_reply", "booking_cancel", "welcome"
 ]);
 
 // One digest SMS per hour, tops.
