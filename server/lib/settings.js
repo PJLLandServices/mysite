@@ -85,6 +85,12 @@ const DEFAULT_REVIEW_REQUESTS = {
   fromName: "Patrick from PJL Land Services"
 };
 
+// New-customer welcome email (lib/welcome-email.js). OFF by default —
+// Patrick flips it on from /admin/welcome-email once he has read the
+// rendered variants. Manual sends from that page ignore the switch; only
+// the automatic sweep and the installation-invoice hook honour it.
+const DEFAULT_WELCOME_EMAIL = { enabled: false };
+
 // Seasonal-outreach message templates (feature-seasonal-outreach-brief.md
 // §3.2). Patrick saves a per-season subject + SMS body + email body from
 // the compose modal's "Save as default" path; the outreach page seeds the
@@ -152,6 +158,7 @@ const DEFAULT_SETTINGS = {
   invoiceSms: { ...DEFAULT_INVOICE_SMS },
   payments: { acceptedCardBrands: [...DEFAULT_PAYMENTS.acceptedCardBrands] },
   reviewRequests: { ...DEFAULT_REVIEW_REQUESTS },
+  welcomeEmail: { ...DEFAULT_WELCOME_EMAIL },
   outreachTemplates: {
     spring: { ...BLANK_OUTREACH_TEMPLATE },
     fall: { ...BLANK_OUTREACH_TEMPLATE }
@@ -188,6 +195,7 @@ function hydrate(s) {
   const contact = s?.contactInfo || {};
   const ism = s?.invoiceSms || {};
   const rr = s?.reviewRequests || {};
+  const we = s?.welcomeEmail || {};
   const out = s?.outreachTemplates || {};
   const pickTemplate = (key) => {
     const t = out[key] || {};
@@ -271,6 +279,7 @@ function hydrate(s) {
         ? rr.fromName.trim()
         : DEFAULT_REVIEW_REQUESTS.fromName
     },
+    welcomeEmail: { enabled: we.enabled === true },
     outreachTemplates: {
       spring: pickTemplate("spring"),
       fall: pickTemplate("fall")
@@ -518,6 +527,29 @@ async function updateReviewRequests(patch, { who = "admin", note = "" } = {}) {
   return settings;
 }
 
+// Update the welcomeEmail namespace. One key, one switch; audit-stamped
+// like every other settings writer.
+async function updateWelcomeEmail(patch, { who = "admin", note = "" } = {}) {
+  const settings = await readAll();
+  const before = { ...settings.welcomeEmail };
+  const next = { ...settings.welcomeEmail };
+  if (patch && typeof patch === "object" && Object.prototype.hasOwnProperty.call(patch, "enabled")) {
+    next.enabled = patch.enabled === true;
+  }
+  settings.welcomeEmail = next;
+  settings.audit.unshift({
+    ts: new Date().toISOString(),
+    who,
+    action: "welcomeEmail",
+    before,
+    after: { ...next },
+    note
+  });
+  if (settings.audit.length > 50) settings.audit.length = 50;
+  await writeAll(settings);
+  return settings;
+}
+
 // ---------- iCal feed token management (Brief C) -------------------
 // The feed at GET /calendar/:token.ics is gated by this token alone —
 // no other auth. The token IS the credential, so regenerate invalidates
@@ -665,6 +697,7 @@ module.exports = {
   updatePayments,
   updateDeposits,
   updateReviewRequests,
+  updateWelcomeEmail,
   recordSyncError,
   clearSyncErrors,
   recordAudit,

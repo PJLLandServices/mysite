@@ -508,7 +508,11 @@ async function update(id, patch, { by = "admin", note = "", action = "updated" }
     "internalNotes",
     "notificationPrefs",
     "negotiatedRates",
-    "copySpouseOnInvoices"
+    "copySpouseOnInvoices",
+    // Welcome-email mark (lib/welcome-email.js): { sentAt, variant,
+    // bookingId, by }. Written BEFORE the send so a crash can never
+    // double-send; null clears it (admin force-resend keeps history).
+    "welcomeEmail"
   ];
 
   const next = { ...current };

@@ -51,6 +51,7 @@ const scheduleStore = require("./lib/schedule-store");
 const { mergeDaySchedule } = require("./lib/day-schedule");
 const jobFinder = require("./lib/job-finder");
 const bookingReminders = require("./lib/booking-reminders");
+const welcomeEmail = require("./lib/welcome-email");
 const calendarLinks = require("./lib/calendar-links");
 const { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice } = require("./lib/pricing");
 const { normalizeServiceFeeWaiver, friendlyWaiverReason } = require("./lib/service-fee-waiver");
@@ -1288,6 +1289,9 @@ function needsAuth(method, pathname) {
   // is public (the token is the credential); everything under
   // /api/review-requests is admin/tech-only.
   if (pathname.startsWith("/api/review-requests")) return "user";
+  // New-customer welcome email: the admin page and its API are staff-only.
+  if (pathname === "/admin/welcome-email" || pathname === "/admin/welcome-email/") return "user";
+  if (pathname.startsWith("/api/welcome-email")) return "user";
   if (pathname === "/admin/chats" || pathname === "/admin/chats/") return "user";
   if (pathname === "/admin/messages" || pathname === "/admin/messages/") return "user";
   if (pathname === "/admin/customers" || pathname === "/admin/customers/") return "user";
@@ -1502,6 +1506,20 @@ function normalizePostalCode(value) {
 
 function portalTokenForId(id) {
   return crypto.createHash("sha256").update(`pjl-portal:${id}`).digest("base64url").slice(0, 24);
+}
+
+// The welcome email's portal button — same resolution as the day-before
+// reminder: the lead's own portal token, else the property-derived one,
+// else the bare site. Returns a (booking) => url closure over the leads
+// list so the sweep reads leads once per pass, not once per customer.
+function welcomePortalUrlFor(leads) {
+  const leadById = new Map((leads || []).filter((l) => l && l.id).map((l) => [l.id, l]));
+  return (b) => {
+    const base = resolvePublicBaseUrl();
+    const lead = b?.leadId ? leadById.get(b.leadId) : null;
+    const token = lead?.portal?.token || (b?.propertyId ? portalTokenForId(b.propertyId) : "");
+    return token ? `${base}/portal/${token}` : `${base}/portal/login`;
+  };
 }
 
 function defaultPortal(id, now = new Date().toISOString()) {
@@ -10378,6 +10396,44 @@ async function handleApi(req, res, pathname) {
           by: await actorLabel(req),
           note: `Re-emailed to ${inv.customerEmail}.`
         });
+      }
+
+      // New-customer welcome, INSTALLATION variant. An install customer's
+      // first touch is the proposal, not a booking, so the sweep never
+      // sees them; the final invoice of an installation project is the
+      // moment they become a customer. Same gate (settings switch), same
+      // once-ever mark, same mark-before-send. Best effort — the invoice
+      // already went out, and a welcome that fails must not turn a
+      // successful send into a 500.
+      try {
+        const welcomeSettings = await settings.get();
+        if (welcomeSettings?.welcomeEmail?.enabled === true && renderInv.customerId) {
+          const projectId = renderInv.projectId || renderInv.sourceProjectId || null;
+          const project = projectId ? await projects.get(projectId) : null;
+          if (welcomeEmail.isFinalInstallationInvoice(renderInv, project)) {
+            const welcomeCustomer = await customers.get(renderInv.customerId, { withProperties: false });
+            if (welcomeCustomer && !welcomeCustomer.welcomeEmail?.sentAt) {
+              const welcomeBooking = {
+                id: null,
+                customerId: welcomeCustomer.id,
+                customerName: renderInv.customerName || welcomeCustomer.name || "",
+                customerEmail: renderInv.customerEmail || welcomeCustomer.email || "",
+                propertyId: renderInv.propertyId || project?.propertyId || null,
+                leadId: renderInv.leadId || project?.leadId || null
+              };
+              const welcomeResult = await welcomeEmail.sendWelcomeFor({
+                customer: welcomeCustomer,
+                booking: welcomeBooking,
+                variant: "installation",
+                by: "sweep",
+                portalUrlFor: welcomePortalUrlFor(await readLeads())
+              });
+              console.log(`[welcome-email] installation welcome sent to ${welcomeResult.to} for ${welcomeCustomer.id} (invoice ${invId}, project ${project.id})`);
+            }
+          }
+        }
+      } catch (welcomeErr) {
+        console.warn(`[welcome-email] installation welcome failed after invoice ${invId}:`, welcomeErr?.message);
       }
 
       // Junk-mail warning SMS (Junk-Mail Warning brief, May 2026) —
@@ -25318,6 +25374,96 @@ async function orderDayForDriving(rows) {
     }
   }
 
+  // ---- New-customer welcome email (Sep 2026). One email per customer,
+  // on their earliest booking. The switch here gates the automatic sweep
+  // and the installation-invoice hook only; the manual send below is
+  // Patrick's own hand and ignores it.
+
+  if (req.method === "GET" && pathname === "/api/welcome-email") {
+    try {
+      const [s, custs] = await Promise.all([settings.get(), customers.list()]);
+      const recent = custs
+        .filter((c) => c?.welcomeEmail?.sentAt)
+        .sort((a, b) => String(b.welcomeEmail.sentAt).localeCompare(String(a.welcomeEmail.sentAt)))
+        .slice(0, 50)
+        .map((c) => ({
+          customerId: c.id,
+          customerName: c.name || "",
+          email: c.email || "",
+          ...c.welcomeEmail
+        }));
+      return sendJson(res, 200, { ok: true, settings: s.welcomeEmail, recent });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load welcome-email state."] });
+    }
+  }
+
+  if (req.method === "PATCH" && pathname === "/api/welcome-email/settings") {
+    try {
+      const session = await requireUser(req);
+      const payload = await parseRequestBody(req);
+      const updated = await settings.updateWelcomeEmail(payload || {}, {
+        who: session?.uid || "admin",
+        note: "Edited on /admin/welcome-email"
+      });
+      return sendJson(res, 200, { ok: true, settings: updated.welcomeEmail });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't save welcome-email settings."] });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/welcome-email/backfill-candidates") {
+    try {
+      const [all, custs] = await Promise.all([bookings.list(), customers.list()]);
+      const candidates = welcomeEmail.backfillCandidates({ bookings: all, customers: custs });
+      return sendJson(res, 200, { ok: true, candidates });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't scan for welcome candidates."] });
+    }
+  }
+
+  // Manual send for ONE booking. Variant defaults from the booking's
+  // serviceKey; "installation" may be asked for explicitly. A customer
+  // already marked is refused (409) unless { force: true } — the mark is
+  // rewritten, so the record still says what was last sent and by whom.
+  if (req.method === "POST" && pathname === "/api/welcome-email/send") {
+    try {
+      const session = await requireUser(req);
+      const payload = await parseRequestBody(req);
+      const bookingId = String(payload?.bookingId || "").trim();
+      if (!bookingId) return sendJson(res, 400, { ok: false, errors: ["bookingId is required."] });
+      const booking = await bookings.get(bookingId);
+      if (!booking) return sendJson(res, 404, { ok: false, errors: [`Booking ${bookingId} not found.`] });
+      if (!booking.customerId) return sendJson(res, 400, { ok: false, errors: [`Booking ${bookingId} has no customer on it.`] });
+      const customer = await customers.get(booking.customerId, { withProperties: false });
+      if (!customer) return sendJson(res, 404, { ok: false, errors: [`Customer ${booking.customerId} not found.`] });
+      if (customer.welcomeEmail?.sentAt && payload?.force !== true) {
+        return sendJson(res, 409, {
+          ok: false,
+          code: "already_sent",
+          errors: [`${customer.name || customer.id} already received the welcome email (${customer.welcomeEmail.variant}, ${customer.welcomeEmail.sentAt}). Retry with force to send again.`]
+        });
+      }
+      const variant = payload?.variant
+        ? String(payload.variant)
+        : welcomeEmail.variantForServiceKey(booking.serviceKey);
+      if (!welcomeEmail.VARIANTS.includes(variant)) {
+        return sendJson(res, 400, { ok: false, errors: [`Unknown variant "${variant}". One of: ${welcomeEmail.VARIANTS.join(", ")}.`] });
+      }
+      const result = await welcomeEmail.sendWelcomeFor({
+        customer,
+        booking,
+        variant,
+        by: await actorLabel(req),
+        portalUrlFor: welcomePortalUrlFor(await readLeads())
+      });
+      console.log(`[welcome-email] manual send (${variant}) to ${result.to} for ${customer.id} by ${session?.uid || "admin"}`);
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't send the welcome email."] });
+    }
+  }
+
   sendJson(res, 404, { ok: false, errors: ["API endpoint not found."] });
 }
 
@@ -25554,6 +25700,9 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin/review-requests" || pathname === "/admin/review-requests/") {
     return { dir: SERVER_DIR, relative: "/review-requests.html" };
+  }
+  if (pathname === "/admin/welcome-email" || pathname === "/admin/welcome-email/") {
+    return { dir: SERVER_DIR, relative: "/welcome-email.html" };
   }
   if (pathname.startsWith("/crm/")) {
     return { dir: SERVER_DIR, relative: pathname.slice("/crm".length) };
@@ -26629,6 +26778,30 @@ server.listen(PORT, HOST, () => {
   };
   sweepBookingReminders();
   setInterval(sweepBookingReminders, 5 * 60 * 1000);
+
+  // New-customer welcome sweep. Gated by settings.welcomeEmail.enabled
+  // (default OFF); a customer's EARLIEST slot-holding booking, once it is
+  // 30 minutes old, earns the one welcome email — marked on the customer
+  // record BEFORE the send, so a crash errs quiet, never twice. The
+  // installation variant is never chosen here: it fires from the final
+  // invoice of an installation project (see the invoice send handler).
+  const sweepWelcomeEmails = async () => {
+    try {
+      const result = await welcomeEmail.sweep({
+        portalUrlFor: welcomePortalUrlFor(await readLeads())
+      });
+      if (result.sent || result.errors?.length) {
+        console.log(`[welcome-email] sweep: sent ${result.sent}/${result.due} due, errors ${result.errors.length}`);
+      }
+      for (const e of result.errors || []) {
+        console.warn(`[welcome-email] FAILED for ${e.customerId} (${e.bookingId}): ${e.error}`);
+      }
+    } catch (err) {
+      console.warn("[welcome-email] sweep failed:", err?.message);
+    }
+  };
+  sweepWelcomeEmails();
+  setInterval(sweepWelcomeEmails, 5 * 60 * 1000);
 
   // Assignment cadence sweep (stage 4) — dispatches steps 2–6 of the
   // follow-up cadence for blasted bookings, each step at most once,
