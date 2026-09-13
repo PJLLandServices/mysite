@@ -284,6 +284,17 @@ ok("an invoice pointing at a different project, or no project, is false",
   ok("one failed variant does not stop the others", partial.results.filter((x) => x.ok).length === welcome.VARIANTS.length - 1);
 }
 
+// ---- 6. Phone layout: nothing that should sit side by side stacks -----
+
+{
+  const html = welcome.renderWelcomeEmail({ variant: "fall_closing" }).html;
+  ok("no stacking column classes remain (badges and season icons never drop under their text)", !/class="col/.test(html) && !/\.col\s*\{/.test(html));
+  ok("each season icon sits in its own cell beside its text", (html.match(/<td class="season-cell"[^>]*>\s*<img class="season-img"/g) || []).length === 3);
+  ok("warranty and referral badges sit in a side cell beside their copy", (html.match(/<td class="side-cell"[^>]*>\s*<img class="side-img"/g) || []).length === 2);
+  const inst = welcome.renderWelcomeEmail({ variant: "installation" }).html;
+  ok("installation season paragraphs carry the mobile spacing hook", (inst.match(/<div class="txt" style="font-family:'DM Sans'[^"]*line-height:28px/g) || []).length >= 4);
+}
+
 // ---- Report ----------------------------------------------------------
 
 if (failures.length) {

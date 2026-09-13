@@ -88,7 +88,7 @@ const WARRANTY_INSTALLATION_COPY =
 // Paragraph styling lifted from the removed block, verbatim.
 const PARA_STYLE = "font-family:'DM Sans',Arial,Helvetica,sans-serif; font-size:16px; line-height:28px; color:#3D4A40;";
 function para(text, first) {
-  return `              <div style="${PARA_STYLE}${first ? "" : " padding-top:16px;"}">\n                ${text}\n              </div>\n`;
+  return `              <div class="txt" style="${PARA_STYLE}${first ? "" : " padding-top:16px;"}">\n                ${text}\n              </div>\n`;
 }
 
 const SEASONS_PARAGRAPHS = [
