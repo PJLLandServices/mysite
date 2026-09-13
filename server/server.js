@@ -25464,6 +25464,24 @@ async function orderDayForDriving(rows) {
     }
   }
 
+  // Test send: all four variants to one address, [TEST] subjects, no
+  // customer marked. The only way to see the real rendering in an inbox.
+  if (req.method === "POST" && pathname === "/api/welcome-email/test") {
+    try {
+      const session = await requireUser(req);
+      const payload = await parseRequestBody(req);
+      const result = await welcomeEmail.sendTestWelcomes({ to: payload?.to });
+      console.log(`[welcome-email] test send to ${result.to} by ${session?.uid || "admin"}: ${result.results.map((r) => `${r.variant}=${r.ok ? "ok" : "fail"}`).join(" ")}`);
+      const failed = result.results.filter((r) => !r.ok);
+      if (failed.length === result.results.length) {
+        return sendJson(res, 502, { ok: false, errors: [failed[0].error || "Test send failed."], ...result });
+      }
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't send the test."] });
+    }
+  }
+
   sendJson(res, 404, { ok: false, errors: ["API endpoint not found."] });
 }
 

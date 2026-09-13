@@ -141,6 +141,18 @@
         <p class="we-note" id="flash" hidden></p>
       </section>
 
+      <!-- Test send: all four versions to one inbox, nobody marked. -->
+      <section class="we-card" aria-label="Send a test">
+        <strong style="font-size:15px;">Send a test</strong>
+        <p class="we-note">Sends all four versions (spring opening, fall closing, service, installation) to one address. Subjects start with [TEST]. No customer is marked.</p>
+        <div class="we-toggle-row" style="margin-top:12px; flex-wrap:wrap;">
+          <input type="email" id="testTo" placeholder="you@pjllandservices.com" autocomplete="email"
+                 style="flex:1 1 240px; min-height:44px; padding:0 12px; border:1px solid #cfd8cc; border-radius:10px; font:inherit;">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="testBtn">Send test</button>
+        </div>
+        <p class="we-note" id="testResult" hidden></p>
+      </section>
+
       <!-- Backfill: customers with a first booking and no welcome yet. -->
       <section class="we-card" aria-label="Backfill candidates">
         <div class="we-toggle-row" style="justify-content:space-between;">
@@ -356,6 +368,34 @@
           btn.disabled = false;
           btn.textContent = original;
           flash(err.message, true);
+        }
+      });
+
+      function testNote(message, isError) {
+        const n = document.getElementById("testResult");
+        n.textContent = message;
+        n.style.color = isError ? "#93392b" : "#1B4D2E";
+        n.hidden = false;
+      }
+      document.getElementById("testBtn").addEventListener("click", async () => {
+        const btn = document.getElementById("testBtn");
+        const to = document.getElementById("testTo").value.trim();
+        if (!to) { testNote("Type the address to send the test to.", true); return; }
+        btn.disabled = true;
+        try {
+          const res = await fetch("/api/welcome-email/test", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ to })
+          });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok || !body.ok) throw new Error((body.errors && body.errors[0]) || "Test send failed.");
+          const bad = (body.results || []).filter((r) => !r.ok);
+          testNote(bad.length ? `Sent ${body.results.length - bad.length} of ${body.results.length} to ${body.to}. Failed: ${bad.map((r) => r.variant).join(", ")}.` : `All four test emails sent to ${body.to}.`, bad.length > 0);
+        } catch (err) {
+          testNote(err.message, true);
+        } finally {
+          btn.disabled = false;
         }
       });
 
