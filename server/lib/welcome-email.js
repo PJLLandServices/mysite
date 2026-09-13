@@ -445,6 +445,42 @@ function isFinalInstallationInvoice(invoice, project) {
   return quotes.isInstallationQuote({ type: "project_proposal", branch: project.branch });
 }
 
+// Test send: every variant to ONE address, prefixed [TEST], with NO mark
+// on any customer. Goes through the same guarded Gmail transport as a
+// real welcome, so it proves the live path (images included) end to end.
+// Patrick, 2026-09-13: the Gmail connector draft stripped every <img>;
+// this is how the real rendering gets checked in a real inbox.
+async function sendTestWelcomes({ to, portalUrl = DEFAULT_PORTAL_URL, sendMail = null } = {}) {
+  const addr = String(to || "").trim();
+  if (!/^[^s@]+@[^s@]+.[^s@]+$/.test(addr)) throw new Error("A valid email address is required for the test.");
+  const send = sendMail || (async (msg) => {
+    const transporter = getTransporter();
+    if (!transporter) throw new Error("Email transport not configured (GMAIL_USER / GMAIL_APP_PASSWORD).");
+    return transporter.sendMail(msg);
+  });
+  const results = [];
+  for (const variant of VARIANTS) {
+    const rendered = renderWelcomeEmail({ variant, firstName: "", portalUrl });
+    const message = {
+      from: `"PJL Land Services" <${fromAddress()}>`,
+      to: addr,
+      replyTo: fromAddress(),
+      subject: `[TEST ${variant.replace(/_/g, " ")}] ${rendered.subject}`,
+      text: rendered.text,
+      html: rendered.html
+    };
+    try {
+      const info = await send(message);
+      logSend({ kind: "welcome", to: addr, ok: true, refId: `test-${variant}` });
+      results.push({ variant, ok: true, suppressed: info?.suppressed === true });
+    } catch (err) {
+      logSend({ kind: "welcome", to: addr, ok: false, error: err?.message, refId: `test-${variant}` });
+      results.push({ variant, ok: false, error: err?.message || String(err) });
+    }
+  }
+  return { to: addr, results };
+}
+
 module.exports = {
   VARIANTS,
   SUBJECTS,
@@ -454,6 +490,7 @@ module.exports = {
   variantForServiceKey,
   dueWelcomes,
   sendWelcomeFor,
+  sendTestWelcomes,
   sweep,
   backfillCandidates,
   isFinalInstallationInvoice

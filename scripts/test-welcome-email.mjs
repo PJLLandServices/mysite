@@ -258,6 +258,22 @@ ok("an invoice pointing at a different project, or no project, is false",
   && welcome.isFinalInstallationInvoice({ id: "INV-9" }, proj) === false
   && welcome.isFinalInstallationInvoice({ id: "INV-9", projectId: "PR-1" }, null) === false);
 
+// ---- 5. Test send: all four variants, one inbox, nobody marked --------
+
+{
+  const sent = [];
+  const r = await welcome.sendTestWelcomes({ to: "owner@example.com", sendMail: async (m) => { sent.push(m); return { messageId: "x" }; } });
+  ok("test send delivers one email per variant", sent.length === welcome.VARIANTS.length && r.results.every((x) => x.ok));
+  ok("every test email goes only to the given address", sent.every((m) => m.to === "owner@example.com"));
+  ok("every test subject is prefixed [TEST", sent.every((m) => m.subject.startsWith("[TEST ")));
+  ok("test emails keep their images (remote <img> tags survive)", sent.every((m) => (m.html.match(/<img /g) || []).length >= 10));
+  let threw = false;
+  try { await welcome.sendTestWelcomes({ to: "not-an-email", sendMail: async () => ({}) }); } catch { threw = true; }
+  ok("test send refuses an invalid address", threw);
+  const partial = await welcome.sendTestWelcomes({ to: "owner@example.com", sendMail: async (m) => { if (m.subject.includes("service")) throw new Error("boom"); return {}; } });
+  ok("one failed variant does not stop the others", partial.results.filter((x) => x.ok).length === welcome.VARIANTS.length - 1);
+}
+
 // ---- Report ----------------------------------------------------------
 
 if (failures.length) {
