@@ -270,6 +270,16 @@ ok("an invoice pointing at a different project, or no project, is false",
   let threw = false;
   try { await welcome.sendTestWelcomes({ to: "not-an-email", sendMail: async () => ({}) }); } catch { threw = true; }
   ok("test send refuses an invalid address", threw);
+  {
+    const real = [];
+    await welcome.sendTestWelcomes({ to: "patrick@pjllandservices.com", sendMail: async (m) => { real.push(m); return {}; } });
+    ok("test send accepts an address containing the letter s", real.length === welcome.VARIANTS.length);
+    for (const bad of ["no-at-sign.com", "a@b", "a b@c.com", ""]) {
+      let t2 = false;
+      try { await welcome.sendTestWelcomes({ to: bad, sendMail: async () => ({}) }); } catch { t2 = true; }
+      ok(`test send refuses "${bad}"`, t2);
+    }
+  }
   const partial = await welcome.sendTestWelcomes({ to: "owner@example.com", sendMail: async (m) => { if (m.subject.includes("service")) throw new Error("boom"); return {}; } });
   ok("one failed variant does not stop the others", partial.results.filter((x) => x.ok).length === welcome.VARIANTS.length - 1);
 }

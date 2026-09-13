@@ -452,7 +452,7 @@ function isFinalInstallationInvoice(invoice, project) {
 // this is how the real rendering gets checked in a real inbox.
 async function sendTestWelcomes({ to, portalUrl = DEFAULT_PORTAL_URL, sendMail = null } = {}) {
   const addr = String(to || "").trim();
-  if (!/^[^s@]+@[^s@]+.[^s@]+$/.test(addr)) throw new Error("A valid email address is required for the test.");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr)) throw new Error("A valid email address is required for the test.");
   const send = sendMail || (async (msg) => {
     const transporter = getTransporter();
     if (!transporter) throw new Error("Email transport not configured (GMAIL_USER / GMAIL_APP_PASSWORD).");
