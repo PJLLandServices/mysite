@@ -90,6 +90,8 @@
   .lp-foot ul{margin:2px 0 0;padding-left:16px}
   .lp-note{font-size:11px;color:#5b6b63;margin-top:6px}
   .lp-tools{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;margin:0 0 8px;color:#5b6b63}
+  .lp-page+.lp-page{margin-top:26px;padding-top:20px;border-top:3px dashed var(--line)}
+  .lp-pageno{font-size:11px;color:#5b6b63;text-align:right;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px}
   .lp-tools label{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
   .lp-sw{display:inline-block;width:18px;height:5px;border-radius:2px;vertical-align:middle;margin-right:6px}
   .lp-sw-main{background:#1f2d3d;background-image:repeating-linear-gradient(90deg,transparent 0 5px,#fff 5px 8px)}
@@ -100,6 +102,8 @@
     body.lp-open #lpOverlay{position:static;display:block;background:#fff;padding:0}
     body.lp-open .lp-sheet{box-shadow:none;width:auto;max-width:100%;max-height:none;border-radius:0;padding:0;overflow:visible}
     body.lp-open .lp-draw{page-break-inside:avoid}
+    body.lp-open .lp-page{page-break-after:always;break-after:page;border-top:0;margin-top:0;padding-top:0}
+    body.lp-open .lp-page:last-child{page-break-after:auto;break-after:auto}
     body.lp-open .no-print{display:none!important}
     body.mp-open:not(.lp-open) > *:not(#mpOverlay){display:none!important}
     body.mp-open:not(.lp-open) #mpOverlay{position:static;display:block;background:#fff;padding:0}
@@ -608,6 +612,7 @@
       <p class="hint" style="font-size:12px">Click a zone, head or pipe to work on it. Sizes and lengths are measured off the calibrated sheet; the BOM still treats laterals as an on-site figure.</p>
       <span class="sk-grow"></span>
       <div class="sk-tools">
+        <button type="button" onclick="lpOpenAll()" class="ghost" title="Every valve on this sheet, one page each, in station order — the pipe layout for the sub as one PDF">Print all zone sheets</button>
         <button type="button" onclick="window.print()" class="ghost">Print</button>
         <button type="button" class="del" onclick="mpCancel()">Close</button>
       </div>
@@ -5011,13 +5016,46 @@ const lp = { ppf:1, panX:0, panY:0, _w:1040, _h:620, planPage:null, underOpacity
              // can switch on, and other valves' pipe crossing this frame is
              // shown faintly so he knows what else is in the ground here.
              zi:null, showHeads:false, showOthers:true, showMain:true };
-function lpToggle(k){ lp[k]=!lp[k]; if(lp.zi!=null) lpOpen(lp.zi); }
-
+function lpToggle(k){ lp[k]=!lp[k]; if(lp.all) lpOpenAll(); else if(lp.zi!=null) lpOpen(lp.zi); }
+function lpToolsHtml(){
+  return `<div class="lp-tools no-print">
+      <label><input type="checkbox" ${lp.showHeads?'checked':''} onchange="lpToggle('showHeads')"> Head arcs &amp; captions</label>
+      <label><input type="checkbox" ${lp.showMain?'checked':''} onchange="lpToggle('showMain')"> Mainline</label>
+      <label><input type="checkbox" ${lp.showOthers?'checked':''} onchange="lpToggle('showOthers')"> Other zones' pipe</label>
+      ${lp.all?'<span style="margin-left:auto">One page per valve, in station order.</span>':''}
+    </div>`;
+}
+// One valve's sheet.
 function lpOpen(zi){
-  const z=LAST_ZONES[zi]; if(!z) return;
-  lp.zi=zi;
+  lp.all=false; lp.zi=zi;
+  const h=lpSheetHtml(zi);
+  if(!h){ alert('Nothing of this valve is traced on this sheet.'); return; }
+  el('lpSheet').innerHTML=lpToolsHtml()+h;
+  document.body.classList.add('lp-open');
+  el('lpOverlay').hidden=false;
+}
+// Every valve on this sheet, one page each, in station order — the whole
+// pipe layout for the sub as a single PDF.
+function lpZoneOrder(){
+  return LAST_ZONES.map((z,i)=>i)
+    .filter(i=>!!mpZoneBBox(i))
+    .sort((a,b)=>{ const za=LAST_ZONES[a], zb=LAST_ZONES[b];
+      return ((za.station||0)-(zb.station||0)) || String(za.half||'').localeCompare(String(zb.half||'')) || (a-b); });
+}
+function lpOpenAll(){
+  const order=lpZoneOrder();
+  if(!order.length){ alert('No valve is traced on this sheet yet.'); return; }
+  lp.all=true; lp.zi=null;
+  el('lpSheet').innerHTML=lpToolsHtml()+order.map(lpSheetHtml).join('');
+  document.body.classList.add('lp-open');
+  el('lpOverlay').hidden=false;
+  el('lpSheet').scrollTop=0;
+}
+// The sheet for one valve as HTML, or '' when nothing of it is on this sheet.
+function lpSheetHtml(zi){
+  const z=LAST_ZONES[zi]; if(!z) return '';
   const bb=mpZoneBBox(zi);
-  if(!bb){ alert('Nothing of this valve is traced on this sheet.'); return; }
+  if(!bb) return '';
   lp.planPage=mp.page;
   const pad=Math.max(6, (bb.maxX-bb.minX+bb.maxY-bb.minY)*0.07);
   const fb={minX:bb.minX-pad, minY:bb.minY-pad, maxX:bb.maxX+pad, maxY:bb.maxY+pad};
@@ -5148,12 +5186,8 @@ function lpOpen(zi){
   const otherList = others.length
     ? `<div><b>Other pipe in this frame</b><ul>${others.map(o=>{ const oz=LAST_ZONES[o.zi]; const asgO=asg.byManifold.findIndex(l=>l.includes(o.zi));
         return `<li><i class="lp-sw" style="background:${mpZoneColour(o.zi)}"></i>${esc(oz?oz.name:'zone')} — ${esc(o.size)} from ${asgO>=0?'M'+(asgO+1):'POC'} (faint)</li>`; }).join('')}</ul></div>` : '';
-  el('lpSheet').innerHTML=`
-    <div class="lp-tools no-print">
-      <label><input type="checkbox" ${lp.showHeads?'checked':''} onchange="lpToggle('showHeads')"> Head arcs &amp; captions</label>
-      <label><input type="checkbox" ${lp.showMain?'checked':''} onchange="lpToggle('showMain')"> Mainline</label>
-      <label><input type="checkbox" ${lp.showOthers?'checked':''} onchange="lpToggle('showOthers')"> Other zones' pipe</label>
-    </div>
+  const pageNo = lp.all ? (()=>{ const o=lpZoneOrder(); return `<div class="lp-pageno">Valve ${o.indexOf(zi)+1} of ${o.length}</div>`; })() : '';
+  return `<div class="lp-page">${pageNo}
     <div class="lp-head">
       <div>
         <h2><i class="lp-sw" style="background:${col};width:14px;height:14px"></i>Pipe layout — ${esc(z.name)}</h2>
@@ -5179,9 +5213,8 @@ function lpOpen(zi){
       </ul></div>
       ${headList}${otherList}
     </div>
-    <div class="lp-note">Lengths are measured off the calibrated site plan and are for layout; confirm on site.${skRasterOk.get(pg.id)===false?' The plan image could not be loaded, so the drawing is shown on a plain grid.':''} Internal working drawing — not a customer document.</div>`;
-  document.body.classList.add('lp-open');
-  el('lpOverlay').hidden=false;
+    <div class="lp-note">Lengths are measured off the calibrated site plan and are for layout; confirm on site.${skRasterOk.get(pg.id)===false?' The plan image could not be loaded, so the drawing is shown on a plain grid.':''} Internal working drawing — not a customer document.</div>
+  </div>`;
 }
 function lpClose(){ el('lpOverlay').hidden=true; document.body.classList.remove('lp-open'); }
 

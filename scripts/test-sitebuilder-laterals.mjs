@@ -408,6 +408,18 @@ await page.evaluate(() => lpClose());
 const dripSheet = await page.evaluate(() => { const zi = LAST_ZONES.findIndex(z => (z.bedKeys || []).some(k => k.endsWith(':a_bedw'))); lpOpen(zi); const h = el('lpSheet').innerHTML; lpClose();
   return { bed: /West bed/.test(h), station: /one of 2 valves on this station/.test(h), drip: /ft dripline/.test(h) }; });
 check(dripSheet.bed && dripSheet.station && dripSheet.drip, 'a bed valve on a shared station prints with its station note');
+// every valve, one page each, in station order
+const all = await page.evaluate(() => { lpOpenAll(); const h = el('lpSheet').innerHTML;
+  const pages = [...document.querySelectorAll('#lpSheet .lp-page')].length;
+  const titles = [...document.querySelectorAll('#lpSheet .lp-page h2')].map(x => x.textContent.replace(/^.*— /, ''));
+  const stations = [...document.querySelectorAll('#lpSheet .lp-page .lp-sub')].filter(x => /^Station/.test(x.textContent)).map(x => +x.textContent.match(/Station (\d+)/)[1]);
+  const expect = LAST_ZONES.filter((z, i) => mpZoneBBox(i)).length;
+  const ordered = stations.every((s, i) => i === 0 || s >= stations[i - 1]);
+  lpClose();
+  return { pages, expect, titles, stations, ordered, numbered: /Valve 1 of \d+/.test(h) }; });
+console.log('all sheets:', JSON.stringify(all));
+check(all.pages === all.expect && all.pages >= 4, 'Print all zone sheets renders one page per valve on the sheet (' + all.pages + ')');
+check(all.ordered && all.numbered, 'pages run in station order and are numbered');
 
 check(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
 await browser.close();
