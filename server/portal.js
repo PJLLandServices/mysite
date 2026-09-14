@@ -426,7 +426,14 @@ function renderWorkOrder(data) {
     workOrderWhen.textContent = "Date to be confirmed — we'll reach out to schedule your visit.";
   } else {
     const start = new Date(nv.start);
-    if (nv.bucketLabel) {
+    if (nv.dateOnly) {
+      // The date is real (day PJL has on the schedule); the time is an
+      // internal route estimate, not a commitment — show the day only,
+      // never an hour/minute.
+      workOrderWhen.textContent = start.toLocaleDateString("en-CA", {
+        weekday: "long", month: "long", day: "numeric"
+      });
+    } else if (nv.bucketLabel) {
       // "Tuesday, May 14 — Morning Appointment"
       const dayPart = start.toLocaleDateString("en-CA", {
         weekday: "long", month: "long", day: "numeric"

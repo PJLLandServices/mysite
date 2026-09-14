@@ -207,8 +207,17 @@ try {
   // never render as an exact arrival time (Patrick, 2026-09-14, after
   // the portal briefly showed "Wednesday, October 7 at 9:42 a.m." for
   // exactly this kind of booking).
-  ok("nextVisit never exposes the internal scheduled time to the customer",
-    portal.nextVisit?.dateTBC === true && portal.nextVisit?.start === null,
+  // The DAY is real, on-the-books information and must show (Patrick,
+  // after a first fix over-corrected to "date to be confirmed" for a
+  // visit that IS scheduled: "there is a f***ing appointment
+  // scheduled"). Only the exact hour/minute must never render — that's
+  // the frontend's job (dateOnly: true tells portal.js to format the
+  // day and stop there), not something this JSON-level test can see
+  // directly, so this checks the contract the frontend relies on.
+  ok("nextVisit carries the real date and flags it date-only (no time)",
+    portal.nextVisit?.dateOnly === true
+      && typeof portal.nextVisit?.start === "string"
+      && new Date(portal.nextVisit.start).toISOString().slice(0, 10) === scheduledFor.slice(0, 10),
     JSON.stringify(portal.nextVisit));
   ok("the 'Book a Service' card agrees the property is already booked",
     Array.isArray(portal.bookableProperties)
