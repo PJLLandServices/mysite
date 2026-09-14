@@ -40,11 +40,13 @@ const welcome = require(path.join(SANDBOX, "server/lib/welcome-email.js"));
 const customers = require(path.join(SANDBOX, "server/lib/customers.js"));
 const settingsLib = require(path.join(SANDBOX, "server/lib/settings.js"));
 const SOURCE = fs.readFileSync(path.join(ROOT, "server/lib/welcome-email.html"), "utf8");
+const SPRING_SOURCE = fs.readFileSync(path.join(ROOT, "server/lib/welcome-email-spring.html"), "utf8");
 
 // ---- 1. Render ---------------------------------------------------------
 
 const PORTAL = "https://www.pjllandservices.com/portal/abc&def";
 const BOOKING_BAND = "HOW YOUR BOOKING GOT MADE";
+const SPRING_BOOKING_BAND = "HOW YOUR BOOKING WAS MADE";
 const SEASONS_BAND = "HOW YOUR SEASONS WORK FROM HERE";
 const BOOKING_TAIL = "reminder text the day before.";
 const rendered = Object.fromEntries(welcome.VARIANTS.map((v) => [
@@ -52,8 +54,9 @@ const rendered = Object.fromEntries(welcome.VARIANTS.map((v) => [
 ]));
 
 ok("four variants render", welcome.VARIANTS.length === 4 && welcome.VARIANTS.every((v) => rendered[v].html.length > 10000));
-ok("spring_opening and fall_closing keep the booking section",
-  rendered.spring_opening.html.includes(BOOKING_BAND) && rendered.fall_closing.html.includes(BOOKING_BAND));
+ok("spring_opening carries its OWN booking heading; fall_closing keeps the shared design's",
+  rendered.spring_opening.html.includes(SPRING_BOOKING_BAND) && !rendered.spring_opening.html.includes(BOOKING_BAND)
+  && rendered.fall_closing.html.includes(BOOKING_BAND));
 ok("service drops the booking band AND its body",
   !rendered.service.html.includes(BOOKING_BAND) && !rendered.service.html.includes(BOOKING_TAIL));
 ok("installation drops the booking section and gets the seasons section in its place",
@@ -68,11 +71,12 @@ ok("service and spring do NOT get the seasons section",
 ok("the cream-to-green wave still joins the cut in service and installation",
   (rendered.service.html.match(/pjl-wave-cream-to-green/g) || []).length === 2
   && (rendered.installation.html.match(/pjl-wave-cream-to-green/g) || []).length === 2);
-ok("installation warranty copy leads with three years; others keep the repair copy",
+ok("installation warranty copy leads with three years; service keeps the repair copy; spring is one-year only",
   rendered.installation.html.includes("Your new system carries three years, parts and labour.")
   && !rendered.installation.html.includes("New system installations carry three years.")
   && rendered.service.html.includes("New system installations carry three years.")
-  && rendered.spring_opening.html.includes("New system installations carry three years."));
+  && rendered.spring_opening.html.includes("Every repair we carry out is covered for one year, parts and labour.")
+  && !rendered.spring_opening.html.includes("three years"));
 ok("every variant substitutes the portal URL (escaped) and loses the generic login link",
   welcome.VARIANTS.every((v) =>
     rendered[v].html.includes('href="https://www.pjllandservices.com/portal/abc&amp;def"')
@@ -83,11 +87,14 @@ ok("no unsubscribe URL keeps the designed mailto",
   welcome.renderWelcomeEmail({ variant: "service", portalUrl: PORTAL }).html.includes("mailto:info@pjllandservices.com?subject=Unsubscribe"));
 ok("no portal URL falls back to the login page",
   welcome.renderWelcomeEmail({ variant: "service" }).html.includes('href="https://www.pjllandservices.com/portal/login"'));
-ok("spring_opening with the default link is the approved file byte-for-byte",
-  welcome.renderWelcomeEmail({ variant: "spring_opening" }).html === SOURCE);
+ok("spring_opening with the default link is its own approved file byte-for-byte",
+  welcome.renderWelcomeEmail({ variant: "spring_opening" }).html === SPRING_SOURCE);
+ok("fall_closing with the default link is still the shared design file byte-for-byte",
+  welcome.renderWelcomeEmail({ variant: "fall_closing" }).html === SOURCE);
 ok("subjects are per variant",
-  rendered.spring_opening.subject === rendered.fall_closing.subject
-  && rendered.spring_opening.subject.endsWith("you're in the book")
+  rendered.spring_opening.subject.endsWith("your spring opening is booked")
+  && rendered.fall_closing.subject.endsWith("you're in the book")
+  && rendered.spring_opening.subject !== rendered.fall_closing.subject
   && rendered.service.subject.endsWith("we've got your repair booked")
   && rendered.installation.subject.endsWith("your new system, and what comes next"));
 ok("text alternative greets by first name and carries the portal link; the HTML is unchanged by the name",
@@ -96,7 +103,7 @@ ok("text alternative greets by first name and carries the portal link; the HTML 
 ok("text alternative follows the variant",
   rendered.installation.text.includes(SEASONS_BAND) && !rendered.installation.text.includes(BOOKING_BAND)
   && rendered.service.text.includes("ON THE DAY") && !rendered.service.text.includes(BOOKING_BAND)
-  && rendered.spring_opening.text.includes(BOOKING_BAND));
+  && rendered.spring_opening.text.includes(SPRING_BOOKING_BAND) && !rendered.spring_opening.text.includes(BOOKING_BAND));
 ok("an unknown variant renders as service", welcome.renderWelcomeEmail({ variant: "nope" }).subject === rendered.service.subject);
 
 // ---- 2. dueWelcomes ----------------------------------------------------
@@ -266,7 +273,7 @@ ok("an invoice pointing at a different project, or no project, is false",
   ok("test send delivers one email per variant", sent.length === welcome.VARIANTS.length && r.results.every((x) => x.ok));
   ok("every test email goes only to the given address", sent.every((m) => m.to === "owner@example.com"));
   ok("every test subject is prefixed [TEST", sent.every((m) => m.subject.startsWith("[TEST ")));
-  ok("test emails keep their images (remote <img> tags survive)", sent.every((m) => (m.html.match(/<img /g) || []).length >= 10));
+  ok("test emails keep their images (remote <img> tags survive)", sent.every((m) => (m.html.match(/<img /g) || []).length >= 8));
   let threw = false;
   try { await welcome.sendTestWelcomes({ to: "not-an-email", sendMail: async () => ({}) }); } catch { threw = true; }
   ok("test send refuses an invalid address", threw);

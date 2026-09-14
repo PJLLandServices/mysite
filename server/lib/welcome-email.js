@@ -6,14 +6,21 @@
 // (a 600px table-layout email, images hosted on pjllandservices.com) and
 // is used byte-for-byte except for the deliberate substitutions below.
 //
-// Four variants, all cut from the one design:
-//   spring_opening / fall_closing — the email as designed.
-//   service                       — the "HOW YOUR BOOKING GOT MADE" band
-//                                   and its body come out; a repair
-//                                   customer has not met the season plan.
-//   installation                  — same cut, replaced by "HOW YOUR
-//                                   SEASONS WORK FROM HERE", and the
-//                                   warranty copy leads with three years.
+// Four variants:
+//   spring_opening — its OWN design, welcome-email-spring.html. Patrick's
+//                    Sep 13 2026 rewrite: real spring content (weather-
+//                    dependent start, fall-inspection-to-spring-repair
+//                    cycle, one-year-only warranty), not a cut of the
+//                    shared design below. Keep this file self-contained —
+//                    it does not participate in the booking-cut / seasons-
+//                    insert / warranty-swap logic that follows.
+//   fall_closing   — the shared design (welcome-email.html) as built.
+//   service        — shared design, the "HOW YOUR BOOKING GOT MADE" band
+//                    and its body come out; a repair customer has not met
+//                    the season plan.
+//   installation   — shared design, same cut, replaced by "HOW YOUR
+//                    SEASONS WORK FROM HERE", and the warranty copy leads
+//                    with three years.
 //
 // Lifecycle (the part that matters more than the HTML):
 //   - The automatic sweep runs only while settings.welcomeEmail.enabled
@@ -45,10 +52,18 @@ function template() {
   return templateCache;
 }
 
+// Spring's own design — see the note at the top of this file.
+const SPRING_TEMPLATE_FILE = path.join(__dirname, "welcome-email-spring.html");
+let springTemplateCache = null;
+function springTemplate() {
+  if (springTemplateCache === null) springTemplateCache = fs.readFileSync(SPRING_TEMPLATE_FILE, "utf8");
+  return springTemplateCache;
+}
+
 const VARIANTS = ["spring_opening", "fall_closing", "service", "installation"];
 
 const SUBJECTS = {
-  spring_opening: "Welcome to PJL Land Services — you're in the book",
+  spring_opening: "Welcome to PJL Land Services — your spring opening is booked",
   fall_closing: "Welcome to PJL Land Services — you're in the book",
   service: "Welcome to PJL Land Services — we've got your repair booked",
   installation: "Welcome to PJL Land Services — your new system, and what comes next"
@@ -139,6 +154,16 @@ function replaceOnce(html, needle, replacement, what) {
 }
 
 function renderHtml({ variant, portalUrl, unsubscribeUrl }) {
+  // Spring is a fully separate design — no booking cut, no seasons
+  // insert, no warranty swap. Just the two universal link substitutions.
+  if (variant === "spring_opening") {
+    let springHtml = springTemplate();
+    springHtml = replaceOnce(springHtml, PORTAL_HREF, `href="${escapeHtml(portalUrl || DEFAULT_PORTAL_URL)}"`, "spring portal button");
+    if (unsubscribeUrl) {
+      springHtml = replaceOnce(springHtml, UNSUBSCRIBE_HREF, `href="${escapeHtml(unsubscribeUrl)}"`, "spring unsubscribe link");
+    }
+    return springHtml;
+  }
   let html = template();
   if (variant === "service" || variant === "installation") {
     const start = html.indexOf(BOOKING_START);
@@ -158,14 +183,58 @@ function renderHtml({ variant, portalUrl, unsubscribeUrl }) {
   return html;
 }
 
+// Spring's own plain-text alternative, matching welcome-email-spring.html.
+// Kept separate from the shared renderText below rather than folded in,
+// so editing spring's copy again can never accidentally touch fall's.
+function renderSpringText({ firstName, portalUrl, unsubscribeUrl }) {
+  const name = String(firstName || "").trim();
+  const lines = [];
+  lines.push(name ? `Hi ${name},` : "Hi,");
+  lines.push("");
+  lines.push("Thank you for choosing PJL Land Services. Finding a sprinkler company you can count on is harder than it should be. Calls go unanswered, appointments slip, and nobody explains what was done. You've made the right call, and we don't take that trust lightly.");
+  lines.push("");
+  lines.push("HOW YOUR BOOKING WAS MADE");
+  lines.push("Our booking system routes our trucks by area, so the day runs in order instead of criss-crossing York Region and the GTA. It's also how we keep your price where it is — less driving means lower costs, and that saving stays with you. Returning customers don't book at all: we place their property on a route day, send the date by email and text with a link to their own appointment page, and a simple acceptance confirms the spot. We'll text you the day before as a reminder too.");
+  lines.push("");
+  lines.push("YOUR FUTURE SPRING OPENINGS");
+  lines.push("We start openings when the weather allows, not before, with the goal of every system running by the May 24 long weekend. Every fall closing includes an in-depth inspection; we document anything we find, but repairs wait until spring, when the system is running and we can actually fix and test it. Repairs are quoted on site and, for the most part, completed the same day.");
+  lines.push("");
+  lines.push("EVERY VISIT IS DOCUMENTED");
+  lines.push("Our technicians record your shut-off, blow-out connection, valves, zone locations and coverage types. So when you call about a dry corner out back, you don't have to describe it — we already know which zone that is.");
+  lines.push("");
+  lines.push("YOUR YEAR WITH US");
+  lines.push("Summer: our team is available for whatever your system throws at you, and repairs are often same-day. Fall: closings run through the same automated booking system, and can often be done without you needing to be home. All seasonal appointments use the same link, where you can change your appointment up to 24 hours in advance.");
+  lines.push("");
+  lines.push("PLANNING A LANDSCAPE RENOVATION?");
+  lines.push("Call us once you have the plan in hand, before the work begins. We'll walk the property with you and make sure the irrigation is ready for your new landscape.");
+  lines.push("");
+  lines.push("WE STAND BEHIND OUR WORK");
+  lines.push("Every repair we carry out is covered for one year, parts and labour.");
+  lines.push("");
+  lines.push("PAYING US");
+  lines.push("Our technicians carry secure card readers (Visa, Mastercard, Amex); e-transfer works too. Or we'll send the invoice and you can pay from your phone. Invoices, receipts and work orders live in your portal:");
+  lines.push(portalUrl || DEFAULT_PORTAL_URL);
+  lines.push("");
+  lines.push("SEND A NEIGHBOUR OR FRIEND OUR WAY");
+  lines.push("When a neighbour or friend books with us, you get 10% off your seasonal service charge.");
+  lines.push("");
+  lines.push("Anything at all — (905) 960-0181 or info@pjllandservices.com.");
+  lines.push("Thank you again for choosing us.");
+  lines.push("");
+  lines.push("PJL Land Services · Newmarket, Ontario · pjllandservices.com");
+  lines.push(`You're receiving this because you booked a service with us. Unsubscribe: ${unsubscribeUrl || DEFAULT_UNSUBSCRIBE_HREF}`);
+  return lines.join("\n");
+}
+
 function renderText({ variant, firstName, portalUrl, unsubscribeUrl }) {
+  if (variant === "spring_opening") return renderSpringText({ firstName, portalUrl, unsubscribeUrl });
   const lines = [];
   const name = String(firstName || "").trim();
   lines.push(name ? `Hi ${name},` : "Hi,");
   lines.push("");
   lines.push("You're in the book. Letting someone onto your property is a big ask, and we don't take it lightly. Five minutes here and you'll know exactly how we run.");
   lines.push("");
-  if (variant === "spring_opening" || variant === "fall_closing") {
+  if (variant === "fall_closing") {
     lines.push("HOW YOUR BOOKING GOT MADE");
     lines.push("Our booking system routes trucks by area, sequencing streets and subdivisions so the day runs in order. That's the reason our prices sit where they do. Online booking is how new customers get started; from your second season on your property goes onto a route day in the season plan and the appointment comes to you by email and text. What we promise is a half-day, never a minute: morning is an 8am to 12pm arrival window, afternoon is 12pm to 5pm. From your appointment page you can confirm, move, cancel, correct your zone count, or tell us to come whenever we're in the area. You don't have to reply at all — the appointment stands unless you change it, and you'll get a reminder text the day before.");
     lines.push("");
@@ -460,16 +529,19 @@ async function sendTestWelcomes({ to, portalUrl = DEFAULT_PORTAL_URL, sendMail =
   });
   const results = [];
   for (const variant of VARIANTS) {
-    const rendered = renderWelcomeEmail({ variant, firstName: "", portalUrl });
-    const message = {
-      from: `"PJL Land Services" <${fromAddress()}>`,
-      to: addr,
-      replyTo: fromAddress(),
-      subject: `[TEST ${variant.replace(/_/g, " ")}] ${rendered.subject}`,
-      text: rendered.text,
-      html: rendered.html
-    };
+    // Render lives INSIDE the try too — a template that fails to build for
+    // one variant must not throw the whole batch and leave the caller
+    // unsure which of the earlier variants actually went out.
     try {
+      const rendered = renderWelcomeEmail({ variant, firstName: "", portalUrl });
+      const message = {
+        from: `"PJL Land Services" <${fromAddress()}>`,
+        to: addr,
+        replyTo: fromAddress(),
+        subject: `[TEST ${variant.replace(/_/g, " ")}] ${rendered.subject}`,
+        text: rendered.text,
+        html: rendered.html
+      };
       const info = await send(message);
       logSend({ kind: "welcome", to: addr, ok: true, refId: `test-${variant}` });
       results.push({ variant, ok: true, suppressed: info?.suppressed === true });
