@@ -4902,12 +4902,39 @@ function lateralRunSvg(ed, run, col, dm, opts){
     });
   }
   if(opts.labels){
-    pieces.forEach(pc=>{
-      // screen length of the whole piece
-      let px=0; for(let i=0;i<pc.pts.length-1;i++) px+=Math.hypot((pc.pts[i+1].x-pc.pts[i].x)*ed.ppf, (pc.pts[i+1].y-pc.pts[i].y)*ed.ppf);
-      if(px < (pc.kind==='spur' ? minLabelPx*0.8 : minLabelPx)) return;
+    // One label per continuous run of the same size — not one per piece.
+    // A hand-drawn run breaks into a piece at every head it passes, and a
+    // label on each read as noise ("1\" · 19 ft, 1\" · 20 ft, 1\" · 20 ft…").
+    // So pieces are chained through their shared endpoints, breaking only
+    // at a tee (three or more pipes meet) or where the size changes, and
+    // each chain is labelled once, on its longest piece, with its total.
+    const px=pc=>{ let t=0; for(let i=0;i<pc.pts.length-1;i++) t+=Math.hypot((pc.pts[i+1].x-pc.pts[i].x)*ed.ppf, (pc.pts[i+1].y-pc.pts[i].y)*ed.ppf); return t; };
+    const ek=q=>q.x.toFixed(2)+','+q.y.toFixed(2);
+    const trunk=pieces.map((pc,i)=>({pc,i})).filter(x=>x.pc.kind!=='spur');
+    const ends=x=>[ek(x.pc.pts[0]), ek(x.pc.pts[x.pc.pts.length-1])];
+    const deg=new Map(), byEnd=new Map();
+    trunk.forEach(x=>ends(x).forEach(k=>{ deg.set(k,(deg.get(k)||0)+1); if(!byEnd.has(k)) byEnd.set(k,[]); byEnd.get(k).push(x); }));
+    const used=new Set(), chains=[];
+    trunk.forEach(x=>{
+      if(used.has(x.i)) return;
+      const chain=[x]; used.add(x.i);
+      const grow=(fromEnd)=>{
+        let cur=x, key=ends(x)[fromEnd];
+        for(;;){
+          if(deg.get(key)!==2) break;                                   // a tee or a loose end
+          const nb=(byEnd.get(key)||[]).find(y=>y.i!==cur.i && !used.has(y.i));
+          if(!nb || nb.pc.size!==cur.pc.size) break;                    // size steps down here
+          used.add(nb.i); if(fromEnd===0) chain.unshift(nb); else chain.push(nb);
+          const [k0,k1]=ends(nb); key = (k0===key) ? k1 : k0; cur=nb;
+        }
+      };
+      grow(1); grow(0);
+      chains.push(chain);
+    });
+    const labelOn=(pc, txt)=>{
+      const L0=px(pc);
       // label at the piece's halfway point, along its own path
-      let half=px/2, ax=pc.pts[0].x, ay=pc.pts[0].y, bx=ax, by=ay, mx=SX(ax), my=SY(ay);
+      let half=L0/2, ax=pc.pts[0].x, ay=pc.pts[0].y, bx=ax, by=ay, mx=SX(ax), my=SY(ay);
       for(let i=0;i<pc.pts.length-1;i++){
         const L=Math.hypot((pc.pts[i+1].x-pc.pts[i].x)*ed.ppf, (pc.pts[i+1].y-pc.pts[i].y)*ed.ppf);
         if(half<=L){ const t=L>0?half/L:0; ax=pc.pts[i].x; ay=pc.pts[i].y; bx=pc.pts[i+1].x; by=pc.pts[i+1].y;
@@ -4917,9 +4944,17 @@ function lateralRunSvg(ed, run, col, dm, opts){
       const dx=SX(bx)-SX(ax), dy=SY(by)-SY(ay), L=Math.hypot(dx,dy)||1;
       const nx=-dy/L, ny=dx/L;
       const size=opts.fontSize||10.5;
-      const txt=(pc.size||lateralSizeForGPM(pc.gpm))+' · '+Math.round(pc.ft)+' ft';
       g+=mpHalo(mx+nx*(size+1), my+ny*(size+1)+size*0.35, txt, size, 'middle', opts.labelInk||col);
+    };
+    chains.forEach(chain=>{
+      const total=chain.reduce((t,x)=>t+px(x.pc),0);
+      if(total<minLabelPx) return;
+      const ft=chain.reduce((t,x)=>t+(x.pc.ft||0),0);
+      const longest=chain.reduce((b,x)=>px(x.pc)>px(b.pc)?x:b, chain[0]).pc;
+      labelOn(longest, (longest.size||lateralSizeForGPM(longest.gpm))+' · '+Math.round(ft)+' ft');
     });
+    // spurs: only a long one is worth a label
+    pieces.forEach(pc=>{ if(pc.kind==='spur' && px(pc)>=minLabelPx*1.2) labelOn(pc, (pc.size||lateralSizeForGPM(pc.gpm))+' · '+Math.round(pc.ft)+' ft'); });
   }
   return g;
 }
