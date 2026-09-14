@@ -209,11 +209,17 @@ async function deriveBookingState(propertyId, season, year) {
     if (b.status === "cancelled" || b.status === "no_show") return false;
     return isInSeasonWindow(b.scheduledFor, season, year);
   });
-  if (!candidate) return { hasBooking: false, bookingId: null, scheduledDate: null };
+  if (!candidate) return { hasBooking: false, bookingId: null, scheduledDate: null, bucket: null };
   return {
     hasBooking: true,
     bookingId: candidate.id,
-    scheduledDate: candidate.scheduledFor
+    scheduledDate: candidate.scheduledFor,
+    // Route day-planning assigns "morning" / "afternoon" onto
+    // assignment.bucket once the day is planned; null until then. This
+    // IS a real customer-facing time window (unlike the exact
+    // scheduledFor minute, which is a route-order estimate) — the
+    // customer portal's Next Visit card shows it when present.
+    bucket: candidate.assignment?.bucket || null
   };
 }
 

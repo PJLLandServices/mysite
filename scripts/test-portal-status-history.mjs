@@ -127,7 +127,12 @@ function writeFixtures() {
     scheduledFor,
     serviceKey,
     serviceLabel: "Season-plan probe visit",
-    status: "confirmed"
+    status: "confirmed",
+    // Route day-planning has assigned a bucket — this IS a real
+    // customer-facing time window (Patrick: "the customer is provided
+    // a time slot, Morning or Afternoon") and must be surfaced,
+    // unlike the exact scheduledFor minute.
+    assignment: { bucket: "morning" }
   }], null, 2));
 
   fs.writeFileSync(path.join(DATA, "work-orders.json"), JSON.stringify([{
@@ -214,10 +219,18 @@ try {
   // the frontend's job (dateOnly: true tells portal.js to format the
   // day and stop there), not something this JSON-level test can see
   // directly, so this checks the contract the frontend relies on.
-  ok("nextVisit carries the real date and flags it date-only (no time)",
-    portal.nextVisit?.dateOnly === true
-      && typeof portal.nextVisit?.start === "string"
-      && new Date(portal.nextVisit.start).toISOString().slice(0, 10) === scheduledFor.slice(0, 10),
+  // The fixture booking has assignment.bucket: "morning" (route
+  // day-planning has assigned a real time window) — Patrick: "the
+  // customer is provided a time slot, Morning or Afternoon." That must
+  // surface exactly like the public-booking-flow bucket does; dateOnly
+  // must NOT be set when a bucket is available (it's the fallback for
+  // before a bucket is assigned, not a replacement for one).
+  ok("nextVisit carries the real date and the assigned morning/afternoon bucket",
+    typeof portal.nextVisit?.start === "string"
+      && new Date(portal.nextVisit.start).toISOString().slice(0, 10) === scheduledFor.slice(0, 10)
+      && portal.nextVisit?.bucketLabel === "Morning Appointment"
+      && portal.nextVisit?.bucketWindow === "8 AM – 12 PM"
+      && portal.nextVisit?.dateOnly !== true,
     JSON.stringify(portal.nextVisit));
   ok("the 'Book a Service' card agrees the property is already booked",
     Array.isArray(portal.bookableProperties)

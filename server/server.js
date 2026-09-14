@@ -3953,7 +3953,7 @@ async function customerPortalSections(lead) {
       try {
         const st = await outreach.deriveBookingState(prop.id, seasonPlanSeason, seasonPlanYear);
         return (st && st.hasBooking)
-          ? { propertyId: prop.id, address: prop.address, season: seasonPlanSeason, bookingId: st.bookingId, scheduledDate: st.scheduledDate }
+          ? { propertyId: prop.id, address: prop.address, season: seasonPlanSeason, bookingId: st.bookingId, scheduledDate: st.scheduledDate, bucket: st.bucket || null }
           : null;
       } catch (err) {
         console.warn("[portal] season-plan booking state failed:", err?.message);
@@ -4042,18 +4042,32 @@ async function customerPortalSections(lead) {
     // Then, after a first fix hid the date too ("date to be confirmed"
     // for a visit PJL already knows is on the books) — "there is a
     // f***ing appointment scheduled" — the date itself IS known
-    // information and must show; only the hour/minute must not.
-    // `dateOnly` tells the frontend to render the day and stop there.
+    // information and must show.
+    //
+    // What actually IS a real customer-facing time window: the
+    // morning/afternoon bucket route day-planning assigns onto
+    // booking.assignment.bucket (Patrick: "the customer is provided a
+    // time slot, Morning or Afternoon") — same bucketLabel/bucketWindow
+    // shape and copy the public booking flow already uses, so the
+    // Next Visit card's existing bucketLabel branch renders it exactly
+    // the same way. `dateOnly` is the fallback for before route
+    // planning has assigned a bucket yet — day known, no window yet.
     const spb = [...seasonPlanBookings].sort((a, b) =>
       String(a.scheduledDate || "").localeCompare(String(b.scheduledDate || "")))[0];
+    const bucketCopy = spb.bucket === "morning"
+      ? { bucketLabel: "Morning Appointment", bucketWindow: "8 AM – 12 PM" }
+      : spb.bucket === "afternoon"
+      ? { bucketLabel: "Afternoon Appointment", bucketWindow: "12 PM – 5 PM" }
+      : { bucketLabel: null, bucketWindow: null };
     nextVisit = {
       source: "season_plan",
       actionable: false,
       woId: null,
       serviceLabel: outreach.seasonLabel(spb.season),
       start: spb.scheduledDate || null,
-      dateOnly: true,
-      dateTBC: !spb.scheduledDate
+      dateOnly: !bucketCopy.bucketLabel,
+      dateTBC: !spb.scheduledDate,
+      ...bucketCopy
     };
   }
 
