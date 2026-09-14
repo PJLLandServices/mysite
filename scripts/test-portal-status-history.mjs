@@ -20,6 +20,12 @@
 // appeared in Service History or anywhere else on the portal, even
 // though it existed and might be payable.
 //
+// Also covers a follow-up sweep finding: a season-plan booking's
+// scheduledFor is an internal route/day-schedule timestamp, not a time
+// committed to the customer. It must never be surfaced as an exact
+// arrival time — not in the Next Visit card, and not via the
+// property-token calendar (.ics) download either.
+//
 // Boots the real server against fixture data and hits the real public
 // portal endpoint end-to-end, no stubs.
 //
@@ -27,6 +33,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -66,10 +73,20 @@ if (!win) {
   console.log("• test-portal-status-history: no season window resolvable right now — nothing to test, skipping.");
   process.exit(0);
 }
-const pad = (n) => String(n).padStart(2, "0");
-// A day safely inside the window (start + 3, clamped to a valid day-of-month).
-const probeDay = Math.min(win.startDay + 3, 28);
-const scheduledFor = `${year}-${pad(win.startMonth)}-${pad(probeDay)}T16:00:00.000Z`;
+// A day that is BOTH inside the season window AND strictly in the
+// future relative to right now — the calendar.ics route only offers a
+// season-plan event when scheduledFor is future-dated, so a window-only
+// date (which can land in the past, e.g. right after a window opens)
+// would make that assertion pass vacuously regardless of the fix.
+const windowStart = new Date(Date.UTC(year, win.startMonth - 1, win.startDay, 16, 0, 0));
+const windowEnd = new Date(Date.UTC(year, win.endMonth - 1, win.endDay, 16, 0, 0));
+const soon = new Date(Date.now() + 2 * 86400000);
+const probeMs = Math.max(soon.getTime(), windowStart.getTime());
+if (probeMs > windowEnd.getTime()) {
+  console.log("• test-portal-status-history: no future date available inside the current season window — nothing to test, skipping.");
+  process.exit(0);
+}
+const scheduledFor = new Date(probeMs).toISOString();
 const serviceKey = `${outreach.SEASONAL_SERVICE_PREFIXES[season]}4z`;
 
 const CUSTOMER_ID = "cust-portal-probe";
@@ -208,6 +225,15 @@ try {
     JSON.stringify(orphanRow));
   ok("the completed Work Order is still listed too (nothing regressed)",
     history.some((h) => h.id === PAST_WO_ID));
+
+  // ---- Sweep finding: the property-token calendar (.ics) download must
+  // not hand the customer's calendar app the same internal route time
+  // either — same class of leak as nextVisit, different surface.
+  const propertyToken = crypto.createHash("sha256")
+    .update(`pjl-portal:${PROPERTY_ID}`).digest("base64url").slice(0, 24);
+  const icsRes = await fetch(`http://127.0.0.1:${PORT}/api/portal/${propertyToken}/calendar.ics`, { cache: "no-store" });
+  ok("the property-token calendar download refuses rather than exposing the internal time",
+    icsRes.status === 404, `got ${icsRes.status}`);
 } finally {
   child.kill("SIGKILL");
   for (const [f, buf] of backups) {
