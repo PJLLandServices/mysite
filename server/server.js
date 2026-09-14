@@ -4032,6 +4032,16 @@ async function customerPortalSections(lead) {
     }
   }
   if (!nextVisit && seasonPlanBookings.length) {
+    // scheduledDate is used only to pick which booking is "next" when a
+    // customer has more than one property — NEVER surfaced to the
+    // customer as a time. It's an internal route/day-schedule timestamp
+    // that route optimization can (and does) move right up until the
+    // actual visit; it is not a time PJL has committed to the customer.
+    // Patrick, 2026-09-14: after this shipped, the portal displayed
+    // "Wednesday, October 7 at 9:42 a.m." for a season-plan booking —
+    // "that was never supposed to be displayed to any customer
+    // whatsoever." Always renders as "date to be confirmed," the same
+    // state a dateless canonical Work Order already uses.
     const spb = [...seasonPlanBookings].sort((a, b) =>
       String(a.scheduledDate || "").localeCompare(String(b.scheduledDate || "")))[0];
     nextVisit = {
@@ -4039,8 +4049,8 @@ async function customerPortalSections(lead) {
       actionable: false,
       woId: null,
       serviceLabel: outreach.seasonLabel(spb.season),
-      start: spb.scheduledDate || null,
-      dateTBC: !spb.scheduledDate
+      start: null,
+      dateTBC: true
     };
   }
 
@@ -7255,16 +7265,17 @@ async function handleApi(req, res, pathname) {
         serviceLabel: lead.booking.serviceLabel || "",
         address: lead.contact?.address || ""
       };
-    } else {
-      const property = (await properties.list()).find((p) => p.id && portalTokenForId(p.id) === token) || null;
-      if (property) {
-        const upcoming = (await bookings.list())
-          .filter((b) => b && b.propertyId === property.id && b.status === "confirmed"
-            && b.scheduledFor && new Date(b.scheduledFor).getTime() > Date.now())
-          .sort((a, b) => new Date(a.scheduledFor) - new Date(b.scheduledFor))[0];
-        if (upcoming) eventSource = { ...upcoming, address: upcoming.address || property.address || "" };
-      }
     }
+    // Deliberately NO fallback here for a property-token (season-plan)
+    // visit: its bookings.json scheduledFor is an internal route/day-
+    // schedule timestamp that route optimization can move right up
+    // until the actual visit, never a time PJL has committed to the
+    // customer — the same thing that leaked into the Next Visit card
+    // (Patrick, 2026-09-14: "that was never supposed to be displayed to
+    // any customer whatsoever"). An .ics file inherently commits to an
+    // exact DTSTART, so there is no safe way to offer one here; refuse
+    // with the same 404 as "nothing upcoming" rather than hand the
+    // customer's calendar app a time that can quietly go stale.
     if (!eventSource) return sendJson(res, 404, { ok: false, errors: ["No upcoming appointment to add."] });
     const event = calendarLinks.eventForBooking(eventSource, {
       portalUrl: `${resolvePublicBaseUrl()}/portal/${encodeURIComponent(token)}`
