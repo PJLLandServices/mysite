@@ -127,7 +127,12 @@ function writeFixtures() {
     scheduledFor,
     serviceKey,
     serviceLabel: "Season-plan probe visit",
-    status: "confirmed"
+    status: "confirmed",
+    // Route day-planning has assigned a bucket — this IS a real
+    // customer-facing time window (Patrick: "the customer is provided
+    // a time slot, Morning or Afternoon") and must be surfaced,
+    // unlike the exact scheduledFor minute.
+    assignment: { bucket: "morning" }
   }], null, 2));
 
   fs.writeFileSync(path.join(DATA, "work-orders.json"), JSON.stringify([{
@@ -207,8 +212,25 @@ try {
   // never render as an exact arrival time (Patrick, 2026-09-14, after
   // the portal briefly showed "Wednesday, October 7 at 9:42 a.m." for
   // exactly this kind of booking).
-  ok("nextVisit never exposes the internal scheduled time to the customer",
-    portal.nextVisit?.dateTBC === true && portal.nextVisit?.start === null,
+  // The DAY is real, on-the-books information and must show (Patrick,
+  // after a first fix over-corrected to "date to be confirmed" for a
+  // visit that IS scheduled: "there is a f***ing appointment
+  // scheduled"). Only the exact hour/minute must never render — that's
+  // the frontend's job (dateOnly: true tells portal.js to format the
+  // day and stop there), not something this JSON-level test can see
+  // directly, so this checks the contract the frontend relies on.
+  // The fixture booking has assignment.bucket: "morning" (route
+  // day-planning has assigned a real time window) — Patrick: "the
+  // customer is provided a time slot, Morning or Afternoon." That must
+  // surface exactly like the public-booking-flow bucket does; dateOnly
+  // must NOT be set when a bucket is available (it's the fallback for
+  // before a bucket is assigned, not a replacement for one).
+  ok("nextVisit carries the real date and the assigned morning/afternoon bucket",
+    typeof portal.nextVisit?.start === "string"
+      && new Date(portal.nextVisit.start).toISOString().slice(0, 10) === scheduledFor.slice(0, 10)
+      && portal.nextVisit?.bucketLabel === "Morning Appointment"
+      && portal.nextVisit?.bucketWindow === "8 AM – 12 PM"
+      && portal.nextVisit?.dateOnly !== true,
     JSON.stringify(portal.nextVisit));
   ok("the 'Book a Service' card agrees the property is already booked",
     Array.isArray(portal.bookableProperties)

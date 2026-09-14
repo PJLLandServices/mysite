@@ -3953,7 +3953,7 @@ async function customerPortalSections(lead) {
       try {
         const st = await outreach.deriveBookingState(prop.id, seasonPlanSeason, seasonPlanYear);
         return (st && st.hasBooking)
-          ? { propertyId: prop.id, address: prop.address, season: seasonPlanSeason, bookingId: st.bookingId, scheduledDate: st.scheduledDate }
+          ? { propertyId: prop.id, address: prop.address, season: seasonPlanSeason, bookingId: st.bookingId, scheduledDate: st.scheduledDate, bucket: st.bucket || null }
           : null;
       } catch (err) {
         console.warn("[portal] season-plan booking state failed:", err?.message);
@@ -4032,25 +4032,42 @@ async function customerPortalSections(lead) {
     }
   }
   if (!nextVisit && seasonPlanBookings.length) {
-    // scheduledDate is used only to pick which booking is "next" when a
-    // customer has more than one property — NEVER surfaced to the
-    // customer as a time. It's an internal route/day-schedule timestamp
-    // that route optimization can (and does) move right up until the
-    // actual visit; it is not a time PJL has committed to the customer.
-    // Patrick, 2026-09-14: after this shipped, the portal displayed
-    // "Wednesday, October 7 at 9:42 a.m." for a season-plan booking —
-    // "that was never supposed to be displayed to any customer
-    // whatsoever." Always renders as "date to be confirmed," the same
-    // state a dateless canonical Work Order already uses.
+    // The DAY is real — it's what PJL has on the schedule — but the
+    // exact TIME on scheduledFor is an internal route/day-schedule
+    // estimate that route optimization can (and does) move right up
+    // until the actual visit; it is not a time PJL has committed to the
+    // customer. Patrick, 2026-09-14: after showing the full timestamp,
+    // the portal displayed "Wednesday, October 7 at 9:42 a.m." — "that
+    // was never supposed to be displayed to any customer whatsoever."
+    // Then, after a first fix hid the date too ("date to be confirmed"
+    // for a visit PJL already knows is on the books) — "there is a
+    // f***ing appointment scheduled" — the date itself IS known
+    // information and must show.
+    //
+    // What actually IS a real customer-facing time window: the
+    // morning/afternoon bucket route day-planning assigns onto
+    // booking.assignment.bucket (Patrick: "the customer is provided a
+    // time slot, Morning or Afternoon") — same bucketLabel/bucketWindow
+    // shape and copy the public booking flow already uses, so the
+    // Next Visit card's existing bucketLabel branch renders it exactly
+    // the same way. `dateOnly` is the fallback for before route
+    // planning has assigned a bucket yet — day known, no window yet.
     const spb = [...seasonPlanBookings].sort((a, b) =>
       String(a.scheduledDate || "").localeCompare(String(b.scheduledDate || "")))[0];
+    const bucketCopy = spb.bucket === "morning"
+      ? { bucketLabel: "Morning Appointment", bucketWindow: "8 AM – 12 PM" }
+      : spb.bucket === "afternoon"
+      ? { bucketLabel: "Afternoon Appointment", bucketWindow: "12 PM – 5 PM" }
+      : { bucketLabel: null, bucketWindow: null };
     nextVisit = {
       source: "season_plan",
       actionable: false,
       woId: null,
       serviceLabel: outreach.seasonLabel(spb.season),
-      start: null,
-      dateTBC: true
+      start: spb.scheduledDate || null,
+      dateOnly: !bucketCopy.bucketLabel,
+      dateTBC: !spb.scheduledDate,
+      ...bucketCopy
     };
   }
 
