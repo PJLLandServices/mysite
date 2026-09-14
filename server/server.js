@@ -4032,6 +4032,16 @@ async function customerPortalSections(lead) {
     }
   }
   if (!nextVisit && seasonPlanBookings.length) {
+    // scheduledDate is used only to pick which booking is "next" when a
+    // customer has more than one property — NEVER surfaced to the
+    // customer as a time. It's an internal route/day-schedule timestamp
+    // that route optimization can (and does) move right up until the
+    // actual visit; it is not a time PJL has committed to the customer.
+    // Patrick, 2026-09-14: after this shipped, the portal displayed
+    // "Wednesday, October 7 at 9:42 a.m." for a season-plan booking —
+    // "that was never supposed to be displayed to any customer
+    // whatsoever." Always renders as "date to be confirmed," the same
+    // state a dateless canonical Work Order already uses.
     const spb = [...seasonPlanBookings].sort((a, b) =>
       String(a.scheduledDate || "").localeCompare(String(b.scheduledDate || "")))[0];
     nextVisit = {
@@ -4039,8 +4049,8 @@ async function customerPortalSections(lead) {
       actionable: false,
       woId: null,
       serviceLabel: outreach.seasonLabel(spb.season),
-      start: spb.scheduledDate || null,
-      dateTBC: !spb.scheduledDate
+      start: null,
+      dateTBC: true
     };
   }
 

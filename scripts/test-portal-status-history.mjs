@@ -185,6 +185,14 @@ try {
   ok("nextVisit carries the season label",
     portal.nextVisit?.serviceLabel === outreach.seasonLabel(season),
     portal.nextVisit?.serviceLabel);
+  // A season-plan scheduledFor is an internal route/day-schedule
+  // timestamp, not a time PJL has committed to the customer — it must
+  // never render as an exact arrival time (Patrick, 2026-09-14, after
+  // the portal briefly showed "Wednesday, October 7 at 9:42 a.m." for
+  // exactly this kind of booking).
+  ok("nextVisit never exposes the internal scheduled time to the customer",
+    portal.nextVisit?.dateTBC === true && portal.nextVisit?.start === null,
+    JSON.stringify(portal.nextVisit));
   ok("the 'Book a Service' card agrees the property is already booked",
     Array.isArray(portal.bookableProperties)
       && portal.bookableProperties.some((p) => p.propertyId === PROPERTY_ID && p.alreadyBooked === true),
