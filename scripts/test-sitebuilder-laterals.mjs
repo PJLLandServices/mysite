@@ -388,11 +388,12 @@ const sheet = await page.evaluate(key => {
   mpSelectZone(zi); lpOpen(zi);
   const h = el('lpSheet').innerHTML;
   return { open: !el('lpOverlay').hidden && document.body.classList.contains('lp-open'),
-           title: /Lateral layout — Front lawn/.test(h), box: /M\d · valve box/.test(h),
+           title: /Pipe layout — Front lawn/.test(h), box: /M\d · valve box/.test(h),
            labels: (h.match(/3\/4" · \d+ ft|1" · \d+ ft/g) || []).length,
            captions: (h.match(/\d+\. PGP[^<]*· \d+° · \d+ ft/g) || []).length,
            sizes: /Pipe by size/.test(h) && /poly — \d+ ft/.test(h),
-           noMain: !/POC/.test(h.replace(/no box placed/, '')) };
+           arrows: (h.match(/<polygon points="[^"]*" fill="#fff" stroke="var\(--z/g) || []).length,
+           tools: /Head arcs/.test(h) && /Other zones' pipe/.test(h) };
 }, lawnKey);
 console.log('sheet:', JSON.stringify(sheet));
 check(sheet.open && sheet.title, 'print sheet opens for the selected valve');
@@ -400,6 +401,7 @@ check(sheet.box, 'sheet shows the valve box');
 check(sheet.labels > 0, 'sheet labels pipe with size · length (' + sheet.labels + ')');
 check(sheet.captions > 0, 'sheet captions every head with model · arc · throw (' + sheet.captions + ')');
 check(sheet.sizes, 'sheet totals pipe by size');
+check(sheet.arrows > 0 && sheet.tools, 'sheet draws flow arrows on the pipe and offers the head / mainline / other-pipe toggles (' + sheet.arrows + ' arrows)');
 if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: false });
 await page.evaluate(() => lpClose());
 // a drip valve sheet too

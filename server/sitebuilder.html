@@ -89,6 +89,11 @@
   .lp-foot b{color:var(--green-d)}
   .lp-foot ul{margin:2px 0 0;padding-left:16px}
   .lp-note{font-size:11px;color:#5b6b63;margin-top:6px}
+  .lp-tools{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;margin:0 0 8px;color:#5b6b63}
+  .lp-tools label{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+  .lp-sw{display:inline-block;width:18px;height:5px;border-radius:2px;vertical-align:middle;margin-right:6px}
+  .lp-sw-main{background:#1f2d3d;background-image:repeating-linear-gradient(90deg,transparent 0 5px,#fff 5px 8px)}
+  .lp-head h2 .lp-sw{border-radius:3px;margin-right:8px}
   @media print{
     @page{size:letter landscape;margin:8mm}
     body.lp-open > *:not(#lpOverlay){display:none!important}
@@ -4851,6 +4856,46 @@ function lateralRunSvg(ed, run, col, dm, opts){
          '" stroke="'+col+'" stroke-width="'+ww.toFixed(1)+'" stroke-opacity="'+(0.9*dm).toFixed(3)+'" stroke-linecap="round"'+(pc.kind==='spur'?' stroke-dasharray="3 2"':'')+'/>';
     }
   });
+  if(opts.arrows){
+    // Distance from the root along the run (undirected), so each piece can
+    // be pointed from its near end to its far end — the way the water goes.
+    const key=q=>q.x.toFixed(2)+','+q.y.toFixed(2);
+    const adj=new Map();
+    const link=(u,v,w)=>{ if(!adj.has(u)) adj.set(u,[]); adj.get(u).push([v,w]); };
+    run.edges.forEach(e=>{ const w=e.ft||Math.hypot(e.b.x-e.a.x,e.b.y-e.a.y); link(key(e.a),key(e.b),w); link(key(e.b),key(e.a),w); });
+    const dist=new Map(); const start=key(opts.arrows);
+    let seeds=[start];
+    if(!adj.has(start)){ // root not on the run (hand-drawn run starting elsewhere): nearest endpoint
+      let bk=null, bd=Infinity; adj.forEach((_,k)=>{ const [x,y]=k.split(',').map(Number); const d=Math.hypot(x-opts.arrows.x,y-opts.arrows.y); if(d<bd){bd=d;bk=k;} }); seeds=bk?[bk]:[]; }
+    const todo=seeds.map(k=>[k,0]);
+    while(todo.length){ todo.sort((a,b)=>a[1]-b[1]); const [u,d]=todo.shift(); if(dist.has(u)) continue; dist.set(u,d); (adj.get(u)||[]).forEach(([v,w])=>{ if(!dist.has(v)) todo.push([v,d+w]); }); }
+    const asz=(opts.arrowSize||7)*(opts.printScale||1);
+    pieces.forEach(pc=>{
+      if(pc.kind==='spur') return;
+      const da=dist.get(key(pc.pts[0])), db=dist.get(key(pc.pts[pc.pts.length-1]));
+      const pts=(da!=null && db!=null && db<da) ? pc.pts.slice().reverse() : pc.pts;
+      let px=0; for(let i=0;i<pts.length-1;i++) px+=Math.hypot((pts[i+1].x-pts[i].x)*ed.ppf,(pts[i+1].y-pts[i].y)*ed.ppf);
+      if(px<asz*2.2) return;
+      // One arrow per ~9 arrow-lengths of pipe, never under the length
+      // label that sits at the halfway point.
+      const n=Math.max(1, Math.floor(px/(asz*9)));
+      const fracs = n===1 ? [0.68] : Array.from({length:n}, (_,i)=>{ let f=(i+1)/(n+1); if(Math.abs(f-0.5)<0.09) f+=0.12; return f; });
+      fracs.forEach(fr=>{
+        let half=px*fr, ax=pts[0].x, ay=pts[0].y, bx=ax, by=ay, mx=SX(ax), my=SY(ay);
+        for(let i=0;i<pts.length-1;i++){
+          const L=Math.hypot((pts[i+1].x-pts[i].x)*ed.ppf,(pts[i+1].y-pts[i].y)*ed.ppf);
+          if(half<=L){ const t=L>0?half/L:0; ax=pts[i].x; ay=pts[i].y; bx=pts[i+1].x; by=pts[i+1].y; mx=SX(ax)+(SX(bx)-SX(ax))*t; my=SY(ay)+(SY(by)-SY(ay))*t; break; }
+          half-=L;
+        }
+        const dx=SX(bx)-SX(ax), dy=SY(by)-SY(ay), L=Math.hypot(dx,dy)||1, ux=dx/L, uy=dy/L, nx=-uy, ny=ux;
+        const [x1,y1,x2,y2]=shift(mx,my,mx,my);
+        const tip=`${(x1+ux*asz*0.6).toFixed(1)},${(y1+uy*asz*0.6).toFixed(1)}`;
+        const l=`${(x1-ux*asz*0.5+nx*asz*0.55).toFixed(1)},${(y1-uy*asz*0.5+ny*asz*0.55).toFixed(1)}`;
+        const r=`${(x1-ux*asz*0.5-nx*asz*0.55).toFixed(1)},${(y1-uy*asz*0.5-ny*asz*0.55).toFixed(1)}`;
+        g+='<polygon points="'+tip+' '+l+' '+r+'" fill="'+(opts.arrowFill||'#fff')+'" stroke="'+col+'" stroke-width="1.2" stroke-linejoin="round" stroke-opacity="'+dm.toFixed(2)+'" fill-opacity="'+dm.toFixed(2)+'"/>';
+      });
+    });
+  }
   if(opts.labels){
     pieces.forEach(pc=>{
       // screen length of the whole piece
@@ -4893,7 +4938,7 @@ function mpLateralSvg(){
     const sibs=perRoot.get(run.rootKey)||[run.zi];
     const off=(sibs.indexOf(run.zi)-(sibs.length-1)/2)*2.8;   // screen px, perpendicular
     const col=mpZoneColour(run.zi), dm=mpDim(run.zi);
-    g+=lateralRunSvg(mp, run, col, dm, {offset:off, labels: mp.zoneSel===run.zi});
+    g+=lateralRunSvg(mp, run, col, dm, {offset:off, labels: mp.zoneSel===run.zi, arrows: mp.zoneSel===run.zi ? mpLateralRoot(run.zi) : null});
   });
   // Bends of the selected valve's hand-drawn run, draggable.
   if(mp.zoneSel!=null){
@@ -4960,10 +5005,17 @@ function mpSplitSvg(){
    throw, over a faded copy of the plan for orientation. Nothing else — no
    mainline, no wire, no other zones — because the person trenching this
    valve's pipe does not need them and they hide the numbers.            */
-const lp = { ppf:1, panX:0, panY:0, _w:1040, _h:620, planPage:null, underOpacity:0.28, underHidden:false, quietUnderlay:true };
+const lp = { ppf:1, panX:0, panY:0, _w:1040, _h:620, planPage:null, underOpacity:0.28, underHidden:false, quietUnderlay:true,
+             // What the sheet is FOR: the sub who trenches the pipe. So the
+             // pipe is the drawing; head arcs and captions are a layer he
+             // can switch on, and other valves' pipe crossing this frame is
+             // shown faintly so he knows what else is in the ground here.
+             zi:null, showHeads:false, showOthers:true, showMain:true };
+function lpToggle(k){ lp[k]=!lp[k]; if(lp.zi!=null) lpOpen(lp.zi); }
 
 function lpOpen(zi){
   const z=LAST_ZONES[zi]; if(!z) return;
+  lp.zi=zi;
   const bb=mpZoneBBox(zi);
   if(!bb){ alert('Nothing of this valve is traced on this sheet.'); return; }
   lp.planPage=mp.page;
@@ -4984,20 +5036,23 @@ function lpOpen(zi){
   let g=`<svg width="${lp._w}" height="${lp._h}" viewBox="0 0 ${lp._w} ${lp._h}" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">`;
   g+=`<rect x="0" y="0" width="${lp._w}" height="${lp._h}" fill="#fff"/>`;
   g+=underlaySvg(lp);
+  const inFrame=q=>q.x>=fb.minX && q.x<=fb.maxX && q.y>=fb.minY && q.y<=fb.maxY;
 
-  // this valve's areas
-  let heads=[], beds=0, dripFt=0;
+  // this valve's areas — a light wash, the pipe has to read over it
+  let heads=[], beds=0, dripFt=0, trees=[];
   (z.parts||[]).forEach(pt=>{
     const a=areas[pt.areaIdx];
-    if(!a || !validPoly(a) || !(a.planRef && a.planRef.pageId===mp.pageId)) return;
+    if(!a || !(a.planRef && a.planRef.pageId===mp.pageId)) return;
     const p=mpPlanFor(a);
+    trees=trees.concat(mpZoneTreesOf(z, a));
+    if(!validPoly(a)) return;
     const pts=a.poly.map(v=>`${SX(v.x).toFixed(1)},${SY(v.y).toFixed(1)}`).join(' ');
-    g+=`<polygon points="${pts}" fill="${col}" fill-opacity="0.10" stroke="${col}" stroke-width="2"/>`;
+    g+=`<polygon points="${pts}" fill="${col}" fill-opacity="0.07" stroke="${col}" stroke-width="1.4" stroke-opacity="0.7"/>`;
     if(a.family==='drip'){
       beds++;
       const rowFt=Math.max((a.dripRowIn==null?18:a.dripRowIn)/12, 0.25);
       dripRunSegments(a.poly, rowFt).forEach(sg=>{ dripFt+=Math.hypot(sg.x1-sg.x0, sg.y1-sg.y0);
-        g+=`<line x1="${SX(sg.x0).toFixed(1)}" y1="${SY(sg.y0).toFixed(1)}" x2="${SX(sg.x1).toFixed(1)}" y2="${SY(sg.y1).toFixed(1)}" stroke="${col}" stroke-width="1" stroke-dasharray="4 3" stroke-opacity="0.8"/>`; });
+        g+=`<line x1="${SX(sg.x0).toFixed(1)}" y1="${SY(sg.y0).toFixed(1)}" x2="${SX(sg.x1).toFixed(1)}" y2="${SY(sg.y1).toFixed(1)}" stroke="${col}" stroke-width="0.8" stroke-dasharray="4 3" stroke-opacity="0.45"/>`; });
       const c=polyCentroid(a.poly);
       g+=mpHalo(SX(c.x), SY(c.y), esc(a.name||'Bed'), 12, 'middle', '#1a2320');
       return;
@@ -5005,22 +5060,75 @@ function lpOpen(zi){
     if(a.family==='trees') return;
     heads=heads.concat(mpZoneHeads(z, pt, a, p));
   });
-  // laterals
-  if(run) g+=lateralRunSvg(lp, run, col, 1, {labels:true, minLabelPx:34, fontSize:11, labelInk:'#1a2320', printScale:1.25});
-  // heads with captions
+
+  // other valves' pipe crossing this frame — faint, in their own colours,
+  // so the sub knows what else is going in the ground here
+  const others=[];
+  if(lp.showOthers){
+    lat.runs.forEach(o=>{
+      if(o.zi===zi) return;
+      if(!o.edges.some(e=>inFrame(e.a)||inFrame(e.b))) return;
+      others.push(o);
+      g+=lateralRunSvg(lp, o, mpZoneColour(o.zi), 0.42, {labels:false, printScale:1.0});
+    });
+  }
+
+  // the mainline — one look, unmistakable: dark casing with a white dash
+  let mainFt=0, mainSize='';
+  if(lp.showMain && (r.poc || box)){
+    const st=mpRouteStats();
+    mainSize=pipeForGPM(peakStationGPM());
+    const dropped=[];
+    st.segs.forEach(sg=>{
+      if(!inFrame(sg.a) && !inFrame(sg.b)) return;
+      mainFt+=sg.ft;
+      const d='M'+SX(sg.a.x).toFixed(1)+' '+SY(sg.a.y).toFixed(1)+'L'+SX(sg.b.x).toFixed(1)+' '+SY(sg.b.y).toFixed(1);
+      g+='<path d="'+d+'" fill="none" stroke="#fff" stroke-width="11" stroke-opacity="0.9" stroke-linecap="round"/>';
+      g+='<path d="'+d+'" fill="none" stroke="'+MP_LINE+'" stroke-width="6" stroke-linecap="round"/>';
+      g+='<path d="'+d+'" fill="none" stroke="#fff" stroke-width="1.6" stroke-dasharray="9 7" stroke-linecap="butt"/>';
+      const px=Math.hypot((sg.b.x-sg.a.x)*U,(sg.b.y-sg.a.y)*U);
+      if(px>=70) g+=mpHalo((SX(sg.a.x)+SX(sg.b.x))/2, (SY(sg.a.y)+SY(sg.b.y))/2-11, 'MAIN '+mainSize+' · '+Math.round(sg.ft)+' ft', 11, 'middle', MP_LINE);
+    });
+    // the drop from the main to this valve's box
+    const t = mi>=0 ? st.tees[mi] : null;
+    if(box && t && t.dist>=0.25){
+      g+='<line x1="'+SX(box.x).toFixed(1)+'" y1="'+SY(box.y).toFixed(1)+'" x2="'+SX(t.x).toFixed(1)+'" y2="'+SY(t.y).toFixed(1)+'" stroke="#fff" stroke-width="7" stroke-opacity="0.9"/>';
+      g+='<line x1="'+SX(box.x).toFixed(1)+'" y1="'+SY(box.y).toFixed(1)+'" x2="'+SX(t.x).toFixed(1)+'" y2="'+SY(t.y).toFixed(1)+'" stroke="'+MP_LINE+'" stroke-width="3" stroke-dasharray="7 5"/>';
+      mainFt+=t.dist;
+      if(t.dist*U>=80) g+=mpHalo((SX(box.x)+SX(t.x))/2+12, (SY(box.y)+SY(t.y))/2, 'drop '+Math.round(t.dist)+' ft', 10, 'start', MP_LINE);
+    }
+    if(r.poc && inFrame(r.poc)){
+      g+='<circle cx="'+SX(r.poc.x).toFixed(1)+'" cy="'+SY(r.poc.y).toFixed(1)+'" r="8" fill="#fff" stroke="'+MP_LINE+'" stroke-width="3"/>';
+      g+='<circle cx="'+SX(r.poc.x).toFixed(1)+'" cy="'+SY(r.poc.y).toFixed(1)+'" r="2.6" fill="'+MP_LINE+'"/>';
+      g+=mpHalo(SX(r.poc.x), SY(r.poc.y)-15, 'POC', 11, 'middle', MP_LINE);
+    }
+  }
+
+  // THIS valve's lateral — heavy, labelled, with arrows the way the water goes
+  if(run) g+=lateralRunSvg(lp, run, col, 1, {labels:true, minLabelPx:34, fontSize:11.5, labelInk:'#1a2320', printScale:1.7, arrows: box||r.poc||run.edges[0].a, arrowSize:8});
+
+  // heads: numbered dots always (the pipe ends there); arcs + captions on request
   heads.forEach((hd,k)=>{
     const cx=SX(hd.x), cy=SY(hd.y), rr=Math.max((hd.r||1)*U, 3);
-    if(hd.arc>=360) g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="${col}" fill-opacity="0.08" stroke="${col}" stroke-opacity="0.5" stroke-width="0.8"/>`;
-    else { const half=(hd.arc*Math.PI/180)/2; g+=`<path d="${sector(cx,cy,rr,(hd.dir||0)-half,(hd.dir||0)+half)}" fill="${col}" fill-opacity="0.1" stroke="${col}" stroke-opacity="0.5" stroke-width="0.8"/>`; }
-    g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="4" fill="${col}" stroke="#fff" stroke-width="1.2"/>`;
-    g+=mpHalo(cx, cy-8, (k+1)+'. '+headCaption(hd), 10, 'middle', '#1a2320');
+    if(lp.showHeads){
+      if(hd.arc>=360) g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="${col}" fill-opacity="0.08" stroke="${col}" stroke-opacity="0.5" stroke-width="0.8"/>`;
+      else { const half=(hd.arc*Math.PI/180)/2; g+=`<path d="${sector(cx,cy,rr,(hd.dir||0)-half,(hd.dir||0)+half)}" fill="${col}" fill-opacity="0.1" stroke="${col}" stroke-opacity="0.5" stroke-width="0.8"/>`; }
+    }
+    g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="4.5" fill="#fff" stroke="${col}" stroke-width="2"/>`;
+    g+=mpHalo(cx, cy-9, lp.showHeads ? (k+1)+'. '+headCaption(hd) : String(k+1), 10, 'middle', '#1a2320');
+  });
+  trees.forEach((t,k)=>{
+    const cx=SX(t.x), cy=SY(t.y), rr=Math.max((t.dia||4)/2*U, 4);
+    g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="none" stroke="${col}" stroke-width="1" stroke-dasharray="3 2" stroke-opacity="0.7"/>`;
+    g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="4.5" fill="#fff" stroke="${col}" stroke-width="2"/>`;
+    g+=mpHalo(cx, cy-9, 'T'+(k+1), 10, 'middle', '#1a2320');
   });
   // the box
   if(box){
     const X=SX(box.x), Y=SY(box.y);
-    g+=`<rect x="${(X-14).toFixed(1)}" y="${(Y-10).toFixed(1)}" width="28" height="20" rx="4" fill="#fff" stroke="${MP_LINE}" stroke-width="2.6"/>`;
-    for(let k=0;k<3;k++){ const vx=X-7+k*7; g+=`<line x1="${vx.toFixed(1)}" y1="${(Y-5).toFixed(1)}" x2="${vx.toFixed(1)}" y2="${(Y+5).toFixed(1)}" stroke="${MP_LINE}" stroke-width="1.8"/>`; }
-    g+=mpHalo(X, Y+26, 'M'+(mi+1)+' · valve box', 11.5, 'middle', MP_LINE);
+    g+=`<rect x="${(X-16).toFixed(1)}" y="${(Y-11).toFixed(1)}" width="32" height="22" rx="4" fill="#fff" stroke="${MP_LINE}" stroke-width="3"/>`;
+    for(let k=0;k<3;k++){ const vx=X-8+k*8; g+=`<line x1="${vx.toFixed(1)}" y1="${(Y-5).toFixed(1)}" x2="${vx.toFixed(1)}" y2="${(Y+5).toFixed(1)}" stroke="${MP_LINE}" stroke-width="2"/>`; }
+    g+=mpHalo(X, Y+27, 'M'+(mi+1)+' · valve box', 11.5, 'middle', MP_LINE);
   } else if(r.poc && run && run.rootKey==='poc'){
     g+=mpHalo(SX(r.poc.x), SY(r.poc.y)-14, 'POC (no box placed)', 11, 'middle', MP_LINE);
   }
@@ -5035,10 +5143,20 @@ function lpOpen(zi){
   const twin = z.half ? LAST_ZONES.find(x=>x!==z && baseKey(x.key)===baseKey(z.key)) : null;
   const stationTxt = 'Station '+((z.station||0)+1)+(z.half?' — valve '+z.half+' of 2'+(twin?' (other valve: '+esc(twin.name)+')':''):(z.stationGroup?' — one of '+LAST_ZONES.filter(x=>x.stationGroup===z.stationGroup).length+' valves on this station':''));
   const today=new Date().toLocaleDateString('en-CA');
+  const headList = heads.length && !lp.showHeads
+    ? `<div><b>Heads</b> <span style="color:#5b6b63">(number on the drawing)</span><ul>${heads.map((hd,k)=>`<li>${k+1}. ${esc(headCaption(hd))}</li>`).join('')}</ul></div>` : '';
+  const otherList = others.length
+    ? `<div><b>Other pipe in this frame</b><ul>${others.map(o=>{ const oz=LAST_ZONES[o.zi]; const asgO=asg.byManifold.findIndex(l=>l.includes(o.zi));
+        return `<li><i class="lp-sw" style="background:${mpZoneColour(o.zi)}"></i>${esc(oz?oz.name:'zone')} — ${esc(o.size)} from ${asgO>=0?'M'+(asgO+1):'POC'} (faint)</li>`; }).join('')}</ul></div>` : '';
   el('lpSheet').innerHTML=`
+    <div class="lp-tools no-print">
+      <label><input type="checkbox" ${lp.showHeads?'checked':''} onchange="lpToggle('showHeads')"> Head arcs &amp; captions</label>
+      <label><input type="checkbox" ${lp.showMain?'checked':''} onchange="lpToggle('showMain')"> Mainline</label>
+      <label><input type="checkbox" ${lp.showOthers?'checked':''} onchange="lpToggle('showOthers')"> Other zones' pipe</label>
+    </div>
     <div class="lp-head">
       <div>
-        <h2>Lateral layout — ${esc(z.name)}</h2>
+        <h2><i class="lp-sw" style="background:${col};width:14px;height:14px"></i>Pipe layout — ${esc(z.name)}</h2>
         <div class="lp-sub">PJL Land Services · ${esc(linkedProject ? (linkedProject.name||'') : 'Unlinked design')}${linkedProject && linkedProject.customerName ? ' · '+esc(linkedProject.customerName) : ''}${linkedProject && linkedProject.address ? ' · '+esc(linkedProject.address) : ''}</div>
         <div class="lp-sub">${esc(stationTxt)} · ${z.gpm.toFixed(1)} GPM this valve${z.half||z.stationGroup?` · ${(z.stationGpm||stationZones()[z.station||0].gpm).toFixed(1)} GPM station`:''} · sheet: ${esc(pg.label||pg.id)} · ${today}</div>
       </div>
@@ -5046,6 +5164,7 @@ function lpOpen(zi){
         <tr><td>Valve box</td><td><b>${box?'M'+(mi+1):'—'}</b></td></tr>
         <tr><td>${beds?'Beds':'Heads'}</td><td><b>${beds||heads.length}</b>${dripFt?` · ${Math.round(dripFt)} ft dripline`:''}</td></tr>
         <tr><td>Lateral pipe</td><td><b>${run?Math.round(run.ft)+' ft':'—'}</b>${run&&run.custom?' · hand-routed':''}</td></tr>
+        ${mainFt>0.5?`<tr><td>Main in frame</td><td><b>${esc(mainSize)}</b> · ${Math.round(mainFt)} ft</td></tr>`:''}
         <tr><td>Scale</td><td>${cal.ftPerPx?cal.ftPerPx.toFixed(4)+' ft/px':'—'} · ${esc(ver.state||'—')}</td></tr>
       </table>
     </div>
@@ -5053,10 +5172,12 @@ function lpOpen(zi){
     <div class="lp-foot">
       <div><b>Pipe by size</b><ul>${sizes||'<li>no lateral run yet — place a manifold on the master plan</li>'}</ul></div>
       <div><b>Reading the sheet</b><ul>
-        <li>Solid line = lateral trunk, labelled <i>size · length</i>. Dashed short lines = spurs to heads (${spurs}).</li>
-        <li>Each head: number, model, arc, throw. Numbers run in the order the heads were laid out.</li>
+        <li><i class="lp-sw" style="background:${col}"></i><b>Coloured line</b> = this valve's lateral, labelled <i>size · length</i>; <b>arrows</b> point the way the water goes, out from the box. Dashed short lines = spurs to heads (${spurs}).</li>
+        <li><i class="lp-sw lp-sw-main"></i><b>Dark line with white dashes</b> = mainline (${esc(mainSize||pipeForGPM(peakStationGPM()))}); dashed dark line = drop to the box.</li>
+        <li>Numbered circles = heads (T = trees). Faint coloured lines = other valves' pipe through this frame.</li>
         <li>Trunk <b>${esc(run?run.size:'—')}</b> — sized on this valve's full ${z.gpm.toFixed(1)} GPM at about 5 ft/sec; branches drop to 3/4". Nothing under 3/4".</li>
       </ul></div>
+      ${headList}${otherList}
     </div>
     <div class="lp-note">Lengths are measured off the calibrated site plan and are for layout; confirm on site.${skRasterOk.get(pg.id)===false?' The plan image could not be loaded, so the drawing is shown on a plain grid.':''} Internal working drawing — not a customer document.</div>`;
   document.body.classList.add('lp-open');
