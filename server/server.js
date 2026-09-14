@@ -3792,11 +3792,13 @@ async function customerPortalSections(lead) {
 
   // ---- Service history: every non-build WO, full history, newest first.
   let serviceHistory = [];
+  const historyWoIds = new Set();
   try {
     const wos = (await workOrders.list()).filter((w) =>
       !w.deletedAt
       && w.type !== "build"
       && ((customerId && w.customerId === customerId) || (w.leadId && leadIds.has(w.leadId))));
+    wos.forEach((w) => historyWoIds.add(w.id));
     wos.sort((a, b) => String(b.completedAt || b.scheduledFor || b.createdAt || "")
       .localeCompare(String(a.completedAt || a.scheduledFor || a.createdAt || "")));
     serviceHistory = wos.map((w) => {
@@ -3824,6 +3826,54 @@ async function customerPortalSections(lead) {
       };
     });
   } catch (err) { console.warn("[portal] service history build failed:", err?.message); }
+
+  // ---- PJL-21: invoices with no Work Order behind them (a normal,
+  // supported creation path — invoices.createDraft accepts woId: null)
+  // were otherwise invisible on the portal: Service History was
+  // WO-only and Projects only shows project-linked invoices, so an
+  // invoice created outside both cascades had no home anywhere a
+  // customer could browse to, even though it existed and might be
+  // payable. Any of the customer's invoices not already accounted for
+  // above (not tied to a WO that made it into history, not tied to a
+  // project) gets its own history-style entry here instead.
+  //
+  // Matched primarily by customerId; falls back to the customer's
+  // known contact email/phone for legacy invoices that predate
+  // customerId altogether — the same fallback createDraft itself uses
+  // to resolve customerId, so this doesn't invent a new matching rule.
+  try {
+    const knownEmails = new Set(unionLeads
+      .map((l) => String(l.contact?.email || "").trim().toLowerCase())
+      .filter(Boolean));
+    const knownPhones = new Set(unionLeads
+      .map((l) => String(l.contact?.phone || "").trim())
+      .filter(Boolean));
+    const orphanInvoices = allInvoices.filter((i) => {
+      if (!visibleInvoice(i)) return false;
+      if (i.projectId) return false; // surfaced via Projects instead
+      if (i.woId && historyWoIds.has(i.woId)) return false; // already listed above
+      if (customerId && i.customerId === customerId) return true;
+      if (i.customerId) return false; // belongs to a different customer
+      const email = String(i.customerEmail || "").trim().toLowerCase();
+      const phone = String(i.customerPhone || "").trim();
+      return (email && knownEmails.has(email)) || (phone && knownPhones.has(phone));
+    });
+    const orphanEntries = orphanInvoices.map((inv) => ({
+      id: `invoice-${inv.id}`,
+      type: "invoice_only",
+      typeLabel: "Invoice",
+      status: "completed",
+      completedAt: inv.createdAt || null,
+      scheduledFor: null,
+      warranty: null,
+      reportUrl: null,
+      invoice: invoiceView(inv)
+    }));
+    if (orphanEntries.length) {
+      serviceHistory = serviceHistory.concat(orphanEntries).sort((a, b) =>
+        String(b.completedAt || b.scheduledFor || "").localeCompare(String(a.completedAt || a.scheduledFor || "")));
+    }
+  } catch (err) { console.warn("[portal] orphan invoice history build failed:", err?.message); }
 
   // ---- Projects: stage level only.
   let projectCards = [];
@@ -3866,7 +3916,7 @@ async function customerPortalSections(lead) {
   }
 
   // JOB-005 (CRM-09) — facts for the derived header state, from the same
-  // canonical reads as the sections above. "Upcoming" means either:
+  // canonical reads as the sections above. "Upcoming" means any of:
   //   1. a lead booking envelope whose end/start is still ahead of now
   //      (public booking flow), or
   //   2. any of the customer's work orders in a PRE-TERMINAL status
@@ -3878,8 +3928,43 @@ async function customerPortalSections(lead) {
   //      closed out is still pending work — a stale "scheduled" is a
   //      truthful nag, a wrong "complete" is the CRM-09 defect class.
   //      (Stranded non-terminal WOs themselves are tracked as CRM-11.)
+  //   3. PJL-20 — a season-plan booking (bookings.json, matched via
+  //      outreach.deriveBookingState). This is the mechanism that
+  //      actually schedules existing/season-plan customers — they don't
+  //      get a lead envelope or a Work Order until much closer to the
+  //      visit, so #1/#2 alone missed real, on-the-books seasonal work
+  //      (confirmed live: a customer with a booked fall closing still
+  //      read "your service is complete"). Computed once here and reused
+  //      below for both the derived header state and the "Book a
+  //      Service" card, so the two surfaces can never disagree again.
   // Never mere envelope existence — that was the original bug.
   const nowMs = Date.now();
+
+  const seasonPlanSeason = outreach.seasonForBooking();
+  const seasonPlanYear = new Date().getFullYear();
+  let ownedProperties = [];
+  let seasonPlanBookings = [];
+  try {
+    const allProps = await properties.list();
+    ownedProperties = customerId
+      ? allProps.filter((prop) => prop.customerId === customerId)
+      : allProps.filter((prop) => prop.id && prop.id === lead.propertyId);
+    const states = await Promise.all(ownedProperties.map(async (prop) => {
+      try {
+        const st = await outreach.deriveBookingState(prop.id, seasonPlanSeason, seasonPlanYear);
+        return (st && st.hasBooking)
+          ? { propertyId: prop.id, address: prop.address, season: seasonPlanSeason, bookingId: st.bookingId, scheduledDate: st.scheduledDate }
+          : null;
+      } catch (err) {
+        console.warn("[portal] season-plan booking state failed:", err?.message);
+        return null;
+      }
+    }));
+    seasonPlanBookings = states.filter(Boolean);
+  } catch (err) {
+    console.warn("[portal] season-plan bookings build failed:", err?.message);
+  }
+
   const envelopeUpcoming = unionLeads.some((l) => {
     const t = Date.parse(l.booking?.end || l.booking?.start || "");
     return Number.isFinite(t) && t >= nowMs;
@@ -3887,7 +3972,7 @@ async function customerPortalSections(lead) {
   const WO_TERMINAL = new Set(["completed", "cancelled", "no_show"]);
   const woUpcoming = serviceHistory.some((w) => !WO_TERMINAL.has(w.status));
   const derivedFacts = {
-    upcomingBooking: envelopeUpcoming || woUpcoming,
+    upcomingBooking: envelopeUpcoming || woUpcoming || seasonPlanBookings.length > 0,
     hasCompletedWork: serviceHistory.some((w) => w.status === "completed"),
     projectUnderway: projectCards.some((p) => p.stage === "scheduled")
   };
@@ -3902,7 +3987,9 @@ async function customerPortalSections(lead) {
   //      date; dateless or past-dated-but-still-open (the normal
   //      advance-booking shape, JOB-005 option (a)) shows "date to be
   //      confirmed". Never a fabricated or empty date.
-  //   3. Nothing upcoming → null → the card hides. Completed work is
+  //   3. PJL-20 — a season-plan booking (see above), when neither a WO
+  //      nor a lead envelope exists yet for it.
+  //   4. Nothing upcoming → null → the card hides. Completed work is
   //      the disqualifier and lives in Service History only.
   const envelopeVisit = (l) => {
     const b = l.booking;
@@ -3944,6 +4031,18 @@ async function customerPortalSections(lead) {
       };
     }
   }
+  if (!nextVisit && seasonPlanBookings.length) {
+    const spb = [...seasonPlanBookings].sort((a, b) =>
+      String(a.scheduledDate || "").localeCompare(String(b.scheduledDate || "")))[0];
+    nextVisit = {
+      source: "season_plan",
+      actionable: false,
+      woId: null,
+      serviceLabel: outreach.seasonLabel(spb.season),
+      start: spb.scheduledDate || null,
+      dateTBC: !spb.scheduledDate
+    };
+  }
 
   // ---- Bookable properties: one "Book a service" CTA per property.
   // The customer portal used to tell people "Book again any time" and give
@@ -3956,41 +4055,27 @@ async function customerPortalSections(lead) {
   // The property token is deliberately NOT sent to the browser: booking is
   // started by POSTing this lead's own token plus a propertyId, and the
   // server re-checks ownership there (see begin-booking below).
-  let bookableProperties = [];
-  try {
-    const season = outreach.seasonForBooking();
-    const year = new Date().getFullYear();
-    const all = await properties.list();
-    const owned = customerId
-      ? all.filter((prop) => prop.customerId === customerId)
-      : all.filter((prop) => prop.id && prop.id === lead.propertyId);
-    bookableProperties = await Promise.all(owned.map(async (prop) => {
-      const zoneCount = Array.isArray(prop.system?.zones) ? prop.system.zones.length : 0;
-      // Already booked for this season? Then a seasonal CTA would be
-      // nagging about work that's on the calendar — offer the plain
-      // "book a service" route instead, in case they want something else.
-      let booked = false;
-      try {
-        const st = await outreach.deriveBookingState(prop.id, season, year);
-        booked = Boolean(st && st.hasBooking);
-      } catch (err) {
-        console.warn("[portal] seasonal booking state failed:", err?.message);
-      }
-      return {
-        propertyId: prop.id,
-        address: String(prop.address || "").trim(),
-        zoneCount,
-        // A seasonal express handoff needs a zone count to resolve a tier.
-        // Without one, send them to the full menu rather than guess.
-        season: (zoneCount > 0 && !booked) ? season : null,
-        seasonLabel: (zoneCount > 0 && !booked) ? outreach.seasonLabel(season) : "",
-        alreadyBooked: booked
-      };
-    }));
-  } catch (err) {
-    console.warn("[portal] bookable properties build failed:", err?.message);
-    bookableProperties = [];
-  }
+  //
+  // Reuses ownedProperties/seasonPlanBookings computed above (PJL-20) —
+  // this card and the derived header state now read the exact same
+  // booking facts instead of two independent queries that could disagree.
+  const bookableProperties = ownedProperties.map((prop) => {
+    const zoneCount = Array.isArray(prop.system?.zones) ? prop.system.zones.length : 0;
+    // Already booked for this season? Then a seasonal CTA would be
+    // nagging about work that's on the calendar — offer the plain
+    // "book a service" route instead, in case they want something else.
+    const booked = seasonPlanBookings.some((b) => b.propertyId === prop.id);
+    return {
+      propertyId: prop.id,
+      address: String(prop.address || "").trim(),
+      zoneCount,
+      // A seasonal express handoff needs a zone count to resolve a tier.
+      // Without one, send them to the full menu rather than guess.
+      season: (zoneCount > 0 && !booked) ? seasonPlanSeason : null,
+      seasonLabel: (zoneCount > 0 && !booked) ? outreach.seasonLabel(seasonPlanSeason) : "",
+      alreadyBooked: booked
+    };
+  });
 
   return { serviceHistory, projects: projectCards, derivedFacts, nextVisit, bookableProperties };
 }
