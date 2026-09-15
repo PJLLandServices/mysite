@@ -2,30 +2,30 @@
 //
 // One email, sent ONCE per customer, the first time they book with us:
 // how routing works, what we record, how the season runs, how billing
-// works. The approved design lives beside this file as welcome-email.html
-// (a 600px table-layout email, images hosted on pjllandservices.com) and
-// is used byte-for-byte except for the deliberate substitutions below.
+// works.
 //
-// Four variants:
-//   spring_opening — its OWN design, welcome-email-spring.html.
-//   fall_closing   — its OWN design, welcome-email-fall.html.
-//   service        — its OWN design, welcome-email-service.html. Not
-//                    auto-booked like the two above (SERVICE_REPAIR_SPEC
-//                    §7: every call is inbound), but a repair DOES
-//                    auto-enrol the property onto the seasonal board
-//                    (§5) — that fact is the one this variant exists to
-//                    land, since it was blank/vague before.
-//                    All three rewritten Sep 2026 against Patrick's ops
-//                    specs — every §9 is explicit that internal routing/
-//                    driving-cost/one-person-operation reasoning never
-//                    reaches the customer, which the original shared
-//                    draft violated. None of the three participates in
-//                    the booking-cut / seasons-insert / warranty-swap
-//                    logic below — keep them self-contained.
-//   installation   — the only variant still on the shared design
-//                    (welcome-email.html): the booking section comes out
-//                    and is replaced by "HOW YOUR SEASONS WORK FROM
-//                    HERE", and the warranty copy leads with three years.
+// Four variants, each its OWN complete, self-contained design (a 600px
+// table-layout email, images hosted on pjllandservices.com):
+//   spring_opening — welcome-email-spring.html
+//   fall_closing   — welcome-email-fall.html
+//   service        — welcome-email-service.html. Not auto-booked like
+//                    the two above (SERVICE_REPAIR_SPEC §7: every call
+//                    is inbound), but a repair DOES auto-enrol the
+//                    property onto the seasonal board (§5) — that fact
+//                    is the one this variant exists to land, since it
+//                    was blank/vague before.
+//   installation   — welcome-email-installation.html. The customer never
+//                    sees or approves "the design" (INSTALLATION_SPEC
+//                    §4 Stage 2 — that's backend costing); they get the
+//                    quote and a full explanation at handoff. Never
+//                    promise "zero overspray" (§4 Stage 7) — the honest
+//                    claim is full coverage, efficient delivery.
+//
+// All four rewritten Sep 2026 against Patrick's ops specs — every spec's
+// §9 is explicit that internal routing/driving-cost/one-person-operation
+// reasoning never reaches the customer, which the original shared draft
+// (retired the same pass) violated throughout. Each file is fully
+// self-contained: no cut-and-swap logic, no shared markers to drift.
 //
 // Lifecycle (the part that matters more than the HTML):
 //   - The automatic sweep runs only while settings.welcomeEmail.enabled
@@ -50,14 +50,7 @@ const bookings = require("./bookings");
 const testRecipients = require("./test-recipients");
 const { logSend } = require("./mailer-log");
 
-const TEMPLATE_FILE = path.join(__dirname, "welcome-email.html");
-let templateCache = null;
-function template() {
-  if (templateCache === null) templateCache = fs.readFileSync(TEMPLATE_FILE, "utf8");
-  return templateCache;
-}
-
-// Spring's and fall's own designs — see the note at the top of this file.
+// Every variant's own design — see the note at the top of this file.
 const SPRING_TEMPLATE_FILE = path.join(__dirname, "welcome-email-spring.html");
 let springTemplateCache = null;
 function springTemplate() {
@@ -77,6 +70,13 @@ let serviceTemplateCache = null;
 function serviceTemplate() {
   if (serviceTemplateCache === null) serviceTemplateCache = fs.readFileSync(SERVICE_TEMPLATE_FILE, "utf8");
   return serviceTemplateCache;
+}
+
+const INSTALLATION_TEMPLATE_FILE = path.join(__dirname, "welcome-email-installation.html");
+let installationTemplateCache = null;
+function installationTemplate() {
+  if (installationTemplateCache === null) installationTemplateCache = fs.readFileSync(INSTALLATION_TEMPLATE_FILE, "utf8");
+  return installationTemplateCache;
 }
 
 const VARIANTS = ["spring_opening", "fall_closing", "service", "installation"];
@@ -106,49 +106,8 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
-// ---- Markers inside welcome-email.html ---------------------------------
-// The template is sliced on its own section comments, so the design file
-// can be re-exported from the editor without touching this module as long
-// as those comments survive.
-const BOOKING_START = "          <!-- ═══ BOOKING ═══ -->";
-const BOOKING_END = "          <!-- curve into green -->";
 const PORTAL_HREF = `href="${DEFAULT_PORTAL_URL}"`;
 const UNSUBSCRIBE_HREF = `href="${DEFAULT_UNSUBSCRIBE_HREF}"`;
-const WARRANTY_SERVICE_COPY =
-  "Parts and labour on every repair we carry out. If something we touched gives you trouble, we come back. New system installations carry three years.";
-const WARRANTY_INSTALLATION_COPY =
-  "Your new system carries three years, parts and labour. If something we installed gives you trouble, we come back. Repairs we carry out afterwards carry one year.";
-
-// Paragraph styling lifted from the removed block, verbatim.
-const PARA_STYLE = "font-family:'DM Sans',Arial,Helvetica,sans-serif; font-size:16px; line-height:28px; color:#3D4A40;";
-function para(text, first) {
-  return `              <div class="txt" style="${PARA_STYLE}${first ? "" : " padding-top:16px;"}">\n                ${text}\n              </div>\n`;
-}
-
-const SEASONS_PARAGRAPHS = [
-  "You never have to book a spring opening or a fall closing. Your property is on our season plan. Ahead of each season we place it on a route day, and the appointment comes to you by email and text with a link to your own appointment page.",
-  "What we promise is a half-day, never a minute. Morning means an 8am to 12pm arrival window, afternoon means 12pm to 5pm. The exact minute belongs to the route and shifts as the day gets tuned, so you&rsquo;ll never be given a time that changes on you later.",
-  "From your appointment page you can confirm, move to another open day, cancel, or tell us to come whenever we&rsquo;re in the area. You don&rsquo;t have to reply at all. Nobody gets un-booked for staying quiet, and you&rsquo;ll get a reminder text the day before.",
-  "Our routes are built by area, sequencing streets and subdivisions so the day runs in order. Tight routes across York Region and the GTA mean less fuel and less windshield time, and that saving goes back into what we charge you."
-];
-
-function seasonsSection() {
-  return (
-    "          <!-- ═══ SEASONS ═══ -->\n" +
-    "          <tr>\n" +
-    "            <td style=\"background-color:#E8811F; padding:0;\">\n" +
-    "              <div class=\"gutter\" style=\"font-family:'Barlow Condensed','Arial Narrow',Arial,sans-serif; font-size:22px; line-height:24px; font-weight:700; letter-spacing:1px; color:#FFFFFF; padding:16px 46px;\">\n" +
-    "                HOW YOUR SEASONS WORK FROM HERE\n" +
-    "              </div>\n" +
-    "            </td>\n" +
-    "          </tr>\n" +
-    "          <tr>\n" +
-    "            <td class=\"gutter\" style=\"background-color:#FFFDF8; padding:34px 46px 40px 46px;\">\n" +
-    SEASONS_PARAGRAPHS.map((t, i) => para(t, i === 0)).join("") +
-    "            </td>\n" +
-    "          </tr>\n\n"
-  );
-}
 
 function normalizeVariant(variant) {
   return VARIANTS.includes(variant) ? variant : "service";
@@ -168,37 +127,26 @@ function variantForServiceKey(serviceKey) {
 // a silent no-op can't ship an email with the wrong link in it.
 function replaceOnce(html, needle, replacement, what) {
   const at = html.indexOf(needle);
-  if (at === -1) throw new Error(`welcome-email.html: ${what} marker not found`);
+  if (at === -1) throw new Error(`${what} marker not found`);
   return html.slice(0, at) + replacement + html.slice(at + needle.length);
 }
 
+const OWN_TEMPLATE_BY_VARIANT = {
+  spring_opening: springTemplate,
+  fall_closing: fallTemplate,
+  service: serviceTemplate,
+  installation: installationTemplate
+};
+
+// Every variant is its own complete, self-contained design now (the last
+// hold-out, installation, moved off the shared cut-and-swap template in
+// the same Sep 2026 pass — see the note at the top of this file). Just
+// the two universal link substitutions.
 function renderHtml({ variant, portalUrl, unsubscribeUrl }) {
-  // Spring, fall and service are fully separate designs — no booking
-  // cut, no seasons insert, no warranty swap. Just the two universal
-  // link substitutions. Only installation still uses the shared file.
-  if (variant === "spring_opening" || variant === "fall_closing" || variant === "service") {
-    let ownHtml = variant === "spring_opening" ? springTemplate()
-      : variant === "fall_closing" ? fallTemplate()
-      : serviceTemplate();
-    ownHtml = replaceOnce(ownHtml, PORTAL_HREF, `href="${escapeHtml(portalUrl || DEFAULT_PORTAL_URL)}"`, `${variant} portal button`);
-    if (unsubscribeUrl) {
-      ownHtml = replaceOnce(ownHtml, UNSUBSCRIBE_HREF, `href="${escapeHtml(unsubscribeUrl)}"`, `${variant} unsubscribe link`);
-    }
-    return ownHtml;
-  }
-  let html = template();
-  if (variant === "installation") {
-    const start = html.indexOf(BOOKING_START);
-    const end = html.indexOf(BOOKING_END);
-    if (start === -1 || end === -1 || end < start) {
-      throw new Error("welcome-email.html: booking section markers not found");
-    }
-    html = html.slice(0, start) + seasonsSection() + html.slice(end);
-    html = replaceOnce(html, WARRANTY_SERVICE_COPY, WARRANTY_INSTALLATION_COPY, "warranty copy");
-  }
-  html = replaceOnce(html, PORTAL_HREF, `href="${escapeHtml(portalUrl || DEFAULT_PORTAL_URL)}"`, "portal button");
+  let html = OWN_TEMPLATE_BY_VARIANT[variant]();
+  html = replaceOnce(html, PORTAL_HREF, `href="${escapeHtml(portalUrl || DEFAULT_PORTAL_URL)}"`, `${variant} portal button`);
   if (unsubscribeUrl) {
-    html = replaceOnce(html, UNSUBSCRIBE_HREF, `href="${escapeHtml(unsubscribeUrl)}"`, "unsubscribe link");
+    html = replaceOnce(html, UNSUBSCRIBE_HREF, `href="${escapeHtml(unsubscribeUrl)}"`, `${variant} unsubscribe link`);
   }
   return html;
 }
@@ -332,53 +280,50 @@ function renderServiceText({ firstName, portalUrl, unsubscribeUrl }) {
   return lines.join("\n");
 }
 
-function renderText({ variant, firstName, portalUrl, unsubscribeUrl }) {
-  if (variant === "spring_opening") return renderSpringText({ firstName, portalUrl, unsubscribeUrl });
-  if (variant === "fall_closing") return renderFallText({ firstName, portalUrl, unsubscribeUrl });
-  if (variant === "service") return renderServiceText({ firstName, portalUrl, unsubscribeUrl });
-  const lines = [];
+// Installation's own plain-text alternative, matching
+// welcome-email-installation.html.
+function renderInstallationText({ firstName, portalUrl, unsubscribeUrl }) {
   const name = String(firstName || "").trim();
+  const lines = [];
   lines.push(name ? `Hi ${name},` : "Hi,");
   lines.push("");
-  lines.push("You're in the book. Letting someone onto your property is a big ask, and we don't take it lightly. Five minutes here and you'll know exactly how we run.");
+  lines.push("Welcome to the PJL family. Your system is in and on file with us. We're not going anywhere — here's how we look after it from here.");
   lines.push("");
-  if (variant === "installation") {
-    lines.push("HOW YOUR SEASONS WORK FROM HERE");
-    lines.push("You never have to book a spring opening or a fall closing. Your property is on our season plan; ahead of each season we place it on a route day and the appointment comes to you by email and text with a link to your own appointment page. What we promise is a half-day, never a minute: morning is an 8am to 12pm arrival window, afternoon is 12pm to 5pm. From your appointment page you can confirm, move to another open day, cancel, or tell us to come whenever we're in the area. You don't have to reply at all, and you'll get a reminder text the day before. Our routes are built by area, and that saving goes back into what we charge you.");
-    lines.push("");
-  }
-  lines.push("ON THE DAY");
-  lines.push("1. We show up when we said, inside the window you booked.");
-  lines.push("2. We find the fault first, before we touch anything.");
-  lines.push("3. It's fixed, or it's quoted — a straight answer on what it is and what it costs before we order a thing.");
+  lines.push("HOW YOUR SEASONS WORK FROM HERE");
+  lines.push("You never have to book a spring opening or a fall closing. Every year, we put your property on the schedule ourselves and send you the date by email and text, with a link to your own appointment page. A simple acceptance confirms your spot, and we'll text you the day before as a reminder. Your first spring opening starts from what we already know about your system — there's nothing to rebuild, only to verify.");
   lines.push("");
-  lines.push("YOU GET THE RESULTS, NOT JUST THE REPAIR");
-  lines.push("Every service is written up on a work order: what we found, what we did, and the health of the system. Your shut-off, blow-out connection, controller, valve boxes and every zone go on your property file and stay there.");
+  lines.push("EVERY VISIT IS DOCUMENTED");
+  lines.push("Your install already built your property's record with us: every zone, what it waters, the heads on it, and where everything runs. So when you call about a dry corner out back, you don't have to describe it — we already know which zone that is.");
   lines.push("");
   lines.push("YOUR YEAR WITH US");
-  lines.push("Spring — openings, every system on by the May long weekend. Summer — repairs, usually same-day, and free site meetings. Fall — closings, booked from mid-September, done before the freeze. You'll hear from us ahead of each season.");
+  lines.push("Spring: we start openings once the frost is out of the ground, never before, with every system running by the May 24 long weekend. Fall: closings open from mid-September, and we work through the whole season until every system on the board is done. Summer: our team is available for whatever your system needs, and most repairs are same-day.");
   lines.push("");
-  lines.push("PLANNING A LANDSCAPE RENOVATION?");
-  lines.push("Call us once you've got the landscape plan in hand and we'll plan around it. Bringing us in afterwards means cutting back into finished work.");
+  lines.push("PLANNING MORE FOR THE PROPERTY?");
+  lines.push("A new bed, a patio, a pool, landscape lighting — call us once you have the plan, before anyone breaks ground. We'll walk the property with you and make sure the irrigation is ready for it, rather than cutting back into what we just finished.");
   lines.push("");
-  lines.push("WE STAND BEHIND THE WORK");
-  lines.push(variant === "installation"
-    ? "Your new system carries three years, parts and labour. If something we installed gives you trouble, we come back. Repairs we carry out afterwards carry one year."
-    : "Parts and labour on every repair we carry out. If something we touched gives you trouble, we come back. New system installations carry three years.");
+  lines.push("WE STAND BEHIND OUR WORK");
+  lines.push("Your new system carries three years, parts and labour. If something we installed gives you trouble, we come back. Repairs we carry out afterwards carry one year.");
   lines.push("");
-  lines.push("PAYING US — COMPLETELY PAPERLESS");
-  lines.push("Our technicians carry secure card readers (Visa, Mastercard, Amex, tap or insert); e-transfer works too. Prefer not to pay at the door? We'll send the invoice and you can pay it from your phone. Your invoice, receipt and work order live in your portal:");
+  lines.push("PAYING US");
+  lines.push("Our technicians can take payment on the spot the moment the work is done: credit card, Apple Pay, Google Pay, or e-transfer. Invoices, receipts and work orders live in your portal:");
   lines.push(portalUrl || DEFAULT_PORTAL_URL);
   lines.push("");
   lines.push("SEND A NEIGHBOUR OR FRIEND OUR WAY");
-  lines.push("10% off your seasonal service charge when they book an appointment. Applied once per seasonal service; can't be combined with other savings.");
+  lines.push("When a neighbour or friend books with us, you get 10% off your seasonal service charge.");
   lines.push("");
   lines.push("Anything at all — (905) 960-0181 or info@pjllandservices.com.");
-  lines.push("Glad to have you with us.");
+  lines.push("You trusted us with a big project on your own property, and we don't take that lightly. Thank you for choosing us.");
   lines.push("");
   lines.push("PJL Land Services · Newmarket, Ontario · pjllandservices.com");
   lines.push(`You're receiving this because you booked a service with us. Unsubscribe: ${unsubscribeUrl || DEFAULT_UNSUBSCRIBE_HREF}`);
   return lines.join("\n");
+}
+
+function renderText({ variant, firstName, portalUrl, unsubscribeUrl }) {
+  if (variant === "spring_opening") return renderSpringText({ firstName, portalUrl, unsubscribeUrl });
+  if (variant === "fall_closing") return renderFallText({ firstName, portalUrl, unsubscribeUrl });
+  if (variant === "service") return renderServiceText({ firstName, portalUrl, unsubscribeUrl });
+  return renderInstallationText({ firstName, portalUrl, unsubscribeUrl });
 }
 
 function renderWelcomeEmail({ variant, firstName, portalUrl, unsubscribeUrl } = {}) {
