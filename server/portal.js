@@ -188,31 +188,59 @@ function renderSystem(property) {
     const SPRINKLER_LABELS = { rotors: "Rotors", popups: "Pop-ups", drip: "Drip", flower_pots: "Flower Pots" };
     const COVERAGE_LABELS  = { plants: "Plants", grass: "Grass", trees: "Trees", shrubs: "Shrubs" };
     const labelFor = (lookup, value) => lookup[value] || value;
+    // PJL-24 — average suggested run time per sprinkler type, sprinkler
+    // type alone (coverage doesn't change it). Patrick, 2026-09-14: "most
+    // systems are already set this way." Flower Pots deliberately has no
+    // entry — no suggestion shown rather than a guessed number.
+    const SUGGESTED_MINUTES = { rotors: 30, popups: 10, drip: 45 };
 
     systemZoneList.innerHTML = "";
     zones
       .slice()
       .sort((a, b) => (a.number || 0) - (b.number || 0))
       .forEach((z) => {
-        const li = document.createElement("li");
-        const num = z.number ? `Zone ${z.number}` : "Zone";
-        const location = z.location || z.label || "";
-        const head = location ? `${num} — ${location}` : num;
+        const sprinklerTypes = z.sprinklerTypes || [];
+        const sprinklerLabels = sprinklerTypes.map((v) => labelFor(SPRINKLER_LABELS, v));
+        const coverageLabels  = (z.coverage || []).map((v) => labelFor(COVERAGE_LABELS, v));
+        const equipLabels = [...sprinklerLabels, ...coverageLabels];
 
-        const sprinklerLabels = (z.sprinklerTypes || []).map((v) => labelFor(SPRINKLER_LABELS, v));
-        const coverageLabels  = (z.coverage       || []).map((v) => labelFor(COVERAGE_LABELS, v));
-        const meta = [];
-        if (sprinklerLabels.length) meta.push(sprinklerLabels.join(", "));
-        if (coverageLabels.length)  meta.push(coverageLabels.join(", "));
+        const tr = document.createElement("tr");
 
-        li.textContent = head;
-        if (meta.length) {
-          const small = document.createElement("span");
-          small.className = "portal-system-zone-meta";
-          small.textContent = ` · ${meta.join(" · ")}`;
-          li.appendChild(small);
+        const zoneCell = document.createElement("td");
+        const num = document.createElement("span");
+        num.className = "portal-zone-num";
+        num.textContent = z.number ? `Zone ${z.number}` : "Zone";
+        zoneCell.appendChild(num);
+        const loc = document.createElement("span");
+        loc.className = "portal-zone-loc";
+        loc.textContent = z.location || z.label || "";
+        zoneCell.appendChild(loc);
+        tr.appendChild(zoneCell);
+
+        // A zone can carry more than one sprinkler type — show each
+        // type's own suggested time rather than average across
+        // different equipment.
+        const timeParts = sprinklerTypes
+          .filter((v) => SUGGESTED_MINUTES[v])
+          .map((v) => `~${SUGGESTED_MINUTES[v]} min`);
+        const timeCell = document.createElement("td");
+        const timeSpan = document.createElement("span");
+        timeSpan.className = "portal-zone-time";
+        if (timeParts.length) {
+          timeSpan.textContent = timeParts.join(" + ");
+        } else {
+          timeSpan.className += " is-none";
+          timeSpan.textContent = "No suggestion";
         }
-        systemZoneList.appendChild(li);
+        timeCell.appendChild(timeSpan);
+        tr.appendChild(timeCell);
+
+        const equipCell = document.createElement("td");
+        equipCell.className = "portal-zone-equip";
+        equipCell.textContent = equipLabels.length ? equipLabels.join(", ") : "—";
+        tr.appendChild(equipCell);
+
+        systemZoneList.appendChild(tr);
       });
     systemZones.hidden = false;
   } else {
