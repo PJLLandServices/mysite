@@ -194,16 +194,16 @@ function renderSpringText({ firstName, portalUrl, unsubscribeUrl }) {
   lines.push("Thank you for choosing PJL Land Services. Finding a sprinkler company you can count on is harder than it should be. Calls go unanswered, appointments slip, and nobody explains what was done. You've made the right call, and we don't take that trust lightly.");
   lines.push("");
   lines.push("HOW YOUR BOOKING WAS MADE");
-  lines.push("Our booking system routes our trucks by area, so the day runs in order instead of criss-crossing York Region and the GTA. It's also how we keep your price where it is — less driving means lower costs, and that saving stays with you. Returning customers don't book at all: we place their property on a route day, send the date by email and text with a link to their own appointment page, and a simple acceptance confirms the spot. We'll text you the day before as a reminder too.");
+  lines.push("This is the only time you'll need to book. From next season on, we'll put you on the schedule ourselves and send you the date by email and text, with a link to your own appointment page. From that link, you can move the day, cancel it, or tell us to come whenever we're in the area. A simple acceptance confirms your spot, and we'll text you the day before as a reminder. You'll get a morning window, 8am to 12pm, or an afternoon window, 12pm to 5pm.");
   lines.push("");
   lines.push("YOUR FUTURE SPRING OPENINGS");
-  lines.push("We start openings when the weather allows, not before, with the goal of every system running by the May 24 long weekend. Every fall closing includes an in-depth inspection; we document anything we find, but repairs wait until spring, when the system is running and we can actually fix and test it. Repairs are quoted on site and, for the most part, completed the same day.");
+  lines.push("We start openings once the frost is out of the ground, never before. Every system is running by the May 24 long weekend. On the visit, we turn your water on, start the controller, and run every zone on its own to check coverage, pressure and operation. Anything found gets quoted and fixed on the spot where possible, including anything already noted on your fall closing, since that carries forward onto this visit.");
   lines.push("");
   lines.push("EVERY VISIT IS DOCUMENTED");
   lines.push("Our technicians record your shut-off, blow-out connection, valves, zone locations and coverage types. So when you call about a dry corner out back, you don't have to describe it — we already know which zone that is.");
   lines.push("");
   lines.push("YOUR YEAR WITH US");
-  lines.push("Summer: our team is available for whatever your system throws at you, and repairs are often same-day. Fall: closings run through the same automated booking system, and can often be done without you needing to be home. All seasonal appointments use the same link, where you can change your appointment up to 24 hours in advance.");
+  lines.push("Summer: our team is available for whatever your system throws at you, and repairs are often same-day. Fall: closings run through the same booking, no need to ask.");
   lines.push("");
   lines.push("PLANNING A LANDSCAPE RENOVATION?");
   lines.push("Call us once you have the plan in hand, before the work begins. We'll walk the property with you and make sure the irrigation is ready for your new landscape.");
@@ -212,7 +212,7 @@ function renderSpringText({ firstName, portalUrl, unsubscribeUrl }) {
   lines.push("Every repair we carry out is covered for one year, parts and labour.");
   lines.push("");
   lines.push("PAYING US");
-  lines.push("Our technicians carry secure card readers (Visa, Mastercard, Amex); e-transfer works too. Or we'll send the invoice and you can pay from your phone. Invoices, receipts and work orders live in your portal:");
+  lines.push("Our technicians can take payment on the spot the moment the work is done: credit card, Apple Pay, Google Pay, or e-transfer. Invoices, receipts and work orders live in your portal:");
   lines.push(portalUrl || DEFAULT_PORTAL_URL);
   lines.push("");
   lines.push("SEND A NEIGHBOUR OR FRIEND OUR WAY");
