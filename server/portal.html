@@ -191,6 +191,14 @@
           <button type="button" class="portal-btn portal-btn-secondary" id="rescheduleBtn">Change appointment</button>
           <button type="button" class="portal-btn portal-btn-danger" id="cancelBtn">Cancel appointment</button>
         </div>
+        <!-- PJL-28: season-plan (automated seasonal) bookings already have
+             their own confirm/reschedule/cancel page at /a/<token> — same
+             engine the buttons above use, plus a route-safe afternoon-only
+             reschedule restriction. Link out to it rather than duplicating
+             that UI here, same pattern as the warranty-claims card below. -->
+        <div class="workorder-actions" id="workOrderManageRow" hidden>
+          <a class="portal-btn portal-btn-secondary" id="workOrderManageLink" href="#">Confirm, reschedule, or cancel →</a>
+        </div>
         <!-- Admin-only: change appointment type. Hidden for customers; shown
              only when an admin/tech session (Patrick) is viewing this portal.
              Changing the type moves the visit length + price envelope. -->
@@ -481,7 +489,7 @@
   </main>
 
   <script src="/js/time-picker.js?v=1"></script>
-  <script src="/crm/portal.js?v=20260915e"></script>
+  <script src="/crm/portal.js?v=20260915f"></script>
   <script src="/crm/crm-contact.js" defer></script>
 </body>
 </html>
