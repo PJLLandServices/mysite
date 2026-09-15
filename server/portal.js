@@ -982,34 +982,41 @@ function renderPortalBooking(propertiesList) {
     where.append(meta);
     li.append(where);
 
-    const btn = document.createElement(row.season ? "button" : "a");
+    // PJL-28 sweep finding: this used to be a bare <a href="/book.html">
+    // whenever row.season was null (already booked this season, or no
+    // zone count on file) — Patrick: "she gets treated like a brand new
+    // customer." begin-booking already mints a session with her name,
+    // email, phone, address, and zone count whether or not a season is
+    // given (suggestedService just comes back empty without one), and
+    // book.html already knows how to consume it (applySessionPrefill in
+    // js/booking.js) — greets her by name and skips the address step.
+    // The season-suggestion button already used this; now the plain
+    // "book anything else" button does too, instead of a cold-start link.
+    const btn = document.createElement("button");
+    btn.type = "button";
     btn.className = "portal-btn portal-btn-primary";
-    if (row.season) {
-      btn.type = "button";
-      btn.textContent = `Book my ${row.seasonLabel.toLowerCase()} →`;
-      btn.onclick = async () => {
-        const original = btn.textContent;
-        btn.disabled = true;
-        btn.textContent = "Opening booking…";
-        try {
-          const token = tokenFromLocation();
-          const qs = `?season=${encodeURIComponent(row.season)}&propertyId=${encodeURIComponent(row.propertyId)}`;
-          const r = await fetch(`/api/portal/${encodeURIComponent(token)}/begin-booking${qs}`, {
-            method: "POST", cache: "no-store"
-          });
-          const d = await r.json();
-          if (!r.ok || !d.ok || !d.redirect) throw new Error("Booking session failed to start.");
-          window.location.assign(d.redirect);
-        } catch (err) {
-          // Never dead-end the customer: fall through to the plain booking
-          // page rather than leaving them on a button that did nothing.
-          window.location.assign("/book.html");
-        }
-      };
-    } else {
-      btn.href = "/book.html";
-      btn.textContent = "Book a service →";
-    }
+    btn.textContent = row.season ? `Book my ${row.seasonLabel.toLowerCase()} →` : "Book a service →";
+    btn.onclick = async () => {
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Opening booking…";
+      try {
+        const token = tokenFromLocation();
+        const qs = row.season
+          ? `?season=${encodeURIComponent(row.season)}&propertyId=${encodeURIComponent(row.propertyId)}`
+          : `?propertyId=${encodeURIComponent(row.propertyId)}`;
+        const r = await fetch(`/api/portal/${encodeURIComponent(token)}/begin-booking${qs}`, {
+          method: "POST", cache: "no-store"
+        });
+        const d = await r.json();
+        if (!r.ok || !d.ok || !d.redirect) throw new Error("Booking session failed to start.");
+        window.location.assign(d.redirect);
+      } catch (err) {
+        // Never dead-end the customer: fall through to the plain booking
+        // page rather than leaving them on a button that did nothing.
+        window.location.assign("/book.html");
+      }
+    };
     li.append(btn);
     list.append(li);
   });
