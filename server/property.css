@@ -39,6 +39,38 @@
    overlapping the "Linked bookings" stat. */
 .property-stat { margin-top: 30px; }
 
+/* PJL-27 follow-up: the same uploaded photo as the property-page hero
+   background too, so Patrick recognizes the house at a glance when he
+   opens a property. Unlike the portal hero (already dark, white text by
+   default), this card is normally light with dark-green text — a photo
+   needs a flat dark wash (not a directional gradient, since the stat
+   block sits on the right, not just the bottom) and every child text
+   color flipped to white for the same legibility guarantee regardless of
+   what's in the photo. No photo on file — .has-photo is never added and
+   the card looks exactly as it does today. */
+.property-hero.has-photo {
+  background-image:
+    linear-gradient(rgba(10,20,14,0.78), rgba(10,20,14,0.78)),
+    var(--property-hero-photo);
+  background-size: cover;
+  background-position: center;
+  border-color: rgba(255,255,255,0.18);
+}
+.property-hero.has-photo .pjl-page-eyebrow,
+.property-hero.has-photo h1,
+.property-hero.has-photo .property-customer,
+.property-hero.has-photo .property-customer a,
+.property-hero.has-photo .property-meta,
+.property-hero.has-photo .property-stat span,
+.property-hero.has-photo .property-stat strong {
+  color: #fff;
+}
+.property-hero.has-photo #changeOwnerBtn {
+  background: rgba(255,255,255,0.12);
+  border-color: rgba(255,255,255,0.6);
+  color: #fff;
+}
+
 /* Small, greyscale, barely-there until hovered — the same discovery
    pattern as an icon-only toolbar button. Turns green (.has-photo) once
    a photo is on file, as a status signal without opening the modal. */

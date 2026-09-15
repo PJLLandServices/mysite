@@ -279,6 +279,18 @@ function renderHeroPhotoState(property, heroPhotoUrl) {
       ? `Uploaded ${formatDate(property.heroPhoto.uploadedAt)}`
       : "Uploaded";
   }
+  // Follow-up: the same photo as the property-page hero background too,
+  // so Patrick recognizes the house at a glance without opening the
+  // modal. No photo — .has-photo is never added, hero looks like today.
+  if (propertyHero) {
+    if (has && loadedHeroPhotoUrl) {
+      propertyHero.style.setProperty("--property-hero-photo", `url("${loadedHeroPhotoUrl}")`);
+      propertyHero.classList.add("has-photo");
+    } else {
+      propertyHero.classList.remove("has-photo");
+      propertyHero.style.removeProperty("--property-hero-photo");
+    }
+  }
 }
 
 const DEFERRED_TYPE_LABELS = {
