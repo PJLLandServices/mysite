@@ -987,6 +987,19 @@ function renderPortalBooking(propertiesList) {
   });
 
   section.hidden = false;
+
+  // PJL-23: when every property the customer owns is already booked for
+  // the season, "Book a Service" isn't what they need to see first —
+  // move it below the main content (Current Stage, Next Visit, Service
+  // History) instead of sitting above all of it. Patrick: it "could
+  // come down below." Left in its normal top slot whenever at least one
+  // property still needs a booking nudge — that's a genuine call to
+  // action and stays prominent.
+  const allAlreadyBooked = rows.every((r) => r.alreadyBooked);
+  const content = document.getElementById("portalContent");
+  if (allAlreadyBooked && content && content.parentNode) {
+    content.parentNode.insertBefore(section, content.nextSibling);
+  }
 }
 
 // Property-portal render path (seasonal outreach). Swaps the hero
