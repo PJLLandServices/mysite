@@ -231,6 +231,13 @@ function blankProperty() {
       notes: ""                   // free-form system-wide notes
     },
     photos: [],                   // [{ id, slot, url, uploadedAt }]   — Phase 5
+    // Customer portal hero background (PJL-27). Staff-uploaded, single slot
+    // — metadata only; the JPEG itself lives on disk at
+    // PROPERTY_HERO_DIR/<id>.jpg (server.js) and is embedded as a data URI
+    // wherever it's needed (admin preview, portal payload), same pattern as
+    // a quote's proposal-hero-photo. null when nothing's on file — the
+    // portal falls back to the standard green background.
+    heroPhoto: null,              // { bytes, uploadedAt, uploadedBy } | null
     leadIds: [],                  // back-refs to leads attached to this property
     workOrderIds: [],             // back-refs to work orders (Phase 2)
     // Deferred recommendations — the "fall finds, spring fixes" engine
@@ -503,6 +510,7 @@ function hydrate(p) {
     siteContacts: normalizeSiteContacts(p?.siteContacts),
     system: { ...base.system, ...(p.system || {}) },
     photos: Array.isArray(p?.photos) ? p.photos : [],
+    heroPhoto: (p?.heroPhoto && typeof p.heroPhoto === "object") ? p.heroPhoto : null,
     history: Array.isArray(p?.history) ? p.history : [],
     leadIds: Array.isArray(p?.leadIds) ? p.leadIds : [],
     workOrderIds: Array.isArray(p?.workOrderIds) ? p.workOrderIds : [],

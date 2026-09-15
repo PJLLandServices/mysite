@@ -71,6 +71,13 @@
     <p class="property-back"><a href="/admin/properties">← All properties</a></p>
 
     <header class="property-hero" id="propertyHero" hidden>
+      <!-- PJL-27: barely-there until hovered, so it doesn't compete with
+           the actual property info. Opens heroPhotoModal below. Turns
+           green (.has-photo) once a photo is on file, as a quiet signal
+           without needing to open the modal to check. -->
+      <button type="button" class="property-hero-photo-trigger" id="heroPhotoTrigger" aria-label="Customer portal photo" title="Customer portal photo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 16l4.5-6 3.5 4.5 2.5-3L20 16"/><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8" cy="8.5" r="1.5"/></svg>
+      </button>
       <div>
         <p class="pjl-page-eyebrow">Property profile</p>
         <h1 id="propertyAddress">—</h1>
@@ -85,6 +92,44 @@
         <strong id="leadCount">0</strong>
       </div>
     </header>
+
+    <!-- PJL-27: customer portal hero photo upload. Staff-only — nothing
+         here is ever shown to or editable by the customer. Reuses the
+         shared .confirm-modal chrome (crm.css) for the backdrop/card. -->
+    <div class="confirm-modal" id="heroPhotoModal" hidden role="dialog" aria-modal="true" aria-labelledby="heroPhotoModalTitle">
+      <div class="confirm-modal-card">
+        <h2 id="heroPhotoModalTitle">Customer portal photo</h2>
+        <p>Shown as the background of this customer's portal header. Staff-uploaded only — customers never add their own. Falls back to the standard PJL green background when nothing's on file.</p>
+
+        <div id="heroPhotoEmpty">
+          <div class="photo-upload-empty">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 16l4.5-6 3.5 4.5 2.5-3L20 16"/><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8" cy="8.5" r="1.5"/></svg>
+            <button type="button" class="photo-upload-btn" id="heroPhotoUploadBtn">+ Upload photo</button>
+            <p class="photo-upload-hint">JPG or PNG, up to 25 MB</p>
+          </div>
+        </div>
+
+        <div id="heroPhotoFilled" hidden>
+          <div class="photo-preview-row">
+            <div class="photo-preview-thumb" id="heroPhotoThumb"></div>
+            <div>
+              <p class="photo-preview-meta" id="heroPhotoMeta">—</p>
+              <div class="photo-btn-row">
+                <button type="button" class="pjl-btn pjl-btn-outline" id="heroPhotoReplaceBtn">Replace photo</button>
+                <button type="button" class="pjl-btn pjl-btn-danger" id="heroPhotoRemoveBtn">Remove</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <input type="file" id="heroPhotoFileInput" accept="image/jpeg,image/png" hidden>
+        <p class="confirm-error" id="heroPhotoError" hidden></p>
+
+        <div class="confirm-actions">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="heroPhotoClose">Close</button>
+        </div>
+      </div>
+    </div>
 
     <p class="property-loading" id="propertyLoading">Loading property…</p>
     <p class="property-error" id="propertyError" hidden>This property couldn't be loaded.</p>

@@ -62,8 +62,22 @@ const confirmError = document.getElementById("confirmError");
 const confirmCancel = document.getElementById("confirmCancel");
 const confirmAccept = document.getElementById("confirmAccept");
 
+const heroPhotoTrigger = document.getElementById("heroPhotoTrigger");
+const heroPhotoModal = document.getElementById("heroPhotoModal");
+const heroPhotoEmpty = document.getElementById("heroPhotoEmpty");
+const heroPhotoFilled = document.getElementById("heroPhotoFilled");
+const heroPhotoThumb = document.getElementById("heroPhotoThumb");
+const heroPhotoMeta = document.getElementById("heroPhotoMeta");
+const heroPhotoUploadBtn = document.getElementById("heroPhotoUploadBtn");
+const heroPhotoReplaceBtn = document.getElementById("heroPhotoReplaceBtn");
+const heroPhotoRemoveBtn = document.getElementById("heroPhotoRemoveBtn");
+const heroPhotoFileInput = document.getElementById("heroPhotoFileInput");
+const heroPhotoClose = document.getElementById("heroPhotoClose");
+const heroPhotoError = document.getElementById("heroPhotoError");
+
 let loadedProperty = null;
 let loadedLeadCount = 0;
+let loadedHeroPhotoUrl = null;
 
 // Pull the property ID from the URL: /admin/property/<id>
 function getPropertyId() {
@@ -246,6 +260,25 @@ function renderHero(property, leads) {
   const codePart = property.code ? `${property.code} · ` : "";
   propertyMeta.textContent = `${codePart}${phone} · created ${formatDate(property.createdAt)}`;
   leadCount.textContent = leads.length;
+}
+
+// PJL-27: customer portal hero photo — the small greyscale trigger in the
+// corner of the hero, and the modal's empty/filled states. Called on
+// initial load and again after every upload/remove so the trigger and
+// modal never show stale state.
+function renderHeroPhotoState(property, heroPhotoUrl) {
+  if (!heroPhotoTrigger || !heroPhotoModal) return;
+  loadedHeroPhotoUrl = heroPhotoUrl || null;
+  const has = Boolean(property?.heroPhoto);
+  heroPhotoTrigger.classList.toggle("has-photo", has);
+  heroPhotoEmpty.hidden = has;
+  heroPhotoFilled.hidden = !has;
+  if (has) {
+    heroPhotoThumb.style.backgroundImage = loadedHeroPhotoUrl ? `url("${loadedHeroPhotoUrl}")` : "none";
+    heroPhotoMeta.textContent = property.heroPhoto.uploadedAt
+      ? `Uploaded ${formatDate(property.heroPhoto.uploadedAt)}`
+      : "Uploaded";
+  }
 }
 
 const DEFERRED_TYPE_LABELS = {
@@ -1126,6 +1159,7 @@ async function init() {
     propertyLoading.hidden = true;
     propertyForm.hidden = false;
     renderHero(data.property, data.leads || []);
+    renderHeroPhotoState(data.property, data.heroPhotoUrl || null);
     populateForm(data.property, data.seasonalPricingResolved || null);
     renderLeadsList(data.leads || []);
     renderFieldWoList(data.property);
@@ -1138,6 +1172,94 @@ async function init() {
 }
 
 init();
+
+// ---- Customer portal hero photo modal ------------------------------
+//
+// Staff-only upload (PJL-27) — nothing here is ever exposed to the
+// customer. Reads the file client-side as base64, POSTs it, then
+// re-fetches the property so the preview thumbnail comes from the same
+// compressed JPEG the portal will actually show (rather than re-encoding
+// the original file client-side, which could drift from what the server
+// stored).
+(function setupHeroPhotoModal() {
+  if (!heroPhotoTrigger || !heroPhotoModal) return;
+
+  function showError(message) {
+    heroPhotoError.textContent = message;
+    heroPhotoError.hidden = false;
+  }
+  function clearError() {
+    heroPhotoError.hidden = true;
+    heroPhotoError.textContent = "";
+  }
+  function openModal() { clearError(); heroPhotoModal.hidden = false; }
+  function closeModal() { heroPhotoModal.hidden = true; }
+  function pickFile() { heroPhotoFileInput.value = ""; heroPhotoFileInput.click(); }
+
+  heroPhotoTrigger.addEventListener("click", openModal);
+  heroPhotoClose.addEventListener("click", closeModal);
+  heroPhotoModal.addEventListener("click", (event) => {
+    if (event.target === heroPhotoModal) closeModal();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (!heroPhotoModal.hidden && event.key === "Escape") closeModal();
+  });
+  heroPhotoUploadBtn.addEventListener("click", pickFile);
+  heroPhotoReplaceBtn.addEventListener("click", pickFile);
+
+  heroPhotoFileInput.addEventListener("change", async () => {
+    const file = heroPhotoFileInput.files && heroPhotoFileInput.files[0];
+    if (!file) return;
+    const id = getPropertyId();
+    if (!id) return;
+    clearError();
+    const busyLabel = heroPhotoUploadBtn.hidden ? heroPhotoReplaceBtn : heroPhotoUploadBtn;
+    busyLabel.disabled = true;
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error("Couldn't read that file."));
+        reader.readAsDataURL(file);
+      });
+      const base64 = dataUrl.split(",")[1] || "";
+      if (!base64) throw new Error("Couldn't read that file.");
+      const response = await fetch(`/api/properties/${encodeURIComponent(id)}/hero-photo`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ filename: file.name, data: base64 })
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error((result.errors || ["Upload failed."]).join(" "));
+      loadedProperty = result.property || loadedProperty;
+      const fresh = await fetch(`/api/properties/${encodeURIComponent(id)}`, { cache: "no-store" })
+        .then((r) => r.json()).catch(() => null);
+      renderHeroPhotoState(loadedProperty, fresh?.heroPhotoUrl || null);
+    } catch (err) {
+      showError(err.message || "Couldn't upload that photo.");
+    } finally {
+      busyLabel.disabled = false;
+    }
+  });
+
+  heroPhotoRemoveBtn.addEventListener("click", async () => {
+    const id = getPropertyId();
+    if (!id) return;
+    clearError();
+    heroPhotoRemoveBtn.disabled = true;
+    try {
+      const response = await fetch(`/api/properties/${encodeURIComponent(id)}/hero-photo`, { method: "DELETE" });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error((result.errors || ["Couldn't remove the photo."]).join(" "));
+      loadedProperty = result.property || loadedProperty;
+      renderHeroPhotoState(loadedProperty, null);
+    } catch (err) {
+      showError(err.message || "Couldn't remove the photo.");
+    } finally {
+      heroPhotoRemoveBtn.disabled = false;
+    }
+  });
+})();
 
 // ---- Change-owner modal -------------------------------------------
 //
