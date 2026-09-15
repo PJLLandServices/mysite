@@ -39,44 +39,47 @@ fs.mkdirSync(path.join(SANDBOX, "server/data"), { recursive: true });
 const welcome = require(path.join(SANDBOX, "server/lib/welcome-email.js"));
 const customers = require(path.join(SANDBOX, "server/lib/customers.js"));
 const settingsLib = require(path.join(SANDBOX, "server/lib/settings.js"));
-const SOURCE = fs.readFileSync(path.join(ROOT, "server/lib/welcome-email.html"), "utf8");
 const SPRING_SOURCE = fs.readFileSync(path.join(ROOT, "server/lib/welcome-email-spring.html"), "utf8");
 const FALL_SOURCE = fs.readFileSync(path.join(ROOT, "server/lib/welcome-email-fall.html"), "utf8");
+const SERVICE_SOURCE = fs.readFileSync(path.join(ROOT, "server/lib/welcome-email-service.html"), "utf8");
+const INSTALLATION_SOURCE = fs.readFileSync(path.join(ROOT, "server/lib/welcome-email-installation.html"), "utf8");
 
 // ---- 1. Render ---------------------------------------------------------
 
 const PORTAL = "https://www.pjllandservices.com/portal/abc&def";
-const BOOKING_BAND = "HOW YOUR BOOKING GOT MADE";
-const SPRING_BOOKING_BAND = "HOW YOUR BOOKING WAS MADE";
-const SEASONS_BAND = "HOW YOUR SEASONS WORK FROM HERE";
-const BOOKING_TAIL = "reminder text the day before.";
+const BOOKING_BAND = "HOW YOUR BOOKING WAS MADE"; // shared verbatim per spec — spring, fall
+const INSTALLATION_SEASONS_HEADING = "How your seasons work from here";
 const rendered = Object.fromEntries(welcome.VARIANTS.map((v) => [
   v, welcome.renderWelcomeEmail({ variant: v, firstName: "Ad <b>", portalUrl: PORTAL, unsubscribeUrl: "https://x/unsub" })
 ]));
 
-ok("four variants render", welcome.VARIANTS.length === 4 && welcome.VARIANTS.every((v) => rendered[v].html.length > 10000));
-ok("spring_opening and fall_closing both carry their own (shared-per-spec) booking heading, not the old shared-template one",
-  rendered.spring_opening.html.includes(SPRING_BOOKING_BAND) && rendered.fall_closing.html.includes(SPRING_BOOKING_BAND)
-  && !rendered.spring_opening.html.includes(BOOKING_BAND) && !rendered.fall_closing.html.includes(BOOKING_BAND));
-ok("service drops the booking band AND its body",
-  !rendered.service.html.includes(BOOKING_BAND) && !rendered.service.html.includes(BOOKING_TAIL));
-ok("installation drops the booking section and gets the seasons section in its place",
-  !rendered.installation.html.includes(BOOKING_BAND) && rendered.installation.html.includes(SEASONS_BAND)
-  && rendered.installation.html.indexOf(SEASONS_BAND) < rendered.installation.html.indexOf("On the day"));
-ok("installation seasons block carries all four paragraphs with the entities",
-  ["You never have to book a spring opening", "half-day, never a minute", "Nobody gets un-booked", "less windshield time"]
-    .every((t) => rendered.installation.html.includes(t))
-  && rendered.installation.html.includes("you&rsquo;ll never be given a time"));
-ok("service and spring do NOT get the seasons section",
-  !rendered.service.html.includes(SEASONS_BAND) && !rendered.spring_opening.html.includes(SEASONS_BAND));
-ok("the cream-to-green wave still joins the cut in service and installation",
-  (rendered.service.html.match(/pjl-wave-cream-to-green/g) || []).length === 2
-  && (rendered.installation.html.match(/pjl-wave-cream-to-green/g) || []).length === 2);
-ok("installation warranty copy leads with three years; spring, fall and service are one-year only, no install upsell",
+ok("four variants render, each its own complete design", welcome.VARIANTS.length === 4 && welcome.VARIANTS.every((v) => rendered[v].html.length > 10000));
+ok("spring_opening and fall_closing carry the shared-per-spec booking heading; service and installation don't need it",
+  rendered.spring_opening.html.includes(BOOKING_BAND) && rendered.fall_closing.html.includes(BOOKING_BAND)
+  && !rendered.service.html.includes(BOOKING_BAND) && !rendered.installation.html.includes(BOOKING_BAND));
+ok("installation explains the seasonal cycle instead of a booking flow (it's never auto-booked itself)",
+  rendered.installation.html.includes(INSTALLATION_SEASONS_HEADING)
+  && rendered.installation.html.includes("nothing to rebuild, only to verify"));
+ok("service explains how a repair visit itself works, distinct from the seasonal auto-booking sections",
+  rendered.service.html.includes("How a repair visit goes") && !rendered.service.html.includes(BOOKING_BAND)
+  && !rendered.service.html.includes(INSTALLATION_SEASONS_HEADING));
+ok("spring and fall do not carry installation's seasons heading or service's repair-visit heading",
+  !rendered.spring_opening.html.includes(INSTALLATION_SEASONS_HEADING) && !rendered.fall_closing.html.includes(INSTALLATION_SEASONS_HEADING)
+  && !rendered.spring_opening.html.includes("How a repair visit goes") && !rendered.fall_closing.html.includes("How a repair visit goes"));
+ok("no variant surfaces the internal routing/driving-cost reasoning every spec's §9 forbids",
+  welcome.VARIANTS.every((v) => !rendered[v].html.includes("less windshield time") && !rendered[v].html.includes("less fuel")
+    && !rendered[v].html.includes("route down your street") && !rendered[v].html.includes("routes are built by area")));
+ok("no variant still describes a repair-style \"find the fault first\" visit outside of service's own repair content",
+  !rendered.spring_opening.html.includes("find the fault first") && !rendered.fall_closing.html.includes("find the fault first")
+  && !rendered.installation.html.includes("find the fault first"));
+ok("installation warranty leads with three years; spring, fall and service are one-year only, no install upsell line",
   rendered.installation.html.includes("Your new system carries three years, parts and labour.")
   && !rendered.installation.html.includes("New system installations carry three years.")
   && [rendered.spring_opening, rendered.fall_closing, rendered.service].every((r) =>
     r.html.includes("Every repair we carry out is covered for one year, parts and labour.") && !r.html.includes("three years")));
+ok("installation never promises zero overspray, and never claims the customer reviewed/approved a design",
+  !rendered.installation.html.toLowerCase().includes("zero overspray")
+  && !/you (saw|see|reviewed|approved) the design/i.test(rendered.installation.html));
 ok("every variant substitutes the portal URL (escaped) and loses the generic login link",
   welcome.VARIANTS.every((v) =>
     rendered[v].html.includes('href="https://www.pjllandservices.com/portal/abc&amp;def"')
@@ -87,10 +90,11 @@ ok("no unsubscribe URL keeps the designed mailto",
   welcome.renderWelcomeEmail({ variant: "service", portalUrl: PORTAL }).html.includes("mailto:info@pjllandservices.com?subject=Unsubscribe"));
 ok("no portal URL falls back to the login page",
   welcome.renderWelcomeEmail({ variant: "service" }).html.includes('href="https://www.pjllandservices.com/portal/login"'));
-ok("spring_opening with the default link is its own approved file byte-for-byte",
-  welcome.renderWelcomeEmail({ variant: "spring_opening" }).html === SPRING_SOURCE);
-ok("fall_closing with the default link is its own approved file byte-for-byte",
-  welcome.renderWelcomeEmail({ variant: "fall_closing" }).html === FALL_SOURCE);
+ok("every variant with the default link is its own approved file byte-for-byte",
+  welcome.renderWelcomeEmail({ variant: "spring_opening" }).html === SPRING_SOURCE
+  && welcome.renderWelcomeEmail({ variant: "fall_closing" }).html === FALL_SOURCE
+  && welcome.renderWelcomeEmail({ variant: "service" }).html === SERVICE_SOURCE
+  && welcome.renderWelcomeEmail({ variant: "installation" }).html === INSTALLATION_SOURCE);
 ok("subjects are per variant",
   rendered.spring_opening.subject.endsWith("your spring opening is booked")
   && rendered.fall_closing.subject.endsWith("your fall closing is booked")
@@ -101,10 +105,10 @@ ok("text alternative greets by first name and carries the portal link; the HTML 
   rendered.service.text.startsWith("Hi Ad <b>,") && rendered.service.text.includes(PORTAL)
   && !rendered.service.html.includes("Ad <b>") && !rendered.service.html.includes("Ad &lt;b&gt;"));
 ok("text alternative follows the variant",
-  rendered.installation.text.includes(SEASONS_BAND) && !rendered.installation.text.includes(BOOKING_BAND)
+  rendered.installation.text.includes(INSTALLATION_SEASONS_HEADING.toUpperCase()) && !rendered.installation.text.includes(BOOKING_BAND)
   && rendered.service.text.includes("HOW A REPAIR VISIT GOES") && !rendered.service.text.includes(BOOKING_BAND)
-  && rendered.spring_opening.text.includes(SPRING_BOOKING_BAND) && !rendered.spring_opening.text.includes(BOOKING_BAND)
-  && rendered.fall_closing.text.includes("YOUR FUTURE FALL CLOSINGS") && !rendered.fall_closing.text.includes(BOOKING_BAND));
+  && rendered.spring_opening.text.includes(BOOKING_BAND)
+  && rendered.fall_closing.text.includes("YOUR FUTURE FALL CLOSINGS") && rendered.fall_closing.text.includes(BOOKING_BAND));
 ok("an unknown variant renders as service", welcome.renderWelcomeEmail({ variant: "nope" }).subject === rendered.service.subject);
 
 // ---- 2. dueWelcomes ----------------------------------------------------
@@ -248,7 +252,7 @@ const manual = await welcome.sendWelcomeFor({
 ok("a manual send goes out with the switch off, as installation, marked by admin",
   manual.ok && manual.variant === "installation"
   && (await customers.get(hal.id, { withProperties: false })).welcomeEmail.by === "admin"
-  && sentMail[sentMail.length - 1].html.includes(SEASONS_BAND));
+  && sentMail[sentMail.length - 1].html.includes(INSTALLATION_SEASONS_HEADING));
 
 // ---- 4. Installation invoice detection ---------------------------------
 
@@ -297,7 +301,7 @@ ok("an invoice pointing at a different project, or no project, is false",
 {
   const html = welcome.renderWelcomeEmail({ variant: "installation" }).html;
   ok("no stacking column classes remain (badges and season icons never drop under their text)", !/class="col/.test(html) && !/\.col\s*\{/.test(html));
-  ok("each season icon sits in its own cell beside its text", (html.match(/<td class="season-cell"[^>]*>\s*<img class="season-img"/g) || []).length === 3);
+  ok("each season icon sits in its own cell beside its text", (html.match(/<td class="season-cell"[^>]*>\s*<img class="season-img"/g) || []).length === 2);
   ok("warranty and referral badges sit in a side cell beside their copy", (html.match(/<td class="side-cell"[^>]*>\s*<img class="side-img"/g) || []).length === 2);
   const inst = welcome.renderWelcomeEmail({ variant: "installation" }).html;
   ok("installation season paragraphs carry the mobile spacing hook", (inst.match(/<div class="txt" style="font-family:'DM Sans'[^"]*line-height:28px/g) || []).length >= 4);
