@@ -4,7 +4,11 @@
 //
 // WHAT THIS PROTECTS. One email per customer, ever, on their FIRST
 // booking — and never to a customer who is not new, never before the
-// booking has settled, never when Patrick has the switch off. The
+// booking has settled, never when Patrick has the switch off, and never
+// to a customer who already existed before the switch was ever turned
+// on (autoSendCutoff — see the 2026-09-15 incident notes below, where
+// the lack of this sent every past customer PJL had one email in a
+// single sweep the first time the switch was used for real). The
 // renderer is pinned too: each variant keeps or drops the booking
 // section exactly as designed, and every variant carries the customer's
 // own portal link instead of the generic login page. And the invariant
@@ -175,27 +179,54 @@ ok("a cancelled FIRST booking followed by a live second one does not make the se
     ], customers: C, now: NOW, settings: ON
   }).some((d) => d.booking.id === "X-2"));
 
-// backfill list ignores the toggle and the age, honours the mark
+// autoSendCutoff: the 2026-09-15 incident. Enabling the switch for the
+// first time must never treat a booking from long before that moment
+// as newly due — before this existed, dueWelcomes had no concept of
+// "before" at all, and the very first enable swept every customer
+// PJL had ever had in one pass.
+const WITH_CUTOFF = { welcomeEmail: { enabled: true, autoSendCutoff: ago(60) } };
+ok("a booking older than the cutoff is excluded even though it is otherwise perfectly due",
+  welcome.dueWelcomes({ bookings: [{ ...B[0], createdAt: ago(60 * 24 * 200) }], customers: C, now: NOW, settings: WITH_CUTOFF }).length === 0);
+ok("a booking created after the cutoff is still picked up normally",
+  welcome.dueWelcomes({ bookings: [{ ...B[0], createdAt: ago(45) }], customers: C, now: NOW, settings: WITH_CUTOFF }).length === 1);
+ok("no cutoff set (the pre-fix shape) behaves exactly as before — this is what actually broke",
+  welcome.dueWelcomes({ bookings: [{ ...B[0], createdAt: ago(60 * 24 * 200) }], customers: C, now: NOW, settings: ON }).length === 1);
+
+// backfill list ignores the toggle, the cutoff, and the age, honours the mark
 const backfill = welcome.backfillCandidates({ bookings: B, customers: C });
 ok("backfill candidates ignore the switch and the 30-minute age but still honour the mark",
   backfill.map((r) => r.bookingId).sort().join(",") === "BK-1,BK-2,BK-7,BK-8"
   && backfill.every((r) => r.customerId !== "C-4"));
+ok("a booking the cutoff would hide from the automatic sweep still shows up here — Patrick can still work through real history by hand",
+  welcome.backfillCandidates({ bookings: [{ ...B[0], createdAt: ago(60 * 24 * 200) }], customers: C })
+    .some((r) => r.bookingId === "BK-1"));
 
 // ---- 3. Mark before send ------------------------------------------------
 
 const settingsPath = path.join(SANDBOX, "server/data/settings.json");
-await settingsLib.updateWelcomeEmail({ enabled: true }, { who: "test" });
+await settingsLib.updateWelcomeEmail({ enabled: true }, { who: "test", now: ago(120) });
 ok("settings writer flips the switch and audits it",
   (await settingsLib.get()).welcomeEmail.enabled === true
   && (await settingsLib.get()).audit.some((a) => a.action === "welcomeEmail")
   && fs.existsSync(settingsPath));
 ok("settings default is OFF", settingsLib.DEFAULT_SETTINGS.welcomeEmail.enabled === false);
+ok("the first-ever enable stamps autoSendCutoff to that moment, not the real clock",
+  (await settingsLib.get()).welcomeEmail.autoSendCutoff === new Date(ago(120)).toISOString());
+await settingsLib.updateWelcomeEmail({ enabled: false }, { who: "test" });
+await settingsLib.updateWelcomeEmail({ enabled: true }, { who: "test", now: NOW });
+ok("re-enabling later never moves the cutoff forward",
+  (await settingsLib.get()).welcomeEmail.autoSendCutoff === new Date(ago(120)).toISOString());
 
 const ann = await customers.create({ name: "Ann Fresh", email: "ann@example.com", phone: "9055550100" });
 const gus = await customers.create({ name: "Gus Repair", email: "gus@example.com", phone: "9055550101" });
+// Ivy pins the 2026-09-15 incident: a real customer from long before the
+// switch was ever turned on, with no mark, exactly like every one of
+// Patrick's actual customers the day this bug fired for real.
+const ivy = await customers.create({ name: "Ivy Historical", email: "ivy@example.com", phone: "9055550103" });
 const liveBookings = [
   { id: "BK-ANN", customerId: ann.id, serviceKey: "spring_open_4z", status: "confirmed", createdAt: ago(45), propertyId: "P-ANN" },
-  { id: "BK-GUS", customerId: gus.id, serviceKey: "service_call", status: "confirmed", createdAt: ago(45) }
+  { id: "BK-GUS", customerId: gus.id, serviceKey: "service_call", status: "confirmed", createdAt: ago(45) },
+  { id: "BK-IVY", customerId: ivy.id, serviceKey: "spring_open_4z", status: "confirmed", createdAt: ago(60 * 24 * 200) }
 ];
 
 const sentMail = [];
@@ -230,6 +261,12 @@ ok("the message is addressed, framed and linked like every other customer email"
   sentMail.length === 1 && sentMail[0].to === "ann@example.com"
   && /PJL Land Services/.test(sentMail[0].from) && sentMail[0].replyTo
   && sentMail[0].html.includes('href="https://x/portal/P-ANN"') && sentMail[0].text.startsWith("Hi Ann,"));
+ok("a customer whose booking predates the day the switch was ever turned on is never auto-swept, unmarked, not mailed — the 2026-09-15 incident this pins",
+  first.due === 2 && !sentMail.some((m) => m.to === "ivy@example.com")
+  && !(await customers.get(ivy.id, { withProperties: false })).welcomeEmail);
+ok("that same historical customer still shows up on the backfill table, for Patrick to send by hand",
+  welcome.backfillCandidates({ bookings: liveBookings, customers: await customers.list() })
+    .some((r) => r.customerId === ivy.id && r.bookingId === "BK-IVY"));
 
 throwFor = null;
 const second = await welcome.sweep(deps);
