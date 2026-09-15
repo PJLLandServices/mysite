@@ -41,6 +41,7 @@ const customers = require(path.join(SANDBOX, "server/lib/customers.js"));
 const settingsLib = require(path.join(SANDBOX, "server/lib/settings.js"));
 const SOURCE = fs.readFileSync(path.join(ROOT, "server/lib/welcome-email.html"), "utf8");
 const SPRING_SOURCE = fs.readFileSync(path.join(ROOT, "server/lib/welcome-email-spring.html"), "utf8");
+const FALL_SOURCE = fs.readFileSync(path.join(ROOT, "server/lib/welcome-email-fall.html"), "utf8");
 
 // ---- 1. Render ---------------------------------------------------------
 
@@ -54,9 +55,9 @@ const rendered = Object.fromEntries(welcome.VARIANTS.map((v) => [
 ]));
 
 ok("four variants render", welcome.VARIANTS.length === 4 && welcome.VARIANTS.every((v) => rendered[v].html.length > 10000));
-ok("spring_opening carries its OWN booking heading; fall_closing keeps the shared design's",
-  rendered.spring_opening.html.includes(SPRING_BOOKING_BAND) && !rendered.spring_opening.html.includes(BOOKING_BAND)
-  && rendered.fall_closing.html.includes(BOOKING_BAND));
+ok("spring_opening and fall_closing both carry their own (shared-per-spec) booking heading, not the old shared-template one",
+  rendered.spring_opening.html.includes(SPRING_BOOKING_BAND) && rendered.fall_closing.html.includes(SPRING_BOOKING_BAND)
+  && !rendered.spring_opening.html.includes(BOOKING_BAND) && !rendered.fall_closing.html.includes(BOOKING_BAND));
 ok("service drops the booking band AND its body",
   !rendered.service.html.includes(BOOKING_BAND) && !rendered.service.html.includes(BOOKING_TAIL));
 ok("installation drops the booking section and gets the seasons section in its place",
@@ -89,11 +90,11 @@ ok("no portal URL falls back to the login page",
   welcome.renderWelcomeEmail({ variant: "service" }).html.includes('href="https://www.pjllandservices.com/portal/login"'));
 ok("spring_opening with the default link is its own approved file byte-for-byte",
   welcome.renderWelcomeEmail({ variant: "spring_opening" }).html === SPRING_SOURCE);
-ok("fall_closing with the default link is still the shared design file byte-for-byte",
-  welcome.renderWelcomeEmail({ variant: "fall_closing" }).html === SOURCE);
+ok("fall_closing with the default link is its own approved file byte-for-byte",
+  welcome.renderWelcomeEmail({ variant: "fall_closing" }).html === FALL_SOURCE);
 ok("subjects are per variant",
   rendered.spring_opening.subject.endsWith("your spring opening is booked")
-  && rendered.fall_closing.subject.endsWith("you're in the book")
+  && rendered.fall_closing.subject.endsWith("your fall closing is booked")
   && rendered.spring_opening.subject !== rendered.fall_closing.subject
   && rendered.service.subject.endsWith("we've got your repair booked")
   && rendered.installation.subject.endsWith("your new system, and what comes next"));
@@ -294,7 +295,7 @@ ok("an invoice pointing at a different project, or no project, is false",
 // ---- 6. Phone layout: nothing that should sit side by side stacks -----
 
 {
-  const html = welcome.renderWelcomeEmail({ variant: "fall_closing" }).html;
+  const html = welcome.renderWelcomeEmail({ variant: "service" }).html;
   ok("no stacking column classes remain (badges and season icons never drop under their text)", !/class="col/.test(html) && !/\.col\s*\{/.test(html));
   ok("each season icon sits in its own cell beside its text", (html.match(/<td class="season-cell"[^>]*>\s*<img class="season-img"/g) || []).length === 3);
   ok("warranty and referral badges sit in a side cell beside their copy", (html.match(/<td class="side-cell"[^>]*>\s*<img class="side-img"/g) || []).length === 2);
