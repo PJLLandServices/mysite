@@ -367,9 +367,20 @@ function earliestBookingFor(customerId, all) {
 //   settings  — the settings object (settings.get); the enabled switch
 //               lives at settings.welcomeEmail.enabled
 // Returns [{ booking, customer, variant }].
+//
+// settings.welcomeEmail.autoSendCutoff, when present, excludes any
+// booking created before it. This is what keeps "enabled" meaning
+// "start watching for new customers" instead of "every past customer
+// who has no mark is due right now" — without it, the very first
+// enable ever scans a real customer list back to day one and treats
+// all of it as brand new (2026-09-15 incident: one sweep emailed every
+// past customer). backfillCandidates() below calls this with no
+// cutoff in its settings on purpose — that table is Patrick working
+// through real historical gaps by hand, not the automatic sweep.
 function dueWelcomes({ bookings: all = [], customers: custs = [], now = new Date(), settings = null } = {}) {
   if (settings?.welcomeEmail?.enabled !== true) return [];
   const nowMs = now instanceof Date ? now.getTime() : Date.parse(now) || Date.now();
+  const cutoffMs = settings?.welcomeEmail?.autoSendCutoff ? Date.parse(settings.welcomeEmail.autoSendCutoff) : null;
   const customerById = new Map((custs || []).filter((c) => c && c.id).map((c) => [c.id, c]));
   const out = [];
   const seen = new Set();
@@ -384,7 +395,9 @@ function dueWelcomes({ bookings: all = [], customers: custs = [], now = new Date
     // booking is not a new customer, whatever the state of the first.
     const earliest = earliestBookingFor(b.customerId, all);
     if (!earliest || earliest.id !== b.id) continue;
-    const age = nowMs - (Date.parse(b.createdAt) || 0);
+    const createdAtMs = Date.parse(b.createdAt) || 0;
+    if (cutoffMs !== null && createdAtMs < cutoffMs) continue;
+    const age = nowMs - createdAtMs;
     if (age < MIN_AGE_MS) continue;
     seen.add(b.customerId);
     out.push({ booking: b, customer, variant: variantForServiceKey(b.serviceKey) });
@@ -523,8 +536,9 @@ async function sweep({
 }
 
 // Customers who have an earliest slot-holding booking and no mark —
-// the backfill list for /admin/welcome-email. Ignores the toggle and the
-// 30-minute age (this is a human reading a table, not a robot sending).
+// the backfill list for /admin/welcome-email. Ignores the toggle, the
+// autoSendCutoff, and the 30-minute age (this is a human reading a
+// table and choosing to send, not the automatic sweep).
 function backfillCandidates({ bookings: all = [], customers: custs = [] } = {}) {
   const rows = dueWelcomes({
     bookings: all, customers: custs,

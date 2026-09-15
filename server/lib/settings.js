@@ -89,7 +89,19 @@ const DEFAULT_REVIEW_REQUESTS = {
 // Patrick flips it on from /admin/welcome-email once he has read the
 // rendered variants. Manual sends from that page ignore the switch; only
 // the automatic sweep and the installation-invoice hook honour it.
-const DEFAULT_WELCOME_EMAIL = { enabled: false };
+//
+// autoSendCutoff: stamped automatically the first time enabled flips
+// false -> true (see updateWelcomeEmail below), and never moved
+// backwards. The automatic sweep only ever considers bookings created
+// on or after this moment — otherwise "enabled" reads as "start
+// watching for new customers" but actually means "every customer who
+// ever booked and has no mark is due right now," which blasted the
+// entire historical customer list the first time this switch was used
+// for real (2026-09-15, incident: every past customer got a welcome
+// email in one sweep). Backfill candidates on /admin/welcome-email
+// deliberately still ignore this cutoff — that table exists precisely
+// so Patrick can work through real historical gaps by hand.
+const DEFAULT_WELCOME_EMAIL = { enabled: false, autoSendCutoff: null };
 
 // Seasonal-outreach message templates (feature-seasonal-outreach-brief.md
 // §3.2). Patrick saves a per-season subject + SMS body + email body from
@@ -279,7 +291,10 @@ function hydrate(s) {
         ? rr.fromName.trim()
         : DEFAULT_REVIEW_REQUESTS.fromName
     },
-    welcomeEmail: { enabled: we.enabled === true },
+    welcomeEmail: {
+      enabled: we.enabled === true,
+      autoSendCutoff: typeof we.autoSendCutoff === "string" && we.autoSendCutoff ? we.autoSendCutoff : null
+    },
     outreachTemplates: {
       spring: pickTemplate("spring"),
       fall: pickTemplate("fall")
@@ -527,14 +542,22 @@ async function updateReviewRequests(patch, { who = "admin", note = "" } = {}) {
   return settings;
 }
 
-// Update the welcomeEmail namespace. One key, one switch; audit-stamped
-// like every other settings writer.
-async function updateWelcomeEmail(patch, { who = "admin", note = "" } = {}) {
+// Update the welcomeEmail namespace. Audit-stamped like every other
+// settings writer. The only real write is `enabled`; autoSendCutoff is
+// never accepted from the caller — it is derived, stamped the moment
+// enabled first flips false -> true, and never moved once set (see the
+// comment on DEFAULT_WELCOME_EMAIL above for why it exists at all).
+// `now` is injectable so tests can pin the stamped cutoff to their own
+// fake clock instead of the real one.
+async function updateWelcomeEmail(patch, { who = "admin", note = "", now = new Date() } = {}) {
   const settings = await readAll();
   const before = { ...settings.welcomeEmail };
   const next = { ...settings.welcomeEmail };
   if (patch && typeof patch === "object" && Object.prototype.hasOwnProperty.call(patch, "enabled")) {
     next.enabled = patch.enabled === true;
+  }
+  if (next.enabled === true && !before.enabled && !next.autoSendCutoff) {
+    next.autoSendCutoff = (now instanceof Date ? now : new Date(now)).toISOString();
   }
   settings.welcomeEmail = next;
   settings.audit.unshift({
