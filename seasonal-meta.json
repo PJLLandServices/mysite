@@ -75,7 +75,11 @@
     },
     "sprinkler-service-north-york.html": {
       "town": "North York",
-      "evergreen": "Sprinkler repair and Hydrawise installs in York Mills, Hoggs Hollow and Bayview Village."
+      "evergreen": "Sprinkler repair and Hydrawise installs in York Mills, Hoggs Hollow and Bayview Village.",
+      "static": {
+        "title": "North York Irrigation & Sprinkler Service",
+        "description": "Irrigation system repair, installation and Hydrawise upgrades across North York — York Mills, Hoggs Hollow, Willowdale and Bayview Village. Book online."
+      }
     },
     "sprinkler-service-lawrence-park.html": {
       "town": "Lawrence Park",
@@ -83,7 +87,11 @@
     },
     "sprinkler-service-forest-hill.html": {
       "town": "Forest Hill",
-      "evergreen": "Discreet sprinkler, drip and lighting service for Forest Hill's established properties."
+      "evergreen": "Discreet sprinkler, drip and lighting service for Forest Hill's established properties.",
+      "static": {
+        "title": "Forest Hill Irrigation & Sprinkler Service",
+        "description": "Irrigation system service, sprinkler repair and drip lines for Forest Hill's established properties. Discreet scheduled work, pricing published up front."
+      }
     },
     "sprinkler-service-orangeville.html": {
       "town": "Orangeville",
