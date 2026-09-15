@@ -409,7 +409,11 @@
         <dl class="portal-system-grid" id="systemGrid"></dl>
         <div class="portal-system-zones" id="systemZones" hidden>
           <h3>Your zones</h3>
-          <ol class="portal-zone-list" id="systemZoneList"></ol>
+          <table class="portal-zone-table">
+            <colgroup><col class="pzt-zone"><col class="pzt-time"><col class="pzt-equip"></colgroup>
+            <thead><tr><th>Zone</th><th>Suggested Run Time</th><th>Equipment</th></tr></thead>
+            <tbody id="systemZoneList"></tbody>
+          </table>
         </div>
       </article>
 

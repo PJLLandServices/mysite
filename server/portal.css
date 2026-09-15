@@ -301,26 +301,85 @@ h1 {
   color: var(--green);
   margin: 0 0 8px;
 }
-.portal-zone-list {
-  margin: 0;
-  padding: 0 0 0 22px;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 6px 18px;
-  font-size: 14px;
-  color: var(--text-mid);
-}
-.portal-zone-list li::marker {
-  color: var(--green);
-  font-weight: 700;
-}
-.portal-system-zone-meta {
-  color: var(--text-muted);
+/* PJL-24: a real table, not a bulleted auto-fit grid — one header row
+   ("Zone" / "Suggested Run Time" / "Equipment") instead of repeating a
+   label per zone, and every column lines up regardless of how long a
+   location name is. A bulleted list of run-on "Zone N — Location ·
+   Equipment" strings was the thing Patrick flagged directly: "scattered
+   across a piece of paper," "runs in jot sections." See PJL-24. */
+.portal-zone-table {
+  width: 100%;
+  border-collapse: collapse;
   font-size: 13px;
+  table-layout: fixed;
+}
+.portal-zone-table col.pzt-zone { width: 46%; }
+.portal-zone-table col.pzt-time { width: 22%; }
+.portal-zone-table col.pzt-equip { width: 32%; }
+.portal-zone-table th {
+  text-align: left;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 0 10px 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+.portal-zone-table td {
+  padding: 8px 10px 8px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: baseline;
+  overflow-wrap: anywhere;
+}
+.portal-zone-table th:last-child,
+.portal-zone-table td:last-child {
+  padding-right: 0;
+}
+.portal-zone-table .portal-zone-num {
+  display: inline-block;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--green);
+  background: var(--green-pale);
+  border-radius: 5px;
+  padding: 1px 6px;
+  margin-right: 7px;
+  white-space: nowrap;
+}
+.portal-zone-table .portal-zone-loc {
+  font-weight: 600;
+  color: var(--text);
+}
+.portal-zone-table .portal-zone-time {
+  font-weight: 700;
+  color: var(--green-mid);
+  white-space: nowrap;
+}
+.portal-zone-table .portal-zone-time.is-none {
+  font-weight: 400;
+  font-style: italic;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.portal-zone-table .portal-zone-equip {
+  color: var(--text-muted);
+  font-size: 12.5px;
 }
 @media (max-width: 540px) {
   .portal-system-grid { grid-template-columns: 1fr; gap: 4px; }
   .portal-system-grid dt { padding-top: 6px; }
+  .portal-zone-table col.pzt-zone { width: 42%; }
+  .portal-zone-table col.pzt-time { width: 24%; }
+  .portal-zone-table col.pzt-equip { width: 34%; }
+  .portal-zone-table th,
+  .portal-zone-table td {
+    font-size: 12px;
+    padding-right: 6px;
+  }
 }
 
 /* ============= Status timeline ============= */
