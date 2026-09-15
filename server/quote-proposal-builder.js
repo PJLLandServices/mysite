@@ -598,7 +598,7 @@
               ? `<button type="button" class="pb-line-desc-toggle" data-li-desc-toggle="${idx}" aria-pressed="false">+ Show description</button>`
               : `<div class="pb-line-detail-row">
                   <input type="text" class="pb-line-detail" data-li-desc="${idx}" value="${escapeAttr(li.description || "")}" placeholder="Detail line — shown under the component">
-                  <button type="button" class="pb-line-desc-toggle" data-li-desc-toggle="${idx}" aria-pressed="true" title="Hide description">×</button>
+                  <button type="button" class="pb-line-desc-toggle" data-li-desc-toggle="${idx}" aria-pressed="true" title="Hide description">Hide</button>
                 </div>`}
           </td>
           <td class="pb-col-source" data-label="Source"><span class="pb-line-source-badge" data-source="${escapeAttr(li.source || "custom")}">${escapeHtml(sourceLabel)}</span></td>
