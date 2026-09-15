@@ -1535,6 +1535,12 @@ function normalizeProposalLineItem(raw, idx) {
     // Hides the description on the quote/PDF/customer page without
     // discarding the text, so it can be switched back on later.
     showDescription: raw.showDescription === false ? false : true,
+    // Hides the WHOLE line (title, description, qty, price) from the PDF and
+    // customer page — e.g. a cost folded into the bottom line without being
+    // itemized. The line stays fully editable in the builder and its price
+    // still counts toward the subtotal/HST/total either way; only the
+    // rendered schedule omits the row. Mirrors proposalSections[].include.
+    include: raw.include === false ? false : true,
     unit,
     qty: safeQty,
     price: safePrice,
