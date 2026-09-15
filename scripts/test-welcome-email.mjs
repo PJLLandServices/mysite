@@ -72,12 +72,11 @@ ok("service and spring do NOT get the seasons section",
 ok("the cream-to-green wave still joins the cut in service and installation",
   (rendered.service.html.match(/pjl-wave-cream-to-green/g) || []).length === 2
   && (rendered.installation.html.match(/pjl-wave-cream-to-green/g) || []).length === 2);
-ok("installation warranty copy leads with three years; service keeps the repair copy; spring is one-year only",
+ok("installation warranty copy leads with three years; spring, fall and service are one-year only, no install upsell",
   rendered.installation.html.includes("Your new system carries three years, parts and labour.")
   && !rendered.installation.html.includes("New system installations carry three years.")
-  && rendered.service.html.includes("New system installations carry three years.")
-  && rendered.spring_opening.html.includes("Every repair we carry out is covered for one year, parts and labour.")
-  && !rendered.spring_opening.html.includes("three years"));
+  && [rendered.spring_opening, rendered.fall_closing, rendered.service].every((r) =>
+    r.html.includes("Every repair we carry out is covered for one year, parts and labour.") && !r.html.includes("three years")));
 ok("every variant substitutes the portal URL (escaped) and loses the generic login link",
   welcome.VARIANTS.every((v) =>
     rendered[v].html.includes('href="https://www.pjllandservices.com/portal/abc&amp;def"')
@@ -103,8 +102,9 @@ ok("text alternative greets by first name and carries the portal link; the HTML 
   && !rendered.service.html.includes("Ad <b>") && !rendered.service.html.includes("Ad &lt;b&gt;"));
 ok("text alternative follows the variant",
   rendered.installation.text.includes(SEASONS_BAND) && !rendered.installation.text.includes(BOOKING_BAND)
-  && rendered.service.text.includes("ON THE DAY") && !rendered.service.text.includes(BOOKING_BAND)
-  && rendered.spring_opening.text.includes(SPRING_BOOKING_BAND) && !rendered.spring_opening.text.includes(BOOKING_BAND));
+  && rendered.service.text.includes("HOW A REPAIR VISIT GOES") && !rendered.service.text.includes(BOOKING_BAND)
+  && rendered.spring_opening.text.includes(SPRING_BOOKING_BAND) && !rendered.spring_opening.text.includes(BOOKING_BAND)
+  && rendered.fall_closing.text.includes("YOUR FUTURE FALL CLOSINGS") && !rendered.fall_closing.text.includes(BOOKING_BAND));
 ok("an unknown variant renders as service", welcome.renderWelcomeEmail({ variant: "nope" }).subject === rendered.service.subject);
 
 // ---- 2. dueWelcomes ----------------------------------------------------
@@ -295,7 +295,7 @@ ok("an invoice pointing at a different project, or no project, is false",
 // ---- 6. Phone layout: nothing that should sit side by side stacks -----
 
 {
-  const html = welcome.renderWelcomeEmail({ variant: "service" }).html;
+  const html = welcome.renderWelcomeEmail({ variant: "installation" }).html;
   ok("no stacking column classes remain (badges and season icons never drop under their text)", !/class="col/.test(html) && !/\.col\s*\{/.test(html));
   ok("each season icon sits in its own cell beside its text", (html.match(/<td class="season-cell"[^>]*>\s*<img class="season-img"/g) || []).length === 3);
   ok("warranty and referral badges sit in a side cell beside their copy", (html.match(/<td class="side-cell"[^>]*>\s*<img class="side-img"/g) || []).length === 2);
