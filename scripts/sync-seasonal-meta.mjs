@@ -99,10 +99,18 @@ const escAttr = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 const escText = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
 
 function blockFor(file, page, season) {
-  const variant = META.seasonal[season];
-  const bareTitle = `Sprinkler Service ${page.town} — ${resolvePrices(variant.titleSuffix)}`;
+  let bareTitle, description;
+  if (page.static) {
+    // Retargeted pages (irrigation-vocabulary fix, 2026-09) — fixed title/description,
+    // not season-driven. See docs/briefs/seo-city-irrigation-retarget.md.
+    bareTitle = page.static.title;
+    description = page.static.description;
+  } else {
+    const variant = META.seasonal[season];
+    bareTitle = `Sprinkler Service ${page.town} — ${resolvePrices(variant.titleSuffix)}`;
+    description = `${page.evergreen} ${resolvePrices(variant.sentence)}`;
+  }
   const title = bareTitle + META.brand;
-  const description = `${page.evergreen} ${resolvePrices(variant.sentence)}`;
   return {
     bareTitle, description,
     html: [
