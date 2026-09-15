@@ -603,6 +603,35 @@ button.pb-line-desc-toggle[aria-pressed="false"] {
   background: #FAFAF7;
 }
 
+/* Whole-line visibility toggle — hides title+qty+price from the PDF and
+   customer page (the price still counts toward the subtotal either way).
+   Sits above the component name so it's the first thing seen on the row. */
+.pb-line-visibility-toggle {
+  display: block;
+  margin-bottom: 6px;
+  background: #FFFFFF;
+  border: 1px solid #D8D6C8;
+  border-radius: 4px;
+  color: #5C6B52;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 4px 8px;
+}
+.pb-line-visibility-toggle:hover { background: #EAF3DE; border-color: #B9C9A6; color: #1B4D2E; }
+.pb-line-visibility-toggle[aria-pressed="false"] {
+  background: #FDF1E6;
+  border-color: #E8B98A;
+  color: #8A4A12;
+}
+.pb-line-visibility-toggle[aria-pressed="false"]:hover { background: #FBE4CB; }
+
+/* Excluded line: still fully editable, just visibly dimmed so it reads as
+   "not on the customer's copy" at a glance. */
+.pb-line-row-excluded { opacity: 0.55; }
+.pb-line-row-excluded:hover { opacity: 0.85; }
+
 .pb-line-source-badge {
   display: inline-block;
   padding: 2px 8px;
