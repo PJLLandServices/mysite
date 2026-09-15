@@ -571,6 +571,37 @@
 }
 .pb-line-detail::placeholder { color: #9AA694; }
 
+.pb-line-detail-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+.pb-line-detail-row .pb-line-detail { margin-top: 0; flex: 1; }
+
+/* Toggle that hides/shows the detail line without clearing its text. */
+.pb-line-desc-toggle {
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #9AA694;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 6px;
+}
+.pb-line-desc-toggle:hover { background: #F5F4EE; color: #5C6B52; }
+button.pb-line-desc-toggle[aria-pressed="false"] {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #9AA694;
+  font-style: italic;
+  padding: 2px 0;
+}
+button.pb-line-desc-toggle[aria-pressed="false"]:hover { color: #5C6B52; background: none; }
+
 .pb-line-source-badge {
   display: inline-block;
   padding: 2px 8px;

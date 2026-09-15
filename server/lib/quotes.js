@@ -1532,6 +1532,9 @@ function normalizeProposalLineItem(raw, idx) {
     sourceKey,
     label: String(raw.label || raw.sourceKey || "Line item").slice(0, 400),
     description: String(raw.description || "").slice(0, 1000),
+    // Hides the description on the quote/PDF/customer page without
+    // discarding the text, so it can be switched back on later.
+    showDescription: raw.showDescription === false ? false : true,
     unit,
     qty: safeQty,
     price: safePrice,

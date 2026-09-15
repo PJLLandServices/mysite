@@ -965,7 +965,7 @@ function renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth, heading =
       const qty = Number(li.qty) || 1;
       const price = Number(li.price) || 0;
       const lineTotal = Number(li.lineTotal) || (price * qty);
-      const desc = li.description ? String(li.description) : "";
+      const desc = li.description && li.showDescription !== false ? String(li.description) : "";
 
       // Measure the description block (label + optional sub-description) at
       // the description column width — the Brief A collision fix, unchanged.

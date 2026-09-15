@@ -594,7 +594,12 @@
           ${moveCell}
           <td class="pb-col-desc" data-label="Component & detail">
             <input type="text" data-li-label="${idx}" value="${escapeAttr(li.label)}" placeholder="Component name">
-            <input type="text" class="pb-line-detail" data-li-desc="${idx}" value="${escapeAttr(li.description || "")}" placeholder="Detail line — shown under the component">
+            ${li.showDescription === false
+              ? `<button type="button" class="pb-line-desc-toggle" data-li-desc-toggle="${idx}" aria-pressed="false">+ Show description</button>`
+              : `<div class="pb-line-detail-row">
+                  <input type="text" class="pb-line-detail" data-li-desc="${idx}" value="${escapeAttr(li.description || "")}" placeholder="Detail line — shown under the component">
+                  <button type="button" class="pb-line-desc-toggle" data-li-desc-toggle="${idx}" aria-pressed="true" title="Hide description">×</button>
+                </div>`}
           </td>
           <td class="pb-col-source" data-label="Source"><span class="pb-line-source-badge" data-source="${escapeAttr(li.source || "custom")}">${escapeHtml(sourceLabel)}</span></td>
           <td class="pb-col-qty" data-label="Qty"><input type="number" data-li-qty="${idx}" value="${li.qty}" min="0" step="0.01"></td>
@@ -657,6 +662,15 @@
         state.quote.lineItems.splice(i, 1);
         renderLineItems();
         renderTotals();
+        markDirty();
+      });
+    });
+    el.lineList.querySelectorAll("[data-li-desc-toggle]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const i = Number(btn.dataset.liDescToggle);
+        const li = state.quote.lineItems[i];
+        li.showDescription = li.showDescription === false ? true : false;
+        renderLineItems();
         markDirty();
       });
     });
