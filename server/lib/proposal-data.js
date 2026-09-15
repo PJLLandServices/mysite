@@ -122,7 +122,7 @@ function scheduleRows(quote) {
   // PDF renders (lib/line-item-order.js). The glyph follows POSITION by
   // design: it is decoration that gives the top of the schedule more weight,
   // so it stays with the slot rather than travelling with a moved line.
-  const items = orderedLineItems(quote);
+  const items = orderedLineItems(quote).filter((li) => li.include !== false);
   const mode = quote.pdfOptions && quote.pdfOptions.lineItems;
   if (mode === "summary" || items.length === 0) {
     return [{ glyph: "large", cls: "Complete system", detail: "Designed, supplied & installed", qty: "1" }];
@@ -357,7 +357,7 @@ function effectiveFixtureCount(quote) {
 // Recessed — also the glyph), its description is the In-Lite fixture code.
 function lightingRows(quote) {
   // Same arranged display order as the sprinkler schedule and the PDF.
-  return orderedLineItems(quote).map((li) => {
+  return orderedLineItems(quote).filter((li) => li.include !== false).map((li) => {
     const qty = Number(li.qty) || 0;
     const price = Number(li.price) || 0;
     const line = li.lineTotal != null ? Number(li.lineTotal) : price * qty;

@@ -589,16 +589,20 @@
           `<button type="button" class="pb-line-move" data-li-up="${idx}" ${upDis} aria-label="Move line up" title="Move up">↑</button>` +
           `<button type="button" class="pb-line-move" data-li-down="${idx}" ${downDis} aria-label="Move line down" title="Move down">↓</button>` +
           `</td>`;
+      const excluded = li.include === false;
       return `
-        <tr class="pb-line-row" data-idx="${idx}">
+        <tr class="pb-line-row${excluded ? " pb-line-row-excluded" : ""}" data-idx="${idx}">
           ${moveCell}
           <td class="pb-col-desc" data-label="Component & detail">
+            <button type="button" class="pb-line-visibility-toggle" data-li-include-toggle="${idx}" aria-pressed="${excluded ? "false" : "true"}">
+              ${excluded ? "+ Show this line on the quote" : "Hide this line from the customer"}
+            </button>
             <input type="text" data-li-label="${idx}" value="${escapeAttr(li.label)}" placeholder="Component name">
             ${li.showDescription === false
               ? `<button type="button" class="pb-line-desc-toggle" data-li-desc-toggle="${idx}" aria-pressed="false">+ Show description</button>`
               : `<div class="pb-line-detail-row">
                   <input type="text" class="pb-line-detail" data-li-desc="${idx}" value="${escapeAttr(li.description || "")}" placeholder="Detail line — shown under the component">
-                  <button type="button" class="pb-line-desc-toggle" data-li-desc-toggle="${idx}" aria-pressed="true" title="Hide description">×</button>
+                  <button type="button" class="pb-line-desc-toggle" data-li-desc-toggle="${idx}" aria-pressed="true" title="Hide description">Hide</button>
                 </div>`}
           </td>
           <td class="pb-col-source" data-label="Source"><span class="pb-line-source-badge" data-source="${escapeAttr(li.source || "custom")}">${escapeHtml(sourceLabel)}</span></td>
@@ -662,6 +666,15 @@
         state.quote.lineItems.splice(i, 1);
         renderLineItems();
         renderTotals();
+        markDirty();
+      });
+    });
+    el.lineList.querySelectorAll("[data-li-include-toggle]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const i = Number(btn.dataset.liIncludeToggle);
+        const li = state.quote.lineItems[i];
+        li.include = li.include === false ? true : false;
+        renderLineItems();
         markDirty();
       });
     });

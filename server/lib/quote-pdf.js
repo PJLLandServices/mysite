@@ -896,9 +896,10 @@ function renderAttachmentInline(doc, att, quote, { MARGIN_X, contentWidth }) {
 
 function renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth, heading = "ITEMIZED PRICING", mode = "itemized" }) {
   // Display order as arranged in the proposal builder (lib/line-item-order.js).
-  // Sequence only — the totals below are summed from the quote record and are
-  // unaffected by how the rows are arranged.
-  const items = orderedLineItems(quote);
+  // Sequence only — the totals below are summed from the FULL quote record
+  // (all line items, including excluded ones) and are unaffected by how the
+  // rows are arranged or which ones print.
+  const items = orderedLineItems(quote).filter((li) => li.include !== false);
   const showTable = mode !== "summary";  // Brief D: summary = no table, total only
   // Back-compat: a non-summary pricing section with no line items renders
   // nothing at all, exactly as before Brief D. Summary always shows the
