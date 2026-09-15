@@ -1,3 +1,4 @@
+const portalHero = document.getElementById("portalHero");
 const portalTitle = document.getElementById("portalTitle");
 const portalIntro = document.getElementById("portalIntro");
 const portalContent = document.getElementById("portalContent");
@@ -697,6 +698,21 @@ function renderPortal(data) {
 
   const hasBooking = Boolean(data.booking);
   customerFirstName = customer.firstName || "";
+
+  // PJL-27: personalized hero background. data.heroPhotoUrl is a data URI
+  // when the property has a staff-uploaded photo on file, null otherwise —
+  // the .has-photo class (and the CSS var it reads) only gets set in the
+  // photo case, so every other property keeps today's plain green hero
+  // untouched.
+  if (portalHero) {
+    if (data.heroPhotoUrl) {
+      portalHero.style.setProperty("--portal-hero-photo", `url("${data.heroPhotoUrl}")`);
+      portalHero.classList.add("has-photo");
+    } else {
+      portalHero.classList.remove("has-photo");
+      portalHero.style.removeProperty("--portal-hero-photo");
+    }
+  }
 
   // JOB-005 (CRM-09) — headline, current-stage card, and follow-up line
   // derive from data.derived (canonical-store state computed server-side)

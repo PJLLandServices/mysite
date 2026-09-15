@@ -926,6 +926,28 @@ function proposalHeroPath(quoteId) {
   return path.join(PROPOSAL_HERO_DIR, `${safe}.jpg`);
 }
 
+// Customer portal hero background (PJL-27). Same shape as the proposal hero
+// photo above: Patrick uploads once from the property admin page, it's
+// compressed and kept here, and every consumer (property admin preview,
+// portal payload) reads it back and embeds it as a data URI rather than
+// serving it from a public URL.
+const PROPERTY_HERO_DIR = path.join(DATA_DIR, "property-hero");
+function propertyHeroPath(propertyId) {
+  const safe = String(propertyId || "").replace(/[^A-Za-z0-9._-]/g, "");
+  if (!safe) return null;
+  return path.join(PROPERTY_HERO_DIR, `${safe}.jpg`);
+}
+async function readPropertyHeroPhotoDataUri(propertyId) {
+  const p = propertyHeroPath(propertyId);
+  if (!p) return null;
+  try {
+    const buf = await fs.readFile(p);
+    return "data:image/jpeg;base64," + buf.toString("base64");
+  } catch (_err) {
+    return null;
+  }
+}
+
 // Design-level shared photos (Smart Controller Upgrade brief, 2026-07). Unlike
 // the per-quote hero photo, these belong to a DESIGN and are the same on every
 // proposal of that design until Patrick swaps one — so they live under a
@@ -4169,6 +4191,9 @@ async function portalPayloadForLead(lead, req) {
         : []
     }
   } : null;
+  // Personalized portal hero background (PJL-27) — null when the property
+  // has no photo on file, and the hero falls back to the standard green.
+  const heroPhotoUrl = property?.heroPhoto ? await readPropertyHeroPhotoDataUri(property.id) : null;
   const status = lead.crm?.status || lead.status || "new";
   // Customer-visible activity: portal messages, status changes, and the
   // initial "Quote request received" entry. Filters out internal-only notes
@@ -4230,6 +4255,7 @@ async function portalPayloadForLead(lead, req) {
 
   return {
     viewerIsAdmin,
+    heroPhotoUrl,
     warrantyClaims: portalWarrantyClaims,
     customer: {
       name: contact.fullName || lead.contact?.name || "PJL Customer",
@@ -9819,7 +9845,11 @@ async function handleApi(req, res, pathname) {
       spring_opening: resolveSeasonalPrice(property, "spring_opening"),
       fall_closing:   resolveSeasonalPrice(property, "fall_closing")
     };
-    return sendJson(res, 200, { ok: true, property, leads: linkedLeads, seasonalPricingResolved });
+    // Hero photo preview for the admin page (PJL-27) — embedded as a data
+    // URI, same as the proposal-hero-photo pattern, so the property page
+    // doesn't need a separate image-serving route.
+    const heroPhotoUrl = property.heroPhoto ? await readPropertyHeroPhotoDataUri(property.id) : null;
+    return sendJson(res, 200, { ok: true, property, leads: linkedLeads, seasonalPricingResolved, heroPhotoUrl });
   }
 
   if (propertyMatch && req.method === "PATCH") {
@@ -9982,6 +10012,61 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, deletedId: id, affectedLeadCount: affectedLeadIds.length });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't delete property."] });
+    }
+  }
+
+  // POST /api/properties/:id/hero-photo — admin. Upload the customer
+  // portal's personalized hero background photo (PJL-27). Same shape as
+  // /api/quotes/:id/proposal-hero-photo: compress once with sharp to a
+  // ~1600px JPEG, keep it on disk, embed as a data URI wherever it's shown.
+  // Body: { filename, data } where data is base64 of the raw image.
+  const propertyHeroPhotoMatch = pathname.match(/^\/api\/properties\/([^/]+)\/hero-photo$/);
+  if (propertyHeroPhotoMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(propertyHeroPhotoMatch[1]);
+      const property = await properties.get(id);
+      if (!property) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
+      const payload = await parseRequestBody(req, { maxBytes: 30 * 1024 * 1024 });
+      const raw = Buffer.from(String(payload.data || ""), "base64");
+      if (!raw.length) return sendJson(res, 422, { ok: false, errors: ["The image was empty."] });
+      let jpeg;
+      try {
+        // rotate() honours EXIF orientation before we strip it — never
+        // flips or mirrors the photo, just bakes in the camera's own
+        // orientation tag. resize keeps aspect and never upscales.
+        jpeg = await sharp(raw, { failOn: "none" }).rotate()
+          .resize({ width: 1600, withoutEnlargement: true })
+          .jpeg({ quality: 72, mozjpeg: true }).toBuffer();
+      } catch (imgErr) {
+        return sendJson(res, 422, { ok: false, errors: ["That doesn't look like an image we can read — try a JPG or PNG."] });
+      }
+      const heroPath = propertyHeroPath(id);
+      if (!heroPath) return sendJson(res, 400, { ok: false, errors: ["Bad property id."] });
+      await fs.mkdir(PROPERTY_HERO_DIR, { recursive: true });
+      await fs.writeFile(heroPath, jpeg);
+      const meta = { bytes: jpeg.length, uploadedAt: new Date().toISOString(), uploadedBy: session.uid || "admin" };
+      const updated = await properties.update(id, { heroPhoto: meta });
+      return sendJson(res, 201, { ok: true, heroPhoto: meta, property: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't save the photo."] });
+    }
+  }
+
+  if (propertyHeroPhotoMatch && req.method === "DELETE") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(propertyHeroPhotoMatch[1]);
+      const property = await properties.get(id);
+      if (!property) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
+      const heroPath = propertyHeroPath(id);
+      if (heroPath) { try { await fs.unlink(heroPath); } catch (_) { /* already gone */ } }
+      const updated = await properties.update(id, { heroPhoto: null });
+      return sendJson(res, 200, { ok: true, property: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't remove the photo."] });
     }
   }
 
