@@ -307,7 +307,9 @@ function renderServiceText({ firstName, portalUrl, unsubscribeUrl }) {
   lines.push("Every repair gets written up on a work order: what we found, what we did, and anything it changes about your system. So when you call about a dry corner out back, you don't have to describe it — we already know which zone that is.");
   lines.push("");
   lines.push("YOUR YEAR WITH US");
-  lines.push("Spring: openings are booked for you automatically — we turn your system back on, with every system running again by the May 24 long weekend. Fall: closings are booked the same way, starting from mid-September, and we work through the season until every system on the board is done.");
+  lines.push("Spring: we start openings once the frost is out of the ground, never before, with every system running again by the May 24 long weekend. On the visit, we turn your water on, start the controller, and run every zone on its own to check coverage, pressure and operation. Anything found gets quoted and fixed on the spot where possible.");
+  lines.push("");
+  lines.push("Fall: closings open from mid-September, and we work through the whole season until every system on the board is done. On the visit, we shut off water to your system, then blow out each zone with compressed air until it's fully clear, and set your controller for winter. Anything we find gets noted on your work order and carries forward to your next spring opening.");
   lines.push("");
   lines.push("PLANNING A LANDSCAPE RENOVATION?");
   lines.push("Call us once you have the plan in hand, before the work begins. We'll walk the property with you and make sure the irrigation is ready for your new landscape.");
