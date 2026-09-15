@@ -605,8 +605,17 @@ function renderServiceHistory(items) {
     const report = w.reportUrl
       ? `<a class="portal-history-link" href="${escapeHtml(w.reportUrl)}" target="_blank" rel="noopener">Service report (PDF)</a>`
       : "";
-    const inv = w.invoice
-      ? `<span class="portal-history-invoice">Invoice ${escapeHtml(w.invoice.id)} · ${escapeHtml(money.format(Number(w.invoice.total || 0)).replace("CA", "").trim())} · ${escapeHtml(statusLabel(w.invoice.status))} · ${escapeHtml(isoDay(w.invoice.createdAt))} · <a class="portal-history-link" href="${escapeHtml(w.invoice.pdfUrl)}" target="_blank" rel="noopener">Download</a></span>`
+    // PJL-22: the invoice's download used to live as a trailing word
+    // inside this muted metadata sentence — technically clickable, but
+    // it read as incidental text, not an action ("off to the side" —
+    // Patrick). Metadata and the download are now two separate flex
+    // items so the download reads as its own clear button, the same
+    // visual weight as "Service report (PDF)" beside it.
+    const invMeta = w.invoice
+      ? `<span class="portal-history-invoice">Invoice ${escapeHtml(w.invoice.id)} · ${escapeHtml(money.format(Number(w.invoice.total || 0)).replace("CA", "").trim())} · ${escapeHtml(statusLabel(w.invoice.status))} · ${escapeHtml(isoDay(w.invoice.createdAt))}</span>`
+      : "";
+    const invDownload = w.invoice
+      ? `<a class="portal-history-link" href="${escapeHtml(w.invoice.pdfUrl)}" target="_blank" rel="noopener">Download invoice (PDF)</a>`
       : "";
     return `<li class="portal-history-item">
       <div class="portal-history-main">
@@ -615,7 +624,7 @@ function renderServiceHistory(items) {
         <span class="portal-history-status">${escapeHtml(statusLabel(w.status))}</span>
         ${warranty}
       </div>
-      <div class="portal-history-links">${report}${inv}</div>
+      <div class="portal-history-links">${report}${invMeta}${invDownload}</div>
     </li>`;
   }).join("");
 }
