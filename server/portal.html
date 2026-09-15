@@ -39,7 +39,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/crm/portal.css?v=20260915">
+  <link rel="stylesheet" href="/crm/portal.css?v=20260915b">
   <link rel="stylesheet" href="/crm/crm-contact.css">
   <link rel="stylesheet" href="/js/time-picker.css?v=1">
 </head>
@@ -267,6 +267,25 @@
           <div><dt>Email</dt><dd id="customerEmail"></dd></div>
           <div><dt>Home address</dt><dd id="customerAddress"></dd></div>
         </dl>
+        <!-- PJL-25: phone/email editing used to live in Notification
+             Preferences, a separate card, even though it's the exact same
+             fields shown read-only above. Moved here so Contact Details is
+             the one place for both viewing and updating this info. The
+             read-only dl above keeps its tap-to-call/tap-to-map hooks
+             (crm-contact.js) untouched. -->
+        <form id="contactUpdateForm" class="portal-contact-update">
+          <p class="portal-contact-update-intro">Phone or email changed?</p>
+          <label class="portal-prefs-field">
+            <span>Phone</span>
+            <input type="tel" id="contactPhoneInput" autocomplete="tel" placeholder="(905) 555-1234">
+          </label>
+          <label class="portal-prefs-field">
+            <span>Email</span>
+            <input type="email" id="contactEmailInput" autocomplete="email" placeholder="you@example.com">
+          </label>
+          <button type="submit" class="portal-btn portal-btn-secondary">Update contact info</button>
+          <p class="portal-contact-update-status" id="contactUpdateStatus" role="status"></p>
+        </form>
       </article>
 
       <article class="portal-card portal-message-card">
@@ -419,16 +438,11 @@
 
       <article class="portal-card portal-prefs" id="prefsCard">
         <h2>Notification preferences</h2>
-        <p>How would you like PJL to reach you?</p>
+        <p>When and how should we send appointment reminders and updates? (To change your phone or email, use Contact Details above.)</p>
         <form id="prefsForm" class="portal-prefs-form">
-          <label class="portal-prefs-field">
-            <span>Phone</span>
-            <input type="tel" id="prefsPhone" autocomplete="tel" placeholder="(905) 555-1234">
-          </label>
-          <label class="portal-prefs-field">
-            <span>Email</span>
-            <input type="email" id="prefsEmail" autocomplete="email" placeholder="you@example.com">
-          </label>
+          <!-- PJL-25: phone/email moved to the Contact Details card
+               (contactUpdateForm) — this form only owns timing/channel
+               preferences now, not the contact fields themselves. -->
           <label class="portal-prefs-field">
             <span>Best time to reach you</span>
             <input type="text" id="prefsBestTime" placeholder="e.g. Weekdays after 5pm">
@@ -468,7 +482,7 @@
   </main>
 
   <script src="/js/time-picker.js?v=1"></script>
-  <script src="/crm/portal.js?v=20260915"></script>
+  <script src="/crm/portal.js?v=20260915b"></script>
   <script src="/crm/crm-contact.js" defer></script>
 </body>
 </html>
