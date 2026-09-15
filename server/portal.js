@@ -430,6 +430,15 @@ function renderWorkOrder(data) {
   if (actionsEl) actionsEl.hidden = !nv.actionable;
   if (blockedEl && !nv.actionable) blockedEl.hidden = true;
 
+  // PJL-28: season-plan bookings get a link to their own manage page
+  // (/a/<token> — confirm/reschedule/cancel) instead of the Change/Cancel
+  // buttons above, which only work on this portal's own lead.booking.
+  const manageRow = document.getElementById("workOrderManageRow");
+  const manageLink = document.getElementById("workOrderManageLink");
+  const showManageLink = nv.source === "season_plan" && Boolean(nv.manageUrl);
+  if (manageRow) manageRow.hidden = !showManageLink;
+  if (manageLink && showManageLink) manageLink.href = nv.manageUrl;
+
   workOrderId.textContent = nv.woId || "Booked";
   workOrderStatus.textContent = nv.dateTBC ? "Booked" : "Scheduled";
   workOrderService.textContent = nv.serviceLabel || "—";

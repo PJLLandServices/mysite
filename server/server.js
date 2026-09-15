@@ -4081,6 +4081,25 @@ async function customerPortalSections(lead) {
       : spb.bucket === "afternoon"
       ? { bucketLabel: "Afternoon Appointment", bucketWindow: "12 PM – 5 PM" }
       : { bucketLabel: null, bucketWindow: null };
+    // PJL-28: confirm/reschedule/cancel for a season-plan booking already
+    // exist — the assignment page (/a/<token>, appointment-actions.js)
+    // already gives an assigned customer exactly those three actions,
+    // with the same 24h cutoff and the same rescheduleBooking() engine
+    // the portal's own self-booked flow uses (afternoon-only slots on
+    // reschedule, specifically to protect route/driving order — see
+    // appointment-actions.js). Rather than rebuild that UI a second time
+    // inside the portal, link out to it — same pattern already used for
+    // warranty claims ("the portal links out to each claim's own status
+    // page rather than duplicating the status UI in two places").
+    // ensureToken mints one on demand if this booking was viewed via the
+    // portal before any outreach SMS/email minted it.
+    let manageUrl = null;
+    try {
+      const token = await appointmentActions.ensureToken(spb.bookingId);
+      if (token) manageUrl = `/a/${token}`;
+    } catch (err) {
+      console.warn("[portal] season-plan appointment token failed:", err?.message);
+    }
     nextVisit = {
       source: "season_plan",
       actionable: false,
@@ -4089,6 +4108,7 @@ async function customerPortalSections(lead) {
       start: spb.scheduledDate || null,
       dateOnly: !bucketCopy.bucketLabel,
       dateTBC: !spb.scheduledDate,
+      manageUrl,
       ...bucketCopy
     };
   }
