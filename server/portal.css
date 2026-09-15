@@ -217,6 +217,28 @@ h1 {
   color: var(--text-mid);
 }
 
+/* PJL-25: the phone/email update mini-form consolidated into this card
+   from Notification Preferences. Reuses .portal-prefs-field/.portal-btn
+   styling — a divider separates it from the read-only display above. */
+.portal-contact-update {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.portal-contact-update-intro {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.portal-contact-update-status {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--text-mid);
+}
+
 .portal-actions {
   display: flex;
   flex-wrap: wrap;

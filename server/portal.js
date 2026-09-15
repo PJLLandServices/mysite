@@ -1490,8 +1490,10 @@ async function loadPrefs() {
     if (!data.ok) return;
     const prefs = data.preferences || {};
     const contact = data.contact || {};
-    document.getElementById("prefsPhone").value = contact.phone || "";
-    document.getElementById("prefsEmail").value = contact.email || "";
+    // PJL-25: contactPhoneInput/contactEmailInput live in the Contact
+    // Details card now, not here — same /preferences payload feeds both.
+    document.getElementById("contactPhoneInput").value = contact.phone || "";
+    document.getElementById("contactEmailInput").value = contact.email || "";
     document.getElementById("prefsBestTime").value = prefs.bestTimeToReach || "";
     // All channels default ON. The customer can opt out per-toggle, but
     // a fresh portal load shows every notification stream as enabled —
@@ -1515,8 +1517,6 @@ document.getElementById("prefsForm")?.addEventListener("submit", async (event) =
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        phone: document.getElementById("prefsPhone").value.trim(),
-        email: document.getElementById("prefsEmail").value.trim(),
         bestTimeToReach: document.getElementById("prefsBestTime").value.trim(),
         textReminders: document.getElementById("prefsTextReminders").checked,
         emailOnly: document.getElementById("prefsEmailOnly").checked,
@@ -1526,6 +1526,40 @@ document.getElementById("prefsForm")?.addEventListener("submit", async (event) =
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't save.");
     status.textContent = customerFirstName ? `Saved, ${customerFirstName}.` : "Saved.";
+  } catch (err) {
+    status.textContent = err.message || "Failed.";
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+// PJL-25: phone/email consolidated into Contact Details — same
+// /preferences PATCH endpoint, sent independently of the timing/channel
+// toggles above so editing one never touches the other (the server
+// route already applies each field only when present in the payload).
+document.getElementById("contactUpdateForm")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const token = tokenFromLocation();
+  if (!token) return;
+  const status = document.getElementById("contactUpdateStatus");
+  const submit = event.target.querySelector("button[type='submit']");
+  status.textContent = "Saving…";
+  submit.disabled = true;
+  try {
+    const r = await fetch(`/api/portal/${encodeURIComponent(token)}/preferences`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        phone: document.getElementById("contactPhoneInput").value.trim(),
+        email: document.getElementById("contactEmailInput").value.trim()
+      })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't save.");
+    status.textContent = customerFirstName ? `Saved, ${customerFirstName}.` : "Saved.";
+    // Refresh the read-only display (and its tap-to-call/tap-to-map hooks)
+    // so the update shows immediately without a full page reload.
+    loadPortal();
   } catch (err) {
     status.textContent = err.message || "Failed.";
   } finally {
