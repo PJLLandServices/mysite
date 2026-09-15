@@ -29,7 +29,6 @@ const portalAdminServiceSelect = document.getElementById("portalAdminServiceSele
 const portalAdminServiceSaveBtn = document.getElementById("portalAdminServiceSaveBtn");
 const portalAdminServiceStatus = document.getElementById("portalAdminServiceStatus");
 const messageHeading = document.getElementById("messageHeading");
-const helpHeading = document.getElementById("helpHeading");
 const systemCard = document.getElementById("systemCard");
 const systemGrid = document.getElementById("systemGrid");
 const systemZones = document.getElementById("systemZones");
@@ -743,19 +742,14 @@ function renderPortal(data) {
     projectStatus.textContent = statusLabelFor(project.status, hasBooking);
   }
 
-  // Personalize the secondary card headings when we know who they are.
-  // The "Send PJL a message" + "Need to update something?" cards both work
-  // generically, but reading the customer's name in the heading makes the
-  // page feel addressed to them rather than templated.
+  // Personalize the "Get in touch" card heading when we know who they are —
+  // reading the customer's name makes the page feel addressed to them
+  // rather than templated. PJL-26 merged the old "Need to update
+  // something?" card into this one, so there's only one heading to update.
   if (messageHeading) {
     messageHeading.textContent = customerFirstName
-      ? `Send PJL a message, ${customerFirstName}`
-      : "Send PJL a message";
-  }
-  if (helpHeading) {
-    helpHeading.textContent = customerFirstName
-      ? `Need to update something, ${customerFirstName}?`
-      : "Need to update something?";
+      ? `Get in touch, ${customerFirstName}`
+      : "Get in touch";
   }
   followUpText.textContent = project.nextFollowUp
     ? `Next follow-up: ${formatDate(project.nextFollowUp)}`

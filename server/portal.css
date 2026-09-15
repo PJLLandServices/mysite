@@ -173,8 +173,7 @@ h1 {
   text-transform: uppercase;
 }
 
-.portal-status p,
-.portal-help p {
+.portal-status p {
   color: var(--text-mid);
 }
 
@@ -239,14 +238,6 @@ h1 {
   color: var(--text-mid);
 }
 
-.portal-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 18px;
-}
-
-.portal-actions a,
 .portal-error a {
   min-height: 46px;
   display: inline-flex;
@@ -873,6 +864,41 @@ h1 {
   font-size: 14px;
   color: rgba(15, 31, 20, 0.65);
   min-height: 18px;
+}
+
+/* PJL-26: call/email fallback merged into the message card, below the
+   send form, instead of its own separate "Need to update something?" card. */
+.portal-contact-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 20px 0 14px;
+}
+.portal-contact-divider::before,
+.portal-contact-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.portal-contact-divider span {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.portal-contact-alt-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.portal-contact-alt-actions .portal-btn {
+  flex: 1;
+  text-align: center;
+  min-width: 140px;
 }
 
 /* ============= Message thread (two-way conversation) ============= */
