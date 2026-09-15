@@ -87,6 +87,20 @@ body {
   background-size: 32px 32px;
 }
 
+/* PJL-27: personalized hero background. Applied via inline style
+   (--portal-hero-photo) when the property has a photo on file — the dark
+   gradient becomes a legibility scrim over the photo instead of the flat
+   green, everything else (dot-grid overlay, padding, radius) stays the
+   same. No photo on file — .has-photo is never added, and .portal-hero's
+   plain rule above (the standard green) applies unchanged. */
+.portal-hero.has-photo {
+  background-image:
+    linear-gradient(0deg, rgba(10,20,14,0.92) 0%, rgba(10,20,14,0.55) 45%, rgba(10,20,14,0.15) 100%),
+    var(--portal-hero-photo);
+  background-size: cover;
+  background-position: center;
+}
+
 .portal-hero > * {
   position: relative;
 }

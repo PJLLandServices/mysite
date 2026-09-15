@@ -23,6 +23,7 @@
 .property-back a:hover { color: var(--pjl-amber); }
 
 .property-hero {
+  position: relative;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -34,6 +35,84 @@
   border: 1px solid rgba(27, 77, 46, 0.18);
   border-radius: 18px;
 }
+/* PJL-27: room for the hero-photo trigger in the corner without it
+   overlapping the "Linked bookings" stat. */
+.property-stat { margin-top: 30px; }
+
+/* Small, greyscale, barely-there until hovered — the same discovery
+   pattern as an icon-only toolbar button. Turns green (.has-photo) once
+   a photo is on file, as a status signal without opening the modal. */
+.property-hero-photo-trigger {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid rgba(27,77,46,0.18);
+  background: rgba(255,255,255,0.7);
+  color: var(--pjl-text-mid);
+  cursor: pointer;
+  opacity: 0.4;
+  filter: grayscale(1);
+  transition: opacity 0.15s ease, filter 0.15s ease, background 0.15s ease;
+}
+.property-hero-photo-trigger:hover,
+.property-hero-photo-trigger:focus-visible {
+  opacity: 1;
+  filter: grayscale(0);
+  background: #fff;
+}
+.property-hero-photo-trigger svg { width: 17px; height: 17px; }
+.property-hero-photo-trigger.has-photo { color: var(--pjl-green); }
+
+/* Hero photo upload modal contents (chrome itself is .confirm-modal /
+   .confirm-modal-card, shared across the admin — see crm.css). */
+.photo-upload-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 20px;
+  border: 1.5px dashed rgba(27, 77, 46, 0.35);
+  border-radius: 12px;
+  background: rgba(74,140,92,0.04);
+  text-align: center;
+}
+.photo-upload-empty svg { width: 30px; height: 30px; color: var(--pjl-green); opacity: 0.6; }
+.photo-upload-btn {
+  margin-top: 4px;
+  padding: 10px 20px;
+  background: transparent;
+  border: 1.5px solid var(--pjl-green);
+  border-radius: 8px;
+  color: var(--pjl-green);
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.photo-upload-hint { margin: 8px 0 0; font-size: 12.5px; color: var(--pjl-text-muted); }
+.photo-preview-row { display: flex; gap: 16px; align-items: center; }
+.photo-preview-thumb {
+  width: 130px;
+  height: 84px;
+  border-radius: 10px;
+  overflow: hidden;
+  flex: 0 0 auto;
+  border: 1px solid rgba(27,77,46,0.15);
+  background-size: cover;
+  background-position: center;
+}
+.photo-preview-meta { margin: 0 0 8px; font-size: 13px; color: var(--pjl-text-mid); }
+.photo-btn-row { display: flex; gap: 10px; }
+.photo-btn-row .pjl-btn { padding: 9px 16px; font-size: 13px; }
 .property-hero h1 {
   margin: 8px 0 6px;
   font-size: clamp(28px, 4vw, 42px);
