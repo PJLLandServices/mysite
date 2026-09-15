@@ -130,7 +130,7 @@ function scheduleRows(quote) {
   return items.map((li, i) => ({
     glyph: glyphForIndex(i),
     cls: li.label || li.sourceKey || "Line item",
-    detail: li.description ? String(li.description) : "",
+    detail: li.description && li.showDescription !== false ? String(li.description) : "",
     qty: qtyText(li)
   }));
 }
