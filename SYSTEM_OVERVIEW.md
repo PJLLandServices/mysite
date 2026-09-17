@@ -1548,6 +1548,21 @@ box is added, moved or removed. Save-time pin pruning and
 yet stays a valve of its own, as before. Walked by
 `scripts/test-sitebuilder-laterals.mjs`.
 
+**Hand-picked valves in the head editor (Sept 2026).** `Lay out heads`
+has a Valve row: with a head selected, Auto / 1 / 2 / … / + (keys 0-9 do
+the same). A pick is stored as `manualHeads[i].zone` (0-based, absent =
+Auto); `packZones` honours picks — compacting the numbers, packing any
+Auto heads under the ceiling into valves after the picked ones, and
+reporting over-ceiling valves in `over` (surfaced as a flag on the area
+card and a red chip in the editor) rather than re-splitting them. The
+first pick freezes every other head onto its current valve so one click
+does not reshuffle the area. Heads in the editor are coloured by valve.
+Both the head editor and the shape editor draw every OTHER area traced
+on the same sheet faintly (`ctxAreasSvg`: dashed outline, name, and its
+heads' throw). While any `.sk-overlay` is open the page cannot scroll
+(`body:has(...)`), and the editor's selected-head readout sits on its own
+fixed-height row so dragging a throw no longer reflows the canvas.
+
 **Three builder-owned durable fields on the project record**, each capped
 independently and each written whole:
 

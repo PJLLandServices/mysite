@@ -352,6 +352,17 @@
   .sk-handle{fill:var(--z3);stroke:#fff;stroke-width:2;cursor:grab}
   .sk-center{fill:var(--green-d);stroke:#fff;stroke-width:2;cursor:grab}
   .lo-palette{padding:8px 16px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;background:#f6faf6}
+  /* The readout changes length as a head is dragged; on its own row with a
+     fixed height it can never reflow the canvas under the pointer. */
+  .lo-palette #loSelInfo{flex:1 0 100%;min-height:1.5em;line-height:1.5em;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lo-zones{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--muted)}
+  .lo-zones button{width:auto;min-height:0;padding:4px 9px;font-size:12.5px;font-weight:700;border:1.5px solid var(--line);border-radius:6px;background:#fff;color:var(--ink);cursor:pointer;line-height:1}
+  .lo-zones button.zc{color:#fff;border-color:transparent}
+  .lo-zones button.on{outline:2px solid var(--ink);outline-offset:1px}
+  .lo-zones button.over{box-shadow:0 0 0 2px var(--warn)}
+  .lo-zones .lo-zwarn{color:var(--warn);font-weight:600}
+  /* No page scroll behind an open editor — wheel and drag stay on the canvas. */
+  body:has(.sk-overlay:not([hidden])){overflow:hidden}
   .lo-palette select{padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:15px;background:#fff}
   .lo-arcs{display:inline-flex;gap:4px}
   .lo-arcs button{font-size:12px;padding:6px 9px;border-radius:6px;border:1px solid var(--green);background:#fff;color:var(--green-d);cursor:pointer;font-weight:600}
@@ -708,6 +719,7 @@
       <span class="sk-num">Nozzle <select id="loNoz"></select></span>
       <span class="lo-arcs" id="loArcs"></span>
       <button type="button" class="lo-snap on" id="loSnap" onclick="loToggleSnap()">Snap: grid</button>
+      <span class="lo-zones" id="loZones2" title="With a head selected, pick the valve it runs on. Keys 1-9 do the same; 0 puts it back on Auto."></span>
       <span class="sk-under" id="loUnderCtl" hidden>
         <label for="loUnderOpacity">Plan</label>
         <input id="loUnderOpacity" type="range" min="0" max="100" step="5" value="50" aria-label="Underlay opacity">
@@ -1251,8 +1263,25 @@ const PZ_BALANCE_BUDGET = 3e6;
 
 function packZones(heads, ceiling){
   const n = heads.length;
-  if(!n) return {zones: 0, zoneGPM: []};
+  if(!n) return {zones: 0, zoneGPM: [], over: []};
   const cap = Math.max(ceiling, 0.001);
+  // Heads given a zone by hand keep it. Zone numbers are compacted so the
+  // valves come out 1, 2, 3 whatever was typed, and any head left on Auto
+  // is packed under the ceiling into zones AFTER the hand-picked ones. A
+  // hand-picked zone may exceed the ceiling — that is reported (`over`),
+  // not silently re-split, because the split was the whole point.
+  if(heads.some(h => Number.isInteger(h.manualZone))){
+    const picked = [...new Set(heads.filter(h => Number.isInteger(h.manualZone)).map(h => h.manualZone))].sort((a,b)=>a-b);
+    const map = new Map(picked.map((z,i) => [z,i]));
+    const rest = [];
+    heads.forEach(h => { if(map.has(h.manualZone)) h.zone = map.get(h.manualZone); else rest.push(h); });
+    if(rest.length){ packZones(rest, ceiling); rest.forEach(h => { h.zone += picked.length; }); }
+    const zones = heads.reduce((m, hd) => Math.max(m, hd.zone), 0) + 1;
+    const zoneGPM = new Array(zones).fill(0);
+    heads.forEach(hd => { zoneGPM[hd.zone] += hd.gpm || 0; });
+    const over = zoneGPM.map((g,i) => g > cap + 0.001 ? i : -1).filter(i => i >= 0);
+    return {zones, zoneGPM, over};
+  }
   const gpm = heads.map(hd => hd.gpm || 0);
   const k = pzMinZones(gpm, cap);
 
@@ -1274,7 +1303,7 @@ function packZones(heads, ceiling){
   const zones = heads.reduce((m, hd) => Math.max(m, hd.zone), 0) + 1;
   const zoneGPM = new Array(zones).fill(0);
   heads.forEach(hd => { zoneGPM[hd.zone] += hd.gpm; });
-  return {zones, zoneGPM};
+  return {zones, zoneGPM, over: []};
 }
 
 function plan(a){
@@ -1371,7 +1400,9 @@ function plan(a){
       // flow-model note by LO_MIN_ARC — budgeting full flow is the
       // conservative side of a valve-sizing decision).
       const pct=loRadiusPct(mh);
-      heads.push({xft:mh.x-orig.x, yft:mh.y-orig.y, arc:mh.arc, dir:mh.dir||0, gpm:spec.gpm, r:spec.r*pct, nz:spec.label});
+      const hd={xft:mh.x-orig.x, yft:mh.y-orig.y, arc:mh.arc, dir:mh.dir||0, gpm:spec.gpm, r:spec.r*pct, nz:spec.label};
+      if(Number.isInteger(mh.zone)) hd.manualZone=mh.zone;
+      heads.push(hd);
     });
     const pk=packZones(heads,ceiling);
     // Arcs are free-form now, so bucket before counting. The buckets are the
@@ -1391,6 +1422,7 @@ function plan(a){
     const mixedRotor = h.family==='rotor' && zoneMixArc.some(x=>x.size>1);
     const outPoly = gm.poly ? gm.poly.map(p=>({x:p.x-orig.x, y:p.y-orig.y})) : null;
     return {family:h.family,kind:h.kind,matched:h.matched,manual:true,L:gm.L,W:gm.W,sqft:gm.sqft,heads,zones:pk.zones,zoneGPM:pk.zoneGPM,
+      overZones:pk.over||[], handZoned:heads.some(x=>Number.isInteger(x.manualZone)),
       arcCount,mixedRotor,body:h.body,series:h.series,noz:h.noz,poly:outPoly,orig,totalGPM:heads.reduce((t,x)=>t+x.gpm,0)};
   }
 
@@ -2050,6 +2082,7 @@ function compute(){
     const flowNote=(h.matched?'matched precip (arc-scaled flow)':'fixed GPM at any arc')+(p.manual?' &middot; hand-placed layout':'');
     const zoneGpmStr=p.zoneGPM.map(g=>g.toFixed(1)).join(' / ');
     const flag=p.mixedRotor?`<div class="flag">! Zone mixes arcs on gear rotors (not matched-precip). Group same-arc heads where you can, or bump the run time for the 90 heads on Hydrawise.</div>`:'';
+    const overFlag=(p.overZones&&p.overZones.length)?`<div class="flag">! Valve ${p.overZones.map(z=>z+1).join(', ')} is over the ${ceiling} GPM ceiling — you put those heads on it by hand in the layout editor. Move a head off it, or raise the ceiling.</div>`:'';
     rb.innerHTML=`
       <div class="big">
         <div class="stat"><div class="n">${p.sqft.toFixed(0)}</div><div class="l">sq ft</div></div>
@@ -5705,6 +5738,35 @@ function skPerimNow(){
   for(let i=0;i<last;i++){ const A=sk.poly[i],B=sk.poly[(i+1)%n]; p+=Math.hypot(B.x-A.x,B.y-A.y); }
   return p;
 }
+// Every OTHER area traced on the same sheet, faint: outline, name, and its
+// heads' throw. Drawing a new outline or placing heads is done against the
+// neighbours, so they have to be in view — pale enough not to be mistaken
+// for the one being edited.
+function ctxAreasSvg(ed, page, skipIdx){
+  if(!page) return '';
+  const SX=x=>pzSX(ed,x), SY=y=>pzSY(ed,y), U=ed.ppf;
+  let g='<g pointer-events="none">';
+  areas.forEach((a,i)=>{
+    if(i===skipIdx || !a || !(a.planRef && a.planRef.pageId===page.id) || !validPoly(a)) return;
+    const zi0=zoneIndexOf(i,0);
+    const col = zi0>=0 ? mpZoneColour(zi0) : '#7a8a82';
+    const pts=a.poly.map(v=>`${SX(v.x).toFixed(1)},${SY(v.y).toFixed(1)}`).join(' ');
+    g+=`<polygon points="${pts}" fill="${col}" fill-opacity="0.05" stroke="${col}" stroke-width="1.4" stroke-dasharray="6 4" stroke-opacity="0.75"/>`;
+    const p=mpPlanFor(a);
+    if(p && !p.noShape && a.family!=='drip' && a.family!=='trees'){
+      mpHeadsOf(a,p).forEach(h=>{
+        const zi=zoneIndexOf(i, h.zone||0, h), hc = zi>=0 ? mpZoneColour(zi) : col;
+        const cx=SX(h.x), cy=SY(h.y), rr=Math.max((h.r||1)*U, 3);
+        if(h.arc>=360) g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="${hc}" fill-opacity="0.05" stroke="${hc}" stroke-opacity="0.3" stroke-width="0.7"/>`;
+        else { const half=(h.arc*Math.PI/180)/2; g+=`<path d="${sector(cx,cy,rr,(h.dir||0)-half,(h.dir||0)+half)}" fill="${hc}" fill-opacity="0.06" stroke="${hc}" stroke-opacity="0.3" stroke-width="0.7"/>`; }
+        g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="2.6" fill="${hc}" fill-opacity="0.7" stroke="#fff" stroke-width="0.8"/>`;
+      });
+    }
+    const c=polyCentroid(a.poly);
+    g+=mpHalo(SX(c.x), SY(c.y), esc(a.name||'Area'), 11, 'middle', col);
+  });
+  return g+'</g>';
+}
 function skDraw(){
   const body=el('skBody'); sk._w=Math.max(body.clientWidth-2,300); sk._h=Math.max(body.clientHeight-2,300);
   const SX=x=>pzSX(sk,x), SY=y=>pzSY(sk,y), U=sk.ppf;
@@ -5716,6 +5778,7 @@ function skDraw(){
   g+=L.bg;
   g+=underlaySvg(sk);
   g+= sk.planPage ? `<g opacity="0.35">${L.grid}</g>` : L.grid;
+  g+=ctxAreasSvg(sk, sk.planPage, sk.areaIndex);
   let area=0, perim=0;
   if(sk.tool==='circle' && sk.circle){
     const c=sk.circle, cx=SX(c.cx), cy=SY(c.cy), rr=c.r*U;
@@ -5998,7 +6061,7 @@ function openLayout(i){
   lo.centroid=polyCentroid(lo.outline);
   // rPct absent on every head saved before free radius existed -> full throw.
   if(a.layout==='manual' && Array.isArray(a.manualHeads)){
-    lo.heads = a.manualHeads.map(m=>({x:m.x,y:m.y,noz:m.noz,arc:m.arc,dir:m.dir||0,rPct:loRadiusPct(m)}));
+    lo.heads = a.manualHeads.map(m=>({x:m.x,y:m.y,noz:m.noz,arc:m.arc,dir:m.dir||0,rPct:loRadiusPct(m),manualZone:Number.isInteger(m.zone)?m.zone:undefined}));
   } else {
     // Opening the editor on an auto-laid-out area used to hand back a BLANK
     // canvas — the automatic placement was discarded and there was nothing
@@ -6044,6 +6107,42 @@ function buildPalette(){
   const sb=el('loSnap'); if(sb){ sb.classList.toggle('on', lo.snap); sb.textContent = lo.snap?'Snap: grid':'Snap: free'; }
 }
 function loSetNoz(v){ lo.curNoz=v; if(lo.sel>=0){ lo.heads[lo.sel].noz=v; } loDraw(); }
+// The editor's view of the zones: the same packing the plan will do, so
+// the colours and the count here are what the area card will show.
+function loZonePack(){
+  const shadow=lo.heads.map(hd=>({gpm:loHeadSpec(lo.family,hd.noz,hd.arc).gpm, manualZone:hd.manualZone}));
+  const pk=lo.heads.length ? packZones(shadow, Math.max(num('ceiling'),0.1)) : {zones:0, zoneGPM:[], over:[]};
+  return {pk, zoneOf:shadow.map(h=>h.zone||0)};
+}
+// Put the selected head on valve `z` (0-based), or back on Auto (null).
+function loSetZone(z){
+  if(lo.sel<0){ return; }
+  const hd=lo.heads[lo.sel];
+  // The first hand pick freezes every other head onto the valve it is on
+  // right now, so one click does not reshuffle the rest of the area. After
+  // that the picks are yours.
+  const first = z!=null && !lo.heads.some(h=>Number.isInteger(h.manualZone));
+  if(first){ const {zoneOf}=loZonePack(); lo.heads.forEach((h,i)=>{ if(i!==lo.sel) h.manualZone=zoneOf[i]; }); }
+  if(z==null) delete hd.manualZone; else hd.manualZone=z;
+  loDraw();
+}
+function loZoneChips(){
+  const box=el('loZones2'); if(!box) return;
+  const {pk, zoneOf}=loZonePack();
+  const cur = lo.sel>=0 ? zoneOf[lo.sel] : -1;
+  const hand = lo.sel>=0 && Number.isInteger(lo.heads[lo.sel].manualZone);
+  const chips=[];
+  chips.push(`<span>Valve</span>`);
+  chips.push(`<button type="button" class="${lo.sel>=0 && !hand?'on':''}" onclick="loSetZone(null)" title="Let the plan pack this head under the GPM ceiling">Auto</button>`);
+  for(let z=0; z<pk.zones; z++){
+    const over=pk.over.includes(z);
+    chips.push(`<button type="button" class="zc${z===cur?' on':''}${over?' over':''}" style="background:var(${ZC[z%ZC.length]})" onclick="loSetZone(${z})" title="Valve ${z+1} · ${(pk.zoneGPM[z]||0).toFixed(1)} GPM${over?' — OVER the ceiling':''}">${z+1}</button>`);
+  }
+  chips.push(`<button type="button" onclick="loSetZone(${pk.zones})" title="Start a new valve with this head">+</button>`);
+  if(pk.over.length) chips.push(`<span class="lo-zwarn">valve ${pk.over.map(z=>z+1).join(', ')} over ${Math.max(num('ceiling'),0.1)} GPM</span>`);
+  box.innerHTML=chips.join('');
+  box.style.opacity = lo.sel>=0 ? '1' : '0.55';
+}
 function loSetArc(d){ lo.curArc=d; if(lo.sel>=0){ lo.heads[lo.sel].arc=d; } buildPalette(); loDraw(); }
 // Put a reduced head back to full throw without hunting for the handle.
 function loResetRadius(){ if(lo.sel>=0){ lo.heads[lo.sel].rPct=1; loDraw(); } }
@@ -6068,6 +6167,7 @@ function loUse(){
   if(lo.heads.length){ a.layout='manual'; a.manualHeads=lo.heads.map(m=>{
     const o={x:m.x,y:m.y,noz:m.noz,arc:m.arc,dir:m.dir};
     const pct=loRadiusPct(m); if(pct < 0.999) o.rPct=Number(pct.toFixed(3));
+    if(Number.isInteger(m.manualZone)) o.zone=m.manualZone;     // hand-picked valve
     return o;
   }); }
   else { a.layout='auto'; delete a.manualHeads; }   // cleared → back to auto placement
@@ -6090,23 +6190,29 @@ function loDraw(){
   g+= lo.planPage
     ? `<polygon points="${OP}" fill="#eef6ef" fill-opacity="0.35" stroke="var(--green-d)" stroke-width="2"/>`
     : `<polygon points="${OP}" fill="#eef6ef" stroke="#bcd3bf" stroke-width="1.5"/>`;
-  // heads: wedge + dot
+  // the other areas on this sheet, for context — where the neighbours'
+  // heads and outlines are is what decides where these heads go
+  g+=ctxAreasSvg(lo, lo.planPage, lo.areaIndex);
+  // heads: wedge + dot, coloured by the valve they will run on
+  const {pk:zpk, zoneOf}=loZonePack();
+  const zcol=i=>`var(${ZC[(zoneOf[i]||0)%ZC.length]})`;
   let totGpm=0;
   lo.heads.forEach((hd,idx)=>{
     const spec=loHeadEffective(hd); totGpm+=spec.gpm;
     const cx=SX(hd.x), cy=SY(hd.y), rr=Math.max(spec.r*U,6);
-    const col=idx===lo.sel?'var(--z3)':'var(--green-d)';
+    const col=zcol(idx), sel=idx===lo.sel;
     if(hd.arc>=360){
-      g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="var(--green)" fill-opacity="0.12" stroke="${col}" stroke-opacity="0.5" stroke-width="1"/>`;
+      g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="${col}" fill-opacity="${sel?0.2:0.12}" stroke="${col}" stroke-opacity="${sel?0.9:0.5}" stroke-width="${sel?1.6:1}"/>`;
     } else {
       const half=(hd.arc*Math.PI/180)/2;
-      g+=`<path d="${sector(cx,cy,rr,hd.dir-half,hd.dir+half)}" fill="var(--green)" fill-opacity="0.15" stroke="${col}" stroke-opacity="0.5" stroke-width="1"/>`;
+      g+=`<path d="${sector(cx,cy,rr,hd.dir-half,hd.dir+half)}" fill="${col}" fill-opacity="${sel?0.22:0.14}" stroke="${col}" stroke-opacity="${sel?0.9:0.5}" stroke-width="${sel?1.6:1}"/>`;
     }
   });
   lo.heads.forEach((hd,idx)=>{
     const cx=SX(hd.x), cy=SY(hd.y);
     const sel=idx===lo.sel;
-    g+=`<circle class="lo-hd" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${sel?6:4.5}" fill="${sel?'var(--z3)':'var(--green-d)'}" stroke="#fff" stroke-width="1.5" data-hi="${idx}"/>`;
+    g+=`<circle class="lo-hd" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${sel?7:5}" fill="${zcol(idx)}" stroke="${sel?'#1a2320':'#fff'}" stroke-width="${sel?2.5:1.5}" data-hi="${idx}"/>`;
+    if(Number.isInteger(hd.manualZone)) g+=`<text x="${cx.toFixed(1)}" y="${(cy+3.5).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="#fff" pointer-events="none">${(zoneOf[idx]||0)+1}</text>`;
     if(sel){
       const spec=loHeadEffective(hd);
       const rr=Math.max(spec.r*U,6);
@@ -6158,7 +6264,8 @@ function loDraw(){
   g+=scaleBarSvg(lo);
   g+=`</svg>`;
   body.innerHTML=g;
-  const zones=lo.heads.length?packZones(lo.heads.map(hd=>({gpm:loHeadSpec(lo.family,hd.noz,hd.arc).gpm})), Math.max(num('ceiling'),0.1)).zones:0;
+  const zones=zpk.zones;
+  loZoneChips();
   el('loCount').textContent=lo.heads.length;
   el('loGpm').textContent=totGpm.toFixed(1);
   el('loZones').textContent=zones;
@@ -7614,6 +7721,9 @@ async function initApp(){
        && !/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement||{}).tagName||'')){
       const a=activeUnderlayEditor();
       if(a && !a.ed.underHidden){ a.ed.underHidden=true; a.redraw(); }
+    }
+    if(/^[0-9]$/.test(e.key) && !el('loOverlay').hidden && lo.sel>=0 && !(e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName))){
+      e.preventDefault(); loSetZone(e.key==='0' ? null : parseInt(e.key,10)-1); return;
     }
     if((e.key==='Delete'||e.key==='Backspace')){ if(!el('mpOverlay').hidden && mp.sel){ e.preventDefault(); mpDeleteSel(); } else if(!el('loOverlay').hidden && lo.sel>=0){ e.preventDefault(); loDeleteSel(); } else if(!el('trOverlay').hidden && tr.sel>=0){ e.preventDefault(); trDeleteSel(); } }
   });
