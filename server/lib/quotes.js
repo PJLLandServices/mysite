@@ -479,6 +479,9 @@ function blankFinancing() {
     grossUp: null,            // { targetNet, feePercent, feeFixedCents, at }
     paymentLinkId: null,      // Stripe payment_link id
     paymentLinkUrl: null,
+    linkSentAt: null,         // when stage first moved to link_sent — the
+                               // Pending Financing list's sort key for a
+                               // quote that has no captureBy yet
     authorizationId: null,    // Stripe PaymentIntent id (requires_capture)
     authorizedAt: null,
     captureBy: null,          // authorizedAt + 28 days
@@ -3070,7 +3073,7 @@ async function updateFinancingLifecycle(id, patch = {}, { by = "system", note = 
       fin[key] = patch[key] || null;
     }
   }
-  for (const key of ["authorizedAt", "captureBy", "capturedAt", "declinedAt", "voidedAt", "expiredAt"]) {
+  for (const key of ["linkSentAt", "authorizedAt", "captureBy", "capturedAt", "declinedAt", "voidedAt", "expiredAt"]) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) {
       fin[key] = patch[key] || null;
     }

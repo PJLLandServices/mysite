@@ -153,6 +153,49 @@ async function transitionFinancing(quoteId, toStage, patch = {}, opts = {}) {
 // Returns { ok, action, reason? } for the caller to log. Never throws for
 // a normal no-op; only lets a genuine bug (e.g. a stage transitionFinancing
 // refuses) surface as a rejected promise.
+// Pages Patrick (never a customer) the instant Klarna approves or
+// declines someone at checkout — TRD §7 step 4 / §11: "authorized" is
+// the actual "clear to schedule" signal, so it goes out immediately
+// rather than waiting for the periodic reminder sweep (lib/financing-
+// reminders.js) to pick it up. Best-effort by design: every caller
+// awaits this through `.catch(() => {})`, so an email/SMS hiccup can
+// never fail the webhook handler or roll back the state transition that
+// already committed.
+async function notifyAdminOfStageChange(quote, stage) {
+  if (stage !== "authorized" && stage !== "declined") return;
+  const notifyFinancing = require("./notify-financing");
+  const notifySms = require("./notify-sms");
+  const { resolvePublicBaseUrl } = require("./public-base-url");
+
+  let invoiceId = null;
+  try {
+    const invoicesLib = require("./invoices");
+    const match = (await invoicesLib.list()).find((inv) => inv.quoteId === quote.id);
+    invoiceId = match?.id || null;
+  } catch { /* alert still sends, just links to the quote instead */ }
+
+  const row = {
+    id: quote.id,
+    quoteNumberDisplay: quote.quoteNumberDisplay || quote.id,
+    customerName: quote.customerName || "",
+    financedTotal: quote.financing?.financedAmount?.total,
+    captureBy: quote.financing?.captureBy,
+    base: resolvePublicBaseUrl(),
+    invoiceId
+  };
+
+  if (stage === "authorized") {
+    await notifyFinancing.sendAuthorizedAlert(row).catch((err) => console.warn(`[klarna] authorized email failed for ${quote.id}: ${err?.message}`));
+    const deadline = row.captureBy ? new Date(row.captureBy).toLocaleDateString("en-CA", { month: "short", day: "numeric" }) : "—";
+    await notifySms.sendFinancingReminderSms(`PJL: Klarna approved ${row.customerName || "customer"} for ${row.quoteNumberDisplay} (${fmtMoney(row.financedTotal)}) — clear to schedule. Capture by ${deadline}.`)
+      .catch((err) => console.warn(`[klarna] authorized SMS failed for ${quote.id}: ${err?.message}`));
+  } else {
+    await notifyFinancing.sendDeclinedAlert(row).catch((err) => console.warn(`[klarna] declined email failed for ${quote.id}: ${err?.message}`));
+    await notifySms.sendFinancingReminderSms(`PJL: Klarna declined ${row.customerName || "customer"} for ${row.quoteNumberDisplay} — quote still open, follow up another way.`)
+      .catch((err) => console.warn(`[klarna] declined SMS failed for ${quote.id}: ${err?.message}`));
+  }
+}
+
 async function applyWebhookEvent(type, intentFromEvent) {
   const quoteId = intentFromEvent?.metadata?.quoteId || "";
   if (!quoteId) return { ok: false, action: "skipped", reason: "no quoteId in metadata" };
@@ -173,11 +216,12 @@ async function applyWebhookEvent(type, intentFromEvent) {
     }
     const authorizedAt = new Date().toISOString();
     const captureBy = new Date(Date.now() + 28 * 24 * 60 * 60 * 1000).toISOString();
-    await transitionFinancing(quoteId, "authorized", {
+    const updated = await transitionFinancing(quoteId, "authorized", {
       authorizationId: intent.id,
       authorizedAt,
       captureBy
     }, { by: "system", note: "Klarna approved — funds capturable" });
+    await notifyAdminOfStageChange(updated, "authorized").catch(() => {});
     return { ok: true, action: "authorized" };
   }
 
@@ -185,9 +229,10 @@ async function applyWebhookEvent(type, intentFromEvent) {
     if (currentStage !== "link_sent") {
       return { ok: true, action: "noop", reason: `stage is ${currentStage}, not link_sent` };
     }
-    await transitionFinancing(quoteId, "declined", {
+    const updated = await transitionFinancing(quoteId, "declined", {
       declinedAt: new Date().toISOString()
     }, { by: "system", note: "Klarna declined the customer at checkout" });
+    await notifyAdminOfStageChange(updated, "declined").catch(() => {});
     return { ok: true, action: "declined" };
   }
 
@@ -328,6 +373,7 @@ async function onQuoteAccepted(quote, { by = "system" } = {}) {
   await transitionFinancing(q.id, "link_sent", {
     eligible: true,
     pairedWithDeposit,
+    linkSentAt: new Date().toISOString(),
     // subtotal is an approximation (financedAmount / 1.13) for a
     // balance-only figure — informational only, nothing reads it yet.
     financedAmount: { subtotal: round2(financedAmount / (1 + HST_RATE)), total: financedAmount, at: new Date().toISOString() },
@@ -584,6 +630,84 @@ async function voidFinancingAuthorization(quoteId, { by = "admin" } = {}) {
   });
 }
 
+// ---- Pending Financing queue (build order step 4c) -----------------------
+//
+// Backs the admin "Pending Financing" list page (TRD §8/§12) — every
+// quote currently sitting in a stage that still needs a human: link_sent
+// (waiting on the customer to finish Klarna's checkout), authorized
+// (waiting on Patrick to capture — the 28-day clock is running),
+// declined (waiting on Patrick to follow up another way), or
+// partially_captured (informational — the remainder already auto-
+// released, nothing left to do). captured/voided/expired/not_offered
+// are terminal or inert and never show up here.
+//
+// Deliberately the single source of truth for "what's the days-left
+// figure for this quote" — the reminder sweep below computes the exact
+// same `daysUntil(fin.captureBy)` so the list page and the sweep can
+// never disagree about what's overdue (the CLAUDE.md lifecycle-state
+// discipline: one rule, called from every reader).
+const PENDING_FINANCING_STAGES = ["link_sent", "authorized", "declined", "partially_captured"];
+
+function daysUntil(iso, now) {
+  if (!iso) return null;
+  return (new Date(iso).getTime() - now.getTime()) / (24 * 60 * 60 * 1000);
+}
+
+async function listPendingFinancing({ now = new Date() } = {}) {
+  const all = await quotes.list();
+  const pending = all.filter((q) => q.financing && PENDING_FINANCING_STAGES.includes(q.financing.stage));
+
+  // Link each row to wherever its action buttons actually live: the
+  // invoice page (Capture/Void) once one exists — which, for the common
+  // deposit+balance workflow (TRD §7a), is already true by the time
+  // financing is authorized, since the held balance invoice is created
+  // when the deposit is paid — or the quote's own proposal-builder page
+  // otherwise. One pass over invoices, not one lookup per row.
+  let invoiceIdByQuote = new Map();
+  if (pending.length) {
+    try {
+      const invoicesLib = require("./invoices");
+      const allInvoices = await invoicesLib.list();
+      for (const inv of allInvoices) {
+        if (inv.quoteId && !invoiceIdByQuote.has(inv.quoteId)) invoiceIdByQuote.set(inv.quoteId, inv.id);
+      }
+    } catch (err) {
+      console.warn(`[klarna] pending-financing invoice lookup failed: ${err?.message}`);
+    }
+  }
+
+  return pending
+    .map((q) => {
+      const fin = q.financing;
+      return {
+        id: q.id,
+        quoteNumberDisplay: q.quoteNumberDisplay || q.id,
+        customerName: q.customerName || "",
+        customerEmail: q.customerEmail || "",
+        stage: fin.stage,
+        financedAmount: fin.financedAmount,
+        pairedWithDeposit: fin.pairedWithDeposit === true,
+        linkSentAt: fin.linkSentAt,
+        authorizedAt: fin.authorizedAt,
+        declinedAt: fin.declinedAt,
+        captureBy: fin.captureBy,
+        daysLeft: fin.captureBy ? daysUntil(fin.captureBy, now) : null,
+        invoiceId: invoiceIdByQuote.get(q.id) || null
+      };
+    })
+    // Soonest deadline first — a running captureBy clock outranks
+    // everything else. Rows with no deadline yet (link_sent, declined)
+    // sort after every deadlined row, most-recently-touched first.
+    .sort((a, b) => {
+      if (a.daysLeft != null && b.daysLeft != null) return a.daysLeft - b.daysLeft;
+      if (a.daysLeft != null) return -1;
+      if (b.daysLeft != null) return 1;
+      const aAt = a.linkSentAt || a.declinedAt || "";
+      const bAt = b.linkSentAt || b.declinedAt || "";
+      return bAt.localeCompare(aAt);
+    });
+}
+
 module.exports = {
   computeGrossUp,
   isEligible,
@@ -597,5 +721,7 @@ module.exports = {
   enableFinancingForQuote,
   disableFinancingForQuote,
   captureFinancingAuthorization,
-  voidFinancingAuthorization
+  voidFinancingAuthorization,
+  listPendingFinancing,
+  daysUntil
 };
