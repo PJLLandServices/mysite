@@ -1,7 +1,10 @@
 #!/usr/bin/env node
-// scripts/test-klarna-financing.mjs — Klarna financing tests (PJL-34, build
-// order step 1: data model + settings + lib/klarna.js, no UI/Stripe calls
-// yet).
+// scripts/test-klarna-financing.mjs — Klarna financing tests (PJL-34).
+// Covers build order step 1 (data model, settings, eligibility/gross-up
+// math, the lifecycle state machine) and step 2 (applying a Stripe
+// webhook event to that state machine — see scripts/test-stripe.mjs for
+// the low-level Stripe function tests, createPaymentLink/
+// capturePaymentIntent/deactivatePaymentLink).
 //
 //   1. computeGrossUp — matches the TRD's worked example, rejects bad input
 //   2. isEligible — residential + in-range only; hard-blocks commercial;
@@ -12,6 +15,9 @@
 //      against the real store (backed up and restored, never left dirty)
 //   6. settings.js integration — hydrate defaults + updateFinancing
 //      validation/clamping + audit trail
+//   7. applyWebhookEvent — the webhook -> state machine bridge (step 2):
+//      declined/expired/voided read the event body directly; authorized
+//      re-fetches from Stripe (global.fetch mocked, never a live call)
 //
 // Per CLAUDE.md's lifecycle-state rule, this file is the "pin it with a
 // test that fails on the OLD code" step for the financing state machine —
@@ -213,6 +219,101 @@ try {
     fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ financing: { enabled: true, minTotal: 9000, maxTotal: 5000 } }, null, 2), "utf8");
     s = await settings.get();
     ok(s.financing.maxTotal > s.financing.minTotal, "hydrate() refuses to serve an inverted min/max range");
+  }
+
+  // 7 — applyWebhookEvent (build order step 2): the webhook -> state
+  // machine bridge. payment_intent.payment_failed and .canceled read
+  // straight off the event body (no network, low-stakes per klarna.js's
+  // own comment); amount_capturable_updated re-fetches from Stripe
+  // (money-adjacent judgment), so global.fetch is mocked for that one —
+  // same technique as scripts/test-stripe.mjs, never a live call.
+  {
+    fs.writeFileSync(QUOTES_FILE, JSON.stringify([
+      { id: "Q-2026-9101", total: 5000, deposit: { enabled: false, amount: 0 } },
+      { id: "Q-2026-9102", total: 5000, deposit: { enabled: false, amount: 0 } },
+      { id: "Q-2026-9103", total: 5000, deposit: { enabled: false, amount: 0 } },
+      { id: "Q-2026-9104", total: 5000, deposit: { enabled: false, amount: 0 } }
+    ], null, 2) + "\n", "utf8");
+
+    // (a) payment_intent.payment_failed on a link_sent quote -> declined
+    await klarna.transitionFinancing("Q-2026-9101", "link_sent", { paymentLinkId: "plink_a" });
+    let r = await klarna.applyWebhookEvent("payment_intent.payment_failed", {
+      id: "pi_a", metadata: { quoteId: "Q-2026-9101", source: "pjl-klarna" }
+    });
+    ok(r.action === "declined", "payment_failed on link_sent -> declined");
+    let q = await quotes.get("Q-2026-9101");
+    ok(q.financing.stage === "declined" && q.financing.declinedAt, "declined stage + declinedAt persisted");
+
+    // Redelivery of the same event is a no-op, not a re-decline or an error.
+    r = await klarna.applyWebhookEvent("payment_intent.payment_failed", {
+      id: "pi_a", metadata: { quoteId: "Q-2026-9101", source: "pjl-klarna" }
+    });
+    ok(r.action === "noop", "redelivered payment_failed after already-declined is a no-op, not an error");
+
+    // (b) payment_intent.canceled, reason "automatic" on an authorized quote -> expired
+    await klarna.transitionFinancing("Q-2026-9102", "link_sent", { paymentLinkId: "plink_b" });
+    await klarna.transitionFinancing("Q-2026-9102", "authorized", { authorizationId: "pi_b", authorizedAt: new Date().toISOString() });
+    r = await klarna.applyWebhookEvent("payment_intent.canceled", {
+      id: "pi_b", metadata: { quoteId: "Q-2026-9102", source: "pjl-klarna" }, cancellation_reason: "automatic"
+    });
+    ok(r.action === "expired", "canceled with reason=automatic -> expired");
+    q = await quotes.get("Q-2026-9102");
+    ok(q.financing.stage === "expired" && q.financing.expiredAt, "expired stage + expiredAt persisted");
+    ok(!q.financing.voidedAt, "expiring never stamps voidedAt");
+
+    // (c) payment_intent.canceled, reason "requested_by_customer" (our own
+    // admin-void stamp, per stripe.js's cancelPaymentIntent) -> voided
+    await klarna.transitionFinancing("Q-2026-9103", "link_sent", { paymentLinkId: "plink_c" });
+    await klarna.transitionFinancing("Q-2026-9103", "authorized", { authorizationId: "pi_c", authorizedAt: new Date().toISOString() });
+    r = await klarna.applyWebhookEvent("payment_intent.canceled", {
+      id: "pi_c", metadata: { quoteId: "Q-2026-9103", source: "pjl-klarna" }, cancellation_reason: "requested_by_customer"
+    });
+    ok(r.action === "voided", "canceled with reason=requested_by_customer -> voided (admin action)");
+    q = await quotes.get("Q-2026-9103");
+    ok(q.financing.stage === "voided" && q.financing.voidedAt, "voided stage + voidedAt persisted");
+    ok(!q.financing.expiredAt, "voiding never stamps expiredAt");
+
+    // (d) payment_intent.amount_capturable_updated -> authorized, re-fetches from Stripe
+    {
+      const savedSecret = process.env.STRIPE_SECRET_KEY;
+      const savedPub = process.env.STRIPE_PUBLISHABLE_KEY;
+      process.env.STRIPE_SECRET_KEY = "sk_test_fake";
+      process.env.STRIPE_PUBLISHABLE_KEY = "pk_test_fake";
+      const originalFetch = global.fetch;
+      global.fetch = async () => ({
+        ok: true, status: 200, headers: { get: () => null },
+        json: async () => ({ id: "pi_d", status: "requires_capture" })
+      });
+      try {
+        await klarna.transitionFinancing("Q-2026-9104", "link_sent", { paymentLinkId: "plink_d" });
+        r = await klarna.applyWebhookEvent("payment_intent.amount_capturable_updated", {
+          id: "pi_d", metadata: { quoteId: "Q-2026-9104", source: "pjl-klarna" }
+        });
+        ok(r.action === "authorized", "amount_capturable_updated -> authorized");
+        q = await quotes.get("Q-2026-9104");
+        ok(q.financing.stage === "authorized", "authorized stage persisted");
+        ok(q.financing.authorizationId === "pi_d", "authorizationId comes from the RE-FETCHED intent, not just the event body");
+        ok(!!q.financing.captureBy, "captureBy (28-day deadline) is set");
+        const daysOut = (new Date(q.financing.captureBy) - new Date(q.financing.authorizedAt)) / 86400000;
+        ok(Math.abs(daysOut - 28) < 0.01, "captureBy is exactly 28 days after authorizedAt");
+
+        // Redelivery is a no-op — already authorized, never re-authorized.
+        r = await klarna.applyWebhookEvent("payment_intent.amount_capturable_updated", {
+          id: "pi_d", metadata: { quoteId: "Q-2026-9104", source: "pjl-klarna" }
+        });
+        ok(r.action === "noop", "redelivered amount_capturable_updated after already-authorized is a no-op");
+      } finally {
+        global.fetch = originalFetch;
+        if (savedSecret) process.env.STRIPE_SECRET_KEY = savedSecret; else delete process.env.STRIPE_SECRET_KEY;
+        if (savedPub) process.env.STRIPE_PUBLISHABLE_KEY = savedPub; else delete process.env.STRIPE_PUBLISHABLE_KEY;
+      }
+    }
+
+    // (e) no quoteId / unknown quote -> skipped, never throws
+    r = await klarna.applyWebhookEvent("payment_intent.payment_failed", { id: "pi_x", metadata: {} });
+    ok(r.action === "skipped", "event with no quoteId in metadata is skipped, not an error");
+    r = await klarna.applyWebhookEvent("payment_intent.payment_failed", { id: "pi_y", metadata: { quoteId: "Q-NOPE-9999" } });
+    ok(r.action === "skipped", "event for an unknown quote is skipped, not an error");
   }
 } finally {
   restoreFixtures();

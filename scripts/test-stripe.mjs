@@ -264,5 +264,143 @@ function assert(cond, label) {
     "location: the route returns locationId alongside the secret");
 }
 
+// ---- Klarna financing additions (PJL-34) --------------------------------
+//
+// createPaymentLink / capturePaymentIntent / deactivatePaymentLink all
+// talk to Stripe over fetch(), same as every other function in this
+// module — no separate SDK, no separate test approach. Rather than only
+// testing input validation, `global.fetch` is stubbed so the actual
+// request shape (method, path, body) can be asserted directly, without
+// a live key or a network call. This is stronger than a source-grep and
+// exercises the real function.
+async function withMockedFetch(responseData, run) {
+  const original = global.fetch;
+  let captured = null;
+  global.fetch = async (url, opts) => {
+    captured = { url, method: opts.method, body: opts.body };
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => responseData
+    };
+  };
+  try {
+    const result = await run();
+    return { result, captured };
+  } finally {
+    global.fetch = original;
+  }
+}
+
+{
+  const savedSecret = process.env.STRIPE_SECRET_KEY;
+  const savedPub = process.env.STRIPE_PUBLISHABLE_KEY;
+  process.env.STRIPE_SECRET_KEY = "sk_test_fake";
+  process.env.STRIPE_PUBLISHABLE_KEY = "pk_test_fake";
+
+  // -- createPaymentLink --
+  {
+    const { result, captured } = await withMockedFetch(
+      { id: "plink_test_1", url: "https://buy.stripe.com/test_1" },
+      () => stripe.createPaymentLink({ amountCents: 1072633, quoteId: "Q-2026-9001", description: "PJL financing" })
+    );
+    assert(result.id === "plink_test_1", "createPaymentLink: returns the link id");
+    assert(captured.url.includes("/payment_links"), "createPaymentLink: posts to /payment_links");
+    const body = decodeURIComponent(captured.body);
+    assert(body.includes("payment_method_types[0]=klarna"), "createPaymentLink: Klarna-only, not automatic");
+    assert(body.includes("payment_intent_data[capture_method]=manual"), "createPaymentLink: manual capture — authorize now, capture later");
+    assert(body.includes("payment_intent_data[metadata][quoteId]=Q-2026-9001"), "createPaymentLink: quoteId tagged in metadata");
+    assert(body.includes("payment_intent_data[metadata][source]=pjl-klarna"), "createPaymentLink: source-tagged so the webhook can route it");
+    assert(body.includes("line_items[0][price_data][unit_amount]=1072633"), "createPaymentLink: amount in cents");
+    assert(body.includes("after_completion[type]=hosted_confirmation"), "createPaymentLink: no redirectUrl -> Stripe's own confirmation page");
+
+    const withRedirect = await withMockedFetch(
+      { id: "plink_test_2", url: "https://buy.stripe.com/test_2" },
+      () => stripe.createPaymentLink({ amountCents: 500000, quoteId: "Q-2026-9002", redirectUrl: "https://www.pjllandservices.com/financing-thanks" })
+    );
+    const body2 = decodeURIComponent(withRedirect.captured.body);
+    assert(body2.includes("after_completion[type]=redirect"), "createPaymentLink: redirectUrl -> redirect type");
+    assert(body2.includes("after_completion[redirect][url]=https://www.pjllandservices.com/financing-thanks"), "createPaymentLink: redirect URL passed through");
+
+    let threw = false;
+    try { await stripe.createPaymentLink({ amountCents: 0, quoteId: "Q-1" }); } catch { threw = true; }
+    assert(threw, "createPaymentLink: rejects a non-positive amount");
+    threw = false;
+    try { await stripe.createPaymentLink({ amountCents: 100000 }); } catch { threw = true; }
+    assert(threw, "createPaymentLink: rejects a missing quoteId");
+  }
+
+  // -- capturePaymentIntent --
+  {
+    const { result, captured } = await withMockedFetch(
+      { id: "pi_test_1", status: "succeeded", amount_received: 1212075 },
+      () => stripe.capturePaymentIntent("pi_test_1")
+    );
+    assert(result.status === "succeeded", "capturePaymentIntent: returns the captured intent");
+    assert(captured.url.includes("/payment_intents/pi_test_1/capture"), "capturePaymentIntent: posts to the capture endpoint");
+    assert(!captured.body, "capturePaymentIntent: no amount_to_capture means a full capture, body stays empty");
+
+    const partial = await withMockedFetch(
+      { id: "pi_test_2", status: "succeeded", amount_received: 500000 },
+      () => stripe.capturePaymentIntent("pi_test_2", { amountToCaptureCents: 500000 })
+    );
+    const partialBody = decodeURIComponent(partial.captured.body);
+    assert(partialBody.includes("amount_to_capture=500000"), "capturePaymentIntent: partial capture sends amount_to_capture");
+
+    let threw = false;
+    try { await stripe.capturePaymentIntent(""); } catch { threw = true; }
+    assert(threw, "capturePaymentIntent: refuses without a payment intent id");
+  }
+
+  // -- deactivatePaymentLink --
+  {
+    const { result, captured } = await withMockedFetch(
+      { id: "plink_test_1", active: false },
+      () => stripe.deactivatePaymentLink("plink_test_1")
+    );
+    assert(result.active === false, "deactivatePaymentLink: returns the deactivated link");
+    assert(captured.url.includes("/payment_links/plink_test_1"), "deactivatePaymentLink: posts to the specific link");
+    assert(decodeURIComponent(captured.body) === "active=false", "deactivatePaymentLink: sends active=false");
+
+    const nullResult = await stripe.deactivatePaymentLink("");
+    assert(nullResult === null, "deactivatePaymentLink: no-ops on an empty id rather than calling Stripe");
+  }
+
+  // -- cancelPaymentIntent: cancellationReason (admin-void vs Stripe's own expiry) --
+  {
+    const { captured } = await withMockedFetch(
+      { id: "pi_test_3", status: "canceled", cancellation_reason: "requested_by_customer" },
+      () => stripe.cancelPaymentIntent("pi_test_3", { cancellationReason: "requested_by_customer" })
+    );
+    assert(decodeURIComponent(captured.body) === "cancellation_reason=requested_by_customer",
+      "cancelPaymentIntent: admin void stamps a reason the webhook can tell apart from Stripe's own auto-cancel");
+
+    // Existing callers (invoice amount-changed path) omit the reason —
+    // must keep behaving exactly as before: no body at all.
+    const noReason = await withMockedFetch({ id: "pi_test_4", status: "canceled" }, () => stripe.cancelPaymentIntent("pi_test_4"));
+    assert(!noReason.captured.body, "cancelPaymentIntent: existing callers without a reason are unaffected");
+  }
+
+  if (savedSecret) process.env.STRIPE_SECRET_KEY = savedSecret; else delete process.env.STRIPE_SECRET_KEY;
+  if (savedPub) process.env.STRIPE_PUBLISHABLE_KEY = savedPub; else delete process.env.STRIPE_PUBLISHABLE_KEY;
+}
+
+// The webhook route must dispatch Klarna events into lib/klarna.js
+// BEFORE the invoiceId check — read from source rather than restated, so
+// a refactor that reorders this breaks the test, not just the feature.
+{
+  const serverSrc = readFileSync(new URL("../server/server.js", import.meta.url), "utf8");
+  const routeAt = serverSrc.indexOf('pathname === "/api/webhooks/stripe"');
+  assert(routeAt > 0, "webhook: the stripe webhook route exists");
+  const routeBlock = serverSrc.slice(routeAt, routeAt + 3000);
+  const klarnaBranchAt = routeBlock.indexOf('metadata?.source === "pjl-klarna"');
+  const invoiceIdAt = routeBlock.indexOf("const invoiceId = intent?.metadata?.invoiceId");
+  assert(klarnaBranchAt > 0, "webhook: dispatches on metadata.source === \"pjl-klarna\"");
+  assert(invoiceIdAt > 0, "webhook: still reads invoiceId for the existing invoice path");
+  assert(klarnaBranchAt < invoiceIdAt, "webhook: Klarna branch is checked and returns BEFORE the invoiceId path — never falls through");
+  assert(/klarna\.applyWebhookEvent\(type, intent\)/.test(routeBlock), "webhook: hands the event to klarna.applyWebhookEvent");
+}
+
 console.log(`\ntest-stripe: ${failed ? "FAIL" : "PASS"} — ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

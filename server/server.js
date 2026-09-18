@@ -141,6 +141,7 @@ const { warrantyForWorkOrder } = require("./lib/warranty");
 const billingParties = require("./lib/billing-parties");
 const quickbooks = require("./lib/quickbooks");
 const stripe = require("./lib/stripe");
+const klarna = require("./lib/klarna");
 const bookings = require("./lib/bookings");
 const suppliers = require("./lib/suppliers");
 const materialLists = require("./lib/material-lists");
@@ -11343,6 +11344,12 @@ async function handleApi(req, res, pathname) {
   //                                   the page before the confirm POST)
   //   payment_intent.payment_failed → backstop failure attempt record
   //
+  //   Klarna financing (PJL-34), dispatched separately below by
+  //   metadata.source — these never touch the invoice path above:
+  //   payment_intent.amount_capturable_updated → Klarna approved
+  //   payment_intent.payment_failed             → Klarna declined
+  //   payment_intent.canceled                   → voided or expired
+  //
   // Always 200 on handled-but-imperfect outcomes (Stripe retries non-2xx
   // for days; a permanent condition like "invoice already paid" must not
   // generate a retry storm). 400 only for signature failures.
@@ -11375,8 +11382,27 @@ async function handleApi(req, res, pathname) {
       try {
         const type = event?.type || "";
         const intent = event?.data?.object;
+        if (!type.startsWith("payment_intent.")) return;
+
+        // Klarna financing (PJL-34) — scoped to quoteId + this metadata
+        // marker, never invoiceId, so it can never be mistaken for (or
+        // interfere with) the invoice-payment path below. Deliberately a
+        // separate branch rather than a shared dispatch table: FLOW-23
+        // (the invoice path, PASS) stays byte-for-byte untouched.
+        if (intent?.metadata?.source === "pjl-klarna") {
+          try {
+            const result = await klarna.applyWebhookEvent(type, intent);
+            if (result?.action && !["noop", "ignored", "skipped"].includes(result.action)) {
+              console.log(`[stripe-webhook] klarna ${type} -> ${result.action} (quote ${intent?.metadata?.quoteId || "?"})`);
+            }
+          } catch (klarnaErr) {
+            console.error(`[stripe-webhook] klarna handling failed for ${type} (quote ${intent?.metadata?.quoteId || "?"}): ${klarnaErr.message}`);
+          }
+          return;
+        }
+
         const invoiceId = intent?.metadata?.invoiceId || "";
-        if (!type.startsWith("payment_intent.") || !invoiceId) return;
+        if (!invoiceId) return;
         const inv = await invoices.get(invoiceId);
         if (!inv) {
           console.warn(`[stripe-webhook] ${type} for unknown invoice "${invoiceId}"`);
