@@ -193,6 +193,19 @@
             <p class="invoice-action-status" id="invoicePaymentStatus"></p>
           </section>
 
+          <!-- Klarna financing (PJL-34, build order step 4b). Only shown
+               when this invoice's linked quote has an active Klarna
+               authorization — hidden for every invoice today, same
+               safety posture as the rest of this feature. Capture moves
+               real money; Void cancels the hold with nothing charged. -->
+          <section class="invoice-action-card" id="invoiceKlarnaCard" hidden>
+            <span class="invoice-action-label">Klarna financing</span>
+            <p class="invoice-action-meta" id="invoiceKlarnaMeta">—</p>
+            <button type="button" id="invoiceKlarnaCaptureBtn" class="invoice-action-btn invoice-action-btn--primary" hidden>Capture payment</button>
+            <button type="button" id="invoiceKlarnaVoidBtn" class="invoice-action-btn invoice-action-btn--outline" hidden>Void authorization</button>
+            <p class="invoice-action-status" id="invoiceKlarnaStatus"></p>
+          </section>
+
           <!-- Void + delete (feature-invoice-void-delete-brief.md §4.4).
                Void is visible on draft/sent; Delete is visible ONLY once
                the invoice is void. Void-first is the mandatory road to
@@ -495,6 +508,38 @@
       <div class="invoice-modal-actions">
         <button type="button" class="invoice-action-btn" id="paymentCancelBtn">Cancel</button>
         <button type="button" class="invoice-action-btn invoice-action-btn--primary" id="paymentConfirmBtn">Record payment</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Klarna capture (PJL-34). Amount defaults to the full authorized
+       amount; editable down for a partial capture when the final job
+       total came in under the quote. The server is the authority on the
+       max — this is convenience, not the guard. -->
+  <div class="invoice-modal" id="klarnaCaptureModal" role="dialog" aria-modal="true" aria-labelledby="klarnaCaptureModalTitle" hidden>
+    <div class="invoice-modal-sheet">
+      <h2 id="klarnaCaptureModalTitle">Capture Klarna payment</h2>
+      <p class="invoice-modal-intro" id="klarnaCaptureModalIntro"></p>
+      <label class="invoice-modal-label" for="klarnaCaptureAmountInput">Amount to capture (CAD)</label>
+      <input type="number" class="invoice-modal-input" id="klarnaCaptureAmountInput" min="0.01" step="0.01" inputmode="decimal">
+      <p class="invoice-modal-error" id="klarnaCaptureModalError"></p>
+      <div class="invoice-modal-actions">
+        <button type="button" class="invoice-action-btn" id="klarnaCaptureCancelBtn">Cancel</button>
+        <button type="button" class="invoice-action-btn invoice-action-btn--primary" id="klarnaCaptureConfirmBtn">Capture</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Klarna void (PJL-34). Cancels the authorization — nothing is
+       charged, no fee. Used when the job is cancelled before capture. -->
+  <div class="invoice-modal" id="klarnaVoidModal" role="dialog" aria-modal="true" aria-labelledby="klarnaVoidModalTitle" hidden>
+    <div class="invoice-modal-sheet">
+      <h2 id="klarnaVoidModalTitle">Void Klarna authorization</h2>
+      <p class="invoice-modal-intro">Cancels the hold on the customer's Klarna account — nothing is charged, no fee. This can't be undone; the customer would need to apply again for financing on this job.</p>
+      <p class="invoice-modal-error" id="klarnaVoidModalError"></p>
+      <div class="invoice-modal-actions">
+        <button type="button" class="invoice-action-btn" id="klarnaVoidCancelBtn">Cancel</button>
+        <button type="button" class="invoice-action-btn invoice-action-btn--outline" id="klarnaVoidConfirmBtn">Void authorization</button>
       </div>
     </div>
   </div>

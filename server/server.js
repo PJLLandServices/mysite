@@ -1289,6 +1289,13 @@ function needsAuth(method, pathname) {
   // — not a field decision. The routes also call requireAdmin directly
   // — the gate is the fence, the route check is the lock.
   if (/^\/api\/admin\/quotes\/[^/]+\/klarna\/(enable|disable)$/.test(pathname)) return "admin";
+  // Klarna financing capture/void (PJL-34, build order step 4b) — ADMIN
+  // ONLY, same reasoning as enable/disable above: capture moves real
+  // money, void cancels a live Stripe authorization. The routes also
+  // call requireAdmin directly — the gate is the fence, the route check
+  // is the lock.
+  if (/^\/api\/admin\/invoices\/[^/]+\/klarna\/capture$/.test(pathname)) return "admin";
+  if (/^\/api\/admin\/quotes\/[^/]+\/klarna\/void$/.test(pathname)) return "admin";
   if (pathname === "/admin/trash" || pathname === "/admin/trash/") return "admin";
   if (pathname === "/admin/smart-controller-photos" || pathname === "/admin/smart-controller-photos/") return "user";
   // CRM pages — admin OR tech.
@@ -3285,6 +3292,54 @@ async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "con
   }
 
   return { invoice: updated, alreadyPaid: false, warning: qbWarning || receiptWarning };
+}
+
+// Klarna capture (PJL-34, build order step 4b) — the admin "Capture"
+// button on an invoice whose linked quote has an authorized Klarna hold.
+// Unlike finalizeStripeInvoicePayment above, the money-moving Stripe call
+// happens INSIDE this function (klarna.captureFinancingAuthorization is
+// what actually calls stripe.capturePaymentIntent) — there's no separate
+// browser-side charge to verify after the fact, because the customer's
+// Klarna checkout already happened on Stripe's hosted page, days or weeks
+// earlier. This function's job is just: capture it, then record it in
+// OUR invoice ledger so amountPaid/balanceDue/status stay truthful,
+// exactly like the card path does.
+async function finalizeKlarnaCapture(inv, quote, amountCents, { by = "admin" } = {}) {
+  if (quote.id !== inv.quoteId) {
+    throw new Error(`Quote ${quote.id} is not linked to invoice ${inv.id}.`);
+  }
+  const { quote: updatedQuote, capturedAmountCents, intent } =
+    await klarna.captureFinancingAuthorization(quote.id, { amountCents, by });
+
+  // The Stripe capture above already moved real money — a ledger failure
+  // from here on must never look like the capture itself failed. Same
+  // discipline as finalizeStripeInvoicePayment's ledger try/catch: log
+  // loudly, hand back a warning, never throw.
+  try {
+    const result = await invoices.addPayment(inv.id, {
+      amount: capturedAmountCents / 100,
+      method: "klarna",
+      receivedAt: new Date().toISOString(),
+      by,
+      notes: `Klarna financing captured · ${intent?.id || updatedQuote.financing?.authorizationId || ""}`
+    });
+    if (!result.ok) {
+      console.error(`[klarna] captured ${capturedAmountCents}¢ in Stripe for ${inv.id} but ledger record failed (${(result.errors || []).join("; ")}) — reconcile manually.`);
+      return {
+        invoice: await invoices.get(inv.id),
+        quote: updatedQuote,
+        warning: `Captured in Stripe but couldn't record the payment on the invoice: ${(result.errors || []).join("; ")} — add it manually.`
+      };
+    }
+    return { invoice: result.invoice, quote: updatedQuote, warning: null };
+  } catch (ledgerErr) {
+    console.error(`[klarna] captured ${capturedAmountCents}¢ in Stripe for ${inv.id} but ledger record threw: ${ledgerErr?.message} — reconcile manually.`);
+    return {
+      invoice: await invoices.get(inv.id),
+      quote: updatedQuote,
+      warning: `Captured in Stripe but couldn't record the payment on the invoice: ${ledgerErr?.message || "unknown error"} — add it manually.`
+    };
+  }
 }
 
 // Build a URL by joining a path onto a base, using the URL constructor so
@@ -17634,6 +17689,54 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, quote: updated });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't remove financing."] });
+    }
+  }
+
+  // POST /api/admin/invoices/:id/klarna/capture — the admin "Capture"
+  // button (PJL-34, build order step 4b): collects an authorized Klarna
+  // hold and records it as a payment on THIS invoice. Financing itself
+  // lives on the linked quote (inv.quoteId), not the invoice — this route
+  // is just where an admin naturally is when a job wraps and it's time to
+  // collect. Admin-only: capture moves real money, same tier as
+  // enable/disable above.
+  const klarnaCaptureMatch = pathname.match(/^\/api\/admin\/invoices\/([^/]+)\/klarna\/capture$/);
+  if (klarnaCaptureMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const invoiceId = decodeURIComponent(klarnaCaptureMatch[1]);
+      const payload = await parseRequestBody(req);
+      const amountCents = Math.round(Number(payload?.amountCents));
+      if (!Number.isFinite(amountCents) || amountCents <= 0) {
+        return sendJson(res, 400, { ok: false, errors: ["amountCents must be a positive number."] });
+      }
+      const inv = await invoices.get(invoiceId);
+      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      if (!inv.quoteId) return sendJson(res, 400, { ok: false, errors: ["This invoice isn't linked to a quote — nothing to capture."] });
+      const quote = await quotes.get(inv.quoteId);
+      if (!quote) return sendJson(res, 404, { ok: false, errors: ["The quote linked to this invoice wasn't found."] });
+      const result = await finalizeKlarnaCapture(inv, quote, amountCents, { by: session.uid || "admin" });
+      return sendJson(res, 200, { ok: true, invoice: result.invoice, warning: result.warning });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't capture the Klarna payment."] });
+    }
+  }
+
+  // POST /api/admin/quotes/:id/klarna/void — cancels a Klarna hold that
+  // should never be collected (job cancelled, customer disputed, wrong
+  // amount). Admin-only, same tier as enable/disable/capture above; lives
+  // on the quote (like enable/disable) rather than the invoice, since a
+  // "link_sent" quote may not even have an invoice yet.
+  const klarnaVoidMatch = pathname.match(/^\/api\/admin\/quotes\/([^/]+)\/klarna\/void$/);
+  if (klarnaVoidMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const quoteId = decodeURIComponent(klarnaVoidMatch[1]);
+      const updated = await klarna.voidFinancingAuthorization(quoteId, { by: session.uid || "admin" });
+      return sendJson(res, 200, { ok: true, quote: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't void the Klarna authorization."] });
     }
   }
 

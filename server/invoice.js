@@ -18,6 +18,11 @@ function fmtDate(iso) {
 }
 
 let currentInvoice = null;
+// The linked quote's financing block (PJL-34), refreshed alongside the
+// invoice — null whenever there's no quote, no financing, or nothing
+// currently active on it. Stashed so the capture/void button handlers
+// don't need to re-fetch on every click.
+let currentQuoteFinancing = null;
 // Cached customer record for spouse-CC fields. Fetched after the
 // invoice loads so the three per-send "CC spouse" toggles can pre-fill
 // from copySpouseOnInvoices + show the spouseEmail / spousePhone
@@ -1462,6 +1467,8 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!document.getElementById("voidModal")?.hidden) closeModal("voidModal");
   if (!document.getElementById("deleteModal")?.hidden) closeModal("deleteModal");
+  if (!document.getElementById("klarnaCaptureModal")?.hidden) closeModal("klarnaCaptureModal");
+  if (!document.getElementById("klarnaVoidModal")?.hidden) closeModal("klarnaVoidModal");
 });
 
 // Wire QB block refresh + reminder card + junk-warning card + void/delete
@@ -1471,12 +1478,139 @@ const origRender = render;
 render = function (inv) {
   origRender(inv);
   refreshQbBlock();
+  refreshKlarnaCard(inv);
   renderReminderCard(inv);
   renderJunkWarningCard(inv);
   renderVoidDeleteCard(inv);
   renderPaymentsTable(inv);
   renderPaymentCard(inv);
 };
+
+// ---- Klarna financing (PJL-34, build order step 4b) --------------------
+//
+// Financing lives on the QUOTE, not the invoice (see lib/klarna.js) — this
+// invoice's only link to it is inv.quoteId. The card is hidden for every
+// invoice unless that quote currently has an active authorization; most
+// invoices will never show it at all.
+async function refreshKlarnaCard(inv) {
+  const card = document.getElementById("invoiceKlarnaCard");
+  const meta = document.getElementById("invoiceKlarnaMeta");
+  const captureBtn = document.getElementById("invoiceKlarnaCaptureBtn");
+  const voidBtn = document.getElementById("invoiceKlarnaVoidBtn");
+  const status = document.getElementById("invoiceKlarnaStatus");
+  if (!card || !meta || !captureBtn || !voidBtn) return;
+  if (status) status.textContent = "";
+  currentQuoteFinancing = null;
+  captureBtn.hidden = true;
+  voidBtn.hidden = true;
+
+  if (!inv?.quoteId) { card.hidden = true; return; }
+  let quote;
+  try {
+    const r = await fetch(`/api/admin/quote-folder?id=${encodeURIComponent(inv.quoteId)}`, { cache: "no-store" });
+    const data = await r.json().catch(() => ({}));
+    quote = (data.quotes || []).find((q) => q.id === inv.quoteId);
+  } catch (_) { card.hidden = true; return; }
+
+  const fin = quote?.financing;
+  if (!fin || !["link_sent", "authorized", "partially_captured"].includes(fin.stage)) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  currentQuoteFinancing = { quoteId: inv.quoteId, ...fin };
+
+  if (fin.stage === "link_sent") {
+    meta.textContent = "Waiting on the customer to complete their Klarna application — nothing to capture yet.";
+    voidBtn.hidden = false;
+  } else if (fin.stage === "authorized") {
+    const full = Number(fin.financedAmount?.total) || 0;
+    let deadline = "";
+    if (fin.captureBy) {
+      const days = Math.ceil((new Date(fin.captureBy) - Date.now()) / 86400000);
+      deadline = days >= 0 ? ` — ${days} day${days === 1 ? "" : "s"} left to capture.` : " — the capture window has passed.";
+    }
+    meta.textContent = `Authorized for ${fmt(full)}${deadline}`;
+    captureBtn.hidden = false;
+    voidBtn.hidden = false;
+  } else if (fin.stage === "partially_captured") {
+    const captured = (Number(fin.capturedAmountCents) || 0) / 100;
+    const full = Number(fin.financedAmount?.total) || 0;
+    meta.textContent = `Partially captured — ${fmt(captured)} of ${fmt(full)} authorized. The remainder was released back to the customer.`;
+  }
+}
+
+document.getElementById("invoiceKlarnaCaptureBtn")?.addEventListener("click", () => {
+  if (!currentQuoteFinancing || !currentInvoice) return;
+  const full = Number(currentQuoteFinancing.financedAmount?.total) || 0;
+  document.getElementById("klarnaCaptureModalIntro").textContent =
+    `Captures the Klarna authorization for ${currentInvoice.id}. Authorized amount: ${fmt(full)}. Capturing less than the full amount releases the remainder back to the customer — it can't be captured again afterward.`;
+  const amountEl = document.getElementById("klarnaCaptureAmountInput");
+  amountEl.value = full ? String(full) : "";
+  amountEl.max = String(full);
+  const err = document.getElementById("klarnaCaptureModalError");
+  if (err) err.textContent = "";
+  openModal("klarnaCaptureModal");
+  setTimeout(() => amountEl?.focus(), 0);
+});
+document.getElementById("klarnaCaptureCancelBtn")?.addEventListener("click", () => closeModal("klarnaCaptureModal"));
+document.getElementById("klarnaCaptureModal")?.addEventListener("click", (e) => {
+  if (e.target === document.getElementById("klarnaCaptureModal")) closeModal("klarnaCaptureModal");
+});
+document.getElementById("klarnaCaptureConfirmBtn")?.addEventListener("click", async () => {
+  if (!currentInvoice) return;
+  const btn = document.getElementById("klarnaCaptureConfirmBtn");
+  const err = document.getElementById("klarnaCaptureModalError");
+  const amount = parseFloat(document.getElementById("klarnaCaptureAmountInput").value);
+  if (err) err.textContent = "";
+  if (!Number.isFinite(amount) || amount <= 0) { if (err) err.textContent = "Enter a valid amount."; return; }
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/admin/invoices/${encodeURIComponent(currentInvoice.id)}/klarna/capture`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ amountCents: Math.round(amount * 100) })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't capture payment.");
+    closeModal("klarnaCaptureModal");
+    currentInvoice = data.invoice;
+    render(currentInvoice);
+  } catch (e) {
+    if (err) err.textContent = e.message || "Capture failed.";
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("invoiceKlarnaVoidBtn")?.addEventListener("click", () => {
+  if (!currentQuoteFinancing) return;
+  const err = document.getElementById("klarnaVoidModalError");
+  if (err) err.textContent = "";
+  openModal("klarnaVoidModal");
+});
+document.getElementById("klarnaVoidCancelBtn")?.addEventListener("click", () => closeModal("klarnaVoidModal"));
+document.getElementById("klarnaVoidModal")?.addEventListener("click", (e) => {
+  if (e.target === document.getElementById("klarnaVoidModal")) closeModal("klarnaVoidModal");
+});
+document.getElementById("klarnaVoidConfirmBtn")?.addEventListener("click", async () => {
+  if (!currentQuoteFinancing) return;
+  const btn = document.getElementById("klarnaVoidConfirmBtn");
+  const err = document.getElementById("klarnaVoidModalError");
+  if (err) err.textContent = "";
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/admin/quotes/${encodeURIComponent(currentQuoteFinancing.quoteId)}/klarna/void`, { method: "POST" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't void the authorization.");
+    closeModal("klarnaVoidModal");
+    await refreshKlarnaCard(currentInvoice);
+  } catch (e) {
+    if (err) err.textContent = e.message || "Void failed.";
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 // ---- Authorization posture (admin-only) -----------------------------
 // Pulls the linked WO and renders which path authorized this invoice:
