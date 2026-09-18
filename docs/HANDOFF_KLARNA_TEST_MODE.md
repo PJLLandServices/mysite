@@ -40,9 +40,13 @@ Klarna account, full stop.
 
 That's the only thing I need from you. I'll handle the rest.
 
-## 3. What I'll actually be able to test tomorrow
+## 3. What I expected to be able to test (see §4 for what actually happened)
 
-With a test secret key, I can make real calls to Stripe's test-mode API —
+**This section turned out to be wrong — kept for the record, corrected in
+§4 below, which is the part to actually trust.**
+
+With a test secret key, I expected I'd be able to make real calls to
+Stripe's test-mode API —
 create a real (test) Klarna Payment Link, and (via the pre-installed
 browser in this sandbox) actually click through Klarna's test checkout
 the way a customer would, using Klarna's published test credentials
@@ -58,26 +62,69 @@ login needed). That's a genuine, non-mocked run of:
 - The invoice ledger, QuickBooks note field, and Pending Financing queue
   all agreeing about what happened
 
-## 4. The one thing I can't do from here: live webhook delivery
+## 4. CORRECTION (2026-09-18): this sandbox can't reach Stripe's API at all
 
-Stripe delivers webhooks to a **public URL** it can reach over the
-internet. This sandbox has no public address — the same reason the real
-site listens at `https://www.pjllandservices.com/api/webhooks/stripe`
-and nowhere else (`HANDOFF_STRIPE_PAYMENTS.md` §5's webhook destination).
-So the *automatic* "Klarna approved → email arrives instantly" path
-can't be triggered by a live webhook delivery in this environment.
+The original version of this doc said the only gap was live webhook
+delivery (no public URL), and that everything else — creating a real
+test Payment Link, a real Klarna checkout, a real capture — could still
+run for real from this environment. **That was wrong**, found out the
+hard way when Patrick actually sent test keys: this sandbox's network
+policy blocks *all* outbound calls to `api.stripe.com`, not just inbound
+webhooks. A direct `curl`/`fetch` to Stripe's API from here gets a `403`
+from the egress proxy itself — "destination host not allowed by your
+organization's egress policy for this session." Per that proxy's own
+operating rules, a blocked host is reported, never retried or routed
+around — so this is not a config problem to fix, it's a hard boundary of
+this particular sandbox.
 
-That does **not** block the walkthrough. `applyWebhookEvent()` — the
-function a real webhook calls — takes the same Stripe event data a
-webhook would carry. After the real test-mode checkout completes, I'll
-fetch the real resulting PaymentIntent from Stripe's test API (the exact
-call `payment_intent.amount_capturable_updated` triggers on production)
-and feed it through the same function by hand. Every line of code that
-actually matters — the eligibility check, the gross-up math, the real
-Klarna checkout, the real authorization, the real capture, the ledger,
-the notifications — runs for real. Only the "Stripe rings our doorbell"
-step is simulated, and that step is separately covered by the existing
-webhook-signature tests in `scripts/test-stripe.mjs`.
+**What this actually means**: nothing in `server/lib/stripe.js` or
+`server/lib/klarna.js` can make a real network call to Stripe from a
+Claude Code Cowork/web session running in this kind of sandboxed
+container — test mode or live, doesn't matter, the block is on the
+destination host, not the key. This was never tested until Patrick
+supplied real test keys and the first real call was attempted.
+
+**What still works from here**: everything that doesn't need the
+network — reading/writing the gross-up math, the state machine, the
+admin UI, the reminder sweep's threshold logic, and the full existing
+unit-test suite (`scripts/test-klarna-financing.mjs`, all mocked-fetch,
+zero live calls) all run exactly as before. Code review, bug fixes, and
+new features for this system can keep happening here.
+
+**What has to happen somewhere else**: an actual live Stripe test-mode
+call — creating a real Payment Link, completing Klarna's real test
+checkout, capturing a real (test) authorization — needs an environment
+with normal internet access. Two realistic options:
+
+1. **Patrick's own machine**, running this repo locally (or Claude Code
+   Desktop/CLI there) with the test keys in a local `.env` — normal
+   network, no sandbox restriction. I can walk him through every step
+   live.
+2. **A real Render deployment** (a preview environment for this branch,
+   if Render's plan supports them, or a quick manual push to a spare
+   service) with the test keys set as env vars — this also solves the
+   *webhook* delivery problem from §5 below for free, since Render has a
+   real public URL Stripe can actually reach.
+
+Either way, this sandbox itself cannot be the place the live test runs.
+Flagging this prominently so nobody re-discovers it the hard way again.
+
+## 5. The webhook delivery problem (still real, on top of §4)
+
+Separately from the network block above: Stripe delivers webhooks to a
+**public URL** it can reach over the internet. This sandbox has no
+public address — the same reason the real site listens at
+`https://www.pjllandservices.com/api/webhooks/stripe` and nowhere else
+(`HANDOFF_STRIPE_PAYMENTS.md` §5's webhook destination). Even in an
+environment where §4's block didn't apply, the *automatic* "Klarna
+approved → email arrives instantly" path still couldn't be triggered by
+a live webhook delivery unless that environment also has a public URL.
+
+`applyWebhookEvent()` — the function a real webhook calls — takes the
+same Stripe event data a webhook would carry, so it can always be fed by
+hand once a real PaymentIntent exists, in any environment. That part of
+the plan is still correct — it just doesn't rescue §4's bigger problem
+on its own.
 
 Before this ships to a REAL customer, the two new event types
 (`payment_intent.amount_capturable_updated`,
@@ -87,7 +134,7 @@ in the Stripe Dashboard (test mode and live mode subscriptions are
 separate) — that's a Dashboard setting, not a code change, and it's the
 very last step before flipping this on for a real quote.
 
-## 5. What "done" looks like
+## 6. What "done" looks like
 
 Per the TRD's own recommendation (Decision 9): one full test-mode run,
 start to finish, including the deposit + Klarna-balance combination
