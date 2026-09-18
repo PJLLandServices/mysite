@@ -1005,6 +1005,86 @@ async function sendQuoteAcceptedConfirmation(quote, {
   }
 }
 
+// Klarna financing link — PJL-34, build order step 3. Fired from
+// lib/klarna.js's onQuoteAccepted, the moment a financing-eligible quote
+// (financing.enabled === true — see that module's safety-invariant
+// comment) is accepted. `paymentLinkUrl` is Stripe's own hosted page;
+// there is deliberately no PJL-hosted financing page yet, so this email
+// IS the entire customer-facing surface of the feature for now.
+//
+// Best-effort like every other notification on the acceptance path: the
+// caller (klarna.js) has already created the real Stripe authorization
+// link before this runs, so a send failure here must never be treated as
+// "the offer didn't happen" — it only means Patrick needs to forward the
+// link by hand, which the warning this returns is for.
+async function sendFinancingLinkEmail(quote, {
+  toEmail = "",
+  customerName = "",
+  paymentLinkUrl = "",
+  financedAmountText = "",
+  pairedWithDeposit = false
+} = {}) {
+  const transporter = getTransporter();
+  const to = String(toEmail || quote?.customerEmail || "").trim();
+  if (!to) return { ok: false, skipped: true, reason: "no customer email" };
+  if (!paymentLinkUrl) return { ok: false, skipped: true, reason: "no payment link url" };
+  if (!transporter) {
+    console.warn(`[klarna-link] Skipped (no Gmail config) — quoteId=${quote?.id}`);
+    await logSend({ kind: "stage_notice", to, ok: false, error: "no Gmail config", refId: quote?.id });
+    return { ok: false, skipped: true };
+  }
+
+  const rawName = String(customerName || "").trim().split(" ")[0];
+  const firstName = rawName || "there";
+  const displayId = (quote?.quoteNumberDisplay && String(quote.quoteNumberDisplay).trim()) || quote?.id || "";
+
+  const scopeHtml = pairedWithDeposit
+    ? `<p style="margin: 0 0 12px;">This covers the <strong>remaining balance</strong> of <strong>${escapeHtml(financedAmountText)}</strong> — your deposit is billed separately and isn't part of this application.</p>`
+    : `<p style="margin: 0 0 12px;">This covers the full project total of <strong>${escapeHtml(financedAmountText)}</strong>.</p>`;
+  const scopeText = pairedWithDeposit
+    ? `This covers the remaining balance of ${financedAmountText} — your deposit is billed separately and isn't part of this application.`
+    : `This covers the full project total of ${financedAmountText}.`;
+
+  const { html, text } = brandedEmail({
+    headline: "Apply for financing through Klarna",
+    bodyHtml: `
+      <p style="margin: 0 0 12px;">Hi ${escapeHtml(firstName)},</p>
+      <p style="margin: 0 0 12px;">Thanks for approving quote <strong>${escapeHtml(displayId)}</strong>. As requested, here's your secure link to apply for financing through Klarna.</p>
+      ${scopeHtml}
+      <p style="margin: 0 0 12px;">Klarna will let you know right away whether you're approved — nothing is charged until the work is complete. Applying doesn't affect the schedule; we'll be in touch separately to book the job.</p>
+    `,
+    bodyText: [
+      `Hi ${firstName},`,
+      "",
+      `Thanks for approving quote ${displayId}. As requested, here's your secure link to apply for financing through Klarna.`,
+      scopeText,
+      "",
+      "Klarna will let you know right away whether you're approved — nothing is charged until the work is complete. Applying doesn't affect the schedule; we'll be in touch separately to book the job."
+    ].filter(Boolean).join("\n"),
+    ctaLabel: "Apply for financing",
+    ctaUrl: paymentLinkUrl,
+    footerNote: `Questions? Call us at <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a> or just reply to this email.`
+  });
+
+  try {
+    const info = await transporter.sendMail({
+      from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
+      to,
+      replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
+      subject: `Apply for financing — ${displayId}`,
+      html,
+      text
+    });
+    await logSend({ kind: "stage_notice", to, ok: true, refId: quote?.id });
+    console.log(`[klarna-link] sent quoteId=${quote?.id} to=${to} id=${info.messageId}`);
+    return { ok: true, messageId: info.messageId };
+  } catch (error) {
+    await logSend({ kind: "stage_notice", to, ok: false, error: error.message, refId: quote?.id });
+    console.error(`[klarna-link] failed quoteId=${quote?.id}:`, error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
 // Admin/tech password-reset email. Triggered from
 // POST /api/users/:id/reset-password. `user` is the public-shape user
 // record from lib/users.js; `magicLink` already embeds the token.
@@ -2321,6 +2401,7 @@ module.exports = {
   sendPaymentReceipt,
   sendCustomerLoginLink,
   sendQuoteAcceptedConfirmation,
+  sendFinancingLinkEmail,
   sendAdminPasswordResetLink,
   sendOutreachEmail,
   sendOutreachSms,

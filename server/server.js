@@ -12435,6 +12435,16 @@ async function handleApi(req, res, pathname) {
         console.warn(`[approval-sign] deposit flow failed for ${updated.id}:`, depErr?.message);
       }
 
+      // Klarna financing (PJL-34) — a no-op for every quote today; see the
+      // safety-invariant comment at the top of lib/klarna.js. Independent
+      // of the deposit hook above, same acceptance event, same failure-
+      // tolerant discipline.
+      try {
+        await klarna.onQuoteAccepted(updated, { by: "system" });
+      } catch (klarnaErr) {
+        console.warn(`[approval-sign] klarna flow failed for ${updated.id}:`, klarnaErr?.message);
+      }
+
       // Tell the customer their approval landed — installation work only.
       // Awaited rather than fired-and-forgotten so a hard failure reaches
       // the ledger before the response returns; it cannot throw.
@@ -17531,6 +17541,13 @@ async function handleApi(req, res, pathname) {
         depositWarning = depErr?.message || "Deposit invoice creation failed.";
         console.warn(`[confirm-pdf] deposit flow failed for ${id}:`, depErr?.message);
       }
+      // Klarna financing (PJL-34) — see the safety-invariant comment at
+      // the top of lib/klarna.js: a no-op today, independent of deposits.
+      try {
+        await klarna.onQuoteAccepted(updated, { by: session.uid || "admin" });
+      } catch (klarnaErr) {
+        console.warn(`[confirm-pdf] klarna flow failed for ${id}:`, klarnaErr?.message);
+      }
       // Attestation IS the acceptance on this path, so the customer
       // confirmation fires here too — same installation-only gate.
       await maybeSendAcceptanceConfirmation(updated, {
@@ -20089,6 +20106,13 @@ async function handleApi(req, res, pathname) {
               if (acceptedQuote) await deposits.onQuoteAccepted(acceptedQuote, { by: session.uid || "admin" });
             } catch (depErr) {
               console.warn(`[accept-offline] deposit flow failed for ${quoteId}:`, depErr?.message);
+            }
+            // Klarna financing (PJL-34) — see the safety-invariant
+            // comment at the top of lib/klarna.js: a no-op today.
+            try {
+              if (acceptedQuote) await klarna.onQuoteAccepted(acceptedQuote, { by: session.uid || "admin" });
+            } catch (klarnaErr) {
+              console.warn(`[accept-offline] klarna flow failed for ${quoteId}:`, klarnaErr?.message);
             }
           }
         } catch (qErr) {

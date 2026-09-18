@@ -3,18 +3,33 @@
 // Step 1 of the build order (see the PJL-34 TRD, Linear) built the pure
 // eligibility + gross-up math and the financing state machine's
 // transition rules, on top of the storage primitive in lib/quotes.js
-// (updateFinancingLifecycle). Step 2 adds the Stripe side: applying a
-// webhook event to that state machine. Creating the actual Payment Link
-// (the acceptance hook) is step 3 — this module doesn't call
-// stripe.createPaymentLink yet. This module never touches server/pay.js
-// or the existing card-payment PaymentIntent flow (FLOW-23, PASS) —
-// Klarna is a separate, additive flow by design.
+// (updateFinancingLifecycle). Step 2 added the Stripe side: applying a
+// webhook event to that state machine. Step 3 (below, onQuoteAccepted)
+// is the acceptance hook that actually creates a Payment Link for a real
+// customer — the first piece of this feature with a real-world side
+// effect (an email, a live Stripe object).
+//
+// SAFETY INVARIANT, load-bearing: onQuoteAccepted is a no-op for every
+// quote in existence today, and will stay a no-op for every quote until
+// something explicitly sets quote.financing.enabled = true. Nothing in
+// this codebase does that yet — the only thing that will is the "Enable
+// financing" admin button (build order step 4, not yet built). Eligible
+// (financing.eligible) is only ever a computed hint; it is never read as
+// permission to act. This is deliberate and must not be "simplified"
+// away: this account's Stripe key is LIVE (docs/HANDOFF_STRIPE_PAYMENTS.md),
+// so an accidental auto-enable here would create a real Payment Link and
+// email a real customer.
+//
+// This module never touches server/pay.js or the existing card-payment
+// PaymentIntent flow (FLOW-23, PASS) — Klarna is a separate, additive
+// flow by design.
 
 const quotes = require("./quotes");
 const stripe = require("./stripe");
 
 const HST_RATE = 0.13;
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const fmtMoney = (n) => "$" + (Number(n) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 // ---- Gross-up math ------------------------------------------------------
 //
@@ -202,6 +217,127 @@ async function applyWebhookEvent(type, intentFromEvent) {
   return { ok: true, action: "ignored", reason: `unhandled event type ${type}` };
 }
 
+// ---- Acceptance hook (build order step 3) -------------------------------
+//
+// Called alongside lib/deposits.js's onQuoteAccepted, from every
+// acceptance code path in server.js (portal e-sign, PDF-return
+// attestation, offline/on-site acceptance) — same event, independent
+// hook, exactly the parallel-hook design in TRD §7a: the deposit half
+// (if any) is completely unaffected by anything in this function, and
+// this function never touches the deposit.
+//
+// Failure-tolerant like sendInvoiceNow in deposits.js: a Stripe hiccup
+// or an email hiccup must never un-accept the quote the customer just
+// signed. Callers wrap this in their own try/catch as belt-and-suspenders,
+// but every error path inside here is already caught and turned into a
+// { ok:false, warning } or a logged no-op — this should not throw.
+async function onQuoteAccepted(quote, { by = "system" } = {}) {
+  const q = typeof quote === "string" ? await quotes.get(quote) : quote;
+  if (!q || !q.financing || q.financing.enabled !== true) {
+    return { ok: true, skipped: "not_enabled" };
+  }
+  if (q.financing.stage && q.financing.stage !== "not_offered") {
+    return { ok: true, alreadyRan: true, stage: q.financing.stage };
+  }
+
+  // Re-verify eligibility at the moment of acting, never trust the
+  // enabled flag alone — the same "server never trusts stale state for
+  // money" discipline every other Stripe-adjacent function here follows.
+  // A quote can legitimately fall out of range between "admin enabled
+  // it" and "customer accepted" (partial acceptance changed the total,
+  // Settings' range changed, the kill switch flipped off) — when that
+  // happens this is a silent skip, not a forced financing offer.
+  const settingsLib = require("./settings");
+  const customers = require("./customers");
+  const s = await settingsLib.get();
+
+  let accountType = "residential";
+  let customerName = "";
+  let customerEmail = String(q.customerEmail || "").trim();
+  try {
+    const cust = q.customerId
+      ? await customers.get(q.customerId, { withProperties: false })
+      : (customerEmail ? await customers.findByEmail(customerEmail) : null);
+    if (cust) {
+      if (cust.accountType) accountType = cust.accountType;
+      if (cust.name) customerName = cust.name;
+      if (!customerEmail && cust.email) customerEmail = cust.email;
+    }
+  } catch (err) {
+    console.warn(`[klarna] customer lookup failed for ${q.id}: ${err?.message}`);
+    // Fall through with accountType's safe default ("residential") — but
+    // isEligible still requires accountType === "residential" explicitly,
+    // and this is exactly why: an unresolvable customer NEVER upgrades
+    // itself to eligible by accident. A commercial account whose lookup
+    // happens to fail is not silently offered financing either — it was
+    // never eligible in the first place per the hard block below.
+  }
+
+  const financedAmount = financedAmountForQuote(q);
+  if (!isEligible({ accountType, financedAmount, settings: s.financing })) {
+    console.warn(`[klarna] ${q.id} no longer eligible at acceptance (accountType=${accountType}, financedAmount=${financedAmount}) — skipping link creation`);
+    await quotes.updateFinancingLifecycle(q.id, {}, {
+      by, note: `Skipped — no longer eligible at acceptance (accountType=${accountType}, financedAmount=${fmtMoney(financedAmount)})`
+    }).catch(() => {});
+    return { ok: true, skipped: "no_longer_eligible" };
+  }
+
+  const displayId = (q.quoteNumberDisplay && String(q.quoteNumberDisplay).trim()) || q.id;
+  const pairedWithDeposit = q.deposit?.enabled === true;
+  const idempotencyKey = `pjl-klarna-link-${q.id}`;
+
+  let link;
+  try {
+    link = await stripe.createPaymentLink({
+      amountCents: Math.round(financedAmount * 100),
+      quoteId: q.id,
+      description: `PJL financing — quote ${displayId}${pairedWithDeposit ? " (balance)" : ""}`,
+      idempotencyKey
+    });
+  } catch (err) {
+    const warning = `Klarna payment link failed: ${err.message}`;
+    console.error(`[klarna] ${warning} (quote ${q.id})`);
+    await quotes.updateFinancingLifecycle(q.id, {}, { by, note: warning }).catch(() => {});
+    return { ok: false, warning };
+  }
+
+  await transitionFinancing(q.id, "link_sent", {
+    eligible: true,
+    pairedWithDeposit,
+    // subtotal is an approximation (financedAmount / 1.13) for a
+    // balance-only figure — informational only, nothing reads it yet.
+    financedAmount: { subtotal: round2(financedAmount / (1 + HST_RATE)), total: financedAmount, at: new Date().toISOString() },
+    paymentLinkId: link.id,
+    paymentLinkUrl: link.url
+  }, { by, note: `Klarna payment link created (${pairedWithDeposit ? "balance" : "full amount"}: ${fmtMoney(financedAmount)})` });
+
+  // Best-effort customer email — mirrors deposits.js's sendInvoiceNow: a
+  // send failure must never unwind the authorization link just created,
+  // it only surfaces as a warning for Patrick to notice.
+  let warning = null;
+  if (!customerEmail) {
+    warning = `Klarna link created for ${q.id} but the quote has no customer email — send it manually.`;
+    console.warn(`[klarna] ${warning}`);
+  } else {
+    try {
+      const notify = require("./notify-customer");
+      const result = await notify.sendFinancingLinkEmail(q, {
+        toEmail: customerEmail,
+        customerName,
+        paymentLinkUrl: link.url,
+        financedAmountText: fmtMoney(financedAmount),
+        pairedWithDeposit
+      });
+      if (!result?.ok) warning = result?.reason || result?.error || "Financing email not sent.";
+    } catch (emailErr) {
+      warning = emailErr?.message || "Financing email failed.";
+      console.warn(`[klarna] financing email failed for ${q.id}: ${warning}`);
+    }
+  }
+
+  return { ok: true, paymentLink: link, warning };
+}
+
 module.exports = {
   computeGrossUp,
   isEligible,
@@ -209,5 +345,6 @@ module.exports = {
   ALLOWED_TRANSITIONS,
   canTransition,
   transitionFinancing,
-  applyWebhookEvent
+  applyWebhookEvent,
+  onQuoteAccepted
 };

@@ -52,14 +52,18 @@ const settings = require(path.join(ROOT, "server", "lib", "settings.js"));
 
 const QUOTES_FILE = path.join(ROOT, "server", "data", "quotes.json");
 const SETTINGS_FILE = path.join(ROOT, "server", "data", "settings.json");
+const CUSTOMERS_FILE = path.join(ROOT, "server", "data", "customers.json");
 const originalQuotes = fs.existsSync(QUOTES_FILE) ? fs.readFileSync(QUOTES_FILE, "utf8") : null;
 const originalSettings = fs.existsSync(SETTINGS_FILE) ? fs.readFileSync(SETTINGS_FILE, "utf8") : null;
+const originalCustomers = fs.existsSync(CUSTOMERS_FILE) ? fs.readFileSync(CUSTOMERS_FILE, "utf8") : null;
 
 function restoreFixtures() {
   if (originalQuotes === null) { try { fs.unlinkSync(QUOTES_FILE); } catch {} }
   else fs.writeFileSync(QUOTES_FILE, originalQuotes, "utf8");
   if (originalSettings === null) { try { fs.unlinkSync(SETTINGS_FILE); } catch {} }
   else fs.writeFileSync(SETTINGS_FILE, originalSettings, "utf8");
+  if (originalCustomers === null) { try { fs.unlinkSync(CUSTOMERS_FILE); } catch {} }
+  else fs.writeFileSync(CUSTOMERS_FILE, originalCustomers, "utf8");
 }
 
 const FEE = { feePercent: 0.0599, feeFixedCents: 30 };
@@ -314,6 +318,110 @@ try {
     ok(r.action === "skipped", "event with no quoteId in metadata is skipped, not an error");
     r = await klarna.applyWebhookEvent("payment_intent.payment_failed", { id: "pi_y", metadata: { quoteId: "Q-NOPE-9999" } });
     ok(r.action === "skipped", "event for an unknown quote is skipped, not an error");
+  }
+
+  // 8 — onQuoteAccepted (build order step 3): the acceptance hook.
+  // Section 4's SAFETY INVARIANT gets its own explicit checks here: a
+  // quote is a no-op unless financing.enabled === true, and even then
+  // gets re-verified (not just trusted) before anything reaches Stripe.
+  {
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({
+      financing: { enabled: true, minTotal: 1500, maxTotal: 17500, feePercent: 0.0599, feeFixedCents: 30 }
+    }, null, 2) + "\n", "utf8");
+    fs.writeFileSync(CUSTOMERS_FILE, JSON.stringify([
+      { id: "CUST-RES-1", name: "Jamie Residential", email: "jamie@example.com", accountType: "residential" },
+      { id: "CUST-COM-1", name: "Acme Property Co", email: "billing@acme.example.com", accountType: "commercial" }
+    ], null, 2) + "\n", "utf8");
+    fs.writeFileSync(QUOTES_FILE, JSON.stringify([
+      { id: "Q-ACC-1", total: 10000, customerId: "CUST-RES-1", deposit: { enabled: false, amount: 0 } },
+      { id: "Q-ACC-2", total: 10000, customerId: "CUST-RES-1", deposit: { enabled: false, amount: 0 },
+        financing: { enabled: true, stage: "not_offered" } },
+      { id: "Q-ACC-3", total: 10000, customerId: "CUST-COM-1", deposit: { enabled: false, amount: 0 },
+        financing: { enabled: true, stage: "not_offered" } },
+      { id: "Q-ACC-4", total: 16000, customerId: "CUST-RES-1", deposit: { enabled: true, amount: 6000 },
+        financing: { enabled: true, stage: "not_offered" } },
+      { id: "Q-ACC-5", total: 500, customerId: "CUST-RES-1", deposit: { enabled: false, amount: 0 },
+        financing: { enabled: true, stage: "not_offered" } },
+      { id: "Q-ACC-6", total: 10000, customerId: "CUST-RES-1", deposit: { enabled: false, amount: 0 },
+        financing: { enabled: true, stage: "not_offered" } }
+    ], null, 2) + "\n", "utf8");
+
+    // (a) SAFETY INVARIANT — no financing block at all -> no-op, no Stripe
+    // reachable (STRIPE_SECRET_KEY is unset here, so any attempted call
+    // would throw "not configured" before ever touching the network;
+    // this assertion is the behavioural half of that guarantee).
+    let r = await klarna.onQuoteAccepted("Q-ACC-1", { by: "test" });
+    ok(r.skipped === "not_enabled", "a quote with no financing.enabled is a pure no-op (the load-bearing safety invariant)");
+    let q = await quotes.get("Q-ACC-1");
+    ok(q.financing.stage === "not_offered", "untouched quote's financing stage never moves");
+
+    const savedSecret = process.env.STRIPE_SECRET_KEY;
+    const savedPub = process.env.STRIPE_PUBLISHABLE_KEY;
+    process.env.STRIPE_SECRET_KEY = "sk_test_fake";
+    process.env.STRIPE_PUBLISHABLE_KEY = "pk_test_fake";
+    const originalFetch = global.fetch;
+    try {
+      // (b) enabled + eligible residential quote -> creates the link
+      global.fetch = async () => ({
+        ok: true, status: 200, headers: { get: () => null },
+        json: async () => ({ id: "plink_acc_2", url: "https://buy.stripe.com/test_acc2" })
+      });
+      r = await klarna.onQuoteAccepted("Q-ACC-2", { by: "test" });
+      ok(r.ok === true, "eligible + enabled quote: onQuoteAccepted succeeds");
+      q = await quotes.get("Q-ACC-2");
+      ok(q.financing.stage === "link_sent", "stage moves to link_sent");
+      ok(q.financing.paymentLinkId === "plink_acc_2" && q.financing.paymentLinkUrl === "https://buy.stripe.com/test_acc2", "payment link id/url stored");
+      ok(q.financing.financedAmount?.total === 10000, "financedAmount.total is the whole quote (no deposit)");
+      ok(q.financing.pairedWithDeposit === false, "not paired with a deposit");
+      ok(typeof r.warning === "string", "no Gmail config in this sandbox -> a warning is surfaced (email not silently swallowed)");
+
+      // (c) idempotency — calling again is alreadyRan, no second link
+      r = await klarna.onQuoteAccepted("Q-ACC-2", { by: "test" });
+      ok(r.alreadyRan === true, "re-running onQuoteAccepted on an already-started quote is a no-op");
+
+      // (d) commercial customer — enabled=true (as if someone forced it),
+      // but re-verification at acceptance time hard-blocks it anyway.
+      // No fetch mock swap needed: isEligible rejects before Stripe is reached.
+      r = await klarna.onQuoteAccepted("Q-ACC-3", { by: "test" });
+      ok(r.skipped === "no_longer_eligible", "commercial customer is blocked even if enabled were somehow true");
+      q = await quotes.get("Q-ACC-3");
+      ok(q.financing.stage === "not_offered", "commercial quote's stage never advances");
+      ok(q.history.some((h) => h.action === "financing_lifecycle" && h.note.includes("no longer eligible")), "the skip is recorded in the quote's history for Patrick to find");
+
+      // (e) deposit-paired quote — only the balance is financed
+      global.fetch = async () => ({
+        ok: true, status: 200, headers: { get: () => null },
+        json: async () => ({ id: "plink_acc_4", url: "https://buy.stripe.com/test_acc4" })
+      });
+      r = await klarna.onQuoteAccepted("Q-ACC-4", { by: "test" });
+      ok(r.ok === true, "deposit-paired quote: onQuoteAccepted succeeds");
+      q = await quotes.get("Q-ACC-4");
+      ok(q.financing.financedAmount?.total === 10000, "financedAmount is the BALANCE (16000 - 6000), not the whole total");
+      ok(q.financing.pairedWithDeposit === true, "pairedWithDeposit recorded for the balance-only financing");
+      ok(q.deposit.enabled === true && q.deposit.stage == null, "the deposit object itself is untouched by the financing hook (independent, parallel hooks)");
+
+      // (f) amount fell out of range before acceptance (e.g. partial
+      // acceptance shrank the total) -> re-verification skips, not a
+      // forced offer at a stale amount.
+      r = await klarna.onQuoteAccepted("Q-ACC-5", { by: "test" });
+      ok(r.skipped === "no_longer_eligible", "an amount that fell below the floor is re-checked, not trusted from enable-time");
+
+      // (g) Stripe failure — the link creation itself errors. Stage must
+      // NOT advance (no link_sent with no real Stripe link behind it).
+      global.fetch = async () => ({
+        ok: false, status: 402, headers: { get: () => null },
+        json: async () => ({ error: { message: "Your card was declined.", code: "card_declined" } })
+      });
+      r = await klarna.onQuoteAccepted("Q-ACC-6", { by: "test" });
+      ok(r.ok === false && typeof r.warning === "string", "a Stripe failure surfaces as a warning, not a thrown exception");
+      q = await quotes.get("Q-ACC-6");
+      ok(q.financing.stage === "not_offered", "a failed link creation never advances the stage");
+      ok(q.history.some((h) => h.action === "financing_lifecycle" && h.note.includes("Klarna payment link failed")), "the failure is recorded in history, not silently dropped");
+    } finally {
+      global.fetch = originalFetch;
+      if (savedSecret) process.env.STRIPE_SECRET_KEY = savedSecret; else delete process.env.STRIPE_SECRET_KEY;
+      if (savedPub) process.env.STRIPE_PUBLISHABLE_KEY = savedPub; else delete process.env.STRIPE_PUBLISHABLE_KEY;
+    }
   }
 } finally {
   restoreFixtures();
