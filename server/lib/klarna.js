@@ -1,15 +1,17 @@
 // Klarna financing (via Stripe) — PJL-34.
 //
-// Step 1 of the build order (see the PJL-34 TRD, Linear): pure eligibility
-// + gross-up math, and the financing state machine's transition rules, on
-// top of the storage primitive in lib/quotes.js (updateFinancingLifecycle).
-// No Stripe calls live here yet — those land in step 2, once
-// server/lib/stripe.js gains createPaymentLink / capturePaymentIntent /
-// deactivatePaymentLink. This module never touches server/pay.js or the
-// existing card-payment PaymentIntent flow (FLOW-23, PASS) — Klarna is a
-// separate, additive flow by design.
+// Step 1 of the build order (see the PJL-34 TRD, Linear) built the pure
+// eligibility + gross-up math and the financing state machine's
+// transition rules, on top of the storage primitive in lib/quotes.js
+// (updateFinancingLifecycle). Step 2 adds the Stripe side: applying a
+// webhook event to that state machine. Creating the actual Payment Link
+// (the acceptance hook) is step 3 — this module doesn't call
+// stripe.createPaymentLink yet. This module never touches server/pay.js
+// or the existing card-payment PaymentIntent flow (FLOW-23, PASS) —
+// Klarna is a separate, additive flow by design.
 
 const quotes = require("./quotes");
+const stripe = require("./stripe");
 
 const HST_RATE = 0.13;
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -19,7 +21,7 @@ const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 // Solves for the pre-tax subtotal S such that, after Klarna's fee (taken
 // on the tax-INCLUSIVE total) and after remitting 13% HST on the
 // subtotal, PJL nets exactly targetNet. See TRD §4 for the derivation and
-// a worked example ($10,000 target -> $10,728.20 subtotal / $12,122.87
+// a worked example ($10,000 target -> $10,726.33 subtotal / $12,120.75
 // total, incl. HST). Always call this with Settings values
 // (settings.financing.feePercent/feeFixedCents), never a hardcoded fee —
 // a rate change should be a Settings edit, not a code change.
@@ -110,11 +112,102 @@ async function transitionFinancing(quoteId, toStage, patch = {}, opts = {}) {
   return quotes.updateFinancingLifecycle(quoteId, { ...patch, stage: toStage }, opts);
 }
 
+// ---- Webhook application -------------------------------------------------
+//
+// Called from server.js's existing /api/webhooks/stripe handler for any
+// payment_intent event carrying metadata.source === "pjl-klarna" — a
+// separate branch from the invoice-payment path, matched on quoteId
+// rather than invoiceId, so the two can never collide (see TRD §11). The
+// handler there already acks Stripe before this runs (ack-fast, process-
+// async), so this can take its time and never risk a Stripe redelivery
+// storm.
+//
+// Money-critical judgment (green-lighting a job for scheduling) gets the
+// same treatment finalizeStripeInvoicePayment gives a card payment:
+// re-fetch the intent from Stripe rather than trust the webhook body.
+// Lower-stakes events (a decline, a cancellation whose money is already
+// gone either way) read straight off the event body, matching how the
+// existing payment_intent.payment_failed handler already treats a
+// decline — no re-fetch needed to know the customer wasn't approved.
+//
+// Idempotent by construction: every branch's first move is checking the
+// CURRENT stage against what the event implies, so a Stripe redelivery
+// of an already-applied event is a silent no-op, not a second webhook
+// error or a rejected illegal transition.
+//
+// Returns { ok, action, reason? } for the caller to log. Never throws for
+// a normal no-op; only lets a genuine bug (e.g. a stage transitionFinancing
+// refuses) surface as a rejected promise.
+async function applyWebhookEvent(type, intentFromEvent) {
+  const quoteId = intentFromEvent?.metadata?.quoteId || "";
+  if (!quoteId) return { ok: false, action: "skipped", reason: "no quoteId in metadata" };
+
+  const q = await quotes.get(quoteId);
+  if (!q) return { ok: false, action: "skipped", reason: `quote ${quoteId} not found` };
+  const currentStage = q.financing?.stage || "not_offered";
+
+  if (type === "payment_intent.amount_capturable_updated") {
+    if (currentStage !== "link_sent") {
+      return { ok: true, action: "noop", reason: `stage is ${currentStage}, not link_sent` };
+    }
+    // The one branch that moves money-adjacent trust: re-read from
+    // Stripe before telling Patrick to dispatch a crew.
+    const { intent } = await stripe.retrievePaymentIntent(intentFromEvent.id);
+    if (intent.status !== "requires_capture") {
+      return { ok: true, action: "noop", reason: `intent status is ${intent.status}, not requires_capture` };
+    }
+    const authorizedAt = new Date().toISOString();
+    const captureBy = new Date(Date.now() + 28 * 24 * 60 * 60 * 1000).toISOString();
+    await transitionFinancing(quoteId, "authorized", {
+      authorizationId: intent.id,
+      authorizedAt,
+      captureBy
+    }, { by: "system", note: "Klarna approved — funds capturable" });
+    return { ok: true, action: "authorized" };
+  }
+
+  if (type === "payment_intent.payment_failed") {
+    if (currentStage !== "link_sent") {
+      return { ok: true, action: "noop", reason: `stage is ${currentStage}, not link_sent` };
+    }
+    await transitionFinancing(quoteId, "declined", {
+      declinedAt: new Date().toISOString()
+    }, { by: "system", note: "Klarna declined the customer at checkout" });
+    return { ok: true, action: "declined" };
+  }
+
+  if (type === "payment_intent.canceled") {
+    if (currentStage !== "authorized") {
+      return { ok: true, action: "noop", reason: `stage is ${currentStage}, not authorized` };
+    }
+    // "automatic" is the one value ONLY Stripe's own 28-day auto-cancel
+    // produces — every admin void this codebase issues explicitly passes
+    // cancellationReason: "requested_by_customer" to
+    // stripe.cancelPaymentIntent for exactly this reason. Anything else
+    // (including unset) is therefore a human action, not the clock
+    // running out.
+    const reason = intentFromEvent?.cancellation_reason || "";
+    if (reason === "automatic") {
+      await transitionFinancing(quoteId, "expired", {
+        expiredAt: new Date().toISOString()
+      }, { by: "system", note: "Stripe auto-cancelled the authorization (28-day window passed)" });
+      return { ok: true, action: "expired" };
+    }
+    await transitionFinancing(quoteId, "voided", {
+      voidedAt: new Date().toISOString()
+    }, { by: "admin", note: `Authorization cancelled (cancellation_reason=${reason || "unset"})` });
+    return { ok: true, action: "voided" };
+  }
+
+  return { ok: true, action: "ignored", reason: `unhandled event type ${type}` };
+}
+
 module.exports = {
   computeGrossUp,
   isEligible,
   financedAmountForQuote,
   ALLOWED_TRANSITIONS,
   canTransition,
-  transitionFinancing
+  transitionFinancing,
+  applyWebhookEvent
 };

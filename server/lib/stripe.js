@@ -254,11 +254,126 @@ async function retrievePaymentIntent(paymentIntentId) {
 // Cancel an intent that will never be paid — used when an invoice's
 // amount changed underneath an open intent, so a stale client secret
 // can't be confirmed for the old total.
-async function cancelPaymentIntent(paymentIntentId) {
+//
+// `cancellationReason` is optional and, when passed, is the one thing
+// that lets the Klarna webhook (PJL-34) tell an ADMIN void apart from
+// Stripe's own 28-day auto-cancel: Stripe stamps "automatic" on its own
+// expiry, so lib/klarna.js always passes "requested_by_customer" here
+// for an admin-initiated void — anything that shows up as "automatic"
+// on the webhook side is provably Stripe's doing, not ours. Existing
+// callers (the invoice amount-changed path) omit it and keep their old
+// behaviour exactly.
+async function cancelPaymentIntent(paymentIntentId, { cancellationReason = null } = {}) {
   if (!paymentIntentId) return null;
+  const body = cancellationReason ? { cancellation_reason: cancellationReason } : null;
   const { data } = await stripeRequest(
     "POST",
-    `/payment_intents/${encodeURIComponent(paymentIntentId)}/cancel`
+    `/payment_intents/${encodeURIComponent(paymentIntentId)}/cancel`,
+    body
+  );
+  return data;
+}
+
+// Capture a manual-capture intent — the money actually moves here. Used
+// by the Klarna admin "Capture" action (PJL-34) once a job completes;
+// never called automatically (TRD §8: no safety-net auto-capture, by
+// Patrick's decision). `amountToCaptureCents` captures less than the
+// full authorization (partial capture — the remaining hold auto-
+// releases); omit it to capture the full authorized amount.
+//
+// `idempotencyKey` matters more here than almost anywhere else in this
+// module: capture is a one-shot, money-moving action, and the admin UI
+// action behind this is exactly the kind of button a slow connection
+// invites a second click on. Callers should derive it from the
+// authorization id (+ amount, for a partial capture) so a double-tap
+// reuses the same attempt instead of trying to capture twice.
+async function capturePaymentIntent(paymentIntentId, { amountToCaptureCents = null, idempotencyKey = null } = {}) {
+  if (!paymentIntentId) {
+    throw paymentFailure("Missing Stripe payment intent id to capture.");
+  }
+  const body = {};
+  if (Number.isFinite(amountToCaptureCents) && amountToCaptureCents > 0) {
+    body.amount_to_capture = Math.round(amountToCaptureCents);
+  }
+  const { data } = await stripeRequest(
+    "POST",
+    `/payment_intents/${encodeURIComponent(paymentIntentId)}/capture`,
+    Object.keys(body).length ? body : null,
+    { idempotencyKey }
+  );
+  return data;
+}
+
+// ---- Payment Links (Klarna financing, PJL-34) --------------------------
+//
+// The existing pay page (server/pay.js) embeds a Payment Element and is
+// hard-locked to payment_method_types: ["card"] — Invariant #3 in
+// docs/HANDOFF_STRIPE_PAYMENTS.md says changing that is a deliberate
+// two-file change, never a toggle, and this module deliberately does NOT
+// touch it. Klarna financing is a separate, additive flow: a Stripe-
+// hosted Payment Link, Klarna-only, so the customer's redirect-and-
+// return round trip happens entirely on Stripe's own page rather than
+// needing new UI on pjllandservices.com before this can be tested.
+//
+// createPaymentLink mints ONE link per quote (never reused across
+// customers) for a fixed amount, with the underlying PaymentIntent set
+// to manual capture — "authorize now, capture later" is what makes the
+// whole 28-day-clock design in the TRD possible. `redirectUrl` is
+// optional; omitted, the customer lands on Stripe's own generic hosted
+// confirmation page rather than a PJL page that doesn't exist yet (the
+// real thanks-page wiring is build-order step 3+).
+async function createPaymentLink({
+  amountCents,
+  currency = "CAD",
+  quoteId,
+  description = "",
+  redirectUrl = null,
+  idempotencyKey = null
+}) {
+  if (!Number.isFinite(amountCents) || amountCents <= 0) {
+    throw paymentFailure("Payment link amount must be a positive number of cents.");
+  }
+  if (!quoteId) {
+    throw paymentFailure("createPaymentLink requires a quoteId to tag the authorization.");
+  }
+  const body = {
+    line_items: [{
+      price_data: {
+        currency: String(currency || "CAD").toLowerCase(),
+        product_data: { name: description || `PJL financing — quote ${quoteId}` },
+        unit_amount: Math.round(amountCents)
+      },
+      quantity: 1
+    }],
+    // Klarna-only, deliberately — same reasoning as the card-only
+    // invoice intent: an "automatic" method list is exactly what
+    // accidentally turned Klarna on once before (stripe.js's
+    // createPaymentIntent comment). This link exists FOR Klarna; nothing
+    // else should ever show up on it.
+    payment_method_types: ["klarna"],
+    payment_intent_data: {
+      capture_method: "manual",
+      metadata: { quoteId, source: "pjl-klarna" }
+    }
+  };
+  body.after_completion = redirectUrl
+    ? { type: "redirect", redirect: { url: redirectUrl } }
+    : { type: "hosted_confirmation" };
+  const { data } = await stripeRequest("POST", "/payment_links", body, { idempotencyKey });
+  return data;
+}
+
+// Deactivate a link so a stale one (quote superseded/cancelled/declined
+// before the customer used it) can't still be completed. Deactivating is
+// NOT the same as cancelling the authorization it may have already
+// produced — callers void the PaymentIntent (cancelPaymentIntent)
+// separately when one exists.
+async function deactivatePaymentLink(paymentLinkId) {
+  if (!paymentLinkId) return null;
+  const { data } = await stripeRequest(
+    "POST",
+    `/payment_links/${encodeURIComponent(paymentLinkId)}`,
+    { active: false }
   );
   return data;
 }
@@ -399,6 +514,9 @@ module.exports = {
   createPaymentIntent,
   retrievePaymentIntent,
   cancelPaymentIntent,
+  capturePaymentIntent,
+  createPaymentLink,
+  deactivatePaymentLink,
   createTerminalConnectionToken,
   resolveTerminalLocationId,
   summarizeIntent,

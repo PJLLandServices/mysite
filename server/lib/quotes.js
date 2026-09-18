@@ -486,6 +486,10 @@ function blankFinancing() {
     capturedAmountCents: null,
     declinedAt: null,
     voidedAt: null,
+    expiredAt: null,          // Stripe's own 28-day auto-cancel, distinct
+                               // from voidedAt (an admin action) — the
+                               // webhook tells them apart via Stripe's
+                               // cancellation_reason
     remindersSent: []         // e.g. ["14d","7d"] — dedupe guard for the sweep
   };
 }
@@ -3047,7 +3051,7 @@ async function updateFinancingLifecycle(id, patch = {}, { by = "system", note = 
       fin[key] = patch[key] || null;
     }
   }
-  for (const key of ["authorizedAt", "captureBy", "capturedAt", "declinedAt", "voidedAt"]) {
+  for (const key of ["authorizedAt", "captureBy", "capturedAt", "declinedAt", "voidedAt", "expiredAt"]) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) {
       fin[key] = patch[key] || null;
     }
