@@ -341,28 +341,25 @@ function countWord(n) { return COUNT_WORDS[n] || String(n); }
 // /approve sign view and the PDF; the designed page ignored them entirely.
 // Mirrors approve.js's customer-facing filter exactly: structural kinds
 // (line_items / acceptance_block) never render, Brief D's per-section
-// include:false is honored, and only sections with real text survive.
-// Bodies are stored as light HTML (contenteditable) — normalize <br> and
-// tag soup down to plain paragraphs; the generator escapes them, so typed
-// content can never inject markup into the customer page.
+// include:false is honored, and only sections with real content survive.
+//
+// Bodies go through THE SAME pipeline the PDF uses (quote-pdf.js Brief C2:
+// stripSectionHtml → parseSectionBody), so Patrick's markup convention —
+// **bold**, __underline__, *italic*, "- " bullets, "1. " numbered, blank
+// line = paragraph — renders identically on the page and in the PDF. The
+// generator escapes every run's text, so typed content is never markup.
 function narrativeSections(quote) {
+  const { stripSectionHtml, parseSectionBody } = require("./quote-pdf");
   const sections = Array.isArray(quote && quote.proposalSections) ? quote.proposalSections : [];
   return sections
     .slice()
     .sort((a, b) => (a.order || 0) - (b.order || 0))
     .filter((s) => s && s.kind !== "line_items" && s.kind !== "acceptance_block" && s.include !== false)
-    .map((s) => {
-      const paragraphs = String(s.body || "")
-        .replace(/<br\s*\/?>/gi, "\n")
-        .replace(/<[^>]+>/g, "")
-        .replace(/&nbsp;/g, " ")
-        .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-        .split(/\n\s*\n+/)
-        .map((p) => p.replace(/\s+/g, " ").trim())
-        .filter(Boolean);
-      return { title: String(s.title || "").trim(), paragraphs };
-    })
-    .filter((s) => s.paragraphs.length > 0);
+    .map((s) => ({
+      title: String(s.title || "").trim(),
+      blocks: parseSectionBody(stripSectionHtml(s.body))
+    }))
+    .filter((s) => s.blocks.length > 0);
 }
 
 // Total fixtures across the schedule (sum of line quantities) — transformers

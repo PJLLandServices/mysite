@@ -1352,5 +1352,8 @@ module.exports = {
   renderProjectProposalPdf,    // exported for direct invocation if needed
   renderSmartControllerPdf,    // rich controller layout (narrativeKey quotes)
   parseSectionBody,            // Brief C2 markup parser — exported for tests
-  parseInlineRuns              // line-scoped inline run parser — exported for tests
+  parseInlineRuns,             // line-scoped inline run parser — exported for tests
+  stripSectionHtml             // HTML normalizer that precedes the parser —
+                               // shared with proposal-data.js so the designed
+                               // page reads section bodies EXACTLY as the PDF
 };

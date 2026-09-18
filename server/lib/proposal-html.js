@@ -111,14 +111,69 @@ ${cards}
 // theme CSS files) so the verbatim reference stylesheets stay untouched.
 // Paragraphs are ESCAPED: this is typed content, not template copy, so it
 // gets no rich() vocabulary. Renders nothing when there are no sections.
+// One parsed line's runs → inline HTML. Run text is ESCAPED; the only
+// markup emitted is what the Brief C2 markers toggled (b / i / u), so the
+// page bolds exactly what the PDF bolds and nothing else.
+function narrativeRunsHtml(runs) {
+  return (runs || []).map((r) => {
+    let t = esc(r.text);
+    if (r.underline) t = `<u>${t}</u>`;
+    if (r.italic) t = `<i>${t}</i>`;
+    if (r.bold) t = `<b>${t}</b>`;
+    return t;
+  }).join("");
+}
+
+// Brief C2 blocks (from quote-pdf's parseSectionBody) → HTML. Paragraph
+// lines stay line-scoped (joined with <br>, like the PDF draws them);
+// consecutive list items group into <ul>/<ol>, with level-1 items nested
+// under the preceding level-0 item (<ol type="a"> mirrors the PDF's
+// letter ordinals on sub-numbered items).
+function narrativeBlocksHtml(blocks) {
+  const out = [];
+  let list = null; // { type, items: [{ html, sub: { type, items: [] } | null }] }
+  const listTag = (type, sub) => (type === "numbered" ? (sub ? '<ol type="a">' : "<ol>") : "<ul>");
+  const closeTag = (type) => (type === "numbered" ? "</ol>" : "</ul>");
+  const closeList = () => {
+    if (!list) return;
+    const items = list.items.map((it) => {
+      const sub = it.sub
+        ? `\n      ${listTag(it.sub.type, true)}\n${it.sub.items.map((x) => `        <li>${x}</li>`).join("\n")}\n      ${closeTag(it.sub.type)}\n    `
+        : "";
+      return `      <li>${it.html}${sub}</li>`;
+    }).join("\n");
+    out.push(`    ${listTag(list.type, false)}\n${items}\n    ${closeTag(list.type)}`);
+    list = null;
+  };
+  for (const b of Array.isArray(blocks) ? blocks : []) {
+    if (b.type === "paragraph") {
+      closeList();
+      const lines = (b.lines || []).map((ln) => narrativeRunsHtml(ln.runs)).join("<br>");
+      out.push(`    <p>${lines}</p>`);
+      continue;
+    }
+    if (b.type !== "bullet" && b.type !== "numbered") continue;
+    const html = narrativeRunsHtml(b.runs);
+    if (b.level === 1 && list && list.items.length) {
+      const parent = list.items[list.items.length - 1];
+      if (!parent.sub) parent.sub = { type: b.type, items: [] };
+      parent.sub.items.push(html);
+      continue;
+    }
+    if (!list || list.type !== b.type) { closeList(); list = { type: b.type, items: [] }; }
+    list.items.push({ html, sub: null });
+  }
+  closeList();
+  return out.join("\n");
+}
+
 function renderNarrative(narrative) {
   const sections = Array.isArray(narrative) ? narrative : [];
   if (!sections.length) return "";
   const cards = sections.map((s) => {
     const title = s.title ? `    <h3 class="clause-h">${esc(s.title)}</h3>\n` : "";
-    const paras = (s.paragraphs || []).map((p) => `    <p>${esc(p)}</p>`).join("\n");
     return `  <div class="clause">
-${title}${paras}
+${title}${narrativeBlocksHtml(s.blocks)}
   </div>`;
   }).join("\n\n");
   return `<section class="sec wrap" id="project-notes">

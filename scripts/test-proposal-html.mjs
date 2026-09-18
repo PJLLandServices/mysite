@@ -403,30 +403,36 @@ ok(templates.isKnownTemplate("smart-controller"), "smart-controller is a known t
     ...baseQuote,
     proposalSections: [
       { id: "s3", kind: "custom", title: "Third", body: "Ordered last.", order: 3 },
+      // Brief C2 markup — the SAME convention the PDF renders: **bold**,
+      // blank line = paragraph, "- " bullets with a 2-space sub level.
       { id: "s1", kind: "narrative", title: "Overview", order: 1,
-        body: "Line one of the story.<br><br>Second&nbsp;paragraph &amp; more. <b>Bold</b> stripped." },
+        body: "**System design**\n\nLine one of the story.<br><br>Second&nbsp;paragraph &amp; more, \\*literal star kept\\*.\n\n- Head count checked\n- Pressure verified\n  - at the bib\n1. Trench\n2. Plumb" },
       { id: "sx", kind: "line_items", title: "Investment", order: 2 },          // structural → never renders
       { id: "sh", kind: "custom", title: "Hidden", body: "Nope.", order: 2, include: false }, // Brief D exclude
       { id: "se", kind: "custom", title: "Empty", body: "  <br> ", order: 2 },  // no real text → dropped
       // contenteditable stores typed angle brackets as entities; raw tags
-      // (API-injected) are stripped by the adapter before render.
+      // (API-injected) are stripped before parsing, exactly like the PDF.
       { id: "sq", kind: "custom", title: "Typed", body: "Typed &lt;script&gt;alert(1)&lt;/script&gt; stays text. <script>raw()</script>", order: 4 }
     ]
   };
   const d = buildProposalData(q, parties);
   ok(Array.isArray(d.narrative) && d.narrative.length === 3, `narrative filters to real sections (got ${d.narrative && d.narrative.length})`);
   eq(d.narrative[0].title, "Overview", "narrative sorted by order");
-  eq(d.narrative[0].paragraphs.length, 2, "br-br body splits into paragraphs");
-  eq(d.narrative[0].paragraphs[1], "Second paragraph & more. Bold stripped.", "tags stripped, entities decoded");
+  ok(d.narrative[0].blocks.some((b) => b.type === "paragraph") && d.narrative[0].blocks.some((b) => b.type === "bullet"), "body parses into Brief C2 blocks");
   const html = renderSprinklerProposal(d);
   ok(html.includes('id="project-notes"') && html.includes("Your project"), "sprinkler page renders the narrative section");
-  ok(html.includes("Line one of the story."), "typed paragraph appears on the page");
+  ok(html.includes("<b>System design</b>"), "**markers** render as real bold — matching the PDF");
+  ok(!html.includes("**"), "no literal ** left on the page");
+  ok(html.includes("Second paragraph &amp; more, *literal star kept*."), "entities decoded then re-escaped; backslash-escaped star stays literal");
+  ok(html.includes("<ul>") && html.includes("<li>Head count checked</li>"), "\"- \" lines render as a bullet list");
+  ok(/Pressure verified[\s\S]*?<ul>[\s\S]*?at the bib/.test(html), "2-space sub-bullet nests under its parent");
+  ok(html.includes("<ol>") && html.includes("<li>Trench</li>"), "\"1. \" lines render as a numbered list");
   ok(html.includes("Third") && html.includes("Ordered last."), "later section appears");
   ok(!html.includes("Nope.") && !html.includes(">Hidden<"), "include:false section stays off the page");
   ok(!html.includes("<script>") && html.includes("&lt;script&gt;alert(1)"), "typed angle brackets render escaped; raw tags are stripped — never live markup");
   // lighting theme carries it too
   const dl = buildProposalData(q, { ...parties, templateKey: "lighting" });
-  ok(renderLightingProposal(dl).includes("Line one of the story."), "lighting page renders the narrative");
+  ok(renderLightingProposal(dl).includes("<b>System design</b>"), "lighting page renders the narrative with bold");
   // no sections → no empty section shell
   const dNone = buildProposalData(baseQuote, parties);
   ok(!renderSprinklerProposal(dNone).includes('id="project-notes"'), "no sections → no Your-project section");
