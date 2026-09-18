@@ -18,6 +18,9 @@
 //       token,             // 32-char hex; null when disabled / never generated
 //       regeneratedAt      // ISO timestamp of last generate/regenerate
 //     },
+//     financing: {
+//       enabled, minTotal, maxTotal, feePercent, feeFixedCents  // Klarna, PJL-34
+//     },
 //     audit: [{ ts, who, action, before, after }]               // cap 50
 //   }
 //
@@ -154,6 +157,21 @@ const DEFAULT_PAYMENTS = {
   acceptedCardBrands: [...CARD_BRANDS]
 };
 
+// Klarna financing (Sep 2026, PJL-34). minTotal/maxTotal define the
+// financed-amount eligibility band (residential only — enforced in
+// lib/klarna.js, never overridable here). feePercent/feeFixedCents are
+// the Klarna-via-Stripe processing cost, kept here rather than hardcoded
+// so a future rate change is a Settings edit, not a deploy — quotes
+// already sent snapshot the values they used (quote.financing.grossUp),
+// so changing this never rewrites the price on an existing quote.
+const DEFAULT_FINANCING = {
+  enabled: true,
+  minTotal: 1500,       // CAD
+  maxTotal: 17500,      // CAD — Klarna's real ceiling
+  feePercent: 0.0599,   // fraction, not a percent (5.99%)
+  feeFixedCents: 30     // $0.30 CAD flat, per charge
+};
+
 const DEFAULT_SETTINGS = {
   adminDefaults: {
     newLead: "email_sms",
@@ -169,6 +187,7 @@ const DEFAULT_SETTINGS = {
   deposits: { ...DEFAULT_DEPOSITS },
   invoiceSms: { ...DEFAULT_INVOICE_SMS },
   payments: { acceptedCardBrands: [...DEFAULT_PAYMENTS.acceptedCardBrands] },
+  financing: { ...DEFAULT_FINANCING },
   reviewRequests: { ...DEFAULT_REVIEW_REQUESTS },
   welcomeEmail: { ...DEFAULT_WELCOME_EMAIL },
   outreachTemplates: {
@@ -274,6 +293,26 @@ function hydrate(s) {
         // Dropping ONE brand (the Amex case this was built for) works
         // exactly as intended.
         acceptedCardBrands: brands.length ? brands : [...DEFAULT_PAYMENTS.acceptedCardBrands]
+      };
+    })(),
+    financing: (() => {
+      const f = s?.financing || {};
+      const num = (v, dflt, { min = 0 } = {}) =>
+        Number.isFinite(Number(v)) && Number(v) >= min ? Number(v) : dflt;
+      const minTotal = num(f.minTotal, DEFAULT_FINANCING.minTotal);
+      const maxTotal = num(f.maxTotal, DEFAULT_FINANCING.maxTotal);
+      return {
+        enabled: f.enabled !== false,
+        minTotal,
+        // maxTotal must stay above minTotal — an inverted or equal range
+        // would make every quote ineligible without ever saying so.
+        maxTotal: maxTotal > minTotal ? maxTotal : DEFAULT_FINANCING.maxTotal,
+        feePercent: Number.isFinite(Number(f.feePercent)) && Number(f.feePercent) > 0 && Number(f.feePercent) < 1
+          ? Number(f.feePercent)
+          : DEFAULT_FINANCING.feePercent,
+        feeFixedCents: Number.isInteger(Number(f.feeFixedCents)) && Number(f.feeFixedCents) >= 0
+          ? Number(f.feeFixedCents)
+          : DEFAULT_FINANCING.feeFixedCents
       };
     })(),
     reviewRequests: {
@@ -504,6 +543,51 @@ async function updateDeposits(patch, { who = "admin", note = "" } = {}) {
   return settings;
 }
 
+// Update the financing namespace (Klarna, PJL-34). Audit-stamped like the
+// other settings writers. feePercent is a fraction (0.0599, not 5.99) —
+// clamped to (0, 1) so a typo like "5.99" can't silently gross up quotes
+// by 599%. maxTotal is rejected if it wouldn't stay above minTotal, same
+// spirit as updateDeposits' percent clamp: refuse a value that would make
+// the setting self-contradictory rather than store it and break later.
+async function updateFinancing(patch, { who = "admin", note = "" } = {}) {
+  const settings = await readAll();
+  const before = { ...settings.financing };
+  const next = { ...settings.financing };
+  if (patch && typeof patch === "object") {
+    if (Object.prototype.hasOwnProperty.call(patch, "enabled")) {
+      next.enabled = patch.enabled === true;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "minTotal")) {
+      const n = Number(patch.minTotal);
+      if (Number.isFinite(n) && n >= 0) next.minTotal = Math.round(n * 100) / 100;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "maxTotal")) {
+      const n = Number(patch.maxTotal);
+      if (Number.isFinite(n) && n > next.minTotal) next.maxTotal = Math.round(n * 100) / 100;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "feePercent")) {
+      const n = Number(patch.feePercent);
+      if (Number.isFinite(n) && n > 0 && n < 1) next.feePercent = n;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "feeFixedCents")) {
+      const n = Number(patch.feeFixedCents);
+      if (Number.isInteger(n) && n >= 0) next.feeFixedCents = n;
+    }
+  }
+  settings.financing = next;
+  settings.audit.unshift({
+    ts: new Date().toISOString(),
+    who,
+    action: "financing",
+    before,
+    after: { ...next },
+    note
+  });
+  if (settings.audit.length > 50) settings.audit.length = 50;
+  await writeAll(settings);
+  return settings;
+}
+
 // Update the reviewRequests namespace (Google review email automation).
 // Audit-stamped like the other settings writers. Only known keys move;
 // unknown keys in the patch are ignored.
@@ -719,6 +803,8 @@ module.exports = {
   updateContactInfo,
   updatePayments,
   updateDeposits,
+  updateFinancing,
+  DEFAULT_FINANCING,
   updateReviewRequests,
   updateWelcomeEmail,
   recordSyncError,

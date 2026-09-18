@@ -32,14 +32,18 @@ const HST_RATE = 0.13;
 
 const STATUSES = ["draft", "sent", "partially_paid", "paid", "void"];
 
-// Payment methods. card_qb is the online QuickBooks card charge; the rest
-// are recorded by hand after the money arrives some other way.
-const PAYMENT_METHODS = ["cash", "e_transfer", "cheque", "card_qb", "other"];
+// Payment methods. card_qb is the online QuickBooks card charge; klarna is
+// a Klarna-via-Stripe capture (PJL-34) — recorded automatically when an
+// admin captures a financing authorization, same as card_qb is recorded
+// automatically by the Stripe pay-page flow. The rest are recorded by
+// hand after the money arrives some other way.
+const PAYMENT_METHODS = ["cash", "e_transfer", "cheque", "card_qb", "klarna", "other"];
 const PAYMENT_METHOD_LABELS = {
   cash: "Cash",
   e_transfer: "e-Transfer",
   cheque: "Cheque",
   card_qb: "Card",
+  klarna: "Klarna (financed)",
   other: "Other"
 };
 
