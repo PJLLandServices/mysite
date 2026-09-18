@@ -50,6 +50,7 @@ const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { writeJsonAtomic } = require("./atomic-json");
 
 const FILE = path.join(__dirname, "..", "data", "quotes.json");
 const ATTACHMENTS_DIR = path.join(__dirname, "..", "data", "quote-attachments");
@@ -440,6 +441,55 @@ function normalizeDepositPatch(raw, prior) {
   };
 }
 
+// ---- Klarna financing (Sep 2026, PJL-34) -----------------------------
+//
+// Lives on the quote as its own `financing` object, alongside (and
+// independent of) `deposit` above — a $10K+ job can run both at once:
+// the deposit is due now, paid the normal way; financing covers the
+// remaining balance, authorized at acceptance and captured by Patrick on
+// completion. See the PJL-34 TRD (Linear) for the full design. Like
+// `deposit`, lifecycle fields here are written ONLY by
+// updateFinancingLifecycle, never by a client PATCH.
+const FINANCING_STAGES = [
+  "not_offered",        // not financing-eligible, or admin turned it off
+  "link_sent",          // Klarna payment link emailed, no response yet
+  "declined",           // Klarna declined the customer at checkout
+  "authorized",         // Klarna approved — green light to schedule
+  "captured",           // Patrick captured the full authorized amount
+  "partially_captured", // Patrick captured less than the full authorization
+  "expired",            // 28-day capture window passed unclaimed
+  "voided"               // Patrick cancelled the authorization
+];
+
+function blankFinancing() {
+  return {
+    eligible: false,          // computed per §6 of the TRD, snapshotted at send time
+    enabled: false,           // set by the "Enable financing" action; never
+                               // forceable true for a commercial customer
+    pairedWithDeposit: false, // true when this financing covers the
+                               // deposit-system's balance, not the whole quote
+    stage: "not_offered",
+    // The amount actually financed — the whole total, or the balance when
+    // pairedWithDeposit — snapshotted once at the moment financing is
+    // enabled so later quote edits can't silently drift the figure.
+    financedAmount: null,     // { subtotal, total, at }
+    // The Settings values used to compute financedAmount.total from the
+    // target net, snapshotted so a later Settings change never rewrites
+    // the math on an already-quoted price.
+    grossUp: null,            // { targetNet, feePercent, feeFixedCents, at }
+    paymentLinkId: null,      // Stripe payment_link id
+    paymentLinkUrl: null,
+    authorizationId: null,    // Stripe PaymentIntent id (requires_capture)
+    authorizedAt: null,
+    captureBy: null,          // authorizedAt + 28 days
+    capturedAt: null,
+    capturedAmountCents: null,
+    declinedAt: null,
+    voidedAt: null,
+    remindersSent: []         // e.g. ["14d","7d"] — dedupe guard for the sweep
+  };
+}
+
 const DEFAULT_VALIDITY_DAYS = 30;
 // Project proposals get a longer default validity — commercial buyers
 // commonly compare 2-3 vendors over 60-90 days before sign-off.
@@ -468,7 +518,11 @@ async function readAll() {
 
 async function writeAll(records) {
   await ensureFile();
-  await fs.writeFile(FILE, JSON.stringify(records, null, 2) + "\n", "utf8");
+  // Atomic tmp-then-rename (server/lib/atomic-json.js) — this file used to
+  // write with a plain fs.writeFile, unlike invoices.js and most of the
+  // rest of the codebase. A financially-sensitive field (financing, below)
+  // is a good moment to close that gap rather than copy the old pattern.
+  await writeJsonAtomic(FILE, records);
 }
 
 // ---- ID generation ---------------------------------------------------
@@ -586,6 +640,10 @@ function blankQuote() {
     // snapshot, invoice ids) are written only by updateDepositLifecycle
     // as the acceptance → deposit invoice → balance invoice flow runs.
     deposit: blankDeposit(),
+
+    // Klarna financing (Sep 2026, PJL-34) — see the block comment above
+    // blankFinancing() for how this relates to `deposit`.
+    financing: blankFinancing(),
 
     // Narrative content block key (Smart Controller Upgrade brief,
     // 2026-06-12). When set on an ai_repair_quote (currently only
@@ -848,6 +906,14 @@ function hydrate(q) {
     // legacy quotes hydrate to enabled:false / configured:false, which
     // renders exactly the old "due on completion" behaviour.
     deposit: { ...blankDeposit(), ...(q?.deposit && typeof q.deposit === "object" ? q.deposit : {}) },
+    // Defensive default for records that pre-date the financing schema —
+    // legacy/non-financed quotes hydrate to stage "not_offered", which
+    // renders exactly today's no-financing behaviour.
+    financing: {
+      ...blankFinancing(),
+      ...(q?.financing && typeof q.financing === "object" ? q.financing : {}),
+      remindersSent: Array.isArray(q?.financing?.remindersSent) ? q.financing.remindersSent : []
+    },
     decisions: Array.isArray(q?.decisions) ? q.decisions : [],
     workOrderIds: Array.isArray(q?.workOrderIds) ? q.workOrderIds : [],
     history: Array.isArray(q?.history) ? q.history : [],
@@ -2920,6 +2986,89 @@ async function updateDepositLifecycle(id, patch = {}, { by = "system", note = ""
   return q;
 }
 
+// ---- Klarna financing lifecycle (server-managed) ----------------------
+//
+// The ONLY writer for financing stage / snapshot / authorization fields —
+// mirrors updateDepositLifecycle exactly, deliberately: one mutator per
+// lifecycle, called from lib/klarna.js as the eligibility → link →
+// authorization → capture flow progresses, never from a client PATCH.
+// This function trusts the stage it's given against the enum; klarna.js
+// is where illegal stage-to-stage JUMPS (e.g. captured -> link_sent) get
+// rejected — this layer is storage, not the state machine's rules.
+async function updateFinancingLifecycle(id, patch = {}, { by = "system", note = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  const fin = { ...(q.financing || blankFinancing()) };
+
+  if (Object.prototype.hasOwnProperty.call(patch, "eligible")) {
+    fin.eligible = patch.eligible === true;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "enabled")) {
+    fin.enabled = patch.enabled === true;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "pairedWithDeposit")) {
+    fin.pairedWithDeposit = patch.pairedWithDeposit === true;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "stage")) {
+    if (!FINANCING_STAGES.includes(patch.stage)) {
+      throw new Error(`Unknown financing stage: ${patch.stage}`);
+    }
+    fin.stage = patch.stage;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "financedAmount")) {
+    fin.financedAmount = patch.financedAmount && typeof patch.financedAmount === "object"
+      ? {
+          subtotal: Number(patch.financedAmount.subtotal) || 0,
+          total: Number(patch.financedAmount.total) || 0,
+          at: patch.financedAmount.at || nowIso()
+        }
+      : null;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "grossUp")) {
+    fin.grossUp = patch.grossUp && typeof patch.grossUp === "object"
+      ? {
+          targetNet: Number(patch.grossUp.targetNet) || 0,
+          feePercent: Number(patch.grossUp.feePercent) || 0,
+          feeFixedCents: Number(patch.grossUp.feeFixedCents) || 0,
+          at: patch.grossUp.at || nowIso()
+        }
+      : null;
+  }
+  for (const key of ["paymentLinkId", "paymentLinkUrl", "authorizationId"]) {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) {
+      fin[key] = patch[key] || null;
+    }
+  }
+  for (const key of ["authorizedAt", "captureBy", "capturedAt", "declinedAt", "voidedAt"]) {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) {
+      fin[key] = patch[key] || null;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "capturedAmountCents")) {
+    fin.capturedAmountCents = Number.isFinite(Number(patch.capturedAmountCents))
+      ? Number(patch.capturedAmountCents)
+      : null;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "remindersSent")) {
+    fin.remindersSent = Array.isArray(patch.remindersSent)
+      ? patch.remindersSent.filter((v) => typeof v === "string")
+      : [];
+  }
+
+  q.financing = fin;
+  q.history.push({
+    ts: nowIso(),
+    action: "financing_lifecycle",
+    by,
+    note: note || `stage=${fin.stage || "—"}`
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
 // Set/replace the acceptor on an existing quote. Used by the
 // send-for-approval reuse path, where the tech previewed (creating a
 // draft_preview quote with no acceptor) and then sends with the acceptor
@@ -3048,5 +3197,9 @@ module.exports = {
   DEPOSIT_STAGES,
   blankDeposit,
   computeDepositFigures,
-  updateDepositLifecycle
+  updateDepositLifecycle,
+  // Klarna financing (PJL-34)
+  FINANCING_STAGES,
+  blankFinancing,
+  updateFinancingLifecycle
 };

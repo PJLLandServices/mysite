@@ -1,0 +1,224 @@
+#!/usr/bin/env node
+// scripts/test-klarna-financing.mjs — Klarna financing tests (PJL-34, build
+// order step 1: data model + settings + lib/klarna.js, no UI/Stripe calls
+// yet).
+//
+//   1. computeGrossUp — matches the TRD's worked example, rejects bad input
+//   2. isEligible — residential + in-range only; hard-blocks commercial;
+//      respects the Settings enabled/min/max
+//   3. financedAmountForQuote — whole total, or the deposit-paired balance
+//   4. canTransition / ALLOWED_TRANSITIONS — the financing state machine
+//   5. quotes.js integration — updateFinancingLifecycle + transitionFinancing
+//      against the real store (backed up and restored, never left dirty)
+//   6. settings.js integration — hydrate defaults + updateFinancing
+//      validation/clamping + audit trail
+//
+// Per CLAUDE.md's lifecycle-state rule, this file is the "pin it with a
+// test that fails on the OLD code" step for the financing state machine —
+// section 4 in particular exists to catch an illegal jump (e.g.
+// captured -> link_sent) that would otherwise ship silently.
+//
+// Run: node scripts/test-klarna-financing.mjs   (also in `npm run build:check`)
+
+import fs from "node:fs";
+import path from "node:path";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(__dirname, "..");
+let passed = 0, failed = 0;
+const ok = (c, label) => { if (c) passed += 1; else { failed += 1; console.error("  FAIL:", label); } };
+const throws = async (fn, label) => {
+  try { await fn(); failed += 1; console.error("  FAIL:", label, "(did not throw)"); }
+  catch { passed += 1; }
+};
+
+// Required against the REAL repo tree (not a sandbox copy, unlike
+// test-quote-views.mjs) — quotes.js has too large an internal dependency
+// surface to cherry-pick safely. The real quotes.json/settings.json are
+// backed up below and restored in the finally block, same discipline as
+// scripts/test-booking-lifecycle.mjs.
+const require = createRequire(import.meta.url);
+const klarna = require(path.join(ROOT, "server", "lib", "klarna.js"));
+const quotes = require(path.join(ROOT, "server", "lib", "quotes.js"));
+const settings = require(path.join(ROOT, "server", "lib", "settings.js"));
+
+const QUOTES_FILE = path.join(ROOT, "server", "data", "quotes.json");
+const SETTINGS_FILE = path.join(ROOT, "server", "data", "settings.json");
+const originalQuotes = fs.existsSync(QUOTES_FILE) ? fs.readFileSync(QUOTES_FILE, "utf8") : null;
+const originalSettings = fs.existsSync(SETTINGS_FILE) ? fs.readFileSync(SETTINGS_FILE, "utf8") : null;
+
+function restoreFixtures() {
+  if (originalQuotes === null) { try { fs.unlinkSync(QUOTES_FILE); } catch {} }
+  else fs.writeFileSync(QUOTES_FILE, originalQuotes, "utf8");
+  if (originalSettings === null) { try { fs.unlinkSync(SETTINGS_FILE); } catch {} }
+  else fs.writeFileSync(SETTINGS_FILE, originalSettings, "utf8");
+}
+
+const FEE = { feePercent: 0.0599, feeFixedCents: 30 };
+
+try {
+  // 1 — computeGrossUp
+  {
+    const { subtotal, total } = klarna.computeGrossUp(10000, FEE);
+    ok(Math.abs(subtotal - 10726.33) < 0.01, `gross-up subtotal matches the worked example (got ${subtotal})`);
+    ok(Math.abs(total - 12120.75) < 0.01, `gross-up total matches the worked example (got ${total})`);
+
+    // Round-trip sanity: back out Klarna's fee and PJL's HST remittance
+    // and land on the original target net — the exact discipline the
+    // formula exists to guarantee. This is deliberately a tight tolerance
+    // (not a hand-picked dollar figure) so a future formula edit that
+    // drifts the math even by cents fails loudly here, not in the TRD's
+    // prose.
+    const feeCharged = round2(FEE.feePercent * total + FEE.feeFixedCents / 100);
+    const receivedFromStripe = round2(total - feeCharged);
+    const hstOwed = round2(subtotal * 0.13);
+    const actualNet = round2(receivedFromStripe - hstOwed);
+    ok(Math.abs(actualNet - 10000) < 0.01, `full round-trip nets exactly $10,000 (got ${actualNet})`);
+
+    await throws(async () => klarna.computeGrossUp(0, FEE), "zero target net rejected");
+    await throws(async () => klarna.computeGrossUp(-500, FEE), "negative target net rejected");
+    await throws(async () => klarna.computeGrossUp(10000, { feePercent: 5.99, feeFixedCents: 30 }), "feePercent as a whole number (5.99, not 0.0599) rejected");
+    await throws(async () => klarna.computeGrossUp(10000, { feePercent: 0, feeFixedCents: 30 }), "zero feePercent rejected");
+  }
+
+  // 2 — isEligible
+  {
+    const set = { enabled: true, minTotal: 1500, maxTotal: 17500 };
+    ok(klarna.isEligible({ accountType: "residential", financedAmount: 10000, settings: set }) === true, "residential, in range: eligible");
+    ok(klarna.isEligible({ accountType: "commercial", financedAmount: 10000, settings: set }) === false, "commercial: never eligible, even in range");
+    ok(klarna.isEligible({ accountType: "commercial", financedAmount: 10000, settings: { ...set, minTotal: 0, maxTotal: 999999 } }) === false, "commercial: never eligible under ANY range");
+    ok(klarna.isEligible({ accountType: "residential", financedAmount: 1499.99, settings: set }) === false, "below floor: not eligible");
+    ok(klarna.isEligible({ accountType: "residential", financedAmount: 1500, settings: set }) === true, "at floor: eligible");
+    ok(klarna.isEligible({ accountType: "residential", financedAmount: 17500, settings: set }) === true, "at ceiling: eligible");
+    ok(klarna.isEligible({ accountType: "residential", financedAmount: 17500.01, settings: set }) === false, "above ceiling: not eligible");
+    ok(klarna.isEligible({ accountType: "residential", financedAmount: 10000, settings: { ...set, enabled: false } }) === false, "kill switch off: not eligible regardless of amount/type");
+    ok(klarna.isEligible({ accountType: "residential", financedAmount: NaN, settings: set }) === false, "non-numeric amount: not eligible");
+    ok(klarna.isEligible({ accountType: undefined, financedAmount: 10000, settings: set }) === false, "missing accountType: not eligible");
+  }
+
+  // 3 — financedAmountForQuote
+  {
+    const noDeposit = { total: 12122.87, deposit: { enabled: false, amount: 0 } };
+    ok(klarna.financedAmountForQuote(noDeposit) === 12122.87, "no-deposit quote: whole total is financed");
+
+    const paired = { total: 16000, deposit: { enabled: true, amount: 6000 } };
+    ok(klarna.financedAmountForQuote(paired) === 10000, "deposit-paired quote: only the balance is financed");
+
+    const overpaid = { total: 5000, deposit: { enabled: true, amount: 9000 } };
+    ok(klarna.financedAmountForQuote(overpaid) === 0, "financed amount never goes negative");
+  }
+
+  // 4 — canTransition / ALLOWED_TRANSITIONS
+  {
+    ok(klarna.canTransition("not_offered", "link_sent") === true, "not_offered -> link_sent is legal");
+    ok(klarna.canTransition("link_sent", "authorized") === true, "link_sent -> authorized is legal");
+    ok(klarna.canTransition("link_sent", "declined") === true, "link_sent -> declined is legal");
+    ok(klarna.canTransition("declined", "link_sent") === true, "declined -> link_sent (retry) is legal");
+    ok(klarna.canTransition("authorized", "captured") === true, "authorized -> captured is legal");
+    ok(klarna.canTransition("authorized", "partially_captured") === true, "authorized -> partially_captured is legal");
+    ok(klarna.canTransition("authorized", "expired") === true, "authorized -> expired is legal");
+    ok(klarna.canTransition("authorized", "voided") === true, "authorized -> voided is legal");
+
+    // The illegal jumps a real bug would actually produce — this is the
+    // "pin it with a test that fails on the old code" check: a mutator
+    // with no transition guard would let every one of these through.
+    ok(klarna.canTransition("captured", "link_sent") === false, "captured -> link_sent is illegal (terminal)");
+    ok(klarna.canTransition("not_offered", "authorized") === false, "not_offered -> authorized is illegal (skips the link)");
+    ok(klarna.canTransition("expired", "authorized") === false, "expired -> authorized is illegal (stale authorization)");
+    ok(klarna.canTransition("voided", "captured") === false, "voided -> captured is illegal");
+    ok(klarna.canTransition("declined", "captured") === false, "declined -> captured is illegal (skips authorization)");
+  }
+
+  // 5 — quotes.js integration (real store, backed up above, restored below)
+  {
+    fs.mkdirSync(path.dirname(QUOTES_FILE), { recursive: true });
+    fs.writeFileSync(QUOTES_FILE, JSON.stringify([
+      { id: "Q-2026-9001", total: 12122.87, deposit: { enabled: false, amount: 0 } },
+      { id: "Q-2026-9002", total: 16000, deposit: { enabled: true, amount: 6000, balance: 10000 } }
+    ], null, 2) + "\n", "utf8");
+
+    const hydrated = await quotes.get("Q-2026-9001");
+    ok(hydrated.financing.stage === "not_offered", "legacy/new quote hydrates financing.stage to not_offered");
+    ok(Array.isArray(hydrated.financing.remindersSent) && hydrated.financing.remindersSent.length === 0, "hydrated financing.remindersSent defaults to []");
+
+    // Legal path, end to end, through the real transitionFinancing + storage.
+    await klarna.transitionFinancing("Q-2026-9001", "link_sent", {
+      eligible: true, enabled: true, financedAmount: { subtotal: 10728.20, total: 12122.87 },
+      paymentLinkId: "plink_test_1", paymentLinkUrl: "https://buy.stripe.com/test_1"
+    }, { by: "test" });
+    let q = await quotes.get("Q-2026-9001");
+    ok(q.financing.stage === "link_sent", "transitionFinancing moved stage to link_sent");
+    ok(q.financing.paymentLinkId === "plink_test_1", "transitionFinancing wrote the payment link id");
+    ok(q.history.some((h) => h.action === "financing_lifecycle" && h.note.includes("link_sent")), "history logs the financing_lifecycle transition");
+
+    const authorizedAt = new Date().toISOString();
+    await klarna.transitionFinancing("Q-2026-9001", "authorized", {
+      authorizationId: "pi_test_1", authorizedAt, captureBy: new Date(Date.now() + 28 * 86400000).toISOString()
+    }, { by: "system", note: "klarna approved" });
+    q = await quotes.get("Q-2026-9001");
+    ok(q.financing.stage === "authorized", "link_sent -> authorized applied");
+    ok(q.financing.authorizationId === "pi_test_1", "authorizationId stored");
+
+    // Illegal jump is refused, and refusal leaves the record untouched.
+    let threw = false;
+    try { await klarna.transitionFinancing("Q-2026-9001", "link_sent", {}, { by: "test" }); }
+    catch { threw = true; }
+    ok(threw, "illegal transition (authorized -> link_sent) throws");
+    q = await quotes.get("Q-2026-9001");
+    ok(q.financing.stage === "authorized", "record unchanged after a refused transition");
+
+    await klarna.transitionFinancing("Q-2026-9001", "captured", {
+      capturedAt: new Date().toISOString(), capturedAmountCents: 1212287
+    }, { by: "admin", note: "captured" });
+    q = await quotes.get("Q-2026-9001");
+    ok(q.financing.stage === "captured", "authorized -> captured applied");
+    ok(q.financing.capturedAmountCents === 1212287, "capturedAmountCents stored");
+
+    await throws(async () => klarna.transitionFinancing("Q-2026-9001", "voided", {}, { by: "test" }), "captured is terminal — voided after captured throws");
+
+    await throws(async () => quotes.updateFinancingLifecycle("Q-2026-9001", { stage: "not_a_real_stage" }), "unknown stage rejected by the storage primitive itself");
+
+    await throws(async () => klarna.transitionFinancing("Q-NOPE-0000", "link_sent", {}), "transitionFinancing on a missing quote throws");
+  }
+
+  // 6 — settings.js integration
+  {
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({}, null, 2), "utf8");
+    let s = await settings.get();
+    ok(s.financing.enabled === true, "financing settings default to enabled");
+    ok(s.financing.minTotal === 1500 && s.financing.maxTotal === 17500, "financing settings default to the $1,500-$17,500 range");
+    ok(s.financing.feePercent === 0.0599 && s.financing.feeFixedCents === 30, "financing settings default to Klarna's fee");
+
+    await settings.updateFinancing({ minTotal: 2000, maxTotal: 20000, feePercent: 0.065, feeFixedCents: 35 }, { who: "test", note: "adjust" });
+    s = await settings.get();
+    ok(s.financing.minTotal === 2000 && s.financing.maxTotal === 20000, "updateFinancing applies valid min/max");
+    ok(s.financing.feePercent === 0.065 && s.financing.feeFixedCents === 35, "updateFinancing applies valid fee values");
+    ok(s.audit[0].action === "financing", "settings audit trail records the financing change");
+
+    // Guardrails: a self-contradictory or nonsensical patch is refused,
+    // not silently stored.
+    await settings.updateFinancing({ maxTotal: 1000 }, { who: "test" }); // below current minTotal (2000)
+    s = await settings.get();
+    ok(s.financing.maxTotal === 20000, "maxTotal below minTotal is rejected, prior value kept");
+
+    await settings.updateFinancing({ feePercent: 5.99 }, { who: "test" }); // whole number, not a fraction
+    s = await settings.get();
+    ok(s.financing.feePercent === 0.065, "feePercent >= 1 (a whole-number typo) is rejected, prior value kept");
+
+    // hydrate() defensive default: an inverted range stored some other way
+    // (hand-edited file, old bug) still resolves to something usable
+    // rather than making every quote ineligible.
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ financing: { enabled: true, minTotal: 9000, maxTotal: 5000 } }, null, 2), "utf8");
+    s = await settings.get();
+    ok(s.financing.maxTotal > s.financing.minTotal, "hydrate() refuses to serve an inverted min/max range");
+  }
+} finally {
+  restoreFixtures();
+}
+
+function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+
+console.log(`\nklarna-financing: ${passed} passed, ${failed} failed`);
+process.exit(failed ? 1 : 0);
