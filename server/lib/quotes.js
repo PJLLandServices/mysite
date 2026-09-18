@@ -484,6 +484,7 @@ function blankFinancing() {
     captureBy: null,          // authorizedAt + 28 days
     capturedAt: null,
     capturedAmountCents: null,
+    captureChargeId: null,    // Stripe charge id behind the capture, for reconciliation
     declinedAt: null,
     voidedAt: null,
     expiredAt: null,          // Stripe's own 28-day auto-cancel, distinct
@@ -3064,7 +3065,7 @@ async function updateFinancingLifecycle(id, patch = {}, { by = "system", note = 
         }
       : null;
   }
-  for (const key of ["paymentLinkId", "paymentLinkUrl", "authorizationId"]) {
+  for (const key of ["paymentLinkId", "paymentLinkUrl", "authorizationId", "captureChargeId"]) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) {
       fin[key] = patch[key] || null;
     }

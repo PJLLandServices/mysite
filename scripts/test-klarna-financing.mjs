@@ -24,6 +24,11 @@
 //      price server-side, snapshots the original for undo, draft-only,
 //      not idempotent (calling enable twice is refused, not a silent
 //      double gross-up)
+//  10. captureFinancingAuthorization / voidFinancingAuthorization (step
+//      4b): the admin Capture/Void actions on an authorized hold — full
+//      and partial capture, the over-amount and wrong-stage refusals, and
+//      void's two Stripe branches (deactivate the link before checkout,
+//      cancel the authorization after)
 //
 // Per CLAUDE.md's lifecycle-state rule, this file is the "pin it with a
 // test that fails on the OLD code" step for the financing state machine —
@@ -525,13 +530,146 @@ try {
     ok(paired.financing.financedAmount.total < paired.total, "financed amount is strictly less than the quote's full total when paired with a deposit");
   }
 
-  // Source check — both routes are ADMIN-ONLY (the fence in needsAuth AND
-  // the route's own requireAdmin check), read from source rather than
-  // restated so a refactor that drops either layer fails here.
+  // 10 — captureFinancingAuthorization / voidFinancingAuthorization (step 4b)
+  {
+    fs.writeFileSync(QUOTES_FILE, JSON.stringify([
+      { id: "Q-CAP-1", total: 10000, deposit: { enabled: false, amount: 0 },
+        financing: { enabled: true, stage: "authorized", authorizationId: "pi_cap_1",
+          authorizedAt: new Date().toISOString(), captureBy: new Date(Date.now() + 28 * 86400000).toISOString(),
+          financedAmount: { subtotal: 8849.56, total: 10000 } } },
+      { id: "Q-CAP-2", total: 10000, deposit: { enabled: false, amount: 0 },
+        financing: { enabled: true, stage: "authorized", authorizationId: "pi_cap_2",
+          authorizedAt: new Date().toISOString(), captureBy: new Date(Date.now() + 28 * 86400000).toISOString(),
+          financedAmount: { subtotal: 8849.56, total: 10000 } } },
+      { id: "Q-CAP-3", total: 10000, deposit: { enabled: false, amount: 0 },
+        financing: { enabled: true, stage: "authorized", authorizationId: "pi_cap_3",
+          authorizedAt: new Date().toISOString(), captureBy: new Date(Date.now() + 28 * 86400000).toISOString(),
+          financedAmount: { subtotal: 8849.56, total: 10000 } } },
+      { id: "Q-CAP-4", total: 10000, deposit: { enabled: false, amount: 0 },
+        financing: { enabled: true, stage: "link_sent", paymentLinkId: "plink_cap_4" } },
+      { id: "Q-CAP-5", total: 10000, deposit: { enabled: false, amount: 0 },
+        financing: { enabled: true, stage: "authorized", authorizationId: "pi_cap_5",
+          authorizedAt: new Date().toISOString(), captureBy: new Date(Date.now() + 28 * 86400000).toISOString(),
+          financedAmount: { subtotal: 8849.56, total: 10000 } } },
+      { id: "Q-CAP-6", total: 10000, deposit: { enabled: false, amount: 0 },
+        financing: { enabled: true, stage: "authorized", authorizationId: "pi_cap_6",
+          authorizedAt: new Date().toISOString(), captureBy: new Date(Date.now() + 28 * 86400000).toISOString(),
+          financedAmount: { subtotal: 8849.56, total: 10000 } } },
+      { id: "Q-VOID-1", total: 10000, deposit: { enabled: false, amount: 0 },
+        financing: { enabled: true, stage: "link_sent", paymentLinkId: "plink_void_1" } },
+      { id: "Q-VOID-2", total: 10000, deposit: { enabled: false, amount: 0 },
+        financing: { enabled: true, stage: "authorized", authorizationId: "pi_void_2",
+          authorizedAt: new Date().toISOString(), captureBy: new Date(Date.now() + 28 * 86400000).toISOString(),
+          financedAmount: { subtotal: 8849.56, total: 10000 } } },
+      { id: "Q-VOID-3", total: 10000, deposit: { enabled: false, amount: 0 },
+        financing: { enabled: true, stage: "captured", capturedAmountCents: 1000000, capturedAt: new Date().toISOString() } },
+      { id: "Q-VOID-4", total: 10000, deposit: { enabled: false, amount: 0 },
+        financing: { enabled: false, stage: "not_offered" } }
+    ], null, 2) + "\n", "utf8");
+
+    const savedSecret = process.env.STRIPE_SECRET_KEY;
+    const savedPub = process.env.STRIPE_PUBLISHABLE_KEY;
+    process.env.STRIPE_SECRET_KEY = "sk_test_fake";
+    process.env.STRIPE_PUBLISHABLE_KEY = "pk_test_fake";
+    const originalFetch = global.fetch;
+    try {
+      // (a) full capture -> captured, capturedAmountCents stored
+      global.fetch = async () => ({
+        ok: true, status: 200, headers: { get: () => null },
+        json: async () => ({ id: "pi_cap_1", status: "succeeded", latest_charge: "ch_cap_1" })
+      });
+      let r = await klarna.captureFinancingAuthorization("Q-CAP-1", { amountCents: 1000000, by: "test" });
+      ok(r.quote.financing.stage === "captured", "full capture (amount === authorized) moves stage to captured");
+      ok(r.quote.financing.capturedAmountCents === 1000000, "capturedAmountCents stores the full amount");
+      ok(!!r.quote.financing.capturedAt, "capturedAt is stamped");
+      let q = await quotes.get("Q-CAP-1");
+      ok(q.financing.stage === "captured", "captured stage persisted to the store");
+
+      // (b) partial capture -> partially_captured (terminal, same as full)
+      global.fetch = async () => ({
+        ok: true, status: 200, headers: { get: () => null },
+        json: async () => ({ id: "pi_cap_2", status: "succeeded", latest_charge: "ch_cap_2" })
+      });
+      r = await klarna.captureFinancingAuthorization("Q-CAP-2", { amountCents: 400000, by: "test" });
+      ok(r.quote.financing.stage === "partially_captured", "partial capture (amount < authorized) moves stage to partially_captured");
+      ok(r.quote.financing.capturedAmountCents === 400000, "capturedAmountCents stores only what was actually captured");
+
+      // (c) capturing more than was authorized is refused before Stripe is called
+      await throws(async () => klarna.captureFinancingAuthorization("Q-CAP-3", { amountCents: 1500000, by: "test" }),
+        "capturing more than the authorized amount is refused");
+      q = await quotes.get("Q-CAP-3");
+      ok(q.financing.stage === "authorized", "a refused over-amount capture leaves the stage untouched");
+
+      // (d) wrong stage (link_sent, no authorization yet) is refused
+      await throws(async () => klarna.captureFinancingAuthorization("Q-CAP-4", { amountCents: 1000000, by: "test" }),
+        "capture on a link_sent (not yet authorized) quote is refused");
+
+      // (e) Stripe returns a non-succeeded status -> throws, stage untouched
+      global.fetch = async () => ({
+        ok: true, status: 200, headers: { get: () => null },
+        json: async () => ({ id: "pi_cap_5", status: "requires_action" })
+      });
+      await throws(async () => klarna.captureFinancingAuthorization("Q-CAP-5", { amountCents: 1000000, by: "test" }),
+        "a capture that doesn't come back succeeded throws, nothing is recorded");
+      q = await quotes.get("Q-CAP-5");
+      ok(q.financing.stage === "authorized", "a non-succeeded capture response leaves the stage untouched");
+
+      // (f) Stripe call itself fails (declined/network) -> throws, stage untouched
+      global.fetch = async () => ({
+        ok: false, status: 402, headers: { get: () => null },
+        json: async () => ({ error: { message: "The authorization has expired.", code: "payment_intent_unexpected_state" } })
+      });
+      await throws(async () => klarna.captureFinancingAuthorization("Q-CAP-6", { amountCents: 1000000, by: "test" }),
+        "a Stripe capture failure throws rather than silently recording a capture");
+      q = await quotes.get("Q-CAP-6");
+      ok(q.financing.stage === "authorized", "a failed Stripe capture call leaves the stage untouched");
+
+      // (g) void from link_sent -> deactivates the payment link, stage voided
+      global.fetch = async () => ({
+        ok: true, status: 200, headers: { get: () => null },
+        json: async () => ({ id: "plink_void_1", active: false })
+      });
+      let v = await klarna.voidFinancingAuthorization("Q-VOID-1", { by: "test" });
+      ok(v.financing.stage === "voided", "void from link_sent moves stage to voided");
+      ok(!!v.financing.voidedAt, "voidedAt is stamped");
+
+      // (h) void from authorized -> cancels the PaymentIntent, stage voided
+      global.fetch = async () => ({
+        ok: true, status: 200, headers: { get: () => null },
+        json: async () => ({ id: "pi_void_2", status: "canceled", cancellation_reason: "requested_by_customer" })
+      });
+      v = await klarna.voidFinancingAuthorization("Q-VOID-2", { by: "test" });
+      ok(v.financing.stage === "voided", "void from authorized moves stage to voided");
+      q = await quotes.get("Q-VOID-2");
+      ok(q.financing.stage === "voided", "voided stage persisted to the store");
+
+      // (i) void on a terminal stage (already captured) is refused
+      await throws(async () => klarna.voidFinancingAuthorization("Q-VOID-3", { by: "test" }),
+        "void on an already-captured (terminal) quote is refused — money already moved");
+      q = await quotes.get("Q-VOID-3");
+      ok(q.financing.stage === "captured", "a refused void leaves a captured quote's stage untouched");
+
+      // (j) void on a quote that was never offered financing is refused
+      await throws(async () => klarna.voidFinancingAuthorization("Q-VOID-4", { by: "test" }),
+        "void on a not_offered quote is refused — nothing to void");
+    } finally {
+      global.fetch = originalFetch;
+      if (savedSecret) process.env.STRIPE_SECRET_KEY = savedSecret; else delete process.env.STRIPE_SECRET_KEY;
+      if (savedPub) process.env.STRIPE_PUBLISHABLE_KEY = savedPub; else delete process.env.STRIPE_PUBLISHABLE_KEY;
+    }
+  }
+
+  // Source check — every klarna admin route is ADMIN-ONLY (the fence in
+  // needsAuth AND the route's own requireAdmin check), read from source
+  // rather than restated so a refactor that drops either layer fails here.
   {
     const serverSrc = fs.readFileSync(path.join(ROOT, "server", "server.js"), "utf8");
     ok(/klarna\\\/\(enable\|disable\)\$\/\.test\(pathname\)\) return "admin"/.test(serverSrc),
       "needsAuth fences the klarna enable/disable paths as admin-only");
+    ok(/klarna\\\/capture\$\/\.test\(pathname\)\) return "admin"/.test(serverSrc),
+      "needsAuth fences the klarna capture path as admin-only");
+    ok(/klarna\\\/void\$\/\.test\(pathname\)\) return "admin"/.test(serverSrc),
+      "needsAuth fences the klarna void path as admin-only");
 
     const enableAt = serverSrc.indexOf('pathname.match(/^\\/api\\/admin\\/quotes\\/([^/]+)\\/klarna\\/enable$/)');
     ok(enableAt > 0, "the enable route exists");
@@ -544,6 +682,18 @@ try {
     const disableBlock = serverSrc.slice(disableAt, disableAt + 700);
     ok(/const session = await requireAdmin\(req\);/.test(disableBlock) && /if \(!session\) return sendJson\(res, 403/.test(disableBlock),
       "the disable route checks requireAdmin's answer, not just its own existence");
+
+    const captureAt = serverSrc.indexOf('pathname.match(/^\\/api\\/admin\\/invoices\\/([^/]+)\\/klarna\\/capture$/)');
+    ok(captureAt > 0, "the capture route exists");
+    const captureBlock = serverSrc.slice(captureAt, captureAt + 900);
+    ok(/const session = await requireAdmin\(req\);/.test(captureBlock) && /if \(!session\) return sendJson\(res, 403/.test(captureBlock),
+      "the capture route checks requireAdmin's answer, not just its own existence");
+
+    const voidAt = serverSrc.indexOf('pathname.match(/^\\/api\\/admin\\/quotes\\/([^/]+)\\/klarna\\/void$/)');
+    ok(voidAt > 0, "the void route exists");
+    const voidBlock = serverSrc.slice(voidAt, voidAt + 700);
+    ok(/const session = await requireAdmin\(req\);/.test(voidBlock) && /if \(!session\) return sendJson\(res, 403/.test(voidBlock),
+      "the void route checks requireAdmin's answer, not just its own existence");
   }
 } finally {
   restoreFixtures();

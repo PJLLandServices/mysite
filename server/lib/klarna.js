@@ -485,6 +485,105 @@ async function disableFinancingForQuote(quoteId, { by = "admin" } = {}) {
   }, { by, note: "Financing removed — original pricing restored" });
 }
 
+// ---- Capture / void (build order step 4b) --------------------------------
+//
+// The two admin actions once a customer's Klarna checkout has already
+// authorized: collect the money (capture) once the job is done, or cancel
+// the hold (void) if it never should have gone through. Both are the only
+// things allowed to touch a "link_sent" or "authorized" quote from here on
+// — no auto-capture (TRD §8, Patrick's decision: a job that never happened
+// must never silently get paid for).
+//
+// Capture the authorization — the only function in this module that moves
+// real money. `amountCents` may be less than the full authorized amount
+// (a partial capture, e.g. the job scope shrank); Stripe releases the
+// remainder back to the customer automatically and that release can't be
+// undone, so a partial capture is terminal, same as a full one.
+async function captureFinancingAuthorization(quoteId, { amountCents, by = "admin" } = {}) {
+  const q = await quotes.get(quoteId);
+  if (!q) throw new Error(`Quote ${quoteId} not found.`);
+  const fin = q.financing || {};
+  if (fin.stage !== "authorized") {
+    throw new Error(`Quote ${quoteId} financing is "${fin.stage || "not_offered"}" — capture is only allowed from "authorized".`);
+  }
+  const amt = Math.round(Number(amountCents));
+  if (!Number.isFinite(amt) || amt <= 0) {
+    throw new Error("Capture amount must be a positive number of cents.");
+  }
+  const fullCents = Math.round((Number(fin.financedAmount?.total) || 0) * 100);
+  if (amt > fullCents) {
+    throw new Error(`Cannot capture ${fmtMoney(amt / 100)} — only ${fmtMoney(fullCents / 100)} was authorized.`);
+  }
+
+  const idempotencyKey = `pjl-klarna-capture-${quoteId}-${amt}`;
+  let intent;
+  try {
+    intent = await stripe.capturePaymentIntent(fin.authorizationId, { amountToCaptureCents: amt, idempotencyKey });
+  } catch (err) {
+    throw new Error(`Klarna capture failed in Stripe: ${err.message}`);
+  }
+  if (intent?.status !== "succeeded") {
+    throw new Error(`Stripe capture did not succeed (status: ${intent?.status || "unknown"}) — nothing was recorded.`);
+  }
+
+  const isFull = amt >= fullCents;
+  const stage = isFull ? "captured" : "partially_captured";
+  const updated = await transitionFinancing(quoteId, stage, {
+    capturedAmountCents: amt,
+    capturedAt: new Date().toISOString(),
+    captureChargeId: (intent.latest_charge && intent.latest_charge.id) || intent.latest_charge || null
+  }, {
+    by,
+    note: `Klarna authorization captured — ${fmtMoney(amt / 100)} of ${fmtMoney(fullCents / 100)}` +
+      (isFull ? "" : " (partial — remainder released back to the customer)")
+  });
+
+  return { quote: updated, capturedAmountCents: amt, intent };
+}
+
+// Void — cancels a hold that should never be collected. Branches on
+// what's actually live in Stripe: before the customer completes checkout
+// there's only a Payment Link to deactivate (no PaymentIntent exists
+// yet); after Klarna approves them, it's a real manual-capture
+// authorization that has to be explicitly cancelled. Always passes
+// cancellationReason: "requested_by_customer" to cancelPaymentIntent —
+// applyWebhookEvent's payment_intent.canceled branch relies on exactly
+// that string to tell an admin void apart from Stripe's own 28-day
+// auto-expiry ("automatic"). This function transitions the quote itself
+// rather than waiting for that webhook, so the later webhook delivery is
+// just a no-op confirmation (currentStage is already "voided" by then).
+async function voidFinancingAuthorization(quoteId, { by = "admin" } = {}) {
+  const q = await quotes.get(quoteId);
+  if (!q) throw new Error(`Quote ${quoteId} not found.`);
+  const fin = q.financing || {};
+  const stage = fin.stage;
+
+  if (stage === "authorized") {
+    try {
+      await stripe.cancelPaymentIntent(fin.authorizationId, { cancellationReason: "requested_by_customer" });
+    } catch (err) {
+      throw new Error(`Couldn't cancel the Klarna authorization in Stripe: ${err.message}`);
+    }
+  } else if (stage === "link_sent") {
+    try {
+      if (fin.paymentLinkId) await stripe.deactivatePaymentLink(fin.paymentLinkId);
+    } catch (err) {
+      throw new Error(`Couldn't deactivate the Klarna payment link in Stripe: ${err.message}`);
+    }
+  } else {
+    throw new Error(`Quote ${quoteId} financing is "${stage || "not_offered"}" — nothing to void.`);
+  }
+
+  return transitionFinancing(quoteId, "voided", {
+    voidedAt: new Date().toISOString()
+  }, {
+    by,
+    note: stage === "authorized"
+      ? "Klarna authorization cancelled by admin"
+      : "Klarna payment link deactivated by admin (never completed)"
+  });
+}
+
 module.exports = {
   computeGrossUp,
   isEligible,
@@ -496,5 +595,7 @@ module.exports = {
   applyWebhookEvent,
   onQuoteAccepted,
   enableFinancingForQuote,
-  disableFinancingForQuote
+  disableFinancingForQuote,
+  captureFinancingAuthorization,
+  voidFinancingAuthorization
 };
