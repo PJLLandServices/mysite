@@ -30,7 +30,8 @@
     propertyType: "residential", // toggle on the seasonal-service grid: "residential" or "commercial"
     sessionToken: null, // pre-booking session (AI handoff) — passed back on reserve
     sessionPayload: null, // diagnosis + customer hints loaded from the session
-    customerFirstName: "" // captured from session handoff, used to personalize copy
+    customerFirstName: "", // captured from session handoff, used to personalize copy
+    deepLinked: false // arrived via ?service=, set once in init() — used on every booking_step event
   };
 
   // Families where confirming the customer's zone count adds value to the
@@ -41,6 +42,35 @@
   function serviceNeedsZones() {
     if (!state.serviceMeta) return false;
     return ZONE_REQUIRING_FAMILIES.has(state.serviceMeta.family);
+  }
+
+  // ===== GA4 funnel step tracking =====
+  // Paid clicks were arriving with zero recorded conversions and no way to
+  // tell which of the (5 or 6, service-dependent) steps visitors actually
+  // reached. One event per step render, additive only — never touches the
+  // Ads conversion call near the confirm step.
+  const viewedSteps = new Set();
+
+  function stepOrder() {
+    return serviceNeedsZones()
+      ? ["service", "zones", "address", "when", "contact", "confirm"]
+      : ["service", "address", "when", "contact", "confirm"];
+  }
+
+  function trackBookingStep(name) {
+    if (typeof gtag !== "function") return;
+    try {
+      const isRepeatView = viewedSteps.has(name);
+      viewedSteps.add(name);
+      const idx = stepOrder().indexOf(name);
+      gtag("event", "booking_step", {
+        step_name: name,
+        step_number: idx === -1 ? null : idx + 1,
+        service_key: state.serviceKey || "(none)",
+        deep_linked: Boolean(state.deepLinked),
+        is_repeat_view: isRepeatView
+      });
+    } catch (e) { /* telemetry only — must never surface to the customer */ }
   }
 
   // ===== DOM =====
@@ -182,9 +212,7 @@
 
     // Active-step list depends on whether zones is in the flow. Indices in
     // this array drive the "completed/current/pending" classes.
-    const order = showZones
-      ? ["service", "zones", "address", "when", "contact", "confirm"]
-      : ["service", "address", "when", "contact", "confirm"];
+    const order = stepOrder();
     const idx = order.indexOf(name);
     progressSteps.forEach((p) => {
       p.classList.remove("is-current", "is-complete");
@@ -215,6 +243,8 @@
     // page alone in that case rather than re-aligning what you're looking at.
     const active = steps.find((s) => s.dataset.step === name);
     if (scroll && active) revealIfOffscreen(active, "start");
+
+    trackBookingStep(name);
   }
 
   // ===== Service catalog =====
@@ -967,6 +997,9 @@
     try {
       const params = new URLSearchParams(window.location.search);
       const sessionToken = params.get("session");
+      // Set once, before the catalog fetch, so every booking_step event this
+      // session carries it — not just the one fired here.
+      state.deepLinked = Boolean(params.get("service"));
 
       // If a session token is in the URL, pull it down BEFORE fetching the
       // service catalog — this lets us prefill and pick the suggested
@@ -1046,6 +1079,11 @@
           state.propertyType = propertyTypeForKey(preselect);
         }
         renderServiceCards();
+        // The default (no preselect) and multi-variant deep-link paths both
+        // land here without ever calling showStep() — "service" is already
+        // the step visible in the page markup. The locked-service path above
+        // returns early and tracks its own landing step through showStep().
+        trackBookingStep("service");
       }
     } catch (error) {
       serviceGrid.innerHTML = `<p class="lead" style="color:#a92e2e;">Couldn't load services. Please refresh, or call (905) 960-0181.</p>`;
