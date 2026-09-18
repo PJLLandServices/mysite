@@ -18,6 +18,12 @@
 //   7. applyWebhookEvent — the webhook -> state machine bridge (step 2):
 //      declined/expired/voided read the event body directly; authorized
 //      re-fetches from Stripe (global.fetch mocked, never a live call)
+//   8. onQuoteAccepted — the acceptance hook (step 3)
+//   9. enableFinancingForQuote / disableFinancingForQuote — the "Enable
+//      financing" admin action (step 4): grosses up every line item's
+//      price server-side, snapshots the original for undo, draft-only,
+//      not idempotent (calling enable twice is refused, not a silent
+//      double gross-up)
 //
 // Per CLAUDE.md's lifecycle-state rule, this file is the "pin it with a
 // test that fails on the OLD code" step for the financing state machine —
@@ -422,6 +428,122 @@ try {
       if (savedSecret) process.env.STRIPE_SECRET_KEY = savedSecret; else delete process.env.STRIPE_SECRET_KEY;
       if (savedPub) process.env.STRIPE_PUBLISHABLE_KEY = savedPub; else delete process.env.STRIPE_PUBLISHABLE_KEY;
     }
+  }
+  // 9 — enableFinancingForQuote / disableFinancingForQuote (build order
+  // step 4): the "Enable financing" admin action.
+  {
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({
+      financing: { enabled: true, minTotal: 1500, maxTotal: 17500, feePercent: 0.0599, feeFixedCents: 30 }
+    }, null, 2) + "\n", "utf8");
+    fs.writeFileSync(CUSTOMERS_FILE, JSON.stringify([
+      { id: "CUST-RES-1", name: "Jamie Residential", email: "jamie@example.com", accountType: "residential" },
+      { id: "CUST-COM-1", name: "Acme Property Co", email: "billing@acme.example.com", accountType: "commercial" }
+    ], null, 2) + "\n", "utf8");
+    const lineItemsFor = () => ([
+      { key: "a", label: "Item A", price: 6000, qty: 1, lineTotal: 6000 },
+      { key: "b", label: "Item B", price: 2000, qty: 2, lineTotal: 4000 }
+    ]);
+    fs.writeFileSync(QUOTES_FILE, JSON.stringify([
+      { id: "Q-ENA-1", status: "draft", customerId: "CUST-RES-1", lineItems: lineItemsFor(), subtotal: 10000, hst: 1300, total: 11300 },
+      { id: "Q-ENA-2", status: "sent", customerId: "CUST-RES-1", lineItems: lineItemsFor(), subtotal: 10000, hst: 1300, total: 11300 },
+      { id: "Q-ENA-3", status: "draft", customerId: "CUST-COM-1", lineItems: lineItemsFor(), subtotal: 10000, hst: 1300, total: 11300 },
+      { id: "Q-ENA-4", status: "draft", customerId: "CUST-RES-1", lineItems: [{ key: "a", label: "Small job", price: 200, qty: 1, lineTotal: 200 }], subtotal: 200, hst: 26, total: 226 },
+      // Deposit ALREADY enabled before financing is enabled — mirrors
+      // the real bug caught by driving the actual browser UI: the
+      // existing deposit-threshold feature can auto-enable a deposit
+      // before "Enable financing" is ever clicked, and pairedWithDeposit
+      // has to reflect that, not just deposit-enabled-after-the-fact.
+      { id: "Q-ENA-5", status: "draft", customerId: "CUST-RES-1", lineItems: lineItemsFor(), subtotal: 10000, hst: 1300, total: 11300,
+        deposit: { enabled: true, configured: true, type: "percent", value: 40, amount: 4520, balance: 6780,
+          dueLabel: "due at scheduling", balanceLabel: "due on completion", stage: null, snapshot: null, depositInvoiceId: null, balanceInvoiceId: null } }
+    ], null, 2) + "\n", "utf8");
+
+    // (a) draft + eligible -> succeeds, prices scale, undo snapshot taken
+    let updated = await klarna.enableFinancingForQuote("Q-ENA-1", { by: "test" });
+    ok(updated.financing.enabled === true && updated.financing.eligible === true, "enable succeeds on a draft, eligible, residential quote");
+    const expectedGrossUp = klarna.computeGrossUp(10000, { feePercent: 0.0599, feeFixedCents: 30 });
+    ok(Math.abs(updated.subtotal - expectedGrossUp.subtotal) < 0.01, `quote subtotal is grossed up to match computeGrossUp (got ${updated.subtotal})`);
+    ok(Math.abs(updated.total - expectedGrossUp.total) < 0.01, `quote total is grossed up to match computeGrossUp (got ${updated.total})`);
+    const sumOfLines = round2(updated.lineItems.reduce((s, li) => s + (Number(li.lineTotal) || 0), 0));
+    ok(Math.abs(sumOfLines - updated.subtotal) < 0.005, `line items sum EXACTLY to the new subtotal, no rounding drift (sum=${sumOfLines}, subtotal=${updated.subtotal})`);
+    ok(updated.lineItems[0].lineTotal > 6000 && updated.lineItems[1].lineTotal > 4000, "every line item's price/lineTotal scaled up, none left at the original price");
+    ok(updated.financing.undo && updated.financing.undo.subtotal === 10000 && updated.financing.undo.total === 11300, "the original (pre-gross-up) subtotal/total is snapshotted for undo");
+    ok(JSON.stringify(updated.financing.undo.lineItems) === JSON.stringify(lineItemsFor()), "the original line items are snapshotted verbatim");
+    ok(updated.history.some((h) => h.action === "financing_lifecycle" && h.note.includes("grossed up")), "the price change is recorded in the quote's history");
+
+    // (b) calling enable again is refused, not a silent double gross-up
+    await throws(async () => klarna.enableFinancingForQuote("Q-ENA-1", { by: "test" }), "enabling an already-enabled quote is refused (never double-grosses-up)");
+    let stillOnce = await quotes.get("Q-ENA-1");
+    ok(Math.abs(stillOnce.subtotal - expectedGrossUp.subtotal) < 0.01, "a refused re-enable leaves the price exactly where it was");
+
+    // (c) frozen (non-draft) quote -> refused, price untouched
+    await throws(async () => klarna.enableFinancingForQuote("Q-ENA-2", { by: "test" }), "enable on a sent (non-draft) quote is refused — pricing is frozen");
+    let frozen = await quotes.get("Q-ENA-2");
+    ok(frozen.subtotal === 10000 && frozen.financing.enabled === false, "a refused enable on a frozen quote leaves it completely untouched");
+
+    // (d) commercial customer -> refused with a clear reason, price untouched
+    let threw = null;
+    try { await klarna.enableFinancingForQuote("Q-ENA-3", { by: "test" }); }
+    catch (err) { threw = err; }
+    ok(threw && /commercial/i.test(threw.message), `commercial quote is refused with a commercial-specific reason (got: ${threw?.message})`);
+    let commercial = await quotes.get("Q-ENA-3");
+    ok(commercial.subtotal === 10000 && commercial.financing.enabled === false, "a refused enable on a commercial quote leaves it completely untouched");
+
+    // (e) amount below the floor -> refused with a clear reason
+    threw = null;
+    try { await klarna.enableFinancingForQuote("Q-ENA-4", { by: "test" }); }
+    catch (err) { threw = err; }
+    ok(threw && /floor|below/i.test(threw.message), `below-floor quote is refused with a range-specific reason (got: ${threw?.message})`);
+
+    // (f) disable restores the EXACT original pricing
+    const disabled = await klarna.disableFinancingForQuote("Q-ENA-1", { by: "test" });
+    ok(disabled.subtotal === 10000 && disabled.total === 11300, "disable restores the exact original subtotal/total");
+    ok(JSON.stringify(disabled.lineItems) === JSON.stringify(lineItemsFor()), "disable restores the exact original line items");
+    ok(disabled.financing.enabled === false && disabled.financing.eligible === false && disabled.financing.undo === null, "financing block is fully cleared after disable, not just enabled:false");
+    ok(disabled.history.some((h) => h.note === "Financing removed — original pricing restored"), "the removal is recorded in the quote's history");
+
+    // (g) disable when never enabled -> refused
+    await throws(async () => klarna.disableFinancingForQuote("Q-ENA-1", { by: "test" }), "disabling a quote with no financing enabled is refused, not a silent no-op");
+
+    // (h) re-enabling after a clean disable works again (not permanently stuck)
+    const reEnabled = await klarna.enableFinancingForQuote("Q-ENA-1", { by: "test" });
+    ok(reEnabled.financing.enabled === true, "a quote can be enabled again after a clean disable");
+
+    // (i) REGRESSION (caught by driving the real browser UI, not by any
+    // synthetic test): a quote whose deposit is ALREADY enabled before
+    // "Enable financing" is clicked must be stored as pairedWithDeposit,
+    // and its financedAmount must be the BALANCE (post-gross-up total
+    // minus the deposit, which itself gets recomputed off the new
+    // grossed-up total by the existing refreshLineItems machinery) —
+    // never the whole grossed-up total.
+    const paired = await klarna.enableFinancingForQuote("Q-ENA-5", { by: "test" });
+    ok(paired.financing.pairedWithDeposit === true, "pairedWithDeposit is recorded when the deposit was already enabled at enable-time");
+    const expectedDepositAfter = round2(paired.total * 0.4);
+    const expectedBalanceAfter = round2(paired.total - expectedDepositAfter);
+    ok(Math.abs(paired.deposit.amount - expectedDepositAfter) < 0.01, `deposit amount recomputed off the NEW grossed-up total (got ${paired.deposit.amount}, expected ~${expectedDepositAfter})`);
+    ok(Math.abs(paired.financing.financedAmount.total - expectedBalanceAfter) < 0.01, `financedAmount is the BALANCE, not the whole grossed-up total (got ${paired.financing.financedAmount.total}, expected ~${expectedBalanceAfter})`);
+    ok(paired.financing.financedAmount.total < paired.total, "financed amount is strictly less than the quote's full total when paired with a deposit");
+  }
+
+  // Source check — both routes are ADMIN-ONLY (the fence in needsAuth AND
+  // the route's own requireAdmin check), read from source rather than
+  // restated so a refactor that drops either layer fails here.
+  {
+    const serverSrc = fs.readFileSync(path.join(ROOT, "server", "server.js"), "utf8");
+    ok(/klarna\\\/\(enable\|disable\)\$\/\.test\(pathname\)\) return "admin"/.test(serverSrc),
+      "needsAuth fences the klarna enable/disable paths as admin-only");
+
+    const enableAt = serverSrc.indexOf('pathname.match(/^\\/api\\/admin\\/quotes\\/([^/]+)\\/klarna\\/enable$/)');
+    ok(enableAt > 0, "the enable route exists");
+    const enableBlock = serverSrc.slice(enableAt, enableAt + 700);
+    ok(/const session = await requireAdmin\(req\);/.test(enableBlock) && /if \(!session\) return sendJson\(res, 403/.test(enableBlock),
+      "the enable route checks requireAdmin's answer, not just its own existence");
+
+    const disableAt = serverSrc.indexOf('pathname.match(/^\\/api\\/admin\\/quotes\\/([^/]+)\\/klarna\\/disable$/)');
+    ok(disableAt > 0, "the disable route exists");
+    const disableBlock = serverSrc.slice(disableAt, disableAt + 700);
+    ok(/const session = await requireAdmin\(req\);/.test(disableBlock) && /if \(!session\) return sendJson\(res, 403/.test(disableBlock),
+      "the disable route checks requireAdmin's answer, not just its own existence");
   }
 } finally {
   restoreFixtures();

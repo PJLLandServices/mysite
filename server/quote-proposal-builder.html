@@ -380,6 +380,23 @@
               <p class="pb-dep-stage" id="pbDepStage" hidden></p>
             </div>
           </div>
+
+          <!-- Klarna financing (PJL-34, build order step 4). Draft-only —
+               once sent, pricing (and this choice) is frozen, same rule
+               as the deposit panel above. -->
+          <div class="pb-deposit" id="pbFinancing" hidden>
+            <div class="pb-dep-panel" id="pbFinOfferPanel" hidden>
+              <p class="pb-dep-head">Offer Klarna financing on this quote?</p>
+              <p class="pb-dep-readout">One click grosses up every line item's price to cover Klarna's fee — the customer never sees a separate fee line, just the adjusted total.</p>
+              <button type="button" class="pjl-btn pjl-btn-outline" id="pbFinEnableBtn">Enable financing</button>
+            </div>
+            <p class="pb-dep-under" id="pbFinIneligible" hidden></p>
+            <div class="pb-dep-panel" id="pbFinOnPanel" hidden>
+              <p class="pb-dep-head">Financing enabled</p>
+              <p class="pb-dep-readout" id="pbFinReadout"></p>
+              <button type="button" class="pjl-btn pjl-btn-outline" id="pbFinDisableBtn">Remove financing</button>
+            </div>
+          </div>
         </section>
 
         <!-- Bottom action bar -->

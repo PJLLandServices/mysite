@@ -231,6 +231,52 @@ async function applyWebhookEvent(type, intentFromEvent) {
 // signed. Callers wrap this in their own try/catch as belt-and-suspenders,
 // but every error path inside here is already caught and turned into a
 // { ok:false, warning } or a logged no-op — this should not throw.
+// Resolve the customer bits eligibility and the acceptance email need,
+// tolerating a missing/unresolvable customer record rather than
+// throwing. Shared by onQuoteAccepted and enableFinancingForQuote so
+// there is exactly one place that decides "what accountType does this
+// quote's customer have" — never two copies that could drift (the same
+// discipline CLAUDE.md's lifecycle-state rule asks for).
+async function resolveCustomerBits(q) {
+  const customers = require("./customers");
+  let accountType = "residential";
+  let customerName = "";
+  let customerEmail = String(q.customerEmail || "").trim();
+  try {
+    const cust = q.customerId
+      ? await customers.get(q.customerId, { withProperties: false })
+      : (customerEmail ? await customers.findByEmail(customerEmail) : null);
+    if (cust) {
+      if (cust.accountType) accountType = cust.accountType;
+      if (cust.name) customerName = cust.name;
+      if (!customerEmail && cust.email) customerEmail = cust.email;
+    }
+  } catch (err) {
+    console.warn(`[klarna] customer lookup failed for ${q.id}: ${err?.message}`);
+    // Fall through with the safe default ("residential") — but isEligible
+    // still requires accountType === "residential" explicitly, and this
+    // is exactly why: an unresolvable customer NEVER upgrades itself to
+    // eligible by accident. A commercial account whose lookup happens to
+    // fail is not silently offered financing either — it was never
+    // eligible in the first place per the hard block in isEligible.
+  }
+  return { accountType, customerName, customerEmail };
+}
+
+// A human-readable reason a quote isn't eligible right now, for the
+// admin UI's error message — isEligible itself stays a plain boolean so
+// it's trivial to test, this is just English wrapped around the same
+// checks in the same order.
+function describeIneligibility({ accountType, financedAmount, settings }) {
+  if (!settings || settings.enabled !== true) return "Financing is turned off in Settings right now.";
+  if (accountType !== "residential") return "Klarna doesn't support commercial customers — this quote can never be offered financing.";
+  const amt = Number(financedAmount);
+  if (!Number.isFinite(amt) || amt <= 0) return "This quote doesn't have a financeable amount yet.";
+  if (amt < Number(settings.minTotal)) return `The financed amount (${fmtMoney(amt)}) is below the ${fmtMoney(settings.minTotal)} floor.`;
+  if (amt > Number(settings.maxTotal)) return `The financed amount (${fmtMoney(amt)}) is above the ${fmtMoney(settings.maxTotal)} ceiling.`;
+  return "Not eligible.";
+}
+
 async function onQuoteAccepted(quote, { by = "system" } = {}) {
   const q = typeof quote === "string" ? await quotes.get(quote) : quote;
   if (!q || !q.financing || q.financing.enabled !== true) {
@@ -248,30 +294,8 @@ async function onQuoteAccepted(quote, { by = "system" } = {}) {
   // Settings' range changed, the kill switch flipped off) — when that
   // happens this is a silent skip, not a forced financing offer.
   const settingsLib = require("./settings");
-  const customers = require("./customers");
   const s = await settingsLib.get();
-
-  let accountType = "residential";
-  let customerName = "";
-  let customerEmail = String(q.customerEmail || "").trim();
-  try {
-    const cust = q.customerId
-      ? await customers.get(q.customerId, { withProperties: false })
-      : (customerEmail ? await customers.findByEmail(customerEmail) : null);
-    if (cust) {
-      if (cust.accountType) accountType = cust.accountType;
-      if (cust.name) customerName = cust.name;
-      if (!customerEmail && cust.email) customerEmail = cust.email;
-    }
-  } catch (err) {
-    console.warn(`[klarna] customer lookup failed for ${q.id}: ${err?.message}`);
-    // Fall through with accountType's safe default ("residential") — but
-    // isEligible still requires accountType === "residential" explicitly,
-    // and this is exactly why: an unresolvable customer NEVER upgrades
-    // itself to eligible by accident. A commercial account whose lookup
-    // happens to fail is not silently offered financing either — it was
-    // never eligible in the first place per the hard block below.
-  }
+  const { accountType, customerName, customerEmail } = await resolveCustomerBits(q);
 
   const financedAmount = financedAmountForQuote(q);
   if (!isEligible({ accountType, financedAmount, settings: s.financing })) {
@@ -338,13 +362,139 @@ async function onQuoteAccepted(quote, { by = "system" } = {}) {
   return { ok: true, paymentLink: link, warning };
 }
 
+// ---- "Enable financing" admin action (build order step 4) ---------------
+//
+// The single button Patrick asked for: checks eligibility, grosses up
+// every line item's price (TRD §4 — the whole point of dividing rather
+// than adding is that this needs to happen exactly once, correctly),
+// and marks the quote financing.enabled = true so onQuoteAccepted picks
+// it up automatically once the customer accepts. This is the ONLY place
+// in the codebase that sets financing.enabled = true — see the safety-
+// invariant comment at the top of this file, which this function is the
+// other half of.
+//
+// Draft-only, same rule as quotes.refreshLineItems: line items are
+// frozen the moment a quote is sent, so pricing can't change out from
+// under a customer who already has the PDF. Not idempotent on purpose —
+// calling this twice on an already-enabled quote would gross up an
+// already-grossed-up price. Call disableFinancingForQuote first to
+// change anything.
+async function enableFinancingForQuote(quoteId, { by = "admin" } = {}) {
+  const q = await quotes.get(quoteId);
+  if (!q) throw new Error(`Quote ${quoteId} not found.`);
+  if (q.status !== "draft" && q.status !== "draft_preview") {
+    throw new Error(`Quote ${quoteId} is in status "${q.status}" — pricing is frozen, financing can only be enabled on a draft.`);
+  }
+  if (q.financing?.enabled === true) {
+    throw new Error(`Financing is already enabled on ${quoteId}. Remove it first if you need to change anything.`);
+  }
+
+  const settingsLib = require("./settings");
+  const s = await settingsLib.get();
+  const { accountType } = await resolveCustomerBits(q);
+
+  // Eligibility is checked against the CURRENT (pre-gross-up) financed
+  // amount — the ~7% the gross-up adds is never large enough to cross
+  // the $1,500/$17,500 band in a way that matters, and checking pre-
+  // gross-up means the error message a commercial customer or an
+  // out-of-range quote gets is about the price Patrick actually typed,
+  // not a number he never entered.
+  const financedAmountBefore = financedAmountForQuote(q);
+  if (!isEligible({ accountType, financedAmount: financedAmountBefore, settings: s.financing })) {
+    throw new Error(describeIneligibility({ accountType, financedAmount: financedAmountBefore, settings: s.financing }));
+  }
+
+  const currentSubtotal = Number(q.subtotal) || 0;
+  const grossUp = computeGrossUp(currentSubtotal, s.financing);
+  const factor = currentSubtotal > 0 ? grossUp.subtotal / currentSubtotal : 1;
+
+  const originalLineItems = Array.isArray(q.lineItems) ? q.lineItems : [];
+  const scaledLineItems = originalLineItems.map((li) => {
+    const qty = Number(li.qty) || 1;
+    const newLineTotal = round2((Number(li.lineTotal) || 0) * factor);
+    return { ...li, price: round2(newLineTotal / qty), lineTotal: newLineTotal };
+  });
+  // Rounding every line item independently can leave the sum a cent or
+  // two off the target subtotal — correct it on the LAST line item so
+  // the total the customer sees always matches the formula exactly,
+  // never "close enough."
+  const scaledSum = round2(scaledLineItems.reduce((sum, li) => sum + (Number(li.lineTotal) || 0), 0));
+  const drift = round2(grossUp.subtotal - scaledSum);
+  if (drift !== 0 && scaledLineItems.length > 0) {
+    const last = scaledLineItems[scaledLineItems.length - 1];
+    last.lineTotal = round2(last.lineTotal + drift);
+    last.price = round2(last.lineTotal / (Number(last.qty) || 1));
+  }
+
+  const newHst = round2(grossUp.subtotal * HST_RATE);
+  const newTotal = round2(grossUp.subtotal + newHst);
+  const updated = await quotes.refreshLineItems(quoteId, {
+    lineItems: scaledLineItems, subtotal: grossUp.subtotal, hst: newHst, total: newTotal
+  });
+
+  const financedAmountAfter = financedAmountForQuote(updated);
+  // Caught by actually running this in a browser, not by the unit tests:
+  // a quote that crosses the deposit threshold gets its deposit toggled
+  // on automatically (existing behaviour, unrelated to this feature) —
+  // so by the time "Enable financing" is clicked, q.deposit.enabled may
+  // already be true. pairedWithDeposit has to reflect THAT, or the
+  // stored record disagrees with what financedAmountForQuote just used
+  // to compute financedAmountAfter two lines up.
+  const pairedWithDeposit = updated.deposit?.enabled === true;
+  const final = await quotes.updateFinancingLifecycle(quoteId, {
+    eligible: true,
+    enabled: true,
+    pairedWithDeposit,
+    financedAmount: { subtotal: grossUp.subtotal, total: financedAmountAfter, at: new Date().toISOString() },
+    grossUp: { targetNet: currentSubtotal, feePercent: s.financing.feePercent, feeFixedCents: s.financing.feeFixedCents, at: new Date().toISOString() },
+    undo: { lineItems: originalLineItems, subtotal: currentSubtotal, total: Number(q.total) || 0 }
+  }, {
+    by,
+    note: `Financing enabled — price grossed up ${fmtMoney(currentSubtotal)} -> ${fmtMoney(grossUp.subtotal)} subtotal` +
+      (pairedWithDeposit ? ` (financing covers the ${fmtMoney(financedAmountAfter)} balance, deposit unaffected)` : "")
+  });
+
+  return final;
+}
+
+// Undo enableFinancingForQuote — restores the exact pre-gross-up pricing
+// from the snapshot it took, then clears the financing block back to
+// blank. Draft-only, same reasoning as enable. Throws if financing was
+// never enabled (nothing to undo) rather than silently no-op-ing, so a
+// UI bug that calls this twice is visible immediately.
+async function disableFinancingForQuote(quoteId, { by = "admin" } = {}) {
+  const q = await quotes.get(quoteId);
+  if (!q) throw new Error(`Quote ${quoteId} not found.`);
+  if (q.status !== "draft" && q.status !== "draft_preview") {
+    throw new Error(`Quote ${quoteId} is in status "${q.status}" — pricing is frozen, financing can't be changed.`);
+  }
+  if (q.financing?.enabled !== true || !q.financing?.undo) {
+    throw new Error(`Financing isn't enabled on ${quoteId} — nothing to remove.`);
+  }
+
+  const { lineItems, subtotal, total } = q.financing.undo;
+  const hst = round2(subtotal * HST_RATE);
+  await quotes.refreshLineItems(quoteId, { lineItems, subtotal, hst, total });
+
+  return quotes.updateFinancingLifecycle(quoteId, {
+    eligible: false,
+    enabled: false,
+    financedAmount: null,
+    grossUp: null,
+    undo: null
+  }, { by, note: "Financing removed — original pricing restored" });
+}
+
 module.exports = {
   computeGrossUp,
   isEligible,
+  describeIneligibility,
   financedAmountForQuote,
   ALLOWED_TRANSITIONS,
   canTransition,
   transitionFinancing,
   applyWebhookEvent,
-  onQuoteAccepted
+  onQuoteAccepted,
+  enableFinancingForQuote,
+  disableFinancingForQuote
 };

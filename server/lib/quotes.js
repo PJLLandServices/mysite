@@ -490,7 +490,15 @@ function blankFinancing() {
                                // from voidedAt (an admin action) — the
                                // webhook tells them apart via Stripe's
                                // cancellation_reason
-    remindersSent: []         // e.g. ["14d","7d"] — dedupe guard for the sweep
+    remindersSent: [],        // e.g. ["14d","7d"] — dedupe guard for the sweep
+    // The pre-gross-up line items/subtotal/total, snapshotted the moment
+    // "Enable financing" scales every line item's price up (build order
+    // step 4). The ONLY way back to the original pricing is this
+    // snapshot — restored verbatim on "Remove financing" rather than
+    // trying to divide the markup back out, which would drift on repeat
+    // enable/disable cycles. null whenever financing has never been
+    // enabled on this quote.
+    undo: null                // { lineItems, subtotal, total } | null
   };
 }
 
@@ -3075,6 +3083,15 @@ async function updateFinancingLifecycle(id, patch = {}, { by = "system", note = 
     fin.remindersSent = Array.isArray(patch.remindersSent)
       ? patch.remindersSent.filter((v) => typeof v === "string")
       : [];
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "undo")) {
+    fin.undo = patch.undo && typeof patch.undo === "object" && Array.isArray(patch.undo.lineItems)
+      ? {
+          lineItems: patch.undo.lineItems,
+          subtotal: Number(patch.undo.subtotal) || 0,
+          total: Number(patch.undo.total) || 0
+        }
+      : null;
   }
 
   q.financing = fin;
