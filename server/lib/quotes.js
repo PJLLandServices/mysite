@@ -1980,7 +1980,7 @@ async function reseedProposalSections(id, { by = "admin" } = {}) {
 // on any status (Patrick can attach or replace the designed page after the
 // proposal was sent); it is NOT a scope-protected pricing field. Pass
 // meta=null to clear. Returns the updated record or null if not found.
-async function setProposalDocument(id, meta, { by = "admin" } = {}) {
+async function setProposalDocument(id, meta, { by = "admin", quiet = false } = {}) {
   if (!id) throw new Error("setProposalDocument needs id");
   const records = await readAll();
   const idx = records.findIndex((q) => q.id === id);
@@ -1989,12 +1989,18 @@ async function setProposalDocument(id, meta, { by = "admin" } = {}) {
   const ts = nowIso();
   q.proposalDocument = meta || null;
   q.updatedAt = ts;
-  q.history.push({
-    ts,
-    action: meta ? "proposal_document_attached" : "proposal_document_removed",
-    by,
-    note: meta?.filename || ""
-  });
+  // quiet: the auto-regenerate-on-save path (Sep 2026). The builder autosaves
+  // on a debounce, so a history entry per re-render would bury the audit
+  // trail in "proposal_document_attached" rows while Patrick types. Explicit
+  // Generate clicks and uploads stay loud.
+  if (!quiet) {
+    q.history.push({
+      ts,
+      action: meta ? "proposal_document_attached" : "proposal_document_removed",
+      by,
+      note: meta?.filename || ""
+    });
+  }
   records[idx] = q;
   await writeAll(records);
   return q;

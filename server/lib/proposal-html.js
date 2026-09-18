@@ -103,6 +103,31 @@ ${cards}
 </section>`;
 }
 
+// ---- "Your project" narrative (Patrick's typed builder sections) -------
+// Renders quote.proposalSections (via proposal-data's narrativeSections) so
+// what Patrick types in the builder shows on the designed page — previously
+// the sections fed only the standard sign view and the PDF. Composes ONLY
+// existing theme classes (sec/sec-h + clause cards, present in all three
+// theme CSS files) so the verbatim reference stylesheets stay untouched.
+// Paragraphs are ESCAPED: this is typed content, not template copy, so it
+// gets no rich() vocabulary. Renders nothing when there are no sections.
+function renderNarrative(narrative) {
+  const sections = Array.isArray(narrative) ? narrative : [];
+  if (!sections.length) return "";
+  const cards = sections.map((s) => {
+    const title = s.title ? `    <h3 class="clause-h">${esc(s.title)}</h3>\n` : "";
+    const paras = (s.paragraphs || []).map((p) => `    <p>${esc(p)}</p>`).join("\n");
+    return `  <div class="clause">
+${title}${paras}
+  </div>`;
+  }).join("\n\n");
+  return `<section class="sec wrap" id="project-notes">
+  <h2 class="sec-h">Your project</h2>
+
+${cards}
+</section>`;
+}
+
 // ---- schedule table (+ payment block, which lives inside the section) --
 
 function renderScheduleRows(rows) {
@@ -305,6 +330,8 @@ ${renderHero(data.hero || {}, meta)}
 
 ${renderSystem(data.system || {})}
 
+${renderNarrative(data.narrative)}
+
 ${renderSchedule(data.schedule || {}, renderPayment(data.payment || {}))}
 
 ${renderScope(data.scope || {})}
@@ -438,6 +465,8 @@ ${LIGHTING_CSS}
 ${renderLightingHero(data.hero || {}, meta)}
 
 ${renderSystem(data.system || {})}
+
+${renderNarrative(data.narrative)}
 
 ${renderLightingViews(data.views)}
 
@@ -624,6 +653,8 @@ ${COMBINED_CSS}
 ${renderCombinedHero(data.hero || {}, meta)}
 
 ${renderCombinedProjects(data.projects || {})}
+
+${renderNarrative(data.narrative)}
 
 ${renderCombinedOptions(data.options || {}, renderCombinedPayment(data.payment || {}))}
 

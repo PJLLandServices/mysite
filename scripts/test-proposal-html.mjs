@@ -395,6 +395,43 @@ ok(templates.isKnownTemplate("smart-controller"), "smart-controller is a known t
   ok(htmlPhoto.includes('class="hw-photo"><img src="data:image/jpeg;base64,AAAA"'), "supplied slot renders the photo");
 }
 
+// ---- "Your project" narrative (typed builder sections on the page) ----
+// Sep 2026: quote.proposalSections now render on the designed page, with
+// the same customer-facing filter the standard sign view uses.
+{
+  const q = {
+    ...baseQuote,
+    proposalSections: [
+      { id: "s3", kind: "custom", title: "Third", body: "Ordered last.", order: 3 },
+      { id: "s1", kind: "narrative", title: "Overview", order: 1,
+        body: "Line one of the story.<br><br>Second&nbsp;paragraph &amp; more. <b>Bold</b> stripped." },
+      { id: "sx", kind: "line_items", title: "Investment", order: 2 },          // structural → never renders
+      { id: "sh", kind: "custom", title: "Hidden", body: "Nope.", order: 2, include: false }, // Brief D exclude
+      { id: "se", kind: "custom", title: "Empty", body: "  <br> ", order: 2 },  // no real text → dropped
+      // contenteditable stores typed angle brackets as entities; raw tags
+      // (API-injected) are stripped by the adapter before render.
+      { id: "sq", kind: "custom", title: "Typed", body: "Typed &lt;script&gt;alert(1)&lt;/script&gt; stays text. <script>raw()</script>", order: 4 }
+    ]
+  };
+  const d = buildProposalData(q, parties);
+  ok(Array.isArray(d.narrative) && d.narrative.length === 3, `narrative filters to real sections (got ${d.narrative && d.narrative.length})`);
+  eq(d.narrative[0].title, "Overview", "narrative sorted by order");
+  eq(d.narrative[0].paragraphs.length, 2, "br-br body splits into paragraphs");
+  eq(d.narrative[0].paragraphs[1], "Second paragraph & more. Bold stripped.", "tags stripped, entities decoded");
+  const html = renderSprinklerProposal(d);
+  ok(html.includes('id="project-notes"') && html.includes("Your project"), "sprinkler page renders the narrative section");
+  ok(html.includes("Line one of the story."), "typed paragraph appears on the page");
+  ok(html.includes("Third") && html.includes("Ordered last."), "later section appears");
+  ok(!html.includes("Nope.") && !html.includes(">Hidden<"), "include:false section stays off the page");
+  ok(!html.includes("<script>") && html.includes("&lt;script&gt;alert(1)"), "typed angle brackets render escaped; raw tags are stripped — never live markup");
+  // lighting theme carries it too
+  const dl = buildProposalData(q, { ...parties, templateKey: "lighting" });
+  ok(renderLightingProposal(dl).includes("Line one of the story."), "lighting page renders the narrative");
+  // no sections → no empty section shell
+  const dNone = buildProposalData(baseQuote, parties);
+  ok(!renderSprinklerProposal(dNone).includes('id="project-notes"'), "no sections → no Your-project section");
+}
+
 // ---- report -----------------------------------------------------------
 console.log(`\nproposal-html tests: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

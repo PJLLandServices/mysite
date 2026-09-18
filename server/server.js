@@ -5637,7 +5637,7 @@ async function resolveCombinedChildren(q) {
 // slot (the file the phone-gated /approve serves). Shared by the per-quote
 // "generate page" route and the combined-proposal build. Returns
 // { meta, previewUrl, quote }. Throws Error (with .statusCode) on bad input.
-async function renderAndStoreProposalPage(q, { templateKey, session } = {}) {
+async function renderAndStoreProposalPage(q, { templateKey, session, quiet = false } = {}) {
   // Structural refusal for plain-PDF delivery (residential_repair brief).
   // The phone gate engages by the document's PRESENCE, so the only safe way
   // to keep a repair estimate ungated is to never let the file exist. This is
@@ -5692,8 +5692,32 @@ async function renderAndStoreProposalPage(q, { templateKey, session } = {}) {
     filename: `${q.id}.html`, bytes, uploadedAt: new Date().toISOString(),
     uploadedBy: (session && session.uid) || "admin", generated: true, templateKey: key
   };
-  const updated = await quotes.setProposalDocument(q.id, meta, { by: (session && session.uid) || "admin" });
+  const updated = await quotes.setProposalDocument(q.id, meta, { by: (session && session.uid) || "admin", quiet });
   return { meta, previewUrl: `/approve/${encodeURIComponent(q.id)}`, quote: updated };
+}
+
+// Auto-regenerate the designed page after a proposal save (Sep 2026 —
+// "the page is stale compared to what I am typing on the Sections").
+// Fires ONLY for a page this system generated (meta.generated) — a
+// hand-uploaded document is someone's authored file and is never
+// overwritten by a save. Best-effort: a render failure must not fail the
+// save that triggered it, so the caller gets the saved quote back either
+// way (with the re-rendered record when regeneration succeeded).
+async function regenerateProposalPageIfGenerated(updated, session) {
+  try {
+    const docMeta = updated && updated.proposalDocument;
+    if (!docMeta || docMeta.generated !== true) return null;
+    if (updated.deliveryMode === "plain_pdf") return null;
+    const result = await renderAndStoreProposalPage(updated, {
+      templateKey: docMeta.templateKey || updated.proposalTemplateKey,
+      session,
+      quiet: true // builder autosaves — don't spam quote history per keystroke
+    });
+    return result.quote || null;
+  } catch (err) {
+    console.warn(`[proposal-page] auto-regenerate failed for ${updated && updated.id}:`, err?.message);
+    return null;
+  }
 }
 
 // ===================================================================
@@ -16060,7 +16084,11 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req, { maxBytes: 4 * 1024 * 1024 });
       const updated = await quotes.updateProposal(id, payload, { by: session.uid || "admin" });
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Proposal not found."] });
-      return sendJson(res, 200, { ok: true, quote: updated });
+      // Keep a GENERATED customer page in step with what Patrick just saved
+      // (sections now render on the designed page too). Best-effort; a
+      // hand-uploaded document is never touched.
+      const regenerated = await regenerateProposalPageIfGenerated(updated, session);
+      return sendJson(res, 200, { ok: true, quote: regenerated || updated });
     } catch (err) {
       if (err.code === "proposal_locked") {
         return sendJson(res, 409, {

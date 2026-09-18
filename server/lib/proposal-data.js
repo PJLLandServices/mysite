@@ -335,6 +335,36 @@ function transformerSpec(quote) {
 const COUNT_WORDS = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight"];
 function countWord(n) { return COUNT_WORDS[n] || String(n); }
 
+// Patrick's typed proposal sections → the page's "Your project" narrative
+// (Sep 2026 — "the page is stale compared to what I am typing on the
+// Sections"). Until now the builder's Sections editor fed only the standard
+// /approve sign view and the PDF; the designed page ignored them entirely.
+// Mirrors approve.js's customer-facing filter exactly: structural kinds
+// (line_items / acceptance_block) never render, Brief D's per-section
+// include:false is honored, and only sections with real text survive.
+// Bodies are stored as light HTML (contenteditable) — normalize <br> and
+// tag soup down to plain paragraphs; the generator escapes them, so typed
+// content can never inject markup into the customer page.
+function narrativeSections(quote) {
+  const sections = Array.isArray(quote && quote.proposalSections) ? quote.proposalSections : [];
+  return sections
+    .slice()
+    .sort((a, b) => (a.order || 0) - (b.order || 0))
+    .filter((s) => s && s.kind !== "line_items" && s.kind !== "acceptance_block" && s.include !== false)
+    .map((s) => {
+      const paragraphs = String(s.body || "")
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<[^>]+>/g, "")
+        .replace(/&nbsp;/g, " ")
+        .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+        .split(/\n\s*\n+/)
+        .map((p) => p.replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      return { title: String(s.title || "").trim(), paragraphs };
+    })
+    .filter((s) => s.paragraphs.length > 0);
+}
+
 // Total fixtures across the schedule (sum of line quantities) — transformers
 // are power supplies, not fixtures, so they don't count toward the total.
 function fixtureCount(quote) {
@@ -428,6 +458,7 @@ function buildLightingData(quote, t, ctx, common) {
       lead: (t.system && t.system.lead) || "",
       cards
     },
+    narrative: narrativeSections(quote),
     views: [],
     schedule: {
       heading: (t.schedule && t.schedule.heading) || "Project fixture schedule",
@@ -634,6 +665,9 @@ function buildCombinedData(quote, t, ctx, common) {
         subtotal: c.subtotal, hst: c.hst, total: c.total
       }))
     },
+    // The PARENT combined quote's own typed sections (children keep theirs
+    // on their own standalone pages).
+    narrative: narrativeSections(quote),
     options: {
       heading: (t.options && t.options.heading) || "Your options",
       lead,
@@ -803,6 +837,7 @@ function buildProposalData(quote, { customer = {}, property = {}, templateKey = 
       lead: (t.system && t.system.lead) || "",
       cards: buildSystemCards(t.system || {}, features)
     },
+    narrative: narrativeSections(quote),
     schedule: {
       heading: (t.schedule && t.schedule.heading) || "System schedule",
       lead: (t.schedule && t.schedule.lead) || "",
