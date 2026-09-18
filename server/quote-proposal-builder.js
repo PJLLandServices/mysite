@@ -76,6 +76,13 @@
     depBalanceLabel: $("pbDepBalanceLabel"),
     depReadout: $("pbDepReadout"),
     depStage: $("pbDepStage"),
+    financing: $("pbFinancing"),
+    finOfferPanel: $("pbFinOfferPanel"),
+    finEnableBtn: $("pbFinEnableBtn"),
+    finIneligible: $("pbFinIneligible"),
+    finOnPanel: $("pbFinOnPanel"),
+    finReadout: $("pbFinReadout"),
+    finDisableBtn: $("pbFinDisableBtn"),
     saveState: $("pbSaveState"),
     previewLink: $("pbPreviewLink"),
     sendBtn: $("pbSendBtn"),
@@ -313,6 +320,7 @@
     renderGeneratePanel();
     renderLineItems();
     syncDepositPanel();
+    syncFinancingPanel();
     renderTotals();
     refreshPreviewLink();
   }
@@ -903,6 +911,106 @@
     });
   }
 
+  // ---- Klarna financing (PJL-34, build order step 4) -----------------
+  //
+  // Deliberately NOT a client-side toggle like the deposit checkbox —
+  // enabling financing changes the quote's actual price (the gross-up),
+  // so it's a real server round trip, not something the client computes
+  // and PATCHes in on the next autosave. The button is the whole
+  // interaction: click it, the server decides eligibility and does the
+  // math, the response is what's shown. No client-side price math here.
+  function financingEligibilityNote() {
+    const fs2 = state.financingSettings;
+    const q = state.quote;
+    if (!fs2 || !fs2.enabled) return "Financing is turned off in Settings.";
+    const total = Number(q?.total) || 0;
+    const dep = q?.deposit;
+    const financedAmount = dep && dep.enabled === true
+      ? Math.max(0, Math.round((total - (Number(dep.amount) || 0)) * 100) / 100)
+      : total;
+    if (financedAmount < Number(fs2.minTotal)) return `Under the ${fmtMoney(fs2.minTotal)} financing floor.`;
+    if (financedAmount > Number(fs2.maxTotal)) return `Over the ${fmtMoney(fs2.maxTotal)} financing ceiling.`;
+    return null; // looks eligible client-side — server has the final say
+  }
+
+  function syncFinancingPanel() {
+    const fs2 = state.financingSettings;
+    const q = state.quote;
+    if (!fs2 || !q) { el.financing.hidden = true; return; }
+    const locked = q.status !== "draft";
+    const enabled = q.financing?.enabled === true;
+
+    if (enabled) {
+      el.financing.hidden = false;
+      el.finOfferPanel.hidden = true;
+      el.finIneligible.hidden = true;
+      el.finOnPanel.hidden = false;
+      const fa = q.financing.financedAmount;
+      const amountLabel = q.financing.pairedWithDeposit ? "Balance financed" : "Financed amount";
+      el.finReadout.innerHTML = fa
+        ? `Price includes Klarna's cost. ${amountLabel}: <strong>${fmtMoney(fa.total)}</strong>.`
+        : `Price includes Klarna's cost.`;
+      el.finDisableBtn.hidden = locked;
+      return;
+    }
+
+    if (locked) { el.financing.hidden = true; return; }
+
+    const note = financingEligibilityNote();
+    el.financing.hidden = false;
+    el.finOnPanel.hidden = true;
+    if (note) {
+      el.finOfferPanel.hidden = true;
+      el.finIneligible.hidden = false;
+      el.finIneligible.textContent = note;
+    } else {
+      el.finOfferPanel.hidden = false;
+      el.finIneligible.hidden = true;
+      el.finEnableBtn.disabled = false;
+    }
+  }
+
+  function wireFinancingEvents() {
+    el.finEnableBtn.addEventListener("click", async () => {
+      if (state.isDirty) await saveDraft();
+      if (!confirm(`Enable Klarna financing on ${state.quote.id}? This will raise the quoted price to cover Klarna's fee — the customer sees one adjusted total, not a separate fee line.`)) return;
+      el.finEnableBtn.disabled = true;
+      try {
+        const r = await fetch(`/api/admin/quotes/${encodeURIComponent(state.quote.id)}/klarna/enable`, { method: "POST" });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) {
+          showError(data.errors?.[0] || "Couldn't enable financing.");
+          el.finEnableBtn.disabled = false;
+          return;
+        }
+        state.quote = data.quote;
+        render();
+      } catch (err) {
+        showError(err.message || "Couldn't enable financing.");
+        el.finEnableBtn.disabled = false;
+      }
+    });
+
+    el.finDisableBtn.addEventListener("click", async () => {
+      if (!confirm(`Remove financing from ${state.quote.id}? The price reverts to what it was before financing was enabled.`)) return;
+      el.finDisableBtn.disabled = true;
+      try {
+        const r = await fetch(`/api/admin/quotes/${encodeURIComponent(state.quote.id)}/klarna/disable`, { method: "POST" });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) {
+          showError(data.errors?.[0] || "Couldn't remove financing.");
+          el.finDisableBtn.disabled = false;
+          return;
+        }
+        state.quote = data.quote;
+        render();
+      } catch (err) {
+        showError(err.message || "Couldn't remove financing.");
+        el.finDisableBtn.disabled = false;
+      }
+    });
+  }
+
   async function loadDepositSettings() {
     try {
       const r = await fetch("/api/settings", { cache: "no-store" });
@@ -911,7 +1019,12 @@
         state.depositSettings = data.settings.deposits;
         syncDepositPanel();
       }
-    } catch (_) { /* panel stays hidden without settings */ }
+      // Klarna financing (PJL-34) — same response, no second round trip.
+      if (data.ok && data.settings?.financing) {
+        state.financingSettings = data.settings.financing;
+        syncFinancingPanel();
+      }
+    } catch (_) { /* panels stay hidden without settings */ }
   }
 
   function refreshPreviewLink() {
@@ -2199,6 +2312,7 @@
       el.loading.hidden = true;
       el.app.hidden = false;
       wireDepositEvents();
+      wireFinancingEvents();
       render();
       initPreview();
       loadProjectRates();

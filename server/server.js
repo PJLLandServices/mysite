@@ -1282,6 +1282,13 @@ function needsAuth(method, pathname) {
   // The routes also call requireAdmin directly — the gate is the fence,
   // the route check is the lock.
   if (/^\/api\/work-orders\/[^/]+\/(unlock|relock)$/.test(pathname)) return "admin";
+  // Klarna financing enable/disable (PJL-34) — ADMIN ONLY, deliberately
+  // stricter than the generic quote-folder "user" (admin-or-tech) rule
+  // below. Enabling is the one action that can gross up a real quote's
+  // price and, once accepted, set a live Stripe authorization in motion
+  // — not a field decision. The routes also call requireAdmin directly
+  // — the gate is the fence, the route check is the lock.
+  if (/^\/api\/admin\/quotes\/[^/]+\/klarna\/(enable|disable)$/.test(pathname)) return "admin";
   if (pathname === "/admin/trash" || pathname === "/admin/trash/") return "admin";
   if (pathname === "/admin/smart-controller-photos" || pathname === "/admin/smart-controller-photos/") return "user";
   // CRM pages — admin OR tech.
@@ -17588,6 +17595,42 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, customer: updated });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update rates."] });
+    }
+  }
+
+  // POST /api/admin/quotes/:id/klarna/enable — the "Enable financing"
+  // button (PJL-34, build order step 4). Admin-only: this is the ONLY
+  // action anywhere in the app that can set financing.enabled = true on
+  // a real quote — see the load-bearing safety-invariant comment at the
+  // top of lib/klarna.js. Grosses up every line item's price server-
+  // side; the client never computes or sends a price, only clicks the
+  // button and displays whatever comes back.
+  const klarnaEnableMatch = pathname.match(/^\/api\/admin\/quotes\/([^/]+)\/klarna\/enable$/);
+  if (klarnaEnableMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const quoteId = decodeURIComponent(klarnaEnableMatch[1]);
+      const updated = await klarna.enableFinancingForQuote(quoteId, { by: session.uid || "admin" });
+      return sendJson(res, 200, { ok: true, quote: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't enable financing."] });
+    }
+  }
+
+  // POST /api/admin/quotes/:id/klarna/disable — undo "Enable financing",
+  // restoring the exact pre-gross-up pricing from the snapshot it took.
+  // Admin-only, same reasoning as enable above.
+  const klarnaDisableMatch = pathname.match(/^\/api\/admin\/quotes\/([^/]+)\/klarna\/disable$/);
+  if (klarnaDisableMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const quoteId = decodeURIComponent(klarnaDisableMatch[1]);
+      const updated = await klarna.disableFinancingForQuote(quoteId, { by: session.uid || "admin" });
+      return sendJson(res, 200, { ok: true, quote: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't remove financing."] });
     }
   }
 
