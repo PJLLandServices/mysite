@@ -2017,7 +2017,7 @@ async function setProposalDocument(id, meta, { by = "admin", quiet = false } = {
 // not a scope-protected pricing field, so it is allowed on any status. The
 // caller writes/deletes the actual hero image file on disk. Returns the
 // updated record or null if not found.
-async function setProposalPageConfig(id, { templateKey, heroPhoto, fixtureCount } = {}, { by = "admin" } = {}) {
+async function setProposalPageConfig(id, { templateKey, heroPhoto, fixtureCount, zoneCount } = {}, { by = "admin" } = {}) {
   if (!id) throw new Error("setProposalPageConfig needs id");
   const records = await readAll();
   const idx = records.findIndex((q) => q.id === id);
@@ -2032,6 +2032,16 @@ async function setProposalPageConfig(id, { templateKey, heroPhoto, fixtureCount 
   if (fixtureCount !== undefined) {
     const n = Number(fixtureCount);
     q.proposalFixtureCount = Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+    changed = true;
+  }
+  // Declared zone count for the sprinkler page (Sep 2026 — Q-2026-0081
+  // priced seasonal care at the 1-4 tier because its zones were quoted as
+  // one grouped custom line the line-item counter can't see). Same
+  // override shape as fixtureCount: a positive integer wins over the
+  // line-item derivation; blank/null clears back to counting.
+  if (zoneCount !== undefined) {
+    const n = Number(zoneCount);
+    q.proposalZoneCount = Number.isFinite(n) && n > 0 ? Math.round(n) : null;
     changed = true;
   }
   if (heroPhoto !== undefined) {

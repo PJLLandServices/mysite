@@ -438,6 +438,43 @@ ok(templates.isKnownTemplate("smart-controller"), "smart-controller is a known t
   ok(!renderSprinklerProposal(dNone).includes('id="project-notes"'), "no sections → no Your-project section");
 }
 
+// ---- declared zone count → seasonal tier (Q-2026-0081, Sep 2026) ------
+// Zones quoted as ONE grouped custom line are invisible to the line-item
+// counter; the Generate panel's "Zones" override (proposalZoneCount) is the
+// declared truth and drives the seasonal-care tier.
+{
+  const grouped = {
+    ...baseQuote,
+    lineItems: [
+      { label: "Irrigation zones", description: "supply, heads, piping, valves and wiring, installed", qty: 5 },
+      { label: "Hunter Hydrawise HPC smart controller", qty: 1 }
+    ]
+  };
+  // Without the override: no derivable zone count → no seasonal block at all.
+  const d0 = buildProposalData(grouped, parties);
+  ok(d0.seasonal == null, "grouped zone line + no override → seasonal block absent (never a wrong tier)");
+  // With the override: 5 zones → the 5-6 tier ($105), NOT the 1-4 tier ($90).
+  const d5 = buildProposalData({ ...grouped, proposalZoneCount: 5 }, parties);
+  ok(d5.seasonal && d5.seasonal.zones === 5, "override supplies the zone count");
+  eq(d5.seasonal && d5.seasonal.spring.value, "$105.00", "5 zones price at the 5-6 tier");
+  // (The sprinkler hero deliberately has no Zones fact — the count feeds
+  // the seasonal tier and the {{zoneCount}} template token.)
+  const html5 = renderSprinklerProposal(d5);
+  ok(html5.includes("$105.00") && !html5.includes("$90.00"), "page shows $105, no $90 anywhere");
+  // Per-zone rate lines still count on their own when there is no override.
+  const keyed = {
+    ...baseQuote,
+    lineItems: [{ label: "Lawn zones", sourceKey: "rotor_zone_per_zone", qty: 5 }]
+  };
+  const dk = buildProposalData(keyed, parties);
+  eq(dk.seasonal && dk.seasonal.spring.value, "$105.00", "per-zone keyed lines still derive the tier without an override");
+  // Boundary sanity straight from pricing.json's table.
+  const d4 = buildProposalData({ ...grouped, proposalZoneCount: 4 }, parties);
+  eq(d4.seasonal && d4.seasonal.spring.value, "$90.00", "4 zones price at the 1-4 tier");
+  const d16 = buildProposalData({ ...grouped, proposalZoneCount: 16 }, parties);
+  ok(d16.seasonal && d16.seasonal.custom && d16.seasonal.spring.value === "By quote", "16+ zones → By quote");
+}
+
 // ---- report -----------------------------------------------------------
 console.log(`\nproposal-html tests: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

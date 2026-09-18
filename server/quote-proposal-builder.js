@@ -99,6 +99,9 @@
     genFixtures: $("pbGenFixtures"),
     genFixturesField: $("pbGenFixturesField"),
     genFixturesHint: $("pbGenFixturesHint"),
+    genZones: $("pbGenZones"),
+    genZonesField: $("pbGenZonesField"),
+    genZonesHint: $("pbGenZonesHint"),
     heroInput: $("pbHeroInput"),
     heroStatus: $("pbHeroStatus"),
     heroName: $("pbHeroName"),
@@ -1130,6 +1133,17 @@
       const saved = state.quote && state.quote.proposalFixtureCount;
       el.genFixtures.value = saved != null ? String(saved) : "";
     }
+    // Zones override — the irrigation design's counterpart to Fixtures.
+    // Drives the seasonal-care tier when zones are quoted as one grouped
+    // line the line-item counter can't see.
+    if (!el.genZonesField) return;
+    const isIrrigation = el.genTemplate && el.genTemplate.value === "irrigation";
+    el.genZonesField.hidden = !isIrrigation;
+    if (el.genZonesHint) el.genZonesHint.hidden = !isIrrigation;
+    if (isIrrigation && el.genZones && document.activeElement !== el.genZones) {
+      const saved = state.quote && state.quote.proposalZoneCount;
+      el.genZones.value = saved != null ? String(saved) : "";
+    }
   }
 
   function renderGeneratePanel() {
@@ -1212,6 +1226,11 @@
         const v = el.genFixtures.value.trim();
         body.fixtureCount = v === "" ? null : (Number(v) || null);
       }
+      // Irrigation zone-count override: same shape — typed count, or null to clear.
+      if (el.genTemplate.value === "irrigation" && el.genZones) {
+        const v = el.genZones.value.trim();
+        body.zoneCount = v === "" ? null : (Number(v) || null);
+      }
       const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/generate-proposal-page`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1222,6 +1241,7 @@
       state.quote.proposalDocument = data.proposalDocument;
       if (data.proposalDocument?.templateKey) state.quote.proposalTemplateKey = data.proposalDocument.templateKey;
       if (data.quote && "proposalFixtureCount" in data.quote) state.quote.proposalFixtureCount = data.quote.proposalFixtureCount;
+      if (data.quote && "proposalZoneCount" in data.quote) state.quote.proposalZoneCount = data.quote.proposalZoneCount;
       btn.dataset.justRan = "1";
       renderProposalDoc();
       renderGeneratePanel();

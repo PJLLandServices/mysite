@@ -208,6 +208,18 @@ function countZones(quote) {
   return n;
 }
 
+// The zone count to SHOW (and to price seasonal care by): an explicit
+// proposalZoneCount override — the "Zones" field on the builder's Generate
+// panel — wins; otherwise derive from the line items. The override exists
+// because a job quoted as one grouped line ("Irrigation zones × 5") is
+// invisible to countZones, which sent Q-2026-0081's seasonal care to the
+// 1-4 zone tier ($90) instead of 5-6 ($105). Same pattern as
+// effectiveFixtureCount for the lighting page.
+function effectiveZoneCount(quote) {
+  const override = Number(quote && quote.proposalZoneCount);
+  return Number.isFinite(override) && override > 0 ? override : countZones(quote);
+}
+
 // The residential seasonal tier for a zone count, from pricing.json's
 // canonical seasonal_tiers table (spring opening + fall closing share one
 // price per tier). Ranges look like "1-4", "5-6", "16+". Returns the tier
@@ -772,7 +784,7 @@ function buildProposalData(quote, { customer = {}, property = {}, templateKey = 
   const address = String(property.address || customer.address || "").trim();
   const issued = fmtDate(quote.createdAt);
   const validThrough = fmtDate(quote.validUntil || quote.validUntilDate);
-  const zones = countZones(quote);
+  const zones = effectiveZoneCount(quote);
   const features = systemFeatures(quote);
   const transformer = transformerSpec(quote);   // lighting: count + HUB model
 

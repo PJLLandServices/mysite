@@ -16549,6 +16549,9 @@ async function handleApi(req, res, pathname) {
         if (payload && Object.prototype.hasOwnProperty.call(payload, "fixtureCount")) {
           cfgPatch.fixtureCount = payload.fixtureCount;   // number, or blank/null to clear
         }
+        if (payload && Object.prototype.hasOwnProperty.call(payload, "zoneCount")) {
+          cfgPatch.zoneCount = payload.zoneCount;         // declared zones — number, or blank/null to clear
+        }
         if (Object.keys(cfgPatch).length) {
           await quotes.setProposalPageConfig(q.id, cfgPatch, { by: session.uid || "admin" });
         }
