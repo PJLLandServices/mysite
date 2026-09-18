@@ -65,4 +65,20 @@
       })
       .catch(() => { /* leave badge hidden — graceful failure */ });
   }
+
+  // Pending Klarna financing badge (PJL-34). The Financing nav link
+  // carries a [data-financing-badge] span; populate it with the count of
+  // quotes currently waiting on someone — link_sent, authorized (the
+  // 28-day clock), declined, or partially_captured — same set the queue
+  // page itself lists, soonest-deadline-first.
+  const financingBadge = document.querySelector("[data-financing-badge]");
+  if (financingBadge) {
+    fetch("/api/admin/financing/pending", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data || !data.ok || !Array.isArray(data.quotes)) return;
+        applyCount(financingBadge, data.quotes.length);
+      })
+      .catch(() => { /* leave badge hidden — graceful failure */ });
+  }
 })();

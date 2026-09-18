@@ -245,4 +245,44 @@ async function sendEmailFailureAlertSms(body) {
   }
 }
 
-module.exports = { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms, sendEmailFailureAlertSms };
+// Klarna financing capture-deadline alert (PJL-34, build order step 5).
+// Same dispatch shape as sendEmailFailureAlertSms — the caller (the
+// financing-reminders sweep) builds the body, this just sends it to the
+// same NOTIFY_TO_PHONE every other admin alert uses. Never a customer.
+async function sendFinancingReminderSms(body) {
+  if (!isConfigured()) {
+    console.warn("[sms] Twilio env vars not set — skipping financing reminder SMS.");
+    return { ok: false, skipped: true };
+  }
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
+  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Basic ${auth}`,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({
+        To: process.env.NOTIFY_TO_PHONE,
+        From: process.env.TWILIO_FROM_NUMBER,
+        Body: String(body || "").trim()
+      }).toString()
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error("[sms] Twilio rejected financing reminder:", response.status, data?.message || data?.code || "(no detail)");
+      return { ok: false, error: data?.message || `Twilio HTTP ${response.status}` };
+    }
+    console.log("[sms] Sent financing reminder:", data.sid);
+    return { ok: true, sid: data.sid };
+  } catch (error) {
+    console.error("[sms] Network or runtime error sending financing reminder:", error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
+module.exports = { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms, sendEmailFailureAlertSms, sendFinancingReminderSms };

@@ -1,0 +1,131 @@
+/* [hidden] polyfill — see work-order.css for rationale. */
+[hidden] { display: none !important; }
+
+.pending-financing-body { background: #FAFAF5; min-height: 100vh; }
+
+.pf-shell {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+}
+
+.pf-explainer {
+  max-width: 850px;
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  background: #FFF8E6;
+  border: 1px solid #F0E2A8;
+  border-radius: 8px;
+  color: #6A4A00;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.pf-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.pf-filters button {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid #d8d8c9;
+  background: #fff;
+  color: #555;
+  cursor: pointer;
+}
+.pf-filters button.is-active { background: #1B4D2E; color: #fff; border-color: #1B4D2E; }
+
+.pf-empty {
+  text-align: center;
+  color: #6B6B63;
+  font-style: italic;
+  padding: 40px 20px;
+  background: #fff;
+  border: 1px dashed #d8d8c9;
+  border-radius: 10px;
+}
+
+.pf-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+.pf-table th {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6B6B63;
+  padding: 12px 14px;
+  background: #FAFAF5;
+  border-bottom: 1px solid #E5E5DD;
+}
+.pf-table td {
+  padding: 14px;
+  border-bottom: 1px solid #F1F1E8;
+  font-size: 14px;
+}
+.pf-table tr:hover td { background: #FCFCF7; }
+.pf-table a { color: #1B4D2E; text-decoration: none; font-weight: 600; }
+.pf-table a:hover { text-decoration: underline; }
+.pf-amount { font-variant-numeric: tabular-nums; font-weight: 600; }
+.pf-row-sub { color: #6B6B63; font-size: 12px; }
+
+.pf-status {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 10px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.pf-status--link_sent { background: #E0EBFF; color: #2A4A8C; }
+.pf-status--authorized { background: #E8F4ED; color: #1B4D2E; }
+.pf-status--declined { background: #FFE6E0; color: #8A2418; }
+.pf-status--partially_captured { background: #FDF0DC; color: #8A5313; }
+
+/* Deadline urgency — same escalation the reminder sweep uses (14/7/3/1
+   days): green with room to spare, amber inside a week, red inside 72h
+   or already expired. */
+.pf-deadline { font-weight: 700; font-variant-numeric: tabular-nums; }
+.pf-deadline--ok { color: #1B4D2E; }
+.pf-deadline--soon { color: #8A5313; }
+.pf-deadline--urgent { color: #8A2418; }
+.pf-deadline--expired { color: #8A2418; text-decoration: underline; }
+.pf-deadline-note { color: #6B6B63; font-style: italic; font-size: 13px; }
+
+@media (max-width: 700px) {
+  .pf-table thead { display: none; }
+  .pf-table,
+  .pf-table tbody { display: block; }
+  .pf-table tr {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    column-gap: 12px;
+    row-gap: 2px;
+    padding: 12px 14px;
+    border-bottom: 1px solid #E5E5DD;
+  }
+  .pf-table td {
+    display: block;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+  .pf-table tbody td:nth-of-type(1) { grid-column: 1; grid-row: 1; font-weight: 600; }
+  .pf-table tbody td:nth-of-type(2) { grid-column: 1; grid-row: 2; overflow: hidden; }
+  .pf-table tbody td:nth-of-type(2) strong { font-weight: 500; font-size: 14px; }
+  .pf-table tbody td:nth-of-type(3) { grid-column: 2; grid-row: 2; justify-self: end; font-weight: 600; }
+  .pf-table tbody td:nth-of-type(4) { grid-column: 2; grid-row: 1; justify-self: end; }
+  .pf-table tbody td:nth-of-type(5) { grid-column: 1 / -1; grid-row: 3; justify-self: end; font-size: 13px; }
+}

@@ -29,6 +29,18 @@
 //      and partial capture, the over-amount and wrong-stage refusals, and
 //      void's two Stripe branches (deactivate the link before checkout,
 //      cancel the authorization after)
+//  11. listPendingFinancing (step 4c): the Pending Financing queue's
+//      filter (only link_sent/authorized/declined/partially_captured),
+//      sort (soonest capture deadline first), and the invoice-id join
+//      so a row links to wherever its action buttons actually live
+//  12. financing-reminders' sweepCaptureDeadlines (step 5): the 14/7/3/1
+//      day thresholds, the "daily inside 24h" final stretch, mark-BEFORE-
+//      send so a crash mid-dispatch can't double-send, and a quote that
+//      crosses several thresholds in one pass getting every one of them
+//  13. notifyAdminOfStageChange (TRD §7/§11 gap-close): an "authorized"
+//      or "declined" webhook event pages Patrick immediately (email +
+//      SMS), never a customer, and never blocks the state transition
+//      that already committed if the alert itself fails
 //
 // Per CLAUDE.md's lifecycle-state rule, this file is the "pin it with a
 // test that fails on the OLD code" step for the financing state machine —
@@ -60,19 +72,26 @@ const require = createRequire(import.meta.url);
 const klarna = require(path.join(ROOT, "server", "lib", "klarna.js"));
 const quotes = require(path.join(ROOT, "server", "lib", "quotes.js"));
 const settings = require(path.join(ROOT, "server", "lib", "settings.js"));
+const financingReminders = require(path.join(ROOT, "server", "lib", "financing-reminders.js"));
+const notifyFinancing = require(path.join(ROOT, "server", "lib", "notify-financing.js"));
+const notifySms = require(path.join(ROOT, "server", "lib", "notify-sms.js"));
 
 const QUOTES_FILE = path.join(ROOT, "server", "data", "quotes.json");
 const SETTINGS_FILE = path.join(ROOT, "server", "data", "settings.json");
 const CUSTOMERS_FILE = path.join(ROOT, "server", "data", "customers.json");
+const INVOICES_FILE = path.join(ROOT, "server", "data", "invoices.json");
 const originalQuotes = fs.existsSync(QUOTES_FILE) ? fs.readFileSync(QUOTES_FILE, "utf8") : null;
 const originalSettings = fs.existsSync(SETTINGS_FILE) ? fs.readFileSync(SETTINGS_FILE, "utf8") : null;
 const originalCustomers = fs.existsSync(CUSTOMERS_FILE) ? fs.readFileSync(CUSTOMERS_FILE, "utf8") : null;
+const originalInvoices = fs.existsSync(INVOICES_FILE) ? fs.readFileSync(INVOICES_FILE, "utf8") : null;
 
 function restoreFixtures() {
   if (originalQuotes === null) { try { fs.unlinkSync(QUOTES_FILE); } catch {} }
   else fs.writeFileSync(QUOTES_FILE, originalQuotes, "utf8");
   if (originalSettings === null) { try { fs.unlinkSync(SETTINGS_FILE); } catch {} }
   else fs.writeFileSync(SETTINGS_FILE, originalSettings, "utf8");
+  if (originalInvoices === null) { try { fs.unlinkSync(INVOICES_FILE); } catch {} }
+  else fs.writeFileSync(INVOICES_FILE, originalInvoices, "utf8");
   if (originalCustomers === null) { try { fs.unlinkSync(CUSTOMERS_FILE); } catch {} }
   else fs.writeFileSync(CUSTOMERS_FILE, originalCustomers, "utf8");
 }
@@ -659,6 +678,233 @@ try {
     }
   }
 
+  // 11 — listPendingFinancing (step 4c)
+  {
+    const inTwoDays = new Date(Date.now() + 2 * 86400000).toISOString();
+    const inTenDays = new Date(Date.now() + 10 * 86400000).toISOString();
+    fs.writeFileSync(QUOTES_FILE, JSON.stringify([
+      { id: "Q-PF-1", quoteNumberDisplay: "Q-PF-1", customerName: "Soonest Sam", total: 10000,
+        financing: { enabled: true, stage: "authorized", captureBy: inTwoDays, financedAmount: { total: 10000 } } },
+      { id: "Q-PF-2", quoteNumberDisplay: "Q-PF-2", customerName: "Later Lee", total: 10000,
+        financing: { enabled: true, stage: "authorized", captureBy: inTenDays, financedAmount: { total: 10000 } } },
+      { id: "Q-PF-3", quoteNumberDisplay: "Q-PF-3", customerName: "Waiting Wes", total: 8000,
+        financing: { enabled: true, stage: "link_sent", linkSentAt: new Date().toISOString(), financedAmount: { total: 8000 } } },
+      { id: "Q-PF-4", quoteNumberDisplay: "Q-PF-4", customerName: "Declined Dana", total: 6000,
+        financing: { enabled: true, stage: "declined", declinedAt: new Date().toISOString(), financedAmount: { total: 6000 } } },
+      { id: "Q-PF-5", quoteNumberDisplay: "Q-PF-5", customerName: "Captured Cam", total: 9000,
+        financing: { enabled: true, stage: "captured", financedAmount: { total: 9000 } } },
+      { id: "Q-PF-6", quoteNumberDisplay: "Q-PF-6", customerName: "Never Nell", total: 5000,
+        financing: { enabled: false, stage: "not_offered" } }
+    ], null, 2) + "\n", "utf8");
+    fs.writeFileSync(INVOICES_FILE, JSON.stringify([
+      { id: "I-PF-1", quoteId: "Q-PF-1", status: "sent" }
+    ], null, 2) + "\n", "utf8");
+
+    const rows = await klarna.listPendingFinancing();
+    ok(rows.length === 4, `only the 4 stages that still need someone show up (got ${rows.length})`);
+    ok(!rows.some((r) => r.id === "Q-PF-5"), "captured (terminal, nothing to do) is excluded");
+    ok(!rows.some((r) => r.id === "Q-PF-6"), "not_offered is excluded");
+    ok(rows[0].id === "Q-PF-1" && rows[1].id === "Q-PF-2", "authorized rows sort soonest-deadline-first");
+    const noDeadlineIds = rows.slice(2).map((r) => r.id).sort();
+    ok(JSON.stringify(noDeadlineIds) === JSON.stringify(["Q-PF-3", "Q-PF-4"]), "rows with no deadline (link_sent/declined) sort after every deadlined row");
+    const pf1 = rows.find((r) => r.id === "Q-PF-1");
+    ok(pf1.invoiceId === "I-PF-1", "a quote with a linked invoice carries that invoice id (so the row can link to the Capture/Void page)");
+    const pf2 = rows.find((r) => r.id === "Q-PF-2");
+    ok(pf2.invoiceId === null, "a quote with no invoice yet has invoiceId null (falls back to the quote's own page)");
+    ok(Math.abs(pf1.daysLeft - 2) < 0.05, `daysLeft matches the captureBy math (got ${pf1.daysLeft})`);
+  }
+
+  // 12 — financing-reminders' sweepCaptureDeadlines (step 5). Entirely
+  // dependency-injected — no file I/O — so the threshold/dedupe logic is
+  // tested in isolation from the real store, same technique
+  // booking-reminders.js's own test uses.
+  {
+    const now = new Date("2026-09-18T12:00:00.000Z");
+    const daysFromNow = (n) => new Date(now.getTime() + n * 86400000).toISOString();
+
+    function makeStore(quoteList) {
+      const store = quoteList.map((q) => JSON.parse(JSON.stringify(q)));
+      const listQuotes = async () => store;
+      const markReminderSent = async (id, patch) => {
+        const q = store.find((x) => x.id === id);
+        if (!q) throw new Error(`no such quote ${id}`);
+        q.financing.remindersSent = patch.remindersSent;
+        return q;
+      };
+      return { store, listQuotes, markReminderSent };
+    }
+
+    // (a) a quote exactly at the 14-day threshold, never swept before -> due
+    {
+      const { store, listQuotes, markReminderSent } = makeStore([
+        { id: "Q-SWEEP-1", quoteNumberDisplay: "Q-SWEEP-1", customerName: "A",
+          financing: { stage: "authorized", captureBy: daysFromNow(14), financedAmount: { total: 5000 }, remindersSent: [] } }
+      ]);
+      const emailCalls = []; const smsCalls = [];
+      const notifyEmail = async (rows) => { emailCalls.push(rows); return { ok: true }; };
+      const notifySms = async (body) => { smsCalls.push(body); return { ok: true }; };
+
+      let result = await financingReminders.sweepCaptureDeadlines({ now, listQuotes, markReminderSent, notifyEmail, notifySms, baseUrl: "https://example.test" });
+      ok(result.due === 1 && result.sent === 1, "a quote crossing the 14-day threshold for the first time is due and sent");
+      ok(store[0].financing.remindersSent.includes("14d"), "14d is recorded in remindersSent BEFORE the digest goes out");
+      ok(emailCalls.length === 1 && emailCalls[0].length === 1, "exactly one digest email, listing exactly the one due quote");
+      ok(smsCalls.length === 1, "exactly one SMS");
+
+      // (b) swept again immediately, nothing changed -> not due again
+      result = await financingReminders.sweepCaptureDeadlines({ now, listQuotes, markReminderSent, notifyEmail, notifySms, baseUrl: "https://example.test" });
+      ok(result.due === 0 && result.sent === 0, "re-sweeping the same quote at the same threshold sends nothing (deduped)");
+      ok(emailCalls.length === 1, "no second digest email fired");
+    }
+
+    // (c) a quote first swept at 2 days out crosses 14d, 7d, AND 3d in one pass
+    {
+      const { store, listQuotes, markReminderSent } = makeStore([
+        { id: "Q-SWEEP-2", quoteNumberDisplay: "Q-SWEEP-2", customerName: "B",
+          financing: { stage: "authorized", captureBy: daysFromNow(2), financedAmount: { total: 7000 }, remindersSent: [] } }
+      ]);
+      const notifyEmail = async () => ({ ok: true });
+      const notifySms = async () => ({ ok: true });
+      await financingReminders.sweepCaptureDeadlines({ now, listQuotes, markReminderSent, notifyEmail, notifySms, baseUrl: "https://example.test" });
+      ok(JSON.stringify(store[0].financing.remindersSent) === JSON.stringify(["14d", "7d", "3d"]),
+        `a quote never swept until 2 days out gets every threshold it already crossed, not just the nearest one (got ${JSON.stringify(store[0].financing.remindersSent)})`);
+    }
+
+    // (d) inside the final 24 hours -> a dated "final-" label, once per day
+    {
+      const { store, listQuotes, markReminderSent } = makeStore([
+        { id: "Q-SWEEP-3", quoteNumberDisplay: "Q-SWEEP-3", customerName: "C",
+          financing: { stage: "authorized", captureBy: daysFromNow(0.5), financedAmount: { total: 3000 }, remindersSent: ["14d", "7d", "3d", "1d"] } }
+      ]);
+      const notifyEmail = async () => ({ ok: true });
+      const notifySms = async () => ({ ok: true });
+      let result = await financingReminders.sweepCaptureDeadlines({ now, listQuotes, markReminderSent, notifyEmail, notifySms, baseUrl: "https://example.test" });
+      ok(result.sent === 1, "inside 24 hours, already past every day-threshold, still gets a final reminder");
+      const finalLabel = store[0].financing.remindersSent.find((l) => l.startsWith("final-"));
+      ok(!!finalLabel, "a dated final-<date> label is recorded");
+
+      // Same day, swept again -> not due again today.
+      result = await financingReminders.sweepCaptureDeadlines({ now, listQuotes, markReminderSent, notifyEmail, notifySms, baseUrl: "https://example.test" });
+      ok(result.sent === 0, "the final-stretch reminder is once per calendar day, not once per sweep tick");
+    }
+
+    // (e) nothing due -> no digest at all sent (an all-clear sends nothing)
+    {
+      const { listQuotes, markReminderSent } = makeStore([
+        { id: "Q-SWEEP-4", quoteNumberDisplay: "Q-SWEEP-4", customerName: "D",
+          financing: { stage: "authorized", captureBy: daysFromNow(20), financedAmount: { total: 4000 }, remindersSent: [] } }
+      ]);
+      let emailCalled = false;
+      const notifyEmail = async () => { emailCalled = true; return { ok: true }; };
+      const notifySms = async () => ({ ok: true });
+      const result = await financingReminders.sweepCaptureDeadlines({ now, listQuotes, markReminderSent, notifyEmail, notifySms, baseUrl: "https://example.test" });
+      ok(result.due === 0 && result.sent === 0 && !emailCalled, "a quote with 20 days left triggers no reminder and no digest send");
+    }
+
+    // (f) a mark-sent failure on one quote doesn't stop the others
+    {
+      const { listQuotes } = makeStore([
+        { id: "Q-SWEEP-5", quoteNumberDisplay: "Q-SWEEP-5", customerName: "E",
+          financing: { stage: "authorized", captureBy: daysFromNow(1), financedAmount: { total: 2000 }, remindersSent: [] } },
+        { id: "Q-SWEEP-6", quoteNumberDisplay: "Q-SWEEP-6", customerName: "F",
+          financing: { stage: "authorized", captureBy: daysFromNow(1), financedAmount: { total: 2500 }, remindersSent: [] } }
+      ]);
+      const markReminderSent = async (id) => { if (id === "Q-SWEEP-5") throw new Error("disk full"); };
+      const notifyEmail = async () => ({ ok: true });
+      const notifySms = async () => ({ ok: true });
+      const result = await financingReminders.sweepCaptureDeadlines({ now, listQuotes, markReminderSent, notifyEmail, notifySms, baseUrl: "https://example.test" });
+      ok(result.errors.length === 1 && result.errors[0].quoteId === "Q-SWEEP-5", "the failing quote is recorded as an error, not thrown");
+      ok(result.sent === 1, "the OTHER quote in the same pass still gets its reminder");
+    }
+
+    // (g) dueLabelsFor — direct unit coverage of the threshold math
+    ok(JSON.stringify(financingReminders.dueLabelsFor({ captureBy: daysFromNow(14), remindersSent: [] }, now)) === JSON.stringify(["14d"]),
+      "exactly at 14 days: due for 14d only");
+    ok(JSON.stringify(financingReminders.dueLabelsFor({ captureBy: daysFromNow(14), remindersSent: ["14d"] }, now)) === JSON.stringify([]),
+      "14d already sent: nothing due");
+    ok(JSON.stringify(financingReminders.dueLabelsFor({ captureBy: daysFromNow(15), remindersSent: [] }, now)) === JSON.stringify([]),
+      "15 days out: not inside any threshold yet");
+    ok(financingReminders.dueLabelsFor({ captureBy: null, remindersSent: [] }, now).length === 0,
+      "no captureBy at all: nothing due (a quote that was never authorized has no clock)");
+  }
+
+  // 13 — notifyAdminOfStageChange (closes the TRD §7/§11 gap: the webhook
+  // handler now pages Patrick the instant Klarna approves or declines,
+  // not just on the next reminder sweep). Monkeypatches the REAL
+  // notify-financing/notify-sms module objects — klarna.js's own lazy
+  // require() inside notifyAdminOfStageChange resolves to the same
+  // cached module, so overwriting their exported functions here is
+  // exactly what a real send would call.
+  {
+    fs.writeFileSync(QUOTES_FILE, JSON.stringify([
+      { id: "Q-NOTIFY-1", quoteNumberDisplay: "Q-NOTIFY-1", customerName: "Authorized Amy", total: 5000,
+        financing: { enabled: true, stage: "link_sent", paymentLinkId: "plink_n1", financedAmount: { total: 5000 } } },
+      { id: "Q-NOTIFY-2", quoteNumberDisplay: "Q-NOTIFY-2", customerName: "Declined Dev", total: 5000,
+        financing: { enabled: true, stage: "link_sent", paymentLinkId: "plink_n2", financedAmount: { total: 5000 } } },
+      { id: "Q-NOTIFY-3", quoteNumberDisplay: "Q-NOTIFY-3", customerName: "Throws Theo", total: 5000,
+        financing: { enabled: true, stage: "link_sent", paymentLinkId: "plink_n3", financedAmount: { total: 5000 } } }
+    ], null, 2) + "\n", "utf8");
+    fs.writeFileSync(INVOICES_FILE, JSON.stringify([], null, 2) + "\n", "utf8");
+
+    const originalAuthorizedAlert = notifyFinancing.sendAuthorizedAlert;
+    const originalDeclinedAlert = notifyFinancing.sendDeclinedAlert;
+    const originalSms = notifySms.sendFinancingReminderSms;
+    const authorizedCalls = []; const declinedCalls = []; const smsCalls = [];
+    notifyFinancing.sendAuthorizedAlert = async (row) => { authorizedCalls.push(row); return { ok: true }; };
+    notifyFinancing.sendDeclinedAlert = async (row) => { declinedCalls.push(row); return { ok: true }; };
+    notifySms.sendFinancingReminderSms = async (body) => { smsCalls.push(body); return { ok: true }; };
+
+    const savedSecret = process.env.STRIPE_SECRET_KEY;
+    const savedPub = process.env.STRIPE_PUBLISHABLE_KEY;
+    process.env.STRIPE_SECRET_KEY = "sk_test_fake";
+    process.env.STRIPE_PUBLISHABLE_KEY = "pk_test_fake";
+    const originalFetch = global.fetch;
+    try {
+      // (a) approved -> Patrick gets both channels, with the right quote/amount
+      global.fetch = async () => ({
+        ok: true, status: 200, headers: { get: () => null },
+        json: async () => ({ id: "pi_n1", status: "requires_capture" })
+      });
+      let r = await klarna.applyWebhookEvent("payment_intent.amount_capturable_updated", {
+        id: "pi_n1", metadata: { quoteId: "Q-NOTIFY-1", source: "pjl-klarna" }
+      });
+      ok(r.action === "authorized", "webhook still authorizes normally");
+      // notifyAdminOfStageChange is fire-and-forget (awaited but never
+      // allowed to reject past applyWebhookEvent) — give its microtasks
+      // a tick to actually run before asserting on them.
+      await new Promise((res) => setTimeout(res, 10));
+      ok(authorizedCalls.length === 1 && authorizedCalls[0].id === "Q-NOTIFY-1", "sendAuthorizedAlert fired once, for the right quote");
+      ok(authorizedCalls[0].quoteNumberDisplay === "Q-NOTIFY-1" && authorizedCalls[0].financedTotal === 5000, "the alert row carries the quote's display id and financed amount");
+      ok(smsCalls.length === 1 && /Klarna approved/.test(smsCalls[0]), "an SMS also went out for the approval");
+      ok(declinedCalls.length === 0, "approval never fires the declined alert");
+
+      // (b) declined -> the declined alert + SMS, not the approved one
+      r = await klarna.applyWebhookEvent("payment_intent.payment_failed", {
+        id: "pi_n2", metadata: { quoteId: "Q-NOTIFY-2", source: "pjl-klarna" }
+      });
+      ok(r.action === "declined", "webhook still declines normally");
+      await new Promise((res) => setTimeout(res, 10));
+      ok(declinedCalls.length === 1 && declinedCalls[0].id === "Q-NOTIFY-2", "sendDeclinedAlert fired once, for the right quote");
+      ok(smsCalls.length === 2 && /Klarna declined/.test(smsCalls[1]), "a second, distinct SMS went out for the decline");
+      ok(authorizedCalls.length === 1, "declining never fires the approved alert");
+
+      // (c) the alert itself throwing must never surface through the webhook
+      notifyFinancing.sendAuthorizedAlert = async () => { throw new Error("SMTP exploded"); };
+      r = await klarna.applyWebhookEvent("payment_intent.amount_capturable_updated", {
+        id: "pi_n3", metadata: { quoteId: "Q-NOTIFY-3", source: "pjl-klarna" }
+      });
+      ok(r.action === "authorized", "a failing admin alert never blocks the webhook's own state transition or return value");
+      const q3 = await quotes.get("Q-NOTIFY-3");
+      ok(q3.financing.stage === "authorized", "the quote itself still committed to authorized despite the alert failing");
+    } finally {
+      global.fetch = originalFetch;
+      if (savedSecret) process.env.STRIPE_SECRET_KEY = savedSecret; else delete process.env.STRIPE_SECRET_KEY;
+      if (savedPub) process.env.STRIPE_PUBLISHABLE_KEY = savedPub; else delete process.env.STRIPE_PUBLISHABLE_KEY;
+      notifyFinancing.sendAuthorizedAlert = originalAuthorizedAlert;
+      notifyFinancing.sendDeclinedAlert = originalDeclinedAlert;
+      notifySms.sendFinancingReminderSms = originalSms;
+    }
+  }
+
   // Source check — every klarna admin route is ADMIN-ONLY (the fence in
   // needsAuth AND the route's own requireAdmin check), read from source
   // rather than restated so a refactor that drops either layer fails here.
@@ -694,6 +940,16 @@ try {
     const voidBlock = serverSrc.slice(voidAt, voidAt + 700);
     ok(/const session = await requireAdmin\(req\);/.test(voidBlock) && /if \(!session\) return sendJson\(res, 403/.test(voidBlock),
       "the void route checks requireAdmin's answer, not just its own existence");
+
+    // Pending Financing (step 4c) is read-only — "user" tier (admin or
+    // tech), same as Invoices/Quotes, not "admin"-only like the
+    // money-moving routes above.
+    ok(/pathname === "\/api\/admin\/financing\/pending"\) return "user"/.test(serverSrc),
+      "needsAuth fences the pending-financing list API as user (admin or tech), matching Invoices");
+    ok(/pathname === "\/admin\/pending-financing" \|\| pathname === "\/admin\/pending-financing\/"\) return "user"/.test(serverSrc),
+      "needsAuth fences the pending-financing page as user (admin or tech)");
+    ok(serverSrc.includes('pathname === "/api/admin/financing/pending" && req.method === "GET"'),
+      "the pending-financing list route exists");
   }
 } finally {
   restoreFixtures();

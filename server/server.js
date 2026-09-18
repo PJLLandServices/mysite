@@ -142,6 +142,7 @@ const billingParties = require("./lib/billing-parties");
 const quickbooks = require("./lib/quickbooks");
 const stripe = require("./lib/stripe");
 const klarna = require("./lib/klarna");
+const financingReminders = require("./lib/financing-reminders");
 const bookings = require("./lib/bookings");
 const suppliers = require("./lib/suppliers");
 const materialLists = require("./lib/material-lists");
@@ -1296,6 +1297,11 @@ function needsAuth(method, pathname) {
   // is the lock.
   if (/^\/api\/admin\/invoices\/[^/]+\/klarna\/capture$/.test(pathname)) return "admin";
   if (/^\/api\/admin\/quotes\/[^/]+\/klarna\/void$/.test(pathname)) return "admin";
+  // Pending Financing queue (PJL-34, build order step 4c) — read-only,
+  // same tier as the Invoices/Quotes lists it sits next to: admin or tech
+  // can both check the capture-deadline worklist.
+  if (pathname === "/admin/pending-financing" || pathname === "/admin/pending-financing/") return "user";
+  if (pathname === "/api/admin/financing/pending") return "user";
   if (pathname === "/admin/trash" || pathname === "/admin/trash/") return "admin";
   if (pathname === "/admin/smart-controller-photos" || pathname === "/admin/smart-controller-photos/") return "user";
   // CRM pages — admin OR tech.
@@ -17740,6 +17746,21 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // GET /api/admin/financing/pending — backs the Pending Financing queue
+  // (build order step 4c/§8/§12): every quote currently in link_sent /
+  // authorized / declined / partially_captured, soonest capture deadline
+  // first. Read-only, no money moves here, so this follows GET
+  // /api/invoices's pattern — the needsAuth fence ("user": admin or tech)
+  // is the only gate, no second inline check.
+  if (pathname === "/api/admin/financing/pending" && req.method === "GET") {
+    try {
+      const rows = await klarna.listPendingFinancing();
+      return sendJson(res, 200, { ok: true, quotes: rows });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the financing queue."] });
+    }
+  }
+
   // POST /api/quotes/:id/convert-to-project — spin a Project out of a
   // Quote: snapshots customer + property, sets sourceQuoteId, and
   // re-parents any material lists that were attached to the quote so
@@ -26052,6 +26073,9 @@ function resolveStaticTarget(pathname) {
   if (/^\/admin\/invoice\/[^/]+\/?$/.test(pathname)) {
     return { dir: SERVER_DIR, relative: "/invoice.html" };
   }
+  if (pathname === "/admin/pending-financing" || pathname === "/admin/pending-financing/") {
+    return { dir: SERVER_DIR, relative: "/pending-financing.html" };
+  }
   if (pathname === "/admin/settings" || pathname === "/admin/settings/") {
     return { dir: SERVER_DIR, relative: "/settings.html" };
   }
@@ -27348,4 +27372,29 @@ server.listen(PORT, HOST, () => {
     }
   };
   setInterval(sweepWarrantyClaims, 12 * 60 * 60 * 1000);
+
+  // Klarna financing capture-deadline reminders (PJL-34, build order
+  // step 5). TRD §8: reminders are the WHOLE defense for the 28-day
+  // capture clock — no automatic capture — so this is the one thing
+  // standing between "authorized" and a quietly expired authorization.
+  // Checked every few hours (not a same-day-only gate like the booking
+  // reminder) so a threshold crossed at 2am still gets caught same day.
+  //
+  // Deliberately NOT run on boot, same reasoning as sweepWarrantyClaims:
+  // a restart during a deploy should never fire a duplicate digest for
+  // thresholds already sent earlier that day. The per-label dedupe in
+  // financing.remindersSent makes a duplicate impossible either way —
+  // this is belt-and-suspenders, not the only guard.
+  const sweepFinancingReminders = async () => {
+    try {
+      const result = await financingReminders.sweepCaptureDeadlines();
+      if (result.sent || result.errors.length) {
+        console.log(`[financing] reminder sweep: ${result.sent} quote(s) reminded, ${result.errors.length} error(s).`);
+      }
+      for (const e of result.errors) console.warn(`[financing] reminder error on ${e.quoteId || "(digest)"}: ${e.error}`);
+    } catch (err) {
+      console.warn("[financing] reminder sweep failed:", err?.message);
+    }
+  };
+  setInterval(sweepFinancingReminders, 3 * 60 * 60 * 1000);
 });
