@@ -1019,11 +1019,17 @@ async function proposalHasCustomDoc(q) {
 // over so there's no re-challenge. Injected at serve time; Patrick's file
 // on disk is never modified. Accepted proposals get a "thank you" state
 // instead of the CTA.
+// ---- Financing bands (PJL-35 TRD §3/§4) --------------------------------
+// Rendering logic lives in lib/proposal-financing-bands.js (pure HTML-
+// string functions, unit-testable without booting the whole server) —
+// this file just splices the result into the serve-time page.
+const { financingHeroBandHtml, financingFooterContentHtml } = require("./lib/proposal-financing-bands");
+
 function injectProposalAcceptFooter(html, q, url) {
   const t = url.searchParams.get("t") || q.approval?.token || "";
   const signHref = `/approve/${encodeURIComponent(q.id)}?t=${encodeURIComponent(t)}&amp;sign=1`;
-  const accepted = !!(q.signature && q.signature.signed) ||
-    q.status === "accepted" || q.status === "pending_admin_attestation";
+  const accepted = quotes.isAccepted(q);
+  const finFooterContent = financingFooterContentHtml(q, { signHref, token: t });
   const footer = accepted
     ? `
 <div id="pjl-accept-footer" style="background:#0F1F14;padding:40px 20px 48px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
@@ -1033,13 +1039,20 @@ function injectProposalAcceptFooter(html, q, url) {
 </div>`
     : `
 <div id="pjl-accept-footer" style="background:#0F1F14;padding:40px 20px 48px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+  ${finFooterContent || `
   <p style="margin:0 0 8px;color:#EAF3DE;font-size:20px;font-weight:700;">Ready to move ahead?</p>
   <p style="margin:0 auto 22px;max-width:44ch;color:#9FB3A6;font-size:14px;line-height:1.55;">Review the scope &amp; pricing summary and sign online — it takes about a minute on any device. You can also download the PDF there, or print, sign, and email it back.</p>
   <a href="${signHref}" style="display:inline-block;padding:16px 32px;background:#E07B24;color:#fff;text-decoration:none;border-radius:8px;font-weight:700;font-size:16px;">Accept &amp; sign online</a>
-  <p style="margin:20px 0 0;color:#8A9B90;font-size:13px;">Questions first? Call <a href="tel:+19059600181" style="color:#EAF3DE;font-weight:600;">(905) 960-0181</a> — or reply to the email this came from.</p>
+  <p style="margin:20px 0 0;color:#8A9B90;font-size:13px;">Questions first? Call <a href="tel:+19059600181" style="color:#EAF3DE;font-weight:600;">(905) 960-0181</a> — or reply to the email this came from.</p>`}
 </div>`;
-  const idx = html.toLowerCase().lastIndexOf("</body>");
-  return idx === -1 ? html + footer : html.slice(0, idx) + footer + html.slice(idx);
+  const heroBand = financingHeroBandHtml(q);
+  let out = html;
+  if (heroBand) {
+    const headerIdx = out.indexOf("</header>");
+    out = headerIdx === -1 ? out : out.slice(0, headerIdx + "</header>".length) + heroBand + out.slice(headerIdx + "</header>".length);
+  }
+  const idx = out.toLowerCase().lastIndexOf("</body>");
+  return idx === -1 ? out + footer : out.slice(0, idx) + footer + out.slice(idx);
 }
 
 // ---- /approve link preview + page title (2026-08-29) -----------------
@@ -12607,6 +12620,42 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, quote: { id: updated.id, status: updated.status, signedAt: updated.signature.signedAt }, depositWarning });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't process signature."] });
+    }
+  }
+
+  // Public — "Apply for financing" click on a financing-enabled proposal
+  // page (PJL-35 TRD §2). Deliberately reuses klarna.onQuoteAccepted
+  // UNCHANGED rather than a new function: that function already guards on
+  // financing.stage !== "not_offered" and returns { alreadyRan: true }
+  // instead of erroring, so calling it from HERE (before signature) and
+  // from the three existing post-signature call sites is safe either way
+  // — whichever fires first does the real work, the other(s) are no-ops.
+  // Same token-gating as the sign route above; no signature/acceptance
+  // check here on purpose, since applying for financing is the whole
+  // point of NOT having signed anything yet.
+  const applyFinancingMatch = pathname.match(/^\/api\/approve\/([^/]+)\/([^/]+)\/apply-financing$/);
+  if (applyFinancingMatch && req.method === "POST") {
+    try {
+      const quoteId = decodeURIComponent(applyFinancingMatch[1]);
+      const token = decodeURIComponent(applyFinancingMatch[2]);
+      const q = await quotes.getByApprovalToken(quoteId, token);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
+      if (!q.financing || q.financing.enabled !== true) {
+        return sendJson(res, 409, { ok: false, errors: ["Financing isn't available on this quote."] });
+      }
+      const result = await klarna.onQuoteAccepted(q, { by: "customer" });
+      if (result?.alreadyRan) {
+        return sendJson(res, 200, { ok: true, alreadyRan: true, stage: result.stage });
+      }
+      if (!result?.ok) {
+        return sendJson(res, 200, { ok: false, warning: result?.warning || "Couldn't start your financing application." });
+      }
+      if (result?.skipped) {
+        return sendJson(res, 200, { ok: false, warning: "You're not eligible for financing on this quote right now." });
+      }
+      return sendJson(res, 200, { ok: true, paymentLinkUrl: result.paymentLink?.url || null, warning: result.warning || null });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't start your financing application."] });
     }
   }
 

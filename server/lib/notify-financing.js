@@ -159,16 +159,30 @@ function detailUrl(row) {
     : `${row.base}/admin/quote/${encodeURIComponent(row.id)}/proposal`;
 }
 
-// row: { id, quoteNumberDisplay, customerName, financedTotal, captureBy, base, invoiceId }
+// row: { id, quoteNumberDisplay, customerName, financedTotal, captureBy, base, invoiceId, signed }
+//
+// PJL-35: financing can now authorize BEFORE a signature exists (apply-
+// before-sign re-sequencing), so "approved" no longer automatically means
+// "clear to schedule" — row.signed says which one this actually is. Two
+// wordings, same email, rather than always saying "clear to schedule"
+// and being wrong every time someone applies before signing.
 async function sendAuthorizedAlert(row) {
-  const subject = `Klarna approved — ${row.quoteNumberDisplay} is clear to schedule`;
+  const subject = row.signed
+    ? `Klarna approved — ${row.quoteNumberDisplay} is clear to schedule`
+    : `Klarna approved — ${row.quoteNumberDisplay} still needs a signature`;
   const deadline = row.captureBy ? new Date(row.captureBy).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }) : "—";
+  const statusLine = row.signed
+    ? `Stripe is holding ${moneyText(row.financedTotal)} for <strong>${escapeHtml(row.quoteNumberDisplay)}</strong>. This job is clear to schedule.`
+    : `Stripe is holding ${moneyText(row.financedTotal)} for <strong>${escapeHtml(row.quoteNumberDisplay)}</strong> — but they haven't signed yet. Not clear to schedule until they do.`;
+  const statusText = row.signed
+    ? `${moneyText(row.financedTotal)} held, clear to schedule`
+    : `${moneyText(row.financedTotal)} held, still waiting on their signature`;
   const html = BRAND_WRAP(`
   <h2 style="margin:0 0 6px; font-size:22px;">✅ Klarna approved ${escapeHtml(row.customerName || "the customer")}</h2>
-  <p style="margin:0 0 18px; color:#555;">Stripe is holding ${moneyText(row.financedTotal)} for <strong>${escapeHtml(row.quoteNumberDisplay)}</strong>. This job is clear to schedule.</p>
+  <p style="margin:0 0 18px; color:#555;">${statusLine}</p>
   <p style="margin:0 0 18px; color:#555;">Capture it any time before <strong>${escapeHtml(deadline)}</strong> (28 days from approval) — after that Stripe auto-cancels the hold.</p>
 ${CTA(detailUrl(row), "Open this quote →")}`);
-  const text = `Klarna approved ${row.customerName || "the customer"} for ${row.quoteNumberDisplay} — ${moneyText(row.financedTotal)} held, capture by ${deadline}. ${detailUrl(row)}`;
+  const text = `Klarna approved ${row.customerName || "the customer"} for ${row.quoteNumberDisplay} — ${statusText}, capture by ${deadline}. ${detailUrl(row)}`;
   return send({ to: teamRecipient(), subject, html, text, kind: "other", refId: `financing-authorized-${row.id}` });
 }
 

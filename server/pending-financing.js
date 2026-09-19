@@ -23,8 +23,15 @@ const STAGE_LABELS = {
   partially_captured: "Partially captured"
 };
 
-function stageLabel(stage) {
-  return STAGE_LABELS[stage] || String(stage || "");
+// PJL-35: financing can now authorize BEFORE a signature exists, so
+// "Authorized" alone can no longer be read as "clear to schedule" — the
+// row's own `signed` field (server-computed via quotes.isAccepted, the
+// one shared rule) says which one it actually is.
+function stageLabel(row) {
+  if (row.stage === "authorized") {
+    return row.signed ? "Authorized — clear to schedule" : "Authorized — awaiting signature";
+  }
+  return STAGE_LABELS[row.stage] || String(row.stage || "");
 }
 
 // Deadline column: only authorized/partially_captured rows carry a
@@ -69,7 +76,7 @@ function render() {
         ${row.pairedWithDeposit ? `<br><span class="pf-row-sub">balance after deposit</span>` : ""}
       </td>
       <td class="pf-amount">${fmt(row.financedAmount?.total)}</td>
-      <td><span class="pf-status pf-status--${escapeHtml(row.stage)}">${escapeHtml(stageLabel(row.stage))}</span></td>
+      <td><span class="pf-status pf-status--${escapeHtml(row.stage)}${row.stage === "authorized" && !row.signed ? " pf-status--unsigned" : ""}">${escapeHtml(stageLabel(row))}</span></td>
       <td>${deadlineCell(row)}</td>
     </tr>
   `).join("");

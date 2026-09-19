@@ -93,6 +93,10 @@
 .pf-status--authorized { background: #E8F4ED; color: #1B4D2E; }
 .pf-status--declined { background: #FFE6E0; color: #8A2418; }
 .pf-status--partially_captured { background: #FDF0DC; color: #8A5313; }
+/* PJL-35: authorized-but-not-yet-signed reads amber, not the "clear to
+   schedule" green — the two are no longer the same thing once financing
+   can approve before a signature exists. */
+.pf-status--authorized.pf-status--unsigned { background: #FDF0DC; color: #8A5313; }
 
 /* Deadline urgency — same escalation the reminder sweep uses (14/7/3/1
    days): green with room to spare, amber inside a week, red inside 72h

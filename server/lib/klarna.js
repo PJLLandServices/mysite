@@ -174,6 +174,11 @@ async function notifyAdminOfStageChange(quote, stage) {
     invoiceId = match?.id || null;
   } catch { /* alert still sends, just links to the quote instead */ }
 
+  // PJL-35: financing can now authorize before a signature exists, so
+  // "authorized" is no longer synonymous with "clear to schedule" — the
+  // alert copy has to say which one it actually is. One shared rule
+  // (quotes.isAccepted), not a fresh signed/accepted test for this alert.
+  const signed = quotes.isAccepted(quote);
   const row = {
     id: quote.id,
     quoteNumberDisplay: quote.quoteNumberDisplay || quote.id,
@@ -181,19 +186,38 @@ async function notifyAdminOfStageChange(quote, stage) {
     financedTotal: quote.financing?.financedAmount?.total,
     captureBy: quote.financing?.captureBy,
     base: resolvePublicBaseUrl(),
-    invoiceId
+    invoiceId,
+    signed
   };
 
   if (stage === "authorized") {
     await notifyFinancing.sendAuthorizedAlert(row).catch((err) => console.warn(`[klarna] authorized email failed for ${quote.id}: ${err?.message}`));
     const deadline = row.captureBy ? new Date(row.captureBy).toLocaleDateString("en-CA", { month: "short", day: "numeric" }) : "—";
-    await notifySms.sendFinancingReminderSms(`PJL: Klarna approved ${row.customerName || "customer"} for ${row.quoteNumberDisplay} (${fmtMoney(row.financedTotal)}) — clear to schedule. Capture by ${deadline}.`)
+    const smsTail = signed
+      ? `clear to schedule. Capture by ${deadline}.`
+      : `still waiting on their signature — not yet clear to schedule.`;
+    await notifySms.sendFinancingReminderSms(`PJL: Klarna approved ${row.customerName || "customer"} for ${row.quoteNumberDisplay} (${fmtMoney(row.financedTotal)}) — ${smsTail}`)
       .catch((err) => console.warn(`[klarna] authorized SMS failed for ${quote.id}: ${err?.message}`));
   } else {
     await notifyFinancing.sendDeclinedAlert(row).catch((err) => console.warn(`[klarna] declined email failed for ${quote.id}: ${err?.message}`));
     await notifySms.sendFinancingReminderSms(`PJL: Klarna declined ${row.customerName || "customer"} for ${row.quoteNumberDisplay} — quote still open, follow up another way.`)
       .catch((err) => console.warn(`[klarna] declined SMS failed for ${quote.id}: ${err?.message}`));
   }
+}
+
+// Customer-facing decline follow-up (PJL-35 TRD §7, new scope — PJL-34
+// only ever alerted Patrick internally on a decline). Fires alongside
+// notifyAdminOfStageChange from the same payment_intent.payment_failed
+// branch, same best-effort discipline (caller wraps this in .catch(),
+// never unwinds the state transition that already committed).
+async function notifyCustomerOfDecline(quote) {
+  const { resolvePublicBaseUrl } = require("./public-base-url");
+  const notify = require("./notify-customer");
+  const { customerName, customerEmail } = await resolveCustomerBits(quote);
+  if (!customerEmail) return { ok: false, skipped: true, reason: "no customer email" };
+  const token = quote.approval?.token || "";
+  const proposalUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(quote.id)}${token ? `?t=${encodeURIComponent(token)}` : ""}`;
+  return notify.sendFinancingDeclineEmail(quote, { toEmail: customerEmail, customerName, proposalUrl });
 }
 
 async function applyWebhookEvent(type, intentFromEvent) {
@@ -233,6 +257,7 @@ async function applyWebhookEvent(type, intentFromEvent) {
       declinedAt: new Date().toISOString()
     }, { by: "system", note: "Klarna declined the customer at checkout" });
     await notifyAdminOfStageChange(updated, "declined").catch(() => {});
+    await notifyCustomerOfDecline(updated).catch((err) => console.warn(`[klarna] decline email failed for ${updated.id}: ${err?.message}`));
     return { ok: true, action: "declined" };
   }
 
@@ -692,7 +717,14 @@ async function listPendingFinancing({ now = new Date() } = {}) {
         declinedAt: fin.declinedAt,
         captureBy: fin.captureBy,
         daysLeft: fin.captureBy ? daysUntil(fin.captureBy, now) : null,
-        invoiceId: invoiceIdByQuote.get(q.id) || null
+        invoiceId: invoiceIdByQuote.get(q.id) || null,
+        // PJL-35: financing can now authorize BEFORE a signature exists
+        // (apply-before-sign re-sequencing), so "authorized" alone no
+        // longer means clear to schedule — the queue page needs this to
+        // tell "approved, clear to go" apart from "approved, still
+        // waiting on their signature." One shared rule (quotes.isAccepted),
+        // not a second copy of the signed/accepted test.
+        signed: quotes.isAccepted(q)
       };
     })
     // Soonest deadline first — a running captureBy clock outranks

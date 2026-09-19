@@ -42,6 +42,25 @@
 //      SMS), never a customer, and never blocks the state transition
 //      that already committed if the alert itself fails
 //
+// ---- PJL-35 (apply-before-sign re-sequencing) additions ----
+//  14. quotes.isAccepted — the one shared signed/accepted rule (CLAUDE.md
+//      lifecycle-state discipline), regression-pinned against the OLD ad
+//      hoc inline expression it replaces
+//  15. listPendingFinancing's new `signed` field — authorized+signed vs
+//      authorized+unsigned rows, using the same shared rule
+//  16. notifyAdminOfStageChange / sendAuthorizedAlert's signed-aware copy
+//      — "clear to schedule" only when isAccepted() is also true
+//  17. sendFinancingLinkEmail copy regression — no longer assumes
+//      acceptance already happened (it can now fire pre-signature)
+//  18. sendFinancingDeclineEmail (new, TRD §7) — final locked copy (no
+//      price/fee mention, no negotiation invite — both specific,
+//      negotiated decisions), wired into applyWebhookEvent's decline
+//      branch alongside the existing internal alert
+//  19. The pre-signature apply trigger reuses onQuoteAccepted UNCHANGED —
+//      proven safe to call before AND after a signature exists
+//  20. lib/proposal-financing-bands.js — the hero/footer band HTML per
+//      financing.stage, extracted for direct testability
+//
 // Per CLAUDE.md's lifecycle-state rule, this file is the "pin it with a
 // test that fails on the OLD code" step for the financing state machine —
 // section 4 in particular exists to catch an illegal jump (e.g.
@@ -75,6 +94,8 @@ const settings = require(path.join(ROOT, "server", "lib", "settings.js"));
 const financingReminders = require(path.join(ROOT, "server", "lib", "financing-reminders.js"));
 const notifyFinancing = require(path.join(ROOT, "server", "lib", "notify-financing.js"));
 const notifySms = require(path.join(ROOT, "server", "lib", "notify-sms.js"));
+const notifyCustomer = require(path.join(ROOT, "server", "lib", "notify-customer.js"));
+const financingBands = require(path.join(ROOT, "server", "lib", "proposal-financing-bands.js"));
 
 const QUOTES_FILE = path.join(ROOT, "server", "data", "quotes.json");
 const SETTINGS_FILE = path.join(ROOT, "server", "data", "settings.json");
@@ -950,6 +971,312 @@ try {
       "needsAuth fences the pending-financing page as user (admin or tech)");
     ok(serverSrc.includes('pathname === "/api/admin/financing/pending" && req.method === "GET"'),
       "the pending-financing list route exists");
+
+    // PJL-35 — the new pre-signature apply-financing route: public (no
+    // requireAdmin/requireUser gate, same as the sign route it sits next
+    // to), token-gated via getByApprovalToken, and reuses onQuoteAccepted
+    // unmodified rather than a parallel implementation.
+    const applyAt = serverSrc.indexOf('pathname.match(/^\\/api\\/approve\\/([^/]+)\\/([^/]+)\\/apply-financing$/)');
+    ok(applyAt > 0, "the apply-financing route exists");
+    const applyBlock = serverSrc.slice(applyAt, applyAt + 1200);
+    ok(!/requireAdmin|requireUser/.test(applyBlock), "the apply-financing route is public (token-gated, not staff-gated) — applying happens before anyone has an account relationship established here");
+    ok(/quotes\.getByApprovalToken\(quoteId, token\)/.test(applyBlock), "the apply-financing route resolves the quote via the same token mechanism as /approve");
+    ok(/klarna\.onQuoteAccepted\(q, \{ by: "customer" \}\)/.test(applyBlock), "the route reuses onQuoteAccepted UNCHANGED rather than a second implementation");
+  }
+
+  // 14 — quotes.isAccepted (TRD §8): the one shared signed/accepted rule,
+  // regression-pinned against the OLD ad hoc inline expression it
+  // replaces (server.js's injectProposalAcceptFooter, pre-PJL-35) so the
+  // extraction can't silently change behaviour for any real quote shape.
+  {
+    const oldInline = (q) => !!(q?.signature && q.signature.signed) ||
+      q?.status === "accepted" || q?.status === "pending_admin_attestation";
+    const matrix = [
+      {},
+      { status: "draft" },
+      { status: "draft_preview" },
+      { status: "sent" },
+      { status: "accepted" },
+      { status: "pending_admin_attestation" },
+      { signature: { signed: true } },
+      { signature: { signed: false } },
+      { status: "sent", signature: { signed: true } },
+      { status: "sent", signature: { signed: false } }
+    ];
+    for (const q of matrix) {
+      ok(quotes.isAccepted(q) === oldInline(q), `quotes.isAccepted matches the old inline expression for ${JSON.stringify(q)}`);
+    }
+    ok(quotes.isAccepted(null) === false, "isAccepted(null) is false, never a throw");
+    ok(quotes.isAccepted(undefined) === false, "isAccepted(undefined) is false, never a throw");
+  }
+
+  // 15 — listPendingFinancing's new `signed` field (PJL-35): an
+  // authorized quote's row now says whether it's ALSO signed, since
+  // authorized alone stopped meaning "clear to schedule" the moment
+  // financing could authorize before a signature exists.
+  {
+    const soon = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+    fs.writeFileSync(QUOTES_FILE, JSON.stringify([
+      { id: "Q-SIGNED-1", quoteNumberDisplay: "Q-SIGNED-1", customerName: "Signed Sam", status: "accepted",
+        financing: { enabled: true, stage: "authorized", financedAmount: { total: 5000 }, captureBy: soon } },
+      { id: "Q-UNSIGNED-1", quoteNumberDisplay: "Q-UNSIGNED-1", customerName: "Unsigned Uma", status: "sent",
+        financing: { enabled: true, stage: "authorized", financedAmount: { total: 5000 }, captureBy: soon } }
+    ], null, 2) + "\n", "utf8");
+    fs.writeFileSync(INVOICES_FILE, JSON.stringify([], null, 2) + "\n", "utf8");
+    const rows = await klarna.listPendingFinancing();
+    const signedRow = rows.find((r) => r.id === "Q-SIGNED-1");
+    const unsignedRow = rows.find((r) => r.id === "Q-UNSIGNED-1");
+    ok(signedRow?.signed === true, "an accepted quote's pending-financing row reports signed: true");
+    ok(unsignedRow?.signed === false, "a sent-but-not-accepted quote's pending-financing row reports signed: false");
+  }
+
+  // 16 — notifyAdminOfStageChange carries `signed` on the alert row
+  // (PJL-35): the admin alert can no longer say "clear to schedule" on
+  // authorization alone. Reuses section 13's monkeypatch technique.
+  {
+    fs.writeFileSync(QUOTES_FILE, JSON.stringify([
+      { id: "Q-ROW-SIGNED", quoteNumberDisplay: "Q-ROW-SIGNED", customerName: "Signed Sam", status: "accepted",
+        financing: { enabled: true, stage: "link_sent", paymentLinkId: "plink_rs", financedAmount: { total: 5000 } } },
+      { id: "Q-ROW-UNSIGNED", quoteNumberDisplay: "Q-ROW-UNSIGNED", customerName: "Unsigned Uma", status: "sent",
+        financing: { enabled: true, stage: "link_sent", paymentLinkId: "plink_ru", financedAmount: { total: 5000 } } }
+    ], null, 2) + "\n", "utf8");
+    fs.writeFileSync(INVOICES_FILE, JSON.stringify([], null, 2) + "\n", "utf8");
+
+    const originalAuthorizedAlert = notifyFinancing.sendAuthorizedAlert;
+    const originalSms = notifySms.sendFinancingReminderSms;
+    const calls = []; const smsCalls = [];
+    notifyFinancing.sendAuthorizedAlert = async (row) => { calls.push(row); return { ok: true }; };
+    notifySms.sendFinancingReminderSms = async (body) => { smsCalls.push(body); return { ok: true }; };
+
+    const savedSecret = process.env.STRIPE_SECRET_KEY;
+    process.env.STRIPE_SECRET_KEY = "sk_test_fake";
+    const originalFetch = global.fetch;
+    try {
+      global.fetch = async () => ({
+        ok: true, status: 200, headers: { get: () => null },
+        json: async () => ({ id: "pi_rs", status: "requires_capture" })
+      });
+      await klarna.applyWebhookEvent("payment_intent.amount_capturable_updated", {
+        id: "pi_rs", metadata: { quoteId: "Q-ROW-SIGNED", source: "pjl-klarna" }
+      });
+      global.fetch = async () => ({
+        ok: true, status: 200, headers: { get: () => null },
+        json: async () => ({ id: "pi_ru", status: "requires_capture" })
+      });
+      await klarna.applyWebhookEvent("payment_intent.amount_capturable_updated", {
+        id: "pi_ru", metadata: { quoteId: "Q-ROW-UNSIGNED", source: "pjl-klarna" }
+      });
+      await new Promise((res) => setTimeout(res, 10));
+      const signedCall = calls.find((r) => r.id === "Q-ROW-SIGNED");
+      const unsignedCall = calls.find((r) => r.id === "Q-ROW-UNSIGNED");
+      ok(signedCall?.signed === true, "the alert row for an accepted quote carries signed: true");
+      ok(unsignedCall?.signed === false, "the alert row for a not-yet-accepted quote carries signed: false");
+      ok(smsCalls.some((s) => /clear to schedule/.test(s) && /Q-ROW-SIGNED/.test(s)), "the signed quote's SMS still says clear to schedule");
+      ok(smsCalls.some((s) => /still waiting on their signature/.test(s) && /Q-ROW-UNSIGNED/.test(s)), "the unsigned quote's SMS says still waiting on their signature, not clear to schedule");
+    } finally {
+      global.fetch = originalFetch;
+      if (savedSecret) process.env.STRIPE_SECRET_KEY = savedSecret; else delete process.env.STRIPE_SECRET_KEY;
+      notifyFinancing.sendAuthorizedAlert = originalAuthorizedAlert;
+      notifySms.sendFinancingReminderSms = originalSms;
+    }
+  }
+
+  // sendAuthorizedAlert's own copy branching (notify-financing.js) — a
+  // source check rather than a live send: no Gmail credentials exist in
+  // this sandbox, and `send()`'s early "no transporter" return means the
+  // subject/body strings it computes never reach an assertable return
+  // value. Reading the source for both wordings is the same technique
+  // already used above for route-wiring checks.
+  {
+    const notifyFinancingSrc = fs.readFileSync(path.join(ROOT, "server", "lib", "notify-financing.js"), "utf8");
+    ok(/row\.signed[\s\S]{0,80}is clear to schedule/.test(notifyFinancingSrc), "sendAuthorizedAlert's subject branches on row.signed for the clear-to-schedule wording");
+    ok(/still needs a signature/.test(notifyFinancingSrc), "sendAuthorizedAlert has the awaiting-signature subject wording");
+    ok(/haven't signed yet/.test(notifyFinancingSrc), "sendAuthorizedAlert's body explains the unsigned case plainly, not just the subject line");
+  }
+
+  // 17 — sendFinancingLinkEmail copy regression (PJL-35 TRD §6): this
+  // email now also fires from the pre-signature apply trigger, where
+  // nothing's been approved yet — pins that the old "approving quote X"
+  // framing (which assumed post-signature) can't silently come back.
+  {
+    ok(typeof notifyCustomer.sendFinancingLinkEmail === "function", "sendFinancingLinkEmail is exported");
+    const notifyCustomerSrc = fs.readFileSync(path.join(ROOT, "server", "lib", "notify-customer.js"), "utf8");
+    const fnStart = notifyCustomerSrc.indexOf("async function sendFinancingLinkEmail");
+    const fnBlock = notifyCustomerSrc.slice(fnStart, fnStart + 3200);
+    ok(!/Thanks for approving/.test(fnBlock), "sendFinancingLinkEmail no longer assumes the quote was already approved/signed");
+    ok(/Thanks for your interest in financing/.test(fnBlock), "sendFinancingLinkEmail's copy is signature-neutral");
+    ok(/until you're approved and sign/.test(fnBlock), "sendFinancingLinkEmail is explicit that signing is still a separate, later step");
+  }
+
+  // 18 — sendFinancingDeclineEmail (new, TRD §7): final locked copy,
+  // checked via previewOnly (builds the real HTML/text without needing a
+  // live transporter, same email a real send would produce). Two
+  // specific, negotiated decisions get pinned here, not just "an email
+  // goes out": no price/fee mention (possible merchant-agreement
+  // restriction, Patrick's call), and no wording that reads as an
+  // invitation to negotiate a lower number over email.
+  {
+    const result = await notifyCustomer.sendFinancingDeclineEmail(
+      { id: "Q-DECLINE-PREVIEW", customerEmail: "declined@example.com" },
+      { toEmail: "declined@example.com", customerName: "Dana Decline", proposalUrl: "https://pjllandservices.com/approve/Q-DECLINE-PREVIEW?t=abc", previewOnly: true }
+    );
+    ok(result.ok === true && result.preview, "previewOnly returns the built copy without needing a transporter");
+    const { html, text, subject } = result.preview;
+    ok(subject === "About your financing application", "decline email subject matches the locked copy");
+    ok(/wasn't able to approve financing/.test(text), "decline email states the decline plainly");
+    ok(/welcome to try again/.test(text), "decline email includes the try-again reassurance");
+    ok(/Klarna's customer service|klarna\.com\/us\/customer-service/.test(text), "decline email points decision questions to Klarna, not PJL");
+    ok(/still waiting whenever you're ready/.test(text) && text.includes("https://pjllandservices.com/approve/Q-DECLINE-PREVIEW?t=abc"), "decline email links back to the real proposal URL");
+    ok(!/\$|price|cheaper|fee/i.test(text), "decline email never mentions price, cost, or Klarna's fee — dropped per Patrick (possible merchant-agreement restriction)");
+    ok(!/lower|discount|negotiat/i.test(text), "decline email never invites a negotiate-the-price reply");
+    ok(!/cheque/i.test(text), "decline email never offers a cheque — the same correction applied to the original draft carries through");
+    ok(typeof html === "string" && /wasn't able to approve financing/.test(html), "html body carries the same decline copy as the text body");
+    ok(typeof html === "string" && html.length > 100, "decline email HTML body is non-trivial");
+
+    // No email on file -> skipped, not a throw, matching every other
+    // email function in this file's established contract.
+    const noEmailResult = await notifyCustomer.sendFinancingDeclineEmail({ id: "Q-DECLINE-NOEMAIL" }, {});
+    ok(noEmailResult.ok === false && noEmailResult.skipped === true, "no customer email on file -> skipped cleanly");
+  }
+
+  // Decline email wiring — fires alongside the existing internal alert
+  // from applyWebhookEvent's payment_intent.payment_failed branch, same
+  // best-effort discipline (never blocks the state transition).
+  {
+    fs.writeFileSync(QUOTES_FILE, JSON.stringify([
+      { id: "Q-DECLINE-WIRE", quoteNumberDisplay: "Q-DECLINE-WIRE", customerName: "Wired Wendy", customerEmail: "wendy@example.com",
+        approval: { token: "tok-wire" },
+        financing: { enabled: true, stage: "link_sent", paymentLinkId: "plink_dw", financedAmount: { total: 5000 } } }
+    ], null, 2) + "\n", "utf8");
+    fs.writeFileSync(CUSTOMERS_FILE, JSON.stringify([], null, 2) + "\n", "utf8");
+
+    const originalDeclineEmail = notifyCustomer.sendFinancingDeclineEmail;
+    const originalDeclinedAlert = notifyFinancing.sendDeclinedAlert;
+    const declineEmailCalls = [];
+    notifyCustomer.sendFinancingDeclineEmail = async (quote, opts) => { declineEmailCalls.push({ quote, opts }); return { ok: true }; };
+    notifyFinancing.sendDeclinedAlert = async () => ({ ok: true });
+    try {
+      const r = await klarna.applyWebhookEvent("payment_intent.payment_failed", {
+        id: "pi_dw", metadata: { quoteId: "Q-DECLINE-WIRE", source: "pjl-klarna" }
+      });
+      ok(r.action === "declined", "the webhook still declines normally");
+      await new Promise((res) => setTimeout(res, 10));
+      ok(declineEmailCalls.length === 1, "the customer decline email fired exactly once");
+      ok(declineEmailCalls[0]?.opts?.toEmail === "wendy@example.com", "the decline email went to the customer's own address");
+      ok(declineEmailCalls[0]?.opts?.proposalUrl?.includes("Q-DECLINE-WIRE") && declineEmailCalls[0]?.opts?.proposalUrl?.includes("tok-wire"), "the decline email's proposal link carries the quote id and the real approval token");
+    } finally {
+      notifyCustomer.sendFinancingDeclineEmail = originalDeclineEmail;
+      notifyFinancing.sendDeclinedAlert = originalDeclinedAlert;
+    }
+
+    // A failing decline-email send must never surface through the webhook
+    // or roll back the state transition that already committed.
+    fs.writeFileSync(QUOTES_FILE, JSON.stringify([
+      { id: "Q-DECLINE-THROWS", quoteNumberDisplay: "Q-DECLINE-THROWS", customerName: "Throws Theo", customerEmail: "theo@example.com",
+        financing: { enabled: true, stage: "link_sent", paymentLinkId: "plink_dt", financedAmount: { total: 5000 } } }
+    ], null, 2) + "\n", "utf8");
+    notifyCustomer.sendFinancingDeclineEmail = async () => { throw new Error("SMTP exploded"); };
+    notifyFinancing.sendDeclinedAlert = async () => ({ ok: true });
+    try {
+      const r = await klarna.applyWebhookEvent("payment_intent.payment_failed", {
+        id: "pi_dt", metadata: { quoteId: "Q-DECLINE-THROWS", source: "pjl-klarna" }
+      });
+      ok(r.action === "declined", "a failing decline email never blocks the webhook's own action/return value");
+      const q = await quotes.get("Q-DECLINE-THROWS");
+      ok(q.financing.stage === "declined", "the quote still committed to declined despite the email failing");
+    } finally {
+      notifyCustomer.sendFinancingDeclineEmail = originalDeclineEmail;
+      notifyFinancing.sendDeclinedAlert = originalDeclinedAlert;
+    }
+  }
+
+  // 19 — the pre-signature apply trigger reuses onQuoteAccepted UNCHANGED
+  // (TRD §1/§2's central claim): a financing-enabled, unsigned quote can
+  // complete the WHOLE financing hand-off — link created, stage moves to
+  // link_sent — while staying genuinely unsigned throughout. This is the
+  // test that proves the claim, not just documents it.
+  {
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({
+      financing: { enabled: true, minTotal: 1500, maxTotal: 17500, feePercent: 0.0599, feeFixedCents: 30 }
+    }, null, 2) + "\n", "utf8");
+    fs.writeFileSync(CUSTOMERS_FILE, JSON.stringify([
+      { id: "CUST-PRESIGN", name: "Presign Pat", email: "pat@example.com", accountType: "residential" }
+    ], null, 2) + "\n", "utf8");
+    fs.writeFileSync(QUOTES_FILE, JSON.stringify([
+      { id: "Q-PRESIGN", total: 10000, customerId: "CUST-PRESIGN", status: "sent", deposit: { enabled: false, amount: 0 },
+        financing: { enabled: true, stage: "not_offered" } }
+    ], null, 2) + "\n", "utf8");
+
+    const savedSecret = process.env.STRIPE_SECRET_KEY;
+    process.env.STRIPE_SECRET_KEY = "sk_test_fake";
+    const originalFetch = global.fetch;
+    try {
+      global.fetch = async () => ({
+        ok: true, status: 200, headers: { get: () => null },
+        json: async () => ({ id: "plink_presign", url: "https://buy.stripe.com/test_presign" })
+      });
+      let q = await quotes.get("Q-PRESIGN");
+      ok(quotes.isAccepted(q) === false, "sanity: the quote starts genuinely unsigned");
+      const r = await klarna.onQuoteAccepted(q, { by: "customer" });
+      ok(r.ok === true && r.paymentLink?.url === "https://buy.stripe.com/test_presign", "onQuoteAccepted succeeds when called PRE-signature, exactly as it does post-signature");
+      q = await quotes.get("Q-PRESIGN");
+      ok(q.financing.stage === "link_sent", "financing reached link_sent with no signature ever having existed");
+      ok(quotes.isAccepted(q) === false, "the quote is STILL unsigned — starting financing never signs anything");
+    } finally {
+      global.fetch = originalFetch;
+      if (savedSecret) process.env.STRIPE_SECRET_KEY = savedSecret; else delete process.env.STRIPE_SECRET_KEY;
+    }
+  }
+
+  // 20 — lib/proposal-financing-bands.js: the hero/footer HTML per
+  // financing.stage, extracted from server.js for direct testability.
+  {
+    const notEnabled = { id: "Q-BAND-0", financing: { enabled: false } };
+    ok(financingBands.financingHeroBandHtml(notEnabled) === "", "no financing.enabled -> hero band is empty (a plain proposal carries neither band)");
+    ok(financingBands.financingFooterContentHtml(notEnabled, {}) === "", "no financing.enabled -> footer content is empty");
+
+    const signed = { id: "Q-BAND-1", status: "accepted", financing: { enabled: true, stage: "authorized" } };
+    ok(financingBands.financingHeroBandHtml(signed) === "", "signed -> hero band is empty, its job is done");
+    ok(financingBands.financingFooterContentHtml(signed, {}) === "", "signed -> footer content is empty (existing accepted-branch copy covers it)");
+
+    const notOffered = { id: "Q-BAND-2", status: "sent", financing: { enabled: true, stage: "not_offered" } };
+    const heroNotOffered = financingBands.financingHeroBandHtml(notOffered);
+    ok(/Fund your project fast/.test(heroNotOffered) && /Klarna/.test(heroNotOffered), "not_offered hero band shows the locked pitch copy + badge");
+    const footerNotOffered = financingBands.financingFooterContentHtml(notOffered, { signHref: "/approve/Q-BAND-2?t=x&sign=1", token: "tok2" });
+    ok(/Apply for financing/.test(footerNotOffered), "not_offered footer shows the Apply for financing button");
+    ok(!/Accept &amp; sign online/.test(footerNotOffered), "not_offered footer does NOT show Accept & sign — nothing to sign yet");
+    ok(footerNotOffered.includes('data-quote-id="Q-BAND-2"') && footerNotOffered.includes('data-token="tok2"'), "the apply button carries the real quote id + token for its fetch call");
+
+    const linkSent = { id: "Q-BAND-3", status: "sent", financing: { enabled: true, stage: "link_sent" } };
+    const footerLinkSent = financingBands.financingFooterContentHtml(linkSent, { signHref: "/approve/Q-BAND-3?t=x&sign=1" });
+    ok(/Check your email/.test(footerLinkSent) && /Nothing to sign yet/.test(footerLinkSent), "link_sent footer tells them to check email, nothing to sign yet");
+    ok(!/Apply for financing/.test(footerLinkSent) && !/Accept &amp; sign online/.test(footerLinkSent), "link_sent footer has no button at all — nothing to click here");
+
+    const authorizedUnsigned = { id: "Q-BAND-4", status: "sent", financing: { enabled: true, stage: "authorized" } };
+    const footerAuthorized = financingBands.financingFooterContentHtml(authorizedUnsigned, { signHref: "/approve/Q-BAND-4?t=x&sign=1" });
+    ok(/You're approved for financing/.test(footerAuthorized) && /Accept &amp; sign online/.test(footerAuthorized), "authorized-but-unsigned footer shows approval + the Accept & sign button for the first time");
+    const heroAuthorized = financingBands.financingHeroBandHtml(authorizedUnsigned);
+    ok(/You're approved for financing/.test(heroAuthorized), "authorized-but-unsigned hero band shows the short status line");
+
+    const declined = { id: "Q-BAND-5", status: "sent", financing: { enabled: true, stage: "declined" } };
+    const footerDeclined = financingBands.financingFooterContentHtml(declined, { signHref: "/approve/Q-BAND-5?t=x&sign=1" });
+    ok(/wasn't able to approve financing/.test(footerDeclined) && /Accept &amp; sign online/.test(footerDeclined), "declined footer explains the decline and still offers Accept & sign (pay another way)");
+
+    const depositPaired = { id: "Q-BAND-6", status: "sent", financing: { enabled: true, stage: "not_offered", pairedWithDeposit: true } };
+    const heroDeposit = financingBands.financingHeroBandHtml(depositPaired);
+    ok(/remaining balance/.test(heroDeposit), "a deposit-paired quote's hero band says remaining balance, not the whole project");
+
+    // Badge sizing is a fixed constant everywhere, never computed per-context.
+    ok(/height:78px/.test(heroNotOffered), "hero band badge is fixed at 78px (the minimum-size math), not a smaller context-dependent size");
+    ok(!/height:6\dpx/.test(footerLinkSent + footerNotOffered + footerAuthorized + footerDeclined), "no footer-band variant regresses to a sub-70px-wordmark badge height");
+
+    // The real badge Patrick supplied earlier in the session — regression
+    // guard against the file existing only in a scratchpad again (TRD's
+    // first version referenced two placeholder SVGs that were never
+    // actually added to the repo; this pins that the real asset the code
+    // now points to is really there).
+    ok(financingBands.KLARNA_BADGE === "/klarna-badge.png", "the bands reference the one real badge file, not a placeholder path");
+    ok(fs.existsSync(path.join(ROOT, "server", "klarna-badge.png")), "server/klarna-badge.png actually exists in the repo");
   }
 } finally {
   restoreFixtures();
