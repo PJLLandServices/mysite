@@ -34,10 +34,21 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 
+// The band's BACKGROUND (cream + orange top border) stretches edge to
+// edge, matching how the rest of the page's own bands work — but the
+// CONTENT inside has to stay in the same max-width:1180px column
+// everything else on the page uses (.wrap, in sprinkler-theme.css),
+// or it drifts to the literal left/right edges of the browser window
+// on a wide monitor. Missing that the first time is exactly what
+// produced the huge, unbalanced-looking gap Patrick flagged from a
+// screenshot on his own (wide) screen — it never showed up in this
+// session's own mockup renders because those were always cropped to a
+// narrow 1280px frame, which happens to be close to the 1180px cap.
 function heroBandWrap(inner) {
   return `
-<div id="pjl-fin-hero-band" style="background:#FAFAF5;border-top:4px solid #E07B24;padding:30px clamp(20px,5vw,64px);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:18px 40px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+<div id="pjl-fin-hero-band" style="background:#FAFAF5;border-top:4px solid #E07B24;">
   <style>
+    #pjl-fin-hero-band-in{max-width:1180px;margin:0 auto;padding:30px clamp(20px,5vw,64px);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:18px 40px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
     #pjl-fin-hero-band .pjl-fin-head{font-weight:800;text-transform:uppercase;color:#1B4D2E;font-size:clamp(20px,2.7vw,30px);line-height:1.08;margin:0;}
     #pjl-fin-hero-band .pjl-fin-head br+*{color:#E07B24;}
     #pjl-fin-hero-band .pjl-fin-by{display:flex;align-items:center;gap:16px;}
@@ -45,7 +56,9 @@ function heroBandWrap(inner) {
     #pjl-fin-hero-band .pjl-fin-badge{height:78px;width:auto;display:block;}
     #pjl-fin-hero-band .pjl-fin-status{font-weight:700;font-size:19px;color:#1B4D2E;margin:0;}
   </style>
+  <div id="pjl-fin-hero-band-in">
   ${inner}
+  </div>
 </div>`;
 }
 

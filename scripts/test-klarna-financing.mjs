@@ -1268,6 +1268,15 @@ try {
 
     // Badge sizing is a fixed constant everywhere, never computed per-context.
     ok(/height:78px/.test(heroNotOffered), "hero band badge is fixed at 78px (the minimum-size math), not a smaller context-dependent size");
+
+    // Regression: the hero band's content must stay inside the same
+    // max-width:1180px column the rest of the page uses (.wrap in
+    // sprinkler-theme.css), or on a wide monitor the space-between flex
+    // layout drags the headline and badge out to the literal left/right
+    // edges of the browser window — the exact bug Patrick caught from a
+    // real screenshot (invisible in this session's own mockups, which
+    // were always cropped to a ~1280px frame).
+    ok(/max-width:1180px/.test(heroNotOffered), "hero band content is capped at the same 1180px width every other section on the page uses");
     ok(!/height:6\dpx/.test(footerLinkSent + footerNotOffered + footerAuthorized + footerDeclined), "no footer-band variant regresses to a sub-70px-wordmark badge height");
 
     // The real badge Patrick supplied earlier in the session — regression
