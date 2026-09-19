@@ -23944,12 +23944,27 @@ async function orderDayForDriving(rows) {
   // yet through the SAME function, so what the preview shows is what
   // the board will show once the stop is added. `day` null is a
   // booking-only date: a real numbered route built from its bookings.
-  async function resolvePlanDay({ date, day, bookedRows, byCode, season, bucketCap, requestedWindows, woType }) {
+  async function resolvePlanDay({ date, day, bookedRows, byCode, season, bucketCap, requestedWindows, woType, confirm = null }) {
     const { sequenced } = await sequenceDayWithBookings({
       storedDay: day, bookedRows, byCode, season, requestedWindows
     });
     const weekday = new Date(`${date}T12:00:00`).toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" });
     const booked = numberBookedRows(bookedRows || [], sequenced.timeline);
+
+    // A row's confirmation state, when its booking is a live assignment
+    // booking: { bookingId, sentAt } — sentAt null means the step-1
+    // message is still owed and the panel offers the button. Absent for
+    // self-booked customers (confirmed automatically at reserve time)
+    // and when no `confirm` context rides in (the day preview).
+    const confirmationFor = (bookingId) => {
+      const b = bookingId && confirm ? confirm.byId.get(bookingId) : null;
+      if (!b) return null;
+      return { bookingId: b.id, sentAt: b.assignment.outreach?.steps?.["1"]?.at || null };
+    };
+    for (const row of booked) {
+      const c = confirmationFor(row.bookingId);
+      if (c) row.confirmation = c;
+    }
 
     if (!day) {
       return {
@@ -23985,12 +24000,17 @@ async function orderDayForDriving(rows) {
     // The stop's time window travels with the row, so the control that
     // sets it and the sequencer that honours it read the same value.
     const windows = (day && day.constraints) || {};
-    const withNumber = (code) => ({
-      ...resolvePlanStop(byCode, woType, code),
-      stopNumber: stopNumbers.get(code) || null,
-      notBefore: (windows[code] && windows[code].notBefore) || null,
-      notAfter: (windows[code] && windows[code].notAfter) || null
-    });
+    const withNumber = (code) => {
+      const stop = {
+        ...resolvePlanStop(byCode, woType, code),
+        stopNumber: stopNumbers.get(code) || null,
+        notBefore: (windows[code] && windows[code].notBefore) || null,
+        notAfter: (windows[code] && windows[code].notAfter) || null
+      };
+      const c = confirm ? confirmationFor(confirm.stopBookingId(code, date)) : null;
+      if (c) stop.confirmation = c;
+      return stop;
+    };
     // Plan stops only — the synthetic booked codes are dropped from the
     // rendered bucket lists (they render as booked rows), but they DO
     // keep their numbers in the shared timeline so the map draws them.
@@ -24047,7 +24067,22 @@ async function orderDayForDriving(rows) {
     const leadsForBooked = await readLeads();
     const bookedByDate = await gatherBookedRows({ plan, season, year, all, leads: leadsForBooked });
 
-    const shared = { byCode, season, bucketCap: plan.bucketCap, requestedWindows: customerWindows, woType };
+    // Confirmation state per stop — whether the step-1 assignment message
+    // (the customer's "you're booked") has gone out, so the panel can
+    // offer Send confirmation on the stops still owed one and say "sent"
+    // on the rest. Read from the same outreach record rule 1 writes, so
+    // the panel, the blast and the cadence can never disagree.
+    const confirm = {
+      byId: new Map((await bookings.list())
+        .filter((b) => b && b.source === "assignment" && b.assignment && b.status === "confirmed")
+        .map((b) => [b.id, b])),
+      stopBookingId: (code, date) => {
+        const s = driven.stateFor(code, date);
+        return s && s.state === "on_day" ? s.bookingId : null;
+      }
+    };
+
+    const shared = { byCode, season, bucketCap: plan.bucketCap, requestedWindows: customerWindows, woType, confirm };
     for (const date of Object.keys(plan.days).sort()) {
       const bookedRows = bookedByDate.get(date) || [];
       bookedByDate.delete(date); // consumed — the rest become booking-only days
@@ -24771,6 +24806,43 @@ async function orderDayForDriving(rows) {
       return sendJson(res, 200, { ok: true, booking: updated });
     } catch (err) {
       return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't mark that."] });
+    }
+  }
+
+  // The Season Plan's per-stop "Send confirmation" — the step-1
+  // assignment message for ONE booking, pressed the moment Patrick books
+  // a customer from the desktop, instead of waiting for the season-wide
+  // blast. Same message, same send path, same rule 1: the cadence and
+  // the blast can never double-send a customer confirmed here. Admin
+  // only, exactly like the blast — it messages a customer.
+  const sendConfirmMatch = pathname.match(/^\/api\/assignments\/bookings\/([^/]+)\/send-confirmation$/);
+  if (sendConfirmMatch && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) {
+        return sendJson(res, 403, { ok: false, errors: ["Sending a confirmation needs an admin login."] });
+      }
+      const result = await assignmentCadence.sendConfirmationForBooking(
+        decodeURIComponent(sendConfirmMatch[1]),
+        { by: session?.email || session?.name || "admin", appointmentPageReady: APPOINTMENT_PAGE_READY }
+      );
+      if (result.ok === false && result.skipped) {
+        const why = {
+          season_opt_out: "This property opted out of this season's messages.",
+          no_contact_needed: "This property is marked “no need to contact” — it is never messaged.",
+          no_deliverable_channel: "No email or SMS can reach this customer.",
+          inactive: "This property is archived or deleted.",
+          not_found: "The booking's property no longer exists."
+        };
+        return sendJson(res, 422, { ok: false, errors: [why[result.reason] || `Skipped: ${result.reason}.`] });
+      }
+      if (result.ok === false) {
+        return sendJson(res, 502, { ok: false, errors: (result.errors || []).map((e) => `${e.channel || "send"}: ${e.error}`) });
+      }
+      return sendJson(res, 200, result);
+    } catch (err) {
+      const status = err?.code === "NOT_FOUND" ? 404 : err?.code === "SEND_LOCKED" ? 409 : 422;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't send the confirmation."] });
     }
   }
 

@@ -74,6 +74,54 @@
 
   // ---- Render ------------------------------------------------------
 
+  // "Send confirmation" — the step-1 assignment message ("you're booked
+  // for {date}") for THIS customer, now, instead of waiting for the
+  // season-wide blast. Same message, same ledger: a stop confirmed here
+  // reads "already sent" to the blast and vice versa, so the tag and the
+  // button can simply mirror `confirmation.sentAt`. On success the
+  // control swaps itself for the sent tag in place — no full replan for
+  // a one-row state change.
+  function confirmControl(confirmation) {
+    const sentTag = (at) => {
+      const tag = document.createElement("span");
+      tag.className = "sp-tag is-booked";
+      const when = at ? new Date(at) : null;
+      tag.textContent = when
+        ? `confirmed ${when.toLocaleDateString("en-CA", { month: "short", day: "numeric" })}`
+        : "confirmed";
+      if (when) tag.title = `Confirmation sent ${when.toLocaleString("en-CA")}`;
+      return tag;
+    };
+    if (confirmation.sentAt) return sentTag(confirmation.sentAt);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "sp-window-btn";
+    button.textContent = "Send confirmation";
+    button.title = "Email + text this customer their booking confirmation now";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      button.textContent = "Sending…";
+      try {
+        const response = await fetch(
+          `/api/assignments/bookings/${encodeURIComponent(confirmation.bookingId)}/send-confirmation`,
+          { method: "POST" }
+        );
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error((data.errors || ["The send failed."]).join(" "));
+        showToast(data.alreadySent
+          ? "This customer already has their confirmation."
+          : `Confirmation sent (${(data.sent || []).join(" + ") || "queued"}).`);
+        button.replaceWith(sentTag(data.at || new Date().toISOString()));
+      } catch (error) {
+        showToast(error.message, "bad");
+        button.disabled = false;
+        button.textContent = "Send confirmation";
+      }
+    });
+    return button;
+  }
+
   function stopRow(stop, date, bucket, arrival) {
     const li = document.createElement("li");
     li.className = `sp-stop${stop.resolved ? "" : " is-unresolved"}`;
@@ -151,6 +199,7 @@
       windowForm = window.form;
       meta.appendChild(nudgeControl(stop, date, bucket, arrival));
       meta.appendChild(moveControl(stop, date, bucket));
+      if (stop.confirmation) meta.appendChild(confirmControl(stop.confirmation));
     }
     li.appendChild(meta);
     if (windowForm) li.appendChild(windowForm);
@@ -466,6 +515,10 @@
       + `<span class="sp-stop-sub">${escapeHtml(b.address || "")}${b.serviceLabel ? ` · ${escapeHtml(b.serviceLabel)}` : ""}</span>`
       + `</span>`
       + `<span class="sp-tag is-booked">booked</span>`;
+    // An assignment booking sitting on the day as a booked row (its
+    // property left the plan's stop list) still owes or carries its
+    // confirmation, same as a plan stop.
+    if (b.confirmation) li.appendChild(confirmControl(b.confirmation));
     return li;
   }
 
