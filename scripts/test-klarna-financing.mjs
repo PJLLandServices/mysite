@@ -1275,8 +1275,16 @@ try {
     // first version referenced two placeholder SVGs that were never
     // actually added to the repo; this pins that the real asset the code
     // now points to is really there).
-    ok(financingBands.KLARNA_BADGE === "/klarna-badge.png", "the bands reference the one real badge file, not a placeholder path");
+    ok(financingBands.KLARNA_BADGE === "/crm/klarna-badge.png", "the bands reference the badge at a URL that's actually servable — bare /klarna-badge.png 404s (only /crm/ reaches server/), a real bug caught after this shipped");
     ok(fs.existsSync(path.join(ROOT, "server", "klarna-badge.png")), "server/klarna-badge.png actually exists in the repo");
+
+    // Regression guard for the exact bug that shipped: the badge path
+    // must start with /crm/ (the only prefix server.js's
+    // resolveStaticTarget maps to SERVER_DIR) or it 404s in production
+    // even though it works in every local/unit-test check.
+    ok(financingBands.KLARNA_BADGE.startsWith("/crm/"), "the badge URL is under /crm/ — anything else silently 404s on the real site (SITE_DIR is the repo root, not server/)");
+    const serverSrcForRouting = fs.readFileSync(path.join(ROOT, "server", "server.js"), "utf8");
+    ok(/pathname\.startsWith\("\/crm\/"\)/.test(serverSrcForRouting), "sanity: server.js still maps /crm/ to SERVER_DIR the way this test assumes");
   }
 } finally {
   restoreFixtures();
