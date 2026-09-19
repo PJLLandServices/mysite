@@ -1045,21 +1045,27 @@ async function sendFinancingLinkEmail(quote, {
     ? `This covers the remaining balance of ${financedAmountText} — your deposit is billed separately and isn't part of this application.`
     : `This covers the full project total of ${financedAmountText}.`;
 
+  // Copy fixed 2026-09-19 (PJL-35 TRD §6): this used to say "thanks for
+  // approving quote X," written back when financing only ever started
+  // AFTER a signature existed. It now also fires from the pre-signature
+  // "Apply for financing" click (PJL-35), where nothing's been approved
+  // yet — so the copy can't assume acceptance happened, and needs to say
+  // plainly that signing is still a separate, later step.
   const { html, text } = brandedEmail({
     headline: "Apply for financing through Klarna",
     bodyHtml: `
       <p style="margin: 0 0 12px;">Hi ${escapeHtml(firstName)},</p>
-      <p style="margin: 0 0 12px;">Thanks for approving quote <strong>${escapeHtml(displayId)}</strong>. As requested, here's your secure link to apply for financing through Klarna.</p>
+      <p style="margin: 0 0 12px;">Thanks for your interest in financing quote <strong>${escapeHtml(displayId)}</strong>. Here's your secure link to apply through Klarna.</p>
       ${scopeHtml}
-      <p style="margin: 0 0 12px;">Klarna will let you know right away whether you're approved — nothing is charged until the work is complete. Applying doesn't affect the schedule; we'll be in touch separately to book the job.</p>
+      <p style="margin: 0 0 12px;">Klarna will let you know right away whether you're approved — nothing is charged, and nothing is booked, until you're approved and sign to move ahead.</p>
     `,
     bodyText: [
       `Hi ${firstName},`,
       "",
-      `Thanks for approving quote ${displayId}. As requested, here's your secure link to apply for financing through Klarna.`,
+      `Thanks for your interest in financing quote ${displayId}. Here's your secure link to apply through Klarna.`,
       scopeText,
       "",
-      "Klarna will let you know right away whether you're approved — nothing is charged until the work is complete. Applying doesn't affect the schedule; we'll be in touch separately to book the job."
+      "Klarna will let you know right away whether you're approved — nothing is charged, and nothing is booked, until you're approved and sign to move ahead."
     ].filter(Boolean).join("\n"),
     ctaLabel: "Apply for financing",
     ctaUrl: paymentLinkUrl,
@@ -1081,6 +1087,94 @@ async function sendFinancingLinkEmail(quote, {
   } catch (error) {
     await logSend({ kind: "stage_notice", to, ok: false, error: error.message, refId: quote?.id });
     console.error(`[klarna-link] failed quoteId=${quote?.id}:`, error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
+// Customer-facing decline follow-up (PJL-35 TRD §7, new scope — the
+// original PJL-34 build only alerted Patrick internally on a decline,
+// the customer heard nothing). Fully automatic, same generic copy to
+// every declined customer (Patrick's explicit call — see the PRD): no
+// per-customer branching, and deliberately no mention of price or a
+// cheaper direct-pay option (dropped per Patrick — a possible merchant-
+// agreement restriction on suggesting a financed-vs-direct price
+// difference, and to avoid inviting email negotiation over the total).
+// Triggered from klarna.js's applyWebhookEvent, payment_intent.payment_failed
+// branch, alongside the existing internal alert — same best-effort
+// discipline, .catch(() => {}) at the call site, never blocks or unwinds
+// the state transition that already committed.
+// `previewOnly: true` builds the copy and returns it without touching the
+// transporter or sending anything — lets tests pin the actual wording
+// (no price mention, no negotiation invite — both specific, negotiated
+// decisions, not defaults worth losing to a silent copy edit later)
+// without needing live Gmail credentials, same as no other email in this
+// file could otherwise be copy-tested in this sandbox.
+async function sendFinancingDeclineEmail(quote, {
+  toEmail = "",
+  customerName = "",
+  proposalUrl = "",
+  previewOnly = false
+} = {}) {
+  const to = String(toEmail || quote?.customerEmail || "").trim();
+  if (!to) return { ok: false, skipped: true, reason: "no customer email" };
+
+  const rawName = String(customerName || "").trim().split(" ")[0];
+  const firstName = rawName || "there";
+  const link = proposalUrl || `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(quote?.id || "")}`;
+
+  const { html, text } = brandedEmail({
+    headline: "About your financing application",
+    bodyHtml: `
+      <p style="margin: 0 0 12px;">Hi ${escapeHtml(firstName)},</p>
+      <p style="margin: 0 0 12px;">Klarna wasn't able to approve financing for this quote right now. This can happen for a lot of reasons we're not shown, and it's genuinely common — it doesn't mean no for good.</p>
+      <p style="margin: 0 0 8px;"><strong>A few things that might help:</strong></p>
+      <ul style="margin: 0 0 12px; padding-left: 20px;">
+        <li style="margin-bottom: 8px;"><strong>You're welcome to try again.</strong> Every application gets a fresh look — a lot of customers who weren't approved on the first try are approved later.</li>
+        <li style="margin-bottom: 8px;"><strong>Double-check your details</strong> were entered correctly (name, address, and date of birth need to match exactly).</li>
+        <li style="margin-bottom: 8px;"><strong>Questions about the decision itself</strong> go to Klarna directly, since we're never told the reason — <a href="https://www.klarna.com/us/customer-service/" style="color:#1B4D2E;">Klarna's customer service</a> can tell you more than we can.</li>
+        <li style="margin-bottom: 8px;"><strong>Your proposal is still waiting whenever you're ready</strong> — <a href="${escapeHtml(link)}" style="color:#1B4D2E;">view your proposal</a>. Want to talk about other ways to move forward? Just reply to this email or give us a call.</li>
+      </ul>
+    `,
+    bodyText: [
+      `Hi ${firstName},`,
+      "",
+      "Klarna wasn't able to approve financing for this quote right now. This can happen for a lot of reasons we're not shown, and it's genuinely common — it doesn't mean no for good.",
+      "",
+      "A few things that might help:",
+      "- You're welcome to try again. Every application gets a fresh look — a lot of customers who weren't approved on the first try are approved later.",
+      "- Double-check your details were entered correctly (name, address, and date of birth need to match exactly).",
+      "- Questions about the decision itself go to Klarna directly, since we're never told the reason — https://www.klarna.com/us/customer-service/ can tell you more than we can.",
+      `- Your proposal is still waiting whenever you're ready — ${link}. Want to talk about other ways to move forward? Just reply to this email or give us a call.`
+    ].join("\n"),
+    ctaLabel: "View your proposal",
+    ctaUrl: link,
+    footerNote: `Questions? Call us at <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a> or just reply to this email.`
+  });
+
+  if (previewOnly) return { ok: true, preview: { html, text, subject: "About your financing application" } };
+
+  const transporter = getTransporter();
+  if (!transporter) {
+    console.warn(`[klarna-decline] Skipped (no Gmail config) — quoteId=${quote?.id}`);
+    await logSend({ kind: "stage_notice", to, ok: false, error: "no Gmail config", refId: quote?.id });
+    return { ok: false, skipped: true };
+  }
+
+  try {
+    const info = await transporter.sendMail({
+      from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
+      to,
+      replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
+      subject: "About your financing application",
+      html,
+      text
+    });
+    await logSend({ kind: "stage_notice", to, ok: true, refId: quote?.id });
+    console.log(`[klarna-decline] sent quoteId=${quote?.id} to=${to} id=${info.messageId}`);
+    return { ok: true, messageId: info.messageId };
+  } catch (error) {
+    await logSend({ kind: "stage_notice", to, ok: false, error: error.message, refId: quote?.id });
+    console.error(`[klarna-decline] failed quoteId=${quote?.id}:`, error.message);
     return { ok: false, error: error.message };
   }
 }
@@ -2402,6 +2496,7 @@ module.exports = {
   sendCustomerLoginLink,
   sendQuoteAcceptedConfirmation,
   sendFinancingLinkEmail,
+  sendFinancingDeclineEmail,
   sendAdminPasswordResetLink,
   sendOutreachEmail,
   sendOutreachSms,

@@ -3137,6 +3137,20 @@ async function setScope(id, scope) {
   return q;
 }
 
+// Whether a quote has a real customer signature/acceptance on file — the
+// same boolean `server.js`'s injectProposalAcceptFooter already computed
+// inline, now a single named function per CLAUDE.md's lifecycle-state
+// discipline (PJL-35 TRD §8): a financing-re-sequencing bug was caught
+// before it shipped specifically because this test would otherwise have
+// been written a fourth time, slightly differently, somewhere new.
+// `pending_admin_attestation` counts as accepted — it's the pdf_return
+// acceptance method's own "signed, Patrick just needs to confirm" state,
+// not an unsigned one.
+function isAccepted(q) {
+  return !!(q?.signature && q.signature.signed) ||
+    q?.status === "accepted" || q?.status === "pending_admin_attestation";
+}
+
 async function setAcceptor(id, acceptor) {
   if (!id) throw new Error("setAcceptor needs id");
   const records = await readAll();
@@ -3156,6 +3170,7 @@ module.exports = {
   setAcceptor,
   setScope,
   normalizeAcceptor,
+  isAccepted,
   STATUSES,
   TYPES,
   PROPOSAL_BRANCHES,
