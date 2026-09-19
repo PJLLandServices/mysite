@@ -12,14 +12,18 @@
 //
 // Badge assets are Patrick's to supply (TRD §9) — referenced here by the
 // documented path even though the files don't exist in the repo yet, so
-// the code is ready the moment they land instead of needing a second
-// pass. Sized at a fixed 78px tall everywhere per the PRD's minimum-size
-// math (badge sets the row's scale, never the other way around).
+// Sized at a fixed 78px tall everywhere per the PRD's minimum-size math
+// (badge sets the row's scale, never the other way around) — computed
+// against this exact file: the wordmark occupies 54.3% of the 641x372
+// canvas, so 78px tall clears the 70px-wide minimum for the wordmark
+// itself. One asset for both bands: it's a self-contained pink pill
+// (its own background, not a transparent wordmark needing a light/dark
+// pair), the same asset used in every mockup Patrick approved against
+// both the light hero band and the dark footer band.
 
 const quotes = require("./quotes");
 
-const KLARNA_BADGE_BLACK = "/klarna-badge-black.svg"; // hero band, light bg
-const KLARNA_BADGE_WHITE = "/klarna-badge-white.svg"; // footer band, dark bg
+const KLARNA_BADGE = "/klarna-badge.png";
 
 function escapeHtml(s) {
   return String(s == null ? "" : s)
@@ -60,7 +64,7 @@ function financingHeroBandHtml(q) {
   // already seen it once and it shouldn't disappear mid-wait.
   return heroBandWrap(`
     <h2 class="pjl-fin-head">${pitch.head}</h2>
-    <div class="pjl-fin-by"><span>${pitch.sub}</span><img src="${KLARNA_BADGE_BLACK}" alt="Klarna" class="pjl-fin-badge"></div>`);
+    <div class="pjl-fin-by"><span>${pitch.sub}</span><img src="${KLARNA_BADGE}" alt="Klarna" class="pjl-fin-badge"></div>`);
 }
 
 // Financing content prepended INSIDE the existing #pjl-accept-footer div
@@ -81,7 +85,7 @@ function financingFooterContentHtml(q, { signHref, token } = {}) {
     <h2 style="margin:0 0 26px;color:#FAFAF5;font-weight:800;text-transform:uppercase;font-size:clamp(32px,5vw,54px);line-height:1.03;">${pitch}</h2>
     <div style="display:flex;align-items:center;justify-content:center;gap:18px;margin:0 0 40px;">
       <span style="color:rgba(250,250,245,.74);font-size:18px;font-weight:600;">Backed securely by</span>
-      <img src="${KLARNA_BADGE_WHITE}" alt="Klarna" style="height:66px;width:auto;display:block;">
+      <img src="${KLARNA_BADGE}" alt="Klarna" style="height:78px;width:auto;display:block;">
     </div>`;
 
   if (stage === "authorized") {
@@ -138,4 +142,4 @@ ${eyebrowBadge}
   </script>`;
 }
 
-module.exports = { KLARNA_BADGE_BLACK, KLARNA_BADGE_WHITE, financingHeroBandHtml, financingFooterContentHtml };
+module.exports = { KLARNA_BADGE, financingHeroBandHtml, financingFooterContentHtml };

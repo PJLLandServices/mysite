@@ -1268,6 +1268,15 @@ try {
 
     // Badge sizing is a fixed constant everywhere, never computed per-context.
     ok(/height:78px/.test(heroNotOffered), "hero band badge is fixed at 78px (the minimum-size math), not a smaller context-dependent size");
+    ok(!/height:6\dpx/.test(footerLinkSent + footerNotOffered + footerAuthorized + footerDeclined), "no footer-band variant regresses to a sub-70px-wordmark badge height");
+
+    // The real badge Patrick supplied earlier in the session — regression
+    // guard against the file existing only in a scratchpad again (TRD's
+    // first version referenced two placeholder SVGs that were never
+    // actually added to the repo; this pins that the real asset the code
+    // now points to is really there).
+    ok(financingBands.KLARNA_BADGE === "/klarna-badge.png", "the bands reference the one real badge file, not a placeholder path");
+    ok(fs.existsSync(path.join(ROOT, "server", "klarna-badge.png")), "server/klarna-badge.png actually exists in the repo");
   }
 } finally {
   restoreFixtures();
