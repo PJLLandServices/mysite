@@ -21880,15 +21880,20 @@ Customer signature captured at ${new Date().toISOString()}.`;
       );
       if (isLoadTest) console.log("[load-test] anti-bot bypass for", testNotes.slice(0, 12));
 
-      // Anti-bot gate. Honeypot + time-trap + rate-limit always run —
-      // they're cheap and harmless for admin too. Turnstile is skipped
-      // for admin sessions; the session itself is the bot filter.
+      // Anti-bot gate. Honeypot + time-trap always run — they're cheap
+      // and harmless for admin too. Turnstile AND the per-IP rate limit
+      // are skipped for admin sessions: the session itself is the bot
+      // filter, and the 5/10min cap is sized for one household, not for
+      // a phone-call morning. Patrick booking his sixth job inside ten
+      // minutes from the office IP got 429'd mid-season (2026-09-19);
+      // an authenticated staff member burst-booking is the business
+      // working, not an attack.
       const verdict = await antiBot.checkSubmission({
         body: payload,
         ip: callerIp(req),
         userAgent: req.headers["user-agent"] || "",
         skipTurnstile: isAdmin || isLoadTest,
-        skipRateLimit: isLoadTest
+        skipRateLimit: isAdmin || isLoadTest
       });
       if (!verdict.ok) return sendJson(res, verdict.status, verdict.responseBody);
 

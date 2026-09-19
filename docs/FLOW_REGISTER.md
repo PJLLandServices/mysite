@@ -2,6 +2,17 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-19 (Admin bookings are never rate-limited):** Patrick, booking fall closings:
+*"it is saying that too many attempts have been made."* The anti-bot per-IP cap
+(5 submissions / 10 min, `server/lib/anti-bot.js`) ran on `/api/booking/reserve` for admin
+sessions too — the route's comment called it "harmless for admin," which held until the first
+burst-booking morning of closing season. The route already skips Turnstile for admin because
+the session IS the bot filter; `skipRateLimit` now rides the same `isAdmin` flag. The public
+path is byte-identical: the cap, honeypot and time-trap still run, and admin submissions still
+record against the IP bucket, so the public arithmetic never changes. FLOW-03 (/book.html,
+PASS) untouched on its own path. `scripts/test-admin-booking-ratelimit.mjs` (6 assertions, in
+`build:check`) pins the cap, the skip, skip-is-only-the-rate-limit (honeypot still blocks),
+the bucket still filling, and a source guard on the route wiring.
 **2026-09-19 (Klarna financing, first registration):** FLOW-46 opened — quote financing (PJL-34,
 shipped over several earlier PRs) had no entry in this register at all until now. Covers the
 existing offer/capture/void mechanics plus PJL-35's apply-before-sign re-sequencing, together.
