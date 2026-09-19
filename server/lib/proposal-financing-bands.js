@@ -48,13 +48,13 @@ function heroBandWrap(inner) {
   return `
 <div id="pjl-fin-hero-band" style="background:#FAFAF5;border-top:4px solid #E07B24;">
   <style>
-    #pjl-fin-hero-band-in{max-width:1180px;margin:0 auto;padding:30px clamp(20px,5vw,64px);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:18px 40px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
-    #pjl-fin-hero-band .pjl-fin-head{font-weight:800;text-transform:uppercase;color:#1B4D2E;font-size:clamp(20px,2.7vw,30px);line-height:1.08;margin:0;}
+    #pjl-fin-hero-band-in{max-width:1180px;margin:0 auto;padding:36px clamp(20px,5vw,64px);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:18px 40px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
+    #pjl-fin-hero-band .pjl-fin-head{font-weight:800;text-transform:uppercase;color:#1B4D2E;font-size:clamp(28px,3.8vw,44px);line-height:1.08;margin:0;}
     #pjl-fin-hero-band .pjl-fin-head br+*{color:#E07B24;}
     #pjl-fin-hero-band .pjl-fin-by{display:flex;align-items:center;gap:16px;}
     #pjl-fin-hero-band .pjl-fin-by span{font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:#5F6F63;white-space:nowrap;}
     #pjl-fin-hero-band .pjl-fin-badge{height:78px;width:auto;display:block;}
-    #pjl-fin-hero-band .pjl-fin-status{font-weight:700;font-size:19px;color:#1B4D2E;margin:0;}
+    #pjl-fin-hero-band .pjl-fin-status{font-weight:700;font-size:26px;color:#1B4D2E;margin:0;}
   </style>
   <div id="pjl-fin-hero-band-in">
   ${inner}
