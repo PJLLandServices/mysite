@@ -50,7 +50,7 @@ function heroBandWrap(inner) {
   <style>
     #pjl-fin-hero-band-in{max-width:1180px;margin:0 auto;padding:36px clamp(20px,5vw,64px);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:18px 40px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
     #pjl-fin-hero-band .pjl-fin-head{font-weight:800;text-transform:uppercase;color:#1B4D2E;font-size:clamp(28px,3.8vw,44px);line-height:1.08;margin:0;}
-    #pjl-fin-hero-band .pjl-fin-head br+*{color:#E07B24;}
+    #pjl-fin-hero-band .pjl-fin-head em{font-style:normal;color:#E07B24;}
     #pjl-fin-hero-band .pjl-fin-by{display:flex;align-items:center;gap:16px;}
     #pjl-fin-hero-band .pjl-fin-by span{font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:#5F6F63;white-space:nowrap;}
     #pjl-fin-hero-band .pjl-fin-badge{height:78px;width:auto;display:block;}
@@ -67,8 +67,8 @@ function financingHeroBandHtml(q) {
   if (quotes.isAccepted(q)) return ""; // signed — hero band's done its job
   const stage = q.financing.stage || "not_offered";
   const pitch = q.financing.pairedWithDeposit
-    ? { head: "Fund the remaining balance fast.<br>Flexible financing.", sub: "Backed securely by" }
-    : { head: "Fund your project fast.<br>Flexible financing.", sub: "Backed securely by" };
+    ? { head: "Fund the remaining balance fast.<br><em>Flexible financing.</em>", sub: "Backed securely by" }
+    : { head: "Fund your project fast.<br><em>Flexible financing.</em>", sub: "Backed securely by" };
 
   if (stage === "authorized") {
     return heroBandWrap(`<p class="pjl-fin-status">You're approved for financing.</p>`);

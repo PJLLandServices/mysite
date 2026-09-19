@@ -1277,6 +1277,17 @@ try {
     // real screenshot (invisible in this session's own mockups, which
     // were always cropped to a ~1280px frame).
     ok(/max-width:1180px/.test(heroNotOffered), "hero band content is capped at the same 1180px width every other section on the page uses");
+
+    // Regression: "Flexible financing." must actually render in the
+    // accent orange, matching the property H1's own two-tone treatment.
+    // A prior version used a `br+*` CSS selector, which only matches an
+    // ELEMENT immediately after a <br> — the second line was bare text
+    // with nothing wrapping it, so that rule could never match anything.
+    // Pin both halves: the markup wraps the line in an element, and the
+    // CSS actually targets that element (not the broken br+* selector).
+    ok(/<em>Flexible financing\.<\/em>/.test(heroNotOffered), "the accent line is wrapped in a real element, not bare text after a <br>");
+    ok(!/br\+\*/.test(heroNotOffered), "the broken br+* selector (matches no bare text, ever) is gone");
+    ok(/\.pjl-fin-head em\{[^}]*color:#E07B24/.test(heroNotOffered), "the accent-color rule actually targets the wrapping element");
     ok(!/height:6\dpx/.test(footerLinkSent + footerNotOffered + footerAuthorized + footerDeclined), "no footer-band variant regresses to a sub-70px-wordmark badge height");
 
     // The real badge Patrick supplied earlier in the session — regression
