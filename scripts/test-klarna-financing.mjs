@@ -1306,6 +1306,33 @@ try {
     const serverSrcForRouting = fs.readFileSync(path.join(ROOT, "server", "server.js"), "utf8");
     ok(/pathname\.startsWith\("\/crm\/"\)/.test(serverSrcForRouting), "sanity: server.js still maps /crm/ to SERVER_DIR the way this test assumes");
   }
+
+  // 21 — financingEmailMentionHtml: the one-line pointer added to the
+  // (separate) proposal-send email so a customer who already got the
+  // financing-link email has something connecting it to the proposal
+  // email that follows. Same enabled/not-yet-accepted gate as the bands.
+  {
+    const notEnabled = { id: "Q-MENTION-0", financing: { enabled: false } };
+    ok(financingBands.financingEmailMentionHtml(notEnabled) === "", "no financing.enabled -> no mention line in the proposal email");
+
+    const signed = { id: "Q-MENTION-1", status: "accepted", financing: { enabled: true, stage: "authorized" } };
+    ok(financingBands.financingEmailMentionHtml(signed) === "", "signed -> no mention line, nothing left to point them toward");
+
+    const notOffered = { id: "Q-MENTION-2", status: "sent", financing: { enabled: true, stage: "not_offered" } };
+    const mention = financingBands.financingEmailMentionHtml(notOffered);
+    ok(/Prefer to finance/.test(mention), "unsigned, financing enabled -> the mention line is present");
+
+    const authorizedUnsigned = { id: "Q-MENTION-3", status: "sent", financing: { enabled: true, stage: "authorized" } };
+    ok(/Prefer to finance/.test(financingBands.financingEmailMentionHtml(authorizedUnsigned)), "unsigned even after authorization -> mention line still shows (they still need to sign)");
+
+    // Regression guard: pin that server.js's proposal-send email actually
+    // calls this function — the whole point is a customer who already
+    // got a financing email sees this line in the very next one, so a
+    // silently-dropped wire-up would defeat the fix with green tests.
+    const serverSrcForEmail = fs.readFileSync(path.join(ROOT, "server", "server.js"), "utf8");
+    ok(/financingEmailMentionHtml\(q\)/.test(serverSrcForEmail), "sanity: server.js's proposal email template actually calls financingEmailMentionHtml(q)");
+    ok(/financingEmailMentionHtml/.test(serverSrcForEmail.match(/const \{ financingHeroBandHtml.*\}/)?.[0] || ""), "sanity: financingEmailMentionHtml is imported from the same proposal-financing-bands require");
+  }
 } finally {
   restoreFixtures();
 }

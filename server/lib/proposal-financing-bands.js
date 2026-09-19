@@ -158,4 +158,16 @@ ${eyebrowBadge}
   </script>`;
 }
 
-module.exports = { KLARNA_BADGE, financingHeroBandHtml, financingFooterContentHtml };
+// One-line pointer used in the (separate) proposal-send email — Patrick
+// flagged that a customer who already got the financing-link email had
+// nothing connecting it to the proposal email that follows; this line
+// closes that gap by pointing at the same approval link the email
+// already sends them to, where both bands above take it from there.
+// Same enabled/not-yet-accepted gate as the on-page bands.
+function financingEmailMentionHtml(q) {
+  if (!q?.financing || q.financing.enabled !== true) return "";
+  if (quotes.isAccepted(q)) return "";
+  return `<p style="margin:0 0 14px;font-size:13px;color:#555;">Prefer to finance? You'll see that option when you open your proposal below.</p>`;
+}
+
+module.exports = { KLARNA_BADGE, financingHeroBandHtml, financingFooterContentHtml, financingEmailMentionHtml };
