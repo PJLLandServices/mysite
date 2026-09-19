@@ -10,20 +10,23 @@
 // enableFinancingForQuote) carries neither band, matching the PRD's
 // "there's no plain-proposal-that-might-upgrade case" finding.
 //
-// Badge assets are Patrick's to supply (TRD §9) — referenced here by the
-// documented path even though the files don't exist in the repo yet, so
-// Sized at a fixed 78px tall everywhere per the PRD's minimum-size math
-// (badge sets the row's scale, never the other way around) — computed
-// against this exact file: the wordmark occupies 54.3% of the 641x372
-// canvas, so 78px tall clears the 70px-wide minimum for the wordmark
-// itself. One asset for both bands: it's a self-contained pink pill
-// (its own background, not a transparent wordmark needing a light/dark
-// pair), the same asset used in every mockup Patrick approved against
-// both the light hero band and the dark footer band.
+// Badge: the real file Patrick supplied, at server/klarna-badge.png.
+// Served at /crm/klarna-badge.png — SERVER_DIR (server/) is only reachable
+// over HTTP through the /crm/ prefix (server.js's resolveStaticTarget
+// strips just that prefix); anything without it falls through to SITE_DIR
+// (the repo root) instead and 404s. Sized at a fixed 78px tall everywhere
+// per the PRD's minimum-size math (badge sets the row's scale, never the
+// other way around) — computed against this exact file: the wordmark
+// occupies 54.3% of the 641x372 canvas, so 78px tall clears the 70px-wide
+// minimum for the wordmark itself. One asset for both bands: it's a
+// self-contained pink pill (its own background, not a transparent
+// wordmark needing a light/dark pair), the same asset used in every
+// mockup Patrick approved against both the light hero band and the dark
+// footer band.
 
 const quotes = require("./quotes");
 
-const KLARNA_BADGE = "/klarna-badge.png";
+const KLARNA_BADGE = "/crm/klarna-badge.png";
 
 function escapeHtml(s) {
   return String(s == null ? "" : s)
