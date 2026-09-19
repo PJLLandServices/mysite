@@ -1023,7 +1023,7 @@ async function proposalHasCustomDoc(q) {
 // Rendering logic lives in lib/proposal-financing-bands.js (pure HTML-
 // string functions, unit-testable without booting the whole server) —
 // this file just splices the result into the serve-time page.
-const { financingHeroBandHtml, financingFooterContentHtml } = require("./lib/proposal-financing-bands");
+const { financingHeroBandHtml, financingFooterContentHtml, financingEmailMentionHtml } = require("./lib/proposal-financing-bands");
 
 function injectProposalAcceptFooter(html, q, url) {
   const t = url.searchParams.get("t") || q.approval?.token || "";
@@ -3666,6 +3666,7 @@ function buildProposalApprovalEmail(q, { parties = null, approvalUrl = "", gated
       ? `<p style="margin:0 0 14px;">Your detailed ${docNoun.lower} (<strong>${displayNo}</strong>) is ready to review at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>
     <p style="margin:0 0 14px;padding:12px 14px;background:#EAF3DE;border:1px solid #C7E0A8;border-radius:8px;font-size:13px;color:#33502f;">To open it, you'll be asked for your phone number — the one we have on file for you. Any format is fine.</p>`
       : `<p style="margin:0 0 14px;">Your detailed ${docNoun.lower} (<strong>${displayNo}</strong>) is attached and posted at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>`}
+    ${financingEmailMentionHtml(q)}
     ${extraHtml}
     ${isRepairEmail
       ? `<p style="margin:0 0 14px;padding:12px 14px;background:#FFF4E5;border:1px solid #F0C88A;border-radius:8px;font-size:14px;color:#7A4E12;"><strong>Estimate must be signed ASAP to schedule.</strong>${schedLabel ? ` This repair is scheduled for <strong>${schedLabel}</strong> — please sign your estimate before then to keep that date.` : ""}</p>`
