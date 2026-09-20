@@ -2,6 +2,22 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-20, same day (Project delete — test vs. real):** The **Delete project** button on
+the project page (`server/project.html`/`project.js`) hard-deleted the project record but only
+handled material lists — it detached them, never deleted them — and left any attached work
+orders behind pointing at a project id that no longer existed. Patrick: *"Can you inquire
+whether its a test before deleting. If its a test delete everything about it."* Fixed by
+splitting the delete into two paths on one new question asked at delete time (`deleteProject()`
+in `project.js`): **not a test** (default) keeps the old safe behaviour — material lists
+survive, detached; work orders untouched. **is a test** (`cascade: true` sent to
+`DELETE /api/projects/:id`) hard-deletes the project's attached material lists AND work orders
+before removing the project, so a throwaway test project leaves nothing orphaned behind.
+`scripts/test-project-delete-cascade.mjs` (15 assertions, in `build:check`) pins both paths
+plus a bystander project's work order and material list surviving either delete untouched.
+**Patrick's acceptance test — not yet walked:** delete a real project with an attached work
+order and material list, answer "no" — confirm the work order stays and the material list
+survives but shows unattached; make a throwaway test project with a work order and material
+list, delete it, answer "yes" — confirm all three are gone from their respective lists.
 **2026-09-20, same day (The probe books IN PLACE — the handoff wasn't booking):** Patrick, on
 the first cut below, live: *"that doesn't do anything special but go to the book day.. what
 the fuck."* Correct — a link into the Schedule modal is navigation, not booking; the phone
