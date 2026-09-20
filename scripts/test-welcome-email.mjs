@@ -291,6 +291,55 @@ ok("a manual send goes out with the switch off, as installation, marked by admin
   && (await customers.get(hal.id, { withProperties: false })).welcomeEmail.by === "admin"
   && sentMail[sentMail.length - 1].html.includes(INSTALLATION_SEASONS_HEADING));
 
+// sendWelcomeFor itself now enforces the cutoff for by:"sweep" sends —
+// this is what protects the installation-invoice hook (server.js),
+// which never calls dueWelcomes() at all and previously had zero
+// cutoff awareness, so a routine old-invoice resend could still fire
+// the exact 2026-09-15 failure through a door the first fix never
+// touched. Ivy (still unmarked — nothing above has sent to her) stands
+// in for that install customer.
+const ancientBooking = { id: null, customerId: ivy.id, createdAt: ago(60 * 24 * 200) };
+const cutoffSettings = await settingsLib.get();
+let threw = null;
+try {
+  await welcome.sendWelcomeFor({
+    customer: await customers.get(ivy.id, { withProperties: false }),
+    booking: ancientBooking, variant: "installation", by: "sweep",
+    settings: cutoffSettings, sendMail: deps.sendMail, portalUrlFor: deps.portalUrlFor
+  });
+} catch (err) { threw = err; }
+ok("sendWelcomeFor refuses an automatic (by:\"sweep\") send whose booking predates autoSendCutoff, even when the caller never went through dueWelcomes()",
+  threw !== null && /autoSendCutoff/.test(threw.message)
+  && !(await customers.get(ivy.id, { withProperties: false })).welcomeEmail);
+const manualOld = await welcome.sendWelcomeFor({
+  customer: await customers.get(ivy.id, { withProperties: false }),
+  booking: ancientBooking, variant: "installation", by: "Patrick Lalande",
+  settings: cutoffSettings, sendMail: deps.sendMail, portalUrlFor: deps.portalUrlFor
+});
+ok("the identical pre-cutoff booking sent with a real staff name instead of the literal \"sweep\" still goes through — manual backfill is unaffected",
+  manualOld.ok && (await customers.get(ivy.id, { withProperties: false })).welcomeEmail?.by === "Patrick Lalande");
+
+// Self-heal: a settings file that already has enabled:true with no
+// cutoff — exactly the shape the 2026-09-15 incident left production
+// in — must get one stamped on ANY subsequent save, not only a fresh
+// false->true transition (the earlier version required `!before.enabled`
+// and could never repair this shape without an explicit off/on cycle,
+// which nothing prompts an admin to do).
+fs.writeFileSync(settingsPath, JSON.stringify({ welcomeEmail: { enabled: true }, audit: [] }, null, 2));
+ok("a settings file already enabled with no cutoff reads back as the dangerous legacy shape",
+  (await settingsLib.get()).welcomeEmail.enabled === true && (await settingsLib.get()).welcomeEmail.autoSendCutoff === null);
+await settingsLib.updateWelcomeEmail({ enabled: true }, { who: "test", now: NOW });
+ok("saving again while already enabled self-heals the missing cutoff, with no off/on cycle needed",
+  (await settingsLib.get()).welcomeEmail.autoSendCutoff === NOW.toISOString());
+
+// A corrupted autoSendCutoff (hand-edit, bad restore, anything that
+// bypasses updateWelcomeEmail) must fail CLOSED on read — otherwise
+// Date.parse() on a garbage string returns NaN, and NaN comparisons
+// are always false, silently disabling the cutoff exclusion.
+fs.writeFileSync(settingsPath, JSON.stringify({ welcomeEmail: { enabled: true, autoSendCutoff: "not-a-real-date" }, audit: [] }, null, 2));
+ok("an unparseable autoSendCutoff is rejected on read as null, not passed through as a silent no-op",
+  (await settingsLib.get()).welcomeEmail.autoSendCutoff === null);
+
 // ---- 4. Installation invoice detection ---------------------------------
 
 const proj = { id: "PR-1", branch: "direct_residential", finalInvoiceId: "INV-9" };
