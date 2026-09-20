@@ -332,7 +332,13 @@ function hydrate(s) {
     },
     welcomeEmail: {
       enabled: we.enabled === true,
-      autoSendCutoff: typeof we.autoSendCutoff === "string" && we.autoSendCutoff ? we.autoSendCutoff : null
+      // Must actually parse — a truthy-but-garbage value would make
+      // Date.parse() return NaN downstream, and NaN comparisons are
+      // always false, which silently disables the cutoff exclusion
+      // instead of failing closed.
+      autoSendCutoff: typeof we.autoSendCutoff === "string" && we.autoSendCutoff && !Number.isNaN(Date.parse(we.autoSendCutoff))
+        ? we.autoSendCutoff
+        : null
     },
     outreachTemplates: {
       spring: pickTemplate("spring"),
@@ -628,9 +634,16 @@ async function updateReviewRequests(patch, { who = "admin", note = "" } = {}) {
 
 // Update the welcomeEmail namespace. Audit-stamped like every other
 // settings writer. The only real write is `enabled`; autoSendCutoff is
-// never accepted from the caller — it is derived, stamped the moment
-// enabled first flips false -> true, and never moved once set (see the
-// comment on DEFAULT_WELCOME_EMAIL above for why it exists at all).
+// never accepted from the caller — it is derived, stamped any time this
+// runs with enabled true and no cutoff yet, and never moved once set
+// (see the comment on DEFAULT_WELCOME_EMAIL above for why it exists at
+// all). Deliberately NOT conditioned on catching the false->true edge
+// (an earlier version required `!before.enabled`, which meant a record
+// that reached this function already `enabled: true` with no cutoff —
+// exactly the shape the 2026-09-15 incident left production in — could
+// only ever be repaired by an admin re-toggling the switch off and back
+// on, which nothing prompts anyone to do). This way, any save of the
+// settings while enabled is true self-heals a missing cutoff.
 // `now` is injectable so tests can pin the stamped cutoff to their own
 // fake clock instead of the real one.
 async function updateWelcomeEmail(patch, { who = "admin", note = "", now = new Date() } = {}) {
@@ -640,7 +653,7 @@ async function updateWelcomeEmail(patch, { who = "admin", note = "", now = new D
   if (patch && typeof patch === "object" && Object.prototype.hasOwnProperty.call(patch, "enabled")) {
     next.enabled = patch.enabled === true;
   }
-  if (next.enabled === true && !before.enabled && !next.autoSendCutoff) {
+  if (next.enabled === true && !next.autoSendCutoff) {
     next.autoSendCutoff = (now instanceof Date ? now : new Date(now)).toISOString();
   }
   settings.welcomeEmail = next;

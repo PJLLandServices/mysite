@@ -10744,13 +10744,19 @@ async function handleApi(req, res, pathname) {
                 customerName: renderInv.customerName || welcomeCustomer.name || "",
                 customerEmail: renderInv.customerEmail || welcomeCustomer.email || "",
                 propertyId: renderInv.propertyId || project?.propertyId || null,
-                leadId: renderInv.leadId || project?.leadId || null
+                leadId: renderInv.leadId || project?.leadId || null,
+                // When this install relationship began, for the same
+                // autoSendCutoff check sendWelcomeFor applies to the
+                // sweep's own bookings — project is guaranteed non-null
+                // here (isFinalInstallationInvoice already required it).
+                createdAt: project.createdAt || null
               };
               const welcomeResult = await welcomeEmail.sendWelcomeFor({
                 customer: welcomeCustomer,
                 booking: welcomeBooking,
                 variant: "installation",
                 by: "sweep",
+                settings: welcomeSettings,
                 portalUrlFor: welcomePortalUrlFor(await readLeads())
               });
               console.log(`[welcome-email] installation welcome sent to ${welcomeResult.to} for ${welcomeCustomer.id} (invoice ${invId}, project ${project.id})`);

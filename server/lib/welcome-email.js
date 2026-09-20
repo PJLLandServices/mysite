@@ -433,12 +433,15 @@ function fromAddress() {
 
 // Send ONE welcome. Marks the customer first, then sends. deps:
 //   customer, booking, variant — what to send and to whom
-//   by            — "sweep" | "admin"
+//   by            — "sweep" | the staff member's own name (never sent by
+//                   an automatic path — see the cutoff check below)
 //   markCustomer  — (customerId, mark) => Promise; default customers.update
 //   sendMail      — (message) => Promise<info>; default: guarded transport
 //   portalUrlFor  — (booking, customer) => absolute portal URL
 //   unsubscribeUrlFor — optional (customer) => URL
 //   now           — Date
+//   settings      — settings.get()'s shape; only read for the cutoff
+//                   check below, defaults to a fresh read when omitted
 // Resolves { ok, to, variant, messageId } or throws AFTER the mark is
 // down (the caller logs it; the next pass will not retry — by design).
 async function sendWelcomeFor({
@@ -450,12 +453,33 @@ async function sendWelcomeFor({
   sendMail = null,
   portalUrlFor = null,
   unsubscribeUrlFor = null,
-  now = new Date()
+  now = new Date(),
+  settings = null
 } = {}) {
   if (!customer || !customer.id) throw new Error("welcome: customer required");
   const v = normalizeVariant(variant);
   const to = emailFor(customer, booking);
   if (!to) throw new Error(`welcome: ${customer.id} has no email`);
+
+  // Every automatic path shares this literal "sweep" value — the periodic
+  // sweep itself, and the installation-invoice hook, which is automatic
+  // in exactly the same sense even though it never calls dueWelcomes()
+  // (installs aren't seen by the sweep at all — see server.js). A manual
+  // send's `by` is always the staff member's own name (actorLabel()),
+  // never this literal string, so this can never block Patrick's own
+  // backfill-table sends. Enforced HERE, not only inside dueWelcomes(),
+  // so any current or future automatic caller inherits the same rule
+  // instead of having to remember to check first (2026-09-15 incident:
+  // the installation hook had zero cutoff awareness and could still
+  // re-fire the same failure through a routine invoice resend).
+  if (by === "sweep") {
+    const s = settings || await require("./settings").get();
+    const cutoffMs = s?.welcomeEmail?.autoSendCutoff ? Date.parse(s.welcomeEmail.autoSendCutoff) : null;
+    const createdAtMs = booking?.createdAt ? (Date.parse(booking.createdAt) || 0) : 0;
+    if (cutoffMs !== null && createdAtMs < cutoffMs) {
+      throw new Error(`welcome: ${customer.id} predates autoSendCutoff — automatic sends are blocked; use the backfill table on /admin/welcome-email to send by hand`);
+    }
+  }
 
   const mark = {
     sentAt: (now instanceof Date ? now : new Date(now)).toISOString(),
@@ -526,7 +550,7 @@ async function sweep({
   result.due = due.length;
   for (const { booking, customer, variant } of due) {
     try {
-      await sendWelcomeFor({ customer, booking, variant, by: "sweep", markCustomer, sendMail, portalUrlFor, unsubscribeUrlFor, now });
+      await sendWelcomeFor({ customer, booking, variant, by: "sweep", markCustomer, sendMail, portalUrlFor, unsubscribeUrlFor, now, settings });
       result.sent += 1;
     } catch (err) {
       result.errors.push({ bookingId: booking.id, customerId: customer.id, error: err?.message || String(err) });
