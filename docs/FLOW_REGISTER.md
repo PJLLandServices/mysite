@@ -2,6 +2,33 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-20, same day (Convert-to-project now enriches repair-quote projects too):** Patrick:
+*"I believe I have scoped the quote so that we can also do 'repairs' which allow us to assess an
+entire project, and compose the repairs. I think it should remain."* Traced the real flow: the
+tool for that is `on_site_quote` (built from a Work Order's "Issues → Draft Quote" screen,
+`server/work-order.js` `renderOnSiteQuote` — a genuine multi-line-item editor for bundling
+several repairs found on one visit into one quote). `ai_repair_quote` (the AI-chat path) gets
+the same line items but auto-generated, single-shot. Neither ever got a real Project when
+converted: `convert-to-project` gated its rich enrichment (`projects.createFromProposal` —
+tasks seeded from line items, `proposalSnapshot` with totals/accepted-date/link-back,
+attachments) to `type === "project_proposal"` only; every other type fell into a bare
+`projects.create({name, ..., sourceQuoteId})` with nothing else. `project.js`'s "Accepted
+proposal" panel is gated entirely on `proposalSnapshot` being non-null, so a converted
+repair-quote project rendered no line items, no totals, nothing — the composed repair list was
+reachable only by clicking back into the original quote via its id. Fixed by opening up
+`projects.createFromProposal`/`enrichFromProposal` (`server/lib/projects.js`) to any quote type
+— every field they set either exists on every quote record already (line items, totals, scope,
+acceptance method) or degrades harmlessly to null/empty for types that don't use it
+(branch/billingMode/proposalSections stay null for non-proposals, which the panel already
+tolerated). `convert-to-project` in `server/server.js` now always routes through the same
+enrichment path, dropping the old bare-fallback branch entirely.
+`scripts/test-convert-repair-quote-enrichment.mjs` (16 assertions, in `build:check`) pins:
+on_site_quote gets tasks + proposalSnapshot, ai_repair_quote gets the same, project_proposal is
+unchanged (regression guard), and a quote with zero line items still converts cleanly.
+**Patrick's acceptance test — not yet walked:** build a multi-repair on_site_quote from a Work
+Order's Issues screen, send and accept it, convert to project — confirm the project's Tasks
+panel shows one task per repair and the Accepted proposal panel shows the real totals, not a
+blank project.
 **2026-09-20, same day (Convert-to-project stopped duplicating System Builder jobs):** Patrick,
 live, mid-acceptance: *"I just had a quote accepted, and now i have to convert to
 project.... but we created the quote form a project."* Real bug, not a misunderstanding —

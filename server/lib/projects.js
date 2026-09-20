@@ -593,28 +593,38 @@ async function _updateUnlocked(id, patch = {}) {
   return next;
 }
 
-// Create a new Project from an accepted project_proposal quote.
+// Create a new Project from an accepted quote — any type. Originally
+// project_proposal-only; opened up to on_site_quote / ai_repair_quote too
+// (2026-09-20) because Patrick scopes multi-repair jobs the same way he
+// scopes installs: assess the property, compose several repairs into one
+// quote, convert the accepted quote to a Project. The old type restriction
+// meant that path produced a bare project with just a name — the whole
+// point of the assessment (which repairs, priced how) was reachable only
+// by clicking back into the original quote. Every field below either
+// exists on every quote type (branch/billingMode/proposalSections are
+// project_proposal-only and simply stay null/empty for the others — the
+// project page's panels already tolerate that) or degrades harmlessly.
 //
 // Enriches the standard create() with:
-//   - branch, billingMode mirrored from the quote
+//   - branch, billingMode mirrored from the quote (null for non-proposals)
 //   - labourRateLocked snapshotted from quote.customRates.labour (T&M
 //     uses this rate; fixed-price keeps it informational)
 //   - tasks[] seeded from quote.lineItems — one task per line, status
-//     "pending", description = line label, sourceLineItemId set
+//     "pending", description = line label, sourceLineItemId set — this is
+//     what actually makes a converted repair quote's line items visible
+//     on the project page (the Tasks panel), not the proposal panel
 //   - attachments[] referencing quote.attachments by id (no file copy;
 //     the project reads through to the quote's directory)
-//   - proposalSnapshot frozen copy of the accepted proposal at this
-//     instant (sections + line items + totals + branch + acceptance
-//     method + customer/property snapshot)
+//   - proposalSnapshot frozen copy of the accepted quote at this instant
+//     (sections + line items + totals + branch + acceptance method +
+//     customer/property snapshot) — drives the "Accepted proposal" panel
+//     (totals, accepted date, link back to the quote, attachments)
 //
 // Idempotent at the caller — the convert-to-project endpoint checks
 // for an existing project with sourceQuoteId === quote.id before
 // invoking this and returns the existing one if found.
 async function createFromProposal(quote, { customerName = "", customerEmail = "", customerPhone = "", address = "", propertyId = null, by = "admin" } = {}) {
   if (!quote) throw new Error("createFromProposal requires a quote.");
-  if (quote.type !== "project_proposal") {
-    throw new Error("createFromProposal only handles project_proposal quotes.");
-  }
 
   const namePieces = [];
   if (customerName) namePieces.push(customerName);
@@ -726,9 +736,6 @@ async function createFromProposal(quote, { customerName = "", customerEmail = ""
 async function enrichFromProposal(projectId, quote, { customerName = "", customerEmail = "", customerPhone = "", address = "", propertyId = null, by = "admin" } = {}) {
   if (!projectId) throw new Error("enrichFromProposal requires a projectId.");
   if (!quote) throw new Error("enrichFromProposal requires a quote.");
-  if (quote.type !== "project_proposal") {
-    throw new Error("enrichFromProposal only handles project_proposal quotes.");
-  }
 
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === projectId);

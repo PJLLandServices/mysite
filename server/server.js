@@ -17899,10 +17899,16 @@ async function handleApi(req, res, pathname) {
   // project. Idempotent guard: if a project already exists with this
   // sourceQuoteId, return it without creating a duplicate.
   //
-  // project_proposal quotes route through projects.createFromProposal
-  // so the new project gets enriched with branch + billingMode +
+  // Every quote type routes through projects.createFromProposal so the
+  // new project gets enriched with branch + billingMode +
   // labourRateLocked + tasks[] (seeded from line items) + attachments[]
-  // (referencing the quote's attachments) + proposalSnapshot.
+  // (referencing the quote's attachments) + proposalSnapshot. Used to be
+  // project_proposal-only — opened up 2026-09-20 because a multi-repair
+  // on_site_quote/ai_repair_quote gets scoped the same way an install
+  // does (assess the property, compose several line items, accept, keep
+  // as a Project) and deserves the same fidelity: without this, the
+  // converted project was a bare name with the actual repair list
+  // reachable only by clicking back into the original quote.
   const quoteConvertMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/convert-to-project$/);
   if (quoteConvertMatch && req.method === "POST") {
     try {
@@ -17954,35 +17960,16 @@ async function handleApi(req, res, pathname) {
 
       let proj;
       let linkedExistingProject = false;
-      if (linkedProject && quote.type === "project_proposal") {
+      if (linkedProject) {
         proj = await projects.enrichFromProposal(linkedProject.id, quote, {
           customerName, customerEmail, customerPhone, address, propertyId,
           by: await actorLabel(req)
         });
         linkedExistingProject = true;
-      } else if (quote.type === "project_proposal") {
-        // Project_proposal quotes get the full enrichment.
+      } else {
         proj = await projects.createFromProposal(quote, {
           customerName, customerEmail, customerPhone, address, propertyId,
           by: await actorLabel(req)
-        });
-      } else {
-        // Auto-generate a project name from the customer + quote id. Patrick
-        // can rename it from the project page.
-        const namePieces = [];
-        if (customerName) namePieces.push(customerName);
-        namePieces.push(`(from ${quoteId})`);
-        const name = namePieces.join(" ").slice(0, 200);
-
-        proj = await projects.create({
-          name,
-          customerName,
-          customerEmail,
-          customerPhone,
-          address,
-          propertyId,
-          sourceQuoteId: quoteId,
-          description: quote.scope || ""
         });
       }
 
