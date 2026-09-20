@@ -1034,13 +1034,36 @@ async function ensureBookingServicesLoaded() {
   }
 }
 
-addBookingBtn?.addEventListener("click", async () => {
+async function openBookingDialog() {
   if (!bookingDialog) return;
   resetBookingForm();
   await Promise.all([ensureBookingPropertiesLoaded(), ensureBookingServicesLoaded()]);
   if (typeof bookingDialog.showModal === "function") bookingDialog.showModal();
   else bookingDialog.setAttribute("open", "");
-});
+}
+
+addBookingBtn?.addEventListener("click", openBookingDialog);
+
+// Arriving from the Season Plan's address probe: ?book=<address> opens
+// the +Book modal with the address already in place, so "probe an
+// address" flows straight into booking it — the desktop's answer to the
+// phone app's Book tab. The address also seeds the existing-property
+// typeahead: a known customer is one click from having every field
+// filled. The param is stripped from the URL immediately so a refresh
+// is the schedule page, not a surprise re-opened modal.
+(async () => {
+  const bookParam = new URLSearchParams(location.search).get("book");
+  if (!bookParam) return;
+  history.replaceState(null, "", location.pathname);
+  await openBookingDialog();
+  if (bookingAddress) bookingAddress.value = bookParam;
+  if (bookingPropertySearch) {
+    bookingPropertySearch.value = bookParam;
+    bookingPropertySearch.dispatchEvent(new Event("input"));
+  }
+  bookingService?.focus();
+  scheduleAvailLookup();
+})();
 
 function closeBookingDialog() {
   if (typeof bookingDialog.close === "function") bookingDialog.close();
