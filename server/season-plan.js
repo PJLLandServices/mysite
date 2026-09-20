@@ -2746,9 +2746,9 @@
   // the rest of the booking right here: that day's real slots, the
   // customer's details (with a search over existing properties so a
   // known customer is one click), one press. Server-side it is the SAME
-  // path as the app and the public page — hold, then
-  // /api/booking/reserve — so slot re-validation, the customer/property
-  // record, and the automatic email+text confirmation are identical.
+  // path as the app and the public page — hold, then reserveBooking()
+  // below — so slot re-validation, the customer/property record, and
+  // the automatic email+text confirmation are identical.
 
   const probeCache = { services: null, properties: null };
 
@@ -2949,30 +2949,24 @@
         });
         const hold = await holdRes.json();
         if (!holdRes.ok || !hold.ok) throw new Error(hold.message || (hold.errors || ["That time was just taken — pick another."]).join(" "));
-        const r = await fetch("/api/booking/reserve", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            serviceKey: serviceSelect.value,
-            slotStart: picked.start,
-            holdToken: hold.holdToken,
-            source: "slot",
-            zoneCount: zoneCount.value.trim() || null,
-            contact: {
-              firstName: firstName.value.trim(),
-              lastName: lastName.value.trim(),
-              name: `${firstName.value.trim()} ${lastName.value.trim()}`.trim(),
-              phone: phone.value.trim(),
-              email: email.value.trim(),
-              address,
-              notes: notes.value.trim()
-            },
-            pageUrl: location.href,
-            userAgent: navigator.userAgent
-          })
+        const data = await reserveBooking({
+          serviceKey: serviceSelect.value,
+          slotStart: picked.start,
+          holdToken: hold.holdToken,
+          source: "slot",
+          zoneCount: zoneCount.value.trim() || null,
+          contact: {
+            firstName: firstName.value.trim(),
+            lastName: lastName.value.trim(),
+            name: `${firstName.value.trim()} ${lastName.value.trim()}`.trim(),
+            phone: phone.value.trim(),
+            email: email.value.trim(),
+            address,
+            notes: notes.value.trim()
+          },
+          pageUrl: location.href,
+          userAgent: navigator.userAgent
         });
-        const data = await r.json();
-        if (!r.ok || !data.ok) throw new Error(data.message || (data.errors || ["Booking failed."]).join(" "));
         host.innerHTML = "";
         const done = document.createElement("p");
         done.className = "sp-probe-best";
@@ -3093,6 +3087,23 @@
   // "booked" message and clears their standby envelope. One function for
   // the drawer's button AND a drop on the cockpit, so both do exactly the
   // same thing.
+  // THE one reserve write on this page. Every booking path here — the
+  // standby placement and the probe's inline form — posts through this
+  // function, so the page cannot grow two diverging copies of the
+  // booking write. test-place-tray pins the URL to one call site.
+  async function reserveBooking(payload) {
+    const response = await fetch("/api/booking/reserve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error(data.message || (data.errors || ["Booking failed."]).join(" "));
+    }
+    return data;
+  }
+
   async function bookStandby(row, date) {
     try {
       // Ask the engine where this customer actually fits.
@@ -3118,20 +3129,14 @@
         throw new Error((slotData.errors || ["Couldn't find a slot on that day."]).join(" "));
       }
       const slotStart = slotData.slotStart;
-      const response = await fetch("/api/booking/reserve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          leadId: row.leadId,
-          serviceKey: row.serviceKey,
-          slotStart,
-          source: "admin_custom",
-          zoneCount: row.zoneCount || null,
-          contact: { address: row.address }
-        })
+      await reserveBooking({
+        leadId: row.leadId,
+        serviceKey: row.serviceKey,
+        slotStart,
+        source: "admin_custom",
+        zoneCount: row.zoneCount || null,
+        contact: { address: row.address }
       });
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't place them."]).join(" "));
       showToast(`${row.name || row.leadId} booked onto ${prettyDate(date)} — confirmation sent.`);
       loadStandby();
       await load();

@@ -46,10 +46,12 @@ ok("slots come from the availability engine for exactly the probed day",
   && book.includes("&from=${encodeURIComponent(day.date)}&to=${encodeURIComponent(day.date)}")
   && book.includes("adminBypass=1"));
 const holdAt = book.indexOf('"/api/booking/hold"');
-const reserveAt = book.indexOf('"/api/booking/reserve"');
+const reserveAt = book.indexOf("reserveBooking({");
 ok("the hold is taken before the reserve — two callers can't finish on one slot",
   holdAt !== -1 && reserveAt !== -1 && holdAt < reserveAt, `holdAt=${holdAt} reserveAt=${reserveAt}`);
 ok("the reserve carries the hold's token", book.includes("holdToken: hold.holdToken"));
+ok("the form books through the page's ONE reserve write (test-place-tray pins the URL to one call site)",
+  (plan.match(/\/api\/booking\/reserve/g) || []).length === 1);
 
 // The payload fields the reserve route reads. contact.name is what
 // validateLead checks — the split fields alone fail server-side.
