@@ -158,6 +158,24 @@
           </div>
         </section>
 
+        <!-- Revision/lock status panel (PJL-54, Job Portal). Shows the
+             quote this project is linked to RIGHT NOW — draft/sent/
+             superseded/accepted, whichever presentation mode, and the
+             revision chain — without opening the Proposal Builder. This
+             is the pre-acceptance counterpart to the panel below: that one
+             only lights up once a quote is accepted, this one covers the
+             whole time a quote is live. Hidden when no quote is linked at
+             all (a hand-created project with no System Builder design and
+             no accepted quote yet). -->
+        <section class="proj-section proj-quote-status" id="projQuoteStatusPanel" hidden>
+          <div class="proj-section-head">
+            <h2>Quote</h2>
+            <a class="pjl-btn pjl-btn-outline" id="projQuoteStatusLink" href="#" target="_blank" rel="noopener">Open in Proposal Builder</a>
+          </div>
+          <p class="proj-quote-status-line" id="projQuoteStatusLine"></p>
+          <p class="proj-quote-status-chain" id="projQuoteStatusChain" hidden></p>
+        </section>
+
         <!-- Accepted proposal snapshot (Brief 1, May 2026).
              Only rendered when this project was spun from a project_proposal —
              reads from project.proposalSnapshot (frozen at conversion). -->

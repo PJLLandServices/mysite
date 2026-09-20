@@ -15459,7 +15459,38 @@ async function handleApi(req, res, pathname) {
         }
       } catch (err) { /* tolerate — page falls back to the project snapshot */ }
     }
-    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer });
+    // Revision/lock status panel (PJL-54) — resolve whichever quote this
+    // project is currently linked to (post-acceptance: sourceQuoteId;
+    // pre-acceptance, System-Builder-originated: systemDesign.linkedQuoteId
+    // — which may itself be stale, naming an early revision that's since
+    // been superseded) and walk the FULL chain to the actually-current
+    // version. Frontend renders "Quote v3 — sent, Summary total,
+    // confirmed" from this without a second round-trip.
+    let linkedQuote = null;
+    const quoteAnchorId = proj.sourceQuoteId || proj.systemDesign?.linkedQuoteId || null;
+    if (quoteAnchorId) {
+      try {
+        const resolved = await quotes.resolveRevisionChain(quoteAnchorId);
+        if (resolved) {
+          const { current, chain } = resolved;
+          const isProposal = current.type === "project_proposal";
+          linkedQuote = {
+            id: current.id,
+            version: current.version || 1,
+            status: current.status,
+            type: current.type,
+            presentationMode: isProposal ? ((current.pdfOptions && current.pdfOptions.lineItems) || "itemized") : null,
+            // A send only ever completes once markSentForApproval's gate has
+            // matched the confirmed mode to the live one (PJL-48) — so any
+            // project_proposal quote that made it past "draft" was, by
+            // construction, confirmed for the mode it's showing right now.
+            confirmed: isProposal ? !["draft", "draft_preview"].includes(current.status) : null,
+            chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status }))
+          };
+        }
+      } catch (err) { /* tolerate — panel just doesn't render */ }
+    }
+    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote });
   }
   if (projectMatch && req.method === "PATCH") {
     try {

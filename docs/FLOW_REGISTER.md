@@ -2,6 +2,29 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-20, same day (PJL-54 — revision/lock status panel on the Project page):** First real
+Job Portal build-out (TRD: "Job Portal technical design"), after the day's data-model fixes
+above made it worth doing. New **Quote** panel on `server/project.html` shows, without opening
+the Proposal Builder, exactly the TRD's example: "Quote v3 — sent, Summary total, confirmed."
+The hard part was staleness: a project's only pre-acceptance pointer to its quote
+(`systemDesign.linkedQuoteId`, written once by System Builder) never updates when that quote
+gets revised, so a naive reader would show revision 1's status forever even after two newer
+revisions replaced it — the exact same shape of bug as the Convert-to-project fixes earlier
+today. Fixed the same way: `quotes.resolveRevisionChain(anchorId)` (`server/lib/quotes.js`)
+walks backward via `revisionOf` to the root, then forward via `supersededBy` to the actually-
+current version, returning the full chain in order. `GET /api/projects/:id` resolves the anchor
+(`project.sourceQuoteId` post-acceptance, else `project.systemDesign.linkedQuoteId`
+pre-acceptance) through it and returns `linkedQuote` in one round-trip — id/version/status,
+`presentationMode` + `confirmed` (project_proposal only; `confirmed` is derived, not a stored
+field — any project_proposal quote past `draft` necessarily passed PJL-48's send-time gate,
+so leaving draft IS being confirmed), and the version chain for a "History: v1 → v2 → v3"
+trail. `scripts/test-project-quote-status-panel.mjs` (18 assertions, in `build:check`) pins:
+no link at all, a direct link, a STALE link resolving through 2 revisions to the true current
+one, a non-proposal quote type (presentation fields correctly null), and a dangling anchor
+(quote deleted) resolving to null instead of a 500. **Patrick's acceptance test — not yet
+walked:** open a project with a System-Builder-originated quote that's been revised at least
+once, confirm the Quote panel shows the CURRENT revision's real status (not the original's),
+and the history line links back through every prior version.
 **2026-09-20, same day (Backfill for pre-fix bare project conversions):** Patrick, after the
 convert-to-project enrichment fix above shipped: *"Did it backdate any of the existing
 proposals?"* No — that fix only changed what a FUTURE convert-to-project does; every project
