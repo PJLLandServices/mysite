@@ -2,6 +2,27 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-20, same day (The probe books IN PLACE — the handoff wasn't booking):** Patrick, on
+the first cut below, live: *"that doesn't do anything special but go to the book day.. what
+the fuck."* Correct — a link into the Schedule modal is navigation, not booking; the phone
+books where you stand. Replaced with an inline flow on the probe itself: every **offered** day
+row now carries a **Book** button that opens a form right under the table — that day's real
+slots from `/api/booking/availability` (single-day range, `adminBypass=1` past the address
+gate only; the slot math is the public engine's, unchanged), an existing-customer search over
+`/api/properties` that fills every field on one click, contact fields, one **Book it**.
+Server-side it is the SAME two steps as the app and the public page — `POST
+/api/booking/hold` then `POST /api/booking/reserve` with the hold's token, `source: "slot"`,
+`contact.name` combined for `validateLead` — so slot re-validation, customer/property
+creation, and the automatic email+SMS confirmation are byte-identical to every other booking.
+On success the panel says the confirmation is on its way and reloads the board (the day just
+gained a booking); on failure the slots re-read (the slot is the usual reason). The
+`?book=` handoff on the Schedule page stays for other callers. `scripts/test-probe-book.mjs`
+rewritten (11 assertions, in `build:check`): the offered-day gate, the
+availability/hold/reserve contract in order, the payload fields reserve reads, the
+success-refresh and failure-re-read, and the surviving handoff. **Patrick's acceptance test —
+not yet walked:** probe an address, press Book on an offered day, pick a time, fill (or
+one-click an existing customer), Book it — the booking appears on that day's board without
+leaving the page, and the customer's confirmation email + text arrive.
 **2026-09-20 (The probe books, via the one booking form):** Patrick: *"we still can't book a
 customer from the 'probe an address' like we can on the mobile field app."* The Season Plan's
 probe answered "which day" and stopped — booking the caller meant re-typing the address into

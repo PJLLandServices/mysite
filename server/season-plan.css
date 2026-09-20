@@ -684,3 +684,37 @@
   background: var(--pjl-green-pale); border: 1px solid var(--pjl-green);
   color: var(--pjl-green); font-size: 0.92rem;
 }
+
+/* Booking from the probe — the phone's Book flow, inline on the plan. */
+.sp-probe-book {
+  margin: 12px 0 4px; padding: 14px 16px; border-radius: 10px;
+  background: var(--pjl-surface, #fff); border: 1px solid var(--pjl-green);
+}
+.sp-probe-book h4 { margin: 0 0 10px; font-size: 1rem; color: var(--pjl-green); }
+.sp-probe-book form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
+.sp-book-field { display: grid; gap: 4px; font-size: 0.82rem; color: var(--pjl-text-muted); }
+.sp-book-field:first-child, .sp-book-field:nth-child(2) { grid-column: 1 / -1; }
+.sp-book-field input, .sp-book-field select {
+  padding: 8px 10px; border-radius: 7px; border: 1px solid var(--pjl-border, #d8d8ce);
+  font: inherit; font-size: 0.92rem; width: 100%; box-sizing: border-box;
+}
+.sp-book-slots { display: flex; flex-wrap: wrap; gap: 8px; font-size: 0.88rem; color: var(--pjl-text-mid); }
+.sp-book-slot {
+  padding: 8px 13px; border-radius: 7px; border: 1px solid var(--pjl-border, #d8d8ce);
+  background: none; font: inherit; font-size: 0.9rem; cursor: pointer;
+}
+.sp-book-slot:hover { border-color: var(--pjl-green); }
+.sp-book-slot.is-picked { border-color: var(--pjl-green); background: var(--pjl-green-pale); color: var(--pjl-green); font-weight: 600; }
+.sp-book-hits { grid-column: 1 / -1; list-style: none; margin: -6px 0 0; padding: 0; display: grid; gap: 4px; }
+.sp-book-hits button {
+  width: 100%; text-align: left; padding: 7px 10px; border-radius: 7px;
+  border: 1px solid var(--pjl-border, #d8d8ce); background: none; font: inherit; font-size: 0.88rem; cursor: pointer;
+}
+.sp-book-hits button:hover { border-color: var(--pjl-green); }
+.sp-book-hits small { color: var(--pjl-text-muted); margin-left: 6px; }
+.sp-book-err { grid-column: 1 / -1; margin: 0; color: #A32020; font-size: 0.9rem; font-weight: 600; }
+.sp-book-submit {
+  grid-column: 1 / -1; justify-self: start; padding: 10px 22px; border-radius: 8px;
+  border: none; background: var(--pjl-green); color: #fff; font: inherit; font-weight: 700; cursor: pointer;
+}
+.sp-book-submit:disabled { opacity: 0.6; cursor: default; }
