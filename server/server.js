@@ -1284,6 +1284,9 @@ function needsAuth(method, pathname) {
   // Email-health view (JOB-008) — admin-cookie gated, admin only.
   if (pathname.startsWith("/api/admin/email-health")) return "admin";
   if (pathname === "/api/admin/purge-test-data") return "admin";
+  // One-time backfill for pre-2026-09-20 project conversions — bulk
+  // write across every project, same admin-only bar as purge-test-data.
+  if (pathname === "/api/admin/projects/backfill-proposal-enrichment") return "admin";
   if (pathname === "/api/admin/open-bucket/slot") return "admin";
   // Territory export download — ADMIN ONLY. De-identified, but it is still
   // customer geography (municipality + 2-decimal coordinates for every live
@@ -10273,6 +10276,40 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // One-time backfill (2026-09-20) — projects converted before
+  // convert-to-project opened up its enrichment beyond project_proposal
+  // quotes are missing tasks[]/proposalSnapshot. Dry-run by default;
+  // requires the typed confirm string to actually write, same pattern as
+  // purge-test-data above.
+  if (req.method === "POST" && pathname === "/api/admin/projects/backfill-proposal-enrichment") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const plan = await projects.planProposalBackfill();
+
+      if (String(payload?.confirm || "") !== "BACKFILL PROJECTS") {
+        return sendJson(res, 200, {
+          ok: true,
+          dryRun: true,
+          counts: {
+            total: plan.length,
+            willEnrich: plan.filter((p) => p.quoteFound).length,
+            missingQuote: plan.filter((p) => !p.quoteFound).length
+          },
+          projects: plan,
+          note: 'Nothing was changed. Re-send with confirm: "BACKFILL PROJECTS" to apply.'
+        });
+      }
+
+      const results = await projects.applyProposalBackfill({ by: await actorLabel(req) });
+      console.log("[backfill-proposal-enrichment] enriched", results.enriched.length, "skipped", results.skippedNoQuote.length, "by", session.uid || "admin");
+      return sendJson(res, 200, { ok: true, dryRun: false, ...results });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Backfill failed."] });
+    }
+  }
+
   if (req.method === "POST" && pathname === "/api/properties/bulk-delete") {
     try {
       const payload = await parseRequestBody(req);
@@ -15422,7 +15459,38 @@ async function handleApi(req, res, pathname) {
         }
       } catch (err) { /* tolerate — page falls back to the project snapshot */ }
     }
-    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer });
+    // Revision/lock status panel (PJL-54) — resolve whichever quote this
+    // project is currently linked to (post-acceptance: sourceQuoteId;
+    // pre-acceptance, System-Builder-originated: systemDesign.linkedQuoteId
+    // — which may itself be stale, naming an early revision that's since
+    // been superseded) and walk the FULL chain to the actually-current
+    // version. Frontend renders "Quote v3 — sent, Summary total,
+    // confirmed" from this without a second round-trip.
+    let linkedQuote = null;
+    const quoteAnchorId = proj.sourceQuoteId || proj.systemDesign?.linkedQuoteId || null;
+    if (quoteAnchorId) {
+      try {
+        const resolved = await quotes.resolveRevisionChain(quoteAnchorId);
+        if (resolved) {
+          const { current, chain } = resolved;
+          const isProposal = current.type === "project_proposal";
+          linkedQuote = {
+            id: current.id,
+            version: current.version || 1,
+            status: current.status,
+            type: current.type,
+            presentationMode: isProposal ? ((current.pdfOptions && current.pdfOptions.lineItems) || "itemized") : null,
+            // A send only ever completes once markSentForApproval's gate has
+            // matched the confirmed mode to the live one (PJL-48) — so any
+            // project_proposal quote that made it past "draft" was, by
+            // construction, confirmed for the mode it's showing right now.
+            confirmed: isProposal ? !["draft", "draft_preview"].includes(current.status) : null,
+            chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status }))
+          };
+        }
+      } catch (err) { /* tolerate — panel just doesn't render */ }
+    }
+    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote });
   }
   if (projectMatch && req.method === "PATCH") {
     try {

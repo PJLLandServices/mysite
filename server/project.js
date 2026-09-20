@@ -15,6 +15,10 @@
     branch: document.getElementById("projBranch"),
     billing: document.getElementById("projBilling"),
     labourRate: document.getElementById("projLabourRate"),
+    quoteStatusPanel: document.getElementById("projQuoteStatusPanel"),
+    quoteStatusLine: document.getElementById("projQuoteStatusLine"),
+    quoteStatusChain: document.getElementById("projQuoteStatusChain"),
+    quoteStatusLink: document.getElementById("projQuoteStatusLink"),
     proposalPanel: document.getElementById("projProposalPanel"),
     proposalMeta: document.getElementById("projProposalMeta"),
     proposalTotals: document.getElementById("projProposalTotals"),
@@ -172,6 +176,7 @@
       state.project = data.project;
       state.materialLists = Array.isArray(data.materialLists) ? data.materialLists : [];
       state.linkedCustomer = data.linkedCustomer || null;
+      state.linkedQuote = data.linkedQuote || null;
       els.loading.hidden = true;
       els.page.hidden = false;
       els.savebar.hidden = false;
@@ -211,10 +216,68 @@
     lighting_repair: "Landscape Lighting Repairs"
   };
 
+  // Quote status labels (PJL-54) — browser copy of server/lib/quotes.js's
+  // STATUSES + PDF_LINE_ITEM_MODES enums. Not pinned by a shared test the
+  // way BRANCH_LABELS above is; keep in sync by hand if those enums change.
+  const QUOTE_STATUS_LABELS = {
+    draft: "draft",
+    draft_preview: "draft (previewed)",
+    sent: "sent",
+    accepted: "accepted",
+    partially_accepted: "partially accepted",
+    declined: "declined",
+    expired: "expired",
+    superseded: "superseded",
+    cancelled: "cancelled",
+    pending_admin_attestation: "awaiting signed PDF review"
+  };
+  const PRESENTATION_MODE_LABELS = {
+    itemized: "Itemized",
+    descriptions_only: "Descriptions only",
+    summary: "Summary total"
+  };
+
+  function renderQuoteStatusPanel() {
+    const lq = state.linkedQuote;
+    if (!lq) {
+      els.quoteStatusPanel.hidden = true;
+      return;
+    }
+    els.quoteStatusPanel.hidden = false;
+    els.quoteStatusLink.href = `/admin/quote/${encodeURIComponent(lq.id)}/proposal`;
+
+    const statusLabel = QUOTE_STATUS_LABELS[lq.status] || lq.status;
+    let line = `Quote v${lq.version} — ${statusLabel}`;
+    if (lq.presentationMode) {
+      line += `, ${PRESENTATION_MODE_LABELS[lq.presentationMode] || lq.presentationMode}`;
+    }
+    let html = escapeHtml(line);
+    if (lq.confirmed === true) {
+      html += ", confirmed";
+    } else if (lq.confirmed === false) {
+      html += `, <span class="is-not-confirmed">not yet sent</span>`;
+    }
+    els.quoteStatusLine.innerHTML = html;
+
+    if (Array.isArray(lq.chain) && lq.chain.length > 1) {
+      els.quoteStatusChain.hidden = false;
+      els.quoteStatusChain.innerHTML = "History: " + lq.chain.map((q) => {
+        const label = `v${q.version}`;
+        return q.id === lq.id
+          ? `<span class="is-current">${escapeHtml(label)}</span>`
+          : `<a href="/admin/quote/${encodeURIComponent(q.id)}/proposal">${escapeHtml(label)}</a>`;
+      }).join(" → ");
+    } else {
+      els.quoteStatusChain.hidden = true;
+      els.quoteStatusChain.innerHTML = "";
+    }
+  }
+
   // ---- Render -------------------------------------------------------
   function renderAll() {
     renderHeader();
     renderBuildCta();
+    renderQuoteStatusPanel();
     renderProposalPanel();
     renderTasks();
     renderDailyLog();

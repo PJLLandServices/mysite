@@ -566,6 +566,22 @@
 .proj-billing--fixed_price { background: #EAF3DE; color: #1B4D2E; }
 .proj-labour-rate { background: #FFE8C9; color: #8A4A12; }
 
+/* ---- Quote status panel (PJL-54) ---- */
+.proj-quote-status-line {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1F2A22;
+  margin: 4px 0 6px;
+}
+.proj-quote-status-line .is-not-confirmed { color: #7A5500; font-weight: 500; }
+.proj-quote-status-chain {
+  font-size: 13px;
+  color: #6A6A60;
+  margin: 0;
+}
+.proj-quote-status-chain a { color: #1B4D2E; }
+.proj-quote-status-chain .is-current { font-weight: 700; color: #1F2A22; }
+
 /* ---- Accepted proposal panel ---- */
 .proj-proposal {
   background: #FAFAF5;
