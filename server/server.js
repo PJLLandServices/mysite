@@ -17917,6 +17917,27 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 200, { ok: true, project: dupe, alreadyExisted: true });
       }
 
+      // A quote built FROM a project's System Builder design already
+      // belongs to that project — project.systemDesign.linkedQuoteId was
+      // set the moment the design generated it, before it was ever sent.
+      // Walk the quote's revision chain (a sent revision is a new quote
+      // id; the project's pointer still names the original) looking for
+      // a project that already claims one of these ids and hasn't been
+      // converted yet. Found → enrich that project in place. Not found →
+      // fall through to the old "spin up a new project" path below, the
+      // right behavior for quotes that never went through System Builder.
+      const chainIds = new Set([quoteId]);
+      {
+        let cur = quote;
+        let hops = 0;
+        while (cur && cur.revisionOf && hops < 25) {
+          chainIds.add(cur.revisionOf);
+          cur = await quotes.get(cur.revisionOf);
+          hops += 1;
+        }
+      }
+      const linkedProject = existing.find((p) => p.systemDesign && chainIds.has(p.systemDesign.linkedQuoteId) && !p.sourceQuoteId);
+
       // Pull customer + address from the quote's lead (if linked) so the
       // project carries the customer details forward.
       let leadCustomer = null;
@@ -17932,7 +17953,14 @@ async function handleApi(req, res, pathname) {
       const propertyId = quote.propertyId || leadCustomer?.propertyId || null;
 
       let proj;
-      if (quote.type === "project_proposal") {
+      let linkedExistingProject = false;
+      if (linkedProject && quote.type === "project_proposal") {
+        proj = await projects.enrichFromProposal(linkedProject.id, quote, {
+          customerName, customerEmail, customerPhone, address, propertyId,
+          by: await actorLabel(req)
+        });
+        linkedExistingProject = true;
+      } else if (quote.type === "project_proposal") {
         // Project_proposal quotes get the full enrichment.
         proj = await projects.createFromProposal(quote, {
           customerName, customerEmail, customerPhone, address, propertyId,
@@ -17969,7 +17997,12 @@ async function handleApi(req, res, pathname) {
         if (updated) reparented.push(updated.id);
       }
 
-      return sendJson(res, 201, { ok: true, project: proj, reparentedListIds: reparented });
+      return sendJson(res, linkedExistingProject ? 200 : 201, {
+        ok: true,
+        project: proj,
+        reparentedListIds: reparented,
+        linkedExistingProject
+      });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't convert quote."] });
     }

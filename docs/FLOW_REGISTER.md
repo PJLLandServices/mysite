@@ -2,6 +2,34 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-20, same day (Convert-to-project stopped duplicating System Builder jobs):** Patrick,
+live, mid-acceptance: *"I just had a quote accepted, and now i have to convert to
+project.... but we created the quote form a project."* Real bug, not a misunderstanding —
+`POST /api/quotes/:id/convert-to-project` only ever checked for an existing project with
+`sourceQuoteId === thisQuote`, a field NOTHING sets until conversion itself runs. A quote built
+from a project's System Builder design (`server/sitebuilder.html` writes
+`project.systemDesign.linkedQuoteId` the moment it generates the quote — see the Job Portal
+data-model research earlier the same day) was never consulted, so every System-Builder-
+originated proposal would spin up a second, orphaned, duplicate project for a job that already
+had one the moment it got accepted. Fixed: before creating anything, the route now walks the
+quote's `revisionOf` chain (a sent revision is a new quote id; the project's pointer still
+names whichever ancestor System Builder actually generated) looking for a project that already
+claims one of those ids via `systemDesign.linkedQuoteId` **and hasn't been converted yet**
+(`!project.sourceQuoteId` — an already-claimed project is never reused for a different quote,
+even if its `linkedQuoteId` is stale). Found → `projects.enrichFromProposal()` patches that
+SAME project in place (branch, billingMode, labourRateLocked, tasks seeded only if none are
+already done, attachments, proposalSnapshot, sourceQuoteId) — no new project record, existing
+work/history on it untouched. Not found → unchanged behaviour, a new project is created same as
+before (the common case for quotes never touched by System Builder). Both UI callers (Proposal
+Builder's Convert button, Quote Folder's card action) now tell Patrick when a convert linked to
+an existing project instead of creating one, so it's never a silent surprise.
+`scripts/test-convert-to-project-links-systembuilder.mjs` (16 assertions, in `build:check`)
+pins: direct link, the revision-chain case, the ordinary no-link fallback, and the
+already-claimed-project guard. **Patrick's acceptance test — not yet walked:** on a project
+you built with System Builder, send and accept the quote it generated, then press Convert to
+project (from either the Proposal Builder or the Quote Folder) — confirm it lands you on the
+SAME project you started with, not a new one, and that the project's tasks/attachments/snapshot
+show up on it.
 **2026-09-20, same day (Project delete — test vs. real):** The **Delete project** button on
 the project page (`server/project.html`/`project.js`) hard-deleted the project record but only
 handled material lists — it detached them, never deleted them — and left any attached work

@@ -711,6 +711,111 @@ async function createFromProposal(quote, { customerName = "", customerEmail = ""
   return records[idx];
 }
 
+// Enrich an EXISTING project from an accepted project_proposal quote —
+// the System Builder path. A quote built from a project's saved system
+// design (server/sitebuilder.html, linkedQuoteId written onto
+// project.systemDesign) already belongs to that project before it's ever
+// sent; convert-to-project used to not know that and would spin up a
+// brand-new, duplicate project for the very same job every time. Same
+// enrichment as createFromProposal (branch, billingMode,
+// labourRateLocked, tasks, attachments, proposalSnapshot, sourceQuoteId)
+// but patches the project already on file instead of minting a new id.
+// Tasks are only (re)seeded if none of the existing ones are done yet —
+// same guard as seedTasksFromQuote, so a project someone has already
+// started working never has its progress clobbered.
+async function enrichFromProposal(projectId, quote, { customerName = "", customerEmail = "", customerPhone = "", address = "", propertyId = null, by = "admin" } = {}) {
+  if (!projectId) throw new Error("enrichFromProposal requires a projectId.");
+  if (!quote) throw new Error("enrichFromProposal requires a quote.");
+  if (quote.type !== "project_proposal") {
+    throw new Error("enrichFromProposal only handles project_proposal quotes.");
+  }
+
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === projectId);
+  if (idx === -1) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
+  const current = records[idx];
+
+  const attachments = (quote.attachments || [])
+    .filter((a) => a.kind !== "signed_pdf_return")
+    .map((a, i) => ({
+      id: "att_" + random8(),
+      sourceQuoteId: quote.id,
+      sourceQuoteAttachmentId: a.id,
+      kind: a.kind,
+      caption: a.caption || a.filename || "",
+      filename: a.filename || "",
+      mimeType: a.mimeType || "",
+      order: i
+    }));
+
+  const proposalSnapshot = {
+    quoteId: quote.id,
+    version: quote.version || 1,
+    branch: quote.branch || null,
+    billingMode: quote.billingMode || null,
+    acceptanceMethod: quote.acceptanceMethod || null,
+    acceptedAt: quote.acceptedAt || null,
+    customerName,
+    customerEmail,
+    customerPhone,
+    address,
+    proposalSections: Array.isArray(quote.proposalSections)
+      ? quote.proposalSections.map((s) => ({ ...s, attachmentIds: [...(s.attachmentIds || [])] }))
+      : [],
+    lineItems: Array.isArray(quote.lineItems) ? quote.lineItems.map((li) => ({ ...li })) : [],
+    subtotal: Number(quote.subtotal) || 0,
+    hst: Number(quote.hst) || 0,
+    total: Number(quote.total) || 0,
+    customRates: { ...(quote.customRates || {}) },
+    scope: quote.scope || "",
+    frozenAt: nowIso()
+  };
+
+  const canReseedTasks = !(current.tasks || []).some((t) => t.status === "done");
+  const tasks = canReseedTasks
+    ? (quote.lineItems || []).map((li, i) => ({
+        id: "task_" + random8(),
+        description: String(li.label || li.sourceKey || `Task ${i + 1}`).slice(0, 400),
+        sourceLineItemId: li.id || null,
+        status: "pending",
+        percentComplete: 0,
+        completedAt: null,
+        completedByWoId: null,
+        order: i
+      }))
+    : current.tasks;
+
+  const next = {
+    ...current,
+    sourceQuoteId: quote.id,
+    branch: quote.branch || current.branch || null,
+    billingMode: quote.billingMode || current.billingMode || null,
+    labourRateLocked: Number.isFinite(Number(quote.customRates?.labour))
+      ? Number(quote.customRates.labour)
+      : current.labourRateLocked,
+    tasks,
+    attachments: [...(current.attachments || []), ...attachments],
+    proposalSnapshot,
+    updatedAt: nowIso()
+  };
+  // Customer/property snapshot — only fill what the project doesn't
+  // already carry (don't clobber hand-edited project details).
+  if (!next.customerName && customerName) next.customerName = customerName;
+  if (!next.customerEmail && customerEmail) next.customerEmail = customerEmail;
+  if (!next.customerPhone && customerPhone) next.customerPhone = customerPhone;
+  if (!next.address && address) next.address = address;
+  if (!next.propertyId && propertyId) next.propertyId = propertyId;
+
+  appendHistory(next, {
+    action: "proposal_enriched",
+    by,
+    note: `linked from System Builder design — tasks=${tasks.length} attachments=${attachments.length} branch=${quote.branch || "none"}`
+  });
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
 // Push a WO id onto the project's workOrderIds[]. Idempotent — if the
 // WO is already attached, returns the project unchanged. Caller is
 // responsible for setting the WO's reverse pointer (Phase 2 keeps this
@@ -2096,6 +2201,7 @@ module.exports = {
   get,
   create,
   createFromProposal,
+  enrichFromProposal,
   buildCustomerSnapshot,
   update,
   attachWorkOrder,

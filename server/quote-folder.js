@@ -299,7 +299,7 @@ async function load() {
 }
 
 async function convertToProject(quoteId) {
-  if (!confirm(`Spin up a new project from ${quoteId}? Any material lists attached to this quote will move to the new project.`)) return;
+  if (!confirm(`Convert ${quoteId} to a project? Any material lists attached to this quote will move over.`)) return;
   try {
     const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/convert-to-project`, { method: "POST" });
     const data = await r.json().catch(() => ({}));
@@ -310,6 +310,10 @@ async function convertToProject(quoteId) {
     if (data.alreadyExisted) {
       // Already-converted — go to the existing project rather than create a duplicate.
       alert(`A project for ${quoteId} already exists (${data.project.id}). Opening it.`);
+    } else if (data.linkedExistingProject) {
+      // This quote was built from a project's System Builder design —
+      // linked to that project instead of spinning up a duplicate.
+      alert(`This quote was built from ${data.project.name || data.project.id}'s System Builder design — linked to that project instead of creating a new one.`);
     }
     location.href = `/admin/project/${encodeURIComponent(data.project.id)}`;
   } catch (err) {
