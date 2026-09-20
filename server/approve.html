@@ -36,6 +36,16 @@
       <p>This link couldn't be loaded — it may have expired, been revoked, or contains a typo. Call PJL at <a href="tel:+19059600181">(905) 960-0181</a> if you need a new one.</p>
     </div>
 
+    <!-- Revised (2026-09-20 fix). Shown when the server returns
+         { revised:true } — this link's quote was replaced by a newer
+         revision. Deliberately separate from approveError above: this is
+         not a bad/expired link, it's a real one whose quote has moved on,
+         so it gets its own copy rather than the generic "not found" text. -->
+    <div class="approve-error" id="approveRevised" hidden>
+      <h1>This quote has been revised</h1>
+      <p>This quote has been revised, please see latest quotation for approval requirements. Call PJL at <a href="tel:+19059600181">(905) 960-0181</a> if you need the current link.</p>
+    </div>
+
     <!-- Phone challenge (Phone-Gated Proposal Access, 2026-07). Shown only
          when the server returns { locked:true } for a project_proposal and
          the visitor isn't an admin / the owning customer. One field, one
