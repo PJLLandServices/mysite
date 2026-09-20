@@ -823,6 +823,59 @@ async function enrichFromProposal(projectId, quote, { customerName = "", custome
   return next;
 }
 
+// One-time backfill for projects converted BEFORE 2026-09-20, when
+// convert-to-project only enriched project_proposal quotes — everything
+// else (on_site_quote, ai_repair_quote) got a bare projects.create() with
+// just sourceQuoteId and nothing else. Finds every project that still
+// looks like that (sourceQuoteId set, no proposalSnapshot) and applies
+// the SAME enrichFromProposal() a fresh conversion gets today, so the
+// composed repair list shows up on the project instead of staying
+// reachable only by clicking back into the original quote.
+//
+// Additive only: enrichFromProposal never overwrites customer/address
+// fields that are already set, and refuses to re-seed tasks over ones a
+// project already has done — so this cannot erase work someone already
+// did on a converted project. Never touches a project that's already
+// enriched (has a proposalSnapshot) — safe to run more than once.
+//
+// planProposalBackfill() is the read-only preview (what WOULD change,
+// nothing written); applyProposalBackfill() does the actual writes.
+async function planProposalBackfill() {
+  const records = await readAll();
+  const quotesLib = require("./quotes");
+  const candidates = records.filter((p) => p.sourceQuoteId && !p.proposalSnapshot);
+  const plan = [];
+  for (const p of candidates) {
+    const quote = await quotesLib.get(p.sourceQuoteId);
+    plan.push({
+      projectId: p.id,
+      projectName: p.name,
+      sourceQuoteId: p.sourceQuoteId,
+      quoteFound: !!quote,
+      quoteType: quote ? quote.type : null,
+      lineItemCount: quote ? (quote.lineItems || []).length : 0
+    });
+  }
+  return plan;
+}
+
+async function applyProposalBackfill({ by = "admin" } = {}) {
+  const quotesLib = require("./quotes");
+  const plan = await planProposalBackfill();
+  const enriched = [];
+  const skippedNoQuote = [];
+  for (const item of plan) {
+    if (!item.quoteFound) {
+      skippedNoQuote.push(item.projectId);
+      continue;
+    }
+    const quote = await quotesLib.get(item.sourceQuoteId);
+    await enrichFromProposal(item.projectId, quote, { by });
+    enriched.push(item.projectId);
+  }
+  return { enriched, skippedNoQuote };
+}
+
 // Push a WO id onto the project's workOrderIds[]. Idempotent — if the
 // WO is already attached, returns the project unchanged. Caller is
 // responsible for setting the WO's reverse pointer (Phase 2 keeps this
@@ -2209,6 +2262,8 @@ module.exports = {
   create,
   createFromProposal,
   enrichFromProposal,
+  planProposalBackfill,
+  applyProposalBackfill,
   buildCustomerSnapshot,
   update,
   attachWorkOrder,

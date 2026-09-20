@@ -1284,6 +1284,9 @@ function needsAuth(method, pathname) {
   // Email-health view (JOB-008) — admin-cookie gated, admin only.
   if (pathname.startsWith("/api/admin/email-health")) return "admin";
   if (pathname === "/api/admin/purge-test-data") return "admin";
+  // One-time backfill for pre-2026-09-20 project conversions — bulk
+  // write across every project, same admin-only bar as purge-test-data.
+  if (pathname === "/api/admin/projects/backfill-proposal-enrichment") return "admin";
   if (pathname === "/api/admin/open-bucket/slot") return "admin";
   // Territory export download — ADMIN ONLY. De-identified, but it is still
   // customer geography (municipality + 2-decimal coordinates for every live
@@ -10270,6 +10273,40 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, dryRun: false, marker: plan.marker, counts });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Purge failed."] });
+    }
+  }
+
+  // One-time backfill (2026-09-20) — projects converted before
+  // convert-to-project opened up its enrichment beyond project_proposal
+  // quotes are missing tasks[]/proposalSnapshot. Dry-run by default;
+  // requires the typed confirm string to actually write, same pattern as
+  // purge-test-data above.
+  if (req.method === "POST" && pathname === "/api/admin/projects/backfill-proposal-enrichment") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const plan = await projects.planProposalBackfill();
+
+      if (String(payload?.confirm || "") !== "BACKFILL PROJECTS") {
+        return sendJson(res, 200, {
+          ok: true,
+          dryRun: true,
+          counts: {
+            total: plan.length,
+            willEnrich: plan.filter((p) => p.quoteFound).length,
+            missingQuote: plan.filter((p) => !p.quoteFound).length
+          },
+          projects: plan,
+          note: 'Nothing was changed. Re-send with confirm: "BACKFILL PROJECTS" to apply.'
+        });
+      }
+
+      const results = await projects.applyProposalBackfill({ by: await actorLabel(req) });
+      console.log("[backfill-proposal-enrichment] enriched", results.enriched.length, "skipped", results.skippedNoQuote.length, "by", session.uid || "admin");
+      return sendJson(res, 200, { ok: true, dryRun: false, ...results });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Backfill failed."] });
     }
   }
 

@@ -2,6 +2,31 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-20, same day (Backfill for pre-fix bare project conversions):** Patrick, after the
+convert-to-project enrichment fix above shipped: *"Did it backdate any of the existing
+proposals?"* No — that fix only changed what a FUTURE convert-to-project does; every project
+that was already converted before it shipped is exactly as bare as it was (no tasks, no
+proposalSnapshot). Built the catch-up: `projects.planProposalBackfill()` finds every project
+with `sourceQuoteId` set and no `proposalSnapshot` (the fingerprint of a pre-fix bare
+conversion), and `applyProposalBackfill()` runs the SAME `enrichFromProposal()` a fresh
+conversion gets today against each one's original quote. Additive only — `enrichFromProposal`
+never overwrites a project's existing customer/address fields and refuses to re-seed tasks over
+ones already marked done, so this cannot erase real work; a project with no `sourceQuoteId` at
+all (never converted, the ordinary case) is never a candidate. Exposed as
+`POST /api/admin/projects/backfill-proposal-enrichment` — admin-gated (needsAuth + requireAdmin,
+same as `/api/admin/purge-test-data`), dry-run by default (returns counts, writes nothing),
+requires `confirm: "BACKFILL PROJECTS"` to actually apply — and a **Backfill missing proposal
+data** button on `server/projects.html`/`projects.js` (the "All Projects" list page) that runs
+the dry run first, shows Patrick the count in a confirm dialog, then applies on OK. Safe to run
+more than once — already-enriched projects are automatically excluded from the candidate list.
+`scripts/test-backfill-proposal-enrichment.mjs` (25 assertions, in `build:check`) pins: dry-run
+writes nothing but reports accurate counts, apply enriches the real candidate and skips one
+whose quote no longer exists, an already-enriched project's data (including a DONE task) is
+untouched byte-for-byte, an ordinary never-converted project is never a candidate, a second
+apply run is a clean no-op, and a non-admin gets 403. **Patrick's acceptance test — not yet
+walked:** open Projects, click "Backfill missing proposal data," confirm the count looks right,
+apply it, then open one of the projects it fixed and confirm its Tasks panel and Accepted
+proposal panel now show real data instead of nothing.
 **2026-09-20, same day (Convert-to-project now enriches repair-quote projects too):** Patrick:
 *"I believe I have scoped the quote so that we can also do 'repairs' which allow us to assess an
 entire project, and compose the repairs. I think it should remain."* Traced the real flow: the
