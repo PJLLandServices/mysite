@@ -1891,12 +1891,32 @@ async function ensureApprovalToken(id) {
   return token;
 }
 
-async function markSentForApproval(id, { token, channels = [], toEmail = "", toPhone = "", by = "tech", pdf = null, note = "" } = {}) {
+async function markSentForApproval(id, { token, channels = [], toEmail = "", toPhone = "", by = "tech", pdf = null, note = "", confirmedPresentation = null } = {}) {
   if (!id || !token) throw new Error("markSentForApproval needs id + token");
   const records = await readAll();
   const idx = records.findIndex((q) => q.id === id);
   if (idx === -1) return null;
   const q = records[idx];
+  // Presentation confirmation gate (2026-09-20 fix, PJL-48). Only a
+  // project_proposal has pdfOptions to confirm — ai_repair_quote /
+  // on_site_quote callers never pass this and are unaffected. The caller
+  // must name the exact mode it's confirming, and it must still match the
+  // record's live value: this is the server-side half of "no way around it
+  // via a stale page or a direct API call" — the UI confirmation dialog is
+  // the other half, but this is what actually enforces it.
+  if (q.type === "project_proposal") {
+    const live = (q.pdfOptions && q.pdfOptions.lineItems) || "itemized";
+    if (!PDF_LINE_ITEM_MODES.includes(confirmedPresentation)) {
+      const err = new Error("Presentation must be confirmed before sending.");
+      err.code = "presentation_not_confirmed";
+      throw err;
+    }
+    if (confirmedPresentation !== live) {
+      const err = new Error(`Confirmed presentation "${confirmedPresentation}" no longer matches this quote's current setting "${live}" — refresh and confirm again.`);
+      err.code = "presentation_confirmation_stale";
+      throw err;
+    }
+  }
   const ts = nowIso();
   q.approval = {
     token,
@@ -3212,6 +3232,7 @@ module.exports = {
   ATTACHMENT_KINDS,
   ATTACHMENT_MIME_WHITELIST,
   SCOPE_PROTECTED_FIELDS,
+  PDF_LINE_ITEM_MODES,
   DEFAULT_VALIDITY_DAYS,
   PROPOSAL_DEFAULT_VALIDITY_DAYS,
   HST_RATE,

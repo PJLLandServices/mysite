@@ -55,7 +55,7 @@ const TOKEN_V1 = "a".repeat(32);
 
   await quotes.updateProposal(v1.id, { pdfOptions: { lineItems: "summary" } });
   const sent = await quotes.markSentForApproval(v1.id, {
-    token: TOKEN_V1, channels: ["email"], toEmail: "customer@example.com"
+    token: TOKEN_V1, channels: ["email"], toEmail: "customer@example.com", confirmedPresentation: "summary"
   });
   ok(sent.status === "sent", "v1 sent");
   ok(sent.pdfOptions.lineItems === "summary", "v1 sent as summary (sanity)");
@@ -77,11 +77,11 @@ const TOKEN_V1 = "a".repeat(32);
 {
   const v1 = await quotes.create({ type: "project_proposal", branch: null });
   await quotes.updateProposal(v1.id, { pdfOptions: { lineItems: "descriptions_only" } });
-  await quotes.markSentForApproval(v1.id, { token: "b".repeat(32), channels: [], toEmail: "" });
+  await quotes.markSentForApproval(v1.id, { token: "b".repeat(32), channels: [], toEmail: "", confirmedPresentation: "descriptions_only" });
 
   const v2 = await quotes.createRevision(v1.id, { by: "admin" });
   await quotes.updateProposal(v2.id, { pdfOptions: { lineItems: "itemized" } }); // Patrick deliberately changed it on v2
-  await quotes.markSentForApproval(v2.id, { token: "c".repeat(32), channels: [], toEmail: "" });
+  await quotes.markSentForApproval(v2.id, { token: "c".repeat(32), channels: [], toEmail: "", confirmedPresentation: "itemized" });
 
   const v3 = await quotes.createRevision(v2.id, { by: "admin" });
   ok(
@@ -95,7 +95,7 @@ const TOKEN_V1 = "a".repeat(32);
   const v1 = await quotes.create({ type: "project_proposal", branch: null });
   ok(quotes.isSuperseded(v1) === false, "a draft is not superseded");
 
-  await quotes.markSentForApproval(v1.id, { token: "d".repeat(32), channels: [], toEmail: "" });
+  await quotes.markSentForApproval(v1.id, { token: "d".repeat(32), channels: [], toEmail: "", confirmedPresentation: "itemized" });
   const sent = await quotes.get(v1.id);
   ok(quotes.isSuperseded(sent) === false, "a sent quote is not superseded");
 
@@ -113,7 +113,7 @@ const TOKEN_V1 = "a".repeat(32);
 {
   const v1 = await quotes.create({ type: "project_proposal", branch: null });
   const token = "e".repeat(32);
-  await quotes.markSentForApproval(v1.id, { token, channels: [], toEmail: "" });
+  await quotes.markSentForApproval(v1.id, { token, channels: [], toEmail: "", confirmedPresentation: "itemized" });
   await quotes.createRevision(v1.id, { by: "admin" });
 
   const byToken = await quotes.getByApprovalToken(v1.id, token);
