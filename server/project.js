@@ -913,11 +913,35 @@
   }
   async function deleteProject() {
     const lineCount = (state.materialLists || []).length;
-    const confirmText = lineCount
-      ? `Delete this project? Its ${lineCount} attached material list${lineCount === 1 ? "" : "s"} will be detached but not deleted.`
-      : "Delete this empty project?";
-    if (!confirm(confirmText)) return;
-    const r = await fetch(`/api/projects/${encodeURIComponent(state.projectId)}`, { method: "DELETE" });
+    const woCount = (state.project.workOrderIds || []).length;
+
+    const isTest = confirm(
+      "Is this a TEST project — not real customer work?\n\n" +
+      "OK = Yes, it's a test. Permanently delete the project AND everything attached to it " +
+      `(${woCount} work order${woCount === 1 ? "" : "s"}, ${lineCount} material list${lineCount === 1 ? "" : "s"}).\n` +
+      "Cancel = No, it's real. Use the normal delete (nothing attached gets destroyed)."
+    );
+
+    let cascade = false;
+    if (isTest) {
+      const sure = confirm(
+        "This cannot be undone. It will permanently delete this project, " +
+        `its ${woCount} work order${woCount === 1 ? "" : "s"}, and its ${lineCount} material list${lineCount === 1 ? "" : "s"}. Continue?`
+      );
+      if (!sure) return;
+      cascade = true;
+    } else {
+      const confirmText = lineCount
+        ? `Delete this project? Its ${lineCount} attached material list${lineCount === 1 ? "" : "s"} will be detached but not deleted.`
+        : "Delete this empty project?";
+      if (!confirm(confirmText)) return;
+    }
+
+    const r = await fetch(`/api/projects/${encodeURIComponent(state.projectId)}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cascade })
+    });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
       alert((data.errors && data.errors[0]) || "Couldn't delete project.");

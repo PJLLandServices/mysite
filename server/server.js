@@ -15437,15 +15437,34 @@ async function handleApi(req, res, pathname) {
   }
   if (projectMatch && req.method === "DELETE") {
     const id = decodeURIComponent(projectMatch[1]);
-    const removed = await projects.remove(id);
-    if (!removed) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-    // Detach any material lists that pointed at this project so they
-    // don't render with a dangling parent badge.
+    const proj = await projects.get(id);
+    if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+    const payload = await parseRequestBody(req).catch(() => ({}));
+    const cascade = !!(payload && payload.cascade);
     const attached = await materialLists.list({ parentType: "project", parentId: id, includeArchived: true });
-    for (const rec of attached) {
-      await materialLists.update(rec.id, { parentType: null, parentId: null });
+    const workOrderIds = Array.isArray(proj.workOrderIds) ? proj.workOrderIds : [];
+
+    if (cascade) {
+      // Test project — the customer wants a clean wipe, not an orphan
+      // trail. Delete every attached material list and work order, then
+      // the project itself.
+      for (const rec of attached) {
+        await materialLists.remove(rec.id);
+      }
+      for (const woId of workOrderIds) {
+        await workOrders.remove(woId).catch(() => {});
+      }
+    } else {
+      // Real project — keep the material lists, just detach them so they
+      // don't render with a dangling parent badge. Work orders are left
+      // alone (they're the actual record of work done).
+      for (const rec of attached) {
+        await materialLists.update(rec.id, { parentType: null, parentId: null });
+      }
     }
-    return sendJson(res, 200, { ok: true, removed });
+
+    const removed = await projects.remove(id);
+    return sendJson(res, 200, { ok: true, removed, cascade });
   }
 
   // POST /api/projects/:id/attach-work-order { workOrderId }
