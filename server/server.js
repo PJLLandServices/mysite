@@ -17390,9 +17390,15 @@ async function handleApi(req, res, pathname) {
   // run of the approval email. Composes with the SAME builder + gate check
   // the send uses, so the builder's "Preview email" panel shows exactly what
   // the customer will get: from / to / subject / attachment / body HTML.
-  // Nothing is sent, no token is minted, no state changes. A draft with no
-  // token yet gets a visibly-placeholder link (the real one is issued on
-  // send).
+  // Nothing is sent, no status changes. A real approval token IS minted
+  // (2026-09-20 fix) via ensureApprovalToken — explicitly side-effect-light
+  // (no status change, no history entry) and idempotent, so calling it here
+  // is safe and it's the SAME token a real send reuses. Before this, an
+  // unsent draft's preview link was a dead "issued-on-send" placeholder —
+  // Patrick couldn't actually open the page a customer would see before
+  // sending, which is exactly how the itemized-pricing incident went
+  // unnoticed. Now "Preview what the customer sees" always opens the real,
+  // live-draft accept page.
   const proposalEmailPreviewMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/proposal-email-preview$/);
   if (proposalEmailPreviewMatch && req.method === "GET") {
     const session = await requireAdmin(req);
@@ -17409,8 +17415,9 @@ async function handleApi(req, res, pathname) {
       const toEmail = String(url.searchParams.get("email") || q.customerEmail || "").trim();
       const parties = await quoteRenderParties(q);
       const gated = q.deliveryMode === "plain_pdf" ? false : await proposalHasCustomDoc(q);
-      const hasToken = Boolean(q.approval && q.approval.token);
-      const approvalUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${hasToken ? q.approval.token : "issued-on-send"}`;
+      const previewToken = await quotes.ensureApprovalToken(id);
+      const hasToken = Boolean(previewToken);
+      const approvalUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${hasToken ? previewToken : "issued-on-send"}`;
       const manifest = quotes.emailAttachmentManifest(q, { gated });
       const extraFiles = manifest.filter((m) => m.emailAttached).map((m) => m.filename);
       const mail = buildProposalApprovalEmail(q, { parties, approvalUrl, gated, note, extraFiles });

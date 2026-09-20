@@ -2038,7 +2038,15 @@
     filesTotal: $("pbEmailFilesTotal"),
     frame: $("pbEmailFrame"),
     status: $("pbEmailStatus"),
-    openBtn: $("pbEmailPreviewBtn")
+    openBtn: $("pbEmailPreviewBtn"),
+    confirmFieldset: $("pbEmailConfirmPresentation"),
+    confirmHint: $("pbEmailConfirmHint"),
+    customerPreviewLink: $("pbEmailPreviewCustomerLink")
+  };
+  const LINE_ITEM_LABELS = {
+    itemized: "Itemized — description, qty, unit, line total",
+    descriptions_only: "Descriptions only — no dollar columns",
+    summary: "Summary total only — one number, no breakdown"
   };
   let emailMode = "preview";
   let emailSeq = 0;
@@ -2113,8 +2121,20 @@
         frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"></head>` +
           `<body style="margin:0;padding:22px 18px;background:#ffffff;">${d.html || ""}</body></html>`;
       }
+      // Real working preview link (2026-09-20 fix) — the preview route now
+      // mints a real approval token (ensureApprovalToken, no status change),
+      // so this always opens the actual current-draft customer page, not a
+      // dead placeholder. The button inside the sandboxed email iframe above
+      // can't navigate by design; this is the one that actually works.
+      if (em.customerPreviewLink) {
+        if (d.approvalUrl) {
+          em.customerPreviewLink.href = d.approvalUrl;
+          em.customerPreviewLink.hidden = false;
+        } else {
+          em.customerPreviewLink.hidden = true;
+        }
+      }
       const warns = [];
-      if (d.linkIsPlaceholder) warns.push("The “Review & sign” link is issued when you send — the preview shows a placeholder.");
       if (!d.to) warns.push("Set the customer email in the top bar before sending.");
       em.warn.textContent = warns.join(" ");
       em.warn.hidden = warns.length === 0;
@@ -2219,16 +2239,22 @@
     em.title.textContent = emailMode === "send"
       ? `Review the email, then send ${state.quote.id}`
       : `Email preview — ${state.quote.id}`;
-    // Presentation confirmation (2026-09-20 fix) — opens pre-selected to
-    // whatever's currently set (which, post-revision, is whatever the last
-    // sent version used — see createRevision()'s pdfOptions carry-forward),
-    // never blank. Shares name="pbLineItems" with the settings-panel
-    // radios, so this just re-syncs the whole group to current state.
-    {
-      const opts = state.quote.pdfOptions || {};
-      document.querySelectorAll('input[name="pbLineItems"]').forEach((r) => {
-        r.checked = r.value === (opts.lineItems || "itemized");
-      });
+    // Presentation confirmation (2026-09-20 fix, revised same day) — a
+    // pre-checked radio turned out to still be something Patrick could
+    // click past without looking, so this group opens with NOTHING
+    // checked in send mode and Send now stays disabled until he actively
+    // picks one. The current setting is only shown as a text hint, not
+    // pre-selected. Preview mode (nothing being sent) doesn't need to
+    // force this, so it's hidden there.
+    if (em.confirmFieldset) {
+      const forceChoice = emailMode === "send";
+      em.confirmFieldset.hidden = !forceChoice;
+      if (forceChoice) {
+        document.querySelectorAll('input[name="pbSendLineItems"]').forEach((r) => { r.checked = false; });
+        const current = (state.quote.pdfOptions && state.quote.pdfOptions.lineItems) || "itemized";
+        if (em.confirmHint) em.confirmHint.textContent = `Currently set to: ${LINE_ITEM_LABELS[current] || current}.`;
+        em.send.disabled = true;
+      }
     }
     const alreadySent = state.quote.status !== "draft" && state.quote.status !== "draft_preview";
     // A sent quote shows the note that went out with it (read-only); a
@@ -2269,6 +2295,15 @@
       if (emailTimer) clearTimeout(emailTimer);
       emailTimer = setTimeout(loadEmailPreview, 450);
     });
+    // Send now stays disabled (set in openEmailDialog) until Patrick
+    // actively picks one of these — the forcing function for the
+    // 2026-09-20 fix. Only wired once; openEmailDialog resets .checked
+    // and .disabled on every open, this just reacts to a pick.
+    document.querySelectorAll('input[name="pbSendLineItems"]').forEach((r) => {
+      r.addEventListener("change", () => {
+        if (r.checked) em.send.disabled = false;
+      });
+    });
     em.send.addEventListener("click", async () => {
       if (emailSending) return;
       const email = state.quote.customerEmail;
@@ -2276,18 +2311,28 @@
         showError("Customer email is required before sending.");
         return;
       }
-      if (!confirm(`Send ${state.quote.id} to ${email} now? This locks the proposal.`)) return;
+      const picked = document.querySelector('input[name="pbSendLineItems"]:checked');
+      if (!picked) {
+        showError("Pick what the customer will see before sending.");
+        return;
+      }
+      const confirmedPresentation = picked.value;
+      if (!confirm(`Send ${state.quote.id} to ${email} now?\n\nCustomer will see: ${LINE_ITEM_LABELS[confirmedPresentation] || confirmedPresentation}\n\nThis locks the proposal.`)) return;
       emailSending = true;
       em.send.disabled = true;
       em.status.textContent = "Sending…";
       try {
-        // Presentation confirmation (2026-09-20 fix) — a radio change in
-        // this dialog only updates local state (markDirty); persist it
-        // before sending, then tell the server exactly what was confirmed
-        // so it can verify that's still the live value (defense against a
-        // stale dialog / a second tab changing it after this one opened).
+        // The picked mode may differ from what was last saved (Patrick
+        // changed it right here) — persist it before sending so the
+        // server's live pdfOptions.lineItems matches what's being confirmed.
+        if (!state.quote.pdfOptions || typeof state.quote.pdfOptions !== "object") {
+          state.quote.pdfOptions = { lineItems: "itemized", showAttachments: true, showProjectMap: true };
+        }
+        if (state.quote.pdfOptions.lineItems !== confirmedPresentation) {
+          state.quote.pdfOptions.lineItems = confirmedPresentation;
+          markDirty();
+        }
         if (state.isDirty) await saveDraft();
-        const confirmedPresentation = (state.quote.pdfOptions && state.quote.pdfOptions.lineItems) || "itemized";
         const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/send-proposal-for-approval`, {
           method: "POST",
           headers: { "content-type": "application/json" },
