@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>PJL — Booking Funnel</title>
+  <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260518" />
+  <link rel="shortcut icon" href="/favicon.ico?v=20260518" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=20260518" />
+  <meta name="apple-mobile-web-app-title" content="PJL" />
+  <link rel="manifest" href="/site.webmanifest?v=20260518" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <style>
+    .bf-shell { display: flex; flex-direction: column; gap: 20px; }
+    .bf-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
+    .bf-head h1 { margin: 0; }
+    .bf-range { display: flex; align-items: center; gap: 10px; }
+    .bf-select {
+      padding: 8px 10px; border: 1px solid #E2E0D4; border-radius: 8px; font: inherit;
+      font-size: 14px; background: #FAFAF5; color: #1a2a1e;
+    }
+    .bf-card { background: #fff; border: 1px solid #E2E0D4; border-radius: 14px; padding: 18px 20px; }
+    .bf-stat-row { display: flex; flex-wrap: wrap; gap: 14px; }
+    .bf-stat {
+      flex: 1 1 160px; background: #FAFAF5; border: 1px solid #E2E0D4; border-radius: 10px;
+      padding: 14px 16px;
+    }
+    .bf-stat .bf-stat-label { font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: #616D64; }
+    .bf-stat .bf-stat-value { font-size: 26px; font-weight: 700; color: #1B4D2E; margin-top: 4px; }
+    .bf-note { font-size: 12.5px; color: #616D64; margin: 10px 0 0; line-height: 1.55; }
+    table.bf-table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 480px; }
+    .bf-table th {
+      text-align: left; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase;
+      color: #616D64; padding: 8px 10px; border-bottom: 1px solid #E2E0D4;
+    }
+    .bf-table td { padding: 10px; border-bottom: 1px solid #F0EEE4; vertical-align: top; }
+    .bf-table tr:last-child td { border-bottom: none; }
+    .bf-table-wrap { overflow-x: auto; }
+    .bf-bar-track { background: #F0EEE4; border-radius: 999px; height: 8px; width: 100%; min-width: 80px; }
+    .bf-bar-fill { background: #1B4D2E; border-radius: 999px; height: 8px; }
+    .bf-empty, .bf-error { padding: 26px 10px; text-align: center; color: #616D64; font-size: 14px; }
+    .bf-error { color: #93392b; }
+    .bf-asof { font-size: 12px; color: #616D64; }
+    .bf-section-title { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+  </style>
+</head>
+<body class="pjl-crm-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/season-plan">Season plan</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/outreach">Outreach</a>
+      <a href="/admin/review-requests">Reviews</a>
+      <a href="/admin/welcome-email">Welcome</a>
+      <a href="/admin/booking-funnel" class="is-active">Booking Funnel</a>
+      <a href="/admin/bookings">Bookings</a>
+      <a href="/admin/customers">Customers</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
+      <a href="/admin/sitebuilder">System Builder</a>
+      <a href="/admin/work-orders">Work orders</a>
+      <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/pending-financing">Financing <span class="pjl-nav-badge" data-financing-badge hidden></span></a>
+      <a href="/admin/warranty-claims">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
+      <a href="/admin/material-lists">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/users">Users</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Booking Funnel</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="pjl-crm-shell bf-shell">
+      <header class="bf-head">
+        <div>
+          <p class="pjl-page-eyebrow">Booking page</p>
+          <h1>Booking Funnel</h1>
+        </div>
+        <div class="bf-range">
+          <label for="rangeSelect" style="font-size:13px; color:#616D64;">Range</label>
+          <select class="bf-select" id="rangeSelect">
+            <option value="7">Last 7 days</option>
+            <option value="14">Last 14 days</option>
+            <option value="30">Last 30 days</option>
+          </select>
+        </div>
+      </header>
+
+      <!-- Not configured / error state — replaces every card below when shown. -->
+      <section class="bf-card" id="errorCard" hidden>
+        <p class="bf-error" id="errorText"></p>
+      </section>
+
+      <!-- No data yet for the selected range. -->
+      <section class="bf-card" id="emptyCard" hidden>
+        <p class="bf-empty">No booking-page visits recorded yet for this range. This page reads live from Google Analytics — give it a little traffic first.</p>
+      </section>
+
+      <div id="dataSections" hidden>
+        <section class="bf-card" aria-label="Overview">
+          <div class="bf-stat-row">
+            <div class="bf-stat">
+              <div class="bf-stat-label">Total visitors</div>
+              <div class="bf-stat-value" id="statTotal">—</div>
+            </div>
+            <div class="bf-stat">
+              <div class="bf-stat-label">Reached Pick a Time</div>
+              <div class="bf-stat-value" id="statReachedWhen">—</div>
+            </div>
+            <div class="bf-stat">
+              <div class="bf-stat-label">Reached Confirm</div>
+              <div class="bf-stat-value" id="statReachedConfirm">—</div>
+            </div>
+          </div>
+          <p class="bf-asof" id="asOfNote"></p>
+        </section>
+
+        <section class="bf-card" aria-label="Funnel by step" style="margin-top:16px;">
+          <p class="bf-section-title">Steps</p>
+          <p class="bf-note">How many visitors reached each step, and what share of the step before it that is.</p>
+          <div class="bf-table-wrap" style="margin-top:12px;">
+            <table class="bf-table">
+              <thead>
+                <tr>
+                  <th>Step</th>
+                  <th>Visitors</th>
+                  <th>% of previous step</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="stepsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="bf-card" aria-label="Location" style="margin-top:16px;">
+          <p class="bf-section-title">Roughly where from</p>
+          <p class="bf-note">General city/region, estimated by Google from the visitor's connection — not an exact address.</p>
+          <div class="bf-table-wrap" style="margin-top:12px;">
+            <table class="bf-table">
+              <thead><tr><th>Location</th><th>Visitors</th></tr></thead>
+              <tbody id="locationBody"></tbody>
+            </table>
+            <div class="bf-empty" id="locationEmpty" hidden>No location data for this range.</div>
+          </div>
+        </section>
+
+        <section class="bf-card" aria-label="By service" style="margin-top:16px;">
+          <p class="bf-section-title">By service</p>
+          <div class="bf-table-wrap" style="margin-top:12px;">
+            <table class="bf-table">
+              <thead><tr><th>Service</th><th>Visitors</th><th>Deep-linked</th></tr></thead>
+              <tbody id="serviceBody"></tbody>
+            </table>
+            <div class="bf-empty" id="serviceEmpty" hidden>No service breakdown for this range.</div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    (function () {
+      const els = {
+        range: document.getElementById("rangeSelect"),
+        errorCard: document.getElementById("errorCard"),
+        errorText: document.getElementById("errorText"),
+        emptyCard: document.getElementById("emptyCard"),
+        dataSections: document.getElementById("dataSections"),
+        statTotal: document.getElementById("statTotal"),
+        statReachedWhen: document.getElementById("statReachedWhen"),
+        statReachedConfirm: document.getElementById("statReachedConfirm"),
+        asOfNote: document.getElementById("asOfNote"),
+        stepsBody: document.getElementById("stepsBody"),
+        locationBody: document.getElementById("locationBody"),
+        locationEmpty: document.getElementById("locationEmpty"),
+        serviceBody: document.getElementById("serviceBody"),
+        serviceEmpty: document.getElementById("serviceEmpty")
+      };
+
+      const STEP_LABELS = {
+        service: "Service",
+        zones: "Zones",
+        address: "Address",
+        when: "Pick a Time",
+        contact: "Your Details",
+        confirm: "Confirm"
+      };
+
+      function showOnly(which) {
+        els.errorCard.hidden = which !== "error";
+        els.emptyCard.hidden = which !== "empty";
+        els.dataSections.hidden = which !== "data";
+      }
+
+      function escapeHtml(value) {
+        return String(value == null ? "" : value)
+          .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+      }
+
+      function renderSteps(steps) {
+        els.stepsBody.innerHTML = "";
+        let firstVisitors = null;
+        steps.forEach((s, i) => {
+          if (i === 0) firstVisitors = s.visitors;
+          const pct = i === 0 ? 100 : (steps[i - 1].visitors ? Math.round((s.visitors / steps[i - 1].visitors) * 100) : 0);
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${escapeHtml(STEP_LABELS[s.step_name] || s.step_name)}</td>
+            <td>${escapeHtml(s.visitors)}</td>
+            <td>${i === 0 ? "—" : pct + "%"}</td>
+            <td><div class="bf-bar-track"><div class="bf-bar-fill" style="width:${Math.max(4, Math.min(100, firstVisitors ? Math.round((s.visitors / firstVisitors) * 100) : 0))}%"></div></div></td>
+          `;
+          els.stepsBody.appendChild(tr);
+        });
+
+        const when = steps.find((s) => s.step_name === "when");
+        const confirm = steps.find((s) => s.step_name === "confirm");
+        els.statTotal.textContent = firstVisitors == null ? "—" : firstVisitors;
+        els.statReachedWhen.textContent = when ? when.visitors : "0";
+        els.statReachedConfirm.textContent = confirm ? confirm.visitors : "0";
+      }
+
+      function renderLocation(rows) {
+        els.locationBody.innerHTML = "";
+        els.locationEmpty.hidden = Boolean(rows && rows.length);
+        (rows || []).forEach((r) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `<td>${escapeHtml(r.location || "Unknown")}</td><td>${escapeHtml(r.visitors)}</td>`;
+          els.locationBody.appendChild(tr);
+        });
+      }
+
+      function renderServices(rows) {
+        els.serviceBody.innerHTML = "";
+        els.serviceEmpty.hidden = Boolean(rows && rows.length);
+        (rows || []).forEach((r) => {
+          const tr = document.createElement("tr");
+          const pct = r.visitors ? Math.round((r.deepLinked / r.visitors) * 100) : 0;
+          tr.innerHTML = `<td>${escapeHtml(r.service_key || "(none)")}</td><td>${escapeHtml(r.visitors)}</td><td>${pct}%</td>`;
+          els.serviceBody.appendChild(tr);
+        });
+      }
+
+      async function load() {
+        const days = els.range.value || "7";
+        try {
+          const res = await fetch(`/api/admin/booking-funnel?days=${encodeURIComponent(days)}`, { credentials: "include" });
+          if (res.status === 401) { window.location.href = "/login?next=/admin/booking-funnel"; return; }
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok || !body.ok) {
+            showOnly("error");
+            els.errorText.textContent = (body.errors && body.errors[0]) || "Couldn't reach Google Analytics — try again shortly.";
+            return;
+          }
+          const steps = body.steps || [];
+          if (!steps.length || !steps[0].visitors) {
+            showOnly("empty");
+            return;
+          }
+          showOnly("data");
+          renderSteps(steps);
+          renderLocation(body.byLocation);
+          renderServices(body.byService);
+          els.asOfNote.textContent = body.asOf
+            ? `As of ${new Date(body.asOf).toLocaleString()}${body.stale ? " (cached — Google Analytics didn't respond in time)" : ""}`
+            : "";
+        } catch (err) {
+          showOnly("error");
+          els.errorText.textContent = err.message || "Couldn't load the booking funnel.";
+        }
+      }
+
+      els.range.addEventListener("change", load);
+      load();
+    })();
+  </script>
+  <script src="/crm/crm-nav.js"></script>
+  <script src="/crm/nav-badges.js?v=1"></script>
+</body>
+</html>

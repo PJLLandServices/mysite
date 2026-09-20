@@ -46,6 +46,7 @@ const voicemailStore = require("./lib/voicemail-store");
 const { geocode, PJL_BASE, isConfigured: geocodeIsConfigured } = require("./lib/geocode");
 const bookingGate = require("./lib/booking-gate");
 const distanceLib = require("./lib/distance");
+const ga4 = require("./lib/ga4");
 const { BOOKABLE_SERVICES, BOOKING_BUCKETS, DEFAULT_HOURS, DEFAULT_SETTINGS, GEO_WIDEN_TIERS, listAvailableSlots, groupByDay, expandDaysToRange, recommendDays, parseLocalDateKey, parseHHmmToMinutes } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
 const { mergeDaySchedule } = require("./lib/day-schedule");
@@ -1348,6 +1349,10 @@ function needsAuth(method, pathname) {
   // New-customer welcome email: the admin page and its API are staff-only.
   if (pathname === "/admin/welcome-email" || pathname === "/admin/welcome-email/") return "user";
   if (pathname.startsWith("/api/welcome-email")) return "user";
+  // Booking funnel (GA4 step tracking) — read-only reporting page, same
+  // staff-only gate as the rest of the CRM.
+  if (pathname === "/admin/booking-funnel" || pathname === "/admin/booking-funnel/") return "user";
+  if (pathname.startsWith("/api/admin/booking-funnel")) return "user";
   if (pathname === "/admin/chats" || pathname === "/admin/chats/") return "user";
   if (pathname === "/admin/messages" || pathname === "/admin/messages/") return "user";
   if (pathname === "/admin/customers" || pathname === "/admin/customers/") return "user";
@@ -25973,6 +25978,28 @@ async function orderDayForDriving(rows) {
     }
   }
 
+  // ---- Booking funnel (GA4 step tracking, Sep 2026). Reads the
+  // booking_step events js/booking.js fires on every step render (mysite
+  // PR #257) via the GA4 Data API. Read-only reporting — never touches a
+  // booking, CRM, or payment path. lib/ga4.js carries its own fail-soft
+  // posture (missing credential / Google unreachable / stale-cache
+  // fallback); this handler's job is just to translate that into the same
+  // {ok:true/false} envelope every other admin GET uses.
+  if (req.method === "GET" && pathname === "/api/admin/booking-funnel") {
+    try {
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const daysParam = Number(url.searchParams.get("days"));
+      const days = [7, 14, 30].includes(daysParam) ? daysParam : 7;
+      const result = await ga4.getBookingFunnel(days);
+      if (!result.ok) {
+        return sendJson(res, 200, { ok: false, errors: result.errors || ["Couldn't reach Google Analytics."] });
+      }
+      return sendJson(res, 200, result);
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the booking funnel."] });
+    }
+  }
+
   // ---- New-customer welcome email (Sep 2026). One email per customer,
   // on their earliest booking. The switch here gates the automatic sweep
   // and the installation-invoice hook only; the manual send below is
@@ -26323,6 +26350,9 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin/welcome-email" || pathname === "/admin/welcome-email/") {
     return { dir: SERVER_DIR, relative: "/welcome-email.html" };
+  }
+  if (pathname === "/admin/booking-funnel" || pathname === "/admin/booking-funnel/") {
+    return { dir: SERVER_DIR, relative: "/booking-funnel.html" };
   }
   if (pathname.startsWith("/crm/")) {
     return { dir: SERVER_DIR, relative: pathname.slice("/crm".length) };
