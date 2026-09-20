@@ -2,6 +2,25 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-20 (The probe books, via the one booking form):** Patrick: *"we still can't book a
+customer from the 'probe an address' like we can on the mobile field app."* The Season Plan's
+probe answered "which day" and stopped — booking the caller meant re-typing the address into
+the Schedule page's +Book modal. Fixed as a handoff, not a second booking form: the probe
+result now carries **Book this address →**, which opens `/admin/schedule?book=<address>` in a
+new tab; `schedule.js` reads the param, opens its existing modal through the same
+`openBookingDialog()` the +Book button uses, prefills the address, seeds the
+existing-property typeahead with it (a known customer is one click from every field filled),
+kicks the availability lookup, and strips the param from the URL before the modal opens so a
+refresh is the schedule page, not a re-opened modal. **Nothing new touches the ledger**: the
+booking itself is the registered admin reserve path (`/api/booking/reserve`, slot rules,
+customer/property creation, automatic email+SMS confirmation) reached from one more place.
+`scripts/test-probe-book.mjs` (10 assertions, in `build:check`) pins the param contract
+between the two files, the encode, the prefill/seed/lookup sequence, the strip-before-open
+order, and that the button and the handoff share the one open path. **Patrick's acceptance
+test — not yet walked:** probe a real address on the plan, press Book this address, confirm
+the modal opens with the address in place (and the customer offered by the typeahead when
+they exist), book a slot, and confirm the customer's confirmation arrives as it does from the
+phone.
 **2026-09-19 (The Season Plan confirms one customer on demand):** Patrick: the phone's Book
 tab confirms a customer the moment the booking is made, but a customer booked through the
 Season Plan on the desktop had no equivalent — their "you're booked" waited for the next

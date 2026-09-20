@@ -2659,6 +2659,24 @@
     }
     out.appendChild(head);
 
+    // The probe answers "which day"; this answers "so book it". Opens
+    // the Schedule page's +Book modal with the probed address carried
+    // over (?book=…) — the same admin booking flow as everywhere else,
+    // so the customer record, the slot rules and the automatic
+    // confirmation all come along for free. A new tab, because the plan
+    // this probe sits on is usually mid-thought.
+    const bookLine = document.createElement("p");
+    bookLine.className = "sp-probe-best";
+    const bookLink = document.createElement("a");
+    bookLink.className = "sp-window-btn";
+    bookLink.href = `/admin/schedule?book=${encodeURIComponent(shown)}`;
+    bookLink.target = "_blank";
+    bookLink.rel = "noopener";
+    bookLink.textContent = "Book this address →";
+    bookLink.title = "Opens the Schedule page's booking form with this address filled in";
+    bookLine.appendChild(bookLink);
+    out.appendChild(bookLine);
+
     // The phone-booking answer, first: the cheapest days for this
     // address, so Patrick can offer a date while the caller is still on
     // the line. Sorted by added drive; counts shown so a nearly-full
