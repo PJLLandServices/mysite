@@ -17463,6 +17463,24 @@ async function handleApi(req, res, pathname) {
       if (!quoteCanCarryCustomDoc(q)) {
         return sendJson(res, 422, { ok: false, errors: ["This quote can't be sent as a designed proposal."] });
       }
+      // Presentation confirmation gate (2026-09-20 fix, PJL-48) — project_proposal
+      // only, same as quotes.markSentForApproval()'s own guard below (this route
+      // also carries "combined" and smart-controller ai_repair_quote sends,
+      // which have no pdfOptions confirmation step and must be unaffected).
+      // Checked early, before the PDF render/freeze work, so a missing or
+      // stale confirmation fails fast; markSentForApproval() repeats this
+      // check itself — that's the actual enforcement, this is just a
+      // cheaper early exit with a clearer error for the builder's dialog.
+      const confirmedPresentation = payload?.confirmedPresentation || null;
+      if (q.type === "project_proposal") {
+        const livePresentation = (q.pdfOptions && q.pdfOptions.lineItems) || "itemized";
+        if (!quotes.PDF_LINE_ITEM_MODES.includes(confirmedPresentation)) {
+          return sendJson(res, 422, { ok: false, code: "presentation_not_confirmed", errors: ["Confirm what the customer will see before sending."] });
+        }
+        if (confirmedPresentation !== livePresentation) {
+          return sendJson(res, 422, { ok: false, code: "presentation_confirmation_stale", errors: ["What you confirmed doesn't match this quote's current setting — refresh and confirm again."] });
+        }
+      }
       const sendSms = payload?.sendSms === true;
       const sendEmail = payload?.sendEmail !== false;
       const toEmail = String(payload?.email || q.customerEmail || "").trim();
@@ -17518,7 +17536,7 @@ async function handleApi(req, res, pathname) {
         }
       }
       await quotes.markSentForApproval(q.id, {
-        token, channels, toEmail, toPhone, by: sendBy, note,
+        token, channels, toEmail, toPhone, by: sendBy, note, confirmedPresentation,
         ...(freezeMeta ? { pdf: freezeMeta } : {})
       });
       const approvalUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${token}`;

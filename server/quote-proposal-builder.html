@@ -466,6 +466,20 @@
           </header>
           <div class="pb-email-body">
             <div class="pb-email-compose">
+              <!-- Presentation confirmation (2026-09-20 fix). Opens
+                   pre-selected to the quote's current pdfOptions.lineItems —
+                   never blank, never silently defaulted — so Patrick sees
+                   and confirms (or changes) exactly what the customer is
+                   about to see, every single send. Same radio group name as
+                   the settings panel above (pbLineItems): the existing
+                   change handler already keeps state + autosave in sync,
+                   and native same-name radios stay visually in sync too. -->
+              <fieldset class="pb-pdf-lineitems pb-email-confirm-presentation">
+                <legend>Customer will see</legend>
+                <label><input type="radio" name="pbLineItems" value="itemized"> <span>Itemized — description, qty, unit, line total</span></label>
+                <label><input type="radio" name="pbLineItems" value="descriptions_only"> <span>Descriptions only — no dollar columns</span></label>
+                <label><input type="radio" name="pbLineItems" value="summary"> <span>Summary total only — one number, no breakdown</span></label>
+              </fieldset>
               <label class="pb-email-field">
                 <span>Note to customer (optional)</span>
                 <textarea id="pbEmailNote" rows="4" maxlength="2000" placeholder="e.g. Updated version — I've added the sleeve measurements to the attached site plan and corrected the zone count."></textarea>

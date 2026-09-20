@@ -2219,6 +2219,17 @@
     em.title.textContent = emailMode === "send"
       ? `Review the email, then send ${state.quote.id}`
       : `Email preview — ${state.quote.id}`;
+    // Presentation confirmation (2026-09-20 fix) — opens pre-selected to
+    // whatever's currently set (which, post-revision, is whatever the last
+    // sent version used — see createRevision()'s pdfOptions carry-forward),
+    // never blank. Shares name="pbLineItems" with the settings-panel
+    // radios, so this just re-syncs the whole group to current state.
+    {
+      const opts = state.quote.pdfOptions || {};
+      document.querySelectorAll('input[name="pbLineItems"]').forEach((r) => {
+        r.checked = r.value === (opts.lineItems || "itemized");
+      });
+    }
     const alreadySent = state.quote.status !== "draft" && state.quote.status !== "draft_preview";
     // A sent quote shows the note that went out with it (read-only); a
     // draft restores whatever Patrick typed last time the dialog was open.
@@ -2270,10 +2281,17 @@
       em.send.disabled = true;
       em.status.textContent = "Sending…";
       try {
+        // Presentation confirmation (2026-09-20 fix) — a radio change in
+        // this dialog only updates local state (markDirty); persist it
+        // before sending, then tell the server exactly what was confirmed
+        // so it can verify that's still the live value (defense against a
+        // stale dialog / a second tab changing it after this one opened).
+        if (state.isDirty) await saveDraft();
+        const confirmedPresentation = (state.quote.pdfOptions && state.quote.pdfOptions.lineItems) || "itemized";
         const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/send-proposal-for-approval`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ email, sendEmail: true, sendSms: false, note: em.note.value.trim() })
+          body: JSON.stringify({ email, sendEmail: true, sendSms: false, note: em.note.value.trim(), confirmedPresentation })
         });
         const data = await r.json().catch(() => ({}));
         if (!r.ok || !data.ok) {

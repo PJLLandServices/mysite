@@ -4011,6 +4011,35 @@ UNMAPPED; **what still needs Patrick:** send a real test quote, revise it
 twice with different presentation choices, confirm each revision starts from
 the prior one's mode, and confirm the v1 link now shows the "revised" message
 instead of pricing (see PJL-51).
+**2026-09-20, same day (Send-time presentation confirmation — QUOTE-08,
+PJL-48, under FLOW-20):** closes the gap QUOTE-06 left open: carrying
+`pdfOptions` forward on a revision (QUOTE-06) stops a revision from
+silently reverting, but nothing stopped Patrick from sending ANY version —
+first send or revision — without a moment's notice of what the customer is
+about to see. Added: (1) the Proposal Builder's send dialog (the same
+email-preview-before-send step from QUOTE-04) now opens with the pricing-
+detail radio group pre-selected to the quote's current `pdfOptions.lineItems`
+— never blank — so Patrick sees and can change it right there before
+confirming; (2) `markSentForApproval()` (`server/lib/quotes.js`) refuses to
+send a `project_proposal` unless the caller passes a `confirmedPresentation`
+that matches the record's LIVE `pdfOptions.lineItems` at send time — a stale
+dialog or a direct API call without it is refused, not silently accepted.
+The `/api/quotes/:id/send-proposal-for-approval` route repeats the same
+check early (before the PDF render/freeze work) — scoped to `project_proposal`
+only, since this route also carries the "combined" and smart-controller
+`ai_repair_quote` sends, which have no presentation step and must stay
+unaffected (confirmed by reading `quote-folder.js`'s `sendCombined()` /
+`sendSmartController()` — neither type is `project_proposal`). **Pinned:**
+`scripts/test-quote-presentation-confirm.mjs` (11 assertions — confirmed to
+fail against the pre-fix code); `scripts/test-quote-revision-presentation.mjs`
+(QUOTE-06/07's test) updated to pass the now-required confirmation on every
+`markSentForApproval()` call. Both now run in `build:check` — **neither was
+wired into `build:check` when QUOTE-06/07 shipped earlier today; fixed here
+too.** FLOW-20 stays UNMAPPED; **what still needs Patrick:** open a draft
+proposal, click Send, confirm the dialog shows the pricing-detail choice
+pre-selected (not blank), change it and confirm it actually changes what's
+in the sent PDF/page, and separately confirm a "combined"/smart-controller
+send still works with no such prompt (see PJL-51).
 
 If a flow isn't in here with a status, it is not known to work.
 Update this file, not a chat thread.
