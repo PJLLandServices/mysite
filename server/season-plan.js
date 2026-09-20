@@ -2659,23 +2659,9 @@
     }
     out.appendChild(head);
 
-    // The probe answers "which day"; this answers "so book it". Opens
-    // the Schedule page's +Book modal with the probed address carried
-    // over (?book=…) — the same admin booking flow as everywhere else,
-    // so the customer record, the slot rules and the automatic
-    // confirmation all come along for free. A new tab, because the plan
-    // this probe sits on is usually mid-thought.
-    const bookLine = document.createElement("p");
-    bookLine.className = "sp-probe-best";
-    const bookLink = document.createElement("a");
-    bookLink.className = "sp-window-btn";
-    bookLink.href = `/admin/schedule?book=${encodeURIComponent(shown)}`;
-    bookLink.target = "_blank";
-    bookLink.rel = "noopener";
-    bookLink.textContent = "Book this address →";
-    bookLink.title = "Opens the Schedule page's booking form with this address filled in";
-    bookLine.appendChild(bookLink);
-    out.appendChild(bookLine);
+    // Where the inline booking form opens. Declared here so the table's
+    // per-day Book buttons (built below) have somewhere to point.
+    const bookHost = document.createElement("div");
 
     // The phone-booking answer, first: the cheapest days for this
     // address, so Patrick can offer a date while the caller is still on
@@ -2716,7 +2702,7 @@
 
     const table = document.createElement("table");
     table.className = "sp-probe-table";
-    table.innerHTML = "<thead><tr><th>Route</th><th>Date</th><th>Stops</th><th>Added drive</th><th>Offered</th></tr></thead>";
+    table.innerHTML = "<thead><tr><th>Route</th><th>Date</th><th>Stops</th><th>Added drive</th><th>Offered</th><th></th></tr></thead>";
     const body = document.createElement("tbody");
     for (const day of data.days) {
       const tr = document.createElement("tr");
@@ -2730,10 +2716,279 @@
         : day.widensAtMinutes ? `when full (widens at ${day.widensAtMinutes} min)` : "no";
       tr.innerHTML = `<td>${routeCell}</td><td>${day.date}</td><td>${day.points}</td>`
         + `<td class="sp-num">${added}</td><td>${offeredCell}</td>`;
+      // Book, right here. Only on offered days — an unoffered day is
+      // the corridor saying no, and a button on it would book what the
+      // table just refused.
+      const bookCell = document.createElement("td");
+      if (day.offered) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "sp-window-btn";
+        btn.textContent = "Book";
+        btn.addEventListener("click", () => {
+          openProbeBook(bookHost, shown, day);
+          bookHost.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        });
+        bookCell.appendChild(btn);
+      }
+      tr.appendChild(bookCell);
       body.appendChild(tr);
     }
     table.appendChild(body);
     out.appendChild(table);
+    out.appendChild(bookHost);
+  }
+
+  // ---- Booking from the probe ----------------------------------------
+  //
+  // The phone's Book tab, on the desktop, without leaving the plan. The
+  // probe already found the cheap days, so Book on an offered day opens
+  // the rest of the booking right here: that day's real slots, the
+  // customer's details (with a search over existing properties so a
+  // known customer is one click), one press. Server-side it is the SAME
+  // path as the app and the public page — hold, then
+  // /api/booking/reserve — so slot re-validation, the customer/property
+  // record, and the automatic email+text confirmation are identical.
+
+  const probeCache = { services: null, properties: null };
+
+  async function probeServices() {
+    if (probeCache.services) return probeCache.services;
+    const r = await fetch("/api/booking/services");
+    const data = await r.json();
+    probeCache.services = (data.ok && data.services) || {};
+    return probeCache.services;
+  }
+
+  async function probeProperties() {
+    if (probeCache.properties) return probeCache.properties;
+    try {
+      const r = await fetch("/api/properties");
+      const data = await r.json();
+      probeCache.properties = (data.ok && Array.isArray(data.properties)) ? data.properties : [];
+    } catch { probeCache.properties = []; }
+    return probeCache.properties;
+  }
+
+  async function openProbeBook(host, address, day) {
+    host.innerHTML = "";
+    host.className = "sp-probe-book";
+
+    const title = document.createElement("h4");
+    title.textContent = `Book ${address} — ${prettyDate(day.date)}`;
+    host.appendChild(title);
+
+    const form = document.createElement("form");
+    const field = (labelText, input) => {
+      const wrap = document.createElement("label");
+      wrap.className = "sp-book-field";
+      const span = document.createElement("span");
+      span.textContent = labelText;
+      wrap.append(span, input);
+      return wrap;
+    };
+    const text = (placeholder, autocomplete = "off") => {
+      const input = document.createElement("input");
+      input.type = "text";
+      input.placeholder = placeholder;
+      input.autocomplete = autocomplete;
+      return input;
+    };
+
+    // Service — seasonal services of the plan's own season first, that
+    // season's smallest residential band preselected. The zone bands are
+    // spelled out in the labels, so picking the right one is reading,
+    // not memory.
+    const serviceSelect = document.createElement("select");
+    const services = await probeServices();
+    const season = seasonSelect.value === "spring" ? "spring_opening" : "fall_closing";
+    const entries = Object.entries(services).filter(([, s]) => s.bookable);
+    const groups = [
+      [`This season`, entries.filter(([, s]) => s.family === season)],
+      ["Other services", entries.filter(([, s]) => s.family !== season)]
+    ];
+    for (const [label, items] of groups) {
+      if (!items.length) continue;
+      const og = document.createElement("optgroup");
+      og.label = label;
+      for (const [key, svc] of items) {
+        const o = document.createElement("option");
+        o.value = key;
+        o.textContent = svc.label || key;
+        og.appendChild(o);
+      }
+      serviceSelect.appendChild(og);
+    }
+    const defaultKey = season === "spring_opening" ? "spring_open_4z" : "fall_close_4z";
+    if (services[defaultKey]) serviceSelect.value = defaultKey;
+
+    // The day's slots, live from the same availability engine the public
+    // page reads — with the admin bypass so the bucket really on this
+    // day is offered even when the public grid would hide it.
+    const slotsWrap = document.createElement("div");
+    slotsWrap.className = "sp-book-slots";
+    let picked = null;
+    async function loadSlots() {
+      picked = null;
+      slotsWrap.textContent = "Loading times…";
+      try {
+        const url = "/api/booking/availability"
+          + `?service=${encodeURIComponent(serviceSelect.value)}`
+          + `&address=${encodeURIComponent(address)}`
+          + `&from=${encodeURIComponent(day.date)}&to=${encodeURIComponent(day.date)}&adminBypass=1`;
+        const r = await fetch(url, { cache: "no-store" });
+        const data = await r.json();
+        if (!data.ok) throw new Error((data.errors || ["Couldn't load times."]).join(" "));
+        const slots = ((data.days || []).find((d) => d.date === day.date) || {}).slots || [];
+        slotsWrap.innerHTML = "";
+        if (!slots.length) {
+          slotsWrap.textContent = "No bookable window on this day for that service — it may have filled since the probe. Pick another day above.";
+          return;
+        }
+        for (const s of slots) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "sp-book-slot";
+          b.textContent = s.timeLabel + (s.addedDriveMinutes != null ? ` · +${s.addedDriveMinutes} min drive` : "");
+          b.addEventListener("click", () => {
+            picked = s;
+            for (const el of slotsWrap.querySelectorAll(".sp-book-slot")) el.classList.remove("is-picked");
+            b.classList.add("is-picked");
+          });
+          slotsWrap.appendChild(b);
+        }
+      } catch (error) {
+        slotsWrap.textContent = error.message;
+      }
+    }
+    serviceSelect.addEventListener("change", loadSlots);
+
+    // Existing-customer search: the probe is usually a caller, and a
+    // caller is often already in the book. A hit fills every field.
+    const search = text("Search existing customers — name, address, email…");
+    const searchOut = document.createElement("ul");
+    searchOut.className = "sp-book-hits";
+    searchOut.hidden = true;
+    const firstName = text("First name", "given-name");
+    const lastName = text("Last name", "family-name");
+    const phone = text("Phone", "tel");
+    const email = text("Email", "email");
+    const zoneCount = text("Zones (e.g. 6)");
+    const notes = text("Notes for the visit (optional)");
+    search.addEventListener("input", async () => {
+      const q = search.value.trim().toLowerCase();
+      searchOut.innerHTML = "";
+      if (q.length < 2) { searchOut.hidden = true; return; }
+      const props = await probeProperties();
+      const hits = props.filter((p) => [p.customerName, p.customerEmail, p.address, p.code]
+        .filter(Boolean).join(" ").toLowerCase().includes(q)).slice(0, 6);
+      for (const p of hits) {
+        const li = document.createElement("li");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.innerHTML = `<strong>${escapeHtml(p.customerName || "(no name)")}</strong> <small>${escapeHtml(p.address || "")}</small>`;
+        btn.addEventListener("click", () => {
+          const parts = String(p.customerName || "").trim().split(/\s+/);
+          firstName.value = parts[0] || "";
+          lastName.value = parts.slice(1).join(" ") || "";
+          phone.value = p.customerPhone || "";
+          email.value = p.customerEmail || "";
+          const zones = Array.isArray(p.system?.zones) ? p.system.zones.length : 0;
+          if (zones) zoneCount.value = String(zones);
+          search.value = `${p.customerName || ""} · ${p.address || ""}`.trim();
+          searchOut.hidden = true;
+        });
+        li.appendChild(btn);
+        searchOut.appendChild(li);
+      }
+      searchOut.hidden = hits.length === 0;
+    });
+
+    const err = document.createElement("p");
+    err.className = "sp-book-err";
+    err.hidden = true;
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.className = "sp-book-submit";
+    submit.textContent = "Book it";
+
+    form.append(
+      field("Service", serviceSelect),
+      field("Time on this day", slotsWrap),
+      field("Existing customer?", search), searchOut,
+      field("First name", firstName), field("Last name", lastName),
+      field("Phone", phone), field("Email", email),
+      field("Zones", zoneCount), field("Notes", notes),
+      err, submit
+    );
+    host.appendChild(form);
+    loadSlots();
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      err.hidden = true;
+      const missing = [];
+      if (!firstName.value.trim()) missing.push("first name");
+      if (!phone.value.trim()) missing.push("phone");
+      if (!email.value.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())) missing.push("a valid email");
+      if (!picked) missing.push("a time");
+      if (missing.length) {
+        err.textContent = `Still needed: ${missing.join(", ")}.`;
+        err.hidden = false;
+        return;
+      }
+      submit.disabled = true;
+      submit.textContent = "Booking…";
+      try {
+        // The hold, then the reserve — the same two steps every other
+        // form takes, so two callers can't finish on one slot.
+        const holdRes = await fetch("/api/booking/hold", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ serviceKey: serviceSelect.value, slotStart: picked.start, address })
+        });
+        const hold = await holdRes.json();
+        if (!holdRes.ok || !hold.ok) throw new Error(hold.message || (hold.errors || ["That time was just taken — pick another."]).join(" "));
+        const r = await fetch("/api/booking/reserve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            serviceKey: serviceSelect.value,
+            slotStart: picked.start,
+            holdToken: hold.holdToken,
+            source: "slot",
+            zoneCount: zoneCount.value.trim() || null,
+            contact: {
+              firstName: firstName.value.trim(),
+              lastName: lastName.value.trim(),
+              name: `${firstName.value.trim()} ${lastName.value.trim()}`.trim(),
+              phone: phone.value.trim(),
+              email: email.value.trim(),
+              address,
+              notes: notes.value.trim()
+            },
+            pageUrl: location.href,
+            userAgent: navigator.userAgent
+          })
+        });
+        const data = await r.json();
+        if (!r.ok || !data.ok) throw new Error(data.message || (data.errors || ["Booking failed."]).join(" "));
+        host.innerHTML = "";
+        const done = document.createElement("p");
+        done.className = "sp-probe-best";
+        done.textContent = `✓ Booked — ${prettyDate(day.date)}, ${picked.timeLabel}. `
+          + `Confirmation email + text are on their way to ${firstName.value.trim()}.`
+          + (data.workOrderId ? ` WO ${data.workOrderId}.` : "");
+        host.appendChild(done);
+        load(); // the day just gained a booking; the board should say so
+      } catch (error) {
+        err.textContent = error.message;
+        err.hidden = false;
+        submit.disabled = false;
+        submit.textContent = "Book it";
+        loadSlots(); // the slot may be why — show what's still real
+      }
+    });
   }
 
   // ---- Import ------------------------------------------------------

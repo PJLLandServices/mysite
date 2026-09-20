@@ -1,22 +1,22 @@
-// The probe → booking handoff: "probe an address" flows into booking it.
+// Booking from the probe — inline on the Season Plan, like the phone.
 //
 //   node scripts/test-probe-book.mjs
 //
-// WHAT THIS PROTECTS. Patrick, 2026-09-20: "we still can't book a
-// customer from the 'probe an address' like we can on the mobile field
-// app." The probe answered "which day" and stopped; booking meant
-// re-typing the address into the Schedule page's +Book modal. The fix is
-// a handoff, not a second booking form: the probe result links to
-// /admin/schedule?book=<address>, and schedule.js opens its existing
-// modal with the address in place and the existing-property typeahead
-// seeded. One booking flow, reached from one more place — the reserve
-// path's customer record, slot rules and automatic confirmation all
-// come along for free.
+// WHAT THIS PROTECTS. Patrick, 2026-09-20, on the first cut (a link to
+// the Schedule page's modal): "that doesn't do anything special but go
+// to the book day." Right — a handoff is navigation, not booking. The
+// probe now books IN PLACE: each offered day carries a Book button that
+// opens an inline form — that day's real slots, an existing-customer
+// search, contact fields — and books through the same hold → reserve
+// path as the app and the public page, so slot re-validation, the
+// customer record and the automatic email+text confirmation are
+// identical. The Schedule page's ?book= handoff stays for anywhere else
+// that wants it.
 //
-// These are source guards on the wiring: the pieces live in two
-// browser-side files, so what a refactor can silently break is the
-// contract between them — the param name, the prefill, and the URL
-// strip that keeps a refresh from re-opening the modal.
+// These are source guards: the flow is browser DOM code, so what a
+// refactor can silently break is the contract with the server — the
+// endpoints, the hold-before-reserve order, and the payload fields the
+// reserve route actually reads.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,37 +33,42 @@ function ok(name, cond, detail = "") {
 const plan = fs.readFileSync(path.join(ROOT, "server/season-plan.js"), "utf8");
 const sched = fs.readFileSync(path.join(ROOT, "server/schedule.js"), "utf8");
 
-// ---- The probe side --------------------------------------------------
-ok("the probe result links to the Schedule page's book param",
-  plan.includes("/admin/schedule?book="));
-ok("the address is URL-encoded — a probed address always contains spaces and commas",
-  /\/admin\/schedule\?book=\$\{encodeURIComponent\(/.test(plan));
-ok("the handoff opens in a new tab so the plan stays put",
-  plan.slice(plan.indexOf("/admin/schedule?book=") - 400, plan.indexOf("/admin/schedule?book=") + 400)
-    .includes('"_blank"'));
+// ---- The inline booking ----------------------------------------------
+const book = plan.slice(plan.indexOf("async function openProbeBook"));
+ok("the probe renders a per-day Book button, gated on the day being offered",
+  plan.includes("if (day.offered) {") && plan.includes("openProbeBook(bookHost"));
+ok("the inline form exists", plan.includes("async function openProbeBook"));
 
-// ---- The schedule side -----------------------------------------------
-const handoff = sched.slice(sched.indexOf('get("book")') - 200);
-ok("schedule.js reads the book param", sched.includes('get("book")'));
-ok("…opens the booking dialog", handoff.includes("openBookingDialog()"));
-ok("…prefills the address field", handoff.includes("bookingAddress.value = bookParam"));
-ok("…seeds the existing-property typeahead so a known customer is one click away",
-  handoff.includes("bookingPropertySearch.value = bookParam")
-  && handoff.includes('dispatchEvent(new Event("input"))'));
-ok("…and kicks the availability lookup", handoff.includes("scheduleAvailLookup()"));
+// The server contract, in order: availability (this one day, admin
+// bypass past the gate) → hold → reserve carrying the hold's token.
+ok("slots come from the availability engine for exactly the probed day",
+  book.includes("/api/booking/availability")
+  && book.includes("&from=${encodeURIComponent(day.date)}&to=${encodeURIComponent(day.date)}")
+  && book.includes("adminBypass=1"));
+const holdAt = book.indexOf('"/api/booking/hold"');
+const reserveAt = book.indexOf('"/api/booking/reserve"');
+ok("the hold is taken before the reserve — two callers can't finish on one slot",
+  holdAt !== -1 && reserveAt !== -1 && holdAt < reserveAt, `holdAt=${holdAt} reserveAt=${reserveAt}`);
+ok("the reserve carries the hold's token", book.includes("holdToken: hold.holdToken"));
 
-// The strip must come BEFORE the modal work: a refresh mid-booking must
-// land on the plain schedule page, never a surprise re-opened modal.
-const stripAt = handoff.indexOf("history.replaceState");
-const openAt = handoff.indexOf("openBookingDialog()");
-ok("the URL is stripped before the modal opens",
-  stripAt !== -1 && openAt !== -1 && stripAt < openAt,
-  `stripAt=${stripAt} openAt=${openAt}`);
+// The payload fields the reserve route reads. contact.name is what
+// validateLead checks — the split fields alone fail server-side.
+ok("the reserve books a grid slot, not a custom time", book.includes('source: "slot"'));
+ok("contact.name is the combined name validateLead reads",
+  /name: `\$\{firstName\.value\.trim\(\)\} \$\{lastName\.value\.trim\(\)\}`\.trim\(\)/.test(book));
+ok("the probed address is the booking's address", book.includes("address,") || book.includes("address\n"));
 
-// The +Book button and the handoff share ONE open path — a second copy
-// of the reset/load/show sequence is how the two drift.
-ok("the button and the handoff share openBookingDialog",
-  sched.includes('addBookingBtn?.addEventListener("click", openBookingDialog)'));
+// The aftermath: the board refreshes (the day just gained a booking),
+// and a failed attempt reloads the slots (the slot is the usual reason).
+const successAt = book.indexOf("Confirmation email + text");
+ok("success says the confirmation went out and refreshes the board",
+  successAt !== -1 && book.slice(successAt, successAt + 400).includes("load()"));
+ok("a failed booking re-reads the slots instead of trusting the stale list",
+  book.slice(book.indexOf("catch (error)", reserveAt)).includes("loadSlots()"));
+
+// ---- The schedule handoff stays for other callers ---------------------
+ok("schedule.js still honors ?book= for any page that links it",
+  sched.includes('get("book")') && sched.includes("bookingAddress.value = bookParam"));
 
 if (failures.length) {
   console.error(`FAIL test-probe-book: ${failures.length} failing`);
