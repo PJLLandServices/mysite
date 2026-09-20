@@ -2,6 +2,30 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-19 (The Season Plan confirms one customer on demand):** Patrick: the phone's Book
+tab confirms a customer the moment the booking is made, but a customer booked through the
+Season Plan on the desktop had no equivalent — their "you're booked" waited for the next
+season-wide blast press. New: a per-stop **Send confirmation** button on the plan panel
+(plan stops and booked rows alike), wired to `POST
+/api/assignments/bookings/:id/send-confirmation` (admin-gated) →
+`assignmentCadence.sendConfirmationForBooking()` → the SAME `sendStepForBooking` path the
+blast uses, sending the step-1 assignment message for exactly one booking. **Rule 1 holds in
+both directions and is the point:** a customer confirmed here reads `alreadyBlasted` to every
+later blast, and a blasted customer answers `alreadySent` here — one outreach record, no
+second copy of the send path, no double-text. The blast's interlocks all apply (appointment
+page live, 9–20 send window, send lock), and `cadenceGates` still refuses opt-outs and
+Decision I's no-contact properties with the reason said out loud. The plan payload annotates
+each stop with `{bookingId, sentAt}` read from the same outreach record, so the panel shows
+"confirmed Sep 19" instead of the button once step 1 has fired, whoever fired it.
+Self-booked customers carry no button: `/api/booking/reserve` already confirmed them at
+booking time. `scripts/test-plan-confirmation.mjs` (19 assertions, in `build:check`) pins the
+interlocks, both directions of rule 1 against the real stores, the Decision I gate, the
+non-assignment/cancelled/missing refusals, and source guards on the route, payload and panel
+wiring. **Patrick's acceptance test — not yet walked:** book a property onto a day from the
+plan, run Assign, press Send confirmation on the stop, and confirm (1) the customer gets the
+email + text naming the right day, (2) the button becomes "confirmed" and stays that way
+after a reload, and (3) a later blast press reports that customer under alreadyBlasted, not
+blasted.
 **2026-09-19 (Admin bookings are never rate-limited):** Patrick, booking fall closings:
 *"it is saying that too many attempts have been made."* The anti-bot per-IP cap
 (5 submissions / 10 min, `server/lib/anti-bot.js`) ran on `/api/booking/reserve` for admin

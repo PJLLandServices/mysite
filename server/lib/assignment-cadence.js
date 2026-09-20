@@ -632,6 +632,62 @@ async function blast(season, year, { deps = {}, by = "patrick", now = new Date()
   }
 }
 
+// ---- One booking's confirmation, on demand ------------------------------
+//
+// The Season Plan's per-stop "Send confirmation": the SAME step-1
+// assignment message the blast sends, for exactly one booking, the moment
+// Patrick books it from the desktop. The phone's Book tab confirms a
+// customer at booking time; a customer assigned from the plan used to
+// wait for the next blast press (a season-wide button nobody reaches for
+// to message one person). This is not a new message and not a new send
+// path — it IS step 1 through sendStepForBooking, so rule 1 holds: a
+// customer confirmed here is `alreadyBlasted` to every later blast, and
+// a customer the blast reached answers `alreadySent` here. Refusals
+// mirror the blast's (page interlock, send window, send lock); the
+// per-property gates (opt-out, Decision I's no-contact) live inside
+// sendStepForBooking and answer as a skip with its reason.
+async function sendConfirmationForBooking(bookingId, { deps = {}, by = "patrick", now = new Date(), appointmentPageReady = false } = {}) {
+  const getBooking = deps.getBooking || bookings.get;
+
+  const refuse = (message, code) => {
+    const err = new Error(message);
+    if (code) err.code = code;
+    throw err;
+  };
+
+  const booking = await getBooking(bookingId);
+  if (!booking) refuse("Booking not found.", "NOT_FOUND");
+  if (booking.source !== "assignment" || !booking.assignment) {
+    refuse("Only assignment bookings are confirmed this way — a self-booked customer was already confirmed when they booked.", "NOT_ASSIGNMENT");
+  }
+  if (booking.status !== "confirmed") {
+    refuse(`This booking is ${booking.status || "not live"} — there is nothing to confirm.`, "NOT_LIVE");
+  }
+  const already = booking.assignment.outreach?.steps?.["1"];
+  if (already) {
+    return { ok: true, alreadySent: true, at: already.at || null, attempted: already.attempted || [] };
+  }
+  if (!appointmentPageReady) {
+    refuse("The appointment page isn't live yet — the link in this message would lead nowhere.");
+  }
+  if (!insideSendWindow(now)) {
+    const hh = (n) => `${((n + 11) % 12) + 1}${n < 12 ? " AM" : " PM"}`;
+    refuse(`Sends go out ${hh(SEND_WINDOW.fromHour)} – ${hh(SEND_WINDOW.toHour)} Toronto time`
+      + ` — it's ${now.toLocaleTimeString("en-CA")} now.`);
+  }
+  if (sendInProgress) refuse("Another assignment send is already running.", "SEND_LOCKED");
+  sendInProgress = true;
+  try {
+    const { season, year } = booking.assignment;
+    const outcome = await sendStepForBooking(booking, STEPS[0], { season, year: Number(year), deps, by });
+    if (outcome.skipped) return { ok: false, skipped: true, reason: outcome.reason };
+    if (outcome.sent && outcome.sent.length) return { ok: true, sent: outcome.sent };
+    return { ok: false, errors: outcome.errors || ["The send failed on every channel."] };
+  } finally {
+    sendInProgress = false;
+  }
+}
+
 // ---- Steps 2–6: the sweep ----------------------------------------------
 //
 // Runs every few minutes from server.js. A step dispatches the first
@@ -793,6 +849,7 @@ module.exports = {
   STEPS,
   SEND_WINDOW,
   blast,
+  sendConfirmationForBooking,
   sweepDue,
   status,
   sendStepForBooking,
