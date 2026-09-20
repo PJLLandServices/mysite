@@ -466,19 +466,21 @@
           </header>
           <div class="pb-email-body">
             <div class="pb-email-compose">
-              <!-- Presentation confirmation (2026-09-20 fix). Opens
-                   pre-selected to the quote's current pdfOptions.lineItems —
-                   never blank, never silently defaulted — so Patrick sees
-                   and confirms (or changes) exactly what the customer is
-                   about to see, every single send. Same radio group name as
-                   the settings panel above (pbLineItems): the existing
-                   change handler already keeps state + autosave in sync,
-                   and native same-name radios stay visually in sync too. -->
-              <fieldset class="pb-pdf-lineitems pb-email-confirm-presentation">
-                <legend>Customer will see</legend>
-                <label><input type="radio" name="pbLineItems" value="itemized"> <span>Itemized — description, qty, unit, line total</span></label>
-                <label><input type="radio" name="pbLineItems" value="descriptions_only"> <span>Descriptions only — no dollar columns</span></label>
-                <label><input type="radio" name="pbLineItems" value="summary"> <span>Summary total only — one number, no breakdown</span></label>
+              <!-- Presentation confirmation (2026-09-20 fix, revised same day
+                   after Patrick tried the pre-selected version and could
+                   still click through without looking: a default choice is
+                   not a confirmation). Opens with NOTHING checked — Send now
+                   stays disabled until Patrick actively picks one. A
+                   separate radio group (pbSendLineItems) from the settings
+                   panel above (pbLineItems) on purpose: that one keeps
+                   showing the current setting as a convenience; this one
+                   must never start pre-answered. -->
+              <fieldset class="pb-pdf-lineitems pb-email-confirm-presentation" id="pbEmailConfirmPresentation">
+                <legend>Customer will see — pick one to send</legend>
+                <p class="pb-email-confirm-hint" id="pbEmailConfirmHint"></p>
+                <label><input type="radio" name="pbSendLineItems" value="itemized"> <span>Itemized — description, qty, unit, line total</span></label>
+                <label><input type="radio" name="pbSendLineItems" value="descriptions_only"> <span>Descriptions only — no dollar columns</span></label>
+                <label><input type="radio" name="pbSendLineItems" value="summary"> <span>Summary total only — one number, no breakdown</span></label>
               </fieldset>
               <label class="pb-email-field">
                 <span>Note to customer (optional)</span>
@@ -493,6 +495,15 @@
                 <div><span>To</span><strong id="pbEmailTo">—</strong></div>
                 <div><span>Subject</span><strong id="pbEmailSubject">—</strong></div>
               </div>
+              <!-- Real, working preview (2026-09-20 fix) — opens the ACTUAL
+                   customer accept page in a new tab, live draft data, current
+                   pdfOptions. The button inside the email body below is
+                   real too now (the preview mints a real token instead of a
+                   placeholder), but it sits inside a sandboxed iframe that
+                   blocks navigation by design — this is the one Patrick can
+                   actually click. This is the check that was missing before:
+                   see it with your own eyes before it goes out. -->
+              <a href="#" class="pjl-btn pjl-btn-outline pb-email-preview-link" id="pbEmailPreviewCustomerLink" target="_blank" rel="noopener" hidden>Preview what the customer sees &rarr;</a>
               <div class="pb-email-files" id="pbEmailFiles">
                 <div class="pb-email-files-head">
                   <span>Attached to this email</span>

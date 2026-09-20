@@ -4040,6 +4040,39 @@ proposal, click Send, confirm the dialog shows the pricing-detail choice
 pre-selected (not blank), change it and confirm it actually changes what's
 in the sent PDF/page, and separately confirm a "combined"/smart-controller
 send still works with no such prompt (see PJL-51).
+**2026-09-20, same day (QUOTE-08 revised after live testing — two real
+gaps Patrick found within minutes of trying it):** shipped the pre-selected
+version above, then Patrick actually used it and reported two things:
+(1) a pre-checked radio is still something he can click past without
+reading — he wants it to force a choice, not offer a default; (2) the
+"Review & sign online" button in the email preview didn't do anything —
+worth noting directly, in his words: this exact gap is "what failed me
+knowing too" on the original incident. Both fixed:
+- **No default, ever.** The send dialog's presentation radios (now a
+  separate group, `pbSendLineItems`, from the settings panel's own
+  `pbLineItems`) open with NOTHING checked in send mode. `Send now` stays
+  `disabled` until Patrick clicks one — a text hint states the current
+  setting for reference, but nothing is pre-answered. The confirm dialog
+  before the actual POST also now names the picked mode in plain words.
+- **A real, working preview.** `GET /api/quotes/:id/proposal-email-preview`
+  previously left an unsent draft's approval link as a dead
+  `"issued-on-send"` placeholder — explained in a warning banner, but
+  the button itself just didn't work, and the button embedded in the
+  composed email HTML sits inside a `sandbox=""` iframe that blocks
+  navigation regardless. Now the route calls `quotes.ensureApprovalToken()`
+  (already existed, already side-effect-light — no status change, no
+  history entry, idempotent, and the exact token a real send reuses) so a
+  real token always exists, and a new "Preview what the customer sees →"
+  link — a real anchor in the dialog's own chrome, not inside the
+  sandboxed iframe — opens the actual live `/approve/:id` page in a new
+  tab, current draft data, current `pdfOptions` and all. This reuses an
+  existing pattern (`isPreview` on the approve-page JSON already covered
+  "a draft with a token, opened by admin" for `ai_repair_quote`); it just
+  extends to `project_proposal`, which never had it.
+FLOW-20 stays UNMAPPED; **what still needs Patrick:** open a draft
+proposal, click Send, confirm `Send now` is disabled until a pricing-detail
+option is picked, click "Preview what the customer sees" and confirm the
+page that opens is real and matches the picked option.
 
 If a flow isn't in here with a status, it is not known to work.
 Update this file, not a chat thread.
