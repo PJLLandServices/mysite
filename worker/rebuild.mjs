@@ -10,6 +10,10 @@
 //   {{service_call}}            → pricing.items.service_call.price
 //   {{manifold_examples.3_valve} → pricing.manifold_examples["3_valve"]
 //   {{items.service_call.label} → pricing.items.service_call.label
+//   {{manifold_examples.3_valve + hourly_labour}} → sum of both resolved
+//     numeric values (e.g. the "parts+trip plus one hour of labour"
+//     figure quoted in the AI-intake bonus framing) — only numeric
+//     lookups can be summed; a "+" against a label-type key fails fast.
 //
 // Whole-dollar prices format as integers (95), prices with cents keep
 // two decimals (74.95). Customers and the AI both notice rounding so we
@@ -33,7 +37,7 @@ function formatPrice(n) {
   return n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
-function resolveToken(key) {
+function lookupRaw(key) {
   // Dotted lookup
   if (key.includes('.')) {
     const parts = key.split('.');
@@ -42,13 +46,29 @@ function resolveToken(key) {
       if (val && typeof val === 'object' && p in val) val = val[p];
       else return null;
     }
-    return typeof val === 'number' ? formatPrice(val) : (val == null ? null : String(val));
+    return val == null ? null : val;
   }
   // Shorthand for items: {{service_call}} → pricing.items.service_call.price
   if (pricing.items && pricing.items[key]) {
-    return formatPrice(pricing.items[key].price);
+    return pricing.items[key].price;
   }
   return null;
+}
+
+function resolveToken(key) {
+  // Sum expression, e.g. {{manifold_examples.3_valve + hourly_labour}}
+  if (key.includes('+')) {
+    let sum = 0;
+    for (const part of key.split('+').map((p) => p.trim())) {
+      const val = lookupRaw(part);
+      if (typeof val !== 'number') return null;
+      sum += val;
+    }
+    return formatPrice(sum);
+  }
+  const val = lookupRaw(key);
+  if (val == null) return null;
+  return typeof val === 'number' ? formatPrice(val) : String(val);
 }
 
 let body = fs.readFileSync(PROMPT_PATH, 'utf8');

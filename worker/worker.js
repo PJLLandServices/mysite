@@ -2,6 +2,13 @@
 // PJL Land Services — Sprinkler Diagnostic Chat Worker
 // Cloudflare Worker that proxies customer chat messages to Claude API.
 // System prompt is server-side and protected.
+//
+// The SYSTEM_PROMPT block below is generated — do not hand-edit it.
+// Edit worker/system_prompt.md (voice/rules/flow text, with {{key}}
+// pricing placeholders) and/or pricing.json (the actual numbers), then
+// run `node worker/rebuild.mjs` from the repo root to regenerate this
+// file. That keeps every price the bot can say traceable to
+// pricing.json instead of hand-typed and prone to drifting from it.
 // =============================================================
 
 const SYSTEM_PROMPT = `## WHO YOU ARE
@@ -76,9 +83,9 @@ These are the only prices you may quote. Anything not in this list = "that's a c
 - 8+ zones: custom quote — site visit + drawings required
 - Frost-free hose bib add-on: +$175
 
-**Spring opening (all-in, no service call charge on top):** $90 (≤4 zones), $120 (≤8 zones), $145 (commercial)
+**Spring opening (all-in, no service call charge on top):** Residential — $90 (1-4 zones), $105 (5-6 zones), $120 (7-8 zones), $165 (9-15 zones), 16+ zones custom. Commercial — $145 (1-4 zones), $255 (5-8 zones), 9+ zones custom.
 
-**Fall closing (all-in, no service call charge on top):** $90 (≤4 zones), $105 (≤6 zones), $120 (≤8 zones), $165 (≤15 zones)
+**Fall closing (all-in, no service call charge on top):** Residential — $90 (1-4 zones), $105 (5-6 zones), $120 (7-8 zones), $165 (9-15 zones), 16+ zones custom. Commercial — $145 (1-4 zones), $255 (5-8 zones), 9+ zones custom.
 
 NEVER quote a range like "$100-200." NEVER make up prices. NEVER round prices ($74.95 stays $74.95, do NOT round — customers notice and it makes you look like you don't know the real number). If you don't have the price = it's a custom quote.
 
@@ -221,7 +228,7 @@ Pre-computed parts + trip totals (labour separate, billed on-site at $95/hr):
 - 5-valve box: $754.75
 - 6-valve box: $829.70
 
-When you quote, give (a) the parts + trip total, (b) the labour rate + estimated time, (c) the AI-intake bonus framing. Example for a 3-valve box: "For a 3-valve box: $454.85 covers parts + the trip out — that's the manifold rebuild and all three valves. Repair labour bills on top at $95/hr (typically 1–2 hours for this scope). Here's the AI-intake bonus: if my diagnosis matches what we find on-site, your first hour of repair labour is free — that's a $95 saving. So if everything checks out as quoted, you're looking at around \\$549.85 for a clean repair, with any over-time labour quoted before we continue." Keep it tight — don't over-itemize unless directly asked, but always name the bonus.
+When you quote, give (a) the parts + trip total, (b) the labour rate + estimated time, (c) the AI-intake bonus framing. Example for a 3-valve box: "For a 3-valve box: $454.85 covers parts + the trip out — that's the manifold rebuild and all three valves. Repair labour bills on top at $95/hr (typically 1–2 hours for this scope). Here's the AI-intake bonus: if my diagnosis matches what we find on-site, your first hour of repair labour is free — that's a $95 saving. So if everything checks out as quoted, you're looking at around $549.85 for a clean repair, with any over-time labour quoted before we continue." Keep it tight — don't over-itemize unless directly asked, but always name the bonus.
 
 If they don't know the valve count and can't check: offer "depending on box size, parts + trip lands somewhere between $304.95 (single valve) and $829.70 (six valves) — most homes are 3-valve which is $454.85. Repair labour bills on top at $95/hr (typically 1–2 hours), and the AI-intake bonus knocks the first hour off if my diagnosis is right. Once we have a photo we lock the parts + trip number exactly." Then move toward booking + photo follow-up.
 
@@ -524,16 +531,16 @@ Twenty zones is past our standard tiers — that's a custom panel build, so I wo
 >
 > [SHOW_CONTACT_CAPTURE]`;
 
-// TESTING MODE: Allows requests from any origin.
-// Set to false and configure ALLOWED_ORIGINS before going to production.
-const ALLOW_ALL_ORIGINS_FOR_TESTING = true;
+// Origins allowed to call this Worker. Only pjllandservices.com and its www
+// variant are confirmed live domains (checked 2026-09-20 — the previously
+// listed pjl-land-services.com / www.pjl-land-services.com don't resolve at
+// all, and pjllandservices.github.io has no GitHub Pages actually configured
+// in this repo). See PJL-41 / PJL-42.
+const ALLOW_ALL_ORIGINS_FOR_TESTING = false;
 
 const ALLOWED_ORIGINS = [
-  "https://pjllandservices.github.io",
   "https://pjllandservices.com",
   "https://www.pjllandservices.com",
-  "https://pjl-land-services.com",
-  "https://www.pjl-land-services.com",
 ];
 
 export default {
