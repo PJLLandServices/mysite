@@ -2137,6 +2137,19 @@ async function markSent(id, { channels = [], toEmail = "", toPhone = "", by = "a
   return q;
 }
 
+// A quote's public approval link stays live only while its status still
+// represents the CURRENT offer. Once a revision replaces it, the original
+// flips to "superseded" but its token and content are left in place (so a
+// customer who follows the old link can be told what happened, by name,
+// rather than getting the same generic "link not found" as a typo) — every
+// /api/approve/:id/:token reader must still refuse to show it, so the
+// check is defined ONCE here and called from each one (CLAUDE.md's
+// lifecycle rule: two copies of a status test drift; this is why the
+// Q-2026-0078 incident's dead-link half shipped in the first place).
+function isSuperseded(q) {
+  return !!q && q.status === "superseded";
+}
+
 // Look up a quote by its approval token. Returns the matching quote OR
 // null. Used by the public /api/approve/:id/:token endpoints.
 async function getByApprovalToken(id, token) {
@@ -2903,6 +2916,15 @@ async function createRevision(originalId, { by = "admin", note = "" } = {}) {
   revision.deliveryMode = original.deliveryMode || deliveryModeForBranch(original.branch);
   revision.customRates = { ...original.customRates };
   revision.scope = original.scope;
+  // Presentation carries forward as the new version's STARTING point
+  // (2026-09-20 fix). blankQuote() defaults pdfOptions.lineItems to
+  // "itemized" — until this line every revision silently reverted to it
+  // regardless of what the superseded quote actually showed the customer.
+  // This is the confirmed root cause of the Q-2026-0078 incident: v1/v2
+  // were sent as "summary", and v3 silently reset to fully itemized.
+  // Carrying the value forward is not the same as re-confirming it —
+  // PJL-48 adds an explicit "confirm before send" gate on top of this.
+  revision.pdfOptions = { ...revision.pdfOptions, ...(original.pdfOptions || {}) };
   revision.proposalSections = (original.proposalSections || []).map((s, i) => ({
     ...s,
     id: newSectionId(),
@@ -3222,6 +3244,7 @@ module.exports = {
   sweepStalePreviewQuotes,
   refreshLineItems,
   getByApprovalToken,
+  isSuperseded,
   remove,
   softDelete,
   restore,

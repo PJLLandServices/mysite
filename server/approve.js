@@ -11,6 +11,7 @@ const token = params.get("t") || "";
 const loading = document.getElementById("approveLoading");
 const card = document.getElementById("approveCard");
 const errBlock = document.getElementById("approveError");
+const revisedBlock = document.getElementById("approveRevised");
 const gateBlock = document.getElementById("approveGate");
 const linesEl = document.getElementById("approveLines");
 const signBlock = document.getElementById("approveSignBlock");
@@ -44,6 +45,16 @@ async function load() {
     // phone challenge instead of the document.
     if (data && data.locked) {
       showGate();
+      return;
+    }
+    // Revised (2026-09-20 fix) — a newer version replaced this quote. The
+    // server sends { ok:true, revised:true } and no pricing at all; show
+    // Patrick's message instead of either the form or the generic error.
+    if (data && data.revised) {
+      loading.hidden = true;
+      gateBlock.hidden = true;
+      card.hidden = true;
+      revisedBlock.hidden = false;
       return;
     }
     if (!r.ok || !data.ok) {

@@ -1238,6 +1238,7 @@ async function serveProposalDocIfUnlocked(req, res, quoteId, url) {
   const token = url.searchParams.get("t") || "";
   let q = null;
   try { q = await quotes.getByApprovalToken(quoteId, token); } catch (_) { q = null; }
+  if (q && quotes.isSuperseded(q)) return false; // revised — fall through to approve.html, whose JS shows the "revised" message via the JSON data route below
   if (!q) {
     // No valid token — still let a logged-in admin/tech preview the doc.
     const staff = await requireUser(req);
@@ -10362,6 +10363,9 @@ async function handleApi(req, res, pathname) {
       const attId = decodeURIComponent(approveAttachMatch[3]);
       const q = await quotes.getByApprovalToken(quoteId, token);
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Not found."] });
+      if (quotes.isSuperseded(q)) {
+        return sendJson(res, 404, { ok: false, code: "revised", errors: ["This quote has been revised, please see latest quotation for approval requirements."] });
+      }
       // Proposal phone gate — the token in the URL is necessary but, for a
       // doc-carrying project_proposal, NOT sufficient. Require admin/
       // owning-customer session or a valid unlock cookie scoped to THIS
@@ -10397,6 +10401,9 @@ async function handleApi(req, res, pathname) {
       const token = decodeURIComponent(approvePdfMatch[2]);
       const q = await quotes.getByApprovalToken(quoteId, token);
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
+      if (quotes.isSuperseded(q)) {
+        return sendJson(res, 404, { ok: false, code: "revised", errors: ["This quote has been revised, please see latest quotation for approval requirements."] });
+      }
       // Proposal phone gate — for a doc-carrying project_proposal the PDF
       // sits behind the gate too (admin/owning customer session, or a
       // valid unlock cookie for THIS quote). Proposals without a custom
@@ -10442,6 +10449,9 @@ async function handleApi(req, res, pathname) {
       const q = await quotes.getByApprovalToken(quoteId, token);
       // Bad token → 404, indistinguishable from a nonexistent quote (§3.6).
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
+      if (quotes.isSuperseded(q)) {
+        return sendJson(res, 404, { ok: false, code: "revised", errors: ["This quote has been revised, please see latest quotation for approval requirements."] });
+      }
       // Only a project_proposal carrying a custom HTML document uses the
       // gate; nothing to unlock otherwise (standard proposals and every
       // other quote type are token-only).
@@ -12298,6 +12308,13 @@ async function handleApi(req, res, pathname) {
       const token = decodeURIComponent(approvalGetMatch[2]);
       const q = await quotes.getByApprovalToken(quoteId, token);
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
+      // A revision replaced this quote — tell the page, don't send pricing.
+      // ok:true (not an error) so the client's happy-path fetch handling
+      // doesn't need a special case; { revised:true } is its own branch,
+      // same shape as the existing { locked:true } phone-gate signal below.
+      if (quotes.isSuperseded(q)) {
+        return sendJson(res, 200, { ok: true, revised: true, message: "This quote has been revised, please see latest quotation for approval requirements." });
+      }
       // Proposal phone gate (§3.7) — ONLY for a project_proposal that
       // carries a custom HTML document (the gate exists to protect the
       // designed page; standard proposals behave exactly as before the
@@ -12437,6 +12454,9 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const q = await quotes.getByApprovalToken(quoteId, token);
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
+      if (quotes.isSuperseded(q)) {
+        return sendJson(res, 409, { ok: false, code: "revised", errors: ["This quote has been revised, please see latest quotation for approval requirements."] });
+      }
       // Preview-mode safety: refuse to record an acceptance on a
       // draft_preview quote. The client UI also surfaces a PREVIEW
       // banner and intercepts the submit, but a stale tab / scripted
@@ -12652,6 +12672,9 @@ async function handleApi(req, res, pathname) {
       const token = decodeURIComponent(applyFinancingMatch[2]);
       const q = await quotes.getByApprovalToken(quoteId, token);
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
+      if (quotes.isSuperseded(q)) {
+        return sendJson(res, 409, { ok: false, code: "revised", errors: ["This quote has been revised, please see latest quotation for approval requirements."] });
+      }
       if (!q.financing || q.financing.enabled !== true) {
         return sendJson(res, 409, { ok: false, errors: ["Financing isn't available on this quote."] });
       }
@@ -17589,6 +17612,9 @@ async function handleApi(req, res, pathname) {
       const token = decodeURIComponent(pdfReturnMatch[2]);
       const q = await quotes.getByApprovalToken(quoteId, token);
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
+      if (quotes.isSuperseded(q)) {
+        return sendJson(res, 409, { ok: false, code: "revised", errors: ["This quote has been revised, please see latest quotation for approval requirements."] });
+      }
       if (q.type !== "project_proposal") {
         return sendJson(res, 422, { ok: false, errors: ["This link doesn't accept PDF returns."] });
       }

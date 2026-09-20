@@ -3976,6 +3976,41 @@ the approval email only ever carried the proposal PDF; an uploaded PDF drawing a
 section printed "See attached" in the proposal but was never attached. The email preview now
 lists every file with its fate and a per-file toggle, and the send attaches that same list.
 FLOW-20 still UNMAPPED; no PASS flow touched.
+**2026-09-20 (Revision silently reverted pricing to itemized, and a superseded
+quote's link kept working — QUOTE-06 and QUOTE-07, opened and fixed under
+FLOW-20):** real incident — Patrick sent a revision (v3) of an installation
+quote and it went out fully itemized (System mainline $2,499, Smart controller
+$1,695, one line per zone, down to the labour credit) when v1/v2 had shown the
+customer a curated summary. **QUOTE-06, root cause:** `createRevision()`
+(`server/lib/quotes.js`) built every new revision from `blankQuote()`, which
+hardcodes `pdfOptions.lineItems: "itemized"` — the superseded quote's actual
+presentation choice was never copied forward, so EVERY revision silently
+reverted regardless of what the customer had been shown before. No test
+covered `createRevision()` at all. **Fixed:** the revision now carries the
+superseded quote's `pdfOptions` forward as its starting point. Carrying it
+forward is not the same as re-confirming it before send — that gate
+(PJL-48, a pop-out confirmation pre-selected to the last-sent mode, required
+on every send) is tracked separately in Linear and not yet built.
+**QUOTE-07, found alongside it:** a superseded quote's `/approve/:id/:token`
+link kept resolving to the live record forever — nothing checked `status`,
+so a customer could reopen an old revision and see stale pricing next to the
+current one. **Fixed:** a single shared `quotes.isSuperseded(q)` check, called
+from all eight `/api/approve/:id/:token...` readers (page render, data GET,
+sign, apply-financing, pdf, pdf-return, attachments, unlock) — per this file's
+own lifecycle-state rule, defined once rather than copied at each call site.
+The token and record are deliberately left in place (not nulled) so the page
+can identify which quote moved on and show Patrick's own copy: "This quote
+has been revised, please see latest quotation for approval requirements."
+**Pinned:** `scripts/test-quote-revision-presentation.mjs` (18 assertions, in
+`build:check`), confirmed to fail against the pre-fix code before this
+shipped. **Not covered by that test — needs a walked acceptance:** the actual
+HTTP route gating in `server.js` (the test exercises the `quotes.js` lib
+functions directly, not a live server), and the send-time confirmation gate
+(PJL-48) is separate follow-on work, not included here. FLOW-20 stays
+UNMAPPED; **what still needs Patrick:** send a real test quote, revise it
+twice with different presentation choices, confirm each revision starts from
+the prior one's mode, and confirm the v1 link now shows the "revised" message
+instead of pricing (see PJL-51).
 
 If a flow isn't in here with a status, it is not known to work.
 Update this file, not a chat thread.
