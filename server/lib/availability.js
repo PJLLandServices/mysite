@@ -275,6 +275,17 @@ const DEFAULT_SETTINGS = {
 // still books, via the open bucket when the calendar can't hold them.
 const GEO_WIDEN_TIERS = [25, 40];         // past this the open bucket is the answer, not a longer drive
 const GEO_WIDEN_MIN_DAYS = 3;             // matches the three starred recommendations
+// SCARCITY IS JUDGED ON THE CUSTOMER'S NEXT TWO WEEKS, not on the whole
+// scan. Counting bookable days across the entire horizon meant three
+// empty Saturdays a month out read as "enough", and the ladder never
+// ran: a Toronto address saw NO weekday from Sep 28 to Oct 19 — every
+// planned route day refused at 15 minutes — and its first offer was a
+// Saturday morning two weeks in (Patrick, 2026-09-21: "customers won't
+// find a time when visiting our website to get a fall closing"). The
+// window opens on the first day the scan could offer at all (open
+// hours, inside the season), so a September caller looking at a
+// season that starts Sep 28 is judged on Sep 28 – Oct 11.
+const GEO_WIDEN_WINDOW_DAYS = 14;
 
 // Customer-facing booking buckets. ONE customer per bucket per day —
 // Patrick committed to dropping the 20-slot grid in favour of two
@@ -422,6 +433,9 @@ async function listAvailableSlots(opts = {}) {
   while (true) {
     results = [];
     let geoSuppressedCount = 0;
+    // Exclusive end (YYYY-MM-DD) of the fortnight the widen decision is
+    // made on; set by the first day that passes hours and the season.
+    let nearWindowEndKey = null;
     // Each pass reports its own diagnostics: a widened pass replaces the
     // stricter pass's entries, so "outside_route_area" copy always
     // describes the corridor the customer was actually served with.
@@ -457,6 +471,11 @@ async function listAvailableSlots(opts = {}) {
           diagnostics.seasonClosed.push({ date: dateKey(day), publicBookingThrough: bounds.through });
         }
         continue;
+      }
+      if (nearWindowEndKey === null) {
+        const end = new Date(day);
+        end.setDate(end.getDate() + GEO_WIDEN_WINDOW_DAYS);
+        nearWindowEndKey = dateKey(end);
       }
 
       // ---- Geography filter -------------------------------------------
@@ -681,11 +700,15 @@ async function listAvailableSlots(opts = {}) {
       }
     }
 
-    // Stop widening when the customer has enough days, when geography
-    // suppressed nothing (scarcity is capacity, not distance — the open
-    // bucket is that overflow), or when the ladder is spent.
-    const offeredDayCount = new Set(results.map((s) => dateKey(new Date(s.start)))).size;
-    if (offeredDayCount >= GEO_WIDEN_MIN_DAYS) break;
+    // Stop widening when the customer has enough days IN THEIR NEXT TWO
+    // WEEKS, when geography suppressed nothing (scarcity is capacity,
+    // not distance — the open bucket is that overflow), or when the
+    // ladder is spent.
+    const offeredNearCount = new Set(
+      results.map((s) => dateKey(new Date(s.start)))
+        .filter((k) => nearWindowEndKey === null || k < nearWindowEndKey)
+    ).size;
+    if (offeredNearCount >= GEO_WIDEN_MIN_DAYS) break;
     if (geoSuppressedCount === 0) break;
     if (geoTierIdx === geoLadder.length - 1) break;
     geoTierIdx += 1;
@@ -716,6 +739,70 @@ function recommendDays(days, { max = 3 } = {}) {
     d.addedDriveMinutes = d.slots[0].addedDriveMinutes;
   }
   return days;
+}
+
+// The probe's per-half-day verdict, read off ONE engine run.
+//
+// The season-plan probe used to answer "is this day offered?" with its
+// own rule — whole-day cheapest insertion against a threshold — while
+// the engine above had grown three more: geography scored per bucket,
+// the leg cap, and bucket capacity. So the probe said "R11, +2 min, yes"
+// for an address whose morning was full and whose afternoon was a
+// different cluster, and the Book button under it found no window
+// (Patrick, 2026-09-21: "they were supposed to be available"). Two
+// readers of one question had drifted. This is the one reading: the
+// engine's slots and diagnostics, folded per date and bucket.
+//
+//   status "open"     a slot was emitted (addedDriveMinutes as the slot)
+//          "full"     bucketFull — planned + booked + this one > cap
+//          "far"      geoSuppressed — added drive over the corridor
+//          "spread"   geoSuppressed, reason day_too_spread — the leg cap
+//          "season"   the day is outside the public booking window
+//          "no_window" nothing else said no, and nothing fit — blocks,
+//                     lead time, hours (a Saturday afternoon)
+//
+// A date the engine never reached is absent from the map. The
+// diagnostics describe the corridor the customer was finally served
+// with (each widening pass resets them), so they agree with the slots.
+function bucketVerdicts(slots, diagnostics = {}) {
+  const out = new Map();
+  const bucketKeys = BOOKING_BUCKETS.map((b) => b.key);
+  const ensure = (date) => {
+    if (!out.has(date)) {
+      const buckets = {};
+      for (const k of bucketKeys) buckets[k] = { status: "no_window" };
+      out.set(date, { date, offered: false, buckets });
+    }
+    return out.get(date);
+  };
+  for (const g of diagnostics.seasonClosed || []) {
+    const v = ensure(g.date);
+    for (const k of bucketKeys) v.buckets[k] = { status: "season" };
+  }
+  for (const g of diagnostics.geoSuppressed || []) {
+    const v = ensure(g.date);
+    const key = bucketKeys.includes(g.bucket) ? g.bucket : bucketKeys[0];
+    v.buckets[key] = g.reason === "day_too_spread"
+      ? {
+        status: "spread",
+        addedDriveMinutes: g.addedDriveMinutes ?? null,
+        addedLegMinutes: g.addedLegMinutes ?? null,
+        worstLegMinutes: g.worstLegMinutes ?? null
+      }
+      : { status: "far", addedDriveMinutes: g.addedDriveMinutes ?? null };
+  }
+  for (const g of diagnostics.bucketFull || []) {
+    const v = ensure(g.date);
+    if (!bucketKeys.includes(g.bucket)) continue;
+    v.buckets[g.bucket] = { status: "full", planned: g.planned, booked: g.booked, cap: g.cap };
+  }
+  for (const s of slots || []) {
+    const v = ensure(dateKey(new Date(s.start)));
+    if (!bucketKeys.includes(s.bucketKey)) continue;
+    v.buckets[s.bucketKey] = { status: "open", addedDriveMinutes: s.addedDriveMinutes ?? null };
+    v.offered = true;
+  }
+  return out;
 }
 
 // Group slots by day for the UI's typical "pick a day, then pick a time" flow.
@@ -827,11 +914,13 @@ module.exports = {
   DEFAULT_SETTINGS,
   GEO_WIDEN_TIERS,
   GEO_WIDEN_MIN_DAYS,
+  GEO_WIDEN_WINDOW_DAYS,
   listAvailableSlots,
   groupByDay,
   groupByDayMap,
   expandDaysToRange,
   recommendDays,
+  bucketVerdicts,
   parseLocalDateKey,
   parseHHmmToMinutes,
   minutesToHHmm

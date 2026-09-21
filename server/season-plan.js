@@ -2655,7 +2655,8 @@
         + `${data.routeDaysTotal} route days at the ${data.thresholdMinutes}-minute drive threshold.`;
     } else {
       head.textContent = `${shown} — offered on ${data.routeDaysOffered} of ${data.routeDaysTotal} route days, `
-        + `where inserting them costs ${data.thresholdMinutes} min of extra driving or less.`;
+        + `by the same rule the booking page runs (for ${data.serviceLabel || "a residential closing"}): `
+        + `drive cost per half-day at the ${data.thresholdMinutes}-minute corridor, the day's spread, and each half's capacity.`;
     }
     out.appendChild(head);
 
@@ -2702,7 +2703,8 @@
 
     const table = document.createElement("table");
     table.className = "sp-probe-table";
-    table.innerHTML = "<thead><tr><th>Route</th><th>Date</th><th>Stops</th><th>Added drive</th><th>Offered</th><th></th></tr></thead>";
+    table.innerHTML = "<thead><tr><th>Route</th><th>Date</th><th>Stops</th><th>Added drive</th>"
+      + "<th>Morning</th><th>Afternoon</th><th>Offered</th><th></th></tr></thead>";
     const body = document.createElement("tbody");
     for (const day of data.days) {
       const tr = document.createElement("tr");
@@ -2714,11 +2716,15 @@
       // the calendar leaves the customer short of cheap days.
       const offeredCell = day.offered ? "yes"
         : day.widensAtMinutes ? `when full (widens at ${day.widensAtMinutes} min)` : "no";
+      const buckets = day.buckets || {};
       tr.innerHTML = `<td>${routeCell}</td><td>${day.date}</td><td>${day.points}</td>`
-        + `<td class="sp-num">${added}</td><td>${offeredCell}</td>`;
+        + `<td class="sp-num">${added}</td>`
+        + `<td>${escapeHtml(bucketVerdictText(buckets.morning))}</td>`
+        + `<td>${escapeHtml(bucketVerdictText(buckets.afternoon))}</td>`
+        + `<td>${offeredCell}</td>`;
       // Book, right here. Only on offered days — an unoffered day is
-      // the corridor saying no, and a button on it would book what the
-      // table just refused.
+      // the engine saying no, and a button on it would book what the
+      // table just refused. The Morning / Afternoon columns say why.
       const bookCell = document.createElement("td");
       if (day.offered) {
         const btn = document.createElement("button");
@@ -2751,6 +2757,21 @@
   // the automatic email+text confirmation are identical.
 
   const probeCache = { services: null, properties: null };
+
+  // One half-day's verdict, in the engine's words (availability.js
+  // bucketVerdicts). "full (5/5)" and "too far (+34 min)" are two
+  // different answers to a caller; "no" was hiding both.
+  function bucketVerdictText(v) {
+    if (!v) return "—";
+    switch (v.status) {
+      case "open": return `open${v.addedDriveMinutes == null ? "" : ` · +${v.addedDriveMinutes} min`}`;
+      case "full": return `full (${(v.planned || 0) + (v.booked || 0)}/${v.cap})`;
+      case "far": return `too far (+${v.addedDriveMinutes} min)`;
+      case "spread": return `spreads the day (+${v.addedLegMinutes} min leg)`;
+      case "season": return "outside the booking window";
+      default: return "no window";
+    }
+  }
 
   async function probeServices() {
     if (probeCache.services) return probeCache.services;
