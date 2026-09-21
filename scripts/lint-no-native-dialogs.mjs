@@ -46,45 +46,14 @@ const VERBOSE = process.argv.includes('--verbose');
 // because they haven't been migrated yet. Drop a file from this list in
 // the same PR that finishes migrating every call site in it.
 //
-// Counts below are informational (native-call count as of PJL-60
-// finishing, 2026-09-21 — every confirm()/prompt() sitewide is now
-// migrated; everything left in every file below is a plain alert(),
-// PJL-61's scope) — not enforced, just so a shrinking list is visible in
-// the diff over time.
-const ALLOWLIST_FILES = [
-  { file: 'sitebuilder.html', count: 39, reason: 'PJL-61 (informational alerts) — highest single-file count.' },
-  { file: 'work-order-tech.js', count: 32, reason: 'PJL-61 (informational alerts).' },
-  { file: 'quote-folder.js', count: 29, reason: 'PJL-61 (informational alerts).' },
-  { file: 'project.js', count: 24, reason: 'PJL-61 (informational alerts).' },
-  { file: 'work-order.js', count: 21, reason: 'PJL-61 (informational alerts).' },
-  { file: 'invoice.js', count: 6, reason: 'PJL-61 (informational alerts).' },
-  { file: 'customer.js', count: 5, reason: 'PJL-61 (informational alerts).' },
-  { file: 'admin.js', count: 4, reason: 'PJL-61 (informational alerts).' },
-  { file: 'material-list.js', count: 4, reason: 'PJL-61 (informational alerts).' },
-  { file: 'customers.js', count: 3, reason: 'PJL-61 (informational alerts).' },
-  { file: 'handoff.js', count: 3, reason: 'PJL-61 (informational alerts).' },
-  { file: 'properties.js', count: 3, reason: 'PJL-61 (informational alerts).' },
-  { file: 'property.js', count: 3, reason: 'PJL-61 (informational alerts).' },
-  { file: 'purchase-order.js', count: 3, reason: 'PJL-61 (informational alerts).' },
-  { file: 'settings.js', count: 3, reason: 'PJL-61 (informational alerts).' },
-  { file: 'properties-import.js', count: 2, reason: 'PJL-61 (informational alerts).' },
-  { file: 'quote-request.js', count: 2, reason: 'PJL-61 (informational alerts).' },
-  { file: 'today.js', count: 2, reason: 'PJL-61 (informational alerts).' },
-  { file: 'work-orders-index.js', count: 2, reason: 'PJL-61 (informational alerts).' },
-  { file: 'portal.js', count: 1, reason: 'PJL-61 (informational alert) — host page (portal.html) doesn\'t load pjl-dialog.js/.css yet; add those tags when migrating this one.' },
-  { file: 'quote-proposal-builder.js', count: 1, reason: 'PJL-61 (informational alert).' },
-  { file: 'suppliers.js', count: 1, reason: 'PJL-61 (informational alert).' },
-  { file: 'voice-input.js', count: 1, reason: 'PJL-61 (informational alert).' },
-  // Every confirm()/prompt() sitewide (the 10 highest-stakes calls from
-  // PJL-59, plus the rest of PJL-60 across every file above and every
-  // file that dropped off this list entirely — admin.html,
-  // appointment.js/.html, booking.js, material-list.js's confirms,
-  // outreach.js, quote-request.js's prompt, review-requests.html,
-  // schedule.js, smart-controller-photos.html, suppliers.js's confirm,
-  // today.js, users.js, welcome-email.html, work-order-build.js,
-  // work-orders-index.js, and sitebuilder.html's 10 confirms + 1
-  // prompt) is done. Everything remaining above is a plain alert().
-];
+// As of PJL-61 landing (2026-09-21), every native alert()/confirm()/
+// prompt() call across the entire browser-loaded CRM surface (55 HTML
+// pages + 66 JS files) has been replaced with window.pjlDialog. This
+// list is empty by design — a file only ever goes back on it if new
+// (or newly discovered) native-dialog code shows up mid-migration of
+// something else; the same PR that adds it here should also be the one
+// migrating it, per the convention above.
+const ALLOWLIST_FILES = [];
 const ALLOWLIST_FILE_SET = new Set(ALLOWLIST_FILES.map(e => e.file));
 
 // Fine-grained, permanent exceptions (same shape as

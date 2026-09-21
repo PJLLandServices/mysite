@@ -308,16 +308,16 @@ async function convertToProject(quoteId) {
     const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/convert-to-project`, { method: "POST" });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
-      alert((data.errors && data.errors[0]) || `Couldn't convert (${r.status})`);
+      await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't convert (${r.status})`, { title: "Couldn't convert", icon: "warning" });
       return;
     }
     if (data.alreadyExisted) {
       // Already-converted — go to the existing project rather than create a duplicate.
-      alert(`A project for ${quoteId} already exists (${data.project.id}). Opening it.`);
+      await pjlDialog.alert(`A project for ${quoteId} already exists (${data.project.id}). Opening it.`, { title: "Project already exists", icon: "info" });
     }
     location.href = `/admin/project/${encodeURIComponent(data.project.id)}`;
   } catch (err) {
-    alert(err.message || "Couldn't convert quote to project.");
+    await pjlDialog.alert(err.message || "Couldn't convert quote to project.", { title: "Couldn't convert", icon: "warning" });
   }
 }
 
@@ -375,7 +375,7 @@ async function deleteQuote(quoteId) {
     const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}`, { method: "DELETE" });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
-      alert((data.errors && data.errors[0]) || `Couldn't delete (${r.status})`);
+      await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't delete (${r.status})`, { title: "Couldn't delete", icon: "warning" });
       return;
     }
     // Optimistic remove if not in show-deleted mode; otherwise re-fetch
@@ -386,7 +386,7 @@ async function deleteQuote(quoteId) {
       load();
     }
   } catch (err) {
-    alert(err.message || "Couldn't delete quote.");
+    await pjlDialog.alert(err.message || "Couldn't delete quote.", { title: "Couldn't delete", icon: "warning" });
   }
 }
 
@@ -413,18 +413,18 @@ async function sendQuote(quoteId) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
-      alert((data.errors && data.errors[0]) || `Couldn't send (${r.status})`);
+      await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't send (${r.status})`, { title: "Couldn't send", icon: "warning" });
       return;
     }
     const problems = [];
     if (data.emailError) problems.push(`Email failed: ${data.emailError}`);
     if (data.smsError) problems.push(`SMS failed: ${data.smsError}`);
     if (problems.length) {
-      alert(`${quoteId} marked sent, but:\n${problems.join("\n")}\n\nUse Re-send to retry delivery.`);
+      await pjlDialog.alert(`${quoteId} marked sent, but:\n${problems.join("\n")}\n\nUse Re-send to retry delivery.`, { title: "Sent with delivery issues", icon: "warning" });
     }
     load();
   } catch (err) {
-    alert(err.message || "Couldn't send quote.");
+    await pjlDialog.alert(err.message || "Couldn't send quote.", { title: "Couldn't send", icon: "warning" });
   }
 }
 
@@ -443,7 +443,7 @@ async function sendCombined(quoteId) {
   });
   if (to == null) return; // cancelled
   const email = String(to).trim();
-  if (!email) { alert("An email address is required to send."); return; }
+  if (!email) { await pjlDialog.alert("An email address is required to send.", { title: "Email required" }); return; }
   try {
     const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/send-proposal-for-approval`, {
       method: "POST",
@@ -452,14 +452,14 @@ async function sendCombined(quoteId) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
-      alert((data.errors && data.errors[0]) || `Couldn't send (${r.status})`);
+      await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't send (${r.status})`, { title: "Couldn't send", icon: "warning" });
       return;
     }
-    if (data.emailError) alert(`${quoteId} marked sent, but email failed: ${data.emailError}\n\nUse Re-send to retry.`);
-    else alert(`Sent to ${email}. The customer gets a link to the combined proposal.`);
+    if (data.emailError) await pjlDialog.alert(`${quoteId} marked sent, but email failed: ${data.emailError}\n\nUse Re-send to retry.`, { title: "Email failed", icon: "warning" });
+    else await pjlDialog.alert(`Sent to ${email}. The customer gets a link to the combined proposal.`, { title: "Sent" });
     load();
   } catch (err) {
-    alert(err.message || "Couldn't send the combined proposal.");
+    await pjlDialog.alert(err.message || "Couldn't send the combined proposal.", { title: "Couldn't send", icon: "warning" });
   }
 }
 
@@ -471,7 +471,7 @@ async function generateSmartControllerPage(quoteId) {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({})
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || `Couldn't generate (${r.status})`); return; }
+    if (!r.ok || !data.ok) { await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't generate (${r.status})`, { title: "Couldn't generate", icon: "warning" }); return; }
     if (await pjlDialog.confirm(`Page generated for ${quoteId}. Open the preview?`, {
       title: "Open preview?",
       confirmLabel: "Open"
@@ -479,7 +479,7 @@ async function generateSmartControllerPage(quoteId) {
       window.open(`/approve/${encodeURIComponent(quoteId)}`, "_blank");
     }
     load();
-  } catch (err) { alert(err.message || "Couldn't generate the page."); }
+  } catch (err) { await pjlDialog.alert(err.message || "Couldn't generate the page.", { title: "Couldn't generate", icon: "warning" }); }
 }
 
 // Send a designed, phone-gated proposal (smart-controller upgrade) to the
@@ -502,17 +502,17 @@ async function sendSmartController(quoteId) {
   });
   if (to == null) return;
   const email = String(to).trim();
-  if (!email) { alert("An email address is required to send."); return; }
+  if (!email) { await pjlDialog.alert("An email address is required to send.", { title: "Email required" }); return; }
   try {
     const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/send-proposal-for-approval`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sendEmail: true, email })
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || `Couldn't send (${r.status})`); return; }
-    if (data.emailError) alert(`${quoteId} marked sent, but email failed: ${data.emailError}\n\nUse Re-send to retry.`);
-    else alert(`Sent to ${email}. The customer gets a link to the upgrade proposal.`);
+    if (!r.ok || !data.ok) { await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't send (${r.status})`, { title: "Couldn't send", icon: "warning" }); return; }
+    if (data.emailError) await pjlDialog.alert(`${quoteId} marked sent, but email failed: ${data.emailError}\n\nUse Re-send to retry.`, { title: "Email failed", icon: "warning" });
+    else await pjlDialog.alert(`Sent to ${email}. The customer gets a link to the upgrade proposal.`, { title: "Sent" });
     load();
-  } catch (err) { alert(err.message || "Couldn't send the upgrade proposal."); }
+  } catch (err) { await pjlDialog.alert(err.message || "Couldn't send the upgrade proposal.", { title: "Couldn't send", icon: "warning" }); }
 }
 
 // "View as customer" — opens the customer's exact e-sign page. The tab
@@ -529,14 +529,14 @@ async function previewQuote(quoteId) {
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok || !data.previewUrl) {
       if (tab) tab.close();
-      alert((data.errors && data.errors[0]) || `Couldn't open the preview (${r.status})`);
+      await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't open the preview (${r.status})`, { title: "Couldn't open preview", icon: "warning" });
       return;
     }
     if (tab) tab.location = data.previewUrl;
     else window.location.href = data.previewUrl; // popup blocked — same-tab fallback
   } catch (err) {
     if (tab) tab.close();
-    alert(err.message || "Couldn't open the preview.");
+    await pjlDialog.alert(err.message || "Couldn't open the preview.", { title: "Couldn't open preview", icon: "warning" });
   }
 }
 
@@ -546,12 +546,12 @@ async function restoreQuote(quoteId) {
     const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/restore`, { method: "POST" });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
-      alert((data.errors && data.errors[0]) || `Couldn't restore (${r.status})`);
+      await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't restore (${r.status})`, { title: "Couldn't restore", icon: "warning" });
       return;
     }
     load();
   } catch (err) {
-    alert(err.message || "Couldn't restore quote.");
+    await pjlDialog.alert(err.message || "Couldn't restore quote.", { title: "Couldn't restore", icon: "warning" });
   }
 }
 
@@ -761,18 +761,18 @@ if (scq.openBtn) {
       }
       if (data.existing) {
         scq.backdrop.hidden = true;
-        alert(`A smart-controller draft already exists for this property — ${data.quote.id}. Opening the folder so you can review and send it.`);
+        await pjlDialog.alert(`A smart-controller draft already exists for this property — ${data.quote.id}. Opening the folder so you can review and send it.`, { title: "Draft already exists", icon: "info" });
         load();
         return;
       }
       if (data.custom) {
         scq.backdrop.hidden = true;
-        alert(`${data.zones}+ zones is a custom quote — captured as a CRM lead instead (no priced quote). You'll find it in the CRM.`);
+        await pjlDialog.alert(`${data.zones}+ zones is a custom quote — captured as a CRM lead instead (no priced quote). You'll find it in the CRM.`, { title: "Captured as a lead", icon: "info" });
         load();
         return;
       }
       scq.backdrop.hidden = true;
-      alert(`Draft ${data.quote.id} created — review the PDF, then tap "Send to customer".`);
+      await pjlDialog.alert(`Draft ${data.quote.id} created — review the PDF, then tap "Send to customer".`, { title: "Draft created" });
       load();
     } catch (err) {
       scq.create.disabled = false;
@@ -801,12 +801,12 @@ if (newProposalBtn) {
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
-        alert(data.errors?.[0] || `Couldn't create proposal (${r.status})`);
+        await pjlDialog.alert(data.errors?.[0] || `Couldn't create proposal (${r.status})`, { title: "Couldn't create proposal", icon: "warning" });
         return;
       }
       location.href = `/admin/quote/${encodeURIComponent(data.quote.id)}/proposal`;
     } catch (err) {
-      alert(err.message || "Couldn't create proposal.");
+      await pjlDialog.alert(err.message || "Couldn't create proposal.", { title: "Couldn't create proposal", icon: "warning" });
     }
   });
 }

@@ -110,7 +110,7 @@ dropzone.addEventListener("drop", (event) => {
 
 function handleFile(file) {
   const reader = new FileReader();
-  reader.onload = (e) => {
+  reader.onload = async (e) => {
     try {
       const data = new Uint8Array(e.target.result);
       const wb = XLSX.read(data, { type: "array" });
@@ -133,7 +133,7 @@ function handleFile(file) {
       window._wb = wb;
       loadSheet();
     } catch (err) {
-      alert("Couldn't read the file: " + err.message);
+      await pjlDialog.alert("Couldn't read the file: " + err.message, { title: "Import error", icon: "warning" });
     }
   };
   reader.readAsArrayBuffer(file);
@@ -276,7 +276,7 @@ function renderPreview() {
 
 confirmBtn.addEventListener("click", async () => {
   const records = buildRecords();
-  if (!records.length) { alert("No records to import."); return; }
+  if (!records.length) { await pjlDialog.alert("No records to import.", { title: "Nothing to import" }); return; }
   confirmBtn.disabled = true;
   importStatus.textContent = "Importing…";
   try {

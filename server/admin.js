@@ -935,7 +935,7 @@ if (detailQuoteSendBtn) {
       if (data.emailError) problems.push(`Email failed: ${data.emailError}`);
       if (data.smsError) problems.push(`SMS failed: ${data.smsError}`);
       if (problems.length) {
-        alert(`${quoteId} marked sent, but:\n${problems.join("\n")}\n\nUse Re-send in the Quote folder to retry delivery.`);
+        await pjlDialog.alert(`${quoteId} marked sent, but:\n${problems.join("\n")}\n\nUse Re-send in the Quote folder to retry delivery.`, { title: "Delivery problem", icon: "warning" });
       }
       await loadLeads();
     } catch (err) {
@@ -1098,7 +1098,7 @@ async function createFieldWoFromButton(type) {
   const lead = fieldWoLeadContext;
   if (!lead) return;
   if ((type === "spring_opening" || type === "fall_closing") && !lead.propertyId) {
-    alert("Spring & Fall WOs need a linked property to scaffold zones from. Link a property first.");
+    await pjlDialog.alert("Spring & Fall WOs need a linked property to scaffold zones from. Link a property first.", { title: "Property required", icon: "warning" });
     return;
   }
   const button = document.querySelector(`[data-create-wo="${type}"]`);
@@ -1127,7 +1127,7 @@ async function createFieldWoFromButton(type) {
     // Jump to the editor — that's where the tech does the work.
     window.location.assign(`/admin/work-order/${encodeURIComponent(data.workOrder.id)}`);
   } catch (err) {
-    alert(err.message);
+    await pjlDialog.alert(err.message, { title: "Couldn't create work order", icon: "warning" });
     if (button) button.disabled = false;
   }
 }
@@ -1563,7 +1563,7 @@ bulkDelete.addEventListener("click", async () => {
     saveMessage.textContent = `Deleted ${data.deletedCount} lead${data.deletedCount === 1 ? "" : "s"}.`;
     render();
   } catch (err) {
-    alert(err.message);
+    await pjlDialog.alert(err.message, { title: "Delete failed", icon: "warning" });
   } finally {
     bulkDelete.disabled = false;
   }

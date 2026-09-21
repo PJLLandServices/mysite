@@ -102,12 +102,12 @@
       field.dispatchEvent(new Event("input", { bubbles: true }));
       bumpSilence();
     };
-    rec.onerror = (event) => {
+    rec.onerror = async (event) => {
       // Permission denial / network error — surface to the user once,
       // then clean up. "no-speech" is normal silence-timeout, ignored.
       if (event.error && event.error !== "no-speech" && event.error !== "aborted") {
         console.warn("[voice-input]", event.error);
-        alert("Voice input error: " + event.error + ". Microphone permission may need to be granted in your browser.");
+        await pjlDialog.alert("Voice input error: " + event.error + ". Microphone permission may need to be granted in your browser.", { title: "Voice input error", icon: "warning" });
       }
     };
     rec.onend = () => {

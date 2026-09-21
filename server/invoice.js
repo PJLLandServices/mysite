@@ -355,7 +355,7 @@ document.getElementById("invoiceStatus")?.addEventListener("change", async (even
     currentInvoice = data.invoice;
     render(data.invoice);
   } catch (err) {
-    alert(err.message || "Failed.");
+    await pjlDialog.alert(err.message || "Failed.", { title: "Status update failed", icon: "warning" });
     event.target.value = currentInvoice?.status || "draft";
   }
 });
@@ -372,7 +372,7 @@ document.getElementById("invoiceSaveNotes")?.addEventListener("click", async () 
     if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't save.");
     currentInvoice = data.invoice;
   } catch (err) {
-    alert(err.message || "Failed.");
+    await pjlDialog.alert(err.message || "Failed.", { title: "Save failed", icon: "warning" });
   }
 });
 
@@ -473,7 +473,7 @@ document.getElementById("invoiceSendBtn")?.addEventListener("click", async () =>
   const action = isResend ? "resend" : "send";
   const recipient = currentInvoice.customerEmail;
   if (!recipient) {
-    alert("This invoice has no customer email. Add one in the bill-to section first.");
+    await pjlDialog.alert("This invoice has no customer email. Add one in the bill-to section first.", { title: "No customer email", icon: "warning" });
     return;
   }
   // Confirm with the recipient + total in the prompt so the admin can
@@ -493,10 +493,11 @@ document.getElementById("invoiceSendBtn")?.addEventListener("click", async () =>
       || editorSubject !== String(savedLetter.subject || "")
       || letterToggle.checked !== (savedLetter.enabled === true);
     if (dirty) {
-      alert(
+      await pjlDialog.alert(
         "The accompanying letter has unsaved changes.\n\n" +
         "Save it first — what gets attached is what's on the record, not what's " +
-        "on screen. Sending now would go out with the last saved version."
+        "on screen. Sending now would go out with the last saved version.",
+        { title: "Unsaved letter changes", icon: "warning" }
       );
       document.getElementById("invoiceLetterCard")?.scrollIntoView({ behavior: "smooth", block: "center" });
       return;
@@ -1244,7 +1245,7 @@ document.getElementById("invoicePaymentsBody")?.addEventListener("click", async 
   } catch (err) {
     reverseBtn.disabled = false;
     if (status) { status.textContent = err.message || "Failed."; status.dataset.kind = "error"; }
-    else alert(err.message || "Failed.");
+    else await pjlDialog.alert(err.message || "Failed.", { title: "Reverse payment failed", icon: "warning" });
   }
 });
 
@@ -1357,7 +1358,7 @@ document.getElementById("voidConfirmBtn")?.addEventListener("click", async () =>
     currentInvoice = data.invoice;
     closeModal("voidModal");
     render(data.invoice);
-    if (data.warning) alert(data.warning);
+    if (data.warning) await pjlDialog.alert(data.warning, { title: "Void invoice" });
   } catch (e) {
     if (err) err.textContent = e.message || "Failed.";
   } finally {

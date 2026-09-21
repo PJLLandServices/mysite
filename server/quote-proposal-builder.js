@@ -2389,8 +2389,8 @@
         state.quote = data.quote;
         storeNote("");
         closeEmailDialog();
-        alert(`Sent. ${data.emailSent ? "Email delivered." : "Email NOT sent: " + (data.emailError || "?")}` +
-          `\n\nApproval URL:\n${data.approvalUrl}`);
+        await pjlDialog.alert(`Sent. ${data.emailSent ? "Email delivered." : "Email NOT sent: " + (data.emailError || "?")}` +
+          `\n\nApproval URL:\n${data.approvalUrl}`, { title: "Quote sent" });
         render();
         schedulePreviewRefresh(0);
       } catch (err) {

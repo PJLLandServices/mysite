@@ -284,7 +284,7 @@ bulkbarDownloadEl.addEventListener("click", async () => {
         const body = await res.json();
         if (body?.error) msg = body.error;
       } catch {}
-      alert(msg);
+      await pjlDialog.alert(msg, { title: "Download failed", icon: "warning" });
       return;
     }
     const skipped = parseInt(res.headers.get("X-Customers-Skipped") || "0", 10);
@@ -303,14 +303,14 @@ bulkbarDownloadEl.addEventListener("click", async () => {
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     if (skipped > 0) {
-      alert(`Downloaded ${ids.length - skipped} vCards. ${skipped} customer${skipped === 1 ? " was" : "s were"} skipped (not found).`);
+      await pjlDialog.alert(`Downloaded ${ids.length - skipped} vCards. ${skipped} customer${skipped === 1 ? " was" : "s were"} skipped (not found).`, { title: "Download complete" });
     }
     // Refresh customers so the new vcfDownloads[] entries surface in
     // last-activity timestamps and the detail page's Downloads tab.
     selectedIds.clear();
     await load();
   } catch (err) {
-    alert(err?.message || "Network error.");
+    await pjlDialog.alert(err?.message || "Network error.", { title: "Download failed", icon: "warning" });
   } finally {
     bulkbarDownloadEl.disabled = false;
     bulkbarDownloadEl.textContent = originalLabel;

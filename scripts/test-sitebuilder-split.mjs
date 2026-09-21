@@ -105,12 +105,12 @@ await page.evaluate(({ w, e }) => { const r = routing[mp.pageId]; r.manifolds[0]
                     { w: pick.minX - 5, e: pick.maxX + 5 });
 
 // Simulate the two clicks the way mpTap receives them (sheet feet).
-const after = await page.evaluate(({ zi, x }) => {
+const after = await page.evaluate(async ({ zi, x }) => {
   mpSelectZone(zi);
-  mpSetTool('split');
+  await mpSetTool('split');
   const t0 = mp.tool;
-  mpTap(x, 0);   mpDraw();        // first end
-  mpTap(x, 100); mpDraw();        // second end
+  await mpTap(x, 0);   mpDraw();        // first end
+  await mpTap(x, 100); mpDraw();        // second end
   const r = routing[mp.pageId];
   const asg = mpManifoldAssign();
   const lat = mpLateralPlan();

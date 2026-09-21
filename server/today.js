@@ -354,7 +354,7 @@ todayList.addEventListener("click", async (event) => {
       actionEl.innerHTML = `<span class="today-action-icon" aria-hidden="true">✓</span><span class="today-action-label">Notified ${escapeHtml(time)}</span>`;
     } catch (err) {
       actionEl.innerHTML = originalHTML;
-      alert(err.message || "Couldn't notify customer.");
+      await pjlDialog.alert(err.message || "Couldn't notify customer.", { title: "Notify failed", icon: "warning" });
     } finally {
       actionEl.disabled = false;
     }
@@ -379,7 +379,7 @@ todayList.addEventListener("click", async (event) => {
     } catch (err) {
       actionEl.innerHTML = originalHTML;
       actionEl.disabled = false;
-      alert(err.message || "Couldn't open work order.");
+      await pjlDialog.alert(err.message || "Couldn't open work order.", { title: "Open failed", icon: "warning" });
     }
     return;
   }

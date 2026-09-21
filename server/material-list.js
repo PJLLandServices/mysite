@@ -584,7 +584,7 @@
     const line = state.list.lineItems.find((l) => l.id === lineId);
     if (!line) return;
     if (line.status === "ordered") {
-      alert("This line is on a sent purchase order. Cancel the PO before removing the line.");
+      await pjlDialog.alert("This line is on a sent purchase order. Cancel the PO before removing the line.", { title: "Line locked", icon: "warning" });
       return;
     }
     if (!(await pjlDialog.confirm("Remove this line?", { title: "Remove line", icon: "delete", destructive: true, confirmLabel: "Remove" }))) return;
@@ -728,7 +728,7 @@
     const r = await fetch(`/api/material-lists/${encodeURIComponent(sourceId)}`, { cache: "no-store" });
     const data = await r.json();
     if (!data || !data.ok || !data.list) {
-      alert("Couldn't load source list.");
+      await pjlDialog.alert("Couldn't load source list.", { title: "Copy failed", icon: "warning" });
       return;
     }
     const sourceLines = Array.isArray(data.list.lineItems) ? data.list.lineItems : [];
@@ -1190,7 +1190,7 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
-        alert((data.errors && data.errors[0]) || "Couldn't update status.");
+        await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't update status.", { title: "Update failed", icon: "warning" });
         return;
       }
       state.list = data.list;
@@ -1207,7 +1207,7 @@
       const r = await fetch(`/api/material-lists/${encodeURIComponent(state.listId)}`, { method: "DELETE" });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
-        alert((data.errors && data.errors[0]) || "Couldn't delete list.");
+        await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't delete list.", { title: "Delete failed", icon: "warning" });
         return;
       }
       location.href = "/admin/material-lists";

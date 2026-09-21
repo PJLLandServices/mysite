@@ -714,9 +714,9 @@ document.getElementById("qbClearErrorsBtn")?.addEventListener("click", async () 
   const qb = new URLSearchParams(location.search).get("qb");
   if (!qb) return;
   const status = document.getElementById("qbStatus");
-  if (qb === "connected") setTimeout(() => alert("QuickBooks connected. You can now push invoices."), 200);
-  if (qb === "denied")    setTimeout(() => alert("QuickBooks authorization was denied."), 200);
-  if (qb === "error")     setTimeout(() => alert("QuickBooks connection failed. Check the server logs."), 200);
+  if (qb === "connected") setTimeout(async () => { await pjlDialog.alert("QuickBooks connected. You can now push invoices.", { title: "QuickBooks connected" }); }, 200);
+  if (qb === "denied")    setTimeout(async () => { await pjlDialog.alert("QuickBooks authorization was denied.", { title: "Authorization denied", icon: "warning" }); }, 200);
+  if (qb === "error")     setTimeout(async () => { await pjlDialog.alert("QuickBooks connection failed. Check the server logs.", { title: "Connection failed", icon: "warning" }); }, 200);
   // Clean the URL so refreshes don't repeat the alert.
   history.replaceState(null, "", "/admin/settings");
 })();

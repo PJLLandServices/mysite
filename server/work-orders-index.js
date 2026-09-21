@@ -249,12 +249,12 @@ els.container.addEventListener("click", async (event) => {
     } else {
       msg = `Cascade fired. Service record on file (no billable line items).`;
     }
-    alert(msg);
+    await pjlDialog.alert(msg, { title: "Run completion cascade" });
     await load(); // refresh the list — this WO should drop out of the recovery filter
   } catch (err) {
     btn.disabled = false;
     btn.textContent = original;
-    alert(err.message || "Couldn't run cascade.");
+    await pjlDialog.alert(err.message || "Couldn't run cascade.", { title: "Cascade failed", icon: "warning" });
   }
 });
 

@@ -111,7 +111,7 @@ function _bindPhotoUploadListener() {
       });
     } catch (err) {
       teardownOverlay();
-      alert("Couldn't read the photo: " + err.message);
+      await pjlDialog.alert("Couldn't read the photo: " + err.message, { title: "Photo error", icon: "warning" });
       event.target.value = "";
       return;
     }
@@ -119,7 +119,7 @@ function _bindPhotoUploadListener() {
     const woId = (typeof state !== "undefined" && state && state.id) ? state.id : null;
     if (!woId) {
       teardownOverlay();
-      alert("Page hasn't finished loading yet — wait a moment and try again.");
+      await pjlDialog.alert("Page hasn't finished loading yet — wait a moment and try again.", { title: "Not ready", icon: "warning" });
       event.target.value = "";
       return;
     }
@@ -140,13 +140,13 @@ function _bindPhotoUploadListener() {
       data = await res.json().catch(() => ({}));
     } catch (err) {
       teardownOverlay();
-      alert("Network error: " + err.message);
+      await pjlDialog.alert("Network error: " + err.message, { title: "Network error", icon: "warning" });
       event.target.value = "";
       return;
     }
     if (!res.ok) {
       teardownOverlay();
-      alert(`Server rejected upload (HTTP ${res.status}): ${(data.errors && data.errors[0]) || "no error"}`);
+      await pjlDialog.alert(`Server rejected upload (HTTP ${res.status}): ${(data.errors && data.errors[0]) || "no error"}`, { title: "Upload failed", icon: "warning" });
       event.target.value = "";
       return;
     }
@@ -1380,11 +1380,11 @@ document.addEventListener("click", async (event) => {
   const fromRank = statusRank(state.status);
   const toRank = statusRank(next);
   if (fromRank !== -1 && toRank !== -1 && toRank < fromRank) {
-    alert(`Status only moves forward. You can't roll back from "${state.status}" to "${next}".`);
+    await pjlDialog.alert(`Status only moves forward. You can't roll back from "${state.status}" to "${next}".`, { title: "Can't roll back", icon: "warning" });
     return;
   }
   if (STATUS_TERMINAL.has(state.status)) {
-    alert(`This visit is in a terminal state (${state.status}) and can't change.`);
+    await pjlDialog.alert(`This visit is in a terminal state (${state.status}) and can't change.`, { title: "Terminal state", icon: "warning" });
     return;
   }
 
@@ -1395,7 +1395,7 @@ document.addEventListener("click", async (event) => {
   if (next === "completed") {
     const failures = walkoutCheckFailures();
     if (failures.length) {
-      alert("Can't complete yet:\n\n• " + failures.join("\n• ") + "\n\nResolve these and try again.");
+      await pjlDialog.alert("Can't complete yet:\n\n• " + failures.join("\n• ") + "\n\nResolve these and try again.", { title: "Can't complete yet", icon: "warning" });
       return;
     }
     if (!(await pjlDialog.confirm("All checks pass. Mark this visit completed? Creates a service record on the property and a draft invoice from the authorized line items.", {
@@ -1721,15 +1721,15 @@ function closeZonePicker() {
 // otherwise the zone starts with just its number + location text
 // "Zone N" for the tech to fill in. NO sequential auto-numbering.
 // Always opens the new zone's edit sheet immediately.
-function addZoneAndOpen(zoneNumber) {
+async function addZoneAndOpen(zoneNumber) {
   const n = Number(zoneNumber);
   if (!n || n < 1 || n > 99) {
-    alert("Zone number must be between 1 and 99.");
+    await pjlDialog.alert("Zone number must be between 1 and 99.", { title: "Invalid zone number", icon: "warning" });
     return;
   }
   const existingNumbers = new Set((state.zones || []).map((z) => Number(z.number)).filter(Boolean));
   if (existingNumbers.has(n)) {
-    alert(`Zone ${n} is already on this work order — open it from the zones list above to edit.`);
+    await pjlDialog.alert(`Zone ${n} is already on this work order — open it from the zones list above to edit.`, { title: "Zone already added", icon: "warning" });
     return;
   }
   const propertyZones = (state.linkedProperty && state.linkedProperty.system && Array.isArray(state.linkedProperty.system.zones))
@@ -1791,7 +1791,7 @@ document.addEventListener("click", async (event) => {
   if (n == null) return;
   const existing = new Set((state.zones || []).map((z) => Number(z.number)).filter(Boolean));
   if (existing.has(n)) {
-    alert(`Zone ${n} is already on this work order — tap it in the list above to edit.`);
+    await pjlDialog.alert(`Zone ${n} is already on this work order — tap it in the list above to edit.`, { title: "Zone already added", icon: "warning" });
     return;
   }
   addZoneAndOpen(n);
@@ -1808,11 +1808,11 @@ document.getElementById("techZonePickerList")?.addEventListener("click", (event)
 });
 
 // "Add zone" by typed number — pick any zone 1–99, in any order.
-document.getElementById("techZonePickerAddByNumber")?.addEventListener("click", () => {
+document.getElementById("techZonePickerAddByNumber")?.addEventListener("click", async () => {
   const input = document.getElementById("techZonePickerNumber");
   const n = Number(input?.value);
   if (!Number.isFinite(n) || n < 1 || n > 99) {
-    alert("Please enter a zone number between 1 and 99.");
+    await pjlDialog.alert("Please enter a zone number between 1 and 99.", { title: "Invalid zone number", icon: "warning" });
     if (input) input.focus();
     return;
   }
@@ -2027,7 +2027,7 @@ function renderIssuePhotos(host, issueId, zone) {
         renderPostSigBanner();
       }
     } catch (err) {
-      alert(err.message || "Couldn't upload photo.");
+      await pjlDialog.alert(err.message || "Couldn't upload photo.", { title: "Upload failed", icon: "warning" });
     } finally {
       label.classList.remove("is-uploading");
       input.value = "";
@@ -2693,7 +2693,7 @@ async function saveAllPhotosToDevice() {
       setTimeout(() => URL.revokeObjectURL(url), 500);
     }
   } catch (err) {
-    alert(err.message || "Couldn't save photos.");
+    await pjlDialog.alert(err.message || "Couldn't save photos.", { title: "Save failed", icon: "warning" });
   } finally {
     if (btn) { btn.disabled = false; btn.classList.remove("is-saving"); }
   }
@@ -2757,7 +2757,7 @@ function renderPhotoThumb(photo) {
         // Deleting a completion photo could push the WO back below the
         // gate threshold — refresh the banner.
         renderPostSigBanner();
-      } catch (err) { alert(err.message); }
+      } catch (err) { await pjlDialog.alert(err.message, { title: "Error", icon: "warning" }); }
     });
     wrap.appendChild(remove);
   }
@@ -2802,7 +2802,7 @@ document.getElementById("techWoPhotoInput")?.addEventListener("change", async (e
       renderPostSigBanner();
     }
   } catch (err) {
-    alert(err.message || "Couldn't upload photo.");
+    await pjlDialog.alert(err.message || "Couldn't upload photo.", { title: "Upload failed", icon: "warning" });
   } finally {
     if (addBtn) addBtn.classList.remove("is-uploading");
     input.value = "";  // reset so picking the same file re-fires change
@@ -3365,7 +3365,7 @@ document.getElementById("techSignoffSubmit")?.addEventListener("click", async ()
     // Surface a non-blocking alert so the tech knows to tap the
     // recovery button. The recovery surface auto-renders below.
     if (data.cascade && data.cascade.error && !data.cascade.invoiceId) {
-      alert(`Visit signed and locked. Invoice generation hit a snag — tap "Re-run cascade" below to retry, or create one manually.\n\n(${data.cascade.error})`);
+      await pjlDialog.alert(`Visit signed and locked. Invoice generation hit a snag — tap "Re-run cascade" below to retry, or create one manually.\n\n(${data.cascade.error})`, { title: "Invoice generation issue", icon: "warning" });
     }
     // Pick up the fresh history (cascade_fire + invoice_drafted just
     // got appended server-side) and the freshest zone/property snapshot.
@@ -3380,7 +3380,7 @@ document.getElementById("techSignoffSubmit")?.addEventListener("click", async ()
   } catch (err) {
     submit.disabled = false;
     submit.textContent = "Sign, lock & generate invoice";
-    alert(err.message || "Couldn't save signature.");
+    await pjlDialog.alert(err.message || "Couldn't save signature.", { title: "Couldn't save signature", icon: "warning" });
   }
 });
 
@@ -3570,12 +3570,12 @@ document.getElementById("techBypassSubmit")?.addEventListener("click", () => sub
 // one-tap Resolve jump. Reuses the same .tech-sheet chrome as the bypass
 // sheet. Does NOT touch the signature pad — the drawn signature survives,
 // so the customer never has to sign twice.
-function openGateSheet(blockers) {
+async function openGateSheet(blockers) {
   const sheet = document.getElementById("techGateSheet");
   const list = document.getElementById("techGateList");
   if (!sheet || !list) {
     // Markup missing (e.g. cached old HTML) — never strand the tech.
-    alert("Before you can lock & close this work order, please:\n\n• " + blockers.map((b) => b.label).join("\n• "));
+    await pjlDialog.alert("Before you can lock & close this work order, please:\n\n• " + blockers.map((b) => b.label).join("\n• "), { title: "Can't lock & close yet", icon: "warning" });
     return;
   }
   list.innerHTML = blockers.map((b) =>
@@ -4048,7 +4048,7 @@ document.getElementById("techOnSiteBuildBtn")?.addEventListener("click", async (
     state.onSiteUiMode = "builder";
     renderOnSiteQuote();
   } catch (err) {
-    alert(err.message || "Couldn't build quote.");
+    await pjlDialog.alert(err.message || "Couldn't build quote.", { title: "Couldn't build quote", icon: "warning" });
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -4205,13 +4205,13 @@ async function showCustomLineDialog() {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) {
-          alert((data.errors && data.errors[0]) || "Couldn't save line item.");
+          await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't save line item.", { title: "Couldn't save item", icon: "warning" });
           return;
         }
         cleanup();
         resolve({ label: data.item.label, price: Number(data.item.price), id: data.item.id });
       } catch (err) {
-        alert("Network error: " + (err.message || "couldn't save."));
+        await pjlDialog.alert("Network error: " + (err.message || "couldn't save."), { title: "Network error", icon: "warning" });
       }
     });
 
@@ -4386,7 +4386,7 @@ document.getElementById("techOnSiteSubmitBtn")?.addEventListener("click", async 
   } catch (err) {
     submit.disabled = false;
     submit.textContent = "Sign & accept";
-    alert(err.message || "Couldn't save.");
+    await pjlDialog.alert(err.message || "Couldn't save.", { title: "Couldn't save", icon: "warning" });
   }
 });
 
@@ -4519,7 +4519,7 @@ document.getElementById("techOnSiteDeferBtn")?.addEventListener("click", async (
       renderOnSiteQuote();
     }
   } catch (err) {
-    alert(err.message || "Couldn't defer.");
+    await pjlDialog.alert(err.message || "Couldn't defer.", { title: "Couldn't defer", icon: "warning" });
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -4540,7 +4540,7 @@ sheetIssues.addEventListener("click", async (event) => {
 
   if (deferBtn) {
     if (state.signature?.signed) {
-      alert("Work order is signed and locked.");
+      await pjlDialog.alert("Work order is signed and locked.", { title: "Locked", icon: "warning" });
       return;
     }
     deferBtn.disabled = true;
@@ -4558,7 +4558,7 @@ sheetIssues.addEventListener("click", async (event) => {
       renderZones();
       renderOnSiteQuote();
     } catch (err) {
-      alert(err.message || "Couldn't defer.");
+      await pjlDialog.alert(err.message || "Couldn't defer.", { title: "Couldn't defer", icon: "warning" });
       deferBtn.disabled = false;
     }
     return;
@@ -4573,17 +4573,17 @@ sheetIssues.addEventListener("click", async (event) => {
 let emergencyContext = null;
 let emergencyPad = null;
 
-function openEmergencyModal(ctx) {
+async function openEmergencyModal(ctx) {
   // Hard guards — refuse to open if the WO is locked, not a fall closing,
   // or the issue context is missing. Any of these indicate a stale click
   // from before sign-off or an out-of-band button. Fail loud (no silent
   // open with empty fields, which is what stranded the user the first time).
   if (state.locked || state.signature?.signed) {
-    alert("Work order is signed and locked — emergency override unavailable. Refresh to clear.");
+    await pjlDialog.alert("Work order is signed and locked — emergency override unavailable. Refresh to clear.", { title: "Locked", icon: "warning" });
     return;
   }
   if (state.type !== ON_SITE_FIND_ONLY) {
-    alert("Emergency override only applies to fall closings.");
+    await pjlDialog.alert("Emergency override only applies to fall closings.", { title: "Not applicable", icon: "warning" });
     return;
   }
   const idx = state.activeZoneIndex;
@@ -4696,7 +4696,7 @@ document.getElementById("techEmergencySubmit")?.addEventListener("click", async 
     renderZones();
     renderOnSiteQuote();
     const followup = data.followupWoId ? `\nFollow-up WO ${data.followupWoId}` : "";
-    alert(`Emergency logged. Patrick has been paged.${followup}`);
+    await pjlDialog.alert(`Emergency logged. Patrick has been paged.${followup}`, { title: "Emergency logged" });
   } catch (err) {
     if (errEl) { errEl.textContent = err.message || "Failed."; errEl.hidden = false; }
     if (submit) { submit.disabled = false; submit.textContent = "Page Patrick & create follow-up"; }
@@ -4822,7 +4822,7 @@ document.getElementById("techCarryForwardList")?.addEventListener("click", async
     const property = await fetch(`/api/properties/${encodeURIComponent(propertyId)}`).then((r) => r.json()).catch(() => null);
     if (property?.property) await renderCarryForward(property.property);
   } catch (err) {
-    alert(err.message || "Couldn't update.");
+    await pjlDialog.alert(err.message || "Couldn't update.", { title: "Couldn't update", icon: "warning" });
     card.querySelectorAll("[data-cf-action]").forEach((b) => { b.disabled = false; });
   }
 });
@@ -5321,7 +5321,7 @@ document.getElementById("techMaterialsConfirmBtn")?.addEventListener("click", as
   } catch (err) {
     btn.disabled = false;
     btn.textContent = "Confirm materials list is accurate";
-    alert(err.message || "Couldn't confirm — try again.");
+    await pjlDialog.alert(err.message || "Couldn't confirm — try again.", { title: "Couldn't confirm", icon: "warning" });
   }
 });
 
@@ -5736,7 +5736,7 @@ async function postIntakeDecision(body) {
     // Signature canvas was gated on this decision — refresh its state.
     if (typeof updateSignoffSubmitState === "function") updateSignoffSubmitState();
   } catch (err) {
-    alert(err.message || "Couldn't record decision.");
+    await pjlDialog.alert(err.message || "Couldn't record decision.", { title: "Couldn't record decision", icon: "warning" });
   } finally {
     if (matchBtn) matchBtn.disabled = false;
     if (mismBtn) mismBtn.disabled = false;
@@ -5916,7 +5916,7 @@ function renderPaymentBlock() {
 // or Enter, not every keystroke) so we don't spam the server. Empty
 // string clears the value back to null. Out-of-range entries get
 // silently reverted to the last persisted value with an alert.
-document.getElementById("techLabourHours")?.addEventListener("change", (event) => {
+document.getElementById("techLabourHours")?.addEventListener("change", async (event) => {
   if (state.locked) return;
   const raw = String(event.target.value || "").trim();
   if (raw === "") {
@@ -5926,7 +5926,7 @@ document.getElementById("techLabourHours")?.addEventListener("change", (event) =
   }
   const hours = Number(raw);
   if (!Number.isFinite(hours) || hours < 0 || hours > 12) {
-    alert("Labour hours must be a number between 0 and 12 (decimal OK, e.g. 1.5).");
+    await pjlDialog.alert("Labour hours must be a number between 0 and 12 (decimal OK, e.g. 1.5).", { title: "Invalid hours", icon: "warning" });
     event.target.value = state.labourHours != null ? String(state.labourHours) : "";
     return;
   }

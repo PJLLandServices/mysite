@@ -564,7 +564,7 @@ document.getElementById("commAdd").addEventListener("click", async () => {
   const summary = document.getElementById("commSummary").value.trim();
   const notes = document.getElementById("commNotes").value.trim();
   if (!summary) {
-    alert("Add a short summary of the communication.");
+    await pjlDialog.alert("Add a short summary of the communication.", { title: "Missing summary" });
     return;
   }
   try {
@@ -576,14 +576,14 @@ document.getElementById("commAdd").addEventListener("click", async () => {
     });
     const body = await res.json();
     if (!res.ok || !body.ok) {
-      alert(body?.error || "Couldn't save the record.");
+      await pjlDialog.alert(body?.error || "Couldn't save the record.", { title: "Save failed", icon: "warning" });
       return;
     }
     document.getElementById("commSummary").value = "";
     document.getElementById("commNotes").value = "";
     await load();
   } catch (err) {
-    alert(err?.message || "Network error.");
+    await pjlDialog.alert(err?.message || "Network error.", { title: "Save failed", icon: "warning" });
   }
 });
 
@@ -617,7 +617,7 @@ downloadVcardBtn?.addEventListener("click", async () => {
         const body = await res.json();
         if (body?.error) msg = body.error;
       } catch {}
-      alert(msg);
+      await pjlDialog.alert(msg, { title: "Download failed", icon: "warning" });
       return;
     }
     const cd = res.headers.get("Content-Disposition") || "";
@@ -635,7 +635,7 @@ downloadVcardBtn?.addEventListener("click", async () => {
     // Refresh so the new vcfDownloads[] entry appears in the tab.
     await load();
   } catch (err) {
-    alert(err?.message || "Network error.");
+    await pjlDialog.alert(err?.message || "Network error.", { title: "Download failed", icon: "warning" });
   } finally {
     downloadVcardBtn.disabled = false;
     downloadVcardBtn.textContent = originalText;

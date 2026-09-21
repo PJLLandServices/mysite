@@ -227,13 +227,12 @@ check(removed === 3, 'Delete removes a tree again');
 // --- a tree zone splits across two boxes, like a lawn --------------------
 // Trees sit at y = 30, 50, 70; a line across at y = 60 leaves two above and
 // one below. Each half is its own valve, on one station.
-const tsplit = await page.evaluate(zi => {
-  window.alert = () => {};
+const tsplit = await page.evaluate(async zi => {
   mpSelectZone(zi); if (mp.zoneSel !== zi) mpSelectZone(zi);
   const blocked = mpSplitBlocked(zi);
-  mpSetTool('split');
+  await mpSetTool('split');
   const armed = mp.tool;
-  mpTap(120, 60); mpTap(140, 60); mpDraw();
+  await mpTap(120, 60); await mpTap(140, 60); mpDraw();
   const halves = LAST_ZONES.filter(z => z.key.startsWith('z:a_trees:'));
   const a = halves.find(z => z.half === 'A'), b = halves.find(z => z.half === 'B');
   const feeds = z => mpZoneTrees(z).length;

@@ -463,7 +463,7 @@ document.getElementById("deferredList")?.addEventListener("click", async (event)
     const fresh = await fetch(`/api/properties/${encodeURIComponent(propertyId)}`).then((r) => r.json()).catch(() => null);
     if (fresh?.property) renderDeferredRecommendations(fresh.property);
   } catch (err) {
-    alert(err.message || "Couldn't update.");
+    await pjlDialog.alert(err.message || "Couldn't update.", { title: "Update failed", icon: "warning" });
     btn.disabled = false;
   }
 });
@@ -671,7 +671,7 @@ async function createFieldWoFromButton(type) {
     }
     window.location.assign(`/admin/work-order/${encodeURIComponent(data.workOrder.id)}`);
   } catch (err) {
-    alert(err.message);
+    await pjlDialog.alert(err.message, { title: "Couldn't create work order", icon: "warning" });
     if (button) button.disabled = false;
   }
 }
@@ -1148,7 +1148,7 @@ deleteBtn.addEventListener("click", async () => {
     }
     window.location.assign("/admin/properties");
   } catch (err) {
-    alert(err.message);
+    await pjlDialog.alert(err.message, { title: "Delete failed", icon: "warning" });
   }
 });
 

@@ -540,7 +540,7 @@
       body: JSON.stringify({ reason })
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || "Couldn't cancel."); return; }
+    if (!r.ok || !data.ok) { await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't cancel.", { title: "Cancel failed", icon: "warning" }); return; }
     state.qr = data.quoteRequest;
     renderAll();
   }
@@ -729,14 +729,14 @@
       const cents = effectiveQuoteCents(line);
       event.target.value = cents == null ? "" : (cents / 100).toFixed(2);
     });
-    els.lines.addEventListener("click", (event) => {
+    els.lines.addEventListener("click", async (event) => {
       if (!event.target.matches('[data-action="remove-line"]')) return;
       if (state.qr.status !== "draft") return;
       const li = event.target.closest(".qr-line");
       if (!li) return;
       const lines = state.qr.lines || [];
       if (lines.length <= 1) {
-        alert("A quote request needs at least one line. Cancel the RFQ instead of emptying it.");
+        await pjlDialog.alert("A quote request needs at least one line. Cancel the RFQ instead of emptying it.", { title: "Can't remove line" });
         return;
       }
       const idx = lines.findIndex((line) => line.id === li.dataset.lineId);

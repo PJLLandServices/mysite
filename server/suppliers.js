@@ -181,7 +181,7 @@ async function toggleArchive(supplier) {
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok || !data.ok) {
-    alert((data.errors && data.errors[0]) || `Couldn't ${verb} supplier.`);
+    await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't ${verb} supplier.`, { title: `Couldn't ${verb} supplier`, icon: "warning" });
     return;
   }
   await loadSuppliers();

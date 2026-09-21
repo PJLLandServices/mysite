@@ -400,11 +400,11 @@
           const r = await fetch(`/api/projects/${encodeURIComponent(state.project.id)}/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
           if (!r.ok) {
             const d = await r.json().catch(() => ({}));
-            alert(d.errors?.[0] || `Delete failed (${r.status})`);
+            await pjlDialog.alert(d.errors?.[0] || `Delete failed (${r.status})`, { title: "Delete Failed", icon: "warning" });
             return;
           }
           await refreshProject();
-        } catch (err) { alert(err.message || "Delete failed."); }
+        } catch (err) { await pjlDialog.alert(err.message || "Delete failed.", { title: "Delete Failed", icon: "warning" }); }
       });
     });
   }
@@ -533,7 +533,7 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
-        alert((data.errors && data.errors[0]) || "Couldn't start build tracking.");
+        await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't start build tracking.", { title: "Build Tracking Failed", icon: "warning" });
         return;
       }
       // Full reload so the newly-revealed daily-log / sidebar surfaces
@@ -544,7 +544,7 @@
       renderAll();
       setSaveState("saved", state.project.updatedAt);
     } catch (err) {
-      alert(err.message || "Couldn't start build tracking.");
+      await pjlDialog.alert(err.message || "Couldn't start build tracking.", { title: "Build Tracking Failed", icon: "warning" });
     } finally {
       if (els.startBuildBtn) els.startBuildBtn.disabled = false;
     }
@@ -815,14 +815,14 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
-        alert((data.errors && data.errors[0]) || "Couldn't link customer.");
+        await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't link customer.", { title: "Link Customer Failed", icon: "warning" });
         return;
       }
       closeCustomerPickModal();
       await loadProject();
       setSaveState("saved", state.project.updatedAt);
     } catch (err) {
-      alert(err.message || "Couldn't link customer.");
+      await pjlDialog.alert(err.message || "Couldn't link customer.", { title: "Link Customer Failed", icon: "warning" });
     }
   }
   async function clearCustomer() {
@@ -835,13 +835,13 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
-        alert((data.errors && data.errors[0]) || "Couldn't unlink customer.");
+        await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't unlink customer.", { title: "Unlink Customer Failed", icon: "warning" });
         return;
       }
       await loadProject();
       setSaveState("saved", state.project.updatedAt);
     } catch (err) {
-      alert(err.message || "Couldn't unlink customer.");
+      await pjlDialog.alert(err.message || "Couldn't unlink customer.", { title: "Unlink Customer Failed", icon: "warning" });
     }
   }
 
@@ -854,7 +854,7 @@
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
-      alert((data.errors && data.errors[0]) || "Couldn't attach work order.");
+      await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't attach work order.", { title: "Attach Work Order Failed", icon: "warning" });
       return;
     }
     state.project = data.project;
@@ -872,7 +872,7 @@
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
-      alert((data.errors && data.errors[0]) || "Couldn't detach work order.");
+      await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't detach work order.", { title: "Detach Work Order Failed", icon: "warning" });
       return;
     }
     state.project = data.project;
@@ -899,7 +899,7 @@
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
-      alert((data.errors && data.errors[0]) || "Couldn't create material list.");
+      await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't create material list.", { title: "Create Material List Failed", icon: "warning" });
       return;
     }
     location.href = `/admin/material-list/${encodeURIComponent(data.list.id)}`;
@@ -920,7 +920,7 @@
     const r = await fetch(`/api/projects/${encodeURIComponent(state.projectId)}`, { method: "DELETE" });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
-      alert((data.errors && data.errors[0]) || "Couldn't delete project.");
+      await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't delete project.", { title: "Delete Project Failed", icon: "warning" });
       return;
     }
     location.href = "/admin/projects";
@@ -1367,7 +1367,7 @@
   async function submitAddTask() {
     const description = document.getElementById("addTaskDescription").value.trim();
     const notes = document.getElementById("addTaskNotes").value.trim();
-    if (!description) { alert("Description required."); return; }
+    if (!description) { await pjlDialog.alert("Description required.", { title: "Description Required", icon: "warning" }); return; }
     try {
       const r = await fetch(`/api/projects/${encodeURIComponent(state.project.id)}/tasks`, {
         method: "POST",
@@ -1375,10 +1375,10 @@
         body: JSON.stringify({ description, notes })
       });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok || !data.ok) { alert(data.errors?.[0] || "Add task failed."); return; }
+      if (!r.ok || !data.ok) { await pjlDialog.alert(data.errors?.[0] || "Add task failed.", { title: "Add Task Failed", icon: "warning" }); return; }
       closeModal("addTaskModal");
       await refreshProject();
-    } catch (err) { alert(err.message || "Add task failed."); }
+    } catch (err) { await pjlDialog.alert(err.message || "Add task failed.", { title: "Add Task Failed", icon: "warning" }); }
   }
 
   // Scope change modal
@@ -1440,7 +1440,7 @@
 
   async function saveScopeChangeDraft() {
     const description = document.getElementById("scDescription").value.trim();
-    if (!description) { alert("Description required."); return; }
+    if (!description) { await pjlDialog.alert("Description required.", { title: "Description Required", icon: "warning" }); return; }
     try {
       const r = await fetch(`/api/projects/${encodeURIComponent(state.project.id)}/scope-changes`, {
         method: "POST",
@@ -1451,10 +1451,10 @@
         })
       });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok || !data.ok) { alert(data.errors?.[0] || "Save failed."); return; }
+      if (!r.ok || !data.ok) { await pjlDialog.alert(data.errors?.[0] || "Save failed.", { title: "Save Failed", icon: "warning" }); return; }
       closeModal("scopeChangeModal");
       await refreshProject();
-    } catch (err) { alert(err.message || "Save failed."); }
+    } catch (err) { await pjlDialog.alert(err.message || "Save failed.", { title: "Save Failed", icon: "warning" }); }
   }
 
   // Project completion modal
@@ -1491,7 +1491,7 @@
         </div>
       `;
       openModal("completeProjectModal");
-    } catch (err) { alert(err.message || "Preflight failed."); }
+    } catch (err) { await pjlDialog.alert(err.message || "Preflight failed.", { title: "Preflight Failed", icon: "warning" }); }
   }
 
   async function confirmCompleteProject() {
@@ -1531,16 +1531,16 @@
         body: JSON.stringify({ carryFromWoId: carry })
       });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok || !data.ok) { alert(data.errors?.[0] || "Couldn't create WO."); return; }
+      if (!r.ok || !data.ok) { await pjlDialog.alert(data.errors?.[0] || "Couldn't create WO.", { title: "Create Work Order Failed", icon: "warning" }); return; }
       // Open the new WO immediately so admin can start logging.
       location.href = `/admin/work-order/${encodeURIComponent(data.workOrder.id)}/tech`;
-    } catch (err) { alert(err.message || "Failed."); }
+    } catch (err) { await pjlDialog.alert(err.message || "Failed.", { title: "Create Work Order Failed", icon: "warning" }); }
   }
 
   async function setFinalWo() {
     const woId = document.getElementById("projFinalWoSelect").value;
     if (!woId) {
-      alert("Select a WO to mark as final.");
+      await pjlDialog.alert("Select a WO to mark as final.", { title: "Select Work Order", icon: "warning" });
       return;
     }
     try {
@@ -1550,9 +1550,9 @@
         body: JSON.stringify({ woId })
       });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok || !data.ok) { alert(data.errors?.[0] || "Failed."); return; }
+      if (!r.ok || !data.ok) { await pjlDialog.alert(data.errors?.[0] || "Failed.", { title: "Mark Final WO Failed", icon: "warning" }); return; }
       await refreshProject();
-    } catch (err) { alert(err.message || "Failed."); }
+    } catch (err) { await pjlDialog.alert(err.message || "Failed.", { title: "Mark Final WO Failed", icon: "warning" }); }
   }
 
   function wireBrief2() {

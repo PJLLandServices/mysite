@@ -531,7 +531,7 @@
     if (!(await pjlDialog.confirm("Clone this PO into a new draft? Same supplier, same line items at fresh prices from the catalog.", { title: "Reorder this PO?", confirmLabel: "Clone" }))) return;
     const r = await fetch(`/api/purchase-orders/${encodeURIComponent(state.poId)}/reorder`, { method: "POST" });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || "Couldn't re-order."); return; }
+    if (!r.ok || !data.ok) { await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't re-order.", { title: "Reorder failed", icon: "warning" }); return; }
     location.href = `/admin/purchase-order/${encodeURIComponent(data.purchaseOrder.id)}`;
   }
 
@@ -544,7 +544,7 @@
       body: JSON.stringify({ reason })
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || "Couldn't cancel."); return; }
+    if (!r.ok || !data.ok) { await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't cancel.", { title: "Cancel failed", icon: "warning" }); return; }
     state.po = data.purchaseOrder;
     renderAll();
   }
@@ -558,7 +558,7 @@
     }))) return;
     const r = await fetch(`/api/purchase-orders/${encodeURIComponent(state.poId)}`, { method: "DELETE" });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || "Couldn't delete."); return; }
+    if (!r.ok || !data.ok) { await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't delete.", { title: "Delete failed", icon: "warning" }); return; }
     location.href = "/admin/purchase-orders";
   }
 
