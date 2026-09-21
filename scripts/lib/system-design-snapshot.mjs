@@ -112,3 +112,70 @@ function walk(exp, act, path, diffs) {
 export function moneyFields(diffs) {
   return diffs.filter((d) => /cents|priceCents|subtotalCents/i.test(d.path));
 }
+
+/**
+ * Split a diff list into differences that matter and differences that are
+ * the JavaScript runtime rather than the code.
+ *
+ * WHY THIS EXISTS, AND WHY IT IS DRAWN THIS TIGHT
+ *
+ * Math.sin and Math.cos are allowed by the language spec to be
+ * implementation-defined to within an ulp, and they are: for the 33rd
+ * vertex of a 48-sided circle, Chromium's V8 says -0.8660254037844384 and
+ * Node's says -0.8660254037844385. Same source, same input, different
+ * last bit. Nothing about the engine changed.
+ *
+ * That is a real and boring fact about running the same geometry in two
+ * runtimes, and it must not be allowed to become a place where genuine
+ * differences hide. So the allowance is deliberately narrow, and every
+ * difference it swallows is still REPORTED by path:
+ *
+ *   - both sides must be finite numbers;
+ *   - the recorded value must NOT be a whole number. Every count in this
+ *     engine — valves, heads, stations, quantities, zone indices, cents —
+ *     is an integer, so an integer that moved is always a real difference;
+ *   - nothing on a money path, whatever its value;
+ *   - and the gap must be under a billionth, both absolutely and relative
+ *     to the value.
+ *
+ * A billionth rather than a few ulp because these coordinates are
+ * SUBTRACTED — a head's position is its sheet coordinate minus the area's
+ * origin — and subtracting two nearby numbers amplifies the relative error
+ * of each. An ulp of drift at 12.2 ft becomes seven ulp at 1.2 ft. The
+ * absolute size of the drift is the honest measure, and it is what the
+ * bound is set on.
+ *
+ * A billionth of a foot is a nanometre. Nothing in this engine is
+ * specified anywhere near that finely: the smallest deliberate quantity in
+ * it is the packer's thousandth-of-a-GPM epsilon, six orders of magnitude
+ * larger, and every price is a whole cent. A formula that actually changed
+ * cannot hide under this.
+ *
+ * The authoritative comparison is still the exact one: the extracted
+ * engine is run in the SAME runtime the golden master was recorded in, and
+ * there it has to match bit for bit with no allowance at all.
+ */
+export function classifyDiffs(diffs) {
+  const real = [];
+  const runtimeFloat = [];
+  for (const d of diffs) {
+    if (isRuntimeFloatNoise(d)) runtimeFloat.push(d);
+    else real.push(d);
+  }
+  return { real, runtimeFloat };
+}
+
+function isRuntimeFloatNoise(d) {
+  const { path, expected, actual } = d;
+  if (/cents/i.test(path)) return false;
+  if (typeof expected !== "number" || typeof actual !== "number") return false;
+  if (!Number.isFinite(expected) || !Number.isFinite(actual)) return false;
+  if (Number.isInteger(expected) || Number.isInteger(actual)) return false;
+  const gap = Math.abs(expected - actual);
+  const scale = Math.max(1, Math.abs(expected), Math.abs(actual));
+  return gap <= RUNTIME_FLOAT_TOLERANCE && gap <= RUNTIME_FLOAT_TOLERANCE * scale;
+}
+
+// A nanometre, a billionth of a GPM, a billionth of a cent. See above for
+// why the bound is absolute rather than counted in ulp.
+const RUNTIME_FLOAT_TOLERANCE = 1e-9;

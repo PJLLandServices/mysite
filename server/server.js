@@ -1450,6 +1450,11 @@ function needsAuth(method, pathname) {
   // (admin OR tech). Saves designs onto project.systemDesign via the
   // existing /api/projects/:id PATCH, so no dedicated API prefix here.
   if (pathname === "/admin/sitebuilder" || pathname === "/admin/sitebuilder/") return "user";
+  // Its calculation engine, split out of the page (2026-09-21). Gated the
+  // SAME way the page is: the file carries Patrick's default SKUs and the
+  // zone/BOM rules, which were behind staff auth when they were inline and
+  // must not become public just by moving to their own file.
+  if (pathname === "/admin/sitebuilder-engine.js") return "user";
   // Catalog ↔ supplier assignments + Purchase Orders (Phase 3).
   if (pathname === "/admin/parts-suppliers" || pathname === "/admin/parts-suppliers/") return "user";
   if (pathname === "/admin/purchase-orders" || pathname === "/admin/purchase-orders/") return "user";
@@ -27035,6 +27040,9 @@ function resolveStaticTarget(pathname) {
   // Sprinkler System Builder (staff-gated internal design tool).
   if (pathname === "/admin/sitebuilder" || pathname === "/admin/sitebuilder/") {
     return { dir: SERVER_DIR, relative: "/sitebuilder.html" };
+  }
+  if (pathname === "/admin/sitebuilder-engine.js") {
+    return { dir: SERVER_DIR, relative: "/sitebuilder-engine.js" };
   }
   // Tech-mode pop-out — mobile-first, tap-optimized layout. Same WO id,
   // different page. Route check must come BEFORE the desktop editor's

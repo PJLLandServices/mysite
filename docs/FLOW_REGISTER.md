@@ -2,6 +2,97 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-21, last (The System Builder's maths moves out of the page):** Phases 0 and 1 of the
+System Builder work, to Patrick's brief: build a characterization safety net, then extract ONLY
+the calculation engine, leaving persistence, quote creation and proposal-section generation
+behind, with the old and extracted engines compared before merging.
+
+**Phase 0 — the safety net, built first and thrown at.** 19 fixtures, from the shapes the tool
+is used on (a four-area residential job, a commercial lot) plus the boundaries Patrick named:
+zone splitting, mixed irrigation types, manual overrides, rounding, BOM quantities and pricing.
+They are run through the engine AS IT LIVED IN THE PAGE — `plan()` / `computeZonePlan()` /
+`buildBOM()` / `areaMaterialCents()`, not `compute()`, which interleaves the maths with
+`innerHTML` — and every number recorded in `scripts/fixtures/system-design-golden.json`. Money is
+compared exactly to the cent, nothing is rounded, and ordering is normalized only where it
+carries no meaning: head order, zone order and area order are all decisions (zones are cuts in
+the head sequence; station numbers come from zone position), so they are left alone.
+**A net nobody has thrown anything at is a guess**, so thirteen one-line changes were made to the
+live engine and the golden master re-run against each. **Three were not caught**, which is the
+point of doing it: the zone packer's `+ 0.001` epsilon survived every fixture, because 1.3 x 6
+lands dead on 7.8 with no float drift at all. Searched the real Hunter PGP flow table for sums
+that DO drift (2.4 + 2.5 + 3.0 + 0.8 is 8.700000000000001) and added three fixtures on them; all
+three epsilons — the fill's, the balancer's, and the hand-zoned over-ceiling report's — are now
+pinned. Recorded and not fixed: `plan()`'s own `|| 18` drip row-spacing fallback is unreachable,
+because `familyDefaults()` has always set the field by the time `plan()` reads it.
+
+**Phase 1 — the extraction.** `server/sitebuilder-engine.js`, 1,319 lines lifted out of
+`sitebuilder.html` **verbatim**; `sitebuilder.html` drops from 7,798 lines to 6,727. No formula
+was retyped. Every deviation from the original is one of 19 asserted textual patches, and they
+are all the same kind of change — the engine used to reach out and take four things for itself,
+and is handed them now:
+
+| was | now |
+| --- | --- |
+| `plan()` read `num('ceiling')` and `el('spacingFactor').value` | `computePlan(area, {ceiling, spacingFactor})` |
+| `computeZonePlan()` read `areas`, `routing`, `valveGroupModes` | takes the design |
+| `buildBOM(parts)` read `LAST_PLANS`, `LAST_ZONES`, a form field, and called `measuredLateralsBySize()` | takes all four |
+| `areaMaterialCents()` read `PARTS_MAP` | takes the price list |
+
+Same `Math.max`, same `parseFloat` fallbacks, same arithmetic in the same order.
+
+**What deliberately did NOT move**, per Patrick's constraint: the four money-facing writes — the
+`systemDesign` PATCH, the `waterCostEstimate` PATCH, the material-list PATCH, and
+`POST /api/quotes/proposal` + the proposal-sections PATCH. Also `measuredLateralsBySize()`, which
+walks the routed site-plan sheets: **measuring a drawing is not calculating**, so the page
+measures and hands the result over. A calculation can be re-run a hundred times while you decide;
+a PATCH that rewrites a quote cannot, and the two do not belong in the same file.
+
+**The comparison, before merging** (`npm run test:system-design-engine`):
+
+| | result |
+| --- | --- |
+| extracted engine, in Chromium, vs the golden master | **identical, field for field** |
+| the System Builder page itself, vs the golden master | **identical, field for field** |
+| extracted engine under Node, no browser | every count, quantity and cent exact |
+| deliberately broken engines caught | 9 of 9 |
+
+The first two are run in the SAME runtime the golden master was recorded in, so there is one
+variable and no allowance at all. The Node run has exactly one difference, reported by path
+rather than hidden: the 33rd vertex of a 48-sided circle, 1.8e-15 out, because **V8's `Math.sin`
+differs by one bit between Chromium 141 and Node 22** — the language spec permits it. Nothing on
+a money path, nothing that is a whole number, and the tolerance that allows it is a billionth,
+absolute: a nanometre, six orders of magnitude below the smallest deliberate quantity in the
+engine.
+
+Coverage: 92 valves, 157 heads, 309 BOM lines and $19,925.47 of materials across the fixtures.
+`test:sitebuilder` (the existing split + lateral walkthroughs, 101 assertions including "no page
+errors") passes unchanged; both now serve the engine file, which the page refuses to start
+without. If it fails to load the builder shows a plain message rather than computing silently
+from nothing — verified by 404ing it.
+
+The engine is served at `/admin/sitebuilder-engine.js` behind the **same staff gate as the page**:
+it carries Patrick's default SKUs and the zone/BOM rules, which were behind auth while they were
+inline, and moving code into its own file must not be how it becomes public. `test-admin-gates`
+now runs both halves of that — the fence AND the static route, because a gate on a URL that
+serves nothing is a 404 that breaks the builder. Both assertions were checked by deleting each
+line and watching them fail.
+
+**A stale comment corrected, not silently:** a note above the lateral-tree section said
+`buildBOM` "still estimates lateral pipe from head count x radius" and that the measurement "does
+not touch the bill of materials". That stopped being true with Patrick's September 2026 ruling —
+`measuredLateralsBySize()` reaches the BOM and buys whole rolls per size — and the comment was
+never updated. It contradicted the code on a money path, so it is fixed.
+
+This addresses part of **DEV-03** (`sitebuilder.html` is monolithic): the maths is out. The CSS,
+the drawing tools and the rest of the JS are still inline.
+
+**NOT started, per Patrick's instruction:** Phase 2 — whether the existing builder can live
+inside a full-width workspace route without breaking its full-screen drawing tools.
+
+**Patrick's acceptance test — not yet walked:** open the System Builder on a real project, check
+the zone count, the GPM figures and the BOM total read exactly as they did yesterday, then save
+and reopen.
+
 **2026-09-21, later still (A settled deposit is not a settled job):** Patrick named six situations
 to test Next action against: a brand-new project with no design; McDonald's Dundalk (accepted,
 paid, 0 of 16 tasks); accepted with no installation date; scheduled and part-done; complete with

@@ -64,6 +64,9 @@ function startStaticServer() {
 }
 
 /**
+ * Run the fixtures through the engine AS THE PAGE HAS IT — the System
+ * Builder loaded whole, driven by the names it declares.
+ *
  * @param {Array} fixtures  from scripts/fixtures/system-design-fixtures.mjs
  * @param {object} opts
  * @param {(page:import('playwright').Page)=>Promise<void>} [opts.onReady]
@@ -94,6 +97,39 @@ export async function captureFromPage(fixtures, opts = {}) {
   } finally {
     await browser.close();
     server.close();
+  }
+}
+
+/**
+ * Run the fixtures through the extracted engine module ALONE, in the same
+ * browser the golden master was recorded in.
+ *
+ * This is the apples-to-apples comparison. Running the module under Node
+ * instead introduces a second variable — Math.sin and Math.cos differ by
+ * an ulp between V8 builds — and a test that has to explain away a
+ * difference is a weaker test than one that has none.
+ */
+export async function captureFromModule(fixtures, opts = {}) {
+  const partsSnapshot = JSON.parse(fs.readFileSync(PARTS, "utf8")).parts;
+  const enginePath = path.join(ROOT, "server", "sitebuilder-engine.js");
+  const browser = await chromium.launch(chromiumLaunchOpts());
+  const errors = [];
+  try {
+    const page = await browser.newPage();
+    page.on("pageerror", (e) => errors.push(String(e && e.message ? e.message : e)));
+    await page.setContent("<!doctype html><title>engine</title>");
+    await page.addScriptTag({ content: fs.readFileSync(enginePath, "utf8") });
+    const ready = await page.evaluate(() => typeof window.SystemDesignEngine === "object");
+    if (!ready) throw new Error("the engine module did not publish SystemDesignEngine");
+
+    const out = [];
+    for (const fx of fixtures) {
+      out.push(await page.evaluate(runFixtureOnModule, { fx, parts: partsSnapshot }));
+    }
+    if (errors.length) throw new Error("page errors during capture:\n  " + errors.join("\n  "));
+    return { engine: "module (server/sitebuilder-engine.js)", capturedAt: new Date().toISOString(), fixtures: out };
+  } finally {
+    await browser.close();
   }
 }
 
@@ -150,6 +186,58 @@ function runFixtureInPage({ fx, parts }) {
         (t, x) => t + ((x.plan.heads && x.plan.heads.length) || 0), 0
       ),
       totalGPM: LAST_PLANS.reduce((t, x) => t + (x.plan.totalGPM || 0), 0),
+      bomSubtotalCents: bom.subtotalCents,
+      areaMaterialCentsTotal: areaOut.reduce((t, a) => t + a.materialCents, 0)
+    }
+  };
+}
+/* c8 ignore stop */
+
+/**
+ * Runs INSIDE the browser, against the standalone module. Deliberately the
+ * same calls in the same order as runFixtureInPage above, recording the
+ * same fields — otherwise the two captures would not be comparable and the
+ * whole exercise would prove nothing.
+ */
+/* c8 ignore start — executes in the browser, not in Node */
+function runFixtureOnModule({ fx, parts }) {
+  const E = window.SystemDesignEngine;
+  const clone = (v) => JSON.parse(JSON.stringify(v));
+  const { ceiling, spacingFactor } = fx.inputs;
+
+  const areas = clone(fx.areas);
+  const routing = clone(fx.routing || {});
+  const valveGroupModes = clone(fx.valveGroupModes || {});
+
+  const plans = areas.map((a) => ({ area: a, plan: E.computePlan(a, { ceiling, spacingFactor }) }));
+  const zones = E.computeZonePlan({ plans, areas, routing, valveGroupModes, ceiling });
+  // No `laterals`: nothing is routed off a site plan in these fixtures, so
+  // the page's measuredLateralsBySize() reports nothing measured too and
+  // the head-count estimate runs in both.
+  const bom = E.buildBOM({ plans, zones, parts, spacingFactor });
+
+  const areaOut = areas.map((a, i) => ({
+    aid: a.aid,
+    name: a.name,
+    resolvedFamily: a.family,
+    materialCents: E.areaMaterialCents(a, plans[i].plan, { parts, spacingFactor }),
+    plan: plans[i].plan
+  }));
+
+  return {
+    id: fx.id,
+    why: fx.why,
+    inputs: fx.inputs,
+    areas: areaOut,
+    zones,
+    stations: { count: E.stationCount(zones), zones: E.stationZones(zones), peakGPM: E.peakStationGPM(zones) },
+    bom,
+    totals: {
+      areaCount: areas.length,
+      valveCount: zones.length,
+      stationCount: E.stationCount(zones),
+      headCount: plans.reduce((t, x) => t + ((x.plan.heads && x.plan.heads.length) || 0), 0),
+      totalGPM: plans.reduce((t, x) => t + (x.plan.totalGPM || 0), 0),
       bomSubtotalCents: bom.subtotalCents,
       areaMaterialCentsTotal: areaOut.reduce((t, a) => t + a.materialCents, 0)
     }
