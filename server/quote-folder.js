@@ -354,16 +354,16 @@ async function deleteQuote(quoteId) {
   const customer = (cached && cached.customerEmail) || "(no email)";
   const warning = cached ? describeDescendants(cached) : "";
 
-  const confirmed = window.pjlBulkModal
-    ? await window.pjlBulkModal.confirm({
-        title: "Delete this quote?",
-        body: `${quoteId} — ${customer}${status ? " — " + status : ""}\n\nThe quote will be removed from this list. It can be restored later from the "Show deleted" view. Linked bookings, projects, and invoices are not affected.`,
-        warning,
-        confirmLabel: "Delete",
-        cancelLabel: "Cancel",
-        destructive: true
-      })
-    : window.confirm(`Delete ${quoteId}? (Restore later via "Show deleted".)`);
+  const confirmed = await pjlDialog.confirm(
+    `${quoteId} — ${customer}${status ? " — " + status : ""}\n\nThe quote will be removed from this list. It can be restored later from the "Show deleted" view. Linked bookings, projects, and invoices are not affected.`,
+    {
+      title: "Delete this quote?",
+      icon: "delete",
+      warning,
+      confirmLabel: "Delete",
+      destructive: true
+    }
+  );
 
   if (!confirmed) return;
 
@@ -396,7 +396,11 @@ async function sendQuote(quoteId) {
   const total = cached && Number.isFinite(Number(cached.total))
     ? ` — $${Number(cached.total).toFixed(2)} incl. HST`
     : "";
-  if (!confirm(`Send ${quoteId} to ${customer}${total}?\n\nThe customer gets an email with the quote PDF plus an SMS, and can accept it in their portal.`)) return;
+  if (!(await pjlDialog.confirm(`Send ${quoteId} to ${customer}${total}?\n\nThe customer gets an email with the quote PDF plus an SMS, and can accept it in their portal.`, {
+    title: "Send quote?",
+    icon: "send",
+    confirmLabel: "Send"
+  }))) return;
   try {
     const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/send-for-approval`, {
       method: "POST",

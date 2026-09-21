@@ -4425,7 +4425,11 @@ document.getElementById("techOnSiteSendApprovalBtn")?.addEventListener("click", 
   if (state.locked) return;
   const btn = document.getElementById("techOnSiteSendApprovalBtn");
   const status = document.getElementById("techOnSiteRemoteStatus");
-  if (!confirm(`Send the on-site quote to ${state.customerName || "the customer"} via email${state.customerPhone ? " + SMS" : ""} for remote approval?`)) return;
+  if (!(await pjlDialog.confirm(`Send the on-site quote to ${state.customerName || "the customer"} via email${state.customerPhone ? " + SMS" : ""} for remote approval?`, {
+    title: "Send for remote approval?",
+    icon: "send",
+    confirmLabel: "Send"
+  }))) return;
   btn.disabled = true;
   status.hidden = false;
   status.textContent = "Sending…";

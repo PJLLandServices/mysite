@@ -550,7 +550,12 @@
   }
 
   async function deleteDraft() {
-    if (!confirm("Delete this draft PO? This cannot be undone.")) return;
+    if (!(await pjlDialog.confirm("Delete this draft PO? This cannot be undone.", {
+      title: "Delete draft PO?",
+      icon: "delete",
+      destructive: true,
+      confirmLabel: "Delete"
+    }))) return;
     const r = await fetch(`/api/purchase-orders/${encodeURIComponent(state.poId)}`, { method: "DELETE" });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || "Couldn't delete."); return; }

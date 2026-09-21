@@ -215,7 +215,12 @@ usersBody.addEventListener("click", async (event) => {
   }
 
   if (action === "delete") {
-    if (!confirm(`Delete ${user.name} (${user.email}) permanently? This cannot be undone.`)) return;
+    if (!(await pjlDialog.confirm(`Delete ${user.name} (${user.email}) permanently? This cannot be undone.`, {
+      title: "Delete user account?",
+      icon: "delete",
+      destructive: true,
+      confirmLabel: "Delete"
+    }))) return;
     button.disabled = true;
     try {
       const res = await fetch(`/api/users/${encodeURIComponent(id)}`, { method: "DELETE" });

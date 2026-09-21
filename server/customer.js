@@ -902,7 +902,12 @@ async function requestDelete({ purgeTrashed = false, cascade = false } = {}) {
 deleteBtn?.addEventListener("click", async () => {
   if (!original) return;
   const label = original.name || original.id;
-  if (!confirm(`Delete ${label}?\n\nThis is permanent. Use Cancel if you're not sure — you can soft-delete by setting status to Inactive instead.`)) {
+  if (!(await pjlDialog.confirm(`Delete ${label}?\n\nThis is permanent. Use Cancel if you're not sure — you can soft-delete by setting status to Inactive instead.`, {
+    title: "Delete customer?",
+    icon: "delete",
+    destructive: true,
+    confirmLabel: "Delete"
+  }))) {
     return;
   }
   deleteErrorEl.hidden = true;

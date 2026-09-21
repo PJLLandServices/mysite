@@ -1117,7 +1117,12 @@
   });
 
   async function removeAttachment(attId) {
-    if (!confirm("Remove this attachment? The file will be deleted.")) return;
+    if (!(await pjlDialog.confirm("Remove this attachment? The file will be deleted.", {
+      title: "Remove attachment?",
+      icon: "delete",
+      destructive: true,
+      confirmLabel: "Remove"
+    }))) return;
     try {
       const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/attachments/${encodeURIComponent(attId)}`, {
         method: "DELETE"
@@ -1791,7 +1796,11 @@
   });
 
   el.reviseBtn.addEventListener("click", async () => {
-    if (!confirm(`Create a new revision of ${state.quote.id}? The current quote will be marked superseded.`)) return;
+    if (!(await pjlDialog.confirm(`Create a new revision of ${state.quote.id}? The current quote will be marked superseded.`, {
+      title: "Create revision?",
+      icon: "warning",
+      confirmLabel: "Create Revision"
+    }))) return;
     try {
       const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/revise`, { method: "POST" });
       const data = await r.json().catch(() => ({}));
@@ -2317,7 +2326,11 @@
         return;
       }
       const confirmedPresentation = picked.value;
-      if (!confirm(`Send ${state.quote.id} to ${email} now?\n\nCustomer will see: ${LINE_ITEM_LABELS[confirmedPresentation] || confirmedPresentation}\n\nThis locks the proposal.`)) return;
+      if (!(await pjlDialog.confirm(`Send ${state.quote.id} to ${email} now?\n\nCustomer will see: ${LINE_ITEM_LABELS[confirmedPresentation] || confirmedPresentation}\n\nThis locks the proposal.`, {
+        title: "Send quote?",
+        icon: "send",
+        confirmLabel: "Send"
+      }))) return;
       emailSending = true;
       em.send.disabled = true;
       em.status.textContent = "Sending…";

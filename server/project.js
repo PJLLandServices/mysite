@@ -1280,31 +1280,12 @@
     openModal("resultModal");
   }
 
-  // In-app confirm. Returns a Promise<boolean>. Replaces window.confirm
-  // for non-trivial actions per brief.
+  // In-app confirm. Returns a Promise<boolean>. Delegates to the shared
+  // branded dialog (server/pjl-dialog.js) rather than the page-local
+  // #confirmModal, so every caller here — SCR approve/reject, revise,
+  // set final WO, etc. — gets the sitewide component in one place.
   function askConfirm(title, body, { okLabel = "OK", cancelLabel = "Cancel" } = {}) {
-    return new Promise((resolve) => {
-      const t = document.getElementById("confirmTitle");
-      const b = document.getElementById("confirmBody");
-      const ok = document.getElementById("confirmOk");
-      const cancel = document.getElementById("confirmCancel");
-      if (!t || !b || !ok || !cancel) { resolve(window.confirm(body)); return; }
-      t.textContent = title;
-      b.textContent = body;
-      ok.textContent = okLabel;
-      cancel.textContent = cancelLabel;
-      const cleanup = (val) => {
-        ok.removeEventListener("click", okHandler);
-        cancel.removeEventListener("click", cancelHandler);
-        closeModal("confirmModal");
-        resolve(val);
-      };
-      const okHandler = () => cleanup(true);
-      const cancelHandler = () => cleanup(false);
-      ok.addEventListener("click", okHandler);
-      cancel.addEventListener("click", cancelHandler);
-      openModal("confirmModal");
-    });
+    return pjlDialog.confirm(body, { title, confirmLabel: okLabel, cancelLabel });
   }
 
   async function openStatusUpdateModal() {

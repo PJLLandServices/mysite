@@ -909,7 +909,11 @@ if (detailQuoteSendBtn) {
     if (!quoteId) return;
     const lead = leads.find((item) => item.id === activeLeadId);
     const who = lead?.contact?.email || "the customer";
-    if (!confirm(`Send ${quoteId} to ${who}?\n\nThey get an email with the quote PDF plus an SMS, and can accept it in their portal.`)) return;
+    if (!(await pjlDialog.confirm(`Send ${quoteId} to ${who}?\n\nThey get an email with the quote PDF plus an SMS, and can accept it in their portal.`, {
+      title: "Send quote?",
+      icon: "send",
+      confirmLabel: "Send"
+    }))) return;
     detailQuoteSendBtn.disabled = true;
     if (detailQuoteSendStatus) detailQuoteSendStatus.textContent = "Sending…";
     try {
