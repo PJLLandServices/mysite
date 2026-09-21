@@ -113,6 +113,35 @@ the drawing tools and the rest of the JS are still inline.
 **NOT started, per Patrick's instruction:** Phase 2 — whether the existing builder can live
 inside a full-width workspace route without breaking its full-screen drawing tools.
 
+**Getting a real design out without getting anything else out** (`scripts/export-design-fixture.js`,
+`scripts/explain-zones.mjs`): Patrick declined to send the whole `/api/projects/<id>` response —
+correctly, it carries the customer, the address, the quotes, the invoices and the journal, none of
+which the calculation needs. The exporter is a browser-console snippet run on the System Builder
+page with the project open. It is an **allowlist, not a redaction**: it starts from nothing and
+copies across only the fields the engine provably reads (the five supply inputs, the areas and
+their geometry/nozzles/manual heads/trees, valve groups and modes, routing coordinates, and the
+SKU-and-quantity BOM overrides). A field nobody thought about, or one added to the builder next
+year, is excluded because it was never named rather than included because nobody remembered to
+strip it — deny-lists fail silently in the dangerous direction.
+
+Two guards, both tested by making them fire:
+* **Missing input.** A blank GPM ceiling or spacing factor does not fail loudly downstream — the
+  engine's own `|| 1` and `Math.max(…, 0.1)` quietly stand in, and the comparison would then run
+  against a design that is not the one on screen. It refuses and names the empty box. Found by the
+  exporter's own first run, on a spacing factor that did not match any `<option>`.
+* **Anything that looks personal.** Scans its own output for emails, phone numbers, postal codes,
+  street addresses, quote/invoice numbers and embedded files. An area named
+  "Smith front lawn 905-555-0134" produced no file at all and a one-line explanation, with
+  `PJL_REDACT_NAMES = true` offered as the fix. Verified: no file written, and after redaction the
+  number is gone and the areas read "Area 1 … Area 4".
+
+`explain-zones.mjs` answers "why does it say N zones, it used to say N+1" by separating the three
+numbers people use interchangeably — **area zones** (what each area needs on its own), **valves**
+(what goes in the ground) and **stations** (what the controller drives, which is the figure the
+summary calls "total zones") — showing every place one collapses into the next, then sweeping the
+GPM ceiling to report which ceiling values change the answer and **which named area flips at each
+one**. So "it used to be 12" gets an area attached to it rather than a shrug.
+
 **No preview URL is possible from here, and saying so is part of the record:** the Render service
 is configured in Render's dashboard, not in the repo (there is no `render.yaml`), so PR previews
 cannot be turned on from a commit; and `server/data/*` is gitignored, so a fresh preview would
