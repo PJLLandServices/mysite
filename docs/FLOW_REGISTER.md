@@ -2,6 +2,69 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-21 (Job tabs — real browser-style tabs on the Project page):** Second half of "the
+whole platform feels all over the place": *"at the top of the screen there are tabs, almost
+like a web browser... Project, Site Builder, Parts List, Quote, Invoice."* A full merge of the
+5 surfaces into one shared shell was scoped and set aside — Site Builder alone is a
+self-contained 7,800-line page with its own full-screen overlays and keyboard shortcuts, not a
+drop-in tab-pane. Shipped instead: a persistent tab strip at the top of `server/project.html`
+that resolves each tab to THIS job's actual record — real navigation between real pages (the
+honest reading of "like a web browser": browser tabs load pages, they don't share one DOM
+either), not a fake in-page switch. Site Builder is always reachable
+(`/admin/sitebuilder?project=<id>` — it already handles "no design yet" itself, same query
+param `#projDesignSystemLink` already used). Parts List picks the most recently updated
+material list attached to the project. Quote reads `state.linkedQuote` (PJL-54's chain-resolved
+current quote, above). Invoice prefers `project.finalInvoiceId` (set at project completion)
+and falls back to the linked quote's `depositInvoiceId` mid-job — added a `depositInvoiceId`
+field to the `linkedQuote` summary `GET /api/projects/:id` already returns, no new round-trip.
+Any tab with nothing to resolve to greys out with a reason ("No quote for this job yet") rather
+than linking somewhere generic. `scripts/test-project-job-tabs.mjs` — a **real headless-Chromium
+walk of the actual project.html/project.js** (Playwright, same pattern as
+`test-sitebuilder-laterals.mjs`; every `/api/*` call mocked, no live server) rather than a
+hand-simulated approximation of the render logic — pins: a brand-new job with all four tabs
+correctly disabled, a fully-populated job resolving every tab to the right specific record
+(including picking the newer of two material lists), and the mid-job deposit-invoice fallback.
+Registered as `npm run test:project-job-tabs`, deliberately **not** added to `build:check` —
+same convention as the existing Playwright suites (`test:sitebuilder`), which stay opt-in given
+the browser-launch overhead. **Patrick's acceptance test — not yet walked:** open a project
+that has a design, a material list, a sent quote and (if completed) an invoice — click each of
+the four tabs and confirm it lands on the actual record for that job, not an index page; open a
+brand-new project and confirm Site Builder still opens straight to it while the other three
+show as greyed out.
+**2026-09-21 (Job journal — a real one, on the Project page):** Patrick, after saying the whole
+platform "feels all over the place": tabs across Project/Site Builder/Parts List/Quote/Invoice
+(deferred — a bigger IA change, scoped but not built), plus "a section that we record daily
+updates, upload pictures etc etc." Asked whether he meant a genuinely new log or just surfacing
+the existing per-visit rollup; he confirmed: *"Yes, this should be a job journal. We currently
+have it being delivered as Work Orderz, we are capable of updating the todo list that's created
+from the quote."* Correctly read as: the existing per-visit `dailyLog` on build work orders
+(`lib/work-orders.js`) and the task list seeded from the quote (both already solid) stay as-is
+— the gap is a JOB-level log, not tied to any one visit, that anyone can add to any time.
+Built as a new `journalEntries[]` array on the project record (`server/lib/projects.js`):
+`addJournalEntry`/`deleteJournalEntry`/`addJournalEntryPhotos`/`removeJournalEntryPhoto`, each
+entry `{id, ts, by, note, photos[]}`. Photo upload deliberately REUSES the existing WO-photo
+pipeline (`validatePhotos`, `compressWoPhoto`, `generatePhotoFilename` in `server/server.js`) —
+same magic-byte verification, same EXIF-safe compression, same on-disk shape — rather than
+inventing a second one; only the storage root is new
+(`server/data/project-journal-photos/<projectId>/<entryId>/`, twin functions
+`savePhotosForJournalEntry`/`readJournalPhotoFile`/`deleteJournalPhotoFile` mirroring the WO
+versions exactly). New routes: `POST/DELETE /api/projects/:id/journal[/:entryId]`,
+`POST /api/projects/:id/journal/:entryId/photos`, `GET .../photo/:n`,
+`DELETE .../photos/:n` — all under the existing `/api/projects` → "user" auth rule (any admin
+or tech, not admin-only). New **Job journal** panel on `server/project.html`/`project.js`:
+a note + photo composer, entries newest-first with thumbnails, delete-entry and delete-photo
+controls. Always visible (not gated behind build-tracking) — a pre-work site-visit note is a
+legitimate entry. Closed a real gap while at it: `DELETE /api/projects/:id` had no idea journal
+photo files existed — now cleans up `project-journal-photos/<id>/` on every project delete
+(cascade or not), so removing a project never leaves orphaned images on disk.
+`scripts/test-project-journal.mjs` (27 assertions, in `build:check`) pins: empty note refused
+and nothing written, entry creation, real magic-byte-verified PNG upload against the actual
+pipeline with photo-number continuation across two uploads, single-photo delete removing both
+metadata and the file while leaving the entry's other photos alone, whole-entry delete wiping
+its photo directory, a bystander project never touched, 404s on a nonexistent project, and the
+project-delete cleanup case. **Patrick's acceptance test — not yet walked:** open a project,
+add a journal entry with a couple of photos from your phone, confirm it shows up immediately,
+delete one photo and then the whole entry, confirm both actually disappear.
 **2026-09-20, same day (PJL-54 — revision/lock status panel on the Project page):** First real
 Job Portal build-out (TRD: "Job Portal technical design"), after the day's data-model fixes
 above made it worth doing. New **Quote** panel on `server/project.html` shows, without opening

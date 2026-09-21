@@ -245,6 +245,11 @@ const MAX_CHAT_BODY = 80_000; // ~50K-ish transcript + a few KB of metadata
 // If the booking is abandoned, no photo is ever persisted.
 const PHOTOS_DIR = path.join(DATA_DIR, "photos");
 const WO_PHOTOS_DIR = path.join(DATA_DIR, "wo-photos");
+// Job journal (2026-09-21) — a project-level entry's photos, keyed by
+// <projectId>/<entryId>, same on-disk shape as WO photos (bytes here,
+// metadata on the project record).
+const PROJECT_JOURNAL_PHOTOS_DIR = path.join(DATA_DIR, "project-journal-photos");
+const MAX_PHOTOS_PER_JOURNAL_ENTRY = 30;
 // Customer-uploaded warranty-claim files (the invoice copy + evidence).
 // Same split as lead photos: bytes on disk, metadata on the record.
 const WARRANTY_FILES_DIR = path.join(DATA_DIR, "warranty-claim-files");
@@ -2694,6 +2699,70 @@ async function deleteWorkOrderPhotoFile(woId, n) {
     try { await fs.unlink(file); return true; } catch {}
   }
   return false;
+}
+
+// Job journal photo storage — same shape/compression as WO photos
+// (savePhotosForWorkOrder/readWorkOrderPhotoFile/deleteWorkOrderPhotoFile
+// above), just rooted under <projectId>/<entryId> instead of <woId> since
+// one project can hold many journal entries, each with its own photos.
+async function savePhotosForJournalEntry(projectId, entryId, photos, now, baseN, context = {}) {
+  if (!photos.length) return [];
+  const dir = path.join(PROJECT_JOURNAL_PHOTOS_DIR, projectId, entryId);
+  await fs.mkdir(dir, { recursive: true });
+  const meta = [];
+  for (let i = 0; i < photos.length; i++) {
+    const n = baseN + i + 1;
+    const onDiskFilename = `${n}.${photos[i].ext}`;
+    const originalBytes = photos[i].buffer.length;
+    const compressed = await compressWoPhoto(photos[i]);
+    const storedBuffer = compressed || photos[i].buffer;
+    await fs.writeFile(path.join(dir, onDiskFilename), storedBuffer);
+    const filename = generatePhotoFilename({
+      takenAt: photos[i].meta.takenAt,
+      propertyCode: context.propertyCode,
+      woId: entryId,
+      photoMeta: photos[i].meta,
+      n,
+      ext: photos[i].ext
+    });
+    meta.push({
+      n,
+      mediaType: photos[i].mediaType,
+      kind: photos[i].mediaType === "application/pdf" ? "pdf" : "image",
+      bytes: storedBuffer.length,
+      ...(compressed ? { originalBytes } : {}),
+      addedAt: now,
+      filename,
+      ...photos[i].meta
+    });
+  }
+  return meta;
+}
+
+async function readJournalPhotoFile(projectId, entryId, n) {
+  const dir = path.join(PROJECT_JOURNAL_PHOTOS_DIR, projectId, entryId);
+  for (const ext of Object.keys(WO_MEDIA_MIME_BY_EXT)) {
+    const file = path.join(dir, `${n}.${ext}`);
+    try {
+      const data = await fs.readFile(file);
+      return { data, mediaType: WO_MEDIA_MIME_BY_EXT[ext], ext };
+    } catch {}
+  }
+  return null;
+}
+
+async function deleteJournalPhotoFile(projectId, entryId, n) {
+  const dir = path.join(PROJECT_JOURNAL_PHOTOS_DIR, projectId, entryId);
+  for (const ext of Object.keys(WO_MEDIA_MIME_BY_EXT)) {
+    const file = path.join(dir, `${n}.${ext}`);
+    try { await fs.unlink(file); return true; } catch {}
+  }
+  return false;
+}
+
+async function deleteJournalEntryPhotoDir(projectId, entryId) {
+  const dir = path.join(PROJECT_JOURNAL_PHOTOS_DIR, projectId, entryId);
+  try { await fs.rm(dir, { recursive: true, force: true }); } catch {}
 }
 
 // CORS — diagnose.html is currently hosted on GitHub Pages (different origin
@@ -15591,6 +15660,7 @@ async function handleApi(req, res, pathname) {
             // project_proposal quote that made it past "draft" was, by
             // construction, confirmed for the mode it's showing right now.
             confirmed: isProposal ? !["draft", "draft_preview"].includes(current.status) : null,
+            depositInvoiceId: current.depositInvoiceId || null,
             chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status }))
           };
         }
@@ -15637,6 +15707,13 @@ async function handleApi(req, res, pathname) {
       }
     }
 
+    // Journal entries have no meaning outside their project (unlike
+    // material lists, which can exist detached) — their metadata vanishes
+    // with the project record either way. Clean up their photo files too,
+    // cascade or not, so deleting a project never leaves orphaned images
+    // on disk.
+    await fs.rm(path.join(PROJECT_JOURNAL_PHOTOS_DIR, id), { recursive: true, force: true }).catch(() => {});
+
     const removed = await projects.remove(id);
     return sendJson(res, 200, { ok: true, removed, cascade });
   }
@@ -15673,6 +15750,133 @@ async function handleApi(req, res, pathname) {
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't detach work order."] });
     }
+  }
+
+  // ---------- Job journal (2026-09-21) -------------------------------
+  // A free-form, chronological log tied to the job itself, distinct from
+  // the per-visit dailyLog that already lives on build work orders
+  // (lib/work-orders.js). Note text always required; photos optional and
+  // added in a separate follow-up call once the entry exists, same
+  // upload contract as WO photos: { photos: [{ data: <base64>,
+  // mediaType, category?, label? }] }.
+
+  const journalListMatch = pathname.match(/^\/api\/projects\/([^/]+)\/journal$/);
+  if (journalListMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(journalListMatch[1]);
+      const payload = await parseRequestBody(req);
+      const entry = await projects.addJournalEntry(id, {
+        note: payload.note,
+        by: await actorLabel(req)
+      });
+      return sendJson(res, 201, { ok: true, entry });
+    } catch (err) {
+      const status = err.code === "project_not_found" ? 404 : (err.code === "note_required" ? 422 : 400);
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't add journal entry."] });
+    }
+  }
+
+  const journalEntryMatch = pathname.match(/^\/api\/projects\/([^/]+)\/journal\/([^/]+)$/);
+  if (journalEntryMatch && req.method === "DELETE") {
+    try {
+      const id = decodeURIComponent(journalEntryMatch[1]);
+      const entryId = decodeURIComponent(journalEntryMatch[2]);
+      const removed = await projects.deleteJournalEntry(id, entryId, { by: await actorLabel(req) });
+      await deleteJournalEntryPhotoDir(id, entryId);
+      return sendJson(res, 200, { ok: true, removed });
+    } catch (err) {
+      const status = err.code === "journal_entry_not_found" || err.code === "project_not_found" ? 404 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't delete journal entry."] });
+    }
+  }
+
+  // POST /api/projects/:id/journal/:entryId/photos — same contract/limits
+  // as POST /api/work-orders/:id/photos (see that route's comment).
+  const journalPhotosUploadMatch = pathname.match(/^\/api\/projects\/([^/]+)\/journal\/([^/]+)\/photos$/);
+  if (journalPhotosUploadMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(journalPhotosUploadMatch[1]);
+      const entryId = decodeURIComponent(journalPhotosUploadMatch[2]);
+      return await fieldPhotoUploads.run(`journal:${id}:${entryId}`, async () => {
+        const proj = await projects.get(id);
+        if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+        const entry = (proj.journalEntries || []).find((e) => e.id === entryId);
+        if (!entry) return sendJson(res, 404, { ok: false, errors: ["Journal entry not found."] });
+
+        const payload = await parseRequestBody(req, { maxBytes: WO_UPLOAD_POST_MAX_BYTES });
+        const existing = Array.isArray(entry.photos) ? entry.photos : [];
+        const freshPhotos = fieldPhotoUploads.newPhotos(payload.photos, existing);
+        if (Array.isArray(freshPhotos) && freshPhotos.length === 0 && payload.photos.length > 0) {
+          return sendJson(res, 200, { ok: true, entry, added: [] });
+        }
+        const remaining = MAX_PHOTOS_PER_JOURNAL_ENTRY - existing.length;
+        if (remaining <= 0) {
+          return sendJson(res, 422, { ok: false, errors: [`This entry already has the maximum ${MAX_PHOTOS_PER_JOURNAL_ENTRY} photos. Delete one before uploading more.`] });
+        }
+        let validated;
+        try { validated = validatePhotos(freshPhotos, remaining, { mode: "wo" }); }
+        catch (err) { return sendJson(res, 422, { ok: false, errors: [err.message] }); }
+
+        let propertyCode = null;
+        if (proj.propertyId) {
+          try {
+            const linkedProp = await properties.get(proj.propertyId);
+            if (linkedProp && linkedProp.code) propertyCode = linkedProp.code;
+          } catch (_err) {}
+        }
+
+        const baseN = existing.reduce((max, p) => Math.max(max, Number(p.n) || 0), 0);
+        const now = new Date().toISOString();
+        const newMeta = await savePhotosForJournalEntry(id, entryId, validated, now, baseN, { propertyCode });
+        const updatedEntry = await projects.addJournalEntryPhotos(id, entryId, newMeta);
+        return sendJson(res, 201, { ok: true, entry: updatedEntry, added: newMeta });
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't upload photos."] });
+    }
+  }
+
+  const journalPhotoDeleteMatch = pathname.match(/^\/api\/projects\/([^/]+)\/journal\/([^/]+)\/photos\/(\d+)$/);
+  if (journalPhotoDeleteMatch && req.method === "DELETE") {
+    try {
+      const id = decodeURIComponent(journalPhotoDeleteMatch[1]);
+      const entryId = decodeURIComponent(journalPhotoDeleteMatch[2]);
+      const n = Number(journalPhotoDeleteMatch[3]);
+      const removed = await projects.removeJournalEntryPhoto(id, entryId, n);
+      if (!removed) return sendJson(res, 404, { ok: false, errors: ["Photo not found."] });
+      await deleteJournalPhotoFile(id, entryId, n);
+      return sendJson(res, 200, { ok: true, deletedN: n });
+    } catch (err) {
+      const status = err.code === "journal_entry_not_found" ? 404 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't delete photo."] });
+    }
+  }
+
+  const journalPhotoServeMatch = pathname.match(/^\/api\/projects\/([^/]+)\/journal\/([^/]+)\/photo\/(\d+)$/);
+  if (journalPhotoServeMatch && req.method === "GET") {
+    const id = decodeURIComponent(journalPhotoServeMatch[1]);
+    const entryId = decodeURIComponent(journalPhotoServeMatch[2]);
+    const n = Number(journalPhotoServeMatch[3]);
+    const proj = await projects.get(id);
+    if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+    const entry = (proj.journalEntries || []).find((e) => e.id === entryId);
+    if (!entry) return sendJson(res, 404, { ok: false, errors: ["Journal entry not found."] });
+    const photoMeta = (entry.photos || []).find((p) => Number(p.n) === n);
+    if (!photoMeta) return sendJson(res, 404, { ok: false, errors: ["Photo not found."] });
+    const file = await readJournalPhotoFile(id, entryId, n);
+    if (!file) return sendJson(res, 404, { ok: false, errors: ["Photo not found on disk."] });
+    const headers = {
+      "content-type": file.mediaType,
+      "cache-control": "private, max-age=86400",
+      "content-length": file.data.length
+    };
+    if (photoMeta.filename) {
+      const safe = String(photoMeta.filename).replace(/[^A-Za-z0-9._\-]/g, "");
+      if (safe) headers["content-disposition"] = `inline; filename="${safe}"`;
+    }
+    res.writeHead(200, headers);
+    res.end(file.data);
+    return;
   }
 
   // ---------- Brief 2: Project Execution routes ---------------------

@@ -15,6 +15,10 @@
     branch: document.getElementById("projBranch"),
     billing: document.getElementById("projBilling"),
     labourRate: document.getElementById("projLabourRate"),
+    tabSiteBuilder: document.getElementById("projTabSiteBuilder"),
+    tabPartsList: document.getElementById("projTabPartsList"),
+    tabQuote: document.getElementById("projTabQuote"),
+    tabInvoice: document.getElementById("projTabInvoice"),
     quoteStatusPanel: document.getElementById("projQuoteStatusPanel"),
     quoteStatusLine: document.getElementById("projQuoteStatusLine"),
     quoteStatusChain: document.getElementById("projQuoteStatusChain"),
@@ -28,6 +32,14 @@
     tasksPanel: document.getElementById("projTasksPanel"),
     taskList: document.getElementById("projTaskList"),
     tasksProgress: document.getElementById("projTasksProgress"),
+    journalForm: document.getElementById("projJournalForm"),
+    journalNote: document.getElementById("projJournalNote"),
+    journalPhotoInput: document.getElementById("projJournalPhotoInput"),
+    journalPhotoLabel: document.getElementById("projJournalPhotoLabel"),
+    journalSubmit: document.getElementById("projJournalSubmit"),
+    journalError: document.getElementById("projJournalError"),
+    journalEmpty: document.getElementById("projJournalEmpty"),
+    journalList: document.getElementById("projJournalList"),
     buildCta: document.getElementById("projBuildCta"),
     startBuildBtn: document.getElementById("projStartBuildBtn"),
     name: document.getElementById("projName"),
@@ -237,6 +249,38 @@
     summary: "Summary total"
   };
 
+  // Job tabs (2026-09-21) — Site Builder is always reachable (it
+  // preloads via ?project= and handles "no design yet" itself). Parts
+  // List/Quote/Invoice grey out with a reason when this job doesn't have
+  // one yet, rather than linking somewhere generic.
+  function setJobTab(el, href, disabledReason) {
+    if (href) {
+      el.href = href;
+      el.classList.remove("is-disabled");
+      el.removeAttribute("aria-disabled");
+      el.title = "";
+    } else {
+      el.href = "#";
+      el.classList.add("is-disabled");
+      el.setAttribute("aria-disabled", "true");
+      el.title = disabledReason || "";
+    }
+  }
+
+  function renderJobTabs() {
+    const id = state.project.id;
+    setJobTab(els.tabSiteBuilder, `/admin/sitebuilder?project=${encodeURIComponent(id)}`);
+
+    const lists = (state.materialLists || []).slice().sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+    setJobTab(els.tabPartsList, lists.length ? `/admin/material-list/${encodeURIComponent(lists[0].id)}` : null, "No material list for this job yet.");
+
+    const lq = state.linkedQuote;
+    setJobTab(els.tabQuote, lq ? `/admin/quote/${encodeURIComponent(lq.id)}/proposal` : null, "No quote for this job yet.");
+
+    const invoiceId = state.project.finalInvoiceId || (lq && lq.depositInvoiceId) || null;
+    setJobTab(els.tabInvoice, invoiceId ? `/admin/invoice/${encodeURIComponent(invoiceId)}` : null, "No invoice for this job yet.");
+  }
+
   function renderQuoteStatusPanel() {
     const lq = state.linkedQuote;
     if (!lq) {
@@ -276,10 +320,12 @@
   // ---- Render -------------------------------------------------------
   function renderAll() {
     renderHeader();
+    renderJobTabs();
     renderBuildCta();
     renderQuoteStatusPanel();
     renderProposalPanel();
     renderTasks();
+    renderJournal();
     renderDailyLog();
     renderScopeChanges();
     renderStatusUpdates();
@@ -470,6 +516,113 @@
         } catch (err) { alert(err.message || "Delete failed."); }
       });
     });
+  }
+
+  function journalPhotoUrl(entryId, n) {
+    return `/api/projects/${encodeURIComponent(state.project.id)}/journal/${encodeURIComponent(entryId)}/photo/${encodeURIComponent(n)}`;
+  }
+
+  function renderJournal() {
+    const entries = (state.project.journalEntries || []).slice().sort((a, b) => String(b.ts || "").localeCompare(String(a.ts || "")));
+    els.journalEmpty.hidden = entries.length > 0;
+    els.journalList.innerHTML = entries.map((e) => {
+      const when = e.ts ? new Date(e.ts).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" }) : "";
+      const photos = (e.photos || []).map((p) => {
+        const url = journalPhotoUrl(e.id, p.n);
+        return p.kind === "pdf"
+          ? `<a href="${url}" target="_blank" rel="noopener" title="${escapeHtml(p.filename || "")}" class="proj-journal-photo-pdf" data-entry-id="${escapeHtml(e.id)}" data-n="${p.n}">📄</a>`
+          : `<a href="${url}" target="_blank" rel="noopener" title="${escapeHtml(p.filename || "")}" data-entry-id="${escapeHtml(e.id)}" data-n="${p.n}"><img src="${url}" alt=""></a>`;
+      }).join("");
+      return `
+        <li class="proj-journal-item" data-entry-id="${escapeHtml(e.id)}">
+          <div class="proj-journal-item-head">
+            <span>${escapeHtml(when)} · ${escapeHtml(e.by || "")}</span>
+            <button type="button" class="proj-journal-delete" data-entry-id="${escapeHtml(e.id)}" aria-label="Remove entry">×</button>
+          </div>
+          <p class="proj-journal-item-note">${escapeHtml(e.note || "")}</p>
+          ${photos ? `<div class="proj-journal-photos">${photos}</div>` : ""}
+        </li>
+      `;
+    }).join("");
+
+    els.journalList.querySelectorAll(".proj-journal-delete").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("Delete this journal entry? This also removes its photos.")) return;
+        try {
+          const r = await fetch(`/api/projects/${encodeURIComponent(state.project.id)}/journal/${encodeURIComponent(btn.dataset.entryId)}`, { method: "DELETE" });
+          if (!r.ok) {
+            const d = await r.json().catch(() => ({}));
+            alert(d.errors?.[0] || `Delete failed (${r.status})`);
+            return;
+          }
+          await refreshProject();
+        } catch (err) { alert(err.message || "Delete failed."); }
+      });
+    });
+  }
+
+  function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onerror = () => reject(new Error("Couldn't read " + (file.name || "file")));
+      r.onload = () => {
+        const s = String(r.result || "");
+        const idx = s.indexOf(",");
+        resolve(idx >= 0 ? s.slice(idx + 1) : s);
+      };
+      r.readAsDataURL(file);
+    });
+  }
+
+  async function submitJournalEntry(event) {
+    event.preventDefault();
+    els.journalError.hidden = true;
+    const note = els.journalNote.value.trim();
+    if (!note) return;
+    const files = Array.from(els.journalPhotoInput.files || []);
+    els.journalSubmit.disabled = true;
+    try {
+      const r = await fetch(`/api/projects/${encodeURIComponent(state.project.id)}/journal`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ note })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        els.journalError.hidden = false;
+        els.journalError.textContent = (data.errors && data.errors[0]) || "Couldn't add entry.";
+        return;
+      }
+      if (files.length) {
+        const photos = [];
+        for (const file of files) {
+          try {
+            const base64 = await readFileAsBase64(file);
+            photos.push({ data: base64, mediaType: file.type || "image/jpeg", label: file.name || "" });
+          } catch (err) { console.warn("[journal photo] read failed:", err?.message); }
+        }
+        if (photos.length) {
+          const pr = await fetch(`/api/projects/${encodeURIComponent(state.project.id)}/journal/${encodeURIComponent(data.entry.id)}/photos`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ photos })
+          });
+          if (!pr.ok) {
+            const pd = await pr.json().catch(() => ({}));
+            alert((pd.errors && pd.errors[0]) || "Entry saved, but the photos didn't upload.");
+          }
+        }
+      }
+      els.journalNote.value = "";
+      els.journalPhotoInput.value = "";
+      els.journalPhotoLabel.textContent = "+ Photos";
+      await refreshProject();
+    } catch (err) {
+      els.journalError.hidden = false;
+      els.journalError.textContent = err.message || "Couldn't add entry.";
+    } finally {
+      els.journalSubmit.disabled = false;
+    }
   }
 
   function renderHeader() {
@@ -1036,6 +1189,7 @@
       if (data.ok && data.project) {
         state.project = data.project;
         state.linkedCustomer = data.linkedCustomer || null;
+        state.linkedQuote = data.linkedQuote || null;
         await loadExecBuildWos();
         await loadTaskPhotos();
         renderAll();
@@ -1762,6 +1916,12 @@
     els.newMaterialListButton.addEventListener("click", createMaterialList);
     els.archiveButton.addEventListener("click", archiveProject);
     els.deleteButton.addEventListener("click", deleteProject);
+
+    els.journalForm.addEventListener("submit", submitJournalEntry);
+    els.journalPhotoInput.addEventListener("change", () => {
+      const n = els.journalPhotoInput.files ? els.journalPhotoInput.files.length : 0;
+      els.journalPhotoLabel.textContent = n ? `${n} photo${n === 1 ? "" : "s"} selected` : "+ Photos";
+    });
 
     window.addEventListener("beforeunload", () => {
       if (!state.saveTimer && !state.pendingError) return;
