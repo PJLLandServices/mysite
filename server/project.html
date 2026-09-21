@@ -74,6 +74,22 @@
       <p class="proj-error" id="projError" role="alert" hidden></p>
 
       <section id="projPage" hidden>
+        <!-- Job tabs (2026-09-21) — "at the top of the screen there are
+             tabs, almost like a web browser": Project, Site Builder,
+             Parts List, Quote, Invoice, all for THIS job. Project is
+             always the current page (not a link). The other four resolve
+             to the specific record for this job when one exists — Site
+             Builder is always reachable (it handles "no design yet"
+             itself); Parts List/Quote/Invoice grey out with a reason
+             when nothing exists yet for this job. -->
+        <nav class="proj-job-tabs" id="projJobTabs" aria-label="Job sections">
+          <span class="proj-job-tab is-current">Project</span>
+          <a class="proj-job-tab" id="projTabSiteBuilder" href="#">Site Builder</a>
+          <a class="proj-job-tab" id="projTabPartsList" href="#">Parts List</a>
+          <a class="proj-job-tab" id="projTabQuote" href="#">Quote</a>
+          <a class="proj-job-tab" id="projTabInvoice" href="#">Invoice</a>
+        </nav>
+
         <section class="proj-header">
           <div class="proj-header-id">
             <span class="proj-header-id-text" id="projId"></span>

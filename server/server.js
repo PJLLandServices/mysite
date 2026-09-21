@@ -15660,6 +15660,7 @@ async function handleApi(req, res, pathname) {
             // project_proposal quote that made it past "draft" was, by
             // construction, confirmed for the mode it's showing right now.
             confirmed: isProposal ? !["draft", "draft_preview"].includes(current.status) : null,
+            depositInvoiceId: current.depositInvoiceId || null,
             chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status }))
           };
         }

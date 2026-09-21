@@ -15,6 +15,10 @@
     branch: document.getElementById("projBranch"),
     billing: document.getElementById("projBilling"),
     labourRate: document.getElementById("projLabourRate"),
+    tabSiteBuilder: document.getElementById("projTabSiteBuilder"),
+    tabPartsList: document.getElementById("projTabPartsList"),
+    tabQuote: document.getElementById("projTabQuote"),
+    tabInvoice: document.getElementById("projTabInvoice"),
     quoteStatusPanel: document.getElementById("projQuoteStatusPanel"),
     quoteStatusLine: document.getElementById("projQuoteStatusLine"),
     quoteStatusChain: document.getElementById("projQuoteStatusChain"),
@@ -245,6 +249,38 @@
     summary: "Summary total"
   };
 
+  // Job tabs (2026-09-21) — Site Builder is always reachable (it
+  // preloads via ?project= and handles "no design yet" itself). Parts
+  // List/Quote/Invoice grey out with a reason when this job doesn't have
+  // one yet, rather than linking somewhere generic.
+  function setJobTab(el, href, disabledReason) {
+    if (href) {
+      el.href = href;
+      el.classList.remove("is-disabled");
+      el.removeAttribute("aria-disabled");
+      el.title = "";
+    } else {
+      el.href = "#";
+      el.classList.add("is-disabled");
+      el.setAttribute("aria-disabled", "true");
+      el.title = disabledReason || "";
+    }
+  }
+
+  function renderJobTabs() {
+    const id = state.project.id;
+    setJobTab(els.tabSiteBuilder, `/admin/sitebuilder?project=${encodeURIComponent(id)}`);
+
+    const lists = (state.materialLists || []).slice().sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+    setJobTab(els.tabPartsList, lists.length ? `/admin/material-list/${encodeURIComponent(lists[0].id)}` : null, "No material list for this job yet.");
+
+    const lq = state.linkedQuote;
+    setJobTab(els.tabQuote, lq ? `/admin/quote/${encodeURIComponent(lq.id)}/proposal` : null, "No quote for this job yet.");
+
+    const invoiceId = state.project.finalInvoiceId || (lq && lq.depositInvoiceId) || null;
+    setJobTab(els.tabInvoice, invoiceId ? `/admin/invoice/${encodeURIComponent(invoiceId)}` : null, "No invoice for this job yet.");
+  }
+
   function renderQuoteStatusPanel() {
     const lq = state.linkedQuote;
     if (!lq) {
@@ -284,6 +320,7 @@
   // ---- Render -------------------------------------------------------
   function renderAll() {
     renderHeader();
+    renderJobTabs();
     renderBuildCta();
     renderQuoteStatusPanel();
     renderProposalPanel();

@@ -44,6 +44,48 @@
 }
 .proj-chip-num--zero { color: #B8B5A4; }
 
+/* ---- Job tabs (2026-09-21) --------------------------------------- */
+/* Real browser-tab look on purpose — Patrick's own words: "at the top of
+   the screen there are tabs, almost like a web browser." Project/Site
+   Builder/Parts List/Quote/Invoice, all scoped to this one job. */
+.proj-job-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 16px;
+  border-bottom: 2px solid #1B4D2E;
+  overflow-x: auto;
+}
+.proj-job-tab {
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 18px;
+  min-height: 44px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #4A4A44;
+  background: #F0EEE3;
+  border: 1px solid #D8D5C5;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.proj-job-tab:hover:not(.is-current):not(.is-disabled) {
+  background: #E4E9DC;
+  color: #1B4D2E;
+}
+.proj-job-tab.is-current {
+  background: #1B4D2E;
+  color: #fff;
+  border-color: #1B4D2E;
+  cursor: default;
+}
+.proj-job-tab.is-disabled {
+  color: #B8B5A4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 /* ---- Project detail page ---- */
 /* Brief 2 §3.8: full-screen-width CSS Grid. Top header (project metadata)
    full-width. Body uses a 2-column grid on desktop (1fr 360px): main

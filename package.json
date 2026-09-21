@@ -60,6 +60,7 @@
     "test:backfill-proposal-enrichment": "node scripts/test-backfill-proposal-enrichment.mjs",
     "test:project-quote-status-panel": "node scripts/test-project-quote-status-panel.mjs",
     "test:project-journal": "node scripts/test-project-journal.mjs",
+    "test:project-job-tabs": "node scripts/test-project-job-tabs.mjs",
     "test:crm-sorting": "node scripts/test-crm-sorting.mjs",
     "test:territory-export": "node scripts/test-territory-export.mjs",
     "merge-properties": "node scripts/merge-properties.mjs",
