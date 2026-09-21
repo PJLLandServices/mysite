@@ -113,6 +113,46 @@ acceptance test — not yet walked:** on the public page, book a fall closing fo
 address: weekdays in the first two weeks of the season should now appear (the ones within 25,
 then 40, minutes of that day's route); on the season plan, probe 45 Dunvegan Rd — the Oct 22
 row should read Morning "full (…)" / Afternoon "too far (+…)" with Offered "no".
+**2026-09-21 (Job tabs REPLACED with real inline numbers — the tabs weren't the fix):** Patrick,
+minutes into using the job-tabs entry above, live: *"you literally did nothing by putting the
+tabs above. it just goes to a different page... I don't want to navigate to a different page. I
+want everything i need to know right there. Everything connected, no page moves, or new tabs
+open."* Correct call — navigation between real pages was still navigation; a tab strip with
+nothing behind it is exactly the "all over the place" feeling he was pushing back on in the
+first place. The job-tabs strip is gone (`#projJobTabs`, `renderJobTabs()` — deleted, not just
+hidden) and replaced with real content on the Project page itself:
+- **Quote panel** now shows the actual line items and total inline (`linkedQuote.subtotal/hst/
+  total/lineItems`, added to the same `GET /api/projects/:id` response PJL-54 already built —
+  no new round-trip), not just the status word.
+- **New Site Builder panel** — zone count (`systemDesign.areas.length`) and last-saved date
+  (from the most recent `system_design_saved` history entry — `systemDesign` itself carries no
+  timestamp) directly on the page.
+- **New Invoice panel** — real status, total, amount paid, and balance due (or "paid in full" +
+  date once it's settled), not a link to go find out.
+Each panel keeps ONE "Open …" link for when Patrick actually wants to edit something (the
+design, the quote, the invoice) — never as the only way to see what's going on.
+Caught a real, separate bug along the way while building the Invoice panel: Patrick, live, on
+PROJ-2026-0008 — *"this invoice is part of the project. it has the deposit on it. I-2026-0067"*
+— reporting the invoice wasn't resolving. Root cause: `quote.depositInvoiceId` (what the
+resolution read) is a schema placeholder nothing has ever written to; the REAL link is the
+other way around, `invoice.quoteId`, set by whatever creates a deposit/balance invoice. Fixed
+with `invoices.listByQuote()` (new, mirrors the existing `listByWorkOrder` pattern) — checked
+against the WHOLE revision chain (a deposit is usually raised against whichever version was
+actually accepted, not necessarily today's current one), preferring a balance invoice over a
+deposit invoice once both exist.
+`scripts/test-project-invoice-resolution.mjs` (8 assertions, in `build:check`) pins the
+invoice-lookup fix: direct link, stale-anchor-plus-revision (the invoice was raised against v1,
+the project's pointer resolves to v2, the lookup still finds it), balance-over-deposit
+preference, no-invoice-yet stays null, and bystander isolation.
+`scripts/test-project-inline-summaries.mjs` (13 assertions, Playwright — same real-browser
+pattern as the Site Builder suites, `npm run test:project-inline-summaries`, **not** in
+`build:check`) pins the actual rendered page: the old tab strip element is gone, Site Builder
+shows real status even pre-design, the Invoice panel stays hidden with nothing to show but
+renders real numbers once something exists, the Quote panel's line items and total render
+inline, and a paid-in-full invoice says so instead of a stale $0-balance line.
+**Patrick's acceptance test — not yet walked:** open PROJ-2026-0008 (or any job with a quote,
+a design, and a deposit invoice) and confirm the line items, zone count, and invoice balance
+are all visible on the page itself — no click required to know what's going on.
 **2026-09-21 (Job tabs — real browser-style tabs on the Project page):** Second half of "the
 whole platform feels all over the place": *"at the top of the screen there are tabs, almost
 like a web browser... Project, Site Builder, Parts List, Quote, Invoice."* A full merge of the

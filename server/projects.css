@@ -44,47 +44,35 @@
 }
 .proj-chip-num--zero { color: #B8B5A4; }
 
-/* ---- Job tabs (2026-09-21) --------------------------------------- */
-/* Real browser-tab look on purpose — Patrick's own words: "at the top of
-   the screen there are tabs, almost like a web browser." Project/Site
-   Builder/Parts List/Quote/Invoice, all scoped to this one job. */
-.proj-job-tabs {
+/* ---- Inline job summaries (2026-09-21) ---------------------------- */
+/* Replaces an earlier "browser tabs" idea that just navigated away with
+   nothing shown. Patrick: "I don't want to navigate to a different
+   page. I want everything i need to know right there." Real numbers on
+   THIS page; the Open button is for when he actually wants to edit
+   something, never the only way to see what's going on. */
+.proj-inline-summary-line {
+  font-size: 14px;
+  color: #1F2A22;
+  margin: 4px 0 0;
+}
+.proj-inline-lines {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
   display: flex;
-  gap: 2px;
-  margin-bottom: 16px;
-  border-bottom: 2px solid #1B4D2E;
-  overflow-x: auto;
+  flex-direction: column;
+  gap: 4px;
 }
-.proj-job-tab {
-  display: inline-flex;
-  align-items: center;
-  padding: 10px 18px;
-  min-height: 44px;
+.proj-inline-lines li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
   font-size: 13px;
-  font-weight: 600;
   color: #4A4A44;
-  background: #F0EEE3;
-  border: 1px solid #D8D5C5;
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-  text-decoration: none;
-  white-space: nowrap;
+  padding: 4px 0;
+  border-bottom: 1px dashed #E5E5DD;
 }
-.proj-job-tab:hover:not(.is-current):not(.is-disabled) {
-  background: #E4E9DC;
-  color: #1B4D2E;
-}
-.proj-job-tab.is-current {
-  background: #1B4D2E;
-  color: #fff;
-  border-color: #1B4D2E;
-  cursor: default;
-}
-.proj-job-tab.is-disabled {
-  color: #B8B5A4;
-  cursor: not-allowed;
-  pointer-events: none;
-}
+.proj-inline-lines li strong { color: #1F2A22; font-weight: 600; }
 
 /* ---- Project detail page ---- */
 /* Brief 2 §3.8: full-screen-width CSS Grid. Top header (project metadata)

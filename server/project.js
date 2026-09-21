@@ -15,14 +15,17 @@
     branch: document.getElementById("projBranch"),
     billing: document.getElementById("projBilling"),
     labourRate: document.getElementById("projLabourRate"),
-    tabSiteBuilder: document.getElementById("projTabSiteBuilder"),
-    tabPartsList: document.getElementById("projTabPartsList"),
-    tabQuote: document.getElementById("projTabQuote"),
-    tabInvoice: document.getElementById("projTabInvoice"),
     quoteStatusPanel: document.getElementById("projQuoteStatusPanel"),
     quoteStatusLine: document.getElementById("projQuoteStatusLine"),
+    quoteStatusLines: document.getElementById("projQuoteStatusLines"),
     quoteStatusChain: document.getElementById("projQuoteStatusChain"),
     quoteStatusLink: document.getElementById("projQuoteStatusLink"),
+    siteBuilderPanel: document.getElementById("projSiteBuilderPanel"),
+    siteBuilderLine: document.getElementById("projSiteBuilderLine"),
+    siteBuilderLink: document.getElementById("projSiteBuilderLink"),
+    invoicePanel: document.getElementById("projInvoicePanel"),
+    invoiceLine: document.getElementById("projInvoiceLine"),
+    invoiceLink: document.getElementById("projInvoiceLink"),
     proposalPanel: document.getElementById("projProposalPanel"),
     proposalMeta: document.getElementById("projProposalMeta"),
     proposalTotals: document.getElementById("projProposalTotals"),
@@ -132,6 +135,7 @@
       .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
   }
   function fmtCents(c) { return "$" + ((Number(c) || 0) / 100).toFixed(2); }
+  function fmtDollars(n) { return "$" + (Number(n) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
   function fmtDate(iso) {
     if (!iso) return "—";
     return new Date(iso).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
@@ -189,6 +193,8 @@
       state.materialLists = Array.isArray(data.materialLists) ? data.materialLists : [];
       state.linkedCustomer = data.linkedCustomer || null;
       state.linkedQuote = data.linkedQuote || null;
+      state.invoiceSummary = data.invoiceSummary || null;
+      state.siteBuilderSummary = data.siteBuilderSummary || null;
       els.loading.hidden = true;
       els.page.hidden = false;
       els.savebar.hidden = false;
@@ -249,36 +255,52 @@
     summary: "Summary total"
   };
 
-  // Job tabs (2026-09-21) — Site Builder is always reachable (it
-  // preloads via ?project= and handles "no design yet" itself). Parts
-  // List/Quote/Invoice grey out with a reason when this job doesn't have
-  // one yet, rather than linking somewhere generic.
-  function setJobTab(el, href, disabledReason) {
-    if (href) {
-      el.href = href;
-      el.classList.remove("is-disabled");
-      el.removeAttribute("aria-disabled");
-      el.title = "";
-    } else {
-      el.href = "#";
-      el.classList.add("is-disabled");
-      el.setAttribute("aria-disabled", "true");
-      el.title = disabledReason || "";
+  // Site Builder + Invoice inline summaries (2026-09-21) — real numbers
+  // on THIS page. Patrick: "I don't want to navigate to a different
+  // page. I want everything i need to know right there." The Open link
+  // stays, but only as a secondary action for when he actually wants to
+  // edit something — never the only way to see what's going on.
+  function renderSiteBuilderPanel() {
+    const sb = state.siteBuilderSummary;
+    els.siteBuilderLink.href = `/admin/sitebuilder?project=${encodeURIComponent(state.project.id)}`;
+    if (!sb) {
+      els.siteBuilderPanel.hidden = false;
+      els.siteBuilderLine.textContent = "No design started yet for this job.";
+      return;
     }
+    els.siteBuilderPanel.hidden = false;
+    const zoneLabel = `${sb.zoneCount} zone${sb.zoneCount === 1 ? "" : "s"}`;
+    const savedLabel = sb.lastSavedAt ? `last saved ${fmtDate(sb.lastSavedAt)}` : "not yet saved";
+    els.siteBuilderLine.textContent = `${zoneLabel} — ${savedLabel}`;
   }
 
-  function renderJobTabs() {
-    const id = state.project.id;
-    setJobTab(els.tabSiteBuilder, `/admin/sitebuilder?project=${encodeURIComponent(id)}`);
+  const INVOICE_STATUS_LABELS = {
+    draft: "draft — not sent",
+    sent: "sent",
+    paid: "paid",
+    partial: "partially paid",
+    void: "voided",
+    overdue: "overdue"
+  };
+  const INVOICE_ROLE_LABELS = { deposit: "Deposit invoice", balance: "Balance invoice", standard: "Invoice" };
 
-    const lists = (state.materialLists || []).slice().sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
-    setJobTab(els.tabPartsList, lists.length ? `/admin/material-list/${encodeURIComponent(lists[0].id)}` : null, "No material list for this job yet.");
-
-    const lq = state.linkedQuote;
-    setJobTab(els.tabQuote, lq ? `/admin/quote/${encodeURIComponent(lq.id)}/proposal` : null, "No quote for this job yet.");
-
-    const invoiceId = state.project.finalInvoiceId || (lq && lq.depositInvoiceId) || null;
-    setJobTab(els.tabInvoice, invoiceId ? `/admin/invoice/${encodeURIComponent(invoiceId)}` : null, "No invoice for this job yet.");
+  function renderInvoicePanel() {
+    const inv = state.invoiceSummary;
+    if (!inv) {
+      els.invoicePanel.hidden = true;
+      return;
+    }
+    els.invoicePanel.hidden = false;
+    els.invoiceLink.href = `/admin/invoice/${encodeURIComponent(inv.id)}`;
+    const roleLabel = INVOICE_ROLE_LABELS[inv.invoiceRole] || "Invoice";
+    const statusLabel = INVOICE_STATUS_LABELS[inv.status] || inv.status;
+    let line = `${roleLabel} ${inv.id} — ${statusLabel} — ${fmtDollars(inv.total)}`;
+    if (inv.balanceDue > 0) {
+      line += `, ${fmtDollars(inv.balanceDue)} balance due`;
+    } else if (inv.paidAt) {
+      line += `, paid in full ${fmtDate(inv.paidAt)}`;
+    }
+    els.invoiceLine.textContent = line;
   }
 
   function renderQuoteStatusPanel() {
@@ -303,6 +325,21 @@
     }
     els.quoteStatusLine.innerHTML = html;
 
+    // Real numbers inline — not just a status word. Summary-mode quotes
+    // still carry their real lineItems server-side even though the
+    // CUSTOMER-facing PDF collapses them; showing them here is for
+    // Patrick, not a presentation-mode leak.
+    const lines = Array.isArray(lq.lineItems) ? lq.lineItems : [];
+    if (lines.length) {
+      els.quoteStatusLines.hidden = false;
+      els.quoteStatusLines.innerHTML = lines.map((li) =>
+        `<li><span>${escapeHtml(li.label)}</span><span>${fmtDollars(li.total)}</span></li>`
+      ).join("") + `<li><strong>Total (incl. HST)</strong><strong>${fmtDollars(lq.total)}</strong></li>`;
+    } else {
+      els.quoteStatusLines.hidden = true;
+      els.quoteStatusLines.innerHTML = "";
+    }
+
     if (Array.isArray(lq.chain) && lq.chain.length > 1) {
       els.quoteStatusChain.hidden = false;
       els.quoteStatusChain.innerHTML = "History: " + lq.chain.map((q) => {
@@ -320,9 +357,10 @@
   // ---- Render -------------------------------------------------------
   function renderAll() {
     renderHeader();
-    renderJobTabs();
     renderBuildCta();
     renderQuoteStatusPanel();
+    renderSiteBuilderPanel();
+    renderInvoicePanel();
     renderProposalPanel();
     renderTasks();
     renderJournal();
@@ -1190,6 +1228,8 @@
         state.project = data.project;
         state.linkedCustomer = data.linkedCustomer || null;
         state.linkedQuote = data.linkedQuote || null;
+        state.invoiceSummary = data.invoiceSummary || null;
+        state.siteBuilderSummary = data.siteBuilderSummary || null;
         await loadExecBuildWos();
         await loadTaskPhotos();
         renderAll();

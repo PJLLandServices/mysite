@@ -74,22 +74,6 @@
       <p class="proj-error" id="projError" role="alert" hidden></p>
 
       <section id="projPage" hidden>
-        <!-- Job tabs (2026-09-21) — "at the top of the screen there are
-             tabs, almost like a web browser": Project, Site Builder,
-             Parts List, Quote, Invoice, all for THIS job. Project is
-             always the current page (not a link). The other four resolve
-             to the specific record for this job when one exists — Site
-             Builder is always reachable (it handles "no design yet"
-             itself); Parts List/Quote/Invoice grey out with a reason
-             when nothing exists yet for this job. -->
-        <nav class="proj-job-tabs" id="projJobTabs" aria-label="Job sections">
-          <span class="proj-job-tab is-current">Project</span>
-          <a class="proj-job-tab" id="projTabSiteBuilder" href="#">Site Builder</a>
-          <a class="proj-job-tab" id="projTabPartsList" href="#">Parts List</a>
-          <a class="proj-job-tab" id="projTabQuote" href="#">Quote</a>
-          <a class="proj-job-tab" id="projTabInvoice" href="#">Invoice</a>
-        </nav>
-
         <section class="proj-header">
           <div class="proj-header-id">
             <span class="proj-header-id-text" id="projId"></span>
@@ -189,7 +173,32 @@
             <a class="pjl-btn pjl-btn-outline" id="projQuoteStatusLink" href="#" target="_blank" rel="noopener">Open in Proposal Builder</a>
           </div>
           <p class="proj-quote-status-line" id="projQuoteStatusLine"></p>
+          <ul class="proj-inline-lines" id="projQuoteStatusLines" hidden></ul>
           <p class="proj-quote-status-chain" id="projQuoteStatusChain" hidden></p>
+        </section>
+
+        <!-- Site Builder summary (2026-09-21) — real numbers inline
+             (zone count, last saved), not a link that just navigates
+             away with nothing shown. Patrick: "I don't want to navigate
+             to a different page. I want everything i need to know right
+             there." -->
+        <section class="proj-section proj-sitebuilder-status" id="projSiteBuilderPanel" hidden>
+          <div class="proj-section-head">
+            <h2>Site Builder</h2>
+            <a class="pjl-btn pjl-btn-outline" id="projSiteBuilderLink" href="#">Open Site Builder</a>
+          </div>
+          <p class="proj-inline-summary-line" id="projSiteBuilderLine"></p>
+        </section>
+
+        <!-- Invoice summary (2026-09-21) — status, total, paid, balance
+             due, right here. Prefers the final invoice; falls back to
+             the deposit/balance invoice for a job still in progress. -->
+        <section class="proj-section proj-invoice-status" id="projInvoicePanel" hidden>
+          <div class="proj-section-head">
+            <h2>Invoice</h2>
+            <a class="pjl-btn pjl-btn-outline" id="projInvoiceLink" href="#" target="_blank" rel="noopener">Open invoice</a>
+          </div>
+          <p class="proj-inline-summary-line" id="projInvoiceLine"></p>
         </section>
 
         <!-- Accepted proposal snapshot (Brief 1, May 2026).

@@ -423,6 +423,17 @@ async function listByWorkOrder(woId) {
   return records.filter((r) => r.woId === woId);
 }
 
+// Accepts one quoteId or an array — the Job tabs Invoice resolution
+// (2026-09-21) needs to check a whole revision chain, since a deposit
+// invoice is usually raised against whichever revision was actually
+// accepted, not necessarily the CURRENT one a project's pointer resolves
+// to today.
+async function listByQuote(quoteIdOrIds) {
+  const ids = new Set(Array.isArray(quoteIdOrIds) ? quoteIdOrIds : [quoteIdOrIds]);
+  const records = await readAll();
+  return records.filter((r) => ids.has(r.quoteId));
+}
+
 async function listByProperty(propertyId) {
   const records = await readAll();
   return records.filter((r) => r.propertyId === propertyId);
@@ -1174,6 +1185,7 @@ module.exports = {
   list,
   get,
   listByWorkOrder,
+  listByQuote,
   listByProperty,
   createDraft,
   update,

@@ -15660,13 +15660,82 @@ async function handleApi(req, res, pathname) {
             // project_proposal quote that made it past "draft" was, by
             // construction, confirmed for the mode it's showing right now.
             confirmed: isProposal ? !["draft", "draft_preview"].includes(current.status) : null,
-            depositInvoiceId: current.depositInvoiceId || null,
+            subtotal: Number(current.subtotal) || 0,
+            hst: Number(current.hst) || 0,
+            total: Number(current.total) || 0,
+            lineItems: Array.isArray(current.lineItems)
+              ? current.lineItems.map((li) => ({ label: li.label || li.key || "", total: Number(li.lineTotal ?? (Number(li.qty || 1) * Number(li.price || 0))) || 0 }))
+              : [],
+            // The deposit/balance invoice is a real, populated field —
+            // but it lives on the INVOICE (invoice.quoteId), never on the
+            // quote itself (quote.depositInvoiceId is a schema
+            // placeholder nothing has ever written to — caught live,
+            // 2026-09-21, Patrick: "this invoice is part of the project.
+            // it has the deposit on it," for one that this field was
+            // reading as null). Look it up the right way: every invoice
+            // raised against ANY quote in this job's revision chain (a
+            // deposit is usually raised against whichever version was
+            // actually accepted, not necessarily today's current one).
+            // Prefer the balance invoice if the deposit's already been
+            // paid and superseded by one; else the deposit invoice.
+            depositInvoiceId: null,
             chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status }))
           };
+          try {
+            const chainInvoices = await invoices.listByQuote(chain.map((q) => q.id));
+            const byRole = (role) => chainInvoices
+              .filter((inv) => inv.invoiceRole === role)
+              .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+            const best = byRole("balance") || byRole("deposit");
+            if (best) linkedQuote.depositInvoiceId = best.id;
+          } catch (err) { /* tolerate — Invoice tab just falls back to finalInvoiceId or greys out */ }
         }
       } catch (err) { /* tolerate — panel just doesn't render */ }
     }
-    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote });
+
+    // Invoice summary (2026-09-21) — real numbers inline (status, total,
+    // amount paid, balance due), not just a link out. Prefers the
+    // project's final invoice (set at completion); falls back to the
+    // deposit/balance invoice resolved above for a job still in progress.
+    let invoiceSummary = null;
+    const invoiceId = proj.finalInvoiceId || (linkedQuote && linkedQuote.depositInvoiceId) || null;
+    if (invoiceId) {
+      try {
+        const inv = await invoices.get(invoiceId);
+        if (inv) {
+          invoiceSummary = {
+            id: inv.id,
+            status: inv.status,
+            invoiceRole: inv.invoiceRole,
+            total: inv.total,
+            amountPaid: inv.amountPaid,
+            balanceDue: inv.balanceDue,
+            sentAt: inv.sentAt,
+            paidAt: inv.paidAt
+          };
+        }
+      } catch (err) { /* tolerate — Invoice panel just doesn't render */ }
+    }
+
+    // System Builder summary (2026-09-21) — zone count + last-saved date
+    // inline, pulled from data already on the project record (no extra
+    // fetch): systemDesign.areas is the builder's own area list; the
+    // save timestamp comes from the most recent system_design_saved
+    // history entry (systemDesign itself carries no timestamp — the
+    // server only size-caps and timestamps the HISTORY entry, per the
+    // comment on projects.update()).
+    let siteBuilderSummary = null;
+    if (proj.systemDesign && Array.isArray(proj.systemDesign.areas)) {
+      const lastSave = (proj.history || [])
+        .filter((h) => h.action === "system_design_saved")
+        .sort((a, b) => String(b.ts || "").localeCompare(String(a.ts || "")))[0];
+      siteBuilderSummary = {
+        zoneCount: proj.systemDesign.areas.length,
+        lastSavedAt: lastSave ? lastSave.ts : null
+      };
+    }
+
+    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote, invoiceSummary, siteBuilderSummary });
   }
   if (projectMatch && req.method === "PATCH") {
     try {
