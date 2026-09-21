@@ -429,6 +429,7 @@
   @media print{header{background:var(--green-d)!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     button{display:none}}
 </style>
+<link rel="stylesheet" href="/crm/pjl-dialog.css">
 </head>
 <body>
 <header>
@@ -792,6 +793,7 @@
   <div id="partPickerList" class="pp-list"></div>
 </div>
 
+<script src="/crm/pjl-dialog.js"></script>
 <script>
 /* ==== Head catalogs - manufacturer performance data ====
    HARD RULE: a zone never mixes head families. Rotor / spray / strip /
@@ -2759,15 +2761,16 @@ async function spDeletePage(pageId){
   const deps = spDependentAreaNames(pageId);
   let force = false;
   if(deps.length){
-    const ok = confirm(
+    const ok = await pjlDialog.confirm(
       `${deps.length} traced ${deps.length===1?'area is':'areas are'} drawn on "${pg.label}":\n\n` +
       `${deps.join('\n')}\n\n` +
       `Deleting the sheet removes the drawing you traced them against. The traced shapes are KEPT — ` +
-      `they're already in feet — they just lose their underlay.\n\nDelete anyway?`
+      `they're already in feet — they just lose their underlay.\n\nDelete anyway?`,
+      { title: 'Delete sheet', icon: 'delete', destructive: true, confirmLabel: 'Delete' }
     );
     if(!ok) return;
     force = true;
-  } else if(!confirm(`Delete "${pg.label}"? The image is removed from the project.`)){
+  } else if(!(await pjlDialog.confirm(`Delete "${pg.label}"? The image is removed from the project.`, { title: 'Delete sheet', icon: 'delete', destructive: true, confirmLabel: 'Delete' }))){
     return;
   }
   try{
@@ -3641,7 +3644,7 @@ function mpOrphanPins(){
 
 /* ---- tools ---- */
 
-function mpSetTool(t){
+async function mpSetTool(t){
   if(t==='tree'){
     if(mp.zoneSel==null){ alert('Click the zone the trees belong to first, then pick Tree.'); return; }
     if(mpTreeAreaFor(mp.zoneSel)<0){
@@ -3662,7 +3665,7 @@ function mpSetTool(t){
     if(zg && zg.grouped && !zg.stationGroup){
       const a=areas[(zg.parts||[])[0] && zg.parts[0].areaIdx], g=a && a.valveGroup;
       const n=(zg.members||[]).length;
-      if(g && n>1 && confirm('"'+g+'" is '+n+' beds on one shared valve.\n\nBuild it as one valve per valve box, wired together as one station? Beds fed from the same box share a valve; put a bed in another box and it gets its own valve there. The quote stays one zone; the material list gets a valve per box.')){
+      if(g && n>1 && await pjlDialog.confirm('"'+g+'" is '+n+' beds on one shared valve.\n\nBuild it as one valve per valve box, wired together as one station? Beds fed from the same box share a valve; put a bed in another box and it gets its own valve there. The quote stays one zone; the material list gets a valve per box.', { title: 'Split into one valve per box', icon: 'warning', confirmLabel: 'Build it' })){
         const k=zg.key;
         setValveGroupMode(g, 'station');
         // land on the first bed's valve so the box buttons are right there
@@ -3705,11 +3708,11 @@ function mpSetSplit(zi, ax, ay, bx, by){
   mp.zoneSel=LAST_ZONES.findIndex(x=>x.key===k);
   return true;
 }
-function mpRemoveSplit(zi){
+async function mpRemoveSplit(zi){
   const z=LAST_ZONES[zi]; if(!z) return;
   const r=routingFor(mp.pageId); if(!r || !r.splits) return;
   const k=baseKey(z.key); if(!r.splits[k]) return;
-  if(!confirm('Put '+baseName(z)+' back on one valve? Its B half loses its box assignment.')) return;
+  if(!(await pjlDialog.confirm('Put '+baseName(z)+' back on one valve? Its B half loses its box assignment.', { title: 'Remove split', icon: 'delete', destructive: true, confirmLabel: 'Remove split' }))) return;
   delete r.splits[k];
   if(r.pins) delete r.pins[k+'#B'];
   markDirty(); compute();
@@ -3842,7 +3845,7 @@ function mpSpliceNode(arr, i){
   // indices above i shift down by one
   arr.forEach(n=>{ if(n.p!=null && n.p>i) n.p-=1; });
 }
-function mpDeleteSel(){
+async function mpDeleteSel(){
   const r=routingFor(mp.pageId); if(!r || !mp.sel) return;
   const h=mp.sel;
   if(h[0]==='t' && h.indexOf('_')>0){
@@ -3860,9 +3863,9 @@ function mpDeleteSel(){
     if(nodes){ mpSpliceNode(nodes, parseInt(h.slice(1),10)); }
     mp.sel=null; markDirty(); mpDraw(); return;
   }
-  if(h[0]==='s'){ mpRemoveSplit(parseInt(h.slice(2),10)); return; }
+  if(h[0]==='s'){ await mpRemoveSplit(parseInt(h.slice(2),10)); return; }
   if(h==='poc'){
-    if(r.main.length && !confirm('Removing the point of connection also drops the '+r.main.length+' mainline node'+(r.main.length===1?'':'s')+' that hang off it. Remove it?')) return;
+    if(r.main.length && !(await pjlDialog.confirm('Removing the point of connection also drops the '+r.main.length+' mainline node'+(r.main.length===1?'':'s')+' that hang off it. Remove it?', { title: 'Remove point of connection', icon: 'delete', destructive: true, confirmLabel: 'Remove' }))) return;
     r.poc=null; r.main=[];
   } else {
     const i=parseInt(h.slice(1), 10);
@@ -3870,7 +3873,7 @@ function mpDeleteSel(){
     else if(h[0]==='m'){
       const gone=r.manifolds[i];
       const held=Object.keys(r.pins||{}).filter(k=>r.pins[k]===(gone&&gone.id));
-      if(held.length && !confirm(held.length+' valve'+(held.length===1?'':'s')+' assigned to this box will go back to their nearest box. Remove it?')) return;
+      if(held.length && !(await pjlDialog.confirm(held.length+' valve'+(held.length===1?'':'s')+' assigned to this box will go back to their nearest box. Remove it?', { title: 'Remove manifold box', icon: 'delete', destructive: true, confirmLabel: 'Remove' }))) return;
       held.forEach(k=>delete r.pins[k]);
       r.manifolds.splice(i,1);
       mp.sel=null; markDirty(); mpBoxesChanged(); return;
@@ -3888,10 +3891,10 @@ function mpUndoPoint(){
   mp.sel=null; markDirty(); mpDraw();
 }
 
-function mpClearRouting(){
+async function mpClearRouting(){
   const r=routingFor(mp.pageId); if(!r) return;
   if(!r.poc && !r.main.length && !r.manifolds.length) return;
-  if(!confirm('Clear the point of connection, every manifold and the whole mainline on this sheet?')) return;
+  if(!(await pjlDialog.confirm('Clear the point of connection, every manifold and the whole mainline on this sheet?', { title: 'Clear routing', icon: 'delete', destructive: true, confirmLabel: 'Clear routing' }))) return;
   r.poc=null; r.main=[]; r.manifolds=[];
   mp.sel=null; markDirty(); mpBoxesChanged();
 }
@@ -3899,11 +3902,11 @@ function mpClearRouting(){
 // Chain the main through the manifolds nearest-first. This is a starting
 // point, not a survey: it runs in straight lines through whatever is in the
 // way, so the bends still have to be dragged onto the real trench route.
-function mpAutoRoute(){
+async function mpAutoRoute(){
   const r=routingFor(mp.pageId); if(!r) return;
   if(!r.poc){ alert('Place the point of connection first — auto-route starts there.'); return; }
   if(!r.manifolds.length){ alert('Place at least one manifold — auto-route runs the main to the manifolds.'); return; }
-  if(r.main.length && !confirm('Replace the '+r.main.length+' mainline node'+(r.main.length===1?'':'s')+' you placed — including any tees — with a single straight run through the manifolds?')) return;
+  if(r.main.length && !(await pjlDialog.confirm('Replace the '+r.main.length+' mainline node'+(r.main.length===1?'':'s')+' you placed — including any tees — with a single straight run through the manifolds?', { title: 'Auto-route mainline', icon: 'warning', destructive: true, confirmLabel: 'Replace' }))) return;
   const left=r.manifolds.map((m,i)=>i);
   const path=[]; let cur=r.poc, parent=-1;
   while(left.length){
@@ -4750,10 +4753,10 @@ function mpLateralNodes(zi){
   const r=routingRO(mp.pageId), z=LAST_ZONES[zi];
   return (z && r.laterals && Array.isArray(r.laterals[z.key])) ? r.laterals[z.key] : null;
 }
-function mpResetLaterals(zi){
+async function mpResetLaterals(zi){
   const r=routingFor(mp.pageId), z=LAST_ZONES[zi];
   if(!r || !z || !r.laterals || !r.laterals[z.key]) return;
-  if(!confirm('Throw away the hand-drawn laterals for '+z.name+' and go back to the automatic route?')) return;
+  if(!(await pjlDialog.confirm('Throw away the hand-drawn laterals for '+z.name+' and go back to the automatic route?', { title: 'Reset laterals', icon: 'warning', destructive: true, confirmLabel: 'Reset' }))) return;
   delete r.laterals[z.key];
   if(mp.tool==='lat'){ mp.tool='pan'; mpPaintTools(); }
   mp.sel=null; markDirty(); mpDraw();
@@ -5704,7 +5707,7 @@ function skCheckSheetCoverage(pageId){
 }
 
 // Attach / detach an area from a calibrated sheet.
-function setAreaPlan(i, pageId){
+async function setAreaPlan(i, pageId){
   const a = areas[i];
   if(!pageId){
     if(a.planRef){ delete a.planRef; render(); markDirty(); }
@@ -5721,11 +5724,12 @@ function setAreaPlan(i, pageId){
   // no longer sit where it was drawn, because each page has its own
   // coordinate frame. Say that plainly rather than let it be discovered.
   if(a.planRef && a.planRef.pageId !== pageId && validPoly(a)){
-    const ok = confirm(
+    const ok = await pjlDialog.confirm(
       `"${(a.name||'This area')}" is already traced on another sheet.\n\n` +
       `Moving it to "${pg.label}" keeps the shape and its square footage — the outline is stored ` +
       `in feet — but each sheet has its own coordinate frame, so the shape will not line up with ` +
-      `the new drawing until you re-trace it.\n\nMove it anyway?`
+      `the new drawing until you re-trace it.\n\nMove it anyway?`,
+      { title: 'Move to another sheet', icon: 'warning', confirmLabel: 'Move it' }
     );
     if(!ok){ render(); return; }
   }
@@ -6488,9 +6492,9 @@ function setValveGroupMode(g, v){
   if(v==='station') valveGroupModes[String(g)]='station'; else delete valveGroupModes[String(g)];
   render(); markDirty();
 }
-function setValveGroup(i, v){
+async function setValveGroup(i, v){
   if(v === '__new__'){
-    const name = (prompt('Name this shared valve (e.g. "Drip A", "Bldg face drip"):', 'Drip '+String.fromCharCode(65+valveGroupsInUse().length)) || '').trim();
+    const name = ((await pjlDialog.prompt('Name this shared valve (e.g. "Drip A", "Bldg face drip"):', { title: 'Name shared valve', defaultValue: 'Drip '+String.fromCharCode(65+valveGroupsInUse().length) })) || '').trim();
     if(!name){ render(); return; }
     areas[i].valveGroup = name.slice(0,60);
   } else if(v){

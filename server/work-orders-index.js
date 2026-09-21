@@ -231,7 +231,7 @@ els.container.addEventListener("click", async (event) => {
   event.stopPropagation();
   const id = btn.dataset.woId;
   if (!id) return;
-  if (!confirm(`Run completion cascade on ${id}? Drafts a service record + invoice from the signed scope. Idempotent — safe to re-run.`)) return;
+  if (!(await pjlDialog.confirm(`Run completion cascade on ${id}? Drafts a service record + invoice from the signed scope. Idempotent — safe to re-run.`, { title: "Run completion cascade", icon: "warning" }))) return;
   const original = btn.textContent;
   btn.disabled = true;
   btn.textContent = "Running…";

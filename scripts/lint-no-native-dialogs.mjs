@@ -46,50 +46,44 @@ const VERBOSE = process.argv.includes('--verbose');
 // because they haven't been migrated yet. Drop a file from this list in
 // the same PR that finishes migrating every call site in it.
 //
-// Counts below are informational (native-call count as of PJL-60's
-// highest-volume-file round landing, 2026-09-21 — plain alert()s only
-// remain in these five, confirm()/prompt() are done) — not enforced,
-// just so a shrinking list is visible in the diff over time.
+// Counts below are informational (native-call count as of PJL-60
+// finishing, 2026-09-21 — every confirm()/prompt() sitewide is now
+// migrated; everything left in every file below is a plain alert(),
+// PJL-61's scope) — not enforced, just so a shrinking list is visible in
+// the diff over time.
 const ALLOWLIST_FILES = [
-  { file: 'sitebuilder.html', count: 50, reason: 'Not yet migrated — PJL-60/PJL-61 (highest single-file count).' },
-  { file: 'work-order-tech.js', count: 32, reason: 'Only alert()s remain — confirm()/prompt() fully migrated (PJL-59 + PJL-60). Rest pending PJL-61.' },
-  { file: 'quote-folder.js', count: 29, reason: 'Only alert()s remain — confirm()/prompt() fully migrated (PJL-59 + PJL-60). Rest pending PJL-61.' },
-  { file: 'project.js', count: 24, reason: 'Only alert()s remain — confirm()/prompt() fully migrated (PJL-59 + PJL-60). Rest pending PJL-61.' },
-  { file: 'work-order.js', count: 21, reason: 'Only alert()s remain — confirm()/prompt() fully migrated (PJL-60). Rest pending PJL-61.' },
-  { file: 'quote-proposal-builder.js', count: 10, reason: 'Some call sites already fixed in PJL-59; rest pending PJL-60/PJL-61.' },
-  { file: 'settings.js', count: 8, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'customer.js', count: 7, reason: 'Some call sites already fixed in PJL-59; rest pending PJL-60/PJL-61.' },
-  { file: 'material-list.js', count: 7, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'invoice.js', count: 6, reason: 'Only alert()s remain — confirm() fully migrated (PJL-59 + PJL-60). Rest pending PJL-61.' },
-  { file: 'property.js', count: 5, reason: 'Not yet migrated — PJL-61 (informational alerts).' },
-  { file: 'purchase-order.js', count: 5, reason: 'Some call sites already fixed in PJL-59; rest pending PJL-60/PJL-61.' },
-  { file: 'work-order-build.js', count: 5, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'admin.js', count: 4, reason: 'Some call sites already fixed in PJL-59; rest pending PJL-60/PJL-61.' },
-  { file: 'admin.html', count: 3, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'customers.js', count: 3, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'handoff.js', count: 3, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'properties.js', count: 3, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'quote-request.js', count: 3, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'today.js', count: 3, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'work-orders-index.js', count: 3, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'review-requests.html', count: 2, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'appointment.js', count: 2, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'properties-import.js', count: 2, reason: 'Not yet migrated — PJL-61 (informational alerts).' },
-  { file: 'schedule.js', count: 2, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'suppliers.js', count: 2, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'users.js', count: 2, reason: 'Some call sites already fixed in PJL-59; rest pending PJL-60/PJL-61.' },
-  { file: 'smart-controller-photos.html', count: 1, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'welcome-email.html', count: 1, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'booking.js', count: 1, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'outreach.js', count: 1, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'portal.js', count: 1, reason: 'Not yet migrated — PJL-60/PJL-61.' },
-  { file: 'voice-input.js', count: 1, reason: 'Not yet migrated — PJL-61 (informational alerts).' },
-  // The 10 highest-stakes calls (customer.js:905, users.js:218,
-  // purchase-order.js:553, quote-folder.js:366/399,
-  // quote-proposal-builder.js:1794/2320/1120, admin.js:912,
-  // work-order-tech.js:4428, project.js:1140 via askConfirm) are migrated
-  // in PJL-59. Their files stay above until every OTHER native call in
-  // them is also gone — see PJL-60/PJL-61.
+  { file: 'sitebuilder.html', count: 39, reason: 'PJL-61 (informational alerts) — highest single-file count.' },
+  { file: 'work-order-tech.js', count: 32, reason: 'PJL-61 (informational alerts).' },
+  { file: 'quote-folder.js', count: 29, reason: 'PJL-61 (informational alerts).' },
+  { file: 'project.js', count: 24, reason: 'PJL-61 (informational alerts).' },
+  { file: 'work-order.js', count: 21, reason: 'PJL-61 (informational alerts).' },
+  { file: 'invoice.js', count: 6, reason: 'PJL-61 (informational alerts).' },
+  { file: 'customer.js', count: 5, reason: 'PJL-61 (informational alerts).' },
+  { file: 'admin.js', count: 4, reason: 'PJL-61 (informational alerts).' },
+  { file: 'material-list.js', count: 4, reason: 'PJL-61 (informational alerts).' },
+  { file: 'customers.js', count: 3, reason: 'PJL-61 (informational alerts).' },
+  { file: 'handoff.js', count: 3, reason: 'PJL-61 (informational alerts).' },
+  { file: 'properties.js', count: 3, reason: 'PJL-61 (informational alerts).' },
+  { file: 'property.js', count: 3, reason: 'PJL-61 (informational alerts).' },
+  { file: 'purchase-order.js', count: 3, reason: 'PJL-61 (informational alerts).' },
+  { file: 'settings.js', count: 3, reason: 'PJL-61 (informational alerts).' },
+  { file: 'properties-import.js', count: 2, reason: 'PJL-61 (informational alerts).' },
+  { file: 'quote-request.js', count: 2, reason: 'PJL-61 (informational alerts).' },
+  { file: 'today.js', count: 2, reason: 'PJL-61 (informational alerts).' },
+  { file: 'work-orders-index.js', count: 2, reason: 'PJL-61 (informational alerts).' },
+  { file: 'portal.js', count: 1, reason: 'PJL-61 (informational alert) — host page (portal.html) doesn\'t load pjl-dialog.js/.css yet; add those tags when migrating this one.' },
+  { file: 'quote-proposal-builder.js', count: 1, reason: 'PJL-61 (informational alert).' },
+  { file: 'suppliers.js', count: 1, reason: 'PJL-61 (informational alert).' },
+  { file: 'voice-input.js', count: 1, reason: 'PJL-61 (informational alert).' },
+  // Every confirm()/prompt() sitewide (the 10 highest-stakes calls from
+  // PJL-59, plus the rest of PJL-60 across every file above and every
+  // file that dropped off this list entirely — admin.html,
+  // appointment.js/.html, booking.js, material-list.js's confirms,
+  // outreach.js, quote-request.js's prompt, review-requests.html,
+  // schedule.js, smart-controller-photos.html, suppliers.js's confirm,
+  // today.js, users.js, welcome-email.html, work-order-build.js,
+  // work-orders-index.js, and sitebuilder.html's 10 confirms + 1
+  // prompt) is done. Everything remaining above is a plain alert().
 ];
 const ALLOWLIST_FILE_SET = new Set(ALLOWLIST_FILES.map(e => e.file));
 

@@ -346,7 +346,7 @@
   async function promoteNextDayMats() {
     const mats = state.wo.dailyLog?.nextDayMaterials || [];
     if (!mats.length || !state.project) return;
-    if (!confirm(`Promote ${mats.length} item${mats.length === 1 ? "" : "s"} to a project material list?`)) return;
+    if (!(await pjlDialog.confirm(`Promote ${mats.length} item${mats.length === 1 ? "" : "s"} to a project material list?`, { title: "Promote Materials", confirmLabel: "Promote" }))) return;
     try {
       // Create a material list under the project. material-lists.js
       // expects `lineItems` (not `items`) with shape { sku, qty,
@@ -417,7 +417,7 @@
     const sessions = state.wo.dailyLog?.sessions || [];
     const active = sessions.find((s) => !s.outAt);
     if (!active) return;
-    if (!confirm(`End session ${active.id}?`)) return;
+    if (!(await pjlDialog.confirm(`End session ${active.id}?`, { title: "End Session", icon: "warning", confirmLabel: "End Session" }))) return;
     try {
       const r = await fetch(`/api/work-orders/${encodeURIComponent(WO_ID)}/sessions/${encodeURIComponent(active.id)}/end`, {
         method: "PATCH"
@@ -475,7 +475,7 @@
     }
   }
 
-  function openTaskDoneModal(taskId) {
+  async function openTaskDoneModal(taskId) {
     const task = (state.project?.tasks || []).find((t) => t.id === taskId);
     if (!task) return;
     const current = task.status === "done" ? 100 : Math.max(0, Math.min(100, Number(task.percentComplete) || 0));
@@ -485,7 +485,7 @@
     const fileInput = document.getElementById("tbTaskDonePhotos");
     if (!modal) {
       // Modal missing (old page) — fall back to a "finish it" confirm.
-      if (confirm(`Mark "${task.description}" done?`)) submitTaskProgress(taskId, Math.max(0, 100 - current), []);
+      if (await pjlDialog.confirm(`Mark "${task.description}" done?`, { title: "Mark Task Done", confirmLabel: "Mark Done" })) submitTaskProgress(taskId, Math.max(0, 100 - current), []);
       return;
     }
     if (desc) desc.textContent = task.description;
@@ -578,7 +578,7 @@
   async function reopenTask(taskId) {
     const task = (state.project?.tasks || []).find((t) => t.id === taskId);
     const label = task ? task.description : "this task";
-    if (!confirm(`Reopen "${label}"? This clears the progress logged on this work order and unmarks it as done.`)) return;
+    if (!(await pjlDialog.confirm(`Reopen "${label}"? This clears the progress logged on this work order and unmarks it as done.`, { title: "Reopen Task", icon: "warning", destructive: true, confirmLabel: "Reopen" }))) return;
     try {
       const r = await fetch(`/api/work-orders/${encodeURIComponent(WO_ID)}/tasks-done/${encodeURIComponent(taskId)}`, { method: "DELETE" });
       const data = await r.json().catch(() => ({}));
@@ -602,7 +602,7 @@
   }
 
   async function removeMaterial(idx) {
-    if (!confirm("Remove this material entry?")) return;
+    if (!(await pjlDialog.confirm("Remove this material entry?", { title: "Remove Material", icon: "delete", destructive: true, confirmLabel: "Remove" }))) return;
     try {
       const r = await fetch(`/api/work-orders/${encodeURIComponent(WO_ID)}/materials-consumed/${idx}`, {
         method: "DELETE"

@@ -580,14 +580,14 @@
     scheduleSave();
   }
 
-  function removeLine(lineId) {
+  async function removeLine(lineId) {
     const line = state.list.lineItems.find((l) => l.id === lineId);
     if (!line) return;
     if (line.status === "ordered") {
       alert("This line is on a sent purchase order. Cancel the PO before removing the line.");
       return;
     }
-    if (!confirm("Remove this line?")) return;
+    if (!(await pjlDialog.confirm("Remove this line?", { title: "Remove line", icon: "delete", destructive: true, confirmLabel: "Remove" }))) return;
     state.list.lineItems = state.list.lineItems.filter((l) => l.id !== lineId);
     renderAll();
     scheduleSave();
@@ -1182,7 +1182,7 @@
     els.archiveButton.addEventListener("click", async () => {
       const archiving = state.list.status !== "archived";
       const verb = archiving ? "Archive" : "Restore";
-      if (!confirm(`${verb} this list?`)) return;
+      if (!(await pjlDialog.confirm(`${verb} this list?`, { title: `${verb} list`, confirmLabel: verb }))) return;
       const r = await fetch(`/api/material-lists/${encodeURIComponent(state.listId)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -1203,7 +1203,7 @@
       const confirmText = lineCount
         ? `Delete this list and its ${lineCount} line item${lineCount === 1 ? "" : "s"}? This cannot be undone — archive is safer if you might need it later.`
         : "Delete this empty list?";
-      if (!confirm(confirmText)) return;
+      if (!(await pjlDialog.confirm(confirmText, { title: "Delete list", icon: "delete", destructive: true, confirmLabel: "Delete" }))) return;
       const r = await fetch(`/api/material-lists/${encodeURIComponent(state.listId)}`, { method: "DELETE" });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {

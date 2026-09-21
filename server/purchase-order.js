@@ -528,7 +528,7 @@
 
   // ---- Reorder ------------------------------------------------------
   async function reorderPo() {
-    if (!confirm("Clone this PO into a new draft? Same supplier, same line items at fresh prices from the catalog.")) return;
+    if (!(await pjlDialog.confirm("Clone this PO into a new draft? Same supplier, same line items at fresh prices from the catalog.", { title: "Reorder this PO?", confirmLabel: "Clone" }))) return;
     const r = await fetch(`/api/purchase-orders/${encodeURIComponent(state.poId)}/reorder`, { method: "POST" });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || "Couldn't re-order."); return; }
@@ -536,7 +536,7 @@
   }
 
   async function cancelPo() {
-    const reason = prompt("Cancel this PO. Reason (optional):", "");
+    const reason = await pjlDialog.prompt("Cancel this PO. Reason (optional):", { title: "Cancel PO", defaultValue: "" });
     if (reason === null) return;
     const r = await fetch(`/api/purchase-orders/${encodeURIComponent(state.poId)}/cancel`, {
       method: "POST",

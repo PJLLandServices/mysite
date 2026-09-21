@@ -20,6 +20,8 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const html = fs.readFileSync(path.join(here, '..', 'server', 'sitebuilder.html'), 'utf8');
+const pjlDialogJs = fs.readFileSync(path.join(here, '..', 'server', 'pjl-dialog.js'), 'utf8');
+const pjlDialogCss = fs.readFileSync(path.join(here, '..', 'server', 'pjl-dialog.css'), 'utf8');
 
 const PAGE = 'spp_testpage';
 const project = () => ({
@@ -51,6 +53,8 @@ await page.route('**/*', route => {
   const url = new URL(route.request().url());
   const m = route.request().method();
   if (url.pathname === '/admin/sitebuilder') return route.fulfill({ contentType: 'text/html', body: html });
+  if (url.pathname === '/crm/pjl-dialog.js') return route.fulfill({ contentType: 'application/javascript', body: pjlDialogJs });
+  if (url.pathname === '/crm/pjl-dialog.css') return route.fulfill({ contentType: 'text/css', body: pjlDialogCss });
   if (url.pathname === '/api/projects/PROJ-TEST-0001' && m === 'GET') {
     const p = project(); if (saved) p.systemDesign = saved;
     return route.fulfill({ json: { ok: true, project: p } });
@@ -167,11 +171,11 @@ check(v7.n === base.zones.length && v7.st === base.stations, 'version-7 blob: ev
 
 // --- remove the split ------------------------------------------------------
 saved = blob; await page.reload(); await page.waitForFunction(() => appReady === true);
-const removed = await page.evaluate((k) => {
+const removed = await page.evaluate(async (k) => {
   openMasterPlan(mp.pageId || Object.keys(routing)[0]);
-  window.confirm = () => true;
+  window.pjlDialog.confirm = async () => true;
   const zi = LAST_ZONES.findIndex(z => z.key === k);
-  mpRemoveSplit(zi);
+  await mpRemoveSplit(zi);
   const r = routing[mp.pageId];
   return { zones: LAST_ZONES.map(z => ({ key: z.key, station: z.station, heads: z.headCount })), splits: Object.keys(r.splits), pinsB: r.pins[k + '#B'] || null, st: stationCount() };
 }, pick.key);

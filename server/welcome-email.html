@@ -353,7 +353,7 @@
         const bookingId = btn.dataset.send;
         const select = els.candBody.querySelector(`[data-variant-for="${CSS.escape(bookingId)}"]`);
         const variant = select ? select.value : undefined;
-        if (!confirm(`Send the ${VARIANT_LABELS[variant] || variant} welcome email for ${bookingId} now?`)) return;
+        if (!(await pjlDialog.confirm(`Send the ${VARIANT_LABELS[variant] || variant} welcome email for ${bookingId} now?`, { title: "Send welcome email", icon: "send", confirmLabel: "Send" }))) return;
         btn.disabled = true;
         const original = btn.textContent;
         btn.textContent = "Sending…";

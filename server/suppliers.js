@@ -173,7 +173,7 @@ async function saveForm(event) {
 
 async function toggleArchive(supplier) {
   const verb = supplier.archived ? "restore" : "archive";
-  if (!confirm(`${verb[0].toUpperCase() + verb.slice(1)} ${supplier.name}?`)) return;
+  if (!(await pjlDialog.confirm(`${verb[0].toUpperCase() + verb.slice(1)} ${supplier.name}?`, { title: verb === "archive" ? "Archive supplier" : "Restore supplier", icon: verb === "archive" ? "warning" : undefined, confirmLabel: verb[0].toUpperCase() + verb.slice(1) }))) return;
   const r = await fetch(`/api/suppliers/${encodeURIComponent(supplier.id)}/archive`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

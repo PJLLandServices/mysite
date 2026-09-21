@@ -332,7 +332,7 @@ todayList.addEventListener("click", async (event) => {
     if (actionEl.dataset.notified) {
       // Already notified — confirm before re-firing so the customer
       // doesn't get spammed by a fat-fingered tap.
-      const ok = confirm("Customer already notified earlier. Send another 'on the way' message?");
+      const ok = await pjlDialog.confirm("Customer already notified earlier. Send another 'on the way' message?", { title: "Send notification", icon: "send" });
       if (!ok) return;
     }
     event.preventDefault();

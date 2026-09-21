@@ -315,16 +315,16 @@
           if (!btn) return;
           resend({ ids: [btn.dataset.id] }, btn);
         });
-        document.getElementById("emailHealthDismissAll").addEventListener("click", function (e) {
-          if (!window.confirm("Dismiss every one of these? Nothing is sent. They stay in the ledger; they just stop showing here.")) return;
+        document.getElementById("emailHealthDismissAll").addEventListener("click", async function (e) {
+          if (!(await pjlDialog.confirm("Dismiss every one of these? Nothing is sent. They stay in the ledger; they just stop showing here.", { title: "Dismiss all", icon: "warning", confirmLabel: "Dismiss all" }))) return;
           dismiss({ all: true }, e.target);
         });
-        document.getElementById("emailHealthCatchUp").addEventListener("click", function (e) {
-          if (!window.confirm("Send every blast message that never went out? Each is rebuilt from the booking as it is now and goes only inside the 9 AM – 8 PM window.")) return;
+        document.getElementById("emailHealthCatchUp").addEventListener("click", async function (e) {
+          if (!(await pjlDialog.confirm("Send every blast message that never went out? Each is rebuilt from the booking as it is now and goes only inside the 9 AM – 8 PM window.", { title: "Send catch-up", icon: "send", confirmLabel: "Send" }))) return;
           sendCatchUp(e.target);
         });
-        document.getElementById("emailHealthResendAll").addEventListener("click", function (e) {
-          if (!window.confirm("Send every one of these again? They are rebuilt from the current records, so each says what is true now.")) return;
+        document.getElementById("emailHealthResendAll").addEventListener("click", async function (e) {
+          if (!(await pjlDialog.confirm("Send every one of these again? They are rebuilt from the current records, so each says what is true now.", { title: "Resend all", icon: "send", confirmLabel: "Resend all" }))) return;
           resend({ all: true }, e.target);
         });
         fetch("/api/admin/email-health", { credentials: "same-origin" })

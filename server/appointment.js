@@ -235,7 +235,7 @@
           b.className = "ap-slot";
           b.innerHTML = `<strong>${day.label}</strong><span>${slot.timeLabel} · ${slot.bucketWindow}</span>`;
           b.addEventListener("click", async () => {
-            if (!window.confirm(`Move your appointment to ${day.label}, ${slot.timeLabel.toLowerCase()}?`)) return;
+            if (!(await pjlDialog.confirm(`Move your appointment to ${day.label}, ${slot.timeLabel.toLowerCase()}?`, { title: "Reschedule appointment?", confirmLabel: "Reschedule" }))) return;
             b.disabled = true;
             try {
               const done = await post("/reschedule", { start: slot.start });
@@ -258,7 +258,7 @@
   // ---- Free bucket -------------------------------------------------
 
   el("freeBucketBtn").addEventListener("click", async () => {
-    if (!window.confirm("Join the Free Bucket? We'll fit your visit in when our crew is in your area, and our technician will call you with an approximate arrival time.")) return;
+    if (!(await pjlDialog.confirm("Join the Free Bucket? We'll fit your visit in when our crew is in your area, and our technician will call you with an approximate arrival time.", { title: "Join the Free Bucket?", confirmLabel: "Join" }))) return;
     el("freeBucketBtn").disabled = true;
     try {
       const data = await post("/free-bucket");

@@ -532,7 +532,7 @@
   }
 
   async function cancelQr() {
-    const reason = prompt("Cancel this quote request. Reason (optional):", "");
+    const reason = await pjlDialog.prompt("Cancel this quote request. Reason (optional):", { title: "Cancel quote request", defaultValue: "" });
     if (reason === null) return;
     const r = await fetch(`/api/quote-requests/${encodeURIComponent(state.qrId)}/cancel`, {
       method: "POST",

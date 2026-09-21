@@ -424,10 +424,15 @@
     markDirty();
   }
 
-  function removeSection(id) {
+  async function removeSection(id) {
     const sec = (state.quote.proposalSections || []).find((s) => s.id === id);
     if (!sec || STRUCTURAL_KINDS.includes(sec.kind)) return; // structural: guarded server-side too
-    if (!confirm(`Delete section "${sec.title || sec.kind}"? This can't be undone.`)) return;
+    if (!(await pjlDialog.confirm(`Delete section "${sec.title || sec.kind}"? This can't be undone.`, {
+      title: "Delete section",
+      icon: "delete",
+      destructive: true,
+      confirmLabel: "Delete",
+    }))) return;
     state.quote.proposalSections = (state.quote.proposalSections || []).filter((s) => s.id !== id);
     if (state.activeSectionId === id) {
       const next = (state.quote.proposalSections || [])[0];
@@ -976,7 +981,11 @@
   function wireFinancingEvents() {
     el.finEnableBtn.addEventListener("click", async () => {
       if (state.isDirty) await saveDraft();
-      if (!confirm(`Enable Klarna financing on ${state.quote.id}? This will raise the quoted price to cover Klarna's fee — the customer sees one adjusted total, not a separate fee line.`)) return;
+      if (!(await pjlDialog.confirm(`Enable Klarna financing on ${state.quote.id}? This will raise the quoted price to cover Klarna's fee — the customer sees one adjusted total, not a separate fee line.`, {
+        title: "Enable financing",
+        icon: "warning",
+        confirmLabel: "Enable",
+      }))) return;
       el.finEnableBtn.disabled = true;
       try {
         const r = await fetch(`/api/admin/quotes/${encodeURIComponent(state.quote.id)}/klarna/enable`, { method: "POST" });
@@ -995,7 +1004,11 @@
     });
 
     el.finDisableBtn.addEventListener("click", async () => {
-      if (!confirm(`Remove financing from ${state.quote.id}? The price reverts to what it was before financing was enabled.`)) return;
+      if (!(await pjlDialog.confirm(`Remove financing from ${state.quote.id}? The price reverts to what it was before financing was enabled.`, {
+        title: "Remove financing",
+        icon: "warning",
+        confirmLabel: "Remove",
+      }))) return;
       el.finDisableBtn.disabled = true;
       try {
         const r = await fetch(`/api/admin/quotes/${encodeURIComponent(state.quote.id)}/klarna/disable`, { method: "POST" });
@@ -1203,7 +1216,12 @@
   });
 
   el.docRemove.addEventListener("click", async () => {
-    if (!confirm("Remove the custom proposal document? The customer will see the standard layout instead.")) return;
+    if (!(await pjlDialog.confirm("Remove the custom proposal document? The customer will see the standard layout instead.", {
+      title: "Remove document",
+      icon: "delete",
+      destructive: true,
+      confirmLabel: "Remove",
+    }))) return;
     try {
       const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/proposal-document`, { method: "DELETE" });
       const data = await r.json().catch(() => ({}));
@@ -1490,10 +1508,10 @@
     markDirty();
   });
 
-  el.customLine.addEventListener("click", () => {
-    const label = prompt("Description for the custom line item:");
+  el.customLine.addEventListener("click", async () => {
+    const label = await pjlDialog.prompt("Description for the custom line item:", { title: "Custom line item" });
     if (!label) return;
-    const price = parseFloat(prompt("Unit price ($):"));
+    const price = parseFloat(await pjlDialog.prompt("Unit price ($):", { title: "Custom line item" }));
     if (!Number.isFinite(price)) return;
     const li = {
       id: "li_" + Math.random().toString(36).slice(2, 10),
@@ -1765,7 +1783,11 @@
     const q = state.quote;
     if (!q || q.status !== "draft") return;
     const hasContent = (q.proposalSections || []).some((s) => s.body && s.body.trim());
-    if (hasContent && !confirm("Re-seed the sections to match this branch? Your typed section content will be replaced.")) {
+    if (hasContent && !(await pjlDialog.confirm("Re-seed the sections to match this branch? Your typed section content will be replaced.", {
+      title: "Re-seed sections",
+      icon: "warning",
+      confirmLabel: "Re-seed",
+    }))) {
       return;
     }
     try {
@@ -1815,7 +1837,11 @@
   });
 
   el.convertBtn.addEventListener("click", async () => {
-    if (!confirm(`Convert ${state.quote.id} to a Project? Tasks will be seeded from the line items.`)) return;
+    if (!(await pjlDialog.confirm(`Convert ${state.quote.id} to a Project? Tasks will be seeded from the line items.`, {
+      title: "Convert to Project",
+      icon: "warning",
+      confirmLabel: "Convert",
+    }))) return;
     try {
       const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/convert-to-project`, { method: "POST" });
       const data = await r.json().catch(() => ({}));
@@ -1830,7 +1856,10 @@
   });
 
   el.attestConfirm.addEventListener("click", async () => {
-    if (!confirm(`Confirm you've reviewed the signed PDF and ${state.quote.id} is correctly accepted?`)) return;
+    if (!(await pjlDialog.confirm(`Confirm you've reviewed the signed PDF and ${state.quote.id} is correctly accepted?`, {
+      title: "Confirm acceptance",
+      confirmLabel: "Confirm",
+    }))) return;
     try {
       const r = await fetch(`/api/admin/quote-folder/${encodeURIComponent(state.quote.id)}/confirm-pdf-acceptance`, {
         method: "POST",

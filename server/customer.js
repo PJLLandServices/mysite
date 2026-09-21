@@ -919,10 +919,11 @@ deleteBtn?.addEventListener("click", async () => {
     // customer, then retry carrying the confirmation.
     if (!res.ok && body?.code === "trashed_only") {
       const trashSummary = describeLinks(body.trashed);
-      const proceed = confirm(
+      const proceed = await pjlDialog.confirm(
         `${label} has nothing live attached, but ${trashSummary} still in the Trash `
         + `point at this customer.\n\nDeleting the customer permanently deletes `
-        + `${trashSummary} too — they can't be restored afterwards.\n\nGo ahead?`
+        + `${trashSummary} too — they can't be restored afterwards.\n\nGo ahead?`,
+        { title: "Delete customer and trashed records?", icon: "delete", destructive: true, confirmLabel: "Delete" }
       );
       if (!proceed) {
         deleteBtn.disabled = false;
@@ -938,11 +939,12 @@ deleteBtn?.addEventListener("click", async () => {
     // part-paid invoice refuses it even here; the server says so.
     if (!res.ok && body?.code === "linked" && body.references) {
       const counts = describeLinks(body.references);
-      const typed = prompt(
+      const typed = await pjlDialog.prompt(
         `${label} is linked to ${counts}.\n\n`
         + `DELETE EVERYTHING removes the customer and those ${counts} permanently. `
         + `This cannot be undone.\n\n`
-        + `Type DELETE to remove them all, or cancel to stop.`
+        + `Type DELETE to remove them all, or cancel to stop.`,
+        { title: "Delete everything?", defaultValue: "" }
       );
       if (typed !== null && typed.trim().toUpperCase() === "DELETE") {
         ({ res, body } = await requestDelete({ cascade: true }));

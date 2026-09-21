@@ -445,10 +445,10 @@ document.getElementById("deferredList")?.addEventListener("click", async (event)
   if (!li || !propertyId) return;
   const deferredId = li.dataset.deferredId;
   const action = btn.dataset.deferAction;
-  if (!confirm(`Mark this item as "${action}"?`)) return;
+  if (!(await pjlDialog.confirm(`Mark this item as "${action}"?`, { title: "Update item status?", confirmLabel: "Confirm" }))) return;
   let note = "";
   if (action === "dismissed") {
-    note = prompt("Optional note (why dismissed?)", "") || "";
+    note = (await pjlDialog.prompt("Optional note (why dismissed?)", { title: "Dismiss item", defaultValue: "" })) || "";
   }
   btn.disabled = true;
   try {
