@@ -27,9 +27,17 @@ from York Mills inside it, the whole day says +≤5; the engine offers the after
 TIGHT corridor with no widening and the morning reads `full`; a cap of six opens the morning
 at +≤5; the setter refuses 0, the route and the control exist. `test-geo-availability` (75),
 `booking-guards`, `commercial-slots`, `season-plan-buckets`, `day-preview`, `unplanned-routing`,
-`season-plan-moves` unchanged and green. **Patrick's acceptance test — not yet walked:** probe
+`season-plan-moves` unchanged and green. **Same hour, "See it on the day" from the probe**
+(Patrick: *"on my app, i can select - see it on the day. Can we make the provision for this the
+same?"*): every probe row now carries the button the unplanned list has. The preview route
+takes `address` as well as `code` — a typed address geocodes into a stand-in stop under
+`PROBE`, built through the same `resolvePlanDay` and drawn on the same map; a real code wins
+when both are given; nothing is written. The dialog's Add is disabled for a stand-in (the
+caller is booked from the probe row, which makes the record). `test-day-map-preview.mjs`
+gains 5 source guards (54). **Patrick's acceptance test — not yet walked:** probe
 46 Dunvegan Rd on the plan; that day's Afternoon column should now read a single-digit "+N",
-not 39. Then set Stops per half-day to 6, Save, probe again — the Morning column should read
+not 39; press See it on the day — the map should show the house numbered between Casa Loma
+and York Mills. Then set Stops per half-day to 6, Save, probe again — the Morning column should read
 "open · +N" and the public calendar should offer the day to a Toronto customer.
 **2026-09-21 (The probe said "yes, +2 min" for a day the engine refused):** Patrick, on the
 season-plan probe: *"i have the ability to book 46 dunvegan rd on thursday 22 but its not

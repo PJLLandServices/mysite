@@ -1860,7 +1860,8 @@
     if (oldNote) oldNote.remove();
     previewMap.innerHTML = '<p class="sp-preview-loading">Working out the day…</p>';
     try {
-      const q = new URLSearchParams({ code: row.code });
+      // A probe row has no property yet: the typed address stands in.
+      const q = row.probe ? new URLSearchParams({ address: row.address }) : new URLSearchParams({ code: row.code });
       if (bucket) q.set("bucket", bucket);
       const response = await fetch(`${base()}/preview/${date}?${q}`, { cache: "no-store" });
       const data = await response.json();
@@ -1872,8 +1873,12 @@
       renderPreviewStops(data);
       previewMap.innerHTML = "";
       await drawDayMap(previewMap, previewStops, data.day, { line: data.line });
-      previewAdd.disabled = false;
-      previewAdd.textContent = `Add to ${prettyDate(date)} ${data.bucket}`;
+      // The plan's Add is for a property record. A caller is booked from
+      // the probe row, which makes the record — so the preview is look-only.
+      previewAdd.disabled = Boolean(row.probe);
+      previewAdd.textContent = row.probe
+        ? "Book it from the probe row"
+        : `Add to ${prettyDate(date)} ${data.bucket}`;
     } catch (error) {
       if (seq !== previewSeq) return;
       previewMap.innerHTML = "";
@@ -2762,10 +2767,22 @@
         + `<td>${escapeHtml(bucketVerdictText(buckets.morning))}</td>`
         + `<td>${escapeHtml(bucketVerdictText(buckets.afternoon))}</td>`
         + `<td>${offeredCell}</td>`;
+      // See it on the day — every row. The same map the unplanned list
+      // opens, with the typed address dropped in as the new stop, so a
+      // number in this table can be checked against the route it
+      // describes before anyone books or argues with it.
+      const bookCell = document.createElement("td");
+      const see = document.createElement("button");
+      see.type = "button";
+      see.className = "sp-window-btn";
+      see.textContent = "See it on the day";
+      see.addEventListener("click", () => {
+        openPreview({ probe: true, code: "PROBE", customerName: "New caller", address: shown, days: data.days }, day.date, null);
+      });
+      bookCell.appendChild(see);
       // Book, right here. Only on offered days — an unoffered day is
       // the engine saying no, and a button on it would book what the
       // table just refused. The Morning / Afternoon columns say why.
-      const bookCell = document.createElement("td");
       if (day.offered) {
         const btn = document.createElement("button");
         btn.type = "button";
