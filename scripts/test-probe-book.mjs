@@ -35,8 +35,8 @@ const sched = fs.readFileSync(path.join(ROOT, "server/schedule.js"), "utf8");
 
 // ---- The inline booking ----------------------------------------------
 const book = plan.slice(plan.indexOf("async function openProbeBook"));
-ok("the probe renders a Book button on every route day — 'Book anyway' when the engine refused it",
-  plan.includes('day.offered ? "Book" : "Book anyway"') && plan.includes("openProbeBook(bookHost"));
+ok("the probe renders a per-day Book button, gated on the day being offered",
+  plan.includes("if (day.offered) {") && plan.includes("openProbeBook(bookHost"));
 ok("the inline form exists", plan.includes("async function openProbeBook"));
 
 // The server contract, in order: availability (this one day, admin
@@ -46,24 +46,16 @@ ok("slots come from the availability engine for exactly the probed day",
   && book.includes("&from=${encodeURIComponent(day.date)}&to=${encodeURIComponent(day.date)}")
   && book.includes("adminBypass=1"));
 const holdAt = book.indexOf('"/api/booking/hold"');
-const reserveAt = book.indexOf('reserveBooking(payloadFor(picked.start, hold.holdToken, "slot"))');
+const reserveAt = book.indexOf("reserveBooking({");
 ok("the hold is taken before the reserve — two callers can't finish on one slot",
   holdAt !== -1 && reserveAt !== -1 && holdAt < reserveAt, `holdAt=${holdAt} reserveAt=${reserveAt}`);
-ok("the reserve carries the hold's token", reserveAt !== -1 && book.includes("holdToken,\n"));
+ok("the reserve carries the hold's token", book.includes("holdToken: hold.holdToken"));
 ok("the form books through the page's ONE reserve write (test-place-tray pins the URL to one call site)",
   (plan.match(/\/api\/booking\/reserve/g) || []).length === 1);
 
 // The payload fields the reserve route reads. contact.name is what
 // validateLead checks — the split fields alone fail server-side.
-ok("an offered slot books as a grid slot", book.includes('"slot")') && book.includes("hold.holdToken, "));
-// Book anyway: the admin custom-time path, no hold (there is no grid
-// slot to hold), walking forward past a minute the crew is already on.
-ok("a refused half books through the admin custom-time path",
-  book.includes('"admin_custom")') && book.includes("if (picked.custom) {"));
-ok("the walk-forward stops only on a physical conflict",
-  book.includes('error.code !== "physical_conflict"') && book.includes("at += 30 * 60 * 1000"));
-ok("the refused halves show the engine's reason on the button",
-  book.includes("book anyway (${bucketVerdictText(verdicts[bucket.key])})"));
+ok("the reserve books a grid slot, not a custom time", book.includes('source: "slot"'));
 ok("contact.name is the combined name validateLead reads",
   /name: `\$\{firstName\.value\.trim\(\)\} \$\{lastName\.value\.trim\(\)\}`\.trim\(\)/.test(book));
 ok("the probed address is the booking's address", book.includes("address,") || book.includes("address\n"));

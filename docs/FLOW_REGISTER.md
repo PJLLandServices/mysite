@@ -17,22 +17,37 @@ probe route now runs `listAvailableSlots()` ONCE for the season's smallest resid
 over the whole plan, and `availability.bucketVerdicts()` folds the slots and diagnostics per
 date and half — `open` / `full (5/5)` / `too far (+34)` / `spreads the day (+41 leg)` /
 `outside the booking window` / `no window`. The table shows a **Morning** and **Afternoon**
-column with those words, and its "Offered" is the engine's verdict. Every route day now has a
-Book button; a refused day's reads **Book anyway** and the form offers each refused half with
-its reason, booking through the existing admin custom-time path (`source: "admin_custom"`, no
-hold, first free half-hour of that half, walking forward past a `physical_conflict`) — the
-plan's own rule that Patrick "is allowed to decide a day holds six", now reachable from the
-screen that shows him the cost. NOT changed: the engine, the caps, the corridor, the public
-page. Also renamed the season-window inputs "Booking opens/closes" → "First/Last bookable
-date": the old label reads as "customers may not book until", which is not what it gates
-(fall 2026 has accepted bookings since Sep 1 for dates from Sep 28). Coverage:
-`scripts/test-probe-verdicts.mjs` (19 assertions, in `build:check`) reproduces the drift on a
-fixture — whole-day insertion calls the day cheap, the engine refuses it (morning full,
-afternoon geography), lifting the cap opens it — pins the folding, and source-guards both
-readers; `test-probe-book.mjs` updated for the two booking paths. **Patrick's acceptance test
-— not yet walked:** probe 45 Dunvegan Rd, Toronto; the Oct 22 row should now read Morning
-"full (…)" and Afternoon "too far (+…)" with Offered "no" and a **Book anyway** button; press
-it, pick the morning, fill the caller in, Book it — the booking should land on Oct 22's board.
+column with those words, and its "Offered" is the engine's verdict, so the Book button can no
+longer open a form the engine will refuse. (A first cut added a "Book anyway" admin override on
+refused days; Patrick: *"we don't want a fucking book anyways button… customers won't find a
+time when visiting our website"* — removed the same hour. The customer side is the problem.)
+**Second half, same hour (the ladder that never ran):** the public calendar for a Toronto
+address offered NO weekday from Sep 28 to Oct 19 — every planned route day refused at the
+15-minute corridor — and its first offer was Saturday Oct 10 morning. The elastic corridor
+(2026-09-07, "as the dates fill up, we allow for drive times to widen") exists for exactly
+this and never fired, because `listAvailableSlots` counted bookable days across the ENTIRE
+scan: three empty days a month out read as "enough". Now scarcity is judged inside the first
+`GEO_WIDEN_WINDOW_DAYS` (14) offerable days — the window opens on the first day that passes
+hours and the season gate, so a September caller is judged on Sep 28 – Oct 11 — and fewer than
+`GEO_WIDEN_MIN_DAYS` there, with geography having refused something, reruns one tier wider:
+25, then 40, and no further, as before. A customer who already has three days in their next
+fortnight sees nothing change; hold/reserve re-validation scans a shorter horizon and can only
+widen MORE readily, so an offered slot stays reservable. NOT changed: the caps, the tiers, the
+leg cap, the season gate. Also renamed the season-window inputs "Booking opens/closes" →
+"First/Last bookable date": the old label reads as "customers may not book until", which is
+not what it gates (fall 2026 has accepted bookings since Sep 1 for dates from Sep 28).
+Coverage: `scripts/test-widen-near-window.mjs` (10 assertions, in `build:check`; 5 fail on the
+old engine) — a fortnight of planned north days then three empty weeks: an Aurora caller
+(+17) gets the fortnight at the 25 tier, a fortnight that already offers three days never
+widens, Richmond Hill stays past the cap; `scripts/test-probe-verdicts.mjs` (19 assertions, in
+`build:check`) reproduces the probe drift on a fixture — whole-day insertion calls the day
+cheap, the engine refuses it (morning full, afternoon geography), lifting the cap opens it —
+pins the folding, and source-guards both readers. `test-geo-availability` (75), `booking-guards`
+(35), `commercial-slots`, `booking-hold`, `open-bucket` unchanged and green. **Patrick's
+acceptance test — not yet walked:** on the public page, book a fall closing for a Toronto
+address: weekdays in the first two weeks of the season should now appear (the ones within 25,
+then 40, minutes of that day's route); on the season plan, probe 45 Dunvegan Rd — the Oct 22
+row should read Morning "full (…)" / Afternoon "too far (+…)" with Offered "no".
 **2026-09-21 (Job tabs — real browser-style tabs on the Project page):** Second half of "the
 whole platform feels all over the place": *"at the top of the screen there are tabs, almost
 like a web browser... Project, Site Builder, Parts List, Quote, Invoice."* A full merge of the

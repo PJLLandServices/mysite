@@ -166,8 +166,8 @@ const baseArgs = {
   const client = fs.readFileSync(path.join(ROOT, "server/season-plan.js"), "utf8");
   ok("the table shows a Morning and an Afternoon column",
     client.includes("<th>Morning</th><th>Afternoon</th>") && client.includes("function bucketVerdictText"));
-  ok("every route day has a Book button; a refused day says 'Book anyway'",
-    client.includes('day.offered ? "Book" : "Book anyway"') && !client.includes("if (day.offered) {"));
+  ok("the Book button is gated on the ENGINE's verdict, so it can never open a form the engine will refuse",
+    client.includes("if (day.offered) {") && !client.includes("Book anyway"));
 }
 
 if (failures.length) {
