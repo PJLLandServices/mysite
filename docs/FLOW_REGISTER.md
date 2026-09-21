@@ -2,6 +2,45 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-21, after the first walkthrough (The overview becomes action-oriented):** Patrick, on
+the rebuilt workspace: *"This is dramatically better. It now feels like an actual project-
+management application instead of a long administrative form... I would keep this direction. I'd
+make a few targeted changes rather than redesigning it again."* Ten of them, all applied:
+1. **Next action card** — the overview said what a project CONTAINS, not what needs doing.
+   `lib/nextAction.ts` reads state the server already reports (design saved? proposal accepted?
+   visits booked? tasks outstanding? money owed?) and names the next step with its evidence:
+   "Schedule installation — No installation date assigned · 16 tasks remaining". It decides
+   nothing: no pricing, no scheduling rules, no lifecycle transitions — those stay server-side.
+   Three tones: act (orange), waiting on someone else (blue), done (green).
+2. **The duplicated figure is gone.** Contract value lives once, in the summary band.
+3. **Four summary figures**: Contract value / Project progress / System design / Billing — and
+   each is a button that opens its own section, so the number you're reading is the way in.
+4. **Progress bar** under the task figure.
+5. **Scope card** carries the description plus what the design and proposal already know
+   ("19-zone system · 3 line items on the proposal") and an Open scope link.
+6. **Empty activity state** asks for the first entry and carries the button to make it.
+7. **One word for the document: proposal.** The tab, the card and the button all say it; "Quote"
+   survives only as the internal record type.
+8. **Customer card is contact ACTIONS** — primary contact, tap-to-call, tap-to-email, and links
+   to the customer and property records. The company name and job address already sit in the
+   header, so the card no longer repeats them.
+9. **"Open in classic" is now a quiet ghost button** — an escape hatch during the migration, not
+   a peer of the primary action. It disappears entirely once each tab is migrated.
+10. **Sticky project header** — title, status and the section tabs stay put while a long section
+    scrolls. Verified by scrolling a genuinely tall page (913px) and asserting both are still on
+    screen, not by eyeballing a page that didn't actually scroll.
+**A real bug this surfaced:** a project carrying a `proposalSnapshot` came from an ACCEPTED
+proposal, but if a revision is raised afterwards the linked quote returns to `draft` — and the
+first cut of `nextAction` read only that live status, so it told a crew mid-install to go and
+"send the proposal" on a job they were already building. Fixed: the frozen snapshot is the proof
+of sale. Pinned by a test that builds exactly that record shape.
+**A bug that wasn't:** the first screenshot showed a $2,469,050 contract. Quotes store DOLLARS
+(`Math.round(price * qty * 100) / 100`), so the app was rendering faithfully — the fixture had
+been copied from a test that used cents-looking numbers. Checked before changing anything;
+nothing needed changing.
+`scripts/test-app-shell-rebuild.mjs` grew to 36 assertions covering the above against the real
+server, real records and the real bundle. **Patrick's acceptance test — not yet walked:** open a
+live job and confirm the Next action names the right next step for where that job actually is.
 **2026-09-21, end of day (The front end gets rebuilt — foundation + the first workflow screens):**
 Patrick, after a day of patching the Project page twice over: *"Treat the existing application as a
 functional prototype, not the final interface. Preserve its data models, APIs, calculations and

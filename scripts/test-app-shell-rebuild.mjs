@@ -209,13 +209,92 @@ try {
   await page.waitForTimeout(150);
   await page.click(`text=Rebuild probe — active install`);
   await page.waitForSelector("text=Contract value", { timeout: 10000 });
-  const wsText = await page.locator("main").innerText();
+  let wsText = await page.locator("main").innerText();
   ok("opening a project lands on its workspace", wsText.includes("Rebuild probe — active install"));
   ok("the workspace shows the project id", wsText.includes(active.id));
   ok("the workspace shows real task counts", /1 of 3/.test(wsText), wsText.slice(0, 500));
   // Tab labels are uppercased by CSS, so innerText reads "SYSTEM DESIGN".
   ok("workspace tabs are present", /system design/i.test(wsText) && /closeout/i.test(wsText), wsText.slice(0, 500));
   ok("navigating into a project did not leave the app", page.url().includes("/app/projects/"));
+
+  // ---- 6a. a sold job is never told to "send the proposal" -----------
+  // A project carrying a proposalSnapshot came from an ACCEPTED
+  // proposal. If a revision is raised afterwards the linked quote goes
+  // back to draft — reading only that status told a crew mid-install to
+  // go and send a proposal on a job they were already building.
+  {
+    const projectsLib = require(path.join(ROOT, "server", "lib", "projects.js"));
+    const sold = await projectsLib.create({ name: "Rebuild probe — sold job", customerName: "Sold Co" });
+    await projectsLib.update(sold.id, { status: "active" });
+    // Write the snapshot the way conversion does (it isn't a writable
+    // field through update()).
+    const storePath = path.join(DATA, "projects.json");
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    for (const rec of store) {
+      if (rec.id !== sold.id) continue;
+      rec.status = "active";
+      rec.proposalSnapshot = { quoteId: "Q-SOLD-1", version: 2, total: 18400, acceptedAt: "2026-09-10T12:00:00Z", proposalSections: [] };
+      rec.systemDesign = { areas: [{ aid: "a1" }, { aid: "a2" }], version: 1 };
+      rec.history = [{ ts: "2026-09-09T12:00:00Z", action: "system_design_saved", by: "t", note: "" }];
+    }
+    fs.writeFileSync(storePath, JSON.stringify(store, null, 2));
+
+    await page.goto(`${BASE}/app/projects/${encodeURIComponent(sold.id)}`, { waitUntil: "networkidle" });
+    await page.waitForSelector("text=Contract value", { timeout: 10000 });
+    await page.waitForTimeout(250);
+    const soldText = await page.locator("main").innerText();
+    ok(
+      "a sold job is never told to send the proposal",
+      !/send the proposal/i.test(soldText),
+      soldText.slice(0, 500)
+    );
+    ok(
+      "a sold job with no visits booked asks for a date",
+      /schedule installation/i.test(soldText),
+      soldText.slice(0, 500)
+    );
+  }
+
+  // Back to the active probe job for the remaining overview checks.
+  await page.goto(`${BASE}/app/projects/${encodeURIComponent(active.id)}`, { waitUntil: "networkidle" });
+  await page.waitForSelector("text=Contract value", { timeout: 10000 });
+  await page.waitForTimeout(250);
+  wsText = await page.locator("main").innerText();
+
+  // ---- 6b. the overview answers "what do I do next" ------------------
+  // Patrick, on the first cut: "Right now the overview tells me what the
+  // project contains, but not what needs to happen next. For an active
+  // project, this is the most important information." This job is active
+  // with no design and no proposal, so the honest next step is the
+  // design — and the card has to say so, with the evidence.
+  ok("the overview leads with a Next action", /next action/i.test(wsText), wsText.slice(0, 600));
+  ok("the next action is derived from real state (no design yet)", /start the system design/i.test(wsText), wsText.slice(0, 600));
+
+  // The contract value appears ONCE — as a summary figure. Patrick:
+  // "Remove the duplicated $24,680.33. It appears as both Contract Value
+  // and Quote Value."
+  const valueOccurrences = (wsText.match(/Contract value/gi) || []).length;
+  ok("contract value is labelled once, in the summary", valueOccurrences === 1, `found ${valueOccurrences}`);
+
+  // The four summary figures are the way into their sections.
+  ok("summary carries the four figures", /contract value/i.test(wsText) && /project progress/i.test(wsText) && /system design/i.test(wsText) && /billing/i.test(wsText));
+  await page.click('button:has-text("Project progress")');
+  await page.waitForTimeout(200);
+  ok("clicking a summary figure opens its section", page.url().endsWith("/tasks"), page.url());
+  await page.goBack();
+  await page.waitForTimeout(200);
+
+  // Empty activity state does the asking, with the action in it.
+  const overviewText = await page.locator("main").innerText();
+  ok(
+    "empty activity state invites the first entry",
+    /no project updates have been recorded/i.test(overviewText),
+    overviewText.slice(0, 600)
+  );
+
+  // One word for the customer-facing document. Patrick: "Pick one term
+  // consistently... I'd use Proposal."
+  ok("the document is called a proposal, not a quote", !/\bquote\b/i.test(overviewText), overviewText.slice(0, 800));
 
   // A tab switch is client-side: the URL changes, the shell does not
   // reload, and the pending tabs are honest rather than dead.
