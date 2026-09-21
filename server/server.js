@@ -47,7 +47,7 @@ const { geocode, PJL_BASE, isConfigured: geocodeIsConfigured } = require("./lib/
 const bookingGate = require("./lib/booking-gate");
 const distanceLib = require("./lib/distance");
 const ga4 = require("./lib/ga4");
-const { BOOKABLE_SERVICES, BOOKING_BUCKETS, DEFAULT_HOURS, DEFAULT_SETTINGS, GEO_WIDEN_TIERS, listAvailableSlots, groupByDay, expandDaysToRange, recommendDays, parseLocalDateKey, parseHHmmToMinutes } = require("./lib/availability");
+const { BOOKABLE_SERVICES, BOOKING_BUCKETS, DEFAULT_HOURS, DEFAULT_SETTINGS, GEO_WIDEN_TIERS, listAvailableSlots, groupByDay, expandDaysToRange, recommendDays, bucketVerdicts, parseLocalDateKey, parseHHmmToMinutes } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
 const { mergeDaySchedule } = require("./lib/day-schedule");
 const jobFinder = require("./lib/job-finder");
@@ -25925,12 +25925,46 @@ async function orderDayForDriving(rows) {
       // line is an answer Patrick cannot give a caller.
       const probeNow = new Date();
       const probeTodayKey = `${probeNow.getFullYear()}-${String(probeNow.getMonth() + 1).padStart(2, "0")}-${String(probeNow.getDate()).padStart(2, "0")}`;
+
+      // "Offered" is the ENGINE's answer, not the probe's own. The
+      // whole-day insertion cost below is still shown — it is the
+      // routing number Patrick reads — but it stopped being the verdict
+      // the day the engine learned things it does not know: geography
+      // per half-day, the leg cap, and each half's capacity. An address
+      // read "+2 min, yes" here while the Book button under it found no
+      // window, because its morning was full and its afternoon was a
+      // different cluster (2026-09-21). One run of the real engine, for
+      // the season's smallest residential band, over the whole plan;
+      // bucketVerdicts folds its slots and diagnostics per date and half.
+      const probeServiceKey = season === "spring" ? "spring_open_4z" : "fall_close_4z";
+      const lastShapeDate = Object.keys(shapes).sort().pop();
+      const lastShapeDay = lastShapeDate ? parseLocalDateKey(lastShapeDate) : null;
+      if (lastShapeDay) lastShapeDay.setHours(23, 59, 0, 0);
+      const engineDiagnostics = { geoSuppressed: [], seasonClosed: [], bucketFull: [] };
+      const engineSlots = await listAvailableSlots({
+        serviceKey: probeServiceKey,
+        customerCoords: geo.coords,
+        bookings: active,
+        blocks: scheduleData.blocks,
+        daysAhead: lastShapeDay ? horizonToReach(lastShapeDay, probeNow) : 30,
+        hours: { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) },
+        settings: mergedSettings,
+        dayShapes: shapes,
+        diagnostics: engineDiagnostics,
+        now: probeNow
+      });
+      const verdicts = bucketVerdicts(engineSlots, engineDiagnostics);
+
       for (const date of Object.keys(shapes).sort()) {
         if (date < probeTodayKey) continue;
         const shape = shapes[date];
         const added = resolvedAddress
           ? await geoFilter.addedDriveMinutes(geo.coords, shape.points)
           : null;
+        const verdict = verdicts.get(date) || null;
+        const corridorSaysYes = !resolvedAddress || !shape.points.length
+          || !Number.isFinite(threshold) || threshold <= 0
+          || (added && added.minutes <= threshold);
         days.push({
           date,
           label: shape.label,
@@ -25943,9 +25977,10 @@ async function orderDayForDriving(rows) {
           plannedCount: shape.plannedCount,
           bookedCount: shape.bookedCount,
           addedDriveMinutes: added ? added.minutes : null,
-          offered: !resolvedAddress || !shape.points.length
-            || !Number.isFinite(threshold) || threshold <= 0
-            || (added && added.minutes <= threshold),
+          // A date past the engine's horizon keeps the corridor-only
+          // reading; every date the engine reached takes its verdict.
+          offered: verdict ? verdict.offered : corridorSaysYes,
+          buckets: verdict ? verdict.buckets : null,
           // The corridor is elastic: when the tight corridor leaves a
           // customer short of days, availability reruns at wider tiers.
           // This is the first tier that would admit the day — null when
@@ -25985,6 +26020,8 @@ async function orderDayForDriving(rows) {
         // column of zeroes that looks like a perfect match.
         filterSkipped: !resolvedAddress,
         thresholdMinutes: threshold,
+        serviceKey: probeServiceKey,
+        serviceLabel: BOOKABLE_SERVICES[probeServiceKey]?.label || probeServiceKey,
         routeDaysOffered: offeredCount,
         routeDaysTotal: days.length,
         days

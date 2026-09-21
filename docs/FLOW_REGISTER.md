@@ -2,6 +2,37 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-21 (The probe said "yes, +2 min" for a day the engine refused):** Patrick, on the
+season-plan probe: *"i have the ability to book 46 dunvegan rd on thursday 22 but its not
+allowing me to"* — the table read **R11 · 2026-10-22 · 6 stops · 2 min · yes**, and the Book
+form under it read *"No bookable window on this day for that service."* Read live against the
+public availability route: every Toronto address got `outside_route_area` for Oct 22, nobody
+anywhere was offered its morning, and Aurora/Newmarket got only its afternoon at +13/+14 —
+i.e. the morning half is at its capacity cap and the afternoon half is a different cluster.
+**The cause is two readers of one question.** The probe judged a day by whole-day cheapest
+insertion against the corridor — the rule the engine had on 2026-09-07. Since then the engine
+grew three more (geography per half-day, the leg cap, bucket capacity) and the probe kept its
+own copy, so it drifted exactly the way CLAUDE.md §2 warns. Fixed by removing the copy: the
+probe route now runs `listAvailableSlots()` ONCE for the season's smallest residential band
+over the whole plan, and `availability.bucketVerdicts()` folds the slots and diagnostics per
+date and half — `open` / `full (5/5)` / `too far (+34)` / `spreads the day (+41 leg)` /
+`outside the booking window` / `no window`. The table shows a **Morning** and **Afternoon**
+column with those words, and its "Offered" is the engine's verdict. Every route day now has a
+Book button; a refused day's reads **Book anyway** and the form offers each refused half with
+its reason, booking through the existing admin custom-time path (`source: "admin_custom"`, no
+hold, first free half-hour of that half, walking forward past a `physical_conflict`) — the
+plan's own rule that Patrick "is allowed to decide a day holds six", now reachable from the
+screen that shows him the cost. NOT changed: the engine, the caps, the corridor, the public
+page. Also renamed the season-window inputs "Booking opens/closes" → "First/Last bookable
+date": the old label reads as "customers may not book until", which is not what it gates
+(fall 2026 has accepted bookings since Sep 1 for dates from Sep 28). Coverage:
+`scripts/test-probe-verdicts.mjs` (19 assertions, in `build:check`) reproduces the drift on a
+fixture — whole-day insertion calls the day cheap, the engine refuses it (morning full,
+afternoon geography), lifting the cap opens it — pins the folding, and source-guards both
+readers; `test-probe-book.mjs` updated for the two booking paths. **Patrick's acceptance test
+— not yet walked:** probe 45 Dunvegan Rd, Toronto; the Oct 22 row should now read Morning
+"full (…)" and Afternoon "too far (+…)" with Offered "no" and a **Book anyway** button; press
+it, pick the morning, fill the caller in, Book it — the booking should land on Oct 22's board.
 **2026-09-21 (Job tabs — real browser-style tabs on the Project page):** Second half of "the
 whole platform feels all over the place": *"at the top of the screen there are tabs, almost
 like a web browser... Project, Site Builder, Parts List, Quote, Invoice."* A full merge of the

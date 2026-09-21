@@ -718,6 +718,70 @@ function recommendDays(days, { max = 3 } = {}) {
   return days;
 }
 
+// The probe's per-half-day verdict, read off ONE engine run.
+//
+// The season-plan probe used to answer "is this day offered?" with its
+// own rule — whole-day cheapest insertion against a threshold — while
+// the engine above had grown three more: geography scored per bucket,
+// the leg cap, and bucket capacity. So the probe said "R11, +2 min, yes"
+// for an address whose morning was full and whose afternoon was a
+// different cluster, and the Book button under it found no window
+// (Patrick, 2026-09-21: "they were supposed to be available"). Two
+// readers of one question had drifted. This is the one reading: the
+// engine's slots and diagnostics, folded per date and bucket.
+//
+//   status "open"     a slot was emitted (addedDriveMinutes as the slot)
+//          "full"     bucketFull — planned + booked + this one > cap
+//          "far"      geoSuppressed — added drive over the corridor
+//          "spread"   geoSuppressed, reason day_too_spread — the leg cap
+//          "season"   the day is outside the public booking window
+//          "no_window" nothing else said no, and nothing fit — blocks,
+//                     lead time, hours (a Saturday afternoon)
+//
+// A date the engine never reached is absent from the map. The
+// diagnostics describe the corridor the customer was finally served
+// with (each widening pass resets them), so they agree with the slots.
+function bucketVerdicts(slots, diagnostics = {}) {
+  const out = new Map();
+  const bucketKeys = BOOKING_BUCKETS.map((b) => b.key);
+  const ensure = (date) => {
+    if (!out.has(date)) {
+      const buckets = {};
+      for (const k of bucketKeys) buckets[k] = { status: "no_window" };
+      out.set(date, { date, offered: false, buckets });
+    }
+    return out.get(date);
+  };
+  for (const g of diagnostics.seasonClosed || []) {
+    const v = ensure(g.date);
+    for (const k of bucketKeys) v.buckets[k] = { status: "season" };
+  }
+  for (const g of diagnostics.geoSuppressed || []) {
+    const v = ensure(g.date);
+    const key = bucketKeys.includes(g.bucket) ? g.bucket : bucketKeys[0];
+    v.buckets[key] = g.reason === "day_too_spread"
+      ? {
+        status: "spread",
+        addedDriveMinutes: g.addedDriveMinutes ?? null,
+        addedLegMinutes: g.addedLegMinutes ?? null,
+        worstLegMinutes: g.worstLegMinutes ?? null
+      }
+      : { status: "far", addedDriveMinutes: g.addedDriveMinutes ?? null };
+  }
+  for (const g of diagnostics.bucketFull || []) {
+    const v = ensure(g.date);
+    if (!bucketKeys.includes(g.bucket)) continue;
+    v.buckets[g.bucket] = { status: "full", planned: g.planned, booked: g.booked, cap: g.cap };
+  }
+  for (const s of slots || []) {
+    const v = ensure(dateKey(new Date(s.start)));
+    if (!bucketKeys.includes(s.bucketKey)) continue;
+    v.buckets[s.bucketKey] = { status: "open", addedDriveMinutes: s.addedDriveMinutes ?? null };
+    v.offered = true;
+  }
+  return out;
+}
+
 // Group slots by day for the UI's typical "pick a day, then pick a time" flow.
 function groupByDay(slots) {
   const out = new Map();
@@ -832,6 +896,7 @@ module.exports = {
   groupByDayMap,
   expandDaysToRange,
   recommendDays,
+  bucketVerdicts,
   parseLocalDateKey,
   parseHHmmToMinutes,
   minutesToHHmm

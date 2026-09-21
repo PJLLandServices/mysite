@@ -2655,7 +2655,8 @@
         + `${data.routeDaysTotal} route days at the ${data.thresholdMinutes}-minute drive threshold.`;
     } else {
       head.textContent = `${shown} — offered on ${data.routeDaysOffered} of ${data.routeDaysTotal} route days, `
-        + `where inserting them costs ${data.thresholdMinutes} min of extra driving or less.`;
+        + `by the same rule the booking page runs (for ${data.serviceLabel || "a residential closing"}): `
+        + `drive cost per half-day at the ${data.thresholdMinutes}-minute corridor, the day's spread, and each half's capacity.`;
     }
     out.appendChild(head);
 
@@ -2702,7 +2703,8 @@
 
     const table = document.createElement("table");
     table.className = "sp-probe-table";
-    table.innerHTML = "<thead><tr><th>Route</th><th>Date</th><th>Stops</th><th>Added drive</th><th>Offered</th><th></th></tr></thead>";
+    table.innerHTML = "<thead><tr><th>Route</th><th>Date</th><th>Stops</th><th>Added drive</th>"
+      + "<th>Morning</th><th>Afternoon</th><th>Offered</th><th></th></tr></thead>";
     const body = document.createElement("tbody");
     for (const day of data.days) {
       const tr = document.createElement("tr");
@@ -2714,23 +2716,27 @@
       // the calendar leaves the customer short of cheap days.
       const offeredCell = day.offered ? "yes"
         : day.widensAtMinutes ? `when full (widens at ${day.widensAtMinutes} min)` : "no";
+      const buckets = day.buckets || {};
       tr.innerHTML = `<td>${routeCell}</td><td>${day.date}</td><td>${day.points}</td>`
-        + `<td class="sp-num">${added}</td><td>${offeredCell}</td>`;
-      // Book, right here. Only on offered days — an unoffered day is
-      // the corridor saying no, and a button on it would book what the
-      // table just refused.
+        + `<td class="sp-num">${added}</td>`
+        + `<td>${escapeHtml(bucketVerdictText(buckets.morning))}</td>`
+        + `<td>${escapeHtml(bucketVerdictText(buckets.afternoon))}</td>`
+        + `<td>${offeredCell}</td>`;
+      // Book, right here — on EVERY route day. An offered day books a
+      // real slot. A refused day reads "Book anyway": the form shows why
+      // each half said no and lets Patrick place the customer past the
+      // filter and the cap, because he is the one who decides a day
+      // holds six (the plan's own rule for its caps).
       const bookCell = document.createElement("td");
-      if (day.offered) {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "sp-window-btn";
-        btn.textContent = "Book";
-        btn.addEventListener("click", () => {
-          openProbeBook(bookHost, shown, day);
-          bookHost.scrollIntoView({ behavior: "smooth", block: "nearest" });
-        });
-        bookCell.appendChild(btn);
-      }
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "sp-window-btn";
+      btn.textContent = day.offered ? "Book" : "Book anyway";
+      btn.addEventListener("click", () => {
+        openProbeBook(bookHost, shown, day);
+        bookHost.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+      bookCell.appendChild(btn);
       tr.appendChild(bookCell);
       body.appendChild(tr);
     }
@@ -2751,6 +2757,26 @@
   // the automatic email+text confirmation are identical.
 
   const probeCache = { services: null, properties: null };
+
+  // One half-day's verdict, in the engine's words (availability.js
+  // bucketVerdicts). "full (5/5)" and "too far (+34 min)" are two
+  // different answers to a caller; "no" was hiding both.
+  function bucketVerdictText(v) {
+    if (!v) return "—";
+    switch (v.status) {
+      case "open": return `open${v.addedDriveMinutes == null ? "" : ` · +${v.addedDriveMinutes} min`}`;
+      case "full": return `full (${(v.planned || 0) + (v.booked || 0)}/${v.cap})`;
+      case "far": return `too far (+${v.addedDriveMinutes} min)`;
+      case "spread": return `spreads the day (+${v.addedLegMinutes} min leg)`;
+      case "season": return "outside the booking window";
+      default: return "no window";
+    }
+  }
+
+  const FORCE_BUCKETS = [
+    { key: "morning", label: "Morning Appointment", startHour: 8, endHour: 12 },
+    { key: "afternoon", label: "Afternoon Appointment", startHour: 12, endHour: 17 }
+  ];
 
   async function probeServices() {
     if (probeCache.services) return probeCache.services;
@@ -2841,21 +2867,45 @@
         if (!data.ok) throw new Error((data.errors || ["Couldn't load times."]).join(" "));
         const slots = ((data.days || []).find((d) => d.date === day.date) || {}).slots || [];
         slotsWrap.innerHTML = "";
-        if (!slots.length) {
-          slotsWrap.textContent = "No bookable window on this day for that service — it may have filled since the probe. Pick another day above.";
-          return;
-        }
+        const pick = (button, value) => {
+          picked = value;
+          for (const el of slotsWrap.querySelectorAll(".sp-book-slot")) el.classList.remove("is-picked");
+          button.classList.add("is-picked");
+        };
         for (const s of slots) {
           const b = document.createElement("button");
           b.type = "button";
           b.className = "sp-book-slot";
           b.textContent = s.timeLabel + (s.addedDriveMinutes != null ? ` · +${s.addedDriveMinutes} min drive` : "");
-          b.addEventListener("click", () => {
-            picked = s;
-            for (const el of slotsWrap.querySelectorAll(".sp-book-slot")) el.classList.remove("is-picked");
-            b.classList.add("is-picked");
-          });
+          b.addEventListener("click", () => pick(b, s));
           slotsWrap.appendChild(b);
+        }
+        // The halves the engine refused, with its reason, and a way
+        // past it. "Book anyway" is the admin custom-time path
+        // (source: "admin_custom"): it skips the route filter, the leg
+        // cap and the half-day cap, and checks only that the crew is
+        // not already booked on that minute. Patrick decides whether a
+        // day holds one more; the table just told him what it costs.
+        const openKeys = new Set(slots.map((s) => s.bucketKey));
+        const verdicts = day.buckets || {};
+        for (const bucket of FORCE_BUCKETS) {
+          if (openKeys.has(bucket.key)) continue;
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "sp-book-slot is-force";
+          b.textContent = `${bucket.label} — book anyway (${bucketVerdictText(verdicts[bucket.key])})`;
+          b.title = "Skips the route filter and the half-day cap. Only refuses a minute the crew is already booked on.";
+          b.addEventListener("click", () => pick(b, {
+            custom: true,
+            bucketKey: bucket.key,
+            timeLabel: bucket.label,
+            startHour: bucket.startHour,
+            endHour: bucket.endHour
+          }));
+          slotsWrap.appendChild(b);
+        }
+        if (!slotsWrap.children.length) {
+          slotsWrap.textContent = "No bookable window on this day for that service — it may have filled since the probe. Pick another day above.";
         }
       } catch (error) {
         slotsWrap.textContent = error.message;
@@ -2940,20 +2990,11 @@
       submit.disabled = true;
       submit.textContent = "Booking…";
       try {
-        // The hold, then the reserve — the same two steps every other
-        // form takes, so two callers can't finish on one slot.
-        const holdRes = await fetch("/api/booking/hold", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ serviceKey: serviceSelect.value, slotStart: picked.start, address })
-        });
-        const hold = await holdRes.json();
-        if (!holdRes.ok || !hold.ok) throw new Error(hold.message || (hold.errors || ["That time was just taken — pick another."]).join(" "));
-        const data = await reserveBooking({
+        const payloadFor = (slotStart, holdToken, source) => ({
           serviceKey: serviceSelect.value,
-          slotStart: picked.start,
-          holdToken: hold.holdToken,
-          source: "slot",
+          slotStart,
+          holdToken,
+          source,
           zoneCount: zoneCount.value.trim() || null,
           contact: {
             firstName: firstName.value.trim(),
@@ -2967,6 +3008,39 @@
           pageUrl: location.href,
           userAgent: navigator.userAgent
         });
+        let data;
+        if (picked.custom) {
+          // Book anyway: no hold (there is no grid slot to hold), the
+          // admin custom-time path, at the first free half-hour of the
+          // half-day. The server refuses a minute the crew is already
+          // booked on (physical_conflict); walk forward until it takes
+          // one or the window runs out. The precise minute is re-cut
+          // into driving order by the day's sequencer afterwards.
+          const [y, m, d] = day.date.split("-").map(Number);
+          const endMs = new Date(y, m - 1, d, picked.endHour, 0, 0).getTime();
+          let at = new Date(y, m - 1, d, picked.startHour, 0, 0).getTime();
+          for (;;) {
+            try {
+              data = await reserveBooking(payloadFor(new Date(at).toISOString(), null, "admin_custom"));
+              break;
+            } catch (error) {
+              if (error.code !== "physical_conflict") throw error;
+              at += 30 * 60 * 1000;
+              if (at >= endMs) throw new Error(`Every half-hour of that ${picked.bucketKey} already has a booking on it.`);
+            }
+          }
+        } else {
+          // The hold, then the reserve — the same two steps every other
+          // form takes, so two callers can't finish on one slot.
+          const holdRes = await fetch("/api/booking/hold", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ serviceKey: serviceSelect.value, slotStart: picked.start, address })
+          });
+          const hold = await holdRes.json();
+          if (!holdRes.ok || !hold.ok) throw new Error(hold.message || (hold.errors || ["That time was just taken — pick another."]).join(" "));
+          data = await reserveBooking(payloadFor(picked.start, hold.holdToken, "slot"));
+        }
         host.innerHTML = "";
         const done = document.createElement("p");
         done.className = "sp-probe-best";
@@ -3099,7 +3173,9 @@
     });
     const data = await response.json();
     if (!response.ok || !data.ok) {
-      throw new Error(data.message || (data.errors || ["Booking failed."]).join(" "));
+      const error = new Error(data.message || (data.errors || ["Booking failed."]).join(" "));
+      error.code = data.code || null;
+      throw error;
     }
     return data;
   }
