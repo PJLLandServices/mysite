@@ -698,7 +698,7 @@
 .invoice-revise-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 4px 0 8px; }
 .invoice-revise-table th {
   text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
-  color: #777; padding: 4px 4px; border-bottom: 1px solid #E2E0D4;
+  color: var(--pjl-text-muted, #6B6B63); padding: 4px 4px; border-bottom: 1px solid #E2E0D4;
 }
 .invoice-revise-table th.num, .invoice-revise-table td.num { text-align: right; }
 .invoice-revise-table td { padding: 4px 4px; vertical-align: middle; border-bottom: 1px solid #EFEDE3; }
@@ -718,7 +718,7 @@
 .invoice-revise-totals { margin: 0 0 14px; font-size: 13px; display: grid; gap: 4px; justify-content: end; }
 .invoice-revise-totals > div { display: flex; gap: 18px; justify-content: space-between; min-width: 240px; }
 .invoice-revise-totals-row { border-top: 1.5px solid #1F2A22; padding-top: 6px; font-size: 15px; }
-.invoice-revise-totals-was { color: #777; font-size: 12px; }
+.invoice-revise-totals-was { color: var(--pjl-text-muted, #6B6B63); font-size: 12px; }
 .invoice-revise-total-changed { color: #8A4B0B; }
 @media (max-width: 520px) {
   .invoice-revise-table thead { display: none; }

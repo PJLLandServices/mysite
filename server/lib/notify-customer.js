@@ -2331,6 +2331,12 @@ async function sendInvoiceRevisedSMS({ invoiceId, includeSpouse } = {}) {
     await invoices.appendHistory(invoiceId, { action: "revision_sms_skipped_no_phone", by: "system", note: "No customer phone on invoice." });
     return { ok: false, error: "no_phone" };
   }
+  // Nothing is ever sent to a load-test record — the rule lives in
+  // lib/test-recipients.js. Asked here rather than at the caller so
+  // every Twilio send site is gated the same way.
+  if (await testRecipients.isTestRecipient({ phone: to })) {
+    return testRecipients.suppressed("sms", to);
+  }
   if (!smsConfigured()) return { ok: false, error: "no_twilio_config" };
   const tokenized = await invoices.ensurePortalToken(invoiceId);
   const portalToken = tokenized?.portalToken;
