@@ -432,7 +432,7 @@
 </head>
 <body>
 <header>
-  <a class="crm-back" href="/admin">&larr; Back to CRM</a>
+  <a class="crm-back" href="/admin" id="sbBackLink">&larr; Back to CRM</a>
   <h1>Sprinkler System Builder</h1>
   <p>PJL Land Services — enter supply flow &amp; area dimensions; get an arc-aware head layout, zone split, top-down sketch, and the water cost per run on your town's rates.</p>
 </header>
@@ -7356,6 +7356,16 @@ fetch(RATES_URL, {cache:'no-store'})
 /* ════════════════ Project link — load / save ════════════════ */
 
 const PROJECT_ID = new URLSearchParams(location.search).get('project') || null;
+// Came here from a Project page — send "back" there instead of the CRM
+// dashboard. Patrick: opening Site Builder from a project "doesn't allow
+// you to go back to the project you opened them from."
+if (PROJECT_ID) {
+  const backLink = document.getElementById('sbBackLink');
+  if (backLink) {
+    backLink.href = `/admin/project/${encodeURIComponent(PROJECT_ID)}`;
+    backLink.textContent = `← Back to project ${PROJECT_ID}`;
+  }
+}
 const GLOBAL_INPUT_IDS = ['availGPM','psi','supply','ceiling','spacingFactor','wcTown','wcRun','wcCycles','wcWeeks','wcManualRate','wcManualUnit'];
 let linkedProject = null;   // { id, name, customerName }
 let projectList = null;     // for the standalone picker

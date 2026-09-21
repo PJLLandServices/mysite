@@ -310,7 +310,7 @@
       return;
     }
     els.quoteStatusPanel.hidden = false;
-    els.quoteStatusLink.href = `/admin/quote/${encodeURIComponent(lq.id)}/proposal`;
+    els.quoteStatusLink.href = `/admin/quote/${encodeURIComponent(lq.id)}/proposal?project=${encodeURIComponent(state.project.id)}`;
 
     const statusLabel = QUOTE_STATUS_LABELS[lq.status] || lq.status;
     let line = `Quote v${lq.version} — ${statusLabel}`;
@@ -381,12 +381,18 @@
     const card = document.getElementById("projWaterCostCard");
     if (!card) return;
     const wc = state.project.waterCostEstimate;
+    const waterCostSummaryEl = document.getElementById("projWaterCostSummary");
     if (!wc || typeof wc !== "object") {
       if (empty) empty.hidden = false;
       card.innerHTML = "";
+      if (waterCostSummaryEl) waterCostSummaryEl.textContent = "None saved";
       return;
     }
     if (empty) empty.hidden = true;
+    if (waterCostSummaryEl) {
+      const seasonCost = "$" + (Number(wc.totals?.seasonCost) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      waterCostSummaryEl.textContent = `${seasonCost} per season`;
+    }
     const money = (n) => "$" + (Number(n) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const unit = wc.rateUnit === "m3" ? "m³" : wc.rateUnit === "1000gal" ? "1,000 gal" : "gal";
     const t = wc.totals || {};
@@ -428,6 +434,8 @@
       `Accepted ${escapeHtml(acceptDate)} via ${escapeHtml(methodLabel || "—")} · from ` +
       `<a href="/admin/quote/${encodeURIComponent(snap.quoteId)}/proposal">${escapeHtml(snap.quoteId)}</a>` +
       (snap.version > 1 ? ` <span class="proj-proposal-version">v${escapeHtml(snap.version)}</span>` : "");
+    const proposalSummaryEl = document.getElementById("projProposalSummary");
+    if (proposalSummaryEl) proposalSummaryEl.textContent = `${fmtDollars(snap.total)} — accepted ${acceptDate}`;
 
     els.proposalPdfLink.href = `/api/admin/quote-folder/${encodeURIComponent(snap.quoteId)}/pdf`;
 
@@ -806,12 +814,15 @@
 
   function renderWos() {
     const ids = state.project.workOrderIds || [];
+    const wosSummaryEl = document.getElementById("projWosSummary");
     if (!ids.length) {
       els.wosEmpty.hidden = false;
       els.wosList.innerHTML = "";
+      if (wosSummaryEl) wosSummaryEl.textContent = "None attached";
       return;
     }
     els.wosEmpty.hidden = true;
+    if (wosSummaryEl) wosSummaryEl.textContent = `${ids.length} attached`;
     els.wosList.innerHTML = ids.map((id) => {
       const wo = state.workOrders.get(id);
       const status = wo ? (WO_STATUS_LABELS[wo.status] || wo.status) : "—";
@@ -840,12 +851,15 @@
 
   function renderMls() {
     const lists = state.materialLists || [];
+    const mlsSummaryEl = document.getElementById("projMlsSummary");
     if (!lists.length) {
       els.mlsEmpty.hidden = false;
       els.mlsList.innerHTML = "";
+      if (mlsSummaryEl) mlsSummaryEl.textContent = "None yet";
       return;
     }
     els.mlsEmpty.hidden = true;
+    if (mlsSummaryEl) mlsSummaryEl.textContent = `${lists.length} list${lists.length === 1 ? "" : "s"}`;
     els.mlsList.innerHTML = lists.map((rec) => {
       const totals = rec.totals || {};
       const status = ML_STATUS_LABELS[rec.status] || rec.status;
@@ -1278,12 +1292,15 @@
     }
     panel.hidden = false;
     const wos = state.exec.buildWos;
+    const dailyLogSummaryEl = document.getElementById("projDailyLogSummary");
     if (!wos.length) {
       empty.hidden = false;
       list.innerHTML = "";
+      if (dailyLogSummaryEl) dailyLogSummaryEl.textContent = "No days logged yet";
       return;
     }
     empty.hidden = true;
+    if (dailyLogSummaryEl) dailyLogSummaryEl.textContent = `${wos.length} day${wos.length === 1 ? "" : "s"} logged`;
     list.innerHTML = wos.map((w) => {
       const dl = w.dailyLog || {};
       const sessions = Array.isArray(dl.sessions) ? dl.sessions : [];
@@ -1334,12 +1351,15 @@
     }
     panel.hidden = false;
     const scrs = state.project.scopeChangeRequests || [];
+    const scopeSummaryEl = document.getElementById("projScopeChangesSummary");
     if (!scrs.length) {
       empty.hidden = false;
       list.innerHTML = "";
+      if (scopeSummaryEl) scopeSummaryEl.textContent = "None recorded";
       return;
     }
     empty.hidden = true;
+    if (scopeSummaryEl) scopeSummaryEl.textContent = `${scrs.length} change${scrs.length === 1 ? "" : "s"} recorded`;
     list.innerHTML = scrs.map((s) => {
       const dateStr = s.capturedAt ? new Date(s.capturedAt).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }) : "—";
       const statusLabel = {
@@ -1443,12 +1463,15 @@
     }
     panel.hidden = false;
     const updates = (state.project.statusUpdates || []).slice().reverse(); // newest first
+    const statusUpdatesSummaryEl = document.getElementById("projStatusUpdatesSummary");
     if (!updates.length) {
       empty.hidden = false;
       list.innerHTML = "";
+      if (statusUpdatesSummaryEl) statusUpdatesSummaryEl.textContent = "None sent yet";
       return;
     }
     empty.hidden = true;
+    if (statusUpdatesSummaryEl) statusUpdatesSummaryEl.textContent = `${updates.length} sent`;
     list.innerHTML = updates.map((u) => {
       const dateStr = u.generatedAt ? new Date(u.generatedAt).toLocaleString("en-CA") : "—";
       return `
@@ -1516,6 +1539,8 @@
         <div><span>HST (13%)</span><strong>$${Number(data.hst || 0).toFixed(2)}</strong></div>
         <div class="proj-billing-total"><span>Total CAD</span><strong>$${Number(data.total || 0).toFixed(2)}</strong></div>
       `;
+      const billingSummaryEl = document.getElementById("projBillingSummary");
+      if (billingSummaryEl) billingSummaryEl.textContent = `$${Number(data.total || 0).toFixed(2)} so far`;
       const warn = document.getElementById("projBillingWarn");
       if (data.unknownSkus && data.unknownSkus.length) {
         warn.textContent = `⚠ These consumed SKUs have no retail price: ${data.unknownSkus.join(", ")}. Set a price in parts.json before billing.`;

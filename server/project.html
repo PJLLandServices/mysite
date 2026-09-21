@@ -170,7 +170,7 @@
         <section class="proj-section proj-quote-status" id="projQuoteStatusPanel" hidden>
           <div class="proj-section-head">
             <h2>Quote</h2>
-            <a class="pjl-btn pjl-btn-outline" id="projQuoteStatusLink" href="#" target="_blank" rel="noopener">Open in Proposal Builder</a>
+            <a class="pjl-btn pjl-btn-outline" id="projQuoteStatusLink" href="#">Open in Proposal Builder</a>
           </div>
           <p class="proj-quote-status-line" id="projQuoteStatusLine"></p>
           <ul class="proj-inline-lines" id="projQuoteStatusLines" hidden></ul>
@@ -196,7 +196,7 @@
         <section class="proj-section proj-invoice-status" id="projInvoicePanel" hidden>
           <div class="proj-section-head">
             <h2>Invoice</h2>
-            <a class="pjl-btn pjl-btn-outline" id="projInvoiceLink" href="#" target="_blank" rel="noopener">Open invoice</a>
+            <a class="pjl-btn pjl-btn-outline" id="projInvoiceLink" href="#">Open invoice</a>
           </div>
           <p class="proj-inline-summary-line" id="projInvoiceLine"></p>
         </section>
@@ -204,9 +204,9 @@
         <!-- Accepted proposal snapshot (Brief 1, May 2026).
              Only rendered when this project was spun from a project_proposal —
              reads from project.proposalSnapshot (frozen at conversion). -->
-        <section class="proj-section proj-proposal" id="projProposalPanel" hidden>
+        <details class="proj-section proj-proposal" id="projProposalPanel" hidden>
+          <summary><h2>Accepted proposal</h2><span class="proj-section-summary" id="projProposalSummary"></span></summary>
           <div class="proj-section-head">
-            <h2>Accepted proposal</h2>
             <a class="pjl-btn pjl-btn-outline" id="projProposalPdfLink" href="#" target="_blank" rel="noopener">Open PDF</a>
           </div>
           <p class="proj-proposal-meta" id="projProposalMeta"></p>
@@ -216,20 +216,19 @@
             <summary>View full proposal narrative</summary>
             <div id="projProposalSections"></div>
           </details>
-        </section>
+        </details>
 
         <!-- Tasks (Brief 1 + 2) — seeded from proposal line items at
              conversion; admin marks them done as work progresses (per-WO
              via tech mode) or directly here. Brief 2 adds inline + manual
              additions, drag-reorder, delete-while-pending. -->
-        <section class="proj-section proj-tasks" id="projTasksPanel" hidden>
+        <details class="proj-section proj-tasks" id="projTasksPanel" hidden>
+          <summary><h2>Tasks</h2><span class="proj-tasks-progress" id="projTasksProgress"></span></summary>
           <div class="proj-section-head">
-            <h2>Tasks</h2>
-            <span class="proj-tasks-progress" id="projTasksProgress"></span>
             <button type="button" class="pjl-btn pjl-btn-outline" id="projAddTaskBtn">+ Add task</button>
           </div>
           <ul class="proj-task-list" id="projTaskList"></ul>
-        </section>
+        </details>
 
         <!-- Job journal (2026-09-21) — a free-form log tied to the job
              itself, not to any one visit/work order. Always available
@@ -258,44 +257,42 @@
 
         <!-- Brief 2 — Daily log timeline. One collapsible entry per build
              WO under this project. Sorted newest-first. -->
-        <section class="proj-section proj-daily-log" id="projDailyLogPanel" hidden>
+        <details class="proj-section proj-daily-log" id="projDailyLogPanel" hidden>
+          <summary><h2>Daily log</h2><span class="proj-section-summary" id="projDailyLogSummary"></span></summary>
           <div class="proj-section-head">
-            <h2>Daily log</h2>
             <button type="button" class="pjl-btn pjl-btn-primary" id="projNewBuildWoBtn">+ New day's WO</button>
           </div>
           <p class="proj-empty" id="projDailyLogEmpty" hidden>No build days logged yet. Tap <strong>+ New day's WO</strong> to start day one.</p>
           <ul class="proj-daily-list" id="projDailyList"></ul>
-        </section>
+        </details>
 
         <!-- Brief 2 — Scope changes. List of all SCRs with status badges. -->
-        <section class="proj-section proj-scope-changes" id="projScopeChangesPanel" hidden>
+        <details class="proj-section proj-scope-changes" id="projScopeChangesPanel" hidden>
+          <summary><h2>Scope changes</h2><span class="proj-section-summary" id="projScopeChangesSummary"></span></summary>
           <div class="proj-section-head">
-            <h2>Scope changes</h2>
             <button type="button" class="pjl-btn pjl-btn-outline" id="projAddScopeChangeBtn">+ Note a scope addition</button>
           </div>
           <p class="proj-empty" id="projScopeChangesEmpty" hidden>No scope changes recorded.</p>
           <ul class="proj-scope-list" id="projScopeList"></ul>
-        </section>
+        </details>
 
         <!-- Brief 2 — Status updates history. -->
-        <section class="proj-section proj-status-updates" id="projStatusUpdatesPanel" hidden>
-          <div class="proj-section-head">
-            <h2>Status updates sent</h2>
-          </div>
+        <details class="proj-section proj-status-updates" id="projStatusUpdatesPanel" hidden>
+          <summary><h2>Status updates sent</h2><span class="proj-section-summary" id="projStatusUpdatesSummary"></span></summary>
           <p class="proj-empty" id="projStatusUpdatesEmpty" hidden>No status updates sent yet.</p>
           <ul class="proj-status-update-list" id="projStatusUpdateList"></ul>
-        </section>
+        </details>
 
         <!-- Brief 2 — T&M billing preview (visible only on T&M projects). -->
-        <section class="proj-section proj-billing" id="projBillingPanel" hidden>
+        <details class="proj-section proj-billing" id="projBillingPanel" hidden>
+          <summary><h2>Billing preview (live)</h2><span class="proj-section-summary" id="projBillingSummary"></span></summary>
           <div class="proj-section-head">
-            <h2>Billing preview (live)</h2>
             <button type="button" class="pjl-btn pjl-btn-outline" id="projRefreshBillingBtn">Refresh</button>
           </div>
           <ul class="proj-billing-lines" id="projBillingLines"></ul>
           <div class="proj-billing-totals" id="projBillingTotals"></div>
           <p class="proj-billing-warn" id="projBillingWarn" hidden></p>
-        </section>
+        </details>
 
         <!-- Brief 2 — Sticky action sidebar (visible on desktop only via CSS). -->
         <aside class="proj-sidebar" id="projSidebar" hidden>
@@ -312,18 +309,18 @@
           <p class="proj-sidebar-hint" id="projCompleteHint"></p>
         </aside>
 
-        <section class="proj-section">
+        <details class="proj-section" id="projWosPanel">
+          <summary><h2>Work orders</h2><span class="proj-section-summary" id="projWosSummary"></span></summary>
           <div class="proj-section-head">
-            <h2>Work orders</h2>
             <button type="button" class="pjl-btn pjl-btn-primary" id="attachWoButton">+ Attach work order</button>
           </div>
           <p class="proj-empty" id="projWosEmpty" hidden>No work orders attached yet. Use <strong>+ Attach work order</strong> to link an existing WO from this customer.</p>
           <ul class="proj-row-list" id="projWosList"></ul>
-        </section>
+        </details>
 
-        <section class="proj-section">
+        <details class="proj-section" id="projMlsPanel">
+          <summary><h2>Material lists</h2><span class="proj-section-summary" id="projMlsSummary"></span></summary>
           <div class="proj-section-head">
-            <h2>Material lists</h2>
             <div style="display:flex;gap:8px;flex-wrap:wrap">
               <a class="pjl-btn pjl-btn-outline" id="projDesignSystemLink" href="/admin/sitebuilder">Design system</a>
               <button type="button" class="pjl-btn pjl-btn-primary" id="newMaterialListButton">+ New material list</button>
@@ -331,9 +328,9 @@
           </div>
           <p class="proj-empty" id="projMlsEmpty" hidden>No material lists yet. Create one to track parts for this project.</p>
           <ul class="proj-row-list" id="projMlsList"></ul>
-        </section>
+        </details>
 
-        <section class="proj-section" id="projWaterCostSection">
+        <details class="proj-section" id="projWaterCostSection">
           <style>
             .proj-wc-card{border:1px solid #dfe6e0;border-radius:10px;padding:14px 16px;background:#fff}
             .proj-wc-head{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;font-size:14px;margin-bottom:12px}
@@ -346,13 +343,13 @@
             .proj-wc-table th,.proj-wc-table td{text-align:left;padding:5px 7px;border-bottom:1px solid #eee}
             .proj-wc-table th{font-size:10.5px;text-transform:uppercase;color:#6B6B63;letter-spacing:.3px}
           </style>
+          <summary><h2>Water-cost estimate</h2><span class="proj-section-summary" id="projWaterCostSummary"></span></summary>
           <div class="proj-section-head">
-            <h2>Water-cost estimate</h2>
             <a class="pjl-btn pjl-btn-outline" id="projWaterCostLink" href="/admin/sitebuilder">Open in builder</a>
           </div>
           <p class="proj-empty" id="projWaterCostEmpty" hidden>No water-cost estimate saved yet. Open the builder → §4 Water Cost by Town → <strong>Save water-cost estimate to project</strong>.</p>
           <div id="projWaterCostCard"></div>
-        </section>
+        </details>
 
         <section class="proj-footer-actions">
           <button type="button" class="pjl-btn pjl-btn-outline" id="archiveButton">Archive project</button>

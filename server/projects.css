@@ -379,6 +379,65 @@
   padding: 8px 14px;
   min-height: 40px;
 }
+/* Collapsible sections (2026-09-21) — the Project page grew a long stack
+   of panels (Tasks, Accepted proposal, Daily log, Work orders, etc.) that
+   required zooming out to see end to end. Patrick: "you have to have a
+   32 inch screen to view all the information on this screen." The bulky,
+   grows-over-time sections are now native <details class="proj-section">
+   elements — collapsed by default, one summary line always visible, full
+   content one click away, no page reload. The short "at a glance" panels
+   (Quote/Site Builder/Invoice) stay as plain always-open sections. */
+details.proj-section > summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+  margin: -14px -16px 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+}
+details.proj-section > summary::-webkit-details-marker { display: none; }
+details.proj-section > summary::marker { content: ""; }
+details.proj-section > summary h2 {
+  margin: 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #1B4D2E;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+details.proj-section > summary h2::before {
+  content: "\25B8";
+  display: inline-block;
+  font-size: 13px;
+  color: #6B6B63;
+  transition: transform 0.15s ease;
+}
+details.proj-section[open] > summary h2::before {
+  transform: rotate(90deg);
+}
+.proj-section-summary {
+  font-size: 13px;
+  color: #6B6B63;
+  font-weight: 500;
+}
+details.proj-section[open] > summary {
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #E2E0D4;
+}
+details.proj-section > .proj-section-head {
+  justify-content: flex-end;
+}
+details.proj-section > .proj-section-head:empty {
+  display: none;
+}
 .proj-empty {
   background: #FAFAF5;
   border: 1px dashed #C7C0A8;
