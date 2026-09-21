@@ -61,6 +61,7 @@
     "test:project-quote-status-panel": "node scripts/test-project-quote-status-panel.mjs",
     "test:project-journal": "node scripts/test-project-journal.mjs",
     "test:project-inline-summaries": "node scripts/test-project-inline-summaries.mjs",
+    "test:project-nav-and-density": "node scripts/test-project-nav-and-density.mjs",
     "test:project-invoice-resolution": "node scripts/test-project-invoice-resolution.mjs",
     "test:crm-sorting": "node scripts/test-crm-sorting.mjs",
     "test:territory-export": "node scripts/test-territory-export.mjs",

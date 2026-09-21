@@ -21,6 +21,18 @@
     return;
   }
 
+  // Came here from a Project page — send "back" there instead of the
+  // Quote folder. Patrick: opening the Proposal Builder from a project
+  // "doesn't allow you to go back to the project you opened them from."
+  const PROJECT_ID = new URLSearchParams(location.search).get("project") || null;
+  if (PROJECT_ID) {
+    const backLink = document.getElementById("pbBackLink");
+    if (backLink) {
+      backLink.href = `/admin/project/${encodeURIComponent(PROJECT_ID)}`;
+      backLink.textContent = `← Back to project ${PROJECT_ID}`;
+    }
+  }
+
   // ---- DOM refs ------------------------------------------------------
   const $ = (id) => document.getElementById(id);
   const el = {

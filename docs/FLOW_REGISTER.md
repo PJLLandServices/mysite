@@ -30,6 +30,50 @@ now GETS days, at the first rung that admits it, with true costs on the slots; M
 now see weekdays in the first two weeks of the season (they will show the far northern days
 at their honest cost, with the Saturdays starred as the cheap ones); the watchdog's next run
 should report every test address with 3+ days.
+**2026-09-21, later the same day (Collapse the Project page; stop stranding Patrick on Site
+Builder/Proposal Builder/Invoice):** Patrick, live, on the just-shipped inline-summary Project
+page, with a screenshot zoomed to 25% to fit the whole thing: *"you have to have a 32 inch
+screen to view all the information thats on this screen... go back to the drawing board."*
+Every section — Tasks, Accepted proposal, Job journal, Daily log, Work orders, Material lists,
+etc. — rendered permanently expanded, stacked in one long scroll. In the same message thread,
+a second bug: *"opening the site builder, proposal builder, invoice virtually opens a new tab,
+or doesn't allow you to go back to the project you opened them from."* Both true: the Quote and
+Invoice "Open" links used `target="_blank"` (real new tabs), and none of Site Builder, Proposal
+Builder, or the Invoice page had ANY link back to the project that opened them — only generic
+CRM-dashboard / Quote-folder / All-invoices links, dead ends either way.
+
+**Fix 1 — collapse the bulky sections.** The grows-over-time sections (Accepted proposal,
+Tasks, Daily log, Scope changes, Status updates sent, Billing preview, Work orders, Material
+lists, Water-cost estimate) are now native `<details class="proj-section">` elements —
+collapsed by default, a one-line summary always visible (`6 of 14 complete`, `3 attached`,
+`$480.00 per season`, …), full content one click away, no page reload. The short "at a glance"
+panels from the last fix (Quote/Site Builder/Invoice) stay as plain always-open sections — they
+were already short; that part of the last fix was right.
+
+**Fix 2 — dead-end navigation.** `projQuoteStatusLink` and `projInvoiceLink` dropped
+`target="_blank"` (Site Builder's link was already same-tab). Site Builder, the Proposal
+Builder, and the Invoice page each now show a **"← Back to project {ID}"** link in place of
+their generic one, whenever they know which project they came from: Site Builder and the
+Proposal Builder read `?project=<id>` off the URL (the Project page's links now pass it — Site
+Builder already did); the Invoice page reads the invoice's own `projectId` field instead, since
+an invoice's project is knowable regardless of how the page was reached. Opened from anywhere
+else (nav sidebar, Quote folder, Invoices list), all three keep their original generic link —
+no regression there.
+
+`scripts/test-project-nav-and-density.mjs` (44 Playwright assertions, real headless-Chromium
+loads of all four real pages): every bulky section is a real collapsed `<details>` with a
+correct summary line on a job with 14 tasks / 3 attached WOs / a daily-log entry / a scope
+change / a saved water-cost estimate; clicking a summary expands it in place with no
+navigation and no missing content; the three "Open" links carry no `target` attribute; Site
+Builder / Proposal Builder / Invoice each show the project-aware back link when `?project=` (or
+the invoice's own `projectId`) is present, and keep their old generic link when it isn't.
+Re-ran `test-project-inline-summaries.mjs` (13), `test-project-invoice-resolution.mjs` (8),
+`test-project-journal.mjs` (27), `test-project-delete-cascade.mjs` (15),
+`test-project-quote-status-panel.mjs` (18), `test-sitebuilder-split.mjs` (18) — no regressions.
+**Patrick's acceptance test — not yet walked:** open any job with a quote, a design, tasks, and
+an invoice; confirm the page is short at a glance with real one-line summaries, click a section
+open, then click "Open Site Builder" (or the Proposal Builder, or the invoice) and confirm the
+new page shows a "Back to project" link that actually returns here.
 **2026-09-21, same hour (The truck does not go home at noon; the half-day cap gets a dial):**
 Patrick, with the day preview open — six planned stops through North York and downtown, the
 new house numbered 5 between Casa Loma and York Mills: *"its literally perfect density on that

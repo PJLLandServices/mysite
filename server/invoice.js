@@ -45,6 +45,15 @@ async function load() {
   }
   currentInvoice = data.invoice;
   currentDisclaimerObjects = Array.isArray(data.disclaimerObjects) ? data.disclaimerObjects : [];
+  // Came here from a Project page (or the invoice just belongs to one) —
+  // send "back" there instead of the generic invoices list. Patrick:
+  // opening an invoice from a project "doesn't allow you to go back to
+  // the project you opened them from."
+  const backLink = document.getElementById("invoiceBackLink");
+  if (backLink && currentInvoice.projectId) {
+    backLink.href = `/admin/project/${encodeURIComponent(currentInvoice.projectId)}`;
+    backLink.textContent = `← Back to project ${currentInvoice.projectId}`;
+  }
   // Fetch the customer record so the spouse-CC toggles can pre-fill
   // from copySpouseOnInvoices. Non-fatal — invoices without a
   // customerId or whose customer fetch fails just hide the toggles.
