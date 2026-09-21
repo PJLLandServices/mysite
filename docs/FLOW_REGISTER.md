@@ -2,6 +2,34 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-21, same hour (The ladder runs to the service bound — nobody sees an empty fortnight):**
+The watchdog's first run, with everything above deployed: Toronto 2 of 14 upcoming days (1
+weekday), Etobicoke 1 of 14 (Saturday only), every other weekday `outside_route_area`;
+Markham / Richmond Hill / Vaughan / Aurora / Newmarket healthy. Not a misconfiguration — every
+planned day from Sep 28 to Oct 9 is a northern route, all past 40 minutes from downtown, and 40
+was where the widen ladder stopped (2026-09-07, after a Markham address landed on a West-of-
+the-400 day: "the open bucket exists precisely for the customer we can't place efficiently
+yet"). With ads live that reads as an empty calendar, and bookings were lost to it. Patrick:
+*"my goal will be to not turn down an opportunity. and at this point i belive we may be doing
+that. So i need to expand our capabilites so we dont under deliver."* So `GEO_WIDEN_TIERS` is
+`[25, 40, 60, 90]` again — the 90 being the booking gate's service bound — climbed ONE rung at
+a time and ONLY while the customer's next two weeks hold fewer than three days at the rung
+below (the near-window rule from earlier today, so a customer with days is never widened).
+The leg cap climbs with the rung (`legCap = max(maxLegBetweenStopsMinutes, geoMax)`): a rung
+that admits +60 of driving cannot then refuse the day as "spread", which is exactly what would
+have kept Toronto out of a Newmarket day at the 90 rung. Every slot still carries its true
+`addedDriveMinutes`, so the stars still send customers to the cheap days first, and a far
+booking is a stop on the plan Patrick can move. Deliberately NOT changed: the 15-minute
+opening corridor, the near-window rule, the caps, the gate. The probe's note and its amber
+"widens at N" rows follow the new rungs automatically. Coverage: `test-geo-availability.mjs`
+§8 rewritten (75 → 76): Aurora (+17) widens to exactly 25 and no further; Richmond Hill (+61)
+now GETS days, at the first rung that admits it, with true costs on the slots; Mississauga
+(+179, past the bound) still gets none; a calendar with enough days never widens.
+`test-widen-near-window.mjs` §3: a far caller gets their fortnight at a rung ≤ 90.
+**Patrick's acceptance test — not yet walked:** on the public page, a Toronto address should
+now see weekdays in the first two weeks of the season (they will show the far northern days
+at their honest cost, with the Saturdays starred as the cheap ones); the watchdog's next run
+should report every test address with 3+ days.
 **2026-09-21, same hour (The truck does not go home at noon; the half-day cap gets a dial):**
 Patrick, with the day preview open — six planned stops through North York and downtown, the
 new house numbered 5 between Casa Loma and York Mills: *"its literally perfect density on that
