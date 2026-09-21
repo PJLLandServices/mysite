@@ -269,6 +269,28 @@ function render(inv) {
   }
   $chargeBtnAmount.textContent = fmt(balanceDue);
 
+  // Revised-price notice (invoice-revise). Only present when the server
+  // says the invoice was revised after its original send.
+  const $revised = document.getElementById("payRevisedBanner");
+  const $revisedMsg = document.getElementById("payRevisedMessage");
+  if ($revised && $revisedMsg) {
+    if (inv.revision && inv.revision.originalTotal != null) {
+      $revised.hidden = false;
+      const when = inv.revision.revisedAt ? ` on ${fmtDate(inv.revision.revisedAt)}` : "";
+      const reason = String(inv.revision.reason || "").trim();
+      const why = reason ? ` Reason: ${reason}${/[.!?]$/.test(reason) ? "" : "."}` : "";
+      const dueBit = hasPayments
+        ? ` the revised total is <strong>${escapeHtml(fmt(total))}</strong> and <strong>${escapeHtml(fmt(balanceDue))}</strong> is now due after the payment already received.`
+        : ` the amount now due is <strong>${escapeHtml(fmt(total))}</strong>.`;
+      $revisedMsg.innerHTML =
+        `This invoice was revised${escapeHtml(when)}. The original total was ` +
+        `<strong>${escapeHtml(fmt(inv.revision.originalTotal))}</strong>;${dueBit}${escapeHtml(why)} Please disregard the earlier copy.`;
+    } else {
+      $revised.hidden = true;
+      $revisedMsg.textContent = "";
+    }
+  }
+
   if (inv.eTransferEmail) {
     const link = document.getElementById("payETransferEmail");
     link.href = `mailto:${inv.eTransferEmail}`;
@@ -385,7 +407,10 @@ async function createIntentOnServer() {
   const r = await fetch(`/api/pay/invoice/${encodeURIComponent(currentInvoice.id)}/payment-intent`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ t: token, recaptchaToken })
+    // expectedAmountDue: the amount this page displayed. The server
+    // refuses (409) if the invoice was revised underneath us, so the
+    // customer is never charged an amount they didn't see.
+    body: JSON.stringify({ t: token, recaptchaToken, expectedAmountDue: currentInvoice.balanceDue == null ? currentInvoice.total : currentInvoice.balanceDue })
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok || !data.ok || !data.clientSecret) {
