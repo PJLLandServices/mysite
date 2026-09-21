@@ -198,6 +198,18 @@ function blankProject() {
     // without re-reading the (possibly archived) quote.
     proposalSnapshot: null,
 
+    // Job journal (2026-09-21) — a free-form, chronological log tied to
+    // the JOB itself, not to any one visit/work order. Patrick: "we
+    // currently have it being delivered as Work Orderz" — that's the
+    // per-visit dailyLog on build work orders (lib/work-orders.js), which
+    // stays as the tech's per-visit record. This is deliberately
+    // separate: an entry any admin or tech can add at any time — a note,
+    // optionally with photos — that reads as the job's own story, not
+    // scattered across however many work orders it took to build it.
+    // { id, ts, by, note, photos: [{n, filename, mediaType, kind, bytes,
+    // addedAt}] }, newest-last (rendered newest-first by the UI).
+    journalEntries: [],
+
     // Brief 2 — scope-change records. Each entry captures an
     // out-of-scope addition raised during execution. Flow:
     // pending_admin_review → pending_customer_approval → approved /
@@ -1150,6 +1162,71 @@ async function listRecentProjectPhotos(projectId, { limit = 6 } = {}) {
   }
   photos.sort((a, b) => String(b.addedAt || "").localeCompare(String(a.addedAt || "")));
   return photos.slice(0, limit);
+}
+
+// ---- Job journal (2026-09-21) --------------------------------------
+// A free-form log entry any time, not tied to a visit. Photo FILES are
+// written/removed by the server.js route (same split as WO photos: the
+// lib layer only ever holds metadata) — these functions manage the
+// journalEntries[] array and its photo metadata sub-array.
+
+const MAX_JOURNAL_NOTE_LENGTH = 4000;
+
+async function addJournalEntry(projectId, { note = "", by = "admin" } = {}) {
+  const cleanNote = String(note || "").trim().slice(0, MAX_JOURNAL_NOTE_LENGTH);
+  if (!cleanNote) throw Object.assign(new Error("A journal entry needs a note."), { code: "note_required" });
+  const entry = {
+    id: "journal_" + random8(),
+    ts: nowIso(),
+    by: String(by || "admin").slice(0, 80),
+    note: cleanNote,
+    photos: []
+  };
+  await _mutate(projectId, (proj) => {
+    if (!Array.isArray(proj.journalEntries)) proj.journalEntries = [];
+    proj.journalEntries.push(entry);
+    appendHistory(proj, { action: "journal_entry_added", by, note: cleanNote.slice(0, 120) });
+  });
+  return entry;
+}
+
+async function deleteJournalEntry(projectId, entryId, { by = "admin" } = {}) {
+  return _mutate(projectId, (proj) => {
+    const list = proj.journalEntries || [];
+    const idx = list.findIndex((e) => e.id === entryId);
+    if (idx === -1) throw Object.assign(new Error("Journal entry not found."), { code: "journal_entry_not_found" });
+    const [removed] = list.splice(idx, 1);
+    appendHistory(proj, { action: "journal_entry_removed", by, note: entryId });
+    return removed;
+  });
+}
+
+// Appends already-saved photo metadata (files are written to disk by the
+// caller first, same order as savePhotosForWorkOrder/journal route).
+async function addJournalEntryPhotos(projectId, entryId, photoMeta) {
+  return _mutate(projectId, (proj) => {
+    const entry = (proj.journalEntries || []).find((e) => e.id === entryId);
+    if (!entry) throw Object.assign(new Error("Journal entry not found."), { code: "journal_entry_not_found" });
+    if (!Array.isArray(entry.photos)) entry.photos = [];
+    entry.photos.push(...photoMeta);
+    return entry;
+  });
+}
+
+// Removes one photo's metadata by n and returns it so the caller can
+// delete the matching file on disk. Returns null if not found (caller
+// treats that as 404 without touching the filesystem).
+async function removeJournalEntryPhoto(projectId, entryId, n) {
+  let removed = null;
+  await _mutate(projectId, (proj) => {
+    const entry = (proj.journalEntries || []).find((e) => e.id === entryId);
+    if (!entry) throw Object.assign(new Error("Journal entry not found."), { code: "journal_entry_not_found" });
+    const photos = entry.photos || [];
+    const idx = photos.findIndex((p) => Number(p.n) === Number(n));
+    if (idx === -1) return;
+    [removed] = photos.splice(idx, 1);
+  });
+  return removed;
 }
 
 // Pure read — returns derived metrics from project + attached build WOs.
@@ -2283,6 +2360,11 @@ module.exports = {
   computeTAndMBilling,
   listTaskPhotos,
   listRecentProjectPhotos,
+  // Job journal
+  addJournalEntry,
+  deleteJournalEntry,
+  addJournalEntryPhotos,
+  removeJournalEntryPhoto,
   // Brief 2 — scope changes
   createScopeChangeRequest,
   updateScopeChangeRequest,

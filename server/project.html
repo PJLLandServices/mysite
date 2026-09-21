@@ -206,6 +206,31 @@
           <ul class="proj-task-list" id="projTaskList"></ul>
         </section>
 
+        <!-- Job journal (2026-09-21) — a free-form log tied to the job
+             itself, not to any one visit/work order. Always available
+             (not gated behind build-tracking) — a site-visit note before
+             work even starts is a legitimate entry. Distinct from the
+             read-only per-visit rollup below, which stays as the tech's
+             record of each build day. -->
+        <section class="proj-section proj-journal" id="projJournalPanel">
+          <div class="proj-section-head">
+            <h2>Job journal</h2>
+          </div>
+          <form class="proj-journal-composer" id="projJournalForm">
+            <textarea id="projJournalNote" rows="2" maxlength="4000" placeholder="Add an update — what happened, what's next..." required></textarea>
+            <div class="proj-journal-composer-row">
+              <label class="pjl-btn pjl-btn-outline proj-journal-photo-btn">
+                <span id="projJournalPhotoLabel">+ Photos</span>
+                <input type="file" id="projJournalPhotoInput" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/gif,application/pdf" multiple hidden>
+              </label>
+              <button type="submit" class="pjl-btn pjl-btn-primary" id="projJournalSubmit">Add entry</button>
+            </div>
+            <p class="proj-journal-error" id="projJournalError" hidden></p>
+          </form>
+          <p class="proj-empty" id="projJournalEmpty" hidden>No journal entries yet.</p>
+          <ul class="proj-journal-list" id="projJournalList"></ul>
+        </section>
+
         <!-- Brief 2 — Daily log timeline. One collapsible entry per build
              WO under this project. Sorted newest-first. -->
         <section class="proj-section proj-daily-log" id="projDailyLogPanel" hidden>

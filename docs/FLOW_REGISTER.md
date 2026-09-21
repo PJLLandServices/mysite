@@ -2,6 +2,40 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-21 (Job journal — a real one, on the Project page):** Patrick, after saying the whole
+platform "feels all over the place": tabs across Project/Site Builder/Parts List/Quote/Invoice
+(deferred — a bigger IA change, scoped but not built), plus "a section that we record daily
+updates, upload pictures etc etc." Asked whether he meant a genuinely new log or just surfacing
+the existing per-visit rollup; he confirmed: *"Yes, this should be a job journal. We currently
+have it being delivered as Work Orderz, we are capable of updating the todo list that's created
+from the quote."* Correctly read as: the existing per-visit `dailyLog` on build work orders
+(`lib/work-orders.js`) and the task list seeded from the quote (both already solid) stay as-is
+— the gap is a JOB-level log, not tied to any one visit, that anyone can add to any time.
+Built as a new `journalEntries[]` array on the project record (`server/lib/projects.js`):
+`addJournalEntry`/`deleteJournalEntry`/`addJournalEntryPhotos`/`removeJournalEntryPhoto`, each
+entry `{id, ts, by, note, photos[]}`. Photo upload deliberately REUSES the existing WO-photo
+pipeline (`validatePhotos`, `compressWoPhoto`, `generatePhotoFilename` in `server/server.js`) —
+same magic-byte verification, same EXIF-safe compression, same on-disk shape — rather than
+inventing a second one; only the storage root is new
+(`server/data/project-journal-photos/<projectId>/<entryId>/`, twin functions
+`savePhotosForJournalEntry`/`readJournalPhotoFile`/`deleteJournalPhotoFile` mirroring the WO
+versions exactly). New routes: `POST/DELETE /api/projects/:id/journal[/:entryId]`,
+`POST /api/projects/:id/journal/:entryId/photos`, `GET .../photo/:n`,
+`DELETE .../photos/:n` — all under the existing `/api/projects` → "user" auth rule (any admin
+or tech, not admin-only). New **Job journal** panel on `server/project.html`/`project.js`:
+a note + photo composer, entries newest-first with thumbnails, delete-entry and delete-photo
+controls. Always visible (not gated behind build-tracking) — a pre-work site-visit note is a
+legitimate entry. Closed a real gap while at it: `DELETE /api/projects/:id` had no idea journal
+photo files existed — now cleans up `project-journal-photos/<id>/` on every project delete
+(cascade or not), so removing a project never leaves orphaned images on disk.
+`scripts/test-project-journal.mjs` (27 assertions, in `build:check`) pins: empty note refused
+and nothing written, entry creation, real magic-byte-verified PNG upload against the actual
+pipeline with photo-number continuation across two uploads, single-photo delete removing both
+metadata and the file while leaving the entry's other photos alone, whole-entry delete wiping
+its photo directory, a bystander project never touched, 404s on a nonexistent project, and the
+project-delete cleanup case. **Patrick's acceptance test — not yet walked:** open a project,
+add a journal entry with a couple of photos from your phone, confirm it shows up immediately,
+delete one photo and then the whole entry, confirm both actually disappear.
 **2026-09-20, same day (PJL-54 — revision/lock status panel on the Project page):** First real
 Job Portal build-out (TRD: "Job Portal technical design"), after the day's data-model fixes
 above made it worth doing. New **Quote** panel on `server/project.html` shows, without opening
