@@ -85,7 +85,14 @@ function firstNameOf(fullName) {
 // description — resolved via the caller-provided `describeLine(line)` (which
 // honors the line's stored description before any catalog lookup), keeping
 // this module catalog-agnostic and consistent with the PDF / CSV / detail.
-function renderQuickPasteTable(items, describeLine) {
+//
+// The part number shown is THIS SUPPLIER'S, via the caller-provided
+// `skuForLine(line)` (lib/format.js resolveSupplierSku), because this block
+// exists to be pasted straight into their system — our SKU would land them
+// on the wrong part or on nothing. Ours rides in a second column so the
+// order can still be reconciled against our records. Callers that don't
+// pass one fall back to our SKU, which is what this did before Sept 2026.
+function renderQuickPasteTable(items, describeLine, skuForLine = (l) => l.sku) {
   const headStyle = "text-align:left; padding: 0 12px 6px 0; color: #888780; border-bottom: 0.5px solid #d3d1c7; font-weight: 500;";
   const headStyleLast = "text-align:left; padding: 0 0 6px 0; color: #888780; border-bottom: 0.5px solid #d3d1c7; font-weight: 500;";
   const cellStyle = "padding: 6px 12px 0 0;";
@@ -93,6 +100,7 @@ function renderQuickPasteTable(items, describeLine) {
   const rows = items.map((line) => {
     const desc = describeLine(line);
     return `    <tr>
+      <td style="${cellStyle}">${escapeHtml(skuForLine(line) || line.sku || "")}</td>
       <td style="${cellStyle}">${escapeHtml(line.sku || "")}</td>
       <td style="${cellStyle}">${escapeHtml(String(line.qty))}</td>
       <td style="${cellStyleLast}">${escapeHtml(desc)}</td>
@@ -113,7 +121,8 @@ function renderQuickPasteTable(items, describeLine) {
 ">
   <thead>
     <tr>
-      <th style="${headStyle}">SKU</th>
+      <th style="${headStyle}">PART #</th>
+      <th style="${headStyle}">OUR SKU</th>
       <th style="${headStyle}">QTY</th>
       <th style="${headStyleLast}">DESCRIPTION</th>
     </tr>
@@ -128,15 +137,18 @@ ${rows}
 // fixed width so the table reads as columns even in monospace plain
 // text. Loses the column-paste advantage (it's a single string) but
 // stays useful for clients that strip HTML.
-function renderQuickPasteText(items, describeLine) {
-  const skuWidth = Math.max(3, ...items.map((l) => String(l.sku || "").length));
+function renderQuickPasteText(items, describeLine, skuForLine = (l) => l.sku) {
+  const theirs = (l) => String(skuForLine(l) || l.sku || "");
+  const theirWidth = Math.max(6, ...items.map((l) => theirs(l).length));
+  const skuWidth = Math.max(7, ...items.map((l) => String(l.sku || "").length));
   const qtyWidth = Math.max(3, ...items.map((l) => String(l.qty).length));
   const lines = [];
-  lines.push("SKU".padEnd(skuWidth) + "  " + "QTY".padEnd(qtyWidth) + "  DESCRIPTION");
-  lines.push("-".repeat(skuWidth) + "  " + "-".repeat(qtyWidth) + "  " + "-".repeat(40));
+  lines.push("PART #".padEnd(theirWidth) + "  " + "OUR SKU".padEnd(skuWidth) + "  " + "QTY".padEnd(qtyWidth) + "  DESCRIPTION");
+  lines.push("-".repeat(theirWidth) + "  " + "-".repeat(skuWidth) + "  " + "-".repeat(qtyWidth) + "  " + "-".repeat(40));
   for (const line of items) {
     const desc = describeLine(line);
     lines.push(
+      theirs(line).padEnd(theirWidth) + "  " +
       String(line.sku || "").padEnd(skuWidth) + "  " +
       String(line.qty).padEnd(qtyWidth) + "  " +
       desc
@@ -164,7 +176,7 @@ function buildRfqSubject(rfq) {
 // Build the email body — both HTML and plain-text variants from the
 // same template. `describeLine` is injected by the caller (server.js)
 // so this module stays decoupled from parts.json.
-function buildPoEmail({ po, toName, customBodyText, describeLine }) {
+function buildPoEmail({ po, toName, customBodyText, describeLine, skuForLine }) {
   const greeting = `Hi ${firstNameOf(toName)},`;
   const items = po.lineItems || [];
   const subtotal = fmtCents(po.subtotalCents);
@@ -177,7 +189,7 @@ function buildPoEmail({ po, toName, customBodyText, describeLine }) {
     "",
     "Quick-paste line items for your system:",
     "",
-    renderQuickPasteText(items, describeLine),
+    renderQuickPasteText(items, describeLine, skuForLine),
     "",
     "CSV is attached for direct system entry. Full document attached as PDF.",
     "",
@@ -195,7 +207,7 @@ function buildPoEmail({ po, toName, customBodyText, describeLine }) {
   ].filter((line) => line !== false).join("\n");
 
   // ---- HTML body ------------------------------------------------------
-  const quickPasteHtml = renderQuickPasteTable(items, describeLine);
+  const quickPasteHtml = renderQuickPasteTable(items, describeLine, skuForLine);
   const html = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif; max-width: 600px; color: #1a1a1a; line-height: 1.55; font-size: 14px;">
   <p style="margin: 0 0 14px;">${escapeHtml(greeting)}</p>
   <p style="margin: 0 0 14px;">Please find purchase order <strong>${escapeHtml(po.id)}</strong> attached. Subtotal <strong>${escapeHtml(subtotal)}</strong> before HST.</p>
@@ -221,7 +233,7 @@ function buildPoEmail({ po, toName, customBodyText, describeLine }) {
 // DESCRIPTION only), different framing: this asks the vendor to QUOTE, and
 // must never read like an order. RFQ lines store `quantity` (not `qty`), so
 // adapt before handing to the shared renderers.
-function buildRfqEmail({ rfq, toName, customBodyText, describeLine }) {
+function buildRfqEmail({ rfq, toName, customBodyText, describeLine, skuForLine }) {
   const greeting = `Hi ${firstNameOf(toName)},`;
   const items = (rfq.lines || []).map((l) => ({ ...l, qty: l.quantity }));
   const wrappedDescribe = (line) => describeLine(line);
@@ -234,7 +246,7 @@ function buildRfqEmail({ rfq, toName, customBodyText, describeLine }) {
     "",
     "Quick-paste line items for your system:",
     "",
-    renderQuickPasteText(items, wrappedDescribe),
+    renderQuickPasteText(items, wrappedDescribe, skuForLine),
     "",
     "CSV is attached for direct system entry. Full document attached as PDF.",
     "",
@@ -252,7 +264,7 @@ function buildRfqEmail({ rfq, toName, customBodyText, describeLine }) {
   ].filter((line) => line !== false).join("\n");
 
   // ---- HTML body ------------------------------------------------------
-  const quickPasteHtml = renderQuickPasteTable(items, wrappedDescribe);
+  const quickPasteHtml = renderQuickPasteTable(items, wrappedDescribe, skuForLine);
   const html = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif; max-width: 600px; color: #1a1a1a; line-height: 1.55; font-size: 14px;">
   <p style="margin: 0 0 14px;">${escapeHtml(greeting)}</p>
   <p style="margin: 0 0 14px;">Could you please quote your best unit price and lead time for the items below? Request for quotation <strong>${escapeHtml(rfq.id)}</strong> is attached as a PDF — this is a <strong>request for pricing only</strong>, not a purchase order.</p>
@@ -278,7 +290,7 @@ function buildRfqEmail({ rfq, toName, customBodyText, describeLine }) {
 // endpoint can return a 500 instead of silently flipping RFQ state.
 async function sendQuoteRequestEmail({
   rfq, toEmail, toName, subject, bodyText,
-  pdfBuffer, csvBuffer, describeLine
+  pdfBuffer, csvBuffer, describeLine, skuForLine
 }) {
   const transporter = getTransporter();
   if (!transporter) {
@@ -293,7 +305,7 @@ async function sendQuoteRequestEmail({
 
   const fromAddress = process.env.GMAIL_USER;
   const finalSubject = String(subject || buildRfqSubject(rfq)).slice(0, 200);
-  const { text, html } = buildRfqEmail({ rfq, toName, customBodyText: bodyText, describeLine });
+  const { text, html } = buildRfqEmail({ rfq, toName, customBodyText: bodyText, describeLine, skuForLine });
 
   const info = await transporter.sendMail({
     from: `"${company.NAME}" <${fromAddress}>`,
@@ -339,7 +351,7 @@ async function sendQuoteRequestEmail({
 //   bodyText         — optional caller-supplied extra paragraph
 async function sendPurchaseOrderEmail({
   po, toEmail, toName, subject, bodyText,
-  pdfBuffer, csvBuffer, describeLine
+  pdfBuffer, csvBuffer, describeLine, skuForLine
 }) {
   const transporter = getTransporter();
   if (!transporter) {
@@ -354,7 +366,7 @@ async function sendPurchaseOrderEmail({
 
   const fromAddress = process.env.GMAIL_USER;
   const finalSubject = String(subject || buildSubject(po)).slice(0, 200);
-  const { text, html } = buildPoEmail({ po, toName, customBodyText: bodyText, describeLine });
+  const { text, html } = buildPoEmail({ po, toName, customBodyText: bodyText, describeLine, skuForLine });
 
   const info = await transporter.sendMail({
     from: `"${company.NAME}" <${fromAddress}>`,

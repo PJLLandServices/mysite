@@ -18702,8 +18702,11 @@ async function handleApi(req, res, pathname) {
       // describeLine is injected so notify-supplier.js stays decoupled from
       // parts.json. Same resolver + same catalog as the PDF/CSV — honors the
       // stored line description first, then the catalog (no size prefix).
-      const { resolveLineDescription } = require("./lib/format");
+      const { resolveLineDescription, resolveSupplierSku } = require("./lib/format");
       const describeLine = (line) => resolveLineDescription(line, poPartsMap);
+      // The paste block in the email carries THEIR part number, same as the
+      // PDF and CSV — it is pasted straight into the supplier's system.
+      const skuForLine = (line) => resolveSupplierSku(line, poPartsMap, po.supplierId);
 
       await sendPurchaseOrderEmail({
         po,
@@ -18713,7 +18716,8 @@ async function handleApi(req, res, pathname) {
         bodyText: payload.bodyText || "",
         pdfBuffer,
         csvBuffer,
-        describeLine
+        describeLine,
+        skuForLine
       });
 
       // Flip the PO state — persist the document paths so the resend
@@ -18920,8 +18924,11 @@ async function handleApi(req, res, pathname) {
 
       const subject = String(payload.subject || po.emailSubject || buildSubject(po)).slice(0, 200);
 
-      const { resolveLineDescription } = require("./lib/format");
+      const { resolveLineDescription, resolveSupplierSku } = require("./lib/format");
       const describeLine = (line) => resolveLineDescription(line, poPartsMap);
+      // The paste block in the email carries THEIR part number, same as the
+      // PDF and CSV — it is pasted straight into the supplier's system.
+      const skuForLine = (line) => resolveSupplierSku(line, poPartsMap, po.supplierId);
 
       await sendPurchaseOrderEmail({
         po,
@@ -18931,7 +18938,8 @@ async function handleApi(req, res, pathname) {
         bodyText: payload.bodyText || "",
         pdfBuffer,
         csvBuffer,
-        describeLine
+        describeLine,
+        skuForLine
       });
       const updated = await purchaseOrders.markResent(id, { toEmail, toName: payload.toName, subject });
       return sendJson(res, 200, { ok: true, purchaseOrder: updated });
@@ -19266,8 +19274,9 @@ async function handleApi(req, res, pathname) {
       const pdfPath = path.relative(SERVER_DIR, pdfFsPath).split(path.sep).join("/");
       const csvPath = path.relative(SERVER_DIR, csvFsPath).split(path.sep).join("/");
 
-      const { resolveLineDescription } = require("./lib/format");
+      const { resolveLineDescription, resolveSupplierSku } = require("./lib/format");
       const describeLine = (line) => resolveLineDescription(line, rfqPartsMap);
+      const skuForLine = (line) => resolveSupplierSku(line, rfqPartsMap, rfq.supplierId);
 
       await sendQuoteRequestEmail({
         rfq,
@@ -19277,7 +19286,8 @@ async function handleApi(req, res, pathname) {
         bodyText: payload.bodyText || "",
         pdfBuffer,
         csvBuffer,
-        describeLine
+        describeLine,
+        skuForLine
       });
 
       const sentRfq = await quoteRequests.markSent(id, {
@@ -19335,8 +19345,9 @@ async function handleApi(req, res, pathname) {
         console.warn(`[rfq-resend] ${rfq.id} snapshot missing for: ${snapshotMissingWarn.join(", ")} — regenerated live`);
       }
 
-      const { resolveLineDescription } = require("./lib/format");
+      const { resolveLineDescription, resolveSupplierSku } = require("./lib/format");
       const describeLine = (line) => resolveLineDescription(line, rfqPartsMap);
+      const skuForLine = (line) => resolveSupplierSku(line, rfqPartsMap, rfq.supplierId);
       const subject = String(payload.subject || rfq.emailSubject || buildRfqSubject(rfq)).slice(0, 200);
 
       await sendQuoteRequestEmail({
@@ -19347,7 +19358,8 @@ async function handleApi(req, res, pathname) {
         bodyText: payload.bodyText || "",
         pdfBuffer,
         csvBuffer,
-        describeLine
+        describeLine,
+        skuForLine
       });
       const resent = await quoteRequests.markResent(id, { toEmail, toName: payload.toName, subject });
       return sendJson(res, 200, { ok: true, quoteRequest: resent || rfq });
