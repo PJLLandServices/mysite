@@ -16,6 +16,13 @@
   uses {{invoice.paidLineText}} — a pre-rendered block, empty when there
   are no payments.
 
+  Revisions (invoice-revise, Sep 2026): {{normalVisible}} /
+  {{revisedVisible}} are mirror display values ("block"/"none") that swap
+  the header, sub-header and intro between the ordinary email and a
+  REVISED invoice (see sendInvoiceToCustomer). The revision.* keys carry the
+  original total, revised date and reason; {{revision.noticeText}} is the
+  plain-text block, empty unless opts.revision is set.
+
   The HTML body and plain-text fallback are in the same file separated
   by an HTML "TEXT" comment marker (see below). The renderer splits on
   the FIRST occurrence of that marker, so don't reference the literal
@@ -44,10 +51,10 @@
               <tr>
                 <td valign="middle" style="padding-right:16px;">
                   <h1 style="margin:0;font-size:24px;font-weight:700;line-height:1.2;color:#FFFFFF;">
-                    Your invoice {{invoice.number}}
+                    <span style="display:{{normalVisible}};">Your invoice {{invoice.number}}</span><span style="display:{{revisedVisible}};">Revised invoice {{invoice.number}}</span>
                   </h1>
                   <div style="margin-top:6px;font-size:14px;color:#EAF3DE;">
-                    {{invoice.amountDueFormatted}} · due on completion
+                    <span style="display:{{normalVisible}};">{{invoice.amountDueFormatted}} · due on completion</span><span style="display:{{revisedVisible}};">Now {{invoice.amountDueFormatted}} due · replaces the original for {{revision.originalTotalFormatted}}</span>
                   </div>
                 </td>
                 <td valign="middle" align="right" width="200" style="width:200px;">
@@ -66,7 +73,31 @@
         <tr>
           <td style="padding:28px 32px;color:#1A1A1A;font-size:15px;line-height:1.55;">
             <p style="margin:0 0 16px;">Hi {{customer.firstName}},</p>
-            <p style="margin:0 0 16px;">
+
+            <!-- Revised-invoice variant (invoice-revise). Toggled with a
+                 display value like the payment block: revisedVisible /
+                 normalVisible are "block" / "none" mirrors. The amber
+                 callout states the original total + reason so the customer
+                 can tell this copy from the one already in their inbox. -->
+            <div style="display:{{revisedVisible}};">
+              <div style="background:#FFF4E5;border:1px solid #F0C48A;border-left:4px solid #E07B24;
+                          border-radius:6px;padding:12px 16px;margin:0 0 18px;font-size:14px;
+                          line-height:1.55;color:#1A1A1A;">
+                <strong style="color:#8A4B0B;text-transform:uppercase;letter-spacing:0.04em;font-size:12px;">Price revised</strong><br>
+                Original total: <strong>{{revision.originalTotalFormatted}}</strong> →
+                Revised total: <strong>{{invoice.totalFormatted}}</strong>
+                <span style="color:#7A7A72;">{{revision.revisedDateText}}</span>
+                {{revision.reasonHtml}}
+              </div>
+              <p style="margin:0 0 16px;">
+                Attached is the <strong>revised</strong> invoice
+                <strong>{{invoice.number}}</strong>. It replaces the invoice you
+                received earlier for {{revision.originalTotalFormatted}}. The amount
+                now due is <strong>{{invoice.amountDueFormatted}}</strong>. Please
+                disregard the earlier copy.
+              </p>
+            </div>
+            <p style="margin:0 0 16px;display:{{normalVisible}};">
               Thanks for trusting PJL Land Services. Your invoice
               <strong>{{invoice.number}}</strong> for
               <strong>{{invoice.amountDueFormatted}}</strong> is attached as a
@@ -166,7 +197,7 @@
 <!-- TEXT -->
 Hi {{customer.firstName}},
 
-Thanks for trusting PJL Land Services. Your invoice {{invoice.number}}
+{{revision.noticeText}}Thanks for trusting PJL Land Services. Your invoice {{invoice.number}}
 for {{invoice.amountDueFormatted}} is attached as a PDF.
 
 {{invoice.paidLineText}}WAYS TO PAY

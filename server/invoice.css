@@ -692,3 +692,39 @@
   font-size: 13px;
   color: var(--pjl-text-muted, #6B6B63);
 }
+
+/* ---- Revise price (invoice-revise, Sep 2026) ------------------------ */
+.invoice-modal-sheet--wide { max-width: 640px; }
+.invoice-revise-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 4px 0 8px; }
+.invoice-revise-table th {
+  text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--pjl-text-muted, #6B6B63); padding: 4px 4px; border-bottom: 1px solid #E2E0D4;
+}
+.invoice-revise-table th.num, .invoice-revise-table td.num { text-align: right; }
+.invoice-revise-table td { padding: 4px 4px; vertical-align: middle; border-bottom: 1px solid #EFEDE3; }
+.invoice-revise-table input {
+  width: 100%; box-sizing: border-box; font: inherit; padding: 6px 8px;
+  border: 1px solid #D9D6C8; border-radius: 6px; background: #fff;
+}
+.invoice-revise-table input.num { text-align: right; }
+.invoice-revise-table td.num-cell { width: 64px; }
+.invoice-revise-table td.price-cell { width: 96px; }
+.invoice-revise-table td.total-cell { width: 84px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.invoice-revise-table td.remove-cell { width: 28px; text-align: center; }
+.invoice-revise-remove {
+  border: 0; background: transparent; color: #9B1C1C; font-size: 16px; cursor: pointer; padding: 2px 6px; line-height: 1;
+}
+.invoice-revise-add { margin: 0 0 12px; }
+.invoice-revise-totals { margin: 0 0 14px; font-size: 13px; display: grid; gap: 4px; justify-content: end; }
+.invoice-revise-totals > div { display: flex; gap: 18px; justify-content: space-between; min-width: 240px; }
+.invoice-revise-totals-row { border-top: 1.5px solid #1F2A22; padding-top: 6px; font-size: 15px; }
+.invoice-revise-totals-was { color: var(--pjl-text-muted, #6B6B63); font-size: 12px; }
+.invoice-revise-total-changed { color: #8A4B0B; }
+@media (max-width: 520px) {
+  .invoice-revise-table thead { display: none; }
+  .invoice-revise-table tr { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px 0; }
+  .invoice-revise-table td { border: 0; padding: 0; }
+  .invoice-revise-table td:first-child { grid-column: 1 / -1; }
+  .invoice-revise-table td.total-cell { text-align: right; align-self: center; }
+  .invoice-revise-table td.remove-cell { text-align: right; }
+}

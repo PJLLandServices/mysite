@@ -595,6 +595,28 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
   // PUBLIC_BASE_URL when set, otherwise lands on pjllandservices.com.
   const publicBaseUrl = resolvePublicBaseUrl();
 
+  // Revised-invoice variant (invoice-revise, Sep 2026). The customer
+  // already has the original PDF in their inbox, so the email must say
+  // plainly that this one REPLACES it, what the original total was, and
+  // why it changed. Nothing here is implied — a "reminder" for a
+  // different amount would look like a mistake. Toggled in the template
+  // with display values (same trick as paidBlockVisible).
+  const revision = opts.revision && typeof opts.revision === "object" ? opts.revision : null;
+  const originalTotalFormatted = revision ? moneyTextCurrency(revision.originalTotal) : "";
+  const revisionReason = revision ? String(revision.reason || "").trim() : "";
+  const revisedDateText = revision?.revisedAt
+    ? `(revised ${new Date(revision.revisedAt).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" })})`
+    : "";
+  const revisedVisible = revision ? "block" : "none";
+  const normalVisible = revision ? "none" : "block";
+  const revisionNoticeText = revision
+    ? `PRICE REVISED\n` +
+      `Original total: ${originalTotalFormatted} -> Revised total: ${totalFormatted}` +
+      (revisedDateText ? ` ${revisedDateText}` : "") + `\n` +
+      (revisionReason ? `Reason: ${revisionReason}\n` : "") +
+      `This REVISED invoice replaces the one you received earlier. Please disregard the earlier copy.\n\n`
+    : "";
+
   const vars = {
     customer: { firstName: escapeHtml(firstName) },
     invoice: {
@@ -603,6 +625,13 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
       amountDueFormatted: escapeHtml(amountDueFormatted),
       amountPaidFormatted: escapeHtml(amountPaidFormatted),
       paidBlockVisible
+    },
+    normalVisible,
+    revisedVisible,
+    revision: {
+      originalTotalFormatted: escapeHtml(originalTotalFormatted),
+      revisedDateText: escapeHtml(revisedDateText),
+      reasonHtml: revisionReason ? `<br>Reason: ${escapeHtml(revisionReason)}` : ""
     },
     paymentInstructions: paymentInstructionsHtml,
     viewLink: escapeHtml(viewLink),
@@ -619,6 +648,7 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
       amountPaidFormatted,
       paidLineText
     },
+    revision: { noticeText: revisionNoticeText },
     paymentInstructions: paymentInstructionsText,
     viewLinkText,
     publicBaseUrl
@@ -627,10 +657,13 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
   const html = renderTemplate(htmlTpl, vars);
   const text = renderTemplate(textTpl, textVars);
 
-  const subjectPrefix = opts.resend ? "Invoice reminder" : "Your invoice";
+  // A revised invoice says so up front, with the amount it replaces:
+  // "Revised invoice I-… — $X (was $Y) — PJL Land Services".
+  const subjectPrefix = revision ? "Revised invoice" : (opts.resend ? "Invoice reminder" : "Your invoice");
+  const subjectSuffix = revision ? ` (was ${originalTotalFormatted})` : "";
   // The subject line is read as "what do I owe", so it carries the amount
   // due. Identical to the total on every invoice with no payments.
-  const subject = `${subjectPrefix} ${invoice.id || ""} — ${amountDueFormatted} — PJL Land Services`;
+  const subject = `${subjectPrefix} ${invoice.id || ""} — ${amountDueFormatted}${subjectSuffix} — PJL Land Services`;
 
   // Spouse CC — opts.includeSpouse can override the profile flag
   // (true / false / null = use profile default).
@@ -674,7 +707,7 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
     });
     const extraCount = (Array.isArray(opts.extraAttachments) ? opts.extraAttachments : [])
       .filter((a) => a && a.filename && Buffer.isBuffer(a.content) && a.content.length > 0).length;
-    console.log(`[invoice-email] sent invoice=${invoice.id} to=${to}${ccList.length ? ` cc=${ccList.join(",")}` : ""}${extraCount ? ` +${extraCount} attachment(s)` : ""} id=${info.messageId}${opts.resend ? " (resend)" : ""}`);
+    console.log(`[invoice-email] sent invoice=${invoice.id} to=${to}${ccList.length ? ` cc=${ccList.join(",")}` : ""}${extraCount ? ` +${extraCount} attachment(s)` : ""} id=${info.messageId}${revision ? " (revised)" : opts.resend ? " (resend)" : ""}`);
     await logSend({ kind: "invoice", to, ok: true, refId: invoice.id });
     // Both flags report what actually shipped, not what was configured — an
     // address deduped away (spouse same as the primary recipient, bookkeeper
@@ -2257,6 +2290,100 @@ async function sendInvoiceReminderSMS({ invoiceId, force, includeSpouse } = {}) 
   }
 }
 
+// ---- Revised-invoice SMS (invoice-revise, Sep 2026) ---------------------
+//
+// Fires ONLY when Patrick clicks "Send revised invoice" on the admin
+// invoice page and the customer was originally texted (customerSmsSentAt
+// set) — i.e. we mirror the channel the customer already knows. Tells
+// them the total changed, the old vs new amount, and links the portal.
+// No rate limit (it's an explicit admin action, one per revision); the
+// route in server.js gates it on the latest revision being un-notified.
+function buildInvoiceRevisedSmsBody(invoice, portalUrl, originalTotal) {
+  const label = shortPropertyLabel(invoice);
+  const due = invoice.balanceDue == null ? invoice.total : invoice.balanceDue;
+  return (
+    `PJL Land Services: Your invoice for ${label} has been revised. ` +
+    `New total ${moneyTextCurrency(invoice.total)} (was ${moneyTextCurrency(originalTotal)})` +
+    (Number(due) !== Number(invoice.total) ? `, ${moneyTextCurrency(due)} now due` : "") + `. ` +
+    `A revised copy was emailed to you. View or pay here: ${portalUrl}`
+  );
+}
+
+async function sendInvoiceRevisedSMS({ invoiceId, includeSpouse } = {}) {
+  if (!invoiceId) return { ok: false, error: "missing_invoice_id" };
+  const invoices = require("./invoices");
+  const settingsLib = require("./settings");
+  const invoice = await invoices.get(invoiceId);
+  if (!invoice) return { ok: false, error: "invoice_not_found" };
+  let settings;
+  try { settings = await settingsLib.get(); } catch { settings = null; }
+  if (settings?.invoiceSms?.enabled === false) return { ok: false, error: "disabled" };
+  if (invoice.status === "void") return { ok: false, error: "voided" };
+  const originalTotal = invoices.originalTotal(invoice);
+  if (originalTotal == null) return { ok: false, error: "not_revised" };
+  const allowed = await resolveSmsAllowed(invoice);
+  if (!allowed) {
+    await invoices.appendHistory(invoiceId, { action: "revision_sms_skipped_opted_out", by: "system", note: "Customer opted out of text reminders." });
+    return { ok: false, error: "opted_out" };
+  }
+  const to = String(invoice.customerPhone || "").trim();
+  if (!to) {
+    await invoices.appendHistory(invoiceId, { action: "revision_sms_skipped_no_phone", by: "system", note: "No customer phone on invoice." });
+    return { ok: false, error: "no_phone" };
+  }
+  // Nothing is ever sent to a load-test record — the rule lives in
+  // lib/test-recipients.js. Asked here rather than at the caller so
+  // every Twilio send site is gated the same way.
+  if (await testRecipients.isTestRecipient({ phone: to })) {
+    return testRecipients.suppressed("sms", to);
+  }
+  if (!smsConfigured()) return { ok: false, error: "no_twilio_config" };
+  const tokenized = await invoices.ensurePortalToken(invoiceId);
+  const portalToken = tokenized?.portalToken;
+  if (!portalToken) return { ok: false, error: "portal_token_failed" };
+  const publicBase = resolvePublicBaseUrl();
+  const portalUrl = `${publicBase}/portal/invoice/${encodeURIComponent(invoiceId)}?t=${encodeURIComponent(portalToken)}`;
+  const body = buildInvoiceRevisedSmsBody(invoice, portalUrl, originalTotal);
+
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
+  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  const payload = new URLSearchParams({ To: to, From: process.env.TWILIO_FROM_NUMBER, Body: body });
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Authorization": `Basic ${auth}`, "Content-Type": "application/x-www-form-urlencoded" },
+      body: payload.toString()
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const errMsg = String(data?.message || `Twilio HTTP ${response.status}`).slice(0, 300);
+      console.error(`[invoice-revised-sms] invoice=${invoiceId} Twilio rejected:`, response.status, errMsg);
+      await invoices.appendHistory(invoiceId, { action: "revision_sms_failed", by: "system", note: errMsg });
+      return { ok: false, error: errMsg };
+    }
+    await invoices.markRevisionNotified(invoiceId, {
+      channel: "sms",
+      by: "admin",
+      note: `Revised-invoice SMS to ${to} (sid ${data?.sid || "unknown"})`
+    });
+    console.log(`[invoice-revised-sms] invoice=${invoiceId} sent to=${to} sid=${data?.sid}`);
+    const spouseResult = await fireSpouseInvoiceSms(invoice, body, {
+      includeSpouse,
+      actionSent: "revision_sms_sent_spouse",
+      actionFailed: "revision_sms_failed_spouse",
+      actionSkipped: "revision_sms_skipped_spouse"
+    });
+    return { ok: true, sentAt: new Date().toISOString(), body, sid: data?.sid, spouse: spouseResult };
+  } catch (error) {
+    const errMsg = String(error?.message || "network/runtime error").slice(0, 300);
+    console.error(`[invoice-revised-sms] invoice=${invoiceId} failed:`, errMsg);
+    try { await invoices.appendHistory(invoiceId, { action: "revision_sms_failed", by: "system", note: errMsg }); } catch (_) {}
+    return { ok: false, error: errMsg };
+  }
+}
+
 // ---- Invoice junk-mail warning SMS (Junk-Mail Warning brief, May 2026) -
 //
 // Fires ~30s after the admin clicks "Send invoice" email — warns the
@@ -2502,6 +2629,7 @@ module.exports = {
   sendOutreachSms,
   substituteOutreachTags,
   sendInvoiceReminderSMS,
+  sendInvoiceRevisedSMS,
   sendInvoiceJunkMailWarningSMS,
   sendInvoiceReadySMS,
   sweepPendingInvoiceSMS,

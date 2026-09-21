@@ -291,7 +291,21 @@ function normalize(raw) {
     noteToCustomer,
     disclaimers,
     portalToken: inv.portalToken || null,
-    eTransferEmail: inv.eTransferEmail || process.env.ETRANSFER_EMAIL || "info@pjllandservices.com"
+    eTransferEmail: inv.eTransferEmail || process.env.ETRANSFER_EMAIL || "info@pjllandservices.com",
+    // Price revision (invoice-revise, Sep 2026). When the invoice has
+    // been revised after sending, the PDF carries a REVISED marker in the
+    // header + a callout naming the original total so the customer can
+    // tell this copy from the one already in their inbox.
+    revision: (() => {
+      const revisions = Array.isArray(inv.revisions) ? inv.revisions : [];
+      if (!revisions.length) return null;
+      return {
+        originalTotal: Number(revisions[0].previousTotal) || 0,
+        revisedAt: inv.revisedAt || revisions[revisions.length - 1].ts || null,
+        reason: String(revisions[revisions.length - 1].reason || ""),
+        originalSentAt: inv.sentAt || null
+      };
+    })()
   };
 }
 
@@ -337,6 +351,7 @@ function generateInvoicePdf(rawInvoice) {
       drawHeader(doc, inv);
       drawCustomerBand(doc, inv);
       drawDetailsStrip(doc, inv);
+      drawRevisionCallout(doc, inv);
       drawLineItems(doc, inv);
       drawDisclaimers(doc, inv);
       drawBottomSplit(doc, inv);
@@ -358,13 +373,18 @@ function drawHeader(doc, inv) {
   const leftX = MARGIN_X;
   const rightCol = PAGE_W - MARGIN_X - 200;
 
-  // "INVOICE"
+  // "INVOICE" — or "INVOICE  REVISED" when the price changed after send.
   doc.font(fontHeading(doc)).fontSize(30).fillColor(GREEN);
   doc.text("INVOICE", leftX, top, {
     characterSpacing: 1.5,
     width: CONTENT_W - 200,
-    lineGap: 0
+    lineGap: 0,
+    continued: Boolean(inv.revision)
   });
+  if (inv.revision) {
+    doc.fontSize(14).fillColor(AMBER);
+    doc.text("   REVISED", { characterSpacing: 1.5 });
+  }
 
   // Company info block — three lines.
   doc.font(fontBodyBold()).fontSize(10).fillColor(TEXT);
@@ -523,6 +543,37 @@ function drawDetailsStrip(doc, inv) {
   doc.strokeColor(HAIRLINE).lineWidth(0.5);
   doc.moveTo(MARGIN_X, doc.y + pad - 6).lineTo(PAGE_W - MARGIN_X, doc.y + pad - 6).stroke();
   doc.y += pad;
+  doc.x = MARGIN_X;
+}
+
+// ---- Revision callout -----------------------------------------------
+// Amber box under the details strip. Only drawn when the invoice was
+// revised after sending. Says what it replaces and why.
+function drawRevisionCallout(doc, inv) {
+  const r = inv.revision;
+  if (!r) return;
+  const x = MARGIN_X;
+  const w = CONTENT_W;
+  const padX = 12;
+  const y0 = doc.y + 2;
+  const lines = [];
+  lines.push(`This revised invoice replaces the invoice ${inv.id}${r.originalSentAt ? ` sent ${fmtDate(r.originalSentAt)}` : ""} ` +
+    `for ${fmtMoney(r.originalTotal)}. The revised total is ${fmtMoney(inv.total)}` +
+    `${r.revisedAt ? ` (revised ${fmtDate(r.revisedAt)})` : ""}.`);
+  if (r.reason) lines.push(`Reason: ${r.reason}`);
+  const body = lines.join("\n");
+  doc.font(fontBody()).fontSize(9.5);
+  const bodyH = doc.heightOfString(body, { width: w - padX * 2 - 4, lineGap: 1 });
+  const boxH = bodyH + 30;
+  doc.save();
+  doc.roundedRect(x, y0, w, boxH, 4).fillAndStroke("#FFF4E5", "#F0C48A");
+  doc.rect(x, y0, 4, boxH).fill(AMBER);
+  doc.restore();
+  doc.font(fontBodyBold()).fontSize(8).fillColor("#8A4B0B");
+  doc.text("PRICE REVISED", x + padX, y0 + 8, { characterSpacing: 1.4, width: w - padX * 2 });
+  doc.font(fontBody()).fontSize(9.5).fillColor(TEXT);
+  doc.text(body, x + padX, doc.y + 3, { width: w - padX * 2 - 4, lineGap: 1 });
+  doc.y = y0 + boxH + 10;
   doc.x = MARGIN_X;
 }
 

@@ -106,6 +106,30 @@
         </tr>
       `).join("");
     }
+    // Revised-price notice (invoice-revise). Injected above the line
+    // items so it's the first thing read after the header.
+    let revisedEl = document.getElementById("pinvRevisedBanner");
+    if (invoice.revision && invoice.revision.originalTotal != null) {
+      if (!revisedEl) {
+        revisedEl = document.createElement("div");
+        revisedEl.id = "pinvRevisedBanner";
+        revisedEl.className = "pinv-status-banner pinv-revised-banner";
+        const table = linesEl.closest("table");
+        (table?.parentNode || cardEl).insertBefore(revisedEl, table || null);
+      }
+      const when = invoice.revision.revisedAt ? ` on ${fmtDate(invoice.revision.revisedAt)}` : "";
+      const reason = String(invoice.revision.reason || "").trim();
+      const why = reason ? ` Reason: ${reason}${/[.!?]$/.test(reason) ? "" : "."}` : "";
+      revisedEl.innerHTML =
+        `<strong>Price revised.</strong> This invoice was revised${escapeHtml(when)}. ` +
+        `The original total was <strong>${escapeHtml(fmtMoney(invoice.revision.originalTotal))}</strong>; ` +
+        `the revised total is <strong>${escapeHtml(fmtMoney(invoice.total))}</strong>.${escapeHtml(why)} ` +
+        `Please disregard the earlier copy.`;
+      revisedEl.hidden = false;
+    } else if (revisedEl) {
+      revisedEl.hidden = true;
+    }
+
     document.getElementById("pinvSubtotal").textContent = fmtMoney(invoice.subtotal);
     document.getElementById("pinvHst").textContent = fmtMoney(invoice.hst);
     document.getElementById("pinvTotal").textContent = fmtMoney(invoice.total);

@@ -125,6 +125,19 @@ const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
 const quoteViews = require("./lib/quote-views");
 const invoices = require("./lib/invoices");
+// Customer-safe view of a price revision (invoice-revise). Original
+// total + when + the reason Patrick typed (customer-facing by design —
+// it's the same text the revised email carries). No admin history.
+function publicRevisionSummary(inv) {
+  const revs = Array.isArray(inv?.revisions) ? inv.revisions : [];
+  if (!revs.length) return null;
+  const latest = revs[revs.length - 1];
+  return {
+    originalTotal: Number(revs[0].previousTotal) || 0,
+    revisedAt: inv.revisedAt || latest.ts || null,
+    reason: String(latest.reason || "")
+  };
+}
 const deposits = require("./lib/deposits");
 const completionCascade = require("./lib/completion-cascade");
 const customLineItems = require("./lib/custom-line-items");
@@ -11193,7 +11206,8 @@ async function handleApi(req, res, pathname) {
         balanceDue: inv.balanceDue == null ? inv.total : Number(inv.balanceDue),
         currency: inv.currency,
         payUrl,
-        quickbooksInvoiceId: inv.quickbooksInvoiceId || null
+        quickbooksInvoiceId: inv.quickbooksInvoiceId || null,
+        revision: publicRevisionSummary(inv)
       };
       return sendJson(res, 200, { ok: true, invoice: safe });
     } catch (err) {
@@ -11267,6 +11281,7 @@ async function handleApi(req, res, pathname) {
         currency: inv.currency,
         quickbooksChargeId: inv.quickbooksChargeId,
         eTransferEmail: process.env.ETRANSFER_EMAIL || "info@pjllandservices.com",
+        revision: publicRevisionSummary(inv),
         // Billing-address pre-fill for the AVS fields (AVS brief §4.1).
         // Derived from the invoice's OWN bill-to snapshot, falling back
         // to the service address — never a live customer lookup, so it
@@ -11400,6 +11415,18 @@ async function handleApi(req, res, pathname) {
 
       const rcReject = await verifyRecaptchaOrReject(req, body, "payment-intent");
       if (rcReject) return sendJson(res, rcReject.status, rcReject.payload);
+
+      // Stale-amount guard (invoice-revise). The pay page sends the amount
+      // it displayed; if Patrick revised the invoice while the page was
+      // open, refuse rather than take a payment for an amount the
+      // customer never saw. Optional field — older cached pages skip it.
+      if (body?.expectedAmountDue != null && Number.isFinite(Number(body.expectedAmountDue))) {
+        const shownCents = Math.round(Number(body.expectedAmountDue) * 100);
+        const dueCents = Math.round(Number(inv.balanceDue) * 100);
+        if (shownCents !== dueCents) {
+          return sendJson(res, 409, { ok: false, code: "amount_changed", errors: ["This invoice was updated since you opened this page. Please refresh to see the current amount before paying."] });
+        }
+      }
 
       // MONEY-CRITICAL: create the intent for the OUTSTANDING BALANCE, not
       // the invoice total — see the note on the sdk-config payload above.
@@ -15036,6 +15063,115 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, invoice: updated, warning: qbWarning });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update invoice."] });
+    }
+  }
+
+  // POST /api/invoices/:id/revise — change line items on a SENT invoice
+  // (invoice-revise, Sep 2026). Admin-only. Body: { lineItems, reason }.
+  // invoices.revise() snapshots the previous lines/totals into
+  // revisions[] and refuses draft/paid/void. Mirrors the new lines to
+  // QuickBooks best-effort (pushInvoice updates in place when a QB id
+  // exists). Does NOT email the customer — that's /send-revision below,
+  // an explicit second click so Patrick can eyeball the numbers first.
+  const invoiceReviseMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/revise$/);
+  if (invoiceReviseMatch && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required to revise invoices."] });
+      const id = decodeURIComponent(invoiceReviseMatch[1]);
+      const body = await parseRequestBody(req).catch(() => ({}));
+      const result = await invoices.revise(id, {
+        lineItems: Array.isArray(body?.lineItems) ? body.lineItems : [],
+        reason: typeof body?.reason === "string" ? body.reason : "",
+        by: session.uid || "admin"
+      });
+      if (!result.ok) {
+        return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
+      }
+      let qbWarning = null;
+      let qbAction = null;
+      if (result.invoice.quickbooksInvoiceId) {
+        try {
+          if (quickbooks.isConfigured() && (await quickbooks.isConnected())) {
+            const pushed = await quickbooks.pushInvoice(result.invoice);
+            qbAction = pushed.action;
+            if (pushed.id && pushed.id !== result.invoice.quickbooksInvoiceId) {
+              await invoices.update(id, { quickbooksInvoiceId: pushed.id });
+            }
+          }
+        } catch (qbErr) {
+          console.warn(`[invoice-revise] QB update failed for ${id}: ${qbErr.message}`);
+          qbWarning = `Revised locally, but QuickBooks rejected the update: ${qbErr.message}. Use "Push to QuickBooks" to retry.`;
+        }
+      }
+      const updated = await invoices.get(id);
+      return sendJson(res, 200, { ok: true, invoice: updated || result.invoice, qbAction, warning: qbWarning });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't revise invoice."] });
+    }
+  }
+
+  // POST /api/invoices/:id/send-revision — email the REVISED invoice to
+  // the customer (subject "Revised invoice … — now $X due (was $Y)", amber
+  // callout with the original total + reason, REVISED PDF attached).
+  // If the customer was originally texted about this invoice
+  // (customerSmsSentAt set), also fire a revised-invoice SMS so the
+  // channel they already know carries the change. Admin-only.
+  // Body: { includeSpouse?: bool }.
+  const invoiceSendRevisionMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/send-revision$/);
+  if (invoiceSendRevisionMatch && req.method === "POST") {
+    const invId = decodeURIComponent(invoiceSendRevisionMatch[1]);
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required to send revised invoices."] });
+      const sendBody = await parseRequestBody(req).catch(() => ({}));
+      const includeSpouse = typeof sendBody?.includeSpouse === "boolean" ? sendBody.includeSpouse : null;
+      const inv = await invoices.get(invId);
+      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      if (inv.status === "void" || inv.status === "draft") {
+        return sendJson(res, 409, { ok: false, errors: [`Invoice is "${inv.status}" — a revised copy can't be sent.`] });
+      }
+      const originalTotal = invoices.originalTotal(inv);
+      if (originalTotal == null) {
+        return sendJson(res, 409, { ok: false, errors: ["This invoice hasn't been revised — use Resend instead."] });
+      }
+      if (!inv.customerEmail) {
+        return sendJson(res, 400, { ok: false, errors: ["Invoice has no customer email — add one before sending."] });
+      }
+      const latest = inv.revisions[inv.revisions.length - 1];
+      const tokenized = await invoices.ensurePaymentToken(invId);
+      const paymentToken = tokenized?.paymentToken || inv.paymentToken || null;
+      const renderInv = { ...inv, paymentToken };
+      const pdfBuffer = await generateInvoicePdf(renderInv);
+      const publicBase = resolvePublicBaseUrl();
+      const viewLink = paymentToken
+        ? `${publicBase}/pay/invoice/${encodeURIComponent(invId)}?t=${encodeURIComponent(paymentToken)}`
+        : "";
+      await sendInvoiceToCustomer(renderInv, pdfBuffer, {
+        revision: { originalTotal, reason: latest?.reason || "", revisedAt: inv.revisedAt },
+        viewLink,
+        includeSpouse
+      });
+      let updated = await invoices.markRevisionNotified(invId, {
+        channel: "email",
+        by: session.uid || "admin",
+        note: `Revised invoice emailed to ${inv.customerEmail} (now $${Number(inv.total).toFixed(2)}, was $${Number(originalTotal).toFixed(2)}).`
+      });
+      // SMS mirror — only when the customer was texted originally.
+      let sms = null;
+      if (inv.customerSmsSentAt) {
+        try {
+          const { sendInvoiceRevisedSMS } = require("./lib/notify-customer");
+          sms = await sendInvoiceRevisedSMS({ invoiceId: invId, includeSpouse });
+        } catch (smsErr) {
+          sms = { ok: false, error: smsErr?.message || "SMS failed" };
+        }
+        updated = (await invoices.get(invId)) || updated;
+      }
+      return sendJson(res, 200, { ok: true, invoice: updated, sms });
+    } catch (err) {
+      console.error(`[invoice-send-revision] failed for ${invId}:`, err.message);
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't send revised invoice."] });
     }
   }
 
