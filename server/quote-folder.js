@@ -299,7 +299,7 @@ async function load() {
 }
 
 async function convertToProject(quoteId) {
-  if (!(await pjlDialog.confirm(`Spin up a new project from ${quoteId}? Any material lists attached to this quote will move to the new project.`, {
+  if (!(await pjlDialog.confirm(`Convert ${quoteId} to a project? Any material lists attached to this quote will move over.`, {
     title: "Convert to project?",
     icon: "warning",
     confirmLabel: "Convert"
@@ -314,6 +314,10 @@ async function convertToProject(quoteId) {
     if (data.alreadyExisted) {
       // Already-converted — go to the existing project rather than create a duplicate.
       await pjlDialog.alert(`A project for ${quoteId} already exists (${data.project.id}). Opening it.`, { title: "Project already exists", icon: "info" });
+    } else if (data.linkedExistingProject) {
+      // This quote was built from a project's System Builder design —
+      // linked to that project instead of spinning up a duplicate.
+      await pjlDialog.alert(`This quote was built from ${data.project.name || data.project.id}'s System Builder design — linked to that project instead of creating a new one.`, { title: "Linked to existing project", icon: "info" });
     }
     location.href = `/admin/project/${encodeURIComponent(data.project.id)}`;
   } catch (err) {

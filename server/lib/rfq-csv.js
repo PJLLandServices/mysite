@@ -18,7 +18,7 @@
 
 const fsSync = require("node:fs");
 const path = require("node:path");
-const { formatUnit, resolveLineDescription } = require("./format");
+const { formatUnit, resolveLineDescription, resolveSupplierSku } = require("./format");
 
 // Catalog lookup — same as rfq-pdf.js. The cache is process-lifetime,
 // reset on restart. Snapshot-on-send (server.js) holds the rendered CSV
@@ -72,11 +72,14 @@ function quoteField(value) {
 function generateRfqCsv(rfq, partsMap) {
   const catalog = catalogParts(partsMap);
   const lines = [];
-  lines.push("SKU,Description,Qty,Unit");
+  // Their number first — it is the one the branch looks up — with ours
+  // kept alongside so a reply can be matched back line for line.
+  lines.push("Supplier part #,Our SKU,Description,Qty,Unit");
   for (const line of (rfq.lines || [])) {
     const description = resolveLineDescription(line, catalog);
     const unit = formatUnit(unitForLine(line, catalog), line.quantity);
     const row = [
+      quoteField(resolveSupplierSku(line, catalog, rfq.supplierId)),
       quoteField(line.sku || ""),
       quoteField(description),
       String(line.quantity),

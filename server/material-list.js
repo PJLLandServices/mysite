@@ -39,6 +39,9 @@
     generatePosButton: document.getElementById("mlbGeneratePosButton"),
     posModal: document.getElementById("mlbPosModal"),
     posPlan: document.getElementById("mlbPosPlan"),
+    posModeOne: document.getElementById("mlbPosModeOne"),
+    posModeSplit: document.getElementById("mlbPosModeSplit"),
+    posSupplier: document.getElementById("mlbPosSupplier"),
     posError: document.getElementById("mlbPosError"),
     posConfirm: document.getElementById("mlbPosConfirm"),
     posCancel: document.getElementById("mlbPosCancel"),
@@ -783,13 +786,35 @@
   }
 
   // ---- Generate POs (plan + confirm) --------------------------------
+  // Which supplier the whole order goes to, or null in split mode. The
+  // <select> is filled from the plan response the first time it answers,
+  // so the picker always offers real suppliers rather than a guess.
+  function posForcedSupplierId() {
+    if (els.posModeSplit && els.posModeSplit.checked) return null;
+    return (els.posSupplier && els.posSupplier.value) || null;
+  }
+  function fillPosSuppliers(options, preferredId) {
+    if (!els.posSupplier || !options || !options.length) return;
+    const keep = els.posSupplier.value;
+    if (els.posSupplier.options.length !== options.length) {
+      els.posSupplier.innerHTML = options
+        .map((o) => `<option value="${escapeHtml(o.id)}">${escapeHtml(o.name)}</option>`)
+        .join("");
+    }
+    const want = keep || preferredId || options[0].id;
+    if (want) els.posSupplier.value = want;
+  }
   async function openPosModal() {
     els.posError.hidden = true;
     els.posConfirm.hidden = true;
     els.posModal.hidden = false;
     els.posPlan.innerHTML = `<p class="proj-empty">Planning…</p>`;
     try {
-      const r = await fetch(`/api/material-lists/${encodeURIComponent(state.listId)}/plan-purchase-orders`, { method: "POST" });
+      const r = await fetch(`/api/material-lists/${encodeURIComponent(state.listId)}/plan-purchase-orders`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ supplierId: posForcedSupplierId() })
+      });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok && !data.previews) {
         els.posError.textContent = (data.errors && data.errors[0]) || `Couldn't plan (${r.status})`;
@@ -807,6 +832,10 @@
   function renderPosPlan(plan) {
     const previews = plan.previews || [];
     const missing = plan.missingSupplier || [];
+    // The busiest supplier in the split view is the sensible default for
+    // the one-order picker — it is where most of the list already lives.
+    const busiest = previews.slice().sort((a, b) => b.lineItems.length - a.lineItems.length)[0];
+    fillPosSuppliers(plan.supplierOptions, plan.forcedSupplierId || (busiest && busiest.supplierId));
     let html = "";
     if (previews.length) {
       html += `<div style="margin:0 0 12px"><strong>${previews.length} purchase order${previews.length === 1 ? "" : "s"} will be created:</strong></div>`;
@@ -835,6 +864,18 @@
         </div>
       `;
     }
+    const unpriced = plan.unpricedForSupplier || [];
+    if (unpriced.length) {
+      // Lines this supplier has never quoted: priced from the catalog,
+      // which holds some other supplier's number. Worth knowing before
+      // the PO total is treated as real money.
+      html += `
+        <div style="padding:10px 12px;background:#FFF1D6;border:1px solid #E0CB8E;border-radius:8px;color:#7A5500;margin-top:8px">
+          <strong>${unpriced.length} line${unpriced.length === 1 ? "" : "s"} priced from the catalog</strong> — this supplier hasn't quoted ${unpriced.length === 1 ? "it" : "them"}, so the price shown is another supplier's.
+          <div style="font-family:ui-monospace,monospace;font-size:12px;margin-top:4px">${unpriced.slice(0, 12).map(escapeHtml).join(", ")}${unpriced.length > 12 ? ", …" : ""}</div>
+        </div>
+      `;
+    }
     if (!previews.length && !missing.length) {
       html = `<p class="proj-empty">No <em>need</em> lines on this list. Mark some lines as need, then come back.</p>`;
     }
@@ -845,7 +886,11 @@
     els.posError.hidden = true;
     els.posConfirm.disabled = true;
     try {
-      const r = await fetch(`/api/material-lists/${encodeURIComponent(state.listId)}/generate-purchase-orders`, { method: "POST" });
+      const r = await fetch(`/api/material-lists/${encodeURIComponent(state.listId)}/generate-purchase-orders`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ supplierId: posForcedSupplierId() })
+      });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
         els.posError.textContent = (data.errors && data.errors[0]) || `Generate failed (${r.status})`;
@@ -1173,6 +1218,12 @@
     // Generate is about to do.
     for (const el of [els.rfqModeShop, els.rfqModeAssigned]) {
       if (el) el.addEventListener("change", openRfqModal);
+    }
+    // Same rule on the PO dialog: switching one-order/split, or picking a
+    // different supplier, re-plans rather than leaving last mode's preview
+    // sitting above a button that would do something else.
+    for (const el of [els.posModeOne, els.posModeSplit, els.posSupplier]) {
+      if (el) el.addEventListener("change", openPosModal);
     }
     els.rfqModal.addEventListener("click", (event) => {
       if (event.target === els.rfqModal) els.rfqModal.hidden = true;

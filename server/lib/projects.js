@@ -198,6 +198,18 @@ function blankProject() {
     // without re-reading the (possibly archived) quote.
     proposalSnapshot: null,
 
+    // Job journal (2026-09-21) — a free-form, chronological log tied to
+    // the JOB itself, not to any one visit/work order. Patrick: "we
+    // currently have it being delivered as Work Orderz" — that's the
+    // per-visit dailyLog on build work orders (lib/work-orders.js), which
+    // stays as the tech's per-visit record. This is deliberately
+    // separate: an entry any admin or tech can add at any time — a note,
+    // optionally with photos — that reads as the job's own story, not
+    // scattered across however many work orders it took to build it.
+    // { id, ts, by, note, photos: [{n, filename, mediaType, kind, bytes,
+    // addedAt}] }, newest-last (rendered newest-first by the UI).
+    journalEntries: [],
+
     // Brief 2 — scope-change records. Each entry captures an
     // out-of-scope addition raised during execution. Flow:
     // pending_admin_review → pending_customer_approval → approved /
@@ -593,28 +605,38 @@ async function _updateUnlocked(id, patch = {}) {
   return next;
 }
 
-// Create a new Project from an accepted project_proposal quote.
+// Create a new Project from an accepted quote — any type. Originally
+// project_proposal-only; opened up to on_site_quote / ai_repair_quote too
+// (2026-09-20) because Patrick scopes multi-repair jobs the same way he
+// scopes installs: assess the property, compose several repairs into one
+// quote, convert the accepted quote to a Project. The old type restriction
+// meant that path produced a bare project with just a name — the whole
+// point of the assessment (which repairs, priced how) was reachable only
+// by clicking back into the original quote. Every field below either
+// exists on every quote type (branch/billingMode/proposalSections are
+// project_proposal-only and simply stay null/empty for the others — the
+// project page's panels already tolerate that) or degrades harmlessly.
 //
 // Enriches the standard create() with:
-//   - branch, billingMode mirrored from the quote
+//   - branch, billingMode mirrored from the quote (null for non-proposals)
 //   - labourRateLocked snapshotted from quote.customRates.labour (T&M
 //     uses this rate; fixed-price keeps it informational)
 //   - tasks[] seeded from quote.lineItems — one task per line, status
-//     "pending", description = line label, sourceLineItemId set
+//     "pending", description = line label, sourceLineItemId set — this is
+//     what actually makes a converted repair quote's line items visible
+//     on the project page (the Tasks panel), not the proposal panel
 //   - attachments[] referencing quote.attachments by id (no file copy;
 //     the project reads through to the quote's directory)
-//   - proposalSnapshot frozen copy of the accepted proposal at this
-//     instant (sections + line items + totals + branch + acceptance
-//     method + customer/property snapshot)
+//   - proposalSnapshot frozen copy of the accepted quote at this instant
+//     (sections + line items + totals + branch + acceptance method +
+//     customer/property snapshot) — drives the "Accepted proposal" panel
+//     (totals, accepted date, link back to the quote, attachments)
 //
 // Idempotent at the caller — the convert-to-project endpoint checks
 // for an existing project with sourceQuoteId === quote.id before
 // invoking this and returns the existing one if found.
 async function createFromProposal(quote, { customerName = "", customerEmail = "", customerPhone = "", address = "", propertyId = null, by = "admin" } = {}) {
   if (!quote) throw new Error("createFromProposal requires a quote.");
-  if (quote.type !== "project_proposal") {
-    throw new Error("createFromProposal only handles project_proposal quotes.");
-  }
 
   const namePieces = [];
   if (customerName) namePieces.push(customerName);
@@ -709,6 +731,161 @@ async function createFromProposal(quote, { customerName = "", customerEmail = ""
   });
   await writeAll(records);
   return records[idx];
+}
+
+// Enrich an EXISTING project from an accepted project_proposal quote —
+// the System Builder path. A quote built from a project's saved system
+// design (server/sitebuilder.html, linkedQuoteId written onto
+// project.systemDesign) already belongs to that project before it's ever
+// sent; convert-to-project used to not know that and would spin up a
+// brand-new, duplicate project for the very same job every time. Same
+// enrichment as createFromProposal (branch, billingMode,
+// labourRateLocked, tasks, attachments, proposalSnapshot, sourceQuoteId)
+// but patches the project already on file instead of minting a new id.
+// Tasks are only (re)seeded if none of the existing ones are done yet —
+// same guard as seedTasksFromQuote, so a project someone has already
+// started working never has its progress clobbered.
+async function enrichFromProposal(projectId, quote, { customerName = "", customerEmail = "", customerPhone = "", address = "", propertyId = null, by = "admin" } = {}) {
+  if (!projectId) throw new Error("enrichFromProposal requires a projectId.");
+  if (!quote) throw new Error("enrichFromProposal requires a quote.");
+
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === projectId);
+  if (idx === -1) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
+  const current = records[idx];
+
+  const attachments = (quote.attachments || [])
+    .filter((a) => a.kind !== "signed_pdf_return")
+    .map((a, i) => ({
+      id: "att_" + random8(),
+      sourceQuoteId: quote.id,
+      sourceQuoteAttachmentId: a.id,
+      kind: a.kind,
+      caption: a.caption || a.filename || "",
+      filename: a.filename || "",
+      mimeType: a.mimeType || "",
+      order: i
+    }));
+
+  const proposalSnapshot = {
+    quoteId: quote.id,
+    version: quote.version || 1,
+    branch: quote.branch || null,
+    billingMode: quote.billingMode || null,
+    acceptanceMethod: quote.acceptanceMethod || null,
+    acceptedAt: quote.acceptedAt || null,
+    customerName,
+    customerEmail,
+    customerPhone,
+    address,
+    proposalSections: Array.isArray(quote.proposalSections)
+      ? quote.proposalSections.map((s) => ({ ...s, attachmentIds: [...(s.attachmentIds || [])] }))
+      : [],
+    lineItems: Array.isArray(quote.lineItems) ? quote.lineItems.map((li) => ({ ...li })) : [],
+    subtotal: Number(quote.subtotal) || 0,
+    hst: Number(quote.hst) || 0,
+    total: Number(quote.total) || 0,
+    customRates: { ...(quote.customRates || {}) },
+    scope: quote.scope || "",
+    frozenAt: nowIso()
+  };
+
+  const canReseedTasks = !(current.tasks || []).some((t) => t.status === "done");
+  const tasks = canReseedTasks
+    ? (quote.lineItems || []).map((li, i) => ({
+        id: "task_" + random8(),
+        description: String(li.label || li.sourceKey || `Task ${i + 1}`).slice(0, 400),
+        sourceLineItemId: li.id || null,
+        status: "pending",
+        percentComplete: 0,
+        completedAt: null,
+        completedByWoId: null,
+        order: i
+      }))
+    : current.tasks;
+
+  const next = {
+    ...current,
+    sourceQuoteId: quote.id,
+    branch: quote.branch || current.branch || null,
+    billingMode: quote.billingMode || current.billingMode || null,
+    labourRateLocked: Number.isFinite(Number(quote.customRates?.labour))
+      ? Number(quote.customRates.labour)
+      : current.labourRateLocked,
+    tasks,
+    attachments: [...(current.attachments || []), ...attachments],
+    proposalSnapshot,
+    updatedAt: nowIso()
+  };
+  // Customer/property snapshot — only fill what the project doesn't
+  // already carry (don't clobber hand-edited project details).
+  if (!next.customerName && customerName) next.customerName = customerName;
+  if (!next.customerEmail && customerEmail) next.customerEmail = customerEmail;
+  if (!next.customerPhone && customerPhone) next.customerPhone = customerPhone;
+  if (!next.address && address) next.address = address;
+  if (!next.propertyId && propertyId) next.propertyId = propertyId;
+
+  appendHistory(next, {
+    action: "proposal_enriched",
+    by,
+    note: `linked from System Builder design — tasks=${tasks.length} attachments=${attachments.length} branch=${quote.branch || "none"}`
+  });
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// One-time backfill for projects converted BEFORE 2026-09-20, when
+// convert-to-project only enriched project_proposal quotes — everything
+// else (on_site_quote, ai_repair_quote) got a bare projects.create() with
+// just sourceQuoteId and nothing else. Finds every project that still
+// looks like that (sourceQuoteId set, no proposalSnapshot) and applies
+// the SAME enrichFromProposal() a fresh conversion gets today, so the
+// composed repair list shows up on the project instead of staying
+// reachable only by clicking back into the original quote.
+//
+// Additive only: enrichFromProposal never overwrites customer/address
+// fields that are already set, and refuses to re-seed tasks over ones a
+// project already has done — so this cannot erase work someone already
+// did on a converted project. Never touches a project that's already
+// enriched (has a proposalSnapshot) — safe to run more than once.
+//
+// planProposalBackfill() is the read-only preview (what WOULD change,
+// nothing written); applyProposalBackfill() does the actual writes.
+async function planProposalBackfill() {
+  const records = await readAll();
+  const quotesLib = require("./quotes");
+  const candidates = records.filter((p) => p.sourceQuoteId && !p.proposalSnapshot);
+  const plan = [];
+  for (const p of candidates) {
+    const quote = await quotesLib.get(p.sourceQuoteId);
+    plan.push({
+      projectId: p.id,
+      projectName: p.name,
+      sourceQuoteId: p.sourceQuoteId,
+      quoteFound: !!quote,
+      quoteType: quote ? quote.type : null,
+      lineItemCount: quote ? (quote.lineItems || []).length : 0
+    });
+  }
+  return plan;
+}
+
+async function applyProposalBackfill({ by = "admin" } = {}) {
+  const quotesLib = require("./quotes");
+  const plan = await planProposalBackfill();
+  const enriched = [];
+  const skippedNoQuote = [];
+  for (const item of plan) {
+    if (!item.quoteFound) {
+      skippedNoQuote.push(item.projectId);
+      continue;
+    }
+    const quote = await quotesLib.get(item.sourceQuoteId);
+    await enrichFromProposal(item.projectId, quote, { by });
+    enriched.push(item.projectId);
+  }
+  return { enriched, skippedNoQuote };
 }
 
 // Push a WO id onto the project's workOrderIds[]. Idempotent — if the
@@ -985,6 +1162,71 @@ async function listRecentProjectPhotos(projectId, { limit = 6 } = {}) {
   }
   photos.sort((a, b) => String(b.addedAt || "").localeCompare(String(a.addedAt || "")));
   return photos.slice(0, limit);
+}
+
+// ---- Job journal (2026-09-21) --------------------------------------
+// A free-form log entry any time, not tied to a visit. Photo FILES are
+// written/removed by the server.js route (same split as WO photos: the
+// lib layer only ever holds metadata) — these functions manage the
+// journalEntries[] array and its photo metadata sub-array.
+
+const MAX_JOURNAL_NOTE_LENGTH = 4000;
+
+async function addJournalEntry(projectId, { note = "", by = "admin" } = {}) {
+  const cleanNote = String(note || "").trim().slice(0, MAX_JOURNAL_NOTE_LENGTH);
+  if (!cleanNote) throw Object.assign(new Error("A journal entry needs a note."), { code: "note_required" });
+  const entry = {
+    id: "journal_" + random8(),
+    ts: nowIso(),
+    by: String(by || "admin").slice(0, 80),
+    note: cleanNote,
+    photos: []
+  };
+  await _mutate(projectId, (proj) => {
+    if (!Array.isArray(proj.journalEntries)) proj.journalEntries = [];
+    proj.journalEntries.push(entry);
+    appendHistory(proj, { action: "journal_entry_added", by, note: cleanNote.slice(0, 120) });
+  });
+  return entry;
+}
+
+async function deleteJournalEntry(projectId, entryId, { by = "admin" } = {}) {
+  return _mutate(projectId, (proj) => {
+    const list = proj.journalEntries || [];
+    const idx = list.findIndex((e) => e.id === entryId);
+    if (idx === -1) throw Object.assign(new Error("Journal entry not found."), { code: "journal_entry_not_found" });
+    const [removed] = list.splice(idx, 1);
+    appendHistory(proj, { action: "journal_entry_removed", by, note: entryId });
+    return removed;
+  });
+}
+
+// Appends already-saved photo metadata (files are written to disk by the
+// caller first, same order as savePhotosForWorkOrder/journal route).
+async function addJournalEntryPhotos(projectId, entryId, photoMeta) {
+  return _mutate(projectId, (proj) => {
+    const entry = (proj.journalEntries || []).find((e) => e.id === entryId);
+    if (!entry) throw Object.assign(new Error("Journal entry not found."), { code: "journal_entry_not_found" });
+    if (!Array.isArray(entry.photos)) entry.photos = [];
+    entry.photos.push(...photoMeta);
+    return entry;
+  });
+}
+
+// Removes one photo's metadata by n and returns it so the caller can
+// delete the matching file on disk. Returns null if not found (caller
+// treats that as 404 without touching the filesystem).
+async function removeJournalEntryPhoto(projectId, entryId, n) {
+  let removed = null;
+  await _mutate(projectId, (proj) => {
+    const entry = (proj.journalEntries || []).find((e) => e.id === entryId);
+    if (!entry) throw Object.assign(new Error("Journal entry not found."), { code: "journal_entry_not_found" });
+    const photos = entry.photos || [];
+    const idx = photos.findIndex((p) => Number(p.n) === Number(n));
+    if (idx === -1) return;
+    [removed] = photos.splice(idx, 1);
+  });
+  return removed;
 }
 
 // Pure read — returns derived metrics from project + attached build WOs.
@@ -2096,6 +2338,9 @@ module.exports = {
   get,
   create,
   createFromProposal,
+  enrichFromProposal,
+  planProposalBackfill,
+  applyProposalBackfill,
   buildCustomerSnapshot,
   update,
   attachWorkOrder,
@@ -2115,6 +2360,11 @@ module.exports = {
   computeTAndMBilling,
   listTaskPhotos,
   listRecentProjectPhotos,
+  // Job journal
+  addJournalEntry,
+  deleteJournalEntry,
+  addJournalEntryPhotos,
+  removeJournalEntryPhoto,
   // Brief 2 — scope changes
   createScopeChangeRequest,
   updateScopeChangeRequest,

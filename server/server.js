@@ -149,6 +149,7 @@ const suppliers = require("./lib/suppliers");
 const materialLists = require("./lib/material-lists");
 const projects = require("./lib/projects");
 const partSuppliers = require("./lib/part-suppliers");
+const partSupplierPrices = require("./lib/part-supplier-prices");
 const partsLib = require("./lib/parts");
 const purchaseOrders = require("./lib/purchase-orders");
 const quoteRequests = require("./lib/quote-requests");
@@ -244,6 +245,11 @@ const MAX_CHAT_BODY = 80_000; // ~50K-ish transcript + a few KB of metadata
 // If the booking is abandoned, no photo is ever persisted.
 const PHOTOS_DIR = path.join(DATA_DIR, "photos");
 const WO_PHOTOS_DIR = path.join(DATA_DIR, "wo-photos");
+// Job journal (2026-09-21) — a project-level entry's photos, keyed by
+// <projectId>/<entryId>, same on-disk shape as WO photos (bytes here,
+// metadata on the project record).
+const PROJECT_JOURNAL_PHOTOS_DIR = path.join(DATA_DIR, "project-journal-photos");
+const MAX_PHOTOS_PER_JOURNAL_ENTRY = 30;
 // Customer-uploaded warranty-claim files (the invoice copy + evidence).
 // Same split as lead photos: bytes on disk, metadata on the record.
 const WARRANTY_FILES_DIR = path.join(DATA_DIR, "warranty-claim-files");
@@ -463,8 +469,40 @@ function rebuildCatalogFromOverrides({ initial = false } = {}) {
   // Layer supplier assignments on top. mergeIntoCatalog mutates in place
   // and also normalises missing supplierIds to [].
   partSuppliers.mergeIntoCatalog(PARTS.parts, supplierOverrides);
+  // Then per-supplier prices (lib/part-supplier-prices.js). MUST run
+  // after the assignment merge: the effective price is the PRIMARY
+  // supplier's, and the primary is supplierIds[0].
+  let supplierPriceMap = {};
+  try {
+    const pricePath = path.join(__dirname, "data", "part-supplier-prices.json");
+    if (fsSync.existsSync(pricePath)) {
+      supplierPriceMap = JSON.parse(fsSync.readFileSync(pricePath, "utf8") || "{}");
+    }
+  } catch (err) {
+    console.warn("[parts] could not read part-supplier-prices.json:", err?.message);
+  }
+  partSupplierPrices.mergeIntoCatalog(PARTS.parts, supplierPriceMap, {
+    editedMap: (catalogOverrides && catalogOverrides.edited) || {}
+  });
   if (!initial) CATALOG_VERSION++;
 }
+
+// One-time seed of per-supplier prices from quote requests that were
+// already applied into the catalog's single price field (they pre-date
+// lib/part-supplier-prices.js). No-op once the file exists, so a restart
+// never re-seeds over live data.
+(async function seedPartSupplierPrices() {
+  try {
+    const records = await quoteRequests.list({});
+    const result = await partSupplierPrices.seedIfEmpty(records);
+    if (result.seeded) {
+      console.log(`[parts] seeded per-supplier prices for ${result.skus} SKU(s) from applied quote requests`);
+      rebuildCatalogFromOverrides();
+    }
+  } catch (err) {
+    console.warn("[parts] could not seed per-supplier prices:", err?.message);
+  }
+})();
 
 function fmtMoneyFromCents(cents) {
   const n = Number(cents) || 0;
@@ -1284,6 +1322,9 @@ function needsAuth(method, pathname) {
   // Email-health view (JOB-008) — admin-cookie gated, admin only.
   if (pathname.startsWith("/api/admin/email-health")) return "admin";
   if (pathname === "/api/admin/purge-test-data") return "admin";
+  // One-time backfill for pre-2026-09-20 project conversions — bulk
+  // write across every project, same admin-only bar as purge-test-data.
+  if (pathname === "/api/admin/projects/backfill-proposal-enrichment") return "admin";
   if (pathname === "/api/admin/open-bucket/slot") return "admin";
   // Territory export download — ADMIN ONLY. De-identified, but it is still
   // customer geography (municipality + 2-decimal coordinates for every live
@@ -1458,6 +1499,7 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/material-lists")) return "user";
   if (pathname.startsWith("/api/projects")) return "user";
   if (pathname.startsWith("/api/part-suppliers")) return "user";
+  if (pathname.startsWith("/api/part-supplier-prices")) return "user";
   if (pathname.startsWith("/api/purchase-orders")) return "user";
   if (pathname.startsWith("/api/quote-requests")) return "user";
   // Warranty claims. The CRM surface is admin/tech; the PUBLIC intake
@@ -2657,6 +2699,70 @@ async function deleteWorkOrderPhotoFile(woId, n) {
     try { await fs.unlink(file); return true; } catch {}
   }
   return false;
+}
+
+// Job journal photo storage — same shape/compression as WO photos
+// (savePhotosForWorkOrder/readWorkOrderPhotoFile/deleteWorkOrderPhotoFile
+// above), just rooted under <projectId>/<entryId> instead of <woId> since
+// one project can hold many journal entries, each with its own photos.
+async function savePhotosForJournalEntry(projectId, entryId, photos, now, baseN, context = {}) {
+  if (!photos.length) return [];
+  const dir = path.join(PROJECT_JOURNAL_PHOTOS_DIR, projectId, entryId);
+  await fs.mkdir(dir, { recursive: true });
+  const meta = [];
+  for (let i = 0; i < photos.length; i++) {
+    const n = baseN + i + 1;
+    const onDiskFilename = `${n}.${photos[i].ext}`;
+    const originalBytes = photos[i].buffer.length;
+    const compressed = await compressWoPhoto(photos[i]);
+    const storedBuffer = compressed || photos[i].buffer;
+    await fs.writeFile(path.join(dir, onDiskFilename), storedBuffer);
+    const filename = generatePhotoFilename({
+      takenAt: photos[i].meta.takenAt,
+      propertyCode: context.propertyCode,
+      woId: entryId,
+      photoMeta: photos[i].meta,
+      n,
+      ext: photos[i].ext
+    });
+    meta.push({
+      n,
+      mediaType: photos[i].mediaType,
+      kind: photos[i].mediaType === "application/pdf" ? "pdf" : "image",
+      bytes: storedBuffer.length,
+      ...(compressed ? { originalBytes } : {}),
+      addedAt: now,
+      filename,
+      ...photos[i].meta
+    });
+  }
+  return meta;
+}
+
+async function readJournalPhotoFile(projectId, entryId, n) {
+  const dir = path.join(PROJECT_JOURNAL_PHOTOS_DIR, projectId, entryId);
+  for (const ext of Object.keys(WO_MEDIA_MIME_BY_EXT)) {
+    const file = path.join(dir, `${n}.${ext}`);
+    try {
+      const data = await fs.readFile(file);
+      return { data, mediaType: WO_MEDIA_MIME_BY_EXT[ext], ext };
+    } catch {}
+  }
+  return null;
+}
+
+async function deleteJournalPhotoFile(projectId, entryId, n) {
+  const dir = path.join(PROJECT_JOURNAL_PHOTOS_DIR, projectId, entryId);
+  for (const ext of Object.keys(WO_MEDIA_MIME_BY_EXT)) {
+    const file = path.join(dir, `${n}.${ext}`);
+    try { await fs.unlink(file); return true; } catch {}
+  }
+  return false;
+}
+
+async function deleteJournalEntryPhotoDir(projectId, entryId) {
+  const dir = path.join(PROJECT_JOURNAL_PHOTOS_DIR, projectId, entryId);
+  try { await fs.rm(dir, { recursive: true, force: true }); } catch {}
 }
 
 // CORS — diagnose.html is currently hosted on GitHub Pages (different origin
@@ -10273,6 +10379,40 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // One-time backfill (2026-09-20) — projects converted before
+  // convert-to-project opened up its enrichment beyond project_proposal
+  // quotes are missing tasks[]/proposalSnapshot. Dry-run by default;
+  // requires the typed confirm string to actually write, same pattern as
+  // purge-test-data above.
+  if (req.method === "POST" && pathname === "/api/admin/projects/backfill-proposal-enrichment") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const plan = await projects.planProposalBackfill();
+
+      if (String(payload?.confirm || "") !== "BACKFILL PROJECTS") {
+        return sendJson(res, 200, {
+          ok: true,
+          dryRun: true,
+          counts: {
+            total: plan.length,
+            willEnrich: plan.filter((p) => p.quoteFound).length,
+            missingQuote: plan.filter((p) => !p.quoteFound).length
+          },
+          projects: plan,
+          note: 'Nothing was changed. Re-send with confirm: "BACKFILL PROJECTS" to apply.'
+        });
+      }
+
+      const results = await projects.applyProposalBackfill({ by: await actorLabel(req) });
+      console.log("[backfill-proposal-enrichment] enriched", results.enriched.length, "skipped", results.skippedNoQuote.length, "by", session.uid || "admin");
+      return sendJson(res, 200, { ok: true, dryRun: false, ...results });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Backfill failed."] });
+    }
+  }
+
   if (req.method === "POST" && pathname === "/api/properties/bulk-delete") {
     try {
       const payload = await parseRequestBody(req);
@@ -15038,6 +15178,55 @@ async function handleApi(req, res, pathname) {
   // each part comes from (parts.json's supplierIds field is ignored — see
   // lib/part-suppliers.js for the why).
 
+  // GET /api/part-supplier-prices — every supplier's price for every SKU
+  // that has one ({ sku: { supplierId: { priceCents, source, at } } }).
+  // The catalog response already carries the effective price and a
+  // supplierPrices block per part; this is the raw store, for pages that
+  // want it without walking the whole catalog.
+  if (req.method === "GET" && pathname === "/api/part-supplier-prices") {
+    const map = await partSupplierPrices.getAll();
+    return sendJson(res, 200, { ok: true, partSupplierPrices: map });
+  }
+
+  // PATCH /api/part-supplier-prices — record prices and/or the supplier's
+  // OWN part number for many SKUs at once, without going through an RFQ.
+  // Body: { supplierId, entries: { "<our sku>": cents | { priceCents,
+  // supplierSku } }, source? }. A price-only entry keeps any part number
+  // already on file and vice versa, so this is safe to use for a pure
+  // "their number for this part is X" import.
+  if (req.method === "PATCH" && pathname === "/api/part-supplier-prices") {
+    if (!BASELINE_PARTS) return sendJson(res, 503, { ok: false, errors: ["Parts baseline not loaded."] });
+    try {
+      const payload = await parseRequestBody(req);
+      const supplierId = String((payload && payload.supplierId) || "").trim();
+      if (!supplierId) return sendJson(res, 400, { ok: false, errors: ["supplierId is required."] });
+      const entries = payload && payload.entries;
+      if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
+        return sendJson(res, 400, { ok: false, errors: ["entries must be a { sku: cents | {priceCents, supplierSku} } map."] });
+      }
+      // Unknown SKUs are reported rather than written — a typo shouldn't
+      // quietly create pricing for a part that doesn't exist.
+      const known = {};
+      const skipped = [];
+      for (const [sku, value] of Object.entries(entries)) {
+        if (PARTS && PARTS.parts && PARTS.parts[sku]) known[sku] = value;
+        else skipped.push(sku);
+      }
+      if (!Object.keys(known).length) {
+        return sendJson(res, 422, { ok: false, errors: ["None of those SKUs are in the catalog."], skipped });
+      }
+      const { recorded, unchanged } = await partSupplierPrices.recordSupplierPrices(
+        supplierId,
+        known,
+        { source: (payload && payload.source) || "manual" }
+      );
+      if (recorded.length) rebuildCatalogFromOverrides();
+      return sendJson(res, 200, { ok: true, recorded, unchanged, skipped });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record supplier prices."] });
+    }
+  }
+
   if (req.method === "GET" && pathname === "/api/part-suppliers") {
     const map = await partSuppliers.getAll();
     return sendJson(res, 200, { ok: true, partSuppliers: map });
@@ -15147,7 +15336,13 @@ async function handleApi(req, res, pathname) {
       const list = await materialLists.get(id);
       if (!list) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
       const partsMap = (PARTS && PARTS.parts) || {};
-      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap);
+      // Optional { supplierId } — one order to that supplier instead of
+      // one per assigned supplier. Both suppliers' volume discounts are
+      // all-or-nothing, so splitting a list can cost more than buying it
+      // all at the dearer branch; the dialog lets Patrick choose.
+      const planBody = await parseRequestBody(req).catch(() => ({}));
+      const forceSupplierId = planBody && planBody.supplierId ? String(planBody.supplierId) : null;
+      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId });
       // Hydrate supplier name into each draft preview so the modal can
       // render "PO for Vermeer Supply" without a follow-up fetch.
       const allSuppliers = await suppliers.list({ includeArchived: true });
@@ -15157,12 +15352,20 @@ async function handleApi(req, res, pathname) {
         supplierName: supplierById.get(d.supplierId)?.name || "(unknown supplier)",
         supplierEmail: supplierById.get(d.supplierId)?.email || ""
       }));
+      // Supplier options for the dialog's picker, plus the split preview's
+      // busiest supplier as the sensible default when nothing is chosen.
+      const supplierOptions = allSuppliers
+        .filter((sup) => !sup.archived)
+        .map((sup) => ({ id: sup.id, name: sup.name, email: sup.email || "" }));
       return sendJson(res, 200, {
         ok: true,
-        canGenerate: plan.ok,
+        canGenerate: forceSupplierId ? plan.drafts.length > 0 : plan.ok,
         previews,
-        missingSupplier: plan.missingSupplier,
-        missingSupplierLines: plan.missingSupplierLines
+        missingSupplier: forceSupplierId ? [] : plan.missingSupplier,
+        missingSupplierLines: forceSupplierId ? [] : plan.missingSupplierLines,
+        forcedSupplierId: forceSupplierId,
+        unpricedForSupplier: plan.unpricedForSupplier || [],
+        supplierOptions
       });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't plan purchase orders."] });
@@ -15180,8 +15383,16 @@ async function handleApi(req, res, pathname) {
       const list = await materialLists.get(id);
       if (!list) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
       const partsMap = (PARTS && PARTS.parts) || {};
-      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap);
-      if (!plan.ok) {
+      // Same { supplierId } option as the plan endpoint — the whole list
+      // on one supplier's order. Must be re-read here rather than trusted
+      // from the preview: the dialog and the write are separate requests.
+      const genBody = await parseRequestBody(req).catch(() => ({}));
+      const forceSupplierId = genBody && genBody.supplierId ? String(genBody.supplierId) : null;
+      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId });
+      if (forceSupplierId && !plan.drafts.length) {
+        return sendJson(res, 422, { ok: false, errors: ["Nothing to order — this list has no need lines."] });
+      }
+      if (!forceSupplierId && !plan.ok) {
         return sendJson(res, 422, {
           ok: false,
           errors: ["Cannot generate POs — some need-line SKUs have no supplier assigned."],
@@ -15202,7 +15413,8 @@ async function handleApi(req, res, pathname) {
           supplierAddress: sup?.address || "",
           sourceMaterialListIds: [list.id],
           lineItems: draft.lineItems,
-          notes: list.name ? `Generated from ${list.name} (${list.id}).` : `Generated from ${list.id}.`
+          notes: (list.name ? `Generated from ${list.name} (${list.id}).` : `Generated from ${list.id}.`)
+            + (forceSupplierId ? " Whole list ordered from this supplier." : "")
         });
         created.push(po);
       }
@@ -15422,7 +15634,39 @@ async function handleApi(req, res, pathname) {
         }
       } catch (err) { /* tolerate — page falls back to the project snapshot */ }
     }
-    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer });
+    // Revision/lock status panel (PJL-54) — resolve whichever quote this
+    // project is currently linked to (post-acceptance: sourceQuoteId;
+    // pre-acceptance, System-Builder-originated: systemDesign.linkedQuoteId
+    // — which may itself be stale, naming an early revision that's since
+    // been superseded) and walk the FULL chain to the actually-current
+    // version. Frontend renders "Quote v3 — sent, Summary total,
+    // confirmed" from this without a second round-trip.
+    let linkedQuote = null;
+    const quoteAnchorId = proj.sourceQuoteId || proj.systemDesign?.linkedQuoteId || null;
+    if (quoteAnchorId) {
+      try {
+        const resolved = await quotes.resolveRevisionChain(quoteAnchorId);
+        if (resolved) {
+          const { current, chain } = resolved;
+          const isProposal = current.type === "project_proposal";
+          linkedQuote = {
+            id: current.id,
+            version: current.version || 1,
+            status: current.status,
+            type: current.type,
+            presentationMode: isProposal ? ((current.pdfOptions && current.pdfOptions.lineItems) || "itemized") : null,
+            // A send only ever completes once markSentForApproval's gate has
+            // matched the confirmed mode to the live one (PJL-48) — so any
+            // project_proposal quote that made it past "draft" was, by
+            // construction, confirmed for the mode it's showing right now.
+            confirmed: isProposal ? !["draft", "draft_preview"].includes(current.status) : null,
+            depositInvoiceId: current.depositInvoiceId || null,
+            chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status }))
+          };
+        }
+      } catch (err) { /* tolerate — panel just doesn't render */ }
+    }
+    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote });
   }
   if (projectMatch && req.method === "PATCH") {
     try {
@@ -15437,15 +15681,41 @@ async function handleApi(req, res, pathname) {
   }
   if (projectMatch && req.method === "DELETE") {
     const id = decodeURIComponent(projectMatch[1]);
-    const removed = await projects.remove(id);
-    if (!removed) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-    // Detach any material lists that pointed at this project so they
-    // don't render with a dangling parent badge.
+    const proj = await projects.get(id);
+    if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+    const payload = await parseRequestBody(req).catch(() => ({}));
+    const cascade = !!(payload && payload.cascade);
     const attached = await materialLists.list({ parentType: "project", parentId: id, includeArchived: true });
-    for (const rec of attached) {
-      await materialLists.update(rec.id, { parentType: null, parentId: null });
+    const workOrderIds = Array.isArray(proj.workOrderIds) ? proj.workOrderIds : [];
+
+    if (cascade) {
+      // Test project — the customer wants a clean wipe, not an orphan
+      // trail. Delete every attached material list and work order, then
+      // the project itself.
+      for (const rec of attached) {
+        await materialLists.remove(rec.id);
+      }
+      for (const woId of workOrderIds) {
+        await workOrders.remove(woId).catch(() => {});
+      }
+    } else {
+      // Real project — keep the material lists, just detach them so they
+      // don't render with a dangling parent badge. Work orders are left
+      // alone (they're the actual record of work done).
+      for (const rec of attached) {
+        await materialLists.update(rec.id, { parentType: null, parentId: null });
+      }
     }
-    return sendJson(res, 200, { ok: true, removed });
+
+    // Journal entries have no meaning outside their project (unlike
+    // material lists, which can exist detached) — their metadata vanishes
+    // with the project record either way. Clean up their photo files too,
+    // cascade or not, so deleting a project never leaves orphaned images
+    // on disk.
+    await fs.rm(path.join(PROJECT_JOURNAL_PHOTOS_DIR, id), { recursive: true, force: true }).catch(() => {});
+
+    const removed = await projects.remove(id);
+    return sendJson(res, 200, { ok: true, removed, cascade });
   }
 
   // POST /api/projects/:id/attach-work-order { workOrderId }
@@ -15480,6 +15750,133 @@ async function handleApi(req, res, pathname) {
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't detach work order."] });
     }
+  }
+
+  // ---------- Job journal (2026-09-21) -------------------------------
+  // A free-form, chronological log tied to the job itself, distinct from
+  // the per-visit dailyLog that already lives on build work orders
+  // (lib/work-orders.js). Note text always required; photos optional and
+  // added in a separate follow-up call once the entry exists, same
+  // upload contract as WO photos: { photos: [{ data: <base64>,
+  // mediaType, category?, label? }] }.
+
+  const journalListMatch = pathname.match(/^\/api\/projects\/([^/]+)\/journal$/);
+  if (journalListMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(journalListMatch[1]);
+      const payload = await parseRequestBody(req);
+      const entry = await projects.addJournalEntry(id, {
+        note: payload.note,
+        by: await actorLabel(req)
+      });
+      return sendJson(res, 201, { ok: true, entry });
+    } catch (err) {
+      const status = err.code === "project_not_found" ? 404 : (err.code === "note_required" ? 422 : 400);
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't add journal entry."] });
+    }
+  }
+
+  const journalEntryMatch = pathname.match(/^\/api\/projects\/([^/]+)\/journal\/([^/]+)$/);
+  if (journalEntryMatch && req.method === "DELETE") {
+    try {
+      const id = decodeURIComponent(journalEntryMatch[1]);
+      const entryId = decodeURIComponent(journalEntryMatch[2]);
+      const removed = await projects.deleteJournalEntry(id, entryId, { by: await actorLabel(req) });
+      await deleteJournalEntryPhotoDir(id, entryId);
+      return sendJson(res, 200, { ok: true, removed });
+    } catch (err) {
+      const status = err.code === "journal_entry_not_found" || err.code === "project_not_found" ? 404 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't delete journal entry."] });
+    }
+  }
+
+  // POST /api/projects/:id/journal/:entryId/photos — same contract/limits
+  // as POST /api/work-orders/:id/photos (see that route's comment).
+  const journalPhotosUploadMatch = pathname.match(/^\/api\/projects\/([^/]+)\/journal\/([^/]+)\/photos$/);
+  if (journalPhotosUploadMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(journalPhotosUploadMatch[1]);
+      const entryId = decodeURIComponent(journalPhotosUploadMatch[2]);
+      return await fieldPhotoUploads.run(`journal:${id}:${entryId}`, async () => {
+        const proj = await projects.get(id);
+        if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+        const entry = (proj.journalEntries || []).find((e) => e.id === entryId);
+        if (!entry) return sendJson(res, 404, { ok: false, errors: ["Journal entry not found."] });
+
+        const payload = await parseRequestBody(req, { maxBytes: WO_UPLOAD_POST_MAX_BYTES });
+        const existing = Array.isArray(entry.photos) ? entry.photos : [];
+        const freshPhotos = fieldPhotoUploads.newPhotos(payload.photos, existing);
+        if (Array.isArray(freshPhotos) && freshPhotos.length === 0 && payload.photos.length > 0) {
+          return sendJson(res, 200, { ok: true, entry, added: [] });
+        }
+        const remaining = MAX_PHOTOS_PER_JOURNAL_ENTRY - existing.length;
+        if (remaining <= 0) {
+          return sendJson(res, 422, { ok: false, errors: [`This entry already has the maximum ${MAX_PHOTOS_PER_JOURNAL_ENTRY} photos. Delete one before uploading more.`] });
+        }
+        let validated;
+        try { validated = validatePhotos(freshPhotos, remaining, { mode: "wo" }); }
+        catch (err) { return sendJson(res, 422, { ok: false, errors: [err.message] }); }
+
+        let propertyCode = null;
+        if (proj.propertyId) {
+          try {
+            const linkedProp = await properties.get(proj.propertyId);
+            if (linkedProp && linkedProp.code) propertyCode = linkedProp.code;
+          } catch (_err) {}
+        }
+
+        const baseN = existing.reduce((max, p) => Math.max(max, Number(p.n) || 0), 0);
+        const now = new Date().toISOString();
+        const newMeta = await savePhotosForJournalEntry(id, entryId, validated, now, baseN, { propertyCode });
+        const updatedEntry = await projects.addJournalEntryPhotos(id, entryId, newMeta);
+        return sendJson(res, 201, { ok: true, entry: updatedEntry, added: newMeta });
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't upload photos."] });
+    }
+  }
+
+  const journalPhotoDeleteMatch = pathname.match(/^\/api\/projects\/([^/]+)\/journal\/([^/]+)\/photos\/(\d+)$/);
+  if (journalPhotoDeleteMatch && req.method === "DELETE") {
+    try {
+      const id = decodeURIComponent(journalPhotoDeleteMatch[1]);
+      const entryId = decodeURIComponent(journalPhotoDeleteMatch[2]);
+      const n = Number(journalPhotoDeleteMatch[3]);
+      const removed = await projects.removeJournalEntryPhoto(id, entryId, n);
+      if (!removed) return sendJson(res, 404, { ok: false, errors: ["Photo not found."] });
+      await deleteJournalPhotoFile(id, entryId, n);
+      return sendJson(res, 200, { ok: true, deletedN: n });
+    } catch (err) {
+      const status = err.code === "journal_entry_not_found" ? 404 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't delete photo."] });
+    }
+  }
+
+  const journalPhotoServeMatch = pathname.match(/^\/api\/projects\/([^/]+)\/journal\/([^/]+)\/photo\/(\d+)$/);
+  if (journalPhotoServeMatch && req.method === "GET") {
+    const id = decodeURIComponent(journalPhotoServeMatch[1]);
+    const entryId = decodeURIComponent(journalPhotoServeMatch[2]);
+    const n = Number(journalPhotoServeMatch[3]);
+    const proj = await projects.get(id);
+    if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+    const entry = (proj.journalEntries || []).find((e) => e.id === entryId);
+    if (!entry) return sendJson(res, 404, { ok: false, errors: ["Journal entry not found."] });
+    const photoMeta = (entry.photos || []).find((p) => Number(p.n) === n);
+    if (!photoMeta) return sendJson(res, 404, { ok: false, errors: ["Photo not found."] });
+    const file = await readJournalPhotoFile(id, entryId, n);
+    if (!file) return sendJson(res, 404, { ok: false, errors: ["Photo not found on disk."] });
+    const headers = {
+      "content-type": file.mediaType,
+      "cache-control": "private, max-age=86400",
+      "content-length": file.data.length
+    };
+    if (photoMeta.filename) {
+      const safe = String(photoMeta.filename).replace(/[^A-Za-z0-9._\-]/g, "");
+      if (safe) headers["content-disposition"] = `inline; filename="${safe}"`;
+    }
+    res.writeHead(200, headers);
+    res.end(file.data);
+    return;
   }
 
   // ---------- Brief 2: Project Execution routes ---------------------
@@ -17880,10 +18277,16 @@ async function handleApi(req, res, pathname) {
   // project. Idempotent guard: if a project already exists with this
   // sourceQuoteId, return it without creating a duplicate.
   //
-  // project_proposal quotes route through projects.createFromProposal
-  // so the new project gets enriched with branch + billingMode +
+  // Every quote type routes through projects.createFromProposal so the
+  // new project gets enriched with branch + billingMode +
   // labourRateLocked + tasks[] (seeded from line items) + attachments[]
-  // (referencing the quote's attachments) + proposalSnapshot.
+  // (referencing the quote's attachments) + proposalSnapshot. Used to be
+  // project_proposal-only — opened up 2026-09-20 because a multi-repair
+  // on_site_quote/ai_repair_quote gets scoped the same way an install
+  // does (assess the property, compose several line items, accept, keep
+  // as a Project) and deserves the same fidelity: without this, the
+  // converted project was a bare name with the actual repair list
+  // reachable only by clicking back into the original quote.
   const quoteConvertMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/convert-to-project$/);
   if (quoteConvertMatch && req.method === "POST") {
     try {
@@ -17897,6 +18300,27 @@ async function handleApi(req, res, pathname) {
       if (dupe) {
         return sendJson(res, 200, { ok: true, project: dupe, alreadyExisted: true });
       }
+
+      // A quote built FROM a project's System Builder design already
+      // belongs to that project — project.systemDesign.linkedQuoteId was
+      // set the moment the design generated it, before it was ever sent.
+      // Walk the quote's revision chain (a sent revision is a new quote
+      // id; the project's pointer still names the original) looking for
+      // a project that already claims one of these ids and hasn't been
+      // converted yet. Found → enrich that project in place. Not found →
+      // fall through to the old "spin up a new project" path below, the
+      // right behavior for quotes that never went through System Builder.
+      const chainIds = new Set([quoteId]);
+      {
+        let cur = quote;
+        let hops = 0;
+        while (cur && cur.revisionOf && hops < 25) {
+          chainIds.add(cur.revisionOf);
+          cur = await quotes.get(cur.revisionOf);
+          hops += 1;
+        }
+      }
+      const linkedProject = existing.find((p) => p.systemDesign && chainIds.has(p.systemDesign.linkedQuoteId) && !p.sourceQuoteId);
 
       // Pull customer + address from the quote's lead (if linked) so the
       // project carries the customer details forward.
@@ -17913,29 +18337,17 @@ async function handleApi(req, res, pathname) {
       const propertyId = quote.propertyId || leadCustomer?.propertyId || null;
 
       let proj;
-      if (quote.type === "project_proposal") {
-        // Project_proposal quotes get the full enrichment.
-        proj = await projects.createFromProposal(quote, {
+      let linkedExistingProject = false;
+      if (linkedProject) {
+        proj = await projects.enrichFromProposal(linkedProject.id, quote, {
           customerName, customerEmail, customerPhone, address, propertyId,
           by: await actorLabel(req)
         });
+        linkedExistingProject = true;
       } else {
-        // Auto-generate a project name from the customer + quote id. Patrick
-        // can rename it from the project page.
-        const namePieces = [];
-        if (customerName) namePieces.push(customerName);
-        namePieces.push(`(from ${quoteId})`);
-        const name = namePieces.join(" ").slice(0, 200);
-
-        proj = await projects.create({
-          name,
-          customerName,
-          customerEmail,
-          customerPhone,
-          address,
-          propertyId,
-          sourceQuoteId: quoteId,
-          description: quote.scope || ""
+        proj = await projects.createFromProposal(quote, {
+          customerName, customerEmail, customerPhone, address, propertyId,
+          by: await actorLabel(req)
         });
       }
 
@@ -17950,7 +18362,12 @@ async function handleApi(req, res, pathname) {
         if (updated) reparented.push(updated.id);
       }
 
-      return sendJson(res, 201, { ok: true, project: proj, reparentedListIds: reparented });
+      return sendJson(res, linkedExistingProject ? 200 : 201, {
+        ok: true,
+        project: proj,
+        reparentedListIds: reparented,
+        linkedExistingProject
+      });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't convert quote."] });
     }
@@ -18771,100 +19188,81 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 422, { ok: false, errors: [`Can only apply a quoted request. This one is "${rfq.status}".`] });
       }
 
-      // Applying RFQs one at a time is last-write-wins. If another RFQ from
-      // the same material list quoted a SKU CHEAPER, applying this one
-      // would quietly RAISE the catalog price and every bid built off it —
-      // the exact opposite of "go with the cheapest". Refuse and name the
-      // cheaper source. ?force=1 overrides deliberately; apply-cheapest-
-      // quotes takes the best of each instead.
-      if (rfq.sourceMaterialListId) {
-        const applyUrl = new URL(req.url, baseUrlFromReq(req));
-        const forced = applyUrl.searchParams.get("force") === "1";
-        const sibling = await quoteRequests.list({ sourceMaterialListId: rfq.sourceMaterialListId });
-        const cmp = quoteRequests.compareQuotes(sibling, { listId: rfq.sourceMaterialListId });
-        const dearer = [];
-        for (const row of cmp.rows) {
-          if (!row.cheapest || row.cheapest.rfqId === rfq.id) continue;
-          const mine = (rfq.lines || []).find((l) => l.sku === row.sku && l.quotedPriceCents != null);
-          if (mine && mine.quotedPriceCents > row.cheapest.priceCents) {
-            dearer.push({ sku: row.sku, thisCents: mine.quotedPriceCents,
-                          cheapestCents: row.cheapest.priceCents,
-                          cheapestRfqId: row.cheapest.rfqId,
-                          cheapestSupplierName: row.cheapest.supplierName });
-          }
-        }
-        if (dearer.length && !forced) {
-          return sendJson(res, 409, {
-            ok: false,
-            dearerThanBest: dearer,
-            errors: [`${dearer.length} SKU${dearer.length === 1 ? " on this quote is" : "s on this quote are"} dearer than a quote already recorded for the same material list. Use "Apply cheapest across all quotes", or re-send with force=1 to take this one anyway.`]
-          });
-        }
-      }
+      // Per-supplier prices (lib/part-supplier-prices.js) retired the old
+      // last-write-wins problem: each supplier's quote lands in its own
+      // slot, so applying Central Pro can no longer overwrite what SiteOne
+      // quoted for the same SKU. There is nothing left to guard against —
+      // the catalog price simply follows whichever supplier is PRIMARY for
+      // that part, and every other quote is kept alongside for reference.
 
       // One price per SKU — last priced line wins if a degenerate record
       // carries duplicates. Unpriced (null) lines are simply not part of
-      // the apply set; the vendor didn't quote them.
-      const centsBySku = new Map();
+      // the apply set; the vendor didn't quote them. A SKU that has left
+      // the catalog since quoting is skipped and reported.
+      const centsBySku = {};
+      const skipped = [];
+      let pricedLines = 0;
       for (const line of rfq.lines) {
-        if (line.quotedPriceCents != null && line.sku) centsBySku.set(line.sku, line.quotedPriceCents);
+        if (line.quotedPriceCents == null || !line.sku) continue;
+        pricedLines++;
+        if (!(PARTS && PARTS.parts && PARTS.parts[line.sku])) { skipped.push(line.sku); continue; }
+        centsBySku[line.sku] = line.quotedPriceCents;
       }
-      if (!centsBySku.size) {
+      if (!pricedLines) {
         return sendJson(res, 422, { ok: false, errors: ["No quoted prices to apply — enter at least one price first."] });
       }
-
-      const applied = [];     // { sku, fromCents, toCents } — actually written
-      const unchanged = [];   // quoted price already matches the catalog
-      const skipped = [];     // SKU missing from the catalog (deleted since quoting)
-      for (const [sku, toCents] of centsBySku.entries()) {
-        const current = PARTS && PARTS.parts && PARTS.parts[sku];
-        if (!current) { skipped.push(sku); continue; }
-        const fromCents = Number(current.priceCents);
-        if (fromCents === toCents) { unchanged.push(sku); continue; }
-        try {
-          await partsLib.update(BASELINE_PARTS, sku, { priceCents: toCents }, { allowedCategories: categoriesAllowedSet() });
-          applied.push({ sku, fromCents: Number.isFinite(fromCents) ? fromCents : null, toCents });
-        } catch (err) {
-          // A failure on one SKU (validation OR a transient write error)
-          // shouldn't abort the rest — report it as skipped. NB: applied is
-          // terminal, so there is no per-SKU retry on the RFQ afterwards;
-          // a skipped price has to be fixed on the parts page. That's why
-          // the all-skipped case below refuses to mark applied at all.
-          console.warn(`[rfq-apply] ${rfq.id}: ${sku} skipped — ${err.message}`);
-          skipped.push(sku);
-        }
-      }
-      if (applied.length) rebuildCatalogFromOverrides();
-
-      const appliedCount = applied.length + unchanged.length;
-      // No progress at all, or every WRITE failed (skips with only
-      // "unchanged" passengers): leave the RFQ quoted so the apply is
-      // retryable — flipping to terminal "applied" when nothing was
-      // actually written would strand the quoted prices behind a
-      // read-only grid.
-      if (!appliedCount || (applied.length === 0 && skipped.length > 0)) {
+      if (!Object.keys(centsBySku).length) {
         return sendJson(res, 422, {
           ok: false,
-          errors: [skipped.length
-            ? `No prices could be written (${skipped.length} skipped) — the request stays quoted so you can retry.`
-            : "Nothing could be applied — the quoted SKUs are no longer in the catalog."],
+          errors: [`No prices could be written (${skipped.length} skipped) — the request stays quoted so you can retry.`],
           skipped
         });
       }
 
+      // Snapshot the EFFECTIVE (catalog-visible) price before the write so
+      // we can report which parts actually re-priced. Only parts whose
+      // primary supplier is this one will move; for the rest the quote is
+      // filed against the supplier and the catalog stays put.
+      const beforeEffective = new Map();
+      for (const sku of Object.keys(centsBySku)) {
+        const before = Number(PARTS.parts[sku] && PARTS.parts[sku].priceCents);
+        beforeEffective.set(sku, Number.isFinite(before) ? before : null);
+      }
+
+      const { recorded, unchanged } = await partSupplierPrices.recordSupplierPrices(
+        rfq.supplierId,
+        centsBySku,
+        { source: rfq.id }
+      );
+      if (recorded.length) rebuildCatalogFromOverrides();
+
+      const applied = [];      // catalog price actually moved
+      const storedOnly = [];   // filed against this supplier; catalog unchanged
+      for (const entry of recorded) {
+        const after = Number(PARTS.parts[entry.sku] && PARTS.parts[entry.sku].priceCents);
+        const before = beforeEffective.get(entry.sku);
+        if (Number.isFinite(after) && after !== before) {
+          applied.push({ sku: entry.sku, fromCents: before, toCents: after });
+        } else {
+          storedOnly.push(entry.sku);
+        }
+      }
+
+      const appliedCount = recorded.length + unchanged.length;
+
       // One audit entry for the whole batch, in the catalog.edit family so
       // it reads alongside manual price edits.
-      const detail = applied.slice(0, 6).map((a) => `${a.sku} ${fmtMoneyFromCents(a.fromCents)} → ${fmtMoneyFromCents(a.toCents)}`).join(", ");
+      const detail = applied.slice(0, 6).map((a) => `${a.sku} ${fmtMoneyFromCents(a.fromCents)} \u2192 ${fmtMoneyFromCents(a.toCents)}`).join(", ");
       await settings.recordAudit({
         who: "admin",
         action: "catalog.rfq-apply",
-        note: `${rfq.id} (${rfq.supplierName || rfq.supplierId}): ${applied.length} price${applied.length === 1 ? "" : "s"} updated${unchanged.length ? `, ${unchanged.length} unchanged` : ""}${skipped.length ? `, ${skipped.length} skipped` : ""}${detail ? ` — ${detail}` : ""}${applied.length > 6 ? ", …" : ""}`,
-        before: { rfqId: rfq.id },
-        after: { applied, unchanged, skipped }
+        note: `${rfq.id} (${rfq.supplierName || rfq.supplierId}): ${recorded.length} supplier price${recorded.length === 1 ? "" : "s"} recorded, ${applied.length} catalog price${applied.length === 1 ? "" : "s"} updated${storedOnly.length ? `, ${storedOnly.length} stored only (not this part's primary supplier)` : ""}${unchanged.length ? `, ${unchanged.length} unchanged` : ""}${skipped.length ? `, ${skipped.length} skipped` : ""}${detail ? ` \u2014 ${detail}` : ""}${applied.length > 6 ? ", \u2026" : ""}`,
+        before: { rfqId: rfq.id, supplierId: rfq.supplierId },
+        after: { applied, storedOnly, unchanged, skipped }
       });
 
       const appliedRfq = await quoteRequests.markApplied(id, { appliedCount, skippedSkus: skipped });
-      return sendJson(res, 200, { ok: true, quoteRequest: appliedRfq, applied, unchanged, skipped });
+      return sendJson(res, 200, { ok: true, quoteRequest: appliedRfq, applied, storedOnly, unchanged, skipped });
     } catch (err) {
       console.warn("[rfq] apply-to-catalog failed:", err);
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't apply quoted prices."] });

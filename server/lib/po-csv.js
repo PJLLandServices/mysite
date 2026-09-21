@@ -7,7 +7,7 @@
 // commas, double quotes, or newlines; embedded double quotes escaped
 // by doubling. Header row exactly as the brief specifies:
 //
-//   SKU,Description,Qty,Unit,UnitPrice,LineTotal
+//   Supplier part #,Our SKU,Description,Qty,Unit,UnitPrice,LineTotal
 //
 // Prices are in decimal dollars (supplier systems expect this — they
 // don't store cents). Descriptions and units use the same lookup as
@@ -16,7 +16,7 @@
 
 const fsSync = require("node:fs");
 const path = require("node:path");
-const { formatUnit, resolveLineDescription } = require("./format");
+const { formatUnit, resolveLineDescription, resolveSupplierSku } = require("./format");
 
 // Catalog lookup — same as po-pdf.js. The cache is process-lifetime,
 // reset on restart. Snapshot-on-send (server.js) holds the rendered CSV
@@ -75,11 +75,14 @@ function fmtDollars(cents) {
 function generatePoCsv(po, partsMap) {
   const catalog = catalogParts(partsMap);
   const lines = [];
-  lines.push("SKU,Description,Qty,Unit,UnitPrice,LineTotal");
+  // Their number first — the one their counter looks up — with ours kept
+  // alongside so the order can be reconciled against our records.
+  lines.push("Supplier part #,Our SKU,Description,Qty,Unit,UnitPrice,LineTotal");
   for (const line of (po.lineItems || [])) {
     const description = resolveLineDescription(line, catalog);
     const unit = formatUnit(unitFor(line.sku), line.qty);
     const row = [
+      quoteField(resolveSupplierSku(line, catalog, po.supplierId)),
       quoteField(line.sku || ""),
       quoteField(description),
       String(line.qty),

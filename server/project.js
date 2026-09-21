@@ -15,6 +15,14 @@
     branch: document.getElementById("projBranch"),
     billing: document.getElementById("projBilling"),
     labourRate: document.getElementById("projLabourRate"),
+    tabSiteBuilder: document.getElementById("projTabSiteBuilder"),
+    tabPartsList: document.getElementById("projTabPartsList"),
+    tabQuote: document.getElementById("projTabQuote"),
+    tabInvoice: document.getElementById("projTabInvoice"),
+    quoteStatusPanel: document.getElementById("projQuoteStatusPanel"),
+    quoteStatusLine: document.getElementById("projQuoteStatusLine"),
+    quoteStatusChain: document.getElementById("projQuoteStatusChain"),
+    quoteStatusLink: document.getElementById("projQuoteStatusLink"),
     proposalPanel: document.getElementById("projProposalPanel"),
     proposalMeta: document.getElementById("projProposalMeta"),
     proposalTotals: document.getElementById("projProposalTotals"),
@@ -24,6 +32,14 @@
     tasksPanel: document.getElementById("projTasksPanel"),
     taskList: document.getElementById("projTaskList"),
     tasksProgress: document.getElementById("projTasksProgress"),
+    journalForm: document.getElementById("projJournalForm"),
+    journalNote: document.getElementById("projJournalNote"),
+    journalPhotoInput: document.getElementById("projJournalPhotoInput"),
+    journalPhotoLabel: document.getElementById("projJournalPhotoLabel"),
+    journalSubmit: document.getElementById("projJournalSubmit"),
+    journalError: document.getElementById("projJournalError"),
+    journalEmpty: document.getElementById("projJournalEmpty"),
+    journalList: document.getElementById("projJournalList"),
     buildCta: document.getElementById("projBuildCta"),
     startBuildBtn: document.getElementById("projStartBuildBtn"),
     name: document.getElementById("projName"),
@@ -172,6 +188,7 @@
       state.project = data.project;
       state.materialLists = Array.isArray(data.materialLists) ? data.materialLists : [];
       state.linkedCustomer = data.linkedCustomer || null;
+      state.linkedQuote = data.linkedQuote || null;
       els.loading.hidden = true;
       els.page.hidden = false;
       els.savebar.hidden = false;
@@ -211,12 +228,104 @@
     lighting_repair: "Landscape Lighting Repairs"
   };
 
+  // Quote status labels (PJL-54) — browser copy of server/lib/quotes.js's
+  // STATUSES + PDF_LINE_ITEM_MODES enums. Not pinned by a shared test the
+  // way BRANCH_LABELS above is; keep in sync by hand if those enums change.
+  const QUOTE_STATUS_LABELS = {
+    draft: "draft",
+    draft_preview: "draft (previewed)",
+    sent: "sent",
+    accepted: "accepted",
+    partially_accepted: "partially accepted",
+    declined: "declined",
+    expired: "expired",
+    superseded: "superseded",
+    cancelled: "cancelled",
+    pending_admin_attestation: "awaiting signed PDF review"
+  };
+  const PRESENTATION_MODE_LABELS = {
+    itemized: "Itemized",
+    descriptions_only: "Descriptions only",
+    summary: "Summary total"
+  };
+
+  // Job tabs (2026-09-21) — Site Builder is always reachable (it
+  // preloads via ?project= and handles "no design yet" itself). Parts
+  // List/Quote/Invoice grey out with a reason when this job doesn't have
+  // one yet, rather than linking somewhere generic.
+  function setJobTab(el, href, disabledReason) {
+    if (href) {
+      el.href = href;
+      el.classList.remove("is-disabled");
+      el.removeAttribute("aria-disabled");
+      el.title = "";
+    } else {
+      el.href = "#";
+      el.classList.add("is-disabled");
+      el.setAttribute("aria-disabled", "true");
+      el.title = disabledReason || "";
+    }
+  }
+
+  function renderJobTabs() {
+    const id = state.project.id;
+    setJobTab(els.tabSiteBuilder, `/admin/sitebuilder?project=${encodeURIComponent(id)}`);
+
+    const lists = (state.materialLists || []).slice().sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+    setJobTab(els.tabPartsList, lists.length ? `/admin/material-list/${encodeURIComponent(lists[0].id)}` : null, "No material list for this job yet.");
+
+    const lq = state.linkedQuote;
+    setJobTab(els.tabQuote, lq ? `/admin/quote/${encodeURIComponent(lq.id)}/proposal` : null, "No quote for this job yet.");
+
+    const invoiceId = state.project.finalInvoiceId || (lq && lq.depositInvoiceId) || null;
+    setJobTab(els.tabInvoice, invoiceId ? `/admin/invoice/${encodeURIComponent(invoiceId)}` : null, "No invoice for this job yet.");
+  }
+
+  function renderQuoteStatusPanel() {
+    const lq = state.linkedQuote;
+    if (!lq) {
+      els.quoteStatusPanel.hidden = true;
+      return;
+    }
+    els.quoteStatusPanel.hidden = false;
+    els.quoteStatusLink.href = `/admin/quote/${encodeURIComponent(lq.id)}/proposal`;
+
+    const statusLabel = QUOTE_STATUS_LABELS[lq.status] || lq.status;
+    let line = `Quote v${lq.version} — ${statusLabel}`;
+    if (lq.presentationMode) {
+      line += `, ${PRESENTATION_MODE_LABELS[lq.presentationMode] || lq.presentationMode}`;
+    }
+    let html = escapeHtml(line);
+    if (lq.confirmed === true) {
+      html += ", confirmed";
+    } else if (lq.confirmed === false) {
+      html += `, <span class="is-not-confirmed">not yet sent</span>`;
+    }
+    els.quoteStatusLine.innerHTML = html;
+
+    if (Array.isArray(lq.chain) && lq.chain.length > 1) {
+      els.quoteStatusChain.hidden = false;
+      els.quoteStatusChain.innerHTML = "History: " + lq.chain.map((q) => {
+        const label = `v${q.version}`;
+        return q.id === lq.id
+          ? `<span class="is-current">${escapeHtml(label)}</span>`
+          : `<a href="/admin/quote/${encodeURIComponent(q.id)}/proposal">${escapeHtml(label)}</a>`;
+      }).join(" → ");
+    } else {
+      els.quoteStatusChain.hidden = true;
+      els.quoteStatusChain.innerHTML = "";
+    }
+  }
+
   // ---- Render -------------------------------------------------------
   function renderAll() {
     renderHeader();
+    renderJobTabs();
     renderBuildCta();
+    renderQuoteStatusPanel();
     renderProposalPanel();
     renderTasks();
+    renderJournal();
     renderDailyLog();
     renderScopeChanges();
     renderStatusUpdates();
@@ -407,6 +516,113 @@
         } catch (err) { await pjlDialog.alert(err.message || "Delete failed.", { title: "Delete Failed", icon: "warning" }); }
       });
     });
+  }
+
+  function journalPhotoUrl(entryId, n) {
+    return `/api/projects/${encodeURIComponent(state.project.id)}/journal/${encodeURIComponent(entryId)}/photo/${encodeURIComponent(n)}`;
+  }
+
+  function renderJournal() {
+    const entries = (state.project.journalEntries || []).slice().sort((a, b) => String(b.ts || "").localeCompare(String(a.ts || "")));
+    els.journalEmpty.hidden = entries.length > 0;
+    els.journalList.innerHTML = entries.map((e) => {
+      const when = e.ts ? new Date(e.ts).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" }) : "";
+      const photos = (e.photos || []).map((p) => {
+        const url = journalPhotoUrl(e.id, p.n);
+        return p.kind === "pdf"
+          ? `<a href="${url}" target="_blank" rel="noopener" title="${escapeHtml(p.filename || "")}" class="proj-journal-photo-pdf" data-entry-id="${escapeHtml(e.id)}" data-n="${p.n}">📄</a>`
+          : `<a href="${url}" target="_blank" rel="noopener" title="${escapeHtml(p.filename || "")}" data-entry-id="${escapeHtml(e.id)}" data-n="${p.n}"><img src="${url}" alt=""></a>`;
+      }).join("");
+      return `
+        <li class="proj-journal-item" data-entry-id="${escapeHtml(e.id)}">
+          <div class="proj-journal-item-head">
+            <span>${escapeHtml(when)} · ${escapeHtml(e.by || "")}</span>
+            <button type="button" class="proj-journal-delete" data-entry-id="${escapeHtml(e.id)}" aria-label="Remove entry">×</button>
+          </div>
+          <p class="proj-journal-item-note">${escapeHtml(e.note || "")}</p>
+          ${photos ? `<div class="proj-journal-photos">${photos}</div>` : ""}
+        </li>
+      `;
+    }).join("");
+
+    els.journalList.querySelectorAll(".proj-journal-delete").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("Delete this journal entry? This also removes its photos.")) return;
+        try {
+          const r = await fetch(`/api/projects/${encodeURIComponent(state.project.id)}/journal/${encodeURIComponent(btn.dataset.entryId)}`, { method: "DELETE" });
+          if (!r.ok) {
+            const d = await r.json().catch(() => ({}));
+            alert(d.errors?.[0] || `Delete failed (${r.status})`);
+            return;
+          }
+          await refreshProject();
+        } catch (err) { alert(err.message || "Delete failed."); }
+      });
+    });
+  }
+
+  function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onerror = () => reject(new Error("Couldn't read " + (file.name || "file")));
+      r.onload = () => {
+        const s = String(r.result || "");
+        const idx = s.indexOf(",");
+        resolve(idx >= 0 ? s.slice(idx + 1) : s);
+      };
+      r.readAsDataURL(file);
+    });
+  }
+
+  async function submitJournalEntry(event) {
+    event.preventDefault();
+    els.journalError.hidden = true;
+    const note = els.journalNote.value.trim();
+    if (!note) return;
+    const files = Array.from(els.journalPhotoInput.files || []);
+    els.journalSubmit.disabled = true;
+    try {
+      const r = await fetch(`/api/projects/${encodeURIComponent(state.project.id)}/journal`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ note })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        els.journalError.hidden = false;
+        els.journalError.textContent = (data.errors && data.errors[0]) || "Couldn't add entry.";
+        return;
+      }
+      if (files.length) {
+        const photos = [];
+        for (const file of files) {
+          try {
+            const base64 = await readFileAsBase64(file);
+            photos.push({ data: base64, mediaType: file.type || "image/jpeg", label: file.name || "" });
+          } catch (err) { console.warn("[journal photo] read failed:", err?.message); }
+        }
+        if (photos.length) {
+          const pr = await fetch(`/api/projects/${encodeURIComponent(state.project.id)}/journal/${encodeURIComponent(data.entry.id)}/photos`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ photos })
+          });
+          if (!pr.ok) {
+            const pd = await pr.json().catch(() => ({}));
+            alert((pd.errors && pd.errors[0]) || "Entry saved, but the photos didn't upload.");
+          }
+        }
+      }
+      els.journalNote.value = "";
+      els.journalPhotoInput.value = "";
+      els.journalPhotoLabel.textContent = "+ Photos";
+      await refreshProject();
+    } catch (err) {
+      els.journalError.hidden = false;
+      els.journalError.textContent = err.message || "Couldn't add entry.";
+    } finally {
+      els.journalSubmit.disabled = false;
+    }
   }
 
   function renderHeader() {
@@ -913,11 +1129,37 @@
   }
   async function deleteProject() {
     const lineCount = (state.materialLists || []).length;
-    const confirmText = lineCount
-      ? `Delete this project? Its ${lineCount} attached material list${lineCount === 1 ? "" : "s"} will be detached but not deleted.`
-      : "Delete this empty project?";
-    if (!(await pjlDialog.confirm(confirmText, { title: "Delete Project", icon: "delete", destructive: true, confirmLabel: "Delete" }))) return;
-    const r = await fetch(`/api/projects/${encodeURIComponent(state.projectId)}`, { method: "DELETE" });
+    const woCount = (state.project.workOrderIds || []).length;
+
+    const isTest = await pjlDialog.confirm(
+      "Is this a TEST project — not real customer work?\n\n" +
+      "OK = Yes, it's a test. Permanently delete the project AND everything attached to it " +
+      `(${woCount} work order${woCount === 1 ? "" : "s"}, ${lineCount} material list${lineCount === 1 ? "" : "s"}).\n` +
+      "Cancel = No, it's real. Use the normal delete (nothing attached gets destroyed).",
+      { title: "Test project?", icon: "warning" }
+    );
+
+    let cascade = false;
+    if (isTest) {
+      const sure = await pjlDialog.confirm(
+        "This cannot be undone. It will permanently delete this project, " +
+        `its ${woCount} work order${woCount === 1 ? "" : "s"}, and its ${lineCount} material list${lineCount === 1 ? "" : "s"}. Continue?`,
+        { title: "Delete everything?", icon: "delete", destructive: true, confirmLabel: "Delete" }
+      );
+      if (!sure) return;
+      cascade = true;
+    } else {
+      const confirmText = lineCount
+        ? `Delete this project? Its ${lineCount} attached material list${lineCount === 1 ? "" : "s"} will be detached but not deleted.`
+        : "Delete this empty project?";
+      if (!(await pjlDialog.confirm(confirmText, { title: "Delete Project", icon: "delete", destructive: true, confirmLabel: "Delete" }))) return;
+    }
+
+    const r = await fetch(`/api/projects/${encodeURIComponent(state.projectId)}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cascade })
+    });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
       await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't delete project.", { title: "Delete Project Failed", icon: "warning" });
@@ -949,6 +1191,7 @@
       if (data.ok && data.project) {
         state.project = data.project;
         state.linkedCustomer = data.linkedCustomer || null;
+        state.linkedQuote = data.linkedQuote || null;
         await loadExecBuildWos();
         await loadTaskPhotos();
         renderAll();
@@ -1656,6 +1899,12 @@
     els.newMaterialListButton.addEventListener("click", createMaterialList);
     els.archiveButton.addEventListener("click", archiveProject);
     els.deleteButton.addEventListener("click", deleteProject);
+
+    els.journalForm.addEventListener("submit", submitJournalEntry);
+    els.journalPhotoInput.addEventListener("change", () => {
+      const n = els.journalPhotoInput.files ? els.journalPhotoInput.files.length : 0;
+      els.journalPhotoLabel.textContent = n ? `${n} photo${n === 1 ? "" : "s"} selected` : "+ Photos";
+    });
 
     window.addEventListener("beforeunload", () => {
       if (!state.saveTimer && !state.pendingError) return;

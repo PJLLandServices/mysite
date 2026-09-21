@@ -492,28 +492,52 @@ async function remove(id) {
 // blocker UI ("3 SKUs need supplier assignment before generating").
 //
 // Pricing: snapshotted from `parts[sku].priceCents` at generation time.
-function planDraftsFromMaterialList(list, parts) {
+//
+// ONE-SUPPLIER MODE (`forceSupplierId`). Grouping by each part's assigned
+// supplier splits a single shopping trip across two branches — and both
+// suppliers' volume discounts are all-or-nothing, so a split order can
+// cost MORE than buying everything at the dearer one. Passing
+// forceSupplierId puts every need line on that supplier's single draft
+// instead. Two consequences, both deliberate:
+//   * a SKU with no supplier assigned is no longer a blocker — the
+//     supplier was named explicitly, so there is nothing to look up;
+//   * each line is priced from THAT supplier's quote when we have one
+//     (part.supplierPrices[supplierId], lib/part-supplier-prices.js) and
+//     falls back to the catalog price otherwise. `unpricedForSupplier`
+//     names the fallbacks so the UI can say which lines are a guess.
+function planDraftsFromMaterialList(list, parts, { forceSupplierId = null } = {}) {
   if (!list || !Array.isArray(list.lineItems)) {
-    return { ok: false, drafts: [], missingSupplier: [], missingSupplierLines: [] };
+    return { ok: false, drafts: [], missingSupplier: [], missingSupplierLines: [], unpricedForSupplier: [] };
   }
+  const forced = forceSupplierId ? String(forceSupplierId).trim() : "";
   const drafts = new Map();   // supplierId -> { supplierId, lineItems[] }
   const missingSupplier = new Set();
   const missingSupplierLines = [];
+  const unpricedForSupplier = [];
   for (const line of list.lineItems) {
     if (line.status !== "need") continue;
     const part = parts && parts[line.sku];
     const supplierIds = (part && Array.isArray(part.supplierIds)) ? part.supplierIds : [];
-    if (!supplierIds.length) {
+    if (!forced && !supplierIds.length) {
       missingSupplier.add(line.sku);
       missingSupplierLines.push({ sku: line.sku, qty: line.qty, lineId: line.id });
       continue;
     }
-    const primary = supplierIds[0];
+    const primary = forced || supplierIds[0];
     if (!drafts.has(primary)) {
       drafts.set(primary, { supplierId: primary, lineItems: [], subtotalCents: 0 });
     }
     const draft = drafts.get(primary);
-    const unitCents = part && Number.isFinite(Number(part.priceCents)) ? Math.max(0, Math.floor(Number(part.priceCents))) : 0;
+    // In one-supplier mode the line is priced from that supplier's own
+    // quote where we have it; the catalog price (the PRIMARY supplier's)
+    // would otherwise quote branch A's money for branch B's order.
+    let sourceCents = part ? part.priceCents : null;
+    if (forced) {
+      const theirs = part && part.supplierPrices ? part.supplierPrices[forced] : null;
+      if (theirs && Number.isFinite(Number(theirs.priceCents))) sourceCents = theirs.priceCents;
+      else unpricedForSupplier.push(line.sku);
+    }
+    const unitCents = Number.isFinite(Number(sourceCents)) ? Math.max(0, Math.floor(Number(sourceCents))) : 0;
     const qty = Math.max(1, Math.floor(Number(line.qty) || 1));
     draft.lineItems.push({
       sku: line.sku,
@@ -535,7 +559,8 @@ function planDraftsFromMaterialList(list, parts) {
     ok: drafts.size > 0 && missingSupplier.size === 0,
     drafts: Array.from(drafts.values()),
     missingSupplier: Array.from(missingSupplier),
-    missingSupplierLines
+    missingSupplierLines,
+    unpricedForSupplier
   };
 }
 

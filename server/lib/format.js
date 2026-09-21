@@ -299,6 +299,28 @@ function resolveLineDescription(line, partsMap) {
   return `(SKU ${sku})`;
 }
 
+// resolveSupplierSku — the number THIS supplier calls the part, for any
+// document that goes out to them (RFQ, PO, and their CSVs).
+//
+// Our catalog SKU is ours. The same part is listed under a different
+// number at each branch — our DS100C is SiteOne's KT010C and Central Pro's
+// 100C — but only for SOME parts; plenty are identical. Per-supplier
+// numbers live on the catalog part as supplierPrices[supplierId]
+// .supplierSku (lib/part-supplier-prices.js merges them in), so this is a
+// pure lookup with our SKU as the fallback: a supplier we have no number
+// for still gets a document with a part number on it, just ours.
+//
+// One path, called from all four document builders, so the number on the
+// PDF can never disagree with the number in the CSV.
+function resolveSupplierSku(line, partsMap, supplierId) {
+  const ours = line && line.sku != null ? String(line.sku) : "";
+  if (!supplierId) return ours;
+  const part = partsMap && Object.prototype.hasOwnProperty.call(partsMap, ours) ? partsMap[ours] : null;
+  const bySupplier = part && part.supplierPrices ? part.supplierPrices[supplierId] : null;
+  const theirs = bySupplier && typeof bySupplier.supplierSku === "string" ? bySupplier.supplierSku.trim() : "";
+  return theirs || ours;
+}
+
 // townFromAddress — the town/city out of a free-text property address,
 // for the CRM's "sort by town" (customers + properties indexes, Aug 2026).
 //
@@ -492,6 +514,7 @@ module.exports = {
   parseCanadianAddress,
   townFromAddress,
   resolveLineDescription,
+  resolveSupplierSku,
   documentFilename,
   contentDisposition
 };

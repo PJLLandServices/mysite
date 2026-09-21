@@ -2170,6 +2170,43 @@ function isSuperseded(q) {
   return !!q && q.status === "superseded";
 }
 
+// Resolve the full revision chain from ANY quote id in it, and identify
+// which one is current. A project's only pointer to its quote can be
+// stale — project.systemDesign.linkedQuoteId names whichever quote
+// System Builder generated, which stays the ORIGINAL even after two
+// revisions replace it — so a reader can't just trust the id it's
+// holding. Walks backward via revisionOf to the root (v1), then forward
+// via supersededBy collecting every version in order; the last one (no
+// supersededBy) is current. Missing/deleted quotes in the chain are
+// skipped rather than breaking the walk. Returns null if anchorId itself
+// doesn't resolve to a real quote.
+async function resolveRevisionChain(anchorId) {
+  const anchor = await get(anchorId);
+  if (!anchor) return null;
+
+  let root = anchor;
+  let hops = 0;
+  while (root.revisionOf && hops < 25) {
+    const parent = await get(root.revisionOf);
+    if (!parent) break;
+    root = parent;
+    hops += 1;
+  }
+
+  const chain = [root];
+  let cur = root;
+  hops = 0;
+  while (cur.supersededBy && hops < 25) {
+    const next = await get(cur.supersededBy);
+    if (!next) break;
+    chain.push(next);
+    cur = next;
+    hops += 1;
+  }
+
+  return { current: chain[chain.length - 1], chain };
+}
+
 // Look up a quote by its approval token. Returns the matching quote OR
 // null. Used by the public /api/approve/:id/:token endpoints.
 async function getByApprovalToken(id, token) {
@@ -3266,6 +3303,7 @@ module.exports = {
   refreshLineItems,
   getByApprovalToken,
   isSuperseded,
+  resolveRevisionChain,
   remove,
   softDelete,
   restore,

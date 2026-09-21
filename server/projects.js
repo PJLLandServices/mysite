@@ -19,7 +19,8 @@ const els = {
   newCancel: document.getElementById("newProjectCancel"),
   search: document.getElementById("projectSearch"),
   includeArchived: document.getElementById("includeArchived"),
-  filterButtons: document.querySelectorAll("[data-status-filter]")
+  filterButtons: document.querySelectorAll("[data-status-filter]"),
+  backfillButton: document.getElementById("backfillProposalButton")
 };
 
 const STATUS_LABELS = {
@@ -165,12 +166,62 @@ async function saveNew(event) {
   }
 }
 
+// One-time backfill: projects converted from a quote before
+// convert-to-project's enrichment opened up beyond project_proposal only
+// got a bare name + sourceQuoteId — no tasks, no proposal snapshot. This
+// fills that in for every such project still on file. Dry-run first
+// (server default when no confirm is sent) so the count is real before
+// anything's written; safe to run more than once — already-enriched
+// projects are skipped automatically.
+async function runProposalBackfill() {
+  try {
+    const dryRun = await fetch("/api/admin/projects/backfill-proposal-enrichment", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({})
+    });
+    const dryData = await dryRun.json().catch(() => ({}));
+    if (!dryRun.ok || !dryData.ok) {
+      alert((dryData.errors && dryData.errors[0]) || "Couldn't check for projects to backfill.");
+      return;
+    }
+    const { total, willEnrich, missingQuote } = dryData.counts;
+    if (total === 0) {
+      alert("Nothing to backfill — every converted project already has its proposal data.");
+      return;
+    }
+    let msg = `Found ${total} project${total === 1 ? "" : "s"} converted from a quote before this fix, ` +
+      `missing its repair/task list and totals.\n\n${willEnrich} will be filled in now.`;
+    if (missingQuote) {
+      msg += `\n${missingQuote} can't be — the original quote no longer exists, so ${missingQuote === 1 ? "it" : "those"} will be skipped.`;
+    }
+    msg += "\n\nApply this now?";
+    if (!confirm(msg)) return;
+
+    const applyRes = await fetch("/api/admin/projects/backfill-proposal-enrichment", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirm: "BACKFILL PROJECTS" })
+    });
+    const applyData = await applyRes.json().catch(() => ({}));
+    if (!applyRes.ok || !applyData.ok) {
+      alert((applyData.errors && applyData.errors[0]) || "Backfill failed.");
+      return;
+    }
+    alert(`Done — ${applyData.enriched.length} project${applyData.enriched.length === 1 ? "" : "s"} updated.`);
+    loadProjects();
+  } catch (err) {
+    alert(err.message || "Backfill failed.");
+  }
+}
+
 // Event wiring
 els.newButton.addEventListener("click", openNewForm);
 els.newCancel.addEventListener("click", closeNewForm);
 els.newForm.addEventListener("submit", saveNew);
 els.search.addEventListener("input", () => renderProjects());
 els.includeArchived.addEventListener("change", loadProjects);
+els.backfillButton.addEventListener("click", runProposalBackfill);
 els.filterButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
     currentStatus = btn.dataset.statusFilter || "";

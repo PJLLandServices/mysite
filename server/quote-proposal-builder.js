@@ -1849,6 +1849,9 @@
         showError(data.errors?.[0] || "Convert failed.");
         return;
       }
+      if (data.linkedExistingProject) {
+        alert(`This quote was built from ${data.project.name || data.project.id}'s System Builder design — linked to that project instead of creating a new one.`);
+      }
       location.href = `/admin/project/${encodeURIComponent(data.project.id)}`;
     } catch (err) {
       showError(err.message || "Convert failed.");

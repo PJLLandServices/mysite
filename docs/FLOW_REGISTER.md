@@ -2,6 +2,188 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-21 (Job tabs — real browser-style tabs on the Project page):** Second half of "the
+whole platform feels all over the place": *"at the top of the screen there are tabs, almost
+like a web browser... Project, Site Builder, Parts List, Quote, Invoice."* A full merge of the
+5 surfaces into one shared shell was scoped and set aside — Site Builder alone is a
+self-contained 7,800-line page with its own full-screen overlays and keyboard shortcuts, not a
+drop-in tab-pane. Shipped instead: a persistent tab strip at the top of `server/project.html`
+that resolves each tab to THIS job's actual record — real navigation between real pages (the
+honest reading of "like a web browser": browser tabs load pages, they don't share one DOM
+either), not a fake in-page switch. Site Builder is always reachable
+(`/admin/sitebuilder?project=<id>` — it already handles "no design yet" itself, same query
+param `#projDesignSystemLink` already used). Parts List picks the most recently updated
+material list attached to the project. Quote reads `state.linkedQuote` (PJL-54's chain-resolved
+current quote, above). Invoice prefers `project.finalInvoiceId` (set at project completion)
+and falls back to the linked quote's `depositInvoiceId` mid-job — added a `depositInvoiceId`
+field to the `linkedQuote` summary `GET /api/projects/:id` already returns, no new round-trip.
+Any tab with nothing to resolve to greys out with a reason ("No quote for this job yet") rather
+than linking somewhere generic. `scripts/test-project-job-tabs.mjs` — a **real headless-Chromium
+walk of the actual project.html/project.js** (Playwright, same pattern as
+`test-sitebuilder-laterals.mjs`; every `/api/*` call mocked, no live server) rather than a
+hand-simulated approximation of the render logic — pins: a brand-new job with all four tabs
+correctly disabled, a fully-populated job resolving every tab to the right specific record
+(including picking the newer of two material lists), and the mid-job deposit-invoice fallback.
+Registered as `npm run test:project-job-tabs`, deliberately **not** added to `build:check` —
+same convention as the existing Playwright suites (`test:sitebuilder`), which stay opt-in given
+the browser-launch overhead. **Patrick's acceptance test — not yet walked:** open a project
+that has a design, a material list, a sent quote and (if completed) an invoice — click each of
+the four tabs and confirm it lands on the actual record for that job, not an index page; open a
+brand-new project and confirm Site Builder still opens straight to it while the other three
+show as greyed out.
+**2026-09-21 (Job journal — a real one, on the Project page):** Patrick, after saying the whole
+platform "feels all over the place": tabs across Project/Site Builder/Parts List/Quote/Invoice
+(deferred — a bigger IA change, scoped but not built), plus "a section that we record daily
+updates, upload pictures etc etc." Asked whether he meant a genuinely new log or just surfacing
+the existing per-visit rollup; he confirmed: *"Yes, this should be a job journal. We currently
+have it being delivered as Work Orderz, we are capable of updating the todo list that's created
+from the quote."* Correctly read as: the existing per-visit `dailyLog` on build work orders
+(`lib/work-orders.js`) and the task list seeded from the quote (both already solid) stay as-is
+— the gap is a JOB-level log, not tied to any one visit, that anyone can add to any time.
+Built as a new `journalEntries[]` array on the project record (`server/lib/projects.js`):
+`addJournalEntry`/`deleteJournalEntry`/`addJournalEntryPhotos`/`removeJournalEntryPhoto`, each
+entry `{id, ts, by, note, photos[]}`. Photo upload deliberately REUSES the existing WO-photo
+pipeline (`validatePhotos`, `compressWoPhoto`, `generatePhotoFilename` in `server/server.js`) —
+same magic-byte verification, same EXIF-safe compression, same on-disk shape — rather than
+inventing a second one; only the storage root is new
+(`server/data/project-journal-photos/<projectId>/<entryId>/`, twin functions
+`savePhotosForJournalEntry`/`readJournalPhotoFile`/`deleteJournalPhotoFile` mirroring the WO
+versions exactly). New routes: `POST/DELETE /api/projects/:id/journal[/:entryId]`,
+`POST /api/projects/:id/journal/:entryId/photos`, `GET .../photo/:n`,
+`DELETE .../photos/:n` — all under the existing `/api/projects` → "user" auth rule (any admin
+or tech, not admin-only). New **Job journal** panel on `server/project.html`/`project.js`:
+a note + photo composer, entries newest-first with thumbnails, delete-entry and delete-photo
+controls. Always visible (not gated behind build-tracking) — a pre-work site-visit note is a
+legitimate entry. Closed a real gap while at it: `DELETE /api/projects/:id` had no idea journal
+photo files existed — now cleans up `project-journal-photos/<id>/` on every project delete
+(cascade or not), so removing a project never leaves orphaned images on disk.
+`scripts/test-project-journal.mjs` (27 assertions, in `build:check`) pins: empty note refused
+and nothing written, entry creation, real magic-byte-verified PNG upload against the actual
+pipeline with photo-number continuation across two uploads, single-photo delete removing both
+metadata and the file while leaving the entry's other photos alone, whole-entry delete wiping
+its photo directory, a bystander project never touched, 404s on a nonexistent project, and the
+project-delete cleanup case. **Patrick's acceptance test — not yet walked:** open a project,
+add a journal entry with a couple of photos from your phone, confirm it shows up immediately,
+delete one photo and then the whole entry, confirm both actually disappear.
+**2026-09-20, same day (PJL-54 — revision/lock status panel on the Project page):** First real
+Job Portal build-out (TRD: "Job Portal technical design"), after the day's data-model fixes
+above made it worth doing. New **Quote** panel on `server/project.html` shows, without opening
+the Proposal Builder, exactly the TRD's example: "Quote v3 — sent, Summary total, confirmed."
+The hard part was staleness: a project's only pre-acceptance pointer to its quote
+(`systemDesign.linkedQuoteId`, written once by System Builder) never updates when that quote
+gets revised, so a naive reader would show revision 1's status forever even after two newer
+revisions replaced it — the exact same shape of bug as the Convert-to-project fixes earlier
+today. Fixed the same way: `quotes.resolveRevisionChain(anchorId)` (`server/lib/quotes.js`)
+walks backward via `revisionOf` to the root, then forward via `supersededBy` to the actually-
+current version, returning the full chain in order. `GET /api/projects/:id` resolves the anchor
+(`project.sourceQuoteId` post-acceptance, else `project.systemDesign.linkedQuoteId`
+pre-acceptance) through it and returns `linkedQuote` in one round-trip — id/version/status,
+`presentationMode` + `confirmed` (project_proposal only; `confirmed` is derived, not a stored
+field — any project_proposal quote past `draft` necessarily passed PJL-48's send-time gate,
+so leaving draft IS being confirmed), and the version chain for a "History: v1 → v2 → v3"
+trail. `scripts/test-project-quote-status-panel.mjs` (18 assertions, in `build:check`) pins:
+no link at all, a direct link, a STALE link resolving through 2 revisions to the true current
+one, a non-proposal quote type (presentation fields correctly null), and a dangling anchor
+(quote deleted) resolving to null instead of a 500. **Patrick's acceptance test — not yet
+walked:** open a project with a System-Builder-originated quote that's been revised at least
+once, confirm the Quote panel shows the CURRENT revision's real status (not the original's),
+and the history line links back through every prior version.
+**2026-09-20, same day (Backfill for pre-fix bare project conversions):** Patrick, after the
+convert-to-project enrichment fix above shipped: *"Did it backdate any of the existing
+proposals?"* No — that fix only changed what a FUTURE convert-to-project does; every project
+that was already converted before it shipped is exactly as bare as it was (no tasks, no
+proposalSnapshot). Built the catch-up: `projects.planProposalBackfill()` finds every project
+with `sourceQuoteId` set and no `proposalSnapshot` (the fingerprint of a pre-fix bare
+conversion), and `applyProposalBackfill()` runs the SAME `enrichFromProposal()` a fresh
+conversion gets today against each one's original quote. Additive only — `enrichFromProposal`
+never overwrites a project's existing customer/address fields and refuses to re-seed tasks over
+ones already marked done, so this cannot erase real work; a project with no `sourceQuoteId` at
+all (never converted, the ordinary case) is never a candidate. Exposed as
+`POST /api/admin/projects/backfill-proposal-enrichment` — admin-gated (needsAuth + requireAdmin,
+same as `/api/admin/purge-test-data`), dry-run by default (returns counts, writes nothing),
+requires `confirm: "BACKFILL PROJECTS"` to actually apply — and a **Backfill missing proposal
+data** button on `server/projects.html`/`projects.js` (the "All Projects" list page) that runs
+the dry run first, shows Patrick the count in a confirm dialog, then applies on OK. Safe to run
+more than once — already-enriched projects are automatically excluded from the candidate list.
+`scripts/test-backfill-proposal-enrichment.mjs` (25 assertions, in `build:check`) pins: dry-run
+writes nothing but reports accurate counts, apply enriches the real candidate and skips one
+whose quote no longer exists, an already-enriched project's data (including a DONE task) is
+untouched byte-for-byte, an ordinary never-converted project is never a candidate, a second
+apply run is a clean no-op, and a non-admin gets 403. **Patrick's acceptance test — not yet
+walked:** open Projects, click "Backfill missing proposal data," confirm the count looks right,
+apply it, then open one of the projects it fixed and confirm its Tasks panel and Accepted
+proposal panel now show real data instead of nothing.
+**2026-09-20, same day (Convert-to-project now enriches repair-quote projects too):** Patrick:
+*"I believe I have scoped the quote so that we can also do 'repairs' which allow us to assess an
+entire project, and compose the repairs. I think it should remain."* Traced the real flow: the
+tool for that is `on_site_quote` (built from a Work Order's "Issues → Draft Quote" screen,
+`server/work-order.js` `renderOnSiteQuote` — a genuine multi-line-item editor for bundling
+several repairs found on one visit into one quote). `ai_repair_quote` (the AI-chat path) gets
+the same line items but auto-generated, single-shot. Neither ever got a real Project when
+converted: `convert-to-project` gated its rich enrichment (`projects.createFromProposal` —
+tasks seeded from line items, `proposalSnapshot` with totals/accepted-date/link-back,
+attachments) to `type === "project_proposal"` only; every other type fell into a bare
+`projects.create({name, ..., sourceQuoteId})` with nothing else. `project.js`'s "Accepted
+proposal" panel is gated entirely on `proposalSnapshot` being non-null, so a converted
+repair-quote project rendered no line items, no totals, nothing — the composed repair list was
+reachable only by clicking back into the original quote via its id. Fixed by opening up
+`projects.createFromProposal`/`enrichFromProposal` (`server/lib/projects.js`) to any quote type
+— every field they set either exists on every quote record already (line items, totals, scope,
+acceptance method) or degrades harmlessly to null/empty for types that don't use it
+(branch/billingMode/proposalSections stay null for non-proposals, which the panel already
+tolerated). `convert-to-project` in `server/server.js` now always routes through the same
+enrichment path, dropping the old bare-fallback branch entirely.
+`scripts/test-convert-repair-quote-enrichment.mjs` (16 assertions, in `build:check`) pins:
+on_site_quote gets tasks + proposalSnapshot, ai_repair_quote gets the same, project_proposal is
+unchanged (regression guard), and a quote with zero line items still converts cleanly.
+**Patrick's acceptance test — not yet walked:** build a multi-repair on_site_quote from a Work
+Order's Issues screen, send and accept it, convert to project — confirm the project's Tasks
+panel shows one task per repair and the Accepted proposal panel shows the real totals, not a
+blank project.
+**2026-09-20, same day (Convert-to-project stopped duplicating System Builder jobs):** Patrick,
+live, mid-acceptance: *"I just had a quote accepted, and now i have to convert to
+project.... but we created the quote form a project."* Real bug, not a misunderstanding —
+`POST /api/quotes/:id/convert-to-project` only ever checked for an existing project with
+`sourceQuoteId === thisQuote`, a field NOTHING sets until conversion itself runs. A quote built
+from a project's System Builder design (`server/sitebuilder.html` writes
+`project.systemDesign.linkedQuoteId` the moment it generates the quote — see the Job Portal
+data-model research earlier the same day) was never consulted, so every System-Builder-
+originated proposal would spin up a second, orphaned, duplicate project for a job that already
+had one the moment it got accepted. Fixed: before creating anything, the route now walks the
+quote's `revisionOf` chain (a sent revision is a new quote id; the project's pointer still
+names whichever ancestor System Builder actually generated) looking for a project that already
+claims one of those ids via `systemDesign.linkedQuoteId` **and hasn't been converted yet**
+(`!project.sourceQuoteId` — an already-claimed project is never reused for a different quote,
+even if its `linkedQuoteId` is stale). Found → `projects.enrichFromProposal()` patches that
+SAME project in place (branch, billingMode, labourRateLocked, tasks seeded only if none are
+already done, attachments, proposalSnapshot, sourceQuoteId) — no new project record, existing
+work/history on it untouched. Not found → unchanged behaviour, a new project is created same as
+before (the common case for quotes never touched by System Builder). Both UI callers (Proposal
+Builder's Convert button, Quote Folder's card action) now tell Patrick when a convert linked to
+an existing project instead of creating one, so it's never a silent surprise.
+`scripts/test-convert-to-project-links-systembuilder.mjs` (16 assertions, in `build:check`)
+pins: direct link, the revision-chain case, the ordinary no-link fallback, and the
+already-claimed-project guard. **Patrick's acceptance test — not yet walked:** on a project
+you built with System Builder, send and accept the quote it generated, then press Convert to
+project (from either the Proposal Builder or the Quote Folder) — confirm it lands you on the
+SAME project you started with, not a new one, and that the project's tasks/attachments/snapshot
+show up on it.
+**2026-09-20, same day (Project delete — test vs. real):** The **Delete project** button on
+the project page (`server/project.html`/`project.js`) hard-deleted the project record but only
+handled material lists — it detached them, never deleted them — and left any attached work
+orders behind pointing at a project id that no longer existed. Patrick: *"Can you inquire
+whether its a test before deleting. If its a test delete everything about it."* Fixed by
+splitting the delete into two paths on one new question asked at delete time (`deleteProject()`
+in `project.js`): **not a test** (default) keeps the old safe behaviour — material lists
+survive, detached; work orders untouched. **is a test** (`cascade: true` sent to
+`DELETE /api/projects/:id`) hard-deletes the project's attached material lists AND work orders
+before removing the project, so a throwaway test project leaves nothing orphaned behind.
+`scripts/test-project-delete-cascade.mjs` (15 assertions, in `build:check`) pins both paths
+plus a bystander project's work order and material list surviving either delete untouched.
+**Patrick's acceptance test — not yet walked:** delete a real project with an attached work
+order and material list, answer "no" — confirm the work order stays and the material list
+survives but shows unattached; make a throwaway test project with a work order and material
+list, delete it, answer "yes" — confirm all three are gone from their respective lists.
 **2026-09-20, same day (The probe books IN PLACE — the handoff wasn't booking):** Patrick, on
 the first cut below, live: *"that doesn't do anything special but go to the book day.. what
 the fuck."* Correct — a link into the Schedule modal is navigation, not booking; the phone
@@ -4583,7 +4765,7 @@ Nothing below has been walked. Assume nothing works until verified.
 | FLOW-22a | **Invoice PDFs are re-rendered on demand, never frozen** — **OPEN, no fix shipped** | Found 2026-08-20 during the letterhead investigation (`docs/LETTERHEAD_REFACTOR_INVESTIGATION.md`). Unlike POs, WO reports and quotes — all three of which freeze their customer-facing PDF to disk with a recorded path — invoices carry **no `pdfPath`**. All six call sites (customer email, portal view, admin download, Stripe receipt, deposits, project-complete) call `generateInvoicePdf` and render fresh from the live record. **A reprint of a paid invoice can therefore differ from what the customer was sent**, and any future change to `invoice-pdf.js` retroactively restyles every invoice ever issued. Freezing them is a separate architectural decision, not a refactor — recorded here so it is a known risk with an owner rather than a surprise. |
 | FLOW-24 | Form failure → does anything alert Patrick? | Contact page shows "Your message didn't send." Unknown whether that failure is logged anywhere. |
 | FLOW-25 | AI diagnostic tool (`/sprinkler-repair.html`) | Carries a financial promise: "correct diagnosis = 1 hr labour free." Runs on Cloudflare Worker + API key — a dependency chain separate from Render and from email. |
-| FLOW-27 | **Material List → RFQ → cheapest price → PO** — **UNMAPPED** (opened 2026-08-16) | Hop chain: **ML-… `need` lines → shop or split → RFQ-… per supplier → send (PDF+CSV, no prices) → vendor replies → `recordQuotedPrices` → compare by SKU → apply cheapest to the parts catalog → ML reprices → PO-…**. The supplier half of the money path, and it had **no registered flow and no test coverage at all** before this. `scripts/test-rfq-shopping.mjs` (39 assertions, in `build:check`) now covers the pure logic, and a live-API walk covered the routes: shop mode gives every supplier the whole list including SKUs with no supplier assigned; an outgoing line carries no price of ours and its frozen CSV names no other supplier, no material list and no price column; two suppliers each win different SKUs; **applying a quote dearer than one already recorded for the same list is refused with a 409 naming the SKUs** (this was silently overwriting the cheaper price before); apply-cheapest writes the winner of each SKU with the source RFQ attributed; and asking for quotes never moves a line off `need`. **What is NOT covered and needs Patrick:** the email leg (this sandbox has no SMTP credentials, so `markSent` was called directly), a real two-supplier round trip with genuine replies, and confirming the resulting PO prices against an invoice. |
+| FLOW-27 | **Material List → RFQ → cheapest price → PO** — **UNMAPPED** (opened 2026-08-16) | Hop chain: **ML-… `need` lines → shop or split → RFQ-… per supplier → send (PDF+CSV, no prices) → vendor replies → `recordQuotedPrices` → compare by SKU → apply cheapest to the parts catalog → ML reprices → PO-…**. The supplier half of the money path, and it had **no registered flow and no test coverage at all** before this. `scripts/test-rfq-shopping.mjs` (39 assertions, in `build:check`) now covers the pure logic, and a live-API walk covered the routes: shop mode gives every supplier the whole list including SKUs with no supplier assigned; an outgoing line carries no price of ours and its frozen CSV names no other supplier, no material list and no price column; two suppliers each win different SKUs; **applying a quote dearer than one already recorded for the same list is refused with a 409 naming the SKUs** (this was silently overwriting the cheaper price before); apply-cheapest writes the winner of each SKU with the source RFQ attributed; and asking for quotes never moves a line off `need`. **What is NOT covered and needs Patrick:** the email leg (this sandbox has no SMTP credentials, so `markSent` was called directly), a real two-supplier round trip with genuine replies, and confirming the resulting PO prices against an invoice. **Changed 2026-09-14 — per-supplier prices (Patrick: "they need to be two different prices based on where we receive them from").** The catalog held ONE `priceCents` per SKU, so two suppliers quoting the same list could only ever leave one price standing. `server/lib/part-supplier-prices.js` now stores every supplier's price (and the supplier's OWN part number) per SKU in `server/data/part-supplier-prices.json`; `rebuildCatalogFromOverrides` merges it AFTER the supplier-assignment merge and copies the **primary** supplier's price onto `part.priceCents` (Patrick's ruling — not the cheapest), exposing the rest as `part.supplierPrices` and `part.priceSupplierId`. A hand-typed price with a NEWER `editedAt` than the quote still wins. `apply-to-catalog` files prices per supplier instead of overwriting one field, so **the 409 "dearer than a quote already recorded" guard was removed** — it existed only to stop the overwrite, which can no longer happen; the response gained `storedOnly` (recorded against a supplier that is not this part's primary, catalog unchanged). Supplier part numbers print on the RFQ/PO PDFs and CSVs via one shared `resolveSupplierSku` in `lib/format.js` (their number, ours as fallback; both CSVs gained a `Supplier part #` column). New: `PATCH /api/part-supplier-prices` records prices and/or supplier part numbers without an RFQ. `scripts/test-part-supplier-prices.mjs` (22 assertions, in `build:check`) pins two prices coexisting, the primary deciding the effective price, re-pricing on a primary flip, the manual-edit-wins rule, per-supplier part numbers with our-SKU fallback, and seeding only from **applied** RFQs. **Changed 2026-09-21 — one order to one supplier.** Generating POs from a list whose parts sit with two suppliers silently produced TWO drafts (Patrick hit this on ML-2026-0015: Central Pro 24 lines / $3278.65 and SiteOne 16 lines / $2964.85). Splitting forfeits BOTH suppliers' volume discounts, which are all-or-nothing, so a split order can cost more than buying the lot at the dearer branch. `planDraftsFromMaterialList(list, parts, { forceSupplierId })` now puts every need line on one supplier's draft, priced from THAT supplier's own quote (`part.supplierPrices[supplierId]`) with the catalog price as the fallback and every fallback named in `unpricedForSupplier`; an unassigned SKU stops being a blocker in this mode because the supplier was named explicitly. Both `plan-purchase-orders` and `generate-purchase-orders` accept `{ supplierId }` (the write re-reads it rather than trusting the preview) and the plan returns `supplierOptions`; the dialog gained a one-order/split radio with a supplier picker, defaulting to ONE order at the supplier holding most of the list, re-planning on every change. `scripts/test-po-one-supplier.mjs` (20 assertions, in `build:check`) pins the split being unchanged, one-supplier mode collapsing to a single draft priced at that branch's numbers, the unassigned-SKU blocker clearing, the catalog-price fallback being reported, and the two branches' totals actually differing. **Still needs Patrick:** `apply-cheapest-quotes` now contradicts the primary-supplier rule — it writes a winner price the next rebuild would re-derive from the primary — so it must either flip each SKU's primary to the cheapest quoter or be retired. Unresolved as of this change. |
 | FLOW-46 | **Quote financing (Klarna) — offer → apply → approve/decline → sign → capture** — **UNMAPPED** (opened 2026-09-19) | **First-ever registration for this flow** — PJL-34 (admin enable, Stripe Payment Link, capture/void, the Pending Financing queue, the capture-deadline reminder sweep) shipped across several earlier PRs with no `FLOW_REGISTER.md` entry at all; this row covers that pre-existing behaviour AND the PJL-35 re-sequencing below in one place, since they're one flow. Hop chain: **admin "Enable financing" on a DRAFT quote (`enableFinancingForQuote`, grosses up pricing — draft-only, pricing frozen once sent, which is the actual mechanism behind "a customer who wants financing gets a completely different proposal," not a live toggle) → sent to the customer → `financing.stage` state machine (`not_offered → link_sent → authorized/declined/voided`, `authorized → captured/partially_captured/expired/voided`) → capture or void on the linked invoice**. **PJL-35 (2026-09-19): financing now starts BEFORE signature, not after.** A new customer-facing "Apply for financing" button/route (`POST /api/approve/:id/:token/apply-financing`) calls `klarna.onQuoteAccepted` directly — reused UNCHANGED, since it already no-ops (`{ alreadyRan: true }`) once `financing.stage` has moved past `not_offered`, which is also what makes the three PRE-EXISTING post-signature call sites (`server.js` — remote e-sign, portal accept, pdf-return admin attestation) safe to leave byte-for-byte untouched: whichever trigger fires first does the real work, the others are silent no-ops. Two new customer-facing hero/footer bands on the proposal page (serve-time injected in `injectProposalAcceptFooter`, never baked into the saved file) read `financing.stage` live and show the apply/waiting/approved/declined state; the footer band only shows the Accept & sign button once `authorized` (or after a `declined` customer chooses to pay another way) — **before that, there is deliberately nothing to sign**, which is the direct fix for the risk Patrick raised ("wouldn't the sequence make the customer sign... and then..."): under the old order a signature could exist before the financing outcome did, under this order it can't. **The correctness fix this re-sequencing required:** `financing.stage === "authorized"` alone stopped being a safe "clear to schedule" signal the moment authorization could happen pre-signature — `quotes.isAccepted(q)` is now the one shared rule (replacing at least three slightly different ad hoc inline checks) used by the proposal page's own footer, `listPendingFinancing`'s new `signed` field, and the authorized-alert email/SMS copy, which now says "clear to schedule" only when both are true and "still needs a signature" otherwise. New customer-facing decline email (`notify-customer.js`'s `sendFinancingDeclineEmail`) — PJL-34 only ever alerted Patrick internally on a decline; the customer heard nothing. Deliberately left alone: the financing state machine's transition rules (never referenced signature status to begin with, needed no change); Stripe integration, gross-up math, eligibility rules, capture/void — all untouched. **Badge asset (corrected 2026-09-19):** Patrick had already supplied the real Klarna badge (a self-contained pink-pill PNG, own background — used in every approved mockup against both the light hero band and the dark footer band) earlier in this same session; it was saved to the mockup scratchpad but not carried into the repo when the real bands were built, so the first version of this code referenced two placeholder files (`/klarna-badge-{black,white}.svg`) that never existed. Fixed same-day: the real asset now lives at `server/klarna-badge.png`, one file for both bands, sized to the same 78px-tall minimum-size math either way. **What still needs Patrick — not yet walked, and can't be walked from this sandbox** (`docs/HANDOFF_KLARNA_TEST_MODE.md`: outbound calls to `api.stripe.com` are blocked by this environment's egress policy): one full test-mode walk — open a financing-enabled proposal as a customer, click Apply for financing, complete Klarna's TEST checkout, confirm the hero/footer bands update through every state, confirm the decline email arrives on a declined test run, confirm the Pending Financing page reads "awaiting signature" before signing and "clear to schedule" after. |
 | FLOW-45 | **A failed send is either re-sent or waved off — never nagged about forever** — **UNMAPPED** (opened 2026-09-12) | Hop chain: **Email health → "Never went out" → for `outreach` rows the health read names the season whose catch-up covers them (`catchUp: {season, year, count}`, from each row's booking) → **Send the N blast emails now** → `POST /api/assignments/:season/:year/catch-up` (rebuilt from each booking, inside the 9–8 window; a closed window is said, not thrown) → the ledger's later successes drop those rows on the next load. Anything else → **Dismiss** (row) or **Dismiss all** → `POST /api/admin/email-health/dismiss` → `mailerLog.dismissFailures()` writes `data/email-dismissed.json` (who, when) → `outstandingFailures()` excludes them; the ledger itself is untouched**. **LEDGER-01 (2026-09-12):** Patrick, on forty "outreach · send by hand" rows from the revoked-password morning (2026-09-11 9:03): "how do we get rid of all this garbage." The rows were true — those blast emails never went out and had not been re-sent — but the panel's only advice was "send by hand", forty times, because `outreach` is not rebuildable from the ledger. It IS rebuildable by the cadence (FLOW-3x catch-up), which the Season Plan already offers; the panel now offers the same press where the failures are read. And a failure Patrick has handled another way (phoned, stale) needed a way off the list that kept the record. **Deliberately left alone:** the ledger (append-only history; dismissals live beside it); `RESENDABLE_KINDS` (a magic link and a cadence step are still not rebuilt from the ledger); the send window. `scripts/test-email-dismiss.mjs` (20, in `build:check`) pins dismiss-takes-only-those-rows, idempotence, the record of who/when, the untouched ledger, the injectable Set, bad input, the admin-gated route, the catch-up pointer, and the panel's controls; **verified against the unfixed code first.** **Patrick's acceptance test — not yet walked:** open Email health: the box shows "Send the N blast emails now"; press it inside the window → "N sent"; reload → those rows are gone. Press Dismiss on any leftover row → it disappears; Dismiss all → the box empties; the Recent failures list below still shows the history. |
 | FLOW-44 | **An alert about a booking carries the booking's price** — **UNMAPPED** (opened 2026-09-12) | Hop chain: **customer reschedules / cancels / picks the free bucket on their appointment page, or Patrick resends a failed lead alert → `bookingAlertLead(booking, { sourceLabel, notes, lead })` → `resolveSeasonalPrice(property, family)` (the appointment page's own rule: the property's override, else its zone-count tier, else "Custom quote") → `features: [{ service, price }]` + `totals.expectedTotal` → `sendNewLeadEmail` / `sendNewLeadSms` print the service and the price, and `appointmentWhenLabel()` prints the date as the customer was told it ("Thu, Oct 22, Afternoon (12 PM – 5 PM)")**. **ALERT-01 (found + fixed 2026-09-12):** Patrick, on "New PJL Lead — Customer rescheduled their appointment — ADAM SORRENTI": "Can you tell me why Adam's quoted closing cost is $0.00?" It wasn't. The lead-alert shell prints a lead's items and estimated total; all four booking alerts handed it a bare contact block, so it printed its empty state ("$0.00 · No specific items selected") and ISO timestamps ("Was: 2026-10-22T18:01:00.000Z"). One shape now, for all four. A missing zone count reads "(custom quote)" rather than a silent $0. **Deliberately left alone:** the shell itself (sendNewLeadEmail/Sms) — a lead's alert is unchanged; the SMS keeps its empty note. `scripts/test-booking-alert-price.mjs` (17, in `build:check`) pins the date label, the pricing by the page's rule (tier, override, custom, spring), the contact/portal from the lead, and every call site; **verified against the unfixed code first.** **Patrick's acceptance test — not yet walked:** the next reschedule/cancel alert shows the service line with its price and "Was Thu, Oct 22, Afternoon (12 PM – 5 PM). Now Mon, Oct 19, Morning (8 AM – 12 PM)."; a property with no zone count shows "(custom quote)". |
