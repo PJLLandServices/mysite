@@ -2739,11 +2739,11 @@
     rest.className = "sp-probe-note";
     rest.textContent = "This table covers planned route days AND days real bookings have started "
       + "(marked 'Booked day'). Every other open day in the season has nothing on it yet, so it "
-      + "is offered to this address as normal. The corridor is also elastic: when the calendar "
-      + "leaves an address short of cheap days, availability widens the drive allowance a step at "
-      + "a time, but never past 40 minutes of extra driving — amber rows show where a day would "
-      + "open up. Past that we stop offering days and the customer joins the open bucket, so a "
-      + "far address never buys a date with an hour of detour.";
+      + "is offered to this address as normal. The corridor is also elastic: when an address "
+      + "would see fewer than three days in its next two weeks, availability widens the drive "
+      + "allowance one step at a time — 25, 40, 60, then the whole service area — until it does, "
+      + "so nobody is shown an empty fortnight. Amber rows show the step a day opens at. The "
+      + "starred days are still the cheapest, and a far booking is a stop you can move.";
     out.appendChild(rest);
 
     const table = document.createElement("table");

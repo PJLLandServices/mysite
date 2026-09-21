@@ -262,18 +262,22 @@ const DEFAULT_SETTINGS = {
 // the current corridor leaves an address fewer than GEO_WIDEN_MIN_DAYS
 // bookable days, the scan reruns at the next tier.
 //
-// THE LADDER STOPS AT 40 MINUTES, ON PURPOSE. It used to run to the
-// 90-minute service bound, and that is how a Markham address landed on a
-// "West of the 400" route day: with the calendar starved, the valve
-// opened all the way and bought the customer a day at the cost of an
-// hour of extra driving. Patrick's call (2026-09-07, reading that day):
-// the open bucket "exists precisely for the customer we can't place
-// efficiently yet" — so past 40 minutes we stop offering days and let the
-// first-available card take them. That is still never turning a customer
-// down; it is refusing to wreck a route to seat them on a date. The
-// booking GATE is unchanged — anyone inside the 90-minute service area
-// still books, via the open bucket when the calendar can't hold them.
-const GEO_WIDEN_TIERS = [25, 40];         // past this the open bucket is the answer, not a longer drive
+// THE LADDER RUNS TO THE SERVICE BOUND. From 2026-09-07 it stopped at 40
+// — a Markham address had landed on a "West of the 400" day, and the
+// open bucket was to take anyone the calendar could not seat cheaply.
+// Two weeks later, with ads live, that read as an EMPTY fortnight to
+// every Toronto and Etobicoke caller (every planned day in the first two
+// weeks of fall 2026 was a northern route, all past 40 from downtown)
+// and bookings were being lost to it. Patrick, 2026-09-21: "my goal will
+// be to not turn down an opportunity... I need to expand our capabilites
+// so we dont under deliver." So the rungs continue — 60, then the
+// 90-minute service area — and are climbed ONLY when the customer's
+// next two weeks hold fewer than GEO_WIDEN_MIN_DAYS days at the rung
+// below. The stars still steer to the cheapest days; a far booking is a
+// stop on the plan he can move. The leg cap climbs with the rung (a day
+// may spread by as much as the corridor allows), so a rung that admits
+// the drive cannot then refuse it as spread.
+const GEO_WIDEN_TIERS = [25, 40, 60, 90]; // climbed one rung at a time, only while the fortnight is short
 const GEO_WIDEN_MIN_DAYS = 3;             // matches the three starred recommendations
 // SCARCITY IS JUDGED ON THE CUSTOMER'S NEXT TWO WEEKS, not on the whole
 // scan. Counting bookable days across the entire horizon meant three
@@ -648,10 +652,12 @@ async function listAvailableSlots(opts = {}) {
             // same way round whichever cluster booked first.
             if (Number.isFinite(maxLeg) && maxLeg > 0) {
               // Ordered from where the truck enters this half, for the
-              // same reason as above.
+              // same reason as above. The cap climbs with the widen rung:
+              // a rung that admits +60 of driving admits a 60-minute leg.
+              const legCap = Math.max(maxLeg, Number.isFinite(geoMax) ? geoMax : 0);
               const spread = await geoFilter.worstLegBetweenStops(customerCoords, scoreAgainst,
                 endpoints.start ? { base: endpoints.start } : {});
-              if (spread && spread.added > maxLeg) {
+              if (spread && spread.added > legCap) {
                 geoSuppressedCount += 1;
                 if (diagnostics && Array.isArray(diagnostics.geoSuppressed)) {
                   diagnostics.geoSuppressed.push({

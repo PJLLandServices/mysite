@@ -135,18 +135,24 @@ ok("the window is a fortnight", GEO_WIDEN_WINDOW_DAYS === 14, String(GEO_WIDEN_W
     keys.slice(3).every((k) => !offered.has(k)), [...offered].join(", "));
 }
 
-// ---- 3. The ladder still stops at 40 --------------------------------
+// ---- 3. A far caller climbs the ladder to the service bound -----------
+//
+// Patrick, 2026-09-21: "my goal will be to not turn down an opportunity."
+// The fortnight is never left empty for an address inside the service
+// area; the rung climbed is the first one that seats them.
 
 {
-  const RICHMOND_HILL = { lat: 43.8828, lng: -79.4403, source: "google" }; // far past the cap
+  const RICHMOND_HILL = { lat: 43.8828, lng: -79.4403, source: "google" }; // +61 against the north cluster
+  const rhCost = await geoFilter.addedDriveMinutes(RICHMOND_HILL, shapes[Object.keys(shapes)[0]].points);
   const diagnostics = { geoSuppressed: [], seasonClosed: [] };
   const slots = await listAvailableSlots({ ...baseArgs, customerCoords: RICHMOND_HILL, dayShapes: shapes, diagnostics });
   const near = [...datesOf(slots)].filter(isNear);
-  ok("past 40 minutes the fortnight stays closed — the open bucket takes them",
-    near.length === 0, `near: ${near.join(", ")}`);
-  ok("and widening never reports past the cap",
-    diagnostics.geoWidenedTo === undefined || diagnostics.geoWidenedTo <= Math.max(...GEO_WIDEN_TIERS),
-    `geoWidenedTo=${diagnostics.geoWidenedTo}`);
+  ok("a far caller still gets their fortnight — the ladder climbed past 40",
+    near.length >= GEO_WIDEN_MIN_DAYS, `near: ${near.join(", ") || "none"}`);
+  ok("...to the first rung that admits them, inside the service bound",
+    GEO_WIDEN_TIERS.includes(diagnostics.geoWidenedTo) && diagnostics.geoWidenedTo >= rhCost.minutes
+      && diagnostics.geoWidenedTo <= 90,
+    `geoWidenedTo=${diagnostics.geoWidenedTo} for +${rhCost.minutes}`);
 }
 
 if (failures.length) {
