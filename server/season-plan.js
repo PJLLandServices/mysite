@@ -1172,6 +1172,7 @@
   function render(plan) {
     current = plan;
     renderFollowBar(plan);
+    renderCap(plan);
     if (!plan) {
       planMeta.textContent = "No plan loaded for this season yet.";
       emptyState.hidden = false;
@@ -1859,7 +1860,8 @@
     if (oldNote) oldNote.remove();
     previewMap.innerHTML = '<p class="sp-preview-loading">Working out the day…</p>';
     try {
-      const q = new URLSearchParams({ code: row.code });
+      // A probe row has no property yet: the typed address stands in.
+      const q = row.probe ? new URLSearchParams({ address: row.address }) : new URLSearchParams({ code: row.code });
       if (bucket) q.set("bucket", bucket);
       const response = await fetch(`${base()}/preview/${date}?${q}`, { cache: "no-store" });
       const data = await response.json();
@@ -1871,8 +1873,12 @@
       renderPreviewStops(data);
       previewMap.innerHTML = "";
       await drawDayMap(previewMap, previewStops, data.day, { line: data.line });
-      previewAdd.disabled = false;
-      previewAdd.textContent = `Add to ${prettyDate(date)} ${data.bucket}`;
+      // The plan's Add is for a property record. A caller is booked from
+      // the probe row, which makes the record — so the preview is look-only.
+      previewAdd.disabled = Boolean(row.probe);
+      previewAdd.textContent = row.probe
+        ? "Book it from the probe row"
+        : `Add to ${prettyDate(date)} ${data.bucket}`;
     } catch (error) {
       if (seq !== previewSeq) return;
       previewMap.innerHTML = "";
@@ -2140,6 +2146,45 @@
   });
   el("bookingWindowReset").addEventListener("click", () => {
     saveBookingWindow({ publicBookingFrom: "", publicBookingThrough: "" });
+  });
+
+  // ---- Stops per half-day (the plan's bucketCap) -----------------------
+  //
+  // The number the board's "5 / 5" counts read against, and the one the
+  // booking page refuses a sixth stop on. Until now it was set at import
+  // and nowhere else.
+
+  const capForm = el("capForm");
+  const capInput = el("capInput");
+  const capStatus = el("capStatus");
+
+  function renderCap(plan) {
+    capForm.hidden = !plan;
+    capStatus.hidden = !plan;
+    if (!plan) return;
+    capInput.value = plan.bucketCap;
+    capStatus.textContent = `Currently ${plan.bucketCap} per half-day.`;
+  }
+
+  capForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = el("capSave");
+    button.disabled = true;
+    try {
+      const response = await fetch(`${base()}/caps`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bucketCap: Number(capInput.value) })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't save."]).join(" "));
+      showToast(`Saved — ${data.bucketCap} stops per half-day.`);
+      load(); // every "x / cap" count on the board just changed
+    } catch (error) {
+      showToast(error.message, "bad");
+    } finally {
+      button.disabled = false;
+    }
   });
 
   // ---- Assignment preflight (stage 0, read-only) -------------------
@@ -2722,10 +2767,22 @@
         + `<td>${escapeHtml(bucketVerdictText(buckets.morning))}</td>`
         + `<td>${escapeHtml(bucketVerdictText(buckets.afternoon))}</td>`
         + `<td>${offeredCell}</td>`;
+      // See it on the day — every row. The same map the unplanned list
+      // opens, with the typed address dropped in as the new stop, so a
+      // number in this table can be checked against the route it
+      // describes before anyone books or argues with it.
+      const bookCell = document.createElement("td");
+      const see = document.createElement("button");
+      see.type = "button";
+      see.className = "sp-window-btn";
+      see.textContent = "See it on the day";
+      see.addEventListener("click", () => {
+        openPreview({ probe: true, code: "PROBE", customerName: "New caller", address: shown, days: data.days }, day.date, null);
+      });
+      bookCell.appendChild(see);
       // Book, right here. Only on offered days — an unoffered day is
       // the engine saying no, and a button on it would book what the
       // table just refused. The Morning / Afternoon columns say why.
-      const bookCell = document.createElement("td");
       if (day.offered) {
         const btn = document.createElement("button");
         btn.type = "button";

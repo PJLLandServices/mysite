@@ -25469,6 +25469,26 @@ async function orderDayForDriving(rows) {
     }
   }
 
+  // The per-half-day cap. Plan-level, and until now only settable by
+  // re-importing the plan. Availability reads the plan on every request,
+  // so a change here is live for the next customer to load the calendar.
+  const seasonPlanCapMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/caps$/);
+  if (seasonPlanCapMatch && req.method === "PATCH") {
+    try {
+      const session = await requireUser(req);
+      const body = await parseRequestBody(req);
+      const result = await seasonPlans.setBucketCap(
+        seasonPlanCapMatch[1], Number(seasonPlanCapMatch[2]),
+        { bucketCap: body.bucketCap },
+        { actor: session?.email || session?.name || "admin" }
+      );
+      const plan = await resolveSeasonPlan(seasonPlanCapMatch[1], Number(seasonPlanCapMatch[2]));
+      return sendJson(res, 200, { ok: true, plan, warnings: result.warnings, bucketCap: result.bucketCap });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't set the cap."] });
+    }
+  }
+
   // Hand ordering inside a bucket. Deliberately does NOT re-sequence for
   // storage afterwards: re-running the optimiser over an order Patrick just
   // set by hand is exactly the thing this feature exists to stop.
@@ -25709,9 +25729,16 @@ async function orderDayForDriving(rows) {
       const year = Number(seasonPlanPreviewMatch[2]);
       const date = seasonPlanPreviewMatch[3];
       const query = new URL(req.url, baseUrlFromReq(req)).searchParams;
-      const code = normalizeString(query.get("code"), 40);
       const askedBucket = normalizeString(query.get("bucket"), 10);
-      if (!code) return sendJson(res, 422, { ok: false, errors: ["Which property? No code was given."] });
+      // A typed address — the probe's caller, not yet a property — previews
+      // as a stand-in stop under PROBE_CODE: same day builder, same map,
+      // nothing written (Patrick, 2026-09-21: "on my app, i can select -
+      // see it on the day. Can we make the provision for this the same?").
+      // A real code wins when both are given.
+      const PROBE_CODE = "PROBE";
+      const probeAddress = normalizeString(query.get("address"), 320);
+      const code = normalizeString(query.get("code"), 40) || (probeAddress ? PROBE_CODE : "");
+      if (!code) return sendJson(res, 422, { ok: false, errors: ["Which property? No code or address was given."] });
 
       const driven = await assignments.drivenPlan(season, year);
       if (!driven) return sendJson(res, 404, { ok: false, code: "no_plan", errors: ["No plan loaded for that season."] });
@@ -25719,6 +25746,18 @@ async function orderDayForDriving(rows) {
 
       const all = await properties.list();
       const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+      if (code === PROBE_CODE) {
+        const geo = await geocode(probeAddress);
+        byCode.set(PROBE_CODE, {
+          code: PROBE_CODE,
+          id: PROBE_CODE,
+          customerName: "New caller",
+          address: geo.coords?.formattedAddress || probeAddress,
+          coords: geoFilter.coordsAreResolved(geo.coords)
+            ? { lat: geo.coords.lat, lng: geo.coords.lng, source: geo.coords.source }
+            : null
+        });
+      }
       const property = byCode.get(code);
       if (!property) return sendJson(res, 404, { ok: false, errors: [`No property with code ${code}.`] });
       if (seasonPlans.plannedCodes(driven.stored).has(code)) {

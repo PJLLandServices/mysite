@@ -271,10 +271,20 @@ async function addedDriveMinutes(candidate, points, opts = {}) {
   // fallback instead shifts every insertion cost by however far the yard
   // is from the middle of town.
   const base = opts.base || await routeOrigin();
+  // Where the walk through THESE stops begins and ends. A whole day is a
+  // round trip from the yard; one HALF of it is not — the afternoon is
+  // entered from the morning's last stop, and the morning leaves for the
+  // afternoon's first. Pricing a half from the yard put a Forest Hill
+  // house at +39 into an afternoon the truck reaches from York Mills,
+  // two kilometres away (Patrick, 2026-09-21: "the address is literally
+  // on the way to the next house there. where is it getting the 39
+  // minutes from"). Callers scoring one bucket pass its neighbours.
+  const start = usable(opts.start) ? opts.start : base;
+  const end = usable(opts.end) ? opts.end : base;
   const stops = (points || []).filter(usable);
   if (!stops.length) return { minutes: 0, position: 0, positions: 0, emptyDay: true };
 
-  const route = [base, ...stops, base];
+  const route = [start, ...stops, end];
   const gaps = route.length - 1;
 
   if (exact) {

@@ -2,6 +2,43 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-21, same hour (The truck does not go home at noon; the half-day cap gets a dial):**
+Patrick, with the day preview open — six planned stops through North York and downtown, the
+new house numbered 5 between Casa Loma and York Mills: *"its literally perfect density on that
+appointment"* — while the booking page priced it at **+39 min** and offered only the afternoon,
+and only after widening to 40. Two causes on one day. **(1)** The morning held five planned
+stops at the plan's cap of 5, so the engine could not put the house where it belongs; the cap
+was set at import and no screen could change it. **(2)** With the morning closed, the engine
+costed the house against the AFTERNOON's stops — scored, like every bucket since 2026-09-07,
+as its own round trip from the yard. Newmarket → Forest Hill → Don Mills is thirty-nine extra
+minutes; York Mills → Forest Hill → Don Mills, which the truck would actually drive, is a
+handful. Fixed: `geoFilter.addedDriveMinutes()` takes `start`/`end` endpoints, and
+`listAvailableSlots` scores the afternoon from the morning's last stop and the morning as
+leaving for the afternoon's first (stored bucket order is driving order, so those are the real
+handover); the leg cap orders from the same entry point. Whole-day scoring (the probe's
+number, the unplanned ranker, empty-bucket fallback) is unchanged — it was never wrong. And
+the cap: `seasonPlans.setBucketCap()` behind `PATCH /api/season-plans/:season/:year/caps`,
+with a **Stops per half-day** control on the plan screen beside the booking window (1–12;
+`dayCap` follows to 2× so the review screen does not warn on every day). Availability reads
+the plan per request, so a change is live for the next calendar load. Coverage:
+`scripts/test-bucket-endpoints.mjs` (13 assertions, in `build:check`; fails on the old
+engine): Patrick's day as a fixture — from the yard the afternoon reads over the corridor,
+from York Mills inside it, the whole day says +≤5; the engine offers the afternoon at the
+TIGHT corridor with no widening and the morning reads `full`; a cap of six opens the morning
+at +≤5; the setter refuses 0, the route and the control exist. `test-geo-availability` (75),
+`booking-guards`, `commercial-slots`, `season-plan-buckets`, `day-preview`, `unplanned-routing`,
+`season-plan-moves` unchanged and green. **Same hour, "See it on the day" from the probe**
+(Patrick: *"on my app, i can select - see it on the day. Can we make the provision for this the
+same?"*): every probe row now carries the button the unplanned list has. The preview route
+takes `address` as well as `code` — a typed address geocodes into a stand-in stop under
+`PROBE`, built through the same `resolvePlanDay` and drawn on the same map; a real code wins
+when both are given; nothing is written. The dialog's Add is disabled for a stand-in (the
+caller is booked from the probe row, which makes the record). `test-day-map-preview.mjs`
+gains 5 source guards (54). **Patrick's acceptance test — not yet walked:** probe
+46 Dunvegan Rd on the plan; that day's Afternoon column should now read a single-digit "+N",
+not 39; press See it on the day — the map should show the house numbered between Casa Loma
+and York Mills. Then set Stops per half-day to 6, Save, probe again — the Morning column should read
+"open · +N" and the public calendar should offer the day to a Toronto customer.
 **2026-09-21 (The probe said "yes, +2 min" for a day the engine refused):** Patrick, on the
 season-plan probe: *"i have the ability to book 46 dunvegan rd on thursday 22 but its not
 allowing me to"* — the table read **R11 · 2026-10-22 · 6 stops · 2 min · yes**, and the Book
