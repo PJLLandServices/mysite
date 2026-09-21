@@ -91,7 +91,8 @@
     "test:messages": "node scripts/test-messages.mjs",
     "test:book": "node scripts/test-book.mjs",
     "test:klarna": "node scripts/test-klarna-financing.mjs",
-    "test:booking-funnel": "node scripts/test-booking-funnel.mjs"
+    "test:booking-funnel": "node scripts/test-booking-funnel.mjs",
+    "test:next-action": "node --experimental-strip-types scripts/test-next-action.mjs"
   },
   "engines": {
     "node": ">=18"

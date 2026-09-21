@@ -2,6 +2,28 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-21, later still (A settled deposit is not a settled job):** Patrick named six situations
+to test Next action against: a brand-new project with no design; McDonald's Dundalk (accepted,
+paid, 0 of 16 tasks); accepted with no installation date; scheduled and part-done; complete with
+money outstanding; complete and fully paid. Ran all six against the real logic rather than
+reasoning about them — five read correctly, and **the second one found a bug that wasn't in Next
+action at all.** With a deposit invoice settled in full, the Billing figure read **"Paid"**,
+letter-for-letter identical to a job that owes nothing — on a job with the whole balance still to
+raise and not a task done. Next action got it right ("Schedule installation"), but the figure
+beside it said the money was in. Fixed: a settled invoice whose `invoiceRole` is `deposit` now
+reads **"Deposit paid · balance not invoiced yet"**. Only a settled non-deposit invoice says
+"Paid".
+`scripts/test-next-action.mjs` pins all six situations plus two more the six implied — a balance
+invoice still in DRAFT is Patrick's action rather than a wait on the customer, and a sold job
+carrying a draft revision keeps saying "Finish the install". 25 assertions.
+`test-app-shell-rebuild.mjs` grew to 40, now creating a real deposit invoice and settling it
+through the real payment ledger (`invoices.addPayment`) to prove the deposit wording end to end.
+**Deliberately NOT in `build:check`:** the unit test needs Node's type stripping (22+) and CI
+pins Node 20 — in the gate it would fail for a reason unrelated to the code under test. Caught
+before pushing, not after a red CI run. It runs as `npm run test:next-action`, and the same logic
+is covered end-to-end through the real bundle by the browser suite.
+**Patrick's acceptance test — not yet walked:** open a job with a paid deposit and confirm the
+Billing figure says "Deposit paid", not "Paid".
 **2026-09-21, after the first walkthrough (The overview becomes action-oriented):** Patrick, on
 the rebuilt workspace: *"This is dramatically better. It now feels like an actual project-
 management application instead of a long administrative form... I would keep this direction. I'd

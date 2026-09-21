@@ -56,11 +56,16 @@ export function ProjectWorkspace() {
   const design = data.siteBuilderSummary;
   const goTab = (tab: string) => navigate(`/app/projects/${encodeURIComponent(p.id)}/${tab}`);
 
-  const billing = invoice
-    ? Number(invoice.balanceDue) > 0
+  // A settled DEPOSIT is not a settled job. Reading "Paid" on a job with
+  // the balance still to raise is the kind of glance that loses money,
+  // so the deposit case says what it actually is.
+  const billing = !invoice
+    ? { value: "—", hint: "not invoiced yet", tone: "muted" as const }
+    : Number(invoice.balanceDue) > 0
       ? { value: money(invoice.balanceDue), hint: "outstanding", tone: "money" as const }
-      : { value: "Paid", hint: invoice.paidAt ? shortDate(invoice.paidAt) : "nothing outstanding", tone: "default" as const }
-    : { value: "—", hint: "not invoiced yet", tone: "muted" as const };
+      : invoice.invoiceRole === "deposit"
+        ? { value: "Deposit paid", hint: "balance not invoiced yet", tone: "default" as const }
+        : { value: "Paid", hint: invoice.paidAt ? shortDate(invoice.paidAt) : "nothing outstanding", tone: "default" as const };
 
   return (
     <>

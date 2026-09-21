@@ -1,5 +1,8 @@
-import type { InvoiceSummary, LinkedQuote, ProjectDetail, SiteBuilderSummary } from "./api";
-import { money, taskProgress } from "./format";
+import type { InvoiceSummary, LinkedQuote, ProjectDetail, SiteBuilderSummary } from "./api.ts";
+// Explicit .ts extensions: this module is pure logic with no DOM, so
+// scripts/test-next-action.mjs runs it directly under Node's type
+// stripping. Vite resolves these identically.
+import { money, taskProgress } from "./format.ts";
 
 /* "What do I need to do next?" — the question the overview has to answer
    before any other.

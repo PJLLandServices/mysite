@@ -1,5 +1,5 @@
-import type { ProjectStatus } from "./api";
-import type { Tone } from "../ui/primitives";
+import type { ProjectStatus } from "./api.ts";
+import type { Tone } from "../ui/primitives.tsx";
 
 export function money(n: number | null | undefined) {
   return "$" + (Number(n) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });

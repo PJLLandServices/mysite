@@ -217,6 +217,50 @@ try {
   ok("workspace tabs are present", /system design/i.test(wsText) && /closeout/i.test(wsText), wsText.slice(0, 500));
   ok("navigating into a project did not leave the app", page.url().includes("/app/projects/"));
 
+  // ---- 6a0. a settled DEPOSIT is not a settled job -------------------
+  // Patrick's scenario 2 (McDonald's Dundalk: accepted, paid, 0 of 16
+  // tasks) caught this: the Billing figure read a fully-paid DEPOSIT as
+  // "Paid", identical to a job that owes nothing — with the balance
+  // still to raise. A glance that loses money.
+  {
+    const projectsLib = require(path.join(ROOT, "server", "lib", "projects.js"));
+    const quotesLib = require(path.join(ROOT, "server", "lib", "quotes.js"));
+    const invoicesLib = require(path.join(ROOT, "server", "lib", "invoices.js"));
+
+    const q = await quotesLib.create({
+      type: "project_proposal", customerEmail: "deposit-probe@example.com", branch: "direct_residential",
+      lineItems: [{ id: "li_1", label: "Install", qty: 1, unitPrice: 20000 }],
+      subtotal: 20000, hst: 2600, total: 22600
+    });
+    const dep = await projectsLib.create({ name: "Rebuild probe — deposit paid", customerName: "Deposit Co", sourceQuoteId: q.id });
+    const inv = await invoicesLib.createDraft({
+      quoteId: q.id, projectId: dep.id, invoiceRole: "deposit",
+      customerEmail: "deposit-probe@example.com", lineItems: [{ label: "Deposit", qty: 1, price: 9000, lineTotal: 9000 }]
+    });
+    // Settle it in full through the real payment ledger.
+    const invTotal = (await invoicesLib.get(inv.id)).total;
+    const paid = await invoicesLib.addPayment(inv.id, { amount: invTotal, method: "cash", by: "test" });
+    ok("the deposit probe's payment was recorded", paid?.ok !== false, JSON.stringify(paid?.errors || paid));
+
+    const storePath = path.join(DATA, "projects.json");
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    for (const rec of store) {
+      if (rec.id !== dep.id) continue;
+      rec.status = "active";
+      rec.proposalSnapshot = { quoteId: q.id, version: 1, total: 22600, acceptedAt: "2026-09-10T12:00:00Z", proposalSections: [] };
+      rec.systemDesign = { areas: [{ aid: "a1" }], version: 1 };
+    }
+    fs.writeFileSync(storePath, JSON.stringify(store, null, 2));
+
+    await page.goto(`${BASE}/app/projects/${encodeURIComponent(dep.id)}`, { waitUntil: "networkidle" });
+    await page.waitForSelector("text=Contract value", { timeout: 10000 });
+    await page.waitForTimeout(250);
+    const depText = await page.locator("main").innerText();
+    ok("a paid deposit reads as 'Deposit paid', not 'Paid'", /deposit paid/i.test(depText), depText.slice(0, 500));
+    ok("and it says the balance is still to come", /balance not invoiced yet/i.test(depText), depText.slice(0, 500));
+    ok("a paid deposit does not end the job", !/nothing outstanding/i.test(depText), depText.slice(0, 500));
+  }
+
   // ---- 6a. a sold job is never told to "send the proposal" -----------
   // A project carrying a proposalSnapshot came from an ACCEPTED
   // proposal. If a revision is raised afterwards the linked quote goes
