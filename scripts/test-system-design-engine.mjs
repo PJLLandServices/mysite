@@ -26,9 +26,16 @@
 //      in non-integer geometry is reported by path rather than failed on.
 //      See classifyDiffs() for how narrowly that is drawn.
 //
-//   D. NET INTEGRITY. Deliberately break the engine nine different ways
+//   D. NET INTEGRITY. Deliberately break the engine twelve different ways
 //      and require every one to be caught. A safety net nobody has thrown
 //      anything at is a guess.
+//
+//      Twelve is every deliberate rule in the engine that a fixture can
+//      reach. A thirteenth was tried during development and is NOT here:
+//      plan()'s own `|| 18` drip row-spacing fallback is unreachable,
+//      because familyDefaults() has always set that field by the time
+//      plan() reads it. It is listed as UNREACHABLE at the bottom of this
+//      file's run so the count stays honest rather than quietly rounded.
 //
 // A and B need Chromium. With --no-browser they are skipped and the run
 // is reported as incomplete, because C alone does not prove the page still
@@ -181,11 +188,16 @@ console.log("\nC. Extracted engine under Node (no browser, no DOM)");
 }
 
 // ── D. Does the comparison actually catch a broken engine? ───────────
-//
-// Each entry is a one-line change to a real formula, constant or SKU. A
-// mutation that slips through is a hole in the net, and the whole point of
-// the net is that it has none.
 console.log("\nD. Net integrity — deliberately broken engines that MUST be caught");
+
+// Every deliberate rule in the engine that a fixture can reach. Each entry
+// is a one-line change to a real formula, constant or SKU. A mutation that
+// slips through is a hole in the net, and the whole point of the net is
+// that it has none.
+//
+// These are the SAME mutations that were run by hand against the old
+// in-page engine while the fixtures were being built — kept here so they
+// run on every future change rather than once, by me, on a Sunday.
 const MUTATIONS = [
   ["zone packer epsilon removed", "sum <= cap + 0.001", "sum <= cap"],
   ["fill's own ceiling test loses its epsilon", "acc + g > cap + 0.001", "acc + g > cap"],
@@ -195,7 +207,26 @@ const MUTATIONS = [
   ["lateral estimate 0.6 -> 0.65", "* 0.6;  // rough trunk+branch", "* 0.65;  // rough trunk+branch"],
   ["manifold box grouping 4 -> 3 valves", "const MANIFOLD_PER_BOX = 4;", "const MANIFOLD_PER_BOX = 3;"],
   ["swing arm SKU changed", "swingArm:'SJ506',", "swingArm:'SJ507',"],
-  ["drip row-spacing default 18 -> 16", "if(a.dripRowIn==null) a.dripRowIn=18;", "if(a.dripRowIn==null) a.dripRowIn=16;"]
+  ["drip row-spacing default 18 -> 16", "if(a.dripRowIn==null) a.dripRowIn=18;", "if(a.dripRowIn==null) a.dripRowIn=16;"],
+  // The greedy fill is the fallback the packer uses when the balancing
+  // pass cannot split a run exactly k ways. It has its OWN copy of the
+  // epsilon, and it needs one.
+  ["greedy fill loses its epsilon", "acc + hd.gpm > cap + 0.001", "acc + hd.gpm > cap"],
+  // A hand-picked valve is reported as over the ceiling, never re-split.
+  // Without the epsilon a valve sitting exactly at its limit gets flagged
+  // as overloaded.
+  ["hand-zoned over-ceiling report loses its epsilon", "g > cap + 0.001 ? i : -1", "g > cap ? i : -1"],
+  // The default 10% drip overage, applied when a bed does not name one.
+  ["drip overage default 10% -> 12%", "if(a.overagePct==null) a.overagePct=10; if(a.dripRowIn==null)", "if(a.overagePct==null) a.overagePct=12; if(a.dripRowIn==null)"]
+];
+
+// Tried during development and deliberately NOT in the list above: this
+// one cannot be caught by any fixture because no saved design can reach
+// the code. Asserted, not assumed — if it ever becomes reachable, the
+// assertion below fails and it should join MUTATIONS.
+const UNREACHABLE = [
+  ["plan()'s own drip row-spacing fallback", "parseFloat(a.dripRowIn)||18", "parseFloat(a.dripRowIn)||16",
+   "familyDefaults() always sets a.dripRowIn before computePlan() reads it"]
 ];
 
 const source = fs.readFileSync(ENGINE, "utf8");
@@ -223,8 +254,29 @@ for (const [i, [label, from, to]] of MUTATIONS.entries()) {
     ok = false;
   }
 }
+
+// The unreachable one, checked rather than taken on trust.
+for (const [label, from, to, why] of UNREACHABLE) {
+  if (!source.includes(from)) {
+    console.error(`  FAIL ${label} — the code this mutation edits is not in the engine any more`);
+    ok = false;
+    continue;
+  }
+  const file = path.join(tmp, `u-${label.replace(/\W+/g, "-")}.cjs`);
+  fs.writeFileSync(file, source.replace(from, to));
+  const diffs = classifyDiffs(against(runAllInNode(require(file)))).real;
+  if (diffs.length) {
+    console.error(`  FAIL ${label} is REACHABLE after all (${diffs.length} field(s) moved) — it belongs in MUTATIONS`);
+    ok = false;
+  } else {
+    console.log(`  ok   unreachable, as documented: ${label}`);
+    console.log(`       ${why}`);
+  }
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 summary.push(["broken engines caught", `${caught} of ${MUTATIONS.length}`]);
+summary.push(["unreachable rules, confirmed unreachable", `${UNREACHABLE.length} of ${UNREACHABLE.length}`]);
 
 // ── Summary ──────────────────────────────────────────────────────────
 const f = runAllInNode(require(ENGINE)).fixtures;

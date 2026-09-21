@@ -17,8 +17,10 @@ compared exactly to the cent, nothing is rounded, and ordering is normalized onl
 carries no meaning: head order, zone order and area order are all decisions (zones are cuts in
 the head sequence; station numbers come from zone position), so they are left alone.
 **A net nobody has thrown anything at is a guess**, so thirteen one-line changes were made to the
-live engine and the golden master re-run against each. **Three were not caught**, which is the
-point of doing it: the zone packer's `+ 0.001` epsilon survived every fixture, because 1.3 x 6
+live engine and the golden master re-run against each. All thirteen are now IN the committed test
+rather than having been run once by hand — **12 as mutations that must be caught, and the 13th
+asserted to be unreachable**, so the number in the report and the number in the story are the same
+number. **Three were not caught on the first pass**, which is the point of doing it: the zone packer's `+ 0.001` epsilon survived every fixture, because 1.3 x 6
 lands dead on 7.8 with no float drift at all. Searched the real Hunter PGP flow table for sums
 that DO drift (2.4 + 2.5 + 3.0 + 0.8 is 8.700000000000001) and added three fixtures on them; all
 three epsilons — the fill's, the balancer's, and the hand-zoned over-ceiling report's — are now
@@ -54,7 +56,8 @@ a PATCH that rewrites a quote cannot, and the two do not belong in the same file
 | extracted engine, in Chromium, vs the golden master | **identical, field for field** |
 | the System Builder page itself, vs the golden master | **identical, field for field** |
 | extracted engine under Node, no browser | every count, quantity and cent exact |
-| deliberately broken engines caught | 9 of 9 |
+| deliberately broken engines caught | 12 of 12 |
+| rules asserted unreachable (and so not mutatable) | 1 of 1 |
 
 The first two are run in the SAME runtime the golden master was recorded in, so there is one
 variable and no allowance at all. The Node run has exactly one difference, reported by path
@@ -63,6 +66,27 @@ differs by one bit between Chromium 141 and Node 22** — the language spec perm
 a money path, nothing that is a whole number, and the tolerance that allows it is a billionth,
 absolute: a nanometre, six orders of magnitude below the smallest deliberate quantity in the
 engine.
+
+**Comparing a REAL design, not only the fixtures** (`scripts/compare-real-design.mjs`): loads the
+System Builder twice in one browser — once as it stands on `origin/main` with the engine still
+inline, once from the working tree with the engine extracted — hands both the SAME saved design
+blob, the same catalog and the same form values, drives both through `restoreState()` (the path
+taken when a project is opened), and diffs every figure: stations, valves, splits, per-zone GPM,
+valve grouping, head counts, drip and lateral footage, every BOM line quantity, and the BOM total
+to the cent. It then does the save-and-reopen check in both: `serializeState()` → `restoreState()`
+→ recompute, requiring every figure to come back the same AND the re-serialized blob to be
+byte-for-byte identical. **Nothing is written anywhere** — no server is contacted, every API call
+is answered with an empty object, so it cannot touch a live project. Negative-tested by breaking
+the extracted engine (manifold grouping 4 → 3) and confirming it goes red on 55 fields and a
+$21.42 BOM difference.
+
+**Fixture privacy, checked rather than asserted:** scanned the committed fixtures and golden
+master for emails, phone numbers, Canadian postal codes, street-address shapes and known local
+names — **none**. Every area name is invented ("Front lawn", "Bed A", "Lot frontage"). The only
+person named is Patrick, in a comment describing his own 200 ft roll rule, as throughout the
+codebase. The frozen parts snapshot carries sku/description/priceCents/unit/category for 46 SKUs,
+every value identical to the already-committed `parts.json`, with `supplierIds` deliberately left
+out — so it adds no exposure that the repo did not already have. No binaries, no attachments.
 
 Coverage: 92 valves, 157 heads, 309 BOM lines and $19,925.47 of materials across the fixtures.
 `test:sitebuilder` (the existing split + lateral walkthroughs, 101 assertions including "no page
@@ -88,6 +112,13 @@ the drawing tools and the rest of the JS are still inline.
 
 **NOT started, per Patrick's instruction:** Phase 2 — whether the existing builder can live
 inside a full-width workspace route without breaking its full-screen drawing tools.
+
+**No preview URL is possible from here, and saying so is part of the record:** the Render service
+is configured in Render's dashboard, not in the repo (there is no `render.yaml`), so PR previews
+cannot be turned on from a commit; and `server/data/*` is gitignored, so a fresh preview would
+deploy with **no projects in it at all** — nothing to walk. `compare-real-design.mjs` exists
+because it answers the same question more strictly and without standing up a second copy of the
+customer database to do it.
 
 **Patrick's acceptance test — not yet walked:** open the System Builder on a real project, check
 the zone count, the GPM figures and the BOM total read exactly as they did yesterday, then save
