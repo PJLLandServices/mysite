@@ -410,6 +410,34 @@
     `;
   }
 
+  // Other suppliers' prices for this part. The editable price cell shows
+  // the EFFECTIVE price — the primary supplier's, per lib/part-supplier-
+  // prices.js — so anything quoted by a different supplier would other-
+  // wise be invisible. Shown small under the price, cheapest first, so a
+  // supplier worth switching to is obvious at a glance.
+  function altPricesHtml(p) {
+    const map = (p && p.supplierPrices) || {};
+    const ids = effectiveSupplierIds(p);
+    const primary = ids[0] || "";
+    const rows = Object.entries(map)
+      .filter(([supId]) => supId !== primary)
+      .map(([supId, rec]) => ({ supId, cents: Number(rec && rec.priceCents) }))
+      .filter((r) => Number.isFinite(r.cents))
+      .sort((a, b) => a.cents - b.cents);
+    if (!rows.length) return "";
+    const effective = Number(p.priceCents);
+    return `<span class="ps-alt-prices">` + rows.map((r) => {
+      const sup = state.suppliers.find((s) => s.id === r.supId);
+      const name = sup ? sup.name : r.supId;
+      const cheaper = Number.isFinite(effective) && r.cents < effective;
+      // Their own part number when it differs from ours — the branch
+      // can't look the part up under our SKU.
+      const theirSku = (map[r.supId] && map[r.supId].supplierSku) || "";
+      const skuBit = theirSku && theirSku !== p.sku ? `<span class="ps-alt-sku">${escapeHtml(theirSku)}</span> ` : "";
+      return `<span class="ps-alt-price${cheaper ? " is-cheaper" : ""}" title="${escapeHtml(name)}${theirSku ? " part " + escapeHtml(theirSku) : ""} quoted ${fmtCents(r.cents)}${cheaper ? " — cheaper than the primary supplier" : ""}">${escapeHtml(name)} ${skuBit}${fmtCents(r.cents)}</span>`;
+    }).join("") + `</span>`;
+  }
+
   function renderRow(p, supplierOptions) {
     const ids = effectiveSupplierIds(p);
     const primary = ids[0] || "";
@@ -442,6 +470,7 @@
         <td class="ps-price-cell">
           ${priceIndicator}
           <button type="button" class="ps-price ps-price-edit" data-sku="${escapeHtml(p.sku)}" data-cents="${Number(p.priceCents) || 0}" aria-label="Edit price for ${escapeHtml(p.sku)}">${fmtCents(p.priceCents)}</button>
+          ${altPricesHtml(p)}
         </td>
         <td class="ps-supplier-cell">
           <select class="ps-supplier-select ${isMissing ? "is-missing" : ""}" data-sku="${escapeHtml(p.sku)}">
@@ -852,7 +881,7 @@
         revertHtml = `<button type="button" class="ps-price-revert" data-sku="${escapeHtml(sku)}" data-baseline-cents="${basePrice}" title="Price changed from ${fmtCents(basePrice)}. Click to revert." aria-label="Revert price to ${fmtCents(basePrice)}">&bull;</button>`;
       }
     }
-    cell.innerHTML = `${revertHtml}<button type="button" class="ps-price ps-price-edit" data-sku="${escapeHtml(sku)}" data-cents="${Number(part.priceCents) || 0}" aria-label="Edit price for ${escapeHtml(sku)}">${fmtCents(part.priceCents)}</button>`;
+    cell.innerHTML = `${revertHtml}<button type="button" class="ps-price ps-price-edit" data-sku="${escapeHtml(sku)}" data-cents="${Number(part.priceCents) || 0}" aria-label="Edit price for ${escapeHtml(sku)}">${fmtCents(part.priceCents)}</button>${part ? altPricesHtml(part) : ""}`;
   }
 
   function cssEscape(s) {

@@ -995,3 +995,28 @@
   .ps-sel-supplier { flex: 1; min-width: 0; }
   .ps-sel-toolbar .ps-action--primary { flex: 1 1 auto; justify-content: center; }
 }
+
+/* Other suppliers' prices, under the effective (primary supplier's) price.
+   Small and quiet by default; a cheaper alternative is coloured so a
+   supplier worth switching to reads at a glance. */
+.ps-alt-prices {
+  display: block;
+  margin-top: 2px;
+  line-height: 1.25;
+}
+.ps-alt-price {
+  display: block;
+  font-size: 11px;
+  color: #6b7280;
+  white-space: nowrap;
+}
+.ps-alt-price.is-cheaper {
+  color: #15803d;
+  font-weight: 600;
+}
+/* The supplier's own number for the part, when it differs from our SKU. */
+.ps-alt-sku {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  color: #4b5563;
+}

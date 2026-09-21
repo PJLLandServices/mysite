@@ -149,6 +149,7 @@ const suppliers = require("./lib/suppliers");
 const materialLists = require("./lib/material-lists");
 const projects = require("./lib/projects");
 const partSuppliers = require("./lib/part-suppliers");
+const partSupplierPrices = require("./lib/part-supplier-prices");
 const partsLib = require("./lib/parts");
 const purchaseOrders = require("./lib/purchase-orders");
 const quoteRequests = require("./lib/quote-requests");
@@ -463,8 +464,40 @@ function rebuildCatalogFromOverrides({ initial = false } = {}) {
   // Layer supplier assignments on top. mergeIntoCatalog mutates in place
   // and also normalises missing supplierIds to [].
   partSuppliers.mergeIntoCatalog(PARTS.parts, supplierOverrides);
+  // Then per-supplier prices (lib/part-supplier-prices.js). MUST run
+  // after the assignment merge: the effective price is the PRIMARY
+  // supplier's, and the primary is supplierIds[0].
+  let supplierPriceMap = {};
+  try {
+    const pricePath = path.join(__dirname, "data", "part-supplier-prices.json");
+    if (fsSync.existsSync(pricePath)) {
+      supplierPriceMap = JSON.parse(fsSync.readFileSync(pricePath, "utf8") || "{}");
+    }
+  } catch (err) {
+    console.warn("[parts] could not read part-supplier-prices.json:", err?.message);
+  }
+  partSupplierPrices.mergeIntoCatalog(PARTS.parts, supplierPriceMap, {
+    editedMap: (catalogOverrides && catalogOverrides.edited) || {}
+  });
   if (!initial) CATALOG_VERSION++;
 }
+
+// One-time seed of per-supplier prices from quote requests that were
+// already applied into the catalog's single price field (they pre-date
+// lib/part-supplier-prices.js). No-op once the file exists, so a restart
+// never re-seeds over live data.
+(async function seedPartSupplierPrices() {
+  try {
+    const records = await quoteRequests.list({});
+    const result = await partSupplierPrices.seedIfEmpty(records);
+    if (result.seeded) {
+      console.log(`[parts] seeded per-supplier prices for ${result.skus} SKU(s) from applied quote requests`);
+      rebuildCatalogFromOverrides();
+    }
+  } catch (err) {
+    console.warn("[parts] could not seed per-supplier prices:", err?.message);
+  }
+})();
 
 function fmtMoneyFromCents(cents) {
   const n = Number(cents) || 0;
@@ -1461,6 +1494,7 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/material-lists")) return "user";
   if (pathname.startsWith("/api/projects")) return "user";
   if (pathname.startsWith("/api/part-suppliers")) return "user";
+  if (pathname.startsWith("/api/part-supplier-prices")) return "user";
   if (pathname.startsWith("/api/purchase-orders")) return "user";
   if (pathname.startsWith("/api/quote-requests")) return "user";
   // Warranty claims. The CRM surface is admin/tech; the PUBLIC intake
@@ -15075,6 +15109,55 @@ async function handleApi(req, res, pathname) {
   // each part comes from (parts.json's supplierIds field is ignored — see
   // lib/part-suppliers.js for the why).
 
+  // GET /api/part-supplier-prices — every supplier's price for every SKU
+  // that has one ({ sku: { supplierId: { priceCents, source, at } } }).
+  // The catalog response already carries the effective price and a
+  // supplierPrices block per part; this is the raw store, for pages that
+  // want it without walking the whole catalog.
+  if (req.method === "GET" && pathname === "/api/part-supplier-prices") {
+    const map = await partSupplierPrices.getAll();
+    return sendJson(res, 200, { ok: true, partSupplierPrices: map });
+  }
+
+  // PATCH /api/part-supplier-prices — record prices and/or the supplier's
+  // OWN part number for many SKUs at once, without going through an RFQ.
+  // Body: { supplierId, entries: { "<our sku>": cents | { priceCents,
+  // supplierSku } }, source? }. A price-only entry keeps any part number
+  // already on file and vice versa, so this is safe to use for a pure
+  // "their number for this part is X" import.
+  if (req.method === "PATCH" && pathname === "/api/part-supplier-prices") {
+    if (!BASELINE_PARTS) return sendJson(res, 503, { ok: false, errors: ["Parts baseline not loaded."] });
+    try {
+      const payload = await parseRequestBody(req);
+      const supplierId = String((payload && payload.supplierId) || "").trim();
+      if (!supplierId) return sendJson(res, 400, { ok: false, errors: ["supplierId is required."] });
+      const entries = payload && payload.entries;
+      if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
+        return sendJson(res, 400, { ok: false, errors: ["entries must be a { sku: cents | {priceCents, supplierSku} } map."] });
+      }
+      // Unknown SKUs are reported rather than written — a typo shouldn't
+      // quietly create pricing for a part that doesn't exist.
+      const known = {};
+      const skipped = [];
+      for (const [sku, value] of Object.entries(entries)) {
+        if (PARTS && PARTS.parts && PARTS.parts[sku]) known[sku] = value;
+        else skipped.push(sku);
+      }
+      if (!Object.keys(known).length) {
+        return sendJson(res, 422, { ok: false, errors: ["None of those SKUs are in the catalog."], skipped });
+      }
+      const { recorded, unchanged } = await partSupplierPrices.recordSupplierPrices(
+        supplierId,
+        known,
+        { source: (payload && payload.source) || "manual" }
+      );
+      if (recorded.length) rebuildCatalogFromOverrides();
+      return sendJson(res, 200, { ok: true, recorded, unchanged, skipped });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record supplier prices."] });
+    }
+  }
+
   if (req.method === "GET" && pathname === "/api/part-suppliers") {
     const map = await partSuppliers.getAll();
     return sendJson(res, 200, { ok: true, partSuppliers: map });
@@ -15184,7 +15267,13 @@ async function handleApi(req, res, pathname) {
       const list = await materialLists.get(id);
       if (!list) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
       const partsMap = (PARTS && PARTS.parts) || {};
-      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap);
+      // Optional { supplierId } — one order to that supplier instead of
+      // one per assigned supplier. Both suppliers' volume discounts are
+      // all-or-nothing, so splitting a list can cost more than buying it
+      // all at the dearer branch; the dialog lets Patrick choose.
+      const planBody = await parseRequestBody(req).catch(() => ({}));
+      const forceSupplierId = planBody && planBody.supplierId ? String(planBody.supplierId) : null;
+      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId });
       // Hydrate supplier name into each draft preview so the modal can
       // render "PO for Vermeer Supply" without a follow-up fetch.
       const allSuppliers = await suppliers.list({ includeArchived: true });
@@ -15194,12 +15283,20 @@ async function handleApi(req, res, pathname) {
         supplierName: supplierById.get(d.supplierId)?.name || "(unknown supplier)",
         supplierEmail: supplierById.get(d.supplierId)?.email || ""
       }));
+      // Supplier options for the dialog's picker, plus the split preview's
+      // busiest supplier as the sensible default when nothing is chosen.
+      const supplierOptions = allSuppliers
+        .filter((sup) => !sup.archived)
+        .map((sup) => ({ id: sup.id, name: sup.name, email: sup.email || "" }));
       return sendJson(res, 200, {
         ok: true,
-        canGenerate: plan.ok,
+        canGenerate: forceSupplierId ? plan.drafts.length > 0 : plan.ok,
         previews,
-        missingSupplier: plan.missingSupplier,
-        missingSupplierLines: plan.missingSupplierLines
+        missingSupplier: forceSupplierId ? [] : plan.missingSupplier,
+        missingSupplierLines: forceSupplierId ? [] : plan.missingSupplierLines,
+        forcedSupplierId: forceSupplierId,
+        unpricedForSupplier: plan.unpricedForSupplier || [],
+        supplierOptions
       });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't plan purchase orders."] });
@@ -15217,8 +15314,16 @@ async function handleApi(req, res, pathname) {
       const list = await materialLists.get(id);
       if (!list) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
       const partsMap = (PARTS && PARTS.parts) || {};
-      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap);
-      if (!plan.ok) {
+      // Same { supplierId } option as the plan endpoint — the whole list
+      // on one supplier's order. Must be re-read here rather than trusted
+      // from the preview: the dialog and the write are separate requests.
+      const genBody = await parseRequestBody(req).catch(() => ({}));
+      const forceSupplierId = genBody && genBody.supplierId ? String(genBody.supplierId) : null;
+      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId });
+      if (forceSupplierId && !plan.drafts.length) {
+        return sendJson(res, 422, { ok: false, errors: ["Nothing to order — this list has no need lines."] });
+      }
+      if (!forceSupplierId && !plan.ok) {
         return sendJson(res, 422, {
           ok: false,
           errors: ["Cannot generate POs — some need-line SKUs have no supplier assigned."],
@@ -15239,7 +15344,8 @@ async function handleApi(req, res, pathname) {
           supplierAddress: sup?.address || "",
           sourceMaterialListIds: [list.id],
           lineItems: draft.lineItems,
-          notes: list.name ? `Generated from ${list.name} (${list.id}).` : `Generated from ${list.id}.`
+          notes: (list.name ? `Generated from ${list.name} (${list.id}).` : `Generated from ${list.id}.`)
+            + (forceSupplierId ? " Whole list ordered from this supplier." : "")
         });
         created.push(po);
       }
@@ -18878,100 +18984,81 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 422, { ok: false, errors: [`Can only apply a quoted request. This one is "${rfq.status}".`] });
       }
 
-      // Applying RFQs one at a time is last-write-wins. If another RFQ from
-      // the same material list quoted a SKU CHEAPER, applying this one
-      // would quietly RAISE the catalog price and every bid built off it —
-      // the exact opposite of "go with the cheapest". Refuse and name the
-      // cheaper source. ?force=1 overrides deliberately; apply-cheapest-
-      // quotes takes the best of each instead.
-      if (rfq.sourceMaterialListId) {
-        const applyUrl = new URL(req.url, baseUrlFromReq(req));
-        const forced = applyUrl.searchParams.get("force") === "1";
-        const sibling = await quoteRequests.list({ sourceMaterialListId: rfq.sourceMaterialListId });
-        const cmp = quoteRequests.compareQuotes(sibling, { listId: rfq.sourceMaterialListId });
-        const dearer = [];
-        for (const row of cmp.rows) {
-          if (!row.cheapest || row.cheapest.rfqId === rfq.id) continue;
-          const mine = (rfq.lines || []).find((l) => l.sku === row.sku && l.quotedPriceCents != null);
-          if (mine && mine.quotedPriceCents > row.cheapest.priceCents) {
-            dearer.push({ sku: row.sku, thisCents: mine.quotedPriceCents,
-                          cheapestCents: row.cheapest.priceCents,
-                          cheapestRfqId: row.cheapest.rfqId,
-                          cheapestSupplierName: row.cheapest.supplierName });
-          }
-        }
-        if (dearer.length && !forced) {
-          return sendJson(res, 409, {
-            ok: false,
-            dearerThanBest: dearer,
-            errors: [`${dearer.length} SKU${dearer.length === 1 ? " on this quote is" : "s on this quote are"} dearer than a quote already recorded for the same material list. Use "Apply cheapest across all quotes", or re-send with force=1 to take this one anyway.`]
-          });
-        }
-      }
+      // Per-supplier prices (lib/part-supplier-prices.js) retired the old
+      // last-write-wins problem: each supplier's quote lands in its own
+      // slot, so applying Central Pro can no longer overwrite what SiteOne
+      // quoted for the same SKU. There is nothing left to guard against —
+      // the catalog price simply follows whichever supplier is PRIMARY for
+      // that part, and every other quote is kept alongside for reference.
 
       // One price per SKU — last priced line wins if a degenerate record
       // carries duplicates. Unpriced (null) lines are simply not part of
-      // the apply set; the vendor didn't quote them.
-      const centsBySku = new Map();
+      // the apply set; the vendor didn't quote them. A SKU that has left
+      // the catalog since quoting is skipped and reported.
+      const centsBySku = {};
+      const skipped = [];
+      let pricedLines = 0;
       for (const line of rfq.lines) {
-        if (line.quotedPriceCents != null && line.sku) centsBySku.set(line.sku, line.quotedPriceCents);
+        if (line.quotedPriceCents == null || !line.sku) continue;
+        pricedLines++;
+        if (!(PARTS && PARTS.parts && PARTS.parts[line.sku])) { skipped.push(line.sku); continue; }
+        centsBySku[line.sku] = line.quotedPriceCents;
       }
-      if (!centsBySku.size) {
+      if (!pricedLines) {
         return sendJson(res, 422, { ok: false, errors: ["No quoted prices to apply — enter at least one price first."] });
       }
-
-      const applied = [];     // { sku, fromCents, toCents } — actually written
-      const unchanged = [];   // quoted price already matches the catalog
-      const skipped = [];     // SKU missing from the catalog (deleted since quoting)
-      for (const [sku, toCents] of centsBySku.entries()) {
-        const current = PARTS && PARTS.parts && PARTS.parts[sku];
-        if (!current) { skipped.push(sku); continue; }
-        const fromCents = Number(current.priceCents);
-        if (fromCents === toCents) { unchanged.push(sku); continue; }
-        try {
-          await partsLib.update(BASELINE_PARTS, sku, { priceCents: toCents }, { allowedCategories: categoriesAllowedSet() });
-          applied.push({ sku, fromCents: Number.isFinite(fromCents) ? fromCents : null, toCents });
-        } catch (err) {
-          // A failure on one SKU (validation OR a transient write error)
-          // shouldn't abort the rest — report it as skipped. NB: applied is
-          // terminal, so there is no per-SKU retry on the RFQ afterwards;
-          // a skipped price has to be fixed on the parts page. That's why
-          // the all-skipped case below refuses to mark applied at all.
-          console.warn(`[rfq-apply] ${rfq.id}: ${sku} skipped — ${err.message}`);
-          skipped.push(sku);
-        }
-      }
-      if (applied.length) rebuildCatalogFromOverrides();
-
-      const appliedCount = applied.length + unchanged.length;
-      // No progress at all, or every WRITE failed (skips with only
-      // "unchanged" passengers): leave the RFQ quoted so the apply is
-      // retryable — flipping to terminal "applied" when nothing was
-      // actually written would strand the quoted prices behind a
-      // read-only grid.
-      if (!appliedCount || (applied.length === 0 && skipped.length > 0)) {
+      if (!Object.keys(centsBySku).length) {
         return sendJson(res, 422, {
           ok: false,
-          errors: [skipped.length
-            ? `No prices could be written (${skipped.length} skipped) — the request stays quoted so you can retry.`
-            : "Nothing could be applied — the quoted SKUs are no longer in the catalog."],
+          errors: [`No prices could be written (${skipped.length} skipped) — the request stays quoted so you can retry.`],
           skipped
         });
       }
 
+      // Snapshot the EFFECTIVE (catalog-visible) price before the write so
+      // we can report which parts actually re-priced. Only parts whose
+      // primary supplier is this one will move; for the rest the quote is
+      // filed against the supplier and the catalog stays put.
+      const beforeEffective = new Map();
+      for (const sku of Object.keys(centsBySku)) {
+        const before = Number(PARTS.parts[sku] && PARTS.parts[sku].priceCents);
+        beforeEffective.set(sku, Number.isFinite(before) ? before : null);
+      }
+
+      const { recorded, unchanged } = await partSupplierPrices.recordSupplierPrices(
+        rfq.supplierId,
+        centsBySku,
+        { source: rfq.id }
+      );
+      if (recorded.length) rebuildCatalogFromOverrides();
+
+      const applied = [];      // catalog price actually moved
+      const storedOnly = [];   // filed against this supplier; catalog unchanged
+      for (const entry of recorded) {
+        const after = Number(PARTS.parts[entry.sku] && PARTS.parts[entry.sku].priceCents);
+        const before = beforeEffective.get(entry.sku);
+        if (Number.isFinite(after) && after !== before) {
+          applied.push({ sku: entry.sku, fromCents: before, toCents: after });
+        } else {
+          storedOnly.push(entry.sku);
+        }
+      }
+
+      const appliedCount = recorded.length + unchanged.length;
+
       // One audit entry for the whole batch, in the catalog.edit family so
       // it reads alongside manual price edits.
-      const detail = applied.slice(0, 6).map((a) => `${a.sku} ${fmtMoneyFromCents(a.fromCents)} → ${fmtMoneyFromCents(a.toCents)}`).join(", ");
+      const detail = applied.slice(0, 6).map((a) => `${a.sku} ${fmtMoneyFromCents(a.fromCents)} \u2192 ${fmtMoneyFromCents(a.toCents)}`).join(", ");
       await settings.recordAudit({
         who: "admin",
         action: "catalog.rfq-apply",
-        note: `${rfq.id} (${rfq.supplierName || rfq.supplierId}): ${applied.length} price${applied.length === 1 ? "" : "s"} updated${unchanged.length ? `, ${unchanged.length} unchanged` : ""}${skipped.length ? `, ${skipped.length} skipped` : ""}${detail ? ` — ${detail}` : ""}${applied.length > 6 ? ", …" : ""}`,
-        before: { rfqId: rfq.id },
-        after: { applied, unchanged, skipped }
+        note: `${rfq.id} (${rfq.supplierName || rfq.supplierId}): ${recorded.length} supplier price${recorded.length === 1 ? "" : "s"} recorded, ${applied.length} catalog price${applied.length === 1 ? "" : "s"} updated${storedOnly.length ? `, ${storedOnly.length} stored only (not this part's primary supplier)` : ""}${unchanged.length ? `, ${unchanged.length} unchanged` : ""}${skipped.length ? `, ${skipped.length} skipped` : ""}${detail ? ` \u2014 ${detail}` : ""}${applied.length > 6 ? ", \u2026" : ""}`,
+        before: { rfqId: rfq.id, supplierId: rfq.supplierId },
+        after: { applied, storedOnly, unchanged, skipped }
       });
 
       const appliedRfq = await quoteRequests.markApplied(id, { appliedCount, skippedSkus: skipped });
-      return sendJson(res, 200, { ok: true, quoteRequest: appliedRfq, applied, unchanged, skipped });
+      return sendJson(res, 200, { ok: true, quoteRequest: appliedRfq, applied, storedOnly, unchanged, skipped });
     } catch (err) {
       console.warn("[rfq] apply-to-catalog failed:", err);
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't apply quoted prices."] });

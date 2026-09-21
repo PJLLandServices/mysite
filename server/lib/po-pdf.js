@@ -23,7 +23,7 @@ const fsSync = require("node:fs");
 const path = require("node:path");
 
 const company = require("./company");
-const { formatUnit, formatVendorAddress, resolveLineDescription } = require("./format");
+const { formatUnit, formatVendorAddress, resolveLineDescription, resolveSupplierSku } = require("./format");
 
 // ---- Constants -------------------------------------------------------
 
@@ -302,7 +302,7 @@ function drawTableHeader(doc, y) {
   return ruleY + 10; // y of first row
 }
 
-function drawTableRow(doc, line, rowNum, rowY, catalog) {
+function drawTableRow(doc, line, rowNum, rowY, catalog, supplierId) {
   const { xs, widths, descWidth } = tableLayout();
   const description = resolveLineDescription(line, catalog);
   const unitLabel = formatUnit(unitFor(line.sku), line.qty);
@@ -321,9 +321,11 @@ function drawTableRow(doc, line, rowNum, rowY, catalog) {
   doc.font("Helvetica").fontSize(11).fillColor(INK_SECONDARY);
   doc.text(String(rowNum), xs.rowNum, textY, { ...opts, width: widths.rowNum });
 
-  // SKU — Courier mono, slightly smaller for density
+  // SKU — Courier mono, slightly smaller for density. Prints the number
+  // THIS supplier knows the part by when we have it (resolveSupplierSku);
+  // an order picked at their counter has to carry their number.
   doc.font("Courier").fontSize(10.5).fillColor(INK);
-  doc.text(line.sku || "—", xs.sku, textY, { ...opts, width: widths.sku });
+  doc.text(resolveSupplierSku(line, catalog, supplierId) || "—", xs.sku, textY, { ...opts, width: widths.sku });
 
   // Description — wrapping allowed (the only column that wraps)
   doc.font("Helvetica").fontSize(11).fillColor(INK);
@@ -537,7 +539,7 @@ function generatePoPdf(po, partsMap) {
         const descHeight = doc.heightOfString(description, { width: tableLayout().descWidth });
         const rowHeight = Math.max(descHeight, 14) + 20;
         rowY = ensureRowFits(doc, rowY, rowHeight, ctx);
-        rowY = drawTableRow(doc, line, i + 1, rowY, catalog);
+        rowY = drawTableRow(doc, line, i + 1, rowY, catalog, po.supplierId);
       }
 
       // ---- Totals + Notes + revision stamp (last page only) ----------

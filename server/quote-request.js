@@ -566,6 +566,22 @@
         priceHtml = `<strong>${escapeHtml(fmtCents(toCents))}</strong>`;
         noteHtml = `<span class="qr-apply-note qr-apply-note--skip">not in catalog — will be skipped</span>`;
       } else {
+        // The catalog price follows the part's PRIMARY supplier. When this
+        // RFQ is from someone else, applying files their price alongside
+        // without moving the catalog — say so here rather than showing a
+        // ▲/▼ that never happens.
+        const primaryId = Array.isArray(part.supplierIds) && part.supplierIds.length ? part.supplierIds[0] : null;
+        const isPrimary = !primaryId || !state.qr.supplierId || primaryId === state.qr.supplierId;
+        if (!isPrimary) {
+          return `
+        <li class="qr-apply-row">
+          <span class="qr-apply-sku">${escapeHtml(line.sku)}</span>
+          <span class="qr-apply-prices"><strong>${escapeHtml(fmtCents(toCents))}</strong></span>
+          <span class="qr-apply-desc">${escapeHtml(resolveLineDescription(line))}</span>
+          <span class="qr-apply-note">filed against this supplier — catalog keeps the primary supplier's price</span>
+        </li>
+      `;
+        }
         const fromCents = Number(part.priceCents);
         const fromHtml = Number.isFinite(fromCents) ? escapeHtml(fmtCents(fromCents)) : "—";
         // No numeric catalog price (part exists but priceCents is junk):
@@ -650,9 +666,13 @@
       renderAll();
       setSaveState("saved", state.qr.updatedAt);
       const appliedN = (data.applied || []).length;
+      const storedN = (data.storedOnly || []).length;
       const unchangedN = (data.unchanged || []).length;
       const skippedN = (data.skipped || []).length;
-      const bits = [`${appliedN} price${appliedN === 1 ? "" : "s"} applied`];
+      const bits = [`${appliedN} catalog price${appliedN === 1 ? "" : "s"} updated`];
+      // storedOnly: this supplier isn't the part's primary, so the quote is
+      // on file against them but the catalog still shows the primary's price.
+      if (storedN) bits.push(`${storedN} filed against this supplier only`);
       if (unchangedN) bits.push(`${unchangedN} unchanged`);
       if (skippedN) bits.push(`${skippedN} skipped`);
       els.applySummary.textContent = `${bits.join(", ")}. Open material lists now price from the updated catalog.`;
