@@ -547,16 +547,16 @@
 
     els.journalList.querySelectorAll(".proj-journal-delete").forEach((btn) => {
       btn.addEventListener("click", async () => {
-        if (!confirm("Delete this journal entry? This also removes its photos.")) return;
+        if (!(await pjlDialog.confirm("Delete this journal entry? This also removes its photos.", { title: "Delete journal entry?", icon: "delete", destructive: true, confirmLabel: "Delete" }))) return;
         try {
           const r = await fetch(`/api/projects/${encodeURIComponent(state.project.id)}/journal/${encodeURIComponent(btn.dataset.entryId)}`, { method: "DELETE" });
           if (!r.ok) {
             const d = await r.json().catch(() => ({}));
-            alert(d.errors?.[0] || `Delete failed (${r.status})`);
+            await pjlDialog.alert(d.errors?.[0] || `Delete failed (${r.status})`, { title: "Delete Failed", icon: "warning" });
             return;
           }
           await refreshProject();
-        } catch (err) { alert(err.message || "Delete failed."); }
+        } catch (err) { await pjlDialog.alert(err.message || "Delete failed.", { title: "Delete Failed", icon: "warning" }); }
       });
     });
   }
@@ -609,7 +609,7 @@
           });
           if (!pr.ok) {
             const pd = await pr.json().catch(() => ({}));
-            alert((pd.errors && pd.errors[0]) || "Entry saved, but the photos didn't upload.");
+            await pjlDialog.alert((pd.errors && pd.errors[0]) || "Entry saved, but the photos didn't upload.", { title: "Photo Upload Failed", icon: "warning" });
           }
         }
       }

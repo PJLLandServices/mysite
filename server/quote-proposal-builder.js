@@ -1850,7 +1850,7 @@
         return;
       }
       if (data.linkedExistingProject) {
-        alert(`This quote was built from ${data.project.name || data.project.id}'s System Builder design — linked to that project instead of creating a new one.`);
+        await pjlDialog.alert(`This quote was built from ${data.project.name || data.project.id}'s System Builder design — linked to that project instead of creating a new one.`, { title: "Linked to existing project", icon: "info" });
       }
       location.href = `/admin/project/${encodeURIComponent(data.project.id)}`;
     } catch (err) {
