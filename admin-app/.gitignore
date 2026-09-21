@@ -1,0 +1,5 @@
+# Build artifacts. The app's built OUTPUT is committed on purpose (to
+# server/app-dist/, so Render needs no build step) — but the incremental
+# TypeScript cache is machine-local noise.
+tsconfig.tsbuildinfo
+dist/

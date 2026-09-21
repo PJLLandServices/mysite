@@ -2,6 +2,49 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-21, end of day (The front end gets rebuilt — foundation + the first workflow screens):**
+Patrick, after a day of patching the Project page twice over: *"Treat the existing application as a
+functional prototype, not the final interface. Preserve its data models, APIs, calculations and
+business rules, but rebuild the user interface from a clean foundation... Do not restyle the
+existing pages in place... The finished product must feel like professional field-service and
+construction-management software — not an internal database administration tool."* Plus the
+sequencing: *"Preserve the existing application during development. Build the replacement
+interface alongside it, migrate one workflow at a time and remove an old screen only after the
+replacement has been tested."*
+**Nothing about the backend moves.** Data models, the irrigation maths, proposal generation, PDF
+rendering, auth, integrations, and every `/api/*` contract stay exactly as they are; the new
+interface is a client over the same endpoints. Any screen that needs a number it doesn't have
+asks the server for it — no business rule gets re-implemented in the browser.
+**What landed in this first pass:**
+- `admin-app/` — React + Vite + TypeScript + Tailwind source. Built output is **committed** to
+  `server/app-dist/`, so Render needs no build-command change and there is no new deploy step
+  to fail. `npm run build:app` rebuilds it.
+- A real design system (`src/index.css` `@theme` tokens + `src/ui/primitives.tsx`): brand palette
+  lifted from `crm.css` so it still reads as PJL, one Button/Card/StatusPill/Field/Stat/
+  EmptyState vocabulary, 44px minimum tap targets, focus rings that never disappear.
+- An app shell with the new IA (Work / Operations / Business), one sidebar in one place instead
+  of a copy pasted into 55 HTML files. Sections not yet rebuilt link into the existing CRM and
+  are labelled `classic`, so what is and isn't migrated is visible rather than guessed at.
+- Workflow steps 1–2 of the nine Patrick listed: **Projects list** (real `/api/projects` data,
+  status filters with live counts, search, task progress, contract value; a table on desktop,
+  stacked cards on a phone) and the **Project workspace** (summary stats + tabs across
+  Overview / System Design / Scope &amp; Proposal / Tasks / Materials / Daily Records /
+  Change Orders / Financials / Closeout — progressive disclosure instead of one scroll).
+  The seven tabs not yet built name their workflow and offer the classic screen; none is a dead end.
+- Served at `/app/*` behind the SAME staff login as `/admin/*` (`needsAuth`), with `/app-assets/*`
+  for the hashed bundles. **The existing CRM is untouched** — same routes, same files, still live.
+`scripts/test-app-shell-rebuild.mjs` (27 assertions) is the "after the replacement has been
+tested" half: it boots the REAL server, creates REAL projects through `lib/projects.js`, logs in
+as a real admin, and drives the REAL built bundle in a real browser — no mocked API. It pins the
+auth gate on `/app` and a deep link, the SPA fallback (a refresh on `/app/projects/PROJ-…` serves
+the shell, not a 404), the bundle's content type (a JS file served as `text/html` is a white
+screen), real data rendering with real task progress, the filters and search operating on those
+records, the workspace opening client-side, and `/admin/projects` still serving the old page.
+**Deliberately NOT done yet:** the remaining seven workflow steps, Customers/Operations/Business
+workspaces, and any removal of an old screen. Nothing is deleted until its replacement is walked.
+**Patrick's acceptance test — not yet walked:** sign in, open `/app`, and check the Projects list
+and a project's workspace against a job you know; the classic CRM must still work exactly as
+before at `/admin`.
 **2026-09-21, same hour (The ladder runs to the service bound — nobody sees an empty fortnight):**
 The watchdog's first run, with everything above deployed: Toronto 2 of 14 upcoming days (1
 weekday), Etobicoke 1 of 14 (Saturday only), every other weekday `outside_route_area`;

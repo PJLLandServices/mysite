@@ -1408,6 +1408,11 @@ function needsAuth(method, pathname) {
   // staff-only gate as the rest of the CRM.
   if (pathname === "/admin/booking-funnel" || pathname === "/admin/booking-funnel/") return "user";
   if (pathname.startsWith("/api/admin/booking-funnel")) return "user";
+  // Rebuilt front end (2026-09-21). Same staff-only gate as the CRM it
+  // is replacing — /app is the new interface over the same APIs, not a
+  // second, looser door into them. /app-assets is the built JS/CSS: no
+  // data, and gating it would break the login page's own redirect.
+  if (pathname === "/app" || pathname.startsWith("/app/")) return "user";
   if (pathname === "/admin/chats" || pathname === "/admin/chats/") return "user";
   if (pathname === "/admin/messages" || pathname === "/admin/messages/") return "user";
   if (pathname === "/admin/customers" || pathname === "/admin/customers/") return "user";
@@ -26855,6 +26860,19 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin" || pathname === "/admin/") {
     return { dir: SERVER_DIR, relative: "/admin.html" };
+  }
+  // ── Rebuilt front end (2026-09-21) ───────────────────────────────
+  // The new interface is a client-routed app: every /app/* URL serves
+  // the same shell so a refresh or a pasted deep link lands on the
+  // right screen instead of a 404. Its hashed bundles live under
+  // /app-assets/. Built output is committed (server/app-dist/), so
+  // there is no build step to add on Render and no deploy config to
+  // change — and the existing /admin/* CRM is untouched either way.
+  if (pathname === "/app" || pathname.startsWith("/app/")) {
+    return { dir: SERVER_DIR, relative: "/app-dist/index.html" };
+  }
+  if (pathname.startsWith("/app-assets/")) {
+    return { dir: SERVER_DIR, relative: "/app-dist/" + pathname.slice("/app-assets/".length) };
   }
   // Public customer payment pages (PR 3). Token-gated by the JS layer
   // and the JSON API at /api/pay/invoice/:id. The HTML itself is fine
