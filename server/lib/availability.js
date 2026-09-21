@@ -604,10 +604,27 @@ async function listAvailableSlots(opts = {}) {
             ? shape.bucketPoints[bucket.key]
             : shape.points; // legacy shapes without bucketPoints: whole day
           let scoreAgainst = null;
-          if (bucketStops && bucketStops.length) scoreAgainst = bucketStops;
-          else if (shape.points && shape.points.length) scoreAgainst = shape.points;
+          // THE TRUCK DOES NOT GO HOME AT NOON. A half-day scored on its
+          // own stops still has to be entered and left from where the
+          // crew actually is: the afternoon starts at the morning's last
+          // stop, the morning ends by leaving for the afternoon's first.
+          // Scoring each half as its own round trip from the yard priced
+          // a Forest Hill house at +39 into an afternoon the truck
+          // reaches from York Mills (2026-09-21). The stored bucket order
+          // is driving order (the plan is re-sequenced for storage), so
+          // "last" and "first" are the real handover.
+          const endpoints = {};
+          if (bucketStops && bucketStops.length) {
+            scoreAgainst = bucketStops;
+            const morningPts = (shape.bucketPoints && shape.bucketPoints.morning) || [];
+            const afternoonPts = (shape.bucketPoints && shape.bucketPoints.afternoon) || [];
+            if (bucket.key === "afternoon" && morningPts.length) endpoints.start = morningPts[morningPts.length - 1];
+            if (bucket.key === "morning" && afternoonPts.length) endpoints.end = afternoonPts[0];
+          } else if (shape.points && shape.points.length) {
+            scoreAgainst = shape.points;
+          }
           if (scoreAgainst) {
-            const added = await geoFilter.addedDriveMinutes(customerCoords, scoreAgainst);
+            const added = await geoFilter.addedDriveMinutes(customerCoords, scoreAgainst, endpoints);
             if (added && !added.emptyDay && added.minutes > geoMax) {
               geoSuppressedCount += 1;
               if (diagnostics && Array.isArray(diagnostics.geoSuppressed)) {
@@ -630,7 +647,10 @@ async function listAvailableSlots(opts = {}) {
             // asks the question the marginal check cannot, and asks it the
             // same way round whichever cluster booked first.
             if (Number.isFinite(maxLeg) && maxLeg > 0) {
-              const spread = await geoFilter.worstLegBetweenStops(customerCoords, scoreAgainst);
+              // Ordered from where the truck enters this half, for the
+              // same reason as above.
+              const spread = await geoFilter.worstLegBetweenStops(customerCoords, scoreAgainst,
+                endpoints.start ? { base: endpoints.start } : {});
               if (spread && spread.added > maxLeg) {
                 geoSuppressedCount += 1;
                 if (diagnostics && Array.isArray(diagnostics.geoSuppressed)) {

@@ -402,6 +402,37 @@ async function setStopWindow(season, year, { date, propertyCode, notBefore, notA
   return { plan: revalidated, warnings, window: { date, propertyCode: code, notBefore: from, notAfter: to } };
 }
 
+// The per-half-day cap, from the plan screen.
+//
+// bucketCap is how many stops a morning or an afternoon holds before the
+// booking page stops offering that half (availability.js counts planned
+// stops and bookings together against it). It was set once, at import,
+// and could only be changed by re-importing the plan — so a dense Toronto
+// day with five planned morning stops refused the sixth house that sat
+// between two of them, and nothing on any screen could say otherwise
+// (Patrick, 2026-09-21: "its literally perfect density on that
+// appointment"). dayCap follows it up so the review screen does not warn
+// about every day the moment the half-day cap is raised.
+async function setBucketCap(season, year, { bucketCap }, { actor = "admin" } = {}) {
+  const key = planKey(season, year);
+  const n = Number(bucketCap);
+  if (!Number.isInteger(n) || n < 1 || n > 12) {
+    throw new Error(`Stops per half-day must be a whole number from 1 to 12 (got "${bucketCap}").`);
+  }
+  const all = await read();
+  const plan = all[key];
+  if (!plan) throw new Error(`No ${key} plan to edit.`);
+  plan.bucketCap = n;
+  if (!(Number(plan.dayCap) >= n * 2)) plan.dayCap = n * 2;
+
+  const { plan: revalidated, warnings } = validate(plan);
+  revalidated.updatedAt = new Date().toISOString();
+  revalidated.updatedBy = String(actor || "admin").slice(0, 80);
+  all[key] = revalidated;
+  await writeAll(all);
+  return { plan: revalidated, warnings, bucketCap: n };
+}
+
 // Move one stop up or down inside its own bucket.
 //
 // The optimiser is very good at the thing it can see — driving minutes —
@@ -559,6 +590,7 @@ function codesByDate(plan) {
 module.exports = {
   moveDay,
   setStopWindow,
+  setBucketCap,
   reorderStop,
   clearManualOrder,
   FILE,

@@ -186,6 +186,19 @@
           </form>
           <p class="sp-bwindow-status" id="bookingWindowStatus" hidden></p>
 
+          <h2 class="sp-panel-title sp-drawer-sub">Stops per half-day</h2>
+          <p class="sp-probe-note">How many stops a morning or an afternoon holds before the booking page stops offering that half. Planned stops and bookings count together. Takes effect for the next customer who loads the calendar.</p>
+          <form class="sp-bwindow" id="capForm" hidden>
+            <label class="sp-control">
+              <span>Stops per half-day</span>
+              <input type="number" id="capInput" min="1" max="12" step="1">
+            </label>
+            <div class="sp-bwindow-actions">
+              <button type="submit" class="pjl-btn pjl-btn-primary" id="capSave">Save</button>
+            </div>
+          </form>
+          <p class="sp-bwindow-status" id="capStatus" hidden></p>
+
           <h2 class="sp-panel-title sp-drawer-sub">Plan file</h2>
           <button type="button" class="pjl-btn pjl-btn-outline" id="importBtn">Import plan</button>
         </section>

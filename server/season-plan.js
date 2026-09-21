@@ -1172,6 +1172,7 @@
   function render(plan) {
     current = plan;
     renderFollowBar(plan);
+    renderCap(plan);
     if (!plan) {
       planMeta.textContent = "No plan loaded for this season yet.";
       emptyState.hidden = false;
@@ -2140,6 +2141,45 @@
   });
   el("bookingWindowReset").addEventListener("click", () => {
     saveBookingWindow({ publicBookingFrom: "", publicBookingThrough: "" });
+  });
+
+  // ---- Stops per half-day (the plan's bucketCap) -----------------------
+  //
+  // The number the board's "5 / 5" counts read against, and the one the
+  // booking page refuses a sixth stop on. Until now it was set at import
+  // and nowhere else.
+
+  const capForm = el("capForm");
+  const capInput = el("capInput");
+  const capStatus = el("capStatus");
+
+  function renderCap(plan) {
+    capForm.hidden = !plan;
+    capStatus.hidden = !plan;
+    if (!plan) return;
+    capInput.value = plan.bucketCap;
+    capStatus.textContent = `Currently ${plan.bucketCap} per half-day.`;
+  }
+
+  capForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = el("capSave");
+    button.disabled = true;
+    try {
+      const response = await fetch(`${base()}/caps`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bucketCap: Number(capInput.value) })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't save."]).join(" "));
+      showToast(`Saved — ${data.bucketCap} stops per half-day.`);
+      load(); // every "x / cap" count on the board just changed
+    } catch (error) {
+      showToast(error.message, "bad");
+    } finally {
+      button.disabled = false;
+    }
   });
 
   // ---- Assignment preflight (stage 0, read-only) -------------------
