@@ -60,7 +60,7 @@ export interface ProjectSummary {
   sourceQuoteId?: string | null;
   workOrderIds?: string[];
   tasks?: Array<{ id: string; status: string }>;
-  proposalSnapshot?: { total?: number; acceptedAt?: string } | null;
+  proposalSnapshot?: { quoteId?: string; version?: number; total?: number; acceptedAt?: string } | null;
   updatedAt?: string;
   createdAt?: string;
 }

@@ -112,10 +112,29 @@ export function Field({ label, hint, children }: { label: string; hint?: string;
 
 /* ── Stat ───────────────────────────────────────────────────────────
    A figure that answers a question at a glance. Used in overview
-   headers so the numbers are readable without opening anything. */
-export function Stat({ label, value, tone }: { label: string; value: ReactNode; tone?: "default" | "money" | "muted" }) {
-  return (
-    <div className="min-w-0">
+   headers so the numbers are readable without opening anything.
+
+   Given an `onClick`, a stat becomes the way INTO the section it
+   summarises — the number you're looking at is the thing you want to
+   open, so it shouldn't make you go hunting for a tab afterwards. */
+export function Stat({
+  label,
+  value,
+  tone,
+  progress,
+  onClick,
+  hint
+}: {
+  label: string;
+  value: ReactNode;
+  tone?: "default" | "money" | "muted";
+  /** 0–1. Renders a progress bar under the figure. */
+  progress?: number;
+  onClick?: () => void;
+  hint?: string;
+}) {
+  const body = (
+    <>
       <span className="block font-display text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">
         {label}
       </span>
@@ -127,7 +146,28 @@ export function Stat({ label, value, tone }: { label: string; value: ReactNode; 
       >
         {value}
       </span>
-    </div>
+      {typeof progress === "number" ? (
+        <span className="mt-1.5 block h-1.5 rounded-full bg-canvas overflow-hidden">
+          <span
+            className={cx("block h-full rounded-full", progress >= 1 ? "bg-brand-500" : "bg-accent-500")}
+            style={{ width: `${Math.round(Math.min(1, Math.max(0, progress)) * 100)}%` }}
+          />
+        </span>
+      ) : null}
+      {hint ? <span className="mt-0.5 block text-[12px] text-ink-muted truncate">{hint}</span> : null}
+    </>
+  );
+
+  if (!onClick) return <div className="min-w-0">{body}</div>;
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="min-w-0 text-left rounded-[var(--radius-control)] -m-1.5 p-1.5 transition-colors hover:bg-brand-50 focus-visible:bg-brand-50"
+    >
+      {body}
+    </button>
   );
 }
 
