@@ -46,20 +46,21 @@ const VERBOSE = process.argv.includes('--verbose');
 // because they haven't been migrated yet. Drop a file from this list in
 // the same PR that finishes migrating every call site in it.
 //
-// Counts below are informational (native-call count as of PJL-59 landing,
-// 2026-09-21, after the 10 highest-stakes confirms were fixed) — not
-// enforced, just so a shrinking list is visible in the diff over time.
+// Counts below are informational (native-call count as of PJL-60's
+// highest-volume-file round landing, 2026-09-21 — plain alert()s only
+// remain in these five, confirm()/prompt() are done) — not enforced,
+// just so a shrinking list is visible in the diff over time.
 const ALLOWLIST_FILES = [
   { file: 'sitebuilder.html', count: 50, reason: 'Not yet migrated — PJL-60/PJL-61 (highest single-file count).' },
-  { file: 'work-order-tech.js', count: 39, reason: 'Highest-volume file for PJL-60; some call sites already fixed in PJL-59.' },
-  { file: 'quote-folder.js', count: 35, reason: 'Highest-volume file for PJL-60; some call sites already fixed in PJL-59.' },
-  { file: 'work-order.js', count: 31, reason: 'Highest-volume file for PJL-60.' },
-  { file: 'project.js', count: 29, reason: 'Highest-volume file for PJL-60; some call sites already fixed in PJL-59.' },
-  { file: 'invoice.js', count: 13, reason: 'Highest-volume file for PJL-60.' },
+  { file: 'work-order-tech.js', count: 32, reason: 'Only alert()s remain — confirm()/prompt() fully migrated (PJL-59 + PJL-60). Rest pending PJL-61.' },
+  { file: 'quote-folder.js', count: 29, reason: 'Only alert()s remain — confirm()/prompt() fully migrated (PJL-59 + PJL-60). Rest pending PJL-61.' },
+  { file: 'project.js', count: 24, reason: 'Only alert()s remain — confirm()/prompt() fully migrated (PJL-59 + PJL-60). Rest pending PJL-61.' },
+  { file: 'work-order.js', count: 21, reason: 'Only alert()s remain — confirm()/prompt() fully migrated (PJL-60). Rest pending PJL-61.' },
   { file: 'quote-proposal-builder.js', count: 10, reason: 'Some call sites already fixed in PJL-59; rest pending PJL-60/PJL-61.' },
   { file: 'settings.js', count: 8, reason: 'Not yet migrated — PJL-60/PJL-61.' },
   { file: 'customer.js', count: 7, reason: 'Some call sites already fixed in PJL-59; rest pending PJL-60/PJL-61.' },
   { file: 'material-list.js', count: 7, reason: 'Not yet migrated — PJL-60/PJL-61.' },
+  { file: 'invoice.js', count: 6, reason: 'Only alert()s remain — confirm() fully migrated (PJL-59 + PJL-60). Rest pending PJL-61.' },
   { file: 'property.js', count: 5, reason: 'Not yet migrated — PJL-61 (informational alerts).' },
   { file: 'purchase-order.js', count: 5, reason: 'Some call sites already fixed in PJL-59; rest pending PJL-60/PJL-61.' },
   { file: 'work-order-build.js', count: 5, reason: 'Not yet migrated — PJL-60/PJL-61.' },

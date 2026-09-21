@@ -299,7 +299,11 @@ async function load() {
 }
 
 async function convertToProject(quoteId) {
-  if (!confirm(`Spin up a new project from ${quoteId}? Any material lists attached to this quote will move to the new project.`)) return;
+  if (!(await pjlDialog.confirm(`Spin up a new project from ${quoteId}? Any material lists attached to this quote will move to the new project.`, {
+    title: "Convert to project?",
+    icon: "warning",
+    confirmLabel: "Convert"
+  }))) return;
   try {
     const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/convert-to-project`, { method: "POST" });
     const data = await r.json().catch(() => ({}));
@@ -433,7 +437,10 @@ async function sendCombined(quoteId) {
   const total = cached && Number.isFinite(Number(cached.total))
     ? ` — $${Number(cached.total).toFixed(2)} incl. HST`
     : "";
-  const to = prompt(`Send the combined proposal ${quoteId}${total} to the customer.\n\nThey'll get a link and verify their phone to open it.\n\nEmail address:`, onFile);
+  const to = await pjlDialog.prompt(`Send the combined proposal ${quoteId}${total} to the customer.\n\nThey'll get a link and verify their phone to open it.\n\nEmail address:`, {
+    title: "Send combined proposal?",
+    defaultValue: onFile
+  });
   if (to == null) return; // cancelled
   const email = String(to).trim();
   if (!email) { alert("An email address is required to send."); return; }
@@ -465,7 +472,10 @@ async function generateSmartControllerPage(quoteId) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || `Couldn't generate (${r.status})`); return; }
-    if (confirm(`Page generated for ${quoteId}. Open the preview?`)) {
+    if (await pjlDialog.confirm(`Page generated for ${quoteId}. Open the preview?`, {
+      title: "Open preview?",
+      confirmLabel: "Open"
+    })) {
       window.open(`/approve/${encodeURIComponent(quoteId)}`, "_blank");
     }
     load();
@@ -477,12 +487,19 @@ async function generateSmartControllerPage(quoteId) {
 async function sendSmartController(quoteId) {
   const cached = lastLoadedQuotes.find((q) => q.id === quoteId);
   if (cached && !cached.proposalDocument) {
-    if (!confirm(`Heads up: the page for ${quoteId} hasn't been generated yet — the customer would get the plain quote, not the designed page.\n\nGenerate it first (click "Generate page"), or OK to send anyway.`)) return;
+    if (!(await pjlDialog.confirm(`Heads up: the page for ${quoteId} hasn't been generated yet — the customer would get the plain quote, not the designed page.\n\nGenerate it first (click "Generate page"), or OK to send anyway.`, {
+      title: "Send without the designed page?",
+      icon: "warning",
+      confirmLabel: "Send anyway"
+    }))) return;
   }
   const onFile = (cached && cached.customerEmail) || "";
   const total = cached && Number.isFinite(Number(cached.total))
     ? ` — $${Number(cached.total).toFixed(2)} incl. HST` : "";
-  const to = prompt(`Send the smart-controller upgrade ${quoteId}${total} to the customer.\n\nThey'll get a link and verify their phone to open it.\n\nEmail address:`, onFile);
+  const to = await pjlDialog.prompt(`Send the smart-controller upgrade ${quoteId}${total} to the customer.\n\nThey'll get a link and verify their phone to open it.\n\nEmail address:`, {
+    title: "Send smart-controller upgrade?",
+    defaultValue: onFile
+  });
   if (to == null) return;
   const email = String(to).trim();
   if (!email) { alert("An email address is required to send."); return; }
@@ -769,7 +786,9 @@ if (scq.openBtn) {
 if (newProposalBtn) {
   newProposalBtn.addEventListener("click", async (e) => {
     e.preventDefault();
-    const email = prompt("Customer email for the new proposal (can be edited in the builder):");
+    const email = await pjlDialog.prompt("Customer email for the new proposal (can be edited in the builder):", {
+      title: "New project proposal"
+    });
     if (email === null) return; // cancelled
     try {
       const r = await fetch("/api/quotes/proposal", {

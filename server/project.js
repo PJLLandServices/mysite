@@ -395,7 +395,7 @@
     els.taskList.querySelectorAll(".proj-task-delete").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const taskId = btn.dataset.taskId;
-        if (!confirm("Remove this task?")) return;
+        if (!(await pjlDialog.confirm("Remove this task?", { title: "Remove Task", icon: "delete", destructive: true, confirmLabel: "Remove" }))) return;
         try {
           const r = await fetch(`/api/projects/${encodeURIComponent(state.project.id)}/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
           if (!r.ok) {
@@ -826,7 +826,7 @@
     }
   }
   async function clearCustomer() {
-    if (!confirm("Unlink this customer? The contact details stay on the project but stop tracking the CRM record.")) return;
+    if (!(await pjlDialog.confirm("Unlink this customer? The contact details stay on the project but stop tracking the CRM record.", { title: "Unlink Customer", icon: "warning", confirmLabel: "Unlink" }))) return;
     try {
       const r = await fetch(`/api/projects/${encodeURIComponent(state.projectId)}`, {
         method: "PATCH",
@@ -864,7 +864,7 @@
     setSaveState("saved", state.project.updatedAt);
   }
   async function detachWo(woId) {
-    if (!confirm("Detach this work order from the project? The WO itself stays put.")) return;
+    if (!(await pjlDialog.confirm("Detach this work order from the project? The WO itself stays put.", { title: "Detach Work Order", icon: "warning", confirmLabel: "Detach" }))) return;
     const r = await fetch(`/api/projects/${encodeURIComponent(state.projectId)}/detach-work-order`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -907,7 +907,7 @@
 
   async function archiveProject() {
     const archiving = state.project.status !== "archived";
-    if (!confirm(archiving ? "Archive this project?" : "Restore this project from archive?")) return;
+    if (!(await pjlDialog.confirm(archiving ? "Archive this project?" : "Restore this project from archive?", { title: archiving ? "Archive Project" : "Restore Project", icon: "warning", confirmLabel: archiving ? "Archive" : "Restore" }))) return;
     state.project.status = archiving ? "archived" : "planning";
     flushSave();
   }
@@ -916,7 +916,7 @@
     const confirmText = lineCount
       ? `Delete this project? Its ${lineCount} attached material list${lineCount === 1 ? "" : "s"} will be detached but not deleted.`
       : "Delete this empty project?";
-    if (!confirm(confirmText)) return;
+    if (!(await pjlDialog.confirm(confirmText, { title: "Delete Project", icon: "delete", destructive: true, confirmLabel: "Delete" }))) return;
     const r = await fetch(`/api/projects/${encodeURIComponent(state.projectId)}`, { method: "DELETE" });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {

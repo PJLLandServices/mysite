@@ -826,7 +826,7 @@ woZones.addEventListener("click", async (event) => {
   if (event.target.matches('[data-action="delete-photo"]')) {
     const thumb = event.target.closest(".wo-photo-thumb");
     if (!thumb) return;
-    if (!confirm("Remove this photo?")) return;
+    if (!(await pjlDialog.confirm("Remove this photo?", { title: "Remove photo", icon: "delete", destructive: true, confirmLabel: "Remove" }))) return;
     const n = Number(thumb.dataset.photoN);
     try {
       const wo = await deleteWoPhoto(n);
@@ -1258,11 +1258,12 @@ function renderWorkOrderWarranty(wo) {
       }
       return;
     }
-    if (!window.confirm(
+    if (!(await pjlDialog.confirm(
       "Convert this warranty visit to a chargeable service call?\n\n" +
       "The $95 call-out is restored, the warranty claim is closed as converted, and the " +
-      "customer is emailed your reason. They must still sign for the work."
-    )) return;
+      "customer is emailed your reason. They must still sign for the work.",
+      { title: "Convert to chargeable", icon: "warning", confirmLabel: "Convert" }
+    ))) return;
 
     confirmBtn.disabled = true;
     const original = confirmBtn.textContent;
@@ -1368,8 +1369,8 @@ async function postServiceFeeWaiver(body) {
     }
     postServiceFeeWaiver({ waived: true, reason, notes });
   });
-  removeBtn?.addEventListener("click", () => {
-    if (!confirm("Remove the waiver and restore the service call fee?")) return;
+  removeBtn?.addEventListener("click", async () => {
+    if (!(await pjlDialog.confirm("Remove the waiver and restore the service call fee?", { title: "Remove waiver", icon: "warning", confirmLabel: "Remove" }))) return;
     postServiceFeeWaiver({ waived: false });
   });
 })();
@@ -1425,12 +1426,12 @@ function renderIntakeGuarantee(wo) {
 
 document.getElementById("woIntakeMatchBtn")?.addEventListener("click", async () => {
   if (!loadedWorkOrder || loadedWorkOrder.locked) return;
-  if (!confirm("Confirm: the on-site diagnosis matches the AI-quoted scope. This credits 1 hour of repair labour to the customer.")) return;
+  if (!(await pjlDialog.confirm("Confirm: the on-site diagnosis matches the AI-quoted scope. This credits 1 hour of repair labour to the customer.", { title: "Confirm diagnosis match", confirmLabel: "Confirm" }))) return;
   await postIntakeDecisionDesktop({ matched: true });
 });
 document.getElementById("woIntakeMismatchBtn")?.addEventListener("click", async () => {
   if (!loadedWorkOrder || loadedWorkOrder.locked) return;
-  const reason = prompt("Optional: brief note on why the diagnosis didn't match. Leave blank if none.", "");
+  const reason = await pjlDialog.prompt("Optional: brief note on why the diagnosis didn't match. Leave blank if none.", { title: "Diagnosis mismatch", defaultValue: "" });
   if (reason === null) return;
   await postIntakeDecisionDesktop({ matched: false, mismatchReason: reason || "" });
 });
@@ -1575,7 +1576,7 @@ document.getElementById("woPostSigCompleteBtn")?.addEventListener("click", async
   const id = getWorkOrderId();
   if (!id) return;
   if (loadedWorkOrder.status === "completed") return;
-  if (!confirm("Mark this visit completed? Fires the cascade — service record + draft invoice + customer email.")) return;
+  if (!(await pjlDialog.confirm("Mark this visit completed? Fires the cascade — service record + draft invoice + customer email.", { title: "Mark complete", icon: "warning", confirmLabel: "Mark complete" }))) return;
   const btn = document.getElementById("woPostSigCompleteBtn");
   if (btn) { btn.disabled = true; btn.textContent = "Marking complete…"; }
   try {
@@ -2870,11 +2871,11 @@ async function postLockAction(action, body) {
 
 document.getElementById("woUnlockBtn")?.addEventListener("click", async () => {
   if (!loadedWorkOrder || loadedWorkOrder.locked !== true) return;
-  const reason = prompt(
+  const reason = await pjlDialog.prompt(
     "Unlocking a signed/bypassed work order re-opens its scope for editing.\n"
     + "The signature or bypass record is kept — only the lock is lifted.\n\n"
     + "Why are you unlocking it? (recorded in the work order's history)",
-    ""
+    { title: "Unlock work order", defaultValue: "" }
   );
   if (reason === null) return; // cancelled
   if (String(reason).trim().length < 10) {
@@ -2886,7 +2887,7 @@ document.getElementById("woUnlockBtn")?.addEventListener("click", async () => {
 
 document.getElementById("woRelockBtn")?.addEventListener("click", async () => {
   if (!loadedWorkOrder || loadedWorkOrder.locked === true) return;
-  if (!confirm("Re-lock this work order? Scope freezes again against the signature/bypass already on file.")) return;
+  if (!(await pjlDialog.confirm("Re-lock this work order? Scope freezes again against the signature/bypass already on file.", { title: "Re-lock work order", confirmLabel: "Re-lock" }))) return;
   await postLockAction("relock", {});
 });
 
@@ -2987,10 +2988,10 @@ woForm.addEventListener("change", (e) => { if (e.target !== woStatus) woFormDirt
 window.addEventListener("beforeunload", (e) => {
   if (woFormDirty) { e.preventDefault(); e.returnValue = ""; }
 });
-backLink?.addEventListener("click", (e) => {
+backLink?.addEventListener("click", async (e) => {
   if (!woFormDirty) return;
   e.preventDefault();
-  if (confirm("Are you sure you want to leave without saving?")) {
+  if (await pjlDialog.confirm("Are you sure you want to leave without saving?", { title: "Leave without saving", icon: "warning", destructive: true, confirmLabel: "Leave" })) {
     woFormDirty = false;
     window.location.assign(backLink.href);
   }
@@ -3124,7 +3125,7 @@ woCreateInvoiceBtn?.addEventListener("click", async () => {
 woRunCascadeBtn?.addEventListener("click", async () => {
   const id = getWorkOrderId();
   if (!id) return;
-  if (!confirm("Re-run the full completion cascade? This is idempotent — if a service record already exists for this WO, it'll just return the existing record.")) return;
+  if (!(await pjlDialog.confirm("Re-run the full completion cascade? This is idempotent — if a service record already exists for this WO, it'll just return the existing record.", { title: "Re-run cascade", icon: "warning", confirmLabel: "Re-run" }))) return;
   woRunCascadeBtn.disabled = true;
   setCascadeStatus("Re-running cascade…", "info");
   try {

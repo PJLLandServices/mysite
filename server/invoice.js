@@ -340,7 +340,7 @@ function render(inv) {
 
 document.getElementById("invoiceStatus")?.addEventListener("change", async (event) => {
   const status = event.target.value;
-  if (!confirm(`Set invoice status to "${status}"?`)) {
+  if (!(await pjlDialog.confirm(`Set invoice status to "${status}"?`, { title: "Change status", icon: "warning", confirmLabel: "Change status" }))) {
     event.target.value = currentInvoice?.status || "draft";
     return;
   }
@@ -514,7 +514,7 @@ document.getElementById("invoiceSendBtn")?.addEventListener("click", async () =>
     ? `Resend invoice ${currentInvoice.id} (${fmt(currentInvoice.total)}) to ${recipient}?${letterLine}`
     : `Send invoice ${currentInvoice.id} (${fmt(currentInvoice.total)}) to ${recipient}?\n\n` +
       `Status will flip from Draft to Sent and the customer will receive the branded PDF by email.${letterLine}`;
-  if (!confirm(confirmMsg)) return;
+  if (!(await pjlDialog.confirm(confirmMsg, { title: isResend ? "Resend invoice" : "Send invoice", icon: "send", confirmLabel: isResend ? "Resend" : "Send" }))) return;
 
   const btn = document.getElementById("invoiceSendBtn");
   const status = document.getElementById("invoiceSendStatus");
@@ -669,7 +669,7 @@ document.getElementById("invoiceReminderBtn")?.addEventListener("click", async (
 
   const recipient = currentInvoice.customerPhone || "the customer";
   const customerName = currentInvoice.customerName || "this customer";
-  if (!confirm(`Send a reminder SMS to ${customerName} at ${recipient}?`)) return;
+  if (!(await pjlDialog.confirm(`Send a reminder SMS to ${customerName} at ${recipient}?`, { title: "Send reminder", icon: "send", confirmLabel: "Send" }))) return;
 
   const btn = document.getElementById("invoiceReminderBtn");
   const status = document.getElementById("invoiceReminderStatus");
@@ -706,7 +706,7 @@ document.getElementById("invoiceReminderBtn")?.addEventListener("click", async (
       status.dataset.kind = "warn";
       const serverMsg = (data.errors && data.errors[0]) || "Rate-limited.";
       status.textContent = serverMsg;
-      const forceConfirm = confirm(`${serverMsg}\n\nSend anyway (override the rate limit)?`);
+      const forceConfirm = await pjlDialog.confirm(`${serverMsg}\n\nSend anyway (override the rate limit)?`, { title: "Override rate limit", icon: "warning", confirmLabel: "Send anyway" });
       if (forceConfirm) {
         btn.disabled = true;
         btn.textContent = "Sending…";
@@ -850,7 +850,7 @@ document.getElementById("invoiceJunkWarningBtn")?.addEventListener("click", asyn
 
   const recipient = currentInvoice.customerPhone || "the customer";
   const customerName = currentInvoice.customerName || "this customer";
-  if (!confirm(`Send a junk-mail warning SMS to ${customerName} at ${recipient}?`)) return;
+  if (!(await pjlDialog.confirm(`Send a junk-mail warning SMS to ${customerName} at ${recipient}?`, { title: "Send warning", icon: "send", confirmLabel: "Send" }))) return;
 
   const btn = document.getElementById("invoiceJunkWarningBtn");
   const status = document.getElementById("invoiceJunkWarningStatus");
@@ -894,7 +894,7 @@ document.getElementById("invoiceJunkWarningBtn")?.addEventListener("click", asyn
       status.dataset.kind = "warn";
       const serverMsg = (data.errors && data.errors[0]) || "Skipped.";
       status.textContent = serverMsg;
-      const forceConfirm = confirm(`${serverMsg}\n\nSend anyway?`);
+      const forceConfirm = await pjlDialog.confirm(`${serverMsg}\n\nSend anyway?`, { title: "Send anyway", icon: "warning", confirmLabel: "Send anyway" });
       if (forceConfirm) {
         btn.disabled = true;
         btn.textContent = "Sending…";
@@ -1223,7 +1223,7 @@ document.getElementById("invoicePaymentsBody")?.addEventListener("click", async 
     ? "\n\nThis was an online card payment. Reversing it here removes the record only — it does NOT refund the customer. Refund in Stripe first."
     : "";
   const label = PAYMENT_METHOD_LABELS[payment.method] || payment.method;
-  if (!confirm(`Reverse the ${label} payment of ${fmt(payment.amount)} received ${fmtPaymentDate(payment.receivedAt)}?${cardWarning}`)) return;
+  if (!(await pjlDialog.confirm(`Reverse the ${label} payment of ${fmt(payment.amount)} received ${fmtPaymentDate(payment.receivedAt)}?${cardWarning}`, { title: "Reverse payment", icon: "delete", destructive: true, confirmLabel: "Reverse payment" }))) return;
 
   const status = document.getElementById("invoicePaymentStatus");
   reverseBtn.disabled = true;

@@ -1370,7 +1370,7 @@ function statusRank(s) {
   return i === -1 ? -1 : i;
 }
 
-document.addEventListener("click", (event) => {
+document.addEventListener("click", async (event) => {
   const btn = event.target.closest("[data-run-status]");
   if (!btn) return;
   const next = btn.dataset.runStatus;
@@ -1398,7 +1398,11 @@ document.addEventListener("click", (event) => {
       alert("Can't complete yet:\n\n• " + failures.join("\n• ") + "\n\nResolve these and try again.");
       return;
     }
-    if (!confirm("All checks pass. Mark this visit completed? Creates a service record on the property and a draft invoice from the authorized line items.")) return;
+    if (!(await pjlDialog.confirm("All checks pass. Mark this visit completed? Creates a service record on the property and a draft invoice from the authorized line items.", {
+      title: "Mark completed?",
+      icon: "warning",
+      confirmLabel: "Complete"
+    }))) return;
   }
 
   // Arrival / departure auto-stamps (spec §4.3.2 On-Site Execution).
@@ -2063,7 +2067,7 @@ sheetDone.addEventListener("click", closeZoneSheet);
 // reflects what's about to be lost. Removes the zone from state.zones,
 // PATCHes the WO, and closes the sheet. Refuses on locked WOs (defense
 // in depth — applyLockState also disables the button visually).
-document.getElementById("sheetDeleteZone")?.addEventListener("click", () => {
+document.getElementById("sheetDeleteZone")?.addEventListener("click", async () => {
   if (state.locked) return;
   const idx = state.activeZoneIndex;
   const zone = idx >= 0 ? state.zones[idx] : null;
@@ -2090,7 +2094,12 @@ document.getElementById("sheetDeleteZone")?.addEventListener("click", () => {
   const message = captured.length
     ? `Delete ${zoneLabel}?\n\nThis will discard ${captured.join(", ")}. This can't be undone.`
     : `Delete ${zoneLabel}?\n\nThis can't be undone.`;
-  if (!confirm(message)) return;
+  if (!(await pjlDialog.confirm(message, {
+    title: "Delete zone?",
+    icon: "delete",
+    destructive: true,
+    confirmLabel: "Delete"
+  }))) return;
 
   // Splice the zone out, close the sheet, re-render, persist.
   state.zones.splice(idx, 1);
@@ -2730,7 +2739,12 @@ function renderPhotoThumb(photo) {
     remove.textContent = "×";
     remove.addEventListener("click", async (e) => {
       e.stopPropagation();
-      if (!confirm("Remove this photo?")) return;
+      if (!(await pjlDialog.confirm("Remove this photo?", {
+        title: "Remove photo?",
+        icon: "delete",
+        destructive: true,
+        confirmLabel: "Remove"
+      }))) return;
       try {
         const wo = await deleteWoPhoto(photo.n);
         state.photos = wo.photos || [];
@@ -3410,7 +3424,10 @@ document.getElementById("techGenerateInvoiceBtn")?.addEventListener("click", asy
   const btn = document.getElementById("techGenerateInvoiceBtn");
   const status = document.getElementById("techCascadeRecoveryStatus");
   if (!btn || !state.id) return;
-  if (!confirm("Draft an invoice from this WO's line items?")) return;
+  if (!(await pjlDialog.confirm("Draft an invoice from this WO's line items?", {
+    title: "Draft invoice?",
+    confirmLabel: "Draft"
+  }))) return;
   btn.disabled = true;
   const orig = btn.textContent;
   btn.textContent = "Drafting…";
@@ -3440,7 +3457,10 @@ document.getElementById("techRunCascadeBtn")?.addEventListener("click", async ()
   const btn = document.getElementById("techRunCascadeBtn");
   const status = document.getElementById("techCascadeRecoveryStatus");
   if (!btn || !state.id) return;
-  if (!confirm("Re-run the completion cascade? Idempotent — safe to retry.")) return;
+  if (!(await pjlDialog.confirm("Re-run the completion cascade? Idempotent — safe to retry.", {
+    title: "Re-run cascade?",
+    confirmLabel: "Re-run"
+  }))) return;
   btn.disabled = true;
   const orig = btn.textContent;
   btn.textContent = "Running…";
@@ -5677,12 +5697,18 @@ function renderIntakeGuarantee() {
 
 document.getElementById("techIntakeMatchBtn")?.addEventListener("click", async () => {
   if (state.locked) return;
-  if (!confirm("Confirm: the on-site diagnosis matches the AI-quoted scope. This credits 1 hour of repair labour to the customer.")) return;
+  if (!(await pjlDialog.confirm("Confirm: the on-site diagnosis matches the AI-quoted scope. This credits 1 hour of repair labour to the customer.", {
+    title: "Confirm diagnosis match?",
+    confirmLabel: "Confirm"
+  }))) return;
   await postIntakeDecision({ matched: true });
 });
 document.getElementById("techIntakeMismatchBtn")?.addEventListener("click", async () => {
   if (state.locked) return;
-  const reason = prompt("Optional: brief note on why the diagnosis didn't match (e.g. 'AI quoted leak; actual issue was valve'). Leave blank if none.", "");
+  const reason = await pjlDialog.prompt("Optional: brief note on why the diagnosis didn't match (e.g. 'AI quoted leak; actual issue was valve'). Leave blank if none.", {
+    title: "Diagnosis note",
+    defaultValue: ""
+  });
   if (reason === null) return; // user cancelled
   await postIntakeDecision({ matched: false, mismatchReason: reason || "" });
 });
