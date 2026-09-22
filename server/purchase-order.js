@@ -528,15 +528,15 @@
 
   // ---- Reorder ------------------------------------------------------
   async function reorderPo() {
-    if (!confirm("Clone this PO into a new draft? Same supplier, same line items at fresh prices from the catalog.")) return;
+    if (!(await pjlDialog.confirm("Clone this PO into a new draft? Same supplier, same line items at fresh prices from the catalog.", { title: "Reorder this PO?", confirmLabel: "Clone" }))) return;
     const r = await fetch(`/api/purchase-orders/${encodeURIComponent(state.poId)}/reorder`, { method: "POST" });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || "Couldn't re-order."); return; }
+    if (!r.ok || !data.ok) { await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't re-order.", { title: "Reorder failed", icon: "warning" }); return; }
     location.href = `/admin/purchase-order/${encodeURIComponent(data.purchaseOrder.id)}`;
   }
 
   async function cancelPo() {
-    const reason = prompt("Cancel this PO. Reason (optional):", "");
+    const reason = await pjlDialog.prompt("Cancel this PO. Reason (optional):", { title: "Cancel PO", defaultValue: "" });
     if (reason === null) return;
     const r = await fetch(`/api/purchase-orders/${encodeURIComponent(state.poId)}/cancel`, {
       method: "POST",
@@ -544,16 +544,21 @@
       body: JSON.stringify({ reason })
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || "Couldn't cancel."); return; }
+    if (!r.ok || !data.ok) { await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't cancel.", { title: "Cancel failed", icon: "warning" }); return; }
     state.po = data.purchaseOrder;
     renderAll();
   }
 
   async function deleteDraft() {
-    if (!confirm("Delete this draft PO? This cannot be undone.")) return;
+    if (!(await pjlDialog.confirm("Delete this draft PO? This cannot be undone.", {
+      title: "Delete draft PO?",
+      icon: "delete",
+      destructive: true,
+      confirmLabel: "Delete"
+    }))) return;
     const r = await fetch(`/api/purchase-orders/${encodeURIComponent(state.poId)}`, { method: "DELETE" });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || "Couldn't delete."); return; }
+    if (!r.ok || !data.ok) { await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't delete.", { title: "Delete failed", icon: "warning" }); return; }
     location.href = "/admin/purchase-orders";
   }
 

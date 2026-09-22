@@ -888,7 +888,7 @@ blockForm.addEventListener("submit", async (event) => {
 document.addEventListener("click", async (event) => {
   const btn = event.target.closest("[data-block-id]");
   if (!btn || btn.tagName !== "BUTTON") return;
-  if (!confirm("Remove this block?")) return;
+  if (!(await pjlDialog.confirm("Remove this block?", { title: "Remove block", icon: "delete", destructive: true, confirmLabel: "Remove" }))) return;
   const id = btn.dataset.blockId;
   const response = await fetch(`/api/schedule/blocks/${encodeURIComponent(id)}`, { method: "DELETE" });
   if (response.ok) await loadAll();
@@ -1635,7 +1635,7 @@ actionDeleteBtn?.addEventListener("click", async () => {
       ? new Date(summary.scheduledFor).toLocaleString("en-CA", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })
       : ""
   ].filter(Boolean).join("\n");
-  if (!window.confirm(lines)) return;
+  if (!(await pjlDialog.confirm(lines, { title: "Permanently delete booking", icon: "delete", destructive: true, confirmLabel: "Delete Permanently" }))) return;
   try {
     const r = await fetch(`/api/bookings/${encodeURIComponent(bookingId)}`, { method: "DELETE" });
     const data = await r.json().catch(() => ({}));

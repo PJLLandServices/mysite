@@ -1158,7 +1158,7 @@ function renderPropertyPortal(payload) {
     } catch (err) {
       bookBtn.disabled = false;
       bookBtn.textContent = `Book my ${seasonName} →`;
-      alert("Sorry, the booking page didn't load. Please call (905) 960-0181.");
+      await pjlDialog.alert("Sorry, the booking page didn't load. Please call (905) 960-0181.", { title: "Couldn't start booking", icon: "warning" });
     }
   };
 

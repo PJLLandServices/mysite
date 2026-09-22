@@ -362,7 +362,7 @@ function render(inv) {
 
 document.getElementById("invoiceStatus")?.addEventListener("change", async (event) => {
   const status = event.target.value;
-  if (!confirm(`Set invoice status to "${status}"?`)) {
+  if (!(await pjlDialog.confirm(`Set invoice status to "${status}"?`, { title: "Change status", icon: "warning", confirmLabel: "Change status" }))) {
     event.target.value = currentInvoice?.status || "draft";
     return;
   }
@@ -377,7 +377,7 @@ document.getElementById("invoiceStatus")?.addEventListener("change", async (even
     currentInvoice = data.invoice;
     render(data.invoice);
   } catch (err) {
-    alert(err.message || "Failed.");
+    await pjlDialog.alert(err.message || "Failed.", { title: "Status update failed", icon: "warning" });
     event.target.value = currentInvoice?.status || "draft";
   }
 });
@@ -394,7 +394,7 @@ document.getElementById("invoiceSaveNotes")?.addEventListener("click", async () 
     if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't save.");
     currentInvoice = data.invoice;
   } catch (err) {
-    alert(err.message || "Failed.");
+    await pjlDialog.alert(err.message || "Failed.", { title: "Save failed", icon: "warning" });
   }
 });
 
@@ -495,7 +495,7 @@ document.getElementById("invoiceSendBtn")?.addEventListener("click", async () =>
   const action = isResend ? "resend" : "send";
   const recipient = currentInvoice.customerEmail;
   if (!recipient) {
-    alert("This invoice has no customer email. Add one in the bill-to section first.");
+    await pjlDialog.alert("This invoice has no customer email. Add one in the bill-to section first.", { title: "No customer email", icon: "warning" });
     return;
   }
   // Confirm with the recipient + total in the prompt so the admin can
@@ -515,10 +515,11 @@ document.getElementById("invoiceSendBtn")?.addEventListener("click", async () =>
       || editorSubject !== String(savedLetter.subject || "")
       || letterToggle.checked !== (savedLetter.enabled === true);
     if (dirty) {
-      alert(
+      await pjlDialog.alert(
         "The accompanying letter has unsaved changes.\n\n" +
         "Save it first — what gets attached is what's on the record, not what's " +
-        "on screen. Sending now would go out with the last saved version."
+        "on screen. Sending now would go out with the last saved version.",
+        { title: "Unsaved letter changes", icon: "warning" }
       );
       document.getElementById("invoiceLetterCard")?.scrollIntoView({ behavior: "smooth", block: "center" });
       return;
@@ -536,7 +537,7 @@ document.getElementById("invoiceSendBtn")?.addEventListener("click", async () =>
     ? `Resend invoice ${currentInvoice.id} (${fmt(currentInvoice.total)}) to ${recipient}?${letterLine}`
     : `Send invoice ${currentInvoice.id} (${fmt(currentInvoice.total)}) to ${recipient}?\n\n` +
       `Status will flip from Draft to Sent and the customer will receive the branded PDF by email.${letterLine}`;
-  if (!confirm(confirmMsg)) return;
+  if (!(await pjlDialog.confirm(confirmMsg, { title: isResend ? "Resend invoice" : "Send invoice", icon: "send", confirmLabel: isResend ? "Resend" : "Send" }))) return;
 
   const btn = document.getElementById("invoiceSendBtn");
   const status = document.getElementById("invoiceSendStatus");
@@ -691,7 +692,7 @@ document.getElementById("invoiceReminderBtn")?.addEventListener("click", async (
 
   const recipient = currentInvoice.customerPhone || "the customer";
   const customerName = currentInvoice.customerName || "this customer";
-  if (!confirm(`Send a reminder SMS to ${customerName} at ${recipient}?`)) return;
+  if (!(await pjlDialog.confirm(`Send a reminder SMS to ${customerName} at ${recipient}?`, { title: "Send reminder", icon: "send", confirmLabel: "Send" }))) return;
 
   const btn = document.getElementById("invoiceReminderBtn");
   const status = document.getElementById("invoiceReminderStatus");
@@ -728,7 +729,7 @@ document.getElementById("invoiceReminderBtn")?.addEventListener("click", async (
       status.dataset.kind = "warn";
       const serverMsg = (data.errors && data.errors[0]) || "Rate-limited.";
       status.textContent = serverMsg;
-      const forceConfirm = confirm(`${serverMsg}\n\nSend anyway (override the rate limit)?`);
+      const forceConfirm = await pjlDialog.confirm(`${serverMsg}\n\nSend anyway (override the rate limit)?`, { title: "Override rate limit", icon: "warning", confirmLabel: "Send anyway" });
       if (forceConfirm) {
         btn.disabled = true;
         btn.textContent = "Sending…";
@@ -872,7 +873,7 @@ document.getElementById("invoiceJunkWarningBtn")?.addEventListener("click", asyn
 
   const recipient = currentInvoice.customerPhone || "the customer";
   const customerName = currentInvoice.customerName || "this customer";
-  if (!confirm(`Send a junk-mail warning SMS to ${customerName} at ${recipient}?`)) return;
+  if (!(await pjlDialog.confirm(`Send a junk-mail warning SMS to ${customerName} at ${recipient}?`, { title: "Send warning", icon: "send", confirmLabel: "Send" }))) return;
 
   const btn = document.getElementById("invoiceJunkWarningBtn");
   const status = document.getElementById("invoiceJunkWarningStatus");
@@ -916,7 +917,7 @@ document.getElementById("invoiceJunkWarningBtn")?.addEventListener("click", asyn
       status.dataset.kind = "warn";
       const serverMsg = (data.errors && data.errors[0]) || "Skipped.";
       status.textContent = serverMsg;
-      const forceConfirm = confirm(`${serverMsg}\n\nSend anyway?`);
+      const forceConfirm = await pjlDialog.confirm(`${serverMsg}\n\nSend anyway?`, { title: "Send anyway", icon: "warning", confirmLabel: "Send anyway" });
       if (forceConfirm) {
         btn.disabled = true;
         btn.textContent = "Sending…";
@@ -1245,7 +1246,7 @@ document.getElementById("invoicePaymentsBody")?.addEventListener("click", async 
     ? "\n\nThis was an online card payment. Reversing it here removes the record only — it does NOT refund the customer. Refund in Stripe first."
     : "";
   const label = PAYMENT_METHOD_LABELS[payment.method] || payment.method;
-  if (!confirm(`Reverse the ${label} payment of ${fmt(payment.amount)} received ${fmtPaymentDate(payment.receivedAt)}?${cardWarning}`)) return;
+  if (!(await pjlDialog.confirm(`Reverse the ${label} payment of ${fmt(payment.amount)} received ${fmtPaymentDate(payment.receivedAt)}?${cardWarning}`, { title: "Reverse payment", icon: "delete", destructive: true, confirmLabel: "Reverse payment" }))) return;
 
   const status = document.getElementById("invoicePaymentStatus");
   reverseBtn.disabled = true;
@@ -1266,7 +1267,7 @@ document.getElementById("invoicePaymentsBody")?.addEventListener("click", async 
   } catch (err) {
     reverseBtn.disabled = false;
     if (status) { status.textContent = err.message || "Failed."; status.dataset.kind = "error"; }
-    else alert(err.message || "Failed.");
+    else await pjlDialog.alert(err.message || "Failed.", { title: "Reverse payment failed", icon: "warning" });
   }
 });
 
@@ -1379,7 +1380,7 @@ document.getElementById("voidConfirmBtn")?.addEventListener("click", async () =>
     currentInvoice = data.invoice;
     closeModal("voidModal");
     render(data.invoice);
-    if (data.warning) alert(data.warning);
+    if (data.warning) await pjlDialog.alert(data.warning, { title: "Void invoice" });
   } catch (e) {
     if (err) err.textContent = e.message || "Failed.";
   } finally {
@@ -1658,7 +1659,7 @@ document.getElementById("reviseConfirmBtn")?.addEventListener("click", async () 
     return;
   }
   if (Math.round(t.total * 100) === Math.round((Number(currentInvoice.total) || 0) * 100)) {
-    if (!confirm("The total hasn't changed. Save this revision anyway?")) return;
+    if (!(await pjlDialog.confirm("The total hasn't changed. Save this revision anyway?", { title: "No change to total", icon: "warning", confirmLabel: "Save anyway" }))) return;
   }
   btn.disabled = true;
   try {
@@ -1691,9 +1692,9 @@ document.getElementById("invoiceSendRevisionBtn")?.addEventListener("click", asy
   const revisions = Array.isArray(currentInvoice.revisions) ? currentInvoice.revisions : [];
   const original = revisions.length ? revisions[0].previousTotal : null;
   const recipient = currentInvoice.customerEmail;
-  if (!recipient) { alert("This invoice has no customer email."); return; }
+  if (!recipient) { await pjlDialog.alert("This invoice has no customer email.", { title: "No customer email", icon: "warning" }); return; }
   const smsBit = currentInvoice.customerSmsSentAt ? " They were texted about the original, so they'll get a text about the revision too." : "";
-  if (!confirm(`Send the REVISED invoice ${currentInvoice.id} (now ${fmt(currentInvoice.total)}, was ${fmt(original)}) to ${recipient}?${smsBit}`)) return;
+  if (!(await pjlDialog.confirm(`Send the REVISED invoice ${currentInvoice.id} (now ${fmt(currentInvoice.total)}, was ${fmt(original)}) to ${recipient}?${smsBit}`, { title: "Send revised invoice?", icon: "send", confirmLabel: "Send" }))) return;
   const btn = document.getElementById("invoiceSendRevisionBtn");
   const status = document.getElementById("invoiceReviseStatus");
   btn.disabled = true;

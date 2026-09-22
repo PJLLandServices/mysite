@@ -174,15 +174,16 @@ form.addEventListener("submit", async (event) => {
   }).filter(Boolean);
 
   if (!lineItems.length) {
-    alert("Pick at least one service / item.");
+    await pjlDialog.alert("Pick at least one service / item.", { title: "Add a service", icon: "warning" });
     return;
   }
   const firstKey = lineItems[0].key;
   if (!bookableKeys.has(firstKey)) {
-    alert(
+    await pjlDialog.alert(
       `The first item drives the appointment length. Pick a bookable service for the first row` +
       ` (spring opening, fall winterization, repair, hydrawise retrofit, or site visit). ` +
-      `Add granular line items in additional rows.`
+      `Add granular line items in additional rows.`,
+      { title: "First item must be bookable", icon: "warning" }
     );
     return;
   }
@@ -228,7 +229,7 @@ form.addEventListener("submit", async (event) => {
     }
     showResult(data, payload);
   } catch (err) {
-    alert(err.message);
+    await pjlDialog.alert(err.message, { title: "Couldn't send link", icon: "warning" });
     submitBtn.disabled = false;
     submitBtn.textContent = originalText;
   }

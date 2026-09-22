@@ -200,7 +200,7 @@ document.getElementById("icalGenerateBtn")?.addEventListener("click", async () =
 });
 
 document.getElementById("icalRegenerateBtn")?.addEventListener("click", async () => {
-  if (!confirm("Regenerate the calendar URL?\n\nThe current URL on your iPhone will stop working — you'll need to add the new one. Use this if the URL leaked.")) return;
+  if (!(await pjlDialog.confirm("Regenerate the calendar URL?\n\nThe current URL on your iPhone will stop working — you'll need to add the new one. Use this if the URL leaked.", { title: "Regenerate calendar URL", icon: "warning", confirmLabel: "Regenerate" }))) return;
   const status = document.getElementById("icalStatusAfter");
   status.textContent = "Regenerating…";
   try {
@@ -213,7 +213,7 @@ document.getElementById("icalRegenerateBtn")?.addEventListener("click", async ()
 });
 
 document.getElementById("icalDisableBtn")?.addEventListener("click", async () => {
-  if (!confirm("Disable the calendar feed?\n\nYour iPhone subscription will stop receiving updates and existing events may disappear.")) return;
+  if (!(await pjlDialog.confirm("Disable the calendar feed?\n\nYour iPhone subscription will stop receiving updates and existing events may disappear.", { title: "Disable calendar feed", icon: "warning", destructive: true, confirmLabel: "Disable" }))) return;
   const status = document.getElementById("icalStatusAfter");
   status.textContent = "Disabling…";
   try {
@@ -368,7 +368,7 @@ async function loadQbStatus() {
 }
 
 document.getElementById("qbDisconnectBtn")?.addEventListener("click", async () => {
-  if (!confirm("Disconnect from QuickBooks? You'll need to re-authorize before pushing invoices again.")) return;
+  if (!(await pjlDialog.confirm("Disconnect from QuickBooks? You'll need to re-authorize before pushing invoices again.", { title: "Disconnect QuickBooks", icon: "warning", confirmLabel: "Disconnect" }))) return;
   await fetch("/api/admin/quickbooks/disconnect", { method: "POST" });
   loadQbStatus();
 });
@@ -547,7 +547,7 @@ document.getElementById("qbSyncItemsBtn")?.addEventListener("click", async () =>
 });
 
 document.getElementById("qbClearErrorsBtn")?.addEventListener("click", async () => {
-  if (!confirm("Clear the recent-errors list? Errors are dropped, not the underlying records.")) return;
+  if (!(await pjlDialog.confirm("Clear the recent-errors list? Errors are dropped, not the underlying records.", { title: "Clear sync errors", icon: "delete", destructive: true, confirmLabel: "Clear" }))) return;
   try {
     const r = await fetch("/api/admin/quickbooks/clear-sync-errors", { method: "POST" });
     const data = await r.json();
@@ -658,7 +658,7 @@ document.getElementById("qbClearErrorsBtn")?.addEventListener("click", async () 
   });
 
   applyBtn.addEventListener("click", async () => {
-    if (!confirm(`Run backfill on ${lastDryRunTotal} lead${lastDryRunTotal === 1 ? "" : "s"}? This creates / matches customer records and is safe to re-run, but the writes are permanent.`)) return;
+    if (!(await pjlDialog.confirm(`Run backfill on ${lastDryRunTotal} lead${lastDryRunTotal === 1 ? "" : "s"}? This creates / matches customer records and is safe to re-run, but the writes are permanent.`, { title: "Run backfill", icon: "warning", confirmLabel: "Run backfill" }))) return;
     dryBtn.disabled = true;
     applyBtn.disabled = true;
     setStatus("Running backfill…", "info");
@@ -714,9 +714,9 @@ document.getElementById("qbClearErrorsBtn")?.addEventListener("click", async () 
   const qb = new URLSearchParams(location.search).get("qb");
   if (!qb) return;
   const status = document.getElementById("qbStatus");
-  if (qb === "connected") setTimeout(() => alert("QuickBooks connected. You can now push invoices."), 200);
-  if (qb === "denied")    setTimeout(() => alert("QuickBooks authorization was denied."), 200);
-  if (qb === "error")     setTimeout(() => alert("QuickBooks connection failed. Check the server logs."), 200);
+  if (qb === "connected") setTimeout(async () => { await pjlDialog.alert("QuickBooks connected. You can now push invoices.", { title: "QuickBooks connected" }); }, 200);
+  if (qb === "denied")    setTimeout(async () => { await pjlDialog.alert("QuickBooks authorization was denied.", { title: "Authorization denied", icon: "warning" }); }, 200);
+  if (qb === "error")     setTimeout(async () => { await pjlDialog.alert("QuickBooks connection failed. Check the server logs.", { title: "Connection failed", icon: "warning" }); }, 200);
   // Clean the URL so refreshes don't repeat the alert.
   history.replaceState(null, "", "/admin/settings");
 })();

@@ -177,7 +177,7 @@ usersBody.addEventListener("click", async (event) => {
   }
 
   if (action === "reset") {
-    if (!confirm(`Email a password-reset link to ${user.email}?`)) return;
+    if (!(await pjlDialog.confirm(`Email a password-reset link to ${user.email}?`, { title: "Send password reset?", icon: "send", confirmLabel: "Send" }))) return;
     button.disabled = true;
     try {
       const res = await fetch(`/api/users/${encodeURIComponent(id)}/reset-password`, { method: "POST" });
@@ -194,7 +194,7 @@ usersBody.addEventListener("click", async (event) => {
 
   if (action === "toggle") {
     const next = !user.disabled;
-    if (next && !confirm(`Disable ${user.name}? They won't be able to sign in until you re-enable.`)) return;
+    if (next && !(await pjlDialog.confirm(`Disable ${user.name}? They won't be able to sign in until you re-enable.`, { title: "Disable user?", icon: "warning", confirmLabel: "Disable" }))) return;
     button.disabled = true;
     try {
       const res = await fetch(`/api/users/${encodeURIComponent(id)}`, {
@@ -215,7 +215,12 @@ usersBody.addEventListener("click", async (event) => {
   }
 
   if (action === "delete") {
-    if (!confirm(`Delete ${user.name} (${user.email}) permanently? This cannot be undone.`)) return;
+    if (!(await pjlDialog.confirm(`Delete ${user.name} (${user.email}) permanently? This cannot be undone.`, {
+      title: "Delete user account?",
+      icon: "delete",
+      destructive: true,
+      confirmLabel: "Delete"
+    }))) return;
     button.disabled = true;
     try {
       const res = await fetch(`/api/users/${encodeURIComponent(id)}`, { method: "DELETE" });

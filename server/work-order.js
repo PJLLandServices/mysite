@@ -360,7 +360,7 @@ async function saveAllWoPhotosToDevice() {
       setTimeout(() => URL.revokeObjectURL(url), 500);
     }
   } catch (err) {
-    alert(err.message || "Couldn't save photos.");
+    await pjlDialog.alert(err.message || "Couldn't save photos.", { title: "Save failed", icon: "warning" });
   } finally {
     if (btn) { btn.disabled = false; btn.classList.remove("is-saving"); }
   }
@@ -805,7 +805,7 @@ async function addZoneRow(zone) {
       const n = await showZoneNumberDialog();
       if (n == null) return;
       if (onPage.has(n)) {
-        alert(`Zone ${n} is already on this work order.`);
+        await pjlDialog.alert(`Zone ${n} is already on this work order.`, { title: "Duplicate zone", icon: "warning" });
         return;
       }
       seed = { number: n, location: "", sprinklerTypes: [], coverage: [], status: "", notes: "" };
@@ -826,7 +826,7 @@ woZones.addEventListener("click", async (event) => {
   if (event.target.matches('[data-action="delete-photo"]')) {
     const thumb = event.target.closest(".wo-photo-thumb");
     if (!thumb) return;
-    if (!confirm("Remove this photo?")) return;
+    if (!(await pjlDialog.confirm("Remove this photo?", { title: "Remove photo", icon: "delete", destructive: true, confirmLabel: "Remove" }))) return;
     const n = Number(thumb.dataset.photoN);
     try {
       const wo = await deleteWoPhoto(n);
@@ -841,7 +841,7 @@ woZones.addEventListener("click", async (event) => {
         const issueId = issuePhotos.dataset.issuePhotos;
         renderIssuePhotosInline(issuePhotos, issueId);
       }
-    } catch (err) { alert(err.message); }
+    } catch (err) { await pjlDialog.alert(err.message, { title: "Couldn't remove photo", icon: "warning" }); }
     return;
   }
   if (event.target.matches('[data-action="add-issue"]')) {
@@ -906,7 +906,7 @@ woZones.addEventListener("change", async (event) => {
         const host = row.querySelector(`[data-issue-photos="${CSS.escape(issueId)}"]`);
         if (host) renderIssuePhotosInline(host, issueId);
       }
-    } catch (err) { alert(err.message); }
+    } catch (err) { await pjlDialog.alert(err.message, { title: "Couldn't upload photo", icon: "warning" }); }
     finally {
       if (label) label.classList.remove("is-uploading");
       input.value = "";
@@ -1258,11 +1258,12 @@ function renderWorkOrderWarranty(wo) {
       }
       return;
     }
-    if (!window.confirm(
+    if (!(await pjlDialog.confirm(
       "Convert this warranty visit to a chargeable service call?\n\n" +
       "The $95 call-out is restored, the warranty claim is closed as converted, and the " +
-      "customer is emailed your reason. They must still sign for the work."
-    )) return;
+      "customer is emailed your reason. They must still sign for the work.",
+      { title: "Convert to chargeable", icon: "warning", confirmLabel: "Convert" }
+    ))) return;
 
     confirmBtn.disabled = true;
     const original = confirmBtn.textContent;
@@ -1302,7 +1303,7 @@ async function postServiceFeeWaiver(body) {
         errEl.textContent = msg;
         errEl.hidden = false;
       }
-      if (!errEl || errEl.offsetParent === null) alert(msg);
+      if (!errEl || errEl.offsetParent === null) await pjlDialog.alert(msg, { title: "Couldn't update waiver", icon: "warning" });
       return;
     }
     loadedWorkOrder = data.workOrder;
@@ -1313,12 +1314,12 @@ async function postServiceFeeWaiver(body) {
     // money already changed, so say so rather than letting the claim sit
     // at "approved — free repair" unnoticed.
     if (data.claimConversion && data.claimConversion.ok === false) {
-      alert("The fee was restored on this work order, but the warranty claim could not be updated. " +
-            "Open the claim and set it to converted manually.");
+      await pjlDialog.alert("The fee was restored on this work order, but the warranty claim could not be updated. " +
+            "Open the claim and set it to converted manually.", { title: "Claim update failed", icon: "warning" });
     }
   } catch (err) {
     if (errEl) { errEl.textContent = err.message; errEl.hidden = false; }
-    else alert(err.message);
+    else await pjlDialog.alert(err.message, { title: "Couldn't save waiver", icon: "warning" });
   }
 }
 
@@ -1368,8 +1369,8 @@ async function postServiceFeeWaiver(body) {
     }
     postServiceFeeWaiver({ waived: true, reason, notes });
   });
-  removeBtn?.addEventListener("click", () => {
-    if (!confirm("Remove the waiver and restore the service call fee?")) return;
+  removeBtn?.addEventListener("click", async () => {
+    if (!(await pjlDialog.confirm("Remove the waiver and restore the service call fee?", { title: "Remove waiver", icon: "warning", confirmLabel: "Remove" }))) return;
     postServiceFeeWaiver({ waived: false });
   });
 })();
@@ -1425,12 +1426,12 @@ function renderIntakeGuarantee(wo) {
 
 document.getElementById("woIntakeMatchBtn")?.addEventListener("click", async () => {
   if (!loadedWorkOrder || loadedWorkOrder.locked) return;
-  if (!confirm("Confirm: the on-site diagnosis matches the AI-quoted scope. This credits 1 hour of repair labour to the customer.")) return;
+  if (!(await pjlDialog.confirm("Confirm: the on-site diagnosis matches the AI-quoted scope. This credits 1 hour of repair labour to the customer.", { title: "Confirm diagnosis match", confirmLabel: "Confirm" }))) return;
   await postIntakeDecisionDesktop({ matched: true });
 });
 document.getElementById("woIntakeMismatchBtn")?.addEventListener("click", async () => {
   if (!loadedWorkOrder || loadedWorkOrder.locked) return;
-  const reason = prompt("Optional: brief note on why the diagnosis didn't match. Leave blank if none.", "");
+  const reason = await pjlDialog.prompt("Optional: brief note on why the diagnosis didn't match. Leave blank if none.", { title: "Diagnosis mismatch", defaultValue: "" });
   if (reason === null) return;
   await postIntakeDecisionDesktop({ matched: false, mismatchReason: reason || "" });
 });
@@ -1457,7 +1458,7 @@ async function postIntakeDecisionDesktop(body) {
       renderSignoff(data.workOrder);
     }
   } catch (err) {
-    alert(err.message || "Couldn't record decision.");
+    await pjlDialog.alert(err.message || "Couldn't record decision.", { title: "Couldn't record decision", icon: "warning" });
   } finally {
     if (matchBtn) matchBtn.disabled = false;
     if (mismBtn) mismBtn.disabled = false;
@@ -1575,7 +1576,7 @@ document.getElementById("woPostSigCompleteBtn")?.addEventListener("click", async
   const id = getWorkOrderId();
   if (!id) return;
   if (loadedWorkOrder.status === "completed") return;
-  if (!confirm("Mark this visit completed? Fires the cascade — service record + draft invoice + customer email.")) return;
+  if (!(await pjlDialog.confirm("Mark this visit completed? Fires the cascade — service record + draft invoice + customer email.", { title: "Mark complete", icon: "warning", confirmLabel: "Mark complete" }))) return;
   const btn = document.getElementById("woPostSigCompleteBtn");
   if (btn) { btn.disabled = true; btn.textContent = "Marking complete…"; }
   try {
@@ -1606,7 +1607,7 @@ document.getElementById("woPostSigCompleteBtn")?.addEventListener("click", async
       } catch (_e) {}
     }, 1500);
   } catch (err) {
-    alert(err.message || "Couldn't mark complete.");
+    await pjlDialog.alert(err.message || "Couldn't mark complete.", { title: "Couldn't mark complete", icon: "warning" });
     if (btn) { btn.disabled = false; btn.textContent = "Mark visit completed"; }
   }
 });
@@ -1898,7 +1899,7 @@ document.getElementById("woOnSiteBuildBtn")?.addEventListener("click", async () 
       renderOnSiteQuote(data.workOrder);
     }
   } catch (err) {
-    alert(err.message || "Couldn't build quote.");
+    await pjlDialog.alert(err.message || "Couldn't build quote.", { title: "Couldn't build quote", icon: "warning" });
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -2084,12 +2085,12 @@ document.getElementById("woOnSitePreviewBtn")?.addEventListener("click", async (
 // Opens the channel picker. The old behaviour fired BOTH email and SMS with
 // no opt-out, which on a commercial account texts the site contact a quote
 // meant for the signatory. Now the operator ticks channels and sends.
-document.getElementById("woOnSiteSendApprovalBtn")?.addEventListener("click", () => {
+document.getElementById("woOnSiteSendApprovalBtn")?.addEventListener("click", async () => {
   if (!loadedWorkOrder) return;
   const customerEmail = loadedWorkOrder.customerEmail || "";
   const customerPhone = loadedWorkOrder.customerPhone || "";
   if (!customerEmail && !customerPhone) {
-    alert("Customer has no email or phone on file. Add one before sending an approval link.");
+    await pjlDialog.alert("Customer has no email or phone on file. Add one before sending an approval link.", { title: "Missing contact info", icon: "warning" });
     return;
   }
   const modal = document.getElementById("woSendApprovalModal");
@@ -2231,7 +2232,7 @@ document.getElementById("woPaidOnSiteSection")?.addEventListener("change", async
     // as soon as the radio is picked.
     if (typeof updateWoSignoffSubmitState === "function") updateWoSignoffSubmitState();
   } catch (err) {
-    alert(err.message || "Couldn't save payment status.");
+    await pjlDialog.alert(err.message || "Couldn't save payment status.", { title: "Couldn't save payment status", icon: "warning" });
     // Revert the radio to the persisted state on failure.
     if (loadedWorkOrder) renderPaidOnSite(loadedWorkOrder);
   }
@@ -2706,7 +2707,7 @@ document.getElementById("woSignoffSubmit")?.addEventListener("click", async () =
     // (Create draft invoice now / Re-run completion cascade) below
     // the post-sig banner will be the next thing Patrick sees.
     if (data.cascade && data.cascade.error && !data.cascade.invoiceId) {
-      alert(`Visit signed and locked. Invoice generation hit a snag — use the Create draft invoice or Re-run cascade buttons below to retry.\n\n(${data.cascade.error})`);
+      await pjlDialog.alert(`Visit signed and locked. Invoice generation hit a snag — use the Create draft invoice or Re-run cascade buttons below to retry.\n\n(${data.cascade.error})`, { title: "Invoice generation issue", icon: "warning" });
     }
     renderSignoff(data.workOrder);
     renderPostSigBanner(data.workOrder);
@@ -2718,7 +2719,7 @@ document.getElementById("woSignoffSubmit")?.addEventListener("click", async () =
   } catch (err) {
     submit.disabled = false;
     submit.textContent = "Sign, lock & generate invoice";
-    alert(err.message || "Couldn't save signature.");
+    await pjlDialog.alert(err.message || "Couldn't save signature.", { title: "Couldn't save signature", icon: "warning" });
   }
 });
 
@@ -2738,7 +2739,7 @@ document.getElementById("woPhotoInput")?.addEventListener("change", async (event
       renderPostSigBanner(wo);
     }
   } catch (err) {
-    alert(err.message || "Couldn't upload photo.");
+    await pjlDialog.alert(err.message || "Couldn't upload photo.", { title: "Couldn't upload photo", icon: "warning" });
   } finally {
     if (label) label.classList.remove("is-uploading");
     input.value = "";
@@ -2862,7 +2863,7 @@ async function postLockAction(action, body) {
       populateForm(data.workOrder);
     }
   } catch (err) {
-    alert(err.message || `Couldn't ${action} this work order.`);
+    await pjlDialog.alert(err.message || `Couldn't ${action} this work order.`, { title: `Couldn't ${action} work order`, icon: "warning" });
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -2870,15 +2871,15 @@ async function postLockAction(action, body) {
 
 document.getElementById("woUnlockBtn")?.addEventListener("click", async () => {
   if (!loadedWorkOrder || loadedWorkOrder.locked !== true) return;
-  const reason = prompt(
+  const reason = await pjlDialog.prompt(
     "Unlocking a signed/bypassed work order re-opens its scope for editing.\n"
     + "The signature or bypass record is kept — only the lock is lifted.\n\n"
     + "Why are you unlocking it? (recorded in the work order's history)",
-    ""
+    { title: "Unlock work order", defaultValue: "" }
   );
   if (reason === null) return; // cancelled
   if (String(reason).trim().length < 10) {
-    alert("Give a bit more detail — the reason is the audit trail for overriding a signed contract.");
+    await pjlDialog.alert("Give a bit more detail — the reason is the audit trail for overriding a signed contract.", { title: "More detail needed", icon: "warning" });
     return;
   }
   await postLockAction("unlock", { reason: String(reason).trim() });
@@ -2886,7 +2887,7 @@ document.getElementById("woUnlockBtn")?.addEventListener("click", async () => {
 
 document.getElementById("woRelockBtn")?.addEventListener("click", async () => {
   if (!loadedWorkOrder || loadedWorkOrder.locked === true) return;
-  if (!confirm("Re-lock this work order? Scope freezes again against the signature/bypass already on file.")) return;
+  if (!(await pjlDialog.confirm("Re-lock this work order? Scope freezes again against the signature/bypass already on file.", { title: "Re-lock work order", confirmLabel: "Re-lock" }))) return;
   await postLockAction("relock", {});
 });
 
@@ -2987,10 +2988,10 @@ woForm.addEventListener("change", (e) => { if (e.target !== woStatus) woFormDirt
 window.addEventListener("beforeunload", (e) => {
   if (woFormDirty) { e.preventDefault(); e.returnValue = ""; }
 });
-backLink?.addEventListener("click", (e) => {
+backLink?.addEventListener("click", async (e) => {
   if (!woFormDirty) return;
   e.preventDefault();
-  if (confirm("Are you sure you want to leave without saving?")) {
+  if (await pjlDialog.confirm("Are you sure you want to leave without saving?", { title: "Leave without saving", icon: "warning", destructive: true, confirmLabel: "Leave" })) {
     woFormDirty = false;
     window.location.assign(backLink.href);
   }
@@ -3124,7 +3125,7 @@ woCreateInvoiceBtn?.addEventListener("click", async () => {
 woRunCascadeBtn?.addEventListener("click", async () => {
   const id = getWorkOrderId();
   if (!id) return;
-  if (!confirm("Re-run the full completion cascade? This is idempotent — if a service record already exists for this WO, it'll just return the existing record.")) return;
+  if (!(await pjlDialog.confirm("Re-run the full completion cascade? This is idempotent — if a service record already exists for this WO, it'll just return the existing record.", { title: "Re-run cascade", icon: "warning", confirmLabel: "Re-run" }))) return;
   woRunCascadeBtn.disabled = true;
   setCascadeStatus("Re-running cascade…", "info");
   try {
@@ -3260,7 +3261,7 @@ deleteBtn.addEventListener("click", async () => {
     }
     window.location.assign(backLink.href);
   } catch (err) {
-    alert(err.message);
+    await pjlDialog.alert(err.message, { title: "Delete failed", icon: "warning" });
   }
 });
 
@@ -3726,11 +3727,11 @@ function closeWoBypassModal() {
 // Resolve action: a jump for gates with a desktop control, a one-tap
 // "Confirm now" for the materials gate (desktop has no packing checklist),
 // and a "resolve in tech mode" hint for gates desktop can't satisfy.
-function openWoGateModal(blockers) {
+async function openWoGateModal(blockers) {
   const modal = document.getElementById("woGateModal");
   const list = document.getElementById("woGateList");
   if (!modal || !list) {
-    alert("Before you can lock & close this work order, please:\n\n• " + blockers.map((b) => b.label).join("\n• "));
+    await pjlDialog.alert("Before you can lock & close this work order, please:\n\n• " + blockers.map((b) => b.label).join("\n• "), { title: "Can't lock & close", icon: "warning" });
     return;
   }
   list.innerHTML = blockers.map((b) => {
@@ -3778,7 +3779,7 @@ async function confirmWoMaterials() {
     loadedWorkOrder = data.workOrder || loadedWorkOrder;
     if (!loadedWorkOrder.materialsConfirmedAt) loadedWorkOrder.materialsConfirmedAt = now;
   } catch (err) {
-    alert(err.message || "Couldn't confirm materials.");
+    await pjlDialog.alert(err.message || "Couldn't confirm materials.", { title: "Couldn't confirm materials", icon: "warning" });
     return;
   }
   // Re-evaluate: re-open with what's left, or close if the list is clear.
@@ -4070,14 +4071,14 @@ document.getElementById("woBypassWarningAck")?.addEventListener("change", update
 document.getElementById("woBypassWarningVerbalAck")?.addEventListener("change", updateWoBypassWarningSubmitState);
 document.getElementById("woBypassSubmit")?.addEventListener("click", () => submitWoBypass(false));
 document.getElementById("woBypassConfirmAnyway")?.addEventListener("click", () => submitWoBypass(true));
-document.getElementById("woBypassRemoteApproval")?.addEventListener("click", () => {
+document.getElementById("woBypassRemoteApproval")?.addEventListener("click", async () => {
   closeWoBypassModal();
   const remoteBtn = document.getElementById("woOnSiteSendApprovalBtn");
   if (remoteBtn) {
     revealIfOffscreen(remoteBtn, "center");
     remoteBtn.focus();
   } else {
-    alert("Open the on-site quote section and tap 'Send for remote approval'.");
+    await pjlDialog.alert("Open the on-site quote section and tap 'Send for remote approval'.", { title: "Remote approval" });
   }
 });
 

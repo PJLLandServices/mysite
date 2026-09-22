@@ -172,7 +172,7 @@ for (const [label, body] of [
   ok(
     "send is blocked while the letter has unsaved changes",
     /const dirty = editorBody !== String\(savedLetter\.body/.test(src) &&
-    /if \(dirty\) \{[\s\S]{0,400}return;/.test(src)
+    /if \(dirty\) \{[\s\S]{0,600}return;/.test(src)
   );
   ok(
     "the send confirmation states whether a letter is attached",

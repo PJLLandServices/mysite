@@ -412,7 +412,7 @@
   skipSeasonBtn.addEventListener("click", async () => {
     const ids = Array.from(state.selected);
     if (!ids.length) return;
-    if (!window.confirm(`Mark ${ids.length} ${ids.length === 1 ? "property" : "properties"} as "skip this season"? They won't appear in the Not-booked filter going forward.`)) return;
+    if (!(await pjlDialog.confirm(`Mark ${ids.length} ${ids.length === 1 ? "property" : "properties"} as "skip this season"? They won't appear in the Not-booked filter going forward.`, { title: "Skip this season", icon: "warning", confirmLabel: "Skip" }))) return;
     let ok = 0;
     let failed = 0;
     for (const propertyId of ids) {

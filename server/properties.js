@@ -366,13 +366,13 @@ bulkDelete.addEventListener("click", async () => {
     await reload();
     flashSuccess(`Deleted ${result.deletedCount} customer${result.deletedCount === 1 ? "" : "s"}.`);
   } catch (err) {
-    alert(err.message);
+    await pjlDialog.alert(err.message, { title: "Delete failed", icon: "warning" });
   }
 });
 
 bulkDeleteAll.addEventListener("click", async () => {
   if (!properties.length) {
-    alert("No customers to delete.");
+    await pjlDialog.alert("No customers to delete.", { title: "Nothing to delete" });
     return;
   }
   const ok = await openConfirm({
@@ -387,7 +387,7 @@ bulkDeleteAll.addEventListener("click", async () => {
     await reload();
     flashSuccess(`Deleted ${result.deletedCount} customer${result.deletedCount === 1 ? "" : "s"}.`);
   } catch (err) {
-    alert(err.message);
+    await pjlDialog.alert(err.message, { title: "Delete failed", icon: "warning" });
   }
 });
 

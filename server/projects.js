@@ -182,12 +182,12 @@ async function runProposalBackfill() {
     });
     const dryData = await dryRun.json().catch(() => ({}));
     if (!dryRun.ok || !dryData.ok) {
-      alert((dryData.errors && dryData.errors[0]) || "Couldn't check for projects to backfill.");
+      await pjlDialog.alert((dryData.errors && dryData.errors[0]) || "Couldn't check for projects to backfill.", { title: "Backfill failed", icon: "warning" });
       return;
     }
     const { total, willEnrich, missingQuote } = dryData.counts;
     if (total === 0) {
-      alert("Nothing to backfill — every converted project already has its proposal data.");
+      await pjlDialog.alert("Nothing to backfill — every converted project already has its proposal data.", { title: "Nothing to backfill" });
       return;
     }
     let msg = `Found ${total} project${total === 1 ? "" : "s"} converted from a quote before this fix, ` +
@@ -196,7 +196,7 @@ async function runProposalBackfill() {
       msg += `\n${missingQuote} can't be — the original quote no longer exists, so ${missingQuote === 1 ? "it" : "those"} will be skipped.`;
     }
     msg += "\n\nApply this now?";
-    if (!confirm(msg)) return;
+    if (!(await pjlDialog.confirm(msg, { title: "Apply backfill?", icon: "warning", confirmLabel: "Apply" }))) return;
 
     const applyRes = await fetch("/api/admin/projects/backfill-proposal-enrichment", {
       method: "POST",
@@ -205,13 +205,13 @@ async function runProposalBackfill() {
     });
     const applyData = await applyRes.json().catch(() => ({}));
     if (!applyRes.ok || !applyData.ok) {
-      alert((applyData.errors && applyData.errors[0]) || "Backfill failed.");
+      await pjlDialog.alert((applyData.errors && applyData.errors[0]) || "Backfill failed.", { title: "Backfill failed", icon: "warning" });
       return;
     }
-    alert(`Done — ${applyData.enriched.length} project${applyData.enriched.length === 1 ? "" : "s"} updated.`);
+    await pjlDialog.alert(`Done — ${applyData.enriched.length} project${applyData.enriched.length === 1 ? "" : "s"} updated.`, { title: "Backfill complete" });
     loadProjects();
   } catch (err) {
-    alert(err.message || "Backfill failed.");
+    await pjlDialog.alert(err.message || "Backfill failed.", { title: "Backfill failed", icon: "warning" });
   }
 }
 

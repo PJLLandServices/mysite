@@ -233,7 +233,7 @@ try {
     ok("…with a button per line and one for the lot",
       /class="eh-resend"/.test(panel) && /id="emailHealthResendAll"/.test(panel), "no resend buttons");
     ok("…and asks before sending the lot",
-      /window\.confirm\(/.test(panel), "Resend all fires with no confirmation");
+      /pjlDialog\.confirm\(/.test(panel), "Resend all fires with no confirmation");
   }
 } finally {
   if (hadLedger) {

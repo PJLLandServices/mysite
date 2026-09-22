@@ -564,7 +564,7 @@ document.getElementById("commAdd").addEventListener("click", async () => {
   const summary = document.getElementById("commSummary").value.trim();
   const notes = document.getElementById("commNotes").value.trim();
   if (!summary) {
-    alert("Add a short summary of the communication.");
+    await pjlDialog.alert("Add a short summary of the communication.", { title: "Missing summary" });
     return;
   }
   try {
@@ -576,14 +576,14 @@ document.getElementById("commAdd").addEventListener("click", async () => {
     });
     const body = await res.json();
     if (!res.ok || !body.ok) {
-      alert(body?.error || "Couldn't save the record.");
+      await pjlDialog.alert(body?.error || "Couldn't save the record.", { title: "Save failed", icon: "warning" });
       return;
     }
     document.getElementById("commSummary").value = "";
     document.getElementById("commNotes").value = "";
     await load();
   } catch (err) {
-    alert(err?.message || "Network error.");
+    await pjlDialog.alert(err?.message || "Network error.", { title: "Save failed", icon: "warning" });
   }
 });
 
@@ -617,7 +617,7 @@ downloadVcardBtn?.addEventListener("click", async () => {
         const body = await res.json();
         if (body?.error) msg = body.error;
       } catch {}
-      alert(msg);
+      await pjlDialog.alert(msg, { title: "Download failed", icon: "warning" });
       return;
     }
     const cd = res.headers.get("Content-Disposition") || "";
@@ -635,7 +635,7 @@ downloadVcardBtn?.addEventListener("click", async () => {
     // Refresh so the new vcfDownloads[] entry appears in the tab.
     await load();
   } catch (err) {
-    alert(err?.message || "Network error.");
+    await pjlDialog.alert(err?.message || "Network error.", { title: "Download failed", icon: "warning" });
   } finally {
     downloadVcardBtn.disabled = false;
     downloadVcardBtn.textContent = originalText;
@@ -902,7 +902,12 @@ async function requestDelete({ purgeTrashed = false, cascade = false } = {}) {
 deleteBtn?.addEventListener("click", async () => {
   if (!original) return;
   const label = original.name || original.id;
-  if (!confirm(`Delete ${label}?\n\nThis is permanent. Use Cancel if you're not sure — you can soft-delete by setting status to Inactive instead.`)) {
+  if (!(await pjlDialog.confirm(`Delete ${label}?\n\nThis is permanent. Use Cancel if you're not sure — you can soft-delete by setting status to Inactive instead.`, {
+    title: "Delete customer?",
+    icon: "delete",
+    destructive: true,
+    confirmLabel: "Delete"
+  }))) {
     return;
   }
   deleteErrorEl.hidden = true;
@@ -914,10 +919,11 @@ deleteBtn?.addEventListener("click", async () => {
     // customer, then retry carrying the confirmation.
     if (!res.ok && body?.code === "trashed_only") {
       const trashSummary = describeLinks(body.trashed);
-      const proceed = confirm(
+      const proceed = await pjlDialog.confirm(
         `${label} has nothing live attached, but ${trashSummary} still in the Trash `
         + `point at this customer.\n\nDeleting the customer permanently deletes `
-        + `${trashSummary} too — they can't be restored afterwards.\n\nGo ahead?`
+        + `${trashSummary} too — they can't be restored afterwards.\n\nGo ahead?`,
+        { title: "Delete customer and trashed records?", icon: "delete", destructive: true, confirmLabel: "Delete" }
       );
       if (!proceed) {
         deleteBtn.disabled = false;
@@ -933,11 +939,12 @@ deleteBtn?.addEventListener("click", async () => {
     // part-paid invoice refuses it even here; the server says so.
     if (!res.ok && body?.code === "linked" && body.references) {
       const counts = describeLinks(body.references);
-      const typed = prompt(
+      const typed = await pjlDialog.prompt(
         `${label} is linked to ${counts}.\n\n`
         + `DELETE EVERYTHING removes the customer and those ${counts} permanently. `
         + `This cannot be undone.\n\n`
-        + `Type DELETE to remove them all, or cancel to stop.`
+        + `Type DELETE to remove them all, or cancel to stop.`,
+        { title: "Delete everything?", defaultValue: "" }
       );
       if (typed !== null && typed.trim().toUpperCase() === "DELETE") {
         ({ res, body } = await requestDelete({ cascade: true }));

@@ -17,6 +17,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/pjl-dialog.css">
   <style>
     .rr-shell { display: flex; flex-direction: column; gap: 20px; }
     .rr-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
@@ -622,7 +623,8 @@
           : mode === "email-now"
             ? `Send Email 1 right now to ${jobs}? They'll receive it within moments.`
             : `Queue review-request emails for ${jobs} on the next Tue–Thu 10:00 slot?`;
-        if (!confirm(prompt)) return;
+        const confirmTitle = mode === "sms" ? "Text review link" : mode === "email-now" ? "Send review email" : "Queue review emails";
+        if (!(await pjlDialog.confirm(prompt, { title: confirmTitle, icon: mode === "queue" ? undefined : "send", confirmLabel: mode === "queue" ? "Queue" : "Send" }))) return;
         [els.backfillEnqueueBtn, els.backfillSendNowBtn, els.backfillSmsBtn].forEach((b) => { b.disabled = true; });
         const activeLabel = btn.textContent;
         btn.textContent = mode === "queue" ? "Queuing…" : "Sending…";
@@ -683,7 +685,7 @@
 
         const btn = event.target.closest("[data-cancel]");
         if (!btn) return;
-        if (!confirm("Cancel this review-request sequence? No further emails will send to this customer for this job.")) return;
+        if (!(await pjlDialog.confirm("Cancel this review-request sequence? No further emails will send to this customer for this job.", { title: "Cancel sequence", icon: "warning", confirmLabel: "Cancel Sequence" }))) return;
         btn.disabled = true;
         try {
           const res = await fetch(`/api/review-requests/${encodeURIComponent(btn.dataset.cancel)}/cancel`, {
@@ -704,6 +706,7 @@
       load().catch((err) => flash(err.message || "Couldn't load.", true));
     })();
   </script>
+  <script src="/crm/pjl-dialog.js"></script>
   <script src="/crm/crm-nav.js"></script>
   <script src="/crm/nav-badges.js?v=1"></script>
 </body>

@@ -173,7 +173,7 @@ async function saveForm(event) {
 
 async function toggleArchive(supplier) {
   const verb = supplier.archived ? "restore" : "archive";
-  if (!confirm(`${verb[0].toUpperCase() + verb.slice(1)} ${supplier.name}?`)) return;
+  if (!(await pjlDialog.confirm(`${verb[0].toUpperCase() + verb.slice(1)} ${supplier.name}?`, { title: verb === "archive" ? "Archive supplier" : "Restore supplier", icon: verb === "archive" ? "warning" : undefined, confirmLabel: verb[0].toUpperCase() + verb.slice(1) }))) return;
   const r = await fetch(`/api/suppliers/${encodeURIComponent(supplier.id)}/archive`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -181,7 +181,7 @@ async function toggleArchive(supplier) {
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok || !data.ok) {
-    alert((data.errors && data.errors[0]) || `Couldn't ${verb} supplier.`);
+    await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't ${verb} supplier.`, { title: `Couldn't ${verb} supplier`, icon: "warning" });
     return;
   }
   await loadSuppliers();

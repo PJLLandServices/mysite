@@ -429,6 +429,7 @@
   @media print{header{background:var(--green-d)!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     button{display:none}}
 </style>
+<link rel="stylesheet" href="/crm/pjl-dialog.css">
 </head>
 <body>
 <header>
@@ -792,6 +793,7 @@
   <div id="partPickerList" class="pp-list"></div>
 </div>
 
+<script src="/crm/pjl-dialog.js"></script>
 <script src="/admin/sitebuilder-engine.js"></script>
 <script>
 /* ══════════ The calculation engine lives in its own file now ══════════
@@ -1637,13 +1639,14 @@ async function loadPdfJs(){
 
 const spUp = { doc:null, file:null, pages:[], selected:new Set(), busy:false };
 
-function spOpenUpload(){
+async function spOpenUpload(){
   if(!linkedProject){
-    alert(
+    await pjlDialog.alert(
       'Attach this design to a project first.\n\n' +
       'Site plans are stored on the project record, so there has to be a project to store ' +
       'them on. Use the Project box at the top of the page — pick a project, then ' +
-      '"Attach & save" — and the upload will be ready.'
+      '"Attach & save" — and the upload will be ready.',
+      { title: 'Attach a project first' }
     );
     // Take them to the control that fixes it rather than leaving them to hunt.
     const panel = el('projectPanel');
@@ -1931,7 +1934,7 @@ async function spUploadSelected(){
     spCancel();
     renderSitePlan();
     render();   // area cards gain the new sheet in their "trace on" picker
-    if(added) alert(`${added} sheet${added===1?'':'s'} added. Calibrate ${added===1?'it':'each one'} against a dimension printed on the drawing before you can trace on it.`);
+    if(added) await pjlDialog.alert(`${added} sheet${added===1?'':'s'} added. Calibrate ${added===1?'it':'each one'} against a dimension printed on the drawing before you can trace on it.`, { title: 'Sheets added' });
   } catch(err){
     spProgress('');
     spErr(String(err && err.message || err) + (added ? `\n\n${added} sheet${added===1?'':'s'} uploaded before this failed — those are saved.` : ''));
@@ -1948,15 +1951,16 @@ async function spDeletePage(pageId){
   const deps = spDependentAreaNames(pageId);
   let force = false;
   if(deps.length){
-    const ok = confirm(
+    const ok = await pjlDialog.confirm(
       `${deps.length} traced ${deps.length===1?'area is':'areas are'} drawn on "${pg.label}":\n\n` +
       `${deps.join('\n')}\n\n` +
       `Deleting the sheet removes the drawing you traced them against. The traced shapes are KEPT — ` +
-      `they're already in feet — they just lose their underlay.\n\nDelete anyway?`
+      `they're already in feet — they just lose their underlay.\n\nDelete anyway?`,
+      { title: 'Delete sheet', icon: 'delete', destructive: true, confirmLabel: 'Delete' }
     );
     if(!ok) return;
     force = true;
-  } else if(!confirm(`Delete "${pg.label}"? The image is removed from the project.`)){
+  } else if(!(await pjlDialog.confirm(`Delete "${pg.label}"? The image is removed from the project.`, { title: 'Delete sheet', icon: 'delete', destructive: true, confirmLabel: 'Delete' }))){
     return;
   }
   try{
@@ -1973,7 +1977,7 @@ async function spDeletePage(pageId){
     areas.forEach(a => { if(a.planRef && a.planRef.pageId === pageId) delete a.planRef; });
     renderSitePlan(); render();
   } catch(err){
-    alert('Couldn’t delete that sheet: ' + (err.message || err));
+    await pjlDialog.alert('Couldn’t delete that sheet: ' + (err.message || err), { title: 'Delete failed', icon: 'warning' });
   }
 }
 
@@ -1999,7 +2003,7 @@ function calRasterUrl(pageId){
   return `/api/projects/${encodeURIComponent(linkedProject.id)}/site-plan/pages/${encodeURIComponent(pageId)}/raster`;
 }
 
-function calOpen(pageId){
+async function calOpen(pageId){
   const pg = spPage(pageId);
   if(!pg) return;
   // Rule 3 — a number a bid depends on is never silently changed. Refuse up
@@ -2007,11 +2011,12 @@ function calOpen(pageId){
   // then bouncing them at save.
   const deps = spDependentAreaNames(pageId);
   if(pg.calibration && pg.calibration.state === 'calibrated' && deps.length){
-    alert(
+    await pjlDialog.alert(
       `"${pg.label}" is already calibrated and ${deps.length} traced ${deps.length===1?'area depends':'areas depend'} on that scale:\n\n` +
       `${deps.join('\n')}\n\n` +
       `Re-scaling now would change ${deps.length===1?'its':'their'} square footage — and therefore the bid — without telling you. ` +
-      `Delete or detach ${deps.length===1?'that area':'those areas'} first, then recalibrate.`
+      `Delete or detach ${deps.length===1?'that area':'those areas'} first, then recalibrate.`,
+      { title: 'Already calibrated', icon: 'warning' }
     );
     return;
   }
@@ -2297,12 +2302,13 @@ async function calSave(){
     const v = j.page.calibration.verify || {};
     if(!j.changed){
       // Nothing moved. Say so rather than implying a fresh calibration.
-      alert('Calibration is unchanged — same points, same distances. Nothing was rewritten.');
+      await pjlDialog.alert('Calibration is unchanged — same points, same distances. Nothing was rewritten.', { title: 'No change' });
     } else {
-      alert(
+      await pjlDialog.alert(
         `"${j.page.label}" calibrated at ${j.page.calibration.ftPerPx.toFixed(5)} ft/px.\n` +
         `Verification ${v.state} at ${v.residualPct}% residual.\n\n` +
-        `You can now trace areas on this sheet — pick it in an area's "Trace on" box.`
+        `You can now trace areas on this sheet — pick it in an area's "Trace on" box.`,
+        { title: 'Calibrated' }
       );
     }
   } catch(err){
@@ -2386,11 +2392,11 @@ function mpAreasOn(pageId){
   return out;
 }
 
-function openMasterPlan(pageId){
+async function openMasterPlan(pageId){
   const pg = spPage(pageId);
-  if(!pg || !spTraceable(pg)){ alert('Calibrate this sheet before opening the master plan.'); return; }
+  if(!pg || !spTraceable(pg)){ await pjlDialog.alert('Calibrate this sheet before opening the master plan.', { title: 'Calibrate first' }); return; }
   const on = mpAreasOn(pageId);
-  if(!on.length){ alert('Nothing is traced on this sheet yet. Trace an area onto it first.'); return; }
+  if(!on.length){ await pjlDialog.alert('Nothing is traced on this sheet yet. Trace an area onto it first.', { title: 'Nothing traced yet' }); return; }
   compute();                                  // make sure LAST_ZONES is current
   mp.pageId=pageId; mp.page=pg; mp.planPage=pg; mp.underHidden=false;
   skProbeRaster(pg.id);
@@ -2829,20 +2835,20 @@ function mpOrphanPins(){
 
 /* ---- tools ---- */
 
-function mpSetTool(t){
+async function mpSetTool(t){
   if(t==='tree'){
-    if(mp.zoneSel==null){ alert('Click the zone the trees belong to first, then pick Tree.'); return; }
+    if(mp.zoneSel==null){ await pjlDialog.alert('Click the zone the trees belong to first, then pick Tree.', { title: 'Pick a zone first' }); return; }
     if(mpTreeAreaFor(mp.zoneSel)<0){
-      alert('Trees go on a drip or tree zone traced on this sheet. Pick one of those zones first.');
+      await pjlDialog.alert('Trees go on a drip or tree zone traced on this sheet. Pick one of those zones first.', { title: 'Pick a zone first' });
       return;
     }
   }
   if(t==='lat'){
-    if(mp.zoneSel==null){ alert('Click the zone whose laterals you want to draw first, then pick Lateral bend.'); return; }
+    if(mp.zoneSel==null){ await pjlDialog.alert('Click the zone whose laterals you want to draw first, then pick Lateral bend.', { title: 'Pick a zone first' }); return; }
     mpEditLaterals(mp.zoneSel); return;
   }
   if(t==='split'){
-    if(mp.zoneSel==null){ alert('Click the zone you want to split first, then pick Split zone.'); return; }
+    if(mp.zoneSel==null){ await pjlDialog.alert('Click the zone you want to split first, then pick Split zone.', { title: 'Pick a zone first' }); return; }
     // A shared drip group is split a different way: one valve per bed on
     // one station. Offer that here rather than sending Patrick off to find
     // the setting on the area card.
@@ -2850,7 +2856,7 @@ function mpSetTool(t){
     if(zg && zg.grouped && !zg.stationGroup){
       const a=areas[(zg.parts||[])[0] && zg.parts[0].areaIdx], g=a && a.valveGroup;
       const n=(zg.members||[]).length;
-      if(g && n>1 && confirm('"'+g+'" is '+n+' beds on one shared valve.\n\nBuild it as one valve per valve box, wired together as one station? Beds fed from the same box share a valve; put a bed in another box and it gets its own valve there. The quote stays one zone; the material list gets a valve per box.')){
+      if(g && n>1 && await pjlDialog.confirm('"'+g+'" is '+n+' beds on one shared valve.\n\nBuild it as one valve per valve box, wired together as one station? Beds fed from the same box share a valve; put a bed in another box and it gets its own valve there. The quote stays one zone; the material list gets a valve per box.', { title: 'Split into one valve per box', icon: 'warning', confirmLabel: 'Build it' })){
         const k=zg.key;
         setValveGroupMode(g, 'station');
         // land on the first bed's valve so the box buttons are right there
@@ -2861,7 +2867,7 @@ function mpSetTool(t){
       return;
     }
     const why=mpSplitBlocked(mp.zoneSel);
-    if(why){ alert(why); return; }
+    if(why){ await pjlDialog.alert(why, { title: "Can't split zone" }); return; }
   }
   mp.tool=t; mp.sel=null; mp.splitA=null; mpPaintTools(); mpDraw();
 }
@@ -2877,7 +2883,7 @@ function mpSplitBlocked(zi){
   return null;
 }
 // Draw or replace the split line for the selected zone (both ends known).
-function mpSetSplit(zi, ax, ay, bx, by){
+async function mpSetSplit(zi, ax, ay, bx, by){
   const z=LAST_ZONES[zi]; if(!z) return false;
   const a=areas[z.parts[0].areaIdx], p=mpPlanFor(a);
   const pt=z.parts[0], sp={ax,ay,bx,by};
@@ -2885,7 +2891,7 @@ function mpSetSplit(zi, ax, ay, bx, by){
   const hs=isTrees ? mpTreesOf(a) : mpHeadsOf(a,p).filter(h=>(h.zone||0)===pt.localZone);
   const nA=hs.filter(h=>headHalf(sp,h)==='A').length, nB=hs.length-nA;
   const what=isTrees?'tree':'head';
-  if(!nA || !nB){ alert('That line leaves every '+what+' on one side ('+hs.length+' '+what+(hs.length===1?'':'s')+'). Draw it between the '+what+'s that should be on different valves.'); return false; }
+  if(!nA || !nB){ await pjlDialog.alert('That line leaves every '+what+' on one side ('+hs.length+' '+what+(hs.length===1?'':'s')+'). Draw it between the '+what+'s that should be on different valves.', { title: 'Split leaves one side empty' }); return false; }
   const r=routingFor(mp.pageId); if(!r.splits) r.splits={};
   r.splits[baseKey(z.key)]={ax,ay,bx,by};
   markDirty(); compute();                     // LAST_ZONES now carries the two halves
@@ -2893,11 +2899,11 @@ function mpSetSplit(zi, ax, ay, bx, by){
   mp.zoneSel=LAST_ZONES.findIndex(x=>x.key===k);
   return true;
 }
-function mpRemoveSplit(zi){
+async function mpRemoveSplit(zi){
   const z=LAST_ZONES[zi]; if(!z) return;
   const r=routingFor(mp.pageId); if(!r || !r.splits) return;
   const k=baseKey(z.key); if(!r.splits[k]) return;
-  if(!confirm('Put '+baseName(z)+' back on one valve? Its B half loses its box assignment.')) return;
+  if(!(await pjlDialog.confirm('Put '+baseName(z)+' back on one valve? Its B half loses its box assignment.', { title: 'Remove split', icon: 'delete', destructive: true, confirmLabel: 'Remove split' }))) return;
   delete r.splits[k];
   if(r.pins) delete r.pins[k+'#B'];
   markDirty(); compute();
@@ -2913,7 +2919,7 @@ function mpPaintTools(){
   const bd=el('mpBody'); if(bd) bd.style.cursor = (mp.tool==='pan') ? '' : 'crosshair';
 }
 
-function mpTap(fx, fy){
+async function mpTap(fx, fy){
   const r=routingFor(mp.pageId); if(!r) return;
   if(mp.tool==='poc'){ r.poc={x:fx, y:fy}; mp.sel='poc'; markDirty(); return; }
   if(mp.tool==='manifold'){ r.manifolds.push({x:fx, y:fy, id:mintId('m_')}); mp.sel='m'+(r.manifolds.length-1); markDirty(); mpBoxesChanged(); mp.sel='m'+(r.manifolds.length-1); return; }
@@ -2966,11 +2972,11 @@ function mpTap(fx, fy){
     if(!mp.splitA){ mp.splitA={x:fx, y:fy}; return; }          // first end — wait for the second
     const a=mp.splitA; mp.splitA=null;
     if(Math.hypot(fx-a.x, fy-a.y)<0.5) return;
-    if(mpSetSplit(mp.zoneSel, a.x, a.y, fx, fy)){ mp.tool='pan'; mpPaintTools(); }
+    if(await mpSetSplit(mp.zoneSel, a.x, a.y, fx, fy)){ mp.tool='pan'; mpPaintTools(); }
     return;
   }
   if(mp.tool==='bend'){
-    if(!r.poc){ alert('Place the point of connection first — the mainline starts there.'); return; }
+    if(!r.poc){ await pjlDialog.alert('Place the point of connection first — the mainline starts there.', { title: 'No point of connection' }); return; }
     // The new node hangs off whatever is selected, so selecting a node part
     // way along the run and clicking gives you a TEE. With nothing selected
     // it continues from the nearest node, which is the common case.
@@ -3030,7 +3036,7 @@ function mpSpliceNode(arr, i){
   // indices above i shift down by one
   arr.forEach(n=>{ if(n.p!=null && n.p>i) n.p-=1; });
 }
-function mpDeleteSel(){
+async function mpDeleteSel(){
   const r=routingFor(mp.pageId); if(!r || !mp.sel) return;
   const h=mp.sel;
   if(h[0]==='t' && h.indexOf('_')>0){
@@ -3048,9 +3054,9 @@ function mpDeleteSel(){
     if(nodes){ mpSpliceNode(nodes, parseInt(h.slice(1),10)); }
     mp.sel=null; markDirty(); mpDraw(); return;
   }
-  if(h[0]==='s'){ mpRemoveSplit(parseInt(h.slice(2),10)); return; }
+  if(h[0]==='s'){ await mpRemoveSplit(parseInt(h.slice(2),10)); return; }
   if(h==='poc'){
-    if(r.main.length && !confirm('Removing the point of connection also drops the '+r.main.length+' mainline node'+(r.main.length===1?'':'s')+' that hang off it. Remove it?')) return;
+    if(r.main.length && !(await pjlDialog.confirm('Removing the point of connection also drops the '+r.main.length+' mainline node'+(r.main.length===1?'':'s')+' that hang off it. Remove it?', { title: 'Remove point of connection', icon: 'delete', destructive: true, confirmLabel: 'Remove' }))) return;
     r.poc=null; r.main=[];
   } else {
     const i=parseInt(h.slice(1), 10);
@@ -3058,7 +3064,7 @@ function mpDeleteSel(){
     else if(h[0]==='m'){
       const gone=r.manifolds[i];
       const held=Object.keys(r.pins||{}).filter(k=>r.pins[k]===(gone&&gone.id));
-      if(held.length && !confirm(held.length+' valve'+(held.length===1?'':'s')+' assigned to this box will go back to their nearest box. Remove it?')) return;
+      if(held.length && !(await pjlDialog.confirm(held.length+' valve'+(held.length===1?'':'s')+' assigned to this box will go back to their nearest box. Remove it?', { title: 'Remove manifold box', icon: 'delete', destructive: true, confirmLabel: 'Remove' }))) return;
       held.forEach(k=>delete r.pins[k]);
       r.manifolds.splice(i,1);
       mp.sel=null; markDirty(); mpBoxesChanged(); return;
@@ -3076,10 +3082,10 @@ function mpUndoPoint(){
   mp.sel=null; markDirty(); mpDraw();
 }
 
-function mpClearRouting(){
+async function mpClearRouting(){
   const r=routingFor(mp.pageId); if(!r) return;
   if(!r.poc && !r.main.length && !r.manifolds.length) return;
-  if(!confirm('Clear the point of connection, every manifold and the whole mainline on this sheet?')) return;
+  if(!(await pjlDialog.confirm('Clear the point of connection, every manifold and the whole mainline on this sheet?', { title: 'Clear routing', icon: 'delete', destructive: true, confirmLabel: 'Clear routing' }))) return;
   r.poc=null; r.main=[]; r.manifolds=[];
   mp.sel=null; markDirty(); mpBoxesChanged();
 }
@@ -3087,11 +3093,11 @@ function mpClearRouting(){
 // Chain the main through the manifolds nearest-first. This is a starting
 // point, not a survey: it runs in straight lines through whatever is in the
 // way, so the bends still have to be dragged onto the real trench route.
-function mpAutoRoute(){
+async function mpAutoRoute(){
   const r=routingFor(mp.pageId); if(!r) return;
-  if(!r.poc){ alert('Place the point of connection first — auto-route starts there.'); return; }
-  if(!r.manifolds.length){ alert('Place at least one manifold — auto-route runs the main to the manifolds.'); return; }
-  if(r.main.length && !confirm('Replace the '+r.main.length+' mainline node'+(r.main.length===1?'':'s')+' you placed — including any tees — with a single straight run through the manifolds?')) return;
+  if(!r.poc){ await pjlDialog.alert('Place the point of connection first — auto-route starts there.', { title: 'No point of connection' }); return; }
+  if(!r.manifolds.length){ await pjlDialog.alert('Place at least one manifold — auto-route runs the main to the manifolds.', { title: 'No manifolds yet' }); return; }
+  if(r.main.length && !(await pjlDialog.confirm('Replace the '+r.main.length+' mainline node'+(r.main.length===1?'':'s')+' you placed — including any tees — with a single straight run through the manifolds?', { title: 'Auto-route mainline', icon: 'warning', destructive: true, confirmLabel: 'Replace' }))) return;
   const left=r.manifolds.map((m,i)=>i);
   const path=[]; let cur=r.poc, parent=-1;
   while(left.length){
@@ -3893,22 +3899,22 @@ function mpLateralNodes(zi){
   const r=routingRO(mp.pageId), z=LAST_ZONES[zi];
   return (z && r.laterals && Array.isArray(r.laterals[z.key])) ? r.laterals[z.key] : null;
 }
-function mpResetLaterals(zi){
+async function mpResetLaterals(zi){
   const r=routingFor(mp.pageId), z=LAST_ZONES[zi];
   if(!r || !z || !r.laterals || !r.laterals[z.key]) return;
-  if(!confirm('Throw away the hand-drawn laterals for '+z.name+' and go back to the automatic route?')) return;
+  if(!(await pjlDialog.confirm('Throw away the hand-drawn laterals for '+z.name+' and go back to the automatic route?', { title: 'Reset laterals', icon: 'warning', destructive: true, confirmLabel: 'Reset' }))) return;
   delete r.laterals[z.key];
   if(mp.tool==='lat'){ mp.tool='pan'; mpPaintTools(); }
   mp.sel=null; markDirty(); mpDraw();
 }
-function mpEditLaterals(zi){
+async function mpEditLaterals(zi){
   if(zi==null) return;
   mp.zoneSel=zi;
   if(!mpLateralNodes(zi)){
     const got=mpAdoptAutoLaterals(zi);
     if(!got){
       const r=routingFor(mp.pageId);
-      if(!r || (!r.manifolds.length && !r.poc)){ alert('Place a manifold (or the point of connection) first — the laterals start from the valve box.'); return; }
+      if(!r || (!r.manifolds.length && !r.poc)){ await pjlDialog.alert('Place a manifold (or the point of connection) first — the laterals start from the valve box.', { title: 'No valve box yet' }); return; }
       if(!r.laterals) r.laterals={};
       r.laterals[LAST_ZONES[zi].key]=[];        // empty tree: first click starts it at the box
     }
@@ -4237,10 +4243,10 @@ function lpToolsHtml(){
     </div>`;
 }
 // One valve's sheet.
-function lpOpen(zi){
+async function lpOpen(zi){
   lp.all=false; lp.zi=zi;
   const h=lpSheetHtml(zi);
-  if(!h){ alert('Nothing of this valve is traced on this sheet.'); return; }
+  if(!h){ await pjlDialog.alert('Nothing of this valve is traced on this sheet.', { title: 'Nothing traced' }); return; }
   el('lpSheet').innerHTML=lpToolsHtml()+h;
   document.body.classList.add('lp-open');
   el('lpOverlay').hidden=false;
@@ -4253,9 +4259,9 @@ function lpZoneOrder(){
     .sort((a,b)=>{ const za=LAST_ZONES[a], zb=LAST_ZONES[b];
       return ((za.station||0)-(zb.station||0)) || String(za.half||'').localeCompare(String(zb.half||'')) || (a-b); });
 }
-function lpOpenAll(){
+async function lpOpenAll(){
   const order=lpZoneOrder();
-  if(!order.length){ alert('No valve is traced on this sheet yet.'); return; }
+  if(!order.length){ await pjlDialog.alert('No valve is traced on this sheet yet.', { title: 'Nothing traced' }); return; }
   lp.all=true; lp.zi=null;
   el('lpSheet').innerHTML=lpToolsHtml()+order.map(lpSheetHtml).join('');
   document.body.classList.add('lp-open');
@@ -4736,7 +4742,7 @@ function skContentBBox(){
   }
   return {minX:0,minY:0,maxX:40,maxY:30};
 }
-function openSketch(i){
+async function openSketch(i){
   ensureArea(areas[i]);
   // Hard gate (accuracy rule 1). An underlay you can trace on without a
   // verified scale is worse than no underlay, because it looks
@@ -4746,17 +4752,18 @@ function openSketch(i){
   if(ref && ref.pageId){
     page = spPage(ref.pageId);
     if(!page){
-      alert('The sheet this area was traced on is no longer on the project. The shape is kept (it is already in feet) — it just has no underlay now.');
+      await pjlDialog.alert('The sheet this area was traced on is no longer on the project. The shape is kept (it is already in feet) — it just has no underlay now.', { title: 'Sheet no longer available' });
       delete areas[i].planRef;
     } else if(!spTraceable(page)){
       const v = (page.calibration && page.calibration.verify) || {};
-      alert(
+      await pjlDialog.alert(
         `"${page.label}" isn't ready to trace on.\n\n` +
         (page.calibration.state !== 'calibrated'
           ? 'It has no verified scale yet. Calibrate it against a dimension printed on the drawing first.'
           : v.state === 'failed'
             ? `Its scale verification FAILED (${v.residualPct}% off the second dimension). Tracing stays blocked until that is resolved — a wrong scale here produces a confidently wrong bid.`
-            : 'Its scale verification is warned and hasn\'t been acknowledged. Re-open the calibration to review it.')
+            : 'Its scale verification is warned and hasn\'t been acknowledged. Re-open the calibration to review it.'),
+        { title: 'Not ready to trace', icon: 'warning' }
       );
       return;
     }
@@ -4795,18 +4802,18 @@ function skUndo(){
   else if(sk.closed){ sk.closed=false; } else { sk.poly.pop(); }
   sk.sel=-1; skDraw();
 }
-function skUse(){
+async function skUse(){
   const a=areas[sk.areaIndex]; a.mode='custom';
   if(sk.tool==='sector'){
-    if(!sk.sector || sk.sector.r<0.5){ alert('Press and drag from the corner to draw the arc first.'); return; }
+    if(!sk.sector || sk.sector.r<0.5){ await pjlDialog.alert('Press and drag from the corner to draw the arc first.', { title: 'Draw the arc first' }); return; }
     delete a.circle; a.shapeKind='sector'; a.arc={cx:sk.sector.cx, cy:sk.sector.cy, r:sk.sector.r, a0:sk.sector.a0, sweep:sk.sweep};
     a.poly=sectorPoly(sk.sector.cx, sk.sector.cy, sk.sector.r, sk.sector.a0, sk.sweep);
   } else if(sk.tool==='circle'){
-    if(!sk.circle || sk.circle.r<0.5){ alert('Press and drag on the grid to draw a circle first.'); return; }
+    if(!sk.circle || sk.circle.r<0.5){ await pjlDialog.alert('Press and drag on the grid to draw a circle first.', { title: 'Draw the circle first' }); return; }
     delete a.arc; a.shapeKind='circle'; a.circle={cx:sk.circle.cx, cy:sk.circle.cy, r:sk.circle.r};
     a.poly=circlePoly(sk.circle.cx, sk.circle.cy, sk.circle.r);
   } else {
-    if(sk.poly.length<3){ alert('Draw at least 3 points to make a shape.'); return; }
+    if(sk.poly.length<3){ await pjlDialog.alert('Draw at least 3 points to make a shape.', { title: 'Not enough points' }); return; }
     delete a.shapeKind; delete a.circle; delete a.arc;
     // 3 dp of a foot is ~0.012 inch — far finer than a raster underlay can
     // express, and full float precision would burn a meaningful slice of
@@ -4815,13 +4822,13 @@ function skUse(){
   }
   el('skOverlay').hidden=true;
   render(); markDirty();
-  if(sk.planPage) skCheckSheetCoverage(sk.planPage.id);
+  if(sk.planPage) await skCheckSheetCoverage(sk.planPage.id);
 }
 
 // Aggregate sanity check. Traced area summing past 80% of the sheet's own
 // calibrated extents is the signature of an order-of-magnitude scale error.
 // A real site CAN cover most of its sheet, so this warns and never blocks.
-function skCheckSheetCoverage(pageId){
+async function skCheckSheetCoverage(pageId){
   const pg = spPage(pageId);
   if(!pg || !pg.calibration || !(pg.calibration.ftPerPx > 0)) return;
   const f = pg.calibration.ftPerPx;
@@ -4835,19 +4842,20 @@ function skCheckSheetCoverage(pageId){
   });
   const fraction = traced / extent;
   if(fraction > 0.8){
-    alert(
+    await pjlDialog.alert(
       `Heads-up on "${pg.label}".\n\n` +
       `Traced areas on this sheet now total ${Math.round(traced).toLocaleString()} sq ft — ` +
       `${Math.round(fraction*100)}% of the whole sheet's calibrated extents ` +
       `(${Math.round(extent).toLocaleString()} sq ft).\n\n` +
       `That is usually the signature of a scale error an order of magnitude out. ` +
-      `Worth re-checking the calibration before this goes into a bid.`
+      `Worth re-checking the calibration before this goes into a bid.`,
+      { title: 'Coverage looks off', icon: 'warning' }
     );
   }
 }
 
 // Attach / detach an area from a calibrated sheet.
-function setAreaPlan(i, pageId){
+async function setAreaPlan(i, pageId){
   const a = areas[i];
   if(!pageId){
     if(a.planRef){ delete a.planRef; render(); markDirty(); }
@@ -4855,7 +4863,7 @@ function setAreaPlan(i, pageId){
   }
   const pg = spPage(pageId);
   if(!pg || !spTraceable(pg)){
-    alert('That sheet doesn\'t have a verified scale yet. Calibrate it first.');
+    await pjlDialog.alert('That sheet doesn\'t have a verified scale yet. Calibrate it first.', { title: 'Not calibrated' });
     render();
     return;
   }
@@ -4864,11 +4872,12 @@ function setAreaPlan(i, pageId){
   // no longer sit where it was drawn, because each page has its own
   // coordinate frame. Say that plainly rather than let it be discovered.
   if(a.planRef && a.planRef.pageId !== pageId && validPoly(a)){
-    const ok = confirm(
+    const ok = await pjlDialog.confirm(
       `"${(a.name||'This area')}" is already traced on another sheet.\n\n` +
       `Moving it to "${pg.label}" keeps the shape and its square footage — the outline is stored ` +
       `in feet — but each sheet has its own coordinate frame, so the shape will not line up with ` +
-      `the new drawing until you re-trace it.\n\nMove it anyway?`
+      `the new drawing until you re-trace it.\n\nMove it anyway?`,
+      { title: 'Move to another sheet', icon: 'warning', confirmLabel: 'Move it' }
     );
     if(!ok){ render(); return; }
   }
@@ -5117,16 +5126,17 @@ const SK_HOOKS = {
     if(h==='DRAWs' && sk.sector && sk.sector.r<0.5) sk.sector=null;
     sk._drawing=null;
   },
-  tap: (fx,fy)=>{
+  tap: async (fx,fy)=>{
     if(sk.tool!=='poly' || sk.closed) return;
     // Hard stop, not a warning. Refusing a point costs one click; a save
     // that fails at the 512 KB cap costs the whole tracing session.
     if(skVertexTotal() >= SP_VERTEX_HARD){
-      alert(
+      await pjlDialog.alert(
         `This design is at ${SP_VERTEX_HARD.toLocaleString()} outline points, which is the limit.\n\n` +
         `Saved designs are capped at 512 KB on the project record and every point costs space. ` +
         `Simplify the most detailed areas — long straight runs rarely need more than two points — ` +
-        `and you can keep tracing.`
+        `and you can keep tracing.`,
+        { title: 'Outline point limit reached', icon: 'warning' }
       );
       return;
     }
@@ -5183,10 +5193,10 @@ function loContentBBox(){
   const bb=polyBBox(pts); const PAD=3;
   return {minX:bb.minX-PAD, minY:bb.minY-PAD, maxX:bb.maxX+PAD, maxY:bb.maxY+PAD};
 }
-function openLayout(i){
+async function openLayout(i){
   ensureArea(areas[i]);
   const a=areas[i];
-  if(!loManualCapable(a.family)){ alert('Manual layout is for rotor, MP, or spray areas.'); return; }
+  if(!loManualCapable(a.family)){ await pjlDialog.alert('Manual layout is for rotor, MP, or spray areas.', { title: "Can't lay out heads" }); return; }
   lo.areaIndex=i; lo.family=a.family; lo.sel=-1;
   const gm=geom(a);
   if(gm.poly){ lo.outline=gm.poly.map(p=>({x:p.x,y:p.y})); }
@@ -5619,9 +5629,9 @@ function setValveGroupMode(g, v){
   if(v==='station') valveGroupModes[String(g)]='station'; else delete valveGroupModes[String(g)];
   render(); markDirty();
 }
-function setValveGroup(i, v){
+async function setValveGroup(i, v){
   if(v === '__new__'){
-    const name = (prompt('Name this shared valve (e.g. "Drip A", "Bldg face drip"):', 'Drip '+String.fromCharCode(65+valveGroupsInUse().length)) || '').trim();
+    const name = ((await pjlDialog.prompt('Name this shared valve (e.g. "Drip A", "Bldg face drip"):', { title: 'Name shared valve', defaultValue: 'Drip '+String.fromCharCode(65+valveGroupsInUse().length) })) || '').trim();
     if(!name){ render(); return; }
     areas[i].valveGroup = name.slice(0,60);
   } else if(v){
@@ -5719,9 +5729,9 @@ function wirePicker(){
 
 // ── Interactive BOM: manual swaps / qty / removals / added lines ──
 let bomOverrides = { edits:{}, removed:{}, custom:[] };   // edits[sku]={sku?,qty?}
-function bomAddLine(){
+async function bomAddLine(){
   const btn=el('bomAddBtn'), sku=btn&&btn.dataset.sku, qty=Math.max(1,parseInt(el('bomAddQty')&&el('bomAddQty').value,10)||1);
-  if(!sku){ alert('Pick a component to add first.'); return; }
+  if(!sku){ await pjlDialog.alert('Pick a component to add first.', { title: 'Pick a component first' }); return; }
   bomOverrides.custom.push({sku,qty}); markDirty(); renderBOM();
 }
 function resetBom(){ bomOverrides={edits:{},removed:{},custom:[]}; markDirty(); renderBOM(); }
@@ -5744,10 +5754,10 @@ function bomFinalLines(parts){
 // Push the BOM onto the project's Material List (draft → update in place; a
 // purchased list is never clobbered — a new list is made instead).
 async function generateMaterialList(){
-  if(!linkedProject){ alert('Attach this design to a project first (Project section at the top).'); return; }
+  if(!linkedProject){ await pjlDialog.alert('Attach this design to a project first (Project section at the top).', { title: 'Attach a project first' }); return; }
   const parts=await loadParts();
   const {catalog, nonCatalog}=bomFinalLines(parts);
-  if(!catalog.length){ alert('No catalog materials yet — add areas first.'); return; }
+  if(!catalog.length){ await pjlDialog.alert('No catalog materials yet — add areas first.', { title: 'Nothing to add' }); return; }
   const note=el('mlGenNote'); note.textContent='Working…';
   const notes='Generated from the System Builder design — '+new Date().toLocaleString()
     + (nonCatalog.length ? '\n\nNot-stocked / design-only items (price + order separately):\n'+nonCatalog.map(n=>`- ${n.qty}× ${n.label}`).join('\n') : '');
@@ -5899,7 +5909,7 @@ async function persistDesignQuiet(){
   try{ await fetch('/api/projects/'+encodeURIComponent(linkedProject.id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({systemDesign:serializeState()})}); }catch(_){}
 }
 async function generateQuote(){
-  if(!linkedProject){ alert('Attach this design to a project first (Project section at the top).'); return; }
+  if(!linkedProject){ await pjlDialog.alert('Attach this design to a project first (Project section at the top).', { title: 'Attach a project first' }); return; }
   const note=el('quoteGenNote'); note.textContent='Working…';
   try{
     await generateMaterialList();                        // both lists move together
@@ -6235,9 +6245,9 @@ function snapshotWaterCost(){
   };
 }
 async function saveWaterCostDoc(){
-  if(!linkedProject){ alert('Attach this design to a project first (Project section at the top).'); return; }
+  if(!linkedProject){ await pjlDialog.alert('Attach this design to a project first (Project section at the top).', { title: 'Attach a project first' }); return; }
   const snap=snapshotWaterCost();
-  if(!snap){ alert('Pick a town / rate and add at least one area first.'); return; }
+  if(!snap){ await pjlDialog.alert('Pick a town / rate and add at least one area first.', { title: 'Nothing to save yet' }); return; }
   el('wcSaveNote').textContent='Saving…';
   try{
     const res=await fetch('/api/projects/'+encodeURIComponent(linkedProject.id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({waterCostEstimate:snap})});
@@ -6562,11 +6572,12 @@ async function saveDesign(){
     // with a message that says what to do.
     const bytes = JSON.stringify(blob).length;
     if(bytes > SP_DESIGN_PREFLIGHT_MAX){
-      alert(
+      await pjlDialog.alert(
         `This design is ${(bytes/1024).toFixed(0)} KB and the project record caps saved designs at 512 KB.\n\n` +
         `Nothing has been lost — this refused before sending, so your work is still on screen. ` +
         `Simplify the most detailed traced areas (long straight runs rarely need more than two points) ` +
-        `and save again. The point counter in the shape editor shows where the weight is.`
+        `and save again. The point counter in the shape editor shows where the weight is.`,
+        { title: 'Design too large to save', icon: 'warning' }
       );
       return;
     }
@@ -6592,10 +6603,10 @@ async function saveDesign(){
         }catch(_){ /* sync is best-effort; save already succeeded */ }
       }
     } else {
-      alert('Save failed: ' + ((j.errors && j.errors[0]) || ('HTTP ' + res.status)));
+      await pjlDialog.alert('Save failed: ' + ((j.errors && j.errors[0]) || ('HTTP ' + res.status)), { title: 'Save failed', icon: 'warning' });
     }
   } catch(err){
-    alert('Save failed: ' + (err.message || err));
+    await pjlDialog.alert('Save failed: ' + (err.message || err), { title: 'Save failed', icon: 'warning' });
   } finally {
     updateProjectBar();
   }
@@ -6604,7 +6615,7 @@ async function saveDesign(){
 async function attachToPicked(){
   const pick = el('projPick');
   const id = pick ? pick.value : '';
-  if(!id){ alert('Pick a project first.'); return; }
+  if(!id){ await pjlDialog.alert('Pick a project first.', { title: 'Pick a project first' }); return; }
   const p = (projectList || []).find(x=>x.id === id);
   linkedProject = { id, name: p ? p.name : '', customerName: p ? p.customerName : '', customerEmail: p ? (p.customerEmail||'') : '', propertyId: p ? (p.propertyId||null) : null, address: p ? (p.address||'') : '' };
   // Reflect the link in the URL so a refresh keeps it (and matches the

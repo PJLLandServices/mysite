@@ -231,7 +231,7 @@ els.container.addEventListener("click", async (event) => {
   event.stopPropagation();
   const id = btn.dataset.woId;
   if (!id) return;
-  if (!confirm(`Run completion cascade on ${id}? Drafts a service record + invoice from the signed scope. Idempotent — safe to re-run.`)) return;
+  if (!(await pjlDialog.confirm(`Run completion cascade on ${id}? Drafts a service record + invoice from the signed scope. Idempotent — safe to re-run.`, { title: "Run completion cascade", icon: "warning" }))) return;
   const original = btn.textContent;
   btn.disabled = true;
   btn.textContent = "Running…";
@@ -249,12 +249,12 @@ els.container.addEventListener("click", async (event) => {
     } else {
       msg = `Cascade fired. Service record on file (no billable line items).`;
     }
-    alert(msg);
+    await pjlDialog.alert(msg, { title: "Run completion cascade" });
     await load(); // refresh the list — this WO should drop out of the recovery filter
   } catch (err) {
     btn.disabled = false;
     btn.textContent = original;
-    alert(err.message || "Couldn't run cascade.");
+    await pjlDialog.alert(err.message || "Couldn't run cascade.", { title: "Cascade failed", icon: "warning" });
   }
 });
 

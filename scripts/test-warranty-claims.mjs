@@ -525,7 +525,7 @@ ok("a warranty WO is 'live' only until it is converted",
   /liveWarranty = [^;]*!wo\.warrantyClaim\.converted/.test(woJs));
 // An error written into a hidden panel is worse than no error.
 ok("a refused fee change falls back to an alert when its panel is hidden",
-  woJs.includes("errEl.offsetParent === null) alert(msg)"));
+  woJs.includes("errEl.offsetParent === null) await pjlDialog.alert(msg"));
 
 ok("the tech UI shows the warranty banner", techHtml.includes('id="techWarranty"'));
 ok("the tech banner names the claim", techHtml.includes('id="techWarrantyClaim"'));

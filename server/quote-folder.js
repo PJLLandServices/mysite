@@ -299,25 +299,29 @@ async function load() {
 }
 
 async function convertToProject(quoteId) {
-  if (!confirm(`Convert ${quoteId} to a project? Any material lists attached to this quote will move over.`)) return;
+  if (!(await pjlDialog.confirm(`Convert ${quoteId} to a project? Any material lists attached to this quote will move over.`, {
+    title: "Convert to project?",
+    icon: "warning",
+    confirmLabel: "Convert"
+  }))) return;
   try {
     const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/convert-to-project`, { method: "POST" });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
-      alert((data.errors && data.errors[0]) || `Couldn't convert (${r.status})`);
+      await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't convert (${r.status})`, { title: "Couldn't convert", icon: "warning" });
       return;
     }
     if (data.alreadyExisted) {
       // Already-converted — go to the existing project rather than create a duplicate.
-      alert(`A project for ${quoteId} already exists (${data.project.id}). Opening it.`);
+      await pjlDialog.alert(`A project for ${quoteId} already exists (${data.project.id}). Opening it.`, { title: "Project already exists", icon: "info" });
     } else if (data.linkedExistingProject) {
       // This quote was built from a project's System Builder design —
       // linked to that project instead of spinning up a duplicate.
-      alert(`This quote was built from ${data.project.name || data.project.id}'s System Builder design — linked to that project instead of creating a new one.`);
+      await pjlDialog.alert(`This quote was built from ${data.project.name || data.project.id}'s System Builder design — linked to that project instead of creating a new one.`, { title: "Linked to existing project", icon: "info" });
     }
     location.href = `/admin/project/${encodeURIComponent(data.project.id)}`;
   } catch (err) {
-    alert(err.message || "Couldn't convert quote to project.");
+    await pjlDialog.alert(err.message || "Couldn't convert quote to project.", { title: "Couldn't convert", icon: "warning" });
   }
 }
 
@@ -358,16 +362,16 @@ async function deleteQuote(quoteId) {
   const customer = (cached && cached.customerEmail) || "(no email)";
   const warning = cached ? describeDescendants(cached) : "";
 
-  const confirmed = window.pjlBulkModal
-    ? await window.pjlBulkModal.confirm({
-        title: "Delete this quote?",
-        body: `${quoteId} — ${customer}${status ? " — " + status : ""}\n\nThe quote will be removed from this list. It can be restored later from the "Show deleted" view. Linked bookings, projects, and invoices are not affected.`,
-        warning,
-        confirmLabel: "Delete",
-        cancelLabel: "Cancel",
-        destructive: true
-      })
-    : window.confirm(`Delete ${quoteId}? (Restore later via "Show deleted".)`);
+  const confirmed = await pjlDialog.confirm(
+    `${quoteId} — ${customer}${status ? " — " + status : ""}\n\nThe quote will be removed from this list. It can be restored later from the "Show deleted" view. Linked bookings, projects, and invoices are not affected.`,
+    {
+      title: "Delete this quote?",
+      icon: "delete",
+      warning,
+      confirmLabel: "Delete",
+      destructive: true
+    }
+  );
 
   if (!confirmed) return;
 
@@ -375,7 +379,7 @@ async function deleteQuote(quoteId) {
     const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}`, { method: "DELETE" });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
-      alert((data.errors && data.errors[0]) || `Couldn't delete (${r.status})`);
+      await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't delete (${r.status})`, { title: "Couldn't delete", icon: "warning" });
       return;
     }
     // Optimistic remove if not in show-deleted mode; otherwise re-fetch
@@ -386,7 +390,7 @@ async function deleteQuote(quoteId) {
       load();
     }
   } catch (err) {
-    alert(err.message || "Couldn't delete quote.");
+    await pjlDialog.alert(err.message || "Couldn't delete quote.", { title: "Couldn't delete", icon: "warning" });
   }
 }
 
@@ -400,7 +404,11 @@ async function sendQuote(quoteId) {
   const total = cached && Number.isFinite(Number(cached.total))
     ? ` — $${Number(cached.total).toFixed(2)} incl. HST`
     : "";
-  if (!confirm(`Send ${quoteId} to ${customer}${total}?\n\nThe customer gets an email with the quote PDF plus an SMS, and can accept it in their portal.`)) return;
+  if (!(await pjlDialog.confirm(`Send ${quoteId} to ${customer}${total}?\n\nThe customer gets an email with the quote PDF plus an SMS, and can accept it in their portal.`, {
+    title: "Send quote?",
+    icon: "send",
+    confirmLabel: "Send"
+  }))) return;
   try {
     const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/send-for-approval`, {
       method: "POST",
@@ -409,18 +417,18 @@ async function sendQuote(quoteId) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
-      alert((data.errors && data.errors[0]) || `Couldn't send (${r.status})`);
+      await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't send (${r.status})`, { title: "Couldn't send", icon: "warning" });
       return;
     }
     const problems = [];
     if (data.emailError) problems.push(`Email failed: ${data.emailError}`);
     if (data.smsError) problems.push(`SMS failed: ${data.smsError}`);
     if (problems.length) {
-      alert(`${quoteId} marked sent, but:\n${problems.join("\n")}\n\nUse Re-send to retry delivery.`);
+      await pjlDialog.alert(`${quoteId} marked sent, but:\n${problems.join("\n")}\n\nUse Re-send to retry delivery.`, { title: "Sent with delivery issues", icon: "warning" });
     }
     load();
   } catch (err) {
-    alert(err.message || "Couldn't send quote.");
+    await pjlDialog.alert(err.message || "Couldn't send quote.", { title: "Couldn't send", icon: "warning" });
   }
 }
 
@@ -433,10 +441,13 @@ async function sendCombined(quoteId) {
   const total = cached && Number.isFinite(Number(cached.total))
     ? ` — $${Number(cached.total).toFixed(2)} incl. HST`
     : "";
-  const to = prompt(`Send the combined proposal ${quoteId}${total} to the customer.\n\nThey'll get a link and verify their phone to open it.\n\nEmail address:`, onFile);
+  const to = await pjlDialog.prompt(`Send the combined proposal ${quoteId}${total} to the customer.\n\nThey'll get a link and verify their phone to open it.\n\nEmail address:`, {
+    title: "Send combined proposal?",
+    defaultValue: onFile
+  });
   if (to == null) return; // cancelled
   const email = String(to).trim();
-  if (!email) { alert("An email address is required to send."); return; }
+  if (!email) { await pjlDialog.alert("An email address is required to send.", { title: "Email required" }); return; }
   try {
     const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/send-proposal-for-approval`, {
       method: "POST",
@@ -445,14 +456,14 @@ async function sendCombined(quoteId) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
-      alert((data.errors && data.errors[0]) || `Couldn't send (${r.status})`);
+      await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't send (${r.status})`, { title: "Couldn't send", icon: "warning" });
       return;
     }
-    if (data.emailError) alert(`${quoteId} marked sent, but email failed: ${data.emailError}\n\nUse Re-send to retry.`);
-    else alert(`Sent to ${email}. The customer gets a link to the combined proposal.`);
+    if (data.emailError) await pjlDialog.alert(`${quoteId} marked sent, but email failed: ${data.emailError}\n\nUse Re-send to retry.`, { title: "Email failed", icon: "warning" });
+    else await pjlDialog.alert(`Sent to ${email}. The customer gets a link to the combined proposal.`, { title: "Sent" });
     load();
   } catch (err) {
-    alert(err.message || "Couldn't send the combined proposal.");
+    await pjlDialog.alert(err.message || "Couldn't send the combined proposal.", { title: "Couldn't send", icon: "warning" });
   }
 }
 
@@ -464,12 +475,15 @@ async function generateSmartControllerPage(quoteId) {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({})
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || `Couldn't generate (${r.status})`); return; }
-    if (confirm(`Page generated for ${quoteId}. Open the preview?`)) {
+    if (!r.ok || !data.ok) { await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't generate (${r.status})`, { title: "Couldn't generate", icon: "warning" }); return; }
+    if (await pjlDialog.confirm(`Page generated for ${quoteId}. Open the preview?`, {
+      title: "Open preview?",
+      confirmLabel: "Open"
+    })) {
       window.open(`/approve/${encodeURIComponent(quoteId)}`, "_blank");
     }
     load();
-  } catch (err) { alert(err.message || "Couldn't generate the page."); }
+  } catch (err) { await pjlDialog.alert(err.message || "Couldn't generate the page.", { title: "Couldn't generate", icon: "warning" }); }
 }
 
 // Send a designed, phone-gated proposal (smart-controller upgrade) to the
@@ -477,25 +491,32 @@ async function generateSmartControllerPage(quoteId) {
 async function sendSmartController(quoteId) {
   const cached = lastLoadedQuotes.find((q) => q.id === quoteId);
   if (cached && !cached.proposalDocument) {
-    if (!confirm(`Heads up: the page for ${quoteId} hasn't been generated yet — the customer would get the plain quote, not the designed page.\n\nGenerate it first (click "Generate page"), or OK to send anyway.`)) return;
+    if (!(await pjlDialog.confirm(`Heads up: the page for ${quoteId} hasn't been generated yet — the customer would get the plain quote, not the designed page.\n\nGenerate it first (click "Generate page"), or OK to send anyway.`, {
+      title: "Send without the designed page?",
+      icon: "warning",
+      confirmLabel: "Send anyway"
+    }))) return;
   }
   const onFile = (cached && cached.customerEmail) || "";
   const total = cached && Number.isFinite(Number(cached.total))
     ? ` — $${Number(cached.total).toFixed(2)} incl. HST` : "";
-  const to = prompt(`Send the smart-controller upgrade ${quoteId}${total} to the customer.\n\nThey'll get a link and verify their phone to open it.\n\nEmail address:`, onFile);
+  const to = await pjlDialog.prompt(`Send the smart-controller upgrade ${quoteId}${total} to the customer.\n\nThey'll get a link and verify their phone to open it.\n\nEmail address:`, {
+    title: "Send smart-controller upgrade?",
+    defaultValue: onFile
+  });
   if (to == null) return;
   const email = String(to).trim();
-  if (!email) { alert("An email address is required to send."); return; }
+  if (!email) { await pjlDialog.alert("An email address is required to send.", { title: "Email required" }); return; }
   try {
     const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/send-proposal-for-approval`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sendEmail: true, email })
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || `Couldn't send (${r.status})`); return; }
-    if (data.emailError) alert(`${quoteId} marked sent, but email failed: ${data.emailError}\n\nUse Re-send to retry.`);
-    else alert(`Sent to ${email}. The customer gets a link to the upgrade proposal.`);
+    if (!r.ok || !data.ok) { await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't send (${r.status})`, { title: "Couldn't send", icon: "warning" }); return; }
+    if (data.emailError) await pjlDialog.alert(`${quoteId} marked sent, but email failed: ${data.emailError}\n\nUse Re-send to retry.`, { title: "Email failed", icon: "warning" });
+    else await pjlDialog.alert(`Sent to ${email}. The customer gets a link to the upgrade proposal.`, { title: "Sent" });
     load();
-  } catch (err) { alert(err.message || "Couldn't send the upgrade proposal."); }
+  } catch (err) { await pjlDialog.alert(err.message || "Couldn't send the upgrade proposal.", { title: "Couldn't send", icon: "warning" }); }
 }
 
 // "View as customer" — opens the customer's exact e-sign page. The tab
@@ -512,14 +533,14 @@ async function previewQuote(quoteId) {
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok || !data.previewUrl) {
       if (tab) tab.close();
-      alert((data.errors && data.errors[0]) || `Couldn't open the preview (${r.status})`);
+      await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't open the preview (${r.status})`, { title: "Couldn't open preview", icon: "warning" });
       return;
     }
     if (tab) tab.location = data.previewUrl;
     else window.location.href = data.previewUrl; // popup blocked — same-tab fallback
   } catch (err) {
     if (tab) tab.close();
-    alert(err.message || "Couldn't open the preview.");
+    await pjlDialog.alert(err.message || "Couldn't open the preview.", { title: "Couldn't open preview", icon: "warning" });
   }
 }
 
@@ -529,12 +550,12 @@ async function restoreQuote(quoteId) {
     const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/restore`, { method: "POST" });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) {
-      alert((data.errors && data.errors[0]) || `Couldn't restore (${r.status})`);
+      await pjlDialog.alert((data.errors && data.errors[0]) || `Couldn't restore (${r.status})`, { title: "Couldn't restore", icon: "warning" });
       return;
     }
     load();
   } catch (err) {
-    alert(err.message || "Couldn't restore quote.");
+    await pjlDialog.alert(err.message || "Couldn't restore quote.", { title: "Couldn't restore", icon: "warning" });
   }
 }
 
@@ -744,18 +765,18 @@ if (scq.openBtn) {
       }
       if (data.existing) {
         scq.backdrop.hidden = true;
-        alert(`A smart-controller draft already exists for this property — ${data.quote.id}. Opening the folder so you can review and send it.`);
+        await pjlDialog.alert(`A smart-controller draft already exists for this property — ${data.quote.id}. Opening the folder so you can review and send it.`, { title: "Draft already exists", icon: "info" });
         load();
         return;
       }
       if (data.custom) {
         scq.backdrop.hidden = true;
-        alert(`${data.zones}+ zones is a custom quote — captured as a CRM lead instead (no priced quote). You'll find it in the CRM.`);
+        await pjlDialog.alert(`${data.zones}+ zones is a custom quote — captured as a CRM lead instead (no priced quote). You'll find it in the CRM.`, { title: "Captured as a lead", icon: "info" });
         load();
         return;
       }
       scq.backdrop.hidden = true;
-      alert(`Draft ${data.quote.id} created — review the PDF, then tap "Send to customer".`);
+      await pjlDialog.alert(`Draft ${data.quote.id} created — review the PDF, then tap "Send to customer".`, { title: "Draft created" });
       load();
     } catch (err) {
       scq.create.disabled = false;
@@ -769,7 +790,9 @@ if (scq.openBtn) {
 if (newProposalBtn) {
   newProposalBtn.addEventListener("click", async (e) => {
     e.preventDefault();
-    const email = prompt("Customer email for the new proposal (can be edited in the builder):");
+    const email = await pjlDialog.prompt("Customer email for the new proposal (can be edited in the builder):", {
+      title: "New project proposal"
+    });
     if (email === null) return; // cancelled
     try {
       const r = await fetch("/api/quotes/proposal", {
@@ -782,12 +805,12 @@ if (newProposalBtn) {
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
-        alert(data.errors?.[0] || `Couldn't create proposal (${r.status})`);
+        await pjlDialog.alert(data.errors?.[0] || `Couldn't create proposal (${r.status})`, { title: "Couldn't create proposal", icon: "warning" });
         return;
       }
       location.href = `/admin/quote/${encodeURIComponent(data.quote.id)}/proposal`;
     } catch (err) {
-      alert(err.message || "Couldn't create proposal.");
+      await pjlDialog.alert(err.message || "Couldn't create proposal.", { title: "Couldn't create proposal", icon: "warning" });
     }
   });
 }

@@ -223,7 +223,7 @@ if (deleteBookingBtn) {
       original.address || "",
       original.scheduledFor ? formatDateTime(original.scheduledFor) : ""
     ].filter(Boolean).join("\n");
-    if (!window.confirm(lines)) return;
+    if (!(await pjlDialog.confirm(lines, { title: "Delete booking", icon: "delete", destructive: true, confirmLabel: "Delete" }))) return;
 
     deleteBookingError.hidden = true;
     deleteBookingBtn.disabled = true;

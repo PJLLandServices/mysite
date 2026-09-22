@@ -1,0 +1,180 @@
+/* PJL Dialog — shared branded replacement for alert()/confirm()/prompt().
+   Visual language matches .pjl-bulk-modal-* in crm.css (same panel shape,
+   fonts, colors, mobile bottom-sheet behavior) so it reads as one
+   consistent system rather than a fourth pattern. */
+
+.pjl-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 720;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  animation: pjl-dialog-fade 0.15s ease-out;
+}
+@keyframes pjl-dialog-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.pjl-dialog-panel {
+  max-width: 480px;
+  width: 100%;
+  background: var(--pjl-cream);
+  border-radius: 8px;
+  padding: 24px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.35);
+  font-family: "DM Sans", sans-serif;
+}
+.pjl-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 12px;
+}
+.pjl-dialog-icon {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  color: var(--pjl-text-mid);
+}
+.pjl-dialog-panel-destructive .pjl-dialog-icon,
+.pjl-dialog-icon-warning,
+.pjl-dialog-icon-delete {
+  color: #D32F2F;
+}
+.pjl-dialog-icon-send {
+  color: var(--pjl-green);
+}
+.pjl-dialog-icon-info {
+  color: #2C6FAD;
+}
+.pjl-dialog-title {
+  margin: 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 28px;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  color: var(--pjl-dark);
+}
+.pjl-dialog-body {
+  margin: 0 0 18px;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--pjl-text);
+  /* Honor newlines so callers can structure intro + detail without
+     composing separate <p> elements. */
+  white-space: pre-line;
+}
+.pjl-dialog-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: -6px 0 18px;
+  padding: 10px 12px;
+  border: 1.5px solid var(--pjl-border);
+  border-radius: 6px;
+  font-size: 16px;
+  font-family: "DM Sans", sans-serif;
+  background: #FFFFFF;
+  color: var(--pjl-text);
+}
+.pjl-dialog-input:focus {
+  outline: none;
+  border-color: var(--pjl-green);
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.06);
+}
+.pjl-dialog-warning {
+  margin: -6px 0 18px;
+  padding: 10px 12px;
+  background: #FFF5E0;
+  border: 1px solid #F0D488;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #6E4A1A;
+}
+.pjl-dialog-typed-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pjl-text-mid);
+  margin: 0 0 6px;
+}
+.pjl-dialog-typed-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 18px;
+  padding: 10px 12px;
+  border: 1.5px solid var(--pjl-border);
+  border-radius: 6px;
+  font-size: 16px;
+  font-family: "DM Sans", sans-serif;
+  background: #FFFFFF;
+  color: var(--pjl-text);
+}
+.pjl-dialog-typed-input:focus {
+  outline: none;
+  border-color: var(--pjl-amber);
+  box-shadow: 0 0 0 3px var(--pjl-amber-pale);
+}
+.pjl-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.pjl-dialog-btn {
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1.5px solid transparent;
+  cursor: pointer;
+  font-family: "DM Sans", sans-serif;
+  min-width: 90px;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.pjl-dialog-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pjl-dialog-btn-secondary {
+  background: #FFFFFF;
+  border-color: var(--pjl-border);
+  color: var(--pjl-text);
+}
+.pjl-dialog-btn-secondary:hover:not(:disabled) {
+  background: var(--pjl-cream);
+  border-color: var(--pjl-text-muted);
+}
+.pjl-dialog-btn-primary {
+  background: var(--pjl-green);
+  border-color: var(--pjl-green);
+  color: #FFFFFF;
+}
+.pjl-dialog-btn-primary:hover:not(:disabled) {
+  background: var(--pjl-green-mid);
+  border-color: var(--pjl-green-mid);
+}
+.pjl-dialog-btn-destructive {
+  background: #D32F2F;
+  border-color: #D32F2F;
+  color: #FFFFFF;
+}
+.pjl-dialog-btn-destructive:hover:not(:disabled) {
+  background: #B71C1C;
+  border-color: #B71C1C;
+}
+
+@media (max-width: 600px) {
+  .pjl-dialog-backdrop { align-items: flex-end; padding: 0; }
+  .pjl-dialog-panel {
+    max-width: 100%;
+    border-radius: 14px 14px 0 0;
+    padding: 22px 18px 18px;
+  }
+  .pjl-dialog-actions { flex-direction: column-reverse; }
+  .pjl-dialog-actions > * { width: 100%; min-height: 48px; }
+}

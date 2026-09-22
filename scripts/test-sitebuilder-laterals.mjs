@@ -22,6 +22,8 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const html = fs.readFileSync(path.join(here, '..', 'server', 'sitebuilder.html'), 'utf8');
+const pjlDialogJs = fs.readFileSync(path.join(here, '..', 'server', 'pjl-dialog.js'), 'utf8');
+const pjlDialogCss = fs.readFileSync(path.join(here, '..', 'server', 'pjl-dialog.css'), 'utf8');
 // The calculation engine is its own file since 2026-09-21. The page
 // refuses to start without it, so the route table below has to serve it.
 const engineJs = fs.readFileSync(path.join(here, '..', 'server', 'sitebuilder-engine.js'), 'utf8');
@@ -61,6 +63,8 @@ await page.route('**/*', route => {
   const url = new URL(route.request().url());
   const m = route.request().method();
   if (url.pathname === '/admin/sitebuilder') return route.fulfill({ contentType: 'text/html', body: html });
+  if (url.pathname === '/crm/pjl-dialog.js') return route.fulfill({ contentType: 'application/javascript', body: pjlDialogJs });
+  if (url.pathname === '/crm/pjl-dialog.css') return route.fulfill({ contentType: 'text/css', body: pjlDialogCss });
   if (url.pathname === '/admin/sitebuilder-engine.js') return route.fulfill({ contentType: 'text/javascript', body: engineJs });
   if (url.pathname === '/api/projects/PROJ-TEST-0002' && m === 'GET') {
     const p = project(); if (saved) p.systemDesign = saved;
@@ -106,11 +110,11 @@ check(grp1.blob && grp1.blob['Front drip'] === 'station', 'mode saved in the des
 await page.evaluate(() => setValveGroupMode('Front drip', ''));
 await page.evaluate(id => openMasterPlan(id), PAGE);
 await page.waitForSelector('#mpOverlay:not([hidden])');
-const offer = await page.evaluate(() => {
+const offer = await page.evaluate(async () => {
   const zi = LAST_ZONES.findIndex(z => z.grouped);
   const before = LAST_ZONES.length;
-  window.confirm = () => true;
-  mp.zoneSel = zi; mpSetTool('split');
+  window.pjlDialog.confirm = async () => true;
+  mp.zoneSel = zi; await mpSetTool('split');
   return { before, after: LAST_ZONES.length, mode: valveGroupMode('Front drip'), sel: mp.zoneSel != null ? LAST_ZONES[mp.zoneSel].key : null, tool: mp.tool };
 });
 check(offer.mode === 'station' && offer.after === offer.before + 1, 'Split zone on a shared drip group switches it to one valve per box (two boxes, two valves)');
@@ -227,13 +231,12 @@ check(removed === 3, 'Delete removes a tree again');
 // --- a tree zone splits across two boxes, like a lawn --------------------
 // Trees sit at y = 30, 50, 70; a line across at y = 60 leaves two above and
 // one below. Each half is its own valve, on one station.
-const tsplit = await page.evaluate(zi => {
-  window.alert = () => {};
+const tsplit = await page.evaluate(async zi => {
   mpSelectZone(zi); if (mp.zoneSel !== zi) mpSelectZone(zi);
   const blocked = mpSplitBlocked(zi);
-  mpSetTool('split');
+  await mpSetTool('split');
   const armed = mp.tool;
-  mpTap(120, 60); mpTap(140, 60); mpDraw();
+  await mpTap(120, 60); await mpTap(140, 60); mpDraw();
   const halves = LAST_ZONES.filter(z => z.key.startsWith('z:a_trees:'));
   const a = halves.find(z => z.half === 'A'), b = halves.find(z => z.half === 'B');
   const feeds = z => mpZoneTrees(z).length;
@@ -253,7 +256,7 @@ check(tsplit.treesA + tsplit.treesB === 3 && tsplit.treesA > 0 && tsplit.treesB 
 check(tsplit.fedA === tsplit.treesA && tsplit.fedB === tsplit.treesB, 'each half runs pipe only to its own trees');
 check(tsplit.gpmSum === tsplit.stationGpm, 'the halves add up to the station flow');
 check(tsplit.boxOfB === 1 && tsplit.drawnHalves === 1, 'the B half sits in the east box; the split line is drawn once');
-const tunsplit = await page.evaluate(key => { window.confirm = () => true; const zi = LAST_ZONES.findIndex(z => z.key === key); mpRemoveSplit(zi);
+const tunsplit = await page.evaluate(async key => { window.pjlDialog.confirm = async () => true; const zi = LAST_ZONES.findIndex(z => z.key === key); await mpRemoveSplit(zi);
   return LAST_ZONES.filter(z => z.key.startsWith('z:a_trees:')).length; }, tsplit.key);
 check(tunsplit === 1, 'remove split puts the trees back on one valve');
 
@@ -382,7 +385,7 @@ const back = await page.evaluate(({ PAGE, key }) => { openMasterPlan(PAGE); cons
 check(back.custom && Math.abs(back.ft - hand.ft3) < 0.01, 'after reload the hand-drawn run is back, same length');
 const strip = b => { const c = JSON.parse(JSON.stringify(b)); delete c.savedAt; return JSON.stringify(c); };
 check(strip(back.blob) === strip(blob), 'save → reload → save round-trips byte-for-byte');
-const reset = await page.evaluate(key => { window.confirm = () => true; const zi = LAST_ZONES.findIndex(z => z.key === key); mpResetLaterals(zi);
+const reset = await page.evaluate(async key => { window.pjlDialog.confirm = async () => true; const zi = LAST_ZONES.findIndex(z => z.key === key); await mpResetLaterals(zi);
   const run = mpLateralPlan().runs.find(r => r.zi === zi); return { custom: !!run.custom, ft: run.ft }; }, lawnKey);
 check(!reset.custom && Math.abs(reset.ft - hand.autoFt) < 0.01, 'back to auto route restores the original run exactly');
 
