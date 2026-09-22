@@ -83,6 +83,30 @@ check('the public routes that must stay public still are', () => {
   assert.equal(needsAuth('POST', '/api/warranty-claims'), null);
 });
 
+check('the System Builder\'s calculation engine is gated like the page it serves', () => {
+  // Split out of sitebuilder.html on 2026-09-21. The file carries Patrick\'s
+  // default SKUs, the zone-packing rules and the BOM maths, all of which
+  // were behind staff auth while they were inline. Moving code into its own
+  // file must not be how it becomes public.
+  assert.equal(needsAuth('GET', '/admin/sitebuilder'), 'user');
+  assert.equal(needsAuth('GET', '/admin/sitebuilder-engine.js'), 'user');
+
+  // And a gate on a URL that serves nothing is not a gate, it is a 404
+  // waiting to break the builder. The static resolver has to map it too.
+  const start = SRC.indexOf('function resolveStaticTarget(pathname) {');
+  assert.ok(start > 0, 'resolveStaticTarget not found in server.js');
+  const end = SRC.indexOf('\n}\n', start);
+  const resolveStaticTarget = new Function(
+    'SERVER_DIR', 'SITE_DIR',
+    `${SRC.slice(start, end + 3)}; return resolveStaticTarget;`
+  )('/server', '/site');
+  assert.equal(
+    resolveStaticTarget('/admin/sitebuilder-engine.js').relative,
+    '/sitebuilder-engine.js',
+    'the engine URL is fenced but serves nothing — the builder would refuse to start',
+  );
+});
+
 check('the admin surfaces around it did not move', () => {
   assert.equal(needsAuth('GET', '/api/users'), 'admin');
   assert.equal(needsAuth('GET', '/api/admin/territory-export'), 'admin');

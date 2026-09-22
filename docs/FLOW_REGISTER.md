@@ -2,6 +2,256 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-21, last (The System Builder's maths moves out of the page):** Phases 0 and 1 of the
+System Builder work, to Patrick's brief: build a characterization safety net, then extract ONLY
+the calculation engine, leaving persistence, quote creation and proposal-section generation
+behind, with the old and extracted engines compared before merging.
+
+**Phase 0 — the safety net, built first and thrown at.** 19 fixtures, from the shapes the tool
+is used on (a four-area residential job, a commercial lot) plus the boundaries Patrick named:
+zone splitting, mixed irrigation types, manual overrides, rounding, BOM quantities and pricing.
+They are run through the engine AS IT LIVED IN THE PAGE — `plan()` / `computeZonePlan()` /
+`buildBOM()` / `areaMaterialCents()`, not `compute()`, which interleaves the maths with
+`innerHTML` — and every number recorded in `scripts/fixtures/system-design-golden.json`. Money is
+compared exactly to the cent, nothing is rounded, and ordering is normalized only where it
+carries no meaning: head order, zone order and area order are all decisions (zones are cuts in
+the head sequence; station numbers come from zone position), so they are left alone.
+**A net nobody has thrown anything at is a guess**, so thirteen one-line changes were made to the
+live engine and the golden master re-run against each. All thirteen are now IN the committed test
+rather than having been run once by hand — **12 as mutations that must be caught, and the 13th
+asserted to be unreachable**, so the number in the report and the number in the story are the same
+number. **Three were not caught on the first pass**, which is the point of doing it: the zone packer's `+ 0.001` epsilon survived every fixture, because 1.3 x 6
+lands dead on 7.8 with no float drift at all. Searched the real Hunter PGP flow table for sums
+that DO drift (2.4 + 2.5 + 3.0 + 0.8 is 8.700000000000001) and added three fixtures on them; all
+three epsilons — the fill's, the balancer's, and the hand-zoned over-ceiling report's — are now
+pinned. Recorded and not fixed: `plan()`'s own `|| 18` drip row-spacing fallback is unreachable,
+because `familyDefaults()` has always set the field by the time `plan()` reads it.
+
+**Phase 1 — the extraction.** `server/sitebuilder-engine.js`, 1,319 lines lifted out of
+`sitebuilder.html` **verbatim**; `sitebuilder.html` drops from 7,798 lines to 6,727. No formula
+was retyped. Every deviation from the original is one of 19 asserted textual patches, and they
+are all the same kind of change — the engine used to reach out and take four things for itself,
+and is handed them now:
+
+| was | now |
+| --- | --- |
+| `plan()` read `num('ceiling')` and `el('spacingFactor').value` | `computePlan(area, {ceiling, spacingFactor})` |
+| `computeZonePlan()` read `areas`, `routing`, `valveGroupModes` | takes the design |
+| `buildBOM(parts)` read `LAST_PLANS`, `LAST_ZONES`, a form field, and called `measuredLateralsBySize()` | takes all four |
+| `areaMaterialCents()` read `PARTS_MAP` | takes the price list |
+
+Same `Math.max`, same `parseFloat` fallbacks, same arithmetic in the same order.
+
+**What deliberately did NOT move**, per Patrick's constraint: the four money-facing writes — the
+`systemDesign` PATCH, the `waterCostEstimate` PATCH, the material-list PATCH, and
+`POST /api/quotes/proposal` + the proposal-sections PATCH. Also `measuredLateralsBySize()`, which
+walks the routed site-plan sheets: **measuring a drawing is not calculating**, so the page
+measures and hands the result over. A calculation can be re-run a hundred times while you decide;
+a PATCH that rewrites a quote cannot, and the two do not belong in the same file.
+
+**The comparison, before merging** (`npm run test:system-design-engine`):
+
+| | result |
+| --- | --- |
+| extracted engine, in Chromium, vs the golden master | **identical, field for field** |
+| the System Builder page itself, vs the golden master | **identical, field for field** |
+| extracted engine under Node, no browser | every count, quantity and cent exact |
+| deliberately broken engines caught | 12 of 12 |
+| rules asserted unreachable (and so not mutatable) | 1 of 1 |
+
+The first two are run in the SAME runtime the golden master was recorded in, so there is one
+variable and no allowance at all. The Node run has exactly one difference, reported by path
+rather than hidden: the 33rd vertex of a 48-sided circle, 1.8e-15 out, because **V8's `Math.sin`
+differs by one bit between Chromium 141 and Node 22** — the language spec permits it. Nothing on
+a money path, nothing that is a whole number, and the tolerance that allows it is a billionth,
+absolute: a nanometre, six orders of magnitude below the smallest deliberate quantity in the
+engine.
+
+**"Down from 12 zones to 11" on the Dundalk job — REOPENED (2026-09-22). The account below was
+written too confidently; it is corrected here rather than deleted.**
+
+**The correction.** Patrick: *"Code's conclusion is wrong — and I was wrong to accept it. 11 is not
+the correct station count… Do not infer the station count from the number of proposal lines or
+from the 17.1 GPM ceiling."* He is right on the method. What follows was derived from a screenshot
+plus a RECONSTRUCTION of the design — never from his saved design — and was then stated as settled.
+**Reproducing a figure does not prove the figure is right; it proves a model that produces it
+exists.** The ceiling explains one area's hydraulic sectioning. It says nothing about the station
+total.
+
+**Why the tool cannot show what he is describing.** A proposal line is a presentation unit; a
+controller station is a programmed output. In this builder they cannot disagree, because
+`quoteSections()` builds its lines from `stationZones()` — proposal lines ARE stations, by
+construction. So the tool is structurally incapable of representing "12 programmed outputs
+described by an 11-line proposal". If Dundalk really has 12, the builder is under-modelling the
+install, and the only mechanism that can hide an output is the one that puts several valves on one
+station.
+
+**Answered from the code rather than inferred:** `applyValveSplits()` pushes both halves of a split
+with the SAME `z.station` and increments the counter once, and the wire note says "a split zone's
+two valves land on one terminal". **East Side Lawn 2 A and B are two valves on ONE station** —
+option (i) of the three Patrick listed, not two stations and not a presentation grouping. Same for
+a boxed drip group. On this job that is five multi-valve stations (East Side Lawn 2, Trees, Drip A,
+Drip B, Drip C), any one of which accounts for a twelfth output if it is wired as two on site.
+
+**`scripts/enumerate-stations.mjs`** prints, from a saved design and deducing nothing: every
+station numbered from 1 with the areas it feeds; every physical valve including both halves of
+every split; every proposal line as the quote generator emits them; and the full
+area → hydraulic section → valve → station → proposal-line mapping. It ends by naming every station
+carrying more than one valve, because those are exactly where a valve count and a station count
+legitimately differ — and exactly where an install can diverge from the design.
+
+**The ground truth for "how many programmed outputs" is the Hydrawise controller, not the builder.**
+Still open. PR #287 is NOT merged, per Patrick — though it is unaffected either way, being a pure
+refactor proven identical to production across 750 generated designs.
+
+**What was previously recorded here, now only a hypothesis:** Patrick
+reported the station count had dropped. Nothing in this branch was deployed and `sitebuilder.html`
+had not changed on `main` since #285, so the first job was to find out what had. Rebuilt the design
+from the figures legible in his screenshots (19 areas, 70 heads, 11 stations, 16 valves, peak 17.1
+GPM, "2 gear + 4 pop-up + 13 drip + 1 strip + 1 trees" = 21 area zones — and 19 areas = 13 drip
+beds + 1 trees + 5 lawns, which is the only split that makes both totals close). The
+reconstruction reproduced every one of those figures, and sweeping the GPM ceiling gave a single
+crossing point:
+
+| ceiling | stations | peak |
+| --- | --- | --- |
+| 17.0 | 12 | 16.7 |
+| 17.1 or higher | 11 | 17.1 |
+
+**East Side Lawn 2**, 17.1 GPM across 22 heads. Below a 17.1 ceiling it needs two valves on two
+stations; at or above it, all 22 fit on one station, and the split line drawn across it keeps it
+at two valves — which is why the valve count stayed at 16 while stations fell to 11.
+
+Patrick then confirmed: **the ceiling is 17.1, and he set it there deliberately.** The two valves
+open together on one station because together they draw 17.1 GPM against 18.0 available and do not
+need separate run times. That is precisely what the driveway-split feature is for — one station,
+two valves, one line on the quote. Both of those facts are established. What does NOT follow, and
+what was wrongly concluded from them, is that the system therefore has 11 controller stations.
+**That inference is withdrawn.** Recorded here because the investigation looked for a regression and
+correctly found a decision; the earlier note in this session flagging 17.1-against-18.0 as tight
+was a misreading of intent, not a finding.
+
+**750 random designs, because Patrick does not do this kind of work.** Asking him to paste
+JavaScript into a browser console to hand over his own design was the wrong shape of request, and
+he said so. `scripts/fuzz-system-design-engine.mjs` removes the need for it: it generates designs
+at random across the whole feature space — every head family, every input mode, traced polygons,
+sectors and circles, hand-placed layouts with hand-assigned valves and free arcs and reduced
+radii, ring and RWS trees, shared and boxed drip valve groups, driveway splits, legacy v1 areas,
+and ceilings and spacing factors swept across their range — and runs each through BOTH engines in
+the same browser. Seeded, so any failure replays with `--seed N --only N`.
+
+**250 designs on each of three seeds: 750 of 750 identical on every field.** 9,455 stations,
+37,051 heads, 17,758 BOM lines, $2,653,832 of materials. Negative-tested first, with a break
+narrow enough to bite only in the hand-zoned GPM path — caught in 4 of 40 designs, so a green run
+means something. This is stronger evidence than one real job would have been: the fixtures pin the
+boundaries somebody thought of, the fuzzer asks the question nobody thought of.
+
+**Comparing a REAL design, not only the fixtures** (`scripts/compare-real-design.mjs`): loads the
+System Builder twice in one browser — once as it stands on `origin/main` with the engine still
+inline, once from the working tree with the engine extracted — hands both the SAME saved design
+blob, the same catalog and the same form values, drives both through `restoreState()` (the path
+taken when a project is opened), and diffs every figure: stations, valves, splits, per-zone GPM,
+valve grouping, head counts, drip and lateral footage, every BOM line quantity, and the BOM total
+to the cent. It then does the save-and-reopen check in both: `serializeState()` → `restoreState()`
+→ recompute, requiring every figure to come back the same AND the re-serialized blob to be
+byte-for-byte identical. **Nothing is written anywhere** — no server is contacted, every API call
+is answered with an empty object, so it cannot touch a live project. Negative-tested by breaking
+the extracted engine (manifold grouping 4 → 3) and confirming it goes red on 55 fields and a
+$21.42 BOM difference.
+
+**Fixture privacy, checked rather than asserted:** scanned the committed fixtures and golden
+master for emails, phone numbers, Canadian postal codes, street-address shapes and known local
+names — **none**. Every area name is invented ("Front lawn", "Bed A", "Lot frontage"). The only
+person named is Patrick, in a comment describing his own 200 ft roll rule, as throughout the
+codebase. The frozen parts snapshot carries sku/description/priceCents/unit/category for 46 SKUs,
+every value identical to the already-committed `parts.json`, with `supplierIds` deliberately left
+out — so it adds no exposure that the repo did not already have. No binaries, no attachments.
+
+Coverage: 92 valves, 157 heads, 309 BOM lines and $19,925.47 of materials across the fixtures.
+`test:sitebuilder` (the existing split + lateral walkthroughs, 101 assertions including "no page
+errors") passes unchanged; both now serve the engine file, which the page refuses to start
+without. If it fails to load the builder shows a plain message rather than computing silently
+from nothing — verified by 404ing it.
+
+The engine is served at `/admin/sitebuilder-engine.js` behind the **same staff gate as the page**:
+it carries Patrick's default SKUs and the zone/BOM rules, which were behind auth while they were
+inline, and moving code into its own file must not be how it becomes public. `test-admin-gates`
+now runs both halves of that — the fence AND the static route, because a gate on a URL that
+serves nothing is a 404 that breaks the builder. Both assertions were checked by deleting each
+line and watching them fail.
+
+**A stale comment corrected, not silently:** a note above the lateral-tree section said
+`buildBOM` "still estimates lateral pipe from head count x radius" and that the measurement "does
+not touch the bill of materials". That stopped being true with Patrick's September 2026 ruling —
+`measuredLateralsBySize()` reaches the BOM and buys whole rolls per size — and the comment was
+never updated. It contradicted the code on a money path, so it is fixed.
+
+This addresses part of **DEV-03** (`sitebuilder.html` is monolithic): the maths is out. The CSS,
+the drawing tools and the rest of the JS are still inline.
+
+**NOT started, per Patrick's instruction:** Phase 2 — whether the existing builder can live
+inside a full-width workspace route without breaking its full-screen drawing tools.
+
+**Getting a real design out without getting anything else out** (`scripts/export-design-fixture.js`,
+`scripts/explain-zones.mjs`): Patrick declined to send the whole `/api/projects/<id>` response —
+correctly, it carries the customer, the address, the quotes, the invoices and the journal, none of
+which the calculation needs. The exporter is a browser-console snippet run on the System Builder
+page with the project open. It is an **allowlist, not a redaction**: it starts from nothing and
+copies across only the fields the engine provably reads (the five supply inputs, the areas and
+their geometry/nozzles/manual heads/trees, valve groups and modes, routing coordinates, and the
+SKU-and-quantity BOM overrides). A field nobody thought about, or one added to the builder next
+year, is excluded because it was never named rather than included because nobody remembered to
+strip it — deny-lists fail silently in the dangerous direction.
+
+Two guards, both tested by making them fire:
+* **Missing input.** A blank GPM ceiling or spacing factor does not fail loudly downstream — the
+  engine's own `|| 1` and `Math.max(…, 0.1)` quietly stand in, and the comparison would then run
+  against a design that is not the one on screen. It refuses and names the empty box. Found by the
+  exporter's own first run, on a spacing factor that did not match any `<option>`.
+* **Anything that looks personal.** Scans its own output for emails, phone numbers, postal codes,
+  street addresses, quote/invoice numbers and embedded files. An area named
+  "Smith front lawn 905-555-0134" produced no file at all and a one-line explanation, with
+  `PJL_REDACT_NAMES = true` offered as the fix. Verified: no file written, and after redaction the
+  number is gone and the areas read "Area 1 … Area 4".
+
+`explain-zones.mjs` answers "why does it say N zones, it used to say N+1" by separating the three
+numbers people use interchangeably — **area zones** (what each area needs on its own), **valves**
+(what goes in the ground) and **stations** (what the controller drives, which is the figure the
+summary calls "total zones") — showing every place one collapses into the next, then sweeping the
+GPM ceiling to report which ceiling values change the answer and **which named area flips at each
+one**. So "it used to be 12" gets an area attached to it rather than a shrug.
+
+**No preview URL is possible from here, and saying so is part of the record:** the Render service
+is configured in Render's dashboard, not in the repo (there is no `render.yaml`), so PR previews
+cannot be turned on from a commit; and `server/data/*` is gitignored, so a fresh preview would
+deploy with **no projects in it at all** — nothing to walk. `compare-real-design.mjs` exists
+because it answers the same question more strictly and without standing up a second copy of the
+customer database to do it.
+
+**Two real defects the same screenshots did surface, both still OPEN and neither caused by this
+branch (identical on `main`):**
+
+> **SB-01 — the master plan drops a split tree valve.** The System Summary says 16 valves; the
+> master plan header and its layers panel say 15. The missing one is **Trees · B**. `mpDraw()`
+> builds its valve set from `zoneIndexOf(i, 0)` per area plus every HEAD of every area — and a
+> tree zone has no heads, it runs to the trees. So a split tree zone only ever contributes its A
+> half (`sitebuilder.html`, the `const used = new Set()` block). It matters because a valve that
+> is not on the master plan gets no lateral drawn and no lateral measured: the sub installs from a
+> plan showing 15 while the BOM has ordered 16. Fix is local — include the tree halves the way
+> heads are included, using `mpTreesOf()` and the same `headHalf()` rule `applyValveSplits()`
+> already uses. Offered; not yet taken up.
+
+> **SB-02 — the project page's "zones" figure is the AREA count.** `server/server.js:15879` builds
+> `siteBuilderSummary.zoneCount` as `proj.systemDesign.areas.length`, and the rebuilt project
+> overview renders it as "System design · N zones". An area can produce several zones, and grouped
+> drip beds collapse many areas onto one valve, so this figure can legitimately disagree with the
+> builder's own. The builder and the quote both count STATIONS (`stationZones()`); only this one
+> counts areas. Not yet fixed.
+
+**Patrick's acceptance test — not yet walked:** open the System Builder on a real project, check
+the zone count, the GPM figures and the BOM total read exactly as they did yesterday, then save
+and reopen.
+
 **2026-09-21, later still (A settled deposit is not a settled job):** Patrick named six situations
 to test Next action against: a brand-new project with no design; McDonald's Dundalk (accepted,
 paid, 0 of 16 tasks); accepted with no installation date; scheduled and part-done; complete with

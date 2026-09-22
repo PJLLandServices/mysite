@@ -20,6 +20,9 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const html = fs.readFileSync(path.join(here, '..', 'server', 'sitebuilder.html'), 'utf8');
+// The calculation engine is its own file since 2026-09-21. The page
+// refuses to start without it, so the route table below has to serve it.
+const engineJs = fs.readFileSync(path.join(here, '..', 'server', 'sitebuilder-engine.js'), 'utf8');
 
 const PAGE = 'spp_testpage';
 const project = () => ({
@@ -51,6 +54,7 @@ await page.route('**/*', route => {
   const url = new URL(route.request().url());
   const m = route.request().method();
   if (url.pathname === '/admin/sitebuilder') return route.fulfill({ contentType: 'text/html', body: html });
+  if (url.pathname === '/admin/sitebuilder-engine.js') return route.fulfill({ contentType: 'text/javascript', body: engineJs });
   if (url.pathname === '/api/projects/PROJ-TEST-0001' && m === 'GET') {
     const p = project(); if (saved) p.systemDesign = saved;
     return route.fulfill({ json: { ok: true, project: p } });
