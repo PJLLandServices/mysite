@@ -246,15 +246,38 @@ const tsplit = await page.evaluate(async zi => {
   const asg = mpManifoldAssign();
   const boxOfB = asg.byManifold.findIndex(l => l.includes(LAST_ZONES.indexOf(LAST_ZONES.find(z => z.key === b.key))));
   const drawnHalves = (el('mpBody').innerHTML.match(/data-mph="sa\d+"/g) || []).length;
-  return { blocked, armed, n: halves.length, station: a && b && a.station === b.station, treesA: a && feeds(a), treesB: b && feeds(b),
-           fedA: a && runsFor(a), fedB: b && runsFor(b), gpmSum: a && b && +(a.gpm + b.gpm).toFixed(2), stationGpm: a && +a.stationGpm.toFixed(2), boxOfB, drawnHalves, key: b && b.key };
+  // Measured BEFORE the toggling below: mpSetShareStation() recomputes, so
+  // `a` and `b` stop being members of LAST_ZONES and runsFor() would return
+  // -1 for both. Evaluating these lazily in the return object is what first
+  // made this test fail for a reason unrelated to what it tests.
+  const fedA0 = a && runsFor(a), fedB0 = b && runsFor(b);
+  const treesA0 = a && feeds(a), treesB0 = b && feeds(b);
+  const gpmSum0 = a && b && +(a.gpm + b.gpm).toFixed(2), stationGpm0 = a && +a.stationGpm.toFixed(2);
+  // Version 9: a newly drawn split is TWO stations, each carrying its own
+  // half. Wire them to one terminal and the station carries both — measured
+  // here both ways round, because the sum only holds in the shared case.
+  const own = { stA: a && a.station, stB: b && b.station,
+                stationGpmA: a && +a.stationGpm.toFixed(2), gpmA: a && +a.gpm.toFixed(2) };
+  const ai = LAST_ZONES.indexOf(a);
+  mpSetShareStation(ai, true);
+  const sh = LAST_ZONES.filter(z => z.key.startsWith('z:a_trees:'));
+  const sa = sh.find(z => z.half === 'A'), sb = sh.find(z => z.half === 'B');
+  const shared = { same: sa && sb && sa.station === sb.station,
+                   gpmSum: sa && sb && +(sa.gpm + sb.gpm).toFixed(2),
+                   stationGpm: sa && +sa.stationGpm.toFixed(2) };
+  mpSetShareStation(LAST_ZONES.indexOf(sa), false);
+  return { blocked, armed, n: halves.length, station: a && b && a.station === b.station, treesA: treesA0, treesB: treesB0,
+           fedA: fedA0, fedB: fedB0, gpmSum: gpmSum0, stationGpm: stationGpm0, boxOfB, drawnHalves, key: b && b.key, own, shared };
 }, treeZi);
 console.log('tree split:', JSON.stringify(tsplit));
 check(tsplit.blocked === null && tsplit.armed === 'split', 'a tree zone can be split');
-check(tsplit.n === 2 && tsplit.station, 'two valves, one station');
+check(tsplit.n === 2 && !tsplit.station, 'two valves, and by default a station each');
+check(tsplit.own.stA !== tsplit.own.stB, 'the two tree valves are on different stations');
 check(tsplit.treesA + tsplit.treesB === 3 && tsplit.treesA > 0 && tsplit.treesB > 0, 'the trees are sorted onto the two valves (' + tsplit.treesA + ' / ' + tsplit.treesB + ')');
 check(tsplit.fedA === tsplit.treesA && tsplit.fedB === tsplit.treesB, 'each half runs pipe only to its own trees');
-check(tsplit.gpmSum === tsplit.stationGpm, 'the halves add up to the station flow');
+check(tsplit.own.stationGpmA === tsplit.own.gpmA, 'on its own station, a half carries only its own flow');
+check(tsplit.shared.same, 'wiring both tree valves to one station puts them back together');
+check(tsplit.shared.gpmSum === tsplit.shared.stationGpm, 'and then the halves add up to the station flow');
 check(tsplit.boxOfB === 1 && tsplit.drawnHalves === 1, 'the B half sits in the east box; the split line is drawn once');
 const tunsplit = await page.evaluate(async key => { window.pjlDialog.confirm = async () => true; const zi = LAST_ZONES.findIndex(z => z.key === key); await mpRemoveSplit(zi);
   return LAST_ZONES.filter(z => z.key.startsWith('z:a_trees:')).length; }, tsplit.key);

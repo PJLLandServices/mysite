@@ -869,9 +869,11 @@ function computeZonePlan(ctx){
    they fall from it, so nudging a head never silently changes the split.
    Each half becomes its own entry in LAST_ZONES — so a half can be pinned
    to its own box, gets its own lateral tree, and is counted as a valve
-   everywhere hardware is counted — while sharing `station` with its twin
-   so everything that counts STATIONS (quote lines, controller size, the
-   cycle) still sees one zone.
+   everywhere hardware is counted. Whether the two halves also share a
+   CONTROLLER STATION is the split's own stored `shareStation` flag, not a
+   property of splitting: shared means one station carrying both valves'
+   flow (quote lines, controller size and the cycle see one zone, as they
+   always did), separate means two stations with their own run times.
 
    Only a single-area sprinkler zone can be split: a drip bed has no heads
    to sort, and a shared drip group is already several beds on one valve.  */
@@ -907,9 +909,30 @@ function applyValveSplits(zones, ctx){
     const gA = gpmOf(A), gB = gpmOf(B);
     const share = (g, n) => (gA+gB)>0 ? (isTrees ? z.gpm*g/(gA+gB) : g) : z.gpm*n/hs.length;
     const gpmA = share(gA, A.length), gpmB = share(gB, B.length);
-    out.push(Object.assign({}, z, { name: z.name+' · A', half:'A', headCount:isTrees?0:A.length, treeCount:isTrees?A.length:0, gpm:gpmA, stationGpm:z.gpm, key:z.key }));
-    out.push(Object.assign({}, z, { name: z.name+' · B', half:'B', headCount:isTrees?0:B.length, treeCount:isTrees?B.length:0, gpm:gpmB, stationGpm:z.gpm, key:z.key+'#B' }));
-    station++;
+    // ONE STATION OR TWO — the decision that is now stored, not assumed.
+    //
+    // Both valves on one terminal is a real wiring choice: they open
+    // together, so the station carries the sum of the two halves. Two
+    // terminals is the other real choice, and it is the one people expect
+    // by default — a driveway split usually exists because the two halves
+    // want their own run times, not only their own box.
+    //
+    // Which it is used to be neither asked nor stored: every split was
+    // wired as one station. A design saved under that rule therefore says
+    // nothing about what was actually installed, so the page's
+    // restoreRouting() migrates it to shareStation:true — preserving its
+    // station count, its proposal, its controller and its run times
+    // exactly — and marks it `legacy` so it is reviewed rather than
+    // silently believed.
+    //
+    // A split drawn from now on stores shareStation:false at the moment
+    // it is drawn. Absent-and-not-legacy means false, so a blob that
+    // somehow lost the flag gets the new default rather than the old one.
+    const shared = sp.shareStation === true;
+    const stationA = station++;
+    const stationB = shared ? stationA : station++;
+    out.push(Object.assign({}, z, { name: z.name+' · A', half:'A', headCount:isTrees?0:A.length, treeCount:isTrees?A.length:0, gpm:gpmA, stationGpm:shared?z.gpm:gpmA, station:stationA, shareStation:shared, legacyShare:sp.legacy===true, key:z.key }));
+    out.push(Object.assign({}, z, { name: z.name+' · B', half:'B', headCount:isTrees?0:B.length, treeCount:isTrees?B.length:0, gpm:gpmB, stationGpm:shared?z.gpm:gpmB, station:stationB, shareStation:shared, legacyShare:sp.legacy===true, key:z.key+'#B' }));
   });
   return out;
 }
@@ -963,7 +986,9 @@ function zoneFeedsHead(z, pt, h, ctx){
 function mpZoneHeads(z, pt, a, p, ctx){
   return mpHeadsOf(a,p).filter(h => zoneFeedsHead(z, pt, h, ctx));
 }
-// Stations: the controller's view. Two split halves are one station.
+// Stations: the controller's view. Two split halves are one station only
+// when their split says shareStation — applyValveSplits has already
+// decided, and every reader here just groups by the `station` it set.
 function stationCount(zones){ return (zones||[]).reduce((m,z)=>Math.max(m,(z.station||0)+1), 0); }
 function stationZones(zones){
   const by=[];
@@ -974,8 +999,9 @@ function stationZones(zones){
   return by.filter(Boolean);
 }
 function baseName(z){ if(z.stationName) return z.stationName; return z.half ? z.name.replace(/ · [AB]$/, '') : z.name; }
-// Peak flow the mainline has to carry: one STATION at a time, and a split
-// station opens both its valves together.
+// Peak flow the mainline has to carry: one STATION at a time. A SHARED
+// split station opens both its valves together, so its two halves sum here;
+// a separated split is two stations and each stands on its own.
 function peakStationGPM(zones){ const s=stationZones(zones); return s.length ? Math.max(...s.map(x=>x.gpm)) : 0; }
 
 // Global zone index for (area, its own zone number) — the master plan uses

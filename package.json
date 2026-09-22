@@ -55,6 +55,7 @@
     "fuzz:system-design": "node scripts/fuzz-system-design-engine.mjs",
     "compare:real-design": "node scripts/compare-real-design.mjs",
     "explain:zones": "node scripts/explain-zones.mjs",
+    "test:split-share-station": "node scripts/test-split-share-station.mjs",
     "audit:commercial": "node scripts/audit-commercial-data.js",
     "test:commercial": "node scripts/test-commercial-schema.mjs",
     "test:invoice-balance": "node scripts/test-invoice-balance-surfaces.mjs",
