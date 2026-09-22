@@ -2,6 +2,50 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-22 (An empty System Builder is not an empty design):** Patrick opened McDonald's
+Dundalk after #288 deployed and got **"Nothing is traced on this sheet yet"** on a project with a
+full traced design. Nothing was lost — but the screen could not tell him that, and there was a
+**Save to project** button next to it.
+
+**Cause: page and engine from different deploys.** #287 lifted the maths out of
+`server/sitebuilder.html` into `server/sitebuilder-engine.js`, served at `/admin/sitebuilder-engine.js`.
+This repo already had two guards against "ran old JS against new HTML" — `no-cache` and a
+version-stamped URL — and **both are scoped to `/crm/`**. Served from `/admin/`, the engine had
+neither. #288 then made the skew fatal: the page began calling `ENGINE.splitStationRule()`, a
+cached engine did not have it, `restoreState()` threw.
+
+**The real defect is what happened next.** `restoreState()` ended `catch(_){ return false; }`, and
+the loader read `if(!restored) startEmptyDesign();`. A design that could not be READ was
+indistinguishable from a project that had NONE — same empty canvas, same live save button. The
+failure path was worse than the failure.
+
+Reproduced before fixing, by serving the current page with the previous commit's engine:
+`restoreState: false`, and the loader starts an empty design. Not inferred — run.
+
+Fixed on three levels, because one was not enough:
+1. `/admin/sitebuilder-engine.js` is served **no-cache**, and its `<script src>` is **version-stamped**
+   by `stampAssetVersions()` like every `/crm/` asset. Page and engine are now always one deploy.
+2. `restoreState()` keeps the error instead of swallowing it, and the loader distinguishes *had a
+   design and could not read it* from *has no design*.
+3. When a design is unreadable the **Save button is removed — not disabled, absent** — a red
+   banner says the canvas is not this project's design and nothing has been lost, and tells Patrick
+   to hard-refresh. `saveDesign()` refuses independently, so the UI is not the only guard.
+
+`scripts/test-engine-version-skew.mjs` (14 assertions) builds the stale pair for real and asserts
+all of it, including that a project with genuinely no design is still saveable — the guard must not
+fire on the ordinary case.
+
+**Separately, from the same screenshot:** the branded dialog rendered with no panel at all — bare
+text over the page. `pjl-dialog.css` uses a `--pjl-*` palette defined only in `crm.css`, and four
+pages load the dialog without loading `crm.css`: sitebuilder, appointment, smart-controller-photos
+and **the customer portal**. Measured: panel `background-color` was `rgba(0, 0, 0, 0)`. Every
+reference now carries a fallback; `test-pjl-dialog.mjs` asserts the panel is actually painted on a
+host page with no `crm.css`.
+
+**Lesson, worth more than either fix: a file that is read by code in another file is a deploy
+boundary.** Splitting the engine out was right; serving it somewhere the cache rules did not reach
+turned a refactor into a data-loss shaped bug three PRs later.
+
 **2026-09-22 (A split zone's two valves: one station or two, recorded instead of assumed):**
 Patrick established that Dundalk has **12 controller stations**: East Side Lawn 2's A and B halves
 are separate stations, Trees A and B are intentionally wired together on one. The builder could

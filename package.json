@@ -56,6 +56,7 @@
     "compare:real-design": "node scripts/compare-real-design.mjs",
     "explain:zones": "node scripts/explain-zones.mjs",
     "test:split-share-station": "node scripts/test-split-share-station.mjs",
+    "test:engine-skew": "node scripts/test-engine-version-skew.mjs",
     "audit:commercial": "node scripts/audit-commercial-data.js",
     "test:commercial": "node scripts/test-commercial-schema.mjs",
     "test:invoice-balance": "node scripts/test-invoice-balance-surfaces.mjs",

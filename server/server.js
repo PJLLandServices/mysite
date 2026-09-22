@@ -100,7 +100,10 @@ const ASSET_VERSION = String(process.env.RENDER_GIT_COMMIT || "").slice(0, 10)
 // Stamp the CRM asset URLs in one HTML document. Pure; the static sender
 // calls it for every .html it serves from the CRM directory.
 //
-//   - only src=/href= attributes pointing at /crm/*.js or /crm/*.css
+//   - only src=/href= attributes pointing at /crm/*.js, /crm/*.css, or
+//     /admin/sitebuilder-engine.js (the System Builder's calculation
+//     engine — same hazard, different directory: the page calls into it
+//     by name, so page and engine must always be the same deploy)
 //   - never tech-sw.js: a service worker's registration URL must not
 //     change between loads, or the browser installs a second worker
 //   - never a URL that already carries a query — it has its own reason
@@ -109,7 +112,7 @@ function stampAssetVersions(html, version = ASSET_VERSION) {
   const v = String(version || "").trim();
   if (!v) return html;
   return String(html).replace(
-    /\b(src|href)=(["'])(\/crm\/[^"'?#\s]+\.(?:js|css))\2/g,
+    /\b(src|href)=(["'])((?:\/crm\/[^"'?#\s]+|\/admin\/sitebuilder-engine)\.(?:js|css))\2/g,
     (whole, attr, quote, url) => (url.endsWith("/tech-sw.js")
       ? whole
       : `${attr}=${quote}${url}?v=${v}${quote}`)
@@ -27381,6 +27384,19 @@ async function serveStatic(req, res, pathname) {
     // connection — correctness is worth more than the 30 seconds of caching.
     // Public-site assets keep max-age=30, untouched.
     if (pathname.startsWith("/crm/") && (ext === ".js" || ext === ".css")) {
+      headers["cache-control"] = "no-cache";
+    }
+
+    // The System Builder's calculation engine is the same hazard from a
+    // different directory. It was lifted out of sitebuilder.html into its
+    // own file, and the page calls into it by name — so a browser holding
+    // yesterday's engine against today's page throws on the first call it
+    // does not recognise. That is not theoretical: the page calls
+    // ENGINE.splitStationRule(), added after the engine first shipped, and
+    // a stale copy made restoreState() throw, which silently started an
+    // EMPTY design on a project that had one. Served from /admin/, it was
+    // missing both guards /crm/ already had — this one and the URL stamp.
+    if (pathname === "/admin/sitebuilder-engine.js") {
       headers["cache-control"] = "no-cache";
     }
 

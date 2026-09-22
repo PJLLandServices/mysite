@@ -140,6 +140,11 @@
   .prescribe{background:#fff;border:1px dashed var(--green);border-radius:10px;padding:10px 12px;margin-top:12px;font-size:13.5px}
   .prescribe b{color:var(--green-d)}
   .flag{background:var(--warnbg);color:var(--warn);border:1px solid #f3c6c1;border-radius:8px;padding:7px 10px;font-size:12.5px;margin-top:8px}
+  /* Shown only when a project's saved design could not be opened. Loud on
+     purpose: the canvas behind it looks like a real empty design. */
+  .warnbox{background:var(--warnbg);color:var(--warn);border:1px solid #ef9a9a;border-radius:10px;
+    padding:14px 16px;font-size:13.5px;line-height:1.55;margin:12px 0 0}
+  .warnbox code{background:#fff;border:1px solid #f3c6c1;border-radius:4px;padding:1px 5px;font-size:12px;word-break:break-word}
   .sketch{background:#fbfdfb;border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;flex-direction:column;align-items:center}
   .sketch svg{width:100%;height:auto;max-width:360px}
   .legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:8px;font-size:11.5px;justify-content:center}
@@ -443,6 +448,7 @@
   <div class="panel" id="projectPanel">
     <h2>Project</h2>
     <div class="projbar" id="projectBar"><span class="saved">Loading…</span></div>
+    <div class="warnbox" id="designUnreadableNote" hidden></div>
   </div>
 
   <div class="panel" id="sitePlanPanel">
@@ -6593,6 +6599,9 @@ function serializeAreas(){
   });
 }
 
+// Why the last restoreState() failed, or null. Read by the project bar and
+// by saveDesign(), which refuses while it is set.
+let restoreError = null;
 function restoreState(blob){
   if(!blob || typeof blob !== 'object') return false;
   restoring = true;
@@ -6632,8 +6641,17 @@ function restoreState(blob){
       render();
     }
     if(TOWNS) onTownChange();
+    restoreError = null;
     return true;
-  } catch(_){ return false; }
+  } catch(err){
+    // Never swallow this. A design that fails to restore used to fall
+    // through to an EMPTY builder with a live Save button next to it, on a
+    // project that had a perfectly good design on the server — one click
+    // from replacing it with nothing. The reason is kept and shown.
+    restoreError = err;
+    try{ console.error('System Builder: restoreState failed', err); }catch(_){}
+    return false;
+  }
   finally { restoring = false; }
 }
 
@@ -6647,10 +6665,38 @@ async function loadProjectList(){
   updateProjectBar();
 }
 
+// Set when a project HAD a saved design and it would not load. The builder
+// is then showing an empty canvas that is not this project's design, so
+// saving would replace a real design with that emptiness.
+let designUnreadable = false;
+
 function updateProjectBar(){
   const bar = el('projectBar');
   if(!bar) return;
   renderSitePlan();   // upload is only available once a project is attached
+  if(linkedProject && designUnreadable){
+    // No Save button at all. Not disabled — absent. The one action that
+    // could destroy the design is not on screen while it cannot be read.
+    bar.innerHTML =
+      `<span class="plink">${esc(linkedProject.id)}</span>` +
+      `<span class="pname">${esc(linkedProject.name || '(unnamed project)')}</span>` +
+      `<span class="grow"></span>` +
+      `<span class="saved unsaved">This project's saved design could not be opened — nothing here is it.</span>`;
+    const w = el('designUnreadableNote');
+    if(w){
+      w.hidden = false;
+      w.innerHTML =
+        `<b>This project's saved design did not open, and what you are looking at is not it.</b> ` +
+        `Your design is still on the server — nothing has been changed or lost, and <b>Save to project has been removed ` +
+        `from this screen</b> so it cannot be written over.<br><br>` +
+        `<b>Try this first:</b> hold <b>Shift</b> and click your browser's reload button (or press <b>Ctrl+Shift+R</b>, ` +
+        `<b>Cmd+Shift+R</b> on a Mac). That forces a fresh copy of the page and usually fixes it — it normally means the ` +
+        `browser kept part of an older version after an update.<br><br>` +
+        `If it still says this after a hard refresh, don't edit anything here: send Patrick this line — ` +
+        `<code>${esc(String((restoreError && restoreError.message) || restoreError || 'unknown'))}</code>`;
+    }
+    return;
+  }
   if(linkedProject){
     const cust = linkedProject.customerName ? ' · ' + esc(linkedProject.customerName) : '';
     let status;
@@ -6678,6 +6724,16 @@ function updateProjectBar(){
 }
 
 async function saveDesign(){
+  // Belt and braces. updateProjectBar() removes the button while the saved
+  // design is unreadable; this refuses even if something calls in anyway.
+  if(designUnreadable){
+    await pjlDialog.alert(
+      'This project\u2019s saved design did not open, so what is on screen is not it. Saving now would replace the ' +
+      'real design with this empty one.\n\nHold Shift and click reload (Ctrl+Shift+R, or Cmd+Shift+R on a Mac) to ' +
+      'fetch a fresh copy of the page, then open the project again.',
+      { title: 'Not saving \u2014 this is not your design', icon: 'warning' });
+    return;
+  }
   if(!linkedProject) return;
   const btn = el('saveBtn');
   if(btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
@@ -6808,7 +6864,7 @@ async function initApp(){
   });
 
   if(PROJECT_ID){
-    let restored = false;
+    let restored = false, projectHadDesign = false;
     try{
       const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID), {headers:{'Accept':'application/json'}});
       if(res.ok){
@@ -6819,6 +6875,7 @@ async function initApp(){
           // triggers render(), and the area cards need the page list to
           // draw their "Trace on" pickers.
           sitePlan = (j.project.sitePlan && typeof j.project.sitePlan === 'object') ? j.project.sitePlan : null;
+          projectHadDesign = !!j.project.systemDesign;
           if(j.project.systemDesign){
             restored = restoreState(j.project.systemDesign);
             lastSavedLabel = fmtSaved(j.project.systemDesign.savedAt);
@@ -6829,6 +6886,10 @@ async function initApp(){
         }
       }
     } catch(_){ /* fall through to defaults */ }
+    // A project with no saved design starts empty — that is normal. A
+    // project WITH one that would not restore is not empty, it is
+    // unreadable, and the two must not look the same on screen.
+    designUnreadable = !restored && !!(linkedProject && projectHadDesign);
     if(!restored) startEmptyDesign();
     // If PROJECT_ID was bad/unknown, leave linkedProject null → free sketch.
     if(!linkedProject) loadProjectList();
