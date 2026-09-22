@@ -1315,7 +1315,8 @@ function compute(){
     `Recommended controller: <b>Hydrawise ${ctrl}</b> (Pro-HC / HPC). `+
     (ok?`<span style="color:var(--ok)">OK - peak zone (${maxZ.toFixed(1)} GPM) within available ${avail} GPM.</span>`
        :`<span style="color:var(--warn)">! Peak zone (${maxZ.toFixed(1)} GPM) exceeds available ${avail} GPM - lower the ceiling or use a lower-flow nozzle.</span>`)+
-    `<br><span style="color:var(--ok)">Zone integrity OK - rotor / spray / strip / drip never share a valve${famSummary?' ('+famSummary+')':''}.</span>`;
+    `<br><span style="color:var(--ok)">Zone integrity OK - rotor / spray / strip / drip never share a valve${famSummary?' ('+famSummary+')':''}.</span>`+
+    legacySplitNotice();
 
   wcZones=zoneList;
   LAST_ZONES = computeZonePlan();
@@ -2893,11 +2894,31 @@ async function mpSetSplit(zi, ax, ay, bx, by){
   const what=isTrees?'tree':'head';
   if(!nA || !nB){ await pjlDialog.alert('That line leaves every '+what+' on one side ('+hs.length+' '+what+(hs.length===1?'':'s')+'). Draw it between the '+what+'s that should be on different valves.', { title: 'Split leaves one side empty' }); return false; }
   const r=routingFor(mp.pageId); if(!r.splits) r.splits={};
-  r.splits[baseKey(z.key)]={ax,ay,bx,by};
+  // Two valves, two controller stations — the usual reason for splitting a
+  // zone. Wire them to one terminal instead with the toggle on the valve,
+  // which sets shareStation back to true.
+  r.splits[baseKey(z.key)]={ax,ay,bx,by,shareStation:false};
   markDirty(); compute();                     // LAST_ZONES now carries the two halves
   const k=baseKey(z.key);
   mp.zoneSel=LAST_ZONES.findIndex(x=>x.key===k);
   return true;
+}
+/* One station or two, for a split valve pair.
+
+   Clears `legacy` either way: once the question has actually been answered
+   the answer stands on its own, and the "review required" notice should
+   stop asking. Setting it back to shared is still an answer. */
+function mpSetShareStation(zi, share){
+  const z=LAST_ZONES[zi]; if(!z || !z.half) return;
+  const a=areas[(z.parts&&z.parts[0]||{}).areaIdx];
+  const pg=a && a.planRef && a.planRef.pageId; if(!pg) return;
+  const r=routingFor(pg); const k=baseKey(z.key);
+  const sp=r && r.splits && r.splits[k]; if(!sp) return;
+  sp.shareStation = !!share;
+  delete sp.legacy;
+  markDirty(); compute();
+  mp.zoneSel=LAST_ZONES.findIndex(x=>x.key===(share?k:z.key));
+  mpDraw();
 }
 async function mpRemoveSplit(zi){
   const z=LAST_ZONES[zi]; if(!z) return;
@@ -3326,7 +3347,7 @@ function mpRouteReadout(){
   }
   const peak=peakStationGPM();
   const bits=[];
-  if(r.poc && st.mainFt>0) bits.push('Mainline <b>'+pipeForGPM(peak)+'</b> · <b>'+Math.round(st.mainFt)+' ft</b> measured');
+  if(r.poc && st.mainFt>0) bits.push('Mainline <b>'+mainlineSize()+'</b>'+(mainlineIsPinned()?' <span title="Specified size, pinned — the suggestion from current flow is '+esc(mainlineSuggested())+'">(as specified)</span>':'')+' · <b>'+Math.round(st.mainFt)+' ft</b> measured');
   else if(r.poc) bits.push('POC placed — no mainline run yet');
   else bits.push('<span class="mp-warnpipe">No point of connection</span>');
   if(st.branchCount) bits.push('<b>'+st.branchCount+'</b> tee'+(st.branchCount===1?'':'s'));
@@ -3364,7 +3385,7 @@ function mpRouteReadout(){
   if(mp.laterals || (r.poc && st.mainFt>0)){
     const lat=mp.laterals ? mpLateralPlan() : {totalFt:0, bySize:{}};
     const rows=[];
-    if(r.poc && st.mainFt>0) rows.push(`<tr><td>Mainline ${esc(pipeForGPM(peak))}</td><td>${Math.round(st.mainFt)} ft</td></tr>`);
+    if(r.poc && st.mainFt>0) rows.push(`<tr><td>Mainline ${esc(mainlineSize())}${mainlineIsPinned()?' (as specified)':''}</td><td>${Math.round(st.mainFt)} ft</td></tr>`);
     if(st.teeFt>=0.5) rows.push(`<tr><td style="color:var(--muted);padding-left:12px">drops to boxes</td><td>${Math.round(st.teeFt)} ft</td></tr>`);
     Object.keys(lat.bySize).sort((a,b)=>LATERAL_SIZES.indexOf(b)-LATERAL_SIZES.indexOf(a))
       .forEach(s=>rows.push(`<tr><td>Lateral ${esc(s)}</td><td>${Math.round(lat.bySize[s])} ft</td></tr>`));
@@ -4332,7 +4353,7 @@ function lpSheetHtml(zi){
   let mainFt=0, mainSize='';
   if(lp.showMain && (r.poc || box)){
     const st=mpRouteStats();
-    mainSize=pipeForGPM(peakStationGPM());
+    mainSize=mainlineSize();
     const dropped=[];
     st.segs.forEach(sg=>{
       if(!inFrame(sg.a) && !inFrame(sg.b)) return;
@@ -4424,7 +4445,7 @@ function lpSheetHtml(zi){
       <div><b>Pipe by size</b><ul>${sizes||'<li>no lateral run yet — place a manifold on the master plan</li>'}</ul></div>
       <div><b>Reading the sheet</b><ul>
         <li><i class="lp-sw" style="background:${col}"></i><b>Coloured line</b> = this valve's lateral, labelled <i>size · length</i>; <b>arrows</b> point the way the water goes, out from the box. Dashed short lines = spurs to heads (${spurs}).</li>
-        <li><i class="lp-sw lp-sw-main"></i><b>Dark line with white dashes</b> = mainline (${esc(mainSize||pipeForGPM(peakStationGPM()))}); dashed dark line = drop to the box.</li>
+        <li><i class="lp-sw lp-sw-main"></i><b>Dark line with white dashes</b> = mainline (${esc(mainSize||mainlineSize())}); dashed dark line = drop to the box.</li>
         <li>Numbered circles = heads (T = trees). Faint coloured lines = other valves' pipe through this frame.</li>
         <li>Trunk <b>${esc(run?run.size:'—')}</b> — sized on this valve's full ${z.gpm.toFixed(1)} GPM at about 5 ft/sec; branches drop to 3/4". Nothing under 3/4".</li>
       </ul></div>
@@ -4690,11 +4711,15 @@ function mpZonePanel(){
   if(mpTreeAreaFor(zi)>=0) h+=`<button type="button" class="lnk${mp.tool==='tree'?' cur':''}" onclick="mpSetTool('tree')">add trees</button>`;
   if(z.half){
     if(twin>=0) h+=`<button type="button" class="lnk" onclick="mpSelectZone(${twin})">go to valve ${z.half==='A'?'B':'A'}</button>`;
+    h+=`<button type="button" class="lnk" onclick="mpSetShareStation(${zi}, ${z.shareStation?'false':'true'})" title="${z.shareStation
+      ? 'Both valves are on one controller terminal and open together. Give each its own station to run them separately.'
+      : 'Each valve has its own controller station. Wire them to one terminal instead if they should open together.'}">${z.shareStation
+      ? 'give each valve its own station' : 'wire both valves to one station'}</button>`;
     h+=`<button type="button" class="lnk" onclick="mpRemoveSplit(${zi})">remove split</button>`;
   } else if(z.grouped && !z.stationGroup && (z.members||[]).length>1){
     h+=`<button type="button" class="lnk" onclick="mpSetTool('split')" title="One valve per valve box, wired as one station — then put each bed in the box it should be fed from">one valve per box</button>`;
   } else if(!mpSplitBlocked(zi)){
-    h+=`<button type="button" class="lnk${mp.tool==='split'?' cur':''}" onclick="mpSetTool('split')" title="Draw a line across the driveway; each side gets its own valve, wired as one station">split across two boxes</button>`;
+    h+=`<button type="button" class="lnk${mp.tool==='split'?' cur':''}" onclick="mpSetTool('split')" title="Draw a line across the driveway; each side gets its own valve and its own controller station. You can wire them to one station afterwards if they should open together.">split across two boxes</button>`;
   }
   h+=`<button type="button" class="lnk pri" onclick="lpOpen(${zi})">Print zone sheet</button>`;
   h+=`<button type="button" class="lnk" onclick="mpClearZoneSel()">show all</button>`;
@@ -5570,6 +5595,56 @@ const TR_HOOKS = {
 
 /* ════════════════ Extras — valves, pipe/wire, timing ════════════════ */
 
+/* Designs saved before version 9 could not say whether a split zone's two
+   valves shared a controller station — the tool always wired them to one.
+   On load they keep that behaviour, so nothing about the job moves. But an
+   assumption the code had no way to record is not the same as a decision
+   somebody made, and it should not be left looking like one. This says so,
+   names the valves, and stops as soon as each has been answered either way. */
+function legacySplitNotice(){
+  const legacy=[...new Set(LAST_ZONES.filter(z=>z.half && z.legacyShare).map(z=>baseName(z)))];
+  const bits=[];
+  if(legacy.length) bits.push(
+    `<b>Legacy shared-station assignment - review required.</b> `+
+    `${legacy.length===1?'This zone was':'These zones were'} saved before the builder recorded whether a `+
+    `split zone's two valves share one controller station. ${legacy.length===1?'It is':'They are'} `+
+    `loaded as <b>one station</b>, exactly as before, so nothing about this job has changed - but that was `+
+    `the old default rather than a choice: <b>${legacy.map(esc).join('</b>, <b>')}</b>. `+
+    `Open each on the master plan and confirm one station or two.`);
+  if(legacyMainlinePinned) bits.push(
+    `<b>Mainline pinned to ${esc(mainlineSizePin)}</b> - the size this design has always specified. `+
+    `It is held rather than recalculated, so changing stations cannot quietly reprint a different size `+
+    `than the pipe in the ground.${mainlineSuggested()!==mainlineSizePin?` (Current flow would suggest ${esc(mainlineSuggested())}.)`:''}`);
+  return bits.length ? `<br><span style="color:var(--warn)">! ${bits.join('</span><br><span style="color:var(--warn)">! ')}</span>` : '';
+}
+
+/* ════════════ The mainline size is a decision, not a derivation ════════════
+
+   The mainline is sized off the peak single-station flow, and it is the one
+   number in this tool that describes something ALREADY IN THE GROUND. Pipe
+   gets bought and trenched at the start of a job; the design keeps being
+   edited afterwards.
+
+   Re-deriving it on every open was fine while the design could not change
+   the station count. It is not fine now: splitting a zone onto two stations
+   lowers the peak, and the suggestion drops a size. On a job that was quoted
+   and installed in 1-1/4" that would quietly start printing 1" on the sub's
+   sheets — a plan that contradicts the trench.
+
+   So the size is PINNED when it is specified, and a version-8 design is
+   pinned on load to whatever it computes at that moment. Unpinning is a
+   deliberate act (`unpinMainline()`), and the pin is shown wherever the size
+   is shown. Every reader goes through mainlineSize(); nothing calls
+   pipeForGPM() for the mainline directly, so the pinned and computed
+   answers can never drift apart.                                          */
+let mainlineSizePin = null;      // e.g. '1-1/4"' — the size actually specified
+let legacyMainlinePinned = false; // pinned by the version-8 migration, not by hand
+function mainlineSize(){ return mainlineSizePin || pipeForGPM(peakStationGPM()); }
+function mainlineIsPinned(){ return !!mainlineSizePin; }
+function mainlineSuggested(){ return pipeForGPM(peakStationGPM()); }
+function unpinMainline(){ mainlineSizePin = null; markDirty(); render(); }
+function pinMainline(size){ mainlineSizePin = size || mainlineSuggested(); markDirty(); render(); }
+
 function pipeForGPM(gpm){
   if(gpm<=4) return '1/2"';
   if(gpm<=8) return '3/4"';
@@ -5594,7 +5669,7 @@ function renderExtras(){
   const peakZoneGPM=peakStationGPM();
   const boxes=Math.max(1,Math.ceil(valves/MANIFOLD_PER_BOX));
   const conductors=valves+2;                     // valves + common + 1 spare
-  const mainline=pipeForGPM(peakZoneGPM);
+  const mainline=mainlineSize();
   let windowMin=0; wcZones.forEach((z,i)=>{ windowMin += zoneMinutes(i); });
 
   box.innerHTML=`
@@ -6340,6 +6415,19 @@ function applyWaterSupply(ws){
 function serializeState(){
   const inputs = {};
   GLOBAL_INPUT_IDS.forEach(id=>{ const e = el(id); if(e) inputs[id] = e.value; });
+  // version 9 records, per split, WHETHER ITS TWO VALVES SHARE ONE
+  // CONTROLLER STATION (`shareStation`), and pins the mainline size that
+  // was specified when the job was sold (`mainlineSize`).
+  //
+  // Neither was ever a stored decision before. Every version-8 split was
+  // wired as one station because that is all the code could do, and the
+  // mainline was re-derived from peak station flow every time the page
+  // opened. Both of those are assumptions that a version-8 blob cannot
+  // distinguish from a choice — so a version-8 blob loads with
+  // shareStation:true on every split, marked `legacy` for review, and its
+  // mainline pinned to what it computes today. Opening an old project
+  // therefore changes no station, no proposal line, no controller, no run
+  // time and no part. Splits drawn from now on are two stations.
   // version 8 adds `routing[page].splits` — a zone split across two valve
   // boxes by a line drawn on the sheet (see applyValveSplits) — and
   // `valveGroupModes` — a shared drip group built as one valve per bed on
@@ -6365,12 +6453,15 @@ function serializeState(){
   // means a hand-sketched area. Wire is derived from the routing and the
   // zone plan, so it is never stored — there is no second copy to drift.
   return {
-    version: 8,
+    version: 9,
     savedAt: new Date().toISOString(),
     inputs,
     waterSupply: readWaterSupply(),
     bomOverrides: JSON.parse(JSON.stringify(bomOverrides)),
     linkedQuoteId: linkedQuoteId || null,
+    // The size actually specified for this job, once it has been. Null
+    // means "still following the flow calculation".
+    mainlineSize: mainlineSizePin || null,
     areas: serializeAreas(),
     valveGroupModes: (()=>{ const live=valveGroupsInUse(), out={};
       Object.keys(valveGroupModes).forEach(g=>{ if(live.includes(g) && valveGroupModes[g]==='station') out[g]='station'; });
@@ -6409,7 +6500,12 @@ function serializeRouting(){
       splits: (()=>{ const live=new Set(LAST_ZONES.map(z=>baseKey(z.key)).filter(Boolean)), out={};
         Object.keys(r.splits||{}).forEach(k=>{ const sp=r.splits[k];
           if(live.has(k) && sp && [sp.ax,sp.ay,sp.bx,sp.by].every(Number.isFinite))
-            out[k]={ax:round3(sp.ax), ay:round3(sp.ay), bx:round3(sp.bx), by:round3(sp.by)}; });
+            out[k]={ax:round3(sp.ax), ay:round3(sp.ay), bx:round3(sp.bx), by:round3(sp.by),
+                    // Stored explicitly, both ways round. An absent flag on
+                    // a version-9 blob would read as the NEW default, which
+                    // is not what a migrated design meant.
+                    shareStation: sp.shareStation===true,
+                    ...(sp.legacy===true ? {legacy:true} : {})}; });
         return out; })(),
       // Hand-drawn lateral trees, per valve key, for valves that still exist.
       laterals: (()=>{ const live=new Set(LAST_ZONES.map(z=>z.key).filter(Boolean)), out={};
@@ -6426,9 +6522,16 @@ function serializeRouting(){
   return out;
 }
 
-function restoreRouting(blob){
+function restoreRouting(blob, version){
   routing={};
   if(!blob || typeof blob!=='object') return;
+  // Version 8 and earlier had no shareStation: every split was one station.
+  // Those designs were priced, proposed, wired and scheduled under that
+  // rule, so opening one must not change a single number. They load as
+  // shareStation:true and carry `legacy` so the builder can say the
+  // assignment came from the old behaviour and wants a look. The decision
+  // itself is ENGINE.splitStationRule() — see there for why it lives in the
+  // engine rather than here.
   const pt=p=>(p && Number.isFinite(+p.x) && Number.isFinite(+p.y)) ? {x:+p.x, y:+p.y} : null;
   Object.keys(blob).forEach(id=>{
     const r=blob[id]; if(!r || typeof r!=='object') return;
@@ -6457,7 +6560,11 @@ function restoreRouting(blob){
     const splits={};
     if(r.splits && typeof r.splits==='object'){
       Object.keys(r.splits).forEach(k=>{ const sp=r.splits[k];
-        if(sp && [sp.ax,sp.ay,sp.bx,sp.by].every(v=>Number.isFinite(+v))) splits[k]={ax:+sp.ax, ay:+sp.ay, bx:+sp.bx, by:+sp.by}; });
+        if(!sp || ![sp.ax,sp.ay,sp.bx,sp.by].every(v=>Number.isFinite(+v))) return;
+        // ONE rule, in the engine, so the audit cannot answer differently.
+        const { shareStation, legacy } = ENGINE.splitStationRule(sp, version);
+        splits[k]={ax:+sp.ax, ay:+sp.ay, bx:+sp.bx, by:+sp.by,
+                   shareStation, ...(legacy ? {legacy:true} : {})}; });
     }
     const laterals={};
     if(r.laterals && typeof r.laterals==='object'){
@@ -6508,12 +6615,22 @@ function restoreState(blob){
     valveGroupModes = {};
     if(blob.valveGroupModes && typeof blob.valveGroupModes==='object')
       Object.keys(blob.valveGroupModes).forEach(g=>{ if(blob.valveGroupModes[g]==='station') valveGroupModes[g]='station'; });
-    restoreRouting(blob.routing);
+    restoreRouting(blob.routing, blob.version);
     if(blob.wcRunOverrides && typeof blob.wcRunOverrides === 'object'){
       Object.keys(wcRunOverrides).forEach(k=>delete wcRunOverrides[k]);
       Object.assign(wcRunOverrides, blob.wcRunOverrides);
     }
+    mainlineSizePin = (typeof blob.mainlineSize === 'string' && blob.mainlineSize) ? blob.mainlineSize : null;
     render();          // rebuilds area cards + runs compute()
+    // A version-8 design never stored a mainline size, and its pipe is in
+    // the ground. Pin it to what it computes right now, AFTER the first
+    // compute has run, so the figure it has always printed is the figure it
+    // keeps printing — whatever is done to its stations afterwards.
+    if(!mainlineSizePin && !(Number(blob.version) >= 9) && LAST_ZONES.length){
+      mainlineSizePin = mainlineSuggested();
+      legacyMainlinePinned = true;
+      render();
+    }
     if(TOWNS) onTownChange();
     return true;
   } catch(_){ return false; }

@@ -158,11 +158,58 @@ export function moneyFields(diffs) {
 export function classifyDiffs(diffs) {
   const real = [];
   const runtimeFloat = [];
+  const declaredNew = [];
   for (const d of diffs) {
     if (isRuntimeFloatNoise(d)) runtimeFloat.push(d);
+    else if (isDeclaredNewField(d)) declaredNew.push(d);
     else real.push(d);
   }
-  return { real, runtimeFloat };
+  return { real, runtimeFloat, declaredNew };
+}
+
+/**
+ * Fields the engine did not used to emit at all, declared here by name.
+ *
+ * WHY THIS EXISTS, AND WHY IT IS DRAWN THIS TIGHT
+ *
+ * A golden master records what the old code SAID. Code that answers every
+ * old question identically and also says one more thing has not changed any
+ * answer — but a field-for-field diff cannot tell that apart from a number
+ * moving, so it fails, and the usual reflex is to re-capture the golden
+ * master. That is the one thing that must never happen: re-capturing
+ * replaces the record of the old behaviour with the new behaviour and the
+ * net stops being a net.
+ *
+ * So a new field is DECLARED instead. The bar is deliberately high:
+ *
+ *   - the golden master must have no value at that path at all. A field
+ *     that existed and changed its value is never in this category, and
+ *     neither is one that disappeared;
+ *   - the LAST segment of the path must be one of the names listed below,
+ *     written out one at a time. There is no pattern and no wildcard;
+ *   - nothing on a money path, whatever its name.
+ *
+ * Every difference this swallows is still reported by path, exactly like
+ * the runtime-float allowance above. Adding a name here is a deliberate
+ * claim that the field is new, additive, and changes no existing answer —
+ * and the rest of the suite still has to pass with the claim in place.
+ */
+const DECLARED_NEW_FIELDS = [
+  // 2026-09-22, version 9. A split zone's two halves now carry the
+  // shared-station decision that produced their station numbers, so the
+  // page can show the valve toggle and name a design still carrying the
+  // old assumption. Both are descriptive: applyValveSplits() reads the
+  // decision off the split, not off these.
+  "shareStation",
+  "legacyShare"
+];
+
+function isDeclaredNewField(d) {
+  const { path, expected } = d;
+  if (/cents/i.test(path)) return false;
+  if (expected !== undefined) return false;
+  const last = String(path).split(".").pop();
+  return DECLARED_NEW_FIELDS.includes(last);
 }
 
 function isRuntimeFloatNoise(d) {

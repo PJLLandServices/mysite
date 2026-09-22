@@ -450,7 +450,17 @@ export const fixtures = [
         pins: {},
         // A vertical line at x = 40 — the driveway. Zone key is
         // 'z:<aid>:<local zone>', which is why aid is pinned above.
-        splits: { "z:a_split001:0": { ax: 40, ay: -10, bx: 40, by: 40 } }
+        //
+        // shareStation:true says what this fixture has always MEANT. It was
+        // written, and the golden master captured, while the builder could
+        // only wire a split's two valves to one controller terminal — the
+        // flag did not exist because there was no other answer. Version 9
+        // makes the answer explicit and defaults a NEW split the other way,
+        // so a flagless split here would silently become two stations and
+        // the golden master would "fail" over a fixture that never changed
+        // its mind. Writing the old answer down is the same migration
+        // restoreRouting() performs on every real version-8 design.
+        splits: { "z:a_split001:0": { ax: 40, ay: -10, bx: 40, by: 40, shareStation: true } }
       }
     }
   },

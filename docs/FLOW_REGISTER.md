@@ -2,6 +2,144 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-22 (A split zone's two valves: one station or two, recorded instead of assumed):**
+Patrick established that Dundalk has **12 controller stations**: East Side Lawn 2's A and B halves
+are separate stations, Trees A and B are intentionally wired together on one. The builder could
+only say 11 because `applyValveSplits()` always put a split's two valves on one terminal — it had
+no way to record the other choice, so the choice was never asked.
+
+**The dangerous part was the migration, and Patrick caught it before it was written.** Flipping the
+default would have re-specified every historical design the moment somebody opened it. Measured,
+not asserted: with the migration removed, the version-8 fixture's controller part changes
+**HCX2600 → HCX2800**, the mainline drops **1-1/4" → 1"**, the proposal grows **two lines**, and
+the BOM moves **$35.76** — on a job already sold, wired and scheduled.
+
+So `routing[page].splits[key]` now carries **`shareStation`**, and:
+* a version-8 blob loads every split as `shareStation:true`, marked `legacy`, so not one number
+  moves;
+* a split drawn from now on stores `shareStation:false` — two stations, which is usually why a zone
+  gets split;
+* the valve panel toggles either way, and answering clears the mark;
+* the System Summary names every unanswered zone: *"Legacy shared-station assignment — review
+  required… loaded as one station, exactly as before, so nothing about this job has changed — but
+  that was the old default rather than a choice."*
+
+**The mainline is pinned, not re-derived.** It is the one figure describing pipe already in the
+ground, and separating a split lowers peak station flow, which lowers the suggested size. A
+version-8 design is pinned on load to whatever it has always printed. Every reader goes through one
+`mainlineSize()`, so the pinned and computed answers cannot drift apart.
+
+`scripts/test-split-share-station.mjs` — 37 assertions, running `origin/main` and the working tree
+in one browser. Twelve are "this version-8 design opens unchanged": stations, valves, peak flow,
+recommended controller, controller part, full-cycle run time, mainline, station list, valve list,
+every proposal line, every BOM line, BOM total. The version-9 blob it re-opens is **the app's own
+`serializeState()` output**, not a fixture I wrote, so the round trip is tested against the app
+rather than against my assumption.
+
+**Two bugs in my own tests, found by making the tests fail:** the proposal-line comparison read
+`l.name`/`l.detail`, which are not fields on a quote line — every entry was
+`{undefined, undefined}`, so it only ever caught a change in the NUMBER of lines. And the first
+mainline fixture put the drip group above the split zone in flow, so separating the split did not
+lower the peak and the assertion proved nothing; its own guard said so, in those words. Both fixed;
+the proposal check now fails on a pure wording change.
+
+`test-sitebuilder-split` and `test-sitebuilder-laterals` encoded the old contract in six places
+(one station, version 8, halves summing to the station). Updated rather than skipped, each gaining
+coverage of the shared case as a deliberate setting. 110 assertions, 0 failures.
+
+`scripts/audit-split-zones.mjs` lists every saved project containing a split, marking each LEGACY /
+shared / separate. Read-only. **It cannot run in the sandbox — `server/data` is gitignored — so the
+audit itself is still outstanding.**
+
+Verified by running it rather than reading it: `syncQuoteFromDesign()` re-syncs a **draft** linked
+quote on save and leaves an **accepted** one alone, reporting `locked`. Changing Dundalk's split
+cannot rewrite its accepted proposal.
+
+**Own branch, own PR, not merged, not pushed to main** — per Patrick. Dundalk itself is untouched:
+its correction to 12 stations is a deliberate edit through the new toggle, not something this
+change does to it.
+
+**Rebased onto the extracted engine (2026-09-22, after #287 merged).** `applyValveSplits()` no
+longer lives in the page, so the station decision moved with it into `server/sitebuilder-engine.js`.
+Everything else stayed on the page, which is the right side of the line drawn in #287: the engine
+decides stations from a split's stored flag, and the page is what stores the flag, migrates a
+version-8 blob, pins the mainline and draws the toggle.
+
+**The rebase found a real defect in the comparison harnesses, and it had been lying in this
+change's favour.** The page loads its maths from the fixed path `/admin/sitebuilder-engine.js`.
+`fuzz-system-design-engine.mjs` and `compare-real-design.mjs` each served BOTH versions of the page
+from ONE server, so the reference page was handed the WORKING TREE's engine — "production" was the
+old page running the new maths, which is neither version. It reported 8 of 300 designs differing
+with the station count moving the WRONG WAY (production higher than the PR), and the sign is what
+gave it away. Both now run a server per version. Re-run afterwards: **750 of 750 designs identical**,
+which is the first time that number has meant what it says for a change that alters the engine.
+`test-split-share-station.mjs` had the same shape and got the same fix.
+
+**The golden master was NOT re-captured.** Fixture 11 is the split fixture; it was written, and the
+golden file recorded, while one station was the only answer the builder had. It now says
+`shareStation: true` — stating what it always meant, the same migration `restoreRouting()` performs
+on every real version-8 design — and all thirteen of its moved numbers came back. What remained was
+four fields the old engine never emitted at all (`shareStation`, `legacyShare` on the two halves).
+Re-capturing to absorb those would replace the record of the old behaviour with the new behaviour
+and end the net. So `classifyDiffs()` gained a third category, drawn as tightly as the sub-ulp one:
+a difference is allowed ONLY where the golden master has no value at that path, the field name is
+written out by hand in `DECLARED_NEW_FIELDS`, and the path is not money — and every one is still
+printed. Negative-tested: with fixture 11's answer removed AND `station`, `stationGpm`, `gpm`,
+`count`, `peakGPM`, `headCount`, `valves` all added to the list, the suite still failed on 11 real
+differences, because the golden master holds values at those paths.
+
+Green after the rebase: golden master identical on every value it holds (12 of 12 mutations caught,
+1 of 1 unreachable rule confirmed), 750/750 fuzzed designs identical, split share-station 37/37,
+sitebuilder suite 110/110. `build:check` fails only where it already failed on a pristine tree —
+`pjl-field`'s `@babel/core` is not installed in this sandbox.
+
+The audit script moved OUT of this change into its own read-only tooling PR, so the thing that
+reads live projects ships on its own with no behaviour change riding along.
+
+**What correcting a split actually touches (2026-09-22, measured for Patrick's merge sign-off).**
+Patrick asked for an explicit statement that deploying this leaves a sold job operationally
+unchanged, and that correcting East Side Lawn 2 changes only the station representation. Sections
+G, H and I of `test-split-share-station.mjs` answer it by running it. **Two of the assumptions in
+that statement did not survive contact.**
+
+*Separating a split is NOT unconditionally BOM-neutral.* A station is what the controller is sized
+on, so a split that pushes the count over a controller band boundary changes the controller part
+and the BOM total. The fixture goes 6 → 7 stations, crosses `totalStations<=6` into `<=8`, and the
+BOM moves **HCX2600 → HCX2800, $2210.09 → $2245.85**. Every other BOM line is identical — only the
+controller line moves — but "the BOM does not change" is false in general and is now asserted in
+the direction it actually behaves.
+
+*At Dundalk's own numbers it does not move.* Reading the ladder is not running it, so the ladder is
+run through `buildBOM()` at every count from 1 to 16: `4|4|4|4|6|6|8|8|1400|1400|1400|1400|1400|1400|HPC|HPC`.
+**11 and 12 are both HCX21400**, so an 11 → 12 correction cannot change Dundalk's controller. The
+band boundaries (4, 6, 8, 14) are pinned too, so a future edit to the ladder fails this rather than
+silently invalidating the claim.
+
+*What else moves with the station count, on a DRAFT quote only:* the desired proposal gains a line
+and **renumbers every zone line after the insertion point** (Zone 2 → Zone 3 …), and the controller
+line keeps its price but restates the count in its description ("sized for 6 zones" → "7"). None of
+it reaches an accepted quote — `syncQuoteFromDesign()` returns `locked` — but it is what a draft
+would be offered.
+
+*The Save button writes more than the quote guard covers.* `saveDesign()` PATCHes the project and
+then, whenever a quote is linked and **without first asking whether that quote is still a draft**,
+calls `generateMaterialList()`. Section I drives the real button against an ACCEPTED quote and
+records every non-GET request:
+
+| material list | what the Save button writes |
+|---|---|
+| draft | `PATCH /api/projects/…` + `PATCH /api/material-lists/ML-1` — the draft list IS rewritten in place |
+| purchased | `PATCH /api/projects/…` + `POST /api/material-lists` — the purchased list is never clobbered; a NEW list is created beside it |
+
+In both cases the accepted quote is not written to, and **nothing else is** — no invoice, task,
+work order, customer or completion record. That last one is asserted as a whitelist over the
+request paths, not as an absence somebody looked for once.
+
+So the honest statement is: opening and saving changes no money-facing record except the project's
+own design blob and its material list, and correcting a split changes the station representation —
+plus the controller part and BOM total IF the new count crosses a band, which at 11 → 12 it does
+not.
+
 **2026-09-21, last (The System Builder's maths moves out of the page):** Phases 0 and 1 of the
 System Builder work, to Patrick's brief: build a characterization safety net, then extract ONLY
 the calculation engine, leaving persistence, quote creation and proposal-section generation

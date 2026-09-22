@@ -72,7 +72,12 @@ const quoteStatus = new Map(quotes.map((q) => [q && q.id, q && q.status]));
 function analyse(design) {
   try {
     const areas = JSON.parse(JSON.stringify(design.areas));
-    const routing = JSON.parse(JSON.stringify(design.routing || {}));
+    // Migrate the stored splits the SAME way opening the project does.
+    // Without this the audit hands raw version-8 routing to an engine that
+    // honours `shareStation`, reads every flagless split as separate, and
+    // reports a station count nobody would ever see on screen. The rule is
+    // the engine's, not a second copy of it.
+    const routing = E.migrateRoutingSplits(design.routing || {}, design.version);
     const valveGroupModes = JSON.parse(JSON.stringify(design.valveGroupModes || {}));
     const ceiling = parseFloat((design.inputs || {}).ceiling) || 0;
     const spacingFactor = (design.inputs || {}).spacingFactor;

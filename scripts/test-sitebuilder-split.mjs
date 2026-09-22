@@ -138,22 +138,49 @@ check(after.toolNow === 'pan', 'tool drops back to Move after the second click')
 check(Object.keys(after.splits).length === 1 && after.splits[pick.key], 'one split line stored under the zone key');
 const halves = after.zones.filter(z => z.key === pick.key || z.key === pick.key + '#B');
 check(halves.length === 2 && halves[0].half === 'A' && halves[1].half === 'B', 'zone became an A half and a B half');
-check(halves[0].station === halves[1].station, 'both halves share one station');
+// Version 9 changed this deliberately: a split drawn from now on is TWO
+// controller stations, because that is usually why a zone gets split. One
+// station is still available, through the toggle exercised further down.
+check(halves[0].station !== halves[1].station, 'each half gets its own controller station');
 check(halves[0].heads + halves[1].heads === pick.n, 'every head landed on exactly one half (' + halves[0].heads + ' + ' + halves[1].heads + ')');
 check(after.valves === base.zones.length + 1, 'one more valve than before');
-check(after.stations === base.stations, 'same number of stations as before');
-check(after.quote.length === base.quoteLines && after.quote.some(l => /2 valves wired as one zone/.test(l)), 'quote still has one line per station, noting the two valves');
+check(after.stations === base.stations + 1, 'one more station than before');
+check(after.quote.length === base.quoteLines + 1, 'the quote gains a line, one per station');
 const boxOfA = after.byBox.findIndex(l => l.includes(pick.key)), boxOfB = after.byBox.findIndex(l => l.includes(pick.key + '#B'));
 check(boxOfA === 0 && boxOfB === 1, 'A half fell to the west box, B half to the east box (' + boxOfA + ',' + boxOfB + ')');
 check(after.runs.some(r => r.key === pick.key && r.root === 'm0') && after.runs.some(r => r.key === pick.key + '#B' && r.root === 'm1'), 'each half gets its own lateral run from its own box');
 check(after.zoneSelKey === pick.key, 'selection stays on the split zone (A half)');
 check(after.svgHasSplit, 'split line drawn with two draggable ends');
-check(after.peak >= Math.max(...halves.map(h => h.gpm)) - 1e-6, 'peak station flow counts both halves opening together');
+check(after.peak >= Math.max(...halves.map(h => h.gpm)) - 1e-6, 'peak station flow is at least the bigger half');
+
+// --- the other way round: wire both valves to one terminal --------------
+// This is what every pre-version-9 split did, and what a migrated design
+// still does. It has to remain reachable, not just historical.
+{
+  const shared = await page.evaluate(({ k, pg }) => {
+    const zi = LAST_ZONES.findIndex(z => z.key === k);
+    mpSetShareStation(zi, true);
+    const hs = LAST_ZONES.filter(z => z.key === k || z.key === k + '#B');
+    return {
+      stations: stationCount(), valves: LAST_ZONES.length,
+      sameStation: hs.length === 2 && hs[0].station === hs[1].station,
+      quote: desiredQuoteLines().desired.filter(l => l.kind === 'zone').map(l => l.description),
+      saved: serializeState().routing[pg].splits[k].shareStation
+    };
+  }, { k: pick.key, pg: PAGE });
+  check(shared.sameStation, 'the toggle puts both valves back on one station');
+  check(shared.stations === base.stations, 'and the station count returns to what it was');
+  check(shared.valves === base.zones.length + 1, 'while the valve count stays up — still two valves in the ground');
+  check(shared.quote.some(d => /2 valves wired as one zone/.test(d)), 'the quote line says two valves are wired as one zone');
+  check(shared.saved === true, 'the shared decision is what gets saved');
+  await page.evaluate(k => { const zi = LAST_ZONES.findIndex(z => z.key === k); mpSetShareStation(zi, false); }, pick.key);
+}
 
 // --- pin B by hand, then save → reload ----------------------------------
 await page.evaluate(k => { const zi = LAST_ZONES.findIndex(z => z.key === k + '#B'); mpPinZone(zi, 1); }, pick.key);
 const blob = await page.evaluate(() => serializeState());
-check(blob.version === 8, 'design saves as version 8');
+check(blob.version === 9, 'design saves as version 9');
+check(blob.routing[PAGE].splits[pick.key].shareStation === false, 'a new split records that its valves do NOT share a station');
 check(blob.routing[PAGE] && blob.routing[PAGE].splits && blob.routing[PAGE].splits[pick.key], 'split line is in the saved blob');
 check(blob.routing[PAGE].pins[pick.key + '#B'] === 'm_east', 'pin on the B half is saved under its own key');
 saved = blob;
