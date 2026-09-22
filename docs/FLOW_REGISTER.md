@@ -4980,6 +4980,41 @@ concurrent request is a read-modify-write against the same JSON.
 
 ---
 
+## INF — Read-only audit CLIs
+
+Tools that READ `server/data` and print. Registered here so "read-only" is a claim with a
+test behind it rather than a promise in a comment.
+
+**Split-zone audit (2026-09-22, SB split stations):** `scripts/audit-split-zones.mjs` — lists
+every saved project whose design contains a split area, so each can be reviewed before the
+shared/separate station distinction is made explicit.
+
+```
+npm run audit:split-zones            # human-readable table
+npm run audit:split-zones -- --json  # machine-readable
+```
+
+Per split area it reports: project id, project name, design version, the area, whether its
+shared-station status is **explicit** or **LEGACY-ASSUMED**, the station count now, the
+station count if that split were separated, and whether an accepted proposal exists.
+
+Standing invariants, each pinned by `scripts/test-audit-split-zones.mjs` (42 assertions):
+
+- The source contains no write call (`writeFile`, `appendFile`, `mkdir`, `rm`, `unlink`,
+  `rename`, `copyFile`, `createWriteStream`, `truncate`, `chmod`), no `child_process`, and no
+  network client (`fetch`, `http`). The scan strips comments first so its own prose cannot
+  satisfy it. Smuggling a `fs.writeFileSync` into the script fails the suite.
+- `server/data` is byte-for-byte identical after two runs, and no file is added to it.
+- Output carries only the agreed columns. Customer email, telephone, invoice figures and
+  internal notes are never read. A field that looks like contact data anywhere in the output
+  aborts the run with exit code 3 and prints nothing — pinned by a fixture whose project name
+  carries a phone number.
+- Station counts come from the extracted engine (`server/sitebuilder-engine.js`), not from
+  proposal lines. Proposal lines are not controller stations; assuming they were is what hid
+  the Dundalk 12-vs-11 discrepancy.
+
+---
+
 # Part 2 — Verified flows
 
 ## FLOW-01 — Existing customer portal login — **PASS**
