@@ -67,6 +67,32 @@ a money path, nothing that is a whole number, and the tolerance that allows it i
 absolute: a nanometre, six orders of magnitude below the smallest deliberate quantity in the
 engine.
 
+**"Down from 12 zones to 11" on the Dundalk job — CONFIRMED NOT A DEFECT (2026-09-22).** Patrick
+reported the station count had dropped. Nothing in this branch was deployed and `sitebuilder.html`
+had not changed on `main` since #285, so the first job was to find out what had. Rebuilt the design
+from the figures legible in his screenshots (19 areas, 70 heads, 11 stations, 16 valves, peak 17.1
+GPM, "2 gear + 4 pop-up + 13 drip + 1 strip + 1 trees" = 21 area zones — and 19 areas = 13 drip
+beds + 1 trees + 5 lawns, which is the only split that makes both totals close). The
+reconstruction reproduced every one of those figures, and sweeping the GPM ceiling gave a single
+crossing point:
+
+| ceiling | stations | peak |
+| --- | --- | --- |
+| 17.0 | 12 | 16.7 |
+| 17.1 or higher | 11 | 17.1 |
+
+**East Side Lawn 2**, 17.1 GPM across 22 heads. Below a 17.1 ceiling it needs two valves on two
+stations; at or above it, all 22 fit on one station, and the split line drawn across it keeps it
+at two valves — which is why the valve count stayed at 16 while stations fell to 11.
+
+Patrick then confirmed: **the ceiling is 17.1, and he set it there deliberately.** The two valves
+open together on one station because together they draw 17.1 GPM against 18.0 available and do not
+need separate run times. That is precisely what the driveway-split feature is for — one station,
+two valves, one line on the quote — so the tool did what it was asked. **11 is the right answer and
+the change was his own.** Recorded here because the investigation looked for a regression and
+correctly found a decision; the earlier note in this session flagging 17.1-against-18.0 as tight
+was a misreading of intent, not a finding.
+
 **750 random designs, because Patrick does not do this kind of work.** Asking him to paste
 JavaScript into a browser console to hand over his own design was the wrong shape of request, and
 he said so. `scripts/fuzz-system-design-engine.mjs` removes the need for it: it generates designs
@@ -163,6 +189,26 @@ cannot be turned on from a commit; and `server/data/*` is gitignored, so a fresh
 deploy with **no projects in it at all** — nothing to walk. `compare-real-design.mjs` exists
 because it answers the same question more strictly and without standing up a second copy of the
 customer database to do it.
+
+**Two real defects the same screenshots did surface, both still OPEN and neither caused by this
+branch (identical on `main`):**
+
+> **SB-01 — the master plan drops a split tree valve.** The System Summary says 16 valves; the
+> master plan header and its layers panel say 15. The missing one is **Trees · B**. `mpDraw()`
+> builds its valve set from `zoneIndexOf(i, 0)` per area plus every HEAD of every area — and a
+> tree zone has no heads, it runs to the trees. So a split tree zone only ever contributes its A
+> half (`sitebuilder.html`, the `const used = new Set()` block). It matters because a valve that
+> is not on the master plan gets no lateral drawn and no lateral measured: the sub installs from a
+> plan showing 15 while the BOM has ordered 16. Fix is local — include the tree halves the way
+> heads are included, using `mpTreesOf()` and the same `headHalf()` rule `applyValveSplits()`
+> already uses. Offered; not yet taken up.
+
+> **SB-02 — the project page's "zones" figure is the AREA count.** `server/server.js:15879` builds
+> `siteBuilderSummary.zoneCount` as `proj.systemDesign.areas.length`, and the rebuilt project
+> overview renders it as "System design · N zones". An area can produce several zones, and grouped
+> drip beds collapse many areas onto one valve, so this figure can legitimately disagree with the
+> builder's own. The builder and the quote both count STATIONS (`stationZones()`); only this one
+> counts areas. Not yet fixed.
 
 **Patrick's acceptance test — not yet walked:** open the System Builder on a real project, check
 the zone count, the GPM figures and the BOM total read exactly as they did yesterday, then save
