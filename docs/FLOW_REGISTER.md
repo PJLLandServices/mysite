@@ -2,6 +2,63 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-22 (A split zone's two valves: one station or two, recorded instead of assumed):**
+Patrick established that Dundalk has **12 controller stations**: East Side Lawn 2's A and B halves
+are separate stations, Trees A and B are intentionally wired together on one. The builder could
+only say 11 because `applyValveSplits()` always put a split's two valves on one terminal — it had
+no way to record the other choice, so the choice was never asked.
+
+**The dangerous part was the migration, and Patrick caught it before it was written.** Flipping the
+default would have re-specified every historical design the moment somebody opened it. Measured,
+not asserted: with the migration removed, the version-8 fixture's controller part changes
+**HCX2600 → HCX2800**, the mainline drops **1-1/4" → 1"**, the proposal grows **two lines**, and
+the BOM moves **$35.76** — on a job already sold, wired and scheduled.
+
+So `routing[page].splits[key]` now carries **`shareStation`**, and:
+* a version-8 blob loads every split as `shareStation:true`, marked `legacy`, so not one number
+  moves;
+* a split drawn from now on stores `shareStation:false` — two stations, which is usually why a zone
+  gets split;
+* the valve panel toggles either way, and answering clears the mark;
+* the System Summary names every unanswered zone: *"Legacy shared-station assignment — review
+  required… loaded as one station, exactly as before, so nothing about this job has changed — but
+  that was the old default rather than a choice."*
+
+**The mainline is pinned, not re-derived.** It is the one figure describing pipe already in the
+ground, and separating a split lowers peak station flow, which lowers the suggested size. A
+version-8 design is pinned on load to whatever it has always printed. Every reader goes through one
+`mainlineSize()`, so the pinned and computed answers cannot drift apart.
+
+`scripts/test-split-share-station.mjs` — 37 assertions, running `origin/main` and the working tree
+in one browser. Twelve are "this version-8 design opens unchanged": stations, valves, peak flow,
+recommended controller, controller part, full-cycle run time, mainline, station list, valve list,
+every proposal line, every BOM line, BOM total. The version-9 blob it re-opens is **the app's own
+`serializeState()` output**, not a fixture I wrote, so the round trip is tested against the app
+rather than against my assumption.
+
+**Two bugs in my own tests, found by making the tests fail:** the proposal-line comparison read
+`l.name`/`l.detail`, which are not fields on a quote line — every entry was
+`{undefined, undefined}`, so it only ever caught a change in the NUMBER of lines. And the first
+mainline fixture put the drip group above the split zone in flow, so separating the split did not
+lower the peak and the assertion proved nothing; its own guard said so, in those words. Both fixed;
+the proposal check now fails on a pure wording change.
+
+`test-sitebuilder-split` and `test-sitebuilder-laterals` encoded the old contract in six places
+(one station, version 8, halves summing to the station). Updated rather than skipped, each gaining
+coverage of the shared case as a deliberate setting. 110 assertions, 0 failures.
+
+`scripts/audit-split-zones.mjs` lists every saved project containing a split, marking each LEGACY /
+shared / separate. Read-only. **It cannot run in the sandbox — `server/data` is gitignored — so the
+audit itself is still outstanding.**
+
+Verified by running it rather than reading it: `syncQuoteFromDesign()` re-syncs a **draft** linked
+quote on save and leaves an **accepted** one alone, reporting `locked`. Changing Dundalk's split
+cannot rewrite its accepted proposal.
+
+**Own branch, own PR, not merged, not pushed to main** — per Patrick. Dundalk itself is untouched:
+its correction to 12 stations is a deliberate edit through the new toggle, not something this
+change does to it.
+
 **2026-09-21, last (The System Builder's maths moves out of the page):** Phases 0 and 1 of the
 System Builder work, to Patrick's brief: build a characterization safety net, then extract ONLY
 the calculation engine, leaving persistence, quote creation and proposal-section generation
