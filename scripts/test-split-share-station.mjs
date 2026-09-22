@@ -35,6 +35,7 @@ import os from "node:os";
 import http from "node:http";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { v8WithSplits } from "./fixtures/v8-split-designs.mjs";
@@ -246,6 +247,97 @@ check("...even though the flow calculation now suggests smaller",
       S.peakStationGPM < A.peakStationGPM,
       `peak ${A.peakStationGPM.toFixed(1)} -> ${S.peakStationGPM.toFixed(1)} GPM; if this is not lower the test is not testing anything`);
 
+// ── G. Separating one split: exactly what moves, and what does not ───
+//
+// The Dundalk correction in miniature. Patrick asked for this stated rather
+// than assumed, so it is measured: choosing "give each valve its own
+// station" on ONE split is a change to the controller-station
+// representation — and the question is what travels with it.
+console.log(`\nG. Correcting one split — what moves and what does not`);
+const moves = (label, key, why) =>
+  check(`${label} CHANGES, as intended`, JSON.stringify(A[key]) !== JSON.stringify(S[key]),
+        `${why} — was ${JSON.stringify(A[key])}, now ${JSON.stringify(S[key])}`);
+const holds = (label, key) =>
+  check(`${label} does not move`, JSON.stringify(A[key]) === JSON.stringify(S[key]),
+        `was ${JSON.stringify(A[key])}, now ${JSON.stringify(S[key])}`);
+
+// What the toggle is FOR. If these stop moving it has stopped working.
+moves("the station count", "stations", "one split becomes two stations");
+moves("the station list", "stationList", "each half gets its own row and run time");
+moves("peak station flow", "peakStationGPM", "the halves no longer open together");
+
+// What never follows it, whatever the station count does.
+holds("the valve count", "valves");
+holds("the mainline printed on the sheets", "mainline");
+
+// AND WHAT *CAN* FOLLOW IT. This is the finding, and it is asserted rather
+// than hidden: a station is what the controller is sized on, so a split that
+// pushes the count over a controller band boundary changes the controller
+// part and therefore the BOM total. This fixture goes 6 -> 7 stations, which
+// crosses `totalStations<=6` into `<=8`.
+check("a split that crosses a controller band DOES change the controller part",
+      A.controllerSku === "HCX2600" && S.controllerSku === "HCX2800",
+      `${A.controllerSku} -> ${S.controllerSku}`);
+check("...and the BOM total moves with it",
+      S.bomSubtotalCents !== A.bomSubtotalCents,
+      `$${(A.bomSubtotalCents / 100).toFixed(2)} -> $${(S.bomSubtotalCents / 100).toFixed(2)}`);
+check("...and nothing in the BOM moves EXCEPT the controller line",
+      JSON.stringify(A.bom.filter((l) => !/^HC/.test(l.sku))) ===
+      JSON.stringify(S.bom.filter((l) => !/^HC/.test(l.sku))));
+console.log(`     BOM: $${(A.bomSubtotalCents / 100).toFixed(2)} -> $${(S.bomSubtotalCents / 100).toFixed(2)} ` +
+            `(${A.controllerSku} -> ${S.controllerSku}), every other line identical`);
+
+// The proposal: the DESIRED line list grows AND renumbers, because a line is
+// built per station and the new station is inserted in station order. That
+// list only ever reaches a DRAFT quote — section F proves an accepted one is
+// left alone and reported `locked` — so on a sold job this is computed and
+// never sent. Asserted so the distinction stays honest instead of implied.
+check("the desired proposal gains a line",
+      S.proposalLines.length === A.proposalLines.length + 1,
+      `${A.proposalLines.length} -> ${S.proposalLines.length}`);
+check("...and renumbers every zone line after the insertion point",
+      S.proposalLines[3].label !== A.proposalLines[3].label,
+      `line 3 was "${A.proposalLines[3].label}", now "${S.proposalLines[3].label}"`);
+check("...while the mainline line is untouched, wording and price",
+      JSON.stringify(S.proposalLines[0]) === JSON.stringify(A.proposalLines[0]));
+// The controller line restates the count in its own words. Worth asserting
+// rather than glossing: its PRICE holds, but a sold proposal that said
+// "sized for 11 zones" would be offered "sized for 12 zones" if it were a
+// draft. On an accepted quote none of this is sent (section F).
+check("the controller line keeps its price",
+      S.proposalLines[1].price === A.proposalLines[1].price);
+check("...but its description restates the zone count",
+      /sized for 6 zones/.test(A.proposalLines[1].description) &&
+      /sized for 7 zones/.test(S.proposalLines[1].description),
+      `"${A.proposalLines[1].description}" -> "${S.proposalLines[1].description}"`);
+
+// ── H. The controller band at Dundalk's own numbers ──────────────────
+//
+// Dundalk goes 11 -> 12 stations, not 6 -> 7. Whether ITS controller moves
+// is a different question from the fixture above, and reading the ladder is
+// not the same as running it — so the ladder is run, at every count either
+// side of every boundary, straight through the engine's own buildBOM.
+console.log(`\nH. What the controller ladder does at each station count`);
+{
+  const ENGINE = createRequire(import.meta.url)(path.join(ROOT, "server", "sitebuilder-engine.js"));
+  const controllerAt = (n) => {
+    const zones = Array.from({ length: n }, (_, i) => ({ station: i, gpm: 1, key: `z${i}` }));
+    const line = ENGINE.buildBOM({ zones, plans: [], parts }).lines.find((l) => /^HC/.test(l.sku));
+    return line ? line.sku : null;
+  };
+  const band = {};
+  for (let n = 1; n <= 16; n++) band[n] = controllerAt(n);
+  console.log(`     ${Object.entries(band).map(([n, s]) => `${n}:${s}`).join("  ")}`);
+  check("11 and 12 stations take the SAME controller part",
+        band[11] === band[12] && band[11] === "HCX21400",
+        `11 -> ${band[11]}, 12 -> ${band[12]}`);
+  check("so a Dundalk-shaped 11 -> 12 correction cannot change the controller",
+        band[11] === band[12]);
+  check("the boundaries are where the ladder says they are (4, 6, 8, 14)",
+        band[4] !== band[5] && band[6] !== band[7] && band[8] !== band[9] && band[14] !== band[15],
+        JSON.stringify(band));
+}
+
 // ── E. What Patrick actually sees ────────────────────────────────────
 console.log(`\nE. The notice on screen`);
 {
@@ -334,6 +426,73 @@ console.log(`\nF. Saving a design against a linked quote`);
               `action=${r.action}, writes=${writes.join(", ") || "none"}`);
         check("...and the builder says so rather than failing silently", r.status === "accepted", String(r.status));
       }
+    } finally { srv.close(); }
+  }
+  await browser.close();
+}
+
+// ── I. Every write the Save button makes, on a SOLD job ──────────────
+//
+// Section F runs syncQuoteFromDesign() on its own. The button does more:
+// saveDesign() PATCHes the project, then — whenever a quote is linked, and
+// WITHOUT first asking whether that quote is still a draft — calls
+// generateMaterialList(). So "the accepted quote is safe" is not the whole
+// answer to "what does saving Dundalk touch". This records every non-GET
+// request the real button makes, against an ACCEPTED quote, and names them.
+console.log(`\nI. What the Save button writes on a job whose quote is accepted`);
+{
+  const browser = await chromium.launch(chromiumLaunchOpts());
+  for (const mlStatus of ["draft", "purchased"]) {
+    const writes = [];
+    const srv = http.createServer((req, res) => {
+      const u = new URL(req.url, "http://x");
+      let body = "";
+      req.on("data", (c) => { body += c; });
+      req.on("end", () => {
+        if (req.method !== "GET") writes.push({ m: req.method, p: u.pathname, body });
+        const json = (o) => { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(o)); };
+        if (u.pathname === "/") { res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          return res.end(fs.readFileSync(path.join(ROOT, "server", "sitebuilder.html"))); }
+        if (u.pathname === "/admin/sitebuilder-engine.js") {
+          res.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8" });
+          return res.end(fs.readFileSync(path.join(ROOT, "server", "sitebuilder-engine.js"))); }
+        if (u.pathname === "/api/admin/quote-folder")
+          return json({ ok: true, quotes: [{ id: "Q-2026-0088", status: "accepted", lineItems: [] }] });
+        if (u.pathname === "/api/material-lists" && req.method === "GET")
+          return json({ ok: true, lists: [{ id: "ML-1", status: mlStatus }] });
+        if (u.pathname === "/api/material-lists") return json({ ok: true, list: { id: "ML-2" } });
+        return json({ ok: true, quote: { id: "Q-2026-0088", total: 0 }, list: { id: "ML-1" } });
+      });
+    });
+    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+    try {
+      const page = await browser.newPage();
+      await page.goto(`http://127.0.0.1:${srv.address().port}/`, { waitUntil: "load" });
+      await page.waitForFunction("appReady === true", null, { timeout: 30000 });
+      await page.evaluate(async ({ d, parts }) => {
+        PARTS_MAP = parts; restoreState(JSON.parse(JSON.stringify(d))); compute();
+        linkedProject = { id: "PROJ-TEST", name: "Test", customerName: "", customerEmail: "", propertyId: null };
+        linkedQuoteId = "Q-2026-0088";
+        await saveDesign();
+      }, { d: v8WithSplits, parts });
+      const paths = writes.map((w) => `${w.m} ${w.p}`);
+      console.log(`     material list ${mlStatus}: ${paths.join(" | ") || "nothing"}`);
+      check(`[ml ${mlStatus}] the design itself is saved`,
+            paths.includes("PATCH /api/projects/PROJ-TEST"), paths.join(" | "));
+      check(`[ml ${mlStatus}] the ACCEPTED quote is NOT written to`,
+            !paths.some((p) => /\/proposal$/.test(p)), paths.join(" | "));
+      if (mlStatus === "draft") {
+        check("[ml draft] the DRAFT material list IS rewritten in place",
+              paths.includes("PATCH /api/material-lists/ML-1"), paths.join(" | "));
+      } else {
+        check("[ml purchased] a PURCHASED material list is never clobbered",
+              !paths.some((p) => /PATCH \/api\/material-lists\//.test(p)), paths.join(" | "));
+        check("[ml purchased] a NEW list is created alongside it instead",
+              paths.includes("POST /api/material-lists"), paths.join(" | "));
+      }
+      check(`[ml ${mlStatus}] nothing else is written — no invoice, task, work order or customer record`,
+            writes.every((w) => /^\/api\/(projects\/|material-lists)/.test(w.p)),
+            paths.join(" | "));
     } finally { srv.close(); }
   }
   await browser.close();

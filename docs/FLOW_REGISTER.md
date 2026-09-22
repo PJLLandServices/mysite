@@ -96,6 +96,50 @@ sitebuilder suite 110/110. `build:check` fails only where it already failed on a
 The audit script moved OUT of this change into its own read-only tooling PR, so the thing that
 reads live projects ships on its own with no behaviour change riding along.
 
+**What correcting a split actually touches (2026-09-22, measured for Patrick's merge sign-off).**
+Patrick asked for an explicit statement that deploying this leaves a sold job operationally
+unchanged, and that correcting East Side Lawn 2 changes only the station representation. Sections
+G, H and I of `test-split-share-station.mjs` answer it by running it. **Two of the assumptions in
+that statement did not survive contact.**
+
+*Separating a split is NOT unconditionally BOM-neutral.* A station is what the controller is sized
+on, so a split that pushes the count over a controller band boundary changes the controller part
+and the BOM total. The fixture goes 6 → 7 stations, crosses `totalStations<=6` into `<=8`, and the
+BOM moves **HCX2600 → HCX2800, $2210.09 → $2245.85**. Every other BOM line is identical — only the
+controller line moves — but "the BOM does not change" is false in general and is now asserted in
+the direction it actually behaves.
+
+*At Dundalk's own numbers it does not move.* Reading the ladder is not running it, so the ladder is
+run through `buildBOM()` at every count from 1 to 16: `4|4|4|4|6|6|8|8|1400|1400|1400|1400|1400|1400|HPC|HPC`.
+**11 and 12 are both HCX21400**, so an 11 → 12 correction cannot change Dundalk's controller. The
+band boundaries (4, 6, 8, 14) are pinned too, so a future edit to the ladder fails this rather than
+silently invalidating the claim.
+
+*What else moves with the station count, on a DRAFT quote only:* the desired proposal gains a line
+and **renumbers every zone line after the insertion point** (Zone 2 → Zone 3 …), and the controller
+line keeps its price but restates the count in its description ("sized for 6 zones" → "7"). None of
+it reaches an accepted quote — `syncQuoteFromDesign()` returns `locked` — but it is what a draft
+would be offered.
+
+*The Save button writes more than the quote guard covers.* `saveDesign()` PATCHes the project and
+then, whenever a quote is linked and **without first asking whether that quote is still a draft**,
+calls `generateMaterialList()`. Section I drives the real button against an ACCEPTED quote and
+records every non-GET request:
+
+| material list | what the Save button writes |
+|---|---|
+| draft | `PATCH /api/projects/…` + `PATCH /api/material-lists/ML-1` — the draft list IS rewritten in place |
+| purchased | `PATCH /api/projects/…` + `POST /api/material-lists` — the purchased list is never clobbered; a NEW list is created beside it |
+
+In both cases the accepted quote is not written to, and **nothing else is** — no invoice, task,
+work order, customer or completion record. That last one is asserted as a whitelist over the
+request paths, not as an absence somebody looked for once.
+
+So the honest statement is: opening and saving changes no money-facing record except the project's
+own design blob and its material list, and correcting a split changes the station representation —
+plus the controller part and BOM total IF the new count crosses a band, which at 11 → 12 it does
+not.
+
 **2026-09-21, last (The System Builder's maths moves out of the page):** Phases 0 and 1 of the
 System Builder work, to Patrick's brief: build a characterization safety net, then extract ONLY
 the calculation engine, leaving persistence, quote creation and proposal-section generation
