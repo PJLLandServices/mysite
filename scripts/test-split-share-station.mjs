@@ -498,6 +498,79 @@ console.log(`\nI. What the Save button writes on a job whose quote is accepted`)
   await browser.close();
 }
 
+// ── J. The page and the audit cannot answer differently ──────────────
+//
+// There are now two readers of a stored split: the builder page, which
+// migrates in restoreRouting() when a project is opened, and the split-zone
+// audit, which reads saved projects off disk with no page at all. They
+// answered differently the moment applyValveSplits() started honouring the
+// flag — the audit read raw version-8 routing as SEPARATE and reported a
+// station count nobody would ever see on screen.
+//
+// So this runs the REAL `scripts/audit-split-zones.mjs`, as a process, over
+// a project file carrying the same design the page just opened, and
+// compares what it says to what the page showed. Re-implementing the
+// audit's logic here would be a third copy of the rule, and a third thing
+// to drift — the earlier version of this section did exactly that and
+// passed against a deliberately broken audit.
+console.log(`\nJ. One rule, two readers`);
+{
+  const ENGINE = createRequire(import.meta.url)(path.join(ROOT, "server", "sitebuilder-engine.js"));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sb-audit-"));
+  const auditRows = (design) => {
+    fs.writeFileSync(path.join(dataDir, "projects.json"), JSON.stringify([
+      { id: "PROJ-X", name: "Cross-check", systemDesign: design }
+    ]));
+    fs.writeFileSync(path.join(dataDir, "quotes.json"), "[]");
+    const out = execFileSync("node", [path.join(ROOT, "scripts", "audit-split-zones.mjs"),
+                                      "--data", dataDir, "--json"], { encoding: "utf8" });
+    return JSON.parse(out);
+  };
+  try {
+    const v8Rows = auditRows(v8WithSplits);
+    const v9Rows = auditRows(after.out.migrated);
+    const v8Now = v8Rows.length ? v8Rows[0].stationsNow : null;
+    const v9Now = v9Rows.length ? v9Rows[0].stationsNow : null;
+    console.log(`     version 8 — page ${A.stations} stations, audit ${v8Now}`);
+    console.log(`     version 9 — page ${M.stations} stations, audit ${v9Now}`);
+    check("the audit sees the split zones at all", v8Rows.length > 0, `${v8Rows.length} rows`);
+    check("a version-8 design reads the same to the page and to the audit",
+          v8Now === A.stations, `page ${A.stations}, audit ${v8Now}`);
+    check("a version-9 design reads the same to the page and to the audit",
+          v9Now === M.stations, `page ${M.stations}, audit ${v9Now}`);
+    check("the audit calls a version-8 split legacy, exactly as the page does",
+          v8Rows.every((r) => /LEGACY/.test(r.status)) && A.savedSplits &&
+          Object.values(A.savedSplits).every((x) => x.legacy === true),
+          JSON.stringify(v8Rows.map((r) => r.status)));
+    check("separating one of them is worth one station, as the page found",
+          v8Rows.some((r) => r.stationsIfSeparated === r.stationsNow + v8Rows.filter((x) => /LEGACY/.test(x.status)).length),
+          JSON.stringify(v8Rows.map((r) => [r.stationsNow, r.stationsIfSeparated])));
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+
+  // And the rule itself, at every case it has to answer.
+  const R = (sp, v) => ENGINE.splitStationRule(sp, v);
+  check("version 8, no flag → shared, and marked for review",
+        R({}, 8).shareStation === true && R({}, 8).legacy === true);
+  check("version 9, no flag → the new default, not marked",
+        R({}, 9).shareStation === false && R({}, 9).legacy === false);
+  check("an explicit flag wins at either version",
+        R({ shareStation: false }, 8).shareStation === false &&
+        R({ shareStation: true }, 9).shareStation === true);
+  check("an explicit answer is never marked for review",
+        R({ shareStation: false }, 8).legacy === false &&
+        R({ shareStation: true }, 9).legacy === false);
+
+  // Neither reader may keep a second copy. Re-implementing the rule is how
+  // these two drifted apart in the first place.
+  const page = fs.readFileSync(path.join(ROOT, "server", "sitebuilder.html"), "utf8");
+  check("the page asks the engine rather than re-deciding",
+        /ENGINE\.splitStationRule\(/.test(page) &&
+        !/typeof sp\.shareStation === 'boolean'/.test(page));
+  const audit = fs.readFileSync(path.join(ROOT, "scripts", "audit-split-zones.mjs"), "utf8");
+  check("the audit migrates before it measures",
+        /migrateRoutingSplits\(/.test(audit));
+}
+
 for (const [label, r] of [["before", before], ["after", after]]) {
   if (r.errors.length) { failures.push(`${label} page errors: ${r.errors.join("; ")}`); console.error(`  FAIL ${label} page errors:\n    ` + r.errors.join("\n    ")); }
 }

@@ -6529,8 +6529,9 @@ function restoreRouting(blob, version){
   // Those designs were priced, proposed, wired and scheduled under that
   // rule, so opening one must not change a single number. They load as
   // shareStation:true and carry `legacy` so the builder can say the
-  // assignment came from the old behaviour and wants a look.
-  const legacyShared = !(Number(version) >= 9);
+  // assignment came from the old behaviour and wants a look. The decision
+  // itself is ENGINE.splitStationRule() — see there for why it lives in the
+  // engine rather than here.
   const pt=p=>(p && Number.isFinite(+p.x) && Number.isFinite(+p.y)) ? {x:+p.x, y:+p.y} : null;
   Object.keys(blob).forEach(id=>{
     const r=blob[id]; if(!r || typeof r!=='object') return;
@@ -6560,10 +6561,10 @@ function restoreRouting(blob, version){
     if(r.splits && typeof r.splits==='object'){
       Object.keys(r.splits).forEach(k=>{ const sp=r.splits[k];
         if(!sp || ![sp.ax,sp.ay,sp.bx,sp.by].every(v=>Number.isFinite(+v))) return;
-        const hasFlag = typeof sp.shareStation === 'boolean';
+        // ONE rule, in the engine, so the audit cannot answer differently.
+        const { shareStation, legacy } = ENGINE.splitStationRule(sp, version);
         splits[k]={ax:+sp.ax, ay:+sp.ay, bx:+sp.bx, by:+sp.by,
-                   shareStation: hasFlag ? sp.shareStation : legacyShared,
-                   ...((!hasFlag && legacyShared) || sp.legacy===true ? {legacy:true} : {})}; });
+                   shareStation, ...(legacy ? {legacy:true} : {})}; });
     }
     const laterals={};
     if(r.laterals && typeof r.laterals==='object'){

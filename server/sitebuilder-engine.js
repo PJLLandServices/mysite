@@ -967,6 +967,47 @@ function splitFor(z, ctx){
   const sp = r && r.splits && r.splits[baseKey(z.key)];
   return (sp && [sp.ax,sp.ay,sp.bx,sp.by].every(Number.isFinite)) ? sp : null;
 }
+/* ════════ What a STORED split means — the one place that decides ════════
+
+   A saved split may or may not carry `shareStation`, and what its absence
+   means depends on the blob's version: before version 9 the builder could
+   only wire a split's two valves to ONE station, so a flagless split in a
+   version-8 design means SHARED and wants reviewing; from version 9 the
+   flag is always written, so a flagless split means the new default.
+
+   This lives here, once, because it has more than one reader. The page
+   applies it in restoreRouting() when a project is opened. The split-zone
+   audit applies it when it reads saved projects straight off disk, without
+   a page. When the rule lived only in the page, the audit read raw stored
+   routing and — once applyValveSplits() started honouring the flag — began
+   reporting every version-8 design as already separated, with a station
+   count that no one would ever see on screen. Two copies of a state test
+   drift; this one drifted within a day of existing.                      */
+function splitStationRule(sp, version){
+  const legacyShared = !(Number(version) >= 9);
+  const hasFlag = sp && typeof sp.shareStation === 'boolean';
+  return {
+    shareStation: hasFlag ? sp.shareStation : legacyShared,
+    legacy: (!hasFlag && legacyShared) || (sp && sp.legacy === true)
+  };
+}
+// Apply that rule across a whole stored `routing` blob, returning a copy.
+// A reader that has no page (the audit) uses this to see what the builder
+// would show; the page migrates in place through restoreRouting() instead.
+function migrateRoutingSplits(routing, version){
+  const out = JSON.parse(JSON.stringify(routing || {}));
+  Object.keys(out).forEach(pageId => {
+    const r = out[pageId];
+    if(!r || typeof r !== 'object' || !r.splits) return;
+    Object.keys(r.splits).forEach(k => {
+      const sp = r.splits[k]; if(!sp) return;
+      const { shareStation, legacy } = splitStationRule(sp, version);
+      sp.shareStation = shareStation;
+      if(legacy) sp.legacy = true; else delete sp.legacy;
+    });
+  });
+  return out;
+}
 function baseKey(key){ return String(key||'').replace(/#B$/, ''); }
 // Which side of the split line a point falls on. Side A is the left of
 // A→B; a point exactly on the line counts as A so nothing is ever lost.
@@ -1337,6 +1378,7 @@ return {
 
   // The design-level zone plan.
   applyValveSplits, bedBoxFor, splitFor, baseKey, baseName, headHalf,
+  splitStationRule, migrateRoutingSplits,
   zoneFeedsHead, mpZoneHeads, zoneIndexOf, valveGroupsInUse,
   stationCount, stationZones, peakStationGPM,
   manifoldIdxById, mpHeadsOf, mpTreesOf,
