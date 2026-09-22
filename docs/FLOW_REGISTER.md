@@ -67,7 +67,44 @@ a money path, nothing that is a whole number, and the tolerance that allows it i
 absolute: a nanometre, six orders of magnitude below the smallest deliberate quantity in the
 engine.
 
-**"Down from 12 zones to 11" on the Dundalk job — CONFIRMED NOT A DEFECT (2026-09-22).** Patrick
+**"Down from 12 zones to 11" on the Dundalk job — REOPENED (2026-09-22). The account below was
+written too confidently; it is corrected here rather than deleted.**
+
+**The correction.** Patrick: *"Code's conclusion is wrong — and I was wrong to accept it. 11 is not
+the correct station count… Do not infer the station count from the number of proposal lines or
+from the 17.1 GPM ceiling."* He is right on the method. What follows was derived from a screenshot
+plus a RECONSTRUCTION of the design — never from his saved design — and was then stated as settled.
+**Reproducing a figure does not prove the figure is right; it proves a model that produces it
+exists.** The ceiling explains one area's hydraulic sectioning. It says nothing about the station
+total.
+
+**Why the tool cannot show what he is describing.** A proposal line is a presentation unit; a
+controller station is a programmed output. In this builder they cannot disagree, because
+`quoteSections()` builds its lines from `stationZones()` — proposal lines ARE stations, by
+construction. So the tool is structurally incapable of representing "12 programmed outputs
+described by an 11-line proposal". If Dundalk really has 12, the builder is under-modelling the
+install, and the only mechanism that can hide an output is the one that puts several valves on one
+station.
+
+**Answered from the code rather than inferred:** `applyValveSplits()` pushes both halves of a split
+with the SAME `z.station` and increments the counter once, and the wire note says "a split zone's
+two valves land on one terminal". **East Side Lawn 2 A and B are two valves on ONE station** —
+option (i) of the three Patrick listed, not two stations and not a presentation grouping. Same for
+a boxed drip group. On this job that is five multi-valve stations (East Side Lawn 2, Trees, Drip A,
+Drip B, Drip C), any one of which accounts for a twelfth output if it is wired as two on site.
+
+**`scripts/enumerate-stations.mjs`** prints, from a saved design and deducing nothing: every
+station numbered from 1 with the areas it feeds; every physical valve including both halves of
+every split; every proposal line as the quote generator emits them; and the full
+area → hydraulic section → valve → station → proposal-line mapping. It ends by naming every station
+carrying more than one valve, because those are exactly where a valve count and a station count
+legitimately differ — and exactly where an install can diverge from the design.
+
+**The ground truth for "how many programmed outputs" is the Hydrawise controller, not the builder.**
+Still open. PR #287 is NOT merged, per Patrick — though it is unaffected either way, being a pure
+refactor proven identical to production across 750 generated designs.
+
+**What was previously recorded here, now only a hypothesis:** Patrick
 reported the station count had dropped. Nothing in this branch was deployed and `sitebuilder.html`
 had not changed on `main` since #285, so the first job was to find out what had. Rebuilt the design
 from the figures legible in his screenshots (19 areas, 70 heads, 11 stations, 16 valves, peak 17.1
@@ -88,8 +125,9 @@ at two valves — which is why the valve count stayed at 16 while stations fell 
 Patrick then confirmed: **the ceiling is 17.1, and he set it there deliberately.** The two valves
 open together on one station because together they draw 17.1 GPM against 18.0 available and do not
 need separate run times. That is precisely what the driveway-split feature is for — one station,
-two valves, one line on the quote — so the tool did what it was asked. **11 is the right answer and
-the change was his own.** Recorded here because the investigation looked for a regression and
+two valves, one line on the quote. Both of those facts are established. What does NOT follow, and
+what was wrongly concluded from them, is that the system therefore has 11 controller stations.
+**That inference is withdrawn.** Recorded here because the investigation looked for a regression and
 correctly found a decision; the earlier note in this session flagging 17.1-against-18.0 as tight
 was a misreading of intent, not a finding.
 
