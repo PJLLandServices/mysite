@@ -118,12 +118,30 @@ function report(diffs, limit = 25) {
   if (diffs.length > limit) console.error(`         … and ${diffs.length - limit} more`);
 }
 
-/** Exact: no allowance at all. Used where the runtime is held constant. */
+/** Reports the fields a change declared as new, so the widening is visible
+ *  rather than silent. See DECLARED_NEW_FIELDS in the snapshot module. */
+function reportDeclaredNew(declaredNew) {
+  console.log(`       ${declaredNew.length} declared-new field(s) the golden master has no value for:`);
+  for (const d of declaredNew) console.log(`         ${d.path} = ${JSON.stringify(d.actual)}`);
+}
+
+/** Exact on every value the golden master holds: no numeric allowance at
+ *  all. Used where the runtime is held constant. A field the golden master
+ *  does not have at all can only pass by being DECLARED by name. */
 function expectExact(label, snapshot) {
-  const diffs = against(snapshot);
+  const all = against(snapshot);
+  const { real, runtimeFloat, declaredNew } = classifyDiffs(all);
+  // The runtime is held constant here, so sub-ulp drift is a real difference.
+  const diffs = real.concat(runtimeFloat);
   if (!diffs.length) {
-    console.log(`  ok   ${label} — identical to the golden master, field for field`);
-    summary.push([label, "identical"]);
+    if (declaredNew.length) {
+      console.log(`  ok   ${label} — every value the golden master holds is identical, field for field`);
+      reportDeclaredNew(declaredNew);
+      summary.push([label, `identical, ${declaredNew.length} declared-new field(s)`]);
+    } else {
+      console.log(`  ok   ${label} — identical to the golden master, field for field`);
+      summary.push([label, "identical"]);
+    }
     return true;
   }
   console.error(`  FAIL ${label} — ${diffs.length} field(s) differ (${moneyFields(diffs).length} of them money)`);
@@ -168,7 +186,8 @@ if (browserAvailable) {
 console.log("\nC. Extracted engine under Node (no browser, no DOM)");
 {
   const diffs = against(runAllInNode(require(ENGINE)));
-  const { real, runtimeFloat } = classifyDiffs(diffs);
+  const { real, runtimeFloat, declaredNew } = classifyDiffs(diffs);
+  if (declaredNew.length && !real.length) reportDeclaredNew(declaredNew);
   if (real.length) {
     console.error(`  FAIL ${real.length} real difference(s) (${moneyFields(real).length} of them money)`);
     report(real);

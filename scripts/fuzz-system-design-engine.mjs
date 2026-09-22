@@ -193,17 +193,32 @@ if (ONLY != null && !designs.length) { console.error(`--only ${ONLY} is out of r
 // ── Serve both versions ──────────────────────────────────────────────
 const parts = (() => { const p = JSON.parse(fs.readFileSync(path.join(ROOT, "parts.json"), "utf8")); return p.parts || p; })();
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sb-fuzz-"));
-fs.writeFileSync(path.join(tmp, "prod.html"), execFileSync("git", ["show", `${REF}:server/sitebuilder.html`], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024 }));
-const server = http.createServer((req, res) => {
-  const p = new URL(req.url, "http://x").pathname;
-  const send = (f, t) => { res.writeHead(200, { "Content-Type": t + "; charset=utf-8" }); res.end(fs.readFileSync(f)); };
-  if (p === "/prod") return send(path.join(tmp, "prod.html"), "text/html");
-  if (p === "/pr") return send(path.join(ROOT, "server", "sitebuilder.html"), "text/html");
-  if (p === "/admin/sitebuilder-engine.js") return send(path.join(ROOT, "server", "sitebuilder-engine.js"), "text/javascript");
-  res.writeHead(200, { "Content-Type": "application/json" }); res.end("{}");
-});
-await new Promise((r) => server.listen(0, "127.0.0.1", r));
-const PORT = server.address().port;
+const showRef = (f) => execFileSync("git", ["show", `${REF}:${f}`], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024 });
+
+// EACH SIDE GETS ITS OWN ENGINE.
+//
+// The page loads its maths from the fixed path /admin/sitebuilder-engine.js.
+// One server cannot answer that path two ways, so serving both pages from
+// one server handed the WORKING TREE's engine to the reference page too —
+// "production" was then the old page running the new maths, and the
+// comparison was neither version. It reported differences with the sign
+// backwards, which is how it was noticed. Two servers, one per version.
+function serveBuilder(html, engine) {
+  return http.createServer((req, res) => {
+    const p = new URL(req.url, "http://x").pathname;
+    const send = (buf, t) => { res.writeHead(200, { "Content-Type": t + "; charset=utf-8" }); res.end(buf); };
+    if (p === "/") return send(html, "text/html");
+    if (p === "/admin/sitebuilder-engine.js") return send(engine, "text/javascript");
+    res.writeHead(200, { "Content-Type": "application/json" }); res.end("{}");
+  });
+}
+const prodSrv = serveBuilder(showRef("server/sitebuilder.html"), showRef("server/sitebuilder-engine.js"));
+const prSrv = serveBuilder(fs.readFileSync(path.join(ROOT, "server", "sitebuilder.html")),
+                           fs.readFileSync(path.join(ROOT, "server", "sitebuilder-engine.js")));
+await new Promise((r) => prodSrv.listen(0, "127.0.0.1", r));
+await new Promise((r) => prSrv.listen(0, "127.0.0.1", r));
+const PROD_URL = `http://127.0.0.1:${prodSrv.address().port}/`;
+const PR_URL = `http://127.0.0.1:${prSrv.address().port}/`;
 
 /* c8 ignore start — runs in the browser */
 function runBatch({ batch, parts }) {
@@ -258,9 +273,9 @@ console.log(`\nFuzzing the calculation engine — ${designs.length} random desig
 console.log(`PRODUCTION (${REF})  vs  PR (working tree)\n`);
 let prod, pr;
 try {
-  console.log("  production…"); prod = await runAll(`http://127.0.0.1:${PORT}/prod`);
-  console.log("  PR…");         pr   = await runAll(`http://127.0.0.1:${PORT}/pr`);
-} finally { server.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log("  production…"); prod = await runAll(PROD_URL);
+  console.log("  PR…");         pr   = await runAll(PR_URL);
+} finally { prodSrv.close(); prSrv.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 
 // ── Compare ──────────────────────────────────────────────────────────
 let ok = true, matched = 0, threwBoth = 0;

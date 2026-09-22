@@ -85,25 +85,38 @@ console.log(`Compared: PRODUCTION (${REF}) vs PR (working tree)\n`);
 
 // ── Serve both versions ──────────────────────────────────────────────
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sb-compare-"));
-const prodHtml = path.join(tmp, "prod.html");
-fs.writeFileSync(prodHtml, execFileSync("git", ["show", `${REF}:server/sitebuilder.html`], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024 }));
+const showRef = (f) => execFileSync("git", ["show", `${REF}:${f}`], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024 });
 
-const server = http.createServer((req, res) => {
-  const p = new URL(req.url, "http://localhost").pathname;
-  const serve = (file, type) => {
-    res.writeHead(200, { "Content-Type": type + "; charset=utf-8" });
-    res.end(fs.readFileSync(file));
-  };
-  if (p === "/prod") return serve(prodHtml, "text/html");
-  if (p === "/pr") return serve(path.join(ROOT, "server", "sitebuilder.html"), "text/html");
-  if (p === "/admin/sitebuilder-engine.js") return serve(path.join(ROOT, "server", "sitebuilder-engine.js"), "text/javascript");
-  // Every API call the page makes gets an empty object. Nothing is fetched
-  // and nothing can be saved.
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end("{}");
-});
-await new Promise((r) => server.listen(0, "127.0.0.1", r));
-const PORT = server.address().port;
+// EACH SIDE GETS ITS OWN ENGINE.
+//
+// The page loads its maths from the fixed path /admin/sitebuilder-engine.js,
+// so one server cannot answer that path two ways: serving both pages from
+// one handed the WORKING TREE's engine to the reference page as well, and
+// "production" became the old page running the new maths. That is not
+// either version, and a comparison between two things neither of which is
+// production proves nothing. Two servers, one per version.
+function serveBuilder(html, engine) {
+  return http.createServer((req, res) => {
+    const p = new URL(req.url, "http://localhost").pathname;
+    const serve = (buf, type) => {
+      res.writeHead(200, { "Content-Type": type + "; charset=utf-8" });
+      res.end(buf);
+    };
+    if (p === "/") return serve(html, "text/html");
+    if (p === "/admin/sitebuilder-engine.js") return serve(engine, "text/javascript");
+    // Every API call the page makes gets an empty object. Nothing is fetched
+    // and nothing can be saved.
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end("{}");
+  });
+}
+const prodSrv = serveBuilder(showRef("server/sitebuilder.html"), showRef("server/sitebuilder-engine.js"));
+const prSrv = serveBuilder(fs.readFileSync(path.join(ROOT, "server", "sitebuilder.html")),
+                           fs.readFileSync(path.join(ROOT, "server", "sitebuilder-engine.js")));
+await new Promise((r) => prodSrv.listen(0, "127.0.0.1", r));
+await new Promise((r) => prSrv.listen(0, "127.0.0.1", r));
+const PROD_URL = `http://127.0.0.1:${prodSrv.address().port}/`;
+const PR_URL = `http://127.0.0.1:${prSrv.address().port}/`;
 
 /** Runs INSIDE the page: restore the design, compute, harvest every number,
  *  then save-and-reopen it and harvest again. */
@@ -197,10 +210,10 @@ async function run(label, url) {
 
 let prod, pr;
 try {
-  prod = await run("production", `http://127.0.0.1:${PORT}/prod`);
-  pr = await run("pr", `http://127.0.0.1:${PORT}/pr`);
+  prod = await run("production", PROD_URL);
+  pr = await run("pr", PR_URL);
 } finally {
-  server.close();
+  prodSrv.close(); prSrv.close();
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 

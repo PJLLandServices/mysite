@@ -58,18 +58,30 @@ const check = (name, cond, detail = "") => {
 
 const parts = (() => { const p = JSON.parse(fs.readFileSync(path.join(ROOT, "parts.json"), "utf8")); return p.parts || p; })();
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sb-split-"));
-fs.writeFileSync(path.join(tmp, "before.html"),
-  execFileSync("git", ["show", `${REF}:server/sitebuilder.html`], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024 }));
+const showRef = (f) => execFileSync("git", ["show", `${REF}:${f}`], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024 });
 
-const server = http.createServer((req, res) => {
-  const p = new URL(req.url, "http://x").pathname;
-  const send = (f, t) => { res.writeHead(200, { "Content-Type": t + "; charset=utf-8" }); res.end(fs.readFileSync(f)); };
-  if (p === "/before") return send(path.join(tmp, "before.html"), "text/html");
-  if (p === "/after") return send(path.join(ROOT, "server", "sitebuilder.html"), "text/html");
-  res.writeHead(200, { "Content-Type": "application/json" }); res.end("{}");
-});
-await new Promise((r) => server.listen(0, "127.0.0.1", r));
-const PORT = server.address().port;
+// The page loads its maths from /admin/sitebuilder-engine.js and refuses to
+// start without it. Each side must get ITS OWN engine — serving the working
+// tree's engine to the reference page would compare this change against
+// itself and pass no matter what it did — so the two versions get a server
+// each rather than sharing one and fighting over that fixed path.
+function serveBuilder(html, engine) {
+  const srv = http.createServer((req, res) => {
+    const p = new URL(req.url, "http://x").pathname;
+    const send = (buf, t) => { res.writeHead(200, { "Content-Type": t + "; charset=utf-8" }); res.end(buf); };
+    if (p === "/") return send(html, "text/html");
+    if (p === "/admin/sitebuilder-engine.js") return send(engine, "text/javascript");
+    res.writeHead(200, { "Content-Type": "application/json" }); res.end("{}");
+  });
+  return srv;
+}
+const beforeSrv = serveBuilder(showRef("server/sitebuilder.html"), showRef("server/sitebuilder-engine.js"));
+const afterSrv = serveBuilder(fs.readFileSync(path.join(ROOT, "server", "sitebuilder.html")),
+                              fs.readFileSync(path.join(ROOT, "server", "sitebuilder-engine.js")));
+await new Promise((r) => beforeSrv.listen(0, "127.0.0.1", r));
+await new Promise((r) => afterSrv.listen(0, "127.0.0.1", r));
+const BEFORE_URL = `http://127.0.0.1:${beforeSrv.address().port}/`;
+const AFTER_URL = `http://127.0.0.1:${afterSrv.address().port}/`;
 
 /** Runs INSIDE the page. Everything a version-8 job was sold on. */
 /* c8 ignore start */
@@ -158,9 +170,9 @@ async function open(url, fn, arg) {
 
 let before, after;
 try {
-  before = await open(`http://127.0.0.1:${PORT}/before`, harvest, { design: v8WithSplits, parts });
-  after = await open(`http://127.0.0.1:${PORT}/after`, roundTrip, { design: v8WithSplits, parts, splitKey: "z:a_front:0" });
-} finally { server.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
+  before = await open(BEFORE_URL, harvest, { design: v8WithSplits, parts });
+  after = await open(AFTER_URL, roundTrip, { design: v8WithSplits, parts, splitKey: "z:a_front:0" });
+} finally { beforeSrv.close(); afterSrv.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 
 const B = before.out;
 const A = after.out.first;
@@ -238,18 +250,14 @@ check("...even though the flow calculation now suggests smaller",
 console.log(`\nE. The notice on screen`);
 {
   const browser = await chromium.launch(chromiumLaunchOpts());
-  const srv = http.createServer((req, res) => {
-    const pp = new URL(req.url, "http://x").pathname;
-    if (pp === "/after") { res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      return res.end(fs.readFileSync(path.join(ROOT, "server", "sitebuilder.html"))); }
-    res.writeHead(200, { "Content-Type": "application/json" }); res.end("{}");
-  });
+  const srv = serveBuilder(fs.readFileSync(path.join(ROOT, "server", "sitebuilder.html")),
+                           fs.readFileSync(path.join(ROOT, "server", "sitebuilder-engine.js")));
   await new Promise((r) => srv.listen(0, "127.0.0.1", r));
   try {
     const page = await browser.newPage();
     const errs = [];
     page.on("pageerror", (e) => errs.push(String(e.message)));
-    await page.goto(`http://127.0.0.1:${srv.address().port}/after`, { waitUntil: "load" });
+    await page.goto(`http://127.0.0.1:${srv.address().port}/`, { waitUntil: "load" });
     await page.waitForFunction("appReady === true", null, { timeout: 30000 });
     const seen = await page.evaluate((d) => {
       PARTS_MAP = {}; restoreState(JSON.parse(JSON.stringify(d))); compute();
@@ -297,6 +305,9 @@ console.log(`\nF. Saving a design against a linked quote`);
       if (req.method !== "GET") writes.push(`${req.method} ${u.pathname}`);
       if (u.pathname === "/after") { res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         return res.end(fs.readFileSync(path.join(ROOT, "server", "sitebuilder.html"))); }
+      if (u.pathname === "/admin/sitebuilder-engine.js") {
+        res.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8" });
+        return res.end(fs.readFileSync(path.join(ROOT, "server", "sitebuilder-engine.js"))); }
       if (u.pathname === "/api/admin/quote-folder") {
         res.writeHead(200, { "Content-Type": "application/json" });
         return res.end(JSON.stringify({ ok: true, quotes: [{ id: "Q-2026-0088", status, lineItems: [] }] }));

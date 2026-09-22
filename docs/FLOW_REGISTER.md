@@ -59,6 +59,43 @@ cannot rewrite its accepted proposal.
 its correction to 12 stations is a deliberate edit through the new toggle, not something this
 change does to it.
 
+**Rebased onto the extracted engine (2026-09-22, after #287 merged).** `applyValveSplits()` no
+longer lives in the page, so the station decision moved with it into `server/sitebuilder-engine.js`.
+Everything else stayed on the page, which is the right side of the line drawn in #287: the engine
+decides stations from a split's stored flag, and the page is what stores the flag, migrates a
+version-8 blob, pins the mainline and draws the toggle.
+
+**The rebase found a real defect in the comparison harnesses, and it had been lying in this
+change's favour.** The page loads its maths from the fixed path `/admin/sitebuilder-engine.js`.
+`fuzz-system-design-engine.mjs` and `compare-real-design.mjs` each served BOTH versions of the page
+from ONE server, so the reference page was handed the WORKING TREE's engine — "production" was the
+old page running the new maths, which is neither version. It reported 8 of 300 designs differing
+with the station count moving the WRONG WAY (production higher than the PR), and the sign is what
+gave it away. Both now run a server per version. Re-run afterwards: **750 of 750 designs identical**,
+which is the first time that number has meant what it says for a change that alters the engine.
+`test-split-share-station.mjs` had the same shape and got the same fix.
+
+**The golden master was NOT re-captured.** Fixture 11 is the split fixture; it was written, and the
+golden file recorded, while one station was the only answer the builder had. It now says
+`shareStation: true` — stating what it always meant, the same migration `restoreRouting()` performs
+on every real version-8 design — and all thirteen of its moved numbers came back. What remained was
+four fields the old engine never emitted at all (`shareStation`, `legacyShare` on the two halves).
+Re-capturing to absorb those would replace the record of the old behaviour with the new behaviour
+and end the net. So `classifyDiffs()` gained a third category, drawn as tightly as the sub-ulp one:
+a difference is allowed ONLY where the golden master has no value at that path, the field name is
+written out by hand in `DECLARED_NEW_FIELDS`, and the path is not money — and every one is still
+printed. Negative-tested: with fixture 11's answer removed AND `station`, `stationGpm`, `gpm`,
+`count`, `peakGPM`, `headCount`, `valves` all added to the list, the suite still failed on 11 real
+differences, because the golden master holds values at those paths.
+
+Green after the rebase: golden master identical on every value it holds (12 of 12 mutations caught,
+1 of 1 unreachable rule confirmed), 750/750 fuzzed designs identical, split share-station 37/37,
+sitebuilder suite 110/110. `build:check` fails only where it already failed on a pristine tree —
+`pjl-field`'s `@babel/core` is not installed in this sandbox.
+
+The audit script moved OUT of this change into its own read-only tooling PR, so the thing that
+reads live projects ships on its own with no behaviour change riding along.
+
 **2026-09-21, last (The System Builder's maths moves out of the page):** Phases 0 and 1 of the
 System Builder work, to Patrick's brief: build a characterization safety net, then extract ONLY
 the calculation engine, leaving persistence, quote creation and proposal-section generation
