@@ -22,6 +22,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const html = fs.readFileSync(path.join(here, '..', 'server', 'sitebuilder.html'), 'utf8');
 const pjlDialogJs = fs.readFileSync(path.join(here, '..', 'server', 'pjl-dialog.js'), 'utf8');
 const pjlDialogCss = fs.readFileSync(path.join(here, '..', 'server', 'pjl-dialog.css'), 'utf8');
+// The calculation engine is its own file since 2026-09-21. The page
+// refuses to start without it, so the route table below has to serve it.
+const engineJs = fs.readFileSync(path.join(here, '..', 'server', 'sitebuilder-engine.js'), 'utf8');
 
 const PAGE = 'spp_testpage';
 const project = () => ({
@@ -55,6 +58,7 @@ await page.route('**/*', route => {
   if (url.pathname === '/admin/sitebuilder') return route.fulfill({ contentType: 'text/html', body: html });
   if (url.pathname === '/crm/pjl-dialog.js') return route.fulfill({ contentType: 'application/javascript', body: pjlDialogJs });
   if (url.pathname === '/crm/pjl-dialog.css') return route.fulfill({ contentType: 'text/css', body: pjlDialogCss });
+  if (url.pathname === '/admin/sitebuilder-engine.js') return route.fulfill({ contentType: 'text/javascript', body: engineJs });
   if (url.pathname === '/api/projects/PROJ-TEST-0001' && m === 'GET') {
     const p = project(); if (saved) p.systemDesign = saved;
     return route.fulfill({ json: { ok: true, project: p } });

@@ -1,0 +1,95 @@
+@import "tailwindcss";
+
+/* ══════════════════════════════════════════════════════════════════
+   PJL design system — the single source of truth for colour,
+   typography and spacing across the rebuilt interface.
+
+   Palette is lifted from the existing product (server/crm.css) so the
+   new application still reads as PJL: deep field green as the primary,
+   a single working orange for the action that matters on a screen,
+   warm neutrals rather than the cold greys of a database tool.
+   ══════════════════════════════════════════════════════════════════ */
+@theme {
+  /* Brand — greens */
+  --color-brand-950: #0f1f14;
+  --color-brand-900: #112418;
+  --color-brand-800: #163a24;
+  --color-brand-700: #1b4d2e;
+  --color-brand-600: #2d6a42;
+  --color-brand-500: #4a8c5c;
+  --color-brand-100: #eaf3de;
+  --color-brand-50: #f4f9ef;
+
+  /* Accent — the working orange. One action per screen. */
+  --color-accent-700: #8b4413;
+  --color-accent-600: #c96a2a;
+  --color-accent-500: #e07b24;
+  --color-accent-300: #f59b4a;
+  --color-accent-50: #fdf3ea;
+
+  /* Warm neutrals — paper, not battleship grey */
+  --color-surface: #ffffff;
+  --color-canvas: #f7f6f1;
+  --color-line: #e2e0d4;
+  --color-line-strong: #d4d2cb;
+  --color-ink: #1f2a22;
+  --color-ink-muted: #6b6b63;
+
+  /* Status */
+  --color-danger-700: #b71c1c;
+  --color-danger-500: #d32f2f;
+  --color-danger-50: #fdeaea;
+  --color-warn-600: #8b4413;
+  --color-warn-50: #fdf3ea;
+  --color-info-600: #2a4d80;
+  --color-info-50: #dce6f5;
+
+  /* Type */
+  --font-display: "Barlow Condensed", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+
+  /* Radii — soft, not rounded-cartoon */
+  --radius-card: 12px;
+  --radius-control: 8px;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Display face carries headings and anything that reads as a label:
+     section titles, table headers, status pills, stat figures. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    letter-spacing: 0.01em;
+    margin: 0;
+  }
+
+  /* Never let a focus ring disappear — this is software people use all
+     day, often on a tablet with a keyboard. */
+  :focus-visible {
+    outline: 2px solid var(--color-brand-600);
+    outline-offset: 2px;
+  }
+
+  /* Respect the tap target floor on touch devices. */
+  button,
+  [role="button"],
+  a {
+    touch-action: manipulation;
+  }
+}

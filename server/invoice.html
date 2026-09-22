@@ -70,7 +70,7 @@
     </header>
 
     <main class="invoice-shell">
-      <p class="invoice-back"><a href="/admin/invoices">← All invoices</a></p>
+      <p class="invoice-back"><a href="/admin/invoices" id="invoiceBackLink">← All invoices</a></p>
       <p class="invoice-loading" id="invoiceLoading">Loading…</p>
 
       <div class="invoice-layout" id="invoiceCard" hidden>
@@ -218,6 +218,26 @@
             <p class="invoice-action-meta" id="invoiceVoidMeta" hidden></p>
             <button type="button" id="invoiceVoidBtn" class="invoice-action-btn invoice-action-btn--outline" hidden>Void invoice</button>
             <button type="button" id="invoiceDeleteBtn" class="invoice-action-btn invoice-action-btn--danger" hidden>Delete invoice</button>
+          </section>
+
+          <!-- Revise price (invoice-revise, Sep 2026). Visible only on a
+               SENT invoice — the customer negotiated after the invoice went
+               out. Step 1 edits the lines (with a required reason) and
+               snapshots the original; step 2 is an explicit "Send revised
+               invoice" so Patrick can check the numbers before the
+               customer sees them. -->
+          <section class="invoice-action-card" id="invoiceReviseCard" hidden>
+            <span class="invoice-action-label">Revise price</span>
+            <p class="invoice-action-meta" id="invoiceReviseMeta"></p>
+            <button type="button" id="invoiceReviseBtn" class="invoice-action-btn invoice-action-btn--outline">✏️ Revise price</button>
+            <label class="invoice-action-cc-toggle" id="invoiceReviseSpouseToggle" hidden>
+              <input type="checkbox" id="invoiceReviseSpouseCheckbox">
+              <span>CC spouse on the revised invoice</span>
+            </label>
+            <p class="invoice-action-cc-disclosure" id="invoiceReviseSpouseDisclosure" hidden></p>
+            <button type="button" id="invoiceSendRevisionBtn" class="invoice-action-btn invoice-action-btn--amber" hidden>Send revised invoice</button>
+            <p class="invoice-action-status" id="invoiceReviseStatus"></p>
+            <ul class="invoice-action-list" id="invoiceReviseHistory" hidden></ul>
           </section>
 
           <section class="invoice-action-card">
@@ -543,6 +563,37 @@
       <div class="invoice-modal-actions">
         <button type="button" class="invoice-action-btn" id="klarnaVoidCancelBtn">Cancel</button>
         <button type="button" class="invoice-action-btn invoice-action-btn--outline" id="klarnaVoidConfirmBtn">Void authorization</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Revise modal (invoice-revise). Editable copy of the line items +
+       required reason. Saving snapshots the original into the audit trail
+       and re-pushes QuickBooks; it does NOT email the customer. -->
+  <div class="invoice-modal" id="reviseModal" role="dialog" aria-modal="true" aria-labelledby="reviseModalTitle" hidden>
+    <div class="invoice-modal-sheet invoice-modal-sheet--wide">
+      <h2 id="reviseModalTitle">Revise price</h2>
+      <p class="invoice-modal-intro">Change the line items below. The original is kept in the audit log. Nothing is sent to the customer until you click <strong>Send revised invoice</strong> afterwards.</p>
+      <table class="invoice-revise-table">
+        <thead>
+          <tr><th>Description</th><th class="num">Qty</th><th class="num">Unit $</th><th class="num">Total</th><th></th></tr>
+        </thead>
+        <tbody id="reviseLines"></tbody>
+      </table>
+      <button type="button" class="invoice-action-btn invoice-revise-add" id="reviseAddLineBtn">+ Add a line (e.g. Negotiated discount)</button>
+      <div class="invoice-revise-totals">
+        <div><span>Subtotal</span><strong id="reviseSubtotal">$0.00</strong></div>
+        <div><span>HST (13%)</span><strong id="reviseHst">$0.00</strong></div>
+        <div class="invoice-revise-totals-row"><span>New total</span><strong id="reviseTotal">$0.00</strong></div>
+        <div class="invoice-revise-totals-was"><span>Current total</span><strong id="reviseWas">$0.00</strong></div>
+        <div class="invoice-revise-totals-was" id="revisePaidRow" hidden><span>Already paid</span><strong id="revisePaid">$0.00</strong></div>
+      </div>
+      <label class="invoice-modal-label" for="reviseReasonInput">Reason (required — shown to the customer)</label>
+      <textarea class="invoice-modal-textarea" id="reviseReasonInput" maxlength="500" placeholder="e.g. Price adjusted as discussed on the phone"></textarea>
+      <p class="invoice-modal-error" id="reviseModalError"></p>
+      <div class="invoice-modal-actions">
+        <button type="button" class="invoice-action-btn" id="reviseCancelBtn">Cancel</button>
+        <button type="button" class="invoice-action-btn invoice-action-btn--primary" id="reviseConfirmBtn">Save revision</button>
       </div>
     </div>
   </div>

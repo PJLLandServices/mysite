@@ -1172,6 +1172,7 @@
   function render(plan) {
     current = plan;
     renderFollowBar(plan);
+    renderCap(plan);
     if (!plan) {
       planMeta.textContent = "No plan loaded for this season yet.";
       emptyState.hidden = false;
@@ -1859,7 +1860,8 @@
     if (oldNote) oldNote.remove();
     previewMap.innerHTML = '<p class="sp-preview-loading">Working out the day…</p>';
     try {
-      const q = new URLSearchParams({ code: row.code });
+      // A probe row has no property yet: the typed address stands in.
+      const q = row.probe ? new URLSearchParams({ address: row.address }) : new URLSearchParams({ code: row.code });
       if (bucket) q.set("bucket", bucket);
       const response = await fetch(`${base()}/preview/${date}?${q}`, { cache: "no-store" });
       const data = await response.json();
@@ -1871,8 +1873,12 @@
       renderPreviewStops(data);
       previewMap.innerHTML = "";
       await drawDayMap(previewMap, previewStops, data.day, { line: data.line });
-      previewAdd.disabled = false;
-      previewAdd.textContent = `Add to ${prettyDate(date)} ${data.bucket}`;
+      // The plan's Add is for a property record. A caller is booked from
+      // the probe row, which makes the record — so the preview is look-only.
+      previewAdd.disabled = Boolean(row.probe);
+      previewAdd.textContent = row.probe
+        ? "Book it from the probe row"
+        : `Add to ${prettyDate(date)} ${data.bucket}`;
     } catch (error) {
       if (seq !== previewSeq) return;
       previewMap.innerHTML = "";
@@ -2140,6 +2146,45 @@
   });
   el("bookingWindowReset").addEventListener("click", () => {
     saveBookingWindow({ publicBookingFrom: "", publicBookingThrough: "" });
+  });
+
+  // ---- Stops per half-day (the plan's bucketCap) -----------------------
+  //
+  // The number the board's "5 / 5" counts read against, and the one the
+  // booking page refuses a sixth stop on. Until now it was set at import
+  // and nowhere else.
+
+  const capForm = el("capForm");
+  const capInput = el("capInput");
+  const capStatus = el("capStatus");
+
+  function renderCap(plan) {
+    capForm.hidden = !plan;
+    capStatus.hidden = !plan;
+    if (!plan) return;
+    capInput.value = plan.bucketCap;
+    capStatus.textContent = `Currently ${plan.bucketCap} per half-day.`;
+  }
+
+  capForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = el("capSave");
+    button.disabled = true;
+    try {
+      const response = await fetch(`${base()}/caps`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bucketCap: Number(capInput.value) })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't save."]).join(" "));
+      showToast(`Saved — ${data.bucketCap} stops per half-day.`);
+      load(); // every "x / cap" count on the board just changed
+    } catch (error) {
+      showToast(error.message, "bad");
+    } finally {
+      button.disabled = false;
+    }
   });
 
   // ---- Assignment preflight (stage 0, read-only) -------------------
@@ -2655,7 +2700,8 @@
         + `${data.routeDaysTotal} route days at the ${data.thresholdMinutes}-minute drive threshold.`;
     } else {
       head.textContent = `${shown} — offered on ${data.routeDaysOffered} of ${data.routeDaysTotal} route days, `
-        + `where inserting them costs ${data.thresholdMinutes} min of extra driving or less.`;
+        + `by the same rule the booking page runs (for ${data.serviceLabel || "a residential closing"}): `
+        + `drive cost per half-day at the ${data.thresholdMinutes}-minute corridor, the day's spread, and each half's capacity.`;
     }
     out.appendChild(head);
 
@@ -2693,16 +2739,17 @@
     rest.className = "sp-probe-note";
     rest.textContent = "This table covers planned route days AND days real bookings have started "
       + "(marked 'Booked day'). Every other open day in the season has nothing on it yet, so it "
-      + "is offered to this address as normal. The corridor is also elastic: when the calendar "
-      + "leaves an address short of cheap days, availability widens the drive allowance a step at "
-      + "a time, but never past 40 minutes of extra driving — amber rows show where a day would "
-      + "open up. Past that we stop offering days and the customer joins the open bucket, so a "
-      + "far address never buys a date with an hour of detour.";
+      + "is offered to this address as normal. The corridor is also elastic: when an address "
+      + "would see fewer than three days in its next two weeks, availability widens the drive "
+      + "allowance one step at a time — 25, 40, 60, then the whole service area — until it does, "
+      + "so nobody is shown an empty fortnight. Amber rows show the step a day opens at. The "
+      + "starred days are still the cheapest, and a far booking is a stop you can move.";
     out.appendChild(rest);
 
     const table = document.createElement("table");
     table.className = "sp-probe-table";
-    table.innerHTML = "<thead><tr><th>Route</th><th>Date</th><th>Stops</th><th>Added drive</th><th>Offered</th><th></th></tr></thead>";
+    table.innerHTML = "<thead><tr><th>Route</th><th>Date</th><th>Stops</th><th>Added drive</th>"
+      + "<th>Morning</th><th>Afternoon</th><th>Offered</th><th></th></tr></thead>";
     const body = document.createElement("tbody");
     for (const day of data.days) {
       const tr = document.createElement("tr");
@@ -2714,12 +2761,28 @@
       // the calendar leaves the customer short of cheap days.
       const offeredCell = day.offered ? "yes"
         : day.widensAtMinutes ? `when full (widens at ${day.widensAtMinutes} min)` : "no";
+      const buckets = day.buckets || {};
       tr.innerHTML = `<td>${routeCell}</td><td>${day.date}</td><td>${day.points}</td>`
-        + `<td class="sp-num">${added}</td><td>${offeredCell}</td>`;
-      // Book, right here. Only on offered days — an unoffered day is
-      // the corridor saying no, and a button on it would book what the
-      // table just refused.
+        + `<td class="sp-num">${added}</td>`
+        + `<td>${escapeHtml(bucketVerdictText(buckets.morning))}</td>`
+        + `<td>${escapeHtml(bucketVerdictText(buckets.afternoon))}</td>`
+        + `<td>${offeredCell}</td>`;
+      // See it on the day — every row. The same map the unplanned list
+      // opens, with the typed address dropped in as the new stop, so a
+      // number in this table can be checked against the route it
+      // describes before anyone books or argues with it.
       const bookCell = document.createElement("td");
+      const see = document.createElement("button");
+      see.type = "button";
+      see.className = "sp-window-btn";
+      see.textContent = "See it on the day";
+      see.addEventListener("click", () => {
+        openPreview({ probe: true, code: "PROBE", customerName: "New caller", address: shown, days: data.days }, day.date, null);
+      });
+      bookCell.appendChild(see);
+      // Book, right here. Only on offered days — an unoffered day is
+      // the engine saying no, and a button on it would book what the
+      // table just refused. The Morning / Afternoon columns say why.
       if (day.offered) {
         const btn = document.createElement("button");
         btn.type = "button";
@@ -2751,6 +2814,21 @@
   // the automatic email+text confirmation are identical.
 
   const probeCache = { services: null, properties: null };
+
+  // One half-day's verdict, in the engine's words (availability.js
+  // bucketVerdicts). "full (5/5)" and "too far (+34 min)" are two
+  // different answers to a caller; "no" was hiding both.
+  function bucketVerdictText(v) {
+    if (!v) return "—";
+    switch (v.status) {
+      case "open": return `open${v.addedDriveMinutes == null ? "" : ` · +${v.addedDriveMinutes} min`}`;
+      case "full": return `full (${(v.planned || 0) + (v.booked || 0)}/${v.cap})`;
+      case "far": return `too far (+${v.addedDriveMinutes} min)`;
+      case "spread": return `spreads the day (+${v.addedLegMinutes} min leg)`;
+      case "season": return "outside the booking window";
+      default: return "no window";
+    }
+  }
 
   async function probeServices() {
     if (probeCache.services) return probeCache.services;

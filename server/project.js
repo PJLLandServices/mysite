@@ -15,14 +15,17 @@
     branch: document.getElementById("projBranch"),
     billing: document.getElementById("projBilling"),
     labourRate: document.getElementById("projLabourRate"),
-    tabSiteBuilder: document.getElementById("projTabSiteBuilder"),
-    tabPartsList: document.getElementById("projTabPartsList"),
-    tabQuote: document.getElementById("projTabQuote"),
-    tabInvoice: document.getElementById("projTabInvoice"),
     quoteStatusPanel: document.getElementById("projQuoteStatusPanel"),
     quoteStatusLine: document.getElementById("projQuoteStatusLine"),
+    quoteStatusLines: document.getElementById("projQuoteStatusLines"),
     quoteStatusChain: document.getElementById("projQuoteStatusChain"),
     quoteStatusLink: document.getElementById("projQuoteStatusLink"),
+    siteBuilderPanel: document.getElementById("projSiteBuilderPanel"),
+    siteBuilderLine: document.getElementById("projSiteBuilderLine"),
+    siteBuilderLink: document.getElementById("projSiteBuilderLink"),
+    invoicePanel: document.getElementById("projInvoicePanel"),
+    invoiceLine: document.getElementById("projInvoiceLine"),
+    invoiceLink: document.getElementById("projInvoiceLink"),
     proposalPanel: document.getElementById("projProposalPanel"),
     proposalMeta: document.getElementById("projProposalMeta"),
     proposalTotals: document.getElementById("projProposalTotals"),
@@ -132,6 +135,7 @@
       .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
   }
   function fmtCents(c) { return "$" + ((Number(c) || 0) / 100).toFixed(2); }
+  function fmtDollars(n) { return "$" + (Number(n) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
   function fmtDate(iso) {
     if (!iso) return "—";
     return new Date(iso).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
@@ -189,6 +193,8 @@
       state.materialLists = Array.isArray(data.materialLists) ? data.materialLists : [];
       state.linkedCustomer = data.linkedCustomer || null;
       state.linkedQuote = data.linkedQuote || null;
+      state.invoiceSummary = data.invoiceSummary || null;
+      state.siteBuilderSummary = data.siteBuilderSummary || null;
       els.loading.hidden = true;
       els.page.hidden = false;
       els.savebar.hidden = false;
@@ -249,36 +255,52 @@
     summary: "Summary total"
   };
 
-  // Job tabs (2026-09-21) — Site Builder is always reachable (it
-  // preloads via ?project= and handles "no design yet" itself). Parts
-  // List/Quote/Invoice grey out with a reason when this job doesn't have
-  // one yet, rather than linking somewhere generic.
-  function setJobTab(el, href, disabledReason) {
-    if (href) {
-      el.href = href;
-      el.classList.remove("is-disabled");
-      el.removeAttribute("aria-disabled");
-      el.title = "";
-    } else {
-      el.href = "#";
-      el.classList.add("is-disabled");
-      el.setAttribute("aria-disabled", "true");
-      el.title = disabledReason || "";
+  // Site Builder + Invoice inline summaries (2026-09-21) — real numbers
+  // on THIS page. Patrick: "I don't want to navigate to a different
+  // page. I want everything i need to know right there." The Open link
+  // stays, but only as a secondary action for when he actually wants to
+  // edit something — never the only way to see what's going on.
+  function renderSiteBuilderPanel() {
+    const sb = state.siteBuilderSummary;
+    els.siteBuilderLink.href = `/admin/sitebuilder?project=${encodeURIComponent(state.project.id)}`;
+    if (!sb) {
+      els.siteBuilderPanel.hidden = false;
+      els.siteBuilderLine.textContent = "No design started yet for this job.";
+      return;
     }
+    els.siteBuilderPanel.hidden = false;
+    const zoneLabel = `${sb.zoneCount} zone${sb.zoneCount === 1 ? "" : "s"}`;
+    const savedLabel = sb.lastSavedAt ? `last saved ${fmtDate(sb.lastSavedAt)}` : "not yet saved";
+    els.siteBuilderLine.textContent = `${zoneLabel} — ${savedLabel}`;
   }
 
-  function renderJobTabs() {
-    const id = state.project.id;
-    setJobTab(els.tabSiteBuilder, `/admin/sitebuilder?project=${encodeURIComponent(id)}`);
+  const INVOICE_STATUS_LABELS = {
+    draft: "draft — not sent",
+    sent: "sent",
+    paid: "paid",
+    partial: "partially paid",
+    void: "voided",
+    overdue: "overdue"
+  };
+  const INVOICE_ROLE_LABELS = { deposit: "Deposit invoice", balance: "Balance invoice", standard: "Invoice" };
 
-    const lists = (state.materialLists || []).slice().sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
-    setJobTab(els.tabPartsList, lists.length ? `/admin/material-list/${encodeURIComponent(lists[0].id)}` : null, "No material list for this job yet.");
-
-    const lq = state.linkedQuote;
-    setJobTab(els.tabQuote, lq ? `/admin/quote/${encodeURIComponent(lq.id)}/proposal` : null, "No quote for this job yet.");
-
-    const invoiceId = state.project.finalInvoiceId || (lq && lq.depositInvoiceId) || null;
-    setJobTab(els.tabInvoice, invoiceId ? `/admin/invoice/${encodeURIComponent(invoiceId)}` : null, "No invoice for this job yet.");
+  function renderInvoicePanel() {
+    const inv = state.invoiceSummary;
+    if (!inv) {
+      els.invoicePanel.hidden = true;
+      return;
+    }
+    els.invoicePanel.hidden = false;
+    els.invoiceLink.href = `/admin/invoice/${encodeURIComponent(inv.id)}`;
+    const roleLabel = INVOICE_ROLE_LABELS[inv.invoiceRole] || "Invoice";
+    const statusLabel = INVOICE_STATUS_LABELS[inv.status] || inv.status;
+    let line = `${roleLabel} ${inv.id} — ${statusLabel} — ${fmtDollars(inv.total)}`;
+    if (inv.balanceDue > 0) {
+      line += `, ${fmtDollars(inv.balanceDue)} balance due`;
+    } else if (inv.paidAt) {
+      line += `, paid in full ${fmtDate(inv.paidAt)}`;
+    }
+    els.invoiceLine.textContent = line;
   }
 
   function renderQuoteStatusPanel() {
@@ -288,7 +310,7 @@
       return;
     }
     els.quoteStatusPanel.hidden = false;
-    els.quoteStatusLink.href = `/admin/quote/${encodeURIComponent(lq.id)}/proposal`;
+    els.quoteStatusLink.href = `/admin/quote/${encodeURIComponent(lq.id)}/proposal?project=${encodeURIComponent(state.project.id)}`;
 
     const statusLabel = QUOTE_STATUS_LABELS[lq.status] || lq.status;
     let line = `Quote v${lq.version} — ${statusLabel}`;
@@ -302,6 +324,21 @@
       html += `, <span class="is-not-confirmed">not yet sent</span>`;
     }
     els.quoteStatusLine.innerHTML = html;
+
+    // Real numbers inline — not just a status word. Summary-mode quotes
+    // still carry their real lineItems server-side even though the
+    // CUSTOMER-facing PDF collapses them; showing them here is for
+    // Patrick, not a presentation-mode leak.
+    const lines = Array.isArray(lq.lineItems) ? lq.lineItems : [];
+    if (lines.length) {
+      els.quoteStatusLines.hidden = false;
+      els.quoteStatusLines.innerHTML = lines.map((li) =>
+        `<li><span>${escapeHtml(li.label)}</span><span>${fmtDollars(li.total)}</span></li>`
+      ).join("") + `<li><strong>Total (incl. HST)</strong><strong>${fmtDollars(lq.total)}</strong></li>`;
+    } else {
+      els.quoteStatusLines.hidden = true;
+      els.quoteStatusLines.innerHTML = "";
+    }
 
     if (Array.isArray(lq.chain) && lq.chain.length > 1) {
       els.quoteStatusChain.hidden = false;
@@ -320,9 +357,10 @@
   // ---- Render -------------------------------------------------------
   function renderAll() {
     renderHeader();
-    renderJobTabs();
     renderBuildCta();
     renderQuoteStatusPanel();
+    renderSiteBuilderPanel();
+    renderInvoicePanel();
     renderProposalPanel();
     renderTasks();
     renderJournal();
@@ -343,12 +381,18 @@
     const card = document.getElementById("projWaterCostCard");
     if (!card) return;
     const wc = state.project.waterCostEstimate;
+    const waterCostSummaryEl = document.getElementById("projWaterCostSummary");
     if (!wc || typeof wc !== "object") {
       if (empty) empty.hidden = false;
       card.innerHTML = "";
+      if (waterCostSummaryEl) waterCostSummaryEl.textContent = "None saved";
       return;
     }
     if (empty) empty.hidden = true;
+    if (waterCostSummaryEl) {
+      const seasonCost = "$" + (Number(wc.totals?.seasonCost) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      waterCostSummaryEl.textContent = `${seasonCost} per season`;
+    }
     const money = (n) => "$" + (Number(n) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const unit = wc.rateUnit === "m3" ? "m³" : wc.rateUnit === "1000gal" ? "1,000 gal" : "gal";
     const t = wc.totals || {};
@@ -390,6 +434,8 @@
       `Accepted ${escapeHtml(acceptDate)} via ${escapeHtml(methodLabel || "—")} · from ` +
       `<a href="/admin/quote/${encodeURIComponent(snap.quoteId)}/proposal">${escapeHtml(snap.quoteId)}</a>` +
       (snap.version > 1 ? ` <span class="proj-proposal-version">v${escapeHtml(snap.version)}</span>` : "");
+    const proposalSummaryEl = document.getElementById("projProposalSummary");
+    if (proposalSummaryEl) proposalSummaryEl.textContent = `${fmtDollars(snap.total)} — accepted ${acceptDate}`;
 
     els.proposalPdfLink.href = `/api/admin/quote-folder/${encodeURIComponent(snap.quoteId)}/pdf`;
 
@@ -768,12 +814,15 @@
 
   function renderWos() {
     const ids = state.project.workOrderIds || [];
+    const wosSummaryEl = document.getElementById("projWosSummary");
     if (!ids.length) {
       els.wosEmpty.hidden = false;
       els.wosList.innerHTML = "";
+      if (wosSummaryEl) wosSummaryEl.textContent = "None attached";
       return;
     }
     els.wosEmpty.hidden = true;
+    if (wosSummaryEl) wosSummaryEl.textContent = `${ids.length} attached`;
     els.wosList.innerHTML = ids.map((id) => {
       const wo = state.workOrders.get(id);
       const status = wo ? (WO_STATUS_LABELS[wo.status] || wo.status) : "—";
@@ -802,12 +851,15 @@
 
   function renderMls() {
     const lists = state.materialLists || [];
+    const mlsSummaryEl = document.getElementById("projMlsSummary");
     if (!lists.length) {
       els.mlsEmpty.hidden = false;
       els.mlsList.innerHTML = "";
+      if (mlsSummaryEl) mlsSummaryEl.textContent = "None yet";
       return;
     }
     els.mlsEmpty.hidden = true;
+    if (mlsSummaryEl) mlsSummaryEl.textContent = `${lists.length} list${lists.length === 1 ? "" : "s"}`;
     els.mlsList.innerHTML = lists.map((rec) => {
       const totals = rec.totals || {};
       const status = ML_STATUS_LABELS[rec.status] || rec.status;
@@ -1192,6 +1244,8 @@
         state.project = data.project;
         state.linkedCustomer = data.linkedCustomer || null;
         state.linkedQuote = data.linkedQuote || null;
+        state.invoiceSummary = data.invoiceSummary || null;
+        state.siteBuilderSummary = data.siteBuilderSummary || null;
         await loadExecBuildWos();
         await loadTaskPhotos();
         renderAll();
@@ -1240,12 +1294,15 @@
     }
     panel.hidden = false;
     const wos = state.exec.buildWos;
+    const dailyLogSummaryEl = document.getElementById("projDailyLogSummary");
     if (!wos.length) {
       empty.hidden = false;
       list.innerHTML = "";
+      if (dailyLogSummaryEl) dailyLogSummaryEl.textContent = "No days logged yet";
       return;
     }
     empty.hidden = true;
+    if (dailyLogSummaryEl) dailyLogSummaryEl.textContent = `${wos.length} day${wos.length === 1 ? "" : "s"} logged`;
     list.innerHTML = wos.map((w) => {
       const dl = w.dailyLog || {};
       const sessions = Array.isArray(dl.sessions) ? dl.sessions : [];
@@ -1296,12 +1353,15 @@
     }
     panel.hidden = false;
     const scrs = state.project.scopeChangeRequests || [];
+    const scopeSummaryEl = document.getElementById("projScopeChangesSummary");
     if (!scrs.length) {
       empty.hidden = false;
       list.innerHTML = "";
+      if (scopeSummaryEl) scopeSummaryEl.textContent = "None recorded";
       return;
     }
     empty.hidden = true;
+    if (scopeSummaryEl) scopeSummaryEl.textContent = `${scrs.length} change${scrs.length === 1 ? "" : "s"} recorded`;
     list.innerHTML = scrs.map((s) => {
       const dateStr = s.capturedAt ? new Date(s.capturedAt).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }) : "—";
       const statusLabel = {
@@ -1405,12 +1465,15 @@
     }
     panel.hidden = false;
     const updates = (state.project.statusUpdates || []).slice().reverse(); // newest first
+    const statusUpdatesSummaryEl = document.getElementById("projStatusUpdatesSummary");
     if (!updates.length) {
       empty.hidden = false;
       list.innerHTML = "";
+      if (statusUpdatesSummaryEl) statusUpdatesSummaryEl.textContent = "None sent yet";
       return;
     }
     empty.hidden = true;
+    if (statusUpdatesSummaryEl) statusUpdatesSummaryEl.textContent = `${updates.length} sent`;
     list.innerHTML = updates.map((u) => {
       const dateStr = u.generatedAt ? new Date(u.generatedAt).toLocaleString("en-CA") : "—";
       return `
@@ -1478,6 +1541,8 @@
         <div><span>HST (13%)</span><strong>$${Number(data.hst || 0).toFixed(2)}</strong></div>
         <div class="proj-billing-total"><span>Total CAD</span><strong>$${Number(data.total || 0).toFixed(2)}</strong></div>
       `;
+      const billingSummaryEl = document.getElementById("projBillingSummary");
+      if (billingSummaryEl) billingSummaryEl.textContent = `$${Number(data.total || 0).toFixed(2)} so far`;
       const warn = document.getElementById("projBillingWarn");
       if (data.unknownSkus && data.unknownSkus.length) {
         warn.textContent = `⚠ These consumed SKUs have no retail price: ${data.unknownSkus.join(", ")}. Set a price in parts.json before billing.`;

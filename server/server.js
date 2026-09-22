@@ -47,7 +47,7 @@ const { geocode, PJL_BASE, isConfigured: geocodeIsConfigured } = require("./lib/
 const bookingGate = require("./lib/booking-gate");
 const distanceLib = require("./lib/distance");
 const ga4 = require("./lib/ga4");
-const { BOOKABLE_SERVICES, BOOKING_BUCKETS, DEFAULT_HOURS, DEFAULT_SETTINGS, GEO_WIDEN_TIERS, listAvailableSlots, groupByDay, expandDaysToRange, recommendDays, parseLocalDateKey, parseHHmmToMinutes } = require("./lib/availability");
+const { BOOKABLE_SERVICES, BOOKING_BUCKETS, DEFAULT_HOURS, DEFAULT_SETTINGS, GEO_WIDEN_TIERS, listAvailableSlots, groupByDay, expandDaysToRange, recommendDays, bucketVerdicts, parseLocalDateKey, parseHHmmToMinutes } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
 const { mergeDaySchedule } = require("./lib/day-schedule");
 const jobFinder = require("./lib/job-finder");
@@ -125,6 +125,19 @@ const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
 const quoteViews = require("./lib/quote-views");
 const invoices = require("./lib/invoices");
+// Customer-safe view of a price revision (invoice-revise). Original
+// total + when + the reason Patrick typed (customer-facing by design —
+// it's the same text the revised email carries). No admin history.
+function publicRevisionSummary(inv) {
+  const revs = Array.isArray(inv?.revisions) ? inv.revisions : [];
+  if (!revs.length) return null;
+  const latest = revs[revs.length - 1];
+  return {
+    originalTotal: Number(revs[0].previousTotal) || 0,
+    revisedAt: inv.revisedAt || latest.ts || null,
+    reason: String(latest.reason || "")
+  };
+}
 const deposits = require("./lib/deposits");
 const completionCascade = require("./lib/completion-cascade");
 const customLineItems = require("./lib/custom-line-items");
@@ -1395,6 +1408,11 @@ function needsAuth(method, pathname) {
   // staff-only gate as the rest of the CRM.
   if (pathname === "/admin/booking-funnel" || pathname === "/admin/booking-funnel/") return "user";
   if (pathname.startsWith("/api/admin/booking-funnel")) return "user";
+  // Rebuilt front end (2026-09-21). Same staff-only gate as the CRM it
+  // is replacing — /app is the new interface over the same APIs, not a
+  // second, looser door into them. /app-assets is the built JS/CSS: no
+  // data, and gating it would break the login page's own redirect.
+  if (pathname === "/app" || pathname.startsWith("/app/")) return "user";
   if (pathname === "/admin/chats" || pathname === "/admin/chats/") return "user";
   if (pathname === "/admin/messages" || pathname === "/admin/messages/") return "user";
   if (pathname === "/admin/customers" || pathname === "/admin/customers/") return "user";
@@ -1432,6 +1450,11 @@ function needsAuth(method, pathname) {
   // (admin OR tech). Saves designs onto project.systemDesign via the
   // existing /api/projects/:id PATCH, so no dedicated API prefix here.
   if (pathname === "/admin/sitebuilder" || pathname === "/admin/sitebuilder/") return "user";
+  // Its calculation engine, split out of the page (2026-09-21). Gated the
+  // SAME way the page is: the file carries Patrick's default SKUs and the
+  // zone/BOM rules, which were behind staff auth when they were inline and
+  // must not become public just by moving to their own file.
+  if (pathname === "/admin/sitebuilder-engine.js") return "user";
   // Catalog ↔ supplier assignments + Purchase Orders (Phase 3).
   if (pathname === "/admin/parts-suppliers" || pathname === "/admin/parts-suppliers/") return "user";
   if (pathname === "/admin/purchase-orders" || pathname === "/admin/purchase-orders/") return "user";
@@ -11193,7 +11216,8 @@ async function handleApi(req, res, pathname) {
         balanceDue: inv.balanceDue == null ? inv.total : Number(inv.balanceDue),
         currency: inv.currency,
         payUrl,
-        quickbooksInvoiceId: inv.quickbooksInvoiceId || null
+        quickbooksInvoiceId: inv.quickbooksInvoiceId || null,
+        revision: publicRevisionSummary(inv)
       };
       return sendJson(res, 200, { ok: true, invoice: safe });
     } catch (err) {
@@ -11267,6 +11291,7 @@ async function handleApi(req, res, pathname) {
         currency: inv.currency,
         quickbooksChargeId: inv.quickbooksChargeId,
         eTransferEmail: process.env.ETRANSFER_EMAIL || "info@pjllandservices.com",
+        revision: publicRevisionSummary(inv),
         // Billing-address pre-fill for the AVS fields (AVS brief §4.1).
         // Derived from the invoice's OWN bill-to snapshot, falling back
         // to the service address — never a live customer lookup, so it
@@ -11400,6 +11425,18 @@ async function handleApi(req, res, pathname) {
 
       const rcReject = await verifyRecaptchaOrReject(req, body, "payment-intent");
       if (rcReject) return sendJson(res, rcReject.status, rcReject.payload);
+
+      // Stale-amount guard (invoice-revise). The pay page sends the amount
+      // it displayed; if Patrick revised the invoice while the page was
+      // open, refuse rather than take a payment for an amount the
+      // customer never saw. Optional field — older cached pages skip it.
+      if (body?.expectedAmountDue != null && Number.isFinite(Number(body.expectedAmountDue))) {
+        const shownCents = Math.round(Number(body.expectedAmountDue) * 100);
+        const dueCents = Math.round(Number(inv.balanceDue) * 100);
+        if (shownCents !== dueCents) {
+          return sendJson(res, 409, { ok: false, code: "amount_changed", errors: ["This invoice was updated since you opened this page. Please refresh to see the current amount before paying."] });
+        }
+      }
 
       // MONEY-CRITICAL: create the intent for the OUTSTANDING BALANCE, not
       // the invoice total — see the note on the sdk-config payload above.
@@ -15039,6 +15076,115 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // POST /api/invoices/:id/revise — change line items on a SENT invoice
+  // (invoice-revise, Sep 2026). Admin-only. Body: { lineItems, reason }.
+  // invoices.revise() snapshots the previous lines/totals into
+  // revisions[] and refuses draft/paid/void. Mirrors the new lines to
+  // QuickBooks best-effort (pushInvoice updates in place when a QB id
+  // exists). Does NOT email the customer — that's /send-revision below,
+  // an explicit second click so Patrick can eyeball the numbers first.
+  const invoiceReviseMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/revise$/);
+  if (invoiceReviseMatch && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required to revise invoices."] });
+      const id = decodeURIComponent(invoiceReviseMatch[1]);
+      const body = await parseRequestBody(req).catch(() => ({}));
+      const result = await invoices.revise(id, {
+        lineItems: Array.isArray(body?.lineItems) ? body.lineItems : [],
+        reason: typeof body?.reason === "string" ? body.reason : "",
+        by: session.uid || "admin"
+      });
+      if (!result.ok) {
+        return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
+      }
+      let qbWarning = null;
+      let qbAction = null;
+      if (result.invoice.quickbooksInvoiceId) {
+        try {
+          if (quickbooks.isConfigured() && (await quickbooks.isConnected())) {
+            const pushed = await quickbooks.pushInvoice(result.invoice);
+            qbAction = pushed.action;
+            if (pushed.id && pushed.id !== result.invoice.quickbooksInvoiceId) {
+              await invoices.update(id, { quickbooksInvoiceId: pushed.id });
+            }
+          }
+        } catch (qbErr) {
+          console.warn(`[invoice-revise] QB update failed for ${id}: ${qbErr.message}`);
+          qbWarning = `Revised locally, but QuickBooks rejected the update: ${qbErr.message}. Use "Push to QuickBooks" to retry.`;
+        }
+      }
+      const updated = await invoices.get(id);
+      return sendJson(res, 200, { ok: true, invoice: updated || result.invoice, qbAction, warning: qbWarning });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't revise invoice."] });
+    }
+  }
+
+  // POST /api/invoices/:id/send-revision — email the REVISED invoice to
+  // the customer (subject "Revised invoice … — now $X due (was $Y)", amber
+  // callout with the original total + reason, REVISED PDF attached).
+  // If the customer was originally texted about this invoice
+  // (customerSmsSentAt set), also fire a revised-invoice SMS so the
+  // channel they already know carries the change. Admin-only.
+  // Body: { includeSpouse?: bool }.
+  const invoiceSendRevisionMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/send-revision$/);
+  if (invoiceSendRevisionMatch && req.method === "POST") {
+    const invId = decodeURIComponent(invoiceSendRevisionMatch[1]);
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required to send revised invoices."] });
+      const sendBody = await parseRequestBody(req).catch(() => ({}));
+      const includeSpouse = typeof sendBody?.includeSpouse === "boolean" ? sendBody.includeSpouse : null;
+      const inv = await invoices.get(invId);
+      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      if (inv.status === "void" || inv.status === "draft") {
+        return sendJson(res, 409, { ok: false, errors: [`Invoice is "${inv.status}" — a revised copy can't be sent.`] });
+      }
+      const originalTotal = invoices.originalTotal(inv);
+      if (originalTotal == null) {
+        return sendJson(res, 409, { ok: false, errors: ["This invoice hasn't been revised — use Resend instead."] });
+      }
+      if (!inv.customerEmail) {
+        return sendJson(res, 400, { ok: false, errors: ["Invoice has no customer email — add one before sending."] });
+      }
+      const latest = inv.revisions[inv.revisions.length - 1];
+      const tokenized = await invoices.ensurePaymentToken(invId);
+      const paymentToken = tokenized?.paymentToken || inv.paymentToken || null;
+      const renderInv = { ...inv, paymentToken };
+      const pdfBuffer = await generateInvoicePdf(renderInv);
+      const publicBase = resolvePublicBaseUrl();
+      const viewLink = paymentToken
+        ? `${publicBase}/pay/invoice/${encodeURIComponent(invId)}?t=${encodeURIComponent(paymentToken)}`
+        : "";
+      await sendInvoiceToCustomer(renderInv, pdfBuffer, {
+        revision: { originalTotal, reason: latest?.reason || "", revisedAt: inv.revisedAt },
+        viewLink,
+        includeSpouse
+      });
+      let updated = await invoices.markRevisionNotified(invId, {
+        channel: "email",
+        by: session.uid || "admin",
+        note: `Revised invoice emailed to ${inv.customerEmail} (now $${Number(inv.total).toFixed(2)}, was $${Number(originalTotal).toFixed(2)}).`
+      });
+      // SMS mirror — only when the customer was texted originally.
+      let sms = null;
+      if (inv.customerSmsSentAt) {
+        try {
+          const { sendInvoiceRevisedSMS } = require("./lib/notify-customer");
+          sms = await sendInvoiceRevisedSMS({ invoiceId: invId, includeSpouse });
+        } catch (smsErr) {
+          sms = { ok: false, error: smsErr?.message || "SMS failed" };
+        }
+        updated = (await invoices.get(invId)) || updated;
+      }
+      return sendJson(res, 200, { ok: true, invoice: updated, sms });
+    } catch (err) {
+      console.error(`[invoice-send-revision] failed for ${invId}:`, err.message);
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't send revised invoice."] });
+    }
+  }
+
   // POST /api/invoices/:id/void — reasoned void action (feature-invoice-
   // void-delete-brief.md §4.3). Admin-only (mirrors the booking hard-delete
   // precedent — the /api/invoices "user" gate isn't enough for a
@@ -15660,13 +15806,82 @@ async function handleApi(req, res, pathname) {
             // project_proposal quote that made it past "draft" was, by
             // construction, confirmed for the mode it's showing right now.
             confirmed: isProposal ? !["draft", "draft_preview"].includes(current.status) : null,
-            depositInvoiceId: current.depositInvoiceId || null,
+            subtotal: Number(current.subtotal) || 0,
+            hst: Number(current.hst) || 0,
+            total: Number(current.total) || 0,
+            lineItems: Array.isArray(current.lineItems)
+              ? current.lineItems.map((li) => ({ label: li.label || li.key || "", total: Number(li.lineTotal ?? (Number(li.qty || 1) * Number(li.price || 0))) || 0 }))
+              : [],
+            // The deposit/balance invoice is a real, populated field —
+            // but it lives on the INVOICE (invoice.quoteId), never on the
+            // quote itself (quote.depositInvoiceId is a schema
+            // placeholder nothing has ever written to — caught live,
+            // 2026-09-21, Patrick: "this invoice is part of the project.
+            // it has the deposit on it," for one that this field was
+            // reading as null). Look it up the right way: every invoice
+            // raised against ANY quote in this job's revision chain (a
+            // deposit is usually raised against whichever version was
+            // actually accepted, not necessarily today's current one).
+            // Prefer the balance invoice if the deposit's already been
+            // paid and superseded by one; else the deposit invoice.
+            depositInvoiceId: null,
             chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status }))
           };
+          try {
+            const chainInvoices = await invoices.listByQuote(chain.map((q) => q.id));
+            const byRole = (role) => chainInvoices
+              .filter((inv) => inv.invoiceRole === role)
+              .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+            const best = byRole("balance") || byRole("deposit");
+            if (best) linkedQuote.depositInvoiceId = best.id;
+          } catch (err) { /* tolerate — Invoice tab just falls back to finalInvoiceId or greys out */ }
         }
       } catch (err) { /* tolerate — panel just doesn't render */ }
     }
-    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote });
+
+    // Invoice summary (2026-09-21) — real numbers inline (status, total,
+    // amount paid, balance due), not just a link out. Prefers the
+    // project's final invoice (set at completion); falls back to the
+    // deposit/balance invoice resolved above for a job still in progress.
+    let invoiceSummary = null;
+    const invoiceId = proj.finalInvoiceId || (linkedQuote && linkedQuote.depositInvoiceId) || null;
+    if (invoiceId) {
+      try {
+        const inv = await invoices.get(invoiceId);
+        if (inv) {
+          invoiceSummary = {
+            id: inv.id,
+            status: inv.status,
+            invoiceRole: inv.invoiceRole,
+            total: inv.total,
+            amountPaid: inv.amountPaid,
+            balanceDue: inv.balanceDue,
+            sentAt: inv.sentAt,
+            paidAt: inv.paidAt
+          };
+        }
+      } catch (err) { /* tolerate — Invoice panel just doesn't render */ }
+    }
+
+    // System Builder summary (2026-09-21) — zone count + last-saved date
+    // inline, pulled from data already on the project record (no extra
+    // fetch): systemDesign.areas is the builder's own area list; the
+    // save timestamp comes from the most recent system_design_saved
+    // history entry (systemDesign itself carries no timestamp — the
+    // server only size-caps and timestamps the HISTORY entry, per the
+    // comment on projects.update()).
+    let siteBuilderSummary = null;
+    if (proj.systemDesign && Array.isArray(proj.systemDesign.areas)) {
+      const lastSave = (proj.history || [])
+        .filter((h) => h.action === "system_design_saved")
+        .sort((a, b) => String(b.ts || "").localeCompare(String(a.ts || "")))[0];
+      siteBuilderSummary = {
+        zoneCount: proj.systemDesign.areas.length,
+        lastSavedAt: lastSave ? lastSave.ts : null
+      };
+    }
+
+    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote, invoiceSummary, siteBuilderSummary });
   }
   if (projectMatch && req.method === "PATCH") {
     try {
@@ -18492,8 +18707,11 @@ async function handleApi(req, res, pathname) {
       // describeLine is injected so notify-supplier.js stays decoupled from
       // parts.json. Same resolver + same catalog as the PDF/CSV — honors the
       // stored line description first, then the catalog (no size prefix).
-      const { resolveLineDescription } = require("./lib/format");
+      const { resolveLineDescription, resolveSupplierSku } = require("./lib/format");
       const describeLine = (line) => resolveLineDescription(line, poPartsMap);
+      // The paste block in the email carries THEIR part number, same as the
+      // PDF and CSV — it is pasted straight into the supplier's system.
+      const skuForLine = (line) => resolveSupplierSku(line, poPartsMap, po.supplierId);
 
       await sendPurchaseOrderEmail({
         po,
@@ -18503,7 +18721,8 @@ async function handleApi(req, res, pathname) {
         bodyText: payload.bodyText || "",
         pdfBuffer,
         csvBuffer,
-        describeLine
+        describeLine,
+        skuForLine
       });
 
       // Flip the PO state — persist the document paths so the resend
@@ -18710,8 +18929,11 @@ async function handleApi(req, res, pathname) {
 
       const subject = String(payload.subject || po.emailSubject || buildSubject(po)).slice(0, 200);
 
-      const { resolveLineDescription } = require("./lib/format");
+      const { resolveLineDescription, resolveSupplierSku } = require("./lib/format");
       const describeLine = (line) => resolveLineDescription(line, poPartsMap);
+      // The paste block in the email carries THEIR part number, same as the
+      // PDF and CSV — it is pasted straight into the supplier's system.
+      const skuForLine = (line) => resolveSupplierSku(line, poPartsMap, po.supplierId);
 
       await sendPurchaseOrderEmail({
         po,
@@ -18721,7 +18943,8 @@ async function handleApi(req, res, pathname) {
         bodyText: payload.bodyText || "",
         pdfBuffer,
         csvBuffer,
-        describeLine
+        describeLine,
+        skuForLine
       });
       const updated = await purchaseOrders.markResent(id, { toEmail, toName: payload.toName, subject });
       return sendJson(res, 200, { ok: true, purchaseOrder: updated });
@@ -19056,8 +19279,9 @@ async function handleApi(req, res, pathname) {
       const pdfPath = path.relative(SERVER_DIR, pdfFsPath).split(path.sep).join("/");
       const csvPath = path.relative(SERVER_DIR, csvFsPath).split(path.sep).join("/");
 
-      const { resolveLineDescription } = require("./lib/format");
+      const { resolveLineDescription, resolveSupplierSku } = require("./lib/format");
       const describeLine = (line) => resolveLineDescription(line, rfqPartsMap);
+      const skuForLine = (line) => resolveSupplierSku(line, rfqPartsMap, rfq.supplierId);
 
       await sendQuoteRequestEmail({
         rfq,
@@ -19067,7 +19291,8 @@ async function handleApi(req, res, pathname) {
         bodyText: payload.bodyText || "",
         pdfBuffer,
         csvBuffer,
-        describeLine
+        describeLine,
+        skuForLine
       });
 
       const sentRfq = await quoteRequests.markSent(id, {
@@ -19125,8 +19350,9 @@ async function handleApi(req, res, pathname) {
         console.warn(`[rfq-resend] ${rfq.id} snapshot missing for: ${snapshotMissingWarn.join(", ")} — regenerated live`);
       }
 
-      const { resolveLineDescription } = require("./lib/format");
+      const { resolveLineDescription, resolveSupplierSku } = require("./lib/format");
       const describeLine = (line) => resolveLineDescription(line, rfqPartsMap);
+      const skuForLine = (line) => resolveSupplierSku(line, rfqPartsMap, rfq.supplierId);
       const subject = String(payload.subject || rfq.emailSubject || buildRfqSubject(rfq)).slice(0, 200);
 
       await sendQuoteRequestEmail({
@@ -19137,7 +19363,8 @@ async function handleApi(req, res, pathname) {
         bodyText: payload.bodyText || "",
         pdfBuffer,
         csvBuffer,
-        describeLine
+        describeLine,
+        skuForLine
       });
       const resent = await quoteRequests.markResent(id, { toEmail, toName: payload.toName, subject });
       return sendJson(res, 200, { ok: true, quoteRequest: resent || rfq });
@@ -25469,6 +25696,26 @@ async function orderDayForDriving(rows) {
     }
   }
 
+  // The per-half-day cap. Plan-level, and until now only settable by
+  // re-importing the plan. Availability reads the plan on every request,
+  // so a change here is live for the next customer to load the calendar.
+  const seasonPlanCapMatch = pathname.match(/^\/api\/season-plans\/(spring|fall)\/(\d{4})\/caps$/);
+  if (seasonPlanCapMatch && req.method === "PATCH") {
+    try {
+      const session = await requireUser(req);
+      const body = await parseRequestBody(req);
+      const result = await seasonPlans.setBucketCap(
+        seasonPlanCapMatch[1], Number(seasonPlanCapMatch[2]),
+        { bucketCap: body.bucketCap },
+        { actor: session?.email || session?.name || "admin" }
+      );
+      const plan = await resolveSeasonPlan(seasonPlanCapMatch[1], Number(seasonPlanCapMatch[2]));
+      return sendJson(res, 200, { ok: true, plan, warnings: result.warnings, bucketCap: result.bucketCap });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't set the cap."] });
+    }
+  }
+
   // Hand ordering inside a bucket. Deliberately does NOT re-sequence for
   // storage afterwards: re-running the optimiser over an order Patrick just
   // set by hand is exactly the thing this feature exists to stop.
@@ -25709,9 +25956,16 @@ async function orderDayForDriving(rows) {
       const year = Number(seasonPlanPreviewMatch[2]);
       const date = seasonPlanPreviewMatch[3];
       const query = new URL(req.url, baseUrlFromReq(req)).searchParams;
-      const code = normalizeString(query.get("code"), 40);
       const askedBucket = normalizeString(query.get("bucket"), 10);
-      if (!code) return sendJson(res, 422, { ok: false, errors: ["Which property? No code was given."] });
+      // A typed address — the probe's caller, not yet a property — previews
+      // as a stand-in stop under PROBE_CODE: same day builder, same map,
+      // nothing written (Patrick, 2026-09-21: "on my app, i can select -
+      // see it on the day. Can we make the provision for this the same?").
+      // A real code wins when both are given.
+      const PROBE_CODE = "PROBE";
+      const probeAddress = normalizeString(query.get("address"), 320);
+      const code = normalizeString(query.get("code"), 40) || (probeAddress ? PROBE_CODE : "");
+      if (!code) return sendJson(res, 422, { ok: false, errors: ["Which property? No code or address was given."] });
 
       const driven = await assignments.drivenPlan(season, year);
       if (!driven) return sendJson(res, 404, { ok: false, code: "no_plan", errors: ["No plan loaded for that season."] });
@@ -25719,6 +25973,18 @@ async function orderDayForDriving(rows) {
 
       const all = await properties.list();
       const byCode = new Map(all.filter((p) => p && p.code).map((p) => [p.code, p]));
+      if (code === PROBE_CODE) {
+        const geo = await geocode(probeAddress);
+        byCode.set(PROBE_CODE, {
+          code: PROBE_CODE,
+          id: PROBE_CODE,
+          customerName: "New caller",
+          address: geo.coords?.formattedAddress || probeAddress,
+          coords: geoFilter.coordsAreResolved(geo.coords)
+            ? { lat: geo.coords.lat, lng: geo.coords.lng, source: geo.coords.source }
+            : null
+        });
+      }
       const property = byCode.get(code);
       if (!property) return sendJson(res, 404, { ok: false, errors: [`No property with code ${code}.`] });
       if (seasonPlans.plannedCodes(driven.stored).has(code)) {
@@ -25925,12 +26191,46 @@ async function orderDayForDriving(rows) {
       // line is an answer Patrick cannot give a caller.
       const probeNow = new Date();
       const probeTodayKey = `${probeNow.getFullYear()}-${String(probeNow.getMonth() + 1).padStart(2, "0")}-${String(probeNow.getDate()).padStart(2, "0")}`;
+
+      // "Offered" is the ENGINE's answer, not the probe's own. The
+      // whole-day insertion cost below is still shown — it is the
+      // routing number Patrick reads — but it stopped being the verdict
+      // the day the engine learned things it does not know: geography
+      // per half-day, the leg cap, and each half's capacity. An address
+      // read "+2 min, yes" here while the Book button under it found no
+      // window, because its morning was full and its afternoon was a
+      // different cluster (2026-09-21). One run of the real engine, for
+      // the season's smallest residential band, over the whole plan;
+      // bucketVerdicts folds its slots and diagnostics per date and half.
+      const probeServiceKey = season === "spring" ? "spring_open_4z" : "fall_close_4z";
+      const lastShapeDate = Object.keys(shapes).sort().pop();
+      const lastShapeDay = lastShapeDate ? parseLocalDateKey(lastShapeDate) : null;
+      if (lastShapeDay) lastShapeDay.setHours(23, 59, 0, 0);
+      const engineDiagnostics = { geoSuppressed: [], seasonClosed: [], bucketFull: [] };
+      const engineSlots = await listAvailableSlots({
+        serviceKey: probeServiceKey,
+        customerCoords: geo.coords,
+        bookings: active,
+        blocks: scheduleData.blocks,
+        daysAhead: lastShapeDay ? horizonToReach(lastShapeDay, probeNow) : 30,
+        hours: { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) },
+        settings: mergedSettings,
+        dayShapes: shapes,
+        diagnostics: engineDiagnostics,
+        now: probeNow
+      });
+      const verdicts = bucketVerdicts(engineSlots, engineDiagnostics);
+
       for (const date of Object.keys(shapes).sort()) {
         if (date < probeTodayKey) continue;
         const shape = shapes[date];
         const added = resolvedAddress
           ? await geoFilter.addedDriveMinutes(geo.coords, shape.points)
           : null;
+        const verdict = verdicts.get(date) || null;
+        const corridorSaysYes = !resolvedAddress || !shape.points.length
+          || !Number.isFinite(threshold) || threshold <= 0
+          || (added && added.minutes <= threshold);
         days.push({
           date,
           label: shape.label,
@@ -25943,9 +26243,10 @@ async function orderDayForDriving(rows) {
           plannedCount: shape.plannedCount,
           bookedCount: shape.bookedCount,
           addedDriveMinutes: added ? added.minutes : null,
-          offered: !resolvedAddress || !shape.points.length
-            || !Number.isFinite(threshold) || threshold <= 0
-            || (added && added.minutes <= threshold),
+          // A date past the engine's horizon keeps the corridor-only
+          // reading; every date the engine reached takes its verdict.
+          offered: verdict ? verdict.offered : corridorSaysYes,
+          buckets: verdict ? verdict.buckets : null,
           // The corridor is elastic: when the tight corridor leaves a
           // customer short of days, availability reruns at wider tiers.
           // This is the first tier that would admit the day — null when
@@ -25985,6 +26286,8 @@ async function orderDayForDriving(rows) {
         // column of zeroes that looks like a perfect match.
         filterSkipped: !resolvedAddress,
         thresholdMinutes: threshold,
+        serviceKey: probeServiceKey,
+        serviceLabel: BOOKABLE_SERVICES[probeServiceKey]?.label || probeServiceKey,
         routeDaysOffered: offeredCount,
         routeDaysTotal: days.length,
         days
@@ -26575,6 +26878,19 @@ function resolveStaticTarget(pathname) {
   if (pathname === "/admin" || pathname === "/admin/") {
     return { dir: SERVER_DIR, relative: "/admin.html" };
   }
+  // ── Rebuilt front end (2026-09-21) ───────────────────────────────
+  // The new interface is a client-routed app: every /app/* URL serves
+  // the same shell so a refresh or a pasted deep link lands on the
+  // right screen instead of a 404. Its hashed bundles live under
+  // /app-assets/. Built output is committed (server/app-dist/), so
+  // there is no build step to add on Render and no deploy config to
+  // change — and the existing /admin/* CRM is untouched either way.
+  if (pathname === "/app" || pathname.startsWith("/app/")) {
+    return { dir: SERVER_DIR, relative: "/app-dist/index.html" };
+  }
+  if (pathname.startsWith("/app-assets/")) {
+    return { dir: SERVER_DIR, relative: "/app-dist/" + pathname.slice("/app-assets/".length) };
+  }
   // Public customer payment pages (PR 3). Token-gated by the JS layer
   // and the JSON API at /api/pay/invoice/:id. The HTML itself is fine
   // to serve to anyone; without the token query param the JS shows the
@@ -26736,6 +27052,9 @@ function resolveStaticTarget(pathname) {
   // Sprinkler System Builder (staff-gated internal design tool).
   if (pathname === "/admin/sitebuilder" || pathname === "/admin/sitebuilder/") {
     return { dir: SERVER_DIR, relative: "/sitebuilder.html" };
+  }
+  if (pathname === "/admin/sitebuilder-engine.js") {
+    return { dir: SERVER_DIR, relative: "/sitebuilder-engine.js" };
   }
   // Tech-mode pop-out — mobile-first, tap-optimized layout. Same WO id,
   // different page. Route check must come BEFORE the desktop editor's

@@ -1,0 +1,327 @@
+{
+  "_note": "Frozen snapshot of the priced parts the System Builder engine can name, taken from parts.json on 2026-09-21. Frozen on purpose: the golden master tests the ENGINE, not the live catalog, so a price change must not move it.",
+  "parts": {
+    "210020": {
+      "sku": "210020",
+      "description": "PVC 1\" × 2\" MxM TBE nipple",
+      "priceCents": 104,
+      "unit": "each",
+      "category": "fittings"
+    },
+    "405010": {
+      "sku": "405010",
+      "description": "PVC tee 1\" FxFxF",
+      "priceCents": 361,
+      "unit": "each",
+      "category": "fittings"
+    },
+    "408010": {
+      "sku": "408010",
+      "description": "PVC elbow 1\" 90° FxF",
+      "priceCents": 280,
+      "unit": "each",
+      "category": "fittings"
+    },
+    "1407130": {
+      "sku": "1407130",
+      "description": "Poly combo elbow 1 × 0.5\" IxF",
+      "priceCents": 187,
+      "unit": "each",
+      "category": "fittings"
+    },
+    "1436010": {
+      "sku": "1436010",
+      "description": "Poly male adapter 1\" IxM",
+      "priceCents": 66,
+      "unit": "each",
+      "category": "fittings"
+    },
+    "CTISDRIPSTAPLES25": {
+      "sku": "CTISDRIPSTAPLES25",
+      "description": "Central 6\" drip staples bag of 25 round",
+      "priceCents": 13,
+      "unit": "bag",
+      "category": "drip"
+    },
+    "DS75C": {
+      "sku": "DS75C",
+      "description": "Dawn saddle 0.75 × 0.50\"",
+      "priceCents": 213,
+      "unit": "each",
+      "category": "sprinkler_heads"
+    },
+    "DUVB60": {
+      "sku": "DUVB60",
+      "description": "Dura 6\" round valve box + lid black/green",
+      "priceCents": 625,
+      "unit": "each",
+      "category": "valves"
+    },
+    "HCHPC400": {
+      "sku": "HCHPC400",
+      "description": "Hydrawise 4-23 station controller indoor/outdoor",
+      "priceCents": 25870,
+      "unit": "each",
+      "category": "controllers"
+    },
+    "HCPCM900": {
+      "sku": "HCPCM900",
+      "description": "Pro-C 9-station expansion module",
+      "priceCents": 23794,
+      "unit": "each",
+      "category": "controllers"
+    },
+    "HCX21400": {
+      "sku": "HCX21400",
+      "description": "X2 14-station WiFi-enabled outdoor controller",
+      "priceCents": 29266,
+      "unit": "each",
+      "category": "controllers"
+    },
+    "HCX2400": {
+      "sku": "HCX2400",
+      "description": "X2 4-station WiFi-enabled outdoor controller",
+      "priceCents": 12393,
+      "unit": "each",
+      "category": "controllers"
+    },
+    "HCX2600": {
+      "sku": "HCX2600",
+      "description": "X2 6-station WiFi-enabled outdoor controller",
+      "priceCents": 14073,
+      "unit": "each",
+      "category": "controllers"
+    },
+    "HCX2800": {
+      "sku": "HCX2800",
+      "description": "X2 8-station WiFi-enabled outdoor controller",
+      "priceCents": 17649,
+      "unit": "each",
+      "category": "controllers"
+    },
+    "HSPGPADJ": {
+      "sku": "HSPGPADJ",
+      "description": "PGP 4\" rotor adjustable",
+      "priceCents": 1304,
+      "unit": "each",
+      "category": "sprinkler_heads"
+    },
+    "HSPROS04PRS30": {
+      "sku": "HSPROS04PRS30",
+      "description": "Pro-Spray 4\" 30PSI pressure regulator",
+      "priceCents": 825,
+      "unit": "each",
+      "category": "sprinkler_heads"
+    },
+    "HSPROS06SIPRS30": {
+      "sku": "HSPROS06SIPRS30",
+      "description": "Pro-Spray 6\" 30PSI pres reg side inlet",
+      "priceCents": 2000,
+      "unit": "each",
+      "category": "sprinkler_heads"
+    },
+    "HSPROS12SIPRS30": {
+      "sku": "HSPROS12SIPRS30",
+      "description": "Hunter Pro-Spray 12\" pop PRS w/ side inlet",
+      "priceCents": 2331,
+      "unit": "each",
+      "category": "sprinkler_heads"
+    },
+    "LDQ0812100": {
+      "sku": "LDQ0812100",
+      "description": "RB drip tube 0.8 GPH 12\" × 100ft",
+      "priceCents": 8695,
+      "unit": "roll",
+      "category": "drip"
+    },
+    "PGV100G": {
+      "sku": "PGV100G",
+      "description": "1\" globe valve no flow control FxF",
+      "priceCents": 2079,
+      "unit": "each",
+      "category": "valves"
+    },
+    "POPO100300": {
+      "sku": "POPO100300",
+      "description": "Oil Creek utility pipe 100PSI 1\" × 300ft",
+      "priceCents": 9169,
+      "unit": "roll",
+      "category": "pipe"
+    },
+    "POPO125300": {
+      "sku": "POPO125300",
+      "description": "Oil Creek utility pipe 100PSI 1.25\" × 300ft",
+      "priceCents": 22227,
+      "unit": "roll",
+      "category": "pipe"
+    },
+    "POPO150250": {
+      "sku": "POPO150250",
+      "description": "Oil Creek utility pipe 100PSI 1.5\" × 250ft",
+      "priceCents": 25131,
+      "unit": "roll",
+      "category": "pipe"
+    },
+    "POPO200200": {
+      "sku": "POPO200200",
+      "description": "Oil Creek utility pipe 100PSI 2\" × 200ft",
+      "priceCents": 33743,
+      "unit": "roll",
+      "category": "pipe"
+    },
+    "POPO75400": {
+      "sku": "POPO75400",
+      "description": "Oil Creek utility pipe 100PSI 0.75\" × 400ft",
+      "priceCents": 9443,
+      "unit": "roll",
+      "category": "pipe"
+    },
+    "RBDPSIM30X075": {
+      "sku": "RBDPSIM30X075",
+      "description": "RB Xeri pressure regulator 0.75\" 30PSI",
+      "priceCents": 2716,
+      "unit": "each",
+      "category": "drip"
+    },
+    "RBDXFELB": {
+      "sku": "RBDXFELB",
+      "description": "RB barb elbow 17mm",
+      "priceCents": 63,
+      "unit": "each",
+      "category": "drip"
+    },
+    "RBDXFFCOUP": {
+      "sku": "RBDXFFCOUP",
+      "description": "RB 17mm XFF coupling barb × barb",
+      "priceCents": 48,
+      "unit": "each",
+      "category": "drip"
+    },
+    "RBDXFFTEE": {
+      "sku": "RBDXFFTEE",
+      "description": "RB 17mm XFF tee barb × barb",
+      "priceCents": 72,
+      "unit": "each",
+      "category": "drip"
+    },
+    "RBN10H": {
+      "sku": "RBN10H",
+      "description": "RB nozzle 10H",
+      "priceCents": 163,
+      "unit": "each",
+      "category": "sprinkler_heads"
+    },
+    "RBN10Q": {
+      "sku": "RBN10Q",
+      "description": "RB nozzle 10Q",
+      "priceCents": 163,
+      "unit": "each",
+      "category": "sprinkler_heads"
+    },
+    "RBN12H": {
+      "sku": "RBN12H",
+      "description": "RB nozzle 12H",
+      "priceCents": 178,
+      "unit": "each",
+      "category": "sprinkler_heads"
+    },
+    "RBN12Q": {
+      "sku": "RBN12Q",
+      "description": "RB nozzle 12Q",
+      "priceCents": 163,
+      "unit": "each",
+      "category": "sprinkler_heads"
+    },
+    "RBN15CST": {
+      "sku": "RBN15CST",
+      "description": "RB nozzle 15CST",
+      "priceCents": 163,
+      "unit": "each",
+      "category": "sprinkler_heads"
+    },
+    "RBN15H": {
+      "sku": "RBN15H",
+      "description": "RB nozzle 15H",
+      "priceCents": 178,
+      "unit": "each",
+      "category": "sprinkler_heads"
+    },
+    "RBN15Q": {
+      "sku": "RBN15Q",
+      "description": "RB nozzle 15Q",
+      "priceCents": 163,
+      "unit": "each",
+      "category": "sprinkler_heads"
+    },
+    "RBN15SST": {
+      "sku": "RBN15SST",
+      "description": "RB nozzle 15SST",
+      "priceCents": 163,
+      "unit": "each",
+      "category": "sprinkler_heads"
+    },
+    "RBN8H": {
+      "sku": "RBN8H",
+      "description": "RB nozzle 8H",
+      "priceCents": 163,
+      "unit": "each",
+      "category": "sprinkler_heads"
+    },
+    "RBN8Q": {
+      "sku": "RBN8Q",
+      "description": "RB nozzle 8Q",
+      "priceCents": 163,
+      "unit": "each",
+      "category": "sprinkler_heads"
+    },
+    "RWSMBC1402": {
+      "sku": "RWSMBC1402",
+      "description": "RB root watering system 1402 18\"",
+      "priceCents": 6877,
+      "unit": "each",
+      "category": "drip"
+    },
+    "SC6712": {
+      "sku": "SC6712",
+      "description": "IDL CLAMP SS 11-16IN - 1IN",
+      "priceCents": 138,
+      "unit": "each",
+      "category": "accessories"
+    },
+    "SJ506": {
+      "sku": "SJ506",
+      "description": "Swing joint 0.5 × 6\"",
+      "priceCents": 205,
+      "unit": "each",
+      "category": "sprinkler_heads"
+    },
+    "VB10151089": {
+      "sku": "VB10151089",
+      "description": "CRSN 12\" deep square std valve box green/green",
+      "priceCents": 3011,
+      "unit": "each",
+      "category": "valves"
+    },
+    "VB111011": {
+      "sku": "VB111011",
+      "description": "CRSN 10\" round valve box green",
+      "priceCents": 1745,
+      "unit": "each",
+      "category": "valves"
+    },
+    "XFDE912250": {
+      "sku": "XFDE912250",
+      "description": "XFDE drip tube 0.9 GPH 12\" × 250ft",
+      "priceCents": 12615,
+      "unit": "roll",
+      "category": "drip"
+    },
+    "XFDE912500": {
+      "sku": "XFDE912500",
+      "description": "XFDE drip tube 0.9 GPH 12\" × 500ft",
+      "priceCents": 24497,
+      "unit": "roll",
+      "category": "drip"
+    }
+  }
+}

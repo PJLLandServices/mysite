@@ -224,6 +224,26 @@ a:hover { text-decoration: underline; }
   color: var(--text);
 }
 
+/* ---- Revised-price banner (invoice-revise) ------------------------ */
+.pay-revised-banner {
+  margin: 0;
+  padding: 18px 32px;
+  background: #FFF4E5;
+  border-left: 4px solid #E07B24;
+  border-bottom: 1px solid var(--hairline);
+}
+.pay-revised-banner h2 {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin: 0 0 4px;
+  color: #8A4B0B;
+}
+.pay-revised-banner p { margin: 0; font-size: 14px; color: var(--text); line-height: 1.5; }
+.pay-revised-banner p strong { white-space: nowrap; }
+
 /* ---- Card-entry form section -------------------------------------- */
 .pay-form-section {
   padding: 24px 32px 28px;
@@ -423,6 +443,7 @@ a:hover { text-decoration: underline; }
   .pay-card-head,
   .pay-summary,
   .pay-paid-banner,
+  .pay-revised-banner,
   .pay-form-section,
   .pay-alt {
     padding-left: 20px;

@@ -2,6 +2,555 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-21, last (The System Builder's maths moves out of the page):** Phases 0 and 1 of the
+System Builder work, to Patrick's brief: build a characterization safety net, then extract ONLY
+the calculation engine, leaving persistence, quote creation and proposal-section generation
+behind, with the old and extracted engines compared before merging.
+
+**Phase 0 — the safety net, built first and thrown at.** 19 fixtures, from the shapes the tool
+is used on (a four-area residential job, a commercial lot) plus the boundaries Patrick named:
+zone splitting, mixed irrigation types, manual overrides, rounding, BOM quantities and pricing.
+They are run through the engine AS IT LIVED IN THE PAGE — `plan()` / `computeZonePlan()` /
+`buildBOM()` / `areaMaterialCents()`, not `compute()`, which interleaves the maths with
+`innerHTML` — and every number recorded in `scripts/fixtures/system-design-golden.json`. Money is
+compared exactly to the cent, nothing is rounded, and ordering is normalized only where it
+carries no meaning: head order, zone order and area order are all decisions (zones are cuts in
+the head sequence; station numbers come from zone position), so they are left alone.
+**A net nobody has thrown anything at is a guess**, so thirteen one-line changes were made to the
+live engine and the golden master re-run against each. All thirteen are now IN the committed test
+rather than having been run once by hand — **12 as mutations that must be caught, and the 13th
+asserted to be unreachable**, so the number in the report and the number in the story are the same
+number. **Three were not caught on the first pass**, which is the point of doing it: the zone packer's `+ 0.001` epsilon survived every fixture, because 1.3 x 6
+lands dead on 7.8 with no float drift at all. Searched the real Hunter PGP flow table for sums
+that DO drift (2.4 + 2.5 + 3.0 + 0.8 is 8.700000000000001) and added three fixtures on them; all
+three epsilons — the fill's, the balancer's, and the hand-zoned over-ceiling report's — are now
+pinned. Recorded and not fixed: `plan()`'s own `|| 18` drip row-spacing fallback is unreachable,
+because `familyDefaults()` has always set the field by the time `plan()` reads it.
+
+**Phase 1 — the extraction.** `server/sitebuilder-engine.js`, 1,319 lines lifted out of
+`sitebuilder.html` **verbatim**; `sitebuilder.html` drops from 7,798 lines to 6,727. No formula
+was retyped. Every deviation from the original is one of 19 asserted textual patches, and they
+are all the same kind of change — the engine used to reach out and take four things for itself,
+and is handed them now:
+
+| was | now |
+| --- | --- |
+| `plan()` read `num('ceiling')` and `el('spacingFactor').value` | `computePlan(area, {ceiling, spacingFactor})` |
+| `computeZonePlan()` read `areas`, `routing`, `valveGroupModes` | takes the design |
+| `buildBOM(parts)` read `LAST_PLANS`, `LAST_ZONES`, a form field, and called `measuredLateralsBySize()` | takes all four |
+| `areaMaterialCents()` read `PARTS_MAP` | takes the price list |
+
+Same `Math.max`, same `parseFloat` fallbacks, same arithmetic in the same order.
+
+**What deliberately did NOT move**, per Patrick's constraint: the four money-facing writes — the
+`systemDesign` PATCH, the `waterCostEstimate` PATCH, the material-list PATCH, and
+`POST /api/quotes/proposal` + the proposal-sections PATCH. Also `measuredLateralsBySize()`, which
+walks the routed site-plan sheets: **measuring a drawing is not calculating**, so the page
+measures and hands the result over. A calculation can be re-run a hundred times while you decide;
+a PATCH that rewrites a quote cannot, and the two do not belong in the same file.
+
+**The comparison, before merging** (`npm run test:system-design-engine`):
+
+| | result |
+| --- | --- |
+| extracted engine, in Chromium, vs the golden master | **identical, field for field** |
+| the System Builder page itself, vs the golden master | **identical, field for field** |
+| extracted engine under Node, no browser | every count, quantity and cent exact |
+| deliberately broken engines caught | 12 of 12 |
+| rules asserted unreachable (and so not mutatable) | 1 of 1 |
+
+The first two are run in the SAME runtime the golden master was recorded in, so there is one
+variable and no allowance at all. The Node run has exactly one difference, reported by path
+rather than hidden: the 33rd vertex of a 48-sided circle, 1.8e-15 out, because **V8's `Math.sin`
+differs by one bit between Chromium 141 and Node 22** — the language spec permits it. Nothing on
+a money path, nothing that is a whole number, and the tolerance that allows it is a billionth,
+absolute: a nanometre, six orders of magnitude below the smallest deliberate quantity in the
+engine.
+
+**"Down from 12 zones to 11" on the Dundalk job — REOPENED (2026-09-22). The account below was
+written too confidently; it is corrected here rather than deleted.**
+
+**The correction.** Patrick: *"Code's conclusion is wrong — and I was wrong to accept it. 11 is not
+the correct station count… Do not infer the station count from the number of proposal lines or
+from the 17.1 GPM ceiling."* He is right on the method. What follows was derived from a screenshot
+plus a RECONSTRUCTION of the design — never from his saved design — and was then stated as settled.
+**Reproducing a figure does not prove the figure is right; it proves a model that produces it
+exists.** The ceiling explains one area's hydraulic sectioning. It says nothing about the station
+total.
+
+**Why the tool cannot show what he is describing.** A proposal line is a presentation unit; a
+controller station is a programmed output. In this builder they cannot disagree, because
+`quoteSections()` builds its lines from `stationZones()` — proposal lines ARE stations, by
+construction. So the tool is structurally incapable of representing "12 programmed outputs
+described by an 11-line proposal". If Dundalk really has 12, the builder is under-modelling the
+install, and the only mechanism that can hide an output is the one that puts several valves on one
+station.
+
+**Answered from the code rather than inferred:** `applyValveSplits()` pushes both halves of a split
+with the SAME `z.station` and increments the counter once, and the wire note says "a split zone's
+two valves land on one terminal". **East Side Lawn 2 A and B are two valves on ONE station** —
+option (i) of the three Patrick listed, not two stations and not a presentation grouping. Same for
+a boxed drip group. On this job that is five multi-valve stations (East Side Lawn 2, Trees, Drip A,
+Drip B, Drip C), any one of which accounts for a twelfth output if it is wired as two on site.
+
+**`scripts/enumerate-stations.mjs`** prints, from a saved design and deducing nothing: every
+station numbered from 1 with the areas it feeds; every physical valve including both halves of
+every split; every proposal line as the quote generator emits them; and the full
+area → hydraulic section → valve → station → proposal-line mapping. It ends by naming every station
+carrying more than one valve, because those are exactly where a valve count and a station count
+legitimately differ — and exactly where an install can diverge from the design.
+
+**The ground truth for "how many programmed outputs" is the Hydrawise controller, not the builder.**
+Still open. PR #287 is NOT merged, per Patrick — though it is unaffected either way, being a pure
+refactor proven identical to production across 750 generated designs.
+
+**What was previously recorded here, now only a hypothesis:** Patrick
+reported the station count had dropped. Nothing in this branch was deployed and `sitebuilder.html`
+had not changed on `main` since #285, so the first job was to find out what had. Rebuilt the design
+from the figures legible in his screenshots (19 areas, 70 heads, 11 stations, 16 valves, peak 17.1
+GPM, "2 gear + 4 pop-up + 13 drip + 1 strip + 1 trees" = 21 area zones — and 19 areas = 13 drip
+beds + 1 trees + 5 lawns, which is the only split that makes both totals close). The
+reconstruction reproduced every one of those figures, and sweeping the GPM ceiling gave a single
+crossing point:
+
+| ceiling | stations | peak |
+| --- | --- | --- |
+| 17.0 | 12 | 16.7 |
+| 17.1 or higher | 11 | 17.1 |
+
+**East Side Lawn 2**, 17.1 GPM across 22 heads. Below a 17.1 ceiling it needs two valves on two
+stations; at or above it, all 22 fit on one station, and the split line drawn across it keeps it
+at two valves — which is why the valve count stayed at 16 while stations fell to 11.
+
+Patrick then confirmed: **the ceiling is 17.1, and he set it there deliberately.** The two valves
+open together on one station because together they draw 17.1 GPM against 18.0 available and do not
+need separate run times. That is precisely what the driveway-split feature is for — one station,
+two valves, one line on the quote. Both of those facts are established. What does NOT follow, and
+what was wrongly concluded from them, is that the system therefore has 11 controller stations.
+**That inference is withdrawn.** Recorded here because the investigation looked for a regression and
+correctly found a decision; the earlier note in this session flagging 17.1-against-18.0 as tight
+was a misreading of intent, not a finding.
+
+**750 random designs, because Patrick does not do this kind of work.** Asking him to paste
+JavaScript into a browser console to hand over his own design was the wrong shape of request, and
+he said so. `scripts/fuzz-system-design-engine.mjs` removes the need for it: it generates designs
+at random across the whole feature space — every head family, every input mode, traced polygons,
+sectors and circles, hand-placed layouts with hand-assigned valves and free arcs and reduced
+radii, ring and RWS trees, shared and boxed drip valve groups, driveway splits, legacy v1 areas,
+and ceilings and spacing factors swept across their range — and runs each through BOTH engines in
+the same browser. Seeded, so any failure replays with `--seed N --only N`.
+
+**250 designs on each of three seeds: 750 of 750 identical on every field.** 9,455 stations,
+37,051 heads, 17,758 BOM lines, $2,653,832 of materials. Negative-tested first, with a break
+narrow enough to bite only in the hand-zoned GPM path — caught in 4 of 40 designs, so a green run
+means something. This is stronger evidence than one real job would have been: the fixtures pin the
+boundaries somebody thought of, the fuzzer asks the question nobody thought of.
+
+**Comparing a REAL design, not only the fixtures** (`scripts/compare-real-design.mjs`): loads the
+System Builder twice in one browser — once as it stands on `origin/main` with the engine still
+inline, once from the working tree with the engine extracted — hands both the SAME saved design
+blob, the same catalog and the same form values, drives both through `restoreState()` (the path
+taken when a project is opened), and diffs every figure: stations, valves, splits, per-zone GPM,
+valve grouping, head counts, drip and lateral footage, every BOM line quantity, and the BOM total
+to the cent. It then does the save-and-reopen check in both: `serializeState()` → `restoreState()`
+→ recompute, requiring every figure to come back the same AND the re-serialized blob to be
+byte-for-byte identical. **Nothing is written anywhere** — no server is contacted, every API call
+is answered with an empty object, so it cannot touch a live project. Negative-tested by breaking
+the extracted engine (manifold grouping 4 → 3) and confirming it goes red on 55 fields and a
+$21.42 BOM difference.
+
+**Fixture privacy, checked rather than asserted:** scanned the committed fixtures and golden
+master for emails, phone numbers, Canadian postal codes, street-address shapes and known local
+names — **none**. Every area name is invented ("Front lawn", "Bed A", "Lot frontage"). The only
+person named is Patrick, in a comment describing his own 200 ft roll rule, as throughout the
+codebase. The frozen parts snapshot carries sku/description/priceCents/unit/category for 46 SKUs,
+every value identical to the already-committed `parts.json`, with `supplierIds` deliberately left
+out — so it adds no exposure that the repo did not already have. No binaries, no attachments.
+
+Coverage: 92 valves, 157 heads, 309 BOM lines and $19,925.47 of materials across the fixtures.
+`test:sitebuilder` (the existing split + lateral walkthroughs, 101 assertions including "no page
+errors") passes unchanged; both now serve the engine file, which the page refuses to start
+without. If it fails to load the builder shows a plain message rather than computing silently
+from nothing — verified by 404ing it.
+
+The engine is served at `/admin/sitebuilder-engine.js` behind the **same staff gate as the page**:
+it carries Patrick's default SKUs and the zone/BOM rules, which were behind auth while they were
+inline, and moving code into its own file must not be how it becomes public. `test-admin-gates`
+now runs both halves of that — the fence AND the static route, because a gate on a URL that
+serves nothing is a 404 that breaks the builder. Both assertions were checked by deleting each
+line and watching them fail.
+
+**A stale comment corrected, not silently:** a note above the lateral-tree section said
+`buildBOM` "still estimates lateral pipe from head count x radius" and that the measurement "does
+not touch the bill of materials". That stopped being true with Patrick's September 2026 ruling —
+`measuredLateralsBySize()` reaches the BOM and buys whole rolls per size — and the comment was
+never updated. It contradicted the code on a money path, so it is fixed.
+
+This addresses part of **DEV-03** (`sitebuilder.html` is monolithic): the maths is out. The CSS,
+the drawing tools and the rest of the JS are still inline.
+
+**NOT started, per Patrick's instruction:** Phase 2 — whether the existing builder can live
+inside a full-width workspace route without breaking its full-screen drawing tools.
+
+**Getting a real design out without getting anything else out** (`scripts/export-design-fixture.js`,
+`scripts/explain-zones.mjs`): Patrick declined to send the whole `/api/projects/<id>` response —
+correctly, it carries the customer, the address, the quotes, the invoices and the journal, none of
+which the calculation needs. The exporter is a browser-console snippet run on the System Builder
+page with the project open. It is an **allowlist, not a redaction**: it starts from nothing and
+copies across only the fields the engine provably reads (the five supply inputs, the areas and
+their geometry/nozzles/manual heads/trees, valve groups and modes, routing coordinates, and the
+SKU-and-quantity BOM overrides). A field nobody thought about, or one added to the builder next
+year, is excluded because it was never named rather than included because nobody remembered to
+strip it — deny-lists fail silently in the dangerous direction.
+
+Two guards, both tested by making them fire:
+* **Missing input.** A blank GPM ceiling or spacing factor does not fail loudly downstream — the
+  engine's own `|| 1` and `Math.max(…, 0.1)` quietly stand in, and the comparison would then run
+  against a design that is not the one on screen. It refuses and names the empty box. Found by the
+  exporter's own first run, on a spacing factor that did not match any `<option>`.
+* **Anything that looks personal.** Scans its own output for emails, phone numbers, postal codes,
+  street addresses, quote/invoice numbers and embedded files. An area named
+  "Smith front lawn 905-555-0134" produced no file at all and a one-line explanation, with
+  `PJL_REDACT_NAMES = true` offered as the fix. Verified: no file written, and after redaction the
+  number is gone and the areas read "Area 1 … Area 4".
+
+`explain-zones.mjs` answers "why does it say N zones, it used to say N+1" by separating the three
+numbers people use interchangeably — **area zones** (what each area needs on its own), **valves**
+(what goes in the ground) and **stations** (what the controller drives, which is the figure the
+summary calls "total zones") — showing every place one collapses into the next, then sweeping the
+GPM ceiling to report which ceiling values change the answer and **which named area flips at each
+one**. So "it used to be 12" gets an area attached to it rather than a shrug.
+
+**No preview URL is possible from here, and saying so is part of the record:** the Render service
+is configured in Render's dashboard, not in the repo (there is no `render.yaml`), so PR previews
+cannot be turned on from a commit; and `server/data/*` is gitignored, so a fresh preview would
+deploy with **no projects in it at all** — nothing to walk. `compare-real-design.mjs` exists
+because it answers the same question more strictly and without standing up a second copy of the
+customer database to do it.
+
+**Two real defects the same screenshots did surface, both still OPEN and neither caused by this
+branch (identical on `main`):**
+
+> **SB-01 — the master plan drops a split tree valve.** The System Summary says 16 valves; the
+> master plan header and its layers panel say 15. The missing one is **Trees · B**. `mpDraw()`
+> builds its valve set from `zoneIndexOf(i, 0)` per area plus every HEAD of every area — and a
+> tree zone has no heads, it runs to the trees. So a split tree zone only ever contributes its A
+> half (`sitebuilder.html`, the `const used = new Set()` block). It matters because a valve that
+> is not on the master plan gets no lateral drawn and no lateral measured: the sub installs from a
+> plan showing 15 while the BOM has ordered 16. Fix is local — include the tree halves the way
+> heads are included, using `mpTreesOf()` and the same `headHalf()` rule `applyValveSplits()`
+> already uses. Offered; not yet taken up.
+
+> **SB-02 — the project page's "zones" figure is the AREA count.** `server/server.js:15879` builds
+> `siteBuilderSummary.zoneCount` as `proj.systemDesign.areas.length`, and the rebuilt project
+> overview renders it as "System design · N zones". An area can produce several zones, and grouped
+> drip beds collapse many areas onto one valve, so this figure can legitimately disagree with the
+> builder's own. The builder and the quote both count STATIONS (`stationZones()`); only this one
+> counts areas. Not yet fixed.
+
+**Patrick's acceptance test — not yet walked:** open the System Builder on a real project, check
+the zone count, the GPM figures and the BOM total read exactly as they did yesterday, then save
+and reopen.
+
+**2026-09-21, later still (A settled deposit is not a settled job):** Patrick named six situations
+to test Next action against: a brand-new project with no design; McDonald's Dundalk (accepted,
+paid, 0 of 16 tasks); accepted with no installation date; scheduled and part-done; complete with
+money outstanding; complete and fully paid. Ran all six against the real logic rather than
+reasoning about them — five read correctly, and **the second one found a bug that wasn't in Next
+action at all.** With a deposit invoice settled in full, the Billing figure read **"Paid"**,
+letter-for-letter identical to a job that owes nothing — on a job with the whole balance still to
+raise and not a task done. Next action got it right ("Schedule installation"), but the figure
+beside it said the money was in. Fixed: a settled invoice whose `invoiceRole` is `deposit` now
+reads **"Deposit paid · balance not invoiced yet"**. Only a settled non-deposit invoice says
+"Paid".
+`scripts/test-next-action.mjs` pins all six situations plus two more the six implied — a balance
+invoice still in DRAFT is Patrick's action rather than a wait on the customer, and a sold job
+carrying a draft revision keeps saying "Finish the install". 25 assertions.
+`test-app-shell-rebuild.mjs` grew to 40, now creating a real deposit invoice and settling it
+through the real payment ledger (`invoices.addPayment`) to prove the deposit wording end to end.
+**Deliberately NOT in `build:check`:** the unit test needs Node's type stripping (22+) and CI
+pins Node 20 — in the gate it would fail for a reason unrelated to the code under test. Caught
+before pushing, not after a red CI run. It runs as `npm run test:next-action`, and the same logic
+is covered end-to-end through the real bundle by the browser suite.
+**Patrick's acceptance test — not yet walked:** open a job with a paid deposit and confirm the
+Billing figure says "Deposit paid", not "Paid".
+**2026-09-21, after the first walkthrough (The overview becomes action-oriented):** Patrick, on
+the rebuilt workspace: *"This is dramatically better. It now feels like an actual project-
+management application instead of a long administrative form... I would keep this direction. I'd
+make a few targeted changes rather than redesigning it again."* Ten of them, all applied:
+1. **Next action card** — the overview said what a project CONTAINS, not what needs doing.
+   `lib/nextAction.ts` reads state the server already reports (design saved? proposal accepted?
+   visits booked? tasks outstanding? money owed?) and names the next step with its evidence:
+   "Schedule installation — No installation date assigned · 16 tasks remaining". It decides
+   nothing: no pricing, no scheduling rules, no lifecycle transitions — those stay server-side.
+   Three tones: act (orange), waiting on someone else (blue), done (green).
+2. **The duplicated figure is gone.** Contract value lives once, in the summary band.
+3. **Four summary figures**: Contract value / Project progress / System design / Billing — and
+   each is a button that opens its own section, so the number you're reading is the way in.
+4. **Progress bar** under the task figure.
+5. **Scope card** carries the description plus what the design and proposal already know
+   ("19-zone system · 3 line items on the proposal") and an Open scope link.
+6. **Empty activity state** asks for the first entry and carries the button to make it.
+7. **One word for the document: proposal.** The tab, the card and the button all say it; "Quote"
+   survives only as the internal record type.
+8. **Customer card is contact ACTIONS** — primary contact, tap-to-call, tap-to-email, and links
+   to the customer and property records. The company name and job address already sit in the
+   header, so the card no longer repeats them.
+9. **"Open in classic" is now a quiet ghost button** — an escape hatch during the migration, not
+   a peer of the primary action. It disappears entirely once each tab is migrated.
+10. **Sticky project header** — title, status and the section tabs stay put while a long section
+    scrolls. Verified by scrolling a genuinely tall page (913px) and asserting both are still on
+    screen, not by eyeballing a page that didn't actually scroll.
+**A real bug this surfaced:** a project carrying a `proposalSnapshot` came from an ACCEPTED
+proposal, but if a revision is raised afterwards the linked quote returns to `draft` — and the
+first cut of `nextAction` read only that live status, so it told a crew mid-install to go and
+"send the proposal" on a job they were already building. Fixed: the frozen snapshot is the proof
+of sale. Pinned by a test that builds exactly that record shape.
+**A bug that wasn't:** the first screenshot showed a $2,469,050 contract. Quotes store DOLLARS
+(`Math.round(price * qty * 100) / 100`), so the app was rendering faithfully — the fixture had
+been copied from a test that used cents-looking numbers. Checked before changing anything;
+nothing needed changing.
+`scripts/test-app-shell-rebuild.mjs` grew to 36 assertions covering the above against the real
+server, real records and the real bundle. **Patrick's acceptance test — not yet walked:** open a
+live job and confirm the Next action names the right next step for where that job actually is.
+**2026-09-21, end of day (The front end gets rebuilt — foundation + the first workflow screens):**
+Patrick, after a day of patching the Project page twice over: *"Treat the existing application as a
+functional prototype, not the final interface. Preserve its data models, APIs, calculations and
+business rules, but rebuild the user interface from a clean foundation... Do not restyle the
+existing pages in place... The finished product must feel like professional field-service and
+construction-management software — not an internal database administration tool."* Plus the
+sequencing: *"Preserve the existing application during development. Build the replacement
+interface alongside it, migrate one workflow at a time and remove an old screen only after the
+replacement has been tested."*
+**Nothing about the backend moves.** Data models, the irrigation maths, proposal generation, PDF
+rendering, auth, integrations, and every `/api/*` contract stay exactly as they are; the new
+interface is a client over the same endpoints. Any screen that needs a number it doesn't have
+asks the server for it — no business rule gets re-implemented in the browser.
+**What landed in this first pass:**
+- `admin-app/` — React + Vite + TypeScript + Tailwind source. Built output is **committed** to
+  `server/app-dist/`, so Render needs no build-command change and there is no new deploy step
+  to fail. `npm run build:app` rebuilds it.
+- A real design system (`src/index.css` `@theme` tokens + `src/ui/primitives.tsx`): brand palette
+  lifted from `crm.css` so it still reads as PJL, one Button/Card/StatusPill/Field/Stat/
+  EmptyState vocabulary, 44px minimum tap targets, focus rings that never disappear.
+- An app shell with the new IA (Work / Operations / Business), one sidebar in one place instead
+  of a copy pasted into 55 HTML files. Sections not yet rebuilt link into the existing CRM and
+  are labelled `classic`, so what is and isn't migrated is visible rather than guessed at.
+- Workflow steps 1–2 of the nine Patrick listed: **Projects list** (real `/api/projects` data,
+  status filters with live counts, search, task progress, contract value; a table on desktop,
+  stacked cards on a phone) and the **Project workspace** (summary stats + tabs across
+  Overview / System Design / Scope &amp; Proposal / Tasks / Materials / Daily Records /
+  Change Orders / Financials / Closeout — progressive disclosure instead of one scroll).
+  The seven tabs not yet built name their workflow and offer the classic screen; none is a dead end.
+- Served at `/app/*` behind the SAME staff login as `/admin/*` (`needsAuth`), with `/app-assets/*`
+  for the hashed bundles. **The existing CRM is untouched** — same routes, same files, still live.
+`scripts/test-app-shell-rebuild.mjs` (27 assertions) is the "after the replacement has been
+tested" half: it boots the REAL server, creates REAL projects through `lib/projects.js`, logs in
+as a real admin, and drives the REAL built bundle in a real browser — no mocked API. It pins the
+auth gate on `/app` and a deep link, the SPA fallback (a refresh on `/app/projects/PROJ-…` serves
+the shell, not a 404), the bundle's content type (a JS file served as `text/html` is a white
+screen), real data rendering with real task progress, the filters and search operating on those
+records, the workspace opening client-side, and `/admin/projects` still serving the old page.
+**Deliberately NOT done yet:** the remaining seven workflow steps, Customers/Operations/Business
+workspaces, and any removal of an old screen. Nothing is deleted until its replacement is walked.
+**Patrick's acceptance test — not yet walked:** sign in, open `/app`, and check the Projects list
+and a project's workspace against a job you know; the classic CRM must still work exactly as
+before at `/admin`.
+**2026-09-21, same hour (The ladder runs to the service bound — nobody sees an empty fortnight):**
+The watchdog's first run, with everything above deployed: Toronto 2 of 14 upcoming days (1
+weekday), Etobicoke 1 of 14 (Saturday only), every other weekday `outside_route_area`;
+Markham / Richmond Hill / Vaughan / Aurora / Newmarket healthy. Not a misconfiguration — every
+planned day from Sep 28 to Oct 9 is a northern route, all past 40 minutes from downtown, and 40
+was where the widen ladder stopped (2026-09-07, after a Markham address landed on a West-of-
+the-400 day: "the open bucket exists precisely for the customer we can't place efficiently
+yet"). With ads live that reads as an empty calendar, and bookings were lost to it. Patrick:
+*"my goal will be to not turn down an opportunity. and at this point i belive we may be doing
+that. So i need to expand our capabilites so we dont under deliver."* So `GEO_WIDEN_TIERS` is
+`[25, 40, 60, 90]` again — the 90 being the booking gate's service bound — climbed ONE rung at
+a time and ONLY while the customer's next two weeks hold fewer than three days at the rung
+below (the near-window rule from earlier today, so a customer with days is never widened).
+The leg cap climbs with the rung (`legCap = max(maxLegBetweenStopsMinutes, geoMax)`): a rung
+that admits +60 of driving cannot then refuse the day as "spread", which is exactly what would
+have kept Toronto out of a Newmarket day at the 90 rung. Every slot still carries its true
+`addedDriveMinutes`, so the stars still send customers to the cheap days first, and a far
+booking is a stop on the plan Patrick can move. Deliberately NOT changed: the 15-minute
+opening corridor, the near-window rule, the caps, the gate. The probe's note and its amber
+"widens at N" rows follow the new rungs automatically. Coverage: `test-geo-availability.mjs`
+§8 rewritten (75 → 76): Aurora (+17) widens to exactly 25 and no further; Richmond Hill (+61)
+now GETS days, at the first rung that admits it, with true costs on the slots; Mississauga
+(+179, past the bound) still gets none; a calendar with enough days never widens.
+`test-widen-near-window.mjs` §3: a far caller gets their fortnight at a rung ≤ 90.
+**Patrick's acceptance test — not yet walked:** on the public page, a Toronto address should
+now see weekdays in the first two weeks of the season (they will show the far northern days
+at their honest cost, with the Saturdays starred as the cheap ones); the watchdog's next run
+should report every test address with 3+ days.
+**2026-09-21, later the same day (Collapse the Project page; stop stranding Patrick on Site
+Builder/Proposal Builder/Invoice):** Patrick, live, on the just-shipped inline-summary Project
+page, with a screenshot zoomed to 25% to fit the whole thing: *"you have to have a 32 inch
+screen to view all the information thats on this screen... go back to the drawing board."*
+Every section — Tasks, Accepted proposal, Job journal, Daily log, Work orders, Material lists,
+etc. — rendered permanently expanded, stacked in one long scroll. In the same message thread,
+a second bug: *"opening the site builder, proposal builder, invoice virtually opens a new tab,
+or doesn't allow you to go back to the project you opened them from."* Both true: the Quote and
+Invoice "Open" links used `target="_blank"` (real new tabs), and none of Site Builder, Proposal
+Builder, or the Invoice page had ANY link back to the project that opened them — only generic
+CRM-dashboard / Quote-folder / All-invoices links, dead ends either way.
+
+**Fix 1 — collapse the bulky sections.** The grows-over-time sections (Accepted proposal,
+Tasks, Daily log, Scope changes, Status updates sent, Billing preview, Work orders, Material
+lists, Water-cost estimate) are now native `<details class="proj-section">` elements —
+collapsed by default, a one-line summary always visible (`6 of 14 complete`, `3 attached`,
+`$480.00 per season`, …), full content one click away, no page reload. The short "at a glance"
+panels from the last fix (Quote/Site Builder/Invoice) stay as plain always-open sections — they
+were already short; that part of the last fix was right.
+
+**Fix 2 — dead-end navigation.** `projQuoteStatusLink` and `projInvoiceLink` dropped
+`target="_blank"` (Site Builder's link was already same-tab). Site Builder, the Proposal
+Builder, and the Invoice page each now show a **"← Back to project {ID}"** link in place of
+their generic one, whenever they know which project they came from: Site Builder and the
+Proposal Builder read `?project=<id>` off the URL (the Project page's links now pass it — Site
+Builder already did); the Invoice page reads the invoice's own `projectId` field instead, since
+an invoice's project is knowable regardless of how the page was reached. Opened from anywhere
+else (nav sidebar, Quote folder, Invoices list), all three keep their original generic link —
+no regression there.
+
+`scripts/test-project-nav-and-density.mjs` (44 Playwright assertions, real headless-Chromium
+loads of all four real pages): every bulky section is a real collapsed `<details>` with a
+correct summary line on a job with 14 tasks / 3 attached WOs / a daily-log entry / a scope
+change / a saved water-cost estimate; clicking a summary expands it in place with no
+navigation and no missing content; the three "Open" links carry no `target` attribute; Site
+Builder / Proposal Builder / Invoice each show the project-aware back link when `?project=` (or
+the invoice's own `projectId`) is present, and keep their old generic link when it isn't.
+Re-ran `test-project-inline-summaries.mjs` (13), `test-project-invoice-resolution.mjs` (8),
+`test-project-journal.mjs` (27), `test-project-delete-cascade.mjs` (15),
+`test-project-quote-status-panel.mjs` (18), `test-sitebuilder-split.mjs` (18) — no regressions.
+**Patrick's acceptance test — not yet walked:** open any job with a quote, a design, tasks, and
+an invoice; confirm the page is short at a glance with real one-line summaries, click a section
+open, then click "Open Site Builder" (or the Proposal Builder, or the invoice) and confirm the
+new page shows a "Back to project" link that actually returns here.
+**2026-09-21, same hour (The truck does not go home at noon; the half-day cap gets a dial):**
+Patrick, with the day preview open — six planned stops through North York and downtown, the
+new house numbered 5 between Casa Loma and York Mills: *"its literally perfect density on that
+appointment"* — while the booking page priced it at **+39 min** and offered only the afternoon,
+and only after widening to 40. Two causes on one day. **(1)** The morning held five planned
+stops at the plan's cap of 5, so the engine could not put the house where it belongs; the cap
+was set at import and no screen could change it. **(2)** With the morning closed, the engine
+costed the house against the AFTERNOON's stops — scored, like every bucket since 2026-09-07,
+as its own round trip from the yard. Newmarket → Forest Hill → Don Mills is thirty-nine extra
+minutes; York Mills → Forest Hill → Don Mills, which the truck would actually drive, is a
+handful. Fixed: `geoFilter.addedDriveMinutes()` takes `start`/`end` endpoints, and
+`listAvailableSlots` scores the afternoon from the morning's last stop and the morning as
+leaving for the afternoon's first (stored bucket order is driving order, so those are the real
+handover); the leg cap orders from the same entry point. Whole-day scoring (the probe's
+number, the unplanned ranker, empty-bucket fallback) is unchanged — it was never wrong. And
+the cap: `seasonPlans.setBucketCap()` behind `PATCH /api/season-plans/:season/:year/caps`,
+with a **Stops per half-day** control on the plan screen beside the booking window (1–12;
+`dayCap` follows to 2× so the review screen does not warn on every day). Availability reads
+the plan per request, so a change is live for the next calendar load. Coverage:
+`scripts/test-bucket-endpoints.mjs` (13 assertions, in `build:check`; fails on the old
+engine): Patrick's day as a fixture — from the yard the afternoon reads over the corridor,
+from York Mills inside it, the whole day says +≤5; the engine offers the afternoon at the
+TIGHT corridor with no widening and the morning reads `full`; a cap of six opens the morning
+at +≤5; the setter refuses 0, the route and the control exist. `test-geo-availability` (75),
+`booking-guards`, `commercial-slots`, `season-plan-buckets`, `day-preview`, `unplanned-routing`,
+`season-plan-moves` unchanged and green. **Same hour, "See it on the day" from the probe**
+(Patrick: *"on my app, i can select - see it on the day. Can we make the provision for this the
+same?"*): every probe row now carries the button the unplanned list has. The preview route
+takes `address` as well as `code` — a typed address geocodes into a stand-in stop under
+`PROBE`, built through the same `resolvePlanDay` and drawn on the same map; a real code wins
+when both are given; nothing is written. The dialog's Add is disabled for a stand-in (the
+caller is booked from the probe row, which makes the record). `test-day-map-preview.mjs`
+gains 5 source guards (54). **Patrick's acceptance test — not yet walked:** probe
+46 Dunvegan Rd on the plan; that day's Afternoon column should now read a single-digit "+N",
+not 39; press See it on the day — the map should show the house numbered between Casa Loma
+and York Mills. Then set Stops per half-day to 6, Save, probe again — the Morning column should read
+"open · +N" and the public calendar should offer the day to a Toronto customer.
+**2026-09-21 (The probe said "yes, +2 min" for a day the engine refused):** Patrick, on the
+season-plan probe: *"i have the ability to book 46 dunvegan rd on thursday 22 but its not
+allowing me to"* — the table read **R11 · 2026-10-22 · 6 stops · 2 min · yes**, and the Book
+form under it read *"No bookable window on this day for that service."* Read live against the
+public availability route: every Toronto address got `outside_route_area` for Oct 22, nobody
+anywhere was offered its morning, and Aurora/Newmarket got only its afternoon at +13/+14 —
+i.e. the morning half is at its capacity cap and the afternoon half is a different cluster.
+**The cause is two readers of one question.** The probe judged a day by whole-day cheapest
+insertion against the corridor — the rule the engine had on 2026-09-07. Since then the engine
+grew three more (geography per half-day, the leg cap, bucket capacity) and the probe kept its
+own copy, so it drifted exactly the way CLAUDE.md §2 warns. Fixed by removing the copy: the
+probe route now runs `listAvailableSlots()` ONCE for the season's smallest residential band
+over the whole plan, and `availability.bucketVerdicts()` folds the slots and diagnostics per
+date and half — `open` / `full (5/5)` / `too far (+34)` / `spreads the day (+41 leg)` /
+`outside the booking window` / `no window`. The table shows a **Morning** and **Afternoon**
+column with those words, and its "Offered" is the engine's verdict, so the Book button can no
+longer open a form the engine will refuse. (A first cut added a "Book anyway" admin override on
+refused days; Patrick: *"we don't want a fucking book anyways button… customers won't find a
+time when visiting our website"* — removed the same hour. The customer side is the problem.)
+**Second half, same hour (the ladder that never ran):** the public calendar for a Toronto
+address offered NO weekday from Sep 28 to Oct 19 — every planned route day refused at the
+15-minute corridor — and its first offer was Saturday Oct 10 morning. The elastic corridor
+(2026-09-07, "as the dates fill up, we allow for drive times to widen") exists for exactly
+this and never fired, because `listAvailableSlots` counted bookable days across the ENTIRE
+scan: three empty days a month out read as "enough". Now scarcity is judged inside the first
+`GEO_WIDEN_WINDOW_DAYS` (14) offerable days — the window opens on the first day that passes
+hours and the season gate, so a September caller is judged on Sep 28 – Oct 11 — and fewer than
+`GEO_WIDEN_MIN_DAYS` there, with geography having refused something, reruns one tier wider:
+25, then 40, and no further, as before. A customer who already has three days in their next
+fortnight sees nothing change; hold/reserve re-validation scans a shorter horizon and can only
+widen MORE readily, so an offered slot stays reservable. NOT changed: the caps, the tiers, the
+leg cap, the season gate. Also renamed the season-window inputs "Booking opens/closes" →
+"First/Last bookable date": the old label reads as "customers may not book until", which is
+not what it gates (fall 2026 has accepted bookings since Sep 1 for dates from Sep 28).
+Coverage: `scripts/test-widen-near-window.mjs` (10 assertions, in `build:check`; 5 fail on the
+old engine) — a fortnight of planned north days then three empty weeks: an Aurora caller
+(+17) gets the fortnight at the 25 tier, a fortnight that already offers three days never
+widens, Richmond Hill stays past the cap; `scripts/test-probe-verdicts.mjs` (19 assertions, in
+`build:check`) reproduces the probe drift on a fixture — whole-day insertion calls the day
+cheap, the engine refuses it (morning full, afternoon geography), lifting the cap opens it —
+pins the folding, and source-guards both readers. `test-geo-availability` (75), `booking-guards`
+(35), `commercial-slots`, `booking-hold`, `open-bucket` unchanged and green. **Patrick's
+acceptance test — not yet walked:** on the public page, book a fall closing for a Toronto
+address: weekdays in the first two weeks of the season should now appear (the ones within 25,
+then 40, minutes of that day's route); on the season plan, probe 45 Dunvegan Rd — the Oct 22
+row should read Morning "full (…)" / Afternoon "too far (+…)" with Offered "no".
+**2026-09-21 (Job tabs REPLACED with real inline numbers — the tabs weren't the fix):** Patrick,
+minutes into using the job-tabs entry above, live: *"you literally did nothing by putting the
+tabs above. it just goes to a different page... I don't want to navigate to a different page. I
+want everything i need to know right there. Everything connected, no page moves, or new tabs
+open."* Correct call — navigation between real pages was still navigation; a tab strip with
+nothing behind it is exactly the "all over the place" feeling he was pushing back on in the
+first place. The job-tabs strip is gone (`#projJobTabs`, `renderJobTabs()` — deleted, not just
+hidden) and replaced with real content on the Project page itself:
+- **Quote panel** now shows the actual line items and total inline (`linkedQuote.subtotal/hst/
+  total/lineItems`, added to the same `GET /api/projects/:id` response PJL-54 already built —
+  no new round-trip), not just the status word.
+- **New Site Builder panel** — zone count (`systemDesign.areas.length`) and last-saved date
+  (from the most recent `system_design_saved` history entry — `systemDesign` itself carries no
+  timestamp) directly on the page.
+- **New Invoice panel** — real status, total, amount paid, and balance due (or "paid in full" +
+  date once it's settled), not a link to go find out.
+Each panel keeps ONE "Open …" link for when Patrick actually wants to edit something (the
+design, the quote, the invoice) — never as the only way to see what's going on.
+Caught a real, separate bug along the way while building the Invoice panel: Patrick, live, on
+PROJ-2026-0008 — *"this invoice is part of the project. it has the deposit on it. I-2026-0067"*
+— reporting the invoice wasn't resolving. Root cause: `quote.depositInvoiceId` (what the
+resolution read) is a schema placeholder nothing has ever written to; the REAL link is the
+other way around, `invoice.quoteId`, set by whatever creates a deposit/balance invoice. Fixed
+with `invoices.listByQuote()` (new, mirrors the existing `listByWorkOrder` pattern) — checked
+against the WHOLE revision chain (a deposit is usually raised against whichever version was
+actually accepted, not necessarily today's current one), preferring a balance invoice over a
+deposit invoice once both exist.
+`scripts/test-project-invoice-resolution.mjs` (8 assertions, in `build:check`) pins the
+invoice-lookup fix: direct link, stale-anchor-plus-revision (the invoice was raised against v1,
+the project's pointer resolves to v2, the lookup still finds it), balance-over-deposit
+preference, no-invoice-yet stays null, and bystander isolation.
+`scripts/test-project-inline-summaries.mjs` (13 assertions, Playwright — same real-browser
+pattern as the Site Builder suites, `npm run test:project-inline-summaries`, **not** in
+`build:check`) pins the actual rendered page: the old tab strip element is gone, Site Builder
+shows real status even pre-design, the Invoice panel stays hidden with nothing to show but
+renders real numbers once something exists, the Quote panel's line items and total render
+inline, and a paid-in-full invoice says so instead of a stale $0-balance line.
+**Patrick's acceptance test — not yet walked:** open PROJ-2026-0008 (or any job with a quote,
+a design, and a deposit invoice) and confirm the line items, zone count, and invoice balance
+are all visible on the page itself — no click required to know what's going on.
 **2026-09-21 (Job tabs — real browser-style tabs on the Project page):** Second half of "the
 whole platform feels all over the place": *"at the top of the screen there are tabs, almost
 like a web browser... Project, Site Builder, Parts List, Quote, Invoice."* A full merge of the
@@ -4765,7 +5314,7 @@ Nothing below has been walked. Assume nothing works until verified.
 | FLOW-22a | **Invoice PDFs are re-rendered on demand, never frozen** — **OPEN, no fix shipped** | Found 2026-08-20 during the letterhead investigation (`docs/LETTERHEAD_REFACTOR_INVESTIGATION.md`). Unlike POs, WO reports and quotes — all three of which freeze their customer-facing PDF to disk with a recorded path — invoices carry **no `pdfPath`**. All six call sites (customer email, portal view, admin download, Stripe receipt, deposits, project-complete) call `generateInvoicePdf` and render fresh from the live record. **A reprint of a paid invoice can therefore differ from what the customer was sent**, and any future change to `invoice-pdf.js` retroactively restyles every invoice ever issued. Freezing them is a separate architectural decision, not a refactor — recorded here so it is a known risk with an owner rather than a surprise. |
 | FLOW-24 | Form failure → does anything alert Patrick? | Contact page shows "Your message didn't send." Unknown whether that failure is logged anywhere. |
 | FLOW-25 | AI diagnostic tool (`/sprinkler-repair.html`) | Carries a financial promise: "correct diagnosis = 1 hr labour free." Runs on Cloudflare Worker + API key — a dependency chain separate from Render and from email. |
-| FLOW-27 | **Material List → RFQ → cheapest price → PO** — **UNMAPPED** (opened 2026-08-16) | Hop chain: **ML-… `need` lines → shop or split → RFQ-… per supplier → send (PDF+CSV, no prices) → vendor replies → `recordQuotedPrices` → compare by SKU → apply cheapest to the parts catalog → ML reprices → PO-…**. The supplier half of the money path, and it had **no registered flow and no test coverage at all** before this. `scripts/test-rfq-shopping.mjs` (39 assertions, in `build:check`) now covers the pure logic, and a live-API walk covered the routes: shop mode gives every supplier the whole list including SKUs with no supplier assigned; an outgoing line carries no price of ours and its frozen CSV names no other supplier, no material list and no price column; two suppliers each win different SKUs; **applying a quote dearer than one already recorded for the same list is refused with a 409 naming the SKUs** (this was silently overwriting the cheaper price before); apply-cheapest writes the winner of each SKU with the source RFQ attributed; and asking for quotes never moves a line off `need`. **What is NOT covered and needs Patrick:** the email leg (this sandbox has no SMTP credentials, so `markSent` was called directly), a real two-supplier round trip with genuine replies, and confirming the resulting PO prices against an invoice. **Changed 2026-09-14 — per-supplier prices (Patrick: "they need to be two different prices based on where we receive them from").** The catalog held ONE `priceCents` per SKU, so two suppliers quoting the same list could only ever leave one price standing. `server/lib/part-supplier-prices.js` now stores every supplier's price (and the supplier's OWN part number) per SKU in `server/data/part-supplier-prices.json`; `rebuildCatalogFromOverrides` merges it AFTER the supplier-assignment merge and copies the **primary** supplier's price onto `part.priceCents` (Patrick's ruling — not the cheapest), exposing the rest as `part.supplierPrices` and `part.priceSupplierId`. A hand-typed price with a NEWER `editedAt` than the quote still wins. `apply-to-catalog` files prices per supplier instead of overwriting one field, so **the 409 "dearer than a quote already recorded" guard was removed** — it existed only to stop the overwrite, which can no longer happen; the response gained `storedOnly` (recorded against a supplier that is not this part's primary, catalog unchanged). Supplier part numbers print on the RFQ/PO PDFs and CSVs via one shared `resolveSupplierSku` in `lib/format.js` (their number, ours as fallback; both CSVs gained a `Supplier part #` column). New: `PATCH /api/part-supplier-prices` records prices and/or supplier part numbers without an RFQ. `scripts/test-part-supplier-prices.mjs` (22 assertions, in `build:check`) pins two prices coexisting, the primary deciding the effective price, re-pricing on a primary flip, the manual-edit-wins rule, per-supplier part numbers with our-SKU fallback, and seeding only from **applied** RFQs. **Changed 2026-09-21 — one order to one supplier.** Generating POs from a list whose parts sit with two suppliers silently produced TWO drafts (Patrick hit this on ML-2026-0015: Central Pro 24 lines / $3278.65 and SiteOne 16 lines / $2964.85). Splitting forfeits BOTH suppliers' volume discounts, which are all-or-nothing, so a split order can cost more than buying the lot at the dearer branch. `planDraftsFromMaterialList(list, parts, { forceSupplierId })` now puts every need line on one supplier's draft, priced from THAT supplier's own quote (`part.supplierPrices[supplierId]`) with the catalog price as the fallback and every fallback named in `unpricedForSupplier`; an unassigned SKU stops being a blocker in this mode because the supplier was named explicitly. Both `plan-purchase-orders` and `generate-purchase-orders` accept `{ supplierId }` (the write re-reads it rather than trusting the preview) and the plan returns `supplierOptions`; the dialog gained a one-order/split radio with a supplier picker, defaulting to ONE order at the supplier holding most of the list, re-planning on every change. `scripts/test-po-one-supplier.mjs` (20 assertions, in `build:check`) pins the split being unchanged, one-supplier mode collapsing to a single draft priced at that branch's numbers, the unassigned-SKU blocker clearing, the catalog-price fallback being reported, and the two branches' totals actually differing. **Still needs Patrick:** `apply-cheapest-quotes` now contradicts the primary-supplier rule — it writes a winner price the next rebuild would re-derive from the primary — so it must either flip each SKU's primary to the cheapest quoter or be retired. Unresolved as of this change. |
+| FLOW-27 | **Material List → RFQ → cheapest price → PO** — **UNMAPPED** (opened 2026-08-16) | Hop chain: **ML-… `need` lines → shop or split → RFQ-… per supplier → send (PDF+CSV, no prices) → vendor replies → `recordQuotedPrices` → compare by SKU → apply cheapest to the parts catalog → ML reprices → PO-…**. The supplier half of the money path, and it had **no registered flow and no test coverage at all** before this. `scripts/test-rfq-shopping.mjs` (39 assertions, in `build:check`) now covers the pure logic, and a live-API walk covered the routes: shop mode gives every supplier the whole list including SKUs with no supplier assigned; an outgoing line carries no price of ours and its frozen CSV names no other supplier, no material list and no price column; two suppliers each win different SKUs; **applying a quote dearer than one already recorded for the same list is refused with a 409 naming the SKUs** (this was silently overwriting the cheaper price before); apply-cheapest writes the winner of each SKU with the source RFQ attributed; and asking for quotes never moves a line off `need`. **What is NOT covered and needs Patrick:** the email leg (this sandbox has no SMTP credentials, so `markSent` was called directly), a real two-supplier round trip with genuine replies, and confirming the resulting PO prices against an invoice. **Changed 2026-09-14 — per-supplier prices (Patrick: "they need to be two different prices based on where we receive them from").** The catalog held ONE `priceCents` per SKU, so two suppliers quoting the same list could only ever leave one price standing. `server/lib/part-supplier-prices.js` now stores every supplier's price (and the supplier's OWN part number) per SKU in `server/data/part-supplier-prices.json`; `rebuildCatalogFromOverrides` merges it AFTER the supplier-assignment merge and copies the **primary** supplier's price onto `part.priceCents` (Patrick's ruling — not the cheapest), exposing the rest as `part.supplierPrices` and `part.priceSupplierId`. A hand-typed price with a NEWER `editedAt` than the quote still wins. `apply-to-catalog` files prices per supplier instead of overwriting one field, so **the 409 "dearer than a quote already recorded" guard was removed** — it existed only to stop the overwrite, which can no longer happen; the response gained `storedOnly` (recorded against a supplier that is not this part's primary, catalog unchanged). Supplier part numbers print on the RFQ/PO PDFs and CSVs via one shared `resolveSupplierSku` in `lib/format.js` (their number, ours as fallback; both CSVs gained a `Supplier part #` column). New: `PATCH /api/part-supplier-prices` records prices and/or supplier part numbers without an RFQ. `scripts/test-part-supplier-prices.mjs` (22 assertions, in `build:check`) pins two prices coexisting, the primary deciding the effective price, re-pricing on a primary flip, the manual-edit-wins rule, per-supplier part numbers with our-SKU fallback, and seeding only from **applied** RFQs. **Changed 2026-09-21 — one order to one supplier.** Generating POs from a list whose parts sit with two suppliers silently produced TWO drafts (Patrick hit this on ML-2026-0015: Central Pro 24 lines / $3278.65 and SiteOne 16 lines / $2964.85). Splitting forfeits BOTH suppliers' volume discounts, which are all-or-nothing, so a split order can cost more than buying the lot at the dearer branch. `planDraftsFromMaterialList(list, parts, { forceSupplierId })` now puts every need line on one supplier's draft, priced from THAT supplier's own quote (`part.supplierPrices[supplierId]`) with the catalog price as the fallback and every fallback named in `unpricedForSupplier`; an unassigned SKU stops being a blocker in this mode because the supplier was named explicitly. Both `plan-purchase-orders` and `generate-purchase-orders` accept `{ supplierId }` (the write re-reads it rather than trusting the preview) and the plan returns `supplierOptions`; the dialog gained a one-order/split radio with a supplier picker, defaulting to ONE order at the supplier holding most of the list, re-planning on every change. `scripts/test-po-one-supplier.mjs` (20 assertions, in `build:check`) pins the split being unchanged, one-supplier mode collapsing to a single draft priced at that branch's numbers, the unassigned-SKU blocker clearing, the catalog-price fallback being reported, and the two branches' totals actually differing. **Changed 2026-09-21 (second pass) — what a supplier document says about the parts.** PO-2026-0012 went to Central Pro carrying two identity bugs. (1) The email's quick-paste block — the thing the branch pastes into their system — still listed OUR SKUs while the PDF and CSV carried theirs; `renderQuickPasteTable`/`renderQuickPasteText` now take an injected `skuForLine` (server.js passes `resolveSupplierSku` on all four send/resend paths) and print PART # then OUR SKU, falling back to ours when no resolver is given. (2) A catalog description still held an import-era tag naming the OTHER supplier — "… 500 ft (SiteOne 207CD500)" — so Central's own PO quoted SiteOne's number back at them; `stripSupplierTag` in `lib/format.js` now drops any parenthetical containing a part-number-shaped token (4+ chars, upper-case/digits/dashes, at least one digit) inside `resolveLineDescription`, so "(New)" and "(price per roll)" survive and a rival's code cannot ride out on any document. The one tagged catalog description was also cleaned at the source. `scripts/test-supplier-doc-identity.mjs` (11 assertions, in `build:check`) pins both, and fails against the pre-fix code. **Still needs Patrick:** `apply-cheapest-quotes` now contradicts the primary-supplier rule — it writes a winner price the next rebuild would re-derive from the primary — so it must either flip each SKU's primary to the cheapest quoter or be retired. Unresolved as of this change. |
 | FLOW-46 | **Quote financing (Klarna) — offer → apply → approve/decline → sign → capture** — **UNMAPPED** (opened 2026-09-19) | **First-ever registration for this flow** — PJL-34 (admin enable, Stripe Payment Link, capture/void, the Pending Financing queue, the capture-deadline reminder sweep) shipped across several earlier PRs with no `FLOW_REGISTER.md` entry at all; this row covers that pre-existing behaviour AND the PJL-35 re-sequencing below in one place, since they're one flow. Hop chain: **admin "Enable financing" on a DRAFT quote (`enableFinancingForQuote`, grosses up pricing — draft-only, pricing frozen once sent, which is the actual mechanism behind "a customer who wants financing gets a completely different proposal," not a live toggle) → sent to the customer → `financing.stage` state machine (`not_offered → link_sent → authorized/declined/voided`, `authorized → captured/partially_captured/expired/voided`) → capture or void on the linked invoice**. **PJL-35 (2026-09-19): financing now starts BEFORE signature, not after.** A new customer-facing "Apply for financing" button/route (`POST /api/approve/:id/:token/apply-financing`) calls `klarna.onQuoteAccepted` directly — reused UNCHANGED, since it already no-ops (`{ alreadyRan: true }`) once `financing.stage` has moved past `not_offered`, which is also what makes the three PRE-EXISTING post-signature call sites (`server.js` — remote e-sign, portal accept, pdf-return admin attestation) safe to leave byte-for-byte untouched: whichever trigger fires first does the real work, the others are silent no-ops. Two new customer-facing hero/footer bands on the proposal page (serve-time injected in `injectProposalAcceptFooter`, never baked into the saved file) read `financing.stage` live and show the apply/waiting/approved/declined state; the footer band only shows the Accept & sign button once `authorized` (or after a `declined` customer chooses to pay another way) — **before that, there is deliberately nothing to sign**, which is the direct fix for the risk Patrick raised ("wouldn't the sequence make the customer sign... and then..."): under the old order a signature could exist before the financing outcome did, under this order it can't. **The correctness fix this re-sequencing required:** `financing.stage === "authorized"` alone stopped being a safe "clear to schedule" signal the moment authorization could happen pre-signature — `quotes.isAccepted(q)` is now the one shared rule (replacing at least three slightly different ad hoc inline checks) used by the proposal page's own footer, `listPendingFinancing`'s new `signed` field, and the authorized-alert email/SMS copy, which now says "clear to schedule" only when both are true and "still needs a signature" otherwise. New customer-facing decline email (`notify-customer.js`'s `sendFinancingDeclineEmail`) — PJL-34 only ever alerted Patrick internally on a decline; the customer heard nothing. Deliberately left alone: the financing state machine's transition rules (never referenced signature status to begin with, needed no change); Stripe integration, gross-up math, eligibility rules, capture/void — all untouched. **Badge asset (corrected 2026-09-19):** Patrick had already supplied the real Klarna badge (a self-contained pink-pill PNG, own background — used in every approved mockup against both the light hero band and the dark footer band) earlier in this same session; it was saved to the mockup scratchpad but not carried into the repo when the real bands were built, so the first version of this code referenced two placeholder files (`/klarna-badge-{black,white}.svg`) that never existed. Fixed same-day: the real asset now lives at `server/klarna-badge.png`, one file for both bands, sized to the same 78px-tall minimum-size math either way. **What still needs Patrick — not yet walked, and can't be walked from this sandbox** (`docs/HANDOFF_KLARNA_TEST_MODE.md`: outbound calls to `api.stripe.com` are blocked by this environment's egress policy): one full test-mode walk — open a financing-enabled proposal as a customer, click Apply for financing, complete Klarna's TEST checkout, confirm the hero/footer bands update through every state, confirm the decline email arrives on a declined test run, confirm the Pending Financing page reads "awaiting signature" before signing and "clear to schedule" after. |
 | FLOW-45 | **A failed send is either re-sent or waved off — never nagged about forever** — **UNMAPPED** (opened 2026-09-12) | Hop chain: **Email health → "Never went out" → for `outreach` rows the health read names the season whose catch-up covers them (`catchUp: {season, year, count}`, from each row's booking) → **Send the N blast emails now** → `POST /api/assignments/:season/:year/catch-up` (rebuilt from each booking, inside the 9–8 window; a closed window is said, not thrown) → the ledger's later successes drop those rows on the next load. Anything else → **Dismiss** (row) or **Dismiss all** → `POST /api/admin/email-health/dismiss` → `mailerLog.dismissFailures()` writes `data/email-dismissed.json` (who, when) → `outstandingFailures()` excludes them; the ledger itself is untouched**. **LEDGER-01 (2026-09-12):** Patrick, on forty "outreach · send by hand" rows from the revoked-password morning (2026-09-11 9:03): "how do we get rid of all this garbage." The rows were true — those blast emails never went out and had not been re-sent — but the panel's only advice was "send by hand", forty times, because `outreach` is not rebuildable from the ledger. It IS rebuildable by the cadence (FLOW-3x catch-up), which the Season Plan already offers; the panel now offers the same press where the failures are read. And a failure Patrick has handled another way (phoned, stale) needed a way off the list that kept the record. **Deliberately left alone:** the ledger (append-only history; dismissals live beside it); `RESENDABLE_KINDS` (a magic link and a cadence step are still not rebuilt from the ledger); the send window. `scripts/test-email-dismiss.mjs` (20, in `build:check`) pins dismiss-takes-only-those-rows, idempotence, the record of who/when, the untouched ledger, the injectable Set, bad input, the admin-gated route, the catch-up pointer, and the panel's controls; **verified against the unfixed code first.** **Patrick's acceptance test — not yet walked:** open Email health: the box shows "Send the N blast emails now"; press it inside the window → "N sent"; reload → those rows are gone. Press Dismiss on any leftover row → it disappears; Dismiss all → the box empties; the Recent failures list below still shows the history. |
 | FLOW-44 | **An alert about a booking carries the booking's price** — **UNMAPPED** (opened 2026-09-12) | Hop chain: **customer reschedules / cancels / picks the free bucket on their appointment page, or Patrick resends a failed lead alert → `bookingAlertLead(booking, { sourceLabel, notes, lead })` → `resolveSeasonalPrice(property, family)` (the appointment page's own rule: the property's override, else its zone-count tier, else "Custom quote") → `features: [{ service, price }]` + `totals.expectedTotal` → `sendNewLeadEmail` / `sendNewLeadSms` print the service and the price, and `appointmentWhenLabel()` prints the date as the customer was told it ("Thu, Oct 22, Afternoon (12 PM – 5 PM)")**. **ALERT-01 (found + fixed 2026-09-12):** Patrick, on "New PJL Lead — Customer rescheduled their appointment — ADAM SORRENTI": "Can you tell me why Adam's quoted closing cost is $0.00?" It wasn't. The lead-alert shell prints a lead's items and estimated total; all four booking alerts handed it a bare contact block, so it printed its empty state ("$0.00 · No specific items selected") and ISO timestamps ("Was: 2026-10-22T18:01:00.000Z"). One shape now, for all four. A missing zone count reads "(custom quote)" rather than a silent $0. **Deliberately left alone:** the shell itself (sendNewLeadEmail/Sms) — a lead's alert is unchanged; the SMS keeps its empty note. `scripts/test-booking-alert-price.mjs` (17, in `build:check`) pins the date label, the pricing by the page's rule (tier, override, custom, spring), the contact/portal from the lead, and every call site; **verified against the unfixed code first.** **Patrick's acceptance test — not yet walked:** the next reschedule/cancel alert shows the service line with its price and "Was Thu, Oct 22, Afternoon (12 PM – 5 PM). Now Mon, Oct 19, Morning (8 AM – 12 PM)."; a property with no zone count shows "(custom quote)". |

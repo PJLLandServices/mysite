@@ -273,6 +273,30 @@ function parseCanadianAddress(raw) {
   return out;
 }
 
+// stripSupplierTag — drop a "(SiteOne 207CD500)"-style tag out of a part
+// description.
+//
+// The Sept 2026 catalog imports parked the supplier's own part number in
+// the description text, because there was nowhere else to put it. There
+// is now: supplierPrices[supplierId].supplierSku (lib/part-supplier-
+// prices.js). Left in the description, that tag RIDES ALONG ONTO EVERY
+// DOCUMENT — so a purchase order sent to Central Pro arrived quoting
+// SiteOne's part number in its own description text (PO-2026-0012,
+// 2026-09-21). Naming one supplier on another's order is the kind of
+// thing that gets a line mis-picked, or reads as a price-shopping slip.
+//
+// Only a parenthetical carrying a CODE is removed: it must hold a token
+// of 4+ characters, upper-case/digits/dashes, with at least one digit.
+// "(New)", "(price per roll)" and "(Sold per Roll)" all survive, because
+// none of them contains a part number.
+function stripSupplierTag(text) {
+  const s = String(text == null ? "" : text);
+  return s
+    .replace(/\s*\([^)]*\b[A-Z0-9][A-Z0-9-]{3,}\b[^)]*\)/g, (match) => (/\d/.test(match) ? "" : match))
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 // resolveLineDescription — THE one description path for a PO line, shared
 // by every render surface (PDF, CSV, supplier email, and — mirrored — the
 // on-screen PO detail table) so they can never disagree. Pure:
@@ -291,11 +315,11 @@ function parseCanadianAddress(raw) {
 // surface so an override-only SKU resolves identically on all of them.
 function resolveLineDescription(line, partsMap) {
   const stored = line && typeof line.description === "string" ? line.description.trim() : "";
-  if (stored) return stored;
+  if (stored) return stripSupplierTag(stored);
   const sku = line && line.sku != null ? String(line.sku) : "";
   const part = partsMap && Object.prototype.hasOwnProperty.call(partsMap, sku) ? partsMap[sku] : null;
   const catalogDesc = part && typeof part.description === "string" ? part.description.trim() : "";
-  if (catalogDesc) return catalogDesc;
+  if (catalogDesc) return stripSupplierTag(catalogDesc);
   return `(SKU ${sku})`;
 }
 
@@ -515,6 +539,7 @@ module.exports = {
   townFromAddress,
   resolveLineDescription,
   resolveSupplierSku,
+  stripSupplierTag,
   documentFilename,
   contentDisposition
 };

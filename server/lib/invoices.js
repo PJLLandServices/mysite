@@ -333,6 +333,25 @@ function hydrate(inv) {
     // mandatory reason lives on the DELETE step / tombstone, not here.
     voidedBy: inv?.voidedBy || null,
     voidReason: inv?.voidReason || "",
+    // Price revisions (invoice-revise, Sep 2026). Each entry is a
+    // snapshot of what the customer was previously shown so the
+    // original document is never lost. Only sent / partially_paid
+    // invoices can be revised (see revise()). revisedAt = ts of the
+    // latest revision. notifiedAt on an entry = when the "revised
+    // invoice" email/SMS went out for it (null until Patrick clicks
+    // Send revised invoice).
+    revisions: Array.isArray(inv?.revisions) ? inv.revisions.map((r) => ({
+      ts: r?.ts || null,
+      by: r?.by || "admin",
+      reason: String(r?.reason || ""),
+      previousLineItems: Array.isArray(r?.previousLineItems) ? r.previousLineItems : [],
+      previousSubtotal: Number(r?.previousSubtotal) || 0,
+      previousHst: Number(r?.previousHst) || 0,
+      previousTotal: Number(r?.previousTotal) || 0,
+      newTotal: Number(r?.newTotal) || 0,
+      notifiedAt: r?.notifiedAt || null
+    })) : [],
+    revisedAt: inv?.revisedAt || null,
     // Whether the originating WO had paidOnSite=true at cascade time.
     // Persisted so the customer email + the invoice page can reshape
     // copy ("Thanks, payment received in the field") vs the default
@@ -421,6 +440,17 @@ async function get(id) {
 async function listByWorkOrder(woId) {
   const records = await readAll();
   return records.filter((r) => r.woId === woId);
+}
+
+// Accepts one quoteId or an array — the Job tabs Invoice resolution
+// (2026-09-21) needs to check a whole revision chain, since a deposit
+// invoice is usually raised against whichever revision was actually
+// accepted, not necessarily the CURRENT one a project's pointer resolves
+// to today.
+async function listByQuote(quoteIdOrIds) {
+  const ids = new Set(Array.isArray(quoteIdOrIds) ? quoteIdOrIds : [quoteIdOrIds]);
+  const records = await readAll();
+  return records.filter((r) => ids.has(r.quoteId));
 }
 
 async function listByProperty(propertyId) {
@@ -868,6 +898,154 @@ async function appendPaymentAttempt(id, attempt) {
   return next;
 }
 
+// Revise the line items on a SENT invoice (invoice-revise, Sep 2026).
+// Use case: the customer negotiated the price after the invoice went out.
+// Rules:
+//   sent / partially_paid → allowed. Previous lines + totals are
+//                   snapshotted into revisions[] so the original document
+//                   is never lost. The new total can't drop below what has
+//                   already been paid (that would be a refund, not a
+//                   revision). Status is re-derived from the ledger after
+//                   the change (a partial payment can become "paid" when
+//                   the price drops to match it).
+//   draft         → 409: a draft has no customer-facing document yet; just
+//                   edit it (or regenerate from the WO).
+//   paid          → 409: money already moved — that's a refund/credit memo.
+//   void          → 409.
+// `lineItems` is the same shape createDraft normalizes to (label/qty/
+// unitPrice[/note]); we re-normalize + recompute totals here. A reason is
+// REQUIRED — it goes in the audit trail and into the revised-invoice email.
+// Does NOT notify the customer: that's a separate explicit step
+// (markRevisionNotified + the /send-revision route in server.js).
+function normalizeLineItems(lineItems) {
+  return (Array.isArray(lineItems) ? lineItems : []).map((l) => {
+    const price = (l.overridePrice != null && Number.isFinite(Number(l.overridePrice)))
+      ? Number(l.overridePrice)
+      : Number(l.unitPrice ?? l.originalPrice ?? l.price) || 0;
+    const qty = Number(l.qty) || 1;
+    return {
+      key: l.key || null,
+      label: String(l.label || (l.key ? l.key : "Line")).trim().slice(0, 200) || "Line",
+      qty,
+      unitPrice: Math.round(price * 100) / 100,
+      lineTotal: Math.round(price * qty * 100) / 100,
+      note: String(l.note || "").slice(0, 500)
+    };
+  });
+}
+
+function fmtMoneyPlain(n) {
+  return "$" + (Number(n) || 0).toFixed(2);
+}
+
+async function revise(id, { lineItems, reason = "", by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return { ok: false, status: 404, code: "not_found", errors: ["Invoice not found."] };
+  const current = records[idx];
+  if (current.status === "paid") {
+    return { ok: false, status: 409, code: "invoice_paid", errors: ["A paid invoice can't be revised — issue a refund or credit memo instead."] };
+  }
+  if (current.status === "void") {
+    return { ok: false, status: 409, code: "invoice_void", errors: ["A voided invoice can't be revised."] };
+  }
+  if (current.status !== "sent" && current.status !== "partially_paid") {
+    return { ok: false, status: 409, code: "invoice_not_sent", errors: ["Only a sent invoice can be revised. A draft can simply be edited before sending."] };
+  }
+  const trimmedReason = String(reason || "").trim().slice(0, 500);
+  if (!trimmedReason) {
+    return { ok: false, status: 400, code: "reason_required", errors: ["A reason is required — it's recorded in the audit log and shown to the customer."] };
+  }
+  const normalized = normalizeLineItems(lineItems);
+  if (!normalized.length) {
+    return { ok: false, status: 400, code: "no_lines", errors: ["A revised invoice needs at least one line item."] };
+  }
+  // Negative unit prices are allowed (a "Negotiated discount" line is the
+  // natural way to show a price cut); the invoice as a whole can't go
+  // below zero, or below what the customer has already paid.
+  for (const l of normalized) {
+    if (!Number.isFinite(l.unitPrice) || !Number.isFinite(l.qty) || l.qty <= 0) {
+      return { ok: false, status: 400, code: "bad_line", errors: [`Line "${l.label}" has an invalid quantity or price.`] };
+    }
+  }
+  const totals = totalsForLines(normalized);
+  if (totals.subtotal < 0) {
+    return { ok: false, status: 400, code: "negative_total", errors: ["The revised total can't be below $0.00."] };
+  }
+  const paidAlready = amountPaidOf(current);
+  if (paidAlready > 0 && totals.total < round2(paidAlready - 0.01)) {
+    return { ok: false, status: 409, code: "below_amount_paid", errors: [`The customer has already paid ${fmtMoneyPlain(paidAlready)} — the revised total can't be less than that. Record a refund instead.`] };
+  }
+  const now = new Date().toISOString();
+  const next = { ...current };
+  next.revisions = [...(current.revisions || []), {
+    ts: now,
+    by,
+    reason: trimmedReason,
+    previousLineItems: current.lineItems || [],
+    previousSubtotal: current.subtotal,
+    previousHst: current.hst,
+    previousTotal: current.total,
+    newTotal: totals.total,
+    notifiedAt: null
+  }];
+  next.revisedAt = now;
+  next.lineItems = normalized;
+  next.subtotal = totals.subtotal;
+  next.hst = totals.hst;
+  next.total = totals.total;
+  next.amountPaid = amountPaidOf(next);
+  next.balanceDue = balanceDueOf(next);
+  next.status = statusForPayments(next, current.status);
+  if (next.status === "paid" && !next.paidAt) next.paidAt = now;
+  next.updatedAt = now;
+  next.history = [...(next.history || []), {
+    ts: now,
+    action: "revised",
+    by,
+    note: `Total ${fmtMoneyPlain(current.total)} → ${fmtMoneyPlain(totals.total)} — ${trimmedReason}`
+  }];
+  if (next.status !== current.status) {
+    next.history.push({ ts: now, action: `status:${next.status}`, by: "system", note: "Re-derived from payments after revision." });
+  }
+  records[idx] = next;
+  await writeAll(records);
+  return { ok: true, invoice: next };
+}
+
+// Stamp notifiedAt on the latest revision after the revised-invoice
+// email/SMS goes out. Idempotent; no-op if there are no revisions.
+async function markRevisionNotified(id, { channel = "email", by = "admin", note = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return null;
+  const now = new Date().toISOString();
+  const next = { ...records[idx] };
+  const revs = [...(next.revisions || [])];
+  if (revs.length) {
+    const last = { ...revs[revs.length - 1], notifiedAt: revs[revs.length - 1].notifiedAt || now };
+    revs[revs.length - 1] = last;
+  }
+  next.revisions = revs;
+  next.updatedAt = now;
+  next.history = [...(next.history || []), {
+    ts: now,
+    action: channel === "sms" ? "revision_sms_sent" : "revision_sent",
+    by,
+    note
+  }];
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// Original (first-issued) total, or null if never revised. Used by the
+// PDF + email + customer surfaces to say "replaces the invoice for $X".
+function originalTotal(inv) {
+  const revs = Array.isArray(inv?.revisions) ? inv.revisions : [];
+  return revs.length ? Number(revs[0].previousTotal) || 0 : null;
+}
+
 // Void an invoice (feature-invoice-void-delete-brief.md §4.2). Follows the
 // bookings.cancel() shape — returns { ok, status } rather than throwing so
 // the route maps codes to HTTP cleanly.
@@ -1174,12 +1352,16 @@ module.exports = {
   list,
   get,
   listByWorkOrder,
+  listByQuote,
   listByProperty,
   createDraft,
   update,
   appendHistory,
   appendPaymentAttempt,
   voidInvoice,
+  revise,
+  markRevisionNotified,
+  originalTotal,
   remove,
   ensurePaymentToken,
   getByPaymentToken,

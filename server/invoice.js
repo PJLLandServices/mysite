@@ -11,7 +11,11 @@ function escapeHtml(s) {
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
-function fmt(n) { return "$" + (Number(n) || 0).toFixed(2); }
+function fmt(n) {
+  const v = Number(n) || 0;
+  // Negative lines (e.g. "Negotiated discount") read as -$30.00, not $-30.00.
+  return (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(2);
+}
 function fmtDate(iso) {
   if (!iso) return "—";
   return new Date(iso).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" });
@@ -41,6 +45,15 @@ async function load() {
   }
   currentInvoice = data.invoice;
   currentDisclaimerObjects = Array.isArray(data.disclaimerObjects) ? data.disclaimerObjects : [];
+  // Came here from a Project page (or the invoice just belongs to one) —
+  // send "back" there instead of the generic invoices list. Patrick:
+  // opening an invoice from a project "doesn't allow you to go back to
+  // the project you opened them from."
+  const backLink = document.getElementById("invoiceBackLink");
+  if (backLink && currentInvoice.projectId) {
+    backLink.href = `/admin/project/${encodeURIComponent(currentInvoice.projectId)}`;
+    backLink.textContent = `← Back to project ${currentInvoice.projectId}`;
+  }
   // Fetch the customer record so the spouse-CC toggles can pre-fill
   // from copySpouseOnInvoices. Non-fatal — invoices without a
   // customerId or whose customer fetch fails just hide the toggles.
@@ -102,6 +115,15 @@ function syncSpouseToggles() {
   wire("invoiceSendSpouseToggle", "invoiceSendSpouseCheckbox", "invoiceSendSpouseDisclosure", spouseEmail, "spouse email");
   wire("invoiceReminderSpouseToggle", "invoiceReminderSpouseCheckbox", "invoiceReminderSpouseDisclosure", spousePhone, "spouse phone");
   wire("invoiceJunkWarningSpouseToggle", "invoiceJunkWarningSpouseCheckbox", "invoiceJunkWarningSpouseDisclosure", spousePhone, "spouse phone");
+  wire("invoiceReviseSpouseToggle", "invoiceReviseSpouseCheckbox", "invoiceReviseSpouseDisclosure", spouseEmail, "spouse email");
+  // The revise card only shows its toggle while a revision is pending
+  // send; remember whether a spouse email exists so renderReviseCard
+  // can hide/show without re-reading the customer.
+  const reviseToggle = document.getElementById("invoiceReviseSpouseToggle");
+  if (reviseToggle) {
+    reviseToggle.dataset.hasSpouse = spouseEmail ? "1" : "0";
+    if (currentInvoice) renderReviseCard(currentInvoice);
+  }
 }
 
 // Read the checkbox state for a given send action. Returns boolean
@@ -121,7 +143,7 @@ function render(inv) {
   card.hidden = false;
   document.getElementById("invoiceTitle").textContent = `Invoice ${inv.id}`;
   document.getElementById("invoiceId").textContent = inv.id;
-  document.getElementById("invoiceMeta").innerHTML = `Issued ${escapeHtml(fmtDate(inv.createdAt))}${inv.sentAt ? `<br>Sent ${escapeHtml(fmtDate(inv.sentAt))}` : ""}${inv.paidAt ? `<br>Paid ${escapeHtml(fmtDate(inv.paidAt))}` : ""}`;
+  document.getElementById("invoiceMeta").innerHTML = `Issued ${escapeHtml(fmtDate(inv.createdAt))}${inv.sentAt ? `<br>Sent ${escapeHtml(fmtDate(inv.sentAt))}` : ""}${inv.revisedAt ? `<br><strong>Revised ${escapeHtml(fmtDate(inv.revisedAt))}</strong>` : ""}${inv.paidAt ? `<br>Paid ${escapeHtml(fmtDate(inv.paidAt))}` : ""}`;
   document.getElementById("invoiceStatus").value = inv.status;
   // PDF action buttons — open in new tab vs. force download. Both hit
   // the same /api/invoices/:id/pdf route in server.js; ?download=1
@@ -1463,13 +1485,254 @@ document.getElementById("deleteConfirmBtn")?.addEventListener("click", async () 
   }
 });
 
-// Close either modal on Escape.
+// ---- Revise price (invoice-revise, Sep 2026) --------------------------
+//
+// Only a SENT (or partially paid) invoice can be revised (the customer
+// negotiated after it went out). Two explicit steps:
+//   1. "Revise price" → modal with editable lines + required reason →
+//      POST /revise. Snapshots the original into revisions[], recomputes
+//      totals, re-pushes QuickBooks. Customer is NOT contacted.
+//   2. "Send revised invoice" → POST /send-revision. Emails the REVISED
+//      PDF with the original total + reason, and texts the customer if
+//      they were texted about the original.
+// The card shows the revision trail so Patrick can see what changed.
+
+function renderReviseCard(inv) {
+  const card = document.getElementById("invoiceReviseCard");
+  const meta = document.getElementById("invoiceReviseMeta");
+  const reviseBtn = document.getElementById("invoiceReviseBtn");
+  const sendBtn = document.getElementById("invoiceSendRevisionBtn");
+  const status = document.getElementById("invoiceReviseStatus");
+  const list = document.getElementById("invoiceReviseHistory");
+  const spouseToggle = document.getElementById("invoiceReviseSpouseToggle");
+  const spouseDisclosure = document.getElementById("invoiceReviseSpouseDisclosure");
+  if (!card || !meta || !reviseBtn || !sendBtn || !status || !list) return;
+
+  const revisions = Array.isArray(inv?.revisions) ? inv.revisions : [];
+  const canRevise = inv?.status === "sent" || inv?.status === "partially_paid";
+  // Card is visible on a revisable invoice, or on any invoice that carries
+  // a revision trail (paid/void after a revision still shows history).
+  card.hidden = !(canRevise || revisions.length);
+  if (card.hidden) return;
+
+  status.textContent = "";
+  status.dataset.kind = "";
+  reviseBtn.hidden = !canRevise;
+  const latest = revisions[revisions.length - 1];
+  const pendingSend = Boolean(latest && !latest.notifiedAt && inv.status !== "void" && inv.status !== "draft");
+  sendBtn.hidden = !pendingSend;
+  sendBtn.disabled = !inv.customerEmail;
+  if (spouseToggle) {
+    const showToggle = pendingSend && spouseToggle.dataset.hasSpouse === "1";
+    spouseToggle.hidden = !showToggle;
+    if (!showToggle && spouseDisclosure) spouseDisclosure.hidden = true;
+  }
+
+  if (!revisions.length) {
+    meta.textContent = "Customer negotiated after this was sent? Change the lines here — the original is kept and the customer gets a clearly-marked revised copy.";
+  } else if (pendingSend) {
+    meta.innerHTML = `<strong>Revised ${escapeHtml(fmtDate(latest.ts))} — not yet sent to the customer.</strong> They still have the ${escapeHtml(fmt(latest.previousTotal))} copy. Send the revised invoice when the numbers look right.`;
+  } else {
+    meta.textContent = `Revised ${fmtDate(latest.ts)} · revised copy sent ${fmtDate(latest.notifiedAt)}${inv.customerSmsSentAt ? " (email + SMS)" : ""}.`;
+  }
+
+  list.hidden = !revisions.length;
+  list.innerHTML = revisions.slice().reverse().map((r) => `
+    <li>
+      ${escapeHtml(fmtDate(r.ts))}: ${escapeHtml(fmt(r.previousTotal))} → <strong>${escapeHtml(fmt(r.newTotal))}</strong>
+      — ${escapeHtml(r.reason || "no reason")}
+      ${r.notifiedAt ? `<br><span class="invoice-action-meta">Customer notified ${escapeHtml(fmtDate(r.notifiedAt))}</span>` : `<br><span class="invoice-action-meta">Customer not yet notified</span>`}
+    </li>
+  `).join("");
+}
+
+// ---- Revise modal: editable line list ----
+let reviseDraftLines = [];
+
+function reviseTotals(lines) {
+  let subtotal = 0;
+  for (const l of lines) subtotal += (Number(l.unitPrice) || 0) * (Number(l.qty) || 0);
+  subtotal = Math.round(subtotal * 100) / 100;
+  const hst = Math.round(subtotal * 0.13 * 100) / 100;
+  const total = Math.round((subtotal + hst) * 100) / 100;
+  return { subtotal, hst, total };
+}
+
+function paintReviseTotals() {
+  const t = reviseTotals(reviseDraftLines);
+  document.getElementById("reviseSubtotal").textContent = fmt(t.subtotal);
+  document.getElementById("reviseHst").textContent = fmt(t.hst);
+  const totalEl = document.getElementById("reviseTotal");
+  totalEl.textContent = fmt(t.total);
+  const was = Number(currentInvoice?.total) || 0;
+  document.getElementById("reviseWas").textContent = fmt(was);
+  totalEl.classList.toggle("invoice-revise-total-changed", Math.round(t.total * 100) !== Math.round(was * 100));
+  const paid = Number(currentInvoice?.amountPaid) || 0;
+  const paidRow = document.getElementById("revisePaidRow");
+  if (paidRow) {
+    paidRow.hidden = !(paid > 0);
+    document.getElementById("revisePaid").textContent = fmt(paid);
+  }
+}
+
+function renderReviseLines() {
+  const body = document.getElementById("reviseLines");
+  if (!body) return;
+  body.innerHTML = reviseDraftLines.map((l, i) => `
+    <tr data-idx="${i}">
+      <td><input type="text" data-field="label" value="${escapeHtml(l.label)}" maxlength="200" placeholder="Description"></td>
+      <td class="num num-cell"><input type="number" class="num" data-field="qty" value="${escapeHtml(String(l.qty))}" min="0.01" step="0.01" inputmode="decimal"></td>
+      <td class="num price-cell"><input type="number" class="num" data-field="unitPrice" value="${escapeHtml(String(l.unitPrice))}" step="0.01" inputmode="decimal"></td>
+      <td class="num total-cell">${fmt((Number(l.unitPrice) || 0) * (Number(l.qty) || 0))}</td>
+      <td class="remove-cell"><button type="button" class="invoice-revise-remove" data-remove="${i}" aria-label="Remove line" title="Remove line">×</button></td>
+    </tr>
+  `).join("") || `<tr><td colspan="5" class="invoice-doc-line-empty">No lines — add one below.</td></tr>`;
+  paintReviseTotals();
+}
+
+document.getElementById("reviseLines")?.addEventListener("input", (e) => {
+  const input = e.target;
+  const row = input.closest("tr[data-idx]");
+  if (!row || !input.dataset.field) return;
+  const line = reviseDraftLines[Number(row.dataset.idx)];
+  if (!line) return;
+  if (input.dataset.field === "label") line.label = input.value;
+  else line[input.dataset.field] = input.value === "" ? 0 : Number(input.value);
+  // Only repaint the computed cells so the focused input isn't replaced.
+  row.querySelector(".total-cell").textContent = fmt((Number(line.unitPrice) || 0) * (Number(line.qty) || 0));
+  paintReviseTotals();
+});
+document.getElementById("reviseLines")?.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-remove]");
+  if (!btn) return;
+  reviseDraftLines.splice(Number(btn.dataset.remove), 1);
+  renderReviseLines();
+});
+document.getElementById("reviseAddLineBtn")?.addEventListener("click", () => {
+  reviseDraftLines.push({ key: null, label: "", qty: 1, unitPrice: 0, note: "" });
+  renderReviseLines();
+  const rows = document.querySelectorAll("#reviseLines tr[data-idx]");
+  rows[rows.length - 1]?.querySelector('input[data-field="label"]')?.focus();
+});
+
+document.getElementById("invoiceReviseBtn")?.addEventListener("click", () => {
+  if (!currentInvoice) return;
+  reviseDraftLines = (currentInvoice.lineItems || []).map((l) => ({
+    key: l.key || null,
+    label: l.label || l.key || "Line",
+    qty: Number(l.qty) || 1,
+    unitPrice: Number(l.unitPrice) || 0,
+    note: l.note || ""
+  }));
+  const err = document.getElementById("reviseModalError");
+  if (err) err.textContent = "";
+  const reason = document.getElementById("reviseReasonInput");
+  if (reason) reason.value = "";
+  renderReviseLines();
+  openModal("reviseModal");
+});
+document.getElementById("reviseCancelBtn")?.addEventListener("click", () => closeModal("reviseModal"));
+document.getElementById("reviseModal")?.addEventListener("click", (e) => {
+  if (e.target === document.getElementById("reviseModal")) closeModal("reviseModal");
+});
+
+document.getElementById("reviseConfirmBtn")?.addEventListener("click", async () => {
+  if (!currentInvoice) return;
+  const btn = document.getElementById("reviseConfirmBtn");
+  const err = document.getElementById("reviseModalError");
+  const reason = (document.getElementById("reviseReasonInput")?.value || "").trim();
+  if (err) err.textContent = "";
+  if (!reason) { if (err) err.textContent = "Please type a reason — the customer will see it."; return; }
+  const lines = reviseDraftLines
+    .map((l) => ({ ...l, label: String(l.label || "").trim() }))
+    .filter((l) => l.label || Number(l.unitPrice));
+  if (!lines.length) { if (err) err.textContent = "Add at least one line."; return; }
+  for (const l of lines) {
+    if (!(Number(l.qty) > 0)) { if (err) err.textContent = `Quantity on "${l.label || "line"}" must be more than 0.`; return; }
+    if (!Number.isFinite(Number(l.unitPrice))) { if (err) err.textContent = `Price on "${l.label || "line"}" isn't a number.`; return; }
+  }
+  const t = reviseTotals(lines);
+  if (t.total < 0) { if (err) err.textContent = "The new total can't be negative."; return; }
+  const paid = Number(currentInvoice.amountPaid) || 0;
+  if (paid > 0 && t.total < paid - 0.005) {
+    if (err) err.textContent = `The customer has already paid ${fmt(paid)} — the new total can't be less than that. Record a refund instead.`;
+    return;
+  }
+  if (Math.round(t.total * 100) === Math.round((Number(currentInvoice.total) || 0) * 100)) {
+    if (!(await pjlDialog.confirm("The total hasn't changed. Save this revision anyway?", { title: "No change to total", icon: "warning", confirmLabel: "Save anyway" }))) return;
+  }
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}/revise`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lineItems: lines, reason })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't save the revision.");
+    currentInvoice = data.invoice;
+    closeModal("reviseModal");
+    render(data.invoice);
+    const status = document.getElementById("invoiceReviseStatus");
+    if (status) {
+      status.textContent = data.warning
+        ? `✓ Revision saved. ${data.warning}`
+        : `✓ Revision saved${data.qbAction ? " and QuickBooks updated" : ""}. Now click “Send revised invoice” to notify the customer.`;
+      status.dataset.kind = data.warning ? "info" : "ok";
+    }
+  } catch (e) {
+    if (err) err.textContent = e.message || "Failed.";
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("invoiceSendRevisionBtn")?.addEventListener("click", async () => {
+  if (!currentInvoice) return;
+  const revisions = Array.isArray(currentInvoice.revisions) ? currentInvoice.revisions : [];
+  const original = revisions.length ? revisions[0].previousTotal : null;
+  const recipient = currentInvoice.customerEmail;
+  if (!recipient) { await pjlDialog.alert("This invoice has no customer email.", { title: "No customer email", icon: "warning" }); return; }
+  const smsBit = currentInvoice.customerSmsSentAt ? " They were texted about the original, so they'll get a text about the revision too." : "";
+  if (!(await pjlDialog.confirm(`Send the REVISED invoice ${currentInvoice.id} (now ${fmt(currentInvoice.total)}, was ${fmt(original)}) to ${recipient}?${smsBit}`, { title: "Send revised invoice?", icon: "send", confirmLabel: "Send" }))) return;
+  const btn = document.getElementById("invoiceSendRevisionBtn");
+  const status = document.getElementById("invoiceReviseStatus");
+  btn.disabled = true;
+  const wasLabel = btn.textContent;
+  btn.textContent = "Sending…";
+  status.textContent = "";
+  status.dataset.kind = "info";
+  try {
+    const includeSpouse = readSpouseToggle("invoiceReviseSpouseCheckbox", "invoiceReviseSpouseToggle");
+    const r = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}/send-revision`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(includeSpouse === null ? {} : { includeSpouse })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Send failed.");
+    currentInvoice = data.invoice;
+    render(data.invoice);
+    let msg = `✓ Revised invoice emailed to ${recipient}.`;
+    if (data.sms) msg += data.sms.ok ? " Text sent too." : ` Text not sent (${data.sms.error}).`;
+    status.textContent = msg;
+    status.dataset.kind = "ok";
+  } catch (e) {
+    status.textContent = e.message || "Failed.";
+    status.dataset.kind = "error";
+    btn.disabled = false;
+    btn.textContent = wasLabel;
+  }
+});
+
+// Close any modal on Escape.
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!document.getElementById("voidModal")?.hidden) closeModal("voidModal");
   if (!document.getElementById("deleteModal")?.hidden) closeModal("deleteModal");
   if (!document.getElementById("klarnaCaptureModal")?.hidden) closeModal("klarnaCaptureModal");
   if (!document.getElementById("klarnaVoidModal")?.hidden) closeModal("klarnaVoidModal");
+  if (!document.getElementById("reviseModal")?.hidden) closeModal("reviseModal");
 });
 
 // Wire QB block refresh + reminder card + junk-warning card + void/delete
@@ -1485,6 +1748,7 @@ render = function (inv) {
   renderVoidDeleteCard(inv);
   renderPaymentsTable(inv);
   renderPaymentCard(inv);
+  renderReviseCard(inv);
 };
 
 // ---- Klarna financing (PJL-34, build order step 4b) --------------------

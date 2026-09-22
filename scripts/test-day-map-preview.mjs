@@ -131,6 +131,12 @@ const lib = (name) => (typeof dayPreview[name] === "function"
     /routeGeometry\.roadLine\(origin, dayPreview\.planLineStops\(after\)\)/.test(block), "the line is not the preview day's");
   ok("…and the answer carries before, after and the delta",
     /before: beforeSummary/.test(block) && /after: afterSummary/.test(block) && /addedDriveMinutes: dayPreview\.driveDelta\(/.test(block), "summary missing");
+  // The probe's caller is not a property yet: a typed address previews as
+  // a stand-in stop through the SAME route (Patrick, 2026-09-21).
+  ok("…a typed address previews as a stand-in stop, through the same builder",
+    /query\.get\("address"\)/.test(block) && /byCode\.set\(PROBE_CODE,/.test(block) && /await geocode\(probeAddress\)/.test(block),
+    "no address path");
+  ok("…and a real code still wins over an address", /query\.get\("code"\), 40\) \|\| \(probeAddress \? PROBE_CODE : ""\)/.test(block), "precedence changed");
 }
 
 // ---- 5. The page: see it, then decide -----------------------------------
@@ -158,6 +164,12 @@ const lib = (name) => (typeof dayPreview[name] === "function"
   ok("the preview asks the server, never draws its own arithmetic",
     /\$\{base\(\)\}\/preview\/\$\{date\}\?\$\{q\}/.test(js), "no preview fetch");
   ok("a stale answer for a day he moved on from is dropped", /if \(seq !== previewSeq\) return;/.test(js), "no request sequencing");
+  ok("every probe row opens the same preview with the typed address",
+    /See it on the day/.test(js) && /openPreview\(\{ probe: true, code: "PROBE"/.test(js), "probe rows can't see the day");
+  ok("…the preview sends the address for a probe row, the code for a property",
+    /row\.probe \? new URLSearchParams\(\{ address: row\.address \}\) : new URLSearchParams\(\{ code: row\.code \}\)/.test(js), "wrong query");
+  ok("…and a probe preview is look-only — booking stays on the probe row",
+    /previewAdd\.disabled = Boolean\(row\.probe\)/.test(js), "Add enabled for a stand-in stop");
   ok("the drive change reads as before → after (+delta)", /Driving: \$\{b\.driveMinutes != null/.test(js), "no drive chip");
 }
 
