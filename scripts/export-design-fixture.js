@@ -19,6 +19,10 @@
    To also replace your area names with "Area 1, Area 2 …", run this first:
        PJL_REDACT_NAMES = true
 
+   There is a short form of this in scripts/export-design-fixture-short.js —
+   same allowlist and the same two guards, small enough to paste out of a
+   message instead of opening a file.
+
    WHY AN ALLOWLIST
 
    This does NOT take the saved design and delete the sensitive parts. It
