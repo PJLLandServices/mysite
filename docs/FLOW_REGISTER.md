@@ -67,6 +67,21 @@ a money path, nothing that is a whole number, and the tolerance that allows it i
 absolute: a nanometre, six orders of magnitude below the smallest deliberate quantity in the
 engine.
 
+**750 random designs, because Patrick does not do this kind of work.** Asking him to paste
+JavaScript into a browser console to hand over his own design was the wrong shape of request, and
+he said so. `scripts/fuzz-system-design-engine.mjs` removes the need for it: it generates designs
+at random across the whole feature space — every head family, every input mode, traced polygons,
+sectors and circles, hand-placed layouts with hand-assigned valves and free arcs and reduced
+radii, ring and RWS trees, shared and boxed drip valve groups, driveway splits, legacy v1 areas,
+and ceilings and spacing factors swept across their range — and runs each through BOTH engines in
+the same browser. Seeded, so any failure replays with `--seed N --only N`.
+
+**250 designs on each of three seeds: 750 of 750 identical on every field.** 9,455 stations,
+37,051 heads, 17,758 BOM lines, $2,653,832 of materials. Negative-tested first, with a break
+narrow enough to bite only in the hand-zoned GPM path — caught in 4 of 40 designs, so a green run
+means something. This is stronger evidence than one real job would have been: the fixtures pin the
+boundaries somebody thought of, the fuzzer asks the question nobody thought of.
+
 **Comparing a REAL design, not only the fixtures** (`scripts/compare-real-design.mjs`): loads the
 System Builder twice in one browser — once as it stands on `origin/main` with the engine still
 inline, once from the working tree with the engine extracted — hands both the SAME saved design
