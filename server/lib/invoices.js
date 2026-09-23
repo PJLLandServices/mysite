@@ -138,7 +138,15 @@ function balanceDueOf(inv) {
 // aren't about money (draft / void) or regressing a manual "paid".
 // Tolerance: a balance within a cent counts as settled.
 function statusForPayments(inv, currentStatus) {
-  if (currentStatus === "draft" || currentStatus === "void") return currentStatus;
+  if (currentStatus === "void") return currentStatus;
+  // A draft paid IN FULL is paid — the money is in, and "Draft — not sent
+  // yet" with Send and Take payment still live invited a second charge
+  // (fall-closing fix #3). A PART-paid draft stays a draft: Patrick still
+  // reviews and sends it, and the send-time re-derive picks up the money.
+  if (currentStatus === "draft") {
+    const total = Number(inv?.total) || 0;
+    return total > 0 && amountPaidOf(inv) >= round2(total - 0.01) ? "paid" : "draft";
+  }
   const paid = amountPaidOf(inv);
   const total = Number(inv?.total) || 0;
   if (paid <= 0) return currentStatus === "partially_paid" ? "sent" : currentStatus;
@@ -361,6 +369,12 @@ function hydrate(inv) {
     // sending or marking paid — this flag is informational, not a
     // status accelerant. Brief C / spec §4.3.2.
     paidOnSiteAtCompletion: inv?.paidOnSiteAtCompletion === true,
+    // Opened for payment ON SITE by signed-in staff (fall-closing fix #3).
+    // Stamped by openForOnSitePayment() only; its presence is what lets a
+    // DRAFT be paid on the customer's pay page. null = never opened.
+    onSitePayment: (inv?.onSitePayment && typeof inv.onSitePayment === "object" && inv.onSitePayment.openedAt)
+      ? { openedAt: String(inv.onSitePayment.openedAt), by: String(inv.onSitePayment.by || "") }
+      : null,
     // Invoice-ready SMS scheduling (Invoice SMS brief, May 2026).
     // customerSmsScheduledAt — when the SMS should fire (set by cascade);
     //   null means "no SMS scheduled" (paid-on-site, opted out, etc.).
@@ -718,6 +732,51 @@ async function update(id, patch) {
 // record. The token is a 32-char hex string (16 random bytes), enough
 // entropy to be unguessable without rate-limiting.
 const cryptoMod = require("node:crypto");
+// Can the customer's pay page take a card for this invoice right now?
+// ONE rule, read by the public invoice read, sdk-config and payment-intent
+// routes, so the page never shows a card form the server would refuse
+// (fall-closing fix #3). Sent / part-paid invoices, as always — plus a
+// DRAFT that signed-in staff opened for payment on site.
+function isPayableOnline(inv) {
+  if (!inv) return false;
+  if (inv.status === "sent" || inv.status === "partially_paid") return true;
+  return inv.status === "draft" && Boolean(inv.onSitePayment?.openedAt);
+}
+
+// The tech taps "Take payment now" with the customer beside them.
+//
+// A draft is Patrick's to review before it goes out, and for a customer
+// who is billed ("Bill later" at sign-off) it stays that way: refused,
+// nothing stamped. A visit signed off "Paid on site" — the new-customer
+// path, pay before the tech leaves — is opened for payment WITHOUT being
+// emailed: status stays draft (so it still sits in Patrick's list), and
+// the stamp lets the pay page take the card. A full payment then flips it
+// to paid through the ledger.
+async function openForOnSitePayment(id, { by = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return { ok: false, status: 404, code: "not_found", errors: ["Invoice not found."] };
+  const inv = records[idx];
+  if (inv.status === "paid") return { ok: false, status: 409, code: "already_paid", errors: ["This invoice is already paid."] };
+  if (inv.status === "void") return { ok: false, status: 409, code: "void", errors: ["This invoice has been voided."] };
+  if (inv.status === "draft" && !inv.onSitePayment?.openedAt) {
+    if (inv.paidOnSiteAtCompletion !== true) {
+      return {
+        ok: false, status: 409, code: "needs_review",
+        errors: ["This visit was signed off as \"Bill later\", so the invoice waits for Patrick's review before the customer can pay it. Nothing was charged."]
+      };
+    }
+    inv.onSitePayment = { openedAt: new Date().toISOString(), by: String(by || "") };
+    inv.history = Array.isArray(inv.history) ? inv.history : [];
+    inv.history.push({ ts: inv.onSitePayment.openedAt, action: "opened_for_on_site_payment", by: String(by || "admin"), note: "Opened for card payment on site (not emailed)." });
+  }
+  if (!inv.paymentToken) inv.paymentToken = cryptoMod.randomBytes(16).toString("hex");
+  inv.updatedAt = new Date().toISOString();
+  records[idx] = inv;
+  await writeAll(records);
+  return { ok: true, invoice: hydrate(inv) };
+}
+
 async function ensurePaymentToken(id) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
@@ -1366,6 +1425,8 @@ module.exports = {
   originalTotal,
   remove: withStoreLock(remove),
   ensurePaymentToken: withStoreLock(ensurePaymentToken),
+  openForOnSitePayment: withStoreLock(openForOnSitePayment),
+  isPayableOnline,
   getByPaymentToken,
   ensurePortalToken: withStoreLock(ensurePortalToken),
   getByPortalToken

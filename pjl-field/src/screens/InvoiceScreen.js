@@ -15,9 +15,11 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator, Alert, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
+  ActivityIndicator, Alert, AppState, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
-import { AuthRequiredError, getInvoice, invoicePaymentLink, recordInvoicePayment, sendInvoice } from '../api';
+import {
+  AuthRequiredError, getInvoice, invoicePaymentLink, recordInvoicePayment, resendInvoice, sendInvoice,
+} from '../api';
 import { money as formatMoney } from '../format';
 import { colors, radius, space, type } from '../theme';
 
@@ -59,6 +61,22 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
 
   useEffect(() => { load(); }, [load]);
 
+  // The customer pays in Safari; when the tech comes back to the app the
+  // invoice must say what happened there. Re-read on every return to the
+  // foreground, quietly — the screen keeps showing what it had until the
+  // fresh copy lands, and a failed re-read leaves it alone.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next !== 'active') return;
+      getInvoice(invoiceId).then(setInvoice).catch(() => {});
+    });
+    return () => sub.remove();
+  }, [invoiceId]);
+
+  // Already out of draft = already emailed at least once, and /send only
+  // accepts drafts. The server's word, not this screen's memory.
+  const alreadySent = (inv) => Boolean(inv?.sentAt) || (inv?.status && inv.status !== 'draft');
+
   const send = () => {
     Alert.alert('Send this invoice?', 'Emails it to the customer now.', [
       { text: 'Cancel', style: 'cancel' },
@@ -67,7 +85,8 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
         onPress: async () => {
           setBusy(true);
           try {
-            await sendInvoice(invoiceId);
+            if (alreadySent(invoice) || sentAt) await resendInvoice(invoiceId);
+            else await sendInvoice(invoiceId);
             setSentAt(new Date());
           } catch (err) {
             Alert.alert("Didn't send", err?.message || 'Nothing was sent. Try again.');
@@ -172,12 +191,19 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
     );
   }
 
-  const already = invoice?.sentAt || sentAt;
-  const paid = invoice?.status === 'paid';
+  const already = alreadySent(invoice) || sentAt;
   // The server derives these; a partial payment leaves the invoice open and
   // the balance is what a second payment should default to.
   const owing = Number(invoice?.balanceDue);
+  // Paid is the server's status — or money covering the whole balance on
+  // a server that has not yet learned to flip a paid draft. Either way a
+  // settled invoice must never offer Send or Take payment again.
+  const paid = invoice?.status === 'paid'
+    || (Number(invoice?.amountPaid) > 0 && Number.isFinite(owing) && owing <= 0.01);
   const partPaid = !paid && Number.isFinite(owing) && owing > 0 && Number(invoice?.amountPaid) > 0;
+  // A draft signed off "Bill later" waits for Patrick's review; the server
+  // refuses to open it for payment, so the button is not offered.
+  const payableHere = !(invoice?.status === 'draft' && invoice?.paidOnSiteAtCompletion !== true);
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -215,9 +241,13 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
               {busy ? 'Working…' : already ? 'Send again' : 'Send invoice'}
             </Text>
           </Pressable>
-          <Pressable style={[styles.button, busy && styles.off]} onPress={takePayment} disabled={busy}>
-            <Text style={styles.buttonText}>Take payment now</Text>
-          </Pressable>
+          {payableHere ? (
+            <Pressable style={[styles.button, busy && styles.off]} onPress={takePayment} disabled={busy}>
+              <Text style={styles.buttonText}>Take payment now</Text>
+            </Pressable>
+          ) : (
+            <Text style={styles.note}>Signed off as “Bill later” — Patrick reviews this one before it goes to the customer.</Text>
+          )}
 
           {/* For money collected some other way. Opening the sheet fills the
               amount with what is still owed, because that is what it almost

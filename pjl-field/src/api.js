@@ -222,6 +222,11 @@ export function isOverdue(invoice, now = Date.now()) {
 export const sendInvoice = (id) =>
   sendJson(`/api/invoices/${encodeURIComponent(id)}/send`, 'POST', {});
 
+// Re-emails an invoice that has already gone out. /send refuses anything
+// that is no longer a draft, so "Send again" must come here.
+export const resendInvoice = (id) =>
+  sendJson(`/api/invoices/${encodeURIComponent(id)}/resend`, 'POST', {});
+
 // The customer's own payment page, minted without sending anything — a
 // draft invoice has no payable link until this runs. The app never talks
 // to Stripe; it opens this URL and the server does the rest.

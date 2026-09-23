@@ -112,8 +112,12 @@ eq("both public payloads expose amountPaid",
 // payments[] carries staff uids and internal notes — never public.
 ok("public payloads do not expose the raw payments array",
   !/payments: inv\.payments/.test(serverJs));
+// The gate moved into one named rule (fall-closing fix #3) so the pay
+// page and the intent route cannot disagree; partially_paid stays payable.
+ok("payment-intent gates on the shared payable rule",
+  /if \(!invoices\.isPayableOnline\(inv\)\)/.test(serverJs));
 ok("payment-intent admits partially_paid",
-  /inv\.status !== "sent" && inv\.status !== "partially_paid"/.test(serverJs));
+  invoices.isPayableOnline({ status: "partially_paid" }) === true && invoices.isPayableOnline({ status: "sent" }) === true);
 
 // ---------------------------------------------------------------------
 // 4. Email template + variable wiring

@@ -11292,6 +11292,9 @@ async function handleApi(req, res, pathname) {
         // raw payments[] carries staff uids and internal notes.
         amountPaid: Number(inv.amountPaid) || 0,
         balanceDue: inv.balanceDue == null ? inv.total : Number(inv.balanceDue),
+        // Whether a card can be taken right now — the page shows the form
+        // only when this is true (fall-closing fix #3).
+        payable: invoices.isPayableOnline(inv),
         currency: inv.currency,
         quickbooksChargeId: inv.quickbooksChargeId,
         eTransferEmail: process.env.ETRANSFER_EMAIL || "info@pjllandservices.com",
@@ -11337,6 +11340,9 @@ async function handleApi(req, res, pathname) {
       if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found or link expired."] });
       const paySettings = await settings.get();
       const phone = paySettings.contactInfo.customerSupportPhone;
+      if (inv.status !== "paid" && inv.status !== "void" && !invoices.isPayableOnline(inv)) {
+        return sendJson(res, 409, { ok: false, code: "not_payable", errors: [`This invoice isn't ready for payment yet. Questions? Call PJL at ${phone}.`] });
+      }
       if (!stripe.isConfigured()) {
         return sendJson(res, 503, { ok: false, errors: [`Card payment isn't available right now. Please use e-Transfer, or call PJL at ${phone} to pay another way.`] });
       }
@@ -11423,7 +11429,9 @@ async function handleApi(req, res, pathname) {
       // status re-derive existed this gate only ever saw "sent", so
       // admitting partially_paid here is what keeps a customer who paid
       // a deposit on site able to pay the rest online.
-      if (inv.status !== "sent" && inv.status !== "partially_paid") {
+      // Same rule the page reads (invoices.isPayableOnline): a draft is
+      // payable only once staff opened it for payment on site.
+      if (!invoices.isPayableOnline(inv)) {
         return sendJson(res, 409, { ok: false, errors: [`This invoice is "${inv.status}" and isn't ready for payment.`] });
       }
 
@@ -14972,8 +14980,14 @@ async function handleApi(req, res, pathname) {
       const session = await requireAdmin(req);
       if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
       const id = decodeURIComponent(invoicePayLinkMatch[1]);
-      const inv = await invoices.ensurePaymentToken(id);
-      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      // A draft opened here is opened for payment ON SITE (fall-closing
+      // fix #3): a "Paid on site" visit becomes payable without being
+      // emailed; a "Bill later" draft is refused so it waits for Patrick's
+      // review — and no link is handed out for a card form that would
+      // only refuse the customer.
+      const opened = await invoices.openForOnSitePayment(id, { by: session?.uid || "admin" });
+      if (!opened.ok) return sendJson(res, opened.status || 409, { ok: false, code: opened.code, errors: opened.errors });
+      const inv = opened.invoice;
       const publicBase = resolvePublicBaseUrl();
       return sendJson(res, 200, {
         ok: true,

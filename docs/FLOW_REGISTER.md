@@ -240,6 +240,16 @@ changed except where named below. Server-side suites boot the real server from a
   lead's CURRENT booking (`workOrders.workOrderForLeadBooking`: envelope id, else an in-progress WO,
   else a finished WO created after this booking; never an earlier booking's finished WO).
   `create()` no longer mints a duplicate id. `scripts/test-wo-current-booking.mjs`; old code: 11 fail.
+- **#3 Take payment on a new invoice.** PATH CHOSEN: a draft becomes payable only when signed-in staff
+  open it for payment on site (`POST /api/invoices/:id/payment-link` → `invoices.openForOnSitePayment`)
+  AND the visit was signed off "Paid on site"; it is stamped `onSitePayment`, NOT emailed, and stays a
+  draft in Patrick's list until the money lands. "Bill later" drafts are refused (409 `needs_review`)
+  and wait for Patrick. One rule, `invoices.isPayableOnline`, gates the pay page (`payable` flag, no
+  card form), sdk-config and payment-intent. A draft paid in full now derives `paid`. App: Send again →
+  `/resend`, re-read on return from Safari, no Take payment on a Bill-later draft.
+  **FLOW-23 IS PASS AND WAS TOUCHED — additively:** the payment-intent gate admits exactly what it did
+  plus a stamped draft; finalize/stripe.js/webhook untouched, handoff §6 invariants hold. Re-walk one
+  real payment. `scripts/test-onsite-payment.mjs`; old code: 13 fail.
 **2026-09-21, last (The System Builder's maths moves out of the page):** Phases 0 and 1 of the
 System Builder work, to Patrick's brief: build a characterization safety net, then extract ONLY
 the calculation engine, leaving persistence, quote creation and proposal-section generation

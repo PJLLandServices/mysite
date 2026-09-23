@@ -331,8 +331,22 @@ function render(inv) {
     return;
   }
 
-  // Status is sent / partially_paid (or draft, edge case) — form section
-  // already visible. The Element's postal pre-fill happens at
+  // Not payable yet (a draft nobody opened for payment on site). The
+  // server would refuse the charge, so never show a card form for it
+  // (fall-closing fix #3). `payable` is absent from an older server's
+  // response — treat absent as payable, the old behaviour.
+  if (inv.payable === false) {
+    $paidBanner.hidden = false;
+    $formSection.hidden = true;
+    const banner = $paidBanner.querySelector("h2");
+    if (banner) banner.textContent = "Not ready for payment yet";
+    document.getElementById("payPaidMessage").textContent =
+      "This invoice hasn't been issued yet. You'll get it by email once it's ready. Questions? Call (905) 960-0181.";
+    return;
+  }
+
+  // Status is sent / partially_paid (or a draft opened for payment on
+  // site) — form section already visible. The Element's postal pre-fill happens at
   // initPaymentForm() via defaultValues, from the same billingPrefill.
 }
 

@@ -103,6 +103,42 @@ export async function bootServer({ port, env = {} } = {}) {
       let json; try { json = JSON.parse(text); } catch { json = { _text: text.slice(0, 400) }; }
       return { status: r.status, body: json, headers: r.headers };
     },
+    // The customer tapping Pay on the Stripe form: the next time the
+    // server re-reads this intent from (stubbed) Stripe, it has succeeded.
+    stripeSucceed(intentId) { fs.appendFileSync(`${OUTBOX}.succeeded`, `${intentId}\n`); },
+    // A customer + property (+ declared zones) + a fall-closing WO on it.
+    async fixture({ zones = 4, email = "cust@example.com", name = "Jane Customer", phone = "9055550100", accountType = "residential", address = "851 Hilton Blvd, Newmarket, ON" } = {}) {
+      const customers = srv.lib("customers.js");
+      const unique = Math.random().toString(36).slice(2, 7);
+      const cust = await customers.create({ name, email: email ? `${unique}.${email}` : "", phone, accountType });
+      const p = await srv.api("POST", "/api/properties", { customerId: cust.id, address });
+      const prop = p.body.property;
+      if (!prop) throw new Error("property create failed: " + JSON.stringify(p.body).slice(0, 300));
+      if (zones) {
+        const zs = Array.from({ length: zones }, (_, i) => ({ number: i + 1, location: `Zone ${i + 1}` }));
+        await srv.api("PATCH", `/api/properties/${prop.id}`, { system: { ...prop.system, zones: zs } });
+      }
+      const w = await srv.api("POST", "/api/work-orders", { type: "fall_closing", propertyId: prop.id });
+      if (!w.body.workOrder) throw new Error("wo create failed: " + JSON.stringify(w.body).slice(0, 300));
+      return { cust, prop, wo: w.body.workOrder };
+    },
+    // PATCH with the If-Match the app would send.
+    async qpatch(id, patch) {
+      const g = await srv.api("GET", `/api/work-orders/${id}`);
+      return srv.api("PATCH", `/api/work-orders/${id}`, patch, { "if-match": g.body.workOrder?.updatedAt || "" });
+    },
+    // Answer every closing gate the way a finished visit would.
+    async prepClosing(id, { extraZones = [], issues = false, paidOnSite = false } = {}) {
+      const wo = (await srv.api("GET", `/api/work-orders/${id}`)).body.workOrder;
+      const zones = [...wo.zones.map((z, i) => ({ ...z, status: "ok",
+        issues: (issues && i === 0) ? [{ type: "broken_head", qty: 2, notes: "cracked rotor by driveway" }] : (z.issues || []) })), ...extraZones];
+      let r = await srv.qpatch(id, { zones });
+      if (r.status !== 200) throw new Error("zones patch " + r.status + " " + JSON.stringify(r.body).slice(0, 300));
+      r = await srv.qpatch(id, { paidOnSite, needsReturnVisit: false, waterShutoffBy: "tech", backFlush: "no",
+        serviceChecklist: { controller_off: true, water_off: true, compressor_disconnected: true, system_winterized: true } });
+      if (r.status !== 200) throw new Error("answers patch " + r.status + " " + JSON.stringify(r.body).slice(0, 300));
+      return r.body.workOrder;
+    },
     async stop() {
       child.kill();
       await new Promise((r) => setTimeout(r, 100));
@@ -113,3 +149,6 @@ export async function bootServer({ port, env = {} } = {}) {
 }
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// The customer's signature as the app sends it.
+export const SIGNATURE = { acknowledgement: true, imageData: "data:image/png;base64," + "A".repeat(200), customerName: "Jane Customer" };

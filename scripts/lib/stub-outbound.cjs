@@ -36,6 +36,7 @@ nodemailer.createTransport = function createStubTransport() {
 // ---- sms + stripe + everything else ----------------------------------
 const realFetch = globalThis.fetch;
 let stripeSeq = 0;
+const intents = new Map();
 function formToObject(body) {
   const out = {};
   if (!body) return out;
@@ -53,16 +54,30 @@ globalThis.fetch = async function stubFetch(input, init = {}) {
   }
   if (url.hostname === "api.stripe.com") {
     const form = formToObject(init.body);
-    log({ channel: "stripe", method: init.method || "GET", path: url.pathname, form });
-    stripeSeq += 1;
-    const id = url.pathname.match(/payment_intents\/(pi_[A-Za-z0-9_]+)/)?.[1] || `pi_stub_${stripeSeq}`;
-    const obj = {
-      id, object: "payment_intent", status: "requires_payment_method",
-      amount: Number(form.amount || 0), currency: form.currency || "cad",
-      client_secret: `${id}_secret_stub`, metadata: {}
-    };
-    for (const [k, v] of Object.entries(form)) {
-      const m = k.match(/^metadata\[(.+)\]$/); if (m) obj.metadata[m[1]] = v;
+    const method = init.method || "GET";
+    log({ channel: "stripe", method, path: url.pathname, form });
+    const existingId = url.pathname.match(/payment_intents\/(pi_[A-Za-z0-9_]+)/)?.[1] || null;
+    let obj = existingId ? intents.get(existingId) : null;
+    if (!obj) {
+      stripeSeq += 1;
+      const id = existingId || `pi_stub_${stripeSeq}`;
+      obj = { id, object: "payment_intent", status: "requires_payment_method",
+        amount: Number(form.amount || 0), currency: form.currency || "cad",
+        client_secret: `${id}_secret_stub`, metadata: {} };
+      for (const [k, v] of Object.entries(form)) {
+        const m = k.match(/^metadata\[(.+)\]$/); if (m) obj.metadata[m[1]] = v;
+      }
+      intents.set(id, obj);
+    }
+    if (/\/cancel$/.test(url.pathname)) obj.status = "canceled";
+    // A test "confirms" an intent (the customer tapping Pay) by listing its
+    // id in $PJL_STUB_OUTBOX.succeeded — the way Stripe would report it.
+    let succeeded = [];
+    try { succeeded = fs.readFileSync(`${OUTBOX}.succeeded`, "utf8").split("\n"); } catch {}
+    if (succeeded.includes(obj.id) && obj.status !== "canceled") {
+      obj.status = "succeeded";
+      obj.latest_charge = { id: `ch_${obj.id}`, status: "succeeded",
+        payment_method_details: { card: { brand: "visa", last4: "4242", checks: {} } } };
     }
     return new Response(JSON.stringify(obj), { status: 200, headers: { "content-type": "application/json" } });
   }
