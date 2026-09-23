@@ -162,12 +162,42 @@ engine extraction.
 - Do not import `server/server.js` from the test. It boots an HTTP server on
   import and the test will hang.
 
-## Decisions still open
+## Decisions — settled 2026-09-23
 
-1. **Does the split tooltip get corrected now, or as part of Phase 1?** It is
-   wrong today and a one-line fix. Recommendation: **now, separately**, so a
-   live incorrect instruction is not waiting on a feature.
-2. Does the registry also serve the admin app (`server/app-dist/`), or is it
-   builder-only? Builder-only is assumed.
-3. Printable help (PRD open question 2) would change the panel's markup;
-   worth deciding before Phase 2 rather than retrofitting.
+**1. The split tooltip is corrected in this PR**, separately from the
+feature, so a live incorrect instruction is not waiting on a build.
+
+**2. Registry is builder-only.** It does not serve `server/app-dist/`.
+No shared plumbing, no cross-package abstraction to design around.
+
+**3. No print view.** *"Everything that I'll do will be on a desktop or
+device."* The panel's markup is screen-only; no print stylesheet, and
+nothing in the layout needs to survive being paginated.
+
+**4. A new split keeps defaulting to two stations.** No behaviour change.
+The combine control (`mpSetShareStation`) already exists and is correct.
+**The entire remaining job is documentation and findability.**
+
+### Synonyms the search must already carry
+
+The real transcript, not guesses. Each of these is a word Patrick
+actually used for the thing on the left:
+
+| Entry | Must also match |
+|---|---|
+| shared station | "together", **"consecutively"**, "one station", "two valves one station", "wired together", "same terminal" |
+| zone | "zine" |
+| valve | "vowel", "vowels" |
+| split | "across the driveway", "two boxes", "cut" |
+
+**"Consecutively" is the load-bearing one.** Patrick used it to mean
+*simultaneously* — the opposite of its irrigation meaning. A search that
+reasons from the dictionary sends him to the wrong entry; a search built
+from this table sends him to the right one. **When a word here turns out
+to be wrong, the fix is a row in this table, not a re-tuned algorithm** —
+which is the reason for an explicit map rather than fuzzy matching.
+
+### Still genuinely open
+
+Nothing blocking. The build can start at Phase 1 whenever Patrick says
+go.

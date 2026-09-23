@@ -130,13 +130,48 @@ names the thing it is most often confused with.
 - Multiple users or permissions.
 - Translations.
 
-## Open questions for Patrick
+## Decisions — answered by Patrick, 2026-09-23
 
-1. **Does this cover the whole admin site eventually, or just the System
-   Builder?** Version one is the builder only; the structure should not
-   prevent growing.
-2. **Should the help centre be printable**, so a sub or a helper can carry a
-   page?
-3. **Should a new split default to one station or two?** The current default
-   is two. Today suggests that surprised you. Changing the default is a
-   separate decision from documenting it, and it is yours.
+**1. Scope: the System Builder only.** Not the CRM, invoicing or work
+orders. Build the structure so it *could* grow later, but do not spend
+anything on that now.
+
+**2. Not printable.** *"Everything that I'll do will be on a desktop or
+device."* This removes the printable-markup constraint from the panel
+design entirely — screen only.
+
+**3. A new split keeps defaulting to TWO separate stations.** The current
+behaviour is correct and does not change. What matters is that the
+**ability to combine them afterwards stays available and is findable** —
+that is the part nobody could discover, not the default.
+
+Patrick's words were *"combine them so that they run consecutively with
+each other."* Checked, because *consecutively* and *together* are
+different things in irrigation and would be built differently. He
+confirmed: **at the same time** — one terminal, both valves opening
+together, flow adding up. That is what the existing control does, so
+**nothing new is built.** Running two stations back-to-back on a
+schedule was considered and is **not** wanted.
+
+**This is worth recording for the search index, not just the decision
+log.** Patrick reached for *"consecutively"* to mean *"together"*. The
+plain-words search has to find the shared-station entry from that word,
+or it fails him in exactly the way requirement R2 exists to prevent.
+
+So question three costs **no code change**: the default is right, the
+combine control already exists (*"wire both valves to one station"*).
+**Both simply need to be documented, which is this project's whole job.**
+The failure this morning was never the default — it was that the tool
+said the opposite of what it did, and the combine control was invisible
+until somebody went looking.
+
+### Consequences for the build
+
+- The **"what splitting does"** concept entry must lead with **"a new
+  split gives you two separate stations"** — stated plainly, because that
+  is the thing that surprised the owner of the software.
+- The **combine control** needs an entry of its own, findable by plain
+  words, not only by having the split already selected.
+- No printable stylesheet, no print view (decision 2).
+- Registry stays builder-scoped; no shared-with-admin-app plumbing
+  (decision 1).
