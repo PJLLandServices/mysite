@@ -357,6 +357,50 @@ own design blob and its material list, and correcting a split changes the statio
 plus the controller part and BOM total IF the new count crosses a band, which at 11 → 12 it does
 not.
 
+**2026-09-23 (FLOW-31 — integrity gaps left after the pressure-test fixes, PJL-100, branch
+`pjl-100-integrity-gaps`):** an audit of main against the must-fix briefs found each fix meets its
+"done when" and left seven should-fix gaps, each reproduced on main through the real routes. One
+commit each; every test boots the real server from a temp copy (`scripts/lib/field-server.mjs`,
+email/SMS/Stripe stubbed) and failed on its parent first.
+- **#7 A no-charge stop is finished, not broken.** Fix #8 creates no invoice for a $0 closing, but the
+  work-order list's "Needs invoice" filter listed every one forever, the tech page offered "Generate
+  invoice now", that button (`POST …/create-invoice`) drafted a $0 invoice and `/send` then **emailed
+  the customer a $0 invoice**. Now: both work-order GETs carry a derived `noCharge` (from the service
+  record, via `isNoChargeServiceRecord`); create-invoice refuses 409 `no_charge`; send/resend refuse any
+  $0 invoice; the filter and the banner skip them (tech cache v52).
+  `scripts/test-no-charge-recovery.mjs`. Old code: 201 $0 draft, 2 $0 emails.
+- **#1 Photos.** The build "mark task done" route (`POST …/tasks-done`) numbered and wrote back its
+  photos from a stale read outside the per-WO photo lock; racing an upload it lost one photo 10/10.
+  Now under `fieldPhotoUploads.run(woId)` like upload and delete. `scripts/test-photo-races.mjs`.
+  (The audit's upload-vs-delete finding was a lib-level simulation; main's delete is already locked.)
+- **#4 + #5 Findings copied once, nothing erased, failures retried.** Two overlapping copies (bulk ×2,
+  per-issue + bulk, emergency + bulk) put the finding on the property twice (6/6, 6/6, 4/4); the routes
+  wrote back zones read before the copy, erasing a zone edit saved meanwhile (6/6); a failed copy was
+  never retried. Now one rule, `lib/wo-findings.js` `copyFindingsForward` — serialized per WO, stamps
+  via the locked `workOrders.stampDeferredIds` on the fresh record — used by all three routes and by a
+  fall closing's completion cascade (which copies anything still unstamped).
+  `scripts/test-defer-races.mjs`.
+- **#2 Finish retry after a crashed completion.** If the first Finish completed the WO but its cascade
+  never ran (restart or throw) and the response was lost, the retry answered "done" with 0 invoices,
+  0 service records, 0 emails. It now runs the (idempotent) cascade under the same per-WO lock.
+  `scripts/test-finish-after-crash.mjs`.
+- **#3 Finish's first call can't hang.** `api.js` `getJson` (so `getWorkOrder`, Finish's re-read) goes
+  through `fetchWithTimeout` (30 s) — a stall is the app's `TimeoutError`, never "signed out". Ships
+  over the air. `scripts/test-api-timeouts.mjs`.
+- **#6 Nobody-home email.** The bypass email's "your invoice will follow separately" is included only
+  when there is an invoice. Section F of `test-no-charge-recovery.mjs`.
+- **Nits.** The desk's "Run completion cascade" takes the per-WO cascade lock (racing Finish it doubled
+  the invoice 5/5); a client-sent `deferredId` the server never wrote is dropped; a re-sent signature
+  is a no-op only if the signer matches too. `scripts/test-integrity-nits.mjs`.
+- **Left alone, deliberately:** the properties backfill writing from an unlocked read (1/40, only
+  while a legacy backfill is due — a fix needs re-entrant locking); no watchdog on
+  `atomic-json.serialize` (releasing a held store lock would reintroduce the lost-write race); a
+  corrupt store still surfaces as each route's 400/500 (nothing is overwritten).
+- **Acceptance walk (Patrick):** complete a no-charge closing with nobody home — the email doesn't
+  promise an invoice, the WO is not under "Needs invoice", the tech page shows no "Generate invoice
+  now". Flag a finding, tap Finish twice on poor signal — the property lists it once. FLOW-31 stays
+  UNMAPPED/awaiting device acceptance; this entry claims no walkthrough.
+
 **2026-09-22 (Fall-closing pressure-test fixes, branch `fix/fall-closing-pressure-test`):** the eight
 MUST-FIX items from the fall-closing pressure test, one commit each. No PASS flow's route or wording
 changed except where named below. Server-side suites boot the real server from a temp copy through
