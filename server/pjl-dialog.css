@@ -1,7 +1,24 @@
 /* PJL Dialog — shared branded replacement for alert()/confirm()/prompt().
    Visual language matches .pjl-bulk-modal-* in crm.css (same panel shape,
    fonts, colors, mobile bottom-sheet behavior) so it reads as one
-   consistent system rather than a fourth pattern. */
+   consistent system rather than a fourth pattern.
+
+   EVERY --pjl-* REFERENCE BELOW CARRIES A FALLBACK, AND MUST.
+
+   The palette itself lives in crm.css. This component is also loaded on
+   four pages that do NOT load crm.css — sitebuilder.html, appointment.html,
+   smart-controller-photos.html and the customer portal — because they sit
+   outside the crm.css wiring and were given the dialog directly. On those
+   pages every var(--pjl-…) resolved to nothing, so the panel's background
+   was never painted: the dialog rendered as bare text over the page behind
+   it, with the backdrop dimming correctly because that one value is a
+   literal. It looked exactly as broken as it was.
+
+   Fallbacks rather than a :root block here, so crm.css stays the single
+   authority wherever it IS loaded — a :root in this file would win or lose
+   by load order, which is the kind of thing that differs per page and gets
+   found by a customer. scripts/test-pjl-dialog.mjs asserts every reference
+   carries one. */
 
 .pjl-dialog-backdrop {
   position: fixed;
@@ -21,7 +38,7 @@
 .pjl-dialog-panel {
   max-width: 480px;
   width: 100%;
-  background: var(--pjl-cream);
+  background: var(--pjl-cream, #FAFAF5);
   border-radius: 8px;
   padding: 24px;
   box-shadow: 0 12px 48px rgba(0, 0, 0, 0.35);
@@ -37,7 +54,7 @@
   flex: 0 0 auto;
   width: 26px;
   height: 26px;
-  color: var(--pjl-text-mid);
+  color: var(--pjl-text-mid, #4A4A4A);
 }
 .pjl-dialog-panel-destructive .pjl-dialog-icon,
 .pjl-dialog-icon-warning,
@@ -45,7 +62,7 @@
   color: #D32F2F;
 }
 .pjl-dialog-icon-send {
-  color: var(--pjl-green);
+  color: var(--pjl-green, #1B4D2E);
 }
 .pjl-dialog-icon-info {
   color: #2C6FAD;
@@ -56,13 +73,13 @@
   font-size: 28px;
   text-transform: uppercase;
   letter-spacing: -0.01em;
-  color: var(--pjl-dark);
+  color: var(--pjl-dark, #0F1F14);
 }
 .pjl-dialog-body {
   margin: 0 0 18px;
   font-size: 15px;
   line-height: 1.55;
-  color: var(--pjl-text);
+  color: var(--pjl-text, #1A1A1A);
   /* Honor newlines so callers can structure intro + detail without
      composing separate <p> elements. */
   white-space: pre-line;
@@ -73,16 +90,16 @@
   box-sizing: border-box;
   margin: -6px 0 18px;
   padding: 10px 12px;
-  border: 1.5px solid var(--pjl-border);
+  border: 1.5px solid var(--pjl-border, #E2E0D4);
   border-radius: 6px;
   font-size: 16px;
   font-family: "DM Sans", sans-serif;
   background: #FFFFFF;
-  color: var(--pjl-text);
+  color: var(--pjl-text, #1A1A1A);
 }
 .pjl-dialog-input:focus {
   outline: none;
-  border-color: var(--pjl-green);
+  border-color: var(--pjl-green, #1B4D2E);
   box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.06);
 }
 .pjl-dialog-warning {
@@ -99,7 +116,7 @@
   display: block;
   font-size: 13px;
   font-weight: 600;
-  color: var(--pjl-text-mid);
+  color: var(--pjl-text-mid, #4A4A4A);
   margin: 0 0 6px;
 }
 .pjl-dialog-typed-input {
@@ -108,17 +125,17 @@
   box-sizing: border-box;
   margin: 0 0 18px;
   padding: 10px 12px;
-  border: 1.5px solid var(--pjl-border);
+  border: 1.5px solid var(--pjl-border, #E2E0D4);
   border-radius: 6px;
   font-size: 16px;
   font-family: "DM Sans", sans-serif;
   background: #FFFFFF;
-  color: var(--pjl-text);
+  color: var(--pjl-text, #1A1A1A);
 }
 .pjl-dialog-typed-input:focus {
   outline: none;
-  border-color: var(--pjl-amber);
-  box-shadow: 0 0 0 3px var(--pjl-amber-pale);
+  border-color: var(--pjl-amber, #E07B24);
+  box-shadow: 0 0 0 3px var(--pjl-amber-pale, #FDF0E4);
 }
 .pjl-dialog-actions {
   display: flex;
@@ -142,21 +159,21 @@
 }
 .pjl-dialog-btn-secondary {
   background: #FFFFFF;
-  border-color: var(--pjl-border);
-  color: var(--pjl-text);
+  border-color: var(--pjl-border, #E2E0D4);
+  color: var(--pjl-text, #1A1A1A);
 }
 .pjl-dialog-btn-secondary:hover:not(:disabled) {
-  background: var(--pjl-cream);
-  border-color: var(--pjl-text-muted);
+  background: var(--pjl-cream, #FAFAF5);
+  border-color: var(--pjl-text-muted, #6B6B63);
 }
 .pjl-dialog-btn-primary {
-  background: var(--pjl-green);
-  border-color: var(--pjl-green);
+  background: var(--pjl-green, #1B4D2E);
+  border-color: var(--pjl-green, #1B4D2E);
   color: #FFFFFF;
 }
 .pjl-dialog-btn-primary:hover:not(:disabled) {
-  background: var(--pjl-green-mid);
-  border-color: var(--pjl-green-mid);
+  background: var(--pjl-green-mid, #2D6A42);
+  border-color: var(--pjl-green-mid, #2D6A42);
 }
 .pjl-dialog-btn-destructive {
   background: #D32F2F;

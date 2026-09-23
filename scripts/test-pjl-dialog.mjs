@@ -164,6 +164,34 @@ function check(label, cond) {
   await resultPromise;
 }
 
+// The palette lives in crm.css, and four pages that load this dialog do NOT
+// load crm.css — sitebuilder, appointment, smart-controller-photos and the
+// customer portal. This host page has no crm.css either, which is the point:
+// it is those pages. Without fallbacks the panel's background never painted
+// and the dialog rendered as bare text over the page behind it.
+{
+  const resultPromise = page.evaluate(() => window.pjlDialog.alert('Painted?', { title: 'Palette' }));
+  await page.waitForSelector('.pjl-dialog-panel');
+  const seen = await page.evaluate(() => {
+    const cs = getComputedStyle(document.querySelector('.pjl-dialog-panel'));
+    const title = getComputedStyle(document.querySelector('.pjl-dialog-title'));
+    return { bg: cs.backgroundColor, color: title.color };
+  });
+  const opaque = (c) => c && c !== 'transparent' && !/rgba\(\s*0,\s*0,\s*0,\s*0\s*\)/.test(c);
+  check(`the panel has an opaque background with no crm.css (${seen.bg})`, opaque(seen.bg));
+  check('the panel background is the cream from the palette',
+        seen.bg === 'rgb(250, 250, 245)');
+  await page.click(".pjl-dialog-btn-primary");
+  await resultPromise;
+}
+
+// And the rule that keeps it that way: no --pjl-* reference without one.
+{
+  const bare = [...cssSrc.matchAll(/var\((--pjl-[a-z-]+)\)/g)].map((m) => m[1]);
+  check(`every --pjl-* reference carries a fallback${bare.length ? ' — bare: ' + [...new Set(bare)].join(', ') : ''}`,
+        bare.length === 0);
+}
+
 check('no uncaught page errors during the run', errors.length === 0);
 if (errors.length) errors.forEach((e) => console.log('  page error:', e));
 
