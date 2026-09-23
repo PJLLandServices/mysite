@@ -450,8 +450,19 @@ console.log(`\nF. Saving a design against a linked quote`);
 console.log(`\nI. What the Save button writes on a job whose quote is accepted`);
 {
   const browser = await chromium.launch(chromiumLaunchOpts());
-  for (const mlStatus of ["draft", "purchased"]) {
+  // 2026-09-23: saving used to rewrite the linked list EVERY time, because
+  // the payload's `notes` carries a timestamp. Now the write is skipped
+  // when the materials already match. Both axes are covered: list status
+  // (draft / purchased) × whether the stored lines already match.
+  for (const mlStatus of ["draft", "purchased"])
+  // "qtyOnly" exists because "differs" also DROPS a line, so a comparison
+  // that looked at SKUs and ignored quantity still passed every assertion.
+  // Patrick asked for quantity to be compared; this is the case that
+  // actually holds it to that.
+  for (const stored of ["matches", "differs", "qtyOnly"]) {
     const writes = [];
+    let seeded = null;            // lineItems the mock list holds
+    let confirmed = false;        // did the page ask before changing it?
     const srv = http.createServer((req, res) => {
       const u = new URL(req.url, "http://x");
       let body = "";
@@ -467,7 +478,7 @@ console.log(`\nI. What the Save button writes on a job whose quote is accepted`)
         if (u.pathname === "/api/admin/quote-folder")
           return json({ ok: true, quotes: [{ id: "Q-2026-0088", status: "accepted", lineItems: [] }] });
         if (u.pathname === "/api/material-lists" && req.method === "GET")
-          return json({ ok: true, lists: [{ id: "ML-1", status: mlStatus }] });
+          return json({ ok: true, lists: [{ id: "ML-1", status: mlStatus, lineItems: seeded || [] }] });
         if (u.pathname === "/api/material-lists") return json({ ok: true, list: { id: "ML-2" } });
         return json({ ok: true, quote: { id: "Q-2026-0088", total: 0 }, list: { id: "ML-1" } });
       });
@@ -477,30 +488,100 @@ console.log(`\nI. What the Save button writes on a job whose quote is accepted`)
       const page = await browser.newPage();
       await page.goto(`http://127.0.0.1:${srv.address().port}/`, { waitUntil: "load" });
       await page.waitForFunction("appReady === true", null, { timeout: 30000 });
+      // Ask the page what it WOULD write, and seed the stored list with
+      // exactly that (or with a deliberate difference). Hand-writing the
+      // expected catalog here would test the fixture, not the comparison.
+      const catalog = await page.evaluate(({ d, parts }) => {
+        PARTS_MAP = parts; restoreState(JSON.parse(JSON.stringify(d))); compute();
+        return bomFinalLines(PARTS_MAP).catalog;
+      }, { d: v8WithSplits, parts });
+      check(`[${mlStatus}/${stored}] the design generates materials to compare`, catalog.length > 0, String(catalog.length));
+      seeded = stored === "matches"
+        // Seeded with real per-line metadata: a rewrite would reset status
+        // to "need", drop poId and release frozenPriceCents, so skipping
+        // the write is what preserves them.
+        ? catalog.map((l) => ({ ...l, id: "ln_" + l.sku, status: "received", poId: "PO-1", frozenPriceCents: 1234 }))
+        : stored === "qtyOnly"
+          // SAME set of SKUs, one quantity different. Nothing else changes.
+          ? catalog.map((l, i) => (i === 0 ? { ...l, qty: l.qty + 7 } : { ...l }))
+          : catalog.slice(1).map((l) => ({ ...l, qty: l.qty + 1 }));
+      if (stored === "qtyOnly") {
+        const sameSkus = JSON.stringify(catalog.map((l) => l.sku).sort()) === JSON.stringify(seeded.map((l) => l.sku).sort());
+        check(`[ml ${mlStatus}/qtyOnly] the fixture differs by QUANTITY ALONE`, sameSkus && catalog.length === seeded.length);
+      }
+
       await page.evaluate(async ({ d, parts }) => {
         PARTS_MAP = parts; restoreState(JSON.parse(JSON.stringify(d))); compute();
         linkedProject = { id: "PROJ-TEST", name: "Test", customerName: "", customerEmail: "", propertyId: null };
         linkedQuoteId = "Q-2026-0088";
+        // Saving now asks before CHANGING a list. Answer yes, so the
+        // "differs" case still exercises the real write path.
+        window.__confirmed = false;
+        window.pjlDialog = window.pjlDialog || {};
+        pjlDialog.confirm = async () => { window.__confirmed = true; return true; };
+        pjlDialog.alert = async () => { };
         await saveDesign();
       }, { d: v8WithSplits, parts });
+      confirmed = await page.evaluate(() => window.__confirmed === true);
       const paths = writes.map((w) => `${w.m} ${w.p}`);
-      console.log(`     material list ${mlStatus}: ${paths.join(" | ") || "nothing"}`);
-      check(`[ml ${mlStatus}] the design itself is saved`,
+      const tag = `[ml ${mlStatus}/${stored}]`;
+      console.log(`     material list ${mlStatus}, stored ${stored}: ${paths.join(" | ") || "nothing"}`);
+
+      // THE DESIGN ALWAYS SAVES. That is the whole point of the button and
+      // none of this may interfere with it.
+      check(`${tag} the design itself is saved`,
             paths.includes("PATCH /api/projects/PROJ-TEST"), paths.join(" | "));
-      check(`[ml ${mlStatus}] the ACCEPTED quote is NOT written to`,
+      check(`${tag} the ACCEPTED quote is NOT written to`,
             !paths.some((p) => /\/proposal$/.test(p)), paths.join(" | "));
-      if (mlStatus === "draft") {
-        check("[ml draft] the DRAFT material list IS rewritten in place",
-              paths.includes("PATCH /api/material-lists/ML-1"), paths.join(" | "));
-      } else {
-        check("[ml purchased] a PURCHASED material list is never clobbered",
-              !paths.some((p) => /PATCH \/api\/material-lists\//.test(p)), paths.join(" | "));
-        check("[ml purchased] a NEW list is created alongside it instead",
-              paths.includes("POST /api/material-lists"), paths.join(" | "));
-      }
-      check(`[ml ${mlStatus}] nothing else is written — no invoice, task, work order or customer record`,
+      check(`${tag} nothing else is written — no invoice, task, work order or customer record`,
             writes.every((w) => /^\/api\/(projects\/|material-lists)/.test(w.p)),
             paths.join(" | "));
+
+      const touchedML = paths.some((p) => /\/api\/material-lists/.test(p));
+      if (stored === "matches") {
+        // Patrick, 2026-09-23: for the Trees A/B change the materials are
+        // identical, and NEITHER a draft nor a purchased list may be
+        // rewritten OR duplicated.
+        check(`${tag} the material list is not written to at all`, !touchedML, paths.join(" | "));
+        check(`${tag} ...not rewritten in place`,
+              !paths.some((p) => /PATCH \/api\/material-lists\//.test(p)), paths.join(" | "));
+        check(`${tag} ...and not duplicated`,
+              !paths.includes("POST /api/material-lists"), paths.join(" | "));
+        check(`${tag} and it does not ask about a change it is not making`, !confirmed);
+      } else {
+        // A REAL difference keeps the old status-dependent behaviour.
+        check(`${tag} the difference is shown before anything is written`, confirmed);
+
+        // WHAT THE PAYLOAD ACTUALLY CARRIES. Patrick asked for the SKU,
+        // quantity AND pricing fields to be compared. Today the payload
+        // carries no price at all — a material list resolves price live
+        // from parts.json — so there is no price to compare. That is
+        // asserted rather than assumed: mlWrittenFields() derives the
+        // compared fields FROM the payload, so the day a price field is
+        // added it is compared automatically, and this assertion fails to
+        // say the shape changed.
+        const w = writes.find((x) => /\/api\/material-lists/.test(x.p));
+        if (w) {
+          let sent = null;
+          try { sent = JSON.parse(w.body); } catch { /* reported below */ }
+          const lines = sent && Array.isArray(sent.lineItems) ? sent.lineItems : null;
+          check(`${tag} the payload sends lineItems`, !!lines && lines.length > 0);
+          if (lines) {
+            const keys = [...new Set(lines.flatMap((l) => Object.keys(l)))].sort();
+            check(`${tag} each line carries exactly sku + qty — no price field to compare`,
+                  JSON.stringify(keys) === JSON.stringify(["qty", "sku"]), keys.join(","));
+          }
+        }
+        if (mlStatus === "draft") {
+          check(`${tag} the DRAFT material list IS rewritten in place`,
+                paths.includes("PATCH /api/material-lists/ML-1"), paths.join(" | "));
+        } else {
+          check(`${tag} a PURCHASED material list is never clobbered`,
+                !paths.some((p) => /PATCH \/api\/material-lists\//.test(p)), paths.join(" | "));
+          check(`${tag} a NEW list is created alongside it instead`,
+                paths.includes("POST /api/material-lists"), paths.join(" | "));
+        }
+      }
     } finally { srv.close(); }
   }
   await browser.close();
