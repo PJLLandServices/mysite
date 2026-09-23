@@ -28,7 +28,33 @@ const issue = (message, code) => Object.assign(new Error(message), { code });
 // changed two different ways is a conflict, and `prefer` ('mine' |
 // 'theirs') is the tech's answer to it.
 const isObject = v => !!v && typeof v === 'object' && !Array.isArray(v);
-const isZoneList = v => Array.isArray(v) && v.every(x => isObject(x) && x.number != null);
+// Lists merged element by element: zone rows (keyed by kind + number) and
+// anything whose elements carry a string id (a zone's `issues`).
+//
+// Round 2: valve-box / controller rows all carry number 0, so keying on
+// `number` alone collapsed them into one and the merge dropped rows. A
+// row's key is its kind and number, plus its position among rows with the
+// same kind and number — unique, and stable while the list is edited.
+const isKeyedList = v => Array.isArray(v) && v.every(x => isObject(x) && (x.number != null || typeof x.id === 'string'));
+const listKeys = list => {
+  const seen = new Map();
+  return (list || []).map((x) => {
+    const base = typeof x.id === 'string' && x.number == null
+      ? `id:${x.id}`
+      : `${x.kind || 'zone'}:${x.number}`;
+    const n = seen.get(base) || 0;
+    seen.set(base, n + 1);
+    return n ? `${base}#${n}` : base;
+  });
+};
+const keyLabel = k => (k.startsWith('zone:') ? `zone ${k.slice(5)}` : k.startsWith('id:') ? `finding ${k.slice(3)}` : k.replace(':', ' '));
+// The server's own bookkeeping stamp (fix #5: a finding copied to the
+// property). It is never an office edit, and never a reason to conflict.
+const withoutStamp = v => {
+  if (Array.isArray(v)) return v.map(withoutStamp);
+  if (isObject(v)) { const { deferredId, ...rest } = v; return Object.fromEntries(Object.entries(rest).map(([k, x]) => [k, withoutStamp(x)])); }
+  return v;
+};
 function merge3(base, mine, theirs, prefer, path, conflicts) {
   if (equal(mine, theirs)) return mine;
   if (equal(mine, base)) return theirs;
@@ -42,16 +68,20 @@ function merge3(base, mine, theirs, prefer, path, conflicts) {
     }
     return out;
   }
-  if (isZoneList(mine) && isZoneList(theirs) && (base == null || isZoneList(base))) {
-    const byNumber = list => new Map((list || []).map(z => [String(z.number), z]));
-    const B = byNumber(base), M = byNumber(mine), T = byNumber(theirs);
+  if (isKeyedList(mine) && isKeyedList(theirs) && (base == null || isKeyedList(base))) {
+    const byKey = list => { const keys = listKeys(list); return new Map((list || []).map((x, i) => [keys[i], x])); };
+    const B = byKey(base), M = byKey(mine), T = byKey(theirs);
+    // The server's order, then anything only the phone has, in its order.
     const out = [];
-    for (const n of new Set([...T.keys(), ...M.keys()])) {
-      const v = merge3(B.get(n), M.get(n), T.get(n), prefer, [...path, `zone ${n}`], conflicts);
+    for (const k of new Set([...T.keys(), ...M.keys()])) {
+      const v = merge3(B.get(k), M.get(k), T.get(k), prefer, [...path, keyLabel(k)], conflicts);
       if (v !== undefined) out.push(v);
     }
-    return out.sort((a, b) => Number(a.number) - Number(b.number));
+    return out;
   }
+  // The office's only change was the server's stamp: the phone's edit
+  // (including removing the row) stands.
+  if (equal(withoutStamp(theirs), withoutStamp(base))) return mine;
   if (prefer === 'mine') return mine;
   if (prefer === 'theirs') return theirs;
   conflicts.push(path.join(' › '));

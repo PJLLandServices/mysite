@@ -1755,7 +1755,20 @@ async function update(id, patch, { ifMatch = null } = {}) {
   // new entry. The lib enforces append-only-shape; the route exposes no
   // direct PATCH of this field, only the snapshot endpoint.
   if (Array.isArray(patch.reportSnapshots)) next.reportSnapshots = patch.reportSnapshots;
-  if (Array.isArray(patch.zones)) next.zones = patch.zones.map(hydrateZone);
+  if (Array.isArray(patch.zones)) {
+    next.zones = patch.zones.map(hydrateZone);
+    // A finding's deferredId is the server's record that it was already
+    // copied to the property (fall-closing fix #5). A client that saves the
+    // zones from a copy read before the stamp must not erase it — the next
+    // defer would copy the same finding to the property twice.
+    const stamped = new Map();
+    for (const z of current.zones || []) for (const i of z.issues || []) if (i.id && i.deferredId) stamped.set(i.id, i.deferredId);
+    if (stamped.size) {
+      for (const z of next.zones) for (const i of z.issues || []) {
+        if (!i.deferredId && stamped.has(i.id)) i.deferredId = stamped.get(i.id);
+      }
+    }
+  }
   if (Array.isArray(patch.additionalRepairs)) next.additionalRepairs = patch.additionalRepairs;
   if (Array.isArray(patch.lineItems)) next.lineItems = patch.lineItems;
   // Photos — wholesale replace when sent. Both the upload endpoint

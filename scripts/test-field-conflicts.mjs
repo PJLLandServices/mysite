@@ -30,9 +30,10 @@ let T = 0;
 const tick = () => new Date(Date.UTC(2026, 9, 1, 12, 0, T++)).toISOString();
 // The server's zone hydration: default fields and issue ids are added.
 const hydrateZone = (z) => ({
-  number: z.number || 0, kind: "zone", location: z.location || z.label || "", sprinklerTypes: z.sprinklerTypes || [],
+  number: z.number || 0, kind: z.kind || "zone", location: z.location || z.label || "", sprinklerTypes: z.sprinklerTypes || [],
   coverage: z.coverage || [], status: z.status || "", notes: z.notes || "", checks: { heads: false, leaks: false, ...(z.checks || {}) },
-  issues: (z.issues || []).map((i) => ({ id: i.id || "iss_srv", type: i.type, subtype: i.subtype || "", qty: i.qty || 1, notes: i.notes || "" }))
+  issues: (z.issues || []).map((i) => ({ id: i.id || "iss_srv", type: i.type, subtype: i.subtype || "", qty: i.qty || 1, notes: i.notes || "",
+    ...(i.deferredId ? { deferredId: i.deferredId } : {}) }))   // the real hydrateIssue keeps the fix-#5 stamp
 });
 
 function world() {
@@ -193,6 +194,46 @@ await test("a 409 version_conflict from a raced save retries on its own (round 2
   await q.flush();                      // the next background pass, NOT a manual retry
   assert.equal(q.status(k).pending, 0, "the edit synced without the tech doing anything");
   assert.equal(S.wo.zones[1].status, "working_well");
+});
+
+await test("valve-box and controller rows (number 0) survive a merge (round 2)", async () => {
+  const { S, load } = world();
+  S.wo.zones = [...S.wo.zones, hydrateZone({ number: 0, kind: "valveBox", location: "VB front" }), hydrateZone({ number: 0, kind: "controller", location: "Garage CTL" }),
+    hydrateZone({ number: 0, kind: "valveBox", location: "VB back" })];
+  const f = load(); const { queue: q, key: k } = await f.openFieldWorkOrder("WO-1");
+  S.online = false;
+  q.patch(k, { zones: q.view(k).zones.map((z) => (z.number === 2 ? { ...z, status: "working_well" } : z.location === "VB back" ? { ...z, notes: "lid cracked" } : z)) });
+  S.officeWo({ zones: S.wo.zones.map((z) => (z.number === 4 ? { ...z, location: "Office rename" } : z)) });
+  S.online = true;
+  assert.equal(await finish(f, q, k), "OK");
+  assert.equal(S.wo.zones.length, 8, "no row dropped");
+  assert.deepEqual(S.wo.zones.filter((z) => z.number === 0).map((z) => `${z.kind}:${z.location}:${z.notes}`),
+    ["valveBox:VB front:", "controller:Garage CTL:", "valveBox:VB back:lid cracked"]);
+  assert.equal(S.wo.zones[1].status, "working_well"); assert.equal(S.wo.zones[3].location, "Office rename");
+});
+
+await test("the server's defer stamp is not an office conflict, and survives (round 2)", async () => {
+  const { S, load } = world();
+  S.wo.zones = setZone(S.wo.zones, 1, { issues: [{ id: "iss_a", type: "broken_head", subtype: "", qty: 1, notes: "rotor" }] });
+  const f = load(); const { queue: q, key: k } = await f.openFieldWorkOrder("WO-1");
+  // Finish #1 copied + stamped the finding server-side; the phone never re-read.
+  S.officeWo({ zones: S.wo.zones.map((z) => (z.number === 1 ? { ...z, issues: z.issues.map((i) => ({ ...i, deferredId: "def_1" })) } : z)) });
+  const z1 = q.view(k).zones[0];
+  q.patch(k, { zones: setZone(q.view(k).zones, 1, { issues: [...z1.issues, { id: "iss_b", type: "leak", qty: 1, notes: "valve weep" }] }) });
+  assert.equal(await finish(f, q, k), "OK", "no conflict to resolve");
+  const iss = S.wo.zones[0].issues;
+  assert.deepEqual(iss.map((i) => [i.id, i.deferredId || null]), [["iss_a", "def_1"], ["iss_b", null]],
+    "the stamped finding keeps its stamp (no second copy), the new one is added");
+});
+
+await test("…and a finding the tech deletes after it was stamped is deleted, not a conflict", async () => {
+  const { S, load } = world();
+  S.wo.zones = setZone(S.wo.zones, 1, { issues: [{ id: "iss_a", type: "broken_head", subtype: "", qty: 1, notes: "rotor" }] });
+  const f = load(); const { queue: q, key: k } = await f.openFieldWorkOrder("WO-1");
+  S.officeWo({ zones: S.wo.zones.map((z) => (z.number === 1 ? { ...z, issues: z.issues.map((i) => ({ ...i, deferredId: "def_1" })) } : z)) });
+  q.patch(k, { zones: setZone(q.view(k).zones, 1, { issues: [] }) });
+  assert.equal(await finish(f, q, k), "OK");
+  assert.equal(S.wo.zones[0].issues.length, 0);
 });
 
 await test("the changed app files parse with the app's own Babel", async () => {

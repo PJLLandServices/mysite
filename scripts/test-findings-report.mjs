@@ -56,6 +56,13 @@ try {
     const d2 = await srv.api("POST", `/api/work-orders/${f.wo.id}/issues/defer`, {});
     ok(d2.status === 200 && d2.body.deferredCount === 0, "a retried defer copies nothing twice");
     ok((propOf(f.prop.id)?.deferredIssues || []).length === 1, `the property carries it forward once (${(propOf(f.prop.id)?.deferredIssues || []).length})`);
+    // Round 2: a client that saves zones from a copy read BEFORE the stamp
+    // (old app, office tab) must not erase it and cause a second copy.
+    const staleZones = woOf(f.wo.id).zones.map((z) => ({ ...z, issues: (z.issues || []).map(({ deferredId, ...i }) => i) }));
+    await srv.api("PATCH", `/api/work-orders/${f.wo.id}`, { zones: staleZones });
+    ok(issuesOf(f.wo.id).every((i) => i.deferredId), "a zones save without the stamp keeps the stamp");
+    const dStale = await srv.api("POST", `/api/work-orders/${f.wo.id}/issues/defer`, {});
+    ok(dStale.body.deferredCount === 0 && (propOf(f.prop.id)?.deferredIssues || []).length === 1, "…so the finding is never copied twice");
 
     const c = await srv.api("PATCH", `/api/work-orders/${f.wo.id}`, { status: "completed", signature: SIGNATURE,
       arrivedAt: new Date().toISOString(), departedAt: new Date().toISOString() });
