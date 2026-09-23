@@ -424,7 +424,11 @@
 // must invalidate or field phones keep running the pre-fix JS and the fix
 // looks like it failed. TECH_BUILD_VERSION bumped to "tech-v51" in the same
 // commit — the two were out of step (v48 vs v50) and now read alike.
-const CACHE_VERSION = "pjl-tech-v51";
+// Bumped 2026-09-23 (v51 -> v52): PJL-100 #7 — the cascade-recovery banner
+// no longer offers "Generate invoice now" on a no-charge visit (reads the
+// server's derived wo.noCharge). Touches work-order-tech.js (in
+// STATIC_ASSETS); TECH_BUILD_VERSION bumped to "tech-v52" alongside.
+const CACHE_VERSION = "pjl-tech-v52";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",

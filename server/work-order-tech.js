@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v51";
+const TECH_BUILD_VERSION = "tech-v52";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -1135,6 +1135,8 @@ function populateStateFromWO(wo) {
     : null;
   state.materialsConfirmedAt = wo.materialsConfirmedAt || null;
   state.history = Array.isArray(wo.history) ? wo.history.slice() : [];
+  // Derived by the server's GET (PJL-100 #7): a completed no-charge visit.
+  state.noCharge = wo.noCharge === true;
 }
 
 // Refetch the WO and re-render every main-screen surface. Does NOT touch
@@ -3360,6 +3362,7 @@ document.getElementById("techSignoffSubmit")?.addEventListener("click", async ()
     if (data.cascade && data.cascade.invoiceId) {
       state.completedInvoiceId = data.cascade.invoiceId;
     }
+    if (data.cascade && data.cascade.noCharge === true) state.noCharge = true;   // PJL-100 #7
     // Cascade error path (Brief: WO Field-Readiness §6.4) — signature
     // and lock persisted, but the downstream artifacts didn't land.
     // Surface a non-blocking alert so the tech knows to tap the
@@ -3402,7 +3405,10 @@ function renderCascadeRecovery() {
   if (!locked) { wrap.hidden = true; return; }
   const history = Array.isArray(state.history) ? state.history : [];
   const cascadeFired = history.some((h) => h && h.action === "cascade_fire");
-  const hasInvoice = !!state.completedInvoiceId;
+  // A no-charge visit has no invoice by design (PJL-100 #7): never offer
+  // "Generate invoice now" — the server refuses it, and it used to draft
+  // a $0 invoice that could then be emailed to the customer.
+  const hasInvoice = !!state.completedInvoiceId || state.noCharge === true;
   const genBtn = document.getElementById("techGenerateInvoiceBtn");
   const runBtn = document.getElementById("techRunCascadeBtn");
   const help = document.getElementById("techCascadeRecoveryHelp");

@@ -103,7 +103,9 @@ function applyFilters(items) {
     // case (overlaps with "stuck") AND the cascade-fired-but-draft-
     // failed case (status="completed" but no invoice). Brief: WO
     // Field-Readiness §6.6.
-    result = result.filter((w) => w.locked === true && !invoicedWoIds.has(w.id));
+    // A no-charge visit (PJL-100 #7) has no invoice BY DESIGN — the server
+    // marks it noCharge — so it is finished, not stranded.
+    result = result.filter((w) => w.locked === true && !invoicedWoIds.has(w.id) && w.noCharge !== true);
   } else if (currentStatus === "unlocked") {
     // "Unlocked" (2026-08-06) — WOs an admin unlocked for editing and
     // hasn't re-locked. This filter exists because admin unlock created a

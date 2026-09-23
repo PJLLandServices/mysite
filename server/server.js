@@ -3350,6 +3350,25 @@ async function seasonalQuoteAtLock(wo, zones) {
   }
 }
 
+// PJL-100 #7 — "this completed visit was no charge", for the readers that
+// ask "does this signed work order have an invoice?" (the work-order
+// list's Needs-invoice filter, the tech page's recovery banner). Derived
+// on read from the service record the cascade wrote, never stored, so it
+// cannot drift from isNoChargeServiceRecord(). Adds `noCharge: true` to
+// each such work order; leaves every other one untouched.
+async function markNoChargeWorkOrders(wos) {
+  const completed = (wos || []).filter((w) => w && w.status === "completed" && w.propertyId);
+  if (!completed.length) return wos;
+  const byWo = new Map();
+  try {
+    for (const p of await properties.list({ includeDeleted: true, includeArchived: true })) {
+      for (const sr of p.serviceRecords || []) if (sr && sr.woId && !byWo.has(sr.woId)) byWo.set(sr.woId, sr);
+    }
+  } catch (err) { console.warn("[wo] no-charge lookup failed:", err?.message); return wos; }
+  for (const w of completed) if (isNoChargeServiceRecord(byWo.get(w.id))) w.noCharge = true;
+  return wos;
+}
+
 async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "confirm" } = {}) {
   const summary = stripe.summarizeIntent(intent, requestId);
   // What this intent SHOULD have charged: the outstanding balance at the
@@ -10798,6 +10817,12 @@ async function handleApi(req, res, pathname) {
       if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
 
       // Status gating
+      // PJL-100 #7 — never email a customer an invoice for nothing. A $0
+      // invoice can still exist (made by hand, older data); it is a record,
+      // not something to send.
+      if (inv.status !== "void" && !(Number(inv.total) > 0)) {
+        return sendJson(res, 409, { ok: false, code: "no_charge", errors: ["This invoice is $0 — there is nothing to send the customer."] });
+      }
       if (action === "send" && inv.status !== "draft") {
         return sendJson(res, 409, { ok: false, errors: [`Invoice is "${inv.status}" — only draft invoices can be sent. Use Resend to re-email.`] });
       }
@@ -14254,6 +14279,21 @@ async function handleApi(req, res, pathname) {
         } catch (err) { console.warn("[create-invoice] seasonal fee re-resolve failed:", err?.message); }
       }
       const woLineItems = pricingLib.billableLines(billWo, completionCascade.lineItemsFromWo(billWo));
+      // PJL-100 #7 — a no-charge visit has no invoice by design (Fix #8).
+      // "Generate invoice now" used to draft a $0 one here, which /send
+      // then emailed to the customer. Judged on the lines this route would
+      // actually bill — AFTER the PJL-96 re-price above, which turns a
+      // price-pending custom-size line into its suggested amount, so a
+      // closing Patrick prices is never mistaken for a no-charge one.
+      {
+        const sr = wo.status === "completed" ? await properties.findServiceRecordByWo(wo.propertyId, wo.id).catch(() => null) : null;
+        const noCharge = woLineItems.length
+          ? !(invoices.totalsForLines(woLineItems).total > 0)
+          : isNoChargeServiceRecord(sr);
+        if (noCharge) {
+          return sendJson(res, 409, { ok: false, code: "no_charge", errors: ["No charge — this visit cost the customer nothing, so there is no invoice to draft."] });
+        }
+      }
       if (!woLineItems.length) {
         return sendJson(res, 422, { ok: false, errors: [
           "This work order has no billable line items. Build the on-site quote first (Issues → Draft Quote) so there's something to invoice."
@@ -19706,6 +19746,7 @@ async function handleApi(req, res, pathname) {
     if (leadId) all = all.filter((w) => w.leadId === leadId);
     // Most-recently-updated first so the index lands on active work.
     all.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+    await markNoChargeWorkOrders(all);   // PJL-100 #7
     return sendJson(res, 200, { ok: true, workOrders: all });
   }
 
@@ -20145,6 +20186,7 @@ async function handleApi(req, res, pathname) {
         }
       } catch (err) { console.warn("[wo-get] seasonal fee preview failed:", err?.message); }
     }
+    await markNoChargeWorkOrders([wo]);   // PJL-100 #7
     return sendJson(res, 200, { ok: true, workOrder: wo, property, lead, lastService, propertyEdits, seasonalFee });
   }
 
