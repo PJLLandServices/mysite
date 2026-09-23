@@ -41,6 +41,7 @@ const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms } = require(
 const testRecipients = require("./lib/test-recipients");
 const { countSystemDesign } = require("./lib/system-design-counts");
 const fieldPhotoUploads = require("./lib/field-photo-uploads");
+const billing = require("./lib/billing");
 const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
 const voicemailStore = require("./lib/voicemail-store");
@@ -3342,8 +3343,9 @@ function isNoChargeServiceRecord(record) {
 async function seasonalQuoteAtLock(wo, zones) {
   if (!wo || (wo.type !== "fall_closing" && wo.type !== "spring_opening")) return null;
   try {
-    const property = wo.propertyId ? await properties.get(wo.propertyId) : null;
-    const commercial = await customers.isCommercialAccount(property?.customerId || wo.customerId || null);
+    // The same inputs billingFor reads (lib/billing.js), so the price set
+    // at the lock and the price billed later come from one source.
+    const { property, commercial } = await billing.billingInputs(wo);
     return pricingLib.pricedQuoteForLock(wo, property, { commercial, zones });
   } catch (err) {
     console.warn(`[wo-lock] seasonal fee pricing failed for ${wo.id}: ${err?.message}`);
@@ -14274,20 +14276,12 @@ async function handleApi(req, res, pathname) {
         if (existing) {
           return [200, { ok: true, invoice: existing, alreadyExisted: true }];
         }
-        // PJL-96: bill the seasonal fee the way the completion cascade does —
-        // re-resolved from the zones recorded (unless it was priced at
-        // signing), and a price-pending line as a suggestion Patrick
-        // confirms. It used to bill the booked tier as seeded.
-        let billWo = wo;
-        if (wo.type === "fall_closing" || wo.type === "spring_opening") {
-          try {
-            const billProperty = await properties.get(wo.propertyId);
-            const commercial = await customers.isCommercialAccount(billProperty?.customerId || wo.customerId || null);
-            const refresh = pricingLib.refreshSeasonalBaseline(wo, billProperty, { commercial, frozen: workOrders.isScopeFrozen(wo) });
-            if (refresh.changed) billWo = { ...wo, onSiteQuote: { ...(wo.onSiteQuote || {}), builderLineItems: refresh.lines } };
-          } catch (err) { console.warn("[create-invoice] seasonal fee re-resolve failed:", err?.message); }
-        }
-        const woLineItems = pricingLib.billableLines(billWo, completionCascade.lineItemsFromWo(billWo));
+        // What this work order bills: billing.billingFor, the same one
+        // calculation Finish and the tech's preview ask (the fee exactly as
+        // signed once locked; a price-pending line as the suggestion
+        // Patrick confirms). It used to bill the booked tier as seeded.
+        const bill = await billing.billingFor(wo);
+        const woLineItems = bill.lines;
         // PJL-100 #7 — a no-charge visit has no invoice by design (Fix #8).
         // "Generate invoice now" used to draft a $0 one here, which /send
         // then emailed to the customer. Judged on the lines this route would
@@ -14296,9 +14290,7 @@ async function handleApi(req, res, pathname) {
         // closing Patrick prices is never mistaken for a no-charge one.
         {
           const sr = wo.status === "completed" ? await properties.findServiceRecordByWo(wo.propertyId, wo.id).catch(() => null) : null;
-          const noCharge = woLineItems.length
-            ? !(invoices.totalsForLines(woLineItems).total > 0)
-            : isNoChargeServiceRecord(sr);
+          const noCharge = woLineItems.length ? bill.noCharge : isNoChargeServiceRecord(sr);
           if (noCharge) {
             return [409, { ok: false, code: "no_charge", errors: ["No charge — this visit cost the customer nothing, so there is no invoice to draft."] }];
           }
@@ -20192,26 +20184,24 @@ async function handleApi(req, res, pathname) {
       } catch (err) { console.warn("[wo-get] computePropertyEdits failed:", err?.message); }
     }
     // What Finish will bill for the seasonal fee, from the zones on the WO
-    // right now (fall-closing fix #7) — the same resolver the cascade runs,
-    // so the tech sees "6 zones → $105" before tapping Finish. Derived,
-    // never stored; absent on non-seasonal WOs and once completed.
+    // right now (fall-closing fix #7) — billing.billingFor, the SAME call
+    // Finish and "Generate invoice now" make, so the tech sees "6 zones →
+    // $105" and the invoice says $105. Derived, never stored; absent on
+    // non-seasonal WOs and once completed.
     let seasonalFee = null;
     if ((wo.type === "fall_closing" || wo.type === "spring_opening") && wo.status !== "completed") {
-      try {
-        const commercial = await customers.isCommercialAccount(property?.customerId || wo.customerId || null);
-        const refresh = pricingLib.refreshSeasonalBaseline(wo, property, { commercial, frozen: workOrders.isScopeFrozen(wo) });
-        if (refresh.before || refresh.customQuote) {
-          seasonalFee = {
-            zoneCount: refresh.zoneCount, commercial,
-            changed: refresh.changed || refresh.customQuote === true,
-            customQuote: refresh.customQuote === true,
-            // PJL-96: priced when the WO was signed — this is the price, final.
-            lockedAtSigning: refresh.lockedAtSigning === true,
-            current: refresh.before,
-            atFinish: refresh.after
-          };
-        }
-      } catch (err) { console.warn("[wo-get] seasonal fee preview failed:", err?.message); }
+      const fee = (await billing.billingFor(wo, { property })).fee;
+      if (fee && (fee.before || fee.pending)) {
+        seasonalFee = {
+          zoneCount: fee.zoneCount, commercial: fee.commercial,
+          changed: fee.changed || fee.pending,
+          customQuote: fee.pending,
+          // PJL-96: priced when the WO was signed — this is the price, final.
+          lockedAtSigning: fee.lockedAtSigning,
+          current: fee.before,
+          atFinish: fee.after
+        };
+      }
     }
     await markNoChargeWorkOrders([wo]);   // PJL-100 #7
     return sendJson(res, 200, { ok: true, workOrder: wo, property, lead, lastService, propertyEdits, seasonalFee });

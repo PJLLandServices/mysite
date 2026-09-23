@@ -5997,3 +5997,31 @@ alerts, WOs, invoices and the season plan are unchanged.
 Tests: `scripts/test-visit-identity.mjs`, 13 of 19 fail on the parent and 19
 of 19 pass. `test-rebook-fresh-record` and `test-booking-lifecycle` controls
 that encoded the old reuse rule were updated to the ruling.
+
+## 2026-09-23 — FLOW-23/31: what a work order bills has one answer, `billing.billingFor(wo)`
+
+Patrick: "I don't want separate pricing logic patched independently in Finish,
+Generate Invoice, payment, etc."
+
+Before, Finish (the completion cascade), "Generate invoice now" and the
+technician's pre-Finish preview each assembled the price themselves. Each
+loaded the property, checked for a commercial account, re-resolved the
+seasonal fee (frozen once signed) and turned a price-pending line into its
+suggestion. The three agreed only because the copies matched.
+
+Now `server/lib/billing.js` `billingFor(wo)` returns the lines an invoice
+bills, the total, no-charge, the fee decision, and the corrected quote for
+an unlocked WO. All three call it. It is a pure read, and the cascade alone
+decides whether to store the correction on an unlocked WO. The duplicated
+preparation is gone from server.js and completion-cascade.js;
+`lineItemsFromWo` moved there too, re-exported by the cascade. The lock
+points still PRICE the fee through `pricing.pricedQuoteForLock`, but load
+their inputs through the same `billing.billingInputs`. Payment reads the
+invoice; it never priced anything. WO creation still seeds the baseline line
+through `seasonalFeeDecision`; that is seeding, not billing.
+
+No price or rule changed. Test: `scripts/test-billing-one-path.mjs`, 20 of
+32 fail on the parent. The failures are the single-path requirement; the
+three already agreed on numbers, which the test now locks in. With the
+change, 32 of 32 pass across five states: walked more than booked, a custom
+size, a commercial account, a per-property rate and a $0 rate.
