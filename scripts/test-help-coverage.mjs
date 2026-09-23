@@ -187,5 +187,58 @@ console.log("\nF. Search answers the words he uses, not the words we use");
   check("an empty query returns nothing rather than everything", !HELP.search("   ").length);
 }
 
+// ── G. The registry is generic, and says the right words ─────────────
+console.log("\nG. No job data in the help, and the terminology is correct");
+{
+  // Everything a reader can SEE. Code comments are excluded on purpose —
+  // they are not shipped to the screen and they explain the history.
+  const shown = HELP.ENTRIES.map((e) => [e.name, e.tip || "", e.body, e.isNot || "",
+    (e.aliases || []).join(" "), (e.alsoSearched || []).join(" ")].join("\n")).join("\n");
+
+  const LEAK = [
+    [/[\w.+-]+@[\w-]+\.\w+/, "an email address"],
+    [/(\+?1[-. ]?)?\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}/, "a phone number"],
+    [/\b[A-Za-z]\d[A-Za-z][ -]?\d[A-Za-z]\d\b/, "a postal code"],
+    [/\bPROJ-\d{4}-\d{4}\b/, "a project id"],
+    [/\bQ-\d{4}-\d{4}\b/, "a quote id"],
+    [/\bI-\d{4}-\d{4}\b/, "an invoice number"],
+    [/\$\s?\d/, "a dollar amount"],
+    [/\b\d+\s+[A-Z][a-z]+\s+(St|Street|Rd|Road|Ave|Avenue|Dr|Drive|Blvd|Cres|Way|Lane|Ln)\b/, "a street address"],
+    // Real jobs and people this project has actually discussed.
+    [/\bDundalk\b/i, "a customer site"],
+    [/\bMcDonald'?s\b/i, "a customer name"],
+    [/\bPatrick\b/i, "the owner by name"],
+    [/\bPJL\b/, "the company by name"],
+    [/\bEast Side Lawn\b/i, "a named zone from a real job"],
+    [/\bRestaurant Front\b/i, "a named area from a real job"]
+  ];
+  for (const [re, what] of LEAK) {
+    const hit = shown.match(re);
+    check(`no ${what} in any entry`, !hit, hit ? `"${hit[0]}"` : "");
+  }
+  check("the help was actually scanned", shown.length > 4000, String(shown.length));
+
+  // ── The word, at the registry level ────────────────────────────────
+  // Patrick, 2026-09-23: keep "consecutively" as a SEARCH alias, but the
+  // displayed text must not redefine it. Simultaneously = together from
+  // one station; consecutively = one after another.
+  const shared = HELP.byId("shared-station");
+  check("shared-station defines simultaneously correctly",
+        /simultaneously means the valves operate together from one controller station/i.test(shared.body));
+  check("...and consecutively correctly",
+        /consecutively means they operate one after another/i.test(shared.body));
+  check("...and offers the word as a search term, not a definition",
+        (shared.alsoSearched || []).indexOf("consecutively") >= 0);
+  check("...while still routing the search there", HELP.search("consecutively")[0].id === "shared-station");
+
+  // The specific mistake being guarded: text that reads "consecutively
+  // means/= at the same time". A synonym ROW is fine; a sentence is not.
+  const sentences = HELP.ENTRIES.map((e) => [e.name, e.tip || "", e.body, e.isNot || ""].join(" ")).join(" ");
+  check("nothing in the displayed help says consecutively means together",
+        !/consecutive(ly)?\s*(means|=|is)\s*[^.]{0,40}(same time|simultaneous|together)/i.test(sentences),
+        (sentences.match(/consecutive[^.]{0,70}/i) || [])[0] || "");
+  check("the synonym map still carries the routing", HELP.SYNONYMS.consecutively === "together");
+}
+
 console.log(`\nhelp coverage: ${pass} passed, ${failures.length} failed`);
 if (failures.length) { for (const f of failures) console.error("  - " + f); process.exit(1); }

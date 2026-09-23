@@ -34,6 +34,7 @@ const pageHtml = fs.readFileSync(path.join(ROOT, "server", "sitebuilder.html"));
 const engine = fs.readFileSync(path.join(ROOT, "server", "sitebuilder-engine.js"));
 const helpJs = fs.readFileSync(path.join(ROOT, "server", "sitebuilder-help.js"));
 let serveHelp = true;                       // section F turns this off
+let saved = null;                           // any PATCH the page sends
 
 const srv = http.createServer((req, res) => {
   const p = new URL(req.url, "http://x").pathname;
@@ -44,11 +45,25 @@ const srv = http.createServer((req, res) => {
     if (!serveHelp) { res.writeHead(404); return res.end(""); }
     return send(helpJs, "text/javascript");
   }
+  if (p === "/api/projects/PROJ-TEST" && req.method === "PATCH") {
+    let body = ""; req.on("data", (d) => { body += d; });
+    return req.on("end", () => {
+      try { saved = JSON.parse(body); } catch { saved = { unparsed: true }; }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, project: { id: "PROJ-TEST" } }));
+    });
+  }
   if (p === "/api/projects/PROJ-TEST") {
     res.writeHead(200, { "Content-Type": "application/json" });
     return res.end(JSON.stringify({ ok: true, project: {
       id: "PROJ-TEST", name: "Help centre test", customerName: "", customerEmail: "",
-      propertyId: null, systemDesign: v8WithSplits } }));
+      propertyId: null,
+      // The master-plan toolbar — and the Help button in it — only exists
+      // once a calibrated sheet is open. Without this the button is in the
+      // DOM but hidden, and a hidden element cannot take focus.
+      sitePlan: { pages: [{ id: "pg1", label: "Sheet 1", rasterWidthPx: 3000, rasterHeightPx: 2000,
+        calibration: { state: "calibrated", ftPerPx: 0.1, verify: { state: "passed", residualPct: 0.1 } } }] },
+      systemDesign: v8WithSplits } }));
   }
   res.writeHead(200, { "Content-Type": "application/json" }); res.end("{}");
 });
@@ -63,6 +78,10 @@ async function open_(viewport) {
   const errs = []; pg.on("pageerror", (e) => errs.push(String(e)));
   await pg.goto(URL_, { waitUntil: "load" });
   await pg.waitForTimeout(500);
+  // Open the sheet so the toolbar is really on screen, the way it is when
+  // somebody reaches for Help mid-drawing.
+  await pg.evaluate(() => { if (typeof openMasterPlan === "function") openMasterPlan("pg1"); });
+  await pg.waitForTimeout(400);
   return { ctx, pg, errs };
 }
 
@@ -171,6 +190,158 @@ console.log("\nD. The 13-stations question, answered without asking anyone");
   });
   check("the panel fills a phone screen without sideways scrolling",
         fits.w <= fits.vw + 1 && !fits.overflow, JSON.stringify(fits));
+  check("no page errors", !errs.length, errs[0]);
+  await ctx.close();
+}
+
+// ── D2. Patrick's pre-merge checklist, 2026-09-23 ────────────────────
+console.log("\nD2. Terminology, focus, mobile reach, and unsaved work");
+{
+  const { ctx, pg, errs } = await open_({ width: 1280, height: 900 });
+
+  // --- The word ------------------------------------------------------
+  // "consecutively" must ROUTE to this entry without the entry adopting
+  // it as a definition. Routing a search term and defining a word are
+  // different jobs; conflating them teaches the mistake back.
+  await pg.evaluate(() => mpHelpOpen());
+  await pg.fill("#hcQ", "consecutively");
+  await pg.waitForTimeout(150);
+  const card = await pg.evaluate(() => {
+    const c = document.querySelector(".hc-card");
+    return c ? { id: c.id.replace(/^hc-/, ""), text: c.textContent } : null;
+  });
+  check("\"consecutively\" still reaches the shared-station entry", card && card.id === "shared-station", card && card.id);
+  check("...which defines SIMULTANEOUSLY as together from one station",
+        card && /simultaneously means the valves operate together from one controller station/i.test(card.text));
+  check("...and CONSECUTIVELY as one after another",
+        card && /consecutively means they operate one after another/i.test(card.text));
+  check("...and shows the word as a search term, not the name for it",
+        card && /sometimes searched as/i.test(card.text) && /not the term for it/i.test(card.text));
+  // The failure mode being guarded against: the entry saying, in effect,
+  // "consecutively = at the same time".
+  check("no displayed text equates consecutively with simultaneous",
+        card && !/consecutive(ly)?\s+(means|=)\s*[^.]{0,40}(same time|simultaneous|together)/i.test(card.text),
+        (card && (card.text.match(/consecutive[^.]{0,80}/i) || [])[0]) || "");
+
+  // --- Focus ---------------------------------------------------------
+  await pg.keyboard.press("Escape");
+  await pg.waitForTimeout(120);
+  check("the Help button is actually visible to be focused",
+        await pg.evaluate(() => { const b = document.querySelector('[data-help="help-button"]');
+          return !!b && b.offsetParent !== null; }));
+  await pg.evaluate(() => document.querySelector('[data-help="help-button"]').focus());
+  check("...and takes focus when clicked",
+        await pg.evaluate(() => document.activeElement === document.querySelector('[data-help="help-button"]')));
+  await pg.evaluate(() => mpHelpOpen());
+  await pg.waitForTimeout(200);
+  check("focus lands in the search box on open",
+        await pg.evaluate(() => document.activeElement && document.activeElement.id === "hcQ"));
+
+  // Tab all the way round; it must never escape the panel.
+  let escaped = null;
+  for (let i = 0; i < 30; i++) {
+    await pg.keyboard.press("Tab");
+    const where = await pg.evaluate(() => {
+      const p = document.querySelector("#hcOverlay .hc-panel");
+      return p && p.contains(document.activeElement) ? "in" : (document.activeElement.tagName + "#" + (document.activeElement.id || ""));
+    });
+    if (where !== "in") { escaped = `after ${i + 1} tabs -> ${where}`; break; }
+  }
+  check("Tab stays inside the panel and cycles", !escaped, escaped || "");
+  await pg.keyboard.down("Shift"); await pg.keyboard.press("Tab"); await pg.keyboard.up("Shift");
+  check("Shift-Tab stays inside too",
+        await pg.evaluate(() => document.querySelector("#hcOverlay .hc-panel").contains(document.activeElement)));
+
+  await pg.keyboard.press("Escape");
+  await pg.waitForTimeout(150);
+  check("Escape closes it", !(await pg.evaluate(() => !!document.querySelector("#hcOverlay.on"))));
+  check("...and focus returns to the Help button",
+        await pg.evaluate(() => document.activeElement === document.querySelector('[data-help="help-button"]')),
+        await pg.evaluate(() => document.activeElement.tagName + "#" + (document.activeElement.id || "") + "." + (document.activeElement.className || "")));
+
+  // The X button must also restore focus, not only the Escape key.
+  await pg.evaluate(() => document.querySelector('[data-help="help-button"]').focus());
+  await pg.evaluate(() => mpHelpOpen());
+  await pg.waitForTimeout(150);
+  await pg.click(".hc-x");
+  await pg.waitForTimeout(150);
+  check("closing with the X button restores focus as well",
+        await pg.evaluate(() => document.activeElement === document.querySelector('[data-help="help-button"]')));
+  check("no page errors", !errs.length, errs[0]);
+  await ctx.close();
+}
+
+// ── D3. Unsaved work survives, and the registry holds no job data ────
+console.log("\nD3. Unsaved work, and what the registry knows");
+{
+  const { ctx, pg, errs } = await open_({ width: 390, height: 844 });   // a phone
+
+  // Make a real, unsaved change first: select an area and mark dirty the
+  // way the builder does. An "it survived" check against a pristine page
+  // proves nothing.
+  const before = await pg.evaluate(() => {
+    if (typeof mp !== "undefined") mp.zoneSel = 0;
+    if (typeof markDirty === "function") markDirty();
+    return { sel: typeof mp !== "undefined" ? mp.zoneSel : null,
+             dirty: typeof DIRTY !== "undefined" ? DIRTY : (typeof dirty !== "undefined" ? dirty : null),
+             areas: typeof areas === "undefined" ? -1 : areas.length,
+             zones: typeof LAST_ZONES === "undefined" ? -1 : LAST_ZONES.length,
+             name: typeof areas !== "undefined" && areas[0] ? areas[0].name : null };
+  });
+  check("the fixture has a design and a selection to lose", before.areas > 0 && before.zones > 0, JSON.stringify(before));
+
+  await pg.evaluate(() => mpHelpOpen());
+  await pg.waitForTimeout(200);
+
+  // On a phone the Close button has to be ON SCREEN, not scrolled away.
+  const x = await pg.evaluate(() => {
+    const b = document.querySelector(".hc-x"); if (!b) return null;
+    const r = b.getBoundingClientRect();
+    return { top: Math.round(r.top), right: Math.round(r.right), w: Math.round(r.width), h: Math.round(r.height),
+             vw: window.innerWidth, vh: window.innerHeight,
+             onScreen: r.top >= 0 && r.left >= 0 && r.bottom <= window.innerHeight && r.right <= window.innerWidth };
+  });
+  check("the Close button is on screen at phone width", x && x.onScreen, JSON.stringify(x));
+  // On screen is NOT the same as clickable. At z-index 9000 this button sat
+  // under the master plan's own header: visible, correctly sized, and
+  // swallowing every click. Ask the document what is actually at that pixel.
+  const hit = await pg.evaluate(() => {
+    const b = document.querySelector(".hc-x"), r = b.getBoundingClientRect();
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return { isButton: top === b || b.contains(top),
+             actually: top ? top.tagName + "." + (top.className || "") : "nothing" };
+  });
+  check("...and nothing is sitting on top of it", hit.isButton, hit.actually);
+  check("...and is a real tap target (44px)", x && x.w >= 40 && x.h >= 40, JSON.stringify(x && [x.w, x.h]));
+  check("...and nothing scrolls sideways", !(await pg.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)));
+  const hitQ = await pg.evaluate(() => {
+    const i = document.getElementById("hcQ"), r = i.getBoundingClientRect();
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return top === i ? "ok" : (top ? top.tagName + "." + (top.className || "") : "nothing");
+  });
+  check("the search box is reachable too, not covered", hitQ === "ok", hitQ);
+
+  // Scroll the results a long way: the Close button must still be there.
+  await pg.evaluate(() => { const r = document.getElementById("hcResults"); r.scrollTop = r.scrollHeight; });
+  await pg.waitForTimeout(120);
+  check("Close stays put after scrolling to the bottom of the help",
+        await pg.evaluate(() => { const r = document.querySelector(".hc-x").getBoundingClientRect();
+          return r.top >= 0 && r.bottom <= window.innerHeight; }));
+
+  await pg.click(".hc-x");
+  await pg.waitForTimeout(150);
+  const after = await pg.evaluate(() => ({
+    sel: typeof mp !== "undefined" ? mp.zoneSel : null,
+    dirty: typeof DIRTY !== "undefined" ? DIRTY : (typeof dirty !== "undefined" ? dirty : null),
+    areas: typeof areas === "undefined" ? -1 : areas.length,
+    zones: typeof LAST_ZONES === "undefined" ? -1 : LAST_ZONES.length,
+    name: typeof areas !== "undefined" && areas[0] ? areas[0].name : null }));
+  check("the drawing is unchanged", after.areas === before.areas && after.zones === before.zones,
+        JSON.stringify([before, after]));
+  check("the selected area is still selected", after.sel === before.sel, JSON.stringify([before.sel, after.sel]));
+  check("the area's own data is untouched", after.name === before.name);
+  check("unsaved work is still flagged unsaved", after.dirty === before.dirty, JSON.stringify([before.dirty, after.dirty]));
+  check("no PATCH was sent while the help was open", !saved, JSON.stringify(saved && Object.keys(saved)));
   check("no page errors", !errs.length, errs[0]);
   await ctx.close();
 }

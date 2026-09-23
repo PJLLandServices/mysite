@@ -185,8 +185,9 @@
       tipOn: "Both valves are on one controller terminal and open together. Give each its own station to run them separately.",
       labelOff: "wire both valves to one station",
       labelOn: "give each valve its own station",
-      body: "Puts the two halves of a split onto ONE controller station. Both valves are wired to the same terminal, so they open at the same time and their flow adds up.\n\nUse it when a split was only ever about pipework — two valve boxes because the driveway is in the way — and the two halves are really one watering zone.\n\nIt appears on either half of a split, in the zone panel. Once wired together, the same link reads \"give each valve its own station\" and puts them back.",
-      isNot: "It does NOT make them run one after the other. They open together, simultaneously, and the station's flow is the sum of both valves. If your supply is tight, check that total before wiring them.",
+      body: "Puts the two halves of a split onto ONE controller station. Both valves are wired to the same terminal, so they open SIMULTANEOUSLY — at the same time — and their flow adds up. (Simultaneously means together from one station; consecutively would mean one after the other, which is a different thing and not what this does.)\n\nUse it when a split was only ever about pipework — two valve boxes because the driveway is in the way — and the two halves are really one watering zone.\n\nIt appears on either half of a split, in the zone panel. Once wired together, the same link reads \"give each valve its own station\" and puts them back.",
+      isNot: "It does NOT make them run one after the other — that would be CONSECUTIVELY, and it is a different arrangement. They open simultaneously, and the station's flow is the sum of both valves. If your supply is tight, check that total before wiring them.",
+      alsoSearched: ["consecutively"],
       aliases: ["consecutively", "together", "one station", "two valves one station", "combine", "join", "wired together", "same terminal", "at the same time", "run together", "share"],
       seeAlso: ["split", "shared-station", "station-vs-valve-vs-area", "peak-flow"]
     },
@@ -250,8 +251,9 @@
     {
       id: "shared-station", kind: "concept", name: "Shared station — two valves, one terminal", icon: "station",
       tip: null,
-      body: "Two valves wired to one controller terminal. The controller opens them together, at the same time, as a single station in the schedule.\n\nBecause they open together, THE STATION'S FLOW IS THE SUM OF BOTH VALVES. Two halves at 1.4 and 0.6 GPM make a 2.0 GPM station. Check that total against your available supply before combining anything substantial.\n\nOn the master plan the two show under one heading reading \"2 valves, one station\".",
-      isNot: "Not the same as running back-to-back. Consecutive means one finishes and the next starts, and their flows never add. A shared station is simultaneous, and the flows do add.",
+      body: "Two valves wired to one controller terminal. The controller opens them SIMULTANEOUSLY — at the same time — as a single station in the schedule.\n\nThe words matter here, because they are opposites:\n\nSIMULTANEOUSLY means the valves operate together from one controller station.\nCONSECUTIVELY means they operate one after another.\n\nA shared station is simultaneous. Nothing in the builder makes two valves run consecutively; that would be two separate stations, ordered by the controller's own schedule.\n\nBecause they open together, THE STATION'S FLOW IS THE SUM OF BOTH VALVES. Two halves at 1.4 and 0.6 GPM make a 2.0 GPM station. Check that total against your available supply before combining anything substantial.\n\nOn the master plan the two show under one heading reading \"2 valves, one station\".",
+      alsoSearched: ["consecutively"],
+      isNot: "Not two valves running one after the other. That is what CONSECUTIVELY means, and it is not what this does — a shared station opens both at once, and their flows add.",
       aliases: ["consecutively", "together", "at the same time", "simultaneous", "one terminal", "two valves one station", "combine", "2 valves one station", "run together"],
       seeAlso: ["share-station", "peak-flow", "what-splitting-does"]
     },
@@ -364,10 +366,16 @@
 
   /* ── Search ───────────────────────────────────────────────────────────
      Patrick dictates, and the transcript is the evidence: he said "zine"
-     for zone, "vowels" for valves, and — the one that matters — he used
-     "consecutively" to mean "at the same time", which is the OPPOSITE of
-     what the word means in irrigation. A matcher reasoning from the
-     dictionary sends him to the wrong entry with total confidence.
+     for zone, "vowels" for valves, and — the one that matters — he typed
+     "consecutively" while describing valves that open AT THE SAME TIME.
+
+     CONSECUTIVELY DOES NOT MEAN THAT, and this map does not pretend it
+     does. Consecutively means one after another; simultaneously means
+     together. The map only routes the word to the entry he was looking
+     for; the entry itself then states the distinction plainly and shows
+     "Sometimes searched as: consecutively" rather than adopting it as a
+     definition. Routing a search term and defining a word are different
+     jobs, and conflating them would teach the mistake back to him.
 
      So the map is explicit and auditable rather than fuzzy. When a word
      comes back wrong the fix is one line here, not a re-tuned algorithm,
@@ -448,10 +456,14 @@
     return '<svg viewBox="0 0 24 24"' + (cls ? ' class="' + cls + '"' : "") + ">" + icon(key) + "</svg>";
   }
   function byKind(kind) { return ENTRIES.filter(function (e) { return e.kind === kind; }); }
+  /* Words people reach for that are NOT what the thing is called, shown as
+     "Sometimes searched as" so the entry acknowledges the search without
+     endorsing the word. */
+  function alsoSearched(id) { var e = byId(id); return (e && e.alsoSearched) || []; }
 
   return {
     ENTRIES: ENTRIES, ICONS: ICONS, SYNONYMS: SYNONYMS,
     search: search, byId: byId, tip: tip, name: name, aria: aria,
-    icon: icon, svg: svg, byKind: byKind
+    icon: icon, svg: svg, byKind: byKind, alsoSearched: alsoSearched
   };
 }));

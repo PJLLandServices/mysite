@@ -356,12 +356,20 @@
      An overlay, never a route change: the builder underneath keeps its
      unsaved work and its selection. Sized off dvh so an on-screen
      keyboard on a phone does not push the results out of reach. */
-  .hc-overlay{position:fixed;inset:0;z-index:9000;display:none;background:rgba(15,20,26,.55);
+  /* ABOVE the sheet editor. .sk-overlay is 9999, .cust-actions 10000 and
+     .part-picker 10001 — at 9000 the help centre rendered UNDERNEATH the
+     master plan, looking perfectly fine while the sheet header quietly ate
+     every click on its Close button. Help is opened from inside the sheet,
+     so it has to sit on top of all of it. */
+  .hc-overlay{position:fixed;inset:0;z-index:10002;display:none;background:rgba(15,20,26,.55);
     backdrop-filter:blur(2px);padding:0}
   .hc-overlay.on{display:block}
   .hc-panel{position:absolute;right:0;top:0;bottom:0;width:min(560px,100vw);
     background:var(--card,#fff);border-left:1px solid var(--line,#dfe4ea);
     display:flex;flex-direction:column;box-shadow:-18px 0 40px rgba(15,20,26,.18)}
+  /* flex:0 0 auto and a scrolling results pane keep this bar — and the
+     Close button in it — pinned and reachable at any height, including a
+     phone with the keyboard up. */
   .hc-top{display:flex;align-items:center;justify-content:space-between;gap:8px;
     padding:12px 14px;border-bottom:1px solid var(--line,#dfe4ea);flex:0 0 auto}
   .hc-title{display:flex;align-items:center;gap:8px;font-size:15px}
@@ -401,6 +409,8 @@
     letter-spacing:.06em;font-weight:700}
   .hc-link{border:0;background:none;padding:2px 0;font:inherit;font-size:12.5px;cursor:pointer;
     color:var(--accent,#2f7d4f);text-decoration:underline;text-underline-offset:2px}
+  .hc-also{font-size:12px;line-height:1.5;margin:8px 0 0;color:#59636e}
+  .hc-also i{font-style:normal;font-weight:700}
   .hc-empty{padding:22px 2px;font-size:13.5px;line-height:1.6;color:var(--muted,#6b7683)}
   .hc-flash{animation:hcFlash .9s ease}
   @keyframes hcFlash{0%{box-shadow:0 0 0 3px var(--accent,#2f7d4f)}100%{box-shadow:0 0 0 0 transparent}}
@@ -953,6 +963,7 @@ function helpStampTips(){
    An overlay ON TOP of the builder: it never re-renders or unmounts the
    page, so a half-drawn design with unsaved work survives opening it. */
 let HELP_OPEN=false;
+let HELP_OPENER=null;      // what to give focus back to on close
 function helpEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function helpPara(s){ return helpEsc(s).split('\n\n').map(p=>'<p>'+p.replace(/\n/g,'<br>')+'</p>').join(''); }
 
@@ -965,6 +976,7 @@ function helpCard(e){
     ${e.tip?`<p class="hc-tip">${helpEsc(e.tip)}</p>`:''}
     <div class="hc-body">${helpPara(e.body)}</div>
     ${e.isNot?`<p class="hc-not"><b>What it is not.</b> ${helpEsc(e.isNot)}</p>`:''}
+    ${(e.alsoSearched||[]).length?`<p class="hc-also">Sometimes searched as: ${(e.alsoSearched||[]).map(w=>`<i>${helpEsc(w)}</i>`).join(', ')} — not the term for it, but it brings you here.</p>`:''}
     ${also?`<footer><span>See also</span>${also}</footer>`:''}
   </article>`;
 }
@@ -1034,15 +1046,47 @@ async function mpHelpOpen(){
     document.body.appendChild(ov);
     ov.addEventListener('click', ev=>{ if(ev.target===ov) mpHelpClose(); });
   }
+  HELP_OPENER = (document.activeElement && document.activeElement !== document.body)
+    ? document.activeElement : document.querySelector('[data-help="help-button"]');
   ov.classList.add('on'); HELP_OPEN=true;
   helpRender('');
   const i=document.getElementById('hcQ'); if(i){ i.value=''; setTimeout(()=>i.focus(),30); }
 }
-function mpHelpClose(){ const ov=document.getElementById('hcOverlay'); if(ov) ov.classList.remove('on'); HELP_OPEN=false; }
+function mpHelpClose(){
+  const ov=document.getElementById('hcOverlay'); if(ov) ov.classList.remove('on');
+  HELP_OPEN=false;
+  // Focus goes back where it came from. Leaving it on a now-hidden panel
+  // strands anyone working by keyboard: the next Tab starts from the top
+  // of the document instead of the button they just pressed.
+  const back=HELP_OPENER; HELP_OPENER=null;
+  // An opener can be gone or hidden by the time we close — the toolbar is
+  // not rendered unless a sheet is open, and a hidden element silently
+  // refuses focus, stranding the caret on <body>. Try the opener, then the
+  // Help button, and settle for neither rather than guessing.
+  const canFocus = n => n && document.contains(n) && n.offsetParent !== null && !n.disabled;
+  const target = canFocus(back) ? back
+               : (n => canFocus(n) ? n : null)(document.querySelector('[data-help="help-button"]'));
+  if(target){ try{ target.focus(); }catch(e){} }
+}
+/* Keep Tab inside the panel while it is open. Without this, tabbing walks
+   out into the builder underneath — which is still fully interactive — and
+   you can end up typing into a form you cannot see. */
+function helpTrapTab(ev){
+  if(!HELP_OPEN || ev.key!=='Tab') return;
+  const panel=document.querySelector('#hcOverlay .hc-panel'); if(!panel) return;
+  const items=[...panel.querySelectorAll('button, input, [href], select, textarea, [tabindex]:not([tabindex="-1"])')]
+    .filter(n=>!n.disabled && n.offsetParent!==null);
+  if(!items.length) return;
+  const first=items[0], last=items[items.length-1], here=document.activeElement;
+  if(ev.shiftKey && (here===first || !panel.contains(here))){ ev.preventDefault(); last.focus(); }
+  else if(!ev.shiftKey && here===last){ ev.preventDefault(); first.focus(); }
+  else if(!panel.contains(here)){ ev.preventDefault(); first.focus(); }
+}
 /* Escape closes the centre before anything else in the page sees the key,
    so it cannot also clear a selection or cancel a tool underneath. */
 document.addEventListener('keydown', ev=>{
-  if(ev.key==='Escape' && HELP_OPEN){ ev.stopPropagation(); mpHelpClose(); }
+  if(ev.key==='Escape' && HELP_OPEN){ ev.stopPropagation(); mpHelpClose(); return; }
+  helpTrapTab(ev);
 }, true);
 /* The side panels re-render constantly — selecting a valve rebuilds the
    whole zone panel — so stamping once at boot would leave every button
