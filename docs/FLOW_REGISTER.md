@@ -5929,3 +5929,26 @@ export are required before push; device acceptance is still outstanding.
 See docs/FIELD_OFFLINE_RELEASE.md for release order, limitations, the Mac/Xcode
 procedure, and airplane-mode/restart/signature/bypass checks. This entry does
 not mark FLOW-31 PASS or claim a production/iPhone walkthrough.
+
+## 2026-09-23 — FLOW-23/31: one active invoice per work order, enforced by the server
+
+Probe on main and PR #298: two simultaneous "Generate invoice now" taps made two
+invoices for one completed visit (5/5), and Generate racing the tech's Finish
+made two in 4 of 6 timings. The route checked, then drafted, outside the lock
+the completion cascade takes; `invoices.createDraft` had no per-WO rule.
+
+Now: "Generate invoice now" runs under `completion-cascade:<woId>` (the same
+lock as Finish and the desk re-run). `invoices.createDraft` (already under the
+store lock) refuses a second ACTIVE invoice for a work order with
+`wo_already_invoiced` and the existing id. The cascade, the project cascade
+and the route all treat that as "this is the visit's invoice". Active means
+any status but void (`invoices.activeInvoiceForWorkOrder`), so
+void-and-regenerate still works, now from the button too, which used to hand
+back the voided invoice. The explicit revision path, `invoices.revise`, edits
+the same invoice in place and is untouched. Invoices with no work order
+(deposits, balances) are untouched.
+
+Not changed: customer messaging, send, payment and QuickBooks. Existing
+duplicate invoices already on disk are not merged or voided. Test:
+`scripts/test-one-invoice-per-wo.mjs`, 7 of 10 fail on the parent, 10 of 10
+pass.

@@ -330,8 +330,13 @@ async function run(wo, deps = {}) {
         disclaimers
       });
     } catch (err) {
-      invoiceDraftError = err?.message || "createDraft threw";
-      console.warn("[cascade] invoice draft failed:", invoiceDraftError);
+      // "Generate invoice now" got there first (the store allows one
+      // active invoice per work order): that invoice IS this visit's.
+      if (err?.code === "wo_already_invoiced") invoice = await invoices.get(err.existingInvoiceId);
+      else {
+        invoiceDraftError = err?.message || "createDraft threw";
+        console.warn("[cascade] invoice draft failed:", invoiceDraftError);
+      }
     }
   }
 
@@ -882,8 +887,11 @@ async function runProjectFinalCascade(project, opts = {}) {
         } : {})
       });
     } catch (err) {
-      invoiceDraftError = err?.message || "createDraft threw";
-      console.warn("[project-cascade] invoice draft failed:", invoiceDraftError);
+      if (err?.code === "wo_already_invoiced") invoice = await invoices.get(err.existingInvoiceId);
+      else {
+        invoiceDraftError = err?.message || "createDraft threw";
+        console.warn("[project-cascade] invoice draft failed:", invoiceDraftError);
+      }
     }
   }
 

@@ -526,6 +526,12 @@ async function get(id) {
   return records.find((r) => r.id === id) || null;
 }
 
+// The invoice that currently bills a work order: any status but void.
+function activeInvoiceForWorkOrder(records, woId) {
+  if (!woId) return null;
+  return (Array.isArray(records) ? records : []).find((r) => r && r.woId === woId && r.status !== "void") || null;
+}
+
 async function listByWorkOrder(woId) {
   const records = await readAll();
   return records.filter((r) => r.woId === woId);
@@ -626,6 +632,21 @@ async function createDraft({
   };
 
   const records = await readAll();
+  // ONE ACTIVE INVOICE PER WORK ORDER, decided here because this runs under
+  // the store lock (createDraft is exported as withStoreLock(createDraft)):
+  // no caller's timing can slip a second one past it. Two taps of
+  // "Generate invoice now", or one racing the completion cascade, made two
+  // invoices for one visit (probe 2026-09-23, 5/5). A VOIDED invoice doesn't
+  // count, so void-and-regenerate works; the explicit revision path,
+  // revise(), edits the same invoice in place and never comes here.
+  // Callers treat wo_already_invoiced as "use existingInvoiceId".
+  if (woId) {
+    const existing = activeInvoiceForWorkOrder(records, woId);
+    if (existing) {
+      throw Object.assign(new Error(`Work order ${woId} already has invoice ${existing.id}.`),
+        { code: "wo_already_invoiced", existingInvoiceId: existing.id });
+    }
+  }
   const now = new Date().toISOString();
   const year = new Date().getUTCFullYear();
   const id = await nextInvoiceId(year);
@@ -1598,6 +1619,7 @@ module.exports = {
   listByQuote,
   listByProperty,
   createDraft: withStoreLock(createDraft),
+  activeInvoiceForWorkOrder,
   update: withStoreLock(update),
   appendHistory: withStoreLock(appendHistory),
   appendPaymentAttempt: withStoreLock(appendPaymentAttempt),

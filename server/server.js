@@ -14258,67 +14258,85 @@ async function handleApi(req, res, pathname) {
   if (woCreateInvoiceMatch && req.method === "POST") {
     try {
       const id = decodeURIComponent(woCreateInvoiceMatch[1]);
-      const wo = await workOrders.get(id);
-      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (!wo.propertyId) return sendJson(res, 422, { ok: false, errors: ["WO has no linked property — link a property first."] });
-      // Check for an existing invoice on this WO before drafting a new one.
-      const existing = (await invoices.listByWorkOrder(id))[0];
-      if (existing) {
-        return sendJson(res, 200, { ok: true, invoice: existing, alreadyExisted: true });
-      }
-      // PJL-96: bill the seasonal fee the way the completion cascade does —
-      // re-resolved from the zones recorded (unless it was priced at
-      // signing), and a price-pending line as a suggestion Patrick
-      // confirms. It used to bill the booked tier as seeded.
-      let billWo = wo;
-      if (wo.type === "fall_closing" || wo.type === "spring_opening") {
-        try {
-          const billProperty = await properties.get(wo.propertyId);
-          const commercial = await customers.isCommercialAccount(billProperty?.customerId || wo.customerId || null);
-          const refresh = pricingLib.refreshSeasonalBaseline(wo, billProperty, { commercial, frozen: workOrders.isScopeFrozen(wo) });
-          if (refresh.changed) billWo = { ...wo, onSiteQuote: { ...(wo.onSiteQuote || {}), builderLineItems: refresh.lines } };
-        } catch (err) { console.warn("[create-invoice] seasonal fee re-resolve failed:", err?.message); }
-      }
-      const woLineItems = pricingLib.billableLines(billWo, completionCascade.lineItemsFromWo(billWo));
-      // PJL-100 #7 — a no-charge visit has no invoice by design (Fix #8).
-      // "Generate invoice now" used to draft a $0 one here, which /send
-      // then emailed to the customer. Judged on the lines this route would
-      // actually bill — AFTER the PJL-96 re-price above, which turns a
-      // price-pending custom-size line into its suggested amount, so a
-      // closing Patrick prices is never mistaken for a no-charge one.
-      {
-        const sr = wo.status === "completed" ? await properties.findServiceRecordByWo(wo.propertyId, wo.id).catch(() => null) : null;
-        const noCharge = woLineItems.length
-          ? !(invoices.totalsForLines(woLineItems).total > 0)
-          : isNoChargeServiceRecord(sr);
-        if (noCharge) {
-          return sendJson(res, 409, { ok: false, code: "no_charge", errors: ["No charge — this visit cost the customer nothing, so there is no invoice to draft."] });
+      const actor = await actorLabel(req);
+      // Under the SAME lock as Finish's completion cascade (and the desk
+      // re-run), so "Generate invoice now" and the cascade take turns: the
+      // second one to run sees the first one's invoice and returns it. The
+      // store's one-active-invoice rule (invoices.createDraft) is the
+      // backstop for any path that doesn't take this lock.
+      const [status, body] = await serializeOn(`completion-cascade:${id}`, async () => {
+        const wo = await workOrders.get(id);
+        if (!wo) return [404, { ok: false, errors: ["Work order not found."] }];
+        if (!wo.propertyId) return [422, { ok: false, errors: ["WO has no linked property — link a property first."] }];
+        // The WO's ACTIVE invoice, by the store's own rule — a voided one
+        // doesn't count, so void-and-regenerate works from this button.
+        const existing = invoices.activeInvoiceForWorkOrder(await invoices.listByWorkOrder(id), id);
+        if (existing) {
+          return [200, { ok: true, invoice: existing, alreadyExisted: true }];
         }
-      }
-      if (!woLineItems.length) {
-        return sendJson(res, 422, { ok: false, errors: [
-          "This work order has no billable line items. Build the on-site quote first (Issues → Draft Quote) so there's something to invoice."
-        ] });
-      }
-      const inv = await invoices.createDraft({
-        woId: wo.id,
-        quoteId: wo.onSiteQuote?.quoteId || null,
-        propertyId: wo.propertyId,
-        customerName: wo.customerName || "",
-        customerEmail: wo.customerEmail || "",
-        customerPhone: wo.customerPhone || "",
-        address: wo.address || "",
-        lineItems: woLineItems,
-        notes: wo.techNotes ? wo.techNotes.slice(0, 500) : ""
+        // PJL-96: bill the seasonal fee the way the completion cascade does —
+        // re-resolved from the zones recorded (unless it was priced at
+        // signing), and a price-pending line as a suggestion Patrick
+        // confirms. It used to bill the booked tier as seeded.
+        let billWo = wo;
+        if (wo.type === "fall_closing" || wo.type === "spring_opening") {
+          try {
+            const billProperty = await properties.get(wo.propertyId);
+            const commercial = await customers.isCommercialAccount(billProperty?.customerId || wo.customerId || null);
+            const refresh = pricingLib.refreshSeasonalBaseline(wo, billProperty, { commercial, frozen: workOrders.isScopeFrozen(wo) });
+            if (refresh.changed) billWo = { ...wo, onSiteQuote: { ...(wo.onSiteQuote || {}), builderLineItems: refresh.lines } };
+          } catch (err) { console.warn("[create-invoice] seasonal fee re-resolve failed:", err?.message); }
+        }
+        const woLineItems = pricingLib.billableLines(billWo, completionCascade.lineItemsFromWo(billWo));
+        // PJL-100 #7 — a no-charge visit has no invoice by design (Fix #8).
+        // "Generate invoice now" used to draft a $0 one here, which /send
+        // then emailed to the customer. Judged on the lines this route would
+        // actually bill — AFTER the PJL-96 re-price above, which turns a
+        // price-pending custom-size line into its suggested amount, so a
+        // closing Patrick prices is never mistaken for a no-charge one.
+        {
+          const sr = wo.status === "completed" ? await properties.findServiceRecordByWo(wo.propertyId, wo.id).catch(() => null) : null;
+          const noCharge = woLineItems.length
+            ? !(invoices.totalsForLines(woLineItems).total > 0)
+            : isNoChargeServiceRecord(sr);
+          if (noCharge) {
+            return [409, { ok: false, code: "no_charge", errors: ["No charge — this visit cost the customer nothing, so there is no invoice to draft."] }];
+          }
+        }
+        if (!woLineItems.length) {
+          return [422, { ok: false, errors: [
+            "This work order has no billable line items. Build the on-site quote first (Issues → Draft Quote) so there's something to invoice."
+          ] }];
+        }
+        let inv;
+        try {
+          inv = await invoices.createDraft({
+            woId: wo.id,
+            quoteId: wo.onSiteQuote?.quoteId || null,
+            propertyId: wo.propertyId,
+            customerName: wo.customerName || "",
+            customerEmail: wo.customerEmail || "",
+            customerPhone: wo.customerPhone || "",
+            address: wo.address || "",
+            lineItems: woLineItems,
+            notes: wo.techNotes ? wo.techNotes.slice(0, 500) : ""
+          });
+        } catch (err) {
+          // The store holds one active invoice per work order; whatever beat
+          // this call to it is the answer, not an error.
+          if (err?.code !== "wo_already_invoiced") throw err;
+          return [200, { ok: true, invoice: await invoices.get(err.existingInvoiceId), alreadyExisted: true }];
+        }
+        try {
+          await workOrders.appendHistory(id, {
+            action: "invoice_drafted",
+            by: actor,
+            note: `Manual: ${inv.id} ($${Number(inv.total).toFixed(2)})`
+          });
+        } catch (err) { console.warn("[wo-history] manual invoice entry failed:", err?.message); }
+        return [201, { ok: true, invoice: inv, alreadyExisted: false }];
       });
-      try {
-        await workOrders.appendHistory(id, {
-          action: "invoice_drafted",
-          by: await actorLabel(req),
-          note: `Manual: ${inv.id} ($${Number(inv.total).toFixed(2)})`
-        });
-      } catch (err) { console.warn("[wo-history] manual invoice entry failed:", err?.message); }
-      return sendJson(res, 201, { ok: true, invoice: inv, alreadyExisted: false });
+      return sendJson(res, status, body);
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create invoice."] });
     }
