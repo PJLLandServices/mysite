@@ -388,8 +388,11 @@
     margin:18px 0 8px;font-weight:700}
   .hc-card{border:1px solid var(--line,#dfe4ea);border-radius:11px;padding:12px 13px;margin:0 0 10px;
     background:var(--card,#fff)}
-  .hc-card header{display:flex;align-items:center;gap:8px;margin:0 0 7px}
-  .hc-card h3{font-size:14.5px;margin:0;flex:1 1 auto}
+  /* background/color/padding are reset explicitly as well as renamed: the
+     rename is the fix, this is the belt on top of it. */
+  .hc-card .hc-head{display:flex;align-items:center;gap:8px;margin:0 0 7px;
+    background:none;color:inherit;padding:0}
+  .hc-card .hc-head h3{font-size:14.5px;margin:0;flex:1 1 auto;color:inherit}
   .hc-kind{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted,#6b7683);
     border:1px solid var(--line,#dfe4ea);border-radius:99px;padding:2px 7px;font-weight:700}
   .hc-tip{font-size:12.5px;color:var(--muted,#6b7683);margin:0 0 8px;font-style:italic;
@@ -403,9 +406,9 @@
   .hc-not{font-size:12.5px;line-height:1.5;margin:9px 0 0;padding:8px 10px;border-radius:8px;
     background:var(--bg,#f7f8fa);color:#59636e}
   .hc-not b{color:var(--ink,#1b2129)}
-  .hc-card footer{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:10px 0 0;
-    padding-top:8px;border-top:1px solid var(--line,#dfe4ea)}
-  .hc-card footer>span{font-size:11px;color:var(--muted,#6b7683);text-transform:uppercase;
+  .hc-card .hc-foot{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:10px 0 0;
+    padding-top:8px;border-top:1px solid var(--line,#dfe4ea);background:none}
+  .hc-card .hc-foot>span{font-size:11px;color:var(--muted,#6b7683);text-transform:uppercase;
     letter-spacing:.06em;font-weight:700}
   .hc-link{border:0;background:none;padding:2px 0;font:inherit;font-size:12.5px;cursor:pointer;
     color:var(--accent,#2f7d4f);text-decoration:underline;text-underline-offset:2px}
@@ -971,13 +974,18 @@ function helpCard(e){
   const sym = HELP.svg(e.icon);
   const kind = e.kind==='tool' ? 'tool' : e.kind==='action' ? 'button' : e.kind==='concept' ? 'idea' : 'readout';
   const also = (e.seeAlso||[]).map(id=>{ const t=HELP.byId(id); return t?`<button type="button" class="hc-link" onclick="helpShow('${id}')">${helpEsc(t.name)}</button>`:''; }).join('');
+  // Classed divs, NOT <header>/<footer>. The page styles the bare element
+  // `header` with a full-width green gradient and white text (line 19), so
+  // a <header> inside a help card rendered as a green banner with a white
+  // glyph. Bare element selectors in this page reach anything that uses
+  // that tag, so the card uses tags nothing else claims.
   return `<article class="hc-card" id="hc-${helpEsc(e.id)}">
-    <header><span class="hc-sym">${sym}</span><h3>${helpEsc(e.name)}</h3><span class="hc-kind">${kind}</span></header>
+    <div class="hc-head"><span class="hc-sym">${sym}</span><h3>${helpEsc(e.name)}</h3><span class="hc-kind">${kind}</span></div>
     ${e.tip?`<p class="hc-tip">${helpEsc(e.tip)}</p>`:''}
     <div class="hc-body">${helpPara(e.body)}</div>
     ${e.isNot?`<p class="hc-not"><b>What it is not.</b> ${helpEsc(e.isNot)}</p>`:''}
     ${(e.alsoSearched||[]).length?`<p class="hc-also">Sometimes searched as: ${(e.alsoSearched||[]).map(w=>`<i>${helpEsc(w)}</i>`).join(', ')} — not the term for it, but it brings you here.</p>`:''}
-    ${also?`<footer><span>See also</span>${also}</footer>`:''}
+    ${also?`<div class="hc-foot"><span>See also</span>${also}</div>`:''}
   </article>`;
 }
 
@@ -5021,7 +5029,15 @@ function mpZonePanel(){
   let h='';
   h+=`<div style="display:flex;align-items:center;gap:8px;margin:2px 0 6px"><i style="width:12px;height:12px;border-radius:3px;background:${mpZoneColour(zi)};flex:0 0 auto"></i><b style="font-size:13.5px">${esc(z.name)}</b></div>`;
   h+=`<dl class="mp-kv">`;
-  h+=`<dt>Flow</dt><dd>${z.gpm.toFixed(1)} GPM${z.half?` <small>· valve ${z.half} of 2, station ${(z.station||0)+1} · ${(z.stationGpm||z.gpm).toFixed(1)} GPM together</small>`:''}</dd>`;
+  // "together" is only true when the two valves SHARE a station. Printed
+  // unconditionally it told Patrick his separated tree valves run together
+  // — the same false sentence the Split tooltip carried, in a different
+  // corner of the same panel. A split half now reads its real arrangement.
+  const otherHalf = z.half==='A' ? 'B' : 'A';
+  const stn = (z.station||0)+1;
+  h+=`<dt>Flow</dt><dd>${z.gpm.toFixed(1)} GPM${z.half?` <small>· valve ${z.half} of 2 · ${z.shareStation
+      ? `station ${stn} with valve ${otherHalf} · ${(z.stationGpm||z.gpm).toFixed(1)} GPM together`
+      : `station ${stn}, its own`}</small>`:''}</dd>`;
   h+=`<dt>Runs on</dt><dd>${z.grouped?`${z.members.length} beds`:(z.headCount?`${z.headCount} head${z.headCount===1?'':'s'}`:'—')}${nTrees?` <small>· ${nTrees} tree${nTrees===1?'':'s'}</small>`:''}</dd>`;
   h+=`<dt>Valve box</dt><dd>${where}</dd>`;
   h+=`</dl>`;
