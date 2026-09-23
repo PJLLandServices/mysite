@@ -388,8 +388,12 @@
     border-left:2px solid var(--line,#dfe4ea);padding-left:9px}
   .hc-body p{font-size:13.5px;line-height:1.55;margin:0 0 8px}
   .hc-body p:last-child{margin-bottom:0}
+  /* NOT var(--muted): muted on the tinted background is 4.35:1, under the
+     4.5:1 floor test-crm-contrast enforces. This text is the half of an
+     entry that stops a wrong assumption — it is read on a phone, outside —
+     so it gets a colour with headroom (5.75:1) rather than the minimum. */
   .hc-not{font-size:12.5px;line-height:1.5;margin:9px 0 0;padding:8px 10px;border-radius:8px;
-    background:var(--bg,#f7f8fa);color:var(--muted,#6b7683)}
+    background:var(--bg,#f7f8fa);color:#59636e}
   .hc-not b{color:var(--ink,#1b2129)}
   .hc-card footer{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:10px 0 0;
     padding-top:8px;border-top:1px solid var(--line,#dfe4ea)}
@@ -1003,8 +1007,16 @@ function helpShow(id){
   const e=HELP.byId(id); if(e) helpSeed(e.name);
 }
 
-function mpHelpOpen(){
-  if(HELP.missing){ alert('The help centre did not load. Reload the page — your design is untouched.'); return; }
+async function mpHelpOpen(){
+  // pjlDialog, not a native alert: the repo's lint-no-native-dialogs gate
+  // forbids alert/confirm/prompt outside the migration allowlist, and it is
+  // right to — a native dialog blocks the page and looks nothing like the
+  // rest of the builder.
+  if(HELP.missing){
+    await pjlDialog.alert('The help centre did not load. Reload the page — your design has not been touched.',
+                          { title: 'Help unavailable' });
+    return;
+  }
   let ov=document.getElementById('hcOverlay');
   if(!ov){
     ov=document.createElement('div'); ov.id='hcOverlay'; ov.className='hc-overlay';
