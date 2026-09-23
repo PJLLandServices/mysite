@@ -2035,7 +2035,15 @@ const { resolveCustomerForLead, finishCustomerForLead, promoteCustomerOnBooking 
 // re-stamp through syncBookingFromLead would recurse, because that is what
 // schedules the re-stamp.
 async function mirrorBookingOnly(lead) {
-  return bookings.upsertFromLead(lead);
+  // isFinishedWo lets the mirror see that a live record's visit is already
+  // done, so a returning customer's new booking gets its own record rather
+  // than being merged into last season's (PJL-97).
+  return bookings.upsertFromLead(lead, {
+    isFinishedWo: async (woId) => {
+      const wo = await workOrders.get(woId);
+      return Boolean(wo) && ["completed", "cancelled", "no_show"].includes(wo.status);
+    }
+  });
 }
 
 async function syncBookingFromLead(lead) {

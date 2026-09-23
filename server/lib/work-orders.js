@@ -731,13 +731,26 @@ const SCOPE_PROTECTED_FIELDS = [
 const WO_TERMINAL_STATUSES = new Set(["completed", "cancelled", "no_show"]);
 function workOrderForLeadBooking(lead, wos) {
   if (!lead) return null;
-  const mine = (Array.isArray(wos) ? wos : [])
+  let mine = (Array.isArray(wos) ? wos : [])
     .filter((w) => w && w.leadId === lead.id && !w.deletedAt && !w.archivedAt);
   if (!mine.length) return null;
   const envelopeId = lead.booking?.workOrder?.id || null;
+  // A previous visit's WO is refused even when the envelope names it: an
+  // old April booking rescheduled to October keeps April's envelope id,
+  // and the fall card opened April's completed job (PJL-97). The test is
+  // bookings.isPreviousVisitWo, the same one every booking-record reader
+  // asks. Required here, not at the top: several suites load this file
+  // alone from a sandbox and never call this function.
+  const { isPreviousVisitWo } = require("./bookings");
   if (envelopeId) {
     const exact = mine.find((w) => w.id === envelopeId);
-    if (exact) return exact;
+    if (exact && !isPreviousVisitWo(exact, lead.booking?.start)) return exact;
+    if (exact) {
+      // The refused WO must not come straight back through the steps below
+      // (its createdAt passes the envelope-timestamp test by construction).
+      mine = mine.filter((w) => w.id !== exact.id);
+      if (!mine.length) return null;
+    }
   }
   const bookedType = lead.booking?.serviceKey ? templateForServiceKey(lead.booking.serviceKey) : null;
   const sameType = mine.filter((w) => !bookedType || w.type === bookedType);

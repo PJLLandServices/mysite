@@ -243,18 +243,43 @@ function holdsItsSlot(status) {
 // Takes WO objects rather than reading them, so this lib still never
 // requires work-orders.js (see remove()'s isActiveWo for the same seam).
 const WO_FINISHED_STATUSES = new Set(["completed", "cancelled", "no_show"]);
+
+// The one test behind it, also asked by workOrders.workOrderForLeadBooking:
+// does this WO belong to a visit BEFORE the one starting at `visitStart`?
+// Only a finished WO can. It is a previous visit's when it finished before
+// the visit's local day, unless it is a COMPLETED WO scheduled for that very
+// day: that is this visit's own job, done ahead of the booked date. With no
+// visit date there is nothing to judge by, and the answer is no.
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+function parseLocal(value) {
+  if (!value) return null;
+  const text = String(value).trim();
+  if (DATE_ONLY_RE.test(text)) {
+    const [y, m, d] = text.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  }
+  const when = new Date(text);
+  return Number.isNaN(when.getTime()) ? null : when;
+}
+function isPreviousVisitWo(wo, visitStart) {
+  if (!wo || !WO_FINISHED_STATUSES.has(wo.status)) return false;
+  const when = parseLocal(visitStart);
+  if (!when) return false;
+  const dayStart = new Date(when.getFullYear(), when.getMonth(), when.getDate()).getTime();
+  const dayEnd = new Date(when.getFullYear(), when.getMonth(), when.getDate() + 1).getTime();
+  if (wo.status === "completed") {
+    const sched = parseLocal(wo.scheduledFor);
+    if (sched && sched.getTime() >= dayStart && sched.getTime() < dayEnd) return false;
+  }
+  const finished = Date.parse(wo.completedAt || wo.updatedAt || "");
+  return !(Number.isFinite(finished) && finished >= dayStart);
+}
+
 function workOrdersForVisit(rec, wos) {
   const ids = Array.isArray(rec?.workOrderIds) ? rec.workOrderIds : [];
   const byId = new Map((Array.isArray(wos) ? wos : []).filter((w) => w && w.id).map((w) => [w.id, w]));
   const linked = ids.map((id) => byId.get(id)).filter(Boolean);
-  const when = rec?.scheduledFor ? new Date(rec.scheduledFor) : null;
-  if (!when || Number.isNaN(when.getTime())) return linked;
-  const dayStart = new Date(when.getFullYear(), when.getMonth(), when.getDate()).getTime();
-  return linked.filter((w) => {
-    if (!WO_FINISHED_STATUSES.has(w.status)) return true;
-    const finished = Date.parse(w.completedAt || w.updatedAt || "");
-    return Number.isFinite(finished) && finished >= dayStart;
-  });
+  return linked.filter((w) => !isPreviousVisitWo(w, rec?.scheduledFor));
 }
 
 // The same rule, answered as ids: the record's workOrderIds minus those
@@ -378,22 +403,55 @@ async function listByProperty(propertyId) {
 // start) gets a fresh confirmed record. A re-sync of the SAME booking
 // onto a dead record (the cascade re-syncing a completed job) is a
 // no-op on status: nothing revives a finished appointment by accident.
-async function upsertFromLead(lead) {
+//
+// A LIVE record whose visit is already done (PJL-97). Nothing closes a
+// booking record when its work order completes, so a returning customer's
+// April record was still `confirmed` when they booked the fall, and the
+// reuse below moved it to October and appended the fall WO: one record,
+// two seasons, and every reader acting on April's finished job. When the
+// caller can say whether a WO is finished (`isFinishedWo(woId)`, the same
+// seam remove()'s isActiveWo uses — this lib never reads work orders), a
+// NEW booking arriving on a live record whose linked WOs are ALL finished
+// closes that record as completed and gets a fresh one. A reschedule of
+// the same booking, a live record with work still open, or a record with
+// no WO yet is reused exactly as before; with no checker passed nothing
+// changes at all.
+async function upsertFromLead(lead, { isFinishedWo = null } = {}) {
   if (!lead || !lead.booking) return null;
   const records = await readAll();
   const now = new Date().toISOString();
   const booking = lead.booking;
   const forLead = records.filter((b) => b.leadId === lead.id);
-  const live = forLead.find((b) => holdsItsSlot(b.status));
+  let live = forLead.find((b) => holdsItsSlot(b.status));
   const dead = forLead.find((b) => !holdsItsSlot(b.status));
   const woId = booking.workOrder?.id || null;
   const isSameBooking = (rec) => Boolean(rec) && (
     (woId && (rec.workOrderIds || []).includes(woId))
     || (booking.start && rec.scheduledFor === booking.start)
   );
+  let closedLive = null;
+  if (live && woId && typeof isFinishedWo === "function" && !isSameBooking(live)) {
+    const linked = Array.isArray(live.workOrderIds) ? live.workOrderIds : [];
+    const finished = linked.length
+      ? await Promise.all(linked.map((id) => Promise.resolve(isFinishedWo(id)).catch(() => false)))
+      : [];
+    if (finished.length && finished.every(Boolean)) {
+      live.status = "completed";
+      live.updatedAt = now;
+      live.history = Array.isArray(live.history) ? live.history : [];
+      live.history.push({
+        ts: now,
+        action: "closed_by_rebook",
+        by: "system",
+        note: `Visit done (${linked.join(", ")}); new booking ${woId} gets its own record`
+      });
+      closedLive = live;
+      live = null;
+    }
+  }
   // Reuse: the live record, else a dead record that IS this booking.
   const existing = live || (dead && isSameBooking(dead) ? dead : null);
-  const rebookedOver = !existing && dead ? dead : null;
+  const rebookedOver = !existing ? (closedLive || dead || null) : null;
 
   // Admin force-booking marker. When the lead.booking was created via
   // the admin Custom-time override, we mirror the flag onto the
@@ -999,6 +1057,7 @@ module.exports = {
   holdsItsSlot,
   workOrdersForVisit,
   workOrderIdsForVisit,
+  isPreviousVisitWo,
   customerState,
   customerStateLabel,
   CUSTOMER_STATE_LABELS,
