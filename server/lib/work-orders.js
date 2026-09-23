@@ -706,6 +706,51 @@ const SCOPE_PROTECTED_FIELDS = [
   "customerNotes"
 ];
 
+// Which work order belongs to the lead's CURRENT booking.
+//
+// A returning customer is one lead with many visits: April's opening left
+// a completed WO on the lead, and September's closing re-booked the same
+// lead with a new envelope id (lead.booking.workOrder.id). Today and Open
+// WO used to answer "any WO on the lead" — whichever came last in the
+// file — so the fall stop showed "Completed / View WO" for the spring job
+// and the closing could not be started (fall-closing fix #2).
+//
+// The rule, in order:
+//   1. The WO whose id IS the booking envelope's id. Every create path
+//      (Open WO, the CRM create) reuses that id, so this is the normal hit
+//      — and it is right even when that WO is completed (today's job done).
+//   2. Otherwise the newest WO still in progress on the lead. A job opened
+//      before the office moved its booking is still that job.
+//   3. Otherwise a finished WO only if it was created AFTER this booking
+//      was made — a finished WO from an earlier booking is never reused.
+//   4. Otherwise null: the caller creates a fresh WO for this booking.
+// Deleted and archived WOs never count.
+const WO_TERMINAL_STATUSES = new Set(["completed", "cancelled", "no_show"]);
+function workOrderForLeadBooking(lead, wos) {
+  if (!lead) return null;
+  const mine = (Array.isArray(wos) ? wos : [])
+    .filter((w) => w && w.leadId === lead.id && !w.deletedAt && !w.archivedAt);
+  if (!mine.length) return null;
+  const envelopeId = lead.booking?.workOrder?.id || null;
+  if (envelopeId) {
+    const exact = mine.find((w) => w.id === envelopeId);
+    if (exact) return exact;
+  }
+  const newest = (list) => [...list].sort((a, b) =>
+    String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))[0] || null;
+  const open = mine.filter((w) => !WO_TERMINAL_STATUSES.has(w.status));
+  if (open.length) return newest(open);
+  const bookedAt = Date.parse(lead.booking?.workOrder?.createdAt || "");
+  if (Number.isFinite(bookedAt)) {
+    const sinceBooking = mine.filter((w) => Date.parse(w.createdAt || "") >= bookedAt);
+    if (sinceBooking.length) return newest(sinceBooking);
+    return null;
+  }
+  // A legacy booking with no envelope timestamp: nothing says the
+  // finished WO is from another visit, so keep the old answer.
+  return envelopeId ? null : newest(mine);
+}
+
 // Is this WO's scope frozen? `wo.locked` is the single authority.
 //
 // Every lock path sets it: drawn signature (server.js sets payload.locked
@@ -1440,7 +1485,10 @@ async function create({ type, lead, property, customId, quote = null, project = 
 
   const records = await readAll();
   const wo = blankWorkOrder();
-  if (customId) wo.id = customId;
+  // Never mint a second record under an id already in the store (a
+  // deleted WO still holds its id) — two records with one id would make
+  // every get() answer the wrong one.
+  if (customId && !records.some((r) => r.id === customId)) wo.id = customId;
   wo.type = type;
 
   // Brief 2 — build-mode wiring. parentProjectId + dailyLog seeded.
@@ -2259,6 +2307,7 @@ module.exports = {
   canAdoptDeclaredZones,
   canBuildOnSiteQuote,
   isScopeFrozen,
+  workOrderForLeadBooking,
   findProtectedFieldTouched,
   summarizeScopeAdditions,
   captureSignatureBypass: withStoreLock(captureSignatureBypass),

@@ -236,6 +236,10 @@ changed except where named below. Server-side suites boot the real server from a
   name), and THROW on a damaged file instead of reading it as `[]`. `scripts/test-store-concurrency.mjs`
   (60 lib rounds per store + 50 HTTP rounds of PATCH+PATCH+photo, corrupt/zero-byte files fail loudly
   and are left untouched). Old code: lost writes every round, torn file, crash.
+- **#2 Returning customer's Today card.** Today and `POST /api/leads/:id/open-wo` pick the WO for the
+  lead's CURRENT booking (`workOrders.workOrderForLeadBooking`: envelope id, else an in-progress WO,
+  else a finished WO created after this booking; never an earlier booking's finished WO).
+  `create()` no longer mints a duplicate id. `scripts/test-wo-current-booking.mjs`; old code: 11 fail.
 **2026-09-21, last (The System Builder's maths moves out of the page):** Phases 0 and 1 of the
 System Builder work, to Patrick's brief: build a characterization safety net, then extract ONLY
 the calculation engine, leaving persistence, quote creation and proposal-section generation

@@ -23419,7 +23419,15 @@ async function orderDayForDriving(rows) {
 
     const allLeads = await readLeads();
     const allWos = await workOrders.list();
-    const woByLeadId = new Map(allWos.map((w) => [w.leadId, w]));
+    // One lead can carry several visits (a spring opening and this fall's
+    // closing). The row shows the WO for THIS booking, never "whichever WO
+    // on the lead came last" — see workOrders.workOrderForLeadBooking.
+    const wosByLeadId = new Map();
+    for (const w of allWos) {
+      if (!w.leadId) continue;
+      if (!wosByLeadId.has(w.leadId)) wosByLeadId.set(w.leadId, []);
+      wosByLeadId.get(w.leadId).push(w);
+    }
     // The canonical booking id per lead, so a row on the phone can name
     // the record it wants removed. The lead's embedded booking is a read
     // cache and carries no id of its own.
@@ -23479,7 +23487,7 @@ async function orderDayForDriving(rows) {
       .map((lead) => {
         const start = new Date(lead.booking.start);
         const end = lead.booking.end ? new Date(lead.booking.end) : null;
-        const wo = woByLeadId.get(lead.id) || null;
+        const wo = workOrders.workOrderForLeadBooking(lead, wosByLeadId.get(lead.id)) || null;
         // Reuse the lead's contact extractor when present — it has the
         // street/town/postal split that the tech needs for clean display.
         const contact = lead.contactExport || lead.contact || {};
@@ -23887,13 +23895,12 @@ async function orderDayForDriving(rows) {
       const lead = allLeads.find((l) => l.id === leadId);
       if (!lead) return sendJson(res, 404, { ok: false, errors: ["Lead not found."] });
 
-      // Existing WO for this lead? Return it.
-      const existing = await workOrders.listByLead(leadId);
-      if (existing.length) {
-        // Most-recent first — listByLead doesn't sort, so pick the
-        // newest by updatedAt.
-        existing.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-        return sendJson(res, 200, { ok: true, workOrder: existing[0], created: false });
+      // Existing WO for THIS booking? Return it. Not "any WO on the lead":
+      // a returning customer's completed spring WO is not this fall's
+      // closing (fall-closing fix #2, workOrderForLeadBooking).
+      const existingForBooking = workOrders.workOrderForLeadBooking(lead, await workOrders.listByLead(leadId));
+      if (existingForBooking) {
+        return sendJson(res, 200, { ok: true, workOrder: existingForBooking, created: false });
       }
 
       // Create a new WO. Pick the template from the booked service and
