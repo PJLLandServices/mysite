@@ -69,7 +69,7 @@ function world() {
     throw new Error("unexpected " + p);
   };
   const load = () => vm.runInNewContext(src + "\n({ openFieldWorkOrder, flushBeforeFinish, resolveFieldConflicts, fieldStatus });",
-    { createQueue, readLocal, writeLocal, storeForOwner, HOST: "https://x.local", AuthRequiredError: class AuthRequiredError extends Error {},
+    { createQueue, readLocal, writeLocal, storeForOwner, HOST: "https://x.local", AuthRequiredError: class AuthRequiredError extends Error {}, withClientVersion: (headers) => headers,
       fetch, AbortController, setTimeout, clearTimeout, AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) } });
   // The office, at the desk, straight to the server.
   S.officeWo = (patch) => { Object.assign(S.wo, patch); if (patch.zones) S.wo.zones = patch.zones.map(hydrateZone); S.wo.updatedAt = tick(); };

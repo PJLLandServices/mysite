@@ -41,6 +41,7 @@ import DayMap from './DayMap';
 import MonthSheet from './MonthSheet';
 import { colors, radius, space, type } from '../theme';
 import { runningVersionLabel } from '../updates';
+import { clientVersionText } from '../clientVersion';
 import { fieldDay } from '../offline/field';
 import { Pill, PickerSheet, PromptSheet } from '../ui';
 import { REMOVAL_REASONS, reasonByCode, removalLabel, removalNote } from '../removal-reasons';
@@ -318,6 +319,9 @@ export default function TodayScreen({ onOpenWorkOrder, onAddStop, refreshToken =
     scrollRef.current.scrollTo({ y: Math.max(0, top - 12), animated: true });
   };
   const versionLabel = runningVersionLabel();
+  // Which commit/update/runtime this phone runs — read here to confirm a
+  // release landed, and matched against the server's [field-client] log.
+  const versionLines = clientVersionText();
   const anchor = fromYmd(selected || payload?.date || ymd(new Date()));
   const weekStart = startOfWeek(anchor);
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
@@ -564,6 +568,9 @@ export default function TodayScreen({ onOpenWorkOrder, onAddStop, refreshToken =
       {versionLabel ? (
         <Text style={styles.version}>App updated {versionLabel}</Text>
       ) : null}
+      {versionLines.map((line) => (
+        <Text key={line} style={styles.versionDetail} selectable>{line}</Text>
+      ))}
       <View style={styles.footerSpace} />
 
       <PickerSheet
@@ -784,5 +791,6 @@ const styles = StyleSheet.create({
   removedNote: { ...type.caption, color: colors.text, lineHeight: 19, marginTop: 2 },
 
   version: { ...type.caption, textAlign: 'center', paddingTop: space.md },
+  versionDetail: { ...type.caption, textAlign: 'center' },
   footerSpace: { height: space.lg },
 });

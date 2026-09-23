@@ -5755,3 +5755,33 @@ export are required before push; device acceptance is still outstanding.
 See docs/FIELD_OFFLINE_RELEASE.md for release order, limitations, the Mac/Xcode
 procedure, and airplane-mode/restart/signature/bypass checks. This entry does
 not mark FLOW-31 PASS or claim a production/iPhone walkthrough.
+
+## 2026-09-23 — FIELD-VERSION-01: the phone says which commit it runs (FLOW-31/32 release check, awaiting iPhone acceptance)
+
+On 2026-09-23 the server ran main while every phone still ran JavaScript from
+before 2026-09-11: the two OTA publishes since then had both refused ("no
+installed build can receive this update"), and the phone's only label was
+"App updated <time>". Nothing, on the phone or the server, named the commit.
+
+Now: the build and update workflows stamp `GITHUB_SHA` into
+`pjl-field/src/buildInfo.json` before EAS bundles (committed locally in the
+runner, never pushed; the file in git is a placeholder of nulls, and the
+stamper refuses to run without a commit). The Today tab footer shows the
+commit, whether it is the build's own bundle or an OTA update (with its update
+id), and the runtime. Every app request carries `x-pjl-client`; the server
+writes one `[field-client] <user> runs commit=… source=… run=… update=…
+runtime=… channel=…` log line per user per version, and
+`GET /api/admin/field-clients` (admin only, memory only) lists the latest.
+
+A release is on a phone only when the Today tab, the log line and main's
+commit all agree. A green TestFlight or EAS run is not that evidence.
+
+Boundaries: JavaScript only (no native module; the fingerprint is unchanged,
+4737af92… before and after). The header is informational: the server never
+rejects, delays or changes a request because of it, and a malformed value is
+not logged. Customer-facing pages, invoicing, booking and messaging are
+untouched.
+
+Tests: `scripts/test-field-version-stamp.mjs`, 17 of 21 fail on the parent
+commit and 31 of 31 pass; whole build:check and an iOS Metro export pass. Not
+PASS until the installed build shows the expected commit and the log agrees.

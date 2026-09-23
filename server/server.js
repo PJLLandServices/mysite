@@ -41,6 +41,7 @@ const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms } = require(
 const testRecipients = require("./lib/test-recipients");
 const { countSystemDesign } = require("./lib/system-design-counts");
 const fieldPhotoUploads = require("./lib/field-photo-uploads");
+const fieldClients = require("./lib/field-clients");
 const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
 const voicemailStore = require("./lib/voicemail-store");
@@ -721,6 +722,20 @@ function signPayload(encodedPayload, secret) {
 
 // Read + verify the session cookie. Returns { uid, role, exp } on success
 // or null on any failure (missing / malformed / bad signature / expired).
+// The signed-in user behind a field-app request, for the [field-client]
+// log line (lib/field-clients.js). The email is looked up only when the
+// line is actually written — a new user or a new version.
+async function noteFieldClient(req) {
+  const header = String(req.headers[fieldClients.CLIENT_VERSION_HEADER] || "");
+  const session = await readSession(req).catch(() => null);
+  const who = session ? { id: session.uid, role: session.role } : null;
+  if (who && fieldClients.wouldLog(header, who)) {
+    const u = await users.get(session.uid).catch(() => null);
+    if (u?.email) who.email = u.email;
+  }
+  fieldClients.noteClientVersion(header, who);
+}
+
 async function readSession(req) {
   try {
     const config = await readAuthConfig();
@@ -1340,6 +1355,8 @@ function needsAuth(method, pathname) {
   // Email-health view (JOB-008) — admin-cookie gated, admin only.
   if (pathname.startsWith("/api/admin/email-health")) return "admin";
   if (pathname === "/api/admin/purge-test-data") return "admin";
+  // Which commit each phone reports running (lib/field-clients.js).
+  if (pathname === "/api/admin/field-clients") return "admin";
   // One-time backfill for pre-2026-09-20 project conversions — bulk
   // write across every project, same admin-only bar as purge-test-data.
   if (pathname === "/api/admin/projects/backfill-proposal-enrichment") return "admin";
@@ -8069,6 +8086,15 @@ async function handleApi(req, res, pathname) {
       console.error("[bulk-actions] dispatch error:", error);
       return sendJson(res, 500, { ok: false, error: error?.message || "Bulk action failed." });
     }
+  }
+
+  // GET /api/admin/field-clients — the latest commit/update/runtime each
+  // signed-in phone reported (x-pjl-client). A release is on a phone when
+  // this, the "[field-client]" log line and the phone's Today tab all name
+  // the same commit. Admin-only (needsAuth). Memory only: empty after a
+  // restart until each phone makes its next request.
+  if (pathname === "/api/admin/field-clients" && req.method === "GET") {
+    return sendJson(res, 200, { ok: true, clients: fieldClients.listClientVersions() });
   }
 
   // GET /api/admin/email-health — JOB-008 Task 4. Last-7-day sent/failed
@@ -27907,6 +27933,12 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(204);
       res.end();
       return;
+    }
+
+    // Field app: record which commit this phone runs (x-pjl-client). Fire
+    // and forget — it never delays or refuses the request it rides on.
+    if (pathname.startsWith("/api/") && req.headers[fieldClients.CLIENT_VERSION_HEADER]) {
+      noteFieldClient(req).catch(() => {});
     }
 
     const authHandled = await handleAuth(req, res, pathname);
