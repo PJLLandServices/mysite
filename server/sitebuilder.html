@@ -494,6 +494,8 @@
     <div id="areas"></div>
     <div class="btnrow">
       <button onclick="addArea()">+ Add area</button>
+      <button class="ghost" onclick="expandAllAreas(true)">Open all</button>
+      <button class="ghost" onclick="expandAllAreas(false)">Close all</button>
       <button class="ghost" onclick="openCustomerForm()">Customer quote sheet</button>
       <button class="ghost" onclick="window.print()">Print full (internal)</button>
     </div>
@@ -915,28 +917,54 @@ const num=id=>parseFloat(el(id).value)||0;
 
 const STR_KEYS = new Set(["name","mode","family","rotorNoz","mpNoz","sprayBody","spraySeries","stripNoz","stripBody","dripProduct","dripDir"]);
 const RENDER_KEYS = new Set(["mode","family","rotorNoz","mpNoz","sprayBody","spraySeries","stripNoz","stripBody","dripProduct"]);
-// Make each major section collapsible; header (with its number) stays visible.
+/* Every major section starts CLOSED, and so does every area card.
+
+   A real job is twenty areas long. Opened out, the page is several screens
+   of form fields you have to scroll past to reach the one you came for, and
+   on a phone in a driveway that is the whole screen. Closed, the page is a
+   list you can see at once and open what you need.
+
+   THE PROJECT PANEL IS THE EXCEPTION, AND IS NOT COLLAPSIBLE AT ALL.
+   It holds the project name, the saved-state line, the Save to project
+   button and the warning shown when a design could not be read. Collapsing
+   it hides the thing you act with and the thing that warns you not to. It
+   is the page's status bar, not a section of content.                     */
+const COLLAPSE_KEY = 'sb_collapse_v2';   // v2: the default flipped to closed
 function initCollapse(){
-  let state={}; try{ state=JSON.parse(localStorage.getItem('sb_collapse')||'{}'); }catch(e){}
+  let state={}; try{ state=JSON.parse(localStorage.getItem(COLLAPSE_KEY)||'{}'); }catch(e){}
   document.querySelectorAll('.wrap > .panel').forEach(p=>{
+    if(p.id === 'projectPanel') return;                 // never collapsible
     const h=p.querySelector(':scope > h2'); if(!h) return;
     p.classList.add('collapsible');
     const key=h.textContent.trim();
-    if(state[key]) p.classList.add('collapsed');
+    // Closed unless this section was deliberately opened before. Only an
+    // explicit false counts as "leave it open" — an absent key is the new
+    // default, which is why the storage key moved to v2 rather than being
+    // read in place.
+    if(state[key] !== false) p.classList.add('collapsed');
     h.addEventListener('click', ()=>{
       const now=p.classList.toggle('collapsed');
-      state[key]=now; try{ localStorage.setItem('sb_collapse', JSON.stringify(state)); }catch(e){}
+      state[key]=now; try{ localStorage.setItem(COLLAPSE_KEY, JSON.stringify(state)); }catch(e){}
     });
   });
 }
-const collapsedZones = new Set();   // indices of collapsed area cards (transient UI state)
+// Which area cards are OPEN. Empty means every one is closed, which is the
+// state the page loads in — the inverse of how this was tracked before, so
+// that "nothing recorded" means "closed" rather than "open".
+const expandedZones = new Set();
 function toggleAreaCollapse(i){
   const card=el('areas').children[i]; if(!card) return;
-  if(card.classList.toggle('collapsed')) collapsedZones.add(i); else collapsedZones.delete(i);
+  if(card.classList.toggle('collapsed')) expandedZones.delete(i); else expandedZones.add(i);
 }
-function startEmptyDesign(){ collapsedZones.clear(); areas=[]; routing={}; valveGroupModes={}; render(); }
-function addArea(){ collapsedZones.clear(); areas.push(newArea()); render(); markDirty(); }
-function delArea(i){ collapsedZones.clear(); areas.splice(i,1); render(); markDirty(); }
+function expandAllAreas(open){
+  expandedZones.clear();
+  if(open) areas.forEach((_,i)=>expandedZones.add(i));
+  render();
+}
+function startEmptyDesign(){ expandedZones.clear(); areas=[]; routing={}; valveGroupModes={}; render(); }
+// A just-added area opens: it is empty and you added it in order to fill it.
+function addArea(){ areas.push(newArea()); expandedZones.clear(); expandedZones.add(areas.length-1); render(); markDirty(); }
+function delArea(i){ expandedZones.clear(); areas.splice(i,1); render(); markDirty(); }
 function upd(i,k,v){
   areas[i][k] = STR_KEYS.has(k) ? v : (parseFloat(v)||0);
   if(k==="family"){ familyDefaults(areas[i]); delete areas[i].layout; delete areas[i].manualHeads; }  // heads are family-specific
@@ -1164,7 +1192,7 @@ function render(){
         `;
     const gsum=(()=>{ try{ const g=geom(a); return g.noShape?'no shape drawn':Math.round(g.sqft).toLocaleString()+' sq ft'; }catch(e){ return ''; } })();
     const famLabel=(FAMILIES[a.family]||{}).label||a.family;
-    const c=document.createElement('div'); c.className='areacard'+(collapsedZones.has(i)?' collapsed':'');
+    const c=document.createElement('div'); c.className='areacard'+(expandedZones.has(i)?'':' collapsed');
     c.innerHTML=`
       <div class="areatitle" onclick="toggleAreaCollapse(${i})">
         <span class="chev"></span>

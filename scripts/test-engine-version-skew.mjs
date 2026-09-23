@@ -27,14 +27,15 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { v8WithSplits } from "./fixtures/v8-split-designs.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const STALE_REF = process.argv.includes("--stale-ref")
-  ? process.argv[process.argv.indexOf("--stale-ref") + 1] : "origin/main~1";
+// The name the page calls into the engine for. Removing it from the
+// engine's exports is what "an older engine" means, in the only sense that
+// matters here.
+const NEEDED = "splitStationRule";
 
 let pass = 0; const failures = [];
 const check = (name, cond, detail = "") => {
@@ -71,10 +72,19 @@ console.log("\nA. The engine cannot go stale in the first place");
 // ── B. A stale engine is reported, and the save is withdrawn ─────────
 console.log("\nB. If it goes stale anyway, the page refuses to pretend");
 const page_html = fs.readFileSync(path.join(ROOT, "server", "sitebuilder.html"));
-const fresh = fs.readFileSync(path.join(ROOT, "server", "sitebuilder-engine.js"));
-let stale = null;
-try { stale = execFileSync("git", ["show", `${STALE_REF}:server/sitebuilder-engine.js`], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024 }); }
-catch { console.log(`  SKIP no engine at ${STALE_REF} — cannot build a stale pair`); }
+const fresh = fs.readFileSync(path.join(ROOT, "server", "sitebuilder-engine.js"), "utf8");
+
+// The stale engine is SYNTHESISED, not fetched from a commit. An earlier
+// version of this test took the engine from origin/main~1 — which stopped
+// being stale the moment this fix merged and main moved on, so the test
+// quietly started asserting nothing. A stale engine is not "an old commit",
+// it is "an engine missing something the page calls", so that is what is
+// built: the current engine with one export removed.
+const stale = fresh.replace(new RegExp(`\\b${NEEDED},\\s*`), "");
+check(`the page calls ENGINE.${NEEDED}`,
+      new RegExp(`ENGINE\\.${NEEDED}\\(`).test(page_html.toString()));
+check("the stale engine really is missing it",
+      stale !== fresh && !new RegExp(`\\b${NEEDED},`).test(stale), "the export was not removed");
 
 async function open(engine, { withDesign }) {
   const srv = http.createServer((req, res) => {
@@ -106,7 +116,7 @@ async function open(engine, { withDesign }) {
   } finally { await browser.close(); srv.close(); }
 }
 
-if (stale) {
+{
   const bad = await open(stale, { withDesign: true });
   check("a stale engine is detected rather than swallowed", bad.unreadable, JSON.stringify(bad));
   check("the Save button is GONE, not merely disabled", !bad.hasSaveButton);
