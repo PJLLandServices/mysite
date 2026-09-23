@@ -16464,8 +16464,14 @@ async function handleApi(req, res, pathname) {
 
       // Upload any attached photos first, stamping taskId on each.
       const photoMetas = [];
-      if (Array.isArray(payload.photos) && payload.photos.length) {
-        const existing = Array.isArray(wo.photos) ? wo.photos : [];
+      // PJL-100 #1 — under the SAME per-WO photo lock as the upload and
+      // delete routes, reading the photo list fresh inside it. This block
+      // used to number and write back its photos from the copy read at the
+      // top of the route, so a normal upload landing meanwhile lost one of
+      // the two photos (10/10 rounds).
+      if (Array.isArray(payload.photos) && payload.photos.length) await fieldPhotoUploads.run(woId, async () => {
+        const fresh = (await workOrders.get(woId)) || wo;
+        const existing = Array.isArray(fresh.photos) ? fresh.photos : [];
         const remaining = MAX_PHOTOS_PER_WO - existing.length;
         if (remaining > 0) {
           // Stamp taskId on each photo before validation.
@@ -16491,7 +16497,7 @@ async function handleApi(req, res, pathname) {
             console.warn("[tasks-done photos] upload failed:", photoErr?.message);
           }
         }
-      }
+      });
 
       // Record the per-day log line (delta + resulting cumulative), then flip
       // the project's master task (authoritative). Same order as before
