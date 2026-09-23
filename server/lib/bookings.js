@@ -282,6 +282,22 @@ function workOrdersForVisit(rec, wos) {
   return linked.filter((w) => !isPreviousVisitWo(w, rec?.scheduledFor));
 }
 
+// The canonical record that IS the lead's current booking (PJL-93): a live
+// record naming the booking envelope's WO id, else a live one at the
+// booking's start, else the lead's only live record. A WO raised for the
+// booking is linked to this record and nothing else. Last season's closed
+// record is never it.
+function recordForLeadBooking(records, lead) {
+  const booking = lead?.booking;
+  if (!lead?.id || !booking) return null;
+  const live = (Array.isArray(records) ? records : [])
+    .filter((r) => r && r.leadId === lead.id && holdsItsSlot(r.status));
+  const envelopeId = booking.workOrder?.id || null;
+  return (envelopeId && live.find((r) => (r.workOrderIds || []).includes(envelopeId)))
+    || (booking.start && live.find((r) => r.scheduledFor === booking.start))
+    || (live.length === 1 ? live[0] : null);
+}
+
 // The same rule, answered as ids: the record's workOrderIds minus those
 // whose WO belongs to a previous visit. An id with no WO behind it yet (the
 // booking envelope's id, before anyone opens the work order) is kept,
@@ -1058,6 +1074,7 @@ module.exports = {
   workOrdersForVisit,
   workOrderIdsForVisit,
   isPreviousVisitWo,
+  recordForLeadBooking,
   customerState,
   customerStateLabel,
   CUSTOMER_STATE_LABELS,

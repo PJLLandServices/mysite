@@ -2,6 +2,38 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-23 (FLOW-32 — a returning customer's fall booking is its own visit, PJL-97 + PJL-93):**
+Found auditing Fix #2 (#2 above covers Today's card and Open WO). Nothing closes a booking record
+when its work order completes, so a spring customer's April record stayed `confirmed`, and the fall
+re-booking (`bookings.upsertFromLead`) REUSED it: `scheduledFor` moved to October and the fall WO id
+was appended, one record reading `["WO-APRIL","WO-FALL"]`. Every reader of the record's work orders
+then acted on April's finished job: admin reschedule 409'd "Technician has already arrived" (April's
+`arrivedAt`) or, without it, re-dated April's completed WO onto the new day, where Today drew it as a
+ghost ✓ stop; the portal refused online reschedule AND cancel (`multi_wo_booking` / `wo_locked`); the
+iCal event linked April's WO; route re-timing froze or re-dated it; admin delete refused. Three
+commits. (1) **Readers:** one rule, `bookings.workOrdersForVisit(rec, wos)` (+ `workOrderIdsForVisit`),
+backed by `bookings.isPreviousVisitWo(wo, visitStart)` — a finished WO belongs to an earlier visit if
+it finished before the visit's local day, unless it is a COMPLETED WO scheduled for that day (the
+visit done ahead of time). Called from `rescheduleBooking`, portal booking-actions, portal cancel
+(guards + cascade), `retimeCustomerBooking`, the iCal link, Today's canonical pass and admin delete's
+`isActiveWo`; live data already holds merged records, so this is the half that repairs them.
+(2) **Writer:** `upsertFromLead(lead, { isFinishedWo })` closes a live record whose linked WOs are ALL
+finished as `completed` (history `closed_by_rebook`) when a NEW booking (unseen envelope id, different
+start) arrives, and makes a fresh record; `mirrorBookingOnly` passes the checker. Reschedules, open
+work, records with no WO yet and callers without a checker are unchanged. `workOrderForLeadBooking`
+step 1 now skips an envelope-named WO that `isPreviousVisitWo` refuses (an old April booking moved to
+October kept April's envelope and reopened April's job). (3) **PJL-93:** the CRM new-WO form attaches
+to `bookings.recordForLeadBooking()` only, not every record the lead has; Open WO links a WO it had to
+create under a fresh id to that record too. Left alone on purpose: `lib/assignments.js` (per-season
+assignment records, "has any WO" is right there), `bookings.remove` (the caller's `isActiveWo` carries
+the rule), and the CRM history views (`server/bookings.js` count badge, `server/booking.js` detail,
+`server/work-order.js` booking lookup) which show a record's whole history, including records merged
+before this shipped. Tests (in `build:check`): `test-merged-booking-readers.mjs` (35; parent: 26
+fail), `test-rebook-fresh-record.mjs` (19; parent: 8 fail), `test-crm-wo-attach.mjs` (17; parent: 5
+fail). **No PASS flow touched.** UNMAPPED — Patrick's walk: open a returning customer's fall booking,
+move it to another day (no "technician has arrived"), confirm April's job keeps its April date and no
+✓ ghost appears on the new day; from their portal, confirm Reschedule and Cancel are offered; check the
+calendar event opens the fall work order.
 **2026-09-23 (A station, a valve and an area are three different things):** Patrick, on Dundalk:
 *"Trees A and Trees B must appear separately, even though they share one controller station. They
 are still two physical valves with separate lateral piping."* Closes SB-01 and SB-02, both opened

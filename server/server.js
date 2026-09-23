@@ -19857,10 +19857,15 @@ async function handleApi(req, res, pathname) {
       // bookings carry workOrderIds[] for multi-day repairs). Looks up
       // the booking via the lead's id since lead.booking is the legacy
       // embedded shape; the canonical Booking record matches by leadId.
+      //
+      // Only the record that IS the lead's current booking (PJL-93). This
+      // used to attach to every record the lead had, so a returning
+      // customer's fall WO was also written onto last season's closed
+      // record.
       if (lead) {
         try {
-          const leadBookings = await bookings.listByLead(lead.id);
-          for (const bk of leadBookings) await bookings.attachWorkOrder(bk.id, wo.id);
+          const current = bookings.recordForLeadBooking(await bookings.listByLead(lead.id), lead);
+          if (current) await bookings.attachWorkOrder(current.id, wo.id);
         } catch (err) { console.warn("[bookings] attachWorkOrder failed:", err?.message); }
       }
 
@@ -24152,6 +24157,16 @@ async function orderDayForDriving(rows) {
       if (sourceQuote) {
         try { await quotes.attachWorkOrder(sourceQuote.id, wo.id); }
         catch (err) { console.warn("[quotes] attachWorkOrder failed:", err?.message); }
+      }
+      // create() mints a fresh id when the envelope's is already taken (a
+      // stale envelope still naming last season's WO). The booking record
+      // only knows the envelope id, so link the new WO to the record for
+      // this booking, or a reschedule would leave it behind (PJL-97).
+      if (customId && wo.id !== customId) {
+        try {
+          const current = bookings.recordForLeadBooking(await bookings.listByLead(lead.id), lead);
+          if (current) await bookings.attachWorkOrder(current.id, wo.id);
+        } catch (err) { console.warn("[bookings] attachWorkOrder failed:", err?.message); }
       }
 
       // Tag the lead with the WO id + log activity.
