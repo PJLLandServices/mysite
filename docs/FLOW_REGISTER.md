@@ -2,6 +2,35 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-23 (FLOW-31 — Fix #6b, PJL-98: the office's edits survive the tech's offline walk):** the
+PJL-77 audit of Fix #6 (`6332c076`, `78cff897`) found four gaps, each reproduced against the real
+queue before fixing, one commit each on `pjl-98-offline-merge`:
+1. **A second queued zone edit silently undid an office edit.** Tech marks Zones 4 and 1 done with no
+   signal, office renames Zone 2: the first sync merged correctly, the second put the old name back —
+   same for property fields (an office shut-off correction). `queue.acknowledge()` rebased the next
+   edit onto the server copy even when office changes had been merged into what was sent. It now
+   rebases only when what went out was exactly the tech's edit.
+2. **A draft on a zone the office removed blocked Finish forever.** Drafts are stamped with "its zone
+   was on the visit"; one rule (`queue.zoneDrafts`) lets only drafts whose zone is still there block.
+   At Finish a stale draft's text goes to the visit's `techNotes` and the draft is cleared, one commit.
+3. **A tech could not remove a zone.** `ZoneStage.confirmRemove` called the admin-only property DELETE
+   first; the 403 read as "Not signed in" and the zone stayed on the visit — which fix #7 bills for.
+   The visit removal is now saved first (queued, offline-safe); then the property is tried
+   (`field.removeZoneFromProperty`). `removePropertyZone`'s 403 is code `forbidden` ("needs the office
+   for now"), never sign-in; on any failure the office is told in `techNotes`. **No permission change —
+   the DELETE rule is PJL-86.**
+4. **PRD D4.** Keep mine now appends each overridden office value to `techNotes` in the same commit, and
+   the answer applies only to the clashes the tech was shown (it was stamped on every pending edit of
+   the record, deciding clashes nobody saw). Main's design is kept: one prompt per clash, Keep mine /
+   Use office's on the banner and at Finish.
+`techNotes` is office-only (not on the customer's report); it is copied to the draft invoice's
+internal notes, and its first line is the service record's summary when the tech wrote none. App-only,
+OTA (SDK 54, no native module, no server change). `scripts/test-field-merge-gaps.mjs` (13 cases, in
+`build:check`): gap 1 failed 3 of 4 on main, gap 2 1 of 2, gap 3 4 of 4, gap 4 3 of 3 — each on its
+parent commit. `test-field-conflicts` 15/15, `test-findings-report` 31/31, `test-field-offline` 16/16,
+`test-field-client` 6/6, `test-app-shell` 25/25 unchanged. **No PASS flow touched; FLOW-31 stays
+awaiting iPhone acceptance** — walk: mark two zones done in airplane mode while the office renames a
+third; remove a zone as a tech; clash one zone label and choose Keep mine, then read the WO notes.
 **2026-09-23 (FLOW-32 — a returning customer's fall booking is its own visit, PJL-97 + PJL-93):**
 Found auditing Fix #2 (#2 above covers Today's card and Open WO). Nothing closes a booking record
 when its work order completes, so a spring customer's April record stayed `confirmed`, and the fall
