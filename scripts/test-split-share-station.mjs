@@ -66,19 +66,26 @@ const showRef = (f) => execFileSync("git", ["show", `${REF}:${f}`], { cwd: ROOT,
 // tree's engine to the reference page would compare this change against
 // itself and pass no matter what it did — so the two versions get a server
 // each rather than sharing one and fighting over that fixed path.
-function serveBuilder(html, engine) {
+function serveBuilder(html, engine, helpJs) {
   const srv = http.createServer((req, res) => {
     const p = new URL(req.url, "http://x").pathname;
     const send = (buf, t) => { res.writeHead(200, { "Content-Type": t + "; charset=utf-8" }); res.end(buf); };
     if (p === "/") return send(html, "text/html");
     if (p === "/admin/sitebuilder-engine.js") return send(engine, "text/javascript");
+    // The help registry, from 2026-09-23. The BEFORE page predates it and
+    // never asks; the AFTER page reads every tooltip out of it.
+    if (p === "/admin/sitebuilder-help.js") return send(helpJs || "", "text/javascript");
     res.writeHead(200, { "Content-Type": "application/json" }); res.end("{}");
   });
   return srv;
 }
-const beforeSrv = serveBuilder(showRef("server/sitebuilder.html"), showRef("server/sitebuilder-engine.js"));
+// The registry as it stands now, served to both pages: the before page
+// simply never requests it.
+const helpNow = () => fs.readFileSync(path.join(ROOT, "server", "sitebuilder-help.js"));
+const beforeSrv = serveBuilder(showRef("server/sitebuilder.html"), showRef("server/sitebuilder-engine.js"), helpNow());
 const afterSrv = serveBuilder(fs.readFileSync(path.join(ROOT, "server", "sitebuilder.html")),
-                              fs.readFileSync(path.join(ROOT, "server", "sitebuilder-engine.js")));
+                              fs.readFileSync(path.join(ROOT, "server", "sitebuilder-engine.js")),
+                              helpNow());
 await new Promise((r) => beforeSrv.listen(0, "127.0.0.1", r));
 await new Promise((r) => afterSrv.listen(0, "127.0.0.1", r));
 const BEFORE_URL = `http://127.0.0.1:${beforeSrv.address().port}/`;
@@ -343,7 +350,8 @@ console.log(`\nE. The notice on screen`);
 {
   const browser = await chromium.launch(chromiumLaunchOpts());
   const srv = serveBuilder(fs.readFileSync(path.join(ROOT, "server", "sitebuilder.html")),
-                           fs.readFileSync(path.join(ROOT, "server", "sitebuilder-engine.js")));
+                           fs.readFileSync(path.join(ROOT, "server", "sitebuilder-engine.js")),
+                              helpNow());
   await new Promise((r) => srv.listen(0, "127.0.0.1", r));
   try {
     const page = await browser.newPage();

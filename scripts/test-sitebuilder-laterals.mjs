@@ -28,6 +28,10 @@ const pjlDialogCss = fs.readFileSync(path.join(here, '..', 'server', 'pjl-dialog
 // refuses to start without it, so the route table below has to serve it.
 const engineJs = fs.readFileSync(path.join(here, '..', 'server', 'sitebuilder-engine.js'), 'utf8');
 
+// The help registry ships with the page (2026-09-23): the toolbar reads
+// every tooltip and label out of it, so a harness that does not serve it
+// renders unlabelled controls.
+const helpJs = fs.readFileSync(path.join(here, '..', 'server', 'sitebuilder-help.js'), 'utf8');
 const PAGE = 'spp_testpage';
 const project = () => ({
   id: 'PROJ-TEST-0002', name: 'Lateral walk', customerName: 'Test', address: '1 Test Rd',
@@ -66,6 +70,7 @@ await page.route('**/*', route => {
   if (url.pathname === '/crm/pjl-dialog.js') return route.fulfill({ contentType: 'application/javascript', body: pjlDialogJs });
   if (url.pathname === '/crm/pjl-dialog.css') return route.fulfill({ contentType: 'text/css', body: pjlDialogCss });
   if (url.pathname === '/admin/sitebuilder-engine.js') return route.fulfill({ contentType: 'text/javascript', body: engineJs });
+  if (url.pathname === '/admin/sitebuilder-help.js') return route.fulfill({ contentType: 'text/javascript', body: helpJs });
   if (url.pathname === '/api/projects/PROJ-TEST-0002' && m === 'GET') {
     const p = project(); if (saved) p.systemDesign = saved;
     return route.fulfill({ json: { ok: true, project: p } });

@@ -95,7 +95,7 @@ const showRef = (f) => execFileSync("git", ["show", `${REF}:${f}`], { cwd: ROOT,
 // "production" became the old page running the new maths. That is not
 // either version, and a comparison between two things neither of which is
 // production proves nothing. Two servers, one per version.
-function serveBuilder(html, engine) {
+function serveBuilder(html, engine, helpJs) {
   return http.createServer((req, res) => {
     const p = new URL(req.url, "http://localhost").pathname;
     const serve = (buf, type) => {
@@ -104,15 +104,20 @@ function serveBuilder(html, engine) {
     };
     if (p === "/") return serve(html, "text/html");
     if (p === "/admin/sitebuilder-engine.js") return serve(engine, "text/javascript");
+    // The help registry (2026-09-23). The PRODUCTION page may predate it
+    // and simply never ask; the candidate page reads its tooltips from it.
+    if (p === "/admin/sitebuilder-help.js") return serve(helpJs || "", "text/javascript");
     // Every API call the page makes gets an empty object. Nothing is fetched
     // and nothing can be saved.
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end("{}");
   });
 }
-const prodSrv = serveBuilder(showRef("server/sitebuilder.html"), showRef("server/sitebuilder-engine.js"));
+const helpNow = () => fs.readFileSync(path.join(ROOT, "server", "sitebuilder-help.js"));
+const prodSrv = serveBuilder(showRef("server/sitebuilder.html"), showRef("server/sitebuilder-engine.js"), helpNow());
 const prSrv = serveBuilder(fs.readFileSync(path.join(ROOT, "server", "sitebuilder.html")),
-                           fs.readFileSync(path.join(ROOT, "server", "sitebuilder-engine.js")));
+                           fs.readFileSync(path.join(ROOT, "server", "sitebuilder-engine.js")),
+                           helpNow());
 await new Promise((r) => prodSrv.listen(0, "127.0.0.1", r));
 await new Promise((r) => prSrv.listen(0, "127.0.0.1", r));
 const PROD_URL = `http://127.0.0.1:${prodSrv.address().port}/`;

@@ -33,10 +33,15 @@ const check = (name, cond, detail = "") => {
 
 const page_html = fs.readFileSync(path.join(ROOT, "server", "sitebuilder.html"));
 const engine = fs.readFileSync(path.join(ROOT, "server", "sitebuilder-engine.js"));
+// The help registry ships with the page (2026-09-23): the toolbar reads
+// every tooltip and label out of it, so a harness that does not serve it
+// renders unlabelled controls.
+const helpJs = fs.readFileSync(path.join(ROOT, "server", "sitebuilder-help.js"));
 const srv = http.createServer((req, res) => {
   const p = new URL(req.url, "http://x").pathname;
   if (p === "/") { res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }); return res.end(page_html); }
   if (p === "/admin/sitebuilder-engine.js") { res.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8" }); return res.end(engine); }
+  if (p === "/admin/sitebuilder-help.js") { res.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8" }); return res.end(helpJs); }
   if (p === "/api/projects/PROJ-TEST") {
     res.writeHead(200, { "Content-Type": "application/json" });
     return res.end(JSON.stringify({ ok: true, project: {
