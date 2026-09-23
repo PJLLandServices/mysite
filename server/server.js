@@ -14335,9 +14335,11 @@ async function handleApi(req, res, pathname) {
       // skipSms — for re-drafting an invoice after a correction. Without it a
       // re-run schedules a fresh "your invoice is ready" text to a customer
       // who either already got one or shouldn't be contacted by a re-cut.
-      const result = await completionCascade.run(wo, {
+      // PJL-100 (nit) — under the same per-WO lock as the phone's Finish,
+      // so a desk re-run landing with it makes one invoice, not two.
+      const result = await serializeOn(`completion-cascade:${id}`, async () => completionCascade.run((await workOrders.get(id)) || wo, {
         skipInvoiceSms: payload?.skipSms === true
-      });
+      }));
       return sendJson(res, 200, { ok: true, ...result });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't run cascade."] });
