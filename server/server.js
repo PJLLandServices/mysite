@@ -121,7 +121,7 @@ function stampAssetVersions(html, version = ASSET_VERSION) {
 }
 const seasonsLib = require("./lib/seasons");
 const customers = require("./lib/customers");
-const { writeJsonAtomic } = require("./lib/atomic-json");
+const { writeJsonAtomic, serialize: serializeOn } = require("./lib/atomic-json");
 const { createLock } = require("./lib/booking-lock");
 const holds = require("./lib/booking-holds");
 const purgeTestData = require("./lib/purge-test-data");
@@ -20122,6 +20122,22 @@ async function handleApi(req, res, pathname) {
         }
       }
 
+      // A RE-SENT signature is not a new one (fall-closing fix #4). The
+      // phone's Finish reached the server, the job completed, and the
+      // response was lost to the driveway's signal; the retry carries the
+      // very same signature. Refusing it 409 wo_locked left every retry
+      // saying "Couldn't finish" on a job that was done. An identical
+      // signature on an already-signed WO is dropped from the payload and
+      // the rest of the retry (status: completed) proceeds as a no-op.
+      // A DIFFERENT signature still meets the lock below.
+      if (payload && payload.signature && typeof payload.signature === "object"
+          && existing.signature?.signed
+          && typeof payload.signature.imageData === "string"
+          && payload.signature.imageData === existing.signature.imageData) {
+        delete payload.signature;
+        if (payload.locked === true) delete payload.locked;
+      }
+
       // Spec §10 r11 + §4.3.3 r5 — once the WO is locked (signed), any
       // payload that touches a scope-protected field is refused with a
       // 409. Non-scope fields (status forward-progression, photos via
@@ -20237,10 +20253,17 @@ async function handleApi(req, res, pathname) {
       if (updated.status === "completed" && priorStatus !== "completed" && updated.propertyId) {
         const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
         try {
-          cascadeResult = await completionCascade.run(updated, {
+          // EXACTLY ONCE per WO (fall-closing fix #4). Two Finish taps in
+          // the same second both read the WO before either wrote it, so
+          // both saw a transition into completed and both ran the cascade
+          // — two customer emails in 4 of 5 trials. Serialized per WO, the
+          // second run starts after the first has written its service
+          // record, and the cascade's own idempotency check answers
+          // alreadyRan (same invoice, no notify).
+          cascadeResult = await serializeOn(`completion-cascade:${id}`, () => completionCascade.run(updated, {
             notifyAdmin: async (ctx) => { setImmediate(() => runAdminNotify(ctx, baseUrl).catch((e) => console.warn("[cascade] admin notify failed:", e?.message))); },
             notifyCustomer: async (ctx) => { setImmediate(() => runCustomerNotify(ctx).catch((e) => console.warn("[cascade] customer notify failed:", e?.message))); }
-          });
+          }));
         } catch (err) {
           cascadeError = err?.message || "cascade threw";
           console.warn("[cascade] run failed:", cascadeError);
@@ -20496,6 +20519,21 @@ async function handleApi(req, res, pathname) {
         // client can show the recovery banner with "tap to retry."
         // Brief: WO Field-Readiness §6.4.
         responseBody.cascade = { ran: false, error: cascadeError, invoiceId: null };
+      } else if (payload?.status === "completed" && updated.status === "completed" && priorStatus === "completed") {
+        // A Finish RETRY on a job that already completed (the first
+        // response was lost). Answer with the invoice that completion
+        // drafted, so the phone lands on it instead of "Couldn't finish".
+        // Waits for a cascade still running for this WO first.
+        await serializeOn(`completion-cascade:${id}`, async () => {});
+        let invoiceId = null;
+        let invoiceTotal = null;
+        try {
+          const mine = (await invoices.listByWorkOrder(id)).filter((i) => i.status !== "void");
+          mine.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+          invoiceId = mine[0]?.id || null;
+          invoiceTotal = mine[0]?.total ?? null;
+        } catch (err) { console.warn("[wo] completion retry invoice lookup failed:", err?.message); }
+        responseBody.cascade = { ran: false, alreadyRan: true, invoiceId, invoiceTotal, invoiceDraftError: null, propertyEditsApplied: false };
       }
       return sendJson(res, 200, responseBody);
     } catch (error) {

@@ -250,6 +250,11 @@ changed except where named below. Server-side suites boot the real server from a
   **FLOW-23 IS PASS AND WAS TOUCHED — additively:** the payment-intent gate admits exactly what it did
   plus a stamped draft; finalize/stripe.js/webhook untouched, handoff §6 invariants hold. Re-walk one
   real payment. `scripts/test-onsite-payment.mjs`; old code: 13 fail.
+- **#4 Finish is idempotent.** An identical re-sent signature on a signed WO is dropped instead of
+  409 `wo_locked`; a completion retry on a completed WO answers with its invoice id; the cascade runs
+  under a per-WO `serialize` so two Finish taps give one invoice and one customer email. App: Finish
+  re-reads the WO (completed → straight to the invoice; signed → no signature re-sent), 45s/30s
+  timeouts on complete / defer / bypass. `scripts/test-finish-idempotent.mjs`; old code: 15 fail.
 **2026-09-21, last (The System Builder's maths moves out of the page):** Phases 0 and 1 of the
 System Builder work, to Patrick's brief: build a characterization safety net, then extract ONLY
 the calculation engine, leaving persistence, quote creation and proposal-section generation

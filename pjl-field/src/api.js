@@ -108,13 +108,35 @@ export const listPropertyWorkOrders = (propertyId) =>
   getJson(`/api/work-orders?propertyId=${encodeURIComponent(propertyId)}`)
     .then((d) => d.workOrders || []);
 
-async function sendJson(path, method, body) {
-  const res = await fetch(`${HOST}${path}`, {
+// A call that must not spin forever on a driveway's signal. Aborts after
+// `ms` and says so in words the tech can act on; the server-side work is
+// idempotent (fall-closing fix #4), so tapping Finish again is safe.
+export class TimeoutError extends Error {}
+async function fetchWithTimeout(url, options, ms) {
+  if (!ms) return fetch(url, options);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      throw new TimeoutError(`No answer from PJL after ${Math.round(ms / 1000)} seconds. Nothing is lost — tap Finish again when you have signal.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+export const FINISH_TIMEOUT_MS = 45_000;
+export const FINISH_STEP_TIMEOUT_MS = 30_000;
+
+async function sendJson(path, method, body, { timeout = 0 } = {}) {
+  const res = await fetchWithTimeout(`${HOST}${path}`, {
     method,
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     credentials: 'include',
     body: JSON.stringify(body || {}),
-  });
+  }, timeout);
   if (res.status === 401 || res.status === 403) throw new AuthRequiredError();
   const text = await res.text();
   let data;
@@ -147,7 +169,8 @@ export const createWorkOrderForProperty = ({ type, propertyId }) =>
 // work order but does NOT complete it — completion is the separate call
 // below, same as the web page.
 export const signatureBypass = (id, { reason, note }) =>
-  sendJson(`/api/work-orders/${encodeURIComponent(id)}/signature-bypass`, 'POST', { reason, note });
+  sendJson(`/api/work-orders/${encodeURIComponent(id)}/signature-bypass`, 'POST', { reason, note },
+    { timeout: FINISH_STEP_TIMEOUT_MS });
 
 // Sign (when there is someone to sign) and complete, in one PATCH — the
 // server applies the signature, flips status, AWAITS the completion
@@ -162,12 +185,12 @@ export async function completeWorkOrder(id, { signature = null, arrivedAt = null
   if (signature) body.signature = signature;
   if (arrivedAt) body.arrivedAt = arrivedAt;
   if (departedAt) body.departedAt = departedAt;
-  const res = await fetch(`${HOST}/api/work-orders/${encodeURIComponent(id)}`, {
+  const res = await fetchWithTimeout(`${HOST}/api/work-orders/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     credentials: 'include',
     body: JSON.stringify(body),
-  });
+  }, FINISH_TIMEOUT_MS);
   if (res.status === 401 || res.status === 403) throw new AuthRequiredError();
   const text = await res.text();
   let data;
@@ -457,7 +480,8 @@ export const replyToThread = (leadId, message) =>
 // deferred recommendations. Takes no payload — the server reads the
 // zones. Called once, at finish.
 export const deferIssues = (id) =>
-  sendJson(`/api/work-orders/${encodeURIComponent(id)}/issues/defer`, 'POST');
+  sendJson(`/api/work-orders/${encodeURIComponent(id)}/issues/defer`, 'POST', {},
+    { timeout: FINISH_STEP_TIMEOUT_MS });
 
 // The zone label a tech corrects on site belongs to the property, not
 // just to today's visit — that is the whole point of correcting it.

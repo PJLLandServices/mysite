@@ -224,13 +224,25 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
       const { queue, key } = field.current;
       queue.draft(key, 'signoff', result);
       await flushBeforeFinish(queue, key);
+      // The server's copy decides where this Finish picks up. A previous
+      // tap may have completed the job and lost only its response
+      // (fall-closing fix #4): then the job is done, and re-sending the
+      // signature or re-running the transfer is exactly what must not
+      // happen. A completed WO goes straight on to its invoice.
       const freshBeforeFinish = await getWorkOrder(workOrderId);
-      if (freshBeforeFinish.zones?.some(z => z.issues?.length)) await deferIssues(workOrderId);
+      const alreadyDone = freshBeforeFinish?.status === 'completed';
+      if (!alreadyDone && freshBeforeFinish.zones?.some(z => z.issues?.length)) await deferIssues(workOrderId);
       const nowIso = new Date().toISOString();
       let data;
-      if (result.mode === 'customer') {
+      if (alreadyDone) {
+        // Completing a completed job is a no-op the server answers with
+        // the invoice that completion drafted.
+        data = await completeWorkOrder(workOrderId, {});
+      } else if (result.mode === 'customer') {
         data = await completeWorkOrder(workOrderId, {
-          signature: result.signature,
+          // Signed already (the lock landed, the response did not): the
+          // signature is on file — send the completion only.
+          signature: freshBeforeFinish?.signature?.signed ? null : result.signature,
           arrivedAt: wo?.arrivedAt ? null : nowIso,
           departedAt: wo?.departedAt ? null : nowIso,
         });
