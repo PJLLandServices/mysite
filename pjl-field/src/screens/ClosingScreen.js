@@ -177,8 +177,9 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
   if (closeoutDone < closeoutTotal) blockers.push(`${closeoutTotal - closeoutDone} close-out step${closeoutTotal - closeoutDone === 1 ? '' : 's'} left`);
 
   // Close-out preserves the findings with this visit and opens sign-off.
-  // The server transfer clears WO issues, so it must wait until all queued
-  // zone edits have landed. The transfer runs before connected completion.
+  // The server transfer copies WO issues to the property (and stamps them),
+  // so it must wait until all queued zone edits have landed. The transfer
+  // runs before connected completion.
   const toSignOff = useCallback(() => {
     Alert.alert(
       'Finish the walk-through?',
@@ -231,7 +232,9 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
       // happen. A completed WO goes straight on to its invoice.
       const freshBeforeFinish = await getWorkOrder(workOrderId);
       const alreadyDone = freshBeforeFinish?.status === 'completed';
-      if (!alreadyDone && freshBeforeFinish.zones?.some(z => z.issues?.length)) await deferIssues(workOrderId);
+      // Findings are COPIED to the property and stay on this visit's report
+      // (fall-closing fix #5); only ones not yet copied need the call.
+      if (!alreadyDone && freshBeforeFinish.zones?.some(z => z.issues?.some(i => !i.deferredId))) await deferIssues(workOrderId);
       const nowIso = new Date().toISOString();
       let data;
       if (alreadyDone) {

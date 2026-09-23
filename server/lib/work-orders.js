@@ -1338,7 +1338,11 @@ function hydrateIssue(issue) {
     // for legacy issues / types without subtype options.
     subtype: typeof issue?.subtype === "string" ? issue.subtype : "",
     qty: Number.isFinite(Number(issue?.qty)) && Number(issue?.qty) > 0 ? Number(issue.qty) : 1,
-    notes: issue?.notes || ""
+    notes: issue?.notes || "",
+    // Set once the finding has been copied to the property's deferred
+    // recommendations (fall-closing fix #5). The issue STAYS on the WO so
+    // this visit's report lists it; the id makes the transfer idempotent.
+    ...(typeof issue?.deferredId === "string" && issue.deferredId ? { deferredId: issue.deferredId } : {})
   };
 }
 

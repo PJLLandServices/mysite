@@ -255,6 +255,11 @@ changed except where named below. Server-side suites boot the real server from a
   under a per-WO `serialize` so two Finish taps give one invoice and one customer email. App: Finish
   re-reads the WO (completed → straight to the invoice; signed → no signature re-sent), 45s/30s
   timeouts on complete / defer / bypass. `scripts/test-finish-idempotent.mjs`; old code: 15 fail.
+- **#5 Findings stay on the Service Report.** `POST /api/work-orders/:id/issues/defer` COPIES each
+  finding to the property's deferred list and keeps it on the WO stamped `deferredId` (idempotent); a
+  failed copy keeps the finding unstamped and is named in `notTransferred`, never cleared. The issue
+  rollup skips stamped findings. Per-issue defer and emergency routes still MOVE (unchanged — the app
+  does not use them). `scripts/test-findings-report.mjs` (pdftotext + email); old code: 9 fail.
 **2026-09-21, last (The System Builder's maths moves out of the page):** Phases 0 and 1 of the
 System Builder work, to Patrick's brief: build a characterization safety net, then extract ONLY
 the calculation engine, leaving persistence, quote creation and proposal-section generation

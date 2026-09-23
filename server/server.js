@@ -22019,26 +22019,46 @@ Customer signature captured at ${new Date().toISOString()}.`;
       if (!propertyId) {
         return sendJson(res, 422, { ok: false, errors: ["Cannot defer issues — work order has no linked property."] });
       }
+      // COPY, don't move (fall-closing fix #5). Each finding is copied to
+      // the property's deferred recommendations and STAYS on the WO,
+      // stamped with its deferredId — the customer's Service Report
+      // renders from the WO's zones, and clearing them left it saying "no
+      // findings" while the email promised they were in it. A finding
+      // whose copy FAILED keeps no stamp and is reported, never silently
+      // dropped; a stamped one is never copied twice (retry-safe).
       const deferredIds = [];
-      const remainingZones = (wo.zones || []).map((z) => ({ ...z, issues: [] }));
+      const failures = [];
+      const nextZones = [];
       for (const z of wo.zones || []) {
+        const issues = [];
         for (const issue of z.issues || []) {
+          if (issue.deferredId) { issues.push(issue); continue; }
           try {
             const entry = await properties.addDeferredIssue(propertyId, deferredPayloadFromIssue(wo, z.number, issue, "fall_visit_no_repairs_policy"));
-            if (entry?.id) deferredIds.push(entry.id);
-          } catch (_e) {}
+            if (!entry?.id) throw new Error("no deferred entry was written");
+            deferredIds.push(entry.id);
+            issues.push({ ...issue, deferredId: entry.id });
+          } catch (err) {
+            console.warn(`[defer] zone ${z.number} issue ${issue.id} not transferred:`, err?.message);
+            failures.push({ zone: z.number, issueId: issue.id, error: String(err?.message || err).slice(0, 200) });
+            issues.push(issue);
+          }
         }
+        nextZones.push({ ...z, issues });
       }
-      // Clear the issues off the WO so the tech UI reflects everything's deferred.
-      await workOrders.update(id, { zones: remainingZones });
+      if (deferredIds.length) await workOrders.update(id, { zones: nextZones });
       try {
         await workOrders.appendHistory(id, {
           action: "issues_bulk_deferred",
           by: "tech",
-          note: `${deferredIds.length} issue${deferredIds.length === 1 ? "" : "s"} routed to deferred recommendations (fall closing find-only)`
+          note: `${deferredIds.length} issue${deferredIds.length === 1 ? "" : "s"} copied to deferred recommendations (fall closing find-only)`
+            + (failures.length ? ` — ${failures.length} NOT transferred, still on the work order` : "")
         });
       } catch (err) { console.warn("[wo-history] bulk-defer entry failed:", err?.message); }
-      return sendJson(res, 200, { ok: true, deferredCount: deferredIds.length, deferredIds });
+      // A failed copy does not block Finish: the finding is still on this
+      // visit (and its report), and the next call copies whatever is
+      // unstamped. It is named in the response and the history instead.
+      return sendJson(res, 200, { ok: true, deferredCount: deferredIds.length, deferredIds, notTransferred: failures });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't defer issues."] });
     }

@@ -429,7 +429,11 @@ function rollupIssuesToLineItems(wo, pricing) {
   const zoneLines = [];
   const zones = Array.isArray(wo && wo.zones) ? wo.zones : [];
   for (const zone of zones) {
-    zoneLines.push(...rollupZone(pricing, zone));
+    // An issue already moved to the property's deferred recommendations
+    // stays on the WO so the visit's report still lists it (fall-closing
+    // fix #5) — but it is deferred, so it is never quoted from here.
+    const live = Array.isArray(zone?.issues) ? zone.issues.filter((i) => !(i && i.deferredId)) : zone?.issues;
+    zoneLines.push(...rollupZone(pricing, live === zone?.issues ? zone : { ...zone, issues: live }));
   }
 
   const lines = [];
