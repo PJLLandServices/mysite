@@ -82,9 +82,16 @@ function merge3(base, mine, theirs, prefer, path, conflicts) {
   // The office's only change was the server's stamp: the phone's edit
   // (including removing the row) stands.
   if (equal(withoutStamp(theirs), withoutStamp(base))) return mine;
-  if (prefer === 'mine') return mine;
-  if (prefer === 'theirs') return theirs;
-  conflicts.push(path.join(' › '));
+  // `prefer` is the tech's answer for the clashes they were SHOWN, by path
+  // (PJL-98 gap 4). A plain string is the older, whole-record answer that
+  // a phone may still carry from the previous release.
+  const where = path.join(' › ');
+  const choice = typeof prefer === 'string' ? prefer : prefer?.[where];
+  if (choice === 'mine') return mine;
+  if (choice === 'theirs') return theirs;
+  // Both values travel with the clash, so "Keep mine" can keep the office's
+  // in the visit notes instead of throwing it away.
+  conflicts.push({ path: where, mine: mine ?? null, theirs: theirs ?? null });
   return mine;
 }
 
@@ -231,9 +238,10 @@ export function createQueue({ store, transport }) {
                 if (!equal(merged, remote[field])) changes[field] = merged;
               }
               if (conflicts.length) {
+                const paths = conflicts.map(c => c.path);
                 throw Object.assign(issue(
-                  `The office also changed ${conflicts.slice(0, 2).join(' and ')}${conflicts.length > 2 ? ` (+${conflicts.length - 2} more)` : ''}. Choose which version to keep.`,
-                  'conflict'), { paths: conflicts });
+                  `The office also changed ${paths.slice(0, 2).join(' and ')}${paths.length > 2 ? ` (+${paths.length - 2} more)` : ''}. Choose which version to keep.`,
+                  'conflict'), { paths, clashes: conflicts, entryId: entry.id });
               }
               if (Object.keys(changes).length && entry.key.startsWith('wo:') && ['completed', 'cancelled', 'no_show'].includes(remote.status)) {
                 throw issue('This visit has been closed on the server. Your field changes are retained for review.', 'closed');
@@ -246,7 +254,8 @@ export function createQueue({ store, transport }) {
             acknowledge(entry, result, sent);
           } catch (err) {
             blocked.add(entry.key);
-            commit(s => { s.errors[entry.key] = { message: err.message || 'Waiting for connection', code: err.code || 'network', ...(err.paths ? { paths: err.paths } : {}) }; });
+            commit(s => { s.errors[entry.key] = { message: err.message || 'Waiting for connection', code: err.code || 'network',
+              ...(err.paths ? { paths: err.paths, clashes: err.clashes, entryId: err.entryId } : {}) }; });
           }
         }
       } catch (err) {
@@ -260,11 +269,33 @@ export function createQueue({ store, transport }) {
   // The tech's answer to a true conflict: keep the phone's version of the
   // contested parts, or take the office's. Everything that did not
   // conflict merges either way. The next flush applies it.
-  const resolveConflict = (key, prefer) => {
+  //
+  // The answer covers exactly what the tech was shown: the paths of the
+  // edit that raised the clash. It used to be stamped on EVERY pending edit
+  // of the record, deciding clashes nobody had seen (PJL-98 gap 4); a later
+  // clash is now asked for like the first. `note` ({ key, field, text }) is
+  // appended in the same commit — the office's overridden values.
+  const resolveConflict = (key, prefer, { note } = {}) => {
     if (!['mine', 'theirs'].includes(prefer)) throw new Error('Choose mine or theirs.');
+    const shown = state.errors[key]?.code === 'conflict' && state.errors[key].entryId && Array.isArray(state.errors[key].paths)
+      ? state.errors[key] : null;
+    const noted = note?.text ? view(note.key) : null;
     commit(s => {
-      for (const p of s.pending) if (p.key === key && p.kind === 'patch') p.prefer = prefer;
+      for (const p of s.pending) {
+        if (p.key !== key || p.kind !== 'patch') continue;
+        if (!shown) { p.prefer = prefer; continue; } // An error recorded by the previous release.
+        if (p.id !== shown.entryId) continue;
+        const answers = typeof p.prefer === 'string' || !p.prefer ? {} : { ...p.prefer };
+        for (const path of shown.paths) answers[path] = prefer;
+        p.prefer = answers;
+      }
       delete s.errors[key];
+      if (noted) {
+        const current = noted[note.field] || '';
+        s.pending.push({ id: `edit-${++s.sequence}`, key: note.key, kind: 'patch',
+          patch: { [note.field]: current ? `${current}\n\n${note.text}` : note.text },
+          before: { [note.field]: noted[note.field] ?? null } });
+      }
     });
   };
   return {

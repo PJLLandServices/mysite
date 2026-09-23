@@ -138,12 +138,19 @@ export function startFieldSync() {
 // One place that writes to the visit's tech notes for the office (office-
 // only; never on the customer's report). Used when the phone has to keep
 // something the office would otherwise never see (PJL-98).
+const techNoteText = lines => [`Field app, ${new Date().toISOString().slice(0, 10)} — kept so nothing is lost:`, ...lines].join('\n');
 function appendTechNote(queue, key, lines, { clearDrafts = [] } = {}) {
   if (!lines.length) return;
   const current = queue.view(key)?.techNotes || '';
-  const text = [`Field app, ${new Date().toISOString().slice(0, 10)} — kept so nothing is lost:`, ...lines].join('\n');
+  const text = techNoteText(lines);
   queue.patch(key, { techNotes: current ? `${current}\n\n${text}` : text }, { clearDrafts });
 }
+const shownValue = v => {
+  if (v == null || v === '') return '(blank)';
+  const text = typeof v === 'string' ? `"${v}"` : JSON.stringify(v);
+  return text.length > 120 ? `${text.slice(0, 117)}…` : text;
+};
+const clashLabel = (path, onProperty) => `${onProperty ? 'Property: ' : ''}${path.replace(/^zones › zone (\S+)/, 'Zone $1')}`;
 const draftText = d => [d?.label ? `label "${d.label}"` : '', d?.notes ? `notes "${d.notes}"` : '',
   d?.repairs && d?.types?.length ? `repairs: ${d.types.join(', ')}` : ''].filter(Boolean).join(', ') || 'no text';
 // The property half of removing a zone (PJL-98 gap 3). The visit half is
@@ -192,10 +199,19 @@ export async function flushBeforeFinish(queue, key) {
 // A true conflict (the office changed the same zone field the tech did)
 // is the tech's call, and he must always be able to make it on the phone.
 // Resolves the visit and its property correction together, then syncs.
+//
+// Keep mine overrides the office, so what the office had goes into the
+// visit's tech notes in the same commit (PRD D4, PJL-98 gap 4): the field
+// copy wins and nothing the office typed is lost. Use office's needs no note.
 export async function resolveFieldConflicts(queue, key, prefer) {
   const propertyId = queue.view(key)?.property?.id;
   for (const k of [key, propertyId ? `prop:${propertyId}` : null]) {
-    if (k && queue.status(k).error?.code === 'conflict') queue.resolveConflict(k, prefer);
+    const error = k ? queue.status(k).error : null;
+    if (error?.code !== 'conflict') continue;
+    const lines = prefer === 'mine'
+      ? (error.clashes || []).map(c => `• ${clashLabel(c.path, k !== key)}: the office had ${shownValue(c.theirs)}; the phone's ${shownValue(c.mine)} was kept.`)
+      : [];
+    queue.resolveConflict(k, prefer, lines.length ? { note: { key, field: 'techNotes', text: techNoteText(lines) } } : {});
   }
   await queue.flush({ retry: true });
   return fieldStatus(queue, key);

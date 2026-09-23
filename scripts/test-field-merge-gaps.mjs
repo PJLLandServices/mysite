@@ -231,5 +231,64 @@ await test("3d. ZoneStage removes the zone from the visit BEFORE touching the pr
   assert.ok(visit > 0 && property > visit, "the visit is not saved first");
 });
 
+// ── Gap 4 ───────────────────────────────────────────────────────────────────
+async function clashOnZone3(w) {
+  const f = w.load(); const { queue: q, key: k } = await f.openFieldWorkOrder("WO-1");
+  w.S.online = false;
+  q.patch(k, { zones: setZone(q.view(k).zones, 3, { location: "Backyard north" }) });
+  w.S.officeWo((wo) => { at(wo.zones, 3).location = "Back garden"; });
+  w.S.online = true;
+  return { f, q, k };
+}
+
+await test("4. Keep mine: the field copy wins AND the office's value is kept in the visit notes (D4)", async () => {
+  const w = world(); const { f, q, k } = await clashOnZone3(w);
+  assert.match(await finish(f, q, k), /^BLOCKED\(conflict\)/, "control: a true clash still asks");
+  await f.resolveFieldConflicts(q, k, "mine");
+  assert.equal(await finish(f, q, k), "OK");
+  assert.equal(at(w.S.wo.zones, 3).location, "Backyard north");
+  assert.match(w.S.wo.techNotes, /Back garden/, "the office's value was thrown away");
+  assert.match(w.S.wo.techNotes, /Zone 3/);
+});
+
+await test("4b. one answer decides only the clash the tech was shown — a later clash is asked, not overwritten", async () => {
+  const w = world(); const f = w.load(); const { queue: q, key: k } = await f.openFieldWorkOrder("WO-1");
+  w.S.online = false;
+  q.patch(k, { zones: setZone(q.view(k).zones, 3, { location: "Backyard north" }) });
+  q.patch(k, { customerNotes: "Dog in yard" });
+  w.S.officeWo((wo) => { at(wo.zones, 3).location = "Back garden"; wo.customerNotes = "Customer away"; });
+  w.S.online = true;
+  const first = await finish(f, q, k);
+  assert.match(first, /zone 3/); assert.doesNotMatch(first, /customerNotes/, "control: only the zone-3 clash is shown first");
+  await f.resolveFieldConflicts(q, k, "mine");
+  assert.equal(w.S.wo.customerNotes, "Customer away", "Keep mine for Zone 3 overwrote an office note the tech never saw");
+  const second = await finish(f, q, k);
+  assert.match(second, /^BLOCKED\(conflict\).*customerNotes/, "the customer-note clash was never asked");
+  await f.resolveFieldConflicts(q, k, "theirs");
+  assert.equal(await finish(f, q, k), "OK");
+  assert.equal(w.S.wo.customerNotes, "Customer away");
+  assert.equal(at(w.S.wo.zones, 3).location, "Backyard north");
+});
+
+await test("4c. a property clash kept as mine is noted on the visit; Use office's writes no note", async () => {
+  const w = world(); const f = w.load(); const { queue: q, key: k } = await f.openFieldWorkOrder("WO-1");
+  const pk = "prop:P-1";
+  w.S.online = false;
+  q.patch(pk, { system: { ...q.view(pk).system, shutoffLocation: "Garage wall" } });
+  w.S.officeProp((p) => { p.system.shutoffLocation = "Basement closet"; });
+  w.S.online = true;
+  assert.match(await finish(f, q, k), /^BLOCKED\(conflict\)/);
+  await f.resolveFieldConflicts(q, k, "mine");
+  assert.equal(await finish(f, q, k), "OK");
+  assert.equal(w.S.prop.system.shutoffLocation, "Garage wall");
+  assert.match(w.S.wo.techNotes, /Basement closet/);
+  const w2 = world(); const c2 = await clashOnZone3(w2);
+  await finish(c2.f, c2.q, c2.k);
+  await c2.f.resolveFieldConflicts(c2.q, c2.k, "theirs");
+  assert.equal(await finish(c2.f, c2.q, c2.k), "OK");
+  assert.equal(at(w2.S.wo.zones, 3).location, "Back garden");
+  assert.equal(w2.S.wo.techNotes, "", "Use office's should leave the notes alone");
+});
+
 console.log(`field-merge-gaps: ${pass} passed, ${fail} failed`);
 process.exitCode = fail ? 1 : 0;
