@@ -19,6 +19,7 @@ import {
   patchWorkOrder, signatureBypass,
 } from '../api';
 import { colors, radius, space, type } from '../theme';
+import { money as formatMoney } from '../format';
 import StartStage from './closing/StartStage';
 import WaterOffStage from './closing/WaterOffStage';
 import ZoneStage from './closing/ZoneStage';
@@ -243,6 +244,23 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
       // happen. A completed WO goes straight on to its invoice.
       const freshBeforeFinish = await getWorkOrder(workOrderId);
       const alreadyDone = freshBeforeFinish?.status === 'completed';
+      // The price follows the zones actually walked (fall-closing fix #7).
+      // When that moves the seasonal fee off what was booked, say so and
+      // let the tech stop before the invoice is drafted.
+      const fee = freshBeforeFinish?.seasonalFee;
+      if (!alreadyDone && fee?.changed && fee.current && fee.atFinish) {
+        const go = await new Promise((resolve) => Alert.alert(
+          'The price follows the zones',
+          `${fee.zoneCount} zone${fee.zoneCount === 1 ? '' : 's'}${fee.commercial ? ' (commercial)' : ''} → ${formatMoney(fee.atFinish.price) ?? '—'}`
+            + ` (booked at ${formatMoney(fee.current.price) ?? '—'}). The invoice will use the new price.`,
+          [
+            { text: 'Go back', style: 'cancel', onPress: () => resolve(false) },
+            { text: 'Finish', onPress: () => resolve(true) },
+          ],
+          { cancelable: true, onDismiss: () => resolve(false) },
+        ));
+        if (!go) return;
+      }
       // Findings are COPIED to the property and stay on this visit's report
       // (fall-closing fix #5); only ones not yet copied need the call.
       if (!alreadyDone && freshBeforeFinish.zones?.some(z => z.issues?.some(i => !i.deferredId))) await deferIssues(workOrderId);

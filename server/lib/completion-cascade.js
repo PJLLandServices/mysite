@@ -199,6 +199,32 @@ async function run(wo, deps = {}) {
   // on a BACK-DATED completion the service record and warranty derive
   // from the actual visit date, not the day the record was closed out.
   const completedAt = wo.completedAt || new Date().toISOString();
+
+  // Bill the zones actually walked, at the account's real tier
+  // (fall-closing fix #7). The seasonal line was snapshotted from the
+  // BOOKED count when the WO was opened, and priced residential always.
+  // Re-resolve it through the pricing resolvers now; a per-property
+  // override and a hand-priced line both still win. The WO's own line is
+  // corrected too, so the WO, the report and the invoice agree.
+  if (wo.type === "fall_closing" || wo.type === "spring_opening") {
+    try {
+      const liveProperty = await properties.get(wo.propertyId);
+      const commercial = await require("./customers").isCommercialAccount(liveProperty?.customerId || wo.customerId || null);
+      const refresh = require("./pricing").refreshSeasonalBaseline(wo, liveProperty, { commercial });
+      if (refresh.changed) {
+        wo = { ...wo, onSiteQuote: { ...(wo.onSiteQuote || {}), builderLineItems: refresh.lines } };
+        await workOrders.update(wo.id, { onSiteQuote: wo.onSiteQuote });
+        try {
+          await workOrders.appendHistory(wo.id, {
+            action: "seasonal_fee_reresolved",
+            by: "system",
+            note: `${refresh.zoneCount} zones${commercial ? " (commercial)" : ""}: ${refresh.before.key} $${refresh.before.price.toFixed(2)} → ${refresh.after.key} $${refresh.after.price.toFixed(2)}`
+          });
+        } catch (_e) {}
+      }
+    } catch (err) { console.warn("[cascade] seasonal fee re-resolve failed:", err?.message); }
+  }
+
   const lineItems = lineItemsFromWo(wo);
   const summary = summarizeWo(wo);
   const warrantyMonths = WARRANTY_MONTHS[wo.type] || 12;

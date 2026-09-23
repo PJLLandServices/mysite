@@ -92,7 +92,9 @@ export const openWorkOrder = (leadId) =>
 export const getWorkOrder = (id) =>
   getJson(`/api/work-orders/${encodeURIComponent(id)}`).then((d) => {
     if (!d?.workOrder) return d;
-    return { ...d.workOrder, property: d.property || null, lead: d.lead || null };
+    // seasonalFee: what Finish will bill for the seasonal line, from the
+    // zones on the WO now (fall-closing fix #7). Null from older servers.
+    return { ...d.workOrder, property: d.property || null, lead: d.lead || null, seasonalFee: d.seasonalFee || null };
   });
 
 // Where a work-order photo actually lives. The stored record carries `n`,

@@ -265,6 +265,13 @@ changed except where named below. Server-side suites boot the real server from a
   leaf changed two ways is a conflict, and the closing screen offers **Keep mine / Use office's**
   (`queue.resolveConflict`, `field.resolveFieldConflicts`). Add a zone goes through the queue; removing
   a zone clears its `zone:N` draft. App-only. `scripts/test-field-conflicts.mjs` (rebuilt audit harness).
+- **#7 Price follows the walked zones and the real tier.** `resolveSeasonalPrice(property, type,
+  { commercial, zoneCount })` (defaults unchanged); `customers.isCommercialAccount` is the commercial
+  rule; the WO seed passes it; the cascade re-resolves the seasonal baseline from the WO's zone count
+  (`pricing.refreshSeasonalBaseline` — property override and hand-priced lines still win, custom tiers
+  left for Patrick) and corrects the WO's line too. `GET /api/work-orders/:id` returns `seasonalFee`;
+  the app confirms "6 zones → $X" before Finish. Other resolveSeasonalPrice callers (property page,
+  portal) still read residential — not changed here. `scripts/test-closing-price.mjs`; old: 12 fail.
 **2026-09-21, last (The System Builder's maths moves out of the page):** Phases 0 and 1 of the
 System Builder work, to Patrick's brief: build a characterization safety net, then extract ONLY
 the calculation engine, leaving persistence, quote creation and proposal-section generation

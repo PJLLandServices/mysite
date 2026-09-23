@@ -192,7 +192,15 @@ function effectiveZoneCount(property) {
 //     zoneCount: number,       // input used for tier lookup (0 when no override hit)
 //     tier:  string | null     // human-readable tier label (e.g. "Spring opening — 7-8 zones residential")
 //   }
-function resolveSeasonalPrice(property, serviceType) {
+//
+// Options (fall-closing fix #7), both defaulting to the old behaviour:
+//   commercial — the owner's accountType is "commercial": use the
+//                commercial tier table. Was hard-coded false, so a
+//                commercial site was always priced residential.
+//   zoneCount  — the zones actually on the work order, when known. A job
+//                booked at 4 zones where the tech walked 6 bills the 5-6
+//                tier, not the tier it was booked at.
+function resolveSeasonalPrice(property, serviceType, { commercial = false, zoneCount: zoneCountOverride = null } = {}) {
   if (serviceType !== "spring_opening" && serviceType !== "fall_closing") {
     throw new Error(
       `resolveSeasonalPrice: serviceType must be 'spring_opening' or 'fall_closing' (got '${serviceType}'). Per-property overrides do not apply to other services — service_call stays canonical.`
@@ -222,8 +230,9 @@ function resolveSeasonalPrice(property, serviceType) {
   // first, the declared count when nothing is mapped (effectiveZoneCount
   // above); missing both buckets into the 1-4 tier (deriveSeasonalKey's
   // existing behavior).
-  const zoneCount = effectiveZoneCount(property);
-  const key = deriveSeasonalKey(serviceType, zoneCount, false);
+  const overrideCount = Math.floor(Number(zoneCountOverride) || 0);
+  const zoneCount = overrideCount > 0 ? overrideCount : effectiveZoneCount(property);
+  const key = deriveSeasonalKey(serviceType, zoneCount, commercial === true);
   if (!key || !PRICING?.items?.[key]) {
     // Defensive: pricing.json never has this state today, but guard so
     // callers always get the documented shape.
@@ -253,4 +262,45 @@ function resolveSeasonalPrice(property, serviceType) {
   };
 }
 
-module.exports = { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice, effectiveZoneCount };
+// The seasonal fee a work order should bill, from the zones actually on it
+// (fall-closing fix #7). The baseline line is seeded when the WO is opened
+// — from the BOOKED count — and the cascade used to bill that snapshot, so
+// 4 booked / 6 walked billed the 1-4 tier. This re-resolves the same line
+// through resolveSeasonalPrice at completion (and for the app's preview):
+//
+//   * a per-property override still wins (it is resolveSeasonalPrice's
+//     first rule — grandfathered/legacy rates included);
+//   * a line Patrick priced by hand on this WO (overridePrice) is left alone;
+//   * a custom-quote tier (16+ residential, 9+ commercial) is left alone —
+//     no flat price to move to; Patrick prices it on the draft;
+//   * only the seasonal baseline line moves; the additional-plumbing line
+//     and anything else is untouched.
+//
+// Returns { lines, changed, before, after, zoneCount } — `lines` is the full
+// builder list with the baseline replaced when changed.
+function refreshSeasonalBaseline(wo, property, { commercial = false } = {}) {
+  const lines = Array.isArray(wo?.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
+  const none = { lines, changed: false, before: null, after: null, zoneCount: 0 };
+  if (wo?.type !== "spring_opening" && wo?.type !== "fall_closing") return none;
+  const idx = lines.findIndex((l) => l && l.source && l.source.baseline === true
+    && !l.source.propertyAdditionalFallBlowout && l.key !== "fall_additional_plumbing" && !l.source.aiBonusCredit);
+  if (idx === -1) return none;
+  const line = lines[idx];
+  const zoneCount = Array.isArray(wo.zones) ? wo.zones.filter((z) => z && (z.kind || "zone") === "zone").length : 0;
+  if (line.overridePrice != null && line.overridePrice !== "") return { ...none, zoneCount };
+  const resolved = resolveSeasonalPrice(property || {}, wo.type, { commercial, zoneCount });
+  if (resolved.custom) return { ...none, zoneCount };
+  const before = { key: line.key || "", price: Number(line.originalPrice) || 0 };
+  const after = { key: resolved.key || line.key || "", price: resolved.price, source: resolved.source, tier: resolved.tier || null };
+  if (before.price === after.price && before.key === after.key) return { ...none, zoneCount, before, after };
+  const next = [...lines];
+  next[idx] = {
+    ...line,
+    key: after.key,
+    originalPrice: after.price,
+    note: resolved.source === "property_override" ? "Per-property rate" : (line.note === "Per-property rate" ? "" : (line.note || ""))
+  };
+  return { lines: next, changed: true, before, after, zoneCount };
+}
+
+module.exports = { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice, effectiveZoneCount, refreshSeasonalBaseline };

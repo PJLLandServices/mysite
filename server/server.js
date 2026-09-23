@@ -56,6 +56,7 @@ const bookingReminders = require("./lib/booking-reminders");
 const welcomeEmail = require("./lib/welcome-email");
 const calendarLinks = require("./lib/calendar-links");
 const { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice } = require("./lib/pricing");
+const pricingLib = require("./lib/pricing");
 const { normalizeServiceFeeWaiver, friendlyWaiverReason } = require("./lib/service-fee-waiver");
 const bookingSessions = require("./lib/booking-sessions");
 const properties = require("./lib/properties");
@@ -19704,7 +19705,9 @@ async function handleApi(req, res, pathname) {
       if (type === "spring_opening" || type === "fall_closing") {
         try {
           const resolved = property
-            ? resolveSeasonalPrice(property, type)
+            // The account's real tier table (fall-closing fix #7): a
+            // commercial site was seeded residential, always.
+            ? resolveSeasonalPrice(property, type, { commercial: await customers.isCommercialAccount(property.customerId) })
             : (() => {
                 // No property linked (ad-hoc WO from /admin/handoff).
                 // Fall back to the old booking-serviceKey path so the
@@ -19878,7 +19881,7 @@ async function handleApi(req, res, pathname) {
       const hasBaseline = existingBuilder.some((l) => l && l.source && l.source.baseline === true);
       if (!hasBaseline) {
         const resolved = property
-          ? resolveSeasonalPrice(property, wo.type)
+          ? resolveSeasonalPrice(property, wo.type, { commercial: await customers.isCommercialAccount(property.customerId) })
           : (() => {
               const fallbackKey = lead?.booking?.serviceKey && PRICING.items?.[lead.booking.serviceKey]
                 ? String(lead.booking.serviceKey)
@@ -19982,7 +19985,26 @@ async function handleApi(req, res, pathname) {
         propertyEdits = completionCascade.computePropertyEdits(wo, property);
       } catch (err) { console.warn("[wo-get] computePropertyEdits failed:", err?.message); }
     }
-    return sendJson(res, 200, { ok: true, workOrder: wo, property, lead, lastService, propertyEdits });
+    // What Finish will bill for the seasonal fee, from the zones on the WO
+    // right now (fall-closing fix #7) — the same resolver the cascade runs,
+    // so the tech sees "6 zones → $105" before tapping Finish. Derived,
+    // never stored; absent on non-seasonal WOs and once completed.
+    let seasonalFee = null;
+    if ((wo.type === "fall_closing" || wo.type === "spring_opening") && wo.status !== "completed") {
+      try {
+        const commercial = await customers.isCommercialAccount(property?.customerId || wo.customerId || null);
+        const refresh = pricingLib.refreshSeasonalBaseline(wo, property, { commercial });
+        if (refresh.before) {
+          seasonalFee = {
+            zoneCount: refresh.zoneCount, commercial,
+            changed: refresh.changed,
+            current: refresh.before,
+            atFinish: refresh.after
+          };
+        }
+      } catch (err) { console.warn("[wo-get] seasonal fee preview failed:", err?.message); }
+    }
+    return sendJson(res, 200, { ok: true, workOrder: wo, property, lead, lastService, propertyEdits, seasonalFee });
   }
 
   if (workOrderMatch && req.method === "PATCH") {

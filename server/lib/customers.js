@@ -1221,8 +1221,23 @@ async function recordVcfDownloadBatch(ids, batchId) {
   return updated;
 }
 
+// Does this customer bill at the COMMERCIAL seasonal tier? The one rule
+// for work-order pricing (fall-closing fix #7): accountType on the owning
+// customer record. An unresolvable customer is residential, the same
+// assumption every tier lookup makes.
+async function isCommercialAccount(customerId) {
+  if (!customerId) return false;
+  try {
+    const owner = await get(customerId, { withProperties: false });
+    return owner?.accountType === "commercial";
+  } catch {
+    return false;
+  }
+}
+
 module.exports = {
   STATUSES,
+  isCommercialAccount,
   normalizeEmail,
   normalizePhone,
   normalizeCommercialContact,
