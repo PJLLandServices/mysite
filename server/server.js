@@ -20790,9 +20790,31 @@ async function handleApi(req, res, pathname) {
         // response was lost). Answer with the invoice that completion
         // drafted, so the phone lands on it instead of "Couldn't finish".
         // Waits for a cascade still running for this WO first.
-        await serializeOn(`completion-cascade:${id}`, async () => {});
-        let invoiceId = null;
-        let invoiceTotal = null;
+        //
+        // PJL-100 #2 — …and if the first attempt completed the WO but its
+        // cascade never ran (the server restarted mid-request, or the
+        // cascade threw), there is no service record: run the cascade now,
+        // under the same per-WO lock, instead of answering "done" with
+        // nothing behind it. The cascade is idempotent, so a second retry
+        // arriving meanwhile finds the service record and only looks up.
+        let retryCascade = null;
+        await serializeOn(`completion-cascade:${id}`, async () => {
+          if (!updated.propertyId) return;
+          const hasRecord = await properties.findServiceRecordByWo(updated.propertyId, id).catch(() => null);
+          if (hasRecord) return;
+          const retryBaseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+          try {
+            retryCascade = await completionCascade.run(await workOrders.get(id) || updated, {
+              notifyAdmin: async (ctx) => { setImmediate(() => runAdminNotify(ctx, retryBaseUrl).catch((e) => console.warn("[cascade] admin notify failed:", e?.message))); },
+              notifyCustomer: async (ctx) => { setImmediate(() => runCustomerNotify(ctx).catch((e) => console.warn("[cascade] customer notify failed:", e?.message))); }
+            });
+          } catch (err) {
+            console.warn("[cascade] run on completion retry failed:", err?.message);
+            try { await workOrders.appendHistory(id, { action: "cascade_failed", by: "system", note: String(err?.message || "cascade threw").slice(0, 200) }); } catch (_e) {}
+          }
+        });
+        let invoiceId = retryCascade?.invoice?.id || null;
+        let invoiceTotal = retryCascade?.invoice?.total ?? null;
         try {
           const mine = (await invoices.listByWorkOrder(id)).filter((i) => i.status !== "void");
           mine.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
@@ -20804,7 +20826,18 @@ async function handleApi(req, res, pathname) {
           try { noCharge = isNoChargeServiceRecord(await properties.findServiceRecordByWo(updated.propertyId, id)); }
           catch (_e) { noCharge = false; }
         }
-        responseBody.cascade = { ran: false, alreadyRan: true, invoiceId, invoiceTotal, invoiceDraftError: null, propertyEditsApplied: false, noCharge };
+        if (retryCascade && retryCascade.ok) {
+          // The retry did the work the first attempt never got to.
+          responseBody.workOrder = (await workOrders.get(id)) || responseBody.workOrder;
+          responseBody.cascade = {
+            ran: true, alreadyRan: false, invoiceId, invoiceTotal,
+            invoiceDraftError: retryCascade.invoiceDraftError || null,
+            propertyEditsApplied: !!retryCascade.propertyEditsApplied,
+            noCharge: retryCascade.noCharge === true || isNoChargeServiceRecord(retryCascade.serviceRecord)
+          };
+        } else {
+          responseBody.cascade = { ran: false, alreadyRan: true, invoiceId, invoiceTotal, invoiceDraftError: null, propertyEditsApplied: false, noCharge };
+        }
       }
       return sendJson(res, 200, responseBody);
     } catch (error) {
