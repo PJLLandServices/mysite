@@ -96,8 +96,22 @@ export interface InvoiceSummary {
   paidAt?: string | null;
 }
 
+/* Three different counts, and they are not interchangeable.
+ *
+ *   stationCount  programmed outputs on the controller. What the proposal
+ *                 raises a line for and what the controller is sized on.
+ *   valveCount    physical valves — a box, a solenoid, a lateral run. Two
+ *                 valves wired to one terminal are two valves, one station.
+ *   areaCount     traced landscape areas. One area can make several valves;
+ *                 grouped drip beds collapse several areas onto one.
+ *
+ * This used to be a single `zoneCount`, which the server filled with
+ * `areas.length` — the area count under a name that belongs to neither of
+ * the other two. */
 export interface SiteBuilderSummary {
-  zoneCount: number;
+  stationCount: number;
+  valveCount: number;
+  areaCount: number;
   lastSavedAt?: string | null;
 }
 

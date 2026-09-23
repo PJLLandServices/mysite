@@ -133,10 +133,14 @@ await withPage({
     depositInvoiceId: 'I-2026-0067', chain: []
   },
   invoiceSummary: { id: 'I-2026-0067', status: 'sent', invoiceRole: 'deposit', total: 9872.13, amountPaid: 0, balanceDue: 9872.13, sentAt: '2026-09-20T12:00:00Z', paidAt: null },
-  siteBuilderSummary: { zoneCount: 4, lastSavedAt: '2026-09-15T12:00:00Z' }
+  // Deliberately three DIFFERENT numbers: a summary that printed one of
+  // them under another's name is the defect this pins.
+  siteBuilderSummary: { stationCount: 4, valveCount: 6, areaCount: 9, lastSavedAt: '2026-09-15T12:00:00Z' }
 }, async (page) => {
   const s = await page.evaluate(readState);
-  check(/4 zones/.test(s.siteBuilder.text) && /last saved/.test(s.siteBuilder.text), `Site Builder shows real zone count + save date inline (got "${s.siteBuilder.text}")`);
+  check(/4 stations/.test(s.siteBuilder.text) && /6 valves/.test(s.siteBuilder.text) &&
+        /9 areas/.test(s.siteBuilder.text) && /last saved/.test(s.siteBuilder.text),
+        `Site Builder names stations, valves and areas separately + save date inline (got "${s.siteBuilder.text}")`);
   check(!s.invoice.hidden, 'Invoice panel renders once there is a real invoice');
   check(/I-2026-0067/.test(s.invoice.text) && /sent/.test(s.invoice.text) && /9,872\.13/.test(s.invoice.text) && /balance due/.test(s.invoice.text),
     `Invoice line shows id, status, total, and balance due — all inline (got "${s.invoice.text}")`);

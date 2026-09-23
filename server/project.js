@@ -269,9 +269,18 @@
       return;
     }
     els.siteBuilderPanel.hidden = false;
-    const zoneLabel = `${sb.zoneCount} zone${sb.zoneCount === 1 ? "" : "s"}`;
+    // Three counts, named. A station is one programmed output; a valve is
+    // a box and a trench; an area is one traced piece of landscape. Two
+    // valves wired to one terminal are two valves on one station, and the
+    // old single "N zones" could not say that — it was the area count
+    // wearing another name.
+    const n = (v, one, many) => `${v} ${v === 1 ? one : many}`;
+    const parts = [];
+    if (sb.stationCount) parts.push(n(sb.stationCount, "station", "stations"));
+    if (sb.valveCount) parts.push(n(sb.valveCount, "valve", "valves"));
+    if (sb.areaCount) parts.push(n(sb.areaCount, "area", "areas"));
     const savedLabel = sb.lastSavedAt ? `last saved ${fmtDate(sb.lastSavedAt)}` : "not yet saved";
-    els.siteBuilderLine.textContent = `${zoneLabel} — ${savedLabel}`;
+    els.siteBuilderLine.textContent = `${parts.join(" · ") || "no areas yet"} — ${savedLabel}`;
   }
 
   const INVOICE_STATUS_LABELS = {

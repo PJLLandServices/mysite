@@ -302,6 +302,15 @@
   .mp-secbody{padding:6px 10px 8px}
   .mp-layers{display:flex;flex-direction:column;gap:1px;padding:4px 4px 6px}
   .mp-layer{display:flex;align-items:center;gap:7px;padding:4px 6px;border-radius:7px;border:1px solid transparent;cursor:pointer;min-width:0}
+  /* Two valves on one controller terminal: a heading naming the station,
+     and the valve rows indented under it. They stay individually
+     selectable — the grouping says what they share, not that they merged. */
+  .mp-station{display:flex;align-items:baseline;justify-content:space-between;gap:8px;
+    padding:7px 6px 3px;font-size:11px;font-weight:700;color:var(--green-d);
+    text-transform:uppercase;letter-spacing:.5px}
+  .mp-station span{font-size:10.5px;font-weight:600;color:var(--muted);text-transform:none;letter-spacing:0}
+  .mp-layer.sub{margin-left:10px;border-left:2px solid var(--line);border-top-left-radius:0;border-bottom-left-radius:0}
+  .mp-layer.sub.on{border-left-color:var(--green)}
   .mp-layer:hover{background:#fff;border-color:var(--line)}
   .mp-layer.on{background:var(--green-l);border-color:var(--green)}
   .mp-layer.hid{opacity:.5}
@@ -3481,6 +3490,17 @@ function mpZoneTreesOf(z, a){
   const sp=splitFor(z);
   return sp ? list.filter(t=>headHalf(sp, t)===z.half) : list;
 }
+// Does this valve have anything on the sheet being drawn? True when any
+// area it feeds is traced on this page AND that area actually carries
+// something for THIS valve — an outline, or trees on this side of a split.
+// A valve whose only area sits on another sheet is not on this one.
+function mpZoneOnSheet(z){
+  return (z && z.parts || []).some(pt=>{
+    const a=areas[pt.areaIdx];
+    if(!a || !(a.planRef && a.planRef.pageId===mp.pageId)) return false;
+    return validPoly(a) || mpZoneTreesOf(z, a).length > 0;
+  });
+}
 // What a zone feeds at a POINT rather than over an outline: its trees.
 // Only the trees of areas this valve actually carries, on this sheet.
 function mpZoneTrees(z){
@@ -4571,14 +4591,34 @@ function mpDraw(){
   body.innerHTML=g;
 
   // ---- layers + header stats ----
+  //
+  // WHICH VALVES ARE ON THIS SHEET, ASKED OF THE ZONE MODEL.
+  //
+  // This used to be reverse-engineered from the drawing: one pass over the
+  // traced areas taking zone 0, and one pass over every HEAD asking which
+  // zone fed it. Trees are not heads. So a split TREES zone contributed
+  // only its A half — the first pass cannot tell the halves apart without a
+  // head to place, and the second never ran for it. Trees B was missing
+  // from the layers panel, and the valve count in the header was one short,
+  // on a sheet that draws its laterals perfectly well.
+  //
+  // LAST_ZONES already knows. Each half is its own entry, with its own key,
+  // its own trees and its own lateral run; the two share a `station` when
+  // they are wired to one terminal. So ask it, rather than deducing from
+  // what happens to be drawable.
   const used=new Set();
-  on.forEach(({i})=>{ const z=zoneIndexOf(i,0); if(z>=0) used.add(z); });
-  areas.forEach((a,i)=>{ mpHeadsOf(a, mpPlanFor(a)).forEach(hd=>{ const z=zoneIndexOf(i,hd.zone||0,hd); if(z>=0) used.add(z); }); });
-  mpLayersPanel([...used].sort((x,y)=>x-y));
+  LAST_ZONES.forEach((z,zi)=>{ if(mpZoneOnSheet(z)) used.add(zi); });
+  const usedZis=[...used].sort((x,y)=>x-y);
+  mpLayersPanel(usedZis);
+  // Stations and valves are different counts and are named separately: a
+  // split pair wired to one terminal is TWO valves on ONE station, and a
+  // header that prints only one of those numbers is the reason nobody could
+  // tell whether Dundalk was an 11 or a 12 station job.
+  const stations=new Set(usedZis.map(zi=>LAST_ZONES[zi].station));
   el('mpStat').innerHTML =
     `${on.length} area${on.length===1?'':'s'} · ${heads} head${heads===1?'':'s'} · ${beds} drip bed${beds===1?'':'s'}` +
     (dripFt?` · ${Math.round(dripFt)} ft dripline`:'') +
-    ` · ${used.size} valve${used.size===1?'':'s'}`;
+    ` · ${used.size} valve${used.size===1?'':'s'} · ${stations.size} station${stations.size===1?'':'s'}`;
   mpRouteReadout();
   mpZonePanel();
 
@@ -4603,20 +4643,46 @@ function mpLayersPanel(usedZis){
   rows.push(layerRow('Laterals', mp.laterals, 'mpToggleLaterals()', ''));
   rows.push(layerRow('Wire', mp.wire, 'mpToggleWire()', ''));
   let hiddenN=0;
-  usedZis.forEach(zi=>{
-    const z=LAST_ZONES[zi]; if(!z) return;
-    const on=mp.zoneSel===zi, vis=mpZoneVisible(zi);
-    if(!vis) hiddenN++;
-    const sub=`${z.gpm.toFixed(1)} GPM${z.grouped?` · ${z.members.length} beds`:(z.headCount?` · ${z.headCount} hd`:'')}`;
-    rows.push(`<div class="mp-layer${on?' on':''}${vis?'':' hid'}${zi===usedZis[0]?' grp':''}" onclick="mpSelectZone(${zi})" aria-selected="${on}">`+
-      `<button type="button" class="eye${vis?'':' off'}" onclick="if(event.altKey){event.stopPropagation();mpSoloZone(${zi});}else mpToggleZoneVis(${zi},event)" title="Show/hide this zone · Alt-click to solo" aria-label="${vis?'Hide':'Show'} ${esc(z.name)}" aria-pressed="${vis}">${vis?MP_EYE_ON:MP_EYE_OFF}</button>`+
-      `<i style="background:${mpZoneColour(zi)}"></i><b>${esc(z.name)}</b><span>${sub}</span></div>`);
+  // ONE ROW PER PHYSICAL VALVE, GROUPED BY THE STATION THAT OPENS IT.
+  //
+  // Two valves on one controller terminal are still two valves: two boxes,
+  // two lateral runs, two things to dig. They each get a row, each
+  // selectable, each with its own eye. What they share is a heading, so the
+  // sheet says plainly that one programmed output opens both — which is the
+  // distinction the proposal and the controller disagree about otherwise.
+  const byStation=new Map();
+  usedZis.forEach(zi=>{ const z=LAST_ZONES[zi]; if(!z) return;
+    const st=z.station||0; if(!byStation.has(st)) byStation.set(st, []);
+    byStation.get(st).push(zi); });
+  let first=true;
+  [...byStation.keys()].sort((a,b)=>a-b).forEach(st=>{
+    const group=byStation.get(st);
+    if(group.length>1){
+      const z0=LAST_ZONES[group[0]];
+      rows.push(`<div class="mp-station${first?' grp':''}">Station ${st+1} · ${esc(baseName(z0))}`+
+        `<span>${group.length} valves, one station</span></div>`);
+      first=false;
+    }
+    group.forEach(zi=>{
+      const z=LAST_ZONES[zi];
+      const on=mp.zoneSel===zi, vis=mpZoneVisible(zi);
+      if(!vis) hiddenN++;
+      const sub=`${z.gpm.toFixed(1)} GPM${z.grouped?` · ${z.members.length} beds`:(z.headCount?` · ${z.headCount} hd`:(z.treeCount?` · ${z.treeCount} trees`:''))}`;
+      rows.push(`<div class="mp-layer${on?' on':''}${vis?'':' hid'}${first?' grp':''}${group.length>1?' sub':''}" onclick="mpSelectZone(${zi})" aria-selected="${on}">`+
+        `<button type="button" class="eye${vis?'':' off'}" onclick="if(event.altKey){event.stopPropagation();mpSoloZone(${zi});}else mpToggleZoneVis(${zi},event)" title="Show/hide this zone · Alt-click to solo" aria-label="${vis?'Hide':'Show'} ${esc(z.name)}" aria-pressed="${vis}">${vis?MP_EYE_ON:MP_EYE_OFF}</button>`+
+        `<i style="background:${mpZoneColour(zi)}"></i><b>${esc(z.name)}</b><span>${sub}</span></div>`);
+      first=false;
+    });
   });
   const offPlan = areas.filter(a=>a && !(a.planRef && a.planRef.pageId===mp.pageId) && !( a.mode==='custom' && !validPoly(a) )).length;
   if(offPlan) rows.push(`<span class="mp-off">${offPlan} area${offPlan===1?'':'s'} not traced on this sheet — not shown</span>`);
   if(hiddenN) rows.push(`<div class="mp-acts" style="padding:4px 6px 2px"><button type="button" class="lnk" onclick="mpShowAllZones()">show all ${hiddenN} hidden</button></div>`);
   box.innerHTML=rows.join('');
-  const n=el('mpLayersN'); if(n) n.textContent = usedZis.length+' valve'+(usedZis.length===1?'':'s')+(hiddenN?` · ${hiddenN} hidden`:'');
+  const nStations=new Set(usedZis.map(zi=>(LAST_ZONES[zi]||{}).station||0)).size;
+  const n=el('mpLayersN');
+  if(n) n.textContent = usedZis.length+' valve'+(usedZis.length===1?'':'s')
+    + ' · '+nStations+' station'+(nStations===1?'':'s')
+    + (hiddenN?` · ${hiddenN} hidden`:'');
 }
 
 /* ---- Zone panel: what is selected, its pipe size, its box, and every

@@ -58,6 +58,7 @@
     "test:split-share-station": "node scripts/test-split-share-station.mjs",
     "test:engine-skew": "node scripts/test-engine-version-skew.mjs",
     "test:sitebuilder-collapse": "node scripts/test-sitebuilder-collapse.mjs",
+    "test:station-vs-valve": "node scripts/test-station-vs-valve.mjs",
     "audit:commercial": "node scripts/audit-commercial-data.js",
     "test:commercial": "node scripts/test-commercial-schema.mjs",
     "test:invoice-balance": "node scripts/test-invoice-balance-surfaces.mjs",

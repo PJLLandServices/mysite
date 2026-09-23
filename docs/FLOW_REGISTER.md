@@ -2,6 +2,49 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-23 (A station, a valve and an area are three different things):** Patrick, on Dundalk:
+*"Trees A and Trees B must appear separately, even though they share one controller station. They
+are still two physical valves with separate lateral piping."* Closes SB-01 and SB-02, both opened
+2026-09-21.
+
+| | | |
+|---|---|---|
+| controller station | one programmed output | Station 9 · Trees |
+| physical valve | a box, a solenoid, a lateral run | Trees A, Trees B |
+| designed area | one traced landscape area | Trees |
+
+**SB-01 — the master plan listed one valve where there are two.** `mpDraw()` built its valve set by
+walking HEADS: one pass over traced areas taking zone 0, one over every head asking which zone fed
+it. **Trees are not heads.** The first pass cannot tell a split's halves apart without a head to
+place, and the second never ran for a tree zone — so Trees B was absent from the layers panel and
+the header's valve count was one short, on a sheet whose laterals had been drawn correctly all
+along. The set now comes from `LAST_ZONES`, which already holds each half with its own key, trees
+and lateral run. Both halves are listed, individually selectable, under a **Station N · Name**
+heading reading *"2 valves, one station"*. The header and the panel now print valves AND stations,
+because printing one of them was how nobody could tell whether Dundalk was an 11- or 12-station job.
+
+**SB-02 — the project summary sent the area count under another name.** `zoneCount:
+systemDesign.areas.length`, read by four places. It agrees with the builder only when no area
+splits and no drip beds group, and disagreed silently everywhere else. `server/lib/system-design-counts.js`
+now runs the saved design through the **same engine the builder runs** — including
+`migrateRoutingSplits()`, so a version-8 flagless split counts as SHARED exactly as the screen
+shows it — and the summary sends `stationCount`, `valveCount` and `areaCount`. `zoneCount` is gone,
+and all four readers were updated: the legacy project page, the overview's stat tile, its design
+line, and `nextAction`.
+
+Pinned by `scripts/test-station-vs-valve.mjs` (44 assertions). Patrick's regression, in his terms:
+a station operating two physical valves raises the **station count by one and the valve count by
+two**; both valve layers appear on the master plan; both laterals are measured; the proposal keeps
+**one** line. Section E then runs the SERVER's counter against the BROWSER's numbers for the same
+design, in three shapes — the comparison whose absence let `areas.length` survive. Section F
+asserts no reader still reads `.zoneCount`, **including the built bundle**, so a `.tsx` edit that
+was never rebuilt cannot leave the old wording live.
+
+Verified against the old code: reverting the valve set to the head-walking version makes the layers
+panel report `["Front lawn","Trees · A"]` — Trees B missing, which is exactly what Patrick saw.
+
+Dundalk's accepted proposal, material list, invoices and pricing are untouched; nothing here writes.
+
 **2026-09-22 (An empty System Builder is not an empty design):** Patrick opened McDonald's
 Dundalk after #288 deployed and got **"Nothing is traced on this sheet yet"** on a project with a
 full traced design. Nothing was lost — but the screen could not tell him that, and there was a
