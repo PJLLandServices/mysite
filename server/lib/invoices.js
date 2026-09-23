@@ -22,6 +22,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 
 const FILE = path.join(__dirname, "..", "data", "invoices.json");
+const { writeJsonAtomic, serialize, parseJsonArrayStore } = require("./atomic-json");
 // Tombstone log for hard-deleted void invoices (feature-invoice-void-delete-
 // brief.md, 2026-07). Append-only, never pruned, never edited. Deliberately
 // EXCLUDED from the customer-delete referential scan (that scan lists files
@@ -176,15 +177,12 @@ async function ensureFile() {
   }
 }
 
+// A damaged file THROWS rather than reading as [] — an empty answer
+// would let the next save write a one-invoice file over all of them.
 async function readAll() {
   await ensureFile();
-  try {
-    const raw = await fs.readFile(FILE, "utf8");
-    const parsed = JSON.parse(raw || "[]");
-    return Array.isArray(parsed) ? parsed.map(hydrate) : [];
-  } catch {
-    return [];
-  }
+  const raw = await fs.readFile(FILE, "utf8");
+  return parseJsonArrayStore(raw, FILE).map(hydrate);
 }
 
 // Atomic write: stage to .tmp, rename over the real file. Prevents a
@@ -192,12 +190,16 @@ async function readAll() {
 // that remove() rewrites the file after appending a tombstone (a torn
 // invoices.json with an already-written tombstone would be recoverable,
 // but a torn write on any path is worth avoiding). Matches parts.js.
+//
+// The temp name used to be a fixed `invoices.json.tmp`: two writes in the
+// same tick shared it, and one rename failed ENOENT. writeJsonAtomic gives
+// every write its own temp file, and withStoreLock (module.exports)
+// serializes each read-modify-write so neither save erases the other.
 async function writeAll(records) {
   await ensureFile();
-  const tmp = FILE + ".tmp";
-  await fs.writeFile(tmp, JSON.stringify(records, null, 2) + "\n", "utf8");
-  await fs.rename(tmp, FILE);
+  await writeJsonAtomic(FILE, records);
 }
+const withStoreLock = (fn) => (...args) => serialize(FILE, () => fn(...args));
 
 // Append one entry to the tombstone log, atomically. Read-modify-write
 // under the same flat-file model as the rest of the module; the log is
@@ -1336,9 +1338,9 @@ module.exports = {
   STATUSES,
   PAYMENT_METHODS,
   PAYMENT_METHOD_LABELS,
-  addPayment,
-  updatePayment,
-  removePayment,
+  addPayment: withStoreLock(addPayment),
+  updatePayment: withStoreLock(updatePayment),
+  removePayment: withStoreLock(removePayment),
   amountPaidOf,
   balanceDueOf,
   // Exported for the balance-surface regression tests: the send-time
@@ -1354,17 +1356,17 @@ module.exports = {
   listByWorkOrder,
   listByQuote,
   listByProperty,
-  createDraft,
-  update,
-  appendHistory,
-  appendPaymentAttempt,
-  voidInvoice,
-  revise,
-  markRevisionNotified,
+  createDraft: withStoreLock(createDraft),
+  update: withStoreLock(update),
+  appendHistory: withStoreLock(appendHistory),
+  appendPaymentAttempt: withStoreLock(appendPaymentAttempt),
+  voidInvoice: withStoreLock(voidInvoice),
+  revise: withStoreLock(revise),
+  markRevisionNotified: withStoreLock(markRevisionNotified),
   originalTotal,
-  remove,
-  ensurePaymentToken,
+  remove: withStoreLock(remove),
+  ensurePaymentToken: withStoreLock(ensurePaymentToken),
   getByPaymentToken,
-  ensurePortalToken,
+  ensurePortalToken: withStoreLock(ensurePortalToken),
   getByPortalToken
 };

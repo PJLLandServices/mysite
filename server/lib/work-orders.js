@@ -40,6 +40,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 
 const FILE = path.join(__dirname, "..", "data", "work-orders.json");
+const { writeJsonAtomic, serialize, parseJsonArrayStore } = require("./atomic-json");
 
 const TEMPLATES = {
   spring_opening: { label: "Spring Opening", scaffoldFromProperty: true },
@@ -204,21 +205,22 @@ async function ensureFile() {
   }
 }
 
+// A damaged file THROWS (parseJsonArrayStore). It used to read as [],
+// and the next save wrote a one-record file over every work order.
 async function readAll() {
   await ensureFile();
-  try {
-    const raw = await fs.readFile(FILE, "utf8");
-    const parsed = JSON.parse(raw || "[]");
-    return Array.isArray(parsed) ? parsed.map(hydrate) : [];
-  } catch {
-    return [];
-  }
+  const raw = await fs.readFile(FILE, "utf8");
+  return parseJsonArrayStore(raw, FILE).map(hydrate);
 }
 
+// Temp-file + rename, so a reader never sees half a file. Every caller
+// that pairs readAll() with writeAll() runs under withStoreLock (see
+// module.exports) so two saves in the same second cannot erase each other.
 async function writeAll(records) {
   await ensureFile();
-  await fs.writeFile(FILE, JSON.stringify(records, null, 2) + "\n", "utf8");
+  await writeJsonAtomic(FILE, records);
 }
+const withStoreLock = (fn) => (...args) => serialize(FILE, () => fn(...args));
 
 // ---- Helpers ---------------------------------------------------------
 
@@ -2259,39 +2261,39 @@ module.exports = {
   isScopeFrozen,
   findProtectedFieldTouched,
   summarizeScopeAdditions,
-  captureSignatureBypass,
-  unlockWorkOrder,
-  relockWorkOrder,
-  recordOfflineQuoteAcceptance,
-  attachSignedCopyRef,
-  appendReportSnapshot,
-  patchReportSnapshot,
-  appendHistory,
+  captureSignatureBypass: withStoreLock(captureSignatureBypass),
+  unlockWorkOrder: withStoreLock(unlockWorkOrder),
+  relockWorkOrder: withStoreLock(relockWorkOrder),
+  recordOfflineQuoteAcceptance: withStoreLock(recordOfflineQuoteAcceptance),
+  attachSignedCopyRef: withStoreLock(attachSignedCopyRef),
+  appendReportSnapshot: withStoreLock(appendReportSnapshot),
+  patchReportSnapshot: withStoreLock(patchReportSnapshot),
+  appendHistory: withStoreLock(appendHistory),
   list,
   get,
   listByProperty,
   listByLead,
-  create,
-  update,
-  completeBackdated,
-  remove,
-  softDelete,
-  restore,
-  softArchive,
+  create: withStoreLock(create),
+  update: withStoreLock(update),
+  completeBackdated: withStoreLock(completeBackdated),
+  remove: withStoreLock(remove),
+  softDelete: withStoreLock(softDelete),
+  restore: withStoreLock(restore),
+  softArchive: withStoreLock(softArchive),
   listDeleted,
   listArchived,
-  purgeDeleted,
+  purgeDeleted: withStoreLock(purgeDeleted),
   // Brief 2 — build-mode operations
   blankDailyLog,
-  startSession,
-  endSession,
-  setLabourersForSession,
-  markTaskDoneToday,
-  unmarkTaskDoneToday,
-  addTaskProgressToday,
-  recordMaterialConsumed,
-  removeMaterialConsumed,
-  setNextDayPlan,
-  setDailyNotes,
+  startSession: withStoreLock(startSession),
+  endSession: withStoreLock(endSession),
+  setLabourersForSession: withStoreLock(setLabourersForSession),
+  markTaskDoneToday: withStoreLock(markTaskDoneToday),
+  unmarkTaskDoneToday: withStoreLock(unmarkTaskDoneToday),
+  addTaskProgressToday: withStoreLock(addTaskProgressToday),
+  recordMaterialConsumed: withStoreLock(recordMaterialConsumed),
+  removeMaterialConsumed: withStoreLock(removeMaterialConsumed),
+  setNextDayPlan: withStoreLock(setNextDayPlan),
+  setDailyNotes: withStoreLock(setDailyNotes),
   listBuildWosForProject
 };

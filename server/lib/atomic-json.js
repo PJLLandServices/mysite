@@ -50,4 +50,52 @@ async function writeJsonAtomic(file, value) {
   }
 }
 
-module.exports = { writeJsonAtomic };
+// Serialize read-modify-write on one store, in process.
+//
+// writeJsonAtomic() keeps the FILE whole; it does not keep two writers'
+// CHANGES. Two requests that each readAll(), change a different record
+// (or a different field of one record) and writeAll() both succeed, and
+// the second silently erases the first. On a work order that is the
+// phone's zone edit and the office's note landing in the same second —
+// measured 3 of 3 rounds in the fall-closing pressure test (2026-09-22).
+//
+// serialize(key, fn) runs fn only after every earlier fn queued on the
+// same key has settled, so each read-modify-write sees the previous one's
+// result. A throw releases the queue for the next caller. The server is a
+// single Node process (Render), so an in-process queue is the whole lock.
+// NOT re-entrant: a function running under serialize(key) must not call
+// serialize(key) again, or it waits on itself.
+const queues = new Map();
+function serialize(key, fn) {
+  const previous = queues.get(key) || Promise.resolve();
+  const current = previous.catch(() => {}).then(() => fn());
+  // Keep the chain alive even when fn throws, but never leak the
+  // rejection to the NEXT caller — only to the caller that owns it.
+  const tail = current.catch(() => {});
+  queues.set(key, tail);
+  tail.then(() => { if (queues.get(key) === tail) queues.delete(key); });
+  return current;
+}
+
+// Parse a JSON array store, or throw. A store that exists but does not
+// parse is DAMAGED, not empty: answering [] lets the next write save a
+// one-record file over every record that was there (fall-closing pressure
+// test round 4: work-orders.json went from N records to 1). A missing
+// file is the only legitimate empty.
+function parseJsonArrayStore(raw, file) {
+  let parsed;
+  try { parsed = JSON.parse(raw); }
+  catch (err) {
+    const e = new Error(`${path.basename(file)} is unreadable (${err.message}) — refusing to treat it as empty.`);
+    e.code = "STORE_CORRUPT";
+    throw e;
+  }
+  if (!Array.isArray(parsed)) {
+    const e = new Error(`${path.basename(file)} is not a JSON array — refusing to treat it as empty.`);
+    e.code = "STORE_CORRUPT";
+    throw e;
+  }
+  return parsed;
+}
+
+module.exports = { writeJsonAtomic, serialize, parseJsonArrayStore };

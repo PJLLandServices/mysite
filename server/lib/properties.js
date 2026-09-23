@@ -27,7 +27,7 @@
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
-const { writeJsonAtomic } = require("./atomic-json");
+const { writeJsonAtomic, serialize, parseJsonArrayStore } = require("./atomic-json");
 const crypto = require("node:crypto");
 // Contact-id helpers only — the bill-to resolver itself is not used here.
 // Safe to require at load time: billing-parties.js requires no siblings.
@@ -51,10 +51,12 @@ async function ensureFile() {
 
 async function readAll() {
   await ensureFile();
-  try {
+  {
+    // A damaged file THROWS rather than reading as [] — an empty answer
+    // let the next save (a defer-issues, a zone edit) write a near-empty
+    // properties.json over every property (fall-closing pressure test).
     const raw = await fs.readFile(FILE, "utf8");
-    const parsed = JSON.parse(raw || "[]");
-    if (!Array.isArray(parsed)) return [];
+    const parsed = parseJsonArrayStore(raw, FILE);
     const hydrated = parsed.map(hydrate);
 
     // One-time backfill: persist the con_ ids hydrate() just minted for site
@@ -101,8 +103,6 @@ async function readAll() {
     }
 
     return hydrated;
-  } catch {
-    return [];
   }
 }
 
@@ -110,6 +110,10 @@ async function writeAll(properties) {
   await ensureFile();
   await writeJsonAtomic(FILE, properties);
 }
+// Every exported read-modify-write runs under this (module.exports), so a
+// defer-issues on the phone and a property PATCH from the office cannot
+// erase each other. Not re-entrant — mutators here never call each other.
+const withStoreLock = (fn) => (...args) => serialize(FILE, () => fn(...args));
 
 // ---- Helpers ---------------------------------------------------------
 
@@ -1960,10 +1964,10 @@ async function auditMissingCustomerName() {
 }
 
 module.exports = {
-  removeZone,
+  removeZone: withStoreLock(removeZone),
   ZONE_REMOVAL_REASONS,
-  attachLead,
-  relinkLead,
+  attachLead: withStoreLock(attachLead),
+  relinkLead: withStoreLock(relinkLead),
   findMatch,
   // Commercial matching (Phase 0.5) — address-anchored, email-agnostic.
   findByAddress,
@@ -1975,33 +1979,33 @@ module.exports = {
   findByCustomerEmail,
   list,
   get,
-  create,
-  transferOwner,
-  update,
-  remove,
-  removeMany,
-  bulkUpsert,
-  addDeferredIssue,
+  create: withStoreLock(create),
+  transferOwner: withStoreLock(transferOwner),
+  update: withStoreLock(update),
+  remove: withStoreLock(remove),
+  removeMany: withStoreLock(removeMany),
+  bulkUpsert: withStoreLock(bulkUpsert),
+  addDeferredIssue: withStoreLock(addDeferredIssue),
   getDeferredIssue,
-  updateDeferredIssue,
+  updateDeferredIssue: withStoreLock(updateDeferredIssue),
   listDeferred,
-  addServiceRecord,
+  addServiceRecord: withStoreLock(addServiceRecord),
   findServiceRecordByWo,
-  applySystemUpdates,
-  softDelete,
-  restore,
-  softArchive,
+  applySystemUpdates: withStoreLock(applySystemUpdates),
+  softDelete: withStoreLock(softDelete),
+  restore: withStoreLock(restore),
+  softArchive: withStoreLock(softArchive),
   listDeleted,
   listArchived,
-  purgeDeleted,
+  purgeDeleted: withStoreLock(purgeDeleted),
   // Seasonal outreach helpers (see top of section).
   seasonKey,
-  mintOptOutTokensIfMissing,
+  mintOptOutTokensIfMissing: withStoreLock(mintOptOutTokensIfMissing),
   findByOptOutToken,
-  recordOutreachTouch,
-  setSeasonalOptOut,
-  setSeasonalCommPref,
-  setSeasonalEligibility,
+  recordOutreachTouch: withStoreLock(recordOutreachTouch),
+  setSeasonalOptOut: withStoreLock(setSeasonalOptOut),
+  setSeasonalCommPref: withStoreLock(setSeasonalCommPref),
+  setSeasonalEligibility: withStoreLock(setSeasonalEligibility),
   sanitizeSeasonalConsent,
   auditMissingCustomerName
 };

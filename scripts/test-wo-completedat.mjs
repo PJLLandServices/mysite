@@ -47,7 +47,8 @@ function ok(cond, label) {
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "pjl-wo-completedat-"));
 fs.mkdirSync(path.join(SANDBOX, "lib"), { recursive: true });
 fs.mkdirSync(path.join(SANDBOX, "data"), { recursive: true });
-for (const f of ["work-orders.js", "warranty.js"]) {
+// atomic-json.js: work-orders.js requires it since fall-closing fix #1.
+for (const f of ["work-orders.js", "warranty.js", "atomic-json.js"]) {
   fs.copyFileSync(path.join(ROOT, "server", "lib", f), path.join(SANDBOX, "lib", f));
 }
 const require = createRequire(import.meta.url);

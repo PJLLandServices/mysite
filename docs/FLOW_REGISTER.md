@@ -227,6 +227,15 @@ own design blob and its material list, and correcting a split changes the statio
 plus the controller part and BOM total IF the new count crosses a band, which at 11 → 12 it does
 not.
 
+**2026-09-22 (Fall-closing pressure-test fixes, branch `fix/fall-closing-pressure-test`):** the eight
+MUST-FIX items from the fall-closing pressure test, one commit each. No PASS flow's route or wording
+changed except where named below. Server-side suites boot the real server from a temp copy through
+`scripts/lib/field-server.mjs`, with email/SMS/Stripe stubbed by `scripts/lib/stub-outbound.cjs`.
+- **#1 Store races.** work-orders, invoices and properties (incl. deferred issues) now serialize every
+  read-modify-write in process (`atomic-json.serialize`), write through `writeJsonAtomic` (unique temp
+  name), and THROW on a damaged file instead of reading it as `[]`. `scripts/test-store-concurrency.mjs`
+  (60 lib rounds per store + 50 HTTP rounds of PATCH+PATCH+photo, corrupt/zero-byte files fail loudly
+  and are left untouched). Old code: lost writes every round, torn file, crash.
 **2026-09-21, last (The System Builder's maths moves out of the page):** Phases 0 and 1 of the
 System Builder work, to Patrick's brief: build a characterization safety net, then extract ONLY
 the calculation engine, leaving persistence, quote creation and proposal-section generation

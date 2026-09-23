@@ -62,10 +62,11 @@ async function throwsWithCode(fn, code, label) {
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "pjl-wo-unlock-"));
 fs.mkdirSync(path.join(SANDBOX, "lib"), { recursive: true });
 fs.mkdirSync(path.join(SANDBOX, "data"), { recursive: true });
-fs.copyFileSync(
-  path.join(ROOT, "server", "lib", "work-orders.js"),
-  path.join(SANDBOX, "lib", "work-orders.js")
-);
+// atomic-json.js joined when work-orders.js stopped using a bare
+// fs.writeFile (fall-closing fix #1) — the sandbox copies what it requires.
+for (const f of ["work-orders.js", "atomic-json.js"]) {
+  fs.copyFileSync(path.join(ROOT, "server", "lib", f), path.join(SANDBOX, "lib", f));
+}
 const require = createRequire(import.meta.url);
 const workOrders = require(path.join(SANDBOX, "lib", "work-orders.js"));
 const WO_JSON = path.join(SANDBOX, "data", "work-orders.json");
