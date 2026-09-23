@@ -767,6 +767,12 @@ async function openForOnSitePayment(id, { by = "" } = {}) {
   if (inv.status === "void") return { ok: false, status: 409, code: "void", errors: ["This invoice has been voided."] };
   // Nothing to pay on a $0 invoice — no link, no card form (fall-closing #8).
   if (!(Number(inv.total) > 0)) return { ok: false, status: 409, code: "no_charge", errors: ["This visit is no charge — there is nothing to pay."] };
+  // A custom-quote tier line still carries a placeholder price until
+  // Patrick prices it (fall-closing #7 round 2): never charge that.
+  const { CUSTOM_QUOTE_NOTE_PREFIX } = require("./pricing");
+  if (inv.status === "draft" && (inv.lineItems || []).some((l) => String(l.note || "").startsWith(CUSTOM_QUOTE_NOTE_PREFIX))) {
+    return { ok: false, status: 409, code: "needs_pricing", errors: ["This closing is a custom-quote size — Patrick prices it before the customer pays. Nothing was charged."] };
+  }
   if (inv.status === "draft" && !inv.onSitePayment?.openedAt) {
     if (inv.paidOnSiteAtCompletion !== true) {
       return {

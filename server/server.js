@@ -20019,10 +20019,11 @@ async function handleApi(req, res, pathname) {
       try {
         const commercial = await customers.isCommercialAccount(property?.customerId || wo.customerId || null);
         const refresh = pricingLib.refreshSeasonalBaseline(wo, property, { commercial });
-        if (refresh.before) {
+        if (refresh.before || refresh.customQuote) {
           seasonalFee = {
             zoneCount: refresh.zoneCount, commercial,
-            changed: refresh.changed,
+            changed: refresh.changed || refresh.customQuote === true,
+            customQuote: refresh.customQuote === true,
             current: refresh.before,
             atFinish: refresh.after
           };
@@ -20394,7 +20395,8 @@ async function handleApi(req, res, pathname) {
             phone: wo.customerPhone || "",
             email: wo.customerEmail || "",
             address: wo.address || "",
-            notes: `${bypassWarning}${serviceRecord.summary}${invoice ? ` · Invoice ${invoice.id} ($${invoice.total.toFixed(2)})` : " · No charge"}`
+            notes: `${bypassWarning}${serviceRecord.summary}${invoice ? ` · Invoice ${invoice.id} ($${invoice.total.toFixed(2)})`
+              : (Array.isArray(serviceRecord?.lineItems) && serviceRecord.lineItems.length ? " · No charge" : " · No invoice drafted — price this visit")}`
           },
           // The alert shell prints "Requested" items and an "Estimated
           // total". A completion carries neither on the alias, so every
@@ -20403,7 +20405,11 @@ async function handleApi(req, res, pathname) {
           // total — or say plainly that the visit was no charge.
           features: invoice
             ? (invoice.lineItems || []).map((l) => ({ label: l.label, qty: Number(l.qty) || 1, price: Number(l.unitPrice) || 0, quoteType: "fixed" }))
-            : [{ label: "No charge — nothing to invoice", qty: 1, price: 0, quoteType: "fixed" }],
+            // No lines at all is NOT "no charge" — a custom-quote size
+            // (16+ / 9+ commercial) seeds none and needs Patrick to price it.
+            : (Array.isArray(serviceRecord?.lineItems) && serviceRecord.lineItems.length
+              ? [{ label: "No charge — nothing to invoice", qty: 1, price: 0, quoteType: "fixed" }]
+              : [{ label: "No invoice drafted — price this visit (custom-quote size or no fee line)", qty: 1, price: 0, quoteType: "custom" }]),
           totals: { expectedTotal: invoice ? Number(invoice.total) || 0 : 0 }
         };
         await Promise.allSettled([

@@ -278,19 +278,39 @@ function resolveSeasonalPrice(property, serviceType, { commercial = false, zoneC
 //
 // Returns { lines, changed, before, after, zoneCount } — `lines` is the full
 // builder list with the baseline replaced when changed.
+// The note that marks a seasonal line Patrick still has to price. Read by
+// invoices.openForOnSitePayment so a placeholder price is never charged.
+const CUSTOM_QUOTE_NOTE_PREFIX = "Custom quote — Patrick to price";
 function refreshSeasonalBaseline(wo, property, { commercial = false } = {}) {
   const lines = Array.isArray(wo?.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
   const none = { lines, changed: false, before: null, after: null, zoneCount: 0 };
   if (wo?.type !== "spring_opening" && wo?.type !== "fall_closing") return none;
   const idx = lines.findIndex((l) => l && l.source && l.source.baseline === true
     && !l.source.propertyAdditionalFallBlowout && l.key !== "fall_additional_plumbing" && !l.source.aiBonusCredit);
-  if (idx === -1) return none;
-  const line = lines[idx];
   const zoneCount = Array.isArray(wo.zones) ? wo.zones.filter((z) => z && (z.kind || "zone") === "zone").length : 0;
+  if (idx === -1) {
+    // No seeded line: a custom-quote size from the start (16+ residential,
+    // 9+ commercial). Say so, so nobody reads the missing line as free.
+    const r = resolveSeasonalPrice(property || {}, wo.type, { commercial, zoneCount });
+    return r.custom
+      ? { ...none, zoneCount, changed: false, customQuote: true, before: null,
+          after: { key: r.key || "", price: null, custom: true, source: r.source, tier: r.tier || null } }
+      : none;
+  }
+  const line = lines[idx];
   if (line.overridePrice != null && line.overridePrice !== "") return { ...none, zoneCount };
   const resolved = resolveSeasonalPrice(property || {}, wo.type, { commercial, zoneCount });
-  if (resolved.custom) return { ...none, zoneCount };
   const before = { key: line.key || "", price: Number(line.originalPrice) || 0 };
+  if (resolved.custom) {
+    // Round 2: 16+ residential / 9+ commercial has NO flat price. Don't
+    // silently bill the booked tier's: the line is flagged for Patrick to
+    // price on the draft, and the preview says so.
+    const note = `${CUSTOM_QUOTE_NOTE_PREFIX} (${zoneCount} zones${commercial ? ", commercial" : ""})`;
+    const next = [...lines];
+    next[idx] = { ...line, key: resolved.key || line.key || "", custom: true, note };
+    return { lines: next, changed: true, customQuote: true, before,
+      after: { key: resolved.key || "", price: null, custom: true, source: resolved.source, tier: resolved.tier || null }, zoneCount };
+  }
   const after = { key: resolved.key || line.key || "", price: resolved.price, source: resolved.source, tier: resolved.tier || null };
   if (before.price === after.price && before.key === after.key) return { ...none, zoneCount, before, after };
   const next = [...lines];
@@ -303,4 +323,4 @@ function refreshSeasonalBaseline(wo, property, { commercial = false } = {}) {
   return { lines: next, changed: true, before, after, zoneCount };
 }
 
-module.exports = { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice, effectiveZoneCount, refreshSeasonalBaseline };
+module.exports = { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice, effectiveZoneCount, refreshSeasonalBaseline, CUSTOM_QUOTE_NOTE_PREFIX };

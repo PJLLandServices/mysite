@@ -248,11 +248,15 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
       // When that moves the seasonal fee off what was booked, say so and
       // let the tech stop before the invoice is drafted.
       const fee = freshBeforeFinish?.seasonalFee;
-      if (!alreadyDone && fee?.changed && fee.current && fee.atFinish) {
+      if (!alreadyDone && fee?.changed && fee.atFinish && (fee.current || fee.atFinish.custom)) {
+        const zonesText = `${fee.zoneCount} zone${fee.zoneCount === 1 ? '' : 's'}${fee.commercial ? ' (commercial)' : ''}`;
         const go = await new Promise((resolve) => Alert.alert(
           'The price follows the zones',
-          `${fee.zoneCount} zone${fee.zoneCount === 1 ? '' : 's'}${fee.commercial ? ' (commercial)' : ''} → ${formatMoney(fee.atFinish.price) ?? '—'}`
-            + ` (booked at ${formatMoney(fee.current.price) ?? '—'}). The invoice will use the new price.`,
+          fee.atFinish.custom
+            // 16+ residential / 9+ commercial: no flat price exists.
+            ? `${zonesText} → custom quote — Patrick to price. The invoice waits for him; don't take payment on site.`
+            : `${zonesText} → ${formatMoney(fee.atFinish.price) ?? '—'}`
+              + ` (booked at ${formatMoney(fee.current?.price) ?? '—'}). The invoice will use the new price.`,
           [
             { text: 'Go back', style: 'cancel', onPress: () => resolve(false) },
             { text: 'Finish', onPress: () => resolve(true) },

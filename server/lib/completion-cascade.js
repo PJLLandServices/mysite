@@ -212,13 +212,22 @@ async function run(wo, deps = {}) {
       const commercial = await require("./customers").isCommercialAccount(liveProperty?.customerId || wo.customerId || null);
       const refresh = require("./pricing").refreshSeasonalBaseline(wo, liveProperty, { commercial });
       if (refresh.changed) {
+        // The invoice bills the re-resolved line. The WO's own quote is
+        // corrected only while it is NOT signature-locked (round 2): a
+        // signed scope is the customer's record and is never rewritten
+        // after the fact; the history entry records the difference.
+        const signedLocked = workOrders.isScopeFrozen(wo);
         wo = { ...wo, onSiteQuote: { ...(wo.onSiteQuote || {}), builderLineItems: refresh.lines } };
-        await workOrders.update(wo.id, { onSiteQuote: wo.onSiteQuote });
+        if (!signedLocked) await workOrders.update(wo.id, { onSiteQuote: wo.onSiteQuote });
         try {
+          const afterText = refresh.customQuote
+            ? `${refresh.after.key || "custom tier"} — custom quote, Patrick to price on the draft`
+            : `${refresh.after.key} $${refresh.after.price.toFixed(2)}`;
           await workOrders.appendHistory(wo.id, {
             action: "seasonal_fee_reresolved",
             by: "system",
-            note: `${refresh.zoneCount} zones${commercial ? " (commercial)" : ""}: ${refresh.before.key} $${refresh.before.price.toFixed(2)} → ${refresh.after.key} $${refresh.after.price.toFixed(2)}`
+            note: `${refresh.zoneCount} zones${commercial ? " (commercial)" : ""}: ${refresh.before.key} $${refresh.before.price.toFixed(2)} → ${afterText}`
+              + (signedLocked ? " (invoice only — the signed work order is left as signed)" : "")
           });
         } catch (_e) {}
       }

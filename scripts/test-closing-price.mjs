@@ -58,8 +58,12 @@ try {
     const line = seasonalLine(invoiceFor(f.wo.id)?.lineItems);
     ok(lineKey(line) === "fall_close_6z", `the invoice bills the 5-6 tier (got ${lineKey(line)})`);
     ok(linePrice(line) === price("fall_close_6z"), `…at its pricing.json price (got ${linePrice(line)})`);
-    const woLine = seasonalLine(srv.data("work-orders").find((w) => w.id === f.wo.id)?.onSiteQuote?.builderLineItems);
-    ok(lineKey(woLine) === "fall_close_6z", "the work order's own line agrees with the invoice");
+    // Round 2: the WO was signed — its quote is the customer's record and is
+    // not rewritten after signing; the history says what the invoice did.
+    const doneWo = srv.data("work-orders").find((w) => w.id === f.wo.id);
+    ok(lineKey(seasonalLine(doneWo?.onSiteQuote?.builderLineItems)) === "fall_close_4z", "the signed work order's quote is left as signed");
+    ok((doneWo?.history || []).some((h) => h.action === "seasonal_fee_reresolved" && /fall_close_6z/.test(h.note) && /invoice only/.test(h.note)),
+      "…and its history records the re-priced invoice line");
   }
 
   // ---- B. commercial ------------------------------------------------------
@@ -89,6 +93,34 @@ try {
     const line = seasonalLine(invoiceFor(id)?.lineItems) || (invoiceFor(id)?.lineItems || [])[0];
     ok(linePrice(line) === overridePrice, `the property's own rate is billed, not the 5-6 tier (got ${linePrice(line)})`);
   }
+
+  // ---- E (round 2). custom-quote sizes are never billed flat -------------
+  {
+    const f = await srv.fixture({ zones: 15 });
+    await srv.prepClosing(f.wo.id, { extraZones: [{ number: 16, location: "X16", status: "working_well" }], paidOnSite: true });
+    const g = await srv.api("GET", `/api/work-orders/${f.wo.id}`);
+    ok(g.body.seasonalFee?.customQuote === true && g.body.seasonalFee?.atFinish?.custom === true,
+      `booked 15, walked 16: the tech's preview says custom (${JSON.stringify(g.body.seasonalFee?.atFinish)})`);
+    await complete(f.wo.id);
+    await sleep(300);
+    const i = invoiceFor(f.wo.id);
+    const line = seasonalLine(i?.lineItems) || (i?.lineItems || [])[0];
+    ok(/^Custom quote — Patrick to price/.test(line?.note || ""), `the draft line is flagged for Patrick (note: ${line?.note})`);
+    const link = await srv.api("POST", `/api/invoices/${i.id}/payment-link`, {});
+    ok(link.status === 409 && link.body.code === "needs_pricing", `…and can't be charged on site at the placeholder price (${link.status} ${link.body.code})`);
+  }
+  {
+    const f = await srv.fixture({ zones: 16 });
+    await srv.prepClosing(f.wo.id);
+    const g = await srv.api("GET", `/api/work-orders/${f.wo.id}`);
+    ok(g.body.seasonalFee?.customQuote === true, "16 zones from the start: the preview says custom, not free");
+    const before = srv.outbox().length;
+    await complete(f.wo.id);
+    await sleep(900);
+    const alert = srv.outbox().slice(before).find((m) => /WO COMPLETED/.test(m.subject));
+    const txt = String(alert?.html || "").replace(/<[^>]+>/g, " ");
+    ok(/No invoice drafted — price this visit/.test(txt) && !/No charge/.test(txt), "Patrick's alert says 'price this visit', not 'No charge'");
+  }
 } finally {
   await srv.stop();
 }
@@ -109,11 +141,17 @@ try {
     ok(r.changed && r.lines[0].key === "fall_close_6z" && r.lines[1].originalPrice === 12, "only the seasonal line moves");
     ok(refreshSeasonalBaseline(wo(50), {}, {}).changed === false, "a hand-priced line on the WO is left alone");
     const big = { ...wo(null), zones: Array.from({ length: 20 }, (_, i) => ({ number: i + 1 })) };
-    ok(refreshSeasonalBaseline(big, {}, {}).changed === false, "a custom-quote tier is left for Patrick, not zeroed");
+    const rb = refreshSeasonalBaseline(big, {}, {});
+    ok(rb.customQuote === true && rb.after?.custom === true && rb.after?.price === null, "a custom-quote tier is reported as custom, not given a flat price");
+    ok(rb.lines[0].custom === true && /^Custom quote — Patrick to price/.test(rb.lines[0].note) && rb.lines[0].originalPrice === price("fall_close_4z"),
+      "…its draft line is flagged for Patrick (not zeroed, not silently billed)");
+    const unseeded = { type: "fall_closing", zones: Array.from({ length: 16 }, (_, i) => ({ number: i + 1 })), onSiteQuote: { builderLineItems: [] } };
+    ok(refreshSeasonalBaseline(unseeded, {}, {}).customQuote === true, "a custom-size job with no seeded line says custom, not free");
   }
   const closing = fs.readFileSync(new URL("../pjl-field/src/screens/ClosingScreen.js", import.meta.url), "utf8");
-  ok(/fee\?\.changed && fee\.current && fee\.atFinish/.test(closing) && /The price follows the zones/.test(closing),
+  ok(/fee\?\.changed && fee\.atFinish && \(fee\.current \|\| fee\.atFinish\.custom\)/.test(closing) && /The price follows the zones/.test(closing),
     "the app shows the price change before Finish");
+  ok(/custom quote — Patrick to price/.test(closing), "…and says 'custom — Patrick to price' for a custom-quote size");
   const api = fs.readFileSync(new URL("../pjl-field/src/api.js", import.meta.url), "utf8");
   ok(/seasonalFee: d\.seasonalFee \|\| null/.test(api), "the app keeps the server's preview on the fresh read");
 }
