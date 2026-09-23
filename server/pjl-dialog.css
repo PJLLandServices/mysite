@@ -20,11 +20,25 @@
    found by a customer. scripts/test-pjl-dialog.mjs asserts every reference
    carries one. */
 
+/* ABOVE EVERYTHING. A modal asks a question and blocks until it is
+   answered, so it has to be reachable from wherever it was opened.
+
+   At 720 it was not. The System Builder's master plan is a full-screen
+   overlay at z-index 9999, so every dialog opened from inside it — remove
+   split, one-valve-per-box, a failed save, the material-list confirm —
+   rendered UNDERNEATH the plan. The page sat waiting on an answer to a
+   question that could not be seen or clicked, which reads exactly like the
+   editor having frozen (2026-09-23, Patrick: "i cannot do anything to any
+   of these zones").
+
+   The tallest thing anything else claims is 10002 (the help centre).
+   10100 clears the lot with headroom, and this file is the only place that
+   decides it. scripts/test-pjl-dialog.mjs holds the ceiling. */
 .pjl-dialog-backdrop {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.6);
-  z-index: 720;
+  z-index: 10100;
   display: flex;
   align-items: center;
   justify-content: center;

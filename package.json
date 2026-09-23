@@ -52,6 +52,7 @@
     "test:audit-head-counts": "node scripts/test-audit-head-counts.mjs",
     "test:help-coverage": "node scripts/test-help-coverage.mjs",
     "test:help-centre": "node scripts/test-help-centre.mjs",
+    "test:dialog-above-overlays": "node scripts/test-dialog-above-overlays.mjs",
     "test:sitebuilder": "node scripts/test-sitebuilder-split.mjs && node scripts/test-sitebuilder-laterals.mjs",
     "test:pjl-dialog": "node scripts/test-pjl-dialog.mjs",
     "capture:system-design-golden": "node scripts/capture-system-design-golden.mjs",
