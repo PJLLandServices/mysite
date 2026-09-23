@@ -50,9 +50,12 @@ console.log("\nA. The engine cannot go stale in the first place");
   const srv = fs.readFileSync(path.join(ROOT, "server", "server.js"), "utf8");
   check("the engine is served no-cache",
         /pathname === "\/admin\/sitebuilder-engine\.js"[\s\S]{0,400}?cache-control"\]\s*=\s*"no-cache"/.test(srv));
-  check("its URL is version-stamped like the /crm/ assets",
-        /admin\\\/sitebuilder-engine/.test(srv) &&
-        /stampAssetVersions/.test(srv));
+  // The help registry (2026-09-23) shipped with the same hazard and gets
+  // the same two guards: the page reads every tooltip out of it by name.
+  check("the help registry is served no-cache too",
+        /pathname === "\/admin\/sitebuilder-help\.js"[\s\S]{0,200}?cache-control"\]\s*=\s*"no-cache"/.test(srv) ||
+        /sitebuilder-engine\.js" \|\|[\s\S]{0,160}?sitebuilder-help\.js"[\s\S]{0,200}?"no-cache"/.test(srv));
+  check("the stamper exists at all", /stampAssetVersions/.test(srv));
   // Run the stamper rather than read it: lift the regex out of the source
   // and apply it, so this asserts behaviour rather than the shape of a line.
   // server.js is NOT imported here — importing it starts the whole server.
@@ -64,8 +67,19 @@ console.log("\nA. The engine cannot go stale in the first place");
     check("it matches the engine's script tag",
           re.test('<script src="/admin/sitebuilder-engine.js"></script>'));
     re.lastIndex = 0;
+    re.lastIndex = 0;
+    // Behaviour, not source text: the assertion that the ENGINE is stamped
+    // used to read the regex's literal characters, and broke the moment the
+    // pattern was widened to cover the help registry — while the stamping
+    // itself still worked perfectly. Ask the regex what it matches instead.
+    check("it matches the help registry's script tag",
+          re.test('<script src="/admin/sitebuilder-help.js"></script>'));
+    re.lastIndex = 0;
     check("...and still matches the /crm/ assets it always did",
           re.test('<link rel="stylesheet" href="/crm/crm.css">'));
+    re.lastIndex = 0;
+    check("...without stamping anything under /admin/ that is not one of them",
+          !re.test('<script src="/admin/something-else.js"></script>'));
   }
 }
 

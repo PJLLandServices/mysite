@@ -351,6 +351,73 @@
   .mp-empty{color:var(--muted);font-style:italic;padding:2px 0 4px}
   .mp-help{font-size:12px;color:var(--muted);line-height:1.5;margin:0}
   .mp-help b{color:var(--ink)}
+
+  /* ── Help centre ───────────────────────────────────────────────────
+     An overlay, never a route change: the builder underneath keeps its
+     unsaved work and its selection. Sized off dvh so an on-screen
+     keyboard on a phone does not push the results out of reach. */
+  /* ABOVE the sheet editor. .sk-overlay is 9999, .cust-actions 10000 and
+     .part-picker 10001 — at 9000 the help centre rendered UNDERNEATH the
+     master plan, looking perfectly fine while the sheet header quietly ate
+     every click on its Close button. Help is opened from inside the sheet,
+     so it has to sit on top of all of it. */
+  .hc-overlay{position:fixed;inset:0;z-index:10002;display:none;background:rgba(15,20,26,.55);
+    backdrop-filter:blur(2px);padding:0}
+  .hc-overlay.on{display:block}
+  .hc-panel{position:absolute;right:0;top:0;bottom:0;width:min(560px,100vw);
+    background:var(--card,#fff);border-left:1px solid var(--line,#dfe4ea);
+    display:flex;flex-direction:column;box-shadow:-18px 0 40px rgba(15,20,26,.18)}
+  /* flex:0 0 auto and a scrolling results pane keep this bar — and the
+     Close button in it — pinned and reachable at any height, including a
+     phone with the keyboard up. */
+  .hc-top{display:flex;align-items:center;justify-content:space-between;gap:8px;
+    padding:12px 14px;border-bottom:1px solid var(--line,#dfe4ea);flex:0 0 auto}
+  .hc-title{display:flex;align-items:center;gap:8px;font-size:15px}
+  .hc-title b{font-size:15px}
+  .hc-count{font-size:11.5px;color:var(--muted,#6b7683);font-weight:600}
+  .hc-sym svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;
+    stroke-linecap:round;stroke-linejoin:round;display:block}
+  .hc-x{border:0;background:none;font-size:26px;line-height:1;cursor:pointer;
+    color:var(--muted,#6b7683);padding:0 6px;min-width:44px;min-height:44px}
+  .hc-search{padding:10px 14px;border-bottom:1px solid var(--line,#dfe4ea);flex:0 0 auto}
+  .hc-search input{width:100%;font:15px/1.4 inherit;padding:11px 12px;
+    border:1px solid var(--line,#dfe4ea);border-radius:9px;background:var(--bg,#f7f8fa);color:inherit}
+  .hc-search input:focus{outline:2px solid var(--accent,#2f7d4f);outline-offset:1px}
+  .hc-results{overflow:auto;padding:4px 14px 28px;flex:1 1 auto;-webkit-overflow-scrolling:touch}
+  .hc-h{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted,#6b7683);
+    margin:18px 0 8px;font-weight:700}
+  .hc-card{border:1px solid var(--line,#dfe4ea);border-radius:11px;padding:12px 13px;margin:0 0 10px;
+    background:var(--card,#fff)}
+  .hc-card header{display:flex;align-items:center;gap:8px;margin:0 0 7px}
+  .hc-card h3{font-size:14.5px;margin:0;flex:1 1 auto}
+  .hc-kind{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted,#6b7683);
+    border:1px solid var(--line,#dfe4ea);border-radius:99px;padding:2px 7px;font-weight:700}
+  .hc-tip{font-size:12.5px;color:var(--muted,#6b7683);margin:0 0 8px;font-style:italic;
+    border-left:2px solid var(--line,#dfe4ea);padding-left:9px}
+  .hc-body p{font-size:13.5px;line-height:1.55;margin:0 0 8px}
+  .hc-body p:last-child{margin-bottom:0}
+  /* NOT var(--muted): muted on the tinted background is 4.35:1, under the
+     4.5:1 floor test-crm-contrast enforces. This text is the half of an
+     entry that stops a wrong assumption — it is read on a phone, outside —
+     so it gets a colour with headroom (5.75:1) rather than the minimum. */
+  .hc-not{font-size:12.5px;line-height:1.5;margin:9px 0 0;padding:8px 10px;border-radius:8px;
+    background:var(--bg,#f7f8fa);color:#59636e}
+  .hc-not b{color:var(--ink,#1b2129)}
+  .hc-card footer{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:10px 0 0;
+    padding-top:8px;border-top:1px solid var(--line,#dfe4ea)}
+  .hc-card footer>span{font-size:11px;color:var(--muted,#6b7683);text-transform:uppercase;
+    letter-spacing:.06em;font-weight:700}
+  .hc-link{border:0;background:none;padding:2px 0;font:inherit;font-size:12.5px;cursor:pointer;
+    color:var(--accent,#2f7d4f);text-decoration:underline;text-underline-offset:2px}
+  .hc-also{font-size:12px;line-height:1.5;margin:8px 0 0;color:#59636e}
+  .hc-also i{font-style:normal;font-weight:700}
+  .hc-empty{padding:22px 2px;font-size:13.5px;line-height:1.6;color:var(--muted,#6b7683)}
+  .hc-flash{animation:hcFlash .9s ease}
+  @keyframes hcFlash{0%{box-shadow:0 0 0 3px var(--accent,#2f7d4f)}100%{box-shadow:0 0 0 0 transparent}}
+  @media (max-width:560px){
+    .hc-panel{width:100vw;height:100dvh}
+    .hc-results{padding-bottom:40px}
+  }
   @media (max-width:900px){
     .mp-work{flex-direction:column;min-height:0;overflow:hidden}
     .mp-rail{flex:0 0 auto;flex-direction:row;flex-wrap:nowrap;justify-content:flex-start;gap:2px;overflow-x:auto;overflow-y:hidden;
@@ -583,35 +650,35 @@
     </div>
     <div class="mp-work">
       <div class="mp-rail" id="mpTools" role="toolbar" aria-label="Master plan tools">
-        <button type="button" id="mpToolpan" class="on" onclick="mpSetTool('pan')" data-tip="Move — click a zone, head or pipe to work on it; drag any marker; Ctrl-drag or scroll to pan and zoom. Tap bare ground to show all." aria-label="Move">
+        <button type="button" id="mpToolpan" class="on" onclick="mpSetTool('pan')" data-help="pan">
           <svg viewBox="0 0 24 24"><path d="M5 3l14 9-6.5 1.5L9 20z"/></svg></button>
-        <button type="button" id="mpToolpoc" onclick="mpSetTool('poc')" data-tip="Point of connection — click the meter or tap on the plan. The mainline starts here." aria-label="Point of connection">
+        <button type="button" id="mpToolpoc" onclick="mpSetTool('poc')" data-help="poc">
           <svg viewBox="0 0 24 24"><path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z"/><circle cx="12" cy="14" r="2"/></svg></button>
-        <button type="button" id="mpToolmanifold" onclick="mpSetTool('manifold')" data-tip="Manifold — click to drop a valve box. Zones go to the nearest box unless you put them somewhere else." aria-label="Manifold">
+        <button type="button" id="mpToolmanifold" onclick="mpSetTool('manifold')" data-help="manifold">
           <svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="11" rx="2"/><path d="M8 7v11M12 7v11M16 7v11M2 12h2M20 12h2"/></svg></button>
-        <button type="button" id="mpToolbend" onclick="mpSetTool('bend')" data-tip="Mainline bend — click to run the mainline through a point. Select a node first to tee off it." aria-label="Mainline bend">
+        <button type="button" id="mpToolbend" onclick="mpSetTool('bend')" data-help="bend">
           <svg viewBox="0 0 24 24"><path d="M3 20L9 8l6 8 6-12"/><circle cx="9" cy="8" r="1.6"/><circle cx="15" cy="16" r="1.6"/></svg></button>
         <hr>
-        <button type="button" id="mpToollat" onclick="mpSetTool('lat')" data-tip="Lateral bend — with a zone selected: click on the pipe to bend it, off the pipe to branch out, or select a bend first to tee from it. Drag bends; Delete removes one." aria-label="Lateral bend">
+        <button type="button" id="mpToollat" onclick="mpSetTool('lat')" data-help="lat">
           <svg viewBox="0 0 24 24"><path d="M4 19h6v-7h10"/><path d="M10 12V5h6"/><circle cx="10" cy="12" r="1.6"/></svg></button>
-        <button type="button" id="mpToolsplit" onclick="mpSetTool('split')" data-tip="Split zone — with a zone selected, click two points to draw a line across it. Heads or trees on each side get their own valve AND their own controller station. Wire them back to one station afterwards if they should open together." aria-label="Split zone">
+        <button type="button" id="mpToolsplit" onclick="mpSetTool('split')" data-help="split">
           <svg viewBox="0 0 24 24"><path d="M4 4l16 16"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="17.5" cy="6.5" r="2.5"/><path d="M4 20l5-5M20 4l-5 5"/></svg></button>
-        <button type="button" id="mpTool3tree" onclick="mpSetTool('tree')" data-tip="Tree — with a drip or tree zone selected, click to drop a tree. The lateral runs to each tree and tees. Drag to move, Delete to remove." aria-label="Tree">
+        <button type="button" id="mpTool3tree" onclick="mpSetTool('tree')" data-help="tree">
           <svg viewBox="0 0 24 24"><path d="M12 3l6 8h-3l4 6H5l4-6H6z"/><path d="M12 17v4"/></svg></button>
         <hr>
-        <button type="button" onclick="mpAutoRoute()" data-tip="Auto-route — run the mainline from the point of connection to every manifold in one go." aria-label="Auto-route">
+        <button type="button" onclick="mpAutoRoute()" data-help="autoroute">
           <svg viewBox="0 0 24 24"><path d="M4 20l9-9"/><path d="M14 4l1.5 3 3 1.5-3 1.5L14 13l-1.5-3-3-1.5 3-1.5z"/><path d="M19 15l.8 1.7 1.7.8-1.7.8L19 20l-.8-1.7-1.7-.8 1.7-.8z"/></svg></button>
-        <button type="button" onclick="mpUndoPoint()" data-tip="Undo point — take back the last mainline node placed." aria-label="Undo point">
+        <button type="button" onclick="mpUndoPoint()" data-help="undo-point">
           <svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
-        <button type="button" class="del" onclick="mpClearRouting()" data-tip="Clear routing — remove the point of connection, mainline and manifolds on this sheet." aria-label="Clear routing">
+        <button type="button" class="del" onclick="mpClearRouting()" data-help="clear-routing">
           <svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
         <hr>
-        <button type="button" id="mpToolLat" class="on" onclick="mpToggleLaterals()" data-tip="Laterals layer — show or hide every zone's lateral pipe." aria-label="Toggle laterals">
+        <button type="button" id="mpToolLat" class="on" onclick="mpToggleLaterals()" data-help="laterals-layer">
           <svg viewBox="0 0 24 24"><path d="M3 12h7l2-5 2 10 2-5h5"/></svg></button>
-        <button type="button" id="mpToolWire" class="on" onclick="mpToggleWire()" data-tip="Wire layer — show or hide the control wire runs." aria-label="Toggle wire">
+        <button type="button" id="mpToolWire" class="on" onclick="mpToggleWire()" data-help="wire-layer">
           <svg viewBox="0 0 24 24"><path d="M3 16c3 0 3-8 6-8s3 8 6 8 3-8 6-8"/></svg></button>
         <hr>
-        <button type="button" onclick="mpToggleHelp()" data-tip="How this editor works" aria-label="Help">
+        <button type="button" onclick="mpHelpOpen()" data-help="help-button">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .9-1 1.7"/><circle cx="12" cy="17" r=".6"/></svg></button>
       </div>
       <div class="sk-body" id="mpBody"></div>
@@ -633,7 +700,7 @@
         </div>
         <div class="mp-sec closed" id="mpSecHelp">
           <h4 onclick="mpSecToggle(this)">Help</h4>
-          <div class="mp-secbody"><p class="mp-help" id="mpHint">Every traced area on this sheet, at its true position, coloured by the valve it runs on. Pick a tool on the left, then click the plan to place the <b>point of connection</b>, a <b>manifold</b>, or a <b>mainline bend</b>; drag any marker to move it, Delete to remove the selected one. <b>Select a node before placing a bend to tee off it.</b> Click an area, head or lateral pipe to work on that valve alone; the eye in <b>Layers</b> hides a zone from the drawing. <b>Split zone:</b> with a zone selected, click two points to draw a line across the driveway — the heads on each side get their own valve (A / B) in whichever box you put them, wired together as one station. <b>Lateral bend:</b> with a zone selected — click <b>on the pipe</b> to put a bend in that run, click <b>off the pipe</b> to run a branch out to it, or select a bend first to <b>tee</b> off that exact point. Drag a bend to move it, Delete to remove it (the run splices back together). Heads, beds and <b>each tree</b> attach themselves to the nearest point on the pipe. <b>Tree:</b> with a drip or tree zone selected, click to drop a tree — the lateral runs to each one and tees; drag to move, Delete to remove. <b>Print zone sheet</b> prints that one valve — box, pipe with sizes and lengths, heads with model and arc — over a faded plan. Mainline, lateral and wire lengths are all measured off the calibrated sheet; laterals follow the inside of each outline and every segment is sized on the flow passing through it. Hold H to flash the drawing off. Scroll/pinch to zoom, Ctrl-drag to pan.</p></div>
+          <div class="mp-secbody"><p class="mp-help">Every tool, button and idea in this builder, searchable in plain words.<br><button type="button" class="lnk" onclick="mpHelpOpen()">Open the help centre</button></p></div>
         </div>
       </div>
     </div>
@@ -641,7 +708,7 @@
       <p class="hint" style="font-size:12px">Click a zone, head or pipe to work on it. Sizes and lengths are measured off the calibrated sheet; the BOM still treats laterals as an on-site figure.</p>
       <span class="sk-grow"></span>
       <div class="sk-tools">
-        <button type="button" onclick="lpOpenAll()" class="ghost" title="Every valve on this sheet, one page each, in station order — the pipe layout for the sub as one PDF">Print all zone sheets</button>
+        <button type="button" onclick="lpOpenAll()" class="ghost" data-help="print-zone-sheets">Print all zone sheets</button>
         <button type="button" onclick="window.print()" class="ghost">Print</button>
         <button type="button" class="del" onclick="mpCancel()">Close</button>
       </div>
@@ -812,6 +879,7 @@
 
 <script src="/crm/pjl-dialog.js"></script>
 <script src="/admin/sitebuilder-engine.js"></script>
+<script src="/admin/sitebuilder-help.js"></script>
 <script>
 /* ══════════ The calculation engine lives in its own file now ══════════
 
@@ -848,6 +916,197 @@ if (typeof SystemDesignEngine !== 'object' || !SystemDesignEngine) {
   throw new Error('sitebuilder-engine.js did not load');
 }
 const ENGINE = SystemDesignEngine;
+
+/* ══════════ The help registry ══════════
+
+   Every tooltip, accessible name and help entry in this builder is ONE
+   string in server/sitebuilder-help.js, read at render time. Nothing below
+   writes help text of its own, and scripts/test-help-coverage.mjs fails
+   the build if anything starts to.
+
+   That rule is not tidiness. On 2026-09-23 the Split tool's description
+   said the two halves are "wired as one station" while the code had
+   stored shareStation:false — two stations — for months. It was wrong in
+   the tool's tooltip AND in the Help panel's paragraph, with the button
+   between them saying the opposite. Patrick drew a split believing the
+   description. Two copies of a sentence drift exactly the way two copies
+   of a state test drift (CLAUDE.md, "define the rule once").
+
+   Missing registry is NOT fatal, unlike a missing engine: no help text is
+   bad, but it cannot put a wrong number in a bid. The builder still runs. */
+const HELP = (typeof SystemBuilderHelp === 'object' && SystemBuilderHelp) || (function(){
+  // A stub, not null. Missing help must DEGRADE — blank tooltips, a help
+  // centre that says so — and never throw, because the render paths that
+  // read it (the split panel's share-station toggle among them) would take
+  // the whole zone panel down with them. The engine is the thing worth
+  // refusing to start without; a missing sentence is not.
+  console.warn('sitebuilder-help.js did not load — controls will render without labels.');
+  const none = { tip:'', tipOn:'', tipPanel:'', name:'', labelOn:'one station', labelOff:'share a station' };
+  return { ENTRIES: [], ICONS: {}, SYNONYMS: {},
+    byId: () => none, tip: () => '', name: () => '', aria: () => '',
+    icon: () => '', svg: () => '', search: () => [], byKind: () => [], missing: true };
+}());
+
+/* Stamp every control carrying data-help with its tooltip and accessible
+   name. Runs once at boot; the markup holds only the id. */
+function helpStampTips(){
+  if(HELP.missing) return;
+  document.querySelectorAll('[data-help]').forEach(node=>{
+    const id=node.getAttribute('data-help');
+    const tip=HELP.tip(id), aria=HELP.aria(id);
+    if(tip) node.setAttribute('data-tip', tip);
+    if(aria) node.setAttribute('aria-label', aria);
+  });
+}
+
+/* ── The help centre ──────────────────────────────────────────────────
+   An overlay ON TOP of the builder: it never re-renders or unmounts the
+   page, so a half-drawn design with unsaved work survives opening it. */
+let HELP_OPEN=false;
+let HELP_OPENER=null;      // what to give focus back to on close
+function helpEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function helpPara(s){ return helpEsc(s).split('\n\n').map(p=>'<p>'+p.replace(/\n/g,'<br>')+'</p>').join(''); }
+
+function helpCard(e){
+  const sym = HELP.svg(e.icon);
+  const kind = e.kind==='tool' ? 'tool' : e.kind==='action' ? 'button' : e.kind==='concept' ? 'idea' : 'readout';
+  const also = (e.seeAlso||[]).map(id=>{ const t=HELP.byId(id); return t?`<button type="button" class="hc-link" onclick="helpShow('${id}')">${helpEsc(t.name)}</button>`:''; }).join('');
+  return `<article class="hc-card" id="hc-${helpEsc(e.id)}">
+    <header><span class="hc-sym">${sym}</span><h3>${helpEsc(e.name)}</h3><span class="hc-kind">${kind}</span></header>
+    ${e.tip?`<p class="hc-tip">${helpEsc(e.tip)}</p>`:''}
+    <div class="hc-body">${helpPara(e.body)}</div>
+    ${e.isNot?`<p class="hc-not"><b>What it is not.</b> ${helpEsc(e.isNot)}</p>`:''}
+    ${(e.alsoSearched||[]).length?`<p class="hc-also">Sometimes searched as: ${(e.alsoSearched||[]).map(w=>`<i>${helpEsc(w)}</i>`).join(', ')} — not the term for it, but it brings you here.</p>`:''}
+    ${also?`<footer><span>See also</span>${also}</footer>`:''}
+  </article>`;
+}
+
+function helpRender(q){
+  const box=document.getElementById('hcResults'); if(!box) return;
+  const list = q && q.trim() ? HELP.search(q) : HELP.ENTRIES;
+  const n=document.getElementById('hcCount');
+  if(n) n.textContent = q && q.trim()
+    ? (list.length ? `${list.length} match${list.length===1?'':'es'}` : 'nothing matched')
+    : `${list.length} entries`;
+  if(!list.length){
+    box.innerHTML = `<div class="hc-empty"><p>Nothing matched <b>${helpEsc(q)}</b>.</p>
+      <p>Try plain words for the problem rather than the name of the thing —
+      <button type="button" class="hc-link" onclick="helpSeed('two valves one station')">two valves one station</button>,
+      <button type="button" class="hc-link" onclick="helpSeed('why did my station count go up')">why did my station count go up</button>.</p></div>`;
+    return;
+  }
+  // SEARCHING and BROWSING want opposite orders. A search has a best answer
+  // and it belongs at the top — grouping the hits by category afterwards
+  // throws the ranking away and can put a tool nobody asked about above the
+  // entry that actually answers the question. Browsing has no ranking to
+  // lose, so it groups.
+  if(q && q.trim()){
+    box.innerHTML = list.map(helpCard).join('');
+    return;
+  }
+  const groups=[['tool','Tools'],['action','Buttons'],['concept','How it works'],['readout','Readouts']];
+  box.innerHTML = groups.map(([k,label])=>{
+    const rows=list.filter(e=>e.kind===k);
+    if(!rows.length) return '';
+    return `<h2 class="hc-h">${label}</h2>` + rows.map(helpCard).join('');
+  }).join('');
+}
+
+function helpSeed(q){ const i=document.getElementById('hcQ'); if(i){ i.value=q; helpRender(q); i.focus(); } }
+function helpShow(id){
+  const card=document.getElementById('hc-'+id);
+  if(card){ card.scrollIntoView({block:'start',behavior:'smooth'}); card.classList.add('hc-flash'); setTimeout(()=>card.classList.remove('hc-flash'),900); return; }
+  const e=HELP.byId(id); if(e) helpSeed(e.name);
+}
+
+async function mpHelpOpen(){
+  // pjlDialog, not a native alert: the repo's lint-no-native-dialogs gate
+  // forbids alert/confirm/prompt outside the migration allowlist, and it is
+  // right to — a native dialog blocks the page and looks nothing like the
+  // rest of the builder.
+  if(HELP.missing){
+    await pjlDialog.alert('The help centre did not load. Reload the page — your design has not been touched.',
+                          { title: 'Help unavailable' });
+    return;
+  }
+  let ov=document.getElementById('hcOverlay');
+  if(!ov){
+    ov=document.createElement('div'); ov.id='hcOverlay'; ov.className='hc-overlay';
+    ov.innerHTML = `<div class="hc-panel" role="dialog" aria-modal="true" aria-label="Help centre">
+      <div class="hc-top">
+        <div class="hc-title"><span class="hc-sym">${HELP.svg('help')}</span><b>Help centre</b><span class="hc-count" id="hcCount"></span></div>
+        <button type="button" class="hc-x" onclick="mpHelpClose()" aria-label="Close help">&times;</button>
+      </div>
+      <div class="hc-search">
+        <input id="hcQ" type="search" autocomplete="off" placeholder="Search — a name, or just what you are trying to do"
+               oninput="helpRender(this.value)" aria-label="Search help">
+      </div>
+      <div class="hc-results" id="hcResults"></div>
+    </div>`;
+    document.body.appendChild(ov);
+    ov.addEventListener('click', ev=>{ if(ev.target===ov) mpHelpClose(); });
+  }
+  HELP_OPENER = (document.activeElement && document.activeElement !== document.body)
+    ? document.activeElement : document.querySelector('[data-help="help-button"]');
+  ov.classList.add('on'); HELP_OPEN=true;
+  helpRender('');
+  const i=document.getElementById('hcQ'); if(i){ i.value=''; setTimeout(()=>i.focus(),30); }
+}
+function mpHelpClose(){
+  const ov=document.getElementById('hcOverlay'); if(ov) ov.classList.remove('on');
+  HELP_OPEN=false;
+  // Focus goes back where it came from. Leaving it on a now-hidden panel
+  // strands anyone working by keyboard: the next Tab starts from the top
+  // of the document instead of the button they just pressed.
+  const back=HELP_OPENER; HELP_OPENER=null;
+  // An opener can be gone or hidden by the time we close — the toolbar is
+  // not rendered unless a sheet is open, and a hidden element silently
+  // refuses focus, stranding the caret on <body>. Try the opener, then the
+  // Help button, and settle for neither rather than guessing.
+  const canFocus = n => n && document.contains(n) && n.offsetParent !== null && !n.disabled;
+  const target = canFocus(back) ? back
+               : (n => canFocus(n) ? n : null)(document.querySelector('[data-help="help-button"]'));
+  if(target){ try{ target.focus(); }catch(e){} }
+}
+/* Keep Tab inside the panel while it is open. Without this, tabbing walks
+   out into the builder underneath — which is still fully interactive — and
+   you can end up typing into a form you cannot see. */
+function helpTrapTab(ev){
+  if(!HELP_OPEN || ev.key!=='Tab') return;
+  const panel=document.querySelector('#hcOverlay .hc-panel'); if(!panel) return;
+  const items=[...panel.querySelectorAll('button, input, [href], select, textarea, [tabindex]:not([tabindex="-1"])')]
+    .filter(n=>!n.disabled && n.offsetParent!==null);
+  if(!items.length) return;
+  const first=items[0], last=items[items.length-1], here=document.activeElement;
+  if(ev.shiftKey && (here===first || !panel.contains(here))){ ev.preventDefault(); last.focus(); }
+  else if(!ev.shiftKey && here===last){ ev.preventDefault(); first.focus(); }
+  else if(!panel.contains(here)){ ev.preventDefault(); first.focus(); }
+}
+/* Escape closes the centre before anything else in the page sees the key,
+   so it cannot also clear a selection or cancel a tool underneath. */
+document.addEventListener('keydown', ev=>{
+  if(ev.key==='Escape' && HELP_OPEN){ ev.stopPropagation(); mpHelpClose(); return; }
+  helpTrapTab(ev);
+}, true);
+/* The side panels re-render constantly — selecting a valve rebuilds the
+   whole zone panel — so stamping once at boot would leave every button
+   created afterwards with no tooltip. Watching the tree costs nothing and
+   means a control is labelled no matter who renders it or when. */
+function helpWatch(){
+  helpStampTips();
+  if(!window.MutationObserver) return;
+  new MutationObserver(muts=>{
+    let touched=false;
+    muts.forEach(m=>m.addedNodes && m.addedNodes.forEach(n=>{
+      if(n.nodeType!==1) return;
+      if(n.hasAttribute && n.hasAttribute('data-help')) touched=true;
+      else if(n.querySelector && n.querySelector('[data-help]')) touched=true;
+    }));
+    if(touched) helpStampTips();
+  }).observe(document.body, {childList:true, subtree:true});
+}
+document.addEventListener('DOMContentLoaded', helpWatch);
+
 
 // Catalogs, geometry and area normalization pass straight through under
 // the names this page has always used for them.
@@ -2425,7 +2684,12 @@ function mpWatchResize(){
   });
   mpRO.observe(body);
 }
-function mpToggleHelp(){ const sec=el('mpSecHelp'); if(!sec) return; sec.classList.toggle('closed'); if(!sec.classList.contains('closed')) sec.scrollIntoView({block:'nearest'}); }
+/* The Help sidebar used to hold one long paragraph describing the editor.
+   It was a SECOND copy of every tool's description, and it drifted: it
+   still said a split leaves both halves "wired together as one station"
+   months after that stopped being true. Its content now lives in
+   sitebuilder-help.js as entries, so there is nothing left to drift. */
+function mpToggleHelp(){ mpHelpOpen(); }
 
 // Areas traced onto a given sheet, with their index.
 function mpAreasOn(pageId){
@@ -4669,7 +4933,7 @@ function mpLayersPanel(usedZis){
       if(!vis) hiddenN++;
       const sub=`${z.gpm.toFixed(1)} GPM${z.grouped?` · ${z.members.length} beds`:(z.headCount?` · ${z.headCount} hd`:(z.treeCount?` · ${z.treeCount} trees`:''))}`;
       rows.push(`<div class="mp-layer${on?' on':''}${vis?'':' hid'}${first?' grp':''}${group.length>1?' sub':''}" onclick="mpSelectZone(${zi})" aria-selected="${on}">`+
-        `<button type="button" class="eye${vis?'':' off'}" onclick="if(event.altKey){event.stopPropagation();mpSoloZone(${zi});}else mpToggleZoneVis(${zi},event)" title="Show/hide this zone · Alt-click to solo" aria-label="${vis?'Hide':'Show'} ${esc(z.name)}" aria-pressed="${vis}">${vis?MP_EYE_ON:MP_EYE_OFF}</button>`+
+        `<button type="button" class="eye${vis?'':' off'}" onclick="if(event.altKey){event.stopPropagation();mpSoloZone(${zi});}else mpToggleZoneVis(${zi},event)" data-help="layer-eye" aria-label="${vis?'Hide':'Show'} ${esc(z.name)}" aria-pressed="${vis}">${vis?MP_EYE_ON:MP_EYE_OFF}</button>`+
         `<i style="background:${mpZoneColour(zi)}"></i><b>${esc(z.name)}</b><span>${sub}</span></div>`);
       first=false;
     });
@@ -4811,15 +5075,15 @@ function mpZonePanel(){
   if(mpTreeAreaFor(zi)>=0) h+=`<button type="button" class="lnk${mp.tool==='tree'?' cur':''}" onclick="mpSetTool('tree')">add trees</button>`;
   if(z.half){
     if(twin>=0) h+=`<button type="button" class="lnk" onclick="mpSelectZone(${twin})">go to valve ${z.half==='A'?'B':'A'}</button>`;
-    h+=`<button type="button" class="lnk" onclick="mpSetShareStation(${zi}, ${z.shareStation?'false':'true'})" title="${z.shareStation
-      ? 'Both valves are on one controller terminal and open together. Give each its own station to run them separately.'
-      : 'Each valve has its own controller station. Wire them to one terminal instead if they should open together.'}">${z.shareStation
-      ? 'give each valve its own station' : 'wire both valves to one station'}</button>`;
+    // Label and tooltip both come from the registry — this control is the
+    // one whose description was wrong for months, so it gets no copy here.
+    const shr=HELP.byId('share-station');
+    h+=`<button type="button" class="lnk" onclick="mpSetShareStation(${zi}, ${z.shareStation?'false':'true'})" title="${esc(z.shareStation?shr.tipOn:shr.tip)}">${esc(z.shareStation?shr.labelOn:shr.labelOff)}</button>`;
     h+=`<button type="button" class="lnk" onclick="mpRemoveSplit(${zi})">remove split</button>`;
   } else if(z.grouped && !z.stationGroup && (z.members||[]).length>1){
-    h+=`<button type="button" class="lnk" onclick="mpSetTool('split')" title="One valve per valve box, wired as one station — then put each bed in the box it should be fed from">one valve per box</button>`;
+    h+=`<button type="button" class="lnk" onclick="mpSetTool('split')" title="${esc(HELP.tip('one-valve-per-box'))}">one valve per box</button>`;
   } else if(!mpSplitBlocked(zi)){
-    h+=`<button type="button" class="lnk${mp.tool==='split'?' cur':''}" onclick="mpSetTool('split')" title="Draw a line across the driveway; each side gets its own valve and its own controller station. You can wire them to one station afterwards if they should open together.">split across two boxes</button>`;
+    h+=`<button type="button" class="lnk${mp.tool==='split'?' cur':''}" onclick="mpSetTool('split')" title="${esc(HELP.byId('split').tipPanel)}">split across two boxes</button>`;
   }
   h+=`<button type="button" class="lnk pri" onclick="lpOpen(${zi})">Print zone sheet</button>`;
   h+=`<button type="button" class="lnk" onclick="mpClearZoneSel()">show all</button>`;

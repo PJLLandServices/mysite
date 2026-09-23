@@ -114,7 +114,7 @@ function stampAssetVersions(html, version = ASSET_VERSION) {
   const v = String(version || "").trim();
   if (!v) return html;
   return String(html).replace(
-    /\b(src|href)=(["'])((?:\/crm\/[^"'?#\s]+|\/admin\/sitebuilder-engine)\.(?:js|css))\2/g,
+    /\b(src|href)=(["'])((?:\/crm\/[^"'?#\s]+|\/admin\/sitebuilder-(?:engine|help))\.(?:js|css))\2/g,
     (whole, attr, quote, url) => (url.endsWith("/tech-sw.js")
       ? whole
       : `${attr}=${quote}${url}?v=${v}${quote}`)
@@ -1460,6 +1460,9 @@ function needsAuth(method, pathname) {
   // zone/BOM rules, which were behind staff auth when they were inline and
   // must not become public just by moving to their own file.
   if (pathname === "/admin/sitebuilder-engine.js") return "user";
+  // Its help registry (2026-09-23). Gated with the page for the same
+  // reason: it describes the internal design tool and ships with it.
+  if (pathname === "/admin/sitebuilder-help.js") return "user";
   // Catalog ↔ supplier assignments + Purchase Orders (Phase 3).
   if (pathname === "/admin/parts-suppliers" || pathname === "/admin/parts-suppliers/") return "user";
   if (pathname === "/admin/purchase-orders" || pathname === "/admin/purchase-orders/") return "user";
@@ -27266,6 +27269,9 @@ function resolveStaticTarget(pathname) {
   if (pathname === "/admin/sitebuilder-engine.js") {
     return { dir: SERVER_DIR, relative: "/sitebuilder-engine.js" };
   }
+  if (pathname === "/admin/sitebuilder-help.js") {
+    return { dir: SERVER_DIR, relative: "/sitebuilder-help.js" };
+  }
   // Tech-mode pop-out — mobile-first, tap-optimized layout. Same WO id,
   // different page. Route check must come BEFORE the desktop editor's
   // /admin/work-order/<id> match so the /tech suffix wins.
@@ -27603,7 +27609,8 @@ async function serveStatic(req, res, pathname) {
     // a stale copy made restoreState() throw, which silently started an
     // EMPTY design on a project that had one. Served from /admin/, it was
     // missing both guards /crm/ already had — this one and the URL stamp.
-    if (pathname === "/admin/sitebuilder-engine.js") {
+    if (pathname === "/admin/sitebuilder-engine.js" ||
+        pathname === "/admin/sitebuilder-help.js") {
       headers["cache-control"] = "no-cache";
     }
 

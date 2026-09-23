@@ -37,6 +37,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(here, "..");
 const html = fs.readFileSync(path.join(ROOT, "server", "sitebuilder.html"), "utf8");
 const engineJs = fs.readFileSync(path.join(ROOT, "server", "sitebuilder-engine.js"), "utf8");
+// The help registry ships with the page (2026-09-23): the toolbar reads
+// every tooltip and label out of it, so a harness that does not serve it
+// renders unlabelled controls.
+const helpJs = fs.readFileSync(path.join(ROOT, "server", "sitebuilder-help.js"), "utf8");
 const pjlDialogJs = fs.readFileSync(path.join(ROOT, "server", "pjl-dialog.js"), "utf8");
 const pjlDialogCss = fs.readFileSync(path.join(ROOT, "server", "pjl-dialog.css"), "utf8");
 

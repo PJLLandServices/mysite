@@ -1,0 +1,54 @@
+[
+  {
+    "tip": "Move — click a zone, head or pipe to work on it; drag any marker; Ctrl-drag or scroll to pan and zoom. Tap bare ground to show all.",
+    "aria": "Move"
+  },
+  {
+    "tip": "Point of connection — click the meter or tap on the plan. The mainline starts here.",
+    "aria": "Point of connection"
+  },
+  {
+    "tip": "Manifold — click to drop a valve box. Zones go to the nearest box unless you put them somewhere else.",
+    "aria": "Manifold"
+  },
+  {
+    "tip": "Mainline bend — click to run the mainline through a point. Select a node first to tee off it.",
+    "aria": "Mainline bend"
+  },
+  {
+    "tip": "Lateral bend — with a zone selected: click on the pipe to bend it, off the pipe to branch out, or select a bend first to tee from it. Drag bends; Delete removes one.",
+    "aria": "Lateral bend"
+  },
+  {
+    "tip": "Split zone — with a zone selected, click two points to draw a line across it. Heads or trees on each side get their own valve AND their own controller station. Wire them back to one station afterwards if they should open together.",
+    "aria": "Split zone"
+  },
+  {
+    "tip": "Tree — with a drip or tree zone selected, click to drop a tree. The lateral runs to each tree and tees. Drag to move, Delete to remove.",
+    "aria": "Tree"
+  },
+  {
+    "tip": "Auto-route — run the mainline from the point of connection to every manifold in one go.",
+    "aria": "Auto-route"
+  },
+  {
+    "tip": "Undo point — take back the last mainline node placed.",
+    "aria": "Undo point"
+  },
+  {
+    "tip": "Clear routing — remove the point of connection, mainline and manifolds on this sheet.",
+    "aria": "Clear routing"
+  },
+  {
+    "tip": "Laterals layer — show or hide every zone's lateral pipe.",
+    "aria": "Toggle laterals"
+  },
+  {
+    "tip": "Wire layer — show or hide the control wire runs.",
+    "aria": "Toggle wire"
+  },
+  {
+    "tip": "How this editor works",
+    "aria": "Help"
+  }
+]
