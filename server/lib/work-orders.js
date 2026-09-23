@@ -1803,10 +1803,13 @@ async function update(id, patch, { ifMatch = null } = {}) {
     // defer would copy the same finding to the property twice.
     const stamped = new Map();
     for (const z of current.zones || []) for (const i of z.issues || []) if (i.id && i.deferredId) stamped.set(i.id, i.deferredId);
-    if (stamped.size) {
-      for (const z of next.zones) for (const i of z.issues || []) {
-        if (!i.deferredId && stamped.has(i.id)) i.deferredId = stamped.get(i.id);
-      }
+    // …and the stamp is ALWAYS the server's (PJL-100 nit): a client can't
+    // mark a finding "already copied" with an id the server never wrote —
+    // it would then never reach the property — nor replace the server's.
+    // Only stampDeferredIds() (after a successful copy) sets a new one.
+    for (const z of next.zones) for (const i of z.issues || []) {
+      if (stamped.has(i.id)) i.deferredId = stamped.get(i.id);
+      else delete i.deferredId;
     }
   }
   if (Array.isArray(patch.additionalRepairs)) next.additionalRepairs = patch.additionalRepairs;
