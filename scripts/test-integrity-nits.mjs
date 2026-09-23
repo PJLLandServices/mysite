@@ -67,6 +67,20 @@ try {
     const k2 = srv.data("work-orders").find((w) => w.id === f.wo.id).zones[0].issues[0].deferredId;
     ok(stamped && k1 === stamped && k2 === stamped, `B. the server's stamp survives client rewrites (${stamped} / ${k1} / ${k2})`);
   }
+  // ---- C. a re-sent signature must be the SAME signature -----------------------
+  {
+    const f = await srv.fixture({ zones: 2 });
+    await srv.prepClosing(f.wo.id);
+    const first = await srv.api("PATCH", `/api/work-orders/${f.wo.id}`, { status: "completed", signature: SIGNATURE,
+      arrivedAt: new Date().toISOString(), departedAt: new Date().toISOString() });
+    await sleep(600);
+    const same = await srv.api("PATCH", `/api/work-orders/${f.wo.id}`, { status: "completed", signature: SIGNATURE });
+    ok(first.status === 200 && same.status === 200, `C. the identical signature re-sent is still a no-op 200 (${first.status}, ${same.status})`);
+    const other = await srv.api("PATCH", `/api/work-orders/${f.wo.id}`, { signature: { ...SIGNATURE, customerName: "Somebody Else" } });
+    ok(other.status === 409 && other.body.error === "wo_locked", `C. the same drawing under a different signer is refused 409 wo_locked (got ${other.status} ${other.body.error || ""})`);
+    const stored = srv.data("work-orders").find((w) => w.id === f.wo.id).signature;
+    ok(stored.customerName === SIGNATURE.customerName, "C. the stored signature is untouched");
+  }
 } catch (err) {
   failed += 1;
   console.error(`  FAIL: crashed: ${err?.stack || err}\n${srv.logs().slice(-1500)}`);

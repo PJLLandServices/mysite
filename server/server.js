@@ -20358,7 +20358,11 @@ async function handleApi(req, res, pathname) {
       if (payload && payload.signature && typeof payload.signature === "object"
           && existing.signature?.signed
           && typeof payload.signature.imageData === "string"
-          && payload.signature.imageData === existing.signature.imageData) {
+          && payload.signature.imageData === existing.signature.imageData
+          // …and the same signer (PJL-100 nit): the same drawing under a
+          // different name is a change, and meets the lock below.
+          && String(payload.signature.customerName ?? existing.signature.customerName ?? "").trim()
+             === String(existing.signature.customerName ?? "").trim()) {
         delete payload.signature;
         if (payload.locked === true) delete payload.locked;
       }
