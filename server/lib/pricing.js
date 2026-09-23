@@ -439,12 +439,28 @@ function billableLines(wo, lines) {
 // The note that marked a custom line on drafts made before PJL-96. Still
 // read (invoices.isPriceUnconfirmed) so those drafts stay unpayable too.
 const CUSTOM_QUOTE_NOTE_PREFIX = "Custom quote — Patrick to price";
-function refreshSeasonalBaseline(wo, property, { commercial = false } = {}) {
+//
+// NOTHING IS RE-PRICED AFTER SIGNING (PJL-96, ruling 1). The fee line is
+// priced at the moment the signature or bypass freezes the work order
+// (pricedQuoteForLock below, which stamps source.pricedAtLock). Pass
+// `frozen: true` for a locked WO: a stamped line then stands exactly as
+// signed — the signed WO, the report and the invoice carry one number.
+// An UNSTAMPED line on a locked WO (signed before this rule) still gets
+// the re-resolve, as the safety net it always was.
+function refreshSeasonalBaseline(wo, property, { commercial = false, frozen = false } = {}) {
   const lines = Array.isArray(wo?.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
   const none = { lines, changed: false, before: null, after: null, zoneCount: 0 };
   if (wo?.type !== "spring_opening" && wo?.type !== "fall_closing") return none;
   const idx = feeLineIndex(lines);
   const zoneCount = Array.isArray(wo.zones) ? wo.zones.filter((z) => z && (z.kind || "zone") === "zone").length : 0;
+  if (frozen && idx !== -1 && lines[idx]?.source?.pricedAtLock) {
+    const signed = lines[idx];
+    const asSigned = isPricePending(signed)
+      ? { key: signed.key || "", price: null, custom: true, pending: true, reason: signed.priceReason || null }
+      : { key: signed.key || "", price: Number(signed.overridePrice ?? signed.originalPrice) || 0 };
+    return { ...none, zoneCount, lockedAtSigning: true, pending: isPricePending(signed), customQuote: isPricePending(signed),
+      before: asSigned, after: asSigned };
+  }
   const decision = seasonalFeeDecision(property || {}, wo.type, { commercial, zoneCount });
   const pendingAfter = { key: decision.key || "", price: null, custom: true, pending: true, reason: decision.reason, source: decision.source, tier: decision.tier || null };
   if (idx === -1) {
@@ -491,8 +507,29 @@ function refreshSeasonalBaseline(wo, property, { commercial = false } = {}) {
   return { lines: next, changed: true, before, after, zoneCount };
 }
 
+// The seasonal fee, priced the moment the work order is signed (PJL-96,
+// ruling 1). Called at BOTH lock points — the customer's signature and the
+// nobody-home bypass — with the WO as it stands just before it freezes
+// (`zones` = zones carried in the same signing payload, if any). Re-prices
+// the fee line from the zones recorded (refreshSeasonalBaseline: tier,
+// override, or price pending) and stamps it source.pricedAtLock, so the
+// work order the customer signs carries the price the invoice will bill,
+// and nothing moves it afterwards. Returns { onSiteQuote, refresh } or
+// null when there is no seasonal fee to price.
+function pricedQuoteForLock(wo, property, { commercial = false, zones = null } = {}) {
+  if (wo?.type !== "spring_opening" && wo?.type !== "fall_closing") return null;
+  const view = Array.isArray(zones) ? { ...wo, zones } : wo;
+  const refresh = refreshSeasonalBaseline(view, property, { commercial });
+  const idx = feeLineIndex(refresh.lines);
+  if (idx === -1) return null;
+  const lines = refresh.lines.slice();
+  lines[idx] = { ...lines[idx], source: { ...(lines[idx].source || {}), pricedAtLock: new Date().toISOString(), recordedZones: refresh.zoneCount } };
+  return { onSiteQuote: { ...(wo.onSiteQuote || {}), builderLineItems: lines }, refresh };
+}
+
 module.exports = {
   priceForBooking, deriveSeasonalKey, resolveSeasonalPrice, effectiveZoneCount, refreshSeasonalBaseline, CUSTOM_QUOTE_NOTE_PREFIX,
   // PJL-96
-  suggestSeasonalPrice, seasonalFeeDecision, pendingFeeLine, isPricePending, feeLineIndex, billableLines, PRICE_PENDING_NOTES
+  suggestSeasonalPrice, seasonalFeeDecision, pendingFeeLine, isPricePending, feeLineIndex, billableLines, PRICE_PENDING_NOTES,
+  pricedQuoteForLock
 };

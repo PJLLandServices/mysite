@@ -210,7 +210,7 @@ async function run(wo, deps = {}) {
     try {
       const liveProperty = await properties.get(wo.propertyId);
       const commercial = await require("./customers").isCommercialAccount(liveProperty?.customerId || wo.customerId || null);
-      const refresh = require("./pricing").refreshSeasonalBaseline(wo, liveProperty, { commercial });
+      const refresh = require("./pricing").refreshSeasonalBaseline(wo, liveProperty, { commercial, frozen: workOrders.isScopeFrozen(wo) });
       if (refresh.changed) {
         // The invoice bills the re-resolved line. The WO's own quote is
         // corrected only while it is NOT signature-locked (round 2): a

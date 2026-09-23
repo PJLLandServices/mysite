@@ -16,8 +16,10 @@
 // note, the materials list, a completion photo — a fall closing has
 // already satisfied by the time it reaches this screen, or does not need.
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Alert, StyleSheet, Text, TextInput, View } from 'react-native';
+import { getWorkOrder } from '../../api';
+import { money } from '../../format';
 import { colors, radius, space, type } from '../../theme';
 import { Button, ChoiceRow, Section } from './parts';
 import SignaturePad from './SignaturePad';
@@ -48,6 +50,25 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy, onStrok
   const returning = wo?.needsReturnVisit;
 
   const onReady = useCallback((fn) => setCapture(() => fn), []);
+
+  // The closing fee, as the server will price it at signing (PJL-96): the
+  // work order the customer signs carries this price, and so does the
+  // invoice. A closing PJL prices after the visit — a custom size, or a
+  // commercial account without its own price — shows NO number here: the
+  // customer never sees a suggestion. Best effort: offline, or an older
+  // server, simply shows nothing extra.
+  const zoneKey = (wo?.zones || []).map((z) => `${z?.kind || 'zone'}:${z?.number}`).join(',');
+  const [fee, setFee] = useState(null);
+  useEffect(() => {
+    let live = true;
+    if (!wo?.id) return undefined;
+    getWorkOrder(wo.id)
+      .then((d) => { if (live) setFee(d?.seasonalFee || null); })
+      .catch(() => { if (live) setFee(null); });
+    return () => { live = false; };
+  }, [wo?.id, zoneKey]);
+  const feeAt = fee?.atFinish || fee?.current || null;
+  const feePending = Boolean(feeAt?.pending || feeAt?.custom);
 
   // Everything still standing between here and a finished closing, in the
   // order it appears on screen. Shown rather than hidden behind a dead
@@ -168,6 +189,24 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy, onStrok
         </Section>
       ) : null}
 
+      {feeAt ? (
+        <View style={styles.fee}>
+          <Text style={styles.feeTitle}>Closing fee</Text>
+          {feePending ? (
+            <Text style={styles.feeBody}>
+              {feeAt.reason === 'commercial_unpriced' ? 'Commercial account' : 'Custom size'} — PJL confirms the price after the visit.
+            </Text>
+          ) : (
+            <Text style={styles.feeBody}>
+              {`${fee.zoneCount} zone${fee.zoneCount === 1 ? '' : 's'} — ${money(feeAt.price) ?? '—'} + HST`}
+            </Text>
+          )}
+          {!feePending && fee?.changed && fee?.current && fee.current.price !== feeAt.price ? (
+            <Text style={styles.feeMeta}>{`Booked at ${money(fee.current.price) ?? '—'}; the price follows the zones walked.`}</Text>
+          ) : null}
+        </View>
+      ) : null}
+
       <Section title="Before it closes">
         <ChoiceRow
           label="How are they paying?"
@@ -223,4 +262,8 @@ const styles = StyleSheet.create({
   blockersTitle: { ...type.section, color: colors.warning },
   blocker: { ...type.body, color: colors.warning, lineHeight: 21 },
   actions: { gap: space.sm },
+  fee: { backgroundColor: colors.card, borderRadius: radius.card, padding: space.lg, gap: 4 },
+  feeTitle: { ...type.section },
+  feeBody: { ...type.body, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  feeMeta: { ...type.caption, lineHeight: 19 },
 });

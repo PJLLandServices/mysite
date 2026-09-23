@@ -2,6 +2,75 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-23 (PJL-96: the price is set before signing; Patrick sets custom and commercial prices) —
+FLOW-31, with FLOW-23 hops noted:** Patrick's rulings on fall-closing fix #7, built on it. Branch
+`pjl-96-price-before-signing`, two commits.
+- **Price set before signing (ruling 1).** The seasonal fee is re-priced from the zones recorded at
+  the moment the work order freezes: `pricing.pricedQuoteForLock`, called once at each lock point.
+  - Customer signature: the fresh-signature branch of `PATCH /api/work-orders/:id` carries the priced
+    line in the SAME write as the signature, so the If-Match check is unchanged.
+  - Nobody home: `POST /api/work-orders/:id/signature-bypass`.
+  - The line is stamped `source.pricedAtLock`. `refreshSeasonalBaseline(..., { frozen })` then leaves a
+    stamped line on a locked WO exactly as signed.
+  - Result: the signed WO, the Service Report and the invoice carry one number, and zones edited after
+    the lock move nothing. The completion-time re-resolve stays as the safety net for WOs locked
+    before this change.
+  - The manual `POST /api/work-orders/:id/create-invoice` now re-prices the same way (it billed the
+    booked tier as seeded).
+  - The sign-off screen shows the fee the customer is signing for.
+- **Commercial priced per account (ruling 2).** A per-property `seasonalPricing` price is billed as
+  set. A commercial account without one gets a **price-pending** line. The commercial tier (or its
+  slope) is only the suggestion. There is no account-level price on the customer record yet;
+  Patrick's decision on multi-site accounts is open on PJL-96.
+- **Custom sizes (ruling 3).**
+  - 16+ residential and 9+ commercial are price-pending.
+  - A property known to be that size at booking is seeded a pending line. It used to be seeded none,
+    drafted no invoice and read "no charge".
+  - `pricing.suggestSeasonalPrice` extends the per-zone slope of the last two priced tiers in
+    pricing.json and rounds to the dollar (16 residential → $171, 10 commercial → $310 on today's
+    table). No typed prices.
+- **The customer never sees a suggested number** (coordinator default). The signed line reads
+  "Custom size / Commercial account — PJL confirms the price" with no amount. The same goes for the
+  completion email ("PJL will confirm the price"), the web tech page and the app's invoice screen.
+  The suggestion and its arithmetic appear only on the office invoice ("Price not confirmed" card +
+  **Confirm price**) and in Patrick's completion alert.
+- **Unconfirmed prices are never payable (ruling 4).**
+  - `invoices.createDraft` flags the invoice (`priceConfirm`) when the cascade bills a pending line
+    as a suggestion (`pricing.billableLines`).
+  - `invoices.isPriceUnconfirmed` is the one rule. It also covers drafts made under fix #7 round 2
+    that carry only the old placeholder note.
+  - It is folded into `isPayableOnline` via a new `payBlockReason` ("price_unconfirmed"), for SENT
+    invoices too.
+  - Refused while unconfirmed:
+    - `openForOnSitePayment` (409 `needs_pricing`);
+    - `/send` and `/resend` (409 `price_unconfirmed`);
+    - draft→sent through `update()`;
+    - the portal Pay link;
+    - the invoice-ready, reminder and junk-mail texts.
+  - The invoice-ready text is **held**. `POST /api/invoices/:id/confirm-price` (admin only) confirms the
+    suggestion or sets Patrick's price, clears the pending note, and re-arms the held text so the
+    normal 2-minute sweep sends it (coordinator default).
+  - A commercial suggestion inside a priced tier is that tier's price, unconfirmed.
+- **FLOW-23 (PASS) hops touched, additively:**
+  - the pay page's `payable`, `sdk-config` and `payment-intent` now also refuse a price-unconfirmed
+    invoice, and `payment-intent` names the reason;
+  - the portal `payUrl` is only handed out when `isPayableOnline`.
+  - Untouched: `finalizeStripeInvoicePayment`, `stripe.js`, the method list, the webhook and the
+    charge amount. Every sent / part-paid invoice with a confirmed price behaves as before.
+  - Re-walk one real card payment.
+- **Tests (in build:check):**
+  - `scripts/test-price-confirm.mjs`: 47 assertions; on the parent `fcf506ae`, 6 passed and 23 failed.
+  - `scripts/test-price-before-signing.mjs`: 18 assertions; on its parent, 8 passed and 10 failed.
+  - `scripts/test-closing-price.mjs` expectations updated where the rulings changed them (named in
+    the commits).
+- **Acceptance walk for Patrick (FLOW-31):**
+  1. Book a 4-zone closing and walk 6. The sign-off screen shows the 5–6 price. After signing, the
+     work order and the invoice both carry it.
+  2. Close a 16+ zone system. The customer sees "PJL confirms the price" and no number. The office
+     invoice shows the suggestion with its arithmetic. Send, Take payment and the text are all
+     refused until **Confirm price**. After confirming, the invoice sends, and the held text goes out
+     within minutes.
+  3. Repeat step 2 for a commercial account with no price set.
 **2026-09-23 (FLOW-31 — Fix #6b, PJL-98: the office's edits survive the tech's offline walk):** the
 PJL-77 audit of Fix #6 (`6332c076`, `78cff897`) found four gaps, each reproduced against the real
 queue before fixing, one commit each on `pjl-98-offline-merge`:

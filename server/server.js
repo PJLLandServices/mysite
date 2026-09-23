@@ -3333,6 +3333,23 @@ function isNoChargeServiceRecord(record) {
     && !(invoices.totalsForLines(record.lineItems).total > 0);
 }
 
+// The seasonal fee priced at the moment a work order is signed or bypassed
+// (PJL-96, ruling 1): pricing.pricedQuoteForLock with the WO's property and
+// the owner's account type. Called from both lock points; never throws —
+// a failure leaves the line as it was and the completion-time re-resolve
+// (the safety net for unstamped lines) prices it instead.
+async function seasonalQuoteAtLock(wo, zones) {
+  if (!wo || (wo.type !== "fall_closing" && wo.type !== "spring_opening")) return null;
+  try {
+    const property = wo.propertyId ? await properties.get(wo.propertyId) : null;
+    const commercial = await customers.isCommercialAccount(property?.customerId || wo.customerId || null);
+    return pricingLib.pricedQuoteForLock(wo, property, { commercial, zones });
+  } catch (err) {
+    console.warn(`[wo-lock] seasonal fee pricing failed for ${wo.id}: ${err?.message}`);
+    return null;
+  }
+}
+
 async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "confirm" } = {}) {
   const summary = stripe.summarizeIntent(intent, requestId);
   // What this intent SHOULD have charged: the outstanding balance at the
@@ -14223,7 +14240,20 @@ async function handleApi(req, res, pathname) {
       if (existing) {
         return sendJson(res, 200, { ok: true, invoice: existing, alreadyExisted: true });
       }
-      const woLineItems = completionCascade.lineItemsFromWo(wo);
+      // PJL-96: bill the seasonal fee the way the completion cascade does —
+      // re-resolved from the zones recorded (unless it was priced at
+      // signing), and a price-pending line as a suggestion Patrick
+      // confirms. It used to bill the booked tier as seeded.
+      let billWo = wo;
+      if (wo.type === "fall_closing" || wo.type === "spring_opening") {
+        try {
+          const billProperty = await properties.get(wo.propertyId);
+          const commercial = await customers.isCommercialAccount(billProperty?.customerId || wo.customerId || null);
+          const refresh = pricingLib.refreshSeasonalBaseline(wo, billProperty, { commercial, frozen: workOrders.isScopeFrozen(wo) });
+          if (refresh.changed) billWo = { ...wo, onSiteQuote: { ...(wo.onSiteQuote || {}), builderLineItems: refresh.lines } };
+        } catch (err) { console.warn("[create-invoice] seasonal fee re-resolve failed:", err?.message); }
+      }
+      const woLineItems = pricingLib.billableLines(billWo, completionCascade.lineItemsFromWo(billWo));
       if (!woLineItems.length) {
         return sendJson(res, 422, { ok: false, errors: [
           "This work order has no billable line items. Build the on-site quote first (Issues → Draft Quote) so there's something to invoice."
@@ -20101,12 +20131,14 @@ async function handleApi(req, res, pathname) {
     if ((wo.type === "fall_closing" || wo.type === "spring_opening") && wo.status !== "completed") {
       try {
         const commercial = await customers.isCommercialAccount(property?.customerId || wo.customerId || null);
-        const refresh = pricingLib.refreshSeasonalBaseline(wo, property, { commercial });
+        const refresh = pricingLib.refreshSeasonalBaseline(wo, property, { commercial, frozen: workOrders.isScopeFrozen(wo) });
         if (refresh.before || refresh.customQuote) {
           seasonalFee = {
             zoneCount: refresh.zoneCount, commercial,
             changed: refresh.changed || refresh.customQuote === true,
             customQuote: refresh.customQuote === true,
+            // PJL-96: priced when the WO was signed — this is the price, final.
+            lockedAtSigning: refresh.lockedAtSigning === true,
             current: refresh.before,
             atFinish: refresh.after
           };
@@ -20346,6 +20378,10 @@ async function handleApi(req, res, pathname) {
             ip,
             userAgent
           };
+          // PJL-96: price the seasonal fee from the zones recorded BEFORE the
+          // lock, in this same write (a separate write would trip If-Match).
+          const priced = await seasonalQuoteAtLock(existing, Array.isArray(payload.zones) ? payload.zones : null);
+          if (priced) payload.onSiteQuote = priced.onSiteQuote;
           payload.locked = true;
         }
       }
@@ -20952,6 +20988,11 @@ async function handleApi(req, res, pathname) {
         ? payload.reason.trim()
         : "admin_override";
       const note = typeof payload?.note === "string" ? payload.note : "";
+
+      // PJL-96: price the seasonal fee from the zones recorded before the
+      // bypass freezes the work order — same rule as the signature path.
+      const pricedAtLock = await seasonalQuoteAtLock(wo, null);
+      if (pricedAtLock) await workOrders.update(id, { onSiteQuote: pricedAtLock.onSiteQuote });
 
       let updated;
       try {

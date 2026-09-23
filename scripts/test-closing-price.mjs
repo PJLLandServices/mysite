@@ -58,12 +58,16 @@ try {
     const line = seasonalLine(invoiceFor(f.wo.id)?.lineItems);
     ok(lineKey(line) === "fall_close_6z", `the invoice bills the 5-6 tier (got ${lineKey(line)})`);
     ok(linePrice(line) === price("fall_close_6z"), `…at its pricing.json price (got ${linePrice(line)})`);
-    // Round 2: the WO was signed — its quote is the customer's record and is
-    // not rewritten after signing; the history says what the invoice did.
+    // PJL-96 (ruling 1): the fee is priced BEFORE the signature freezes the
+    // WO, so the signed quote already carries the walked tier and equals the
+    // invoice — it used to keep the booked 1-4 tier while the invoice billed
+    // 5-6 ("invoice only"). Nothing is re-priced after signing.
     const doneWo = srv.data("work-orders").find((w) => w.id === f.wo.id);
-    ok(lineKey(seasonalLine(doneWo?.onSiteQuote?.builderLineItems)) === "fall_close_4z", "the signed work order's quote is left as signed");
-    ok((doneWo?.history || []).some((h) => h.action === "seasonal_fee_reresolved" && /fall_close_6z/.test(h.note) && /invoice only/.test(h.note)),
-      "…and its history records the re-priced invoice line");
+    const signedLine = seasonalLine(doneWo?.onSiteQuote?.builderLineItems);
+    ok(lineKey(signedLine) === "fall_close_6z" && linePrice(signedLine) === linePrice(line),
+      `the signed work order carries the price the invoice bills (got ${lineKey(signedLine)} ${linePrice(signedLine)})`);
+    ok(!(doneWo?.history || []).some((h) => h.action === "seasonal_fee_reresolved" && /invoice only/.test(h.note)),
+      "…and nothing was re-priced after signing");
   }
 
   // ---- B. commercial ------------------------------------------------------
