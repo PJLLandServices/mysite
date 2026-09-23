@@ -146,6 +146,31 @@ function appendTechNote(queue, key, lines, { clearDrafts = [] } = {}) {
 }
 const draftText = d => [d?.label ? `label "${d.label}"` : '', d?.notes ? `notes "${d.notes}"` : '',
   d?.repairs && d?.types?.length ? `repairs: ${d.types.join(', ')}` : ''].filter(Boolean).join(', ') || 'no text';
+// The property half of removing a zone (PJL-98 gap 3). The visit half is
+// already saved, through the queue, before this runs — so a phantom zone
+// is never walked or billed whatever happens here. `removeOnServer` is
+// api.js removePropertyZone (the audited, admin-only DELETE). If the
+// property record cannot follow — a tech session until PJL-86, or no
+// signal — the office is told on the visit's notes, never "Not signed in".
+export async function removeZoneFromProperty(queue, key, { number, reason = '', note = '', reasonLabel = '' }, removeOnServer) {
+  const wo = queue.view(key);
+  const propertyId = wo?.property?.id || wo?.propertyId;
+  if (!propertyId) return { ok: true };
+  try {
+    const property = await removeOnServer(propertyId, number, { reason, note });
+    if (property?.id) queue.seed(`prop:${property.id}`, property);
+    return { ok: true };
+  } catch (err) {
+    const permission = err?.code === 'forbidden';
+    const why = [reasonLabel, note].filter(Boolean).join(' — ');
+    appendTechNote(queue, key, [`• Zone ${number} was removed on site${why ? ` (${why})` : ''}, but the property record still lists it: ${
+      permission ? 'removing zones needs the office for now' : 'the phone could not update it'}.`]);
+    queue.flush().catch(() => {});
+    return { ok: false, message: permission
+      ? `Zone ${number} is off this visit. Removing it from the property record needs the office for now — it's noted on the work order for them.`
+      : `Zone ${number} is off this visit. The property record couldn't be updated from here — it's noted on the work order for the office.` };
+  }
+}
 export async function flushBeforeFinish(queue, key) {
   if (queue.status(key).drafts) throw new Error('There are zone drafts on this phone. Open those zones and record their assessment before signing off.');
   // A draft on a zone that has left the visit (the office removed it) can

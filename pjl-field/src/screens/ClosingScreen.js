@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import {
   AuthRequiredError, completeWorkOrder, deferIssues, getWorkOrder, patchProperty,
-  patchWorkOrder, signatureBypass,
+  patchWorkOrder, signatureBypass, removePropertyZone,
 } from '../api';
 import { colors, radius, space, type } from '../theme';
 import { money as formatMoney } from '../format';
@@ -26,7 +26,7 @@ import ZoneStage from './closing/ZoneStage';
 import CloseOutStage from './closing/CloseOutStage';
 import SignOffStage from './closing/SignOffStage';
 import { CLOSEOUT_STEPS } from './closing/steps';
-import { openFieldWorkOrder, watchFieldQueue, flushBeforeFinish, pendingPhotoUri, fieldStatus, resolveFieldConflicts } from '../offline/field';
+import { openFieldWorkOrder, watchFieldQueue, flushBeforeFinish, pendingPhotoUri, fieldStatus, resolveFieldConflicts, removeZoneFromProperty } from '../offline/field';
 
 const STAGES = [
   { key: 'start', label: 'Start' },
@@ -381,7 +381,10 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
     );
   }
 
-  const shared = { wo, save, saveSystem, saving, saveDraft, getDraft, clearDraft, attachPhoto, photoUri };
+  // The property half of Remove zone (PJL-98): the visit is already saved.
+  const removeZoneOnProperty = (number, why) =>
+    removeZoneFromProperty(field.current.queue, field.current.key, { number, ...why }, removePropertyZone);
+  const shared = { wo, save, saveSystem, saving, saveDraft, getDraft, clearDraft, attachPhoto, photoUri, removeZoneOnProperty };
 
   return (
     <View style={styles.screen}>

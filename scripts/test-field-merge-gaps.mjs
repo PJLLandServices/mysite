@@ -169,5 +169,67 @@ await test("2b. control: a draft on a zone still on the visit keeps blocking; on
   assert.match(await finish(f, q, k), /zone drafts/);
 });
 
+// ── Gap 3 ───────────────────────────────────────────────────────────────────
+// The real api.js, against the same fake server.
+const API_SRC = strip("pjl-field/src/api.js");
+const loadApi = (w) => vm.runInNewContext(API_SRC + "\n({ removePropertyZone, AuthRequiredError });", w.globals());
+const loadFieldWith = (w) => vm.runInNewContext(FIELD + "\n({ openFieldWorkOrder, flushBeforeFinish, fieldStatus, removeZoneFromProperty: typeof removeZoneFromProperty === 'function' ? removeZoneFromProperty : undefined });", w.globals());
+// ZoneStage.confirmRemove, in the order it now runs: the visit first
+// (queued, offline-safe), then the property record.
+async function removeZoneAsTheTech(w, n) {
+  const f = loadFieldWith(w); const api = loadApi(w);
+  assert.equal(typeof f.removeZoneFromProperty, "function", "field.js has no removeZoneFromProperty() — the property removal has no fallback");
+  const { queue: q, key: k } = await f.openFieldWorkOrder("WO-1");
+  q.clearDraft(k, `zone:${n}`);
+  q.patch(k, { zones: q.view(k).zones.filter((z) => z.number !== n) });
+  const outcome = await f.removeZoneFromProperty(q, k, { number: n, reason: "not_present", note: "", reasonLabel: "Isn't on this property" }, api.removePropertyZone);
+  return { f, q, k, outcome };
+}
+
+await test("3. a tech removing a zone (server 403): the visit loses it, no 'Not signed in', the office is told", async () => {
+  const w = world({ role: "tech" });
+  const { f, q, k, outcome } = await removeZoneAsTheTech(w, 4);
+  assert.equal(outcome.ok, false);
+  assert.doesNotMatch(outcome.message, /not signed in/i, "a permission refusal read as signed out");
+  assert.match(outcome.message, /needs the office/i);
+  assert.equal(await finish(f, q, k), "OK");
+  assert.ok(!at(w.S.wo.zones, 4), "the zone is still on the visit (and would be billed)");
+  assert.ok(at(w.S.prop.system.zones, 4), "control: PJL-86 not shipped, the property still lists it");
+  assert.match(w.S.wo.techNotes, /Zone 4/);
+  assert.match(w.S.wo.techNotes, /needs the office/);
+});
+
+await test("3b. an admin removing a zone: gone from the visit AND the property, nothing noted", async () => {
+  const w = world({ role: "admin" });
+  const { f, q, k, outcome } = await removeZoneAsTheTech(w, 4);
+  assert.equal(outcome.ok, true);
+  assert.equal(await finish(f, q, k), "OK");
+  assert.ok(!at(w.S.wo.zones, 4)); assert.ok(!at(w.S.prop.system.zones, 4));
+  assert.ok(!at(q.view("prop:P-1").system.zones, 4), "the phone still shows the removed zone on the property");
+  assert.equal(w.S.wo.techNotes, "");
+});
+
+await test("3c. with no signal: the zone still comes off the visit, and the property is noted for the office", async () => {
+  const w = world({ role: "tech" });
+  const f = loadFieldWith(w); await f.openFieldWorkOrder("WO-1");
+  w.S.online = false;
+  const { f: f2, q, k, outcome } = await removeZoneAsTheTech(w, 5);
+  assert.equal(outcome.ok, false, "offline removal reported success");
+  await q.flush(); // the offline background pass runs its course
+  w.S.online = true;
+  const done = await finish(f2, q, k);
+  assert.equal(done, "OK", done);
+  assert.ok(!at(w.S.wo.zones, 5));
+  assert.match(w.S.wo.techNotes, /Zone 5/);
+});
+
+await test("3d. ZoneStage removes the zone from the visit BEFORE touching the property", () => {
+  const src = fs.readFileSync("pjl-field/src/screens/closing/ZoneStage.js", "utf8");
+  const body = src.slice(src.indexOf("const confirmRemove"), src.indexOf("const askToRemove"));
+  assert.ok(!/removePropertyZone\(/.test(body), "confirmRemove still calls removePropertyZone directly");
+  const visit = body.indexOf("save({ zones: next })"), property = body.indexOf("removeZoneOnProperty(");
+  assert.ok(visit > 0 && property > visit, "the visit is not saved first");
+});
+
 console.log(`field-merge-gaps: ${pass} passed, ${fail} failed`);
 process.exitCode = fail ? 1 : 0;

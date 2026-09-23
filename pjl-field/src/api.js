@@ -132,13 +132,16 @@ async function fetchWithTimeout(url, options, ms) {
 export const FINISH_TIMEOUT_MS = 45_000;
 export const FINISH_STEP_TIMEOUT_MS = 30_000;
 
-async function sendJson(path, method, body, { timeout = 0 } = {}) {
+// `forbidden`: for a call whose 403 means "this account may not do that",
+// not "signed out" — thrown as code 'forbidden' with that message instead.
+async function sendJson(path, method, body, { timeout = 0, forbidden = null } = {}) {
   const res = await fetchWithTimeout(`${HOST}${path}`, {
     method,
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     credentials: 'include',
     body: JSON.stringify(body || {}),
   }, timeout);
+  if (res.status === 403 && forbidden) throw Object.assign(new Error(forbidden), { code: 'forbidden', status: 403 });
   if (res.status === 401 || res.status === 403) throw new AuthRequiredError();
   const text = await res.text();
   let data;
@@ -493,11 +496,15 @@ export const patchProperty = (id, patch) =>
 // Remove a documented zone, with a reason. The server writes the audit
 // entry itself and never renumbers what's left — a controller station
 // keeps its number whatever happens to the ones before it.
+//
+// The route is admin-only until PJL-86. A tech's 403 is a permission
+// answer, not a sign-out, so it must never send them to the sign-in screen.
 export const removePropertyZone = (propertyId, zoneNumber, { reason, note }) =>
   sendJson(
     `/api/properties/${encodeURIComponent(propertyId)}/zones/${encodeURIComponent(zoneNumber)}`,
     'DELETE',
-    { reason, note }
+    { reason, note },
+    { forbidden: 'Removing a zone from the property record needs the office for now.' }
   ).then((d) => d.property);
 
 // photos: [{ mediaType, data (base64, no data: prefix), category, zoneNumber, label }]
