@@ -53,6 +53,7 @@ function world() {
     if (p === "/api/work-orders/WO-1") {
       if (m !== "PATCH") return reply(200, { ok: true, workOrder: clone(S.wo), property: clone(S.prop), lead: null });
       const body = JSON.parse(o.body), im = o.headers["if-match"];
+      if (S.fail409Once) { S.fail409Once = false; return reply(409, { ok: false, error: "version_conflict", errors: ["updated by someone else"] }); }
       if (im && im !== S.wo.updatedAt) return reply(409, { ok: false, error: "version_conflict", errors: ["updated by someone else"] });
       Object.assign(S.wo, body); if (body.zones) S.wo.zones = body.zones.map(hydrateZone); S.wo.updatedAt = tick();
       return reply(200, { ok: true, workOrder: clone(S.wo) });
@@ -181,6 +182,17 @@ await test("the app routes Add a zone through the queue and offers the choice", 
   assert.match(zone, /clearDraft\(`zone:\$\{number\}`\);/, "removing a zone clears its draft");
   assert.match(closing, /Keep mine/); assert.match(closing, /Use office's/);
   assert.match(closing, /resolveFieldConflicts\(queue, key, prefer\)/);
+});
+
+await test("a 409 version_conflict from a raced save retries on its own (round 2)", async () => {
+  const { S, load } = world(); const f = load(); const { queue: q, key: k } = await f.openFieldWorkOrder("WO-1");
+  q.patch(k, { zones: setZone(q.view(k).zones, 2, { status: "working_well" }) });
+  S.fail409Once = true;                 // the server's in-lock If-Match refuses the first try
+  await q.flush();
+  assert.equal(q.status(k).error?.code, "version_conflict");
+  await q.flush();                      // the next background pass, NOT a manual retry
+  assert.equal(q.status(k).pending, 0, "the edit synced without the tech doing anything");
+  assert.equal(S.wo.zones[1].status, "working_well");
 });
 
 await test("the changed app files parse with the app's own Babel", async () => {

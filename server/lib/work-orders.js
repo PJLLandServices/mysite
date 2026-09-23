@@ -1627,11 +1627,19 @@ async function create({ type, lead, property, customId, quote = null, project = 
   return wo;
 }
 
-async function update(id, patch) {
+async function update(id, patch, { ifMatch = null } = {}) {
   const records = await readAll();
   const idx = records.findIndex((w) => w.id === id);
   if (idx === -1) return null;
   const current = records[idx];
+  // Optimistic concurrency, checked HERE — inside the store lock, against
+  // the record as it is at the moment of the write (fall-closing #1).
+  if (ifMatch && current.updatedAt && ifMatch !== current.updatedAt) {
+    const err = new Error("version_conflict");
+    err.code = "VERSION_CONFLICT";
+    err.current = current;
+    throw err;
+  }
 
   // Allow shallow merge on top-level fields, but `zones`, `additionalRepairs`,
   // `lineItems` are replaced wholesale when present (the editor sends the

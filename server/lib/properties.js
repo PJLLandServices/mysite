@@ -1161,11 +1161,19 @@ async function removeZone(propertyId, zoneNumber, { reason, note = "", by = "tec
   return target;
 }
 
-async function update(id, patch) {
+async function update(id, patch, { ifMatch = null } = {}) {
   const properties = await readAll();
   const idx = properties.findIndex((p) => p.id === id);
   if (idx === -1) return null;
   const current = properties[idx];
+  // Optimistic concurrency, checked HERE — inside the store lock, against
+  // the record as it is at the moment of the write (fall-closing #1).
+  if (ifMatch && current.updatedAt && ifMatch !== current.updatedAt) {
+    const err = new Error("version_conflict");
+    err.code = "VERSION_CONFLICT";
+    err.current = current;
+    throw err;
+  }
 
   // Name invariant — refuse a patch that would blank customerName. Other
   // patches (no customerName key in the patch) pass through unchanged.

@@ -142,7 +142,10 @@ export function createQueue({ store, transport }) {
     if (draining) return draining;
     draining = (async () => {
       const blocked = new Set(Object.entries(state.errors)
-        .filter(([, e]) => !retry && !['network', 'auth'].includes(e.code)).map(([key]) => key));
+        .filter(([, e]) => !retry && !['network', 'auth', 'version_conflict'].includes(e.code)).map(([key]) => key));
+      // version_conflict: the server's in-lock If-Match check refused a save
+      // that raced another (fall-closing #1 round 2). The next pass re-reads
+      // and merges, so it retries on its own like a network error.
       try {
         if (!(await transport.verifyOwner())) throw issue('Sign in with the account that recorded this work.', 'auth');
         while (true) {

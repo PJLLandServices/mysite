@@ -58,7 +58,7 @@
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
-const { writeJsonAtomic } = require("./atomic-json");
+const { writeJsonAtomic, updateJsonStore } = require("./atomic-json");
 // Contact-id helpers only — the bill-to resolver itself is not used here.
 // Safe to require at load time: billing-parties.js requires no siblings.
 const { isContactId, coerceContactId } = require("./billing-parties");
@@ -691,20 +691,17 @@ async function purgeTrashedLinks(id, trashed) {
   for (const [store, ids] of Object.entries(trashed)) {
     const idSet = new Set(ids);
     const fullPath = path.join(dataDir, `${store}.json`);
-    if (!fsSync.existsSync(fullPath)) continue;
-    const raw = await fs.readFile(fullPath, "utf8");
-    const arr = JSON.parse(raw || "[]");
-    if (!Array.isArray(arr)) continue;
-    // Re-assert both conditions at the moment of the write: only this
-    // customer's records, and only ones still in the Trash. A restore
-    // between the scan and here takes the record back out of scope.
-    const kept = arr.filter((r) => !(r && idSet.has(r.id) && r.customerId === id && isTrashed(r)));
-    const removedCount = arr.length - kept.length;
-    if (!removedCount) continue;
-    const removedIds = arr
-      .filter((r) => r && idSet.has(r.id) && r.customerId === id && isTrashed(r))
-      .map((r) => r.id);
-    await fs.writeFile(fullPath, JSON.stringify(kept, null, 2) + "\n", "utf8");
+    // Under the store's own lock, atomically (fall-closing #1 round 2).
+    const removedIds = await updateJsonStore(fullPath, (arr) => {
+      // Re-assert both conditions at the moment of the write: only this
+      // customer's records, and only ones still in the Trash. A restore
+      // between the scan and here takes the record back out of scope.
+      const going = (r) => r && idSet.has(r.id) && r.customerId === id && isTrashed(r);
+      const kept = arr.filter((r) => !going(r));
+      if (kept.length === arr.length) return { result: null };
+      return { write: kept, result: arr.filter(going).map((r) => r.id) };
+    });
+    if (!removedIds) continue;
     purged[store] = removedIds;
   }
   return purged;
@@ -769,20 +766,18 @@ async function cascadeDeleteLinks(id, { by = "admin", reason = "" } = {}) {
   const removed = {};
   for (const file of CUSTOMER_LINK_FILES) {
     const fullPath = path.join(dataDir, file);
-    if (!fsSync.existsSync(fullPath)) continue;
+    const store = file.replace(".json", "");
     try {
-      const raw = await fs.readFile(fullPath, "utf8");
-      const arr = JSON.parse(raw || "[]");
-      if (!Array.isArray(arr)) continue;
-      const store = file.replace(".json", "");
-      const going = arr.filter((r) => r && r.customerId === id);
-      if (!going.length) continue;
-      if (store === "invoices") {
-        await appendInvoiceTombstones(going, { by, reason });
-      }
-      const kept = arr.filter((r) => !(r && r.customerId === id));
-      await fs.writeFile(fullPath, JSON.stringify(kept, null, 2) + "\n", "utf8");
-      removed[store] = going.map((r) => r.id).filter(Boolean);
+      // Under the store's own lock, atomically (fall-closing #1 round 2).
+      const ids = await updateJsonStore(fullPath, async (arr) => {
+        const going = arr.filter((r) => r && r.customerId === id);
+        if (!going.length) return { result: null };
+        if (store === "invoices") {
+          await appendInvoiceTombstones(going, { by, reason });
+        }
+        return { write: arr.filter((r) => !(r && r.customerId === id)), result: going.map((r) => r.id).filter(Boolean) };
+      });
+      if (ids) removed[store] = ids;
     } catch (err) {
       console.warn(`[cascadeDelete] couldn't clear ${file}:`, err.message);
     }
@@ -1002,22 +997,16 @@ async function mergeCustomers(primaryId, secondaryId, { by = "admin", note = "" 
   let entitiesUpdated = 0;
   for (const file of filesToUpdate) {
     const fullPath = path.join(dataDir, file);
-    if (!fsSync.existsSync(fullPath)) continue;
     try {
-      const raw = await fs.readFile(fullPath, "utf8");
-      const arr = JSON.parse(raw || "[]");
-      if (!Array.isArray(arr)) continue;
-      let changed = 0;
-      for (const r of arr) {
-        if (r && r.customerId === secondaryId) {
-          r.customerId = primaryId;
-          changed++;
+      // Under the store's own lock, atomically (fall-closing #1 round 2).
+      const changed = await updateJsonStore(fullPath, (arr) => {
+        let n = 0;
+        for (const r of arr) {
+          if (r && r.customerId === secondaryId) { r.customerId = primaryId; n++; }
         }
-      }
-      if (changed) {
-        await fs.writeFile(fullPath, JSON.stringify(arr, null, 2) + "\n", "utf8");
-        entitiesUpdated += changed;
-      }
+        return n ? { write: arr, result: n } : { result: 0 };
+      });
+      entitiesUpdated += changed || 0;
     } catch (err) {
       console.warn(`[mergeCustomers] couldn't update ${file}:`, err.message);
     }

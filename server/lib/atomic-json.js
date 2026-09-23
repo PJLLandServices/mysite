@@ -98,4 +98,31 @@ function parseJsonArrayStore(raw, file) {
   return parsed;
 }
 
-module.exports = { writeJsonAtomic, serialize, parseJsonArrayStore };
+// A read-modify-write of a whole JSON array store, from OUTSIDE the store's
+// own lib (customer merge / cascade delete, which sweep every store for a
+// customerId). Runs under the same serialize(file) queue the libs use, so
+// it can neither lose nor be lost to a concurrent save, and writes
+// atomically. `mutate(arr)` returns { write, result }: `write` (an array)
+// is saved when present; `result` is handed back. A missing file is
+// skipped (mutate is not called); a damaged one throws.
+function updateJsonStore(file, mutate) {
+  return serialize(file, async () => {
+    let raw;
+    try { raw = await fs.readFile(file, "utf8"); }
+    catch (err) { if (err.code === "ENOENT") return undefined; throw err; }
+    const out = await mutate(parseJsonArrayStore(raw, file));
+    if (out && Array.isArray(out.write)) await writeJsonAtomic(file, out.write);
+    return out ? out.result : undefined;
+  });
+}
+
+// Hold several stores' locks for one synchronous-or-async pass (the
+// property merge rewrites every store that names a property). Acquired in
+// a fixed (sorted) order; no lib mutator ever holds two, so no deadlock.
+function withStoreLocks(files, fn) {
+  const ordered = [...new Set(files)].sort();
+  const run = (i) => (i >= ordered.length ? Promise.resolve().then(fn) : serialize(ordered[i], () => run(i + 1)));
+  return run(0);
+}
+
+module.exports = { writeJsonAtomic, serialize, parseJsonArrayStore, updateJsonStore, withStoreLocks };

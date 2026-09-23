@@ -9400,14 +9400,22 @@ async function handleApi(req, res, pathname) {
       }
 
       const propertyMerge = require("./lib/property-merge");
-      const result = propertyMerge.mergeProperties({
-        keep: keepId,
-        remove: duplicateId,
-        apply,
-        allowDifferentCustomer: payload?.allowDifferentCustomer === true,
-        alignDraftInvoiceAddresses: payload?.alignDraftInvoiceAddresses === true,
-        by: await actorLabel(req)
-      });
+      // The merge rewrites every store that names a property. It runs
+      // while holding the in-process locks of the stores that have them,
+      // so a concurrent WO / invoice / property save can neither be lost
+      // under it nor land on top of it (fall-closing #1 round 2).
+      const { withStoreLocks } = require("./lib/atomic-json");
+      const result = await withStoreLocks(
+        ["properties.json", "work-orders.json", "invoices.json", "customers.json"].map((f) => path.join(DATA_DIR, f)),
+        async () => propertyMerge.mergeProperties({
+          keep: keepId,
+          remove: duplicateId,
+          apply,
+          allowDifferentCustomer: payload?.allowDifferentCustomer === true,
+          alignDraftInvoiceAddresses: payload?.alignDraftInvoiceAddresses === true,
+          by: await actorLabel(req)
+        })
+      );
 
       if (!result.ok) {
         // The lib's refusals are deliberate guards, not failures to route
@@ -10214,7 +10222,14 @@ async function handleApi(req, res, pathname) {
       // unsettable from a request body and rejects a flag it can't read
       // rather than defaulting it to opted-in.
       Object.assign(sanitized, properties.sanitizeSeasonalConsent(payload));
-      let updated = await properties.update(id, sanitized);
+      // Same version check again inside the store lock (fall-closing #1).
+      let updated;
+      try {
+        updated = await properties.update(id, sanitized, { ifMatch: propertyVersion || null });
+      } catch (err) {
+        if (err?.code !== "VERSION_CONFLICT") throw err;
+        return sendJson(res, 409, { ok: false, error: "version_conflict", errors: ["This property was changed elsewhere. Your phone's correction is retained for review."] });
+      }
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
 
       // If address changed, refresh the geocoded coords so the iCal
@@ -20127,6 +20142,17 @@ async function handleApi(req, res, pathname) {
       // unrelated edit, and so a signature-only payload doesn't get
       // blocked by a stale version.
       const ifMatch = String(req.headers["if-match"] || "").replace(/^"|"$/g, "");
+      // The same exemptions decide the check made again INSIDE the store
+      // lock at write time (versionCheck below) — fall-closing #1 round 2.
+      const versionExempt = (() => {
+        if (!payload) return true;
+        const keys = Object.keys(payload);
+        if (keys.length === 1 && keys[0] === "photos") return true;
+        if (keys.every((k) => k === "signature" || k === "locked")) return true;
+        const SIGN_AND_COMPLETE = new Set(["signature", "locked", "status", "arrivedAt", "departedAt"]);
+        return Boolean(payload.signature && payload.status === "completed" && keys.every((k) => SIGN_AND_COMPLETE.has(k)));
+      })();
+      const versionCheck = ifMatch && !versionExempt ? ifMatch : null;
       if (ifMatch && existing.updatedAt && ifMatch !== existing.updatedAt) {
         const photosOnlyPayload = payload && Object.keys(payload).length === 1 && "photos" in payload;
         const signatureOnlyPayload = payload && Object.keys(payload).every((k) => k === "signature" || k === "locked");
@@ -20244,7 +20270,24 @@ async function handleApi(req, res, pathname) {
       // "completed" and fire the cascade exactly once.
       const priorStatus = existing.status || null;
 
-      const updated = await workOrders.update(id, payload);
+      // The If-Match is checked AGAIN inside the store lock, against the
+      // record as it is at the moment of the write. The check above read
+      // the WO before this request's own awaits; two saves carrying the
+      // same If-Match both passed it and the second silently replaced the
+      // first's zones (29/30 rounds, fall-closing #1 round 2).
+      let updated;
+      try {
+        updated = await workOrders.update(id, payload, { ifMatch: versionCheck });
+      } catch (err) {
+        if (err?.code !== "VERSION_CONFLICT") throw err;
+        return sendJson(res, 409, {
+          ok: false,
+          error: "version_conflict",
+          errors: ["This work order was updated by someone else while you were editing. Reload to see the latest changes before saving again."],
+          currentVersion: err.current?.updatedAt || null,
+          workOrder: err.current || null
+        });
+      }
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
 
       // Audit trail — append a generic mutation entry for non-status,
@@ -20711,6 +20754,10 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(woPhotoDeleteMatch[1]);
       const n = Number(woPhotoDeleteMatch[2]);
+      // Under the same per-WO photo lock as uploads: a delete racing an
+      // upload used to write back a photo list read before the other's
+      // write — resurrecting the deleted photo (fall-closing #1 round 2).
+      return await fieldPhotoUploads.run(id, async () => {
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
       const existing = Array.isArray(wo.photos) ? wo.photos : [];
@@ -20727,6 +20774,7 @@ async function handleApi(req, res, pathname) {
         });
       } catch (err) { console.warn("[wo-history] photo delete entry failed:", err?.message); }
       return sendJson(res, 200, { ok: true, workOrder: updated, deletedN: n });
+      });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't delete photo."] });
     }

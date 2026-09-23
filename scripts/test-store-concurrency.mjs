@@ -132,6 +132,24 @@ try {
     ok(lost === 0, `properties: no lost defer/PATCH across ${ROUNDS} rounds (lost in ${lost})`);
   }
 
+  // ---- 3b (round 2). a customer merge sweeping the stores vs a WO save --
+  {
+    const customers = require(path.join(SANDBOX, "lib", "customers.js"));
+    let lost = 0;
+    for (let t = 0; t < 15; t++) {
+      const a = await customers.create({ name: `Keep ${t}`, email: `keep${t}@example.com` });
+      const b = await customers.create({ name: `Dup ${t}`, email: `dup${t}@example.com` });
+      const w = await workOrders.create({ type: "service_visit", lead: { id: `L-M${t}`, customerId: b.id, contact: { name: "M" } } });
+      await Promise.all([
+        customers.mergeCustomers(a.id, b.id),
+        workOrders.update(w.id, { techNotes: `note-${t}` })
+      ]);
+      const got = await workOrders.get(w.id);
+      if (got?.customerId !== a.id || got?.techNotes !== `note-${t}`) lost += 1;
+    }
+    ok(lost === 0, `customer merge + WO save in the same moment: both land (lost in ${lost}/15)`);
+  }
+
   ok(leftoverTmp().length === 0, `no temp files left behind (${leftoverTmp().join(",")})`);
 
   // ---- 4. a damaged store fails loudly and is never saved over --------
@@ -193,6 +211,45 @@ try {
     const list = await srv.api("GET", "/api/work-orders");
     ok((list.body.workOrders || []).length === 2, `HTTP: both work orders still listed (got ${(list.body.workOrders || []).length})`);
     ok(srv.outbox().length === 0, "HTTP: nothing was emailed or texted by the race");
+
+    // Round 2 (breaker): phone and office both loaded the same version and
+    // both PATCH zones with that If-Match. One must win and one must get
+    // 409 — never both 200 with one zone edit silently gone.
+    await srv.api("PATCH", `/api/work-orders/${A.id}`, { zones: [1, 2, 3, 4].map((n) => ({ number: n, location: `Z${n}` })) });
+    let bothOk = 0, lostZone = 0, notOne409 = 0;
+    for (let t = 0; t < 20; t++) {
+      const g = (await srv.api("GET", `/api/work-orders/${A.id}`)).body.workOrder;
+      const phone = g.zones.map((z, i) => (i === 0 ? { ...z, notes: `phone-${t}` } : z));
+      const office = g.zones.map((z, i) => (i === 2 ? { ...z, location: `Office-${t}` } : z));
+      const [p1, p2] = await Promise.all([
+        srv.api("PATCH", `/api/work-orders/${A.id}`, { zones: phone }, { "if-match": g.updatedAt }),
+        srv.api("PATCH", `/api/work-orders/${A.id}`, { zones: office }, { "if-match": g.updatedAt })
+      ]);
+      if (p1.status === 200 && p2.status === 200) {
+        bothOk += 1;
+        const now = srv.data("work-orders").find((w) => w.id === A.id);
+        if (now.zones[0]?.notes !== `phone-${t}` || now.zones[2]?.location !== `Office-${t}`) lostZone += 1;
+      }
+      if ([p1.status, p2.status].sort().join() !== "200,409") notOne409 += 1;
+    }
+    ok(bothOk === 0 && lostZone === 0, `same-If-Match race: never both 200 (both in ${bothOk}/20, zone lost in ${lostZone}/20)`);
+    ok(notOne409 === 0, `…exactly one 200 and one 409 every round (off in ${notOne409}/20)`);
+
+    // Photo delete racing an upload: the deleted photo stays deleted and
+    // the new one lands.
+    let resurrected = 0, lostNew = 0;
+    for (let t = 0; t < 10; t++) {
+      const up = await srv.api("POST", `/api/work-orders/${B.id}/photos`, { photos: [{ mediaType: "image/png", data: png, category: "general", clientUploadId: `field-pre-${t}` }] });
+      const n = up.body.added?.[0]?.n;
+      await Promise.all([
+        srv.api("DELETE", `/api/work-orders/${B.id}/photos/${n}`),
+        srv.api("POST", `/api/work-orders/${B.id}/photos`, { photos: [{ mediaType: "image/png", data: png, category: "general", clientUploadId: `field-new-${t}` }] })
+      ]);
+      const now = srv.data("work-orders").find((w) => w.id === B.id);
+      if (now.photos.some((p) => p.clientUploadId === `field-pre-${t}`)) resurrected += 1;
+      if (!now.photos.some((p) => p.clientUploadId === `field-new-${t}`)) lostNew += 1;
+    }
+    ok(resurrected === 0 && lostNew === 0, `photo delete + upload race: none resurrected (${resurrected}/10), none lost (${lostNew}/10)`);
   } finally {
     await srv.stop();
   }

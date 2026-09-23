@@ -83,8 +83,10 @@ function readJson(file) {
   return JSON.parse(raw || "null");
 }
 
+// A unique temp name per write (a fixed `<file>.tmp` collided when two
+// writes met — fall-closing #1 round 2). Still temp + rename, still sync.
 function writeJson(file, value) {
-  const tmp = `${file}.tmp`;
+  const tmp = `${file}.${process.pid}.${Date.now()}.${require("node:crypto").randomBytes(6).toString("hex")}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", "utf8");
   fs.renameSync(tmp, file);
 }
