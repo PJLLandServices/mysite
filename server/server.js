@@ -5259,8 +5259,13 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
   // Look up the linked WO (if any) — we need to update wo.scheduledFor
   // and we also block the move if the tech has already arrived. Multi-WO
   // bookings rarely happen but if any WO has arrivedAt set, block.
-  const linkedWoIds = Array.isArray(bookingRec.workOrderIds) ? bookingRec.workOrderIds : [];
-  const linkedWos = (await Promise.all(linkedWoIds.map((wid) => workOrders.get(wid)))).filter(Boolean);
+  //
+  // THIS visit's WOs only (bookings.workOrdersForVisit, PJL-97): a
+  // returning customer's record can still link last spring's finished WO,
+  // whose arrivedAt refused every move and whose date the loop below
+  // rewrote onto the fall day.
+  const allLinkedWos = (await Promise.all((bookingRec.workOrderIds || []).map((wid) => workOrders.get(wid)))).filter(Boolean);
+  const linkedWos = bookings.workOrdersForVisit(bookingRec, allLinkedWos);
   if (linkedWos.some((w) => w.arrivedAt)) {
     return { ok: false, status: 409, code: "wo_locked", errors: ["Technician has already arrived for this appointment — use the follow-up flow instead."] };
   }
@@ -12984,11 +12989,20 @@ async function handleApi(req, res, pathname) {
       // embedded lead.booking shape doesn't carry the canonical BK- id,
       // so we can't match it on a field after the record is gone.
       const bookingToDelete = await bookings.get(id);
+      // A previous visit's finished WO on a reused record (PJL-97) is not
+      // "work in progress" on this one, so it never blocks the delete.
+      const deleteLinkedWos = bookingToDelete
+        ? (await Promise.all((bookingToDelete.workOrderIds || []).map((wid) => workOrders.get(wid)))).filter(Boolean)
+        : [];
+      const deleteVisitWoIds = new Set(bookingToDelete
+        ? bookings.workOrdersForVisit(bookingToDelete, deleteLinkedWos).map((w) => w.id)
+        : []);
       const result = await bookings.remove(id, {
         by: session.uid || "admin",
         isActiveWo: async (woId) => {
           const wo = await workOrders.get(woId);
           if (!wo) return false;
+          if (!deleteVisitWoIds.has(wo.id)) return false;
           // "Active" = anything past initial scheduling but not cancelled.
           return wo.status && wo.status !== "scheduled" && wo.status !== "cancelled";
         }
@@ -14677,8 +14691,11 @@ async function handleApi(req, res, pathname) {
         ? bookingRec.rescheduleCount : 0;
       const limitReached = rescheduleCount >= 1;
 
-      const linkedWoIds = Array.isArray(bookingRec?.workOrderIds) ? bookingRec.workOrderIds : [];
-      const linkedWos = (await Promise.all(linkedWoIds.map((wid) => workOrders.get(wid)))).filter(Boolean);
+      // This visit's WOs only (PJL-97): last spring's finished WO on a
+      // reused record is not "the appointment is underway".
+      const allLinkedWos = (await Promise.all((bookingRec?.workOrderIds || []).map((wid) => workOrders.get(wid)))).filter(Boolean);
+      const linkedWoIds = bookingRec ? bookings.workOrderIdsForVisit(bookingRec, allLinkedWos) : [];
+      const linkedWos = bookingRec ? bookings.workOrdersForVisit(bookingRec, allLinkedWos) : [];
       const woLocked = linkedWos.some((w) =>
         w.arrivedAt
         || w.status === "in_progress"
@@ -14779,8 +14796,11 @@ async function handleApi(req, res, pathname) {
 
       // WO state checks. Multi-WO and arrived/in-progress/signed/completed
       // all force a phone call. Customer can't unwind a job that's underway.
-      const linkedWoIds = Array.isArray(bookingRec.workOrderIds) ? bookingRec.workOrderIds : [];
-      const linkedWos = (await Promise.all(linkedWoIds.map((wid) => workOrders.get(wid)))).filter(Boolean);
+      // This visit's WOs only (PJL-97) — for the guards AND the cascade
+      // below, which must never touch last spring's finished WO.
+      const allLinkedWos = (await Promise.all((bookingRec.workOrderIds || []).map((wid) => workOrders.get(wid)))).filter(Boolean);
+      const linkedWoIds = bookings.workOrderIdsForVisit(bookingRec, allLinkedWos);
+      const linkedWos = bookings.workOrdersForVisit(bookingRec, allLinkedWos);
       if (linkedWos.some((w) => w.arrivedAt || w.status === "in_progress" || w.status === "signed" || w.status === "completed")) {
         return sendJson(res, 409, {
           ok: false,
@@ -23757,8 +23777,11 @@ async function orderDayForDriving(rows) {
           // tech sees "already opened, status" on the card — and so the
           // work-order union below (mergeDaySchedule dedupes on wo.id)
           // can never list that job a second time.
-          const linkedWo = (Array.isArray(b.workOrderIds) && b.workOrderIds.length)
-            ? allWos.find((w) => b.workOrderIds.includes(w.id)) || null
+          // Only a WO of THIS visit (PJL-97): a record reused across
+          // seasons can still link last spring's finished job.
+          const visitWoIds = new Set(bookings.workOrdersForVisit(b, allWos).map((w) => w.id));
+          const linkedWo = visitWoIds.size
+            ? allWos.find((w) => visitWoIds.has(w.id)) || null
             : null;
           dayBookings.push({
             leadId: b.leadId || "",
@@ -27777,7 +27800,10 @@ async function retimeCustomerBooking(row, start, durationMinutes) {
   const label = (iso) => new Date(iso).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
   const rec = row.bookingId ? await bookings.get(row.bookingId) : null;
   const woIds = Array.isArray(rec?.workOrderIds) ? rec.workOrderIds : [];
-  const wos = (await Promise.all(woIds.map((id) => Promise.resolve(workOrders.get(id)).catch(() => null)))).filter(Boolean);
+  const allWos = (await Promise.all(woIds.map((id) => Promise.resolve(workOrders.get(id)).catch(() => null)))).filter(Boolean);
+  // This visit's WOs only (PJL-97): last spring's arrivedAt must not
+  // freeze the fall stop's time, and its date must not follow the route.
+  const wos = rec ? bookings.workOrdersForVisit(rec, allWos) : allWos;
   if (wos.some((w) => w && w.arrivedAt)) return false;
 
   if (row.leadId) {

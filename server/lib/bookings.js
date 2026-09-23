@@ -221,6 +221,53 @@ function holdsItsSlot(status) {
   return !DEAD_STATUSES.has(String(status || "").toLowerCase());
 }
 
+// Which of a record's linked work orders belong to the visit it describes
+// NOW (PJL-97).
+//
+// A record's workOrderIds is not always one visit. Nothing closes a booking
+// record when its work order completes, so a returning customer's April
+// record stayed `confirmed`, and the fall re-booking reused it: scheduledFor
+// moved to October and the fall WO id was APPENDED. That leaves one record
+// reading ["WO-APRIL", "WO-FALL"]. Every reader that treated "the
+// record's WOs" as "this visit's" then acted on April's finished job:
+// reschedule refused ("technician has already arrived") or re-dated it,
+// the portal refused to reschedule or cancel, and the calendar linked it.
+//
+// A WO that FINISHED (completed / cancelled / no_show — by completedAt, else
+// its last update) before the start of the record's local day is a previous
+// visit's and is dropped. Everything else stays, in record order: open WOs,
+// and this visit's own WO finished on the day (finished early, before the
+// booked minute, included). With no date on the record there is nothing to
+// judge by, and every linked WO is kept, which is the old answer.
+//
+// Takes WO objects rather than reading them, so this lib still never
+// requires work-orders.js (see remove()'s isActiveWo for the same seam).
+const WO_FINISHED_STATUSES = new Set(["completed", "cancelled", "no_show"]);
+function workOrdersForVisit(rec, wos) {
+  const ids = Array.isArray(rec?.workOrderIds) ? rec.workOrderIds : [];
+  const byId = new Map((Array.isArray(wos) ? wos : []).filter((w) => w && w.id).map((w) => [w.id, w]));
+  const linked = ids.map((id) => byId.get(id)).filter(Boolean);
+  const when = rec?.scheduledFor ? new Date(rec.scheduledFor) : null;
+  if (!when || Number.isNaN(when.getTime())) return linked;
+  const dayStart = new Date(when.getFullYear(), when.getMonth(), when.getDate()).getTime();
+  return linked.filter((w) => {
+    if (!WO_FINISHED_STATUSES.has(w.status)) return true;
+    const finished = Date.parse(w.completedAt || w.updatedAt || "");
+    return Number.isFinite(finished) && finished >= dayStart;
+  });
+}
+
+// The same rule, answered as ids: the record's workOrderIds minus those
+// whose WO belongs to a previous visit. An id with no WO behind it yet (the
+// booking envelope's id, before anyone opens the work order) is kept,
+// exactly as every id-counting reader saw it before.
+function workOrderIdsForVisit(rec, wos) {
+  const ids = Array.isArray(rec?.workOrderIds) ? rec.workOrderIds : [];
+  const known = new Set((Array.isArray(wos) ? wos : []).filter((w) => w && w.id).map((w) => w.id));
+  const visit = new Set(workOrdersForVisit(rec, wos).map((w) => w.id));
+  return ids.filter((id) => !known.has(id) || visit.has(id));
+}
+
 function blank() {
   const created = new Date().toISOString();
   return {
@@ -950,6 +997,8 @@ async function attachWorkOrder(bookingId, woId) {
 
 module.exports = {
   holdsItsSlot,
+  workOrdersForVisit,
+  workOrderIdsForVisit,
   customerState,
   customerStateLabel,
   CUSTOMER_STATE_LABELS,
