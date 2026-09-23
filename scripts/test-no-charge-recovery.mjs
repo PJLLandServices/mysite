@@ -99,6 +99,29 @@ try {
     ok(send.status === 200, `D. a billed invoice still sends (${send.status} ${JSON.stringify(send.body.errors || "")})`);
     ok(invoiceMailsTo(f1.cust.email).length >= 1, "D. …and reaches the customer (the stub)");
   }
+  // ---- F. nobody home: the email promises an invoice only when there is one (PJL-100 #6)
+  {
+    // A fall closing with nobody home is locked by the bypass, then completed.
+    async function bypassComplete(zeroRate) {
+      const f = await srv.fixture({ zones: 4 });
+      if (zeroRate) await srv.api("PATCH", `/api/properties/${f.prop.id}`, { seasonalPricing: { fallClosingPrice: 0 } });
+      const w = await srv.api("POST", "/api/work-orders", { type: "fall_closing", propertyId: f.prop.id });
+      const id = w.body.workOrder.id;
+      await srv.prepClosing(id);
+      const by = await srv.api("POST", `/api/work-orders/${id}/signature-bypass`, { reason: "customer_not_home", note: "" });
+      const done = await srv.api("PATCH", `/api/work-orders/${id}`, { status: "completed",
+        arrivedAt: new Date().toISOString(), departedAt: new Date().toISOString() });
+      await sleep(900);
+      const mail = srv.outbox().filter((m) => m.channel === "email" && m.to.includes(f.cust.email) && /summary|complete/i.test(m.subject));
+      return { by, done, mail };
+    }
+    const free = await bypassComplete(true);
+    ok(free.by.status < 300 && free.done.status === 200 && free.done.body.cascade?.noCharge === true, `F. setup: nobody home, no charge (${free.by.status} ${free.done.status})`);
+    ok(free.mail.length === 1, `F. the customer gets their summary email (got ${free.mail.length})`);
+    ok(free.mail[0] && !/invoice will follow/i.test(free.mail[0].html), "F. a no-charge visit's email does not promise an invoice");
+    const billed = await bypassComplete(false);
+    ok(billed.mail[0] && /invoice will follow/i.test(billed.mail[0].html), "F. a billed visit's email still says the invoice will follow");
+  }
 } catch (err) {
   failed += 1;
   console.error(`  FAIL: crashed: ${err?.stack || err}\n${srv.logs().slice(-1500)}`);

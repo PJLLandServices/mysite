@@ -20691,7 +20691,7 @@ async function handleApi(req, res, pathname) {
           ? `
     <p style="margin: 0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
     <p style="margin: 0 0 14px;">${serviceIntro}</p>
-    <p style="margin: 0 0 14px;">Please review the summary below — your invoice will follow separately.</p>
+    <p style="margin: 0 0 14px;">Please review the summary below${invoice ? " — your invoice will follow separately" : ""}.</p>
     <p style="margin: 0 0 14px;">${serviceRecord.summary.replace(/</g, "&lt;")}</p>`
           : `
     <p style="margin: 0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
