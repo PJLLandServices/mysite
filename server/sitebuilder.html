@@ -6206,14 +6206,85 @@ function bomFinalLines(parts){
   bomOverrides.custom.forEach(c=>{ if(c.sku && c.qty>0) bySku[c.sku]=(bySku[c.sku]||0)+c.qty; });
   return { catalog:Object.entries(bySku).map(([sku,qty])=>({sku,qty})), nonCatalog };
 }
+/* ── Is the list we would write already the list that is there? ───────
+   Every save used to rewrite the linked draft list, because the payload
+   carries a `notes` line stamped with new Date().toLocaleString() — so the
+   body differed on every save even when not one material had changed.
+
+   That rewrite is not free. The page sends bare {sku, qty} pairs, and the
+   server's hydrateLine() fills the rest in from defaults: a NEW line id,
+   status back to "need", poId dropped, frozenPriceCents released, per-line
+   notes erased. A list counts as "draft" while it still holds RECEIVED
+   lines (deriveStatus only leaves draft once something is "ordered"), so a
+   rewrite really can throw away purchase-order links and locked prices on
+   a list the code considered safe.
+
+   So: compare what the save WOULD write against what is stored, and write
+   nothing when they match.
+
+   Compared as an order-insensitive multiset of the exact fields the payload
+   carries. Two stored lines of the same SKU are NOT treated as equal to one
+   merged line of the same total — writing would merge them, which is a real
+   change to the record. mlWrittenFields() is derived from the payload
+   itself rather than hard-coded, so a price field added to the payload
+   later is compared automatically instead of being silently ignored. */
+function mlWrittenFields(generated){
+  const keys=new Set();
+  (generated||[]).forEach(l=>Object.keys(l||{}).forEach(k=>keys.add(k)));
+  return [...keys].sort();
+}
+function mlLineKey(line, fields){
+  const o={};
+  fields.forEach(k=>{
+    const v=line ? line[k] : undefined;
+    // Normalise the way the server will: qty floors to a positive int, and
+    // a sku is trimmed. Comparing raw values would call "3" and 3 different
+    // and rewrite the list for nothing.
+    if(k==='qty'){ const n=Number(v); o[k]=Number.isFinite(n)&&n>0?Math.floor(n):1; }
+    else if(typeof v==='string') o[k]=v.trim();
+    else o[k]=(v===undefined?null:v);
+  });
+  return JSON.stringify(o);
+}
+function mlSameMaterials(generated, stored){
+  const fields=mlWrittenFields(generated);
+  if(!fields.length) return false;
+  const a=(generated||[]).map(l=>mlLineKey(l,fields)).sort();
+  const b=(stored||[]).map(l=>mlLineKey(l,fields)).sort();
+  return a.length===b.length && a.every((x,i)=>x===b[i]);
+}
+/* What changed, in the fields that get written — for showing before a save
+   actually touches a list. */
+function mlDiffMaterials(generated, stored){
+  const qtyOf=l=>{ const n=Number(l&&l.qty); return Number.isFinite(n)&&n>0?Math.floor(n):1; };
+  const roll=arr=>{ const m=new Map(); (arr||[]).forEach(l=>{ const k=String((l&&l.sku)||'').trim(); if(!k) return; m.set(k,(m.get(k)||0)+qtyOf(l)); }); return m; };
+  const g=roll(generated), h=roll(stored);
+  const added=[], removed=[], changed=[];
+  g.forEach((q,sku)=>{ if(!h.has(sku)) added.push({sku,qty:q}); else if(h.get(sku)!==q) changed.push({sku,from:h.get(sku),to:q}); });
+  h.forEach((q,sku)=>{ if(!g.has(sku)) removed.push({sku,qty:q}); });
+  return {added, removed, changed};
+}
+function mlDiffText(d){
+  const bits=[];
+  d.added.forEach(x=>bits.push(`+ ${x.qty}× ${x.sku}`));
+  d.removed.forEach(x=>bits.push(`− ${x.qty}× ${x.sku} (removed)`));
+  d.changed.forEach(x=>bits.push(`· ${x.sku}: ${x.from} → ${x.to}`));
+  return bits.join('\n');
+}
+
 // Push the BOM onto the project's Material List (draft → update in place; a
-// purchased list is never clobbered — a new list is made instead).
-async function generateMaterialList(){
+// purchased list is never clobbered — a new list is made instead), UNLESS
+// the materials already match what is stored, in which case nothing is
+// written at all. `opts.confirmIfDifferent` makes a real difference ask
+// first — used by Save, which syncs implicitly and should never change a
+// material list without showing what it is changing.
+async function generateMaterialList(opts){
   if(!linkedProject){ await pjlDialog.alert('Attach this design to a project first (Project section at the top).', { title: 'Attach a project first' }); return; }
   const parts=await loadParts();
   const {catalog, nonCatalog}=bomFinalLines(parts);
   if(!catalog.length){ await pjlDialog.alert('No catalog materials yet — add areas first.', { title: 'Nothing to add' }); return; }
-  const note=el('mlGenNote'); note.textContent='Working…';
+  const note=el('mlGenNote'); if(note) note.textContent='Working…';
+  const say=(html,plain)=>{ if(!note) return; if(html!=null) note.innerHTML=html; else note.textContent=plain; };
   const notes='Generated from the System Builder design — '+new Date().toLocaleString()
     + (nonCatalog.length ? '\n\nNot-stocked / design-only items (price + order separately):\n'+nonCatalog.map(n=>`- ${n.qty}× ${n.label}`).join('\n') : '');
   try{
@@ -6221,6 +6292,32 @@ async function generateMaterialList(){
     const gj=await gr.json().catch(()=>({}));
     const lists=(gj.lists||[]).filter(l=>l.status!=='archived');
     const draft=lists.find(l=>l.status==='draft');
+
+    // NOTHING TO DO? Then do nothing. If any existing list already holds
+    // exactly these materials, writing would only churn the record: reset
+    // line statuses, drop PO links, release frozen prices. That applies to
+    // a purchased list too — matching materials must not spawn a duplicate.
+    const match=lists.find(l=>mlSameMaterials(catalog, l.lineItems));
+    if(match){
+      say(`✓ Material list <a href="/admin/material-list/${encodeURIComponent(match.id)}" target="_blank">${esc(match.id)}</a> already matches this design — nothing written.`);
+      return { skipped:true, id:match.id, status:match.status };
+    }
+
+    // A real difference. Save syncs implicitly, so it shows the change and
+    // asks before touching a list; the explicit button just does it.
+    if(opts && opts.confirmIfDifferent){
+      const target=draft||lists[0]||null;
+      const d=mlDiffMaterials(catalog, target?target.lineItems:[]);
+      const body=target
+        ? `The design no longer matches material list ${target.id} (${target.status}).\n\n${mlDiffText(d)||'(line structure changed)'}\n\n`
+          + (target.status==='draft'
+              ? 'Updating it rewrites its lines — any received line goes back to "need" and loses its purchase-order link and locked price.'
+              : 'That list will NOT be touched. A NEW list will be created beside it.')
+        : `No material list exists for this project yet.\n\n${mlDiffText(d)||''}\n\nOne will be created.`;
+      const ok=await pjlDialog.confirm(body, { title:'Material list differs from the design', icon:'warning', confirmLabel: target && target.status==='draft' ? 'Update the list' : 'Create a list' });
+      if(!ok){ say(null, 'Design saved. Material list left alone.'); return { skipped:true, declined:true, id:target?target.id:null }; }
+    }
+
     let id, verb;
     if(draft){
       const pr=await fetch('/api/material-lists/'+encodeURIComponent(draft.id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({lineItems:catalog, notes})});
@@ -6231,8 +6328,9 @@ async function generateMaterialList(){
       const cj=await cr.json().catch(()=>({})); if(!cr.ok||!cj.ok) throw new Error((cj.errors&&cj.errors[0])||('HTTP '+cr.status));
       id=cj.list.id; verb=(lists.length?'Created new':'Created');
     }
-    note.innerHTML=`✓ ${verb} <a href="/admin/material-list/${encodeURIComponent(id)}" target="_blank">${esc(id)}</a> — ${catalog.length} line${catalog.length>1?'s':''}${nonCatalog.length?` (+${nonCatalog.length} not-stocked → notes)`:''}.`;
-  }catch(e){ note.textContent='Failed: '+e.message; }
+    say(`✓ ${verb} <a href="/admin/material-list/${encodeURIComponent(id)}" target="_blank">${esc(id)}</a> — ${catalog.length} line${catalog.length>1?'s':''}${nonCatalog.length?` (+${nonCatalog.length} not-stocked → notes)`:''}.`);
+    return { id, verb };
+  }catch(e){ say(null, 'Failed: '+e.message); }
 }
 // Website install pricing (mirrors pricing.json — keep in sync). All are
 // EDITABLE defaults once seeded into the quote.
@@ -7141,7 +7239,10 @@ async function saveDesign(){
       // push). Only touches an already-linked DRAFT quote; never auto-creates.
       if(linkedQuoteId){
         try{
-          await generateMaterialList();
+          // Implicit sync: skips entirely when the materials already match,
+          // and shows the difference before changing anything when they
+          // do not. The design itself is already saved by this point.
+          await generateMaterialList({ confirmIfDifferent: true });
           const r=await syncQuoteFromDesign();
           const qn=el('quoteGenNote');
           if(qn && r && r.id) qn.innerHTML = (r.action==='locked')
