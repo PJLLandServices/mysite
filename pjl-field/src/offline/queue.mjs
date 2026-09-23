@@ -101,9 +101,22 @@ export function createQueue({ store, transport }) {
     state = next;
     emit();
   };
+  // Which zone drafts still count as unrecorded work (PJL-98 gap 2). A
+  // draft written against a zone that has since left the visit — the phone
+  // removed it, or the OFFICE did — can never be opened again, so it must
+  // not hold sign-off; it is kept for the Finish note instead. "Written
+  // against" is stamped when the draft is saved (`draftZones`), so a draft
+  // for a zone this phone never listed still blocks, as it always did.
+  const zoneDrafts = key => {
+    const names = Object.keys(state.drafts[key] || {}).filter(name => name.startsWith('zone:'));
+    const onVisit = new Set((view(key)?.zones || []).map(z => String(z?.number)));
+    const seen = state.draftZones?.[key] || {};
+    const stale = names.filter(name => seen[name] && !onVisit.has(name.slice(5)));
+    return { live: names.filter(name => !stale.includes(name)), stale };
+  };
   const status = key => ({
     pending: state.pending.filter(p => p.key === key).length,
-    drafts: Object.keys(state.drafts[key] || {}).filter(name => name.startsWith('zone:')).length,
+    drafts: zoneDrafts(key).live.length,
     error: state.errors[key] || null,
     syncing: !!draining,
   });
@@ -126,7 +139,9 @@ export function createQueue({ store, transport }) {
     if (!value) throw new Error('Open this record while connected before editing it offline.');
     return value;
   };
-  const patch = (key, values) => {
+  // `clearDrafts`: drafts to drop in the SAME commit (a note that carries a
+  // draft's text must not be written without the draft going, or twice).
+  const patch = (key, values, { clearDrafts = [] } = {}) => {
     const before = requireRecord(key);
     const changed = Object.fromEntries(Object.entries(values).filter(([k, v]) => !equal(before[k], v)));
     if (!Object.keys(changed).length) return view(key);
@@ -139,7 +154,10 @@ export function createQueue({ store, transport }) {
     commit(s => {
       s.pending.push({ id: `edit-${++s.sequence}`, key, kind: 'patch', patch: copy(changed),
         before: Object.fromEntries(Object.keys(changed).map(k => [k, before[k] ?? null])) });
-      for (const n of removedZones) if (s.drafts[key]) delete s.drafts[key][`zone:${n}`];
+      for (const name of [...removedZones.map(n => `zone:${n}`), ...clearDrafts]) {
+        if (s.drafts[key]) delete s.drafts[key][name];
+        if (s.draftZones?.[key]) delete s.draftZones[key][name];
+      }
     });
     return view(key);
   };
@@ -261,9 +279,18 @@ export function createQueue({ store, transport }) {
     },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     keys: () => Object.keys(state.records),
-    draft(key, name, value) { commit(s => { s.drafts[key] ||= {}; s.drafts[key][name] = copy(value); }); },
+    draft(key, name, value) {
+      const onVisit = name.startsWith('zone:') && (view(key)?.zones || []).some(z => String(z?.number) === name.slice(5));
+      commit(s => {
+        s.drafts[key] ||= {}; s.drafts[key][name] = copy(value);
+        if (onVisit) { s.draftZones ||= {}; (s.draftZones[key] ||= {})[name] = true; }
+      });
+    },
     getDraft: (key, name) => copy(state.drafts[key]?.[name] ?? null),
-    clearDraft(key, name) { commit(s => { if (s.drafts[key]) delete s.drafts[key][name]; }); },
+    clearDraft(key, name) {
+      commit(s => { if (s.drafts[key]) delete s.drafts[key][name]; if (s.draftZones?.[key]) delete s.draftZones[key][name]; });
+    },
+    zoneDrafts,
     photoPayload: id => store.getBlob(id),
   };
 }

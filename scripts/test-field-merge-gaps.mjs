@@ -144,5 +144,30 @@ await test("1d. control: back-to-back online edits on a hydrating server still s
   assert.equal(at(S.wo.zones, 3).issues[0].notes, "at the valve");
 });
 
+// ── Gap 2 ───────────────────────────────────────────────────────────────────
+await test("2. a draft on a zone the OFFICE removed does not block Finish, and its text is kept for the office", async () => {
+  const { S, load } = world(); const f = load(); const { queue: q, key: k } = await f.openFieldWorkOrder("WO-1");
+  q.draft(k, "zone:3", { label: "Z3", notes: "valve box cracked", types: [], repairs: false });
+  S.officeWo((wo) => { wo.zones = wo.zones.filter((z) => z.number !== 3); });
+  const f2 = load(); const { queue: q2, key: k2 } = await f2.openFieldWorkOrder("WO-1"); // reopened: the office's list arrives
+  assert.equal(q2.status(k2).drafts, 0, "a draft for a zone that is no longer on the visit still counts as unrecorded work");
+  assert.equal(await finish(f2, q2, k2), "OK");
+  assert.match(S.wo.techNotes, /Zone 3/, "the office is not told what the tech had typed");
+  assert.match(S.wo.techNotes, /valve box cracked/);
+  assert.equal(q2.getDraft(k2, "zone:3"), null, "the stale draft is left behind to be noted again");
+  assert.equal(await finish(f2, q2, k2), "OK");
+  assert.equal(S.wo.techNotes.match(/valve box cracked/g).length, 1, "a second Finish repeated the note");
+});
+
+await test("2b. control: a draft on a zone still on the visit keeps blocking; one written with no zone list too", async () => {
+  const { S, load } = world(); const f = load(); const { queue: q, key: k } = await f.openFieldWorkOrder("WO-1");
+  q.draft(k, "zone:2", { notes: "half typed" });
+  S.officeWo((wo) => { at(wo.zones, 4).location = "office"; });
+  assert.match(await finish(f, q, k), /zone drafts/);
+  q.clearDraft(k, "zone:2");
+  q.draft(k, "zone:9", { notes: "a zone this phone never saw" }); // test-field-client's case: no stamp, still blocks
+  assert.match(await finish(f, q, k), /zone drafts/);
+});
+
 console.log(`field-merge-gaps: ${pass} passed, ${fail} failed`);
 process.exitCode = fail ? 1 : 0;

@@ -135,8 +135,26 @@ export function startFieldSync() {
   owner().then(id => { if (!cancelled) stop = watchFieldQueue(forOwner(id)); }).catch(() => {});
   return () => { cancelled = true; stop?.(); };
 }
+// One place that writes to the visit's tech notes for the office (office-
+// only; never on the customer's report). Used when the phone has to keep
+// something the office would otherwise never see (PJL-98).
+function appendTechNote(queue, key, lines, { clearDrafts = [] } = {}) {
+  if (!lines.length) return;
+  const current = queue.view(key)?.techNotes || '';
+  const text = [`Field app, ${new Date().toISOString().slice(0, 10)} — kept so nothing is lost:`, ...lines].join('\n');
+  queue.patch(key, { techNotes: current ? `${current}\n\n${text}` : text }, { clearDrafts });
+}
+const draftText = d => [d?.label ? `label "${d.label}"` : '', d?.notes ? `notes "${d.notes}"` : '',
+  d?.repairs && d?.types?.length ? `repairs: ${d.types.join(', ')}` : ''].filter(Boolean).join(', ') || 'no text';
 export async function flushBeforeFinish(queue, key) {
   if (queue.status(key).drafts) throw new Error('There are zone drafts on this phone. Open those zones and record their assessment before signing off.');
+  // A draft on a zone that has left the visit (the office removed it) can
+  // never be opened again: its text goes to the office, and it stops
+  // holding sign-off (PJL-98 gap 2).
+  const stale = queue.zoneDrafts ? queue.zoneDrafts(key).stale : [];
+  appendTechNote(queue, key, stale.map(name =>
+    `• Zone ${name.slice(5)} is no longer on this visit, so its unrecorded draft was not applied: ${draftText(queue.getDraft(key, name))}.`),
+  { clearDrafts: stale });
   await queue.flush({ retry: true });
   const state = queue.status(key);
   // The code travels with the message so Finish can offer the way out of a
