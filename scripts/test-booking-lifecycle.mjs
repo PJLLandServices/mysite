@@ -288,10 +288,22 @@ try {
     ok("re-syncing the SAME booking onto a COMPLETED record leaves it completed", same && same.id === "BK-DEAD" && same.status === "completed", JSON.stringify(same).slice(0, 120));
     ok("…and creates nothing", afterSame.length === 1, `${afterSame.length}`);
 
-    // A live record is reused exactly as before.
+    // A live record with a DIFFERENT work order is another visit (Patrick,
+    // 2026-09-23): the new booking gets its own record, and the live one is
+    // left exactly where it was — still holding its own slot — and flagged
+    // for the office, never moved into the new booking.
     fs.writeFileSync(BK, JSON.stringify([deadRecord("confirmed", { id: "BK-LIVE", cancelledAt: null, cancellationReason: "" })], null, 2));
+    const fresh = await bookingsLib.upsertFromLead(rebookedLead());
+    const afterLive = JSON.parse(fs.readFileSync(BK, "utf8"));
+    const kept = afterLive.find((b) => b.id === "BK-LIVE");
+    ok("a LIVE record with another work order is NOT moved into the new booking",
+      fresh && fresh.id !== "BK-LIVE" && fresh.scheduledFor === SLOT_START && JSON.stringify(fresh.workOrderIds) === '["WO-NEW"]'
+        && kept && kept.scheduledFor === earlier && JSON.stringify(kept.workOrderIds) === '["WO-OLD"]' && kept.status === "confirmed");
+    ok("…and the new booking is flagged for the office", fresh?.officeReview?.previousBookingId === "BK-LIVE", JSON.stringify(fresh?.officeReview));
+    // A reschedule of the SAME work order is reused and moved.
+    fs.writeFileSync(BK, JSON.stringify([deadRecord("confirmed", { id: "BK-LIVE", cancelledAt: null, cancellationReason: "", workOrderIds: ["WO-NEW"] })], null, 2));
     const reused = await bookingsLib.upsertFromLead(rebookedLead());
-    ok("a LIVE record is reused and moved, as before", reused && reused.id === "BK-LIVE" && reused.status === "confirmed" && reused.scheduledFor === SLOT_START && reused.workOrderIds.includes("WO-NEW"));
+    ok("the SAME work order's record is reused and moved, as before", reused && reused.id === "BK-LIVE" && reused.status === "confirmed" && reused.scheduledFor === SLOT_START);
     ok("…and nothing extra is created", JSON.parse(fs.readFileSync(BK, "utf8")).length === 1);
   }
 } finally {

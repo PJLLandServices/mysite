@@ -10,11 +10,12 @@
 // so the fall re-booking moved April's record to October and appended the
 // fall WO id, which is the merged record test-merged-booking-readers.mjs
 // cleans up after. Now a NEW booking (a work-order id the record has never
-// seen, and a different start) arriving on a live record whose linked work
-// orders are ALL finished closes that record as completed — its history is
-// April's audit trail — and gets a fresh one. A reschedule of the same
-// booking, or a live record with work still open, is reused exactly as
-// before.
+// seen, and a different start) gets a fresh record, and a live record whose
+// linked work orders are ALL finished is closed as completed — its history
+// is April's audit trail. Since 2026-09-23 (Patrick) a live record with
+// work still open is not reused either: it is left as it was and flagged
+// for the office (test-visit-identity.mjs has the rule in full). A
+// reschedule of the same booking is reused exactly as before.
 //
 // Second, workOrderForLeadBooking step 1: the booking envelope's own WO id
 // used to win even when that WO finished before the booking's day (an old
@@ -132,15 +133,26 @@ try {
   {
     const r = await rebook();
     const recs = srv.data("bookings");
-    ok("control: a live record with work still OPEN is reused, as before",
-      (r.status === 201 || r.body.ok === true) && recs.length === 1, `${r.status} ${recs.length} records`);
+    // Patrick, 2026-09-23: open work on the old visit no longer pulls the new
+    // booking into it. The fall booking is its own visit; April's record is
+    // left exactly as it was and flagged for the office
+    // (test-visit-identity.mjs covers the rule in full).
+    const aprilRec = recs.find((b) => (b.workOrderIds || []).includes("WO-APRIL26"));
+    const fallRec = recs.find((b) => b !== aprilRec);
+    ok("a live record with work still OPEN is left alone: the fall booking is its own visit",
+      (r.status === 201 || r.body.ok === true) && recs.length === 2 && aprilRec?.scheduledFor === APRIL
+        && aprilRec?.status === "confirmed" && fallRec?.officeReview?.previousBookingId === aprilRec?.id,
+      `${r.status} ${JSON.stringify(recs.map((b) => [b.status, b.scheduledFor, b.workOrderIds, b.officeReview?.reason]))}`);
   }
-  await seedApril();
+  await seedApril({ woStatus: "scheduled" });
   {
+    // A reschedule keeps the envelope. The WO is not finished: a FINISHED
+    // visit can't be moved, and a booking naming one on another day is a
+    // stale envelope, i.e. a new visit (test-visit-identity.mjs, case 6).
     const lead = aprilLead();
-    lead.booking.start = at("2026-04-21", 9);            // a reschedule keeps the envelope
+    lead.booking.start = at("2026-04-21", 9);
     const rec = await bookingsLib.upsertFromLead(lead, {
-      isFinishedWo: async () => true
+      isFinishedWo: async () => false
     });
     ok("control: a reschedule of the SAME booking (same envelope) reuses its record",
       srv.data("bookings").length === 1 && rec?.scheduledFor === lead.booking.start, `${srv.data("bookings").length}`);

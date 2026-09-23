@@ -5952,3 +5952,48 @@ Not changed: customer messaging, send, payment and QuickBooks. Existing
 duplicate invoices already on disk are not merged or voided. Test:
 `scripts/test-one-invoice-per-wo.mjs`, 7 of 10 fail on the parent, 10 of 10
 pass.
+
+## 2026-09-23 — FLOW-32: a visit is its work order (returning customers, Patrick's ruling)
+
+Ruling (Patrick, 2026-09-23): only a reschedule of the SAME work order may
+reuse a booking record. A new booking or work-order id always creates a new
+visit. An old visit is never re-dated or recycled because something on it was
+left open; unfinished old work is flagged for the office instead.
+
+Found against PR #298's first cut (PJL-97): `bookings.upsertFromLead` still
+moved April's record to October, with the fall WO appended, whenever an April
+WO was never closed out, another April WO was still open, or the booking
+arrived with no WO id. A stale envelope naming April's finished WO also moved
+it. The portal's booking-actions, reschedule-availability, reschedule and
+cancel routes acted on `listByLead(lead)[0]` (the first stored record), which
+can be the old visit. Reproduced: with April's open record stored first, the
+portal answered about April's record and refused to cancel the fall visit.
+
+Now `visitRecordForBooking` is the writer's one rule:
+- The record linking this WO is reused, unless the WO is finished and the
+  record is on another day (a stale envelope).
+- Otherwise, a live record at exactly this start is the same appointment slot.
+  It is reused without moving anything.
+- Otherwise, a not-yet-opened booking (no WO on either side) that is not in
+  the past is reused and moved.
+- Otherwise, the booking is a new record.
+
+On a new visit, every earlier live record stays where it is. One whose WOs
+are all finished is closed as completed (history `closed_by_rebook`).
+Anything else gets history `left_open_for_review`, and the new record
+carries `officeReview { reason: previous_visit_open, previousBookingId,
+openWorkOrderIds }`, shown on the Bookings page as "Review: earlier visit …
+still open". The portal routes use `bookings.currentRecordForLead` (a live
+record by `recordForLeadBooking`, else the record holding the booking's own
+WO on its day). The lone-live-record fallback no longer picks a record that
+links other work orders.
+
+**Capacity, deliberately:** an earlier visit left open keeps its own calendar
+slot until the office resolves it. That includes an upcoming booking
+superseded by a new one, which used to be moved (effectively rescheduled).
+Nothing is auto-cancelled, and no customer is messaged. Customer view, Patrick
+alerts, WOs, invoices and the season plan are unchanged.
+
+Tests: `scripts/test-visit-identity.mjs`, 13 of 19 fail on the parent and 19
+of 19 pass. `test-rebook-fresh-record` and `test-booking-lifecycle` controls
+that encoded the old reuse rule were updated to the ruling.

@@ -14677,7 +14677,7 @@ async function handleApi(req, res, pathname) {
       if (!lead.booking) return sendJson(res, 422, { ok: false, errors: ["No appointment on file."] });
       const currentStart = lead.booking.start ? new Date(lead.booking.start) : null;
       const tooLate = currentStart ? (currentStart.getTime() - Date.now()) < 24 * 60 * 60 * 1000 : false;
-      let bookingRec = (await bookings.listByLead(lead.id))[0];
+      let bookingRec = bookings.currentRecordForLead(await bookings.listByLead(lead.id), lead);
       if (!bookingRec) bookingRec = await syncBookingFromLead(lead);
       const result = bookingRec
         ? await rescheduleAvailability(bookingRec.id, {
@@ -14730,7 +14730,7 @@ async function handleApi(req, res, pathname) {
 
       // Find the canonical Booking record for this lead (or upsert one if
       // the legacy lead.booking shape is the only thing present).
-      let bookingRecord = (await bookings.listByLead(lead.id))[0];
+      let bookingRecord = bookings.currentRecordForLead(await bookings.listByLead(lead.id), lead);
       if (!bookingRecord) bookingRecord = await syncBookingFromLead(lead);
       if (!bookingRecord) return sendJson(res, 422, { ok: false, errors: ["No bookable record on this appointment."] });
 
@@ -14789,7 +14789,7 @@ async function handleApi(req, res, pathname) {
         });
       }
 
-      let bookingRec = (await bookings.listByLead(lead.id))[0];
+      let bookingRec = bookings.currentRecordForLead(await bookings.listByLead(lead.id), lead);
       if (!bookingRec) bookingRec = await syncBookingFromLead(lead);
 
       const currentStart = bookingRec?.scheduledFor ? new Date(bookingRec.scheduledFor) : null;
@@ -14882,7 +14882,7 @@ async function handleApi(req, res, pathname) {
         });
       }
 
-      let bookingRec = (await bookings.listByLead(lead.id))[0];
+      let bookingRec = bookings.currentRecordForLead(await bookings.listByLead(lead.id), lead);
       if (!bookingRec) bookingRec = await syncBookingFromLead(lead);
       if (!bookingRec) return sendJson(res, 422, { ok: false, errors: ["No bookable record on this appointment."] });
 
