@@ -42,13 +42,24 @@ function ok(cond, label) {
     ok(pick(lead, [spring]) === null, "a completed WO from an earlier booking is never reused");
     const fall = { id: "WO-FALL", leadId: "L1", status: "completed", createdAt: "2026-10-06T00:00:00Z", updatedAt: "2026-10-06T00:00:00Z" };
     ok(pick(lead, [fall, spring])?.id === "WO-FALL", "the envelope's own WO wins, even completed");
-    const moved = { id: "WO-OTHER", leadId: "L1", status: "on_site", createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-08-01T00:00:00Z" };
-    ok(pick(lead, [spring, moved])?.id === "WO-OTHER", "an in-progress WO on the lead is still this job");
     const deleted = { ...fall, deletedAt: "2026-10-06T01:00:00Z" };
     ok(pick(lead, [deleted, spring]) === null, "a deleted WO never counts");
-    const legacy = { id: "L2", booking: {} };
-    ok(pick(legacy, [{ ...spring, leadId: "L2" }])?.id === "WO-SPRING", "a legacy booking with no envelope keeps the old answer");
     ok(pick(lead, [{ ...spring, leadId: "OTHER" }]) === null, "another lead's WO never counts");
+    // Round 2 (breaker): open WOs of ANOTHER type, or from before this
+    // booking, are other jobs.
+    const fallLead = { id: "L1", booking: { serviceKey: "fall_close_4z", start: "2026-10-06T14:00:00Z", workOrder: { id: "WO-FALL", createdAt: "2026-09-01T00:00:00Z" } } };
+    const followup = { id: "WO-FUP", leadId: "L1", type: "service_visit", status: "scheduled", createdAt: "2026-04-11T00:00:00Z", updatedAt: "2026-05-01T00:00:00Z" };
+    const springOpen = (status) => ({ id: "WO-SPR", leadId: "L1", type: "spring_opening", status, createdAt: "2026-04-10T00:00:00Z", updatedAt: "2026-05-01T00:00:00Z" });
+    ok(pick(fallLead, [spring, followup]) === null, "a spring follow-up repair left 'scheduled' is not the fall closing");
+    ok(pick(fallLead, [springOpen("awaiting_approval")]) === null, "a spring opening left awaiting_approval is not the fall closing");
+    ok(pick(fallLead, [springOpen("on_site")]) === null, "a spring opening left on_site is not the fall closing");
+    const earlyFall = { id: "WO-EARLY", leadId: "L1", type: "fall_closing", status: "scheduled", createdAt: "2025-10-01T00:00:00Z", updatedAt: "2025-10-01T00:00:00Z" };
+    ok(pick(fallLead, [earlyFall]) === null, "an open fall WO from BEFORE this booking is last year's, not this one");
+    const opened = { id: "WO-OPEN", leadId: "L1", type: "fall_closing", status: "on_site", createdAt: "2026-09-20T00:00:00Z", updatedAt: "2026-09-20T00:00:00Z" };
+    ok(pick(fallLead, [spring, opened])?.id === "WO-OPEN", "an open fall WO made for this booking is reused");
+    const legacy = { id: "L2", booking: { serviceKey: "fall_close_4z", start: "2026-10-06T14:00:00Z" } };
+    ok(pick(legacy, [{ ...spring, leadId: "L2", type: "spring_opening" }]) === null, "a legacy booking with no envelope never reuses a finished spring WO");
+    ok(pick(legacy, [{ ...opened, leadId: "L2", scheduledFor: "2026-10-06T14:00:00Z" }])?.id === "WO-OPEN", "…but finds its own fall WO on the booked day");
   }
 }
 
@@ -109,6 +120,28 @@ try {
   row = await today();
   ok(row?.workOrder?.id === ENVELOPE && row?.workOrder?.status === "completed", "a finished fall job shows as its own completed WO");
   ok(srv.outbox().length === 0, "nothing was emailed or texted");
+
+  // Round 2: open spring work left on the lead must not capture the fall stop.
+  for (const [label, wos] of [
+    ["a spring follow-up repair left scheduled", [spring, { ...spring, id: "WO-FUP00001", type: "service_visit", status: "scheduled", followupOfWoId: spring.id }]],
+    ["a spring opening left awaiting_approval", [{ ...spring, status: "awaiting_approval" }]],
+    ["a spring opening left on_site", [{ ...spring, status: "on_site" }]]
+  ]) {
+    srv.writeData("leads", [lead]);
+    srv.writeData("work-orders", wos);
+    const r = await today();
+    ok(r?.workOrder === null, `${label}: Today shows the fall stop as not started (got ${r?.workOrder?.id})`);
+    const o = await srv.api("POST", `/api/leads/${lead.id}/open-wo`, {});
+    ok(o.body.created === true && o.body.workOrder?.type === "fall_closing" && o.body.workOrder?.id === ENVELOPE,
+      `${label}: Open WO creates the fall closing (got ${o.body.workOrder?.id} ${o.body.workOrder?.type})`);
+  }
+  const legacyLead = { ...lead, booking: { ...lead.booking, workOrder: undefined } };
+  srv.writeData("leads", [legacyLead]);
+  srv.writeData("work-orders", [spring]);
+  const lo = await srv.api("POST", `/api/leads/${lead.id}/open-wo`, {});
+  ok(lo.body.created === true && lo.body.workOrder?.type === "fall_closing", `a legacy booking with no envelope gets a new fall closing (got ${lo.body.workOrder?.id} ${lo.body.workOrder?.status})`);
+  const lo2 = await srv.api("POST", `/api/leads/${lead.id}/open-wo`, {});
+  ok(lo2.body.created === false && lo2.body.workOrder?.id === lo.body.workOrder?.id, "…and opening it again returns that same WO");
 } finally {
   await srv.stop();
 }

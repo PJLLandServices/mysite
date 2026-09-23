@@ -709,22 +709,25 @@ const SCOPE_PROTECTED_FIELDS = [
 // Which work order belongs to the lead's CURRENT booking.
 //
 // A returning customer is one lead with many visits: April's opening left
-// a completed WO on the lead, and September's closing re-booked the same
-// lead with a new envelope id (lead.booking.workOrder.id). Today and Open
-// WO used to answer "any WO on the lead" — whichever came last in the
-// file — so the fall stop showed "Completed / View WO" for the spring job
-// and the closing could not be started (fall-closing fix #2).
+// a WO on the lead (completed, or never closed out), and September's
+// closing re-booked the same lead with a new envelope id
+// (lead.booking.workOrder.id). Today and Open WO used to answer "any WO on
+// the lead", so the fall stop opened the spring job (fall-closing fix #2).
 //
 // The rule, in order:
 //   1. The WO whose id IS the booking envelope's id. Every create path
 //      (Open WO, the CRM create) reuses that id, so this is the normal hit
 //      — and it is right even when that WO is completed (today's job done).
-//   2. Otherwise the newest WO still in progress on the lead. A job opened
-//      before the office moved its booking is still that job.
-//   3. Otherwise a finished WO only if it was created AFTER this booking
-//      was made — a finished WO from an earlier booking is never reused.
+//   2. Otherwise a WO of the BOOKED TYPE (a fall booking wants a
+//      fall_closing) made for THIS booking: created at or after the
+//      booking was made. An open WO of another type — a spring follow-up
+//      repair left scheduled, a spring opening left on_site or
+//      awaiting_approval — is a different job and is never reused.
+//   3. A legacy booking with no envelope timestamp: only a WO of the booked
+//      type scheduled for the booking's own day counts.
 //   4. Otherwise null: the caller creates a fresh WO for this booking.
-// Deleted and archived WOs never count.
+// Deleted and archived WOs never count. Newest wins among candidates,
+// open before finished.
 const WO_TERMINAL_STATUSES = new Set(["completed", "cancelled", "no_show"]);
 function workOrderForLeadBooking(lead, wos) {
   if (!lead) return null;
@@ -736,19 +739,21 @@ function workOrderForLeadBooking(lead, wos) {
     const exact = mine.find((w) => w.id === envelopeId);
     if (exact) return exact;
   }
+  const bookedType = lead.booking?.serviceKey ? templateForServiceKey(lead.booking.serviceKey) : null;
+  const sameType = mine.filter((w) => !bookedType || w.type === bookedType);
+  const bookedAt = Date.parse(lead.booking?.workOrder?.createdAt || "");
+  let forThisBooking;
+  if (Number.isFinite(bookedAt)) {
+    forThisBooking = sameType.filter((w) => Date.parse(w.createdAt || "") >= bookedAt);
+  } else {
+    const day = String(lead.booking?.start || "").slice(0, 10);
+    forThisBooking = day ? sameType.filter((w) => String(w.scheduledFor || "").slice(0, 10) === day) : [];
+  }
+  if (!forThisBooking.length) return null;
   const newest = (list) => [...list].sort((a, b) =>
     String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))[0] || null;
-  const open = mine.filter((w) => !WO_TERMINAL_STATUSES.has(w.status));
-  if (open.length) return newest(open);
-  const bookedAt = Date.parse(lead.booking?.workOrder?.createdAt || "");
-  if (Number.isFinite(bookedAt)) {
-    const sinceBooking = mine.filter((w) => Date.parse(w.createdAt || "") >= bookedAt);
-    if (sinceBooking.length) return newest(sinceBooking);
-    return null;
-  }
-  // A legacy booking with no envelope timestamp: nothing says the
-  // finished WO is from another visit, so keep the old answer.
-  return envelopeId ? null : newest(mine);
+  const open = forThisBooking.filter((w) => !WO_TERMINAL_STATUSES.has(w.status));
+  return newest(open.length ? open : forThisBooking);
 }
 
 // Is this WO's scope frozen? `wo.locked` is the single authority.
