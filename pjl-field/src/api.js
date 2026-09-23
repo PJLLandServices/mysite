@@ -19,12 +19,16 @@ export class AuthRequiredError extends Error {
   }
 }
 
+// Every read has a timeout too (PJL-100 #3): Finish's FIRST call is
+// getWorkOrder, and without one a stalled connection hung Finish before
+// any of the timed calls below ran. fetchWithTimeout is declared further
+// down (hoisted); a timeout is its TimeoutError, never "signed out".
 async function getJson(path) {
-  const res = await fetch(`${HOST}${path}`, {
+  const res = await fetchWithTimeout(`${HOST}${path}`, {
     headers: { accept: 'application/json' },
     credentials: 'include',
     cache: 'no-store',
-  });
+  }, FINISH_STEP_TIMEOUT_MS);
   // The CRM redirects unauthenticated browser requests to the login
   // page, so a 200 carrying HTML means "not signed in" just as much as
   // a 401 does. Check both rather than trusting the status alone.
