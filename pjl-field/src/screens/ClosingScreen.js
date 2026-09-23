@@ -25,7 +25,7 @@ import ZoneStage from './closing/ZoneStage';
 import CloseOutStage from './closing/CloseOutStage';
 import SignOffStage from './closing/SignOffStage';
 import { CLOSEOUT_STEPS } from './closing/steps';
-import { openFieldWorkOrder, watchFieldQueue, flushBeforeFinish, pendingPhotoUri, fieldStatus } from '../offline/field';
+import { openFieldWorkOrder, watchFieldQueue, flushBeforeFinish, pendingPhotoUri, fieldStatus, resolveFieldConflicts } from '../offline/field';
 
 const STAGES = [
   { key: 'start', label: 'Start' },
@@ -208,6 +208,17 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
     );
   }, [findings, workOrderId]);
 
+  // Keep mine / Use office's. Only the contested parts follow the choice;
+  // everything else the office and the phone changed merges either way.
+  const resolveConflicts = useCallback(async (prefer) => {
+    const { queue, key } = field.current;
+    try {
+      setSyncState(await resolveFieldConflicts(queue, key, prefer));
+    } catch (err) {
+      Alert.alert("Couldn't sync yet", err?.message || 'Your work is kept on this phone. Try again when connected.');
+    }
+  }, []);
+
   // Sign-off's Finish. Both paths end with the completion cascade, which
   // writes the service record, promotes the zone names, drafts the
   // invoice, stamps the warranty and emails the customer — all
@@ -267,7 +278,13 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
       // The server's own gate list, when it has one. These are the things
       // that can still be fixed standing here, so name them rather than
       // showing one sentence and no way forward.
-      if (Array.isArray(err?.gateFailures) && err.gateFailures.length) {
+      if (err?.code === 'conflict') {
+        Alert.alert('The office changed this too', err.message, [
+          { text: 'Cancel', style: 'cancel' },
+          { text: "Use office's", onPress: () => resolveConflicts('theirs') },
+          { text: 'Keep mine', onPress: () => resolveConflicts('mine') },
+        ]);
+      } else if (Array.isArray(err?.gateFailures) && err.gateFailures.length) {
         Alert.alert(
           'Not quite ready',
           err.gateFailures.map((g) => `• ${g.label || g.key}`).join('\n')
@@ -278,7 +295,7 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
     } finally {
       setFinishing(false);
     }
-  }, [workOrderId, wo, onFinished, findings]);
+  }, [workOrderId, wo, onFinished, findings, resolveConflicts]);
 
   // The way out comes FIRST, and is rendered in every state including the
   // ones that render nothing else. This screen is an overlay now: it covers
@@ -352,7 +369,20 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
         </Text>
       </View>
 
-      {syncState.pending > 0 ? (
+      {syncState.error?.code === 'conflict' ? (
+        // The only way out of a true conflict, on the phone, every time.
+        <View style={styles.syncNotice}>
+          <Text style={styles.syncText}>{syncState.error.message}</Text>
+          <View style={styles.conflictActions}>
+            <Pressable style={styles.conflictBtn} onPress={() => resolveConflicts('mine')}>
+              <Text style={styles.conflictBtnText}>Keep mine</Text>
+            </Pressable>
+            <Pressable style={styles.conflictBtn} onPress={() => resolveConflicts('theirs')}>
+              <Text style={styles.conflictBtnText}>Use office's</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : syncState.pending > 0 ? (
         <Pressable onPress={() => {
           if (syncState.error?.code === 'auth') onSignIn();
           else field.current.queue.flush({ retry: true }).catch(() => {});
@@ -438,6 +468,9 @@ const styles = StyleSheet.create({
   saveStateBad: { color: colors.danger, fontWeight: '600' },
   syncNotice: { padding: space.md, backgroundColor: colors.warningTint },
   syncText: { ...type.label, color: colors.warning },
+  conflictActions: { flexDirection: 'row', gap: space.sm, marginTop: space.sm },
+  conflictBtn: { flex: 1, paddingVertical: space.sm, borderRadius: radius.card, borderWidth: 1, borderColor: colors.warning, alignItems: 'center' },
+  conflictBtnText: { ...type.label, color: colors.warning },
 
   tabs: { flexDirection: 'row', backgroundColor: colors.card, paddingHorizontal: space.sm, paddingBottom: space.sm, gap: 6 },
   tab: { flex: 1, alignItems: 'center', paddingVertical: 7, borderRadius: radius.card, backgroundColor: colors.ground, gap: 1 },

@@ -139,10 +139,23 @@ export async function flushBeforeFinish(queue, key) {
   if (queue.status(key).drafts) throw new Error('There are zone drafts on this phone. Open those zones and record their assessment before signing off.');
   await queue.flush({ retry: true });
   const state = queue.status(key);
-  if (state.pending) throw new Error(state.error?.message || 'Connect to sync the recorded work before completing this visit.');
+  // The code travels with the message so Finish can offer the way out of a
+  // conflict (keep mine / use office's) instead of a dead end.
+  if (state.pending) throw Object.assign(new Error(state.error?.message || 'Connect to sync the recorded work before completing this visit.'), { code: state.error?.code || null });
   const propertyId = queue.view(key)?.property?.id;
   const propertyState = propertyId ? queue.status(`prop:${propertyId}`) : null;
-  if (propertyState?.pending) throw new Error(propertyState.error?.message || 'The property corrections still need to sync before completing this visit.');
+  if (propertyState?.pending) throw Object.assign(new Error(propertyState.error?.message || 'The property corrections still need to sync before completing this visit.'), { code: propertyState.error?.code || null });
+}
+// A true conflict (the office changed the same zone field the tech did)
+// is the tech's call, and he must always be able to make it on the phone.
+// Resolves the visit and its property correction together, then syncs.
+export async function resolveFieldConflicts(queue, key, prefer) {
+  const propertyId = queue.view(key)?.property?.id;
+  for (const k of [key, propertyId ? `prop:${propertyId}` : null]) {
+    if (k && queue.status(k).error?.code === 'conflict') queue.resolveConflict(k, prefer);
+  }
+  await queue.flush({ retry: true });
+  return fieldStatus(queue, key);
 }
 export function fieldStatus(queue, key) {
   const visit = queue.status(key);

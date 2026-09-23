@@ -16,6 +16,48 @@ const includesSubmitted = (actual, submitted) => {
 };
 const issue = (message, code) => Object.assign(new Error(message), { code });
 
+// Three-way merge of one field: `base` is what this edit was made against,
+// `mine` is the edit, `theirs` is what the server has now.
+//
+// The whole `zones` array (and the whole property `system` object) used to
+// count as ONE field, so the office renaming Zone 4 while the tech marked
+// Zone 2 done offline was a "conflict" nothing on the phone could resolve —
+// Finish blocked forever (fall-closing fix #6). Now objects merge key by
+// key and zone lists merge zone by zone (keyed by `number`), so edits to
+// different zones or different fields both survive. Only the SAME leaf
+// changed two different ways is a conflict, and `prefer` ('mine' |
+// 'theirs') is the tech's answer to it.
+const isObject = v => !!v && typeof v === 'object' && !Array.isArray(v);
+const isZoneList = v => Array.isArray(v) && v.every(x => isObject(x) && x.number != null);
+function merge3(base, mine, theirs, prefer, path, conflicts) {
+  if (equal(mine, theirs)) return mine;
+  if (equal(mine, base)) return theirs;
+  if (equal(theirs, base)) return mine;
+  if (isObject(mine) && isObject(theirs) && (base == null || isObject(base))) {
+    const b = base || {};
+    const out = {};
+    for (const k of new Set([...Object.keys(theirs), ...Object.keys(mine), ...Object.keys(b)])) {
+      const v = merge3(b[k], mine[k], theirs[k], prefer, [...path, k], conflicts);
+      if (v !== undefined) out[k] = v;
+    }
+    return out;
+  }
+  if (isZoneList(mine) && isZoneList(theirs) && (base == null || isZoneList(base))) {
+    const byNumber = list => new Map((list || []).map(z => [String(z.number), z]));
+    const B = byNumber(base), M = byNumber(mine), T = byNumber(theirs);
+    const out = [];
+    for (const n of new Set([...T.keys(), ...M.keys()])) {
+      const v = merge3(B.get(n), M.get(n), T.get(n), prefer, [...path, `zone ${n}`], conflicts);
+      if (v !== undefined) out.push(v);
+    }
+    return out.sort((a, b) => Number(a.number) - Number(b.number));
+  }
+  if (prefer === 'mine') return mine;
+  if (prefer === 'theirs') return theirs;
+  conflicts.push(path.join(' › '));
+  return mine;
+}
+
 export function createQueue({ store, transport }) {
   let state = store.read() || { version: 1, sequence: 0, records: {}, pending: [], drafts: {}, errors: {} };
   if (state.version !== 1) throw new Error('This phone has an unsupported offline database. Keep the app installed and contact support.');
@@ -58,9 +100,16 @@ export function createQueue({ store, transport }) {
     const before = requireRecord(key);
     const changed = Object.fromEntries(Object.entries(values).filter(([k, v]) => !equal(before[k], v)));
     if (!Object.keys(changed).length) return view(key);
+    // A zone taken off the visit takes its unfinished draft with it. Left
+    // behind, a `zone:N` draft for a zone that no longer exists blocked
+    // sign-off forever — nothing on screen could open it (fall-closing #6).
+    const removedZones = Array.isArray(changed.zones) && Array.isArray(before.zones)
+      ? before.zones.map(z => String(z?.number)).filter(n => !changed.zones.some(z => String(z?.number) === n))
+      : [];
     commit(s => {
       s.pending.push({ id: `edit-${++s.sequence}`, key, kind: 'patch', patch: copy(changed),
         before: Object.fromEntries(Object.keys(changed).map(k => [k, before[k] ?? null])) });
+      for (const n of removedZones) if (s.drafts[key]) delete s.drafts[key][`zone:${n}`];
     });
     return view(key);
   };
@@ -113,12 +162,18 @@ export function createQueue({ store, transport }) {
               }
             } else {
               const changes = {};
+              const conflicts = [];
               for (const [field, value] of Object.entries(entry.patch)) {
                 if (includesSubmitted(remote[field], value)) continue; // Accepted, response lost.
-                if (!equal(remote[field], entry.before[field])) {
-                  throw issue(`The office changed ${field}. Your field copy is retained; review both before syncing.`, 'conflict');
-                }
-                changes[field] = value;
+                if (equal(remote[field], entry.before[field])) { changes[field] = value; continue; }
+                // The office moved this field too: merge instead of refusing.
+                const merged = merge3(entry.before[field], value, remote[field], entry.prefer || null, [field], conflicts);
+                if (!equal(merged, remote[field])) changes[field] = merged;
+              }
+              if (conflicts.length) {
+                throw Object.assign(issue(
+                  `The office also changed ${conflicts.slice(0, 2).join(' and ')}${conflicts.length > 2 ? ` (+${conflicts.length - 2} more)` : ''}. Choose which version to keep.`,
+                  'conflict'), { paths: conflicts });
               }
               if (Object.keys(changes).length && entry.key.startsWith('wo:') && ['completed', 'cancelled', 'no_show'].includes(remote.status)) {
                 throw issue('This visit has been closed on the server. Your field changes are retained for review.', 'closed');
@@ -130,7 +185,7 @@ export function createQueue({ store, transport }) {
             acknowledge(entry, result);
           } catch (err) {
             blocked.add(entry.key);
-            commit(s => { s.errors[entry.key] = { message: err.message || 'Waiting for connection', code: err.code || 'network' }; });
+            commit(s => { s.errors[entry.key] = { message: err.message || 'Waiting for connection', code: err.code || 'network', ...(err.paths ? { paths: err.paths } : {}) }; });
           }
         }
       } catch (err) {
@@ -141,8 +196,18 @@ export function createQueue({ store, transport }) {
     })().finally(() => { draining = null; emit(); });
     return draining;
   };
+  // The tech's answer to a true conflict: keep the phone's version of the
+  // contested parts, or take the office's. Everything that did not
+  // conflict merges either way. The next flush applies it.
+  const resolveConflict = (key, prefer) => {
+    if (!['mine', 'theirs'].includes(prefer)) throw new Error('Choose mine or theirs.');
+    commit(s => {
+      for (const p of s.pending) if (p.key === key && p.kind === 'patch') p.prefer = prefer;
+      delete s.errors[key];
+    });
+  };
   return {
-    view, patch, photo, status, flush,
+    view, patch, photo, status, flush, resolveConflict,
     seed(key, remote) {
       const currentTime = Date.parse(state.records[key]?.updatedAt);
       const incomingTime = Date.parse(remote.updatedAt);

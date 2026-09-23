@@ -260,6 +260,11 @@ changed except where named below. Server-side suites boot the real server from a
   failed copy keeps the finding unstamped and is named in `notTransferred`, never cleared. The issue
   rollup skips stamped findings. Per-issue defer and emergency routes still MOVE (unchanged — the app
   does not use them). `scripts/test-findings-report.mjs` (pdftotext + email); old code: 9 fail.
+- **#6 Office edits never strand the tech.** The field outbox (`pjl-field/src/offline/queue.mjs`) now
+  merges three-way per key and per zone (`zones` keyed by `number`, `system` key by key); only the same
+  leaf changed two ways is a conflict, and the closing screen offers **Keep mine / Use office's**
+  (`queue.resolveConflict`, `field.resolveFieldConflicts`). Add a zone goes through the queue; removing
+  a zone clears its `zone:N` draft. App-only. `scripts/test-field-conflicts.mjs` (rebuilt audit harness).
 **2026-09-21, last (The System Builder's maths moves out of the page):** Phases 0 and 1 of the
 System Builder work, to Patrick's brief: build a characterization safety net, then extract ONLY
 the calculation engine, leaving persistence, quote creation and proposal-section generation

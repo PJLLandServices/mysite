@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { ActionSheetIOS, Alert, Image, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { getProperty, patchProperty, removePropertyZone, uploadWoPhotos, woPhotoUri } from '../../api';
+import { removePropertyZone, uploadWoPhotos, woPhotoUri } from '../../api';
 import { colors, radius, space, type } from '../../theme';
 import { pickPhoto, takePhoto } from '../../photos';
 import { Button, CheckRow, Chip, Section } from './parts';
@@ -186,18 +186,17 @@ export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, set
     const nextNumber = zones.reduce((max, z) => Math.max(max, Number(z.number) || 0), 0) + 1;
     setBusy(true);
     try {
-      const fresh = wo?.propertyId ? await getProperty(wo.propertyId) : null;
-      if (fresh) {
-        const propSystem = fresh.system || {};
-        const propZones = Array.isArray(propSystem.zones) ? propSystem.zones : [];
-        if (!propZones.some((z) => Number(z.number) === nextNumber)) {
-          await patchProperty(wo.propertyId, {
-            system: {
-              ...propSystem,
-              zones: [...propZones, { number: nextNumber, location: '', label: '', notes: '', pendingReview: true }],
-            },
-          });
-        }
+      // Through the phone's outbox (saveSystem), like every other property
+      // correction: recorded offline, sent with If-Match, merged zone by
+      // zone. A direct PATCH here used to skip the queue and turn the
+      // tech's own queued zone rename into a conflict (fall-closing #6).
+      const propSystem = wo?.property?.system || {};
+      const propZones = Array.isArray(propSystem.zones) ? propSystem.zones : [];
+      if (wo?.property?.id && !propZones.some((z) => Number(z.number) === nextNumber)) {
+        const recorded = await saveSystem({
+          zones: [...propZones, { number: nextNumber, location: '', label: '', notes: '', pendingReview: true }],
+        });
+        if (!recorded) return;
       }
       save({ zones: [...zones, blankZone(nextNumber)] });
       setZoneIndex(zones.length);
@@ -220,6 +219,9 @@ export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, set
         });
       }
       const next = zones.filter((z) => Number(z.number) !== Number(number));
+      // Its unfinished draft goes with it, or sign-off waits forever on a
+      // zone that is not there (the outbox clears it too).
+      clearDraft(`zone:${number}`);
       save({ zones: next });
       // Step back rather than off the end when the last page goes.
       setZoneIndex(Math.max(0, Math.min(zoneIndex, next.length - 1)));
