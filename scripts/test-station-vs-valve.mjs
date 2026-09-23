@@ -64,7 +64,13 @@ const design = (mode) => ({
     // as well as the trees themselves. The driveway runs down x = 100.
     { aid: "a_trees", name: "Trees", family: "trees", mode: "custom", planRef: { pageId: PAGE },
       poly: [{ x: 40, y: 100 }, { x: 170, y: 100 }, { x: 170, y: 140 }, { x: 40, y: 140 }],
-      trees: [treeAt(60, 120), treeAt(80, 120), treeAt(130, 120), treeAt(150, 120)] }
+      // SEVEN trees, split FIVE and TWO. Deliberately lopsided: a 2-and-2
+      // split cannot tell "each half measured on its own" apart from "the
+      // same measurement printed twice", so the halves are made to differ
+      // in tree count, in flow and in lateral length. Real rows of trees
+      // do not fall evenly either side of a driveway.
+      trees: [treeAt(50, 120), treeAt(62, 120), treeAt(74, 120), treeAt(86, 120), treeAt(96, 120),
+              treeAt(130, 120), treeAt(152, 120)] }
   ].filter((a) => mode !== "lawnOnly" || a.aid !== "a_trees"),
   routing: { [PAGE]: {
     poc: { x: 100, y: 160 }, main: [],
@@ -119,6 +125,11 @@ async function open(mode) {
     headerStat: (document.getElementById("mpStat") || {}).textContent || "",
     // Laterals, per valve, from the same plan the BOM orders from.
     lateralRuns: mpLateralPlan().runs.map((r) => ({ name: LAST_ZONES[r.zi].name, ft: Math.round(r.ft) })),
+    // Per half: what the sheet says each valve actually waters.
+    halves: LAST_ZONES.filter((z) => z.half).map((z) => ({
+      name: z.name, half: z.half, station: z.station,
+      trees: z.treeCount || 0, gpm: +z.gpm.toFixed(2)
+    })),
     // What the customer would be offered.
     quoteLines: desiredQuoteLines().desired.filter((l) => l.kind === "zone").map((l) => l.label)
   }));
@@ -199,9 +210,24 @@ check("the sheet header names both counts",
 
 // ── D. Both laterals, and one proposal line ──────────────────────────
 console.log("\nD. Two lateral runs, one line on the proposal");
+// The halves are lopsided on purpose — five trees one side, two the other.
+// If these ever come out equal the fixture has stopped testing anything.
+console.log(`     halves: ${split.seen.halves.map((h) => `${h.name} ${h.trees} trees ${h.gpm} GPM`).join("  |  ")}`);
+const hA = split.seen.halves.find((h) => h.half === "A") || {};
+const hB = split.seen.halves.find((h) => h.half === "B") || {};
+check("the halves carry DIFFERENT tree counts (5 and 2)",
+      (hA.trees === 5 && hB.trees === 2) || (hA.trees === 2 && hB.trees === 5),
+      `${hA.trees} and ${hB.trees}`);
+check("...so their flows differ too", hA.gpm !== hB.gpm, `${hA.gpm} vs ${hB.gpm}`);
+check("...and every tree is still accounted for", (hA.trees || 0) + (hB.trees || 0) === 7,
+      `${hA.trees} + ${hB.trees}`);
+
 const treeRuns = split.seen.lateralRuns.filter((r) => /Trees/.test(r.name));
 check("BOTH halves have their own lateral run", treeRuns.length === 2, JSON.stringify(split.seen.lateralRuns));
 check("...and both are measured, not zero", treeRuns.every((r) => r.ft > 0), JSON.stringify(treeRuns));
+check("...and the two runs are DIFFERENT lengths — each measured on its own",
+      treeRuns.length === 2 && treeRuns[0].ft !== treeRuns[1].ft,
+      JSON.stringify(treeRuns) + " — equal lengths would mean one measurement printed twice");
 const treeLines = split.seen.quoteLines.filter((l) => /Trees/.test(l));
 check("the proposal still offers ONE line for the trees", treeLines.length === 1, JSON.stringify(split.seen.quoteLines));
 check("...and the proposal's line count equals the station count",
