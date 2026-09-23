@@ -249,7 +249,7 @@ function hydrate(inv) {
     ? inv.payments.map(normalizePayment).filter(Boolean)
     : [];
   const paidSoFar = round2(normalizedPayments.reduce((a, p) => a + p.amount, 0));
-  return {
+  const out = {
     id: inv?.id || "",
     woId: inv?.woId || null,
     quoteId: inv?.quoteId || null,
@@ -409,10 +409,77 @@ function hydrate(inv) {
     // appendPaymentAttempt(); update()'s allowlist deliberately excludes
     // it so no ordinary patch can rewrite the log.
     paymentAttempts: Array.isArray(inv?.paymentAttempts) ? inv.paymentAttempts : [],
+    // PJL-96: a price PJL has not set yet. Written by createDraft when the
+    // seasonal fee line arrives as a SUGGESTION (a custom size, or a
+    // commercial account with no price of its own); confirmed by
+    // confirmPrice(). null for every other invoice.
+    priceConfirm: normalizePriceConfirm(inv?.priceConfirm),
     createdAt: inv?.createdAt || new Date().toISOString(),
     updatedAt: inv?.updatedAt || new Date().toISOString(),
     history: Array.isArray(inv?.history) ? inv.history : []
   };
+  // Derived, never stored: the one answer every surface reads.
+  out.priceUnconfirmed = isPriceUnconfirmed(out);
+  return out;
+}
+
+// ---- Price confirmation (PJL-96) --------------------------------------
+//
+// Patrick's rulings: a custom size (16+ residential, 9+ commercial) and a
+// commercial account without its own price are priced BY PATRICK. The
+// invoice drafts with a suggested amount prefilled (pricing.
+// suggestSeasonalPrice) and flagged; until he confirms it the invoice is
+// never payable, never sent and never texted.
+function normalizePriceConfirm(raw) {
+  if (!raw || typeof raw !== "object" || raw.required !== true) return null;
+  const num = (v) => (v == null || !Number.isFinite(Number(v)) ? null : round2(Number(v)));
+  return {
+    required: true,
+    reason: raw.reason === "commercial_unpriced" ? "commercial_unpriced" : "custom_size",
+    suggestedAmount: num(raw.suggestedAmount),
+    basis: String(raw.basis || "").slice(0, 300),
+    lineIndex: Number.isInteger(raw.lineIndex) ? raw.lineIndex : null,
+    lineKey: raw.lineKey || null,
+    confirmedAt: raw.confirmedAt || null,
+    confirmedBy: raw.confirmedBy || null,
+    confirmedAmount: num(raw.confirmedAmount)
+  };
+}
+
+// THE rule for "is this invoice's price still Patrick's to set?". Also
+// honours drafts made before PJL-96, whose custom line carried only the
+// "Custom quote — Patrick to price" note (and the booked tier's price).
+function isPriceUnconfirmed(inv) {
+  if (!inv || inv.status === "void") return false;
+  if (inv.priceConfirm?.confirmedAt) return false;
+  if (inv.priceConfirm?.required === true) return true;
+  if (inv.status === "paid") return false;
+  const noted = (inv.lineItems || []).filter((l) => l && l.note);
+  if (!noted.length) return false;
+  const prefix = legacyCustomNotePrefix();
+  return Boolean(prefix) && noted.some((l) => String(l.note).startsWith(prefix));
+}
+
+// Read lazily and tolerantly: hydrate() runs on every read, and suites
+// that sandbox this module alone (without pricing.js) must still load it.
+function legacyCustomNotePrefix() {
+  try { return require("./pricing").CUSTOM_QUOTE_NOTE_PREFIX || null; } catch { return null; }
+}
+
+// The index of the line Patrick is confirming: the one createDraft
+// recorded (checked against its key), or a pre-PJL-96 placeholder line.
+function priceConfirmLineIndex(inv) {
+  const lines = inv?.lineItems || [];
+  const pc = inv?.priceConfirm;
+  if (pc && Number.isInteger(pc.lineIndex) && lines[pc.lineIndex] && (!pc.lineKey || lines[pc.lineIndex].key === pc.lineKey)) return pc.lineIndex;
+  if (pc?.lineKey) {
+    const byKey = lines.findIndex((l) => l?.key === pc.lineKey);
+    if (byKey !== -1) return byKey;
+  }
+  const prefix = legacyCustomNotePrefix();
+  let pendingNotes = [];
+  try { pendingNotes = Object.values(require("./pricing").PRICE_PENDING_NOTES || {}); } catch { /* sandboxed */ }
+  return lines.findIndex((l) => (prefix && String(l?.note || "").startsWith(prefix)) || pendingNotes.includes(l?.note));
 }
 
 async function nextInvoiceId(year) {
@@ -579,7 +646,21 @@ async function createDraft({
     };
   });
   const totals = totalsForLines(normalized);
+  // PJL-96: a SUGGESTED seasonal fee line (pricing.billableLines) — the
+  // price is Patrick's to confirm. The suggestion is prefilled; the invoice
+  // is flagged, and stays unpayable / unsent / untexted until he does.
+  const suggestedIdx = (lineItems || []).findIndex((l) => l && l.priceStatus === "suggested");
+  const priceConfirm = suggestedIdx === -1 ? null : {
+    required: true,
+    reason: lineItems[suggestedIdx].priceReason,
+    suggestedAmount: normalized[suggestedIdx].unitPrice,
+    basis: lineItems[suggestedIdx].suggestion?.basis || "",
+    lineIndex: suggestedIdx,
+    lineKey: normalized[suggestedIdx].key,
+    confirmedAt: null, confirmedBy: null, confirmedAmount: null
+  };
   const inv = hydrate({
+    priceConfirm,
     id,
     woId,
     quoteId,
@@ -631,6 +712,13 @@ async function update(id, patch) {
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
   const current = records[idx];
+  // PJL-96: an invoice whose price Patrick has not confirmed is never
+  // issued — not by /send, a bulk "mark sent", or a manual status patch.
+  if (patch && patch.status === "sent" && current.status === "draft" && isPriceUnconfirmed(current)) {
+    const err = new Error("Confirm this invoice's price before it goes to the customer.");
+    err.code = "price_unconfirmed";
+    throw err;
+  }
   const next = { ...current };
   const allowed = ["status", "notes", "quickbooksInvoiceId", "quickbooksChargeId", "quickbooksPaymentId", "stripePaymentIntentId", "stripeChargeId", "paymentToken", "portalToken", "customerSmsScheduledAt", "customerSmsSentAt", "customerReminderHistory", "customerJunkMailWarningSentAt", "customerJunkMailWarningHistory", "customerName", "customerEmail", "customerPhone", "address", "holdUntilCompletion"];
   for (const key of allowed) {
@@ -743,10 +831,24 @@ const cryptoMod = require("node:crypto");
 // routes, so the page never shows a card form the server would refuse
 // (fall-closing fix #3). Sent / part-paid invoices, as always — plus a
 // DRAFT that signed-in staff opened for payment on site.
+//
+// payBlockReason is the same rule with its reason: null when payable,
+// otherwise "void" | "paid" | "price_unconfirmed" | "not_issued".
+// PJL-96 added "price_unconfirmed" — a price Patrick has not confirmed is
+// never payable, sent invoice or not. (A no-charge reason, if one is ever
+// needed, slots in beside it; today a $0 visit drafts no invoice at all.)
+function payBlockReason(inv) {
+  if (!inv) return "not_issued";
+  if (inv.status === "void") return "void";
+  if (inv.status === "paid") return "paid";
+  if (isPriceUnconfirmed(inv)) return "price_unconfirmed";
+  if (inv.status === "sent" || inv.status === "partially_paid") return null;
+  if (inv.status === "draft" && Boolean(inv.onSitePayment?.openedAt)) return null;
+  return "not_issued";
+}
+
 function isPayableOnline(inv) {
-  if (!inv) return false;
-  if (inv.status === "sent" || inv.status === "partially_paid") return true;
-  return inv.status === "draft" && Boolean(inv.onSitePayment?.openedAt);
+  return payBlockReason(inv) === null;
 }
 
 // The tech taps "Take payment now" with the customer beside them.
@@ -769,9 +871,10 @@ async function openForOnSitePayment(id, { by = "" } = {}) {
   if (!(Number(inv.total) > 0)) return { ok: false, status: 409, code: "no_charge", errors: ["This visit is no charge — there is nothing to pay."] };
   // A custom-quote tier line still carries a placeholder price until
   // Patrick prices it (fall-closing #7 round 2): never charge that.
-  const { CUSTOM_QUOTE_NOTE_PREFIX } = require("./pricing");
-  if (inv.status === "draft" && (inv.lineItems || []).some((l) => String(l.note || "").startsWith(CUSTOM_QUOTE_NOTE_PREFIX))) {
-    return { ok: false, status: 409, code: "needs_pricing", errors: ["This closing is a custom-quote size — Patrick prices it before the customer pays. Nothing was charged."] };
+  // PJL-96: the same for any price not yet confirmed (a custom size, or a
+  // commercial account without its own price) — one rule, isPriceUnconfirmed.
+  if (isPriceUnconfirmed(inv)) {
+    return { ok: false, status: 409, code: "needs_pricing", errors: ["PJL confirms this visit's price before the customer pays — the office sends the invoice once it's set. Nothing was charged."] };
   }
   if (inv.status === "draft" && !inv.onSitePayment?.openedAt) {
     if (inv.paidOnSiteAtCompletion !== true) {
@@ -789,6 +892,70 @@ async function openForOnSitePayment(id, { by = "" } = {}) {
   records[idx] = inv;
   await writeAll(records);
   return { ok: true, invoice: hydrate(inv) };
+}
+
+// Patrick confirms the price (PJL-96) — the suggested amount as it stands,
+// or his own (`amount`, dollars). The line takes the confirmed price and
+// loses its "PJL confirms the price" note (the customer's invoice must
+// not say it is pending), the totals are recomputed, and the status is
+// re-derived from any money already recorded. From here the invoice is an
+// ordinary one: payable on the usual rules, sendable, textable.
+//
+// The held "invoice ready" text: if one was scheduled and has not gone,
+// it is re-armed for now, so the normal sweep sends it (decision,
+// 2026-09-23: after Patrick confirms, the held text goes out on the
+// normal schedule automatically).
+//
+// A different amount is accepted only on a DRAFT; a price already issued
+// to the customer (an invoice sent before PJL-96) changes through Revise.
+async function confirmPrice(id, { amount = null, by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return { ok: false, status: 404, code: "not_found", errors: ["Invoice not found."] };
+  const current = records[idx];
+  if (current.status === "void") return { ok: false, status: 409, code: "void", errors: ["This invoice has been voided."] };
+  if (!isPriceUnconfirmed(current)) {
+    return current.priceConfirm?.confirmedAt
+      ? { ok: true, invoice: current, alreadyConfirmed: true }
+      : { ok: false, status: 409, code: "not_required", errors: ["This invoice has no price waiting to be confirmed."] };
+  }
+  const lineIdx = priceConfirmLineIndex(current);
+  if (lineIdx === -1) {
+    return { ok: false, status: 409, code: "line_missing", errors: ["Couldn't find the line to price — edit the lines, then confirm."] };
+  }
+  const lines = (current.lineItems || []).map((l) => ({ ...l }));
+  const line = lines[lineIdx];
+  const qty = Number(line.qty) || 1;
+  let unit = Number(line.unitPrice) || 0;
+  if (amount !== null && amount !== undefined && amount !== "") {
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) return { ok: false, status: 422, code: "bad_amount", errors: ["The price must be a positive amount."] };
+    if (current.status !== "draft" && round2(n) !== round2(unit)) {
+      return { ok: false, status: 409, code: "use_revise", errors: ["This invoice has already gone to the customer — change its price with Revise."] };
+    }
+    unit = round2(n);
+  }
+  if (!(unit > 0)) return { ok: false, status: 422, code: "bad_amount", errors: ["Enter the price for this visit."] };
+  lines[lineIdx] = { ...line, unitPrice: unit, lineTotal: round2(unit * qty), note: "" };
+  const now = new Date().toISOString();
+  const totals = totalsForLines(lines);
+  const next = { ...current, lineItems: lines, subtotal: totals.subtotal, hst: totals.hst, total: totals.total };
+  next.amountPaid = amountPaidOf(next);
+  next.balanceDue = balanceDueOf(next);
+  next.status = statusForPayments(next, current.status);
+  if (next.status === "paid" && !next.paidAt) next.paidAt = now;
+  const pc = current.priceConfirm || { required: true, reason: "custom_size", suggestedAmount: Number(line.unitPrice) || null, basis: "", lineIndex: lineIdx, lineKey: line.key || null };
+  next.priceConfirm = { ...pc, required: true, lineIndex: lineIdx, lineKey: line.key || null, confirmedAt: now, confirmedBy: String(by || "admin"), confirmedAmount: unit };
+  if (current.customerSmsScheduledAt && !current.customerSmsSentAt) next.customerSmsScheduledAt = now;
+  next.updatedAt = now;
+  const suggested = pc.suggestedAmount != null ? ` (suggested $${Number(pc.suggestedAmount).toFixed(2)})` : "";
+  next.history = [...(current.history || []), {
+    ts: now, action: "price_confirmed", by: String(by || "admin"),
+    note: `Price confirmed at $${unit.toFixed(2)}${suggested}${next.customerSmsScheduledAt && !current.customerSmsSentAt ? " · held invoice text released" : ""}`
+  }];
+  records[idx] = next;
+  await writeAll(records);
+  return { ok: true, invoice: hydrate(next) };
 }
 
 async function ensurePaymentToken(id) {
@@ -1442,6 +1609,10 @@ module.exports = {
   ensurePaymentToken: withStoreLock(ensurePaymentToken),
   openForOnSitePayment: withStoreLock(openForOnSitePayment),
   isPayableOnline,
+  // PJL-96
+  payBlockReason,
+  isPriceUnconfirmed,
+  confirmPrice: withStoreLock(confirmPrice),
   getByPaymentToken,
   ensurePortalToken: withStoreLock(ensurePortalToken),
   getByPortalToken

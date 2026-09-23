@@ -10787,6 +10787,11 @@ async function handleApi(req, res, pathname) {
       if (action === "resend" && inv.status === "void") {
         return sendJson(res, 409, { ok: false, errors: ["Cannot resend a voided invoice."] });
       }
+      // PJL-96: a price Patrick has not confirmed never goes to the
+      // customer — the email carries the amount and the pay link.
+      if (invoices.isPriceUnconfirmed(inv)) {
+        return sendJson(res, 409, { ok: false, code: "price_unconfirmed", errors: ["Confirm this invoice's price before sending it — it's a suggested amount until you do."] });
+      }
       // Threshold deposit — a held balance/final invoice waits for
       // project completion (the cascade clears the hold). Admin override:
       // body { forceHeld: true } sends it anyway.
@@ -11067,7 +11072,7 @@ async function handleApi(req, res, pathname) {
       // Map reason codes to HTTP status. The lib returned a structured
       // error — pass the same shape through so the UI can branch on it.
       const code = result.error;
-      const skipCodes = new Set(["voided", "paid", "no_phone", "no_twilio_config", "disabled", "opted_out", "portal_token_failed"]);
+      const skipCodes = new Set(["voided", "paid", "no_phone", "no_twilio_config", "disabled", "opted_out", "portal_token_failed", "price_unconfirmed"]);
       const messages = {
         invoice_not_found: "Invoice not found.",
         missing_invoice_id: "Invoice ID missing in request URL.",
@@ -11080,7 +11085,8 @@ async function handleApi(req, res, pathname) {
         no_twilio_config: "Twilio is not configured on the server — reminder not sent.",
         disabled: "Invoice SMS is disabled in admin settings — reminder not sent.",
         opted_out: "Customer opted out of text reminders — reminder not sent.",
-        portal_token_failed: "Couldn't generate a portal link for this invoice."
+        portal_token_failed: "Couldn't generate a portal link for this invoice.",
+        price_unconfirmed: "Confirm this invoice's price first — nothing is texted while it is a suggestion."
       };
       const msg = messages[code] || code || "Reminder not sent.";
       if (code === "invoice_not_found") {
@@ -11159,7 +11165,7 @@ async function handleApi(req, res, pathname) {
       }
 
       const code = result.error;
-      const skipCodes = new Set(["voided", "paid", "no_phone", "no_twilio_config", "disabled", "opted_out", "portal_token_failed", "autofire_recent"]);
+      const skipCodes = new Set(["voided", "paid", "no_phone", "no_twilio_config", "disabled", "opted_out", "portal_token_failed", "autofire_recent", "price_unconfirmed"]);
       const messages = {
         invoice_not_found: "Invoice not found.",
         missing_invoice_id: "Invoice ID missing in request URL.",
@@ -11232,7 +11238,11 @@ async function handleApi(req, res, pathname) {
       // (set when Patrick clicks Send-to-customer); if absent, the
       // portal page shows a banner instead of a fake button.
       const publicBase = resolvePublicBaseUrl();
-      const payUrl = inv.paymentToken
+      // Only when the pay page would take the card (invoices.isPayableOnline):
+      // a Pay button to a "not ready" page — a draft, or a price PJL has not
+      // confirmed (PJL-96) — is a dead end; the page shows its "being
+      // prepared" banner instead.
+      const payUrl = inv.paymentToken && invoices.isPayableOnline(inv)
         ? `${publicBase}/pay/invoice/${encodeURIComponent(inv.id)}?t=${encodeURIComponent(inv.paymentToken)}`
         : null;
       // Short property label — same logic as the SMS body. Drops city/
@@ -11474,7 +11484,11 @@ async function handleApi(req, res, pathname) {
       // Same rule the page reads (invoices.isPayableOnline): a draft is
       // payable only once staff opened it for payment on site.
       if (!invoices.isPayableOnline(inv)) {
-        return sendJson(res, 409, { ok: false, errors: [`This invoice is "${inv.status}" and isn't ready for payment.`] });
+        return sendJson(res, 409, { ok: false, code: invoices.payBlockReason(inv), errors: [
+          invoices.payBlockReason(inv) === "price_unconfirmed"
+            ? "PJL is still confirming this invoice's price — nothing can be charged yet."
+            : `This invoice is "${inv.status}" and isn't ready for payment.`
+        ] });
       }
 
       const rcReject = await verifyRecaptchaOrReject(req, body, "payment-intent");
@@ -15028,6 +15042,27 @@ async function handleApi(req, res, pathname) {
   // the customer, phone in hand, should not have to email them first to be
   // able to take their money. Idempotent — the same invoice keeps the same
   // token, so this never invalidates a link already in someone's inbox.
+  // POST /api/invoices/:id/confirm-price (PJL-96) — Patrick sets the price
+  // of a closing he prices himself: a custom size (16+ residential, 9+
+  // commercial) or a commercial account without its own price. Body:
+  // { amount? } in dollars; omitted = confirm the suggested amount as is.
+  // ADMIN ONLY — a price is a desk decision, like the fee waiver. Until
+  // this runs the invoice is not payable, not sendable and not texted.
+  const invoiceConfirmPriceMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/confirm-price$/);
+  if (invoiceConfirmPriceMatch && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Only an admin can set this invoice's price."] });
+      const id = decodeURIComponent(invoiceConfirmPriceMatch[1]);
+      const body = await parseRequestBody(req).catch(() => ({}));
+      const result = await invoices.confirmPrice(id, { amount: body?.amount ?? null, by: await actorLabel(req) });
+      if (!result.ok) return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
+      return sendJson(res, 200, { ok: true, invoice: result.invoice, alreadyConfirmed: result.alreadyConfirmed === true });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't confirm the price."] });
+    }
+  }
+
   const invoicePayLinkMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/payment-link$/);
   if (invoicePayLinkMatch && req.method === "POST") {
     try {
@@ -19783,7 +19818,14 @@ async function handleApi(req, res, pathname) {
                   key: fallbackKey
                 };
               })();
-          if (resolved.custom) {
+          // PJL-96: a custom size, or a commercial account without its own
+          // price, is seeded PRICE PENDING — Patrick sets the price. It used
+          // to seed nothing (and close as "no charge") or the tier's price.
+          const pendingDecision = property
+            ? pricingLib.seasonalFeeDecision(property, type, { commercial: await customers.isCommercialAccount(property.customerId) })
+            : null;
+          const pending = pendingDecision?.status === "pending";
+          if (resolved.custom && !pending) {
             // Custom-quote tier (16+ residential / 9+ commercial) and no
             // override on the property — don't seed a meaningless $0 line.
             // Tech adds lines manually on-site.
@@ -19808,7 +19850,7 @@ async function handleApi(req, res, pathname) {
               source: { zoneNumbers: [], issueIds: [], baseline: true },
               note: resolved.source === "property_override" ? "Per-property rate" : ""
             };
-            const builderLineItems = [seasonalLine];
+            const builderLineItems = [pending ? pricingLib.pendingFeeLine(seasonalLine, pendingDecision) : seasonalLine];
             // Optional additional fall-closing plumbing line.
             const sp = property?.seasonalPricing || {};
             if (type === "fall_closing" && sp.hasAdditionalFallBlowout === true) {
@@ -19959,7 +20001,12 @@ async function handleApi(req, res, pathname) {
                 key: fallbackKey
               };
             })();
-        if (!resolved.custom) {
+        // PJL-96: same as the create-time seed — price pending, not nothing.
+        const pendingDecision = property
+          ? pricingLib.seasonalFeeDecision(property, wo.type, { commercial: await customers.isCommercialAccount(property.customerId) })
+          : null;
+        const pending = pendingDecision?.status === "pending";
+        if (!resolved.custom || pending) {
           const refDate = lead?.booking?.start
             ? new Date(lead.booking.start)
             : new Date(wo.scheduledFor || wo.createdAt || Date.now());
@@ -19975,7 +20022,7 @@ async function handleApi(req, res, pathname) {
             source: { zoneNumbers: [], issueIds: [], baseline: true },
             note: resolved.source === "property_override" ? "Per-property rate" : ""
           };
-          const seededLines = [seasonalLine];
+          const seededLines = [pending ? pricingLib.pendingFeeLine(seasonalLine, pendingDecision) : seasonalLine];
           const sp = property?.seasonalPricing || {};
           if (wo.type === "fall_closing" && sp.hasAdditionalFallBlowout === true) {
             const addlPrice = Number(sp.additionalFallBlowoutPrice);
@@ -20431,7 +20478,7 @@ async function handleApi(req, res, pathname) {
             phone: wo.customerPhone || "",
             email: wo.customerEmail || "",
             address: wo.address || "",
-            notes: `${bypassWarning}${serviceRecord.summary}${invoice ? ` · Invoice ${invoice.id} ($${invoice.total.toFixed(2)})`
+            notes: `${bypassWarning}${serviceRecord.summary}${invoice ? ` · Invoice ${invoice.id} ($${invoice.total.toFixed(2)})${invoices.isPriceUnconfirmed(invoice) ? " — SUGGESTED price, confirm it on the invoice before it goes out" : ""}`
               : (Array.isArray(serviceRecord?.lineItems) && serviceRecord.lineItems.length ? " · No charge" : " · No invoice drafted — price this visit")}`
           },
           // The alert shell prints "Requested" items and an "Estimated
@@ -20486,7 +20533,12 @@ async function handleApi(req, res, pathname) {
         // invoice page or QB). paidOnSiteAtCompletion still gets
         // stamped on the invoice record for accounting / QB
         // reconciliation, just not surfaced in the customer email.
-        const totalLine = invoice && invoice.total > 0
+        // PJL-96: a price Patrick has not confirmed (a custom size, or a
+        // commercial account without its own price) is never shown to the
+        // customer — the draft carries only a suggestion.
+        const totalLine = invoice && invoices.isPriceUnconfirmed(invoice)
+          ? `<p style="margin: 0 0 14px;">PJL will confirm the price for today's visit and send your invoice.</p>`
+          : invoice && invoice.total > 0
           ? `<p style="margin: 0 0 14px;">Total for today's visit: <strong>$${moneyCad(invoice.total)} CAD</strong> (incl. HST). An invoice will follow.</p>`
           : "";
         // Warranty line REMOVED from this email on Patrick's 2026-09-01

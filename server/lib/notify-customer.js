@@ -1887,6 +1887,21 @@ async function sendInvoiceReadySMS({ invoiceId, includeSpouse } = {}) {
     return { ok: true, skipped: "already_sent" };
   }
 
+  // PJL-96: a price Patrick has not confirmed is never texted to the
+  // customer. HELD, not consumed: customerSmsSentAt stays empty, so once
+  // he confirms (invoices.confirmPrice re-arms the schedule) the normal
+  // sweep sends it. The history records the hold once, not every sweep.
+  if (invoices.isPriceUnconfirmed(invoice)) {
+    if (!(invoice.history || []).some((h) => h.action === "customer_sms_held_price_unconfirmed")) {
+      await invoices.appendHistory(invoiceId, {
+        action: "customer_sms_held_price_unconfirmed",
+        by: "system",
+        note: "Invoice text held until Patrick confirms the price"
+      });
+    }
+    return { ok: true, skipped: "price_unconfirmed" };
+  }
+
   // Nothing to pay — never text "your invoice is ready" for $0
   // (fall-closing fix #8). The completion cascade no longer drafts a $0
   // invoice, but one can still be made by hand.
@@ -2160,6 +2175,10 @@ async function sendInvoiceReminderSMS({ invoiceId, force, includeSpouse } = {}) 
   }
   if (invoice.status === "paid") {
     return { ok: false, error: "paid" };
+  }
+  // PJL-96: nothing to chase while Patrick has not confirmed the price.
+  if (invoices.isPriceUnconfirmed(invoice)) {
+    return { ok: false, error: "price_unconfirmed" };
   }
 
   // Rate limit — minimum 1 hour between reminders, computed from the
@@ -2470,6 +2489,7 @@ async function sendInvoiceJunkMailWarningSMS({ invoiceId, force, includeSpouse }
 
   if (invoice.status === "void") return { ok: false, error: "voided" };
   if (invoice.status === "paid") return { ok: false, error: "paid" };
+  if (invoices.isPriceUnconfirmed(invoice)) return { ok: false, error: "price_unconfirmed" };
 
   if (!force) {
     // Redundancy with the auto-fire "invoice ready" SMS — if it landed

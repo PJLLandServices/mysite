@@ -253,8 +253,10 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
         const go = await new Promise((resolve) => Alert.alert(
           'The price follows the zones',
           fee.atFinish.custom
-            // 16+ residential / 9+ commercial: no flat price exists.
-            ? `${zonesText} → custom quote — Patrick to price. The invoice waits for him; don't take payment on site.`
+            // A price PJL sets after the visit (PJL-96): a custom size (16+
+            // residential / 9+ commercial) or a commercial account without its
+            // own price. No number here — the office confirms it.
+            ? `${zonesText} → ${fee.atFinish.reason === 'commercial_unpriced' ? 'commercial account' : 'custom size'} — PJL confirms the price after the visit. The invoice waits for the office; don't take payment on site.`
             : `${zonesText} → ${formatMoney(fee.atFinish.price) ?? '—'}`
               + ` (booked at ${formatMoney(fee.current?.price) ?? '—'}). The invoice will use the new price.`,
           [

@@ -5873,10 +5873,16 @@ function renderPaymentBlock() {
   if (!subtotalEl) return;
   const lines = (state.onSiteQuote && state.onSiteQuote.builderLineItems) || [];
   const totals = totalsForLines(lines);
-  subtotalEl.textContent = formatMoney(totals.subtotal);
-  hstEl.textContent = formatMoney(totals.hst);
-  totalEl.textContent = formatMoney(totals.total);
-  if (invoiceLine && state.onSiteQuote?.quoteId) {
+  // PJL-96: a closing PJL prices after the visit (custom size, or a
+  // commercial account without its own price) carries no price here —
+  // never a $0.00 the customer could read as free, never a suggestion.
+  const pricePending = lines.some((l) => l && l.priceStatus === "pending");
+  subtotalEl.textContent = pricePending ? "Set by PJL" : formatMoney(totals.subtotal);
+  hstEl.textContent = pricePending ? "—" : formatMoney(totals.hst);
+  totalEl.textContent = pricePending ? "PJL confirms the price after the visit" : formatMoney(totals.total);
+  if (invoiceLine && pricePending) {
+    invoiceLine.textContent = "PJL confirms the price for this visit and sends the invoice.";
+  } else if (invoiceLine && state.onSiteQuote?.quoteId) {
     invoiceLine.textContent = `Quote on file: ${state.onSiteQuote.quoteId}. Invoice drafts at completion.`;
   }
   // Reflect persisted paidOnSite. null = neither radio checked (forces

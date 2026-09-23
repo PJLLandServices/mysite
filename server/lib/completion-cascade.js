@@ -220,13 +220,16 @@ async function run(wo, deps = {}) {
         wo = { ...wo, onSiteQuote: { ...(wo.onSiteQuote || {}), builderLineItems: refresh.lines } };
         if (!signedLocked) await workOrders.update(wo.id, { onSiteQuote: wo.onSiteQuote });
         try {
-          const afterText = refresh.customQuote
-            ? `${refresh.after.key || "custom tier"} — custom quote, Patrick to price on the draft`
+          const afterText = refresh.pending
+            ? `${refresh.after.key || "custom tier"} — price pending, Patrick confirms it on the invoice`
             : `${refresh.after.key} $${refresh.after.price.toFixed(2)}`;
+          const beforeText = !refresh.before ? "no fee line"
+            : refresh.before.price == null ? `${refresh.before.key} (price pending)`
+              : `${refresh.before.key} $${refresh.before.price.toFixed(2)}`;
           await workOrders.appendHistory(wo.id, {
             action: "seasonal_fee_reresolved",
             by: "system",
-            note: `${refresh.zoneCount} zones${commercial ? " (commercial)" : ""}: ${refresh.before.key} $${refresh.before.price.toFixed(2)} → ${afterText}`
+            note: `${refresh.zoneCount} zones${commercial ? " (commercial)" : ""}: ${beforeText} → ${afterText}`
               + (signedLocked ? " (invoice only — the signed work order is left as signed)" : "")
           });
         } catch (_e) {}
@@ -234,7 +237,9 @@ async function run(wo, deps = {}) {
     } catch (err) { console.warn("[cascade] seasonal fee re-resolve failed:", err?.message); }
   }
 
-  const lineItems = lineItemsFromWo(wo);
+  // PJL-96: a price-pending fee line bills as a SUGGESTED line — the
+  // invoice drafts with the suggestion prefilled, flagged for Patrick.
+  const lineItems = require("./pricing").billableLines(wo, lineItemsFromWo(wo));
   const summary = summarizeWo(wo);
   const warrantyMonths = WARRANTY_MONTHS[wo.type] || 12;
   const warrantyExpiresAt = addMonths(completedAt, warrantyMonths);
