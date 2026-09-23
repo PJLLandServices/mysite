@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { projectsApi, type ProjectStatus } from "../lib/api";
+import { projectsApi, type ProjectStatus, type SiteBuilderSummary } from "../lib/api";
 import { BRANCH_LABELS, PROJECT_STATUS_LABELS, PROJECT_STATUS_TONES, money, shortDate, taskProgress } from "../lib/format";
 import { nextAction } from "../lib/nextAction";
 import { PageBody, PageHeader } from "../shell/AppShell";
@@ -22,6 +22,18 @@ const TABS = [
   { to: "financials", label: "Financials" },
   { to: "closeout", label: "Closeout" }
 ];
+
+/* "12 stations · 16 valves · 19 areas" — Patrick's own wording. Each
+   count is omitted when it is zero rather than printed as "0 valves", so a
+   half-drawn design reads as what it is. */
+function designCounts(sb: SiteBuilderSummary): string {
+  const n = (v: number, one: string, many: string) => `${v} ${v === 1 ? one : many}`;
+  const parts: string[] = [];
+  if (sb.stationCount) parts.push(n(sb.stationCount, "station", "stations"));
+  if (sb.valveCount) parts.push(n(sb.valveCount, "valve", "valves"));
+  if (sb.areaCount) parts.push(n(sb.areaCount, "area", "areas"));
+  return parts.join(" · ");
+}
 
 export function ProjectWorkspace() {
   const { id = "" } = useParams();
@@ -137,11 +149,21 @@ export function ProjectWorkspace() {
             progress={total ? done / total : undefined}
             onClick={() => goTab("tasks")}
           />
+          {/* Stations lead, because that is what the controller is sized on
+              and what the proposal raises a line for. Valves and areas sit
+              in the hint — two valves on one terminal are two valves, and
+              the tile has to be able to say both numbers. */}
           <Stat
             label="System design"
-            value={design?.zoneCount ? `${design.zoneCount} zones` : "Not started"}
-            tone={design?.zoneCount ? "default" : "muted"}
-            hint={design?.lastSavedAt ? `saved ${shortDate(design.lastSavedAt)}` : undefined}
+            value={design?.stationCount
+              ? `${design.stationCount} station${design.stationCount === 1 ? "" : "s"}`
+              : (design?.areaCount ? `${design.areaCount} area${design.areaCount === 1 ? "" : "s"} drawn` : "Not started")}
+            tone={design?.areaCount ? "default" : "muted"}
+            hint={[
+              design?.valveCount ? `${design.valveCount} valve${design.valveCount === 1 ? "" : "s"}` : null,
+              design?.areaCount && design?.stationCount ? `${design.areaCount} area${design.areaCount === 1 ? "" : "s"}` : null,
+              design?.lastSavedAt ? `saved ${shortDate(design.lastSavedAt)}` : null
+            ].filter(Boolean).join(" · ") || undefined}
             onClick={() => goTab("design")}
           />
           <Stat label="Billing" value={billing.value} tone={billing.tone} hint={billing.hint} onClick={() => goTab("financials")} />
@@ -220,10 +242,13 @@ export function ProjectOverviewTab() {
             )}
             {/* The design and proposal already know the shape of the job;
                 surface that rather than leaving the card thin. */}
-            {data.siteBuilderSummary?.zoneCount || quote?.lineItems?.length ? (
+            {/* Stations, valves and areas, named separately. A split zone
+                wired to one terminal is two valves on one station, and a
+                single "N-zone system" could not say which N it meant. */}
+            {data.siteBuilderSummary?.areaCount || quote?.lineItems?.length ? (
               <p className="mt-2 text-[13px] text-ink-muted">
-                {data.siteBuilderSummary?.zoneCount ? `${data.siteBuilderSummary.zoneCount}-zone system` : null}
-                {data.siteBuilderSummary?.zoneCount && quote?.lineItems?.length ? " · " : null}
+                {data.siteBuilderSummary?.areaCount ? designCounts(data.siteBuilderSummary) : null}
+                {data.siteBuilderSummary?.areaCount && quote?.lineItems?.length ? " · " : null}
                 {quote?.lineItems?.length ? `${quote.lineItems.length} line items on the proposal` : null}
               </p>
             ) : null}

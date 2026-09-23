@@ -64,7 +64,10 @@ export function nextAction(
     };
   }
 
-  if (!design || !design.zoneCount) {
+  // A design exists when it has traced areas. Stations are what it
+  // produces from them, and a design with areas but no stations is
+  // half-drawn rather than absent — the line below still points at it.
+  if (!design || !design.areaCount) {
     return {
       headline: "Start the system design",
       detail: "No zones laid out yet — the design drives the parts list and the proposal.",
@@ -77,7 +80,9 @@ export function nextAction(
   if (!quote && !project.proposalSnapshot?.acceptedAt) {
     return {
       headline: "Build the proposal",
-      detail: `${design.zoneCount} zones designed, but no proposal raised yet.`,
+      detail: `${design.stationCount} station${design.stationCount === 1 ? "" : "s"} across ` +
+              `${design.valveCount} valve${design.valveCount === 1 ? "" : "s"} designed, ` +
+              `but no proposal raised yet.`,
       href: `/app/projects/${id}/scope`,
       ctaLabel: "Open Proposal",
       tone: "act"

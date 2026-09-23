@@ -39,6 +39,7 @@ const sharp = require("sharp");
 const { sendNewLeadEmail, sendVoicemailEmail } = require("./lib/notify-email");
 const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms } = require("./lib/notify-sms");
 const testRecipients = require("./lib/test-recipients");
+const { countSystemDesign } = require("./lib/system-design-counts");
 const fieldPhotoUploads = require("./lib/field-photo-uploads");
 const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
@@ -15878,8 +15879,18 @@ async function handleApi(req, res, pathname) {
       const lastSave = (proj.history || [])
         .filter((h) => h.action === "system_design_saved")
         .sort((a, b) => String(b.ts || "").localeCompare(String(a.ts || "")))[0];
+      // Stations, valves and areas are three different numbers, and this
+      // used to send one of them under a name belonging to another:
+      // `zoneCount: areas.length`. An area can produce several valves, and
+      // grouped drip beds collapse several areas onto one — so it agreed
+      // with the builder only on jobs where neither happened. The counts
+      // now come from the same engine the builder runs.
+      const counts = countSystemDesign(proj.systemDesign) ||
+                     { stationCount: 0, valveCount: 0, areaCount: proj.systemDesign.areas.length };
       siteBuilderSummary = {
-        zoneCount: proj.systemDesign.areas.length,
+        stationCount: counts.stationCount,   // programmed outputs on the controller
+        valveCount: counts.valveCount,       // physical valves, boxes and lateral runs
+        areaCount: counts.areaCount,         // traced landscape areas
         lastSavedAt: lastSave ? lastSave.ts : null
       };
     }

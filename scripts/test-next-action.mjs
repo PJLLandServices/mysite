@@ -37,7 +37,9 @@ function check(name, cond, detail = "") {
   else { failures.push(`${name}${detail ? ` — ${detail}` : ""}`); console.error("  FAIL " + name + (detail ? ` — ${detail}` : "")); }
 }
 
-const design = { zoneCount: 19, lastSavedAt: "2026-09-19T14:00:00Z" };
+// Dundalk's real shape: 12 programmed outputs across 16 physical valves,
+// drawn from 19 traced areas. Three different numbers on purpose.
+const design = { stationCount: 12, valveCount: 16, areaCount: 19, lastSavedAt: "2026-09-19T14:00:00Z" };
 const acceptedQuote = { id: "Q-2026-0088", version: 5, status: "accepted", total: 24680.33 };
 const snapshot = { quoteId: "Q-2026-0088", version: 5, total: 24680.33, acceptedAt: "2026-09-20T15:00:00Z" };
 const tasks = (done, total) =>
