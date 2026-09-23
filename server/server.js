@@ -21891,7 +21891,13 @@ async function handleApi(req, res, pathname) {
       if (zoneIdx === -1) return sendJson(res, 404, { ok: false, errors: ["Zone not found on this work order."] });
       const issueIdx = zones[zoneIdx].issues.findIndex((i) => i.id === issueId);
       if (issueIdx === -1) return sendJson(res, 404, { ok: false, errors: ["Issue not found on this zone."] });
-      const [issue] = zones[zoneIdx].issues.splice(issueIdx, 1);
+      // COPY, don't move (fall-closing fix #5, round 2) — same rule as the
+      // bulk route: the finding stays on this visit's report, stamped with
+      // its deferred id; a second tap never copies it twice.
+      const issue = zones[zoneIdx].issues[issueIdx];
+      if (issue.deferredId) {
+        return sendJson(res, 200, { ok: true, alreadyDeferred: true, deferredId: issue.deferredId, workOrder: wo });
+      }
 
       // Default reason: fall_visit_no_repairs_policy on fall closings,
       // customer_declined_spring on spring carry-forward declines, or
@@ -21903,6 +21909,7 @@ async function handleApi(req, res, pathname) {
 
       const entry = await properties.addDeferredIssue(propertyId, deferredPayloadFromIssue(wo, zoneNumber, issue, reason));
       if (!entry) return sendJson(res, 500, { ok: false, errors: ["Couldn't write deferred entry."] });
+      zones[zoneIdx].issues[issueIdx] = { ...issue, deferredId: entry.id };
 
       const updatedWo = await workOrders.update(id, { zones });
       try {
@@ -21958,7 +21965,12 @@ async function handleApi(req, res, pathname) {
       if (zoneIdx === -1) return sendJson(res, 404, { ok: false, errors: ["Zone not found."] });
       const issueIdx = zones[zoneIdx].issues.findIndex((i) => i.id === issueId);
       if (issueIdx === -1) return sendJson(res, 404, { ok: false, errors: ["Issue not found."] });
-      const [issue] = zones[zoneIdx].issues.splice(issueIdx, 1);
+      // COPY, don't move (fall-closing fix #5, round 2): the finding stays
+      // on the fall WO's report, stamped once its deferred copy exists.
+      const issue = zones[zoneIdx].issues[issueIdx];
+      if (issue.deferredId) {
+        return sendJson(res, 409, { ok: false, code: "already_deferred", errors: ["This finding was already moved to the property's recommendations."] });
+      }
 
       const propertyId = wo.propertyId || null;
       if (!propertyId) return sendJson(res, 422, { ok: false, errors: ["Work order has no linked property."] });
@@ -21976,6 +21988,8 @@ async function handleApi(req, res, pathname) {
         severity: "emergency"
       };
       const deferredEntry = await properties.addDeferredIssue(propertyId, deferredPayload);
+      if (!deferredEntry?.id) return sendJson(res, 500, { ok: false, errors: ["Couldn't write the deferred entry — the finding is still on the work order."] });
+      zones[zoneIdx].issues[issueIdx] = { ...issue, deferredId: deferredEntry.id };
 
       // 2) Stamp the customer's authorizing signature onto the deferred record's
       //    preAuthorization slot — same shape the portal pre-auth flow uses,
@@ -22005,7 +22019,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
         console.warn("[emergency] follow-up WO create failed:", err?.message);
       }
 
-      // 4) Update the fall WO — issue removed, note logged.
+      // 4) Update the fall WO — issue kept and stamped, note logged.
       const techNotes = (wo.techNotes ? wo.techNotes + "\n\n" : "") +
         `[EMERGENCY ${new Date().toISOString()}] Zone ${zoneNumber} ${issue.type}: ${severityReason}. Follow-up WO ${followupWoId || "(create failed — Patrick to handle manually)"}.`;
       const updatedWo = await workOrders.update(id, { zones, techNotes });

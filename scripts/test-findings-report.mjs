@@ -97,6 +97,42 @@ try {
     ok(again.body.deferredCount === 1 && (propOf(f.prop.id)?.deferredIssues || []).length === 1,
       "the next call transfers it, once");
   }
+
+  // ---- A2 (round 2). the web tech page's per-issue and emergency defers --
+  {
+    const f = await srv.fixture();
+    await srv.prepClosing(f.wo.id, { issues: true });
+    const iss = issuesOf(f.wo.id)[0];
+    const r = await srv.api("POST", `/api/work-orders/${f.wo.id}/zones/1/issues/${iss.id}/defer`, {});
+    ok(r.status === 201, `per-issue defer works (${r.status})`);
+    ok(issuesOf(f.wo.id).some((i) => i.notes === NOTE && i.deferredId), "per-issue defer keeps the finding on the WO, stamped");
+    const r2 = await srv.api("POST", `/api/work-orders/${f.wo.id}/zones/1/issues/${iss.id}/defer`, {});
+    ok(r2.status === 200 && (propOf(f.prop.id)?.deferredIssues || []).length === 1, "a second tap never copies it twice");
+    const bulk = await srv.api("POST", `/api/work-orders/${f.wo.id}/issues/defer`, {});
+    ok(bulk.body.deferredCount === 0, "…and the app's bulk defer at Finish skips it");
+    await srv.api("PATCH", `/api/work-orders/${f.wo.id}`, { status: "completed", signature: SIGNATURE,
+      arrivedAt: new Date().toISOString(), departedAt: new Date().toISOString() });
+    await sleep(1200);
+    const snaps = woOf(f.wo.id)?.reportSnapshots || [];
+    const pdf = snaps[snaps.length - 1]?.path;
+    if (pdf && fs.existsSync(pdf) && pdftotext) {
+      ok(execFileSync("pdftotext", [pdf, "-"], { encoding: "utf8" }).includes(NOTE), "per-issue deferred finding is on the Service Report PDF");
+    }
+    const mail = srv.outbox().find((m) => m.channel === "email" && m.to.includes(f.cust.email));
+    ok(/1 issue found across 4 zones/.test((mail?.text || "") + (mail?.html || "")), "…and in the customer email's summary");
+  }
+  {
+    const f = await srv.fixture();
+    await srv.prepClosing(f.wo.id, { issues: true });
+    const iss = issuesOf(f.wo.id)[0];
+    const e = await srv.api("POST", `/api/work-orders/${f.wo.id}/zones/1/issues/${iss.id}/emergency`, {
+      severity_reason: "active_leak", customerSignature: { name: "Jane Customer", imageData: SIGNATURE.imageData } });
+    ok(e.status === 201, `emergency override works (${e.status} ${e.body.errors?.[0] || ""})`);
+    ok(issuesOf(f.wo.id).some((i) => i.notes === NOTE && i.deferredId), "an emergency override keeps the finding on the fall WO, stamped");
+    const again = await srv.api("POST", `/api/work-orders/${f.wo.id}/zones/1/issues/${iss.id}/emergency`, {
+      severity_reason: "active_leak", customerSignature: { name: "Jane Customer", imageData: SIGNATURE.imageData } });
+    ok(again.status === 409 && (propOf(f.prop.id)?.deferredIssues || []).length === 1, "…and can't be escalated twice");
+  }
 } finally {
   await srv.stop();
 }
