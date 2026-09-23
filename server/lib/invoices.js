@@ -143,7 +143,13 @@ function statusForPayments(inv, currentStatus) {
   // yet" with Send and Take payment still live invited a second charge
   // (fall-closing fix #3). A PART-paid draft stays a draft: Patrick still
   // reviews and sends it, and the send-time re-derive picks up the money.
-  if (currentStatus === "draft") {
+  // A NEVER-SENT invoice (a draft, or one that left draft only because
+  // money covered it) is paid when the money covers it and a draft
+  // otherwise. So a payment deleted or corrected down puts it back in
+  // Patrick's drafts for review — it used to read "paid" with $0 received,
+  // or "partially_paid", which /send refuses (fall-closing #3, round 2).
+  const neverSent = !inv?.sentAt && (currentStatus === "draft" || currentStatus === "paid" || currentStatus === "partially_paid");
+  if (neverSent) {
     const total = Number(inv?.total) || 0;
     return total > 0 && amountPaidOf(inv) >= round2(total - 0.01) ? "paid" : "draft";
   }

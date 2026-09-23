@@ -128,6 +128,29 @@ try {
     const rest = Math.round((inv.total - half) * 100) / 100;
     const r = await srv.api("POST", `/api/invoices/${inv.id}/payments`, { amount: rest, method: "e_transfer", receivedAt: new Date().toISOString() });
     ok(r.body.invoice?.status === "paid", `the payment that settles it flips it to Paid (${r.body.invoice?.status})`);
+
+    // Round 2 (breaker): a never-sent invoice whose money goes away goes
+    // back to Patrick's drafts — not "paid" with $0 in, not a partially_paid
+    // that /send refuses.
+    const pid = r.body.invoice?.payments?.at(-1)?.id;
+    const down = await srv.api("PATCH", `/api/invoices/${inv.id}/payments/${pid}`, { amount: 1 });
+    ok(down.status === 200 && invoiceFor(f.wo.id)?.status === "draft", `a payment corrected down puts a never-sent invoice back to draft (${invoiceFor(f.wo.id)?.status})`);
+    const all = invoiceFor(f.wo.id).payments || [];
+    for (const p of all) await srv.api("DELETE", `/api/invoices/${inv.id}/payments/${p.id}`);
+    const now = invoiceFor(f.wo.id);
+    ok(now.status === "draft" && !now.paidAt, `every payment reversed: draft, not "paid" with $0 received (${now.status})`);
+  }
+  {
+    const f = await srv.fixture({ email: "" });
+    await srv.prepClosing(f.wo.id, { paidOnSite: true });
+    await complete(f.wo.id);
+    await sleep(300);
+    const inv = invoiceFor(f.wo.id);
+    const p = await srv.api("POST", `/api/invoices/${inv.id}/payments`, { amount: inv.total, method: "cash", receivedAt: new Date().toISOString() });
+    ok(p.body.invoice?.status === "paid", "control: full cash on a draft reads Paid");
+    const pid = p.body.invoice?.payments?.at(-1)?.id;
+    await srv.api("DELETE", `/api/invoices/${inv.id}/payments/${pid}`);
+    ok(invoiceFor(f.wo.id)?.status === "draft", `the cash reversed: back to draft (${invoiceFor(f.wo.id)?.status})`);
   }
 } finally {
   await srv.stop();
