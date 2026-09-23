@@ -152,16 +152,25 @@ export function createQueue({ store, transport }) {
     commit(s => { s.sequence++; s.pending.push({ id, key, kind: 'photo', preview }); });
     return view(key);
   };
-  const acknowledge = (entry, remote) => {
+  // `sent`: what actually went to the server for each field (a merge of the
+  // tech's edit and the office's changes), when anything was sent.
+  const acknowledge = (entry, remote, sent = {}) => {
     commit(s => {
       s.records[entry.key] = copy(remote);
       s.pending = s.pending.filter(p => p.id !== entry.id);
       // Rebase the next edit's comparison onto the acknowledged normalized
-      // record, but only where it was based on this exact submitted value.
+      // record, but only where it was based on this exact submitted value —
+      // and only when the server's copy IS that value (plus its own ids and
+      // defaults). If office changes were merged in, the next edit was made
+      // without them; rebasing onto them would make its stale copy look like
+      // a deliberate undo, and the office's edit would be reverted in
+      // silence (PJL-98 gap 1). Left un-rebased, the next edit merges
+      // against the office's change like any other.
       if (entry.kind === 'patch') {
         for (const [field, submitted] of Object.entries(entry.patch)) {
           const next = s.pending.find(p => p.key === entry.key && p.kind === 'patch' && field in p.patch);
-          if (next && equal(next.before[field], submitted)) next.before[field] = copy(remote[field] ?? null);
+          const onlyMine = (!(field in sent) || equal(sent[field], submitted)) && includesSubmitted(remote[field], submitted);
+          if (next && onlyMine && equal(next.before[field], submitted)) next.before[field] = copy(remote[field] ?? null);
         }
       }
       delete s.errors[entry.key];
@@ -185,7 +194,7 @@ export function createQueue({ store, transport }) {
             if (!(await transport.verifyOwner())) throw issue('Sign in with the account that recorded this work.', 'auth');
             const remote = await transport.read(entry.key);
             if (!remote) throw issue('The server no longer has this record. Your local copy is retained.', 'missing');
-            let result;
+            let result, sent;
             if (entry.kind === 'photo') {
               if ((remote.photos || []).some(p => p.clientUploadId === entry.id)) result = remote;
               else {
@@ -211,11 +220,12 @@ export function createQueue({ store, transport }) {
               if (Object.keys(changes).length && entry.key.startsWith('wo:') && ['completed', 'cancelled', 'no_show'].includes(remote.status)) {
                 throw issue('This visit has been closed on the server. Your field changes are retained for review.', 'closed');
               }
+              sent = changes;
               result = Object.keys(changes).length
                 ? await transport.patch(entry.key, changes, remote.updatedAt)
                 : remote;
             }
-            acknowledge(entry, result);
+            acknowledge(entry, result, sent);
           } catch (err) {
             blocked.add(entry.key);
             commit(s => { s.errors[entry.key] = { message: err.message || 'Waiting for connection', code: err.code || 'network', ...(err.paths ? { paths: err.paths } : {}) }; });
