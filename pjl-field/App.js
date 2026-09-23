@@ -37,6 +37,7 @@ import AddStopScreen from './src/screens/AddStopScreen';
 import BookScreen from './src/screens/BookScreen';
 import ClosingScreen from './src/screens/ClosingScreen';
 import InvoiceScreen from './src/screens/InvoiceScreen';
+import NoChargeScreen from './src/screens/NoChargeScreen';
 import MessagesScreen from './src/screens/MessagesScreen';
 import PropertyProfileScreen from './src/screens/PropertyProfileScreen';
 import SignInScreen from './src/screens/SignInScreen';
@@ -82,6 +83,7 @@ export function tabsForRole(role) {
 // lands exactly where a booking made three weeks ago would.
 export const JOB = {
   CLOSING: 'closing', WEB: 'web', INVOICE: 'invoice', THREAD: 'thread', ADD_STOP: 'addStop',
+  NO_CHARGE: 'noCharge',
 };
 
 // A work order becomes one of two things. Kept out of the component so
@@ -289,8 +291,11 @@ export default function App() {
                 // and the visit is completed either way — fall back to
                 // the work order rather than stranding the tech on a
                 // screen that has just told them it is done.
-                onFinished={({ invoiceId }) => {
+                onFinished={({ invoiceId, noCharge }) => {
                   if (invoiceId) setJob({ kind: JOB.INVOICE, invoiceId });
+                  // No charge: nothing to collect, so no invoice screen and
+                  // no "Take payment" (fall-closing fix #8).
+                  else if (noCharge) setJob({ kind: JOB.NO_CHARGE, workOrderId: job.workOrderId });
                   else setJob({
                     kind: JOB.WEB,
                     url: `/admin/work-order/${encodeURIComponent(job.workOrderId)}/tech`,
@@ -305,6 +310,8 @@ export default function App() {
                 onBack={closeJob}
                 onSignIn={openSignIn}
               />
+            ) : job.kind === JOB.NO_CHARGE ? (
+              <NoChargeScreen workOrderId={job.workOrderId} onBack={closeJob} />
             ) : job.kind === JOB.ADD_STOP ? (
               <AddStopScreen
                 key={`add-stop-${job.day || 'today'}-${signedIn}`}

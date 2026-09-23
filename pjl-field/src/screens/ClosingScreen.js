@@ -289,9 +289,11 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
         });
       }
       const invoiceId = data?.cascade?.invoiceId || data?.cascade?.invoice?.id || null;
+      // A no-charge visit has no invoice by design (fall-closing fix #8).
+      const noCharge = !invoiceId && data?.cascade?.noCharge === true;
       queue.clearDraft(key, 'signoff');
       queue.seed(key, { ...wo, ...data?.workOrder });
-      onFinished({ workOrder: data?.workOrder || wo, invoiceId });
+      onFinished({ workOrder: data?.workOrder || wo, invoiceId, noCharge });
     } catch (err) {
       // The server's own gate list, when it has one. These are the things
       // that can still be fixed standing here, so name them rather than

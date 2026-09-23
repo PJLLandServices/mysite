@@ -272,6 +272,11 @@ changed except where named below. Server-side suites boot the real server from a
   left for Patrick) and corrects the WO's line too. `GET /api/work-orders/:id` returns `seasonalFee`;
   the app confirms "6 zones → $X" before Finish. Other resolveSeasonalPrice callers (property page,
   portal) still read residential — not changed here. `scripts/test-closing-price.mjs`; old: 12 fail.
+- **#8 No-charge stops.** The cascade drafts no invoice when the lines total $0 and returns
+  `noCharge` (also on a Finish retry, via the service record's lines); `sendInvoiceReadySMS` refuses a
+  $0 invoice; a $0 invoice can't be opened for payment; Patrick's completion alert carries the
+  invoice's lines and total (or "No charge"). App: new "No charge — done" screen.
+  `scripts/test-no-charge.mjs`; old code: 12 fail.
 **2026-09-21, last (The System Builder's maths moves out of the page):** Phases 0 and 1 of the
 System Builder work, to Patrick's brief: build a characterization safety net, then extract ONLY
 the calculation engine, leaving persistence, quote creation and proposal-section generation

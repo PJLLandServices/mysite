@@ -291,7 +291,15 @@ async function run(wo, deps = {}) {
   }
   let invoice = null;
   let invoiceDraftError = null;
-  if (lineItems.length) {
+  // A NO-CHARGE visit (fall-closing fix #8): lines that total $0 — a
+  // per-property $0 rate, a courtesy closing. It used to draft a $0
+  // invoice, open a $0 invoice screen with "Take payment" prefilled 0.00,
+  // allow a payment link and schedule "your invoice is ready" to the
+  // customer. There is nothing to pay, so there is no invoice: the visit,
+  // its service record and its report are the record.
+  const billableTotal = lineItems.length ? invoices.totalsForLines(lineItems).total : 0;
+  const noCharge = lineItems.length > 0 && !(billableTotal > 0);
+  if (lineItems.length && !noCharge) {
     try {
       invoice = await invoices.createDraft({
         woId: wo.id,
@@ -550,7 +558,7 @@ async function run(wo, deps = {}) {
     } catch (err) { console.warn("[cascade] property-edits stamp failed:", err?.message); }
   }
 
-  return { ok: true, serviceRecord, invoice, alreadyRan: false, propertyEditsApplied, invoiceDraftError, reportSnapshot, reportSnapshotError };
+  return { ok: true, serviceRecord, invoice, noCharge, alreadyRan: false, propertyEditsApplied, invoiceDraftError, reportSnapshot, reportSnapshotError };
 }
 
 // ---- Brief 2: Project-final cascade --------------------------------

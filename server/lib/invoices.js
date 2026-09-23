@@ -759,6 +759,8 @@ async function openForOnSitePayment(id, { by = "" } = {}) {
   const inv = records[idx];
   if (inv.status === "paid") return { ok: false, status: 409, code: "already_paid", errors: ["This invoice is already paid."] };
   if (inv.status === "void") return { ok: false, status: 409, code: "void", errors: ["This invoice has been voided."] };
+  // Nothing to pay on a $0 invoice — no link, no card form (fall-closing #8).
+  if (!(Number(inv.total) > 0)) return { ok: false, status: 409, code: "no_charge", errors: ["This visit is no charge — there is nothing to pay."] };
   if (inv.status === "draft" && !inv.onSitePayment?.openedAt) {
     if (inv.paidOnSiteAtCompletion !== true) {
       return {
@@ -1413,6 +1415,7 @@ module.exports = {
   list,
   get,
   listByWorkOrder,
+  totalsForLines,
   listByQuote,
   listByProperty,
   createDraft: withStoreLock(createDraft),

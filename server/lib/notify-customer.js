@@ -1887,6 +1887,18 @@ async function sendInvoiceReadySMS({ invoiceId, includeSpouse } = {}) {
     return { ok: true, skipped: "already_sent" };
   }
 
+  // Nothing to pay — never text "your invoice is ready" for $0
+  // (fall-closing fix #8). The completion cascade no longer drafts a $0
+  // invoice, but one can still be made by hand.
+  if (!(Number(invoice.total) > 0)) {
+    await invoices.appendHistory(invoiceId, {
+      action: "customer_sms_skipped_no_charge",
+      by: "system",
+      note: "Invoice total is $0 — no invoice text sent"
+    });
+    return { ok: true, skipped: "no_charge" };
+  }
+
   // Voided between schedule and send — abort. The portal view would still
   // show the line items, but a "your invoice is on its way" SMS for a
   // voided invoice is misleading. Log to history so the admin block

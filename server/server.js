@@ -3312,6 +3312,16 @@ async function readRawBody(req, { maxBytes = 1_000_000 } = {}) {
 //
 // `intent` MUST come from stripe.retrievePaymentIntent — never from the
 // browser. The browser's word that it paid is not evidence.
+// A completed visit that billed nothing (fall-closing fix #8): its service
+// record has lines, no invoice, and a $0 total. A missing record or a
+// failed invoice draft is NOT no-charge — that visit still owes money.
+function isNoChargeServiceRecord(record) {
+  return Boolean(record) && !record.invoiceId
+    && Array.isArray(record.lineItems) && record.lineItems.length > 0
+    // From the LINES, not record.total — a failed draft also leaves total 0.
+    && !(invoices.totalsForLines(record.lineItems).total > 0);
+}
+
 async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "confirm" } = {}) {
   const summary = stripe.summarizeIntent(intent, requestId);
   // What this intent SHOULD have charged: the outstanding balance at the
@@ -20342,7 +20352,16 @@ async function handleApi(req, res, pathname) {
             email: wo.customerEmail || "",
             address: wo.address || "",
             notes: `${bypassWarning}${serviceRecord.summary}${invoice ? ` · Invoice ${invoice.id} ($${invoice.total.toFixed(2)})` : " · No charge"}`
-          }
+          },
+          // The alert shell prints "Requested" items and an "Estimated
+          // total". A completion carries neither on the alias, so every
+          // one read "Estimated total $0.00 / No specific items selected"
+          // (fall-closing fix #8). Give it the invoice's own lines and
+          // total — or say plainly that the visit was no charge.
+          features: invoice
+            ? (invoice.lineItems || []).map((l) => ({ label: l.label, qty: Number(l.qty) || 1, price: Number(l.unitPrice) || 0, quoteType: "fixed" }))
+            : [{ label: "No charge — nothing to invoice", qty: 1, price: 0, quoteType: "fixed" }],
+          totals: { expectedTotal: invoice ? Number(invoice.total) || 0 : 0 }
         };
         await Promise.allSettled([
           sendNewLeadEmail(aliasLead, { baseUrl: adminBaseUrl }),
@@ -20533,7 +20552,10 @@ async function handleApi(req, res, pathname) {
           invoiceId: cascadeResult.invoice?.id || null,
           invoiceTotal: cascadeResult.invoice?.total ?? null,
           invoiceDraftError: cascadeResult.invoiceDraftError || null,
-          propertyEditsApplied: !!cascadeResult.propertyEditsApplied
+          propertyEditsApplied: !!cascadeResult.propertyEditsApplied,
+          // No charge: nothing to pay, no invoice — the app shows "No charge
+          // — done" instead of an invoice screen (fall-closing fix #8).
+          noCharge: cascadeResult.noCharge === true || isNoChargeServiceRecord(cascadeResult.serviceRecord)
         };
       } else if (cascadeError) {
         // Cascade threw — signed/locked/completed all persisted, but
@@ -20555,7 +20577,12 @@ async function handleApi(req, res, pathname) {
           invoiceId = mine[0]?.id || null;
           invoiceTotal = mine[0]?.total ?? null;
         } catch (err) { console.warn("[wo] completion retry invoice lookup failed:", err?.message); }
-        responseBody.cascade = { ran: false, alreadyRan: true, invoiceId, invoiceTotal, invoiceDraftError: null, propertyEditsApplied: false };
+        let noCharge = false;
+        if (!invoiceId && updated.propertyId) {
+          try { noCharge = isNoChargeServiceRecord(await properties.findServiceRecordByWo(updated.propertyId, id)); }
+          catch (_e) { noCharge = false; }
+        }
+        responseBody.cascade = { ran: false, alreadyRan: true, invoiceId, invoiceTotal, invoiceDraftError: null, propertyEditsApplied: false, noCharge };
       }
       return sendJson(res, 200, responseBody);
     } catch (error) {
