@@ -49,6 +49,7 @@
     "audit:split-zones": "node scripts/audit-split-zones.mjs",
     "audit:head-counts": "node scripts/audit-head-counts.mjs",
     "test:audit-split-zones": "node scripts/test-audit-split-zones.mjs",
+    "test:audit-head-counts": "node scripts/test-audit-head-counts.mjs",
     "test:sitebuilder": "node scripts/test-sitebuilder-split.mjs && node scripts/test-sitebuilder-laterals.mjs",
     "test:pjl-dialog": "node scripts/test-pjl-dialog.mjs",
     "capture:system-design-golden": "node scripts/capture-system-design-golden.mjs",
