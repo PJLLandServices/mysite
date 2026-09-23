@@ -145,6 +145,7 @@ function publicRevisionSummary(inv) {
 }
 const deposits = require("./lib/deposits");
 const completionCascade = require("./lib/completion-cascade");
+const woFindings = require("./lib/wo-findings");   // PJL-100 #4/#5
 const customLineItems = require("./lib/custom-line-items");
 const settings = require("./lib/settings");
 const outreach = require("./lib/outreach");
@@ -22071,27 +22072,10 @@ async function handleApi(req, res, pathname) {
   // both the per-issue defer endpoint and the bulk defer-all endpoint so
   // the snapshot pricing logic stays consistent. Returns null if the issue
   // can't be located on the WO (caller treats as a no-op).
+  // Lives in lib/wo-findings.js since PJL-100 #5, so the completion
+  // cascade's retry builds exactly the same entry.
   function deferredPayloadFromIssue(wo, zoneNumber, issue, reason) {
-    const photoIds = (wo.photos || [])
-      .filter((p) => p.issueId === issue.id)
-      .map((p) => Number(p.n))
-      .filter(Number.isFinite);
-    let priceSnapshot = null;
-    try {
-      priceSnapshot = issueRollup.rollupSingleIssueToLineItems(issue, Number(zoneNumber) || 0, PRICING);
-    } catch (err) {
-      console.warn("[defer] price snapshot failed:", err?.message);
-    }
-    return {
-      fromWoId: wo.id,
-      fromZone: Number(zoneNumber) || null,
-      type: issue.type,
-      qty: Number(issue.qty) || 1,
-      notes: issue.notes || "",
-      reason: reason || "customer_declined",
-      photoIds,
-      suggestedPriceSnapshot: priceSnapshot
-    };
+    return woFindings.deferredPayloadFromIssue(wo, zoneNumber, issue, reason, PRICING);
   }
 
   // Per-issue defer (granular tap-to-defer in the tech UI). Body: { reason }.
@@ -22138,11 +22122,16 @@ async function handleApi(req, res, pathname) {
         reason = wo.type === "fall_closing" ? "fall_visit_no_repairs_policy" : "customer_declined";
       }
 
-      const entry = await properties.addDeferredIssue(propertyId, deferredPayloadFromIssue(wo, zoneNumber, issue, reason));
+      // PJL-100 #4 — the one copy rule: serialized with the bulk defer (a
+      // tap racing the phone's Finish copies once) and stamped on the fresh
+      // record (no stale zones written back).
+      const carried = await woFindings.copyFindingsForward(id, { only: [{ zone: zoneNumber, issueId }], reason, pricingJson: PRICING });
+      if (carried.alreadyDeferred.length) {
+        return sendJson(res, 200, { ok: true, alreadyDeferred: true, deferredId: carried.alreadyDeferred[0].deferredId, workOrder: carried.workOrder });
+      }
+      const entry = carried.deferred[0]?.entry || null;
       if (!entry) return sendJson(res, 500, { ok: false, errors: ["Couldn't write deferred entry."] });
-      zones[zoneIdx].issues[issueIdx] = { ...issue, deferredId: entry.id };
-
-      const updatedWo = await workOrders.update(id, { zones });
+      const updatedWo = carried.workOrder;
       try {
         await workOrders.appendHistory(id, {
           action: "issue_deferred",
@@ -22214,13 +22203,17 @@ async function handleApi(req, res, pathname) {
       // 1) Create the deferred record (severity=emergency).
       const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
       const userAgent = req.headers["user-agent"] || "";
-      const deferredPayload = {
-        ...deferredPayloadFromIssue(wo, zoneNumber, issue, "emergency_override"),
-        severity: "emergency"
-      };
-      const deferredEntry = await properties.addDeferredIssue(propertyId, deferredPayload);
+      // PJL-100 #4 — the one copy rule, serialized with every other copy for
+      // this WO: if the bulk defer copied this finding meanwhile, it is
+      // already on the property and is not escalated twice.
+      const carried = await woFindings.copyFindingsForward(id, {
+        only: [{ zone: zoneNumber, issueId }], reason: "emergency_override", extra: { severity: "emergency" }, pricingJson: PRICING
+      });
+      if (carried.alreadyDeferred.length) {
+        return sendJson(res, 409, { ok: false, code: "already_deferred", errors: ["This finding was already moved to the property's recommendations."] });
+      }
+      const deferredEntry = carried.deferred[0]?.entry || null;
       if (!deferredEntry?.id) return sendJson(res, 500, { ok: false, errors: ["Couldn't write the deferred entry — the finding is still on the work order."] });
-      zones[zoneIdx].issues[issueIdx] = { ...issue, deferredId: deferredEntry.id };
 
       // 2) Stamp the customer's authorizing signature onto the deferred record's
       //    preAuthorization slot — same shape the portal pre-auth flow uses,
@@ -22250,10 +22243,14 @@ Customer signature captured at ${new Date().toISOString()}.`;
         console.warn("[emergency] follow-up WO create failed:", err?.message);
       }
 
-      // 4) Update the fall WO — issue kept and stamped, note logged.
-      const techNotes = (wo.techNotes ? wo.techNotes + "\n\n" : "") +
+      // 4) Update the fall WO — issue kept and stamped (by the copy above),
+      // note logged. PJL-100 #4: only the note is written, appended to the
+      // record as it is NOW; zones are no longer written back from the copy
+      // read at the top of this route.
+      const freshForNote = (await workOrders.get(id)) || wo;
+      const techNotes = (freshForNote.techNotes ? freshForNote.techNotes + "\n\n" : "") +
         `[EMERGENCY ${new Date().toISOString()}] Zone ${zoneNumber} ${issue.type}: ${severityReason}. Follow-up WO ${followupWoId || "(create failed — Patrick to handle manually)"}.`;
-      const updatedWo = await workOrders.update(id, { zones, techNotes });
+      const updatedWo = await workOrders.update(id, { techNotes });
 
       // 5) Notify Patrick immediately (rule #13).
       const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
@@ -22320,27 +22317,14 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // findings" while the email promised they were in it. A finding
       // whose copy FAILED keeps no stamp and is reported, never silently
       // dropped; a stamped one is never copied twice (retry-safe).
-      const deferredIds = [];
-      const failures = [];
-      const nextZones = [];
-      for (const z of wo.zones || []) {
-        const issues = [];
-        for (const issue of z.issues || []) {
-          if (issue.deferredId) { issues.push(issue); continue; }
-          try {
-            const entry = await properties.addDeferredIssue(propertyId, deferredPayloadFromIssue(wo, z.number, issue, "fall_visit_no_repairs_policy"));
-            if (!entry?.id) throw new Error("no deferred entry was written");
-            deferredIds.push(entry.id);
-            issues.push({ ...issue, deferredId: entry.id });
-          } catch (err) {
-            console.warn(`[defer] zone ${z.number} issue ${issue.id} not transferred:`, err?.message);
-            failures.push({ zone: z.number, issueId: issue.id, error: String(err?.message || err).slice(0, 200) });
-            issues.push(issue);
-          }
-        }
-        nextZones.push({ ...z, issues });
-      }
-      if (deferredIds.length) await workOrders.update(id, { zones: nextZones });
+      // PJL-100 #4 — through the one copy rule (lib/wo-findings.js):
+      // serialized per WO, so two overlapping calls can't both copy the
+      // same finding, and stamped on the FRESH record, so a zone edit saved
+      // while the copies ran is kept (this used to write back zones read
+      // before them).
+      const carried = await woFindings.copyFindingsForward(id, { reason: "fall_visit_no_repairs_policy", pricingJson: PRICING });
+      const deferredIds = carried.deferred.map((d) => d.deferredId);
+      const failures = carried.notTransferred;
       try {
         await workOrders.appendHistory(id, {
           action: "issues_bulk_deferred",

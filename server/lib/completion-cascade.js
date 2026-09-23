@@ -351,6 +351,26 @@ async function run(wo, deps = {}) {
     invoiceId: invoice?.id || null
   });
 
+  // 3a) PJL-100 #5 — a fall closing's findings are recorded for next
+  // spring. The app copies them just before completing; one whose copy
+  // FAILED (reported as notTransferred, left unstamped) used to stay on the
+  // report and never reach the spring list. Copy whatever is still
+  // unstamped now, through the same rule as the defer routes. Best-effort:
+  // a failure here is logged and left for the next run, never fatal.
+  if (wo.type === "fall_closing") {
+    try {
+      const carried = await require("./wo-findings").copyFindingsForward(wo.id, { reason: "fall_visit_no_repairs_policy" });
+      if (carried.deferred.length || carried.notTransferred.length) {
+        await workOrders.appendHistory(wo.id, {
+          action: "issues_bulk_deferred",
+          by: "system",
+          note: `Completion: ${carried.deferred.length} finding${carried.deferred.length === 1 ? "" : "s"} copied to deferred recommendations`
+            + (carried.notTransferred.length ? ` — ${carried.notTransferred.length} still NOT transferred, on the work order` : "")
+        });
+      }
+    } catch (err) { console.warn("[cascade] carrying findings forward failed:", err?.message); }
+  }
+
   // 3b) Service / Inspection Report PDF snapshot (Service Report brief,
   // 2026-05-19). Gated by wo.completionReportSnapshotAt for idempotency:
   // re-firing the cascade reuses the existing snapshot instead of

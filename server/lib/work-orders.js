@@ -1289,6 +1289,33 @@ async function appendReportSnapshot(id, snapshot) {
 // only logs status transitions). Mirrors invoices.appendHistory(). Used
 // by every WO-mutating dispatcher endpoint to log a one-line audit
 // breadcrumb. Returns the updated WO record, or null if not found.
+// PJL-100 #4 — stamp findings as copied to the property, on the FRESH
+// record under the store lock, touching nothing but `deferredId` on the
+// findings named. The defer routes used to write back the whole zones
+// array from a copy read before the property writes, erasing any zone edit
+// saved in between. `stamps` = [{ zone, issueId, deferredId }]; a finding
+// already stamped keeps its first stamp, one no longer there is skipped.
+// Returns the updated WO, or null if it is gone.
+async function stampDeferredIds(id, stamps) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === id);
+  if (idx === -1) return null;
+  const want = new Map((stamps || []).filter((s) => s && s.issueId && s.deferredId)
+    .map((s) => [`${Number(s.zone)}|${s.issueId}`, String(s.deferredId)]));
+  const next = { ...records[idx] };
+  next.zones = (next.zones || []).map((z) => ({
+    ...z,
+    issues: (z.issues || []).map((i) => {
+      const d = want.get(`${Number(z.number)}|${i.id}`);
+      return d && !i.deferredId ? { ...i, deferredId: d } : i;
+    })
+  }));
+  next.updatedAt = new Date().toISOString();
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
 async function appendHistory(id, entry) {
   const records = await readAll();
   const idx = records.findIndex((w) => w.id === id);
@@ -2361,6 +2388,7 @@ module.exports = {
   appendReportSnapshot: withStoreLock(appendReportSnapshot),
   patchReportSnapshot: withStoreLock(patchReportSnapshot),
   appendHistory: withStoreLock(appendHistory),
+  stampDeferredIds: withStoreLock(stampDeferredIds),
   list,
   get,
   listByProperty,
