@@ -41,11 +41,13 @@ import NoChargeScreen from './src/screens/NoChargeScreen';
 import MessagesScreen from './src/screens/MessagesScreen';
 import PropertyProfileScreen from './src/screens/PropertyProfileScreen';
 import SignInScreen from './src/screens/SignInScreen';
+import TapToPaySettings from './src/screens/TapToPaySettings';
 import ThreadScreen from './src/screens/ThreadScreen';
 import WebScreen from './src/screens/WebScreen';
 import { getSession, listWorkOrderInvoices, setClientVersionHeader } from './src/api';
 import { clientVersionHeader } from './src/clientVersion';
 import { activeInvoiceFor, reopensToInvoice } from './src/workorder-routing';
+import { TapToPayProvider } from './src/taptopay/TapToPayProvider';
 import { colors, space } from './src/theme';
 import { applyPendingUpdate } from './src/updates';
 import { startFieldSync, restoreFieldWorkOrder, forgetOpenFieldWorkOrder } from './src/offline/field';
@@ -137,6 +139,9 @@ export default function App() {
   // one keeps its scroll position and its session.
   const [visited, setVisited] = useState({ today: true });
   const [openPropertyId, setOpenPropertyId] = useState(null);
+  // Tap to Pay on iPhone's own screen, opened from Today's header (Apple
+  // 3.6: reachable outside checkout). An overlay, like the job.
+  const [tapSettingsOpen, setTapSettingsOpen] = useState(false);
   // The job laid over the tabs. Null means there isn't one.
   const [job, setJob] = useState(null);
   // Bumped every time a job closes. Today reloads on it, because the whole
@@ -221,6 +226,9 @@ export default function App() {
   }, [visibleTabs, active]);
 
   return (
+    // The Stripe Terminal SDK's provider, for the life of the app: the reader
+    // outlives any one screen, which is what lets it be warm (Apple 1.5).
+    <TapToPayProvider>
     <View style={styles.root}>
       <StatusBar style="dark" />
       <SafeAreaView style={styles.safe}>
@@ -241,6 +249,7 @@ export default function App() {
                     key={`today-${signedIn}`}
                     onOpenWorkOrder={openWorkOrder}
                     onAddStop={(where) => setJob({ kind: JOB.ADD_STOP, ...where })}
+                    onOpenTapToPay={() => setTapSettingsOpen(true)}
                     refreshToken={jobsClosed}
                     onSignIn={openSignIn}
                   />
@@ -364,10 +373,20 @@ export default function App() {
         </View>
       ) : null}
 
-      {/* Above the job overlay, deliberately: a session can expire while
-          a closing is open, and the sign-in has to reach over whatever
-          is already on screen. Modal to VoiceOver for the same reason
-          the job overlay is. */}
+      {/* Tap to Pay's settings screen. A sibling of the job overlay, not an
+          arm of it: it is opened from Today's header, not from a job. */}
+      {tapSettingsOpen ? (
+        <View style={styles.overlay} accessibilityViewIsModal>
+          <SafeAreaView style={styles.overlaySafe}>
+            <TapToPaySettings onBack={() => setTapSettingsOpen(false)} />
+          </SafeAreaView>
+        </View>
+      ) : null}
+
+      {/* LAST, above the job overlay and Tap to Pay: a session can expire
+          while either is open, and the sign-in has to reach over whatever
+          is already on screen. Modal to VoiceOver for the same reason the
+          job overlay is. */}
       {signInOpen ? (
         <View style={styles.overlay} accessibilityViewIsModal>
           <SafeAreaView style={styles.overlaySafe}>
@@ -376,6 +395,7 @@ export default function App() {
         </View>
       ) : null}
     </View>
+    </TapToPayProvider>
   );
 }
 

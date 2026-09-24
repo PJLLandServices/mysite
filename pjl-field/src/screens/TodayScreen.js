@@ -73,7 +73,7 @@ const longDate = (ymd) => {
   return d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 };
 
-export default function TodayScreen({ onOpenWorkOrder, onAddStop, refreshToken = 0, onSignIn }) {
+export default function TodayScreen({ onOpenWorkOrder, onAddStop, onOpenTapToPay, refreshToken = 0, onSignIn }) {
   const [payload, setPayload] = useState(null);
   // The job "Not today" is being asked about, and the reason picked for it.
   const [removing, setRemoving] = useState(null);        // the job being taken off
@@ -362,6 +362,21 @@ export default function TodayScreen({ onOpenWorkOrder, onAddStop, refreshToken =
               (!serverToday || selected === serverToday) && styles.todayBtnTextOff,
             ]}>Today</Text>
           </Pressable>
+
+          {/* Apple 3.6 — Tap to Pay on iPhone reachable when he is NOT at an
+              invoice (setup, the terms, checking the reader). The app has
+              one header and this is it. */}
+          {onOpenTapToPay ? (
+            <Pressable
+              onPress={onOpenTapToPay}
+              hitSlop={10}
+              style={styles.step}
+              accessibilityRole="button"
+              accessibilityLabel="Tap to Pay on iPhone settings"
+            >
+              <Text style={styles.stepText}>▤</Text>
+            </Pressable>
+          ) : null}
 
           <View style={styles.stepper}>
             <Pressable onPress={() => goTo(ymd(addDays(anchor, -7)))} hitSlop={10} style={styles.step}>

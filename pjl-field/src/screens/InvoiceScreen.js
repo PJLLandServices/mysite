@@ -6,9 +6,12 @@
 // drafted and offers the two things worth doing while still on the
 // driveway: send it, or take the money now.
 //
-// THE APP NEVER TALKS TO STRIPE. Taking payment opens the customer's own
-// payment page in Safari, on the server's domain, where the intent is
-// minted and the keys live. That is not squeamishness: the server already
+// THE APP NEVER TALKS TO STRIPE ABOUT MONEY. Taking payment opens the
+// customer's own payment page in Safari, on the server's domain, where the
+// intent is minted and the keys live. Tap to Pay on iPhone is the same
+// rule with the card in the room: the server mints the charge for the
+// balance, the reader collects it, and the server asks Stripe before the
+// invoice reads Paid. That is not squeamishness: the server already
 // refuses to double-charge an invoice whose money has moved and cancels a
 // stale intent when the amount changes, and none of that protection
 // travels with a copy of the logic in a phone app.
@@ -18,8 +21,11 @@ import {
   ActivityIndicator, Alert, AppState, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import {
-  AuthRequiredError, getInvoice, invoicePaymentLink, recordInvoicePayment, resendInvoice, sendInvoice,
+  AuthRequiredError, finalizeTerminalPayment, getInvoice, invoicePaymentLink, recordInvoicePayment, resendInvoice,
+  sendInvoice, startTerminalPayment,
 } from '../api';
+import { READER, useTapToPay } from '../taptopay/useTapToPay';
+import { useTapToPayLocation } from '../taptopay/TapToPayProvider';
 import { money as formatMoney } from '../format';
 import { colors, radius, space, type } from '../theme';
 
@@ -49,6 +55,19 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
   const [recording, setRecording] = useState(false);   // the sheet is open
   const [amount, setAmount] = useState('');
   const [method, setMethod] = useState('card_qb');
+  // 5.9 — the last Tap to Pay outcome, kept so the screen can name it
+  // (approved, declined, timed out, cancelled) rather than a bare spinner.
+  const [tapOutcome, setTapOutcome] = useState(null);
+
+  // 1.5 / 5.6 — the reader is warmed as soon as the invoice opens, so by the
+  // time the button is pressed Apple's sheet comes up at once.
+  const { locationId, tokenError } = useTapToPayLocation();
+  const tap = useTapToPay();
+  useEffect(() => {
+    if (!locationId) return;
+    tap.setLocation(locationId);
+    tap.warmUp();
+  }, [locationId, tap.setLocation, tap.warmUp]);
 
   const load = useCallback(async () => {
     try {
@@ -112,6 +131,47 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
       await Linking.openURL(url);
     } catch (err) {
       Alert.alert("Couldn't open the payment page", err?.message || 'Send the invoice instead — they can pay from the email.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Tap to Pay on iPhone. Three steps, and only the middle one is the phone's:
+  //   1. the server creates the charge for the balance (it picks the amount)
+  //   2. the reader collects and confirms it (Apple's sheet, the card)
+  //   3. the server re-reads it from Stripe and only then marks it paid
+  // If step 3 cannot reach the server, the money has moved and Stripe's
+  // webhook will still flip the invoice; the screen says so and offers a
+  // re-check rather than a second charge (the server refuses one anyway).
+  const finalizeTap = async (paymentIntentId) => {
+    try {
+      await finalizeTerminalPayment(invoiceId, paymentIntentId);
+      setTapOutcome({ ok: true, outcome: 'approved', paymentIntentId });
+    } catch (err) {
+      setTapOutcome({
+        ok: false, outcome: 'approved_unconfirmed', paymentIntentId,
+        error: err?.message || 'The server could not confirm it yet.',
+      });
+    }
+    try { setInvoice(await getInvoice(invoiceId)); } catch { /* the screen keeps what it had */ }
+  };
+
+  const tapToPay = async () => {
+    setTapOutcome(null);
+    setBusy(true);
+    try {
+      let started;
+      try {
+        started = await startTerminalPayment(invoiceId);
+      } catch (err) {
+        if (err instanceof AuthRequiredError) { setState('auth'); return; }
+        if (err?.code === 'already_paid') { await load(); return; }
+        setTapOutcome({ ok: false, outcome: 'not_started', error: err?.message || 'Could not start the payment.' });
+        return;
+      }
+      const result = await tap.collect({ clientSecret: started.clientSecret });
+      if (result.ok) await finalizeTap(result.paymentIntentId || started.paymentIntentId);
+      else setTapOutcome(result);
     } finally {
       setBusy(false);
     }
@@ -229,9 +289,73 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
       </View>
 
       {paid ? (
-        <Text style={styles.note}>This one is already paid. Nothing left to do.</Text>
+        <Text style={tapOutcome?.ok ? styles.tapOk : styles.note}>
+          {tapOutcome?.ok ? 'Approved — paid by Tap to Pay on iPhone.' : 'This one is already paid. Nothing left to do.'}
+        </Text>
       ) : (
         <View style={styles.actions}>
+          {/* 5.2 — FIRST in the list of payment options, reachable without
+              scrolling. 5.3 — never greyed out once the device supports it:
+              pressing it when the reader is not ready starts it, and before
+              the terms are accepted it is what brings up Apple's own sheet.
+              5.4 — Apple's English wording, exactly (tap.label). 5.5 — no
+              icon, the cheapest way to meet the SF Symbol rule. Only offered
+              where the server would take payment on site (Bill later waits
+              for Patrick, and the server refuses it anyway). */}
+          {payableHere && tap.supported !== false ? (
+            <Pressable
+              style={[styles.button, styles.buttonTap]}
+              onPress={tapToPay}
+              disabled={busy || tap.state === READER.COLLECTING || tap.state === READER.PROCESSING}
+              accessibilityRole="button"
+              accessibilityLabel={tap.label}
+            >
+              <Text style={styles.buttonText}>{tap.label}</Text>
+              {/* 5.7 / 3.9.1 / 5.8 — say which state we are in. */}
+              {tap.state === READER.PREPARING ? (
+                <Text style={styles.buttonSub}>
+                  Getting ready…{tap.progress != null ? ` ${Math.round(Number(tap.progress) * 100)}%` : ''}
+                </Text>
+              ) : null}
+              {tap.state === READER.COLLECTING ? (
+                <Text style={styles.buttonSub}>Hold their card to the top of your phone</Text>
+              ) : null}
+              {tap.state === READER.PROCESSING ? (
+                <Text style={styles.buttonSub}>Processing…</Text>
+              ) : null}
+            </Pressable>
+          ) : null}
+
+          {/* The reader could not start. Stripe's or Apple's own words,
+              because "couldn't start the reader" does not say whether to
+              update iOS, sign in, or use the link instead. */}
+          {payableHere && (tap.state === READER.FAILED || tokenError) ? (
+            <Text style={styles.tapError}>{tap.error || tokenError}</Text>
+          ) : null}
+
+          {/* 5.9 — approved, declined, timed out, cancelled: all named.
+              4.8 / Canada — a declined tap points at the fallback rather
+              than dead-ending, because offline-PIN cards cannot be tapped
+              here and that is a normal outcome, not a fault. */}
+          {tapOutcome && tapOutcome.outcome === 'approved_unconfirmed' ? (
+            <View style={styles.tapPending}>
+              <Text style={styles.tapPendingText}>
+                The card was approved. The invoice will read Paid once the server hears it from Stripe — do not take the
+                payment again. ({tapOutcome.error})
+              </Text>
+              <Pressable onPress={() => { setBusy(true); finalizeTap(tapOutcome.paymentIntentId).finally(() => setBusy(false)); }} disabled={busy}>
+                <Text style={styles.tapPendingAction}>Check again</Text>
+              </Pressable>
+            </View>
+          ) : tapOutcome && !tapOutcome.ok ? (
+            <Text style={styles.tapError}>
+              {tapOutcome.outcome === 'canceled' ? 'Cancelled — nothing was charged.'
+                : tapOutcome.outcome === 'timed_out' ? 'The card timed out. Try again, or send the payment link.'
+                : tapOutcome.outcome === 'not_started' ? tapOutcome.error
+                : `${tapOutcome.error || 'Declined.'} Some Canadian cards need a PIN and cannot be tapped — ask for another card or a digital wallet, or use Take payment now to send the payment link.`}
+            </Text>
+          ) : null}
+
           <Pressable
             style={[styles.button, styles.buttonGhost, busy && styles.off]}
             onPress={send}
@@ -376,6 +500,15 @@ const styles = StyleSheet.create({
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   buttonGhostText: { color: colors.brand, fontSize: 16, fontWeight: '600' },
   off: { opacity: 0.5 },
+  // The Tap to Pay button is the primary action here, so it carries the
+  // brand fill. No disabled/greyed variant — Apple 5.3 forbids one.
+  buttonTap: { backgroundColor: colors.brand, gap: 2 },
+  buttonSub: { color: '#fff', fontSize: 13, opacity: 0.9 },
+  tapError: { ...type.body, color: colors.danger, paddingHorizontal: space.sm },
+  tapOk: { ...type.body, color: colors.brand, fontWeight: '600' },
+  tapPending: { backgroundColor: colors.warningTint, borderRadius: radius.card, padding: space.md, gap: space.sm },
+  tapPendingText: { ...type.body, color: colors.warning },
+  tapPendingAction: { ...type.body, color: colors.brand, fontWeight: '600' },
 
   sheet: { backgroundColor: colors.card, borderRadius: radius.card, padding: space.lg, gap: space.md },
   sheetTitle: { ...type.title },
