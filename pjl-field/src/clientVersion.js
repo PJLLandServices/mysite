@@ -1,7 +1,7 @@
-// The running bundle's identity, read once. See clientVersion.mjs for why.
+// The running bundle's identity, read once. See clientVersionInfo.mjs for why.
 import * as Updates from 'expo-updates';
 import buildInfo from './buildInfo.json';
-import { describeClientVersion, clientVersionLines, clientVersionHeaderValue } from './clientVersion.mjs';
+import { describeClientVersion, clientVersionLines, clientVersionHeaderValue } from './clientVersionInfo.mjs';
 
 let cached = null;
 export function clientVersion() {

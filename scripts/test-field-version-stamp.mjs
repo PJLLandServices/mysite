@@ -60,8 +60,8 @@ const read = (rel) => { try { return fs.readFileSync(path.join(ROOT, rel), "utf8
 
 // ---- B. the app describes itself ---------------------------------------------
 let cv = null;
-try { cv = await import(pathToFileURL(path.join(ROOT, "pjl-field/src/clientVersion.mjs")).href); } catch {}
-ok(Boolean(cv?.describeClientVersion), "B. pjl-field/src/clientVersion.mjs exists");
+try { cv = await import(pathToFileURL(path.join(ROOT, "pjl-field/src/clientVersionInfo.mjs")).href); } catch {}
+ok(Boolean(cv?.describeClientVersion), "B. pjl-field/src/clientVersionInfo.mjs exists");
 if (cv?.describeClientVersion) {
   const built = cv.describeClientVersion({ commit: SHA, source: "build", run: "41", ref: "main" },
     { isEmbeddedLaunch: true, updateId: "ignored", runtimeVersion: "4737af92cef62d333f59ee5cc83d67bd8e400ff4", channel: "production" });

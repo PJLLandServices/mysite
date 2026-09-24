@@ -6,7 +6,7 @@
 // Run by .github/workflows/field-app-build.yml and field-app-update.yml
 // before EAS bundles the JavaScript. Writes pjl-field/src/buildInfo.json
 // (in git it is a placeholder of nulls), which the app shows on the Today
-// tab and sends on every request (pjl-field/src/clientVersion.mjs).
+// tab and sends on every request (pjl-field/src/clientVersionInfo.mjs).
 //
 // REFUSES without GITHUB_SHA. An unstamped bundle would read "commit
 // unknown" on the phone, which is honest but useless for the one question
