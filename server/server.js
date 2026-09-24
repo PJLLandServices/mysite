@@ -3342,7 +3342,7 @@ function isNoChargeServiceRecord(record) {
     && !(invoices.totalsForLines(record.lineItems).total > 0);
 }
 
-async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "confirm" } = {}) {
+async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "confirm", by = "" } = {}) {
   const summary = stripe.summarizeIntent(intent, requestId);
   // What this intent SHOULD have charged: the outstanding balance at the
   // time it was created. Intents are created for balanceDue, so that's the
@@ -3433,12 +3433,15 @@ async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "con
   // had cash against it this settles the remainder rather than pretending
   // the card covered the whole total.
   try {
+    // Said by the intent itself, so the confirm route and the webhook write
+    // the same line whichever lands first.
+    const tapToPay = intent?.metadata?.source === stripe.TAP_TO_PAY_SOURCE;
     await invoices.addPayment(inv.id, {
       amount: (summary.amountCents ?? expectedCents) / 100,
       method: "card_qb",
       receivedAt: new Date().toISOString(),
-      by: "customer",
-      notes: `Online card payment · ${summary.chargeId || summary.paymentIntentId}`
+      by: tapToPay ? (by || "tap_to_pay") : "customer",
+      notes: `${tapToPay ? "Tap to Pay on iPhone" : "Online card payment"} · ${summary.chargeId || summary.paymentIntentId}`
     });
   } catch (ledgerErr) {
     console.warn(`[stripe] ledger record failed for ${inv.id}: ${ledgerErr?.message}`);
@@ -15050,6 +15053,112 @@ async function handleApi(req, res, pathname) {
       });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't build a payment link."] });
+    }
+  }
+
+  // Tap to Pay on iPhone — the charge the reader collects, and the check
+  // that it happened. The phone takes the card; the SERVER decides what it
+  // charges and whether the invoice is paid. See scripts/test-taptopay-server.mjs.
+  //
+  //   POST /api/invoices/:id/terminal-intent           → { clientSecret, paymentIntentId, amountCents, currency }
+  //   POST /api/invoices/:id/terminal-intent/finalize  { paymentIntentId } → { invoice, alreadyPaid, warning }
+  //
+  // ADMIN ONLY, like the connection token and the payment link: starting a
+  // charge is an admin action. /api/invoices is fenced at "user", so the
+  // route checks the role itself.
+  const terminalIntentMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/terminal-intent$/);
+  if (terminalIntentMatch && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const id = decodeURIComponent(terminalIntentMatch[1]);
+      // The same on-site rule as "Take payment now" — a "Bill later" draft
+      // waits for Patrick, a $0 or custom-quote invoice takes nothing — and
+      // it stamps the draft as opened on site, so the ledger and the pay
+      // page agree about it afterwards.
+      const opened = await invoices.openForOnSitePayment(id, { by: session?.uid || "admin" });
+      if (!opened.ok) return sendJson(res, opened.status || 409, { ok: false, code: opened.code, errors: opened.errors });
+      const inv = opened.invoice;
+      // MONEY-CRITICAL: the outstanding balance, from the ledger. Whatever
+      // the phone sends is ignored.
+      const amountCents = Math.round(Number(inv.balanceDue) * 100);
+      if (!Number.isFinite(amountCents) || amountCents <= 0) {
+        return sendJson(res, 409, { ok: false, code: "nothing_owing", errors: ["This invoice has nothing left to pay."] });
+      }
+      const currency = inv.currency || "CAD";
+      const reply = (intent) => sendJson(res, 200, {
+        ok: true, clientSecret: intent.client_secret, paymentIntentId: intent.id, amountCents, currency
+      });
+
+      // A second tap reuses the open intent instead of minting a second
+      // chargeable one — the pay page's rule, on its own slot, because the
+      // two intents are different kinds (card_present vs card) and neither
+      // client can confirm the other's.
+      if (inv.stripeTerminalIntentId) {
+        try {
+          const { intent } = await stripe.retrievePaymentIntent(inv.stripeTerminalIntentId);
+          const open = ["requires_payment_method", "requires_confirmation", "requires_action"].includes(intent?.status);
+          if (open && Number(intent.amount) === amountCents) return reply(intent);
+          if (intent?.status === "succeeded") {
+            // Money already moved and the flip has not landed. Finalize,
+            // never charge again.
+            const result = await finalizeStripeInvoicePayment(inv, intent, null, { via: "terminal-reuse", by: session?.uid || "" });
+            return sendJson(res, 409, { ok: false, code: "already_paid", errors: ["This invoice has already been paid."], invoice: result.invoice });
+          }
+          if (open) {
+            // The balance changed under it (a part payment, a revision):
+            // cancel so the old amount can never be collected.
+            await stripe.cancelPaymentIntent(intent.id).catch((cancelErr) => {
+              console.warn(`[terminal-intent] stale-intent cancel failed for ${inv.id}: ${cancelErr.message}`);
+            });
+          }
+        } catch (lookupErr) {
+          console.warn(`[terminal-intent] stored intent lookup failed for ${inv.id}: ${lookupErr.message}`);
+        }
+      }
+
+      const intent = await stripe.createTerminalPaymentIntent({
+        amountCents,
+        currency,
+        invoiceId: inv.id,
+        description: `PJL invoice ${inv.id}`,
+        // Two taps racing before either stored its intent get ONE intent;
+        // keyed on the intent it replaces too, so a cancelled one is never
+        // handed back for the same amount later.
+        idempotencyKey: `pjl-ttp-${inv.id}-${amountCents}-${inv.stripeTerminalIntentId || "first"}`
+      });
+      await invoices.update(inv.id, { stripeTerminalIntentId: intent.id });
+      return reply(intent);
+    } catch (err) {
+      console.warn(`[terminal-intent] failed: ${err.message}`);
+      return sendJson(res, 502, { ok: false, errors: [err.message || "Couldn't start the payment."] });
+    }
+  }
+
+  const terminalFinalizeMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/terminal-intent\/finalize$/);
+  if (terminalFinalizeMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    const id = decodeURIComponent(terminalFinalizeMatch[1]);
+    const body = await parseRequestBody(req).catch(() => ({}));
+    const paymentIntentId = typeof body?.paymentIntentId === "string" ? body.paymentIntentId.trim() : "";
+    if (!paymentIntentId) return sendJson(res, 400, { ok: false, errors: ["paymentIntentId is required."] });
+    const inv = await invoices.get(id);
+    if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+    let intent, requestId;
+    try {
+      ({ intent, requestId } = await stripe.retrievePaymentIntent(paymentIntentId));
+    } catch (err) {
+      return sendJson(res, 502, { ok: false, errors: [`Couldn't read the payment from Stripe: ${err.message}`] });
+    }
+    try {
+      // The ONE paid-flip: belongs to this invoice, succeeded, right amount
+      // and currency, idempotent — the pay page's and the webhook's.
+      const result = await finalizeStripeInvoicePayment(inv, intent, requestId, { via: "terminal", by: session?.uid || "" });
+      return sendJson(res, 200, { ok: true, invoice: result.invoice, alreadyPaid: result.alreadyPaid, warning: result.warning || null });
+    } catch (err) {
+      console.warn(`[terminal-intent] finalize refused for ${inv.id}: ${err.message}`);
+      return sendJson(res, 409, { ok: false, code: "not_verified", errors: [err.message] });
     }
   }
 
