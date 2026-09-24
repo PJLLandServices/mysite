@@ -39,7 +39,7 @@ const sharp = require("sharp");
 const { sendNewLeadEmail, sendVoicemailEmail } = require("./lib/notify-email");
 const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms } = require("./lib/notify-sms");
 const testRecipients = require("./lib/test-recipients");
-const { countSystemDesign } = require("./lib/system-design-counts");
+const { countSystemDesign, describeSystemDesign } = require("./lib/system-design-counts");
 const fieldPhotoUploads = require("./lib/field-photo-uploads");
 const fieldClients = require("./lib/field-clients");
 const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
@@ -15960,7 +15960,13 @@ async function handleApi(req, res, pathname) {
         stationCount: counts.stationCount,   // programmed outputs on the controller
         valveCount: counts.valveCount,       // physical valves, boxes and lateral runs
         areaCount: counts.areaCount,         // traced landscape areas
-        lastSavedAt: lastSave ? lastSave.ts : null
+        lastSavedAt: lastSave ? lastSave.ts : null,
+        // The saved plan, station by station, so the workspace can SHOW it
+        // rather than only count it (2026-09-24). Reading a plan is the
+        // half of the System Builder that has to work on a phone; drawing
+        // one stays a desktop job for now. Same engine pass as the counts
+        // above, so the list and the totals cannot disagree.
+        stations: describeSystemDesign(proj.systemDesign)
       };
     }
 
@@ -27124,6 +27130,36 @@ function resolveStaticTarget(pathname) {
   // /app-assets/. Built output is committed (server/app-dist/), so
   // there is no build step to add on Render and no deploy config to
   // change — and the existing /admin/* CRM is untouched either way.
+  // The System Builder, as a full-screen route BELONGING TO A JOB
+  // (2026-09-24). Patrick chose hand-off over embedding it in the
+  // workspace tab: "a full-screen project route with return to the same
+  // project."
+  //
+  // Not because an iframe would have leaked its layers — it would not.
+  // An iframe is its own document and its own stacking context, so the
+  // builder's overlays and dialogs could not have collided with the
+  // app's chrome. Two other things decided it:
+  //
+  //   An iframe is a box. The builder's full-screen overlays fill the
+  //   FRAME, not the viewport, so "full width" would have meant the
+  //   frame's width under whatever workspace chrome sat above it.
+  //
+  //   The unsaved-work guard gets harder, not easier. Moving between
+  //   workspace tabs is a React route change, NOT an unload, so
+  //   beforeunload never fires — an embed would have needed a new guard
+  //   built from scratch and coordinated across the frame by
+  //   postMessage. Leaving a separate page IS an unload, so browser
+  //   Back, refresh and closing the tab keep the guard the page already
+  //   has, and only Back to Project is new.
+  //
+  // So it stays its own page and the URL does the joining: the job is in
+  // the PATH, not a query string, and Back to Project returns to the tab
+  // it was opened from. This must be tested BEFORE the /app catch-all —
+  // every other /app/* URL is the React shell, and if this fell through
+  // to it the route would render an empty workspace instead.
+  if (/^\/app\/projects\/[^/]+\/design\/build\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/sitebuilder.html" };
+  }
   if (pathname === "/app" || pathname.startsWith("/app/")) {
     return { dir: SERVER_DIR, relative: "/app-dist/index.html" };
   }

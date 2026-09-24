@@ -2,6 +2,53 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-24 (The System Builder belongs to a job — hand-off, not embedding):** Patrick decided
+option B off `docs/PROJECT_WORKSPACE_BUILDER_PRD.md`: *"a full-screen project route with return to
+the same project... Hide the workspace sidebar while building. Keep a compact project name,
+truthful save status and Back to Project control visible."* **The PRD's earlier iframe
+recommendation is withdrawn, and not for the reason first written down.** An iframe is its own
+document and its own stacking context, so the builder's overlays could NOT have collided with the
+app's chrome — the PRD had that right in option A's favour, and a later draft wrongly said the
+opposite; Patrick caught it before merge. What actually decides it: an iframe is a **box** (the
+builder's full-screen overlays fill the frame, not the viewport, so "full width" would have meant
+the frame's width), and the **unsaved-work guard gets harder, not easier** — moving between
+workspace tabs is a React route change, not an unload, so `beforeunload` never fires and an embed
+would have needed a new cross-frame guard for a loss that cannot happen today. Leaving a separate
+page IS an unload, so three of the four exits keep the guard the page already has.
+
+`resolveStaticTarget()` now serves `sitebuilder.html` at **`/app/projects/:id/design/build`**,
+matched **before** the `/app` SPA catch-all — falling through to it would have rendered an empty
+workspace, which looks like a broken tab rather than a routing mistake. `needsAuth` is untouched:
+`/app/*` was already staff-only, so the new route is gated by the rule that already existed. The
+job is read from the **path**; `?project=` stays for the classic address only, and the two can no
+longer be asked at once.
+
+In the page, workspace mode replaces the tall standalone header with one compact sticky bar —
+job name, save status, Back to Project. **`designSaveStatus()` is the single rule**; the project
+panel and the workspace bar both call it and neither re-derives it, for the reason
+`activeBookings()` has one status test. `describeSystemDesign()` joins `countSystemDesign()` in
+`lib/system-design-counts.js`, reporting the saved plan **station by station out of the same
+engine pass** that produces the three counts, so the list and the totals cannot disagree — a
+shared split station prints "2 valves, one station" and the list sums to the valve count.
+
+**Unsaved work, all four exits.** Hand-off makes three of them free: the builder is its own
+document, so browser Back, refresh and closing the tab are real unloads and the existing
+`beforeunload` guard covers them. Only Back to Project is new, and it confirms first; a departure
+already answered is not queried again by the browser.
+
+**One defect found while testing, and fixed:** a design saved by anything other than the page's
+own Save button (migration, import, server-side fix) read as *"No design saved yet"* in the
+builder while the project summary dated the same design on the same screen. The bar read only the
+blob's `savedAt`; it now falls back to the project's `system_design_saved` history entry.
+
+`scripts/test-workspace-builder-route.mjs` (71 assertions, `npm run test:workspace-builder-route`)
+boots the REAL server, creates REAL projects through `lib/projects.js`, and drives the REAL built
+bundle in a real browser. It pins the route serving the builder and not the shell, the job read
+from the path with no query, the bar's three elements, the save status agreeing across both
+readouts, all four exits guarded, and — the one that closes 2026-09-21's *"it is still saying 13
+zones"* — a ceiling change moving the same three areas from **five stations to seven**, saved, and
+**seven** being what the tab reads on return. Verified to FAIL on the pre-change tree. Deliberately
+**not** in `build:check`, same convention as the other Playwright suites.
 **2026-09-23 (A station, a valve and an area are three different things):** Patrick, on Dundalk:
 *"Trees A and Trees B must appear separately, even though they share one controller station. They
 are still two physical valves with separate lateral piping."* Closes SB-01 and SB-02, both opened

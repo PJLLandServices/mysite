@@ -21,6 +21,40 @@
   header p{margin:4px 0 0;opacity:.9;font-size:13px}
   header .crm-back{display:inline-block;margin-bottom:8px;color:#fff;opacity:.85;font-size:13px;text-decoration:none;font-weight:600}
   header .crm-back:hover{opacity:1;text-decoration:underline}
+  /* ---- Workspace mode (2026-09-24) -------------------------------
+     Opened from a job, at /app/projects/<id>/design/build. The page is
+     the same page; what changes is that it now belongs to a job and has
+     to say so without eating the drawing surface. The tall marketing
+     header goes (a product blurb is not what you need while drawing a
+     lawn) and a single compact bar takes its place: where you came from,
+     which job this is, and whether it is saved. It STAYS PUT while the
+     page scrolls, because "is my work saved" is a question you ask at
+     the bottom of a long page, not the top.
+     z-index 50: over the page, under every full-screen overlay (9999)
+     and every dialog (10100) — see pjl-dialog.css for that stack. */
+  body.ws > header{display:none}
+  .wsbar{display:none}
+  body.ws .wsbar{position:sticky;top:0;z-index:50;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;
+    background:linear-gradient(135deg,var(--green-d),var(--green));color:#fff;padding:9px 16px;
+    box-shadow:0 1px 4px rgba(0,0,0,.18)}
+  .wsbar .ws-back{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.35);color:#fff;
+    font-weight:600;font-size:13px;padding:8px 12px;min-height:40px;border-radius:8px;cursor:pointer}
+  .wsbar .ws-back:hover{background:rgba(255,255,255,.26)}
+  .wsbar .ws-tool{font-size:13px;font-weight:700;letter-spacing:.3px;opacity:.85}
+  .wsbar .ws-name{font-size:14px;font-weight:600;max-width:46vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .wsbar .ws-grow{flex:1 1 auto}
+  /* Truthful, and legible enough to be believed: unsaved is amber on its
+     own chip, saved is quiet. Both come from designSaveStatus(). */
+  .wsbar .ws-status{font-size:12px;font-weight:600;padding:4px 9px;border-radius:999px;
+    background:rgba(255,255,255,.16);white-space:nowrap}
+  .wsbar .ws-status.unsaved{background:#fff3cd;color:#7a4b00}
+  /* Reading a plan is a phone job; drawing one is not, this phase. Say so
+     rather than letting a 380px canvas quietly ruin somebody's evening. */
+  .ws-phonenote{display:none}
+  body.ws .ws-phonenote{display:block;margin:0;padding:11px 16px;background:#fff8e1;border-bottom:1px solid #f0e0b0;
+    color:#6b4e00;font-size:13px;line-height:1.5}
+  body.ws .ws-phonenote a{color:#6b4e00;font-weight:700}
+  @media (min-width:900px){ body.ws .ws-phonenote{display:none} }
   .wrap{max-width:1120px;margin:0 auto;padding:20px 18px 60px}
   .panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:18px;
     box-shadow:0 1px 3px rgba(0,0,0,.04)}
@@ -516,6 +550,33 @@
 <link rel="stylesheet" href="/crm/pjl-dialog.css">
 </head>
 <body>
+<script>
+  /* Workspace mode is decided from the URL before anything paints. The
+     main script below is 6,000 lines down and runs after the whole page
+     has rendered — flipping the layout there would show the standalone
+     header for a beat and then yank it away. */
+  if (/^\/app\/projects\/[^/]+\/design\/build\/?$/.test(location.pathname)) {
+    document.body.classList.add('ws');
+  }
+</script>
+<!-- Workspace bar — only rendered when this page was opened as a job's
+     System Design route (body.ws). Everything in it is filled by
+     updateWorkspaceBar(), which reads the same designSaveStatus() the
+     project panel reads, so the two readouts cannot say different things
+     about the same design. -->
+<div class="wsbar" id="wsBar">
+  <button type="button" class="ws-back" id="wsBackBtn" onclick="backToProject()">&larr; Back to Project</button>
+  <span class="ws-tool">System Builder</span>
+  <span class="ws-name" id="wsName"></span>
+  <span class="ws-grow"></span>
+  <span class="ws-status" id="wsStatus">Loading&hellip;</span>
+</div>
+<p class="ws-phonenote" id="wsPhoneNote">
+  <b>Drawing is a desktop job for now.</b> You can look around here, but tracing areas and
+  placing heads needs a bigger screen. The saved design — stations, valves, areas and the
+  plan station by station — reads fine on a phone on the job's
+  <a href="#" id="wsPhoneNoteLink">System Design tab</a>.
+</p>
 <header>
   <a class="crm-back" href="/admin" id="sbBackLink">&larr; Back to CRM</a>
   <h1>Sprinkler System Builder</h1>
@@ -6848,11 +6909,35 @@ fetch(RATES_URL, {cache:'no-store'})
 
 /* ════════════════ Project link — load / save ════════════════ */
 
-const PROJECT_ID = new URLSearchParams(location.search).get('project') || null;
-// Came here from a Project page — send "back" there instead of the CRM
-// dashboard. Patrick: opening Site Builder from a project "doesn't allow
-// you to go back to the project you opened them from."
-if (PROJECT_ID) {
+// The job can reach this page two ways, and both are first-class:
+//
+//   /app/projects/<id>/design/build   the workspace route (2026-09-24).
+//                                     The job is in the PATH, so the URL
+//                                     names the job it belongs to and a
+//                                     pasted link still knows it.
+//   /admin/sitebuilder?project=<id>   the classic link, kept while the
+//                                     new route is proven on real jobs.
+//
+// Path first: if both somehow said something, the route this page was
+// SERVED at is the one that is true.
+const WS_MATCH = location.pathname.match(/^\/app\/projects\/([^/]+)\/design\/build\/?$/);
+const WORKSPACE_PROJECT_ID = WS_MATCH ? decodeURIComponent(WS_MATCH[1]) : null;
+const PROJECT_ID = WORKSPACE_PROJECT_ID || new URLSearchParams(location.search).get('project') || null;
+// Where "back" goes: the job's System Design tab it was opened from, so
+// returning lands on the summary that is about to show what you saved —
+// not the workspace's first tab, and not the CRM dashboard.
+const WORKSPACE_RETURN = WORKSPACE_PROJECT_ID
+  ? `/app/projects/${encodeURIComponent(WORKSPACE_PROJECT_ID)}/design`
+  : null;
+
+if (WORKSPACE_PROJECT_ID) {
+  document.body.classList.add('ws');   // already set by the early script; idempotent
+  const noteLink = document.getElementById('wsPhoneNoteLink');
+  if (noteLink) noteLink.href = WORKSPACE_RETURN;
+} else if (PROJECT_ID) {
+  // Came here from a Project page — send "back" there instead of the CRM
+  // dashboard. Patrick: opening Site Builder from a project "doesn't allow
+  // you to go back to the project you opened them from."
   const backLink = document.getElementById('sbBackLink');
   if (backLink) {
     backLink.href = `/admin/project/${encodeURIComponent(PROJECT_ID)}`;
@@ -6865,6 +6950,12 @@ let projectList = null;     // for the standalone picker
 let lastSavedLabel = null;
 let dirty = false;
 let appReady = false, restoring = false;
+// Set when a project HAD a saved design and it would not load. The builder
+// is then showing an empty canvas that is not this project's design, so
+// saving would replace a real design with that emptiness. Declared up here
+// with the rest of the project state because designSaveStatus() below reads
+// it, and a `let` read before its declaration is a crash, not a false.
+let designUnreadable = false;
 
 function markDirty(){ if(!appReady || restoring) return; if(!dirty){ dirty = true; updateProjectBar(); } }
 
@@ -6873,6 +6964,68 @@ function fmtSaved(iso){
   const d = new Date(iso);
   if(isNaN(d)) return null;
   return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+}
+
+/* Whether this design is saved, as ONE rule (2026-09-24).
+ *
+ * It is now printed in two places — the project panel and the workspace
+ * bar — and a save status that can say two things about one design is
+ * worse than no save status at all: you would trust whichever one you
+ * happened to be looking at. So both readouts call this, and neither
+ * re-derives it. Same reason activeBookings() has one status test.
+ *
+ * `unsaved:true` means exactly one thing: there is work on this screen
+ * that is not on the server. It is what every exit guard asks. */
+function designSaveStatus(){
+  if(designUnreadable) return { text:'Saved design did not open', unsaved:false };
+  if(!linkedProject)   return { text:'Not linked to a project', unsaved:false };
+  if(dirty)            return { text:'Unsaved changes', unsaved:true };
+  if(lastSavedLabel)   return { text:'Saved ' + lastSavedLabel, unsaved:false };
+  return { text:'No design saved yet', unsaved:false };
+}
+
+/* The workspace bar's half of that. Called by updateProjectBar() — one
+   call site keeps them in step, so a new status can't reach one bar and
+   miss the other. No-ops outside workspace mode. */
+function updateWorkspaceBar(){
+  if(!WORKSPACE_PROJECT_ID) return;
+  const nameEl = el('wsName'), statusEl = el('wsStatus');
+  if(nameEl){
+    const name = linkedProject ? (linkedProject.name || '(unnamed project)') : WORKSPACE_PROJECT_ID;
+    const cust = linkedProject && linkedProject.customerName ? ' · ' + linkedProject.customerName : '';
+    nameEl.textContent = name + cust;
+    nameEl.title = WORKSPACE_PROJECT_ID + ' — ' + name + cust;
+  }
+  if(statusEl){
+    const st = designSaveStatus();
+    statusEl.textContent = st.text;
+    statusEl.classList.toggle('unsaved', st.unsaved);
+  }
+}
+
+/* ── Leaving with unsaved work ────────────────────────────────────
+   Four ways out of this page, and a design you cannot get back if any
+   of them is unguarded:
+     Back to Project   this function
+     browser Back      unload → beforeunload, below
+     refresh           unload → beforeunload, below
+     closing the tab   unload → beforeunload, below
+   Set once the user has ALREADY answered "leave without saving", so the
+   browser does not ask a second time for the same departure. */
+let leavingDeliberately = false;
+
+async function backToProject(){
+  if(!WORKSPACE_RETURN) return;
+  if(designSaveStatus().unsaved){
+    const go = await pjlDialog.confirm(
+      'This design has changes that are not saved to the project.\n\n' +
+      'Leaving now loses them — there is no draft kept on this screen.',
+      { title: 'Leave without saving?', icon: 'warning', destructive: true,
+        confirmLabel: 'Leave without saving', cancelLabel: 'Stay here' });
+    if(!go) return;
+  }
+  leavingDeliberately = true;
+  location.href = WORKSPACE_RETURN;
 }
 
 function readWaterSupply(){
@@ -7137,14 +7290,12 @@ async function loadProjectList(){
   updateProjectBar();
 }
 
-// Set when a project HAD a saved design and it would not load. The builder
-// is then showing an empty canvas that is not this project's design, so
-// saving would replace a real design with that emptiness.
-let designUnreadable = false;
-
 function updateProjectBar(){
   const bar = el('projectBar');
   if(!bar) return;
+  // The workspace bar carries the same status, so it refreshes from the
+  // same call — one place that says "the project state changed".
+  updateWorkspaceBar();
   renderSitePlan();   // upload is only available once a project is attached
   if(linkedProject && designUnreadable){
     // No Save button at all. Not disabled — absent. The one action that
@@ -7171,10 +7322,8 @@ function updateProjectBar(){
   }
   if(linkedProject){
     const cust = linkedProject.customerName ? ' · ' + esc(linkedProject.customerName) : '';
-    let status;
-    if(dirty) status = '<span class="saved unsaved">Unsaved changes</span>';
-    else if(lastSavedLabel) status = `<span class="saved">Saved ${esc(lastSavedLabel)}</span>`;
-    else status = '<span class="saved">No design saved yet</span>';
+    const st = designSaveStatus();
+    const status = `<span class="saved${st.unsaved ? ' unsaved' : ''}">${esc(st.text)}</span>`;
     bar.innerHTML =
       `<span class="plink">${esc(linkedProject.id)}</span>` +
       `<span class="pname">${esc(linkedProject.name || '(unnamed project)')}${cust}</span>` +
@@ -7353,7 +7502,16 @@ async function initApp(){
           projectHadDesign = !!j.project.systemDesign;
           if(j.project.systemDesign){
             restored = restoreState(j.project.systemDesign);
-            lastSavedLabel = fmtSaved(j.project.systemDesign.savedAt);
+            // When the design was saved, from either record that knows.
+            // The blob's own savedAt is the usual answer; the project's
+            // history entry is the fallback for a design written by
+            // anything other than this page's Save button (a migration,
+            // an import, a fix applied server-side). Without the
+            // fallback this bar said "No design saved yet" about a
+            // design the project summary was dating on the same screen —
+            // two readouts, one design, two answers.
+            lastSavedLabel = fmtSaved(j.project.systemDesign.savedAt)
+                          || fmtSaved(j.siteBuilderSummary && j.siteBuilderSummary.lastSavedAt);
           }
           if(j.project.waterCostEstimate && el('wcSaveNote')){
             el('wcSaveNote').textContent='Last saved to project folder · '+(fmtSaved(j.project.waterCostEstimate.savedAt)||'');
@@ -7381,8 +7539,17 @@ async function initApp(){
   loadParts().then(()=>{ if(appReady) compute(); });
 }
 
+// Browser Back, refresh and closing the tab all leave through here. The
+// browser's own "leave site?" prompt is the only guard that works for all
+// three — a page cannot draw its own dialog over an unload — so this is
+// deliberately the native one, not pjlDialog.
+//
+// `leavingDeliberately` covers the Back to Project path: the user has just
+// been asked and answered, and being asked twice for one departure reads
+// like the first answer didn't take.
 window.addEventListener('beforeunload', (e)=>{
-  if(dirty && linkedProject){ e.preventDefault(); e.returnValue = ''; }
+  if(leavingDeliberately) return;
+  if(designSaveStatus().unsaved){ e.preventDefault(); e.returnValue = ''; }
 });
 
 initApp();

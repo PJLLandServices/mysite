@@ -12,6 +12,7 @@
     "build:worker": "node worker/rebuild.mjs",
     "build:app": "npm --prefix admin-app install && npm --prefix admin-app run build",
     "test:app-shell-rebuild": "node scripts/test-app-shell-rebuild.mjs",
+    "test:workspace-builder-route": "node scripts/test-workspace-builder-route.mjs",
     "sync:seasonal-meta": "node scripts/sync-seasonal-meta.mjs",
     "sync:seasonal-meta:check": "node scripts/sync-seasonal-meta.mjs --check",
     "sync:meta-prices": "node scripts/sync-meta-prices.mjs",

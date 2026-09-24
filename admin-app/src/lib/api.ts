@@ -113,6 +113,35 @@ export interface SiteBuilderSummary {
   valveCount: number;
   areaCount: number;
   lastSavedAt?: string | null;
+  /* The saved plan, station by station, exactly as the builder's own
+   * master plan groups it — from the SAME engine pass on the server that
+   * produced the three counts above (`describeSystemDesign`). Reading a
+   * plan has to work on a phone; drawing one does not, this phase.
+   *
+   * `valves` is a count, not a repeat: a shared split station says 2, and
+   * that is how the station list adds up to the valve total. */
+  stations?: SiteBuilderStation[];
+}
+
+export interface SiteBuilderStation {
+  /** 1-based — what the controller face says, not an array index. */
+  station: number;
+  name: string;
+  family: string;
+  valves: number;
+  gpm: number;
+  headCount: number;
+  members: string[];
+}
+
+/* The builder, opened as this job's own full-screen route. A real page
+ * navigation OUT of the SPA and back again, which is the point: leaving
+ * a separate page is an unload, so the builder's existing unsaved-work
+ * warning covers browser Back, refresh and closing the tab without
+ * anything new being written. Returning is a fresh load, which is also
+ * why the summary can never be stale after a save. */
+export function systemBuilderHref(projectId: string): string {
+  return `/app/projects/${encodeURIComponent(projectId)}/design/build`;
 }
 
 export const projectsApi = {
