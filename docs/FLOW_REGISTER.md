@@ -6,9 +6,15 @@ Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
 option B off `docs/PROJECT_WORKSPACE_BUILDER_PRD.md`: *"a full-screen project route with return to
 the same project... Hide the workspace sidebar while building. Keep a compact project name,
 truthful save status and Back to Project control visible."* **The PRD's earlier iframe
-recommendation is withdrawn** — embedding would have put the builder's overlays in the same
-stacking world as the app's chrome, which is the 2026-09-23 dialog-behind-the-plan bug waiting to
-happen again.
+recommendation is withdrawn, and not for the reason first written down.** An iframe is its own
+document and its own stacking context, so the builder's overlays could NOT have collided with the
+app's chrome — the PRD had that right in option A's favour, and a later draft wrongly said the
+opposite; Patrick caught it before merge. What actually decides it: an iframe is a **box** (the
+builder's full-screen overlays fill the frame, not the viewport, so "full width" would have meant
+the frame's width), and the **unsaved-work guard gets harder, not easier** — moving between
+workspace tabs is a React route change, not an unload, so `beforeunload` never fires and an embed
+would have needed a new cross-frame guard for a loss that cannot happen today. Leaving a separate
+page IS an unload, so three of the four exits keep the guard the page already has.
 
 `resolveStaticTarget()` now serves `sitebuilder.html` at **`/app/projects/:id/design/build`**,
 matched **before** the `/app` SPA catch-all — falling through to it would have rendered an empty

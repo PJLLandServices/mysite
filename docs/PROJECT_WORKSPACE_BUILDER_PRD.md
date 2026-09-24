@@ -56,13 +56,31 @@ Patrick, 2026-09-24:
 > control visible."*
 
 **The earlier recommendation — embedding the page in an iframe inside the
-tab — is withdrawn.** It was the wrong trade. An iframe would have put the
-builder's overlays and dialogs in the same stacking world as the app's
-chrome, and a dialog rendering behind the master plan is precisely the bug
-that cost an evening on 2026-09-23. Hand-off gives the builder the whole
-screen and its own document, and gives up nothing that was actually asked
-for: the job is in the URL, the bar says which job it is, and Back returns
-to the tab it came from.
+tab — is withdrawn.**
+
+**Not on isolation grounds.** An iframe is its own document and its own
+stacking context; the builder's overlays and dialogs could not have
+collided with the app's chrome, and this PRD said so correctly in option
+A's favour. Two other things decide it:
+
+1. **An iframe is a box.** The builder's full-screen overlays — master
+   plan, sketch, help centre — fill the *frame*, not the viewport. "Full
+   width" would have meant the frame's width, under whatever workspace
+   chrome sat above it. Hand-off gives the real viewport.
+
+2. **The unsaved-work guard gets harder, not easier** — R3, below.
+   Inside the workspace, moving from System Design to another tab is a
+   React route change and **not an unload**, so `beforeunload` never
+   fires. An embed would have needed a brand-new guard for tab
+   switching, coordinated across the frame boundary by `postMessage`,
+   and would have introduced a way to lose a design that does not exist
+   today. Leaving a separate page **is** an unload, so browser Back,
+   refresh and closing the tab keep the guard the builder already has,
+   and only one new exit had to be built.
+
+Hand-off gives up nothing that was actually asked for: the job is in the
+URL, the bar says which job it is, and Back returns to the tab it came
+from.
 
 Porting to React stays where it was: **not recommended, and not a close
 call.**

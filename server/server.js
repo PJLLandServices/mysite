@@ -27105,12 +27105,26 @@ function resolveStaticTarget(pathname) {
   // there is no build step to add on Render and no deploy config to
   // change — and the existing /admin/* CRM is untouched either way.
   // The System Builder, as a full-screen route BELONGING TO A JOB
-  // (2026-09-24). Patrick chose hand-off over embedding: "a full-screen
-  // project route with return to the same project." The builder is a
-  // 7,000-line document with its own overlays, dialogs and z-index
-  // stack; putting it in an iframe inside the workspace would have made
-  // its layers and the app's layers share a stacking context, which is
-  // exactly the class of bug that put a dialog behind the master plan.
+  // (2026-09-24). Patrick chose hand-off over embedding it in the
+  // workspace tab: "a full-screen project route with return to the same
+  // project."
+  //
+  // Not because an iframe would have leaked its layers — it would not.
+  // An iframe is its own document and its own stacking context, so the
+  // builder's overlays and dialogs could not have collided with the
+  // app's chrome. Two other things decided it:
+  //
+  //   An iframe is a box. The builder's full-screen overlays fill the
+  //   FRAME, not the viewport, so "full width" would have meant the
+  //   frame's width under whatever workspace chrome sat above it.
+  //
+  //   The unsaved-work guard gets harder, not easier. Moving between
+  //   workspace tabs is a React route change, NOT an unload, so
+  //   beforeunload never fires — an embed would have needed a new guard
+  //   built from scratch and coordinated across the frame by
+  //   postMessage. Leaving a separate page IS an unload, so browser
+  //   Back, refresh and closing the tab keep the guard the page already
+  //   has, and only Back to Project is new.
   //
   // So it stays its own page and the URL does the joining: the job is in
   // the PATH, not a query string, and Back to Project returns to the tab

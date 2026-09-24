@@ -135,10 +135,11 @@ export interface SiteBuilderStation {
 }
 
 /* The builder, opened as this job's own full-screen route. A real page
- * navigation out of the SPA and back again: the builder is a 7,000-line
- * document with its own overlays and dialog stack, and it keeps them to
- * itself this way. Returning is a fresh load, which is also why the
- * summary is never stale after a save. */
+ * navigation OUT of the SPA and back again, which is the point: leaving
+ * a separate page is an unload, so the builder's existing unsaved-work
+ * warning covers browser Back, refresh and closing the tab without
+ * anything new being written. Returning is a fresh load, which is also
+ * why the summary can never be stale after a save. */
 export function systemBuilderHref(projectId: string): string {
   return `/app/projects/${encodeURIComponent(projectId)}/design/build`;
 }
