@@ -151,6 +151,18 @@ jobs:
             --limit 20 --json --non-interactive \
             | UPDATE_RT="$update_rt" node "$RUNNER_TEMP/check-runtime.js"
 
+      # Stamp the commit into the bundle, so the installed app can say which
+      # commit it runs (Today tab footer) and send it on every request (the
+      # server logs "[field-client] … commit=…"). Committed LOCALLY, never
+      # pushed: EAS packs the project from git, and a clean tree is what it
+      # uploads. buildInfo.json is JavaScript-only — it does not move the
+      # native fingerprint, so builds and updates stay on one runtime.
+      - name: Stamp the commit into the app
+        run: |
+          node scripts/stamp-field-build-info.mjs update
+          git -c user.name="PJL field update" -c user.email="field-update@pjllandservices.invalid" \
+            commit -q -m "Stamp update ${GITHUB_SHA::7} (not pushed)" -- pjl-field/src/buildInfo.json
+
       - name: Publish the update
         working-directory: pjl-field
         env:
