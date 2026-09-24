@@ -28,7 +28,7 @@
 // then hidden rather than unmounted, so switching away from a half-
 // scrolled list and back doesn't reload it.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, SafeAreaView, StatusBar as RNStatusBar, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import PropertiesScreen from './src/screens/PropertiesScreen';
@@ -43,8 +43,9 @@ import PropertyProfileScreen from './src/screens/PropertyProfileScreen';
 import SignInScreen from './src/screens/SignInScreen';
 import ThreadScreen from './src/screens/ThreadScreen';
 import WebScreen from './src/screens/WebScreen';
-import { getSession, setClientVersionHeader } from './src/api';
+import { getSession, listWorkOrderInvoices, setClientVersionHeader } from './src/api';
 import { clientVersionHeader } from './src/clientVersion';
+import { activeInvoiceFor, reopensToInvoice } from './src/workorder-routing';
 import { colors, space } from './src/theme';
 import { applyPendingUpdate } from './src/updates';
 import { startFieldSync, restoreFieldWorkOrder, forgetOpenFieldWorkOrder } from './src/offline/field';
@@ -115,6 +116,21 @@ export function jobForWorkOrder(workOrder) {
   };
 }
 
+// What tapping a work order opens, once the server has been asked the one
+// thing jobForWorkOrder cannot know: whether a finished closing has an
+// invoice. With one, the invoice (its status, payment, resend) — the same
+// place Finish lands. Without one, or with no signal to ask, the web record
+// exactly as before. Covered by scripts/test-field-reopen-finished.mjs.
+export async function jobForOpening(workOrder, listInvoices) {
+  const job = jobForWorkOrder(workOrder);
+  if (!job || !reopensToInvoice(workOrder)) return job;
+  try {
+    const invoice = activeInvoiceFor(await listInvoices(workOrder.id), workOrder.id);
+    if (invoice) return { kind: JOB.INVOICE, invoiceId: invoice.id };
+  } catch { /* no signal: the web record still opens */ }
+  return job;
+}
+
 export default function App() {
   const [active, setActive] = useState('today');
   // Mount lazily, then keep. An unvisited tab costs nothing; a visited
@@ -175,9 +191,13 @@ export default function App() {
     setVisited((v) => (v[key] ? v : { ...v, [key]: true }));
   }, []);
 
-  const openWorkOrder = useCallback((workOrder) => {
-    const next = jobForWorkOrder(workOrder);
-    if (next) setJob(next);
+  // Only the latest tap opens anything: a finished closing waits on an
+  // invoice lookup, and a slow one must not land over a job tapped after it.
+  const opening = useRef(0);
+  const openWorkOrder = useCallback(async (workOrder) => {
+    const tap = ++opening.current;
+    const next = await jobForOpening(workOrder, listWorkOrderInvoices);
+    if (next && tap === opening.current) setJob(next);
   }, []);
 
   const closeJob = useCallback(() => {
