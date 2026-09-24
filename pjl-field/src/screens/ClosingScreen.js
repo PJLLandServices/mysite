@@ -496,7 +496,9 @@ const styles = StyleSheet.create({
   conflictBtn: { flex: 1, paddingVertical: space.sm, borderRadius: radius.card, borderWidth: 1, borderColor: colors.warning, alignItems: 'center' },
   conflictBtnText: { ...type.label, color: colors.warning },
 
-  tabs: { flexDirection: 'row', backgroundColor: colors.card, paddingHorizontal: space.sm, paddingBottom: space.sm, gap: 6 },
+  // paddingTop too: without it the pills began on the bar's divider
+  // (scripts/test-closing-header-spacing.mjs).
+  tabs: { flexDirection: 'row', backgroundColor: colors.card, paddingHorizontal: space.sm, paddingTop: space.sm, paddingBottom: space.sm, gap: 6 },
   tab: { flex: 1, alignItems: 'center', paddingVertical: 7, borderRadius: radius.card, backgroundColor: colors.ground, gap: 1 },
   tabActive: { backgroundColor: colors.brand },
   tabLabel: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
