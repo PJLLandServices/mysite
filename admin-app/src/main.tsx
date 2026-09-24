@@ -7,6 +7,7 @@ import { AppShell } from "./shell/AppShell";
 import { Dashboard } from "./routes/Dashboard";
 import { ProjectsList } from "./routes/ProjectsList";
 import { PendingTab, ProjectOverviewTab, ProjectWorkspace } from "./routes/ProjectOverview";
+import { SystemDesignTab } from "./routes/SystemDesign";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -30,15 +31,11 @@ createRoot(document.getElementById("root")!).render(
             <Route path="/app/projects" element={<ProjectsList />} />
             <Route path="/app/projects/:id" element={<ProjectWorkspace />}>
               <Route index element={<ProjectOverviewTab />} />
-              <Route
-                path="design"
-                element={
-                  <PendingTab
-                    title="System design"
-                    body="The System Builder moves into this workspace next — the zone layout, heads and hydraulics, without leaving the job."
-                  />
-                }
-              />
+              <Route path="design" element={<SystemDesignTab />} />
+              {/* The builder itself is /app/projects/:id/design/build and is
+                  NOT a React route — the server serves sitebuilder.html at
+                  that path, ahead of the SPA fallback. It is listed here so
+                  the next person to read this file knows the URL is taken. */}
               <Route
                 path="scope"
                 element={
