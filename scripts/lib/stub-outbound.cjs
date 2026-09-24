@@ -67,6 +67,7 @@ globalThis.fetch = async function stubFetch(input, init = {}) {
       for (const [k, v] of Object.entries(form)) {
         const m = k.match(/^metadata\[(.+)\]$/); if (m) obj.metadata[m[1]] = v;
       }
+      obj.payment_method_types = Object.keys(form).filter((k) => /^payment_method_types\[\d+\]$/.test(k)).map((k) => form[k]);
       intents.set(id, obj);
     }
     if (/\/cancel$/.test(url.pathname)) obj.status = "canceled";
@@ -77,7 +78,10 @@ globalThis.fetch = async function stubFetch(input, init = {}) {
     if (succeeded.includes(obj.id) && obj.status !== "canceled") {
       obj.status = "succeeded";
       obj.latest_charge = { id: `ch_${obj.id}`, status: "succeeded",
-        payment_method_details: { card: { brand: "visa", last4: "4242", checks: {} } } };
+        // An in-person intent reports its card the way Stripe does for one.
+        payment_method_details: (obj.payment_method_types || []).includes("card_present")
+          ? { type: "card_present", card_present: { brand: "visa", last4: "4242" } }
+          : { card: { brand: "visa", last4: "4242", checks: {} } } };
     }
     return new Response(JSON.stringify(obj), { status: 200, headers: { "content-type": "application/json" } });
   }

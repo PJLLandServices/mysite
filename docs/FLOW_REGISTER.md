@@ -5832,3 +5832,53 @@ untouched.
 Tests: `scripts/test-field-version-stamp.mjs`, 17 of 21 fail on the parent
 commit and 31 of 31 pass; whole build:check and an iOS Metro export pass. Not
 PASS until the installed build shows the expected commit and the log agrees.
+
+## 2026-09-24 — TAPTOPAY-01: Tap to Pay charges go through the server (FLOW-23 touched additively, awaiting a real tap)
+
+The Tap to Pay on iPhone reference implementation (`claude/pjl-field-taptopay`,
+Sep 2026, never merged) had the phone create its own PaymentIntent for an
+amount read off the screen, then mark the invoice paid by POSTing
+`/payments` with the intent id in a note. That is the one thing
+`finalizeStripeInvoicePayment` exists to forbid: the client's word is not
+evidence. Before the app is ported onto current code, the server gets the
+door it should have gone through:
+
+- `POST /api/invoices/:id/terminal-intent` (admin). Runs the same on-site
+  rule as "Take payment now" (`invoices.openForOnSitePayment`: Bill-later
+  drafts wait for review; $0 and custom-quote placeholders take nothing),
+  charges the server's `balanceDue` (anything the phone sends is ignored),
+  creates a `card_present` + `interac_present` intent with
+  `metadata.invoiceId` and `metadata.source = pjl-field-taptopay`, and
+  reuses the open one on its own slot, `stripeTerminalIntentId`. It sits
+  apart from the pay page's `stripePaymentIntentId` because neither client
+  can confirm the other's kind of intent.
+- `POST /api/invoices/:id/terminal-intent/finalize` (admin). Re-reads the
+  intent from Stripe and runs `finalizeStripeInvoicePayment`, unchanged in
+  its checks. The webhook backstop already finalizes any intent carrying
+  `metadata.invoiceId`, so an app closed mid-payment still gets its
+  invoice flipped.
+
+**FLOW-23 IS PASS AND WAS TOUCHED, additively.** The finalizer's ledger
+line now reads "Tap to Pay on iPhone" (and `by` is the staff uid) when the
+intent's `metadata.source` says so, and is byte-identical otherwise.
+`cardFactsFrom` reads `card_present` / `interac_present` when `card` is
+absent. A `card` charge takes the same path as before. Payment invariants
+(HANDOFF_STRIPE_PAYMENTS §6):
+- One capture, on the reader, with no retries.
+- No card data on the server.
+- The pay page's two-file method list (`card`) is untouched; the terminal
+  list is separate and pay.js never sees it.
+- The server re-verifies every intent.
+- It charges `balanceDue`.
+- The webhook is untouched.
+- The ledger stays append-only.
+
+Verified:
+- `scripts/test-taptopay-server.mjs`: 26 of 33 fail on the old code, 33 of
+  33 pass after.
+- `test-stripe`, `test-onsite-payment` and the rest of build:check are
+  green.
+
+**Needs a real tap:** one small live Tap to Pay payment from the Mac build,
+refunded in Stripe, with the invoice reading Paid and the ledger line
+reading "Tap to Pay on iPhone".
