@@ -1581,7 +1581,7 @@ async function sendOutreachEmail({
 
   const text = [
     renderedBody,
-    portalLink ? `\nOpen your portal: ${portalLink}` : "",
+    portalLink ? `\n${ctaLabel}: ${portalLink}` : "",
     "",
     "Questions? Call (905) 960-0181.",
     footerText,
