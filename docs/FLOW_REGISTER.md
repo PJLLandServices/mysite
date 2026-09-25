@@ -2,6 +2,33 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-25 (The progress bar and the server disagreed on every partly-finished job):**
+`computeProjectMetrics()` averages each task's own `percentComplete`, and `percentComplete` leads
+while `status` follows it (`addTaskProgress()` sets the status FROM the percentage: 0 = pending,
+1–99 = in_progress, 100 = done). The rebuilt app drew its bar from `done / total`, which reports a
+task logged at 60% as **zero**. On a four-task job with every task three-quarters done the server
+said **75% complete** and the Projects list and Overview drew an **empty bar**. Same defect as
+`zoneCount: areas.length` (2026-09-21) in a different corner: a figure the server already computes
+properly, re-derived in the browser by a different rule, disagreeing in silence.
+
+Fixed: `projectPercentComplete()` in `admin-app/src/lib/format.ts` mirrors the server's rule and
+draws both bars. `taskProgress()` stays, and stays a COUNT — "1 of 4 tasks" and "38% complete" are
+two different questions, which is why the server keeps `doneTasks` beside `percentComplete`. The
+rule is mirrored rather than fetched because a 40-job list cannot make one `/metrics` request per
+row. `scripts/test-task-progress-agrees.mjs` (44 assertions, **in `build:check`**) lifts the real
+function out of `format.ts`, builds real projects through `lib/projects.js`, drives each task with
+the real `addTaskProgress()`, and asserts both implementations agree on every shape — with a final
+case pinning that the replaced rule really would have drawn an empty bar.
+
+Opened alongside it: `docs/PROJECT_WORKFLOW_PRD.md`, for the next phase (tasks, logs, time, parts,
+change orders, billing status). **The load-bearing finding there: all six already have working
+server routes** — tasks, journal, `/metrics`, material lists, `/scope-changes` with its six-status
+customer-approval lifecycle, and `/billing-preview`. So that phase is screens over endpoints that
+already work, and its risk is not losing behaviour but re-deriving figures the server owns. Also
+recorded there, before anything is designed: **hours are captured in the field on work-order daily
+logs and never typed into the workspace** — open sessions count toward the metrics figure and are
+deliberately excluded from the billing figure, and those two must not be "tidied up" into
+agreement.
 **2026-09-24 (The System Builder belongs to a job — hand-off, not embedding):** Patrick decided
 option B off `docs/PROJECT_WORKSPACE_BUILDER_PRD.md`: *"a full-screen project route with return to
 the same project... Hide the workspace sidebar while building. Keep a compact project name,

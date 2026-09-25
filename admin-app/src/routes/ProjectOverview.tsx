@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { projectsApi, type ProjectStatus, type SiteBuilderSummary } from "../lib/api";
-import { BRANCH_LABELS, PROJECT_STATUS_LABELS, PROJECT_STATUS_TONES, money, shortDate, taskProgress } from "../lib/format";
+import { BRANCH_LABELS, PROJECT_STATUS_LABELS, PROJECT_STATUS_TONES, money, projectPercentComplete, shortDate, taskProgress } from "../lib/format";
 import { nextAction } from "../lib/nextAction";
 import { PageBody, PageHeader } from "../shell/AppShell";
 import { Button, Card, CardHeader, ErrorNote, LoadingRows, Stat, StatusPill, cx } from "../ui/primitives";
@@ -146,7 +146,7 @@ export function ProjectWorkspace() {
             label="Project progress"
             value={total ? `${done} of ${total} tasks` : "No tasks yet"}
             tone={total ? "default" : "muted"}
-            progress={total ? done / total : undefined}
+            progress={total ? projectPercentComplete(p.tasks) / 100 : undefined}
             onClick={() => goTab("tasks")}
           />
           {/* Stations lead, because that is what the controller is sized on
