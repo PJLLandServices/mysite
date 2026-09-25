@@ -187,6 +187,22 @@ const REPLY_STATES = Object.freeze({
   cancel: "cancelled"
 });
 
+// How the customer answered, in Patrick's words — for the Season Plan
+// tag ("customer confirmed Sep 21 — by texting YES"). One map, keyed by
+// the same responseVia REPLY_STATES reads.
+const RESPONSE_LABELS = Object.freeze({
+  confirm: "on their appointment page",
+  sms_reply: "by texting YES",
+  manual: "by phone/text (marked by you)",
+  reschedule: "by picking a new day",
+  window: "by setting a time window",
+  free_bucket: "by joining the free bucket",
+  cancel: "by cancelling"
+});
+function responseLabel(via) {
+  return RESPONSE_LABELS[via] || "";
+}
+
 function customerState(booking) {
   if (!booking) return "booked";
   const status = String(booking.status || "").toLowerCase();
@@ -950,6 +966,7 @@ async function attachWorkOrder(bookingId, woId) {
 }
 
 module.exports = {
+  responseLabel,
   holdsItsSlot,
   customerState,
   customerStateLabel,
