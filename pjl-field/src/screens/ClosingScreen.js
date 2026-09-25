@@ -27,6 +27,7 @@ import CloseOutStage from './closing/CloseOutStage';
 import SignOffStage from './closing/SignOffStage';
 import { CLOSEOUT_STEPS } from './closing/steps';
 import { openFieldWorkOrder, watchFieldQueue, flushBeforeFinish, pendingPhotoUri, fieldStatus, resolveFieldConflicts } from '../offline/field';
+import { syncNoticeFor } from '../sync-notice';
 
 const STAGES = [
   { key: 'start', label: 'Start' },
@@ -382,6 +383,8 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
   }
 
   const shared = { wo, save, saveSystem, saving, saveDraft, getDraft, clearDraft, attachPhoto, photoUri };
+  // Only a failed upload or a conflict, never the second a tap spends uploading.
+  const notice = syncNoticeFor(syncState);
 
   return (
     <View style={styles.screen}>
@@ -393,7 +396,7 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
         </Text>
       </View>
 
-      {syncState.error?.code === 'conflict' ? (
+      {notice === 'conflict' ? (
         // The only way out of a true conflict, on the phone, every time.
         <View style={styles.syncNotice}>
           <Text style={styles.syncText}>{syncState.error.message}</Text>
@@ -406,7 +409,7 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
             </Pressable>
           </View>
         </View>
-      ) : syncState.pending > 0 ? (
+      ) : notice === 'pending' ? (
         <Pressable onPress={() => {
           if (syncState.error?.code === 'auth') onSignIn();
           else field.current.queue.flush({ retry: true }).catch(() => {});
