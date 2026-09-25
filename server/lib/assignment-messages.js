@@ -101,8 +101,12 @@ const DEFAULT_TEMPLATES = Object.freeze({
     ].join("\n")
   },
   assignment_sms: {
+    // "Reply YES" because customers reply to texts no matter what the text
+    // says — lib/sms-inbound.js now hears it. The last line tells them the
+    // number is automated, so a question goes to Patrick's real number.
     body: "PJL Land Services: your fall sprinkler winterization is booked for {date} ({bucket}) at {street}. "
-      + "Confirm or make changes: {appointmentLink} Questions? {phone}"
+      + "Reply YES to confirm, or tap to make changes: {appointmentLink} "
+      + "This is an automated number - to reach us, call or text {phone}."
   },
   followup_email: {
     subject: "Please confirm — winterization on {date}",
@@ -123,7 +127,8 @@ const DEFAULT_TEMPLATES = Object.freeze({
   },
   followup_sms: {
     body: "PJL Land Services: reminder — winterization {date} ({bucket}) at {street}. "
-      + "Please confirm or make changes: {appointmentLink} We'll come as planned unless we hear otherwise."
+      + "Reply YES to confirm or tap to change: {appointmentLink} We'll come as planned unless we hear otherwise. "
+      + "Automated number - to reach us, call or text {phone}."
   },
   // Patrick's Part-3 escalation wording, copy-edited but keeping his
   // meaning: we will keep reminding; if your needs changed, tell the
@@ -149,12 +154,12 @@ const DEFAULT_TEMPLATES = Object.freeze({
   },
   nudge_sms: {
     body: "PJL Land Services: we've tried several times to confirm your winterization on {date} at {street}, "
-      + "and we'll keep sending reminders. If you no longer need our services, please tell our booking team "
-      + "at {phone}. Otherwise: {appointmentLink}"
+      + "and we'll keep sending reminders. If you no longer need us, please tell our booking team "
+      + "at {phone}. Otherwise reply YES, or tap: {appointmentLink}"
   },
   reminder24_sms: {
     body: "PJL Land Services: a reminder that your fall sprinkler winterization is tomorrow — "
-      + "{date}, {bucket}, at {street}. Questions or changes? Call or text {phone}."
+      + "{date}, {bucket}, at {street}. Questions or changes? Call or text {phone} (this number is automated)."
   },
   // Cadence rule 6: the re-notify NAMES THE CHANGE ("was X, now Y")
   // rather than restating the new date as if it were always so.
@@ -181,7 +186,8 @@ const DEFAULT_TEMPLATES = Object.freeze({
   },
   daymove_sms: {
     body: "PJL Land Services: your winterization day has MOVED — was {oldDate}, now {date} ({bucket}) "
-      + "at {street}. Please confirm the new day: {appointmentLink} Questions? {phone}"
+      + "at {street}. Reply YES to confirm the new day or tap to change: {appointmentLink} "
+      + "Automated number - to reach us, call or text {phone}."
   }
 });
 

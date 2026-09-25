@@ -37,7 +37,8 @@ const sharp = require("sharp");
 })();
 
 const { sendNewLeadEmail, sendVoicemailEmail } = require("./lib/notify-email");
-const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms } = require("./lib/notify-sms");
+const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms, sendInboundTextAlertSms } = require("./lib/notify-sms");
+const smsInbound = require("./lib/sms-inbound");
 const testRecipients = require("./lib/test-recipients");
 const { countSystemDesign, describeSystemDesign } = require("./lib/system-design-counts");
 const fieldPhotoUploads = require("./lib/field-photo-uploads");
@@ -6704,8 +6705,8 @@ async function handleApi(req, res, pathname) {
   if (warrantyHandled !== false) return;
 
   // ===================================================================
-  // Twilio call-forward voicemail (additive — does NOT touch the SMS
-  // Messaging webhook). Telus stays Patrick's customer-facing number;
+  // Twilio call-forward voicemail (additive — the SMS Messaging webhook
+  // is route 5 below, /api/twilio-sms-incoming). Telus stays Patrick's customer-facing number;
   // unanswered calls forward to the existing Twilio number, whose
   // "A call comes in" Voice webhook points at /api/twilio-voice-incoming.
   // That plays a TTS greeting, records a voicemail, then Twilio fires two
@@ -6836,6 +6837,47 @@ async function handleApi(req, res, pathname) {
     res.writeHead(204, { "cache-control": "no-store" });
     res.end();
     return;
+  }
+
+  // 5) A customer TEXTED the Twilio number. The number's Messaging
+  //    "A message comes in" webhook points here. lib/sms-inbound.js decides:
+  //    YES confirms their one upcoming appointment (the appointment page's
+  //    own confirm), STOP turns off their seasonal texts, anything else is
+  //    forwarded to Patrick's cell with an "automated number — call or text
+  //    (905) 960-0181" reply. Same signature gate as the voice routes.
+  if (req.method === "POST" && pathname === "/api/twilio-sms-incoming") {
+    let params = {};
+    try { params = await parseFormBody(req); } catch { params = {}; }
+    if (!allowTwilioWebhook(req, pathname, params, "sms-incoming")) {
+      return sendJson(res, 403, { ok: false, errors: ["Invalid Twilio signature."] });
+    }
+    let reply = null;
+    try {
+      const out = await smsInbound.handleInbound({
+        from: params.From || "",
+        to: params.To || "",
+        body: params.Body || "",
+        messageSid: params.MessageSid || params.SmsSid || "",
+        numMedia: params.NumMedia || 0
+      }, {
+        listBookings: () => bookings.list(),
+        listProperties: () => properties.list(),
+        summarize: appointmentActions.summarize,
+        confirmByToken: (token, opts) => appointmentActions.confirm(token, opts),
+        updateProperty: (id, patch) => properties.update(id, patch),
+        sendAlert: (body) => sendInboundTextAlertSms(body),
+        ownerPhone: process.env.NOTIFY_TO_PHONE || ""
+      });
+      reply = out.reply;
+      console.log(`[sms-inbound] ${out.cls} → ${out.action || "none"}${reply ? " (replied)" : ""}`);
+    } catch (err) {
+      // Answer Twilio anyway — an error response makes it retry the same
+      // text, and the retry would hit the same fault.
+      console.error("[sms-inbound] failed:", err?.message || err);
+    }
+    return sendTwiml(res, 200, reply
+      ? `<Response><Message>${escapeXml(reply)}</Message></Response>`
+      : "<Response/>");
   }
 
   // 4) Public, token-gated audio proxy. The SMS/email "Listen" link points

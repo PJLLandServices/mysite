@@ -180,6 +180,7 @@ const CUSTOMER_STATE_LABELS = Object.freeze({
 
 const REPLY_STATES = Object.freeze({
   confirm: "confirmed",
+  sms_reply: "confirmed",
   reschedule: "moved",
   window: "window",
   free_bucket: "any_time",

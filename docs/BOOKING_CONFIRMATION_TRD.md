@@ -1,6 +1,12 @@
 # Booking Confirmation & Text Replies — Technical Requirements
 
-**Status:** DRAFT, awaiting Patrick's approval of the PRD. Nothing built yet.
+**Status:** Phases 1–3 BUILT on `claude/booking-confirmation-issues-c5hnfq`
+(2026-09-25), not yet live. Phase 4 not started.
+
+**Patrick's decisions (2026-09-25):** forward customer texts to his cell by
+text (no email); a texted YES confirms with no review; the auto-reply says
+it is an automated texting system and to use (905) 960-0181. The two
+customers who called: Greg Davis and Behnaz.
 **Opened:** 2026-09-25
 **PRD:** `docs/BOOKING_CONFIRMATION_PRD.md`
 **Touches flows in:** `docs/FLOW_REGISTER.md` → assignment writer stage 5
@@ -57,6 +63,22 @@ Collateral from the same bug:
   says "Questions? {phone}".
 
 ---
+
+## As built (differences from the plan below)
+
+- Success note is `#doneNote` (not `#confirmedNote`) and is shown for every
+  action, not just confirm.
+- Forward is **SMS only** (`sendInboundTextAlertSms` in `notify-sms.js`);
+  no email, per Patrick.
+- The Playwright UI test is `npm run test:appointment-page-ui`, kept out of
+  `build:check` because CI has no Chromium (same as `test:pjl-dialog`). The
+  static guard `lint-hidden-polyfill.mjs` and `test-sms-inbound.mjs` are in
+  `build:check`.
+- The nudge text lost "our services" ("If you no longer need us") to stay
+  inside two SMS segments with "reply YES" added.
+- Self-booked (`notify-customer.js`) texts also carry the "automated
+  number" line. A YES from a self-booked customer is forwarded, not
+  auto-confirmed — they were confirmed at booking.
 
 ## 1. Phase 1 — Appointment page hotfix
 
