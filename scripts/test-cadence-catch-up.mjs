@@ -321,7 +321,7 @@ const same = (a, b) => Array.isArray(a) && a.length === b.length && b.every((x) 
     /armTwice\(el\("catchUpBtn"\)/.test(page), "one press would send to real customers");
 
   ok("the count and the send come from the same rule",
-    /summary\.owed \+= owedForBooking\(b\)/.test(src),
+    /summary\.owed \+= owedForBooking\(b[,)]/.test(src),
     "the status counts owed messages its own way");
 }
 
@@ -337,6 +337,82 @@ const same = (a, b) => Array.isArray(a) && a.length === b.length && b.every((x) 
   const server = read("server/server.js");
   ok("…and the resend names the attempt it is replacing",
     /resendOf: failure\.ts/.test(server), "the resend doesn't say what it was for");
+}
+
+// ---- 8. Somebody who has ANSWERED is owed no "please confirm" -------
+//
+// 2026-09-25: Behnaz confirmed her appointment and then got another
+// "please confirm" message. The sweep already stopped steps 2–5 after a
+// response; the catch-up didn't ask. An email that failed in the mail
+// outage stayed owed, and "Send the messages that never went out" would
+// deliver a stale request for confirmation to someone who had confirmed.
+{
+  const future = new Date("2026-10-05T08:15:00-04:00").toISOString();
+  const failedEmail = { at: "2026-09-10T13:00:00Z", attempted: ["email", "sms"], sent: ["sms"], errors: [{ channel: "email", error: "535" }] };
+  const mk = (id, outreach, scheduledFor = future) => ({
+    id, source: "assignment", status: "confirmed",
+    customerName: "Behnaz Test", customerEmail: "b@example.com", customerPhone: "+15551230000",
+    propertyId: "P-8", scheduledFor, serviceLabel: "Fall closing",
+    assignment: { season: "fall", year: 2026, code: "P-008", outreach: { token: `tok-${id}-000000000`, ...outreach } }
+  });
+  const answered = mk("BK-ANSWERED", {
+    steps: { "1": failedEmail, "2": { ...failedEmail, at: "2026-09-20T13:00:00Z" } },
+    respondedAt: "2026-09-21T15:00:00Z", responseVia: "confirm"
+  });
+  const reminderOwed = mk("BK-REMINDER", {
+    steps: { "6": { at: "2026-10-04T13:00:00Z", attempted: ["sms"], sent: [] } },
+    respondedAt: "2026-09-21T15:00:00Z", responseVia: "confirm"
+  });
+  const passed = mk("BK-PASSED", { steps: { "2": failedEmail } }, new Date("2026-09-15T08:15:00-04:00").toISOString());
+
+  const NOW8 = new Date("2026-09-25T14:00:00-04:00");
+  const wantedNames = (b) => {
+    try { return cadence.owedForBooking(b, { now: NOW8 }).map((i) => i.step.n); } catch (e) { return `(threw ${e.message})`; }
+  };
+  ok("a customer who confirmed is owed NO step 1 or 2 message, even with a failed email on record",
+    same(wantedNames(answered), []), j(wantedNames(answered)));
+  ok("…but the 24-hour reminder is still owed after they confirm (that's what it's for)",
+    same(wantedNames({ ...reminderOwed, scheduledFor: new Date(NOW8.getTime() + 20 * 3600e3).toISOString() }), [6]),
+    j(wantedNames({ ...reminderOwed, scheduledFor: new Date(NOW8.getTime() + 20 * 3600e3).toISOString() })));
+  ok("nothing is owed about an appointment that has already passed",
+    same(wantedNames(passed), []), j(wantedNames(passed)));
+
+  const emails = [];
+  const texts = [];
+  const deps = {
+    listBookings: async () => [answered, passed],
+    getBooking: async (id) => [answered, passed].find((b) => b.id === id) || null,
+    getProperty: async () => ({ id: "P-8", customerName: "Behnaz Test", address: "8 Test Rd, Newmarket, ON",
+      customerEmail: "b@example.com", customerPhone: "+15551230000", seasonalEligibility: { fallClosing: true } }),
+    sendEmail: async (m) => { emails.push(m); return { ok: true }; },
+    sendSms: async (m) => { texts.push(m); return { ok: true }; },
+    recordTouch: async () => {},
+    setAssignmentOutreach: async () => answered
+  };
+  let res = null;
+  try {
+    res = await cadence.catchUpOwed("fall", 2026, { deps, by: "test", appointmentPageReady: true, now: NOW8 });
+  } catch (err) { res = { error: err.message }; }
+  ok("pressing catch-up sends a confirmed customer nothing", emails.length === 0 && texts.length === 0,
+    `emails=${emails.length} texts=${texts.length} ${j(res)}`);
+  ok("…and the button's count doesn't include them either", res?.owed === 0, j(res));
+
+  // THE RACE: the sweep read its list before the customer confirmed; by
+  // the time it reaches them, the stored booking says they answered.
+  const stale = mk("BK-RACE", { steps: { "1": { at: "2026-09-10T13:00:00Z", attempted: ["email", "sms"], sent: ["email", "sms"] } } });
+  const nowStored = { ...stale, assignment: { ...stale.assignment, outreach: { ...stale.assignment.outreach, respondedAt: "2026-09-20T09:59:00Z", responseVia: "sms_reply" } } };
+  const sent2 = [];
+  let raceOut = null;
+  try {
+    raceOut = await cadence.sendStepForBooking(stale, { n: 2, template: "followup", channels: ["email", "sms"], daysBefore: 15, stopsOnResponse: true, asksForAnswer: true }, {
+      season: "fall", year: 2026, by: "test",
+      deps: { ...deps, getBooking: async () => nowStored,
+        sendEmail: async (m) => { sent2.push(m); return { ok: true }; },
+        sendSms: async (m) => { sent2.push(m); return { ok: true }; } }
+    });
+  } catch (err) { raceOut = { error: err.message }; }
+  ok("a customer who confirms WHILE the sweep is running gets no follow-up",
+    sent2.length === 0 && raceOut?.skipped === true && raceOut?.reason === "already_responded", j(raceOut));
 }
 
 if (failures.length) {
