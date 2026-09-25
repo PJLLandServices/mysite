@@ -241,6 +241,12 @@ export const getInvoice = (id) =>
 // still carries a balance, which is a question about two fields and a
 // date rather than a state anything stores. isOverdue() below is the one
 // place that decides it.
+// The invoices raised against one work order, newest first. Used to reopen
+// a finished closing on its invoice (workorder-routing.js activeInvoiceFor).
+export const listWorkOrderInvoices = (woId) =>
+  getJson(`/api/invoices?woId=${encodeURIComponent(woId)}`)
+    .then((d) => d.invoices || []);
+
 export const listPropertyInvoices = (propertyId) =>
   getJson(`/api/invoices?propertyId=${encodeURIComponent(propertyId)}`)
     .then((d) => d.invoices || []);
@@ -295,6 +301,48 @@ export const recordInvoicePayment = (id, { amount, method, notes = '' }) =>
     receivedAt: new Date().toISOString(),
     notes,
   });
+
+// ---- Tap to Pay on iPhone ---------------------------------------------
+//
+// The phone takes the card; the SERVER decides what it charges and whether
+// the invoice is paid (server: POST /api/invoices/:id/terminal-intent and
+// .../finalize, scripts/test-taptopay-server.mjs). No Stripe key of any kind
+// is in this bundle, and the phone never names an amount.
+
+// The Terminal connection token the SDK trades for the right to drive the
+// reader, and the Stripe Location the reader joins at connect time. Admin
+// only on the server.
+export async function terminalConnectionToken() {
+  const res = await clientFetch(`${HOST}/api/terminal/connection-token`, {
+    method: 'POST',
+    headers: { accept: 'application/json' },
+    credentials: 'include',
+    cache: 'no-store',
+  });
+  if (res.status === 401 || res.status === 403) throw new AuthRequiredError();
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { throw new AuthRequiredError(); }
+  if (!res.ok || !data.ok) {
+    // Stripe's own refusal, verbatim: "Terminal is not enabled on this
+    // account" says what to do; "couldn't start the reader" does not.
+    throw new Error((data && data.errors && data.errors[0]) || `Couldn't get a reader token (${res.status})`);
+  }
+  if (!data.secret) throw new Error('The server returned no connection token.');
+  return { secret: data.secret, locationId: data.locationId || null };
+}
+
+// The charge for this invoice's balance, created on the server. Returns
+// { clientSecret, paymentIntentId, amountCents, currency }. Refusals keep
+// their code: needs_review (Bill later), no_charge, needs_pricing,
+// already_paid, nothing_owing.
+export const startTerminalPayment = (invoiceId) =>
+  sendJson(`/api/invoices/${encodeURIComponent(invoiceId)}/terminal-intent`, 'POST', {}, { timeout: 30000 });
+
+// After the reader approves: the server re-reads the payment from Stripe
+// and, only if Stripe agrees, marks the invoice paid. Safe to repeat.
+export const finalizeTerminalPayment = (invoiceId, paymentIntentId) =>
+  sendJson(`/api/invoices/${encodeURIComponent(invoiceId)}/terminal-intent/finalize`, 'POST', { paymentIntentId }, { timeout: 30000 });
 
 // ---- Booking -----------------------------------------------------------
 //

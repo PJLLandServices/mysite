@@ -28,7 +28,7 @@
 // then hidden rather than unmounted, so switching away from a half-
 // scrolled list and back doesn't reload it.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, SafeAreaView, StatusBar as RNStatusBar, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import PropertiesScreen from './src/screens/PropertiesScreen';
@@ -41,10 +41,13 @@ import NoChargeScreen from './src/screens/NoChargeScreen';
 import MessagesScreen from './src/screens/MessagesScreen';
 import PropertyProfileScreen from './src/screens/PropertyProfileScreen';
 import SignInScreen from './src/screens/SignInScreen';
+import TapToPaySettings from './src/screens/TapToPaySettings';
 import ThreadScreen from './src/screens/ThreadScreen';
 import WebScreen from './src/screens/WebScreen';
-import { getSession, setClientVersionHeader } from './src/api';
+import { getSession, listWorkOrderInvoices, setClientVersionHeader } from './src/api';
 import { clientVersionHeader } from './src/clientVersion';
+import { activeInvoiceFor, reopensToInvoice } from './src/workorder-routing';
+import { TapToPayProvider } from './src/taptopay/TapToPayProvider';
 import { colors, space } from './src/theme';
 import { applyPendingUpdate } from './src/updates';
 import { startFieldSync, restoreFieldWorkOrder, forgetOpenFieldWorkOrder } from './src/offline/field';
@@ -115,12 +118,30 @@ export function jobForWorkOrder(workOrder) {
   };
 }
 
+// What tapping a work order opens, once the server has been asked the one
+// thing jobForWorkOrder cannot know: whether a finished closing has an
+// invoice. With one, the invoice (its status, payment, resend) — the same
+// place Finish lands. Without one, or with no signal to ask, the web record
+// exactly as before. Covered by scripts/test-field-reopen-finished.mjs.
+export async function jobForOpening(workOrder, listInvoices) {
+  const job = jobForWorkOrder(workOrder);
+  if (!job || !reopensToInvoice(workOrder)) return job;
+  try {
+    const invoice = activeInvoiceFor(await listInvoices(workOrder.id), workOrder.id);
+    if (invoice) return { kind: JOB.INVOICE, invoiceId: invoice.id };
+  } catch { /* no signal: the web record still opens */ }
+  return job;
+}
+
 export default function App() {
   const [active, setActive] = useState('today');
   // Mount lazily, then keep. An unvisited tab costs nothing; a visited
   // one keeps its scroll position and its session.
   const [visited, setVisited] = useState({ today: true });
   const [openPropertyId, setOpenPropertyId] = useState(null);
+  // Tap to Pay on iPhone's own screen, opened from Today's header (Apple
+  // 3.6: reachable outside checkout). An overlay, like the job.
+  const [tapSettingsOpen, setTapSettingsOpen] = useState(false);
   // The job laid over the tabs. Null means there isn't one.
   const [job, setJob] = useState(null);
   // Bumped every time a job closes. Today reloads on it, because the whole
@@ -175,9 +196,13 @@ export default function App() {
     setVisited((v) => (v[key] ? v : { ...v, [key]: true }));
   }, []);
 
-  const openWorkOrder = useCallback((workOrder) => {
-    const next = jobForWorkOrder(workOrder);
-    if (next) setJob(next);
+  // Only the latest tap opens anything: a finished closing waits on an
+  // invoice lookup, and a slow one must not land over a job tapped after it.
+  const opening = useRef(0);
+  const openWorkOrder = useCallback(async (workOrder) => {
+    const tap = ++opening.current;
+    const next = await jobForOpening(workOrder, listWorkOrderInvoices);
+    if (next && tap === opening.current) setJob(next);
   }, []);
 
   const closeJob = useCallback(() => {
@@ -201,6 +226,9 @@ export default function App() {
   }, [visibleTabs, active]);
 
   return (
+    // The Stripe Terminal SDK's provider, for the life of the app: the reader
+    // outlives any one screen, which is what lets it be warm (Apple 1.5).
+    <TapToPayProvider>
     <View style={styles.root}>
       <StatusBar style="dark" />
       <SafeAreaView style={styles.safe}>
@@ -221,6 +249,7 @@ export default function App() {
                     key={`today-${signedIn}`}
                     onOpenWorkOrder={openWorkOrder}
                     onAddStop={(where) => setJob({ kind: JOB.ADD_STOP, ...where })}
+                    onOpenTapToPay={() => setTapSettingsOpen(true)}
                     refreshToken={jobsClosed}
                     onSignIn={openSignIn}
                   />
@@ -344,10 +373,20 @@ export default function App() {
         </View>
       ) : null}
 
-      {/* Above the job overlay, deliberately: a session can expire while
-          a closing is open, and the sign-in has to reach over whatever
-          is already on screen. Modal to VoiceOver for the same reason
-          the job overlay is. */}
+      {/* Tap to Pay's settings screen. A sibling of the job overlay, not an
+          arm of it: it is opened from Today's header, not from a job. */}
+      {tapSettingsOpen ? (
+        <View style={styles.overlay} accessibilityViewIsModal>
+          <SafeAreaView style={styles.overlaySafe}>
+            <TapToPaySettings onBack={() => setTapSettingsOpen(false)} />
+          </SafeAreaView>
+        </View>
+      ) : null}
+
+      {/* LAST, above the job overlay and Tap to Pay: a session can expire
+          while either is open, and the sign-in has to reach over whatever
+          is already on screen. Modal to VoiceOver for the same reason the
+          job overlay is. */}
       {signInOpen ? (
         <View style={styles.overlay} accessibilityViewIsModal>
           <SafeAreaView style={styles.overlaySafe}>
@@ -356,6 +395,7 @@ export default function App() {
         </View>
       ) : null}
     </View>
+    </TapToPayProvider>
   );
 }
 
