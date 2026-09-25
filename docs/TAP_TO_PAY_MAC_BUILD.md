@@ -547,6 +547,8 @@ that the EAS button build works and this file becomes history.
 | `Tap to Pay on iPhone` missing from Capabilities | The capability came off the App ID | Tell me — it is a tick box on Apple's portal |
 | Build fails with hundreds of red lines | Almost always a stale generated project | `npx expo prebuild --platform ios --clean`, answer **y**, then Step 8 again |
 | The phone refuses to open the app | Developer Mode is off | Step 9, parts 4 and 5 |
+| Build fails with `Sandbox: find(…) deny(1) file-read-data …` | Xcode's User Script Sandboxing blocked a build script from reading the project | Prebuild now switches it off by itself (`plugins/withNoUserScriptSandboxing.js`, since 2026-09-25). On an older download: TARGETS → PJLField → Build Settings → All → search `sandbox` → **User Script Sandboxing: No**, then Clean Build Folder and ▶ |
+| `No script URL provided … packager is running` on the phone | A **Debug** build, which loads its code from the Mac | Step 10a: Release, then Clean Build Folder and ▶ |
 | The Tap to Pay build is gone and the everyday app is back | TestFlight reinstalled over it | Step 12, then Step 10b again (Steps 1–9 do not need repeating) |
 | `No commit to stamp` in Step 6d | The short id was pasted, or none | Paste the 40-character id from Step 4, part 6 |
 | The reader is ready but the payment says the server refused | PR #304 is not live on Render yet | Merge and deploy #304, then try again |

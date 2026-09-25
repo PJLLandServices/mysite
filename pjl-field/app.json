@@ -62,7 +62,8 @@
           "bluetoothBackgroundMode": false,
           "locationWhenInUsePermission": "PJL Field records where you were when you started a service visit, as proof of attendance on the work order, and where a card payment was taken, which Stripe requires for in-person payments."
         }
-      ]
+      ],
+      "./plugins/withNoUserScriptSandboxing"
     ]
   }
 }
