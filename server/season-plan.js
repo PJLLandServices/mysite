@@ -74,25 +74,85 @@
 
   // ---- Render ------------------------------------------------------
 
-  // "Send confirmation" — the step-1 assignment message ("you're booked
-  // for {date}") for THIS customer, now, instead of waiting for the
-  // season-wide blast. Same message, same ledger: a stop confirmed here
-  // reads "already sent" to the blast and vice versa, so the tag and the
-  // button can simply mirror `confirmation.sentAt`. On success the
-  // control swaps itself for the sent tag in place — no full replan for
-  // a one-row state change.
+  // The customer's confirmation, in three honest states (2026-09-25):
+  //
+  //   not messaged yet → "Send confirmation" (the step-1 message for THIS
+  //                      customer now, instead of waiting for the blast —
+  //                      same message, same ledger as the blast).
+  //   messaged, no answer → an amber "sent Sep 19 · no reply yet" tag and
+  //                      a "Mark confirmed" button, for when they told
+  //                      Patrick by phone or text.
+  //   answered         → a green "✓ customer confirmed Sep 21" tag that
+  //                      says how (page, texted YES, marked by phone).
+  //
+  // The old tag read "confirmed Sep 19" the moment WE sent the message,
+  // which looked like the customer's answer — so a customer who never
+  // replied looked done, and there was no visible way to record a "yes"
+  // given over the phone.
+  const shortDate = (at) => new Date(at).toLocaleDateString("en-CA", { month: "short", day: "numeric" });
+
+  function answeredTag(at, how) {
+    const tag = document.createElement("span");
+    tag.className = "sp-tag is-answered";
+    tag.textContent = `✓ customer confirmed ${shortDate(at)}`;
+    tag.title = `Confirmed ${new Date(at).toLocaleString("en-CA")}${how ? ` — ${how}` : ""}`;
+    return tag;
+  }
+
+  function markButton(confirmation, wrap) {
+    const mark = document.createElement("button");
+    mark.type = "button";
+    mark.className = "sp-window-btn";
+    mark.textContent = "Mark confirmed";
+    mark.title = "They said yes by phone or text — stop the reminder messages (the 24-hour text still goes)";
+    mark.addEventListener("click", async () => {
+      const ok = await pjlDialog.confirm(
+        "Mark this customer as confirmed? Use this when they told you yes by phone or text. The \"please confirm\" reminders stop; the 24-hour reminder still goes.",
+        { title: "Customer confirmed", confirmLabel: "Mark confirmed" }
+      );
+      if (!ok) return;
+      mark.disabled = true;
+      mark.textContent = "Saving…";
+      try {
+        const response = await fetch(
+          `/api/assignments/bookings/${encodeURIComponent(confirmation.bookingId)}/mark-responded`,
+          { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }
+        );
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't record that."]).join(" "));
+        const o = data.booking?.assignment?.outreach || {};
+        wrap.replaceChildren(answeredTag(o.respondedAt || new Date().toISOString(),
+          o.responseVia === "manual" ? "by phone/text (marked by you)" : ""));
+        showToast("Marked confirmed — the reminder messages stop.");
+      } catch (error) {
+        showToast(error.message, "bad");
+        mark.disabled = false;
+        mark.textContent = "Mark confirmed";
+      }
+    });
+    return mark;
+  }
+
+  function waitingControls(confirmation, wrap, sentAt) {
+    const tag = document.createElement("span");
+    tag.className = "sp-tag is-awaiting";
+    tag.textContent = `sent ${shortDate(sentAt)} · no reply yet`;
+    tag.title = `Confirmation message sent ${new Date(sentAt).toLocaleString("en-CA")}`
+      + (confirmation.seenAt ? ` · they opened the link ${new Date(confirmation.seenAt).toLocaleString("en-CA")}` : " · link not opened yet");
+    wrap.replaceChildren(tag, markButton(confirmation, wrap));
+  }
+
   function confirmControl(confirmation) {
-    const sentTag = (at) => {
-      const tag = document.createElement("span");
-      tag.className = "sp-tag is-booked";
-      const when = at ? new Date(at) : null;
-      tag.textContent = when
-        ? `confirmed ${when.toLocaleDateString("en-CA", { month: "short", day: "numeric" })}`
-        : "confirmed";
-      if (when) tag.title = `Confirmation sent ${when.toLocaleString("en-CA")}`;
-      return tag;
-    };
-    if (confirmation.sentAt) return sentTag(confirmation.sentAt);
+    const wrap = document.createElement("span");
+    wrap.className = "sp-confirm";
+    if (confirmation.respondedAt) {
+      wrap.appendChild(answeredTag(confirmation.respondedAt, confirmation.responseLabel));
+      return wrap;
+    }
+    if (confirmation.sentAt) {
+      waitingControls(confirmation, wrap, confirmation.sentAt);
+      return wrap;
+    }
 
     const button = document.createElement("button");
     button.type = "button";
@@ -112,14 +172,16 @@
         showToast(data.alreadySent
           ? "This customer already has their confirmation."
           : `Confirmation sent (${(data.sent || []).join(" + ") || "queued"}).`);
-        button.replaceWith(sentTag(data.at || new Date().toISOString()));
+        waitingControls(confirmation, wrap, data.at || new Date().toISOString());
       } catch (error) {
         showToast(error.message, "bad");
         button.disabled = false;
         button.textContent = "Send confirmation";
       }
     });
-    return button;
+    // A customer can confirm by phone before any message goes out.
+    wrap.append(button, markButton(confirmation, wrap));
+    return wrap;
   }
 
   function stopRow(stop, date, bucket, arrival) {

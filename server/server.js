@@ -25155,7 +25155,18 @@ async function orderDayForDriving(rows) {
     const confirmationFor = (bookingId) => {
       const b = bookingId && confirm ? confirm.byId.get(bookingId) : null;
       if (!b) return null;
-      return { bookingId: b.id, sentAt: b.assignment.outreach?.steps?.["1"]?.at || null };
+      // sentAt is when WE messaged them; respondedAt is when THEY answered.
+      // The panel used to show only the first and label it "confirmed",
+      // which read as the customer's answer (2026-09-25).
+      const o = b.assignment.outreach || {};
+      return {
+        bookingId: b.id,
+        sentAt: o.steps?.["1"]?.at || null,
+        seenAt: o.seenAt || null,
+        respondedAt: o.respondedAt || null,
+        responseVia: o.responseVia || null,
+        responseLabel: o.respondedAt ? bookings.responseLabel(o.responseVia) : ""
+      };
     };
     for (const row of booked) {
       const c = confirmationFor(row.bookingId);
