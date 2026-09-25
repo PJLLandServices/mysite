@@ -8,6 +8,7 @@ import { Dashboard } from "./routes/Dashboard";
 import { ProjectsList } from "./routes/ProjectsList";
 import { PendingTab, ProjectOverviewTab, ProjectWorkspace } from "./routes/ProjectOverview";
 import { SystemDesignTab } from "./routes/SystemDesign";
+import { TasksTab } from "./routes/Tasks";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -45,10 +46,7 @@ createRoot(document.getElementById("root")!).render(
                   />
                 }
               />
-              <Route
-                path="tasks"
-                element={<PendingTab title="Tasks" body="The task list and per-visit completion, rebuilt for the field." />}
-              />
+              <Route path="tasks" element={<TasksTab />} />
               <Route
                 path="materials"
                 element={<PendingTab title="Materials" body="Material lists and parts for this job." />}

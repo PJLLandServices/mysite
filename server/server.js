@@ -16304,7 +16304,15 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(taskListMatch[1]);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-      return sendJson(res, 200, { ok: true, tasks: proj.tasks || [] });
+      // Archived tasks are kept so the crew's records still point
+      // somewhere, but they are off the job's list. Ask for them
+      // explicitly with ?includeArchived=1.
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const all = proj.tasks || [];
+      const tasks = url.searchParams.get("includeArchived") === "1"
+        ? all
+        : all.filter((t) => !projects.taskIsArchived(t));
+      return sendJson(res, 200, { ok: true, tasks });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read tasks."] });
     }
@@ -16313,11 +16321,14 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(taskListMatch[1]);
       const payload = await parseRequestBody(req);
+      // actorLabel across all four task writes: `by` lands in history and,
+      // for an archive, on the record itself where the Tasks tab renders
+      // it. "admin" in front of Patrick is not a record of who did it.
       const task = await projects.addTask(id, {
         description: payload.description,
         sourceLineItemId: payload.sourceLineItemId || null,
         notes: payload.notes || ""
-      });
+      }, { by: await actorLabel(req) });
       return sendJson(res, 201, { ok: true, task });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't add task."] });
@@ -16330,7 +16341,7 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(taskItemMatch[1]);
       const taskId = decodeURIComponent(taskItemMatch[2]);
       const payload = await parseRequestBody(req);
-      const task = await projects.updateTask(id, taskId, payload);
+      const task = await projects.updateTask(id, taskId, payload, { by: await actorLabel(req) });
       return sendJson(res, 200, { ok: true, task });
     } catch (err) {
       const status = err.code === "task_locked" ? 409 : err.code === "task_not_found" ? 404 : 400;
@@ -16341,11 +16352,110 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(taskItemMatch[1]);
       const taskId = decodeURIComponent(taskItemMatch[2]);
-      const result = await projects.removeTask(id, taskId);
-      return sendJson(res, 200, { ok: true, removed: result.removed });
+      const result = await projects.removeTask(id, taskId, { by: await actorLabel(req) });
+      // removed = gone for good (nothing ever referenced it).
+      // archived = kept, because the crew's records point at it.
+      return sendJson(res, 200, {
+        ok: true, removed: result.removed, archived: result.archived, reasons: result.reasons || []
+      });
     } catch (err) {
       const status = err.code === "task_locked" ? 409 : err.code === "task_not_found" ? 404 : 400;
       return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't remove task."] });
+    }
+  }
+
+  // POST /api/projects/:id/tasks/:taskId/progress — move a task from the
+  // OFFICE (2026-09-25). Body: { percent } (0-100, absolute) or
+  // { percentDelta }.
+  //
+  // Patrick's split: technicians capture on site through the field app;
+  // the workspace is where he reviews and manages — "task status should
+  // synchronize immediately, but there must be only one underlying task
+  // record", and "task updates should remain available from both places."
+  //
+  // Until now there was only ONE door. `/api/work-orders/:woId/tasks-done`
+  // writes the day's log line and then flips the project's master task,
+  // which is the right order and already keeps one record — but it needs a
+  // work order, so a task could not be corrected or finished from the desk
+  // at all.
+  //
+  // This is the second door onto the SAME record: it calls the same
+  // `projects.addTaskProgress()` the field path calls, so the status
+  // invariant (0 pending / 1-99 in_progress / 100 done) is enforced in one
+  // place for both. It deliberately does NOT write a daily-log line —
+  // an office correction is not a day's work, and inventing a session
+  // would put hours on the job that nobody worked. `completedByWoId` is
+  // null for the same reason: the history then says plainly that this one
+  // was not closed out on a visit.
+  //
+  // Absolute `percent` is converted to a delta here because the mutator is
+  // cumulative; sending an absolute from a screen that has just read the
+  // task is what a person means by "set it to 60".
+  const taskProgressMatch = pathname.match(/^\/api\/projects\/([^/]+)\/tasks\/([^/]+)\/progress$/);
+  if (taskProgressMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(taskProgressMatch[1]);
+      const taskId = decodeURIComponent(taskProgressMatch[2]);
+      const payload = await parseRequestBody(req);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      const task = (proj.tasks || []).find((t) => t.id === taskId);
+      if (!task) return sendJson(res, 404, { ok: false, errors: ["Task not found."] });
+      if (projects.taskIsArchived(task)) {
+        return sendJson(res, 409, { ok: false, errors: ["That task was archived and is no longer on this job."] });
+      }
+
+      let delta;
+      if (payload.percent !== undefined && payload.percent !== null) {
+        const target = Number(payload.percent);
+        if (!Number.isFinite(target) || target < 0 || target > 100) {
+          return sendJson(res, 400, { ok: false, errors: ["percent must be between 0 and 100."] });
+        }
+        const current = task.status === "done" ? 100 : (Number(task.percentComplete) || 0);
+        delta = Math.round(target) - current;
+      } else {
+        delta = Number(payload.percentDelta);
+        if (!Number.isFinite(delta)) {
+          return sendJson(res, 400, { ok: false, errors: ["Send percent or percentDelta."] });
+        }
+      }
+
+      // actorLabel, not the raw uid: `by` is rendered straight to the
+      // screen in nine surfaces, and "usr_a1b2c3" in front of Patrick is
+      // not a record of who changed it.
+      const updated = await projects.addTaskProgress(id, taskId, delta, null, {
+        by: await actorLabel(req)
+      });
+      // The job's own figure comes back with it, from the server's
+      // calculation — so the screen never has to work out what the change
+      // did to the project's percentage.
+      const metrics = await projects.computeProjectMetrics(id);
+      return sendJson(res, 200, { ok: true, task: updated, metrics });
+    } catch (err) {
+      const status = err.code === "task_not_found" ? 404 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't update progress."] });
+    }
+  }
+
+  // POST /api/projects/:id/tasks/:taskId/restore — put an archived task
+  // back on the list (2026-09-25). Patrick: "an accidental archive must be
+  // recoverable without editing project data manually."
+  //
+  // Nothing is reconstructed, because archiving never removed anything:
+  // the progress, the work orders' daily-log lines, their photos and the
+  // recorded hours were untouched the whole time. This clears the three
+  // fields archiving added, and the audit trail keeps BOTH entries.
+  const taskRestoreMatch = pathname.match(/^\/api\/projects\/([^/]+)\/tasks\/([^/]+)\/restore$/);
+  if (taskRestoreMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(taskRestoreMatch[1]);
+      const taskId = decodeURIComponent(taskRestoreMatch[2]);
+      const task = await projects.restoreTask(id, taskId, { by: await actorLabel(req) });
+      const metrics = await projects.computeProjectMetrics(id);
+      return sendJson(res, 200, { ok: true, task, metrics });
+    } catch (err) {
+      const status = err.code === "task_not_found" ? 404 : err.code === "task_not_archived" ? 409 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't restore that task."] });
     }
   }
 
@@ -16375,7 +16485,7 @@ async function handleApi(req, res, pathname) {
       }
       const quote = await quotes.get(proj.sourceQuoteId);
       if (!quote) return sendJson(res, 422, { ok: false, errors: ["Source quote not found."] });
-      const updated = await projects.seedTasksFromQuote(id, quote);
+      const updated = await projects.seedTasksFromQuote(id, quote, { by: await actorLabel(req) });
       return sendJson(res, 200, { ok: true, project: updated });
     } catch (err) {
       const status = err.code === "tasks_partially_done" ? 409 : 400;
@@ -16458,6 +16568,9 @@ async function handleApi(req, res, pathname) {
         try {
           const proj = await projects.get(projectId);
           const t = (proj?.tasks || []).find((x) => x.id === taskId);
+          if (t && projects.taskIsArchived(t)) {
+            return sendJson(res, 409, { ok: false, errors: ["That task was archived and is no longer on this job."] });
+          }
           if (t) curPct = t.status === "done" ? 100 : (Number(t.percentComplete) || 0);
         } catch (_) {}
       }
