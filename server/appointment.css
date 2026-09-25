@@ -1,6 +1,14 @@
 /* The customer's appointment page — public, mobile-first, one card.
    PJL palette: green #1B4D2E, amber #E07B24, cream ground. */
 
+/* `[hidden]` polyfill — REQUIRED. .ap-btn and .ap-badge set an explicit
+   `display`, which beats the browser's own [hidden] rule, so without this
+   nothing on the page ever hides: a customer tapped Confirm, the button
+   stayed put and the "Confirmed" badge appeared off-screen at the top, and
+   they phoned to say it was broken (2026-09-25). Every page's JS toggles
+   `.hidden`; scripts/lint-hidden-polyfill.mjs keeps this line here. */
+[hidden] { display: none !important; }
+
 * { box-sizing: border-box; }
 body {
   margin: 0;
@@ -34,6 +42,12 @@ body {
   border-radius: 999px; background: #E8F2EA; color: #1B4D2E;
   font-size: 0.85rem; font-weight: 600;
 }
+.ap-done {
+  margin: 0 0 16px; padding: 14px 16px; border-radius: 10px;
+  background: #E8F2EA; border: 2px solid #1B4D2E; color: #1B4D2E;
+  font-size: 1.05rem; font-weight: 600; line-height: 1.4;
+}
+.ap-done:focus { outline: 3px solid #E07B24; outline-offset: 2px; }
 .ap-service {
   margin: 2px 0 14px;
   font-family: "Barlow Condensed", sans-serif;
