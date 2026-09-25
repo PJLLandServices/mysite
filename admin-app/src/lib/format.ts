@@ -43,6 +43,17 @@ export const BRANCH_LABELS: Record<string, string> = {
   lighting_repair: "Landscape Lighting Repairs"
 };
 
+/* An ARCHIVED task was taken off the job's list but KEPT, because the
+ * crew's daily logs or photos point at its id. It stops counting.
+ *
+ * On the server that rule is `activeTasks()` in lib/projects.js; this is
+ * the same rule, mirrored for the same reason as projectPercentComplete()
+ * below. Both figures here filter through it, so the count and the
+ * percentage cannot drift from each other or from the server. */
+function live<T extends { archivedAt?: string | null }>(tasks: T[] | undefined): T[] {
+  return (tasks || []).filter((t) => !t.archivedAt);
+}
+
 /* "X of Y tasks" — a COUNT of finished tasks, and only that.
  *
  * Kept deliberately separate from the percentage below, for the same
@@ -50,8 +61,8 @@ export const BRANCH_LABELS: Record<string, string> = {
  * label answers "how many are finished" and the bar answers "how far
  * along is this job", and on a job with partly-finished tasks those are
  * two different numbers. */
-export function taskProgress(tasks: Array<{ status: string }> | undefined) {
-  const list = tasks || [];
+export function taskProgress(tasks: Array<{ status: string; archivedAt?: string | null }> | undefined) {
+  const list = live(tasks);
   const done = list.filter((t) => t.status === "done").length;
   return { done, total: list.length };
 }
@@ -78,9 +89,9 @@ export function taskProgress(tasks: Array<{ status: string }> | undefined) {
  * `scripts/test-task-progress-agrees.mjs` runs the SERVER's function and
  * this one over the same fixtures and fails if they ever diverge. */
 export function projectPercentComplete(
-  tasks: Array<{ status: string; percentComplete?: number }> | undefined
+  tasks: Array<{ status: string; percentComplete?: number; archivedAt?: string | null }> | undefined
 ): number {
-  const list = tasks || [];
+  const list = live(tasks);
   if (!list.length) return 0;
   const pct = (t: { status: string; percentComplete?: number }) =>
     t.status === "done" ? 100 : Number(t.percentComplete) || 0;

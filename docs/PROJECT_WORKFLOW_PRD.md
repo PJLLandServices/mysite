@@ -1,7 +1,6 @@
 # The Project Workspace, day to day — Product Requirements
 
-**Status:** DRAFT. Four decisions for Patrick at the end. One bug found
-while surveying is already fixed — see *Found on the way in*.
+**Status:** DECIDED 2026-09-25. Building in order; Tasks first.
 **Opened:** 2026-09-25
 **Owner:** Patrick
 
@@ -91,24 +90,52 @@ So the workspace's job for time is **read it and bill it**, never capture
 it. Any design that puts an hours field on this screen is proposing a
 second source of truth for money.
 
-## Recommended order
+## Who does what — Patrick's split
 
-Built in this order, each one useful on its own:
+Decided 2026-09-25, and it is the thing every screen in this phase has to
+respect:
 
-1. **Tasks** — the daily driver, and the tab behind the figure that was
-   just corrected. Read, tick, part-complete, seed from the quote.
-2. **Daily Records** — the job journal with photos. Pairs with tasks:
-   what happened today, and what it moved.
-3. **Financials** — billing status, the T&M preview, the deposit/balance
-   picture the Overview already half-shows.
-4. **Change Orders** — the most delicate, because its last step raises a
-   quote revision. Read-only first (see decision 3).
-5. **Materials** — the material list already has a walked flow and the
-   builder writes it; this is mostly a view.
+| | |
+|---|---|
+| **Field app** | Technicians clock in and out, update task progress, record the day's work, photos, parts used and issues. |
+| **Project Workspace** | Patrick plans and assigns tasks, reviews daily records and labour, approves change orders, manages required materials, and prepares billing. |
+| **Both** | **Task status.** It synchronises immediately, and there is **only one underlying task record.** |
 
-Then the Overview gets rebuilt **last**, once the tabs exist to link
-into — it should summarise screens that are there, not describe screens
-that are not.
+> *"That avoids building two competing field interfaces while still
+> letting you correct or complete something from the office."*
+
+So: **desk-first for review and management; the field app owns on-site
+capture; task updates work from both.** Nothing in the workspace becomes a
+second way to log a day's work or a second place hours live.
+
+### What that split ran into immediately
+
+**Task progress can only be moved through a work order today.**
+`POST /api/work-orders/:woId/tasks-done` writes the per-day log line and
+*then* flips the project's master task — which is the right order, and the
+project record is already the single source of truth Patrick asked for.
+But there is **no project-level route**, so the office cannot correct or
+complete a task without a visit attached.
+
+The screen alone could not deliver "available from both places". Added:
+`POST /api/projects/:id/tasks/:taskId/progress` — the same
+`projects.addTaskProgress()` the field path calls, on the same record,
+with `completedByWoId: null` so the history says honestly that this one
+was not closed out on site.
+
+## Build order
+
+Patrick's, 2026-09-25 — Materials ahead of Change Orders, because a change
+order is a change to scope and price that is *tied to tasks and
+materials*, so those have to exist first:
+
+1. **Tasks** — the backbone connecting estimates to completed work.
+2. **Daily Records** — progress, notes, photos, labour and problems.
+3. **Materials** — required, ordered, received and used.
+4. **Change Orders** — scope and price changes tied to tasks/materials.
+5. **Financials** — invoicing from verified work and approved changes.
+6. **Overview last** — summarise the finished workflows with truthful
+   numbers.
 
 ## Requirements
 
@@ -130,30 +157,36 @@ classic link until the replacement has been walked on a real job.
 
 **R6. Phone-first for the field-facing tabs** — see decision 2.
 
-## Decisions for Patrick
+## The decisions, as answered
 
-1. **Is the order above right?** Tasks → Daily Records → Financials →
-   Change Orders → Materials, Overview last. If something is hurting more
-   right now (it is fall closing season), say so and it goes first.
+1. **Order** — Patrick's, above. Materials moved ahead of Change Orders.
 
-2. **Who uses Tasks and Daily Records on a phone?** The field app already
-   captures daily logs and time on work orders. If the workspace's tabs
-   are for you in the office, they can be desktop-first and simpler. If
-   you tick tasks off on site, they need to be phone-first, which is a
-   meaningful amount of the work. **Recommendation: desktop-first for the
-   office, because the field app already owns on-site capture** — but you
-   are the one who would know.
+2. **Phone or desk?** *"You will primarily review and manage these records
+   at the desk, while technicians capture the day-to-day information on
+   their phones through the field app. However, task updates should remain
+   available from both places."* → **Desk-first**, with task updates
+   reachable from either side. That is what the new progress route is for.
 
-3. **Change Orders: read, or raise?** The full lifecycle exists —
-   create → send to customer → approve → generate a quote revision. That
-   last step writes a new priced document. **Recommendation: read-only
-   first**, with raising kept in the classic CRM until the rest of the
-   workspace has been used on a real job.
+3. **Change Orders: read or raise?** Deferred to step 4, where it will be
+   decided against a screen that exists rather than in the abstract. The
+   lifecycle's last step raises a priced document, so the default stays
+   read-first.
 
-4. **Financials: does "raise the invoice" live here?** The T&M preview is
-   safe to show anywhere. Actually generating an invoice is money leaving
-   the building. **Recommendation: show the picture here, keep the button
-   in classic for now.**
+4. **Financials: does "raise the invoice" live here?** Deferred to step 5,
+   same reason.
+
+## The rule for every tab in this phase
+
+> *"Display server-calculated totals instead of independently
+> recalculating them in React. The progress-bar bug is exactly what
+> happens when the browser invents a second calculation."*
+
+Where a list genuinely cannot afford one request per row, the rule is
+mirrored in **one named function** and pinned by a test that runs **both
+implementations over the same records** — as
+`projectPercentComplete()` and `test-task-progress-agrees.mjs` now do.
+Anything else re-derived in the browser is a defect waiting for a
+screenshot.
 
 ## Out of scope for this phase
 

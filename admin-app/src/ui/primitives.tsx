@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from "react";
 
 export function cx(...parts: Array<string | false | null | undefined>) {
@@ -168,6 +169,102 @@ export function Stat({
     >
       {body}
     </button>
+  );
+}
+
+/* ── Confirm dialog ─────────────────────────────────────────────────
+   The CRM spent a whole PR replacing every native alert/confirm/prompt
+   with pjlDialog; this app must not quietly reintroduce them. It cannot
+   use pjlDialog itself — that lives with the CRM's own stylesheet — so
+   this is the same idea in the app's own vocabulary.
+
+   The behaviours are the ones the Help Centre had to learn the hard way
+   on 2026-09-23: Escape closes it, focus moves INTO it and returns to
+   whatever opened it, the backdrop is clickable to cancel, and the
+   whole thing sits above everything else on the page. */
+export function ConfirmDialog({
+  open,
+  title,
+  body,
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  destructive,
+  onConfirm,
+  onCancel
+}: {
+  open: boolean;
+  title: string;
+  body?: ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  destructive?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const openerRef = useRef<Element | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    // Remember who opened it, so closing puts the keyboard back where it
+    // was rather than at the top of the document.
+    openerRef.current = document.activeElement;
+    const panel = panelRef.current;
+    // The confirming action takes focus, but Escape and Cancel are always
+    // one key away — a destructive default that is also the focused
+    // button is how people confirm things they meant to read first.
+    const first = panel?.querySelector<HTMLElement>("[data-autofocus]") || panel;
+    first?.focus();
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); onCancel(); return; }
+      if (e.key !== "Tab" || !panel) return;
+      const focusables = panel.querySelectorAll<HTMLElement>("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])");
+      if (!focusables.length) return;
+      const firstEl = focusables[0];
+      const lastEl = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === firstEl) { e.preventDefault(); lastEl.focus(); }
+      else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); firstEl.focus(); }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      const opener = openerRef.current as HTMLElement | null;
+      // Only if it is still on the page and still focusable — a row that
+      // was just deleted is neither.
+      if (opener && document.contains(opener) && typeof opener.focus === "function") opener.focus();
+    };
+  }, [open, onCancel]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-brand-950/50"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}
+    >
+      <div
+        ref={panelRef}
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        className="w-full max-w-[460px] rounded-[var(--radius-card)] bg-surface shadow-xl outline-none"
+      >
+        <div className="px-5 pt-5">
+          <h2 className="font-display text-[19px] font-bold leading-tight text-ink">{title}</h2>
+          {body ? <div className="mt-2 text-[15px] leading-relaxed text-ink-muted">{body}</div> : null}
+        </div>
+        <div className="flex flex-wrap justify-end gap-2 px-5 py-4">
+          <Button onClick={onCancel} data-autofocus>
+            {cancelLabel}
+          </Button>
+          <Button variant={destructive ? "danger" : "primary"} onClick={onConfirm}>
+            {confirmLabel}
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
 
