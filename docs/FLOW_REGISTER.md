@@ -2,6 +2,50 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-25 (One task record, two doors — the office gets a way in):** Patrick set the split:
+*"Field app: technicians clock in/out, update task progress, record daily work, photos, parts used,
+and issues. Project Workspace: you plan and assign tasks, review daily records and labour, approve
+change orders, manage required materials, and prepare billing. Both: task status should
+synchronize immediately, but there must be only one underlying task record."*
+
+**That split ran straight into a gap.** `POST /api/work-orders/:woId/tasks-done` writes the day's
+log line and *then* flips the project's master task — the right order, and the project record is
+already the single source of truth. But it needs a work order, so **a task could not be corrected
+or finished from the desk at all.** The screen alone could not deliver "available from both
+places".
+
+Added `POST /api/projects/:id/tasks/:taskId/progress`: the second door onto the **same record**,
+calling the same `projects.addTaskProgress()` the field path calls, so the status invariant
+(0 pending / 1–99 in_progress / 100 done) is enforced in one place for both. It takes an absolute
+`percent` (what a person means by "set it to 60") and converts it to the cumulative delta the
+mutator takes. It deliberately writes **no daily-log line and no session** — an office correction
+is not a day's work, and inventing a session would put hours on a job nobody worked.
+`completedByWoId` stays **null**, so the history says plainly that this one was not closed out on
+a visit; the Tasks tab prints that as "finished from the office" rather than leaving it blank. The
+response carries `metrics` so the screen never computes what the change did to the job's
+percentage.
+
+**The Tasks tab** (`admin-app/src/routes/Tasks.tsx`) is step 1 of Patrick's build order (Tasks →
+Daily Records → Materials → Change Orders → Financials → Overview last; Materials ahead of Change
+Orders because a change order is tied to tasks and materials). Every figure on it is the server's:
+the job's percentage, task counts, days logged and person-hours all come from `/metrics`. A
+finished task offers no Edit, because `updateTask()` locks it server-side and offering one would
+be offering a 409. Finishing, reopening and removing each confirm first — in the app's **own**
+dialog: the CRM spent PJL-61 replacing every native `alert`/`confirm`/`prompt`, and the rebuilt app
+had no dialog primitive, so `ConfirmDialog` in `ui/primitives.tsx` carries the Help Centre's
+lessons (Escape closes, focus enters and returns to the opener, backdrop cancels).
+
+`scripts/test-task-two-doors.mjs` (43 assertions, **in `build:check`**) drives both doors
+alternately against one task and re-checks after **every** write that exactly one record carries
+that id, that both doors report the same percentage, and that status follows it — plus that the
+office door invents no work session, that reopening clears `completedAt` **and**
+`completedByWoId`, and that an office completion credits no visit.
+`scripts/test-tasks-tab.mjs` (40 assertions, Playwright, opt-in) walks the real bundle: the crew
+logs 40% from the field and the office screen shows it, the job reads **13%** where a
+finished-task count would still say 0, Escape cancels without moving the record, and no native
+dialog is ever raised. It caught two real defects before merge — a step control that could not
+correct a task downward, and 91px of horizontal overflow at phone width.
+
 **2026-09-25 (The progress bar and the server disagreed on every partly-finished job):**
 `computeProjectMetrics()` averages each task's own `percentComplete`, and `percentComplete` leads
 while `status` follows it (`addTaskProgress()` sets the status FROM the percentage: 0 = pending,

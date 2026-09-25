@@ -16349,6 +16349,74 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // POST /api/projects/:id/tasks/:taskId/progress — move a task from the
+  // OFFICE (2026-09-25). Body: { percent } (0-100, absolute) or
+  // { percentDelta }.
+  //
+  // Patrick's split: technicians capture on site through the field app;
+  // the workspace is where he reviews and manages — "task status should
+  // synchronize immediately, but there must be only one underlying task
+  // record", and "task updates should remain available from both places."
+  //
+  // Until now there was only ONE door. `/api/work-orders/:woId/tasks-done`
+  // writes the day's log line and then flips the project's master task,
+  // which is the right order and already keeps one record — but it needs a
+  // work order, so a task could not be corrected or finished from the desk
+  // at all.
+  //
+  // This is the second door onto the SAME record: it calls the same
+  // `projects.addTaskProgress()` the field path calls, so the status
+  // invariant (0 pending / 1-99 in_progress / 100 done) is enforced in one
+  // place for both. It deliberately does NOT write a daily-log line —
+  // an office correction is not a day's work, and inventing a session
+  // would put hours on the job that nobody worked. `completedByWoId` is
+  // null for the same reason: the history then says plainly that this one
+  // was not closed out on a visit.
+  //
+  // Absolute `percent` is converted to a delta here because the mutator is
+  // cumulative; sending an absolute from a screen that has just read the
+  // task is what a person means by "set it to 60".
+  const taskProgressMatch = pathname.match(/^\/api\/projects\/([^/]+)\/tasks\/([^/]+)\/progress$/);
+  if (taskProgressMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(taskProgressMatch[1]);
+      const taskId = decodeURIComponent(taskProgressMatch[2]);
+      const payload = await parseRequestBody(req);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      const task = (proj.tasks || []).find((t) => t.id === taskId);
+      if (!task) return sendJson(res, 404, { ok: false, errors: ["Task not found."] });
+
+      let delta;
+      if (payload.percent !== undefined && payload.percent !== null) {
+        const target = Number(payload.percent);
+        if (!Number.isFinite(target) || target < 0 || target > 100) {
+          return sendJson(res, 400, { ok: false, errors: ["percent must be between 0 and 100."] });
+        }
+        const current = task.status === "done" ? 100 : (Number(task.percentComplete) || 0);
+        delta = Math.round(target) - current;
+      } else {
+        delta = Number(payload.percentDelta);
+        if (!Number.isFinite(delta)) {
+          return sendJson(res, 400, { ok: false, errors: ["Send percent or percentDelta."] });
+        }
+      }
+
+      const session = await requireUser(req);
+      const updated = await projects.addTaskProgress(id, taskId, delta, null, {
+        by: session?.uid || "admin"
+      });
+      // The job's own figure comes back with it, from the server's
+      // calculation — so the screen never has to work out what the change
+      // did to the project's percentage.
+      const metrics = await projects.computeProjectMetrics(id);
+      return sendJson(res, 200, { ok: true, task: updated, metrics });
+    } catch (err) {
+      const status = err.code === "task_not_found" ? 404 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't update progress."] });
+    }
+  }
+
   // GET /api/projects/:id/task-photos — list task-anchored photo refs
   // across all build WOs. Used by project task list + status update.
   const taskPhotosMatch = pathname.match(/^\/api\/projects\/([^/]+)\/task-photos$/);

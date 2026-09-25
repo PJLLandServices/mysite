@@ -40,7 +40,8 @@ export const api = {
   post: <T,>(path: string, body?: unknown) =>
     request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) }),
   patch: <T,>(path: string, body?: unknown) =>
-    request<T>(path, { method: "PATCH", body: body === undefined ? undefined : JSON.stringify(body) })
+    request<T>(path, { method: "PATCH", body: body === undefined ? undefined : JSON.stringify(body) }),
+  del: <T,>(path: string) => request<T>(path, { method: "DELETE" })
 };
 
 /* ── Shapes, as the existing endpoints actually return them ──────── */
@@ -146,6 +147,62 @@ export interface SiteBuilderStation {
 export function systemBuilderHref(projectId: string): string {
   return `/app/projects/${encodeURIComponent(projectId)}/design/build`;
 }
+
+/* A task on a job. `percentComplete` leads and `status` follows it —
+ * see projectPercentComplete() in format.ts. `completedByWoId` names the
+ * VISIT that finished it, and is null when it was closed out from the
+ * office, which is a real distinction and not a missing value. */
+export interface ProjectTask {
+  id: string;
+  description: string;
+  status: "pending" | "in_progress" | "done";
+  percentComplete?: number;
+  notes?: string;
+  order?: number;
+  sourceLineItemId?: string | null;
+  completedAt?: string | null;
+  completedByWoId?: string | null;
+}
+
+/* What the server computes about a job. Displayed, never recomputed —
+ * `percentComplete` here is the figure, and a screen that works out its
+ * own is the progress-bar bug of 2026-09-25. */
+export interface ProjectMetrics {
+  totalTasks: number;
+  doneTasks: number;
+  percentComplete: number;
+  daysLogged: number;
+  totalPersonHours: number;
+  photoCount: number;
+  pendingScopeChanges: number;
+  lastWorkDate?: string | null;
+  buildWoIds?: string[];
+}
+
+export const tasksApi = {
+  add: (projectId: string, body: { description: string; notes?: string }) =>
+    api.post<{ task: ProjectTask }>(`/api/projects/${encodeURIComponent(projectId)}/tasks`, body),
+  update: (projectId: string, taskId: string, patch: { description?: string; notes?: string; order?: number }) =>
+    api.patch<{ task: ProjectTask }>(
+      `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}`, patch),
+  remove: (projectId: string, taskId: string) =>
+    api.del<{ removed: boolean }>(
+      `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}`),
+  /* The office door onto the same record the field app writes. `percent`
+     is absolute — what a person means by "set it to 60" — and the server
+     converts it to the cumulative delta its mutator takes. */
+  setProgress: (projectId: string, taskId: string, percent: number) =>
+    api.post<{ task: ProjectTask; metrics: ProjectMetrics }>(
+      `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/progress`, { percent }),
+  seedFromQuote: (projectId: string) =>
+    api.post<{ project: ProjectDetail }>(`/api/projects/${encodeURIComponent(projectId)}/tasks/seed`)
+};
+
+export const metricsApi = {
+  get: (projectId: string) =>
+    api.get<{ metrics: ProjectMetrics }>(`/api/projects/${encodeURIComponent(projectId)}/metrics`)
+      .then((d) => d.metrics)
+};
 
 export const projectsApi = {
   list: () => api.get<{ projects: ProjectSummary[] }>("/api/projects").then((d) => d.projects || []),
