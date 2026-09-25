@@ -59,7 +59,10 @@ export interface ProjectSummary {
   billingMode?: "fixed_price" | "time_and_material" | null;
   sourceQuoteId?: string | null;
   workOrderIds?: string[];
-  tasks?: Array<{ id: string; status: string }>;
+  /* `percentComplete` is the server's cumulative per-task figure, and
+     `status` follows it. Reading status alone reports a task logged at
+     60% as not started — see projectPercentComplete() in format.ts. */
+  tasks?: Array<{ id: string; status: string; percentComplete?: number }>;
   proposalSnapshot?: { quoteId?: string; version?: number; total?: number; acceptedAt?: string } | null;
   updatedAt?: string;
   createdAt?: string;

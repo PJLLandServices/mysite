@@ -8,7 +8,8 @@ import {
   PROJECT_STATUS_TONES,
   money,
   relativeDay,
-  taskProgress
+  taskProgress,
+  projectPercentComplete
 } from "../lib/format";
 import { PageBody, PageHeader } from "../shell/AppShell";
 import { Button, Card, EmptyState, ErrorNote, LoadingRows, StatusPill, TextInput, cx } from "../ui/primitives";
@@ -26,7 +27,9 @@ const FILTERS: Array<{ key: ProjectStatus | "all"; label: string }> = [
 function ProgressCell({ project }: { project: ProjectSummary }) {
   const { done, total } = taskProgress(project.tasks);
   if (!total) return <span className="text-ink-muted">—</span>;
-  const pct = Math.round((done / total) * 100);
+  // The COUNT labels the row; the PERCENTAGE draws the bar, and it is the
+  // server's own figure — a task at 60% moves it, which done/total cannot.
+  const pct = projectPercentComplete(project.tasks);
   return (
     <div className="min-w-[104px]">
       <div className="flex items-baseline justify-between gap-2">
