@@ -187,13 +187,19 @@ export function TasksTab() {
     onSuccess: () => { setError(null); refresh(); },
     onError
   });
+  const restore = useMutation({
+    mutationFn: (taskId: string) => tasksApi.restore(id, taskId),
+    onSuccess: () => { setError(null); refresh(); },
+    onError
+  });
   const seed = useMutation({
     mutationFn: () => tasksApi.seedFromQuote(id),
     onSuccess: () => { setError(null); refresh(); },
     onError
   });
 
-  const busy = add.isPending || setProgress.isPending || rename.isPending || remove.isPending || seed.isPending;
+  const busy = add.isPending || setProgress.isPending || rename.isPending
+    || remove.isPending || restore.isPending || seed.isPending;
 
   if (isLoading) return <Card><LoadingRows rows={4} /></Card>;
   if (!data) return null;
@@ -224,6 +230,14 @@ export function TasksTab() {
       run: () => remove.mutate(t.id)
     });
   };
+
+  const askRestore = (t: ProjectTask) =>
+    setConfirm({
+      title: "Put this task back on the list?",
+      body: `"${t.description}" returns to the job at ${t.status === "done" ? 100 : Number(t.percentComplete) || 0}% — exactly where it was. Nothing the crew logged was ever removed, so nothing needs rebuilding.`,
+      confirmLabel: "Restore it",
+      run: () => restore.mutate(t.id)
+    });
 
   const askProgress = (t: ProjectTask, percent: number) => {
     // Finishing and reopening are the two that change what the job says
@@ -325,13 +339,20 @@ export function TasksTab() {
           />
           <ul className="divide-y divide-line">
             {archived.map((t) => (
-              <li key={t.id} className="px-4 py-3">
-                <p className="font-medium text-ink-muted line-through break-words">{t.description}</p>
-                <p className="mt-0.5 text-[13px] text-ink-muted">
-                  Archived {t.archivedAt ? shortDate(t.archivedAt) : ""}
-                  {t.archivedBy ? ` by ${t.archivedBy}` : ""}
-                  {t.archivedReason ? ` — ${t.archivedReason}` : ""}
-                </p>
+              <li key={t.id} className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-ink-muted line-through break-words">{t.description}</p>
+                  <p className="mt-0.5 text-[13px] text-ink-muted">
+                    Archived {t.archivedAt ? shortDate(t.archivedAt) : ""}
+                    {t.archivedBy ? ` by ${t.archivedBy}` : ""}
+                    {t.archivedReason ? ` — ${t.archivedReason}` : ""}
+                  </p>
+                </div>
+                {/* An archive done by mistake has to be undoable here — the
+                    alternative is editing the project file by hand. */}
+                <Button size="sm" disabled={busy} onClick={() => askRestore(t)}>
+                  Restore
+                </Button>
               </li>
             ))}
           </ul>

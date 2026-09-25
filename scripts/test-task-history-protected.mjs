@@ -78,8 +78,9 @@ try {
 
   const users = require(path.join(ROOT, "server", "lib", "users.js"));
   fs.writeFileSync(path.join(DATA, "users.json"), "[]\n");
-  await users.create({ email: "history@local.test", name: "Patrick Lyons", role: "admin", password: "history-probe-12345" });
-  await users.create({ email: "tech@local.test", name: "A Technician", role: "tech", password: "tech-probe-12345" });
+  await users.create({ email: "history@local.test", name: "Dana Okonkwo", role: "admin", password: "history-probe-12345" });
+  await users.create({ email: "tech@local.test", name: "Rosa Petrakis", role: "tech", password: "tech-probe-12345" });
+  await users.create({ email: "second@local.test", name: "Ivo Brandt", role: "admin", password: "second-probe-12345" });
 
   const signIn = async (email, password) => {
     const r = await fetch(`${BASE}/api/login`, {
@@ -90,6 +91,7 @@ try {
       .map((c) => String(c).split(";")[0]).find((c) => c.startsWith("pjl_crm_session=")) || "";
   };
   const adminCookie = await signIn("history@local.test", "history-probe-12345");
+  const secondCookie = await signIn("second@local.test", "second-probe-12345");
   const techCookie = await signIn("tech@local.test", "tech-probe-12345");
   ok("both an admin and a tech can sign in", Boolean(adminCookie) && Boolean(techCookie));
   const H = { cookie: adminCookie, "content-type": "application/json" };
@@ -174,7 +176,7 @@ try {
     ok("the entry exists for this task", Boolean(entry), JSON.stringify(hist.slice(-2)));
     if (entry) {
       ok("...it records WHO, by name and not a uid",
-        entry.by === "Patrick Lyons", String(entry.by));
+        entry.by === "Dana Okonkwo", String(entry.by));
       ok("...it records WHEN", Boolean(entry.ts) && !Number.isNaN(Date.parse(entry.ts)), String(entry.ts));
       ok("...it records that the change came from the OFFICE, not a visit",
         /via manual/.test(String(entry.note)), String(entry.note));
@@ -231,7 +233,7 @@ try {
     ok("THE RECORD IS STILL THERE", Boolean(t), "the task was spliced out — references now dangle");
     if (t) {
       ok("...stamped with when it was archived", Boolean(t.archivedAt), String(t.archivedAt));
-      ok("...and by whom, by name", t.archivedBy === "Patrick Lyons", String(t.archivedBy));
+      ok("...and by whom, by name", t.archivedBy === "Dana Okonkwo", String(t.archivedBy));
       ok("...and why", /daily-log/.test(String(t.archivedReason)), String(t.archivedReason));
       ok("...with its progress intact", t.percentComplete === 20, String(t.percentComplete));
     }
@@ -308,6 +310,136 @@ try {
     ok("...and the recorded hours are untouched", hrsAfter === hrsBefore, `${hrsBefore} → ${hrsAfter}`);
     const woHist = (await workOrders.get(wo.id)).history.filter((h) => String(h.note).includes(t2.id));
     ok("...and the work order's own history still names it", woHist.length > 0, String(woHist.length));
+  }
+
+  // ── ATTRIBUTION COMES FROM THE AUTHENTICATED USER ─────────────────
+  //
+  // Patrick: "The production route must derive the actor from the
+  // authenticated user — never a hard-coded name or stale profile value.
+  // Add a test using two different authenticated users so attribution
+  // cannot accidentally be fixed to one person."
+  //
+  // Two admins, alternating writes on one job. A hard-coded name, a name
+  // baked into the session cookie, or anything cached per-process would
+  // make the second user's writes carry the first user's name — so the
+  // test alternates rather than checking each in isolation.
+  {
+    const t = await projects.addTask(proj.id, { description: "Who did this" });
+    const bothHeaders = [
+      { who: "Dana Okonkwo", H: { cookie: adminCookie, "content-type": "application/json" } },
+      { who: "Ivo Brandt", H: { cookie: secondCookie, "content-type": "application/json" } }
+    ];
+    const seen = [];
+    for (const [i, u] of [...bothHeaders, ...bothHeaders].entries()) {
+      const r = await fetch(progressUrl(t.id), {
+        method: "POST", headers: u.H, body: JSON.stringify({ percent: 10 * (i + 1) })
+      });
+      ok(`${u.who} can write (pass ${i + 1})`, r.ok, `status ${r.status}`);
+      const hist = (await projects.get(proj.id)).history;
+      const last = [...hist].reverse().find((h) => h.action === "task_progress" && String(h.note).includes(t.id));
+      seen.push(last && last.by);
+      ok(`...and the entry is attributed to ${u.who}, not whoever wrote last`,
+        last && last.by === u.who, String(last && last.by));
+    }
+    ok("attribution alternated with the signed-in user, so it is not fixed to one person",
+      seen.join(",") === "Dana Okonkwo,Ivo Brandt,Dana Okonkwo,Ivo Brandt", seen.join(","));
+
+    // ...and it is not a STALE profile value: rename the user and the very
+    // next write carries the new name, because actorLabel re-reads the user
+    // record rather than trusting anything carried in the session.
+    const all = await users.list();
+    const ivo = all.find((u) => u.email === "second@local.test");
+    await users.update(ivo.id, { name: "Ivo Brandt-Reyes" });
+    const r = await fetch(progressUrl(t.id), {
+      method: "POST", headers: bothHeaders[1].H, body: JSON.stringify({ percent: 55 })
+    });
+    ok("a write after a profile rename succeeds", r.ok, `status ${r.status}`);
+    const hist = (await projects.get(proj.id)).history;
+    const last = [...hist].reverse().find((h) => h.action === "task_progress" && String(h.note).includes(t.id));
+    ok("...and carries the NEW name, so the actor is never a stale profile value",
+      last && last.by === "Ivo Brandt-Reyes", String(last && last.by));
+
+    // Nobody's name is compiled in: the whole server tree must not contain
+    // the fixture names, or a hard-coded default could be passing all of
+    // the above by coincidence.
+    const serverSrc = fs.readFileSync(path.join(ROOT, "server", "server.js"), "utf8");
+    const projSrc = fs.readFileSync(path.join(ROOT, "server", "lib", "projects.js"), "utf8");
+    ok("no operator name is hard-coded in the routes",
+      !/Dana Okonkwo|Ivo Brandt|Rosa Petrakis/.test(serverSrc + projSrc));
+  }
+
+  // ── RESTORE · an accidental archive is recoverable ────────────────
+  //
+  // Patrick: "an accidental archive must be recoverable without editing
+  // project data manually. Restoring should preserve all existing logs,
+  // photos, hours and audit history."
+  {
+    const t = await projects.addTask(proj.id, { description: "Archived by mistake" });
+    // Give it real field activity so it archives rather than deletes.
+    await fetch(`${BASE}/api/work-orders/${encodeURIComponent(wo.id)}/tasks-done`, {
+      method: "POST", headers: H, body: JSON.stringify({ taskId: t.id, percentDelta: 35 })
+    });
+    const logsBefore = ((await workOrders.get(wo.id)).dailyLog.tasksCompletedToday || [])
+      .filter((l) => l.taskId === t.id).length;
+    const hrsBefore = (await projects.computeProjectMetrics(proj.id)).totalPersonHours;
+    const daysBefore = (await projects.computeProjectMetrics(proj.id)).daysLogged;
+    const woHistBefore = (await workOrders.get(wo.id)).history.length;
+
+    const del = await fetch(`${BASE}/api/projects/${encodeURIComponent(proj.id)}/tasks/${encodeURIComponent(t.id)}`,
+      { method: "DELETE", headers: H });
+    ok("the task archives", (await del.json()).archived === t.id);
+    const totalWhileArchived = (await projects.computeProjectMetrics(proj.id)).totalTasks;
+
+    // Restore, as a DIFFERENT user than the one who archived it — the
+    // audit trail has to show both people, not overwrite one with the other.
+    const r = await fetch(`${BASE}/api/projects/${encodeURIComponent(proj.id)}/tasks/${encodeURIComponent(t.id)}/restore`,
+      { method: "POST", headers: { cookie: secondCookie, "content-type": "application/json" } });
+    const j = await r.json();
+    ok("an archived task can be restored from the screen", r.ok && j.ok, `status ${r.status} ${JSON.stringify(j).slice(0, 160)}`);
+
+    const back = await taskNow(t.id);
+    ok("it is no longer archived", !back.archivedAt, String(back.archivedAt));
+    ok("...and the archive stamps are cleared with it",
+      !back.archivedBy && !back.archivedReason, `${back.archivedBy} / ${back.archivedReason}`);
+    ok("...it returns at exactly the progress it had (35%)", back.percentComplete === 35, String(back.percentComplete));
+    ok("...and counts again", (await projects.computeProjectMetrics(proj.id)).totalTasks === totalWhileArchived + 1);
+
+    // NOTHING was rebuilt, because nothing was ever removed.
+    const woNow = await workOrders.get(wo.id);
+    ok("the crew's daily-log line for it survived the whole round trip",
+      (woNow.dailyLog.tasksCompletedToday || []).filter((l) => l.taskId === t.id).length === logsBefore,
+      `${logsBefore} before`);
+    const m = await projects.computeProjectMetrics(proj.id);
+    ok("...the recorded hours are unchanged", m.totalPersonHours === hrsBefore, `${hrsBefore} → ${m.totalPersonHours}`);
+    ok("...the days logged are unchanged", m.daysLogged === daysBefore, `${daysBefore} → ${m.daysLogged}`);
+    ok("...and the work order's own history was never touched",
+      woNow.history.length === woHistBefore, `${woHistBefore} → ${woNow.history.length}`);
+
+    // The audit trail GREW — it reads as what happened, not as though it
+    // never did — and names both people.
+    const hist = (await projects.get(proj.id)).history;
+    const arch = hist.find((h) => h.action === "task_archived" && String(h.note).includes(t.id));
+    const rest = hist.find((h) => h.action === "task_restored" && String(h.note).includes(t.id));
+    ok("the archive entry is still in the audit trail", Boolean(arch), "archive entry gone");
+    ok("...and a restore entry joins it", Boolean(rest), "restore entry missing");
+    ok("...archived by the one who archived it", arch && arch.by === "Dana Okonkwo", String(arch && arch.by));
+    ok("...restored by the one who restored it", rest && rest.by === "Ivo Brandt-Reyes", String(rest && rest.by));
+
+    // Restoring something that is not archived is refused, not a silent no-op.
+    const again = await fetch(`${BASE}/api/projects/${encodeURIComponent(proj.id)}/tasks/${encodeURIComponent(t.id)}/restore`,
+      { method: "POST", headers: H });
+    ok("restoring a live task is refused", again.status === 409, `status ${again.status}`);
+    const ghost = await fetch(`${BASE}/api/projects/${encodeURIComponent(proj.id)}/tasks/task_nope/restore`,
+      { method: "POST", headers: H });
+    ok("restoring an unknown task is a 404", ghost.status === 404, `status ${ghost.status}`);
+
+    // And once restored, both doors work on it again.
+    const office = await fetch(progressUrl(t.id), { method: "POST", headers: H, body: JSON.stringify({ percent: 70 }) });
+    ok("the office can move a restored task", office.ok, `status ${office.status}`);
+    const field = await fetch(`${BASE}/api/work-orders/${encodeURIComponent(wo.id)}/tasks-done`, {
+      method: "POST", headers: H, body: JSON.stringify({ taskId: t.id, percentDelta: 5 })
+    });
+    ok("...and so can the field", field.ok, `status ${field.status}`);
   }
 
   // ── re-seeding from the quote must not wipe archived tasks ─────────

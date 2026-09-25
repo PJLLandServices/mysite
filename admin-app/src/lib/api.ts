@@ -203,6 +203,13 @@ export const tasksApi = {
   setProgress: (projectId: string, taskId: string, percent: number) =>
     api.post<{ task: ProjectTask; metrics: ProjectMetrics }>(
       `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/progress`, { percent }),
+  /* Put an archived task back on the list. Nothing is reconstructed —
+     archiving never removed the progress, the crew's daily-log lines,
+     their photos or the recorded hours, so this only clears the fields
+     archiving added. Both entries stay in the audit trail. */
+  restore: (projectId: string, taskId: string) =>
+    api.post<{ task: ProjectTask; metrics: ProjectMetrics }>(
+      `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/restore`),
   seedFromQuote: (projectId: string) =>
     api.post<{ project: ProjectDetail }>(`/api/projects/${encodeURIComponent(projectId)}/tasks/seed`)
 };

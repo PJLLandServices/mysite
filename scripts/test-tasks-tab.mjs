@@ -310,6 +310,27 @@ try {
     ok("...attributed to a person, not 'admin'", stored.archivedBy === "Tasks Tab", String(stored.archivedBy));
   }
 
+  // ---- 7c. an accidental archive is undoable from the screen ----------
+  {
+    const row = page.locator("li", { hasText: "Program the controller" });
+    await row.getByRole("button", { name: "Restore" }).click();
+    await page.waitForSelector('[role="alertdialog"]', { timeout: 5000 });
+    const dlg = await page.locator('[role="alertdialog"]').innerText();
+    ok("restoring asks first", /put this task back on the list/i.test(dlg), dlg.slice(0, 300));
+    ok("...and says it comes back exactly where it was",
+      /50%/.test(dlg) && /nothing needs rebuilding/i.test(dlg), dlg.slice(0, 400));
+    await page.getByRole("button", { name: "Restore it" }).click();
+    await page.waitForFunction(
+      () => !/Archived/.test(document.querySelector("main")?.innerText || ""), { timeout: 10000 });
+
+    const stored = (await projects.get(proj.id)).tasks.find((t) => t.id === t3.id);
+    ok("the task is back on the job", stored && !stored.archivedAt, JSON.stringify(stored || null).slice(0, 160));
+    ok("...at the progress it had", stored.percentComplete === 50, String(stored.percentComplete));
+    const text = await page.locator("main").innerText();
+    ok("...and it is back in the working list, not the archive",
+      /Program the controller/.test(text) && !/Archived/.test(text), text.slice(0, 600));
+  }
+
   // ---- 8. no native dialogs, anywhere ---------------------------------
   ok("the app never used a native alert/confirm/prompt", nativeDialogs.length === 0, nativeDialogs.join(" | "));
 

@@ -2,6 +2,32 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-25 (Attribution comes from the signed-in user; an archive is undoable):** Two follow-ups
+Patrick required before merging the Tasks tab.
+
+**The actor is derived, never fixed.** `actorLabel(req)` resolves `requireUser(req)` →
+`users.get(session.uid)` → `user.name || user.email || uid`, re-reading the user record on **every
+request**, so it is neither hard-coded nor a value cached in the session. The name in the earlier
+test fixture was invented test data and never existed in any production path; fixtures now use
+plainly fictional names that are nobody's. Pinned by two different authenticated admins writing
+**alternately** to one task — a hard-coded name, a name baked into the cookie, or any per-process
+cache would make the second user's write carry the first user's name, which checking each in
+isolation would miss — plus a rename of a user's profile mid-run, whose very next write carries the
+NEW name, and a source scan asserting no operator name appears in `server.js` or `lib/projects.js`.
+
+**Restore.** `POST /api/projects/:id/tasks/:taskId/restore` puts an archived task back. It
+reconstructs **nothing**, because archiving removed nothing: archiving only ADDS `archivedAt`,
+`archivedBy` and `archivedReason`, and the progress, the work orders' daily-log lines, their
+photos, the recorded hours and the WO's own history were untouched throughout. Restoring clears
+those three fields and the task returns at exactly the percentage it held. The audit trail **grows**
+— the archive entry stays and a restore entry joins it, each carrying its own actor — so the record
+reads as what happened rather than as though it never did. Restoring a live task is a 409, an
+unknown one a 404, and both doors work on a restored task again.
+
+`scripts/test-task-history-protected.mjs` is now **82 assertions**; `test-tasks-tab.mjs` **52**,
+including the Restore button, its confirm ("comes back exactly where it was"), and the row moving
+out of the Archived section.
+
 **2026-09-25 (Office corrections must not erase field history — tasks archive, they do not vanish):**
 Patrick, reviewing the Tasks tab before merge, named five rules. **Two did not hold.**
 `removeTask()` spliced the record out of the array and refused only when the task was DONE — so a

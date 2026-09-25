@@ -16437,6 +16437,28 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // POST /api/projects/:id/tasks/:taskId/restore — put an archived task
+  // back on the list (2026-09-25). Patrick: "an accidental archive must be
+  // recoverable without editing project data manually."
+  //
+  // Nothing is reconstructed, because archiving never removed anything:
+  // the progress, the work orders' daily-log lines, their photos and the
+  // recorded hours were untouched the whole time. This clears the three
+  // fields archiving added, and the audit trail keeps BOTH entries.
+  const taskRestoreMatch = pathname.match(/^\/api\/projects\/([^/]+)\/tasks\/([^/]+)\/restore$/);
+  if (taskRestoreMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(taskRestoreMatch[1]);
+      const taskId = decodeURIComponent(taskRestoreMatch[2]);
+      const task = await projects.restoreTask(id, taskId, { by: await actorLabel(req) });
+      const metrics = await projects.computeProjectMetrics(id);
+      return sendJson(res, 200, { ok: true, task, metrics });
+    } catch (err) {
+      const status = err.code === "task_not_found" ? 404 : err.code === "task_not_archived" ? 409 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't restore that task."] });
+    }
+  }
+
   // GET /api/projects/:id/task-photos — list task-anchored photo refs
   // across all build WOs. Used by project task list + status update.
   const taskPhotosMatch = pathname.match(/^\/api\/projects\/([^/]+)\/task-photos$/);

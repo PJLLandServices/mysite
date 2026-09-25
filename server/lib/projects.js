@@ -1166,6 +1166,41 @@ async function removeTask(projectId, taskId, { by = "admin" } = {}) {
   });
 }
 
+/* Put an archived task back on the list (2026-09-25).
+ *
+ * Patrick: "an accidental archive must be recoverable without editing
+ * project data manually. Restoring should preserve all existing logs,
+ * photos, hours and audit history."
+ *
+ * It can, because archiving never took anything away. Archiving ADDS
+ * three fields; the progress, the completion stamps, the work orders'
+ * daily-log lines, their photos and the recorded hours were untouched
+ * throughout. So restoring is the exact inverse — clear the three
+ * fields — and there is deliberately nothing here that reconstructs
+ * state, because there is no state to reconstruct.
+ *
+ * The audit trail GROWS: the archive entry stays and a restore entry
+ * joins it, so the record reads as what happened rather than as though
+ * it never did. */
+async function restoreTask(projectId, taskId, { by = "admin" } = {}) {
+  return _mutate(projectId, (proj) => {
+    const t = (proj.tasks || []).find((x) => x.id === taskId);
+    if (!t) throw Object.assign(new Error("Task not found."), { code: "task_not_found" });
+    if (!taskIsArchived(t)) {
+      throw Object.assign(new Error("That task is not archived."), { code: "task_not_archived" });
+    }
+    const wasArchivedAt = t.archivedAt;
+    delete t.archivedAt;
+    delete t.archivedBy;
+    delete t.archivedReason;
+    appendHistory(proj, {
+      action: "task_restored", by,
+      note: `${taskId} ${t.description.slice(0, 60)} — archived ${wasArchivedAt}, back on the list`
+    });
+    return t;
+  });
+}
+
 async function markTaskComplete(projectId, taskId, completedByWoId, { by = "admin" } = {}) {
   return _mutate(projectId, (proj) => {
     const t = (proj.tasks || []).find((x) => x.id === taskId);
@@ -2483,6 +2518,7 @@ module.exports = {
   addTaskProgress,
   taskIsArchived,
   activeTasks,
+  restoreTask,
   // Brief 2 — metrics & billing
   computeProjectMetrics,
   computeTAndMBilling,
