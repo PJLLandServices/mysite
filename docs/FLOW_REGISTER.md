@@ -2,6 +2,49 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-25 (Office corrections must not erase field history — tasks archive, they do not vanish):**
+Patrick, reviewing the Tasks tab before merge, named five rules. **Two did not hold.**
+`removeTask()` spliced the record out of the array and refused only when the task was DONE — so a
+task at 40%, with the crew's daily-log lines and task-anchored photos pointing at its id, could be
+erased from the office and leave those references dangling against an id that existed nowhere.
+
+**Archiving.** `removeTask()` now checks whether anything has ever referenced the task —
+work-order daily-log lines, task-anchored photos, progress logged, a completion, or a non-planning
+history entry — and **archives** when any of it is found (`archivedAt`, `archivedBy`,
+`archivedReason` naming the evidence), deleting outright only a task nothing ever touched. The
+reference check deliberately over-reports: a false positive costs one archived row, a false
+negative costs a dangling reference. **Planning is not a reference** — `task_added`,
+`task_updated`, `tasks_seeded`, `task_archived` and `task_removed` are excluded, because a task you
+typed wrong and renamed is still a typo and the list must stay clearable. That exclusion was a real
+flaw in the first cut, caught by the browser walk.
+
+**`activeTasks()` is the one rule for "still counts"**, and every reader calls it — the
+cancelled-booking slot leak's lesson applied (CLAUDE.md, `bookingHoldsItsSlot`): `canReseedTasks`,
+`seedTasksFromQuote`'s guard, `computeProjectMetrics` (totals, done count AND percentage), the
+status-update generator's recent/upcoming lists, `pendingTasks`, the `/tasks` endpoint (archived
+served only under `?includeArchived=1`), and the client's `live()` in `format.ts`, which both
+`taskProgress()` and `projectPercentComplete()` filter through. **`seedTasksFromQuote()` replaces
+the task array**, which would have quietly undone all of it — it now preserves archived tasks
+across a re-seed. Neither door may move an archived task: office and field both answer 409.
+
+**Attribution.** All four task writes now stamp `actorLabel(req)` rather than a raw uid or the
+literal "admin" — `by` lands in history and, for an archive, on the record the Tasks tab renders,
+where "usr_a1b2c3" in front of Patrick is not a record of who did it.
+
+**The other three rules already held, and are now executed rather than asserted:** a 40%→20%
+correction appends `-20% → 20% via manual` with the actor's name and a timestamp while leaving the
+crew's original `+40%` entry untouched; reopening clears `completedAt` and `completedByWoId`
+without touching the work order's daily-log lines, its history, or the recorded hours; and the
+office route sits behind the same `needsAuth() === "user"` gate as the work-order route — **there
+is no per-project ACL anywhere in this system**, it is single-tenant and staff-only, and the test
+says so rather than implying a permission model that does not exist.
+
+`scripts/test-task-history-protected.mjs` (52 assertions, **in `build:check`**) walks all five
+rules against real projects, real build work orders, real sessions and real photos — including
+that the daily-log line still resolves after archiving, that hours and days-logged are unmoved,
+and that a re-seed does not wipe the archive. Verified to FAIL on the pre-change tree, headline
+first: *"THE RECORD IS STILL THERE — the task was spliced out, references now dangle."*
+
 **2026-09-25 (One task record, two doors — the office gets a way in):** Patrick set the split:
 *"Field app: technicians clock in/out, update task progress, record daily work, photos, parts used,
 and issues. Project Workspace: you plan and assign tasks, review daily records and labour, approve

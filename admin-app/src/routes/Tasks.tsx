@@ -199,17 +199,31 @@ export function TasksTab() {
   if (!data) return null;
 
   const tasks = (data.project.tasks || []) as ProjectTask[];
-  const ordered = [...tasks].sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
+  // Archived tasks are off the list and out of every figure. They are kept
+  // below, greyed, because the crew's daily logs and photos point at them
+  // — losing sight of them is how a work order ends up referring to
+  // something nobody can find.
+  const archived = tasks.filter((t) => t.archivedAt);
+  const ordered = tasks
+    .filter((t) => !t.archivedAt)
+    .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
   const hasQuote = Boolean(data.project.sourceQuoteId);
 
-  const askDelete = (t: ProjectTask) =>
+  const askDelete = (t: ProjectTask) => {
+    // Whether this deletes or archives is the server's call — it is the
+    // only side that can see the crew's daily logs and photos. So the
+    // question states the RULE rather than guessing the outcome.
+    const worked = (Number(t.percentComplete) || 0) > 0 || t.status !== "pending";
     setConfirm({
       title: "Remove this task?",
-      body: `"${t.description}" would be taken off this job's list. Anything already logged against it on a visit stays on that visit's record.`,
-      confirmLabel: "Remove task",
+      body: worked
+        ? `"${t.description}" has work logged against it, so it will be archived rather than deleted — it comes off the job's list and out of the figures, but the crew's daily records and photos still point at it.`
+        : `"${t.description}" comes off this job's list. If anything has ever been logged against it, it is archived instead of deleted and nothing the crew recorded is lost.`,
+      confirmLabel: worked ? "Archive it" : "Remove task",
       destructive: true,
       run: () => remove.mutate(t.id)
     });
+  };
 
   const askProgress = (t: ProjectTask, percent: number) => {
     // Finishing and reopening are the two that change what the job says
@@ -302,6 +316,27 @@ export function TasksTab() {
           <Button type="submit" variant="primary" disabled={!adding.trim() || busy}>Add task</Button>
         </form>
       </Card>
+
+      {archived.length ? (
+        <Card>
+          <CardHeader
+            title="Archived"
+            meta={`${archived.length} task${archived.length === 1 ? "" : "s"} off the list — kept because the crew's records point at them`}
+          />
+          <ul className="divide-y divide-line">
+            {archived.map((t) => (
+              <li key={t.id} className="px-4 py-3">
+                <p className="font-medium text-ink-muted line-through break-words">{t.description}</p>
+                <p className="mt-0.5 text-[13px] text-ink-muted">
+                  Archived {t.archivedAt ? shortDate(t.archivedAt) : ""}
+                  {t.archivedBy ? ` by ${t.archivedBy}` : ""}
+                  {t.archivedReason ? ` — ${t.archivedReason}` : ""}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
 
       <p className="text-[13px] text-ink-muted">
         The crew updates these on site through the field app — this is the same list, not a copy of it.

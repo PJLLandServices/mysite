@@ -63,7 +63,7 @@ export interface ProjectSummary {
   /* `percentComplete` is the server's cumulative per-task figure, and
      `status` follows it. Reading status alone reports a task logged at
      60% as not started — see projectPercentComplete() in format.ts. */
-  tasks?: Array<{ id: string; status: string; percentComplete?: number }>;
+  tasks?: Array<{ id: string; status: string; percentComplete?: number; archivedAt?: string | null }>;
   proposalSnapshot?: { quoteId?: string; version?: number; total?: number; acceptedAt?: string } | null;
   updatedAt?: string;
   createdAt?: string;
@@ -162,6 +162,12 @@ export interface ProjectTask {
   sourceLineItemId?: string | null;
   completedAt?: string | null;
   completedByWoId?: string | null;
+  /* Set when the task was taken off the list but KEPT, because the crew's
+     daily logs or photos point at its id. It stops counting everywhere;
+     nothing that references it is left dangling. */
+  archivedAt?: string | null;
+  archivedBy?: string | null;
+  archivedReason?: string | null;
 }
 
 /* What the server computes about a job. Displayed, never recomputed —
@@ -185,8 +191,11 @@ export const tasksApi = {
   update: (projectId: string, taskId: string, patch: { description?: string; notes?: string; order?: number }) =>
     api.patch<{ task: ProjectTask }>(
       `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}`, patch),
+  /* Removing is archive-or-delete, decided by the server: a task anything
+     has ever referenced is kept and stops counting; one nothing ever
+     touched is really gone. The response says which happened and why. */
   remove: (projectId: string, taskId: string) =>
-    api.del<{ removed: boolean }>(
+    api.del<{ removed: string | null; archived: string | null; reasons: string[] }>(
       `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}`),
   /* The office door onto the same record the field app writes. `percent`
      is absolute — what a person means by "set it to 60" — and the server

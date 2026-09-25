@@ -83,7 +83,21 @@ function liftPercentComplete() {
   ok("the lifted rule still falls back to percentComplete", /percentComplete/.test(body), body.slice(0, 200));
   ok("the lifted rule still AVERAGES rather than counts", /\/ list\.length/.test(body), body.slice(0, 200));
 
-  const fn = new Function(`${body}\nreturn projectPercentComplete;`)();
+  // It leans on live(), the shared "archived tasks do not count" filter.
+  // Lift that too rather than stubbing it: a stub would happily pass while
+  // the shipped filter was broken, which is the whole failure mode this
+  // file exists to prevent.
+  const liveStart = FORMAT_SRC.indexOf("function live<");
+  assert.ok(liveStart > 0, "live() is gone from format.ts — projectPercentComplete no longer filters archived tasks");
+  const liveRest = FORMAT_SRC.slice(liveStart);
+  const liveEnd = liveRest.indexOf("\n}\n");
+  assert.ok(liveEnd > 0, "could not find the end of live()");
+  const liveBody = liveRest.slice(0, liveEnd + 3)
+    .replace(/<T extends \{[^}]*\}>/, "")
+    .replace(/\(tasks:\s*T\[\]\s*\|\s*undefined\)\s*:\s*T\[\]/, "(tasks)");
+  ok("the lifted filter still drops archived tasks", /archivedAt/.test(liveBody), liveBody.slice(0, 160));
+
+  const fn = new Function(`${liveBody}\n${body}\nreturn projectPercentComplete;`)();
   assert.equal(typeof fn, "function", "lifted value is not a function");
   return fn;
 }
@@ -115,6 +129,19 @@ for (const c of CASES) {
   const got = browserRule(c.tasks);
   ok(`the app: ${c.name} reads ${c.expect}%`, got === c.expect, `got ${got}`);
 }
+
+// An archived task is off the job. It must not drag the percentage down,
+// or removing a half-done task would make a job look LESS finished than
+// before it was taken off the list.
+ok(
+  "an archived task does not count toward the percentage",
+  browserRule([d(), { id: "a", status: "in_progress", percentComplete: 0, archivedAt: "2026-09-25T10:00:00Z" }]) === 100,
+  String(browserRule([d(), { id: "a", status: "in_progress", percentComplete: 0, archivedAt: "2026-09-25T10:00:00Z" }]))
+);
+ok(
+  "...and a job of nothing but archived tasks reads 0, not NaN",
+  browserRule([{ id: "a", status: "done", percentComplete: 100, archivedAt: "2026-09-25T10:00:00Z" }]) === 0
+);
 
 // The specific thing that was wrong, stated as its own assertion so the
 // regression cannot come back disguised as a rounding change.

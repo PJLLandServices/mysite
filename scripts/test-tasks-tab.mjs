@@ -262,10 +262,52 @@ try {
     await page.waitForSelector('[role="alertdialog"]', { timeout: 5000 });
     const dlg = await page.locator('[role="alertdialog"]').innerText();
     ok("removing a task asks first", /remove this task/i.test(dlg), dlg.slice(0, 300));
-    ok("...and says what stays on the visit's record", /stays on that visit/i.test(dlg), dlg.slice(0, 300));
+    // This one was typed and renamed at the desk, never worked on — so the
+    // question offers a real removal and promises nothing is lost if it
+    // turns out otherwise.
+    ok("...and promises the crew's records survive either way",
+      /nothing the crew recorded is lost/i.test(dlg), dlg.slice(0, 400));
     await page.getByRole("button", { name: "Remove task" }).click();
     await page.waitForFunction(() => !/Backfill, rake and seed/.test(document.querySelector("main")?.innerText || ""), { timeout: 10000 });
-    ok("the task is gone", true);
+    ok("a never-worked task is really gone", true);
+  }
+
+  // ---- 7b. a task the crew worked on is ARCHIVED, and says so ---------
+  //
+  // The half-done one carries the field's daily-log line. Removing it must
+  // offer archiving, in those words, and then keep it visible as archived
+  // rather than vanishing it.
+  {
+    const row = page.locator("li", { hasText: "Program the controller" });
+    await row.getByRole("button", { name: "50%" }).click();
+    // Waiting for "50%" in the page text would match the BUTTON on every
+    // unfinished row and pass instantly — wait on the record instead, then
+    // reload so the screen is reading what the server actually holds.
+    for (let i = 0; i < 50; i++) {
+      const t = (await projects.get(proj.id)).tasks.find((x) => x.id === t3.id);
+      if (t && t.percentComplete === 50) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    const at50 = (await projects.get(proj.id)).tasks.find((x) => x.id === t3.id);
+    ok("the desk moved that task to 50%", at50 && at50.percentComplete === 50, String(at50 && at50.percentComplete));
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForSelector("text=The list", { timeout: 10000 });
+    await page.locator("li", { hasText: "Program the controller" }).getByRole("button", { name: "Remove" }).click();
+    await page.waitForSelector('[role="alertdialog"]', { timeout: 5000 });
+    const dlg = await page.locator('[role="alertdialog"]').innerText();
+    ok("removing a worked task offers to ARCHIVE it", /archived rather than deleted/i.test(dlg), dlg.slice(0, 400));
+    ok("...and says the crew's records still point at it",
+      /still point at it/i.test(dlg), dlg.slice(0, 400));
+    await page.getByRole("button", { name: "Archive it" }).click();
+    await page.waitForSelector("text=Archived", { timeout: 10000 });
+    const text = await page.locator("main").innerText();
+    ok("it moves to an Archived section rather than disappearing",
+      /Archived/.test(text) && /Program the controller/.test(text), text.slice(0, 700));
+    ok("...which says why it was kept", /daily-log|progress logged|status/i.test(text), text.slice(-600));
+
+    const stored = (await projects.get(proj.id)).tasks.find((t) => t.id === t3.id);
+    ok("the record survives on the job", Boolean(stored) && Boolean(stored.archivedAt), JSON.stringify(stored || null).slice(0, 200));
+    ok("...attributed to a person, not 'admin'", stored.archivedBy === "Tasks Tab", String(stored.archivedBy));
   }
 
   // ---- 8. no native dialogs, anywhere ---------------------------------

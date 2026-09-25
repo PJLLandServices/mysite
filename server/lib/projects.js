@@ -790,7 +790,7 @@ async function enrichFromProposal(projectId, quote, { customerName = "", custome
     frozenAt: nowIso()
   };
 
-  const canReseedTasks = !(current.tasks || []).some((t) => t.status === "done");
+  const canReseedTasks = !activeTasks(current).some((t) => t.status === "done");
   const tasks = canReseedTasks
     ? (quote.lineItems || []).map((li, i) => ({
         id: "task_" + random8(),
@@ -968,14 +968,18 @@ async function _mutateUnlocked(projectId, fn) {
   return result === undefined ? next : result;
 }
 
-async function seedTasksFromQuote(projectId, quote) {
+async function seedTasksFromQuote(projectId, quote, { by = "admin" } = {}) {
   return _mutate(projectId, (proj) => {
     // Refuse if any task is already done — re-seed would erase history.
-    if ((proj.tasks || []).some((t) => t.status === "done")) {
+    if (activeTasks(proj).some((t) => t.status === "done")) {
       const err = new Error("Cannot re-seed tasks once any task is done.");
       err.code = "tasks_partially_done";
       throw err;
     }
+    // Archived tasks survive a re-seed. They are the record the crew's
+    // daily logs and photos point at; replacing the array wholesale would
+    // erase exactly what archiving exists to protect.
+    const keep = (proj.tasks || []).filter(taskIsArchived);
     proj.tasks = (quote.lineItems || []).map((li, idx) => ({
       id: "task_" + random8(),
       description: String(li.label || li.sourceKey || `Task ${idx + 1}`).slice(0, 400),
@@ -987,7 +991,9 @@ async function seedTasksFromQuote(projectId, quote) {
       order: idx,
       notes: ""
     }));
-    appendHistory(proj, { action: "tasks_seeded", note: `${proj.tasks.length} from quote ${quote.id}` });
+    const seeded = proj.tasks.length;
+    proj.tasks = proj.tasks.concat(keep);
+    appendHistory(proj, { action: "tasks_seeded", by, note: `${seeded} from quote ${quote.id}${keep.length ? `, ${keep.length} archived kept` : ""}` });
     return proj;
   });
 }
@@ -1030,16 +1036,133 @@ async function updateTask(projectId, taskId, patch, { by = "admin" } = {}) {
   });
 }
 
+/* ── Archived tasks (2026-09-25) ──────────────────────────────────
+ *
+ * Patrick: "Removing a task with work-order activity archives it rather
+ * than deleting its history. A task may be permanently deleted only if
+ * nothing has ever referenced it."
+ *
+ * Before this, removeTask() spliced the record out of the array. It
+ * refused only when the task was DONE — so a task at 40%, with the
+ * crew's daily-log lines and task-anchored photos pointing at its id,
+ * could be erased from the office, leaving those references dangling
+ * against an id that no longer existed anywhere.
+ *
+ * An archived task keeps its record, its id and everything that points
+ * at it. It simply stops counting.
+ *
+ * THIS IS THE ONE RULE FOR "STILL COUNTS", and every reader calls it —
+ * the same discipline the cancelled-booking slot leak taught
+ * (CLAUDE.md, `bookingHoldsItsSlot`): a state meaning "this no longer
+ * counts" has to be honoured by all of them, not just the one you are
+ * standing in. */
+function taskIsArchived(t) {
+  return Boolean(t && t.archivedAt);
+}
+function activeTasks(proj) {
+  return (proj && Array.isArray(proj.tasks) ? proj.tasks : []).filter((t) => !taskIsArchived(t));
+}
+
+/* Has anything, anywhere, ever pointed at this task?
+ *
+ * Deliberately generous: every answer here tips the decision toward
+ * KEEPING the record, and the cost of a false positive is one archived
+ * row nobody looks at. The cost of a false negative is a work order
+ * referring to a task that does not exist.
+ *
+ * Returns the reasons, not just a boolean, so the history entry can say
+ * WHY it was archived rather than asserting it. */
+async function taskReferences(proj, task) {
+  const reasons = [];
+  if (!task) return reasons;
+
+  // It has been worked, or was finished at some point.
+  const pct = task.status === "done" ? 100 : Number(task.percentComplete) || 0;
+  if (pct > 0) reasons.push(`progress logged (${pct}%)`);
+  if (task.status !== "pending") reasons.push(`status ${task.status}`);
+  if (task.completedAt) reasons.push("was completed");
+
+  // The crew's own records point at it by id.
+  try {
+    const workOrders = require("./work-orders");
+    const buildWos = await workOrders.listBuildWosForProject(proj.id);
+    let logLines = 0, photos = 0, wos = 0;
+    for (const wo of buildWos) {
+      const lines = (wo.dailyLog && wo.dailyLog.tasksCompletedToday) || [];
+      const hit = lines.filter((l) => String(l.taskId) === String(task.id)).length;
+      const pics = (wo.photos || []).filter((p) => String(p.taskId || "") === String(task.id)).length;
+      if (hit || pics) wos += 1;
+      logLines += hit;
+      photos += pics;
+    }
+    if (logLines) reasons.push(`${logLines} daily-log entr${logLines === 1 ? "y" : "ies"} on ${wos} work order${wos === 1 ? "" : "s"}`);
+    if (photos) reasons.push(`${photos} photo${photos === 1 ? "" : "s"} anchored to it`);
+  } catch (_) {
+    // Cannot read the work orders → cannot prove it is unreferenced.
+    // Archiving is the safe answer, so say so rather than staying silent.
+    reasons.push("work orders could not be read");
+  }
+
+  // The project's own audit trail names it — but only for things that
+  // happened TO the work, not for the office editing its own plan.
+  // Adding a task and renaming it are both just planning; a task you
+  // typed and immediately corrected must still be deletable, or the list
+  // fills with archived typos nobody can clear.
+  const PLANNING_ONLY = new Set(["task_added", "task_updated", "tasks_seeded", "task_archived", "task_removed"]);
+  const named = (proj.history || []).filter(
+    (h) => h && typeof h.note === "string" && h.note.includes(task.id) && !PLANNING_ONLY.has(h.action)
+  ).length;
+  if (named) reasons.push(`${named} history entr${named === 1 ? "y" : "ies"}`);
+
+  return reasons;
+}
+
+/* Remove a task — by archiving it when anything has ever referenced it,
+ * and only truly deleting one that nothing ever touched.
+ *
+ * The reference check runs BEFORE the mutation because it has to read
+ * the work orders, and _mutate's callback is synchronous. The store is
+ * single-writer and lock-serialised, so the window is narrow; a task
+ * that gained a reference inside it would be hard-deleted, which is why
+ * the check is written to over-report rather than under-report.
+ *
+ * Returns { removed, archived, reasons } — the caller needs to be able
+ * to tell the person which of the two things happened. */
 async function removeTask(projectId, taskId, { by = "admin" } = {}) {
-  return _mutate(projectId, (proj) => {
-    const i = (proj.tasks || []).findIndex((x) => x.id === taskId);
+  const proj = await get(projectId);
+  if (!proj) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
+  const existing = (proj.tasks || []).find((x) => x.id === taskId);
+  if (!existing) throw Object.assign(new Error("Task not found."), { code: "task_not_found" });
+  if (taskIsArchived(existing)) {
+    throw Object.assign(new Error("That task is already archived."), { code: "task_archived" });
+  }
+  const reasons = await taskReferences(proj, existing);
+
+  return _mutate(projectId, (p) => {
+    const i = (p.tasks || []).findIndex((x) => x.id === taskId);
     if (i === -1) throw Object.assign(new Error("Task not found."), { code: "task_not_found" });
-    if (proj.tasks[i].status === "done") {
+    const t = p.tasks[i];
+    if (t.status === "done") {
       throw Object.assign(new Error("Completed tasks cannot be removed."), { code: "task_locked" });
     }
-    const [removed] = proj.tasks.splice(i, 1);
-    appendHistory(proj, { action: "task_removed", by, note: removed.description.slice(0, 100) });
-    return { removed: removed.id };
+
+    if (reasons.length) {
+      // Archive. The record, its id and everything pointing at it stay.
+      t.archivedAt = nowIso();
+      t.archivedBy = by;
+      t.archivedReason = reasons.join("; ").slice(0, 300);
+      appendHistory(p, {
+        action: "task_archived", by,
+        note: `${taskId} ${t.description.slice(0, 60)} — kept because: ${t.archivedReason}`
+      });
+      return { removed: null, archived: t.id, reasons };
+    }
+
+    // Nothing ever referenced it: it was added and never touched, so
+    // there is no history to protect.
+    const [gone] = p.tasks.splice(i, 1);
+    appendHistory(p, { action: "task_removed", by, note: gone.description.slice(0, 100) });
+    return { removed: gone.id, archived: null, reasons: [] };
   });
 }
 
@@ -1236,15 +1359,18 @@ async function computeProjectMetrics(projectId) {
   const workOrders = require("./work-orders");
   const buildWos = await workOrders.listBuildWosForProject(projectId);
 
-  const totalTasks = (proj.tasks || []).length;
-  const doneTasks = (proj.tasks || []).filter((t) => t.status === "done").length;
+  // Archived tasks do not count — they were taken off the job's list and
+  // kept only so the crew's records still point somewhere.
+  const liveTasks = activeTasks(proj);
+  const totalTasks = liveTasks.length;
+  const doneTasks = liveTasks.filter((t) => t.status === "done").length;
   // Partial-aware progress: average each task's completion so a half-finished
   // task moves the bar, not only fully-done ones. done reads as 100 even on
   // legacy records that predate percentComplete. doneTasks is kept for the
   // "X of Y tasks" label.
   const taskPct = (t) => (t.status === "done" ? 100 : (Number(t.percentComplete) || 0));
   const percentComplete = totalTasks > 0
-    ? Math.round((proj.tasks || []).reduce((sum, t) => sum + taskPct(t), 0) / totalTasks)
+    ? Math.round(liveTasks.reduce((sum, t) => sum + taskPct(t), 0) / totalTasks)
     : 0;
 
   let totalPersonHours = 0;
@@ -1579,13 +1705,13 @@ async function generateStatusUpdate(projectId, { recipient, preamble = "" }, { b
     const m = metrics || (await computeProjectMetrics(projectId));
 
     // Recent completed tasks (up to 5).
-    const recentTasks = (proj.tasks || [])
+    const recentTasks = activeTasks(proj)
       .filter((t) => t.status === "done" && t.completedAt)
       .sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt)))
       .slice(0, 5);
 
     // Upcoming pending tasks (up to 3).
-    const upcoming = (proj.tasks || [])
+    const upcoming = activeTasks(proj)
       .filter((t) => t.status === "pending")
       .sort((a, b) => (a.order || 0) - (b.order || 0))
       .slice(0, 3);
@@ -1686,7 +1812,7 @@ async function completionPreflight(projectId) {
   }
 
   // Tasks
-  const pendingTasks = (proj.tasks || []).filter((t) => t.status !== "done").length;
+  const pendingTasks = activeTasks(proj).filter((t) => t.status !== "done").length;
   if (pendingTasks > 0) {
     checks.warnings.push({
       key: "tasks_pending",
@@ -2355,6 +2481,8 @@ module.exports = {
   markTaskComplete,
   unmarkTaskComplete,
   addTaskProgress,
+  taskIsArchived,
+  activeTasks,
   // Brief 2 — metrics & billing
   computeProjectMetrics,
   computeTAndMBilling,

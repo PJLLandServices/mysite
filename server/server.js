@@ -16304,7 +16304,15 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(taskListMatch[1]);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-      return sendJson(res, 200, { ok: true, tasks: proj.tasks || [] });
+      // Archived tasks are kept so the crew's records still point
+      // somewhere, but they are off the job's list. Ask for them
+      // explicitly with ?includeArchived=1.
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const all = proj.tasks || [];
+      const tasks = url.searchParams.get("includeArchived") === "1"
+        ? all
+        : all.filter((t) => !projects.taskIsArchived(t));
+      return sendJson(res, 200, { ok: true, tasks });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read tasks."] });
     }
@@ -16313,11 +16321,14 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(taskListMatch[1]);
       const payload = await parseRequestBody(req);
+      // actorLabel across all four task writes: `by` lands in history and,
+      // for an archive, on the record itself where the Tasks tab renders
+      // it. "admin" in front of Patrick is not a record of who did it.
       const task = await projects.addTask(id, {
         description: payload.description,
         sourceLineItemId: payload.sourceLineItemId || null,
         notes: payload.notes || ""
-      });
+      }, { by: await actorLabel(req) });
       return sendJson(res, 201, { ok: true, task });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't add task."] });
@@ -16330,7 +16341,7 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(taskItemMatch[1]);
       const taskId = decodeURIComponent(taskItemMatch[2]);
       const payload = await parseRequestBody(req);
-      const task = await projects.updateTask(id, taskId, payload);
+      const task = await projects.updateTask(id, taskId, payload, { by: await actorLabel(req) });
       return sendJson(res, 200, { ok: true, task });
     } catch (err) {
       const status = err.code === "task_locked" ? 409 : err.code === "task_not_found" ? 404 : 400;
@@ -16341,8 +16352,12 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(taskItemMatch[1]);
       const taskId = decodeURIComponent(taskItemMatch[2]);
-      const result = await projects.removeTask(id, taskId);
-      return sendJson(res, 200, { ok: true, removed: result.removed });
+      const result = await projects.removeTask(id, taskId, { by: await actorLabel(req) });
+      // removed = gone for good (nothing ever referenced it).
+      // archived = kept, because the crew's records point at it.
+      return sendJson(res, 200, {
+        ok: true, removed: result.removed, archived: result.archived, reasons: result.reasons || []
+      });
     } catch (err) {
       const status = err.code === "task_locked" ? 409 : err.code === "task_not_found" ? 404 : 400;
       return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't remove task."] });
@@ -16386,6 +16401,9 @@ async function handleApi(req, res, pathname) {
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
       const task = (proj.tasks || []).find((t) => t.id === taskId);
       if (!task) return sendJson(res, 404, { ok: false, errors: ["Task not found."] });
+      if (projects.taskIsArchived(task)) {
+        return sendJson(res, 409, { ok: false, errors: ["That task was archived and is no longer on this job."] });
+      }
 
       let delta;
       if (payload.percent !== undefined && payload.percent !== null) {
@@ -16402,9 +16420,11 @@ async function handleApi(req, res, pathname) {
         }
       }
 
-      const session = await requireUser(req);
+      // actorLabel, not the raw uid: `by` is rendered straight to the
+      // screen in nine surfaces, and "usr_a1b2c3" in front of Patrick is
+      // not a record of who changed it.
       const updated = await projects.addTaskProgress(id, taskId, delta, null, {
-        by: session?.uid || "admin"
+        by: await actorLabel(req)
       });
       // The job's own figure comes back with it, from the server's
       // calculation — so the screen never has to work out what the change
@@ -16443,7 +16463,7 @@ async function handleApi(req, res, pathname) {
       }
       const quote = await quotes.get(proj.sourceQuoteId);
       if (!quote) return sendJson(res, 422, { ok: false, errors: ["Source quote not found."] });
-      const updated = await projects.seedTasksFromQuote(id, quote);
+      const updated = await projects.seedTasksFromQuote(id, quote, { by: await actorLabel(req) });
       return sendJson(res, 200, { ok: true, project: updated });
     } catch (err) {
       const status = err.code === "tasks_partially_done" ? 409 : 400;
@@ -16526,6 +16546,9 @@ async function handleApi(req, res, pathname) {
         try {
           const proj = await projects.get(projectId);
           const t = (proj?.tasks || []).find((x) => x.id === taskId);
+          if (t && projects.taskIsArchived(t)) {
+            return sendJson(res, 409, { ok: false, errors: ["That task was archived and is no longer on this job."] });
+          }
           if (t) curPct = t.status === "done" ? 100 : (Number(t.percentComplete) || 0);
         } catch (_) {}
       }
