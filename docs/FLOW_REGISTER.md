@@ -2,6 +2,38 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-25 (Confirm visibly confirms; texts to the Twilio number are heard):** Two customers
+(Greg Davis, Behnaz) phoned Patrick saying "Confirm this appointment" didn't work, and customers
+were replying YES to the automated text from the unmonitored 647 number. PRD/TRD:
+`docs/BOOKING_CONFIRMATION_PRD.md` / `_TRD.md`.
+
+**The page.** The confirm POST always saved; `appointment.css` lacked the `[hidden]` polyfill, so
+`.ap-btn`/`.ap-badge` never hid — the button stayed, the "Confirmed" badge rendered off-screen, and
+Cancel/Reschedule stayed on offer inside the 24 h cutoff. Fixed, plus a `#doneNote` success line
+scrolled into view after every action. `scripts/lint-hidden-polyfill.mjs` (build:check) fails any
+page that toggles `.hidden` without the rule. `scripts/test-appointment-page-ui.mjs` (Playwright,
+phone viewport, not in build:check — CI has no Chromium): 9 of 14 fail on the old page, 14/14 after.
+
+**The texts.** New `POST /api/twilio-sms-incoming` (same `allowTwilioWebhook` signature gate as the
+voice routes) → `lib/sms-inbound.js`. YES with exactly one live assignment appointment on that
+phone → `appointmentActions.confirm(token, { via: "sms_reply" })`, the page button's own function,
+so `respondedAt` is the one fact every reader already honours (cadence steps 2–5 stop, step 6 still
+goes, Season Plan and page read "confirmed"; `REPLY_STATES.sms_reply = "confirmed"`). Zero or
+several matches never guess. Anything else is forwarded to Patrick's cell (`NOTIFY_TO_PHONE`) with
+the customer's name/street/appointment, and the customer gets "automated texting system — call or
+text (905) 960-0181" at most once per 12 h. STOP turns off `commPrefs.seasonalRemindersSMS` (Twilio
+blocks and replies itself); CANCEL is a carrier opt-out and never cancels an appointment. Log:
+`server/data/sms-inbound.json`. Untouched: dates, route, capacity, work orders, invoices.
+`scripts/test-sms-inbound.mjs` (build:check, 56 assertions, real booking store + real confirm).
+Templates now say "Reply YES to confirm" and that the number is automated (still ≤ 2 segments).
+
+**Patrick's acceptance test — not yet walked:** (1) after deploy, open an assignment link on your
+phone, tap Confirm, see the green "You're confirmed" line where you tapped; (2) set the 647 number's
+Messaging webhook in Twilio to `https://www.pjllandservices.com/api/twilio-sms-incoming` (POST);
+(3) from your own phone text "hello" to the 647 number — get the automated reply, and the forward
+lands on your cell. Saved template overrides on the Assignment Messages page win over the new
+default wording — re-save them if any exist.
+
 **2026-09-25 (Attribution comes from the signed-in user; an archive is undoable):** Two follow-ups
 Patrick required before merging the Tasks tab.
 

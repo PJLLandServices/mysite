@@ -113,7 +113,7 @@ const TEMPLATES = {
       "Hi {firstName}, this is PJL Land Services confirming we've received your request. " +
       "Patrick personally reviews every inquiry — you'll hear back within one business day. " +
       "If it's urgent, call (905) 960-0181.",
-    sms: "{namePrefix}PJL Land Services received your request. Patrick will be in touch within 1 business day. Track it: {portalUrl}"
+    sms: "{namePrefix}PJL Land Services received your request. Patrick will be in touch within 1 business day. Track it: {portalUrl} Automated text - to reach us, call or text (905) 960-0181."
   },
   reviewed: {
     subject: "PJL Land Services has reviewed your request",
@@ -121,7 +121,7 @@ const TEMPLATES = {
     body:
       "Hi {firstName}, Patrick at PJL Land Services has reviewed your request and will reach out " +
       "to walk through next steps. Your project details are saved in your portal.",
-    sms: "{namePrefix}PJL has reviewed your request. Patrick will reach out next. Portal: {portalUrl}"
+    sms: "{namePrefix}PJL has reviewed your request. Patrick will reach out next. Portal: {portalUrl} Automated text - to reach us, call or text (905) 960-0181."
   },
   quoted: {
     subject: "Your PJL quote is ready",
@@ -129,7 +129,7 @@ const TEMPLATES = {
     body:
       "Hi {firstName}, your PJL Land Services quote is ready to review. Open your portal to see the " +
       "scope, the price, and accept the quote when you're ready. Estimated total: {total}.",
-    sms: "{namePrefix}your PJL quote is ready ({total}). Review and accept in your portal: {portalUrl}"
+    sms: "{namePrefix}your PJL quote is ready ({total}). Review and accept in your portal: {portalUrl} Automated text - to reach us, call or text (905) 960-0181."
   },
 
   // --- Service track (confirmed bookings from /book.html) ---
@@ -140,7 +140,7 @@ const TEMPLATES = {
       "Hi {firstName}, your PJL Land Services {serviceLabel} on {dateStr} at {timeStr} is confirmed. " +
       "Your work order ({workOrderId}) is available in your customer portal. If we run into any issues on our end, " +
       "we'll reach out directly. To make changes, use your portal or call us at (905) 960-0181.",
-    sms: "{namePrefix}your PJL service is confirmed: {serviceLabel} on {dateStr} at {timeStr}. Work order {workOrderId}. Details: {portalUrl}"
+    sms: "{namePrefix}your PJL service is confirmed: {serviceLabel} on {dateStr} at {timeStr}. Work order {workOrderId}. Details: {portalUrl} Automated text - to reach us, call or text (905) 960-0181."
   },
   site_visit: {
     subject: "Your PJL site visit is scheduled — {dateStr}",
@@ -149,7 +149,7 @@ const TEMPLATES = {
       "Hi {firstName}, your PJL Land Services site visit is scheduled for {dateStr} at {timeStr}. " +
       "Patrick will walk your property, scope the work, and follow up with a written quote. " +
       "Your work order ({workOrderId}) is in your portal — no charge for the visit.",
-    sms: "{namePrefix}your PJL site visit is scheduled: {dateStr} at {timeStr}. Free walkaround. Details: {portalUrl}"
+    sms: "{namePrefix}your PJL site visit is scheduled: {dateStr} at {timeStr}. Free walkaround. Details: {portalUrl} Automated text - to reach us, call or text (905) 960-0181."
   },
   // Sent when a booking is rescheduled — fires regardless of who
   // initiated (customer self-serve via portal, or Patrick from the CRM).
@@ -163,7 +163,7 @@ const TEMPLATES = {
       "Hi {firstName}, your PJL Land Services {serviceLabel} has been moved to {dateStr} at {timeStr}. " +
       "Your work order ({workOrderId}) is up to date in your portal. " +
       "If this new time doesn't work, call (905) 960-0181 — we'll find another slot.",
-    sms: "{namePrefix}your PJL appointment moved to {dateStr} at {timeStr}. WO {workOrderId}. Details: {portalUrl}. Different time? (905) 960-0181"
+    sms: "{namePrefix}your PJL appointment moved to {dateStr} at {timeStr}. WO {workOrderId}. Details: {portalUrl}. Different time? Call or text (905) 960-0181 (this number is automated)"
   },
   // Day-before reminder for SELF-BOOKED appointments (Patrick,
   // 2026-09-02: assignment customers get a D−1 text from the cadence;
@@ -178,7 +178,7 @@ const TEMPLATES = {
       "Hi {firstName}, a friendly reminder that PJL Land Services comes tomorrow, {dateStr}, " +
       "for your {serviceLabel} — {timeStr}. Please make sure we can reach what we need to. " +
       "If anything has changed, call or text (905) 960-0181.",
-    sms: "{namePrefix}reminder: PJL comes tomorrow ({dateStr}) for your {serviceLabel} — {timeStr}. Anything changed? (905) 960-0181. Details: {portalUrl}"
+    sms: "{namePrefix}reminder: PJL comes tomorrow ({dateStr}) for your {serviceLabel} — {timeStr}. Anything changed? Call or text (905) 960-0181 (this number is automated). Details: {portalUrl}"
   },
   // "First available" — the customer joined the open bucket instead of
   // picking a day. No date exists yet, so no {dateStr}/{timeStr}; the
@@ -192,7 +192,7 @@ const TEMPLATES = {
       "The next time our crew is working in your neighbourhood, we'll fit you in and confirm your " +
       "exact day ahead of time — usually within a couple of weeks. Nothing else to do for now. " +
       "If any dates absolutely don't work, reply here or call (905) 960-0181 and we'll plan around them.",
-    sms: "{namePrefix}you're on PJL's First Available list for your {serviceLabel}. We'll confirm your exact day ahead of time when our crew is in your neighbourhood. Details: {portalUrl}"
+    sms: "{namePrefix}you're on PJL's First Available list for your {serviceLabel}. We'll confirm your exact day ahead of time when our crew is in your neighbourhood. Details: {portalUrl} Automated text - to reach us, call or text (905) 960-0181."
   },
   // Fired manually from the tech's daily-schedule view when they tap
   // "Notify on route" before driving over. Short, direct — the tech is
@@ -204,7 +204,7 @@ const TEMPLATES = {
       "Hi {firstName}, this is PJL Land Services. Patrick is on his way to your property for your " +
       "{serviceLabel}. We'll see you soon — if you need to flag anything (gate codes, dogs, parking), " +
       "just call or text (905) 960-0181.",
-    sms: "{namePrefix}PJL is on the way for your {serviceLabel}. See you soon. Questions? (905) 960-0181"
+    sms: "{namePrefix}PJL is on the way for your {serviceLabel}. See you soon. Questions? Call or text (905) 960-0181 (this number is automated)"
   }
 };
 
@@ -1581,7 +1581,7 @@ async function sendOutreachEmail({
 
   const text = [
     renderedBody,
-    portalLink ? `\nOpen your portal: ${portalLink}` : "",
+    portalLink ? `\n${ctaLabel}: ${portalLink}` : "",
     "",
     "Questions? Call (905) 960-0181.",
     footerText,

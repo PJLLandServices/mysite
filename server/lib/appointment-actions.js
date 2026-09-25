@@ -117,14 +117,19 @@ function summarize(booking, { now = new Date() } = {}) {
 // "Yes, that works." Idempotent — confirming twice is one response, and
 // a confirm after a reschedule doesn't overwrite how they first
 // answered (bookings.markAssignmentResponded keeps the first).
-async function confirm(token, { listBookings, markResponded = bookings.markAssignmentResponded, now = new Date() } = {}) {
+//
+// `via` says HOW they said yes: "confirm" is the page's button,
+// "sms_reply" is a YES texted back to the Twilio number (lib/sms-inbound.js).
+// Both go through here so a text can never confirm what the button
+// couldn't, and every reader sees one `respondedAt`.
+async function confirm(token, { via = "confirm", listBookings, markResponded = bookings.markAssignmentResponded, now = new Date() } = {}) {
   const booking = await findByToken(token, { listBookings });
   if (!booking) return { ok: false, status: 404, errors: ["That link doesn't match an appointment."] };
   const summary = summarize(booking, { now });
   if (!summary.canConfirm) {
     return { ok: false, status: 409, errors: ["This appointment can no longer be confirmed here — call us at (905) 960-0181."] };
   }
-  const updated = await markResponded(booking.id, { via: "confirm", by: "customer" });
+  const updated = await markResponded(booking.id, { via: via === "sms_reply" ? "sms_reply" : "confirm", by: "customer" });
   return { ok: true, booking: updated, summary: summarize(updated, { now }) };
 }
 

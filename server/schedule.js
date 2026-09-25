@@ -1500,7 +1500,7 @@ async function openBookingActionPanel({ leadId, bookingId, scheduledFor, booking
         } else if (o.respondedAt) {
           const via = { confirm: "confirmed via their link", reschedule: "rescheduled themselves",
             cancel: "cancelled", manual: "confirmed by phone/text", window: "set a time window",
-            free_bucket: "chose the free bucket" }[o.responseVia] || o.responseVia;
+            free_bucket: "chose the free bucket", sms_reply: "confirmed by texting YES" }[o.responseVia] || o.responseVia;
           line = `Customer ${via} on ${new Date(o.respondedAt).toLocaleDateString("en-CA", { month: "short", day: "numeric" })}.`;
         } else if (o.steps && o.steps["1"]) {
           line = "Messaged — no response yet.";
