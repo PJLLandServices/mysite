@@ -235,7 +235,10 @@ ok("clearing the fields restores the default",
 // in a customer's message.
 {
   fs.writeFileSync(STORE, JSON.stringify({
-    assignment_sms: { body: "Old wording with {confirmLink}", updatedAt: "2026-08-31T00:00:00Z", actor: "patrick" }
+    assignment_sms: { body: "Old wording with {confirmLink}", updatedAt: "2026-08-31T00:00:00Z", actor: "patrick" },
+    // Past the one-time "Reply YES" step, so this exercises the read-time
+    // guard rather than the load-time retirement.
+    _migrations: { replyYesTexts_2026_09_25: "2026-09-25T00:00:00Z" }
   }, null, 2));
   const SANDBOX3 = fs.mkdtempSync(path.join(os.tmpdir(), "pjl-messages3-"));
   fs.mkdirSync(path.join(SANDBOX3, "server"), { recursive: true });
@@ -260,6 +263,55 @@ ok("the messages module never requires a notify, mailer, or sms module",
   !/require\("\.\/(notify|mailer|sms|outreach)/.test(source));
 ok("the messages module never calls sendBulk",
   !source.includes("sendBulk"));
+
+// ---- One-time: old saved TEXT wording gives way to "Reply YES" --------
+//
+// 2026-09-25: the new defaults never reached customers because saved text
+// wording from the original setup sat on the live disk and always wins.
+// Reproduce that disk, load the module fresh, and prove the texts now use
+// the defaults while emails, the backup and later saves all behave.
+{
+  const SB2 = fs.mkdtempSync(path.join(os.tmpdir(), "pjl-messages-mig-"));
+  fs.mkdirSync(path.join(SB2, "server"), { recursive: true });
+  fs.cpSync(path.join(ROOT, "server/lib"), path.join(SB2, "server/lib"), { recursive: true });
+  for (const f of ["seasons.json", "pricing.json", "parts.json"]) {
+    if (fs.existsSync(path.join(ROOT, f))) fs.cpSync(path.join(ROOT, f), path.join(SB2, f));
+  }
+  fs.mkdirSync(path.join(SB2, "server/data"), { recursive: true });
+  const store = path.join(SB2, "server/data/assignment-templates.json");
+  const OLD_SMS = "PJL Land Services: your fall sprinkler winterization is booked for {date} ({bucket}) at {street}. Confirm or make changes: {appointmentLink} Questions? {phone}";
+  fs.writeFileSync(store, JSON.stringify({
+    assignment_sms: { body: OLD_SMS, updatedAt: "2026-09-01T00:00:00.000Z", actor: "admin" },
+    followup_sms: { body: "old followup {appointmentLink}", updatedAt: "2026-09-01T00:00:00.000Z" },
+    reminder24_sms: { body: "old reminder {date}", updatedAt: "2026-09-01T00:00:00.000Z" },
+    assignment_email: { subject: "Patrick's subject {date}", body: "Patrick's email {appointmentLink}", updatedAt: "2026-09-01T00:00:00.000Z" }
+  }, null, 2));
+
+  const fresh = require(path.join(SB2, "server/lib/assignment-messages.js"));
+  const list = fresh.listTemplates();
+  ok("after the one-time step, the Step 1 text uses the new default",
+    list.assignment_sms.source === "default" && /Reply YES to confirm/.test(list.assignment_sms.body), list.assignment_sms.source);
+  ok("…and so do the follow-up and 24-hour reminder texts",
+    list.followup_sms.source === "default" && list.reminder24_sms.source === "default");
+  ok("…the reminder now says the number is automated", /automated/.test(list.reminder24_sms.body));
+  ok("saved EMAIL wording is left exactly as it was",
+    list.assignment_email.source === "custom" && list.assignment_email.body === "Patrick's email {appointmentLink}");
+  const disk = JSON.parse(fs.readFileSync(store, "utf8"));
+  ok("the old text wording is kept as a backup, not deleted",
+    Object.entries(disk._retired || {}).some(([k, v]) => k.startsWith("assignment_sms@") && v.body === OLD_SMS));
+  ok("the step is marked done on disk", Boolean(disk._migrations?.replyYesTexts_2026_09_25));
+
+  // Wording saved AFTER the step sticks — the step never runs twice.
+  fresh.setTemplate("assignment_sms", { body: "New wording {appointmentLink}" }, { actor: "patrick" });
+  const again = fresh.retireOldTextWording(JSON.parse(fs.readFileSync(store, "utf8")));
+  ok("a second run changes nothing", again.changed === false && again.retired.length === 0);
+  ok("…so wording Patrick saves later is kept", again.store.assignment_sms?.body === "New wording {appointmentLink}");
+
+  // A server with no saved wording at all: nothing to retire, no error.
+  const none = fresh.retireOldTextWording({});
+  ok("with no saved wording the step retires nothing", none.retired.length === 0);
+  fs.rmSync(SB2, { recursive: true, force: true });
+}
 
 // ---- Report ----------------------------------------------------------
 

@@ -210,6 +210,48 @@ function persist() {
   fs.writeFileSync(STORE_FILE, JSON.stringify(OVERRIDES, null, 2) + "\n", "utf8");
 }
 
+// ONE-TIME: the "Reply YES" texts (2026-09-25). The text defaults gained
+// "Reply YES to confirm" and "this is an automated number" when replies
+// to the Twilio number started being heard (lib/sms-inbound.js). Saved
+// wording always wins over a default, and saved text wording from the
+// original stage-5 setup was still on the live disk — so customers kept
+// getting the old texts. Patrick never meant to customise them and asked
+// for the new wording everywhere, so the saved TEXT wording for these
+// five steps is retired once, here, at load. Emails are untouched.
+//
+// Nothing is thrown away: each retired override is kept under
+// `_retired` with the time. The marker makes this run exactly once, so
+// wording Patrick saves AFTER this sticks like it always has.
+const REPLY_YES_MIGRATION = "replyYesTexts_2026_09_25";
+const REPLY_YES_KEYS = ["assignment_sms", "followup_sms", "nudge_sms", "reminder24_sms", "daymove_sms"];
+function retireOldTextWording(store, { now = new Date() } = {}) {
+  const migrations = { ...(store._migrations || {}) };
+  if (migrations[REPLY_YES_MIGRATION]) return { store, changed: false, retired: [] };
+  const next = { ...store, _retired: { ...(store._retired || {}) } };
+  const retired = [];
+  for (const key of REPLY_YES_KEYS) {
+    if (!next[key]) continue;
+    next._retired[`${key}@${now.toISOString()}`] = next[key];
+    delete next[key];
+    retired.push(key);
+  }
+  migrations[REPLY_YES_MIGRATION] = now.toISOString();
+  next._migrations = migrations;
+  return { store: next, changed: true, retired };
+}
+try {
+  const out = retireOldTextWording(OVERRIDES);
+  if (out.changed) {
+    OVERRIDES = out.store;
+    if (fs.existsSync(STORE_FILE) || out.retired.length) persist();
+    if (out.retired.length) {
+      console.log(`[assignment-messages] retired saved text wording for ${out.retired.join(", ")} — the "Reply YES" defaults are now in use (old wording kept under _retired).`);
+    }
+  }
+} catch (err) {
+  console.warn(`[assignment-messages] couldn't retire old text wording: ${err?.message}`);
+}
+
 // Every {placeholder} a text references. Doubled braces are not a thing
 // here — templates are plain text with single-brace fields.
 function placeholdersIn(text) {
@@ -366,6 +408,8 @@ function renderAllForBooking(booking, extra = {}) {
 }
 
 module.exports = {
+  retireOldTextWording,
+  REPLY_YES_KEYS,
   MERGE_FIELDS,
   TEMPLATE_KEYS,
   DEFAULT_TEMPLATES,
