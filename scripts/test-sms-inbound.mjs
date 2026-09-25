@@ -130,6 +130,26 @@ ok("a second YES still answers politely", again.action === "confirmed" && /confi
 ok("…and keeps the first answer's time",
   (await bookings.get(greg.id)).assignment.outreach.respondedAt === gregAfter.assignment.outreach.respondedAt);
 
+// A confirm that CLAIMS success but never reached the booking must not
+// tell the customer they're confirmed.
+const P6 = { id: "P-6", code: "P-6", customerName: "Lee Ghost", customerPhone: "+19055550166",
+  customerEmail: "l@example.com", address: "6 Ghost Rd, Newmarket, ON" };
+fs.writeFileSync(path.join(SANDBOX, "server/data/properties.json"),
+  JSON.stringify([...(await properties.list()), P6], null, 2));
+const ghost = await mk(P6, new Date(2026, 9, 9, 8, 15).toISOString());
+alerts.length = 0;
+const lying = await text("+19055550166", "YES", {
+  confirmByToken: async () => ({ ok: true, summary: { dateLabel: "Friday, October 9", bucketLabel: "Morning" } })
+});
+ok("a confirm that didn't actually save is NOT reported to the customer as confirmed",
+  !/you're confirmed/.test(lying.reply || "") && /confirm_refused/.test(lying.action), `${lying.action} | ${lying.reply}`);
+ok("…Patrick is told it couldn't be confirmed", alerts.length === 1 && /couldn't be confirmed/.test(alerts[0]));
+ok("…and the booking really is unconfirmed", !(await bookings.get(ghost.id)).assignment.outreach?.respondedAt);
+
+const throwing = await text("+19055550166", "yes", { confirmByToken: async () => { throw new Error("disk full"); } });
+ok("a confirm that crashes still answers Twilio and doesn't claim success",
+  !/you're confirmed/.test(throwing.reply || "") && /disk full/.test(throwing.action), throwing.action);
+
 // ---- 3. YES that can't be pinned to one appointment -------------------
 
 alerts.length = 0;

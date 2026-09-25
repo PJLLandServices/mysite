@@ -215,9 +215,27 @@ async function handleInbound({ from, to = "", body = "", messageSid = "", numMed
     row.action = "help";
   } else if (cls === "yes" && who.appointments.length === 1) {
     const appt = who.appointments[0];
-    const result = await deps.confirmByToken(appt.assignment.outreach.token, { via: "sms_reply" });
+    let result = null;
+    try {
+      result = await deps.confirmByToken(appt.assignment.outreach.token, { via: "sms_reply" });
+    } catch (err) {
+      result = { ok: false, errors: [err?.message || String(err)] };
+    }
+    // Patrick's rule: never tell a customer "you're confirmed" on the
+    // write's word alone. Read the booking back from the store and only
+    // reply once it really carries the confirmation — the date in the
+    // reply comes from that re-read record, not from the request.
+    let saved = null;
     if (result?.ok) {
-      const s = result.summary || {};
+      try {
+        saved = (await deps.listBookings()).find((b) => b && b.id === appt.id) || null;
+      } catch { saved = null; }
+      if (!saved?.assignment?.outreach?.respondedAt || !deps.summarize(saved, { now })) {
+        result = { ok: false, errors: ["the confirmation didn't show up on the booking when re-checked"] };
+      }
+    }
+    if (result?.ok) {
+      const s = deps.summarize(saved, { now });
       const when = s.freeBucket ? s.dateLabel : `${s.dateLabel}, ${s.bucketLabel}`;
       const first = firstNameOf(appt.customerName);
       reply = `PJL Land Services: thanks${first ? ` ${first}` : ""} — you're confirmed for ${when}. `
