@@ -188,6 +188,31 @@ implementations over the same records** — as
 Anything else re-derived in the browser is a defect waiting for a
 screenshot.
 
+## Step 2 — Daily Records: the boundary, and what the backend already does
+
+Patrick's six rules, 2026-09-26, with a survey of each against the code
+**before** the build commits to them. Two do not currently hold.
+
+| # | Rule | Where it stands |
+|---|---|---|
+| 1 | Field staff create work logs, photos, problems and clock events | **Mostly.** Logs, photos and clock events exist on the build WO's `dailyLog`. **"Problems" has no home** — the dailyLog carries `dailyNotes` (free text) and per-zone `issues[]` belongs to service visits, not builds. |
+| 2 | Office can add notes and correct records through an audit trail | **Partly.** Notes: the project journal already does this. **Correcting a clock time is impossible today** — there is no route to change `inAt`/`outAt` at all. |
+| 3 | Hours calculated from clock in/out, never a typed box | **Holds, and must keep holding.** `computeProjectMetrics()` derives person-hours from `session.inAt`/`outAt` × `labourersOnSite`. No hours field exists anywhere. Any box on this screen would be a second source of truth for money. |
+| 4 | Original time entries preserved when corrected | **FAILS.** `setLabourersForSession()` overwrites `sess.labourersOnSite` in place and its history entry records only the NEW count. Labourer count multiplies straight into person-hours, so correcting 3 → 2 silently loses the original figure that billing was based on. |
+| 5 | Task progress uses the same records as #307 | **Holds.** One task record, both doors, already proven. |
+| 6 | Photos use the real upload/storage path from day one | **Available.** `savePhotosForWorkOrder()` writes real compressed files under `WO_PHOTOS_DIR/<woId>/` with meta records. Use it; do not invent a second path. |
+
+**So step 2 carries backend work before any screen:** a correction path for
+clock times that keeps the original, and the same treatment for the
+labourer count. The shape #307 settled is the precedent — corrections
+append, they never overwrite, and the audit trail grows rather than
+rewinding.
+
+**Open question for Patrick when step 2 starts:** where do "problems"
+live? Candidates are a first-class field on the daily log, or the project
+journal with a flag. It decides whether a crew's problem is attached to a
+DAY or to the JOB, and those are read in different places.
+
 ## Out of scope for this phase
 
 - Closeout (it has its own preflight and cascade, and it is the end of
