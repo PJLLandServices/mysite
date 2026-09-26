@@ -85,9 +85,11 @@ function photoStateFor(sku, part, groups, links, fileExists) {
   return { state: "verified", group };
 }
 
+// thumb / thumb2x are the normalized square tile images (part found,
+// centred, contained); largeMobile / large are the untouched photo.
 function photoUrls(hash) {
   const base = `/api/part-photos/${hash}`;
-  return { thumb: `${base}/160.webp`, largeMobile: `${base}/480.webp`, large: `${base}/1200.webp` };
+  return { thumb: `${base}/t160.webp`, thumb2x: `${base}/t320.webp`, largeMobile: `${base}/480.webp`, large: `${base}/1200.webp` };
 }
 
 // Attach `photo` and `photoState` to every part, in place. Pure apart from
@@ -216,9 +218,9 @@ const ACCEPTED_FORMATS = new Set(["jpeg", "png", "webp", "gif", "avif", "tiff", 
 
 // Resize only. `.rotate()` with NO argument applies the file's own EXIF
 // orientation and nothing else — it never adds a rotation or a flip — so
-// the result displays exactly as the original. No other geometric call
-// (flip, flop, extract, rotate(angle)) appears in this module; the test
-// pins that.
+// the result displays exactly as the original. No flip, flop or
+// rotate(angle) appears in this module, and the only extract is
+// normalizeThumbs' plain-background trim; the test pins both.
 async function processImage(buffer, sharp) {
   if (!buffer || !buffer.length) throw new Error("The image was empty.");
   let meta;
@@ -237,7 +239,90 @@ async function processImage(buffer, sharp) {
     variants[size] = data;
     if (size === 1200) { width = info.width; height = info.height; }
   }
-  return { hash, variants, width, height };
+  const thumbs = await normalizeThumbs(buffer, sharp);
+  return { hash, variants, width, height, thumbs: thumbs.variants, thumbInfo: { trimmed: thumbs.trimmed } };
+}
+
+// ------------------------------------------------- normalized thumbnails
+//
+// The picker tile is a square. A tall, narrow part (a Pro-Spray body) shot
+// on a wide white background comes out as a sliver if the whole photo is
+// fitted, and ran out of the tile before #321. So the TILE uses its own
+// normalized square thumbnail (Patrick, Sep 26 2026):
+//
+//   1. find the part: only when the photo's border is a plain, even
+//      background (BG_UNIFORM_MIN of border pixels within BG_TOLERANCE of
+//      its median colour). A busy background is never trimmed.
+//   2. keep the part's bounding box PLUS a margin of original pixels
+//      (THUMB_MARGIN of its longer side) — so a white fitting's faint
+//      edge on white stays inside the frame even if it read as background.
+//   3. fit that, whole, into a square canvas: contain, centred, padded with
+//      the photo's own background colour. Aspect ratio kept; never cover.
+//
+// What is removed is only plain border well outside the part; the part is
+// never cut (the test proves the kept region always contains every
+// non-background pixel). The large 480/1200 views are untouched.
+const THUMB_SIZES = [160, 320];
+const THUMB_MARGIN = 0.08;
+const BG_TOLERANCE = 16;
+const BG_UNIFORM_MIN = 0.92;
+const THUMB_WORK_MAX = 2000;
+
+// data: raw RGB pixels. Returns { trimmed, region, subject, background }.
+function findSubjectRegion(data, width, height, channels = 3) {
+  const full = { left: 0, top: 0, width, height };
+  const at = (x, y) => { const i = (y * width + x) * channels; return [data[i], data[i + 1], data[i + 2]]; };
+  const border = [];
+  const stepX = Math.max(1, Math.floor(width / 400)), stepY = Math.max(1, Math.floor(height / 400));
+  for (let x = 0; x < width; x += stepX) { border.push(at(x, 0), at(x, height - 1)); }
+  for (let y = 0; y < height; y += stepY) { border.push(at(0, y), at(width - 1, y)); }
+  const median = (k) => { const v = border.map((p) => p[k]).sort((a, b) => a - b); return v[v.length >> 1]; };
+  const bg = [median(0), median(1), median(2)];
+  const isBg = (p) => Math.abs(p[0] - bg[0]) <= BG_TOLERANCE && Math.abs(p[1] - bg[1]) <= BG_TOLERANCE && Math.abs(p[2] - bg[2]) <= BG_TOLERANCE;
+  const share = border.filter(isBg).length / border.length;
+  if (share < BG_UNIFORM_MIN) return { trimmed: false, region: full, subject: null, background: null };
+
+  let minX = width, minY = height, maxX = -1, maxY = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * channels;
+      if (Math.abs(data[i] - bg[0]) > BG_TOLERANCE || Math.abs(data[i + 1] - bg[1]) > BG_TOLERANCE || Math.abs(data[i + 2] - bg[2]) > BG_TOLERANCE) {
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return { trimmed: false, region: full, subject: null, background: bg };
+  const subject = { left: minX, top: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
+  const margin = Math.ceil(Math.max(subject.width, subject.height) * THUMB_MARGIN) + 1;
+  const left = Math.max(0, minX - margin), top = Math.max(0, minY - margin);
+  const right = Math.min(width, maxX + 1 + margin), bottom = Math.min(height, maxY + 1 + margin);
+  return { trimmed: true, region: { left, top, width: right - left, height: bottom - top }, subject, background: bg };
+}
+
+async function normalizeThumbs(buffer, sharp) {
+  // Honour EXIF orientation only (as processImage does), flatten any
+  // transparency onto white, and work at a bounded size.
+  const { data, info } = await sharp(buffer, { limitInputPixels: 50e6 })
+    .rotate()
+    .resize({ width: THUMB_WORK_MAX, height: THUMB_WORK_MAX, fit: "inside", withoutEnlargement: true })
+    .flatten({ background: "#ffffff" })
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const found = findSubjectRegion(data, info.width, info.height, info.channels);
+  const bg = found.background || [255, 255, 255];
+  const variants = {};
+  for (const size of THUMB_SIZES) {
+    variants[size] = await sharp(data, { raw: { width: info.width, height: info.height, channels: info.channels } })
+      // The ONE region cut in this module: plain background outside the
+      // part + margin, as computed above. Never inside the part.
+      .extract(found.region)
+      .resize({ width: size, height: size, fit: "contain", position: "centre", background: { r: bg[0], g: bg[1], b: bg[2] } })
+      .webp({ quality: 82 })
+      .toBuffer();
+  }
+  return { variants, trimmed: found.trimmed, region: found.region, subject: found.subject, workSize: { width: info.width, height: info.height } };
 }
 
 // ------------------------------------------------------------ the store
@@ -275,9 +360,37 @@ function createPartPhotos({ dataDir, sharp }) {
     return parseMap(raw, file);
   }
 
+  // size: 160 | 480 | 1200 (the photo, resized) or "t160" | "t320" (the
+  // normalized square thumbnail).
   function imagePath(hash, size) {
-    if (!HASH_RE.test(String(hash)) || !SIZES.includes(Number(size))) return null;
-    return path.join(IMG_DIR, hash, `${Number(size)}.webp`);
+    if (!HASH_RE.test(String(hash))) return null;
+    const s = String(size);
+    if (SIZES.includes(Number(s))) return path.join(IMG_DIR, hash, `${Number(s)}.webp`);
+    if (/^t(160|320)$/.test(s)) return path.join(IMG_DIR, hash, `${s}.webp`);
+    return null;
+  }
+
+  async function writeFileAtomic(p, buf) {
+    const tmp = `${p}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+    await fs.writeFile(tmp, buf);
+    await fs.rename(tmp, p);
+  }
+
+  // Photos saved before normalized thumbnails existed have no t160/t320.
+  // Make them on first request from the stored 1200 image (EXIF already
+  // applied there), so nothing has to be re-uploaded.
+  async function ensureThumb(hash, size) {
+    const p = imagePath(hash, size);
+    if (!p || !/^t(160|320)$/.test(String(size))) return p;
+    if (fsSync.existsSync(p)) return p;
+    const src = imagePath(hash, 1200);
+    if (!src || !fsSync.existsSync(src)) return p;
+    const made = await normalizeThumbs(await fs.readFile(src), sharp);
+    for (const s of THUMB_SIZES) {
+      const out = imagePath(hash, `t${s}`);
+      if (!fsSync.existsSync(out)) await writeFileAtomic(out, made.variants[s]);
+    }
+    return p;
   }
   function fileExists(hash) {
     return fsSync.existsSync(path.join(IMG_DIR, hash, "160.webp"));
@@ -303,6 +416,10 @@ function createPartPhotos({ dataDir, sharp }) {
     for (const size of SIZES) {
       const p = path.join(dir, `${size}.webp`);
       if (!fsSync.existsSync(p)) await fs.writeFile(p, processed.variants[size]);
+    }
+    for (const size of THUMB_SIZES) {
+      const p = path.join(dir, `t${size}.webp`);
+      if (!fsSync.existsSync(p) && processed.thumbs) await fs.writeFile(p, processed.thumbs[size]);
     }
   }
 
@@ -430,7 +547,7 @@ function createPartPhotos({ dataDir, sharp }) {
   }
 
   return {
-    imagePath, fileExists, readStoresSync, mergeInto, snapshot,
+    imagePath, ensureThumb, fileExists, readStoresSync, mergeInto, snapshot,
     setPhoto, setPhotoFromUrl, linkToGroup, unlink, reconfirm, removeGroupPhoto
   };
 }
@@ -438,6 +555,6 @@ function createPartPhotos({ dataDir, sharp }) {
 module.exports = {
   createPartPhotos,
   photoStateFor, mergeIntoCatalog, fingerprintOf, photoUrls,
-  isPublicAddress, fetchImageSafely, processImage,
+  isPublicAddress, fetchImageSafely, processImage, normalizeThumbs, findSubjectRegion,
   SIZES, HASH_RE
 };

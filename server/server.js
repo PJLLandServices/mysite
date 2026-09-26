@@ -13844,17 +13844,19 @@ async function handleApi(req, res, pathname) {
   // whether a photo may show; these routes only read or change the stores
   // and then rebuild the catalog so /api/parts reflects it.
   //
-  //   GET    /api/part-photos/<sha256>/<160|480|1200>.webp   image (staff)
+  //   GET    /api/part-photos/<sha256>/<160|480|1200|t160|t320>.webp   image (staff)
   //   GET    /api/part-photos                                overview (staff)
   //   POST   /api/part-photos/:sku/photo      {data} | {imageUrl}   (admin)
   //   POST   /api/part-photos/:sku/link       {sameAsSku} | {groupId} (admin)
   //   DELETE /api/part-photos/:sku/link                              (admin)
   //   POST   /api/part-photos/:sku/reconfirm                         (admin)
   //   DELETE /api/part-photo-groups/:id/photo                        (admin)
-  const partPhotoImgMatch = pathname.match(/^\/api\/part-photos\/([a-f0-9]{64})\/(160|480|1200)\.webp$/);
+  const partPhotoImgMatch = pathname.match(/^\/api\/part-photos\/([a-f0-9]{64})\/(160|480|1200|t160|t320)\.webp$/);
   if (partPhotoImgMatch && req.method === "GET") {
-    const p = partPhotos.imagePath(partPhotoImgMatch[1], partPhotoImgMatch[2]);
     try {
+      // t160/t320 are the normalized square tile thumbnails; a photo saved
+      // before they existed gets them made on this first request.
+      const p = await partPhotos.ensureThumb(partPhotoImgMatch[1], partPhotoImgMatch[2]);
       const buf = await fs.readFile(p);
       // The URL is the image's own hash, so its bytes can never change:
       // cache it for good. "private" because it sits behind staff auth.

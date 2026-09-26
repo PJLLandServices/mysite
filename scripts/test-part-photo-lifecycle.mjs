@@ -33,7 +33,7 @@ const sharp = require("sharp");
 let lib;
 try { lib = require(path.join(ROOT, "server", "lib", "part-photos.js")); }
 catch (err) { console.log(`FAIL  server/lib/part-photos.js could not be loaded: ${err.message}`); process.exit(1); }
-const { photoStateFor, mergeIntoCatalog, fingerprintOf, isPublicAddress, fetchImageSafely, processImage, createPartPhotos } = lib;
+const { photoStateFor, mergeIntoCatalog, fingerprintOf, isPublicAddress, fetchImageSafely, processImage, createPartPhotos, normalizeThumbs, findSubjectRegion } = lib;
 
 let passed = 0, failed = 0;
 function check(name, cond, detail = "") {
@@ -87,7 +87,7 @@ const onDisk = () => true;
     C: linkFor(parts.C, "PG-0002"), D: linkFor(parts.D, "PG-0003")
   };
   mergeIntoCatalog(parts, groups, links, onDisk);
-  check("merge: verified part gets a thumbnail URL", parts.A.photo && parts.A.photo.thumb === `/api/part-photos/${HASH}/160.webp`);
+  check("merge: verified part gets a thumbnail URL", parts.A.photo && parts.A.photo.thumb === `/api/part-photos/${HASH}/t160.webp` && parts.A.photo.thumb2x === `/api/part-photos/${HASH}/t320.webp`);
   check("merge: verified part gets large + mobile URLs",
     parts.A.photo.large.endsWith("/1200.webp") && parts.A.photo.largeMobile.endsWith("/480.webp"));
   check("merge: TBD part has photo:null", parts.C.photo === null && parts.C.photoState === "tbd");
@@ -153,8 +153,10 @@ const onDisk = () => true;
   check("image: EXIF-rotated phone photo keeps its displayed orientation", tm.width === 20 && tm.height === 40, `${tm.width}x${tm.height}`);
 
   const src = fs.readFileSync(path.join(ROOT, "server", "lib", "part-photos.js"), "utf8").replace(/\/\/.*$/gm, "");
-  check("image: no flip / flop / crop / angled rotate anywhere in the module",
-    !/\.(flip|flop|extract|affine)\(/.test(src) && !/\.trim\(\s*[{\d]/.test(src) &&!/\.rotate\(\s*[^)\s]/.test(src));
+  check("image: no flip / flop / angled rotate anywhere in the module",
+    !/\.(flip|flop|affine)\(/.test(src) && !/\.trim\(\s*[{\d]/.test(src) && !/\.rotate\(\s*[^)\s]/.test(src));
+  check("image: the ONLY region cut is the thumbnail's plain-background trim",
+    (src.match(/\.extract\(/g) || []).length === 1 && /\.extract\(found\.region\)/.test(src));
   await rejects("image: a non-image is refused", () => processImage(Buffer.from("not an image"), sharp), /image/i);
 }
 
@@ -201,7 +203,7 @@ const onDisk = () => true;
     check("store: first photo shows for the SKU it was set on", parts["405010"].photoState === "verified");
     check("store: 'same fitting' SKU shows the same photo", parts["CT-405010"].photo && parts["CT-405010"].photo.thumb === parts["405010"].photo.thumb);
     check("store: image files written for all three sizes",
-      [160, 480, 1200].every((s) => fs.existsSync(store.imagePath(first.hash, s))));
+      [160, 480, 1200, "t160", "t320"].every((s) => fs.existsSync(store.imagePath(first.hash, s))));
 
     const second = await store.setPhoto("CT-405010", teeCentral, img2, { by: "patrick", source: { method: "upload" } });
     parts = { "405010": { ...tee }, "CT-405010": { ...teeCentral } };
@@ -235,6 +237,95 @@ const onDisk = () => true;
     fs.writeFileSync(path.join(dir, "part-photo-links.json"), "{ not json");
     await rejects("store: a damaged store is refused, never treated as empty",
       () => store.linkToGroup("405010", tee, first.groupId, { by: "patrick" }), /refusing to treat it as empty/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// ---- 8. Normalized tile thumbnails (Patrick, Sep 26 2026) ------------------
+// Tall/narrow parts ran out of the picker tile. The tile now uses a square
+// thumbnail: part found on a plain background, a margin of original pixels
+// kept around it, fitted whole and centred (contain, never cover).
+{
+  // Bounding box of "not background" pixels in a decoded thumbnail.
+  async function subjectIn(webp, bg = [255, 255, 255], tol = 40) {
+    const { data, info } = await sharp(webp).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    let x0 = info.width, y0 = info.height, x1 = -1, y1 = -1;
+    for (let y = 0; y < info.height; y++) for (let x = 0; x < info.width; x++) {
+      const i = (y * info.width + x) * info.channels;
+      if (Math.abs(data[i] - bg[0]) > tol || Math.abs(data[i + 1] - bg[1]) > tol || Math.abs(data[i + 2] - bg[2]) > tol) {
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+    }
+    return { w: info.width, h: info.height, x0, y0, x1, y1, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
+  }
+  const svg = (w, h, body, bg = "#fff") => sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="${w}" height="${h}" fill="${bg}"/>${body}</svg>`)).png().toBuffer();
+
+  // A 1:6 Pro-Spray-like body in the middle of a WIDE white photo.
+  const tall = await svg(900, 1200, `<rect x="420" y="60" width="60" height="1080" rx="8" fill="#222"/><rect x="405" y="40" width="90" height="50" fill="#8a5a3c"/>`);
+  const t = await normalizeThumbs(tall, sharp);
+  const ts = await subjectIn(t.variants[160]);
+  check("thumb: output is an exact 160×160 square", ts.w === 160 && ts.h === 160, `${ts.w}x${ts.h}`);
+  check("thumb: 320 (retina) variant is 320×320", (await sharp(t.variants[320]).metadata()).width === 320);
+  check("thumb: plain background was trimmed", t.trimmed === true);
+  check("thumb: tall part is centred", Math.abs(ts.cx - 79.5) <= 2 && Math.abs(ts.cy - 79.5) <= 2, JSON.stringify(ts));
+  check("thumb: tall part is fully inside, not touching the edge", ts.y0 >= 3 && ts.y1 <= 156 && ts.x0 >= 3 && ts.x1 <= 156, JSON.stringify(ts));
+  check("thumb: tall part fills the tile height (not a sliver in a wide photo)", ts.y1 - ts.y0 >= 120, `height ${ts.y1 - ts.y0}`);
+  const partRatio = 90 / 1100, drawnRatio = (ts.x1 - ts.x0 + 1) / (ts.y1 - ts.y0 + 1);
+  check("thumb: aspect ratio preserved (contain, not stretched)", Math.abs(drawnRatio - partRatio) < 0.05, `drawn ${drawnRatio.toFixed(3)} vs part ${partRatio.toFixed(3)}`);
+
+  // A 5:1 dripline coil — wide.
+  const wide = await svg(1400, 1400, `<rect x="100" y="640" width="1200" height="240" rx="20" fill="#6a4424"/>`);
+  const ws = await subjectIn((await normalizeThumbs(wide, sharp)).variants[160]);
+  check("thumb: wide part centred and fills the tile width", Math.abs(ws.cx - 79.5) <= 2 && Math.abs(ws.cy - 79.5) <= 2 && ws.x1 - ws.x0 >= 120, JSON.stringify(ws));
+
+  // White PVC fitting on white: dark outline plus a FAINT rim (within the
+  // background tolerance) just outside it. The kept region must include
+  // the rim — that is what the margin of original pixels is for.
+  const W = 600, H = 400;
+  const raw = Buffer.alloc(W * H * 3, 255);
+  const paint = (x0, y0, x1, y1, v) => { for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) raw.fill(v, (y * W + x) * 3, (y * W + x) * 3 + 3); };
+  paint(196, 146, 404, 254, 244);     // faint rim, 4px wide (reads as background)
+  paint(200, 150, 400, 250, 180);     // outline
+  paint(202, 152, 398, 248, 250);     // white body
+  const fr = findSubjectRegion(raw, W, H, 3);
+  check("thumb: white-on-white fitting found", fr.trimmed && fr.subject.left === 200 && fr.subject.width === 200, JSON.stringify(fr.subject));
+  check("thumb: kept region includes the faint rim outside the outline (never crops the part)",
+    fr.region.left <= 196 && fr.region.top <= 146 && fr.region.left + fr.region.width >= 404 && fr.region.top + fr.region.height >= 254, JSON.stringify(fr.region));
+
+  // Part touching the photo's edge: nothing beyond the photo to trim, and nothing of the part lost.
+  const edge = await svg(400, 800, `<rect x="0" y="0" width="120" height="800" fill="#333"/>`);
+  const er = findSubjectRegion((await sharp(edge).removeAlpha().raw().toBuffer()), 400, 800, 3);
+  check("thumb: a part touching the edge is kept whole", er.region.left === 0 && er.region.top === 0 && er.region.height === 800 && er.region.width >= 120, JSON.stringify(er.region));
+
+  // A busy background (a part photographed on a workbench) is never trimmed.
+  const noise = Buffer.alloc(300 * 300 * 3);
+  for (let i = 0; i < noise.length; i++) noise[i] = (i * 7919 + (i >> 3) * 104729) % 256;
+  const nr = findSubjectRegion(noise, 300, 300, 3);
+  check("thumb: busy background → no trim, whole photo kept", nr.trimmed === false && nr.region.width === 300 && nr.region.height === 300);
+  const noisePng = await sharp(noise, { raw: { width: 300, height: 300, channels: 3 } }).png().toBuffer();
+  const nm = await sharp((await normalizeThumbs(noisePng, sharp)).variants[160]).metadata();
+  check("thumb: busy photo still becomes a bounded 160×160 tile", nm.width === 160 && nm.height === 160);
+
+  // Transparent PNG: flattened onto white, part centred.
+  const transparent = await sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="300" height="900"><rect x="120" y="100" width="60" height="700" fill="#1b4d2e"/></svg>`)).png().toBuffer();
+  const trs = await subjectIn((await normalizeThumbs(transparent, sharp)).variants[160]);
+  check("thumb: transparent PNG part centred on white", Math.abs(trs.cx - 79.5) <= 2 && trs.y1 - trs.y0 >= 120, JSON.stringify(trs));
+
+  // A photo saved before normalized thumbnails existed gets them on first request.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "part-photos-thumb-"));
+  try {
+    const store = createPartPhotos({ dataDir: dir, sharp });
+    const p = part("PROS12SIPRS30");
+    const saved = await store.setPhoto("PROS12SIPRS30", p, tall, { by: "patrick", source: { method: "upload" } });
+    for (const s of ["t160", "t320"]) fs.rmSync(store.imagePath(saved.hash, s));
+    await store.ensureThumb(saved.hash, "t160");
+    check("thumb: an older photo gets its normalized thumbnails on first request",
+      fs.existsSync(store.imagePath(saved.hash, "t160")) && fs.existsSync(store.imagePath(saved.hash, "t320")));
+    const back = await subjectIn(fs.readFileSync(store.imagePath(saved.hash, "t160")));
+    check("thumb: the backfilled thumbnail is centred and inside the tile", Math.abs(back.cx - 79.5) <= 2 && back.y0 >= 3 && back.y1 <= 156, JSON.stringify(back));
+    check("thumb: the large views are the untouched photo (not trimmed)",
+      (await sharp(fs.readFileSync(store.imagePath(saved.hash, 1200))).metadata()).width === 900);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
