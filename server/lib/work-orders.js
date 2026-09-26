@@ -49,9 +49,38 @@ const EventEmitter = require("node:events");
 // listens once and holds or releases the WO's invoice (invoices.scopeHold),
 // so no scope-editing route can forget to.
 const events = new EventEmitter();
-function announceResignature(before, after) {
+
+// AWAITED, deliberately. `events.emit()` calls each listener
+// synchronously but does NOT wait for the promise a listener returns —
+// so the original `emit` here started the invoice-hold write and
+// returned immediately, and the route replied to the client before the
+// hold existed on disk. On a fast machine the write usually won that
+// race; under load it lost, and for that window an invoice the system
+// had just reported as held was still payable.
+//
+// That is the defect this replaces. Patrick: "The system must never
+// report that an invoice hold was applied before the hold actually
+// exists."
+//
+// So: collect what the listeners return and await it. A listener that
+// returns nothing costs nothing; one that returns a promise is now part
+// of the write.
+//
+// A FAILED hold is propagated, not logged and swallowed. A swallowed
+// failure reports success with no hold, which breaks the same rule the
+// race did — just less often, which is worse, not better. The work
+// order itself is already written by the time this runs, so the caller
+// sees an error against an edit that landed; that is recoverable and
+// safe to retry, because setScopeHold() is idempotent (it returns early
+// when the hold is already in the state asked for). Silently leaving an
+// invoice unheld is neither.
+async function announceResignature(before, after) {
   if (awaitsNewSignature(before) === awaitsNewSignature(after)) return;
-  try { events.emit("resignature", after); } catch (err) { console.warn("[resign] listener failed:", err?.message); }
+  const pending = [];
+  for (const listener of events.listeners("resignature")) {
+    pending.push(listener(after));   // sync throws reject the await below
+  }
+  await Promise.all(pending);
 }
 
 const TEMPLATES = {
@@ -1173,7 +1202,7 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy }, { ip, 
 
   records[idx] = next;
   await writeAll(records);
-  announceResignature(current, next);
+  await announceResignature(current, next);
   return next;
 }
 
@@ -1319,7 +1348,7 @@ async function relockWorkOrder(woId, { relockedBy, onSiteQuote = null } = {}, { 
 
   records[idx] = next;
   await writeAll(records);
-  announceResignature(current, next);
+  await announceResignature(current, next);
   return next;
 }
 
@@ -2048,7 +2077,7 @@ async function update(id, patch, { ifMatch = null, systemWrite = false } = {}) {
 
   records[idx] = next;
   await writeAll(records);
-  announceResignature(current, next);
+  await announceResignature(current, next);
   return next;
 }
 

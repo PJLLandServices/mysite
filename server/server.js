@@ -3380,11 +3380,22 @@ async function seasonalQuoteAtLock(wo, zones) {
 // Re-signing (Patrick, 2026-09-26): while a work order awaits the
 // customer's new signature on a revised scope, its invoice (if it has one)
 // is held — nothing payable, sent or texted (invoices.scopeHold). Called
-// after every write that can start or end the wait. Never throws.
+// after every write that can start or end the wait.
+//
+// It used to say "Never throws" here, and that was the problem rather
+// than a feature: it never threw because it never waited.
+// RETURNS the promise. announceResignature() awaits whatever its
+// listeners return, so returning here is what makes the work order's
+// write wait for the invoice hold. Dropping the return would restore
+// the original race silently — the emit would still be awaited, and
+// there would still be nothing to await.
+//
+// No .catch() either: a failure belongs to the caller now. Swallowing
+// it here would report a hold that was never written, which is the
+// defect this exists to prevent.
 workOrders.events.on("resignature", (wo) => {
   if (!wo?.id) return;
-  invoices.setScopeHold(wo.id, workOrders.awaitsNewSignature(wo))
-    .catch((err) => console.warn(`[resign] invoice hold sync failed for ${wo.id}: ${err?.message}`));
+  return invoices.setScopeHold(wo.id, workOrders.awaitsNewSignature(wo));
 });
 async function syncResignatureHold(before, after) {
   try {
