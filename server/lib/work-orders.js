@@ -49,9 +49,56 @@ const EventEmitter = require("node:events");
 // listens once and holds or releases the WO's invoice (invoices.scopeHold),
 // so no scope-editing route can forget to.
 const events = new EventEmitter();
-function announceResignature(before, after) {
+
+// AWAITED, deliberately. `events.emit()` calls each listener
+// synchronously but does NOT wait for the promise a listener returns —
+// so the original `emit` here started the invoice-hold write and
+// returned immediately, and the route replied to the client before the
+// hold existed on disk. On a fast machine the write usually won that
+// race; under load it lost, and for that window an invoice the system
+// had just reported as held was still payable.
+//
+// That is the defect this replaces. Patrick: "The system must never
+// report that an invoice hold was applied before the hold actually
+// exists."
+//
+// So: collect what the listeners return and await it. A listener that
+// returns nothing costs nothing; one that returns a promise is now part
+// of the write.
+//
+// A FAILED hold is propagated, not logged and swallowed. A swallowed
+// failure reports success with no hold, which breaks the same rule the
+// race did — just less often, which is worse, not better. The work
+// order itself is already written by the time this runs, so the caller
+// sees an error against an edit that landed; that is recoverable and
+// safe to retry, because setScopeHold() is idempotent (it returns early
+// when the hold is already in the state asked for). Silently leaving an
+// invoice unheld is neither.
+// The transition a mutator saw, handed to the wrapper below so the
+// announcement runs AFTER this store's lock is released.
+//
+// WHY NOT JUST AWAIT IT IN PLACE. Because that would hold two store
+// locks at once, and atomic-json's withStoreLocks() says in as many
+// words why that is unsafe: "Acquired in a fixed (sorted) order; no lib
+// mutator ever holds two, so no deadlock." Sorted order puts
+// invoices.json BEFORE work-orders.json, so the property merge takes
+// invoices first and work-orders second. A mutator here that held
+// work-orders and then reached for invoices would be the exact reverse
+// — and the two together deadlock: the merge waiting for work-orders,
+// the mutator waiting for invoices, neither ever letting go.
+//
+// Keyed by the returned object rather than by id, so two concurrent
+// writes to the same work order cannot collect each other's
+// transition, and nothing is added to what gets persisted.
+const pendingResignature = new WeakMap();
+
+async function announceResignature(before, after) {
   if (awaitsNewSignature(before) === awaitsNewSignature(after)) return;
-  try { events.emit("resignature", after); } catch (err) { console.warn("[resign] listener failed:", err?.message); }
+  const pending = [];
+  for (const listener of events.listeners("resignature")) {
+    pending.push(listener(after));   // sync throws reject the await below
+  }
+  await Promise.all(pending);
 }
 
 const TEMPLATES = {
@@ -233,6 +280,20 @@ async function writeAll(records) {
   await writeJsonAtomic(FILE, records);
 }
 const withStoreLock = (fn) => (...args) => serialize(FILE, () => fn(...args));
+
+// Same, for the mutators that must publish the invoice hold. The write
+// happens under this store's lock; the hold is written once that lock is
+// released and BEFORE the caller is resolved — so a route still cannot
+// reply ahead of the hold, and no two store locks are ever held at once.
+const withStoreLockThenAnnounce = (fn) => async (...args) => {
+  const result = await serialize(FILE, () => fn(...args));
+  if (result && pendingResignature.has(result)) {
+    const before = pendingResignature.get(result);
+    pendingResignature.delete(result);
+    await announceResignature(before, result);
+  }
+  return result;
+};
 
 // ---- Helpers ---------------------------------------------------------
 
@@ -1173,7 +1234,7 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy }, { ip, 
 
   records[idx] = next;
   await writeAll(records);
-  announceResignature(current, next);
+  pendingResignature.set(next, current);
   return next;
 }
 
@@ -1319,7 +1380,7 @@ async function relockWorkOrder(woId, { relockedBy, onSiteQuote = null } = {}, { 
 
   records[idx] = next;
   await writeAll(records);
-  announceResignature(current, next);
+  pendingResignature.set(next, current);
   return next;
 }
 
@@ -2048,7 +2109,7 @@ async function update(id, patch, { ifMatch = null, systemWrite = false } = {}) {
 
   records[idx] = next;
   await writeAll(records);
-  announceResignature(current, next);
+  pendingResignature.set(next, current);
   return next;
 }
 
@@ -2670,9 +2731,9 @@ module.exports = {
   workOrderForLeadBooking,
   findProtectedFieldTouched,
   summarizeScopeAdditions,
-  captureSignatureBypass: withStoreLock(captureSignatureBypass),
+  captureSignatureBypass: withStoreLockThenAnnounce(captureSignatureBypass),
   unlockWorkOrder: withStoreLock(unlockWorkOrder),
-  relockWorkOrder: withStoreLock(relockWorkOrder),
+  relockWorkOrder: withStoreLockThenAnnounce(relockWorkOrder),
   recordOfflineQuoteAcceptance: withStoreLock(recordOfflineQuoteAcceptance),
   attachSignedCopyRef: withStoreLock(attachSignedCopyRef),
   appendReportSnapshot: withStoreLock(appendReportSnapshot),
@@ -2684,7 +2745,7 @@ module.exports = {
   listByProperty,
   listByLead,
   create: withStoreLock(create),
-  update: withStoreLock(update),
+  update: withStoreLockThenAnnounce(update),
   completeBackdated: withStoreLock(completeBackdated),
   remove: withStoreLock(remove),
   softDelete: withStoreLock(softDelete),
