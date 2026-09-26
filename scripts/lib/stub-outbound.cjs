@@ -127,6 +127,16 @@ globalThis.fetch = async function stubFetch(input, init = {}) {
       throw new TypeError("fetch failed (stub: Stripe unreachable — connect ETIMEDOUT)");
     }
     log({ channel: "stripe", method, path: url.pathname, form });
+    // Terminal (Tap to Pay): the reader's connection token and its one
+    // Location, the shapes Stripe answers with.
+    if (url.pathname === "/v1/terminal/connection_tokens") {
+      return new Response(JSON.stringify({ object: "terminal.connection_token", secret: `pst_test_stub_${Date.now()}` }),
+        { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.pathname === "/v1/terminal/locations") {
+      return new Response(JSON.stringify({ object: "list", data: [{ id: "tml_stub", object: "terminal.location", display_name: "PJL truck (stub)" }] }),
+        { status: 200, headers: { "content-type": "application/json" } });
+    }
     let obj = existingId ? intents.get(existingId) : null;
     if (!obj) {
       stripeSeq += 1;
