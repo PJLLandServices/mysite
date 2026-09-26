@@ -271,6 +271,31 @@ export interface DailySession {
   recordedPersonHours: number;
 }
 
+export interface DayPhoto {
+  n: number;
+  kind: "image" | "pdf";
+  caption: string;
+  takenAt: string | null;
+  taskId: string | null;
+  url: string;
+}
+
+export type ProblemStatus = "open" | "monitoring" | "resolved";
+
+export interface ProjectProblem {
+  id: string;
+  title: string;
+  description: string;
+  status: ProblemStatus;
+  /* From the ONE rule in lib/project-problems.js. The page never tests
+     the status itself — "monitoring" is not resolved, and a second copy
+     of that test is how the two answers drift apart. */
+  needsAttention: boolean;
+  discovery: { at: string | null; onWoId: string | null; workDate: string | null; reportedBy: string | null };
+  resolution: { at: string; by: string | null; note: string } | null;
+  links: { taskId: string | null; photoRef: string | null; scopeChangeId: string | null };
+}
+
 export interface DailyRecordDay {
   woId: string;
   workDate: string | null;
@@ -292,6 +317,11 @@ export interface DailyRecordDay {
   tasksDoneToday: number;
   materialsUsed: number;
   photoCount: number;
+  photos: DayPhoto[];
+  /* Problems DISCOVERED on this day — the fact about the day. They show
+     their CURRENT status, because resolving one later does not rewrite
+     the day it was found on. */
+  problemsFound: ProjectProblem[];
 }
 
 export interface DailyRecords {
@@ -299,6 +329,8 @@ export interface DailyRecords {
   totalPersonHours: number;
   daysLogged: number;
   correctedDays: number;
+  problems: ProjectProblem[];
+  openProblems: number;
 }
 
 export const dailyRecordsApi = {
@@ -324,5 +356,17 @@ export const dailyRecordsApi = {
     api.patch<{ ok: boolean }>(
       `/api/work-orders/${encodeURIComponent(woId)}/sessions/${encodeURIComponent(sessionId)}/labourers`,
       body
-    )
+    ),
+
+  /* Raise a problem against the PROJECT, linked to the day it was
+     found on. */
+  addProblem: (projectId: string, body: {
+    title: string; description?: string; discoveredOnWoId?: string | null; discoveredWorkDate?: string | null;
+  }) => api.post<{ problem: ProjectProblem }>(`/api/projects/${encodeURIComponent(projectId)}/problems`, body),
+
+  /* open / monitoring / resolved. Resolving needs a note — the server
+     refuses without one, and so does the form. */
+  setProblemStatus: (projectId: string, problemId: string, body: { status: ProblemStatus; note?: string }) =>
+    api.patch<{ problem: ProjectProblem }>(
+      `/api/projects/${encodeURIComponent(projectId)}/problems/${encodeURIComponent(problemId)}`, body)
 };

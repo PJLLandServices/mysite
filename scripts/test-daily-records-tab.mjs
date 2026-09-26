@@ -81,6 +81,7 @@ child.stdout.on("data", (c) => { logs += c; });
 child.stderr.on("data", (c) => { logs += c; });
 
 let browser = null;
+let photoDirToClean = null;
 
 try {
   let up = false;
@@ -132,7 +133,21 @@ try {
     }];
     b.locked = true;
     b.signature = { signed: true, signedAt: "2026-09-23T20:00:00.000Z" };
+    // A photo on the correctable day. The meta shape is what
+    // savePhotosForWorkOrder() writes; the file itself is written below
+    // so the <img> resolves rather than 404ing silently behind a broken
+    // icon the test would never notice.
+    a.photos = [{ n: 1, kind: "image", mediaType: "image/png", caption: "Trench at the driveway",
+                  addedAt: "2026-09-24T16:30:00.000Z", filename: "1.png", bytes: 70 }];
     fs.writeFileSync(store, JSON.stringify(all, null, 2));
+
+    const photoDir = path.join(DATA, "wo-photos", woA.id);
+    fs.mkdirSync(photoDir, { recursive: true });
+    // A 1x1 PNG — enough for the route to serve and the browser to load.
+    fs.writeFileSync(path.join(photoDir, "1.png"), Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      "base64"));
+    photoDirToClean = photoDir;
   }
 
   browser = await chromium.launch(chromiumLaunchOpts());
@@ -255,6 +270,72 @@ try {
       w.dailyLog.sessions.length === 1, String(w.dailyLog.sessions.length));
   }
 
+  // ── Photos ─────────────────────────────────────────────────────────
+  //
+  // Through the EXISTING path: wo.photos meta, served by
+  // GET /api/work-orders/:id/photos/:n. Not a second upload route and
+  // not a second place the files live.
+  {
+    text = await open();
+    const imgs = page.locator('[data-testid="day-photos"] img');
+    ok("the day shows its photos", (await imgs.count()) === 1, String(await imgs.count()));
+    const src = await imgs.first().getAttribute("src");
+    ok("...from the existing work-order photo route (singular /photo/, the one that serves)",
+      src === `/api/work-orders/${woA.id}/photo/1`, String(src));
+    // A thumbnail that 404s looks like a thumbnail until you click it.
+    const loaded = await imgs.first().evaluate((el) => el.complete && el.naturalWidth > 0);
+    ok("...and the image actually loads", loaded);
+  }
+
+  // ── Problems: found on a day, outliving it ────────────────────────
+  {
+    await page.click(`[data-testid="raise-problem-${woA.id}"]`);
+    await page.waitForSelector('[data-testid="problem-form"]', { timeout: 10000 });
+    ok("a problem cannot be saved with no title",
+      await page.locator('[data-testid="problem-save"]').isDisabled());
+
+    await page.fill('[data-testid="problem-title"]', "Rock shelf under the east bed");
+    await page.fill('[data-testid="problem-detail"]', "Hit it at about 14 inches.");
+    await page.click('[data-testid="problem-save"]');
+    await page.waitForSelector('[data-testid="problem-form"]', { state: "detached", timeout: 15000 });
+
+    text = await open();
+    ok("the problem shows under the day it was found", /Rock shelf under the east bed/.test(text), text.slice(0, 600));
+    ok("...marked open", /\bopen\b/i.test(text));
+    ok("...and the job's outstanding count moves", /problems open 1/i.test(text), text.slice(0, 400));
+  }
+
+  // ── Monitoring is not resolved ─────────────────────────────────────
+  {
+    await page.locator('[data-testid="problem-to-monitoring"]').first().click();
+    await page.waitForFunction(
+      () => /monitoring/i.test(document.querySelector("main")?.innerText || ""),
+      undefined, { timeout: 15000 }
+    ).catch(() => {});
+    text = await open();
+    ok("a monitored problem still counts as outstanding", /problems open 1/i.test(text), text.slice(0, 400));
+  }
+
+  // ── Resolving needs a note, and does not rewrite the day ──────────
+  {
+    await page.locator('[data-testid="problem-to-resolved"]').first().click();
+    await page.waitForSelector('[data-testid="resolve-note"]', { timeout: 10000 });
+    ok("resolving with no note is refused by the form",
+      await page.locator('[data-testid="resolve-save"]').isDisabled());
+    await page.fill('[data-testid="resolve-note"]', "Rerouted the lateral around the shelf");
+    await page.click('[data-testid="resolve-save"]');
+    await page.waitForSelector('[data-testid="resolve-note"]', { state: "detached", timeout: 15000 });
+
+    text = await open();
+    ok("the job's outstanding count drops to zero", /problems open 0/i.test(text), text.slice(0, 400));
+    // Patrick's wording: "Resolving it later doesn't rewrite Tuesday's record."
+    ok("THE PROBLEM STILL SHOWS UNDER THE DAY IT WAS FOUND",
+      /Rock shelf under the east bed/.test(text), text.slice(0, 700));
+    ok("...marked resolved, with how and by whom",
+      /resolved/i.test(text) && /Rerouted the lateral around the shelf/.test(text) &&
+      /Marguerite Sowande/.test(text), text.slice(0, 900));
+  }
+
   // ── Phone width, where Patrick often reads ─────────────────────────
   {
     await page.setViewportSize({ width: 390, height: 780 });
@@ -268,6 +349,7 @@ try {
   await ctx.close();
 } finally {
   if (browser) await browser.close().catch(() => {});
+  if (photoDirToClean && fs.existsSync(photoDirToClean)) fs.rmSync(photoDirToClean, { recursive: true, force: true });
   child.kill("SIGTERM");
   for (const [f, buf] of backups) {
     const p = path.join(DATA, f);

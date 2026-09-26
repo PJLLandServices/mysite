@@ -19,6 +19,7 @@
 // it is testable directly and cannot surprise a caller with a read.
 
 const sessionHours = require("./session-hours");
+const projectProblems = require("./project-problems");
 
 // Why a day's hours are frozen. `wo.locked` is set when the customer
 // signs the work order off (or an admin records a signature bypass),
@@ -101,7 +102,7 @@ function describeSession(session, { now = null } = {}) {
 }
 
 // One logged day.
-function describeDay(wo, { now = null } = {}) {
+function describeDay(wo, { now = null, problems = [] } = {}) {
   if (!wo) return null;
   const dl = wo.dailyLog || {};
   const sessions = (Array.isArray(dl.sessions) ? dl.sessions : [])
@@ -134,15 +135,41 @@ function describeDay(wo, { now = null } = {}) {
     notes: dl.dailyNotes || "",
     tasksDoneToday: Array.isArray(dl.tasksCompletedToday) ? dl.tasksCompletedToday.length : 0,
     materialsUsed: Array.isArray(dl.materialsConsumed) ? dl.materialsConsumed.length : 0,
-    photoCount: Array.isArray(wo.photos) ? wo.photos.length : 0
+    photoCount: Array.isArray(wo.photos) ? wo.photos.length : 0,
+    // The crew's photos for this day, as references the page turns into
+    // <img src>. They come from wo.photos — the meta that
+    // savePhotosForWorkOrder() already writes — and are served by the
+    // existing GET /api/work-orders/:id/photos/:n. No second upload
+    // path, no second place the files can live.
+    photos: (Array.isArray(wo.photos) ? wo.photos : []).map((ph) => ({
+      n: ph.n,
+      kind: ph.kind || "image",
+      caption: ph.caption || "",
+      takenAt: ph.takenAt || ph.addedAt || null,
+      taskId: ph.taskId || null,
+      // SINGULAR /photo/ — that is the route that serves the file
+      // (server.js woPhotoServeMatch). The plural /photos/:n is the
+      // DELETE route, and a GET to it falls through to a 404. Two
+      // places in the codebase already point <img src> at the plural
+      // form and render broken thumbnails because of it; this is not
+      // one of them.
+      url: `/api/work-orders/${encodeURIComponent(wo.id)}/photo/${encodeURIComponent(ph.n)}`
+    })),
+    // Problems DISCOVERED on this day. The problem itself belongs to
+    // the project and may since have been resolved — this block is the
+    // fact about the day, which is why it shows the problem's CURRENT
+    // status rather than hiding it once resolved. Resolving it later
+    // does not rewrite this day.
+    problemsFound: problems
   };
 }
 
 // The whole job, newest day first — the order the office reads in.
-function describeProject(buildWos, { now = null } = {}) {
+function describeProject(buildWos, { now = null, project = null } = {}) {
   const stamp = now || new Date().toISOString();
+  const byWo = project ? projectProblems.problemsByWorkOrder(project) : new Map();
   const days = (buildWos || [])
-    .map((wo) => describeDay(wo, { now: stamp }))
+    .map((wo) => describeDay(wo, { now: stamp, problems: byWo.get(wo.id) || [] }))
     .filter(Boolean)
     .sort((a, b) => String(b.workDate || "").localeCompare(String(a.workDate || "")));
 
@@ -154,7 +181,14 @@ function describeProject(buildWos, { now = null } = {}) {
     // to collapse.
     totalPersonHours: sessionHours.sumPersonHours(buildWos || [], { openSessions: "toNow", now: stamp }),
     daysLogged: days.length,
-    correctedDays: days.filter((d) => d.anyCorrection).length
+    correctedDays: days.filter((d) => d.anyCorrection).length,
+    // Every problem on the job, newest discovery first, plus the count
+    // still needing attention — from the ONE rule in
+    // project-problems.js, never a second status test written here.
+    problems: (project?.problems || [])
+      .map(projectProblems.describeProblem)
+      .sort((a, b) => String(b.discovery.at || "").localeCompare(String(a.discovery.at || ""))),
+    openProblems: project ? projectProblems.activeProblems(project).length : 0
   };
 }
 

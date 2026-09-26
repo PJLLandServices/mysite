@@ -16716,10 +16716,58 @@ async function handleApi(req, res, pathname) {
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
       const buildWos = await workOrders.listBuildWosForProject(id);
-      const model = dailyRecords.describeProject(buildWos);
+      const model = dailyRecords.describeProject(buildWos, { project: proj });
       return sendJson(res, 200, { ok: true, ...model });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the daily records."] });
+    }
+  }
+
+  // ---- Project problems (2026-09-26) ----
+  //
+  // A problem belongs to the PROJECT and links to the daily record it
+  // was found on. Same gate as the rest of /api/projects/* ("user"):
+  // a technician finding a problem on site is exactly who should be
+  // able to raise one, and the audit trail names them.
+  const problemsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/problems$/);
+  if (problemsMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(problemsMatch[1]);
+      const payload = await parseRequestBody(req);
+      const problem = await projects.addProblem(id, {
+        title: payload.title,
+        description: payload.description || "",
+        discoveredOnWoId: payload.discoveredOnWoId || null,
+        discoveredWorkDate: payload.discoveredWorkDate || null,
+        taskId: payload.taskId || null,
+        photoRef: payload.photoRef || null,
+        scopeChangeId: payload.scopeChangeId || null
+      }, { by: await actorLabel(req) });
+      return sendJson(res, 201, { ok: true, problem });
+    } catch (err) {
+      const status = err.code === "project_not_found" ? 404 : err.code === "missing_title" ? 422 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't record that problem."], code: err.code || null });
+    }
+  }
+
+  // PATCH /api/projects/:id/problems/:problemId — open / monitoring /
+  // resolved. Resolving requires a note; re-opening keeps the history.
+  const problemStatusMatch = pathname.match(/^\/api\/projects\/([^/]+)\/problems\/([^/]+)$/);
+  if (problemStatusMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(problemStatusMatch[1]);
+      const problemId = decodeURIComponent(problemStatusMatch[2]);
+      const payload = await parseRequestBody(req);
+      const problem = await projects.setProblemStatus(id, problemId, payload.status, {
+        note: payload.note || "",
+        by: await actorLabel(req)
+      });
+      return sendJson(res, 200, { ok: true, problem });
+    } catch (err) {
+      const status =
+        err.code === "project_not_found" || err.code === "problem_not_found" ? 404 :
+        err.code === "bad_status" || err.code === "resolution_note_required" ? 422 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't update that problem."], code: err.code || null });
     }
   }
 

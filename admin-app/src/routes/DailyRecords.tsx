@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { dailyRecordsApi } from "../lib/api.ts";
-import type { DailyRecordDay, DailySession } from "../lib/api.ts";
+import { shortDate } from "../lib/format.ts";
+import type { DailyRecordDay, DailySession, ProblemStatus, ProjectProblem } from "../lib/api.ts";
 import {
   Button, Card, CardHeader, EmptyState, ErrorNote, Field, LoadingRows, Stat, StatusPill, TextInput
 } from "../ui/primitives.tsx";
@@ -244,6 +245,81 @@ function CorrectionForm({
   );
 }
 
+/* ── Problems ─────────────────────────────────────────────────────────
+ *
+ * Patrick: "The problem should belong to the project, with a link to
+ * the daily record where it was discovered. Daily Records shows: 'This
+ * problem was discovered Tuesday during this work session.' Project
+ * Overview shows: 'This problem remains open and still needs
+ * resolution.' Resolving it later doesn't rewrite Tuesday's record."
+ *
+ * So a resolved problem still appears under the day it was found on,
+ * showing its CURRENT status. Hiding it once resolved would quietly
+ * rewrite what that day was like.
+ *
+ * The page never tests the status itself — `needsAttention` comes from
+ * the one rule in lib/project-problems.js. A second copy here is how
+ * "monitoring" ends up counted as resolved on one screen and not the
+ * other. */
+
+const PROBLEM_TONE: Record<ProblemStatus, "danger" | "warn" | "good"> = {
+  open: "danger",
+  monitoring: "warn",
+  resolved: "good"
+};
+const PROBLEM_LABEL: Record<ProblemStatus, string> = {
+  open: "Open",
+  monitoring: "Monitoring",
+  resolved: "Resolved"
+};
+
+function ProblemRow({
+  problem, onSetStatus, busy, showDiscovery
+}: {
+  problem: ProjectProblem;
+  onSetStatus: (p: ProjectProblem, status: ProblemStatus) => void;
+  busy: boolean;
+  showDiscovery?: boolean;
+}) {
+  return (
+    <li className="border-t border-line py-3 first:border-t-0" data-testid="problem-row">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <StatusPill tone={PROBLEM_TONE[problem.status]}>{PROBLEM_LABEL[problem.status]}</StatusPill>
+        <span className="font-display text-[15px] font-semibold text-ink">{problem.title}</span>
+      </div>
+      {problem.description ? (
+        <p className="mt-1 whitespace-pre-wrap text-[14px] text-ink">{problem.description}</p>
+      ) : null}
+
+      <p className="mt-1 text-[13px] text-ink-muted">
+        {showDiscovery && problem.discovery.workDate
+          ? <>Discovered {dayHeading(problem.discovery.workDate)}</>
+          : <>Discovered here</>}
+        {problem.discovery.reportedBy ? <> by {problem.discovery.reportedBy}</> : null}
+      </p>
+
+      {/* Resolving appends. The discovery line above is untouched by it. */}
+      {problem.resolution ? (
+        <p className="mt-1 border-l-2 border-emerald-300 pl-3 text-[13px] text-ink-muted">
+          Resolved by <span className="text-ink">{problem.resolution.by || "someone"}</span>
+          {" on "}{shortDate(problem.resolution.at)} — “{problem.resolution.note}”
+        </p>
+      ) : null}
+
+      <div className="mt-2 flex flex-wrap gap-2">
+        {(["open", "monitoring", "resolved"] as ProblemStatus[])
+          .filter((st) => st !== problem.status)
+          .map((st) => (
+            <Button key={st} size="sm" disabled={busy} onClick={() => onSetStatus(problem, st)}
+              data-testid={`problem-to-${st}`}>
+              {st === "resolved" ? "Resolve…" : st === "monitoring" ? "Monitor" : "Re-open"}
+            </Button>
+          ))}
+      </div>
+    </li>
+  );
+}
+
 /* ── The tab ──────────────────────────────────────────────────────── */
 
 export function DailyRecordsTab() {
@@ -251,6 +327,11 @@ export function DailyRecordsTab() {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<null | { kind: "times" | "labourers"; woId: string; session: DailySession }>(null);
   const [error, setError] = useState<string | null>(null);
+  const [raising, setRaising] = useState<null | { woId: string; workDate: string | null }>(null);
+  const [problemTitle, setProblemTitle] = useState("");
+  const [problemDetail, setProblemDetail] = useState("");
+  const [resolving, setResolving] = useState<null | { problem: ProjectProblem; status: ProblemStatus }>(null);
+  const [resolveNote, setResolveNote] = useState("");
 
   const { data, isLoading } = useQuery({
     queryKey: ["daily-records", id], queryFn: () => dailyRecordsApi.get(id), enabled: !!id
@@ -275,6 +356,36 @@ export function DailyRecordsTab() {
     onError: (e: unknown) => setError((e as Error).message || "That correction was refused.")
   });
 
+  const raiseProblem = useMutation({
+    mutationFn: (v: { woId: string; workDate: string | null }) =>
+      dailyRecordsApi.addProblem(id, {
+        title: problemTitle.trim(),
+        description: problemDetail.trim(),
+        discoveredOnWoId: v.woId,
+        discoveredWorkDate: v.workDate
+      }),
+    onSuccess: () => {
+      setError(null); setRaising(null); setProblemTitle(""); setProblemDetail(""); refresh();
+    },
+    onError: (e: unknown) => setError((e as Error).message || "Couldn't record that problem.")
+  });
+
+  const changeProblem = useMutation({
+    mutationFn: (v: { problemId: string; status: ProblemStatus; note: string }) =>
+      dailyRecordsApi.setProblemStatus(id, v.problemId, { status: v.status, note: v.note }),
+    onSuccess: () => { setError(null); setResolving(null); setResolveNote(""); refresh(); },
+    onError: (e: unknown) => setError((e as Error).message || "Couldn't update that problem.")
+  });
+
+  // Resolving needs a note, so it opens a prompt; the other two moves
+  // are immediate. The server refuses a note-less resolve either way —
+  // this is the form agreeing with it rather than finding out after.
+  const onSetStatus = (problem: ProjectProblem, status: ProblemStatus) => {
+    setError(null);
+    if (status === "resolved") { setResolving({ problem, status }); setResolveNote(""); return; }
+    changeProblem.mutate({ problemId: problem.id, status, note: "" });
+  };
+
   if (isLoading) return <Card><LoadingRows /></Card>;
 
   const days = data?.days || [];
@@ -286,10 +397,13 @@ export function DailyRecordsTab() {
           title="Daily records"
           meta={data?.correctedDays ? `${data.correctedDays} day${data.correctedDays === 1 ? "" : "s"} corrected` : undefined}
         />
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Stat label="Days logged" value={String(data?.daysLogged ?? 0)} />
           <Stat label="Person-hours" value={(data?.totalPersonHours ?? 0).toFixed(2)} />
           <Stat label="Photos" value={String(days.reduce((s, d) => s + d.photoCount, 0))} />
+          {/* The count comes from the server's one rule — a "monitoring"
+              problem is NOT resolved and is counted here. */}
+          <Stat label="Problems open" value={String(data?.openProblems ?? 0)} />
         </div>
       </Card>
 
@@ -367,8 +481,138 @@ export function DailyRecordsTab() {
               <p className="mt-1 whitespace-pre-wrap text-[14px] text-ink">{day.notes}</p>
             </div>
           ) : null}
+
+          {/* The crew's photos, from the SAME store and the same URL the
+              classic page uses — wo.photos written by
+              savePhotosForWorkOrder(). Not a second upload path. */}
+          {day.photos.length ? (
+            <div className="mt-3 border-t border-line pt-3">
+              <h4 className="font-display text-[12px] font-semibold uppercase tracking-[0.07em] text-ink-muted">
+                Photos from the day
+              </h4>
+              <ul className="mt-2 flex flex-wrap gap-2" data-testid="day-photos">
+                {day.photos.map((ph) => (
+                  <li key={ph.n}>
+                    <a href={ph.url} target="_blank" rel="noopener noreferrer"
+                       title={ph.caption || `Photo ${ph.n}`}>
+                      {ph.kind === "pdf" ? (
+                        <span className="flex h-20 w-20 items-center justify-center rounded-lg border border-line bg-surface-sunken text-[12px] text-ink-muted">
+                          PDF
+                        </span>
+                      ) : (
+                        <img src={ph.url} alt={ph.caption || `Photo ${ph.n} from this day`}
+                             loading="lazy"
+                             className="h-20 w-20 rounded-lg border border-line object-cover" />
+                      )}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {/* Problems DISCOVERED on this day. A resolved one still shows
+              here, with its current status — resolving it later does not
+              rewrite what this day was like. */}
+          <div className="mt-3 border-t border-line pt-3">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h4 className="font-display text-[12px] font-semibold uppercase tracking-[0.07em] text-ink-muted">
+                Problems found this day
+              </h4>
+              <Button size="sm" data-testid={`raise-problem-${day.woId}`}
+                onClick={() => { setError(null); setRaising({ woId: day.woId, workDate: day.workDate }); setProblemTitle(""); setProblemDetail(""); }}>
+                Record a problem
+              </Button>
+            </div>
+
+            {day.problemsFound.length ? (
+              <ul className="mt-1">
+                {day.problemsFound.map((pr) => (
+                  <ProblemRow key={pr.id} problem={pr} busy={changeProblem.isPending} onSetStatus={onSetStatus} />
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-1 text-[13px] text-ink-muted">Nothing recorded for this day.</p>
+            )}
+
+            {raising && raising.woId === day.woId ? (
+              <div className="mt-3 rounded-lg border border-line bg-surface-sunken p-3" data-testid="problem-form">
+                <p className="mb-2 text-[13px] text-ink-muted">
+                  This stays with the job until somebody deals with it. It will always show
+                  that it was found on this day.
+                </p>
+                <div className="space-y-3">
+                  <Field label="What is the problem">
+                    <TextInput value={problemTitle} onChange={(e) => setProblemTitle(e.target.value)}
+                      placeholder="e.g. Rock shelf under the east bed" data-testid="problem-title" />
+                  </Field>
+                  <Field label="Any detail" hint="Optional.">
+                    <TextInput value={problemDetail} onChange={(e) => setProblemDetail(e.target.value)}
+                      placeholder="What you saw, and what it might mean" data-testid="problem-detail" />
+                  </Field>
+                </div>
+                {error ? <div className="mt-2"><ErrorNote>{error}</ErrorNote></div> : null}
+                <div className="mt-3 flex items-center gap-2">
+                  <Button variant="primary" data-testid="problem-save"
+                    disabled={problemTitle.trim().length < 3 || raiseProblem.isPending}
+                    onClick={() => raiseProblem.mutate({ woId: day.woId, workDate: day.workDate })}>
+                    {raiseProblem.isPending ? "Saving…" : "Record it"}
+                  </Button>
+                  <Button onClick={() => { setRaising(null); setError(null); }} disabled={raiseProblem.isPending}>Cancel</Button>
+                </div>
+              </div>
+            ) : null}
+          </div>
         </Card>
       ))}
+
+      {/* Resolving needs an account of HOW. "Resolved" with no note is a
+          record that answers the wrong question in six months, so the
+          server refuses it and the form asks for it first. */}
+      {resolving ? (
+        <Card>
+          <CardHeader title={`Resolve: ${resolving.problem.title}`} />
+          <Field label="How was it resolved" hint="Required. This is what the record will say later.">
+            <TextInput value={resolveNote} onChange={(e) => setResolveNote(e.target.value)}
+              placeholder="e.g. Rerouted the lateral around the shelf" data-testid="resolve-note" />
+          </Field>
+          {error ? <div className="mt-2"><ErrorNote>{error}</ErrorNote></div> : null}
+          <div className="mt-3 flex items-center gap-2">
+            <Button variant="primary" data-testid="resolve-save"
+              disabled={resolveNote.trim().length < 3 || changeProblem.isPending}
+              onClick={() => changeProblem.mutate({
+                problemId: resolving.problem.id, status: "resolved", note: resolveNote.trim()
+              })}>
+              {changeProblem.isPending ? "Saving…" : "Mark resolved"}
+            </Button>
+            <Button onClick={() => { setResolving(null); setError(null); }} disabled={changeProblem.isPending}>Cancel</Button>
+            {resolveNote.trim().length < 3 ? (
+              <span className="text-[13px] text-ink-muted" data-testid="resolve-note-required">
+                Say how it was resolved to save.
+              </span>
+            ) : null}
+          </div>
+        </Card>
+      ) : null}
+
+      {/* The whole job's problems, newest discovery first. The per-day
+          blocks above answer "what happened that day"; this answers
+          "what is still outstanding" — Patrick's two contexts, one
+          record. */}
+      {data?.problems?.length ? (
+        <Card>
+          <CardHeader
+            title="Problems on this job"
+            meta={`${data.openProblems} still need attention`}
+          />
+          <ul data-testid="all-problems">
+            {data.problems.map((pr) => (
+              <ProblemRow key={pr.id} problem={pr} busy={changeProblem.isPending}
+                onSetStatus={onSetStatus} showDiscovery />
+            ))}
+          </ul>
+        </Card>
+      ) : null}
     </div>
   );
 }
