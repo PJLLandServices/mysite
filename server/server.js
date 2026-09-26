@@ -131,6 +131,7 @@ const holds = require("./lib/booking-holds");
 const purgeTestData = require("./lib/purge-test-data");
 const workOrders = require("./lib/work-orders");
 const sessionHours = require("./lib/session-hours");
+const dailyRecords = require("./lib/daily-records");
 const quotes = require("./lib/quotes");
 const quoteViews = require("./lib/quote-views");
 const invoices = require("./lib/invoices");
@@ -16696,6 +16697,29 @@ async function handleApi(req, res, pathname) {
     } catch (err) {
       const status = err.code === "task_not_found" ? 404 : err.code === "task_not_archived" ? 409 : 400;
       return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't restore that task."] });
+    }
+  }
+
+  // GET /api/projects/:id/daily-records — the day list the Daily Records
+  // tab renders (2026-09-26, item 4 of Patrick's directive).
+  //
+  // Everything the screen shows is calculated HERE: recorded vs effective
+  // clock times, the person-hours each comes to, who corrected what and
+  // why, and — per day — whether a correction is still allowed and the
+  // sentence explaining why not. The page displays; it does not compute.
+  // That is the standing rule from the Tasks release, and on this screen
+  // it matters twice over, because every number on it is money.
+  const dailyRecordsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/daily-records$/);
+  if (dailyRecordsMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(dailyRecordsMatch[1]);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      const buildWos = await workOrders.listBuildWosForProject(id);
+      const model = dailyRecords.describeProject(buildWos);
+      return sendJson(res, 200, { ok: true, ...model });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the daily records."] });
     }
   }
 
