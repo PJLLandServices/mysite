@@ -53,6 +53,13 @@ async function probe() {
 console.log(`watching ${HEALTH}`);
 console.log(`polling every ${POLL_MS}ms for up to ${MAX_MIN} minutes — deploy now\n`);
 
+// Starting mid-outage makes the number a FLOOR, not a measurement.
+// That happened on the second run: polling began at 21:44:50 with the
+// site already down, so its "342.9s" could not account for however much
+// of the outage had already passed, and I reported it as though it
+// could. Say so on the face of the result instead.
+let startedWhileDown = null;
+
 let lastState = null;
 let healthyUntil = null;     // last moment the OLD instance answered 200
 let drainSeenAt = null;      // first 503 "shutting down"
@@ -63,6 +70,15 @@ const deadline = Date.now() + MAX_MIN * 60000;
 while (Date.now() < deadline) {
   const r = await probe();
   const state = r.status === 200 ? "up" : r.status === 503 ? "draining" : "down";
+
+  if (startedWhileDown === null) {
+    startedWhileDown = state !== "up";
+    if (startedWhileDown) {
+      console.log(`${stamp()}  NOTE: already down when polling began — the outage started`);
+      console.log(`         earlier than this, so the figure below is a FLOOR.`);
+      console.log(`         Start this BEFORE triggering the restart for a clean one.\n`);
+    }
+  }
 
   if (state !== lastState) {
     console.log(`${stamp()}  ${state.toUpperCase().padEnd(8)} status=${r.status} ${r.body ? `"${r.body}"` : ""}`);
