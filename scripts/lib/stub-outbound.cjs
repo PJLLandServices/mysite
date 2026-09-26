@@ -2,12 +2,37 @@
 //
 // Preloaded (`node --require`) into a server a test boots. Nothing leaves
 // the machine: every email, SMS and Stripe call is written to the JSONL
-// file at $PJL_STUB_OUTBOX instead, and any other outbound HTTP host is
+// file at $PJL_STUB_OUTBOX instead, and any other outbound host is
 // refused (geocoding and distance already fail open by design).
 //
 //   email  → nodemailer.createTransport() returns a transport that logs
 //   sms    → fetch("https://api.twilio.com/…") answers a fake 201
 //   stripe → fetch("https://api.stripe.com/…") answers a fake object
+//
+// TRIPWIRES (Phase 1 E2E, 2026-09-26). The stub refuses to load at all —
+// the server never starts — when anything in the environment could reach
+// the real business:
+//
+//   * a production host (pjllandservices.com, *.onrender.com) anywhere in
+//     the environment, e.g. PUBLIC_BASE_URL or GMAIL_USER
+//   * a live Stripe key (sk_live_ / rk_live_ / pk_live_), or a Stripe key
+//     that isn't a test key
+//   * a Twilio, Gmail, QuickBooks, Google, Anthropic, captcha or webhook
+//     credential that isn't a stub
+//   * a .env file beside the server it is about to boot (server.js loads
+//     one at boot; on a machine with real keys in it, every key the
+//     harness didn't set would come from there)
+//
+// And below fetch, every TCP/TLS socket to a non-loopback address is
+// refused, so http.request, https.request, SMTP or any library with its
+// own client is caught too — not just fetch.
+//
+// Stripe outcomes a test can set per intent (or "*" for every call), in
+// $PJL_STUB_OUTBOX.stripe as JSONL {id, mode}:
+//   succeeded    the customer's card was approved (also: $OUTBOX.succeeded)
+//   declined     requires_payment_method + last_payment_error card_declined
+//   processing   the reader never finished (a Tap to Pay that timed out)
+//   unreachable  the request never reaches Stripe (network timeout)
 //
 // Test-only. Never required by the server itself.
 
@@ -18,6 +43,35 @@ if (!OUTBOX) throw new Error("stub-outbound: PJL_STUB_OUTBOX is not set");
 function log(entry) {
   fs.appendFileSync(OUTBOX, JSON.stringify({ at: new Date().toISOString(), ...entry }) + "\n");
 }
+
+// ---- tripwires (scripts/lib/test-tripwires.cjs) ---------------------
+const { unsafeEnvironment, PRODUCTION_HOST } = require("./test-tripwires.cjs");
+{
+  const problems = unsafeEnvironment(process.env, process.argv[1]);
+  if (problems.length) {
+    log({ channel: "tripwire", problems });
+    throw new Error(`stub-outbound: refusing to start a test server:\n  - ${problems.join("\n  - ")}`);
+  }
+}
+
+// Below fetch: no socket to anywhere but this machine.
+const net = require("node:net");
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"]);
+const realConnect = net.Socket.prototype.connect;
+net.Socket.prototype.connect = function guardedConnect(...args) {
+  const first = Array.isArray(args[0]) ? args[0][0] : args[0];
+  let host = null;
+  if (first && typeof first === "object") host = first.path ? null : String(first.host || "localhost");
+  else if (typeof first === "number" || /^\d+$/.test(String(first))) host = typeof args[1] === "string" ? args[1] : "localhost";
+  if (host !== null && !LOOPBACK.has(host)) {
+    log({ channel: "refused", via: "socket", host, production: PRODUCTION_HOST.test(host) });
+    const err = new Error(`stub-outbound: socket to ${host} refused in tests`);
+    err.code = "ECONNREFUSED";
+    process.nextTick(() => this.destroy(err));
+    return this;
+  }
+  return realConnect.apply(this, args);
+};
 
 // ---- email ----------------------------------------------------------
 const nodemailer = require("nodemailer");
@@ -37,6 +91,18 @@ nodemailer.createTransport = function createStubTransport() {
 const realFetch = globalThis.fetch;
 let stripeSeq = 0;
 const intents = new Map();
+// The last mode a test set for this intent id (or "*"), if any.
+function modeFor(id) {
+  let mode = null;
+  try {
+    for (const line of fs.readFileSync(`${OUTBOX}.stripe`, "utf8").split("\n")) {
+      if (!line) continue;
+      const m = JSON.parse(line);
+      if (m.id === id) mode = m.mode;
+    }
+  } catch {}
+  return mode;
+}
 function formToObject(body) {
   const out = {};
   if (!body) return out;
@@ -55,8 +121,22 @@ globalThis.fetch = async function stubFetch(input, init = {}) {
   if (url.hostname === "api.stripe.com") {
     const form = formToObject(init.body);
     const method = init.method || "GET";
-    log({ channel: "stripe", method, path: url.pathname, form });
     const existingId = url.pathname.match(/payment_intents\/(pi_[A-Za-z0-9_]+)/)?.[1] || null;
+    if (modeFor("*") === "unreachable" || (existingId && modeFor(existingId) === "unreachable")) {
+      log({ channel: "stripe", method, path: url.pathname, form, unreachable: true });
+      throw new TypeError("fetch failed (stub: Stripe unreachable — connect ETIMEDOUT)");
+    }
+    log({ channel: "stripe", method, path: url.pathname, form });
+    // Terminal (Tap to Pay): the reader's connection token and its one
+    // Location, the shapes Stripe answers with.
+    if (url.pathname === "/v1/terminal/connection_tokens") {
+      return new Response(JSON.stringify({ object: "terminal.connection_token", secret: `pst_test_stub_${Date.now()}` }),
+        { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.pathname === "/v1/terminal/locations") {
+      return new Response(JSON.stringify({ object: "list", data: [{ id: "tml_stub", object: "terminal.location", display_name: "PJL truck (stub)" }] }),
+        { status: 200, headers: { "content-type": "application/json" } });
+    }
     let obj = existingId ? intents.get(existingId) : null;
     if (!obj) {
       stripeSeq += 1;
@@ -75,7 +155,14 @@ globalThis.fetch = async function stubFetch(input, init = {}) {
     // id in $PJL_STUB_OUTBOX.succeeded — the way Stripe would report it.
     let succeeded = [];
     try { succeeded = fs.readFileSync(`${OUTBOX}.succeeded`, "utf8").split("\n"); } catch {}
-    if (succeeded.includes(obj.id) && obj.status !== "canceled") {
+    const mode = modeFor(obj.id);
+    if (mode === "declined" && obj.status !== "canceled" && obj.status !== "succeeded") {
+      obj.status = "requires_payment_method";
+      obj.last_payment_error = { type: "card_error", code: "card_declined", decline_code: "generic_decline",
+        message: "Your card was declined.", payment_method: { card: { brand: "visa", last4: "0002" } } };
+    }
+    if (mode === "processing" && obj.status !== "canceled" && obj.status !== "succeeded") obj.status = "processing";
+    if ((succeeded.includes(obj.id) || mode === "succeeded") && obj.status !== "canceled") {
       obj.status = "succeeded";
       obj.latest_charge = { id: `ch_${obj.id}`, status: "succeeded",
         // An in-person intent reports its card the way Stripe does for one.
@@ -85,6 +172,6 @@ globalThis.fetch = async function stubFetch(input, init = {}) {
     }
     return new Response(JSON.stringify(obj), { status: 200, headers: { "content-type": "application/json" } });
   }
-  log({ channel: "refused", url: url.href });
+  log({ channel: "refused", url: url.href, host: url.hostname, production: PRODUCTION_HOST.test(url.hostname) });
   throw new TypeError(`stub-outbound: outbound request to ${url.hostname} refused in tests`);
 };
