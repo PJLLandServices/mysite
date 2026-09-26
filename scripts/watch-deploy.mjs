@@ -74,9 +74,19 @@ while (Date.now() < deadline) {
     if (state === "up" && downFrom && !backAt) {
       backAt = Date.now();
       console.log(`\n=== back up after ${secs(backAt - downFrom)} ===`);
-      if (drainSeenAt) console.log(`    graceful drain observed ${secs(drainSeenAt - (healthyUntil || drainSeenAt))} before the outage began`);
-      console.log(`    before the fix this gap was about 5m40s (340s)`);
-      console.log(`    the app itself listens in under a second once started\n`);
+      if (drainSeenAt) {
+        console.log("    a 503 \"shutting down\" was seen — the SIGTERM handler RAN on the real instance");
+      } else {
+        console.log("    NO 503 seen — the instance went straight from 200 to unreachable,");
+        console.log("    which is what an instance that never received SIGTERM looks like");
+      }
+      console.log(`    the app itself listens in under a second once started`);
+      // Deliberately NOT compared against the 5m40s from the Render log:
+      // that figure is "Deploying" to "Running npm start", a different
+      // window from the outside-visible outage measured here. Compare
+      // runs of THIS script against each other, which is why the
+      // verification is two deploys measured the same way.
+      console.log("    compare this against another run of this script, not against the Render log\n");
       break;
     }
     lastState = state;
