@@ -1750,7 +1750,25 @@ render = function (inv) {
   renderPaymentCard(inv);
   renderReviseCard(inv);
   renderPriceConfirmCard(inv);
+  renderRevisionRequiredCard(inv);
 };
+
+// ---- Revision required after re-signing (2026-09-26) ---------------------
+// The server decides (invoice.scopeHold.reason); this only says what it
+// means and what clears it.
+function renderRevisionRequiredCard(inv) {
+  const card = document.getElementById("invoiceRevisionRequiredCard");
+  const meta = document.getElementById("invoiceRevisionRequiredMeta");
+  if (!card || !meta) return;
+  const hold = inv?.scopeHold;
+  card.hidden = hold?.reason !== "revision_required";
+  if (card.hidden) return;
+  const signed = hold.requiredTotal != null ? ` billing ${fmt(hold.requiredTotal)}` : "";
+  const how = inv.status === "sent" || inv.status === "partially_paid"
+    ? "Revise it to the signed scope below"
+    : "Void it and generate a new invoice from the work order";
+  meta.textContent = `The customer signed a revised work order${signed}; this invoice (${fmt(inv.total)}) was left as it was. ${how}. Payment and Send stay blocked until then.`;
+}
 
 // ---- Price to confirm (PJL-96) -------------------------------------------
 // The server decides (invoice.priceUnconfirmed); this only shows it. The

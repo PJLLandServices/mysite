@@ -248,10 +248,20 @@ try {
   {
     const src = fs.readFileSync(path.join(ROOT, "server", "server.js"), "utf8");
     const block = src.slice(src.indexOf('workOrders.events.on("resignature"'));
-    const body = block.slice(0, block.indexOf("});") + 3);
-    ok(/return\s+invoices\.setScopeHold\(/.test(body),
+    const listener = block.slice(0, block.indexOf("});") + 3);
+    // Since 2026-09-26 the listener hands off to holdOrReconcileInvoice(),
+    // which holds (awaiting the signature) or reconciles the invoice to the
+    // signed scope and releases it. Both writes must be RETURNED, all the
+    // way up, or the route replies before the invoice is held / re-priced.
+    const helperAt = src.indexOf("async function holdOrReconcileInvoice(");
+    const helper = helperAt < 0 ? "" : src.slice(helperAt, src.indexOf("\n}\n", helperAt) + 3);
+    const body = `${listener}\n${helper}`;
+    ok(/return\s+invoices\.setScopeHold\(/.test(listener)
+      || (/return\s+holdOrReconcileInvoice\(/.test(listener)
+        && /return\s+invoices\.setScopeHold\(/.test(helper)
+        && /return\s+invoices\.reconcileToSignedScope\(/.test(helper)),
       "server.js's resignature listener RETURNS the hold write",
-      body.replace(/\s+/g, " ").slice(0, 200));
+      body.replace(/\s+/g, " ").slice(0, 300));
     ok(!/\.catch\(/.test(body),
       "...and does not swallow its failure with a .catch()",
       body.replace(/\s+/g, " ").slice(0, 200));

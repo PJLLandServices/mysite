@@ -6373,6 +6373,71 @@ Parent: 26 of 40 fail. Now: 40 of 40 pass.
 with Take payment and Send refused. Re-lock, then have the customer sign. Check the original signature
 is still in the history and the invoice is released.
 
+## 2026-09-26 — FLOW-31/23: after re-signing, the invoice bills what the customer signed
+
+Found by the Phase 1 E2E journeys (journey 6, PR #322). This reverses the entry above, which said the
+invoice's lines were "deliberately left alone": the new signature released the hold, and the invoice
+still billed the OLD scope. The pay link and Send were open again at the old price:
+- signed for 4 zones, re-signed at 6: billed the 4-zone price;
+- signed for 6, re-signed at 4: billed the 6-zone price, an **overcharge**.
+
+Nothing forced the void-and-regenerate that entry relied on.
+
+**Now:** when the new acceptance (signature or bypass) lands, the "resignature" listener in server.js
+(`holdOrReconcileInvoice`) first brings the invoice to the signed scope:
+`billing.billingFor(wo).lines`, the re-locked, frozen price. Only then is the hold released. This is
+done by `invoices.reconcileToSignedScope(woId)`, under the invoice store lock:
+- **Already bills that scope:** the hold is released and nothing else is written.
+- **An unsent draft** (no `sentAt`, no money recorded, not in QuickBooks): re-priced **in place**. It
+  is the same invoice, so the one-active-invoice rule holds. The lines are converted exactly as
+  `createDraft` converts them (the extracted `draftLinesFrom`). The previous lines and total are
+  kept in `scopeReconciliations`, and the history records `repriced_to_signed_scope`.
+- **A custom-size price Patrick confirmed** (PJL-96) stands when the signed scope still carries the
+  same suggestion, for example a zone added and then removed. If the size really changed (16 → 18),
+  the invoice is re-priced to the new suggestion and must be confirmed again, so it is held as
+  `price_unconfirmed` and charged at neither number meanwhile.
+- **Anything else is NOT rewritten:** a sent, part-paid or paid invoice, one with money recorded, one
+  already in QuickBooks, or a revised scope that can't be priced or bills $0.
+  - It is flagged instead: `scopeHold.reason = "revision_required"`, carrying the signed total, and
+    the history records `revision_required_after_resignature`.
+  - It stays held. The pay page, portal pay link, Take payment now, Tap to Pay, Send, Resend and the
+    texts all refuse, with the code `revision_required`.
+  - `invoices.revise()` clears it. The history records `revision_resolved`, and says whether the
+    revision matches the signed total.
+  - A flagged invoice that isn't sent (a QuickBooks draft, or $0) is resolved by void and regenerate.
+- **Idempotent.** A retried signature doesn't flip the resignature state, so the listener doesn't run.
+  A repeated reconcile finds "matches", or the same flag already set, and writes nothing.
+- `setScopeHold(false)` can no longer release a revision-required hold.
+
+**The whole workflow:**
+- **Customer:** nothing is sent by the re-price or the flag. The pay page's held wording is unchanged
+  ("This invoice is being updated").
+- **Patrick:** the office invoice page shows a "Revision required" card with what clears it. Send
+  explains the refusal.
+- **Capacity and calendar:** untouched.
+- **Linked records:** only the WO's active invoice. The WO, its priorAcceptances and the service
+  record are untouched.
+- **Audit:** the original signature is kept (priorAcceptances), and so are the original invoice
+  lines (scopeReconciliations, history, revisions).
+- **Deliberately left alone:**
+  - FLOW-23's finalizer, `stripe.js`, `pay.js` and the webhook are unchanged.
+  - An office-recorded cash or cheque payment is still accepted while held, as before.
+  - An open Stripe intent for the old amount is cancelled by the existing amount-mismatch rule on the
+    next tap or pay-page visit.
+
+**Tests:**
+- `scripts/test-resign-reprice.mjs` (build:check): 24 of 56 fail on the parent, and 56 of 56 pass
+  with the change. It covers:
+  - the draft re-priced in both directions;
+  - a sent invoice flagged, every door blocked, then Revise clears it;
+  - money recorded means flagged, not rewritten;
+  - a confirmed custom price kept, and a real size change re-confirmed;
+  - a retry is a no-op;
+  - nothing is sent;
+  - the office card.
+- `test-resignature-await` and `test-scope-hold-before-reply` now follow the release write into
+  `reconcileToSignedScope`. The latter still fails if that write isn't awaited (checked by mutation).
+
 ## 2026-09-23 — FLOW-23/31: what a work order bills has one answer, `billing.billingFor(wo)`
 
 Patrick: "I don't want separate pricing logic patched independently in Finish,

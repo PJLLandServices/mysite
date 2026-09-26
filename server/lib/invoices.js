@@ -421,7 +421,25 @@ function hydrate(inv) {
     // customer accepted it and awaits their new signature (Patrick,
     // 2026-09-26). While set, nothing is payable, sent or texted. Written
     // only by setScopeHold(), driven by workOrders.awaitsNewSignature.
-    scopeHold: inv?.scopeHold && inv.scopeHold.since ? { woId: inv.scopeHold.woId || null, since: inv.scopeHold.since } : null,
+    //
+    // reason "revision_required" (2026-09-26): the customer HAS signed the
+    // revised scope, but this invoice could not be re-priced to it without
+    // silently changing something the customer already has (it was sent,
+    // money is recorded against it, or it is in QuickBooks). Still held —
+    // payment and Send stay blocked — until Patrick revises it (revise()
+    // clears it). Written only by reconcileToSignedScope().
+    scopeHold: inv?.scopeHold && inv.scopeHold.since ? {
+      woId: inv.scopeHold.woId || null,
+      since: inv.scopeHold.since,
+      reason: inv.scopeHold.reason === "revision_required" ? "revision_required" : "awaiting_signature",
+      requiredTotal: Number.isFinite(Number(inv.scopeHold.requiredTotal)) && inv.scopeHold.requiredTotal !== null ? Number(inv.scopeHold.requiredTotal) : null,
+      requiredLineItems: Array.isArray(inv.scopeHold.requiredLineItems) ? inv.scopeHold.requiredLineItems : null,
+      flaggedAt: inv.scopeHold.flaggedAt || null
+    } : null,
+    // What each re-signed scope did to this invoice, append-only: the lines
+    // and total it had before a re-price, or why it was flagged instead.
+    // The audit trail for reconcileToSignedScope().
+    scopeReconciliations: Array.isArray(inv?.scopeReconciliations) ? inv.scopeReconciliations : [],
     createdAt: inv?.createdAt || new Date().toISOString(),
     updatedAt: inv?.updatedAt || new Date().toISOString(),
     history: Array.isArray(inv?.history) ? inv.history : []
@@ -574,6 +592,43 @@ async function listByProperty(propertyId) {
   return records.filter((r) => r.propertyId === propertyId);
 }
 
+// The invoice lines a WO's billable lines become (builder shape in:
+// key/label/qty/originalPrice/overridePrice). ONE conversion, used by
+// createDraft and by reconcileToSignedScope, so a re-priced draft carries
+// exactly the lines a fresh draft of the same scope would.
+function draftLinesFrom(lineItems) {
+  return (lineItems || []).map((l) => {
+    const price = (l.overridePrice != null && Number.isFinite(Number(l.overridePrice)))
+      ? Number(l.overridePrice)
+      : Number(l.originalPrice || l.price) || 0;
+    const qty = Number(l.qty) || 1;
+    return {
+      key: l.key || null,
+      label: l.label || (l.key ? l.key : "Line"),
+      qty,
+      unitPrice: Math.round(price * 100) / 100,
+      lineTotal: Math.round(price * qty * 100) / 100,
+      note: l.note || ""
+    };
+  });
+}
+
+// PJL-96: a SUGGESTED seasonal fee line (pricing.billableLines) — the
+// price is Patrick's to confirm. The suggestion is prefilled; the invoice
+// is flagged, and stays unpayable / unsent / untexted until he does.
+function priceConfirmForLines(lineItems, normalized) {
+  const suggestedIdx = (lineItems || []).findIndex((l) => l && l.priceStatus === "suggested");
+  return suggestedIdx === -1 ? null : {
+    required: true,
+    reason: lineItems[suggestedIdx].priceReason,
+    suggestedAmount: normalized[suggestedIdx].unitPrice,
+    basis: lineItems[suggestedIdx].suggestion?.basis || "",
+    lineIndex: suggestedIdx,
+    lineKey: normalized[suggestedIdx].key,
+    confirmedAt: null, confirmedBy: null, confirmedAmount: null
+  };
+}
+
 // Create a draft invoice from a WO's accepted quote line items. The
 // `lineItems` shape is the on-site-quote builder shape (key/label/qty/
 // originalPrice/overridePrice). Snapshotted at draft time — future
@@ -673,34 +728,9 @@ async function createDraft({
   const id = await nextInvoiceId(year);
   // Normalize line items into a consistent shape so the invoice page
   // doesn't have to know about builder vs accepted-quote variants.
-  const normalized = (lineItems || []).map((l) => {
-    const price = (l.overridePrice != null && Number.isFinite(Number(l.overridePrice)))
-      ? Number(l.overridePrice)
-      : Number(l.originalPrice || l.price) || 0;
-    const qty = Number(l.qty) || 1;
-    return {
-      key: l.key || null,
-      label: l.label || (l.key ? l.key : "Line"),
-      qty,
-      unitPrice: Math.round(price * 100) / 100,
-      lineTotal: Math.round(price * qty * 100) / 100,
-      note: l.note || ""
-    };
-  });
+  const normalized = draftLinesFrom(lineItems);
   const totals = totalsForLines(normalized);
-  // PJL-96: a SUGGESTED seasonal fee line (pricing.billableLines) — the
-  // price is Patrick's to confirm. The suggestion is prefilled; the invoice
-  // is flagged, and stays unpayable / unsent / untexted until he does.
-  const suggestedIdx = (lineItems || []).findIndex((l) => l && l.priceStatus === "suggested");
-  const priceConfirm = suggestedIdx === -1 ? null : {
-    required: true,
-    reason: lineItems[suggestedIdx].priceReason,
-    suggestedAmount: normalized[suggestedIdx].unitPrice,
-    basis: lineItems[suggestedIdx].suggestion?.basis || "",
-    lineIndex: suggestedIdx,
-    lineKey: normalized[suggestedIdx].key,
-    confirmedAt: null, confirmedBy: null, confirmedAmount: null
-  };
+  const priceConfirm = priceConfirmForLines(lineItems, normalized);
   const inv = hydrate({
     priceConfirm,
     id,
@@ -883,11 +913,19 @@ function payBlockReason(inv) {
   if (!inv) return "not_issued";
   if (inv.status === "void") return "void";
   if (inv.status === "paid") return "paid";
-  if (inv.scopeHold?.since) return "awaiting_signature";
+  if (inv.scopeHold?.since) return scopeHoldCode(inv);
   if (isPriceUnconfirmed(inv)) return "price_unconfirmed";
   if (inv.status === "sent" || inv.status === "partially_paid") return null;
   if (inv.status === "draft" && Boolean(inv.onSitePayment?.openedAt)) return null;
   return "not_issued";
+}
+
+// Why a held invoice is held: the revised scope still needs the customer's
+// signature ("awaiting_signature"), or they signed it and this invoice
+// must be revised to match first ("revision_required"). null if not held.
+function scopeHoldCode(inv) {
+  if (!inv?.scopeHold?.since) return null;
+  return inv.scopeHold.reason === "revision_required" ? "revision_required" : "awaiting_signature";
 }
 
 function isPayableOnline(inv) {
@@ -916,6 +954,9 @@ async function openForOnSitePayment(id, { by = "" } = {}) {
   // Patrick prices it (fall-closing #7 round 2): never charge that.
   // PJL-96: the same for any price not yet confirmed (a custom size, or a
   // commercial account without its own price) — one rule, isPriceUnconfirmed.
+  if (scopeHoldCode(inv) === "revision_required") {
+    return { ok: false, status: 409, code: "revision_required", errors: ["The customer signed a revised work order, and this invoice still bills the old one. Patrick revises it before anything is charged. Nothing was charged."] };
+  }
   if (inv.scopeHold?.since) {
     return { ok: false, status: 409, code: "awaiting_signature", errors: ["The work order's scope changed after the customer signed. They need to sign the revised work order before anything is charged. Nothing was charged."] };
   }
@@ -1019,9 +1060,16 @@ async function setScopeHold(woId, hold, { by = "system" } = {}) {
   if (!inv) return null;
   const idx = records.indexOf(inv);
   const on = Boolean(inv.scopeHold && inv.scopeHold.since);
-  if (on === Boolean(hold)) return hydrate(inv);
+  const code = scopeHoldCode(inv);
+  // Releasing is reconcileToSignedScope's job once the new acceptance lands
+  // (it re-prices or flags first). A "revision required" hold is cleared
+  // only by revise(), never by a release here.
+  if (!hold && code === "revision_required") return hydrate(inv);
+  // Already held for the signature: nothing to do. Held for a revision and
+  // the scope changes AGAIN: the new signature comes first.
+  if (on === Boolean(hold) && !(hold && code === "revision_required")) return hydrate(inv);
   const now = new Date().toISOString();
-  const next = { ...inv, scopeHold: hold ? { woId, since: now } : null, updatedAt: now };
+  const next = { ...inv, scopeHold: hold ? { woId, since: now, reason: "awaiting_signature" } : null, updatedAt: now };
   next.history = [...(inv.history || []), {
     ts: now, action: hold ? "scope_hold_on" : "scope_hold_off", by,
     note: hold
@@ -1031,6 +1079,118 @@ async function setScopeHold(woId, hold, { by = "system" } = {}) {
   records[idx] = next;
   await writeAll(records);
   return hydrate(next);
+}
+
+// The customer's new acceptance has landed on a revised scope: make the
+// work order's invoice bill what they signed BEFORE its hold is released
+// (Patrick, 2026-09-26). `lineItems` are the billable lines of the scope as
+// signed (billing.billingFor(wo).lines, the re-locked price); null when
+// they could not be priced.
+//
+//   no active invoice          → { action: "no_invoice" } — nothing to do
+//   already bills that scope   → { action: "matches" } — hold released,
+//                                nothing else written
+//   an unsent DRAFT with no    → { action: "repriced" } — the SAME invoice
+//   money and no QuickBooks id   takes the new lines (the one-per-WO rule
+//                                holds); what it billed before is kept in
+//                                scopeReconciliations; hold released
+//   anything else (sent, part  → { action: "revision_required" } — NOT
+//   paid, paid, in QuickBooks,   rewritten; flagged, still held, until
+//   or a scope that can't be     Patrick revises it (revise() clears it)
+//   priced / is now $0)
+//
+// Idempotent: a retry finds "matches", or the same flag already set, and
+// writes nothing. Never sends anything to anyone.
+async function reconcileToSignedScope(woId, { lineItems = null, by = "system" } = {}) {
+  const records = await readAll();
+  const inv = activeInvoiceForWorkOrder(records, woId);
+  if (!inv) return { action: "no_invoice", invoice: null };
+  const idx = records.indexOf(inv);
+  const now = new Date().toISOString();
+  const target = Array.isArray(lineItems) ? draftLinesFrom(lineItems) : null;
+  // A price Patrick CONFIRMED (PJL-96) stands when the signed scope still
+  // prices the same: the work order only ever carries the SUGGESTION for a
+  // custom size, so without this a scope that returns to what was signed —
+  // or changes something else — would put his price back to the suggestion
+  // and ask him to confirm it again. A different suggestion means the size
+  // really changed: then it is re-priced to the new suggestion and must be
+  // confirmed again (held as price_unconfirmed until he does).
+  let keptConfirm = null;
+  const pc = inv.priceConfirm;
+  if (target && pc?.confirmedAt) {
+    const i = target.findIndex((t, k) => t.key === pc.lineKey && lineItems[k]?.priceStatus === "suggested");
+    if (i !== -1 && pc.suggestedAmount !== null && round2(target[i].unitPrice) === round2(pc.suggestedAmount)) {
+      const unit = round2(pc.confirmedAmount ?? inv.lineItems?.[priceConfirmLineIndex(inv)]?.unitPrice ?? target[i].unitPrice);
+      target[i] = { ...target[i], unitPrice: unit, lineTotal: round2(unit * target[i].qty), note: "" };
+      keptConfirm = { ...pc, lineIndex: i };
+    }
+  }
+  const totals = target ? totalsForLines(target) : null;
+  const sameLines = target && (inv.lineItems || []).length === target.length
+    && target.every((t, i) => {
+      const have = inv.lineItems[i] || {};
+      return (have.key || null) === t.key && Number(have.qty) === t.qty && round2(have.unitPrice) === t.unitPrice;
+    })
+    && round2(inv.total) === totals.total;
+  const pushHistory = (next, entries) => { next.history = [...(inv.history || []), ...entries]; };
+
+  if (sameLines) {
+    if (!inv.scopeHold?.since) return { action: "matches", invoice: inv };
+    const next = { ...inv, scopeHold: null, updatedAt: now };
+    pushHistory(next, [{ ts: now, action: scopeHoldCode(inv) === "revision_required" ? "revision_resolved" : "scope_hold_off", by,
+      note: "Released: the invoice already bills the revised work order the customer accepted" }]);
+    records[idx] = next;
+    await writeAll(records);
+    return { action: "matches", invoice: hydrate(next) };
+  }
+
+  const money = amountPaidOf(inv) > 0 || (inv.payments || []).length > 0;
+  const repriceable = target && totals.total > 0
+    && inv.status === "draft" && !inv.sentAt && !money && !inv.quickbooksInvoiceId;
+  if (repriceable) {
+    const next = { ...inv, lineItems: target, subtotal: totals.subtotal, hst: totals.hst, total: totals.total };
+    next.amountPaid = amountPaidOf(next);
+    next.balanceDue = balanceDueOf(next);
+    next.priceConfirm = keptConfirm || priceConfirmForLines(lineItems, target);
+    next.scopeHold = null;
+    next.scopeReconciliations = [...(inv.scopeReconciliations || []), {
+      ts: now, by, woId, action: "repriced",
+      previousLineItems: inv.lineItems || [], previousSubtotal: inv.subtotal, previousHst: inv.hst, previousTotal: inv.total,
+      newTotal: totals.total
+    }];
+    next.updatedAt = now;
+    pushHistory(next, [
+      { ts: now, action: "repriced_to_signed_scope", by,
+        note: `Re-priced to the revised work order the customer signed: ${fmtMoneyPlain(inv.total)} → ${fmtMoneyPlain(totals.total)} (the previous lines are kept) · nothing sent to the customer` },
+      { ts: now, action: "scope_hold_off", by, note: "Released: the revised work order is accepted and this invoice now bills it" }
+    ]);
+    records[idx] = next;
+    await writeAll(records);
+    return { action: "repriced", invoice: hydrate(next) };
+  }
+
+  const requiredTotal = totals ? totals.total : null;
+  if (scopeHoldCode(inv) === "revision_required" && inv.scopeHold.requiredTotal === requiredTotal) {
+    return { action: "revision_required", invoice: inv, already: true };
+  }
+  const why = !target ? "the revised work order couldn't be priced"
+    : !(totals.total > 0) ? "the revised work order bills nothing"
+    : inv.status !== "draft" || inv.sentAt ? `it was already ${inv.status === "draft" ? "sent" : inv.status.replace("_", " ")}`
+    : money ? "money is already recorded against it"
+    : "it is already in QuickBooks";
+  const next = {
+    ...inv,
+    scopeHold: { woId, since: inv.scopeHold?.since || now, reason: "revision_required", requiredTotal, requiredLineItems: target, flaggedAt: now },
+    scopeReconciliations: [...(inv.scopeReconciliations || []), {
+      ts: now, by, woId, action: "revision_required", reason: why, currentTotal: inv.total, requiredTotal
+    }],
+    updatedAt: now
+  };
+  pushHistory(next, [{ ts: now, action: "revision_required_after_resignature", by,
+    note: `The customer signed a revised work order${requiredTotal !== null ? ` billing ${fmtMoneyPlain(requiredTotal)}` : ""}; this invoice (${fmtMoneyPlain(inv.total)}) was not changed because ${why}. Revise it (or void and regenerate) before it can be paid or sent.` }]);
+  records[idx] = next;
+  await writeAll(records);
+  return { action: "revision_required", invoice: hydrate(next) };
 }
 
 async function ensurePaymentToken(id) {
@@ -1324,6 +1484,18 @@ async function revise(id, { lineItems, reason = "", by = "admin" } = {}) {
   }];
   if (next.status !== current.status) {
     next.history.push({ ts: now, action: `status:${next.status}`, by: "system", note: "Re-derived from payments after revision." });
+  }
+  // A revision is how a "revision required" hold (the customer signed a
+  // revised scope after this invoice went out) is resolved — Patrick's
+  // explicit, reasoned change. The history says whether it now matches
+  // the total the customer signed.
+  if (scopeHoldCode(current) === "revision_required") {
+    const want = current.scopeHold.requiredTotal;
+    next.scopeHold = null;
+    next.history.push({ ts: now, action: "revision_resolved", by,
+      note: want === null || want === undefined
+        ? "Revision required after re-signing — resolved by this revision"
+        : `Revision required after re-signing — resolved by this revision (${fmtMoneyPlain(totals.total)}; the signed work order bills ${fmtMoneyPlain(want)}${round2(want) === totals.total ? " — matches" : " — DIFFERS"})` });
   }
   records[idx] = next;
   await writeAll(records);
@@ -1691,6 +1863,8 @@ module.exports = {
   isPriceSetByPjl,
   confirmPrice: withStoreLock(confirmPrice),
   setScopeHold: withStoreLock(setScopeHold),
+  reconcileToSignedScope: withStoreLock(reconcileToSignedScope),
+  scopeHoldCode,
   getByPaymentToken,
   ensurePortalToken: withStoreLock(ensurePortalToken),
   getByPortalToken

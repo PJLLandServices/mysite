@@ -3413,16 +3413,33 @@ async function seasonalQuoteAtLock(wo, zones) {
 // No .catch() either: a failure belongs to the caller now. Swallowing
 // it here would report a hold that was never written, which is the
 // defect this exists to prevent.
+//
+// RELEASING reconciles first (2026-09-26). The hold used to be lifted the
+// moment the new acceptance landed, with the invoice still billing the OLD
+// scope — so the pay link and Send then charged the customer the old price
+// for a scope they had re-signed at a different one (signed 4 zones and
+// re-signed at 6: billed 4; the reverse: overcharged). Now the invoice is
+// brought to the price the customer just accepted (billing.billingFor —
+// the re-locked, frozen scope) BEFORE the hold goes: an unsent draft is
+// re-priced in place; anything the customer may already have seen is left
+// as it is and flagged "revision required", still held, until Patrick
+// revises it (invoices.reconcileToSignedScope). Idempotent — a retried
+// signature finds the invoice already matching and writes nothing.
+async function holdOrReconcileInvoice(wo) {
+  if (workOrders.awaitsNewSignature(wo)) return invoices.setScopeHold(wo.id, true);
+  const bill = await billing.billingFor(wo);
+  return invoices.reconcileToSignedScope(wo.id, { lineItems: bill.error ? null : bill.lines, by: "system" });
+}
 workOrders.events.on("resignature", (wo) => {
   if (!wo?.id) return;
-  return invoices.setScopeHold(wo.id, workOrders.awaitsNewSignature(wo));
+  return holdOrReconcileInvoice(wo);
 });
 async function syncResignatureHold(before, after) {
   try {
     const was = workOrders.awaitsNewSignature(before);
     const now = workOrders.awaitsNewSignature(after);
     if (!after?.id || was === now) return;
-    await invoices.setScopeHold(after.id, now);
+    await holdOrReconcileInvoice(after);
   } catch (err) {
     console.warn(`[resign] invoice hold sync failed for ${after?.id}: ${err?.message}`);
   }
@@ -10967,6 +10984,9 @@ async function handleApi(req, res, pathname) {
       }
       // Re-signing (2026-09-26): the work order behind it changed in price
       // after the customer signed; they sign the revised scope first.
+      if (invoices.scopeHoldCode(inv) === "revision_required") {
+        return sendJson(res, 409, { ok: false, code: "revision_required", errors: ["The customer signed a revised work order and this invoice still bills the old one. Revise it to the signed scope before sending."] });
+      }
       if (inv.scopeHold?.since) {
         return sendJson(res, 409, { ok: false, code: "awaiting_signature", errors: ["The work order changed after the customer signed. Get their signature on the revised work order before sending this invoice."] });
       }
@@ -11666,7 +11686,7 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 409, { ok: false, code: invoices.payBlockReason(inv), errors: [
           invoices.payBlockReason(inv) === "price_unconfirmed"
             ? "PJL is still confirming this invoice's price — nothing can be charged yet."
-            : invoices.payBlockReason(inv) === "awaiting_signature"
+            : ["awaiting_signature", "revision_required"].includes(invoices.payBlockReason(inv))
               ? "This invoice is being updated — nothing can be charged yet."
               : `This invoice is "${inv.status}" and isn't ready for payment.`
         ] });

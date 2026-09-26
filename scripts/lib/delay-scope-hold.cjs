@@ -28,9 +28,13 @@ if (Number.isFinite(ms) && ms > 0) {
   // very module instance the server will use, not a second copy.
   const invoicesPath = path.join(path.dirname(process.argv[1]), "lib", "invoices.js");
   const invoices = require(invoicesPath);
-  const real = invoices.setScopeHold;
-  if (typeof real === "function") {
-    invoices.setScopeHold = async function delayedSetScopeHold(...args) {
+  // Both hold writes: setScopeHold() holds, and since 2026-09-26 the
+  // release is reconcileToSignedScope(), which re-prices or flags the
+  // invoice and then lets it go. Either one not being awaited is the race.
+  for (const name of ["setScopeHold", "reconcileToSignedScope"]) {
+    const real = invoices[name];
+    if (typeof real !== "function") continue;
+    invoices[name] = async function delayedHoldWrite(...args) {
       await new Promise((r) => setTimeout(r, ms));
       return real.apply(this, args);
     };
