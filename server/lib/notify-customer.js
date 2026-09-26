@@ -1893,6 +1893,9 @@ async function sendInvoiceReadySMS({ invoiceId, includeSpouse } = {}) {
   // Send). One rule, invoices.isPriceSetByPjl; the cascade doesn't
   // schedule these, and this catches a record scheduled before the rule.
   // The history records it once, not every sweep.
+  // The work order awaits the customer's new signature on a revised
+  // scope (invoices.scopeHold): nothing about this invoice goes out yet.
+  if (invoice.scopeHold?.since) return { ok: true, skipped: "awaiting_signature" };
   if (invoices.isPriceSetByPjl(invoice)) {
     if (!(invoice.history || []).some((h) => h.action === "customer_sms_not_sent_price_set_by_pjl")) {
       await invoices.appendHistory(invoiceId, {
@@ -2179,6 +2182,9 @@ async function sendInvoiceReminderSMS({ invoiceId, force, includeSpouse } = {}) 
     return { ok: false, error: "paid" };
   }
   // PJL-96: nothing to chase while Patrick has not confirmed the price.
+  if (invoice.scopeHold?.since) {
+    return { ok: false, error: "awaiting_signature" };
+  }
   if (invoices.isPriceUnconfirmed(invoice)) {
     return { ok: false, error: "price_unconfirmed" };
   }

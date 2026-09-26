@@ -207,7 +207,7 @@ async function run(wo, deps = {}) {
       const signedLocked = workOrders.isScopeFrozen(wo);
       const { before, after, zoneCount, commercial, pending } = bill.fee || {};
       wo = { ...wo, onSiteQuote: bill.correctedQuote };
-      if (!signedLocked) await workOrders.update(wo.id, { onSiteQuote: wo.onSiteQuote });
+      if (!signedLocked) await workOrders.update(wo.id, { onSiteQuote: wo.onSiteQuote }, { systemWrite: true });
       try {
         const afterText = pending
           ? `${after?.key || "custom tier"} — price pending, Patrick confirms it on the invoice`

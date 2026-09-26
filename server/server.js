@@ -3371,6 +3371,26 @@ async function seasonalQuoteAtLock(wo, zones) {
   }
 }
 
+// Re-signing (Patrick, 2026-09-26): while a work order awaits the
+// customer's new signature on a revised scope, its invoice (if it has one)
+// is held — nothing payable, sent or texted (invoices.scopeHold). Called
+// after every write that can start or end the wait. Never throws.
+workOrders.events.on("resignature", (wo) => {
+  if (!wo?.id) return;
+  invoices.setScopeHold(wo.id, workOrders.awaitsNewSignature(wo))
+    .catch((err) => console.warn(`[resign] invoice hold sync failed for ${wo.id}: ${err?.message}`));
+});
+async function syncResignatureHold(before, after) {
+  try {
+    const was = workOrders.awaitsNewSignature(before);
+    const now = workOrders.awaitsNewSignature(after);
+    if (!after?.id || was === now) return;
+    await invoices.setScopeHold(after.id, now);
+  } catch (err) {
+    console.warn(`[resign] invoice hold sync failed for ${after?.id}: ${err?.message}`);
+  }
+}
+
 // PJL-100 #7 — "this completed visit was no charge", for the readers that
 // ask "does this signed work order have an invoice?" (the work-order
 // list's Needs-invoice filter, the tech page's recovery banner). Derived
@@ -10908,6 +10928,11 @@ async function handleApi(req, res, pathname) {
       if (invoices.isPriceUnconfirmed(inv)) {
         return sendJson(res, 409, { ok: false, code: "price_unconfirmed", errors: ["Confirm this invoice's price before sending it — it's a suggested amount until you do."] });
       }
+      // Re-signing (2026-09-26): the work order behind it changed in price
+      // after the customer signed; they sign the revised scope first.
+      if (inv.scopeHold?.since) {
+        return sendJson(res, 409, { ok: false, code: "awaiting_signature", errors: ["The work order changed after the customer signed. Get their signature on the revised work order before sending this invoice."] });
+      }
       // Threshold deposit — a held balance/final invoice waits for
       // project completion (the cascade clears the hold). Admin override:
       // body { forceHeld: true } sends it anyway.
@@ -11188,7 +11213,7 @@ async function handleApi(req, res, pathname) {
       // Map reason codes to HTTP status. The lib returned a structured
       // error — pass the same shape through so the UI can branch on it.
       const code = result.error;
-      const skipCodes = new Set(["voided", "paid", "no_phone", "no_twilio_config", "disabled", "opted_out", "portal_token_failed", "price_unconfirmed"]);
+      const skipCodes = new Set(["voided", "paid", "no_phone", "no_twilio_config", "disabled", "opted_out", "portal_token_failed", "price_unconfirmed", "awaiting_signature"]);
       const messages = {
         invoice_not_found: "Invoice not found.",
         missing_invoice_id: "Invoice ID missing in request URL.",
@@ -11202,7 +11227,8 @@ async function handleApi(req, res, pathname) {
         disabled: "Invoice SMS is disabled in admin settings — reminder not sent.",
         opted_out: "Customer opted out of text reminders — reminder not sent.",
         portal_token_failed: "Couldn't generate a portal link for this invoice.",
-        price_unconfirmed: "Confirm this invoice's price first — nothing is texted while it is a suggestion."
+        price_unconfirmed: "Confirm this invoice's price first — nothing is texted while it is a suggestion.",
+        awaiting_signature: "The work order changed after the customer signed — get their new signature first. Nothing was texted."
       };
       const msg = messages[code] || code || "Reminder not sent.";
       if (code === "invoice_not_found") {
@@ -11603,7 +11629,9 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 409, { ok: false, code: invoices.payBlockReason(inv), errors: [
           invoices.payBlockReason(inv) === "price_unconfirmed"
             ? "PJL is still confirming this invoice's price — nothing can be charged yet."
-            : `This invoice is "${inv.status}" and isn't ready for payment.`
+            : invoices.payBlockReason(inv) === "awaiting_signature"
+              ? "This invoice is being updated — nothing can be charged yet."
+              : `This invoice is "${inv.status}" and isn't ready for payment.`
         ] });
       }
 
@@ -14341,6 +14369,10 @@ async function handleApi(req, res, pathname) {
         const wo = await workOrders.get(id);
         if (!wo) return [404, { ok: false, errors: ["Work order not found."] }];
         if (!wo.propertyId) return [422, { ok: false, errors: ["WO has no linked property — link a property first."] }];
+        // Re-signing: no new bill for a revised scope the customer hasn't signed.
+        if (workOrders.awaitsNewSignature(wo)) {
+          return [409, { ok: false, error: "resign_required", errors: ["The priced scope changed after the customer signed. Get their signature on the revised work order before invoicing it."] }];
+        }
         // The WO's ACTIVE invoice, by the store's own rule — a voided one
         // doesn't count, so void-and-regenerate works from this button.
         const existing = invoices.activeInvoiceForWorkOrder(await invoices.listByWorkOrder(id), id);
@@ -14412,6 +14444,9 @@ async function handleApi(req, res, pathname) {
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
       if (!wo.propertyId) return sendJson(res, 422, { ok: false, errors: ["WO has no linked property."] });
+      if (workOrders.awaitsNewSignature(wo)) {
+        return sendJson(res, 409, { ok: false, error: "resign_required", errors: ["The priced scope changed after the customer signed. Get their signature on the revised work order first."] });
+      }
       const payload = await parseRequestBody(req).catch(() => ({}));
       // skipSms — for re-drafting an invoice after a correction. Without it a
       // re-run schedules a fresh "your invoice is ready" text to a customer
@@ -20267,7 +20302,7 @@ async function handleApi(req, res, pathname) {
                 lastBuiltAt: new Date().toISOString(),
                 builderLineItems
               }
-            });
+            }, { systemWrite: true });
             if (seededWo) wo = seededWo;
           }
         } catch (err) {
@@ -20439,7 +20474,7 @@ async function handleApi(req, res, pathname) {
                 lastBuiltAt: wo.onSiteQuote?.lastBuiltAt || new Date().toISOString(),
                 builderLineItems: [...seededLines, ...existingBuilder]
               }
-            });
+            }, { systemWrite: true });
             console.log(`[wo-self-heal] seeded seasonal fee on ${wo.id} (${resolved.source}, $${resolved.price}${seededLines.length > 1 ? ` + $${seededLines[1].originalPrice} additional` : ""})`);
           } catch (err) {
             console.warn("[wo-self-heal] seed failed:", err?.message);
@@ -20677,7 +20712,14 @@ async function handleApi(req, res, pathname) {
       // dedicated route, materials, paidOnSite, departure stamp,
       // techNotes, serviceChecklist) keep flowing — the WO continues
       // operationally; only the scope is frozen.
-      if (workOrders.isScopeFrozen(existing)) {
+      // Re-signing (Patrick, 2026-09-26): a work order re-locked with a
+      // revised scope still takes the customer's NEW signature — and only
+      // the sign-and-complete shape, nothing else, through the lock.
+      const RESIGN_KEYS = new Set(["signature", "locked", "status", "arrivedAt", "departedAt"]);
+      const resignAttempt = workOrders.awaitsNewSignature(existing)
+        && payload && payload.signature && typeof payload.signature === "object"
+        && Object.keys(payload).every((k) => RESIGN_KEYS.has(k));
+      if (workOrders.isScopeFrozen(existing) && !resignAttempt) {
         const touched = workOrders.findProtectedFieldTouched(payload);
         if (touched) {
           return sendJson(res, 409, {
@@ -20739,10 +20781,24 @@ async function handleApi(req, res, pathname) {
           };
           // PJL-96: price the seasonal fee from the zones recorded BEFORE the
           // lock, in this same write (a separate write would trip If-Match).
-          const priced = await seasonalQuoteAtLock(existing, Array.isArray(payload.zones) ? payload.zones : null);
+          // A revised scope already re-locked had its price frozen then.
+          const priced = existing.locked === true ? null : await seasonalQuoteAtLock(existing, Array.isArray(payload.zones) ? payload.zones : null);
           if (priced) payload.onSiteQuote = priced.onSiteQuote;
           payload.locked = true;
         }
+      }
+
+      // Re-signing: a work order awaiting the customer's signature on a
+      // revised scope does not complete without it (workOrders.
+      // awaitsNewSignature is the one rule; the new signature can ride in
+      // this same request, as the phone's Finish sends it).
+      if (payload && payload.status === "completed" && existing.status !== "completed"
+          && workOrders.awaitsNewSignature(existing) && !(payload.signature && payload.signature.signed === true)) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: "resign_required",
+          errors: ["The priced scope changed after the customer signed. The customer needs to sign the revised work order before it can be finished."]
+        });
       }
 
       // Snapshot the prior status so we can detect a transition to
@@ -20768,6 +20824,7 @@ async function handleApi(req, res, pathname) {
         });
       }
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      await syncResignatureHold(existing, updated);
 
       // Audit trail — append a generic mutation entry for non-status,
       // non-signature fields. Status_change and signature_capture are
@@ -21359,14 +21416,15 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, error: "wo_not_found", errors: ["Work order not found."] });
-      if (wo.signature && wo.signature.signed === true) {
+      const reAccepting = workOrders.awaitsNewSignature(wo);
+      if (!reAccepting && wo.signature && wo.signature.signed === true) {
         return sendJson(res, 409, {
           ok: false,
           error: "already_signed",
           errors: ["This work order is already signed — bypass not available."]
         });
       }
-      if (wo.signatureBypass) {
+      if (!reAccepting && wo.signatureBypass) {
         return sendJson(res, 409, {
           ok: false,
           error: "already_bypassed",
@@ -21383,8 +21441,9 @@ async function handleApi(req, res, pathname) {
 
       // PJL-96: price the seasonal fee from the zones recorded before the
       // bypass freezes the work order — same rule as the signature path.
-      const pricedAtLock = await seasonalQuoteAtLock(wo, null);
-      if (pricedAtLock) await workOrders.update(id, { onSiteQuote: pricedAtLock.onSiteQuote });
+      // (Not on a revised scope already re-locked — its price was frozen then.)
+      const pricedAtLock = wo.locked === true ? null : await seasonalQuoteAtLock(wo, null);
+      if (pricedAtLock) await workOrders.update(id, { onSiteQuote: pricedAtLock.onSiteQuote }, { systemWrite: true });
 
       let updated;
       try {
@@ -21403,6 +21462,7 @@ async function handleApi(req, res, pathname) {
         }
         return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record signature bypass."] });
       }
+      await syncResignatureHold(wo, updated);
 
       // Bypass-time sweep — mirrors the sign-time sweep in the PATCH
       // route. Carry-forward "Repair now" deferred items resolve at the
@@ -21467,9 +21527,20 @@ async function handleApi(req, res, pathname) {
       const by = session.uid || "admin";
 
       try {
+        // Re-locking a revised scope freezes its price NOW (PJL-96's
+        // lock-point rule, applied to the revised scope); the customer's new
+        // signature is still required after (workOrders.awaitsNewSignature).
+        let revisedQuote = null;
+        if (action === "relock") {
+          const before = await workOrders.get(id);
+          if (before && before.locked !== true && workOrders.awaitsNewSignature(before)) {
+            const priced = await seasonalQuoteAtLock(before, null);
+            revisedQuote = priced ? priced.onSiteQuote : null;
+          }
+        }
         const updated = action === "unlock"
           ? await workOrders.unlockWorkOrder(id, { reason: payload?.reason, unlockedBy: by }, { ip, userAgent })
-          : await workOrders.relockWorkOrder(id, { relockedBy: by }, { ip, userAgent });
+          : await workOrders.relockWorkOrder(id, { relockedBy: by, onSiteQuote: revisedQuote }, { ip, userAgent });
         return sendJson(res, 200, { ok: true, workOrder: updated });
       } catch (err) {
         const code = err?.code || "";

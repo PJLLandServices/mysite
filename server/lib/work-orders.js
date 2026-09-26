@@ -41,6 +41,17 @@ const crypto = require("node:crypto");
 
 const FILE = path.join(__dirname, "..", "data", "work-orders.json");
 const { writeJsonAtomic, serialize, parseJsonArrayStore } = require("./atomic-json");
+const EventEmitter = require("node:events");
+
+// "resignature" fires with the saved WO whenever awaitsNewSignature(wo)
+// starts or stops being true — whichever route made the edit. server.js
+// listens once and holds or releases the WO's invoice (invoices.scopeHold),
+// so no scope-editing route can forget to.
+const events = new EventEmitter();
+function announceResignature(before, after) {
+  if (awaitsNewSignature(before) === awaitsNewSignature(after)) return;
+  try { events.emit("resignature", after); } catch (err) { console.warn("[resign] listener failed:", err?.message); }
+}
 
 const TEMPLATES = {
   spring_opening: { label: "Spring Opening", scaffoldFromProperty: true },
@@ -790,6 +801,65 @@ function isScopeFrozen(wo) {
   return wo?.locked === true;
 }
 
+// ---- Re-signing after a priced-scope change (Patrick, 2026-09-26) -------
+//
+// An accepted work order (drawn signature, or signature bypass) that an
+// admin unlocks and then changes in a way that affects what the customer
+// pays must be signed again. The original acceptance is never erased: it
+// moves to `priorAcceptances` when the new one lands, and the history
+// keeps every step. Changes that don't touch price (tech notes, photos,
+// zone labels, checklist) never need a new signature.
+//
+//   pricedScopeKey(wo)       what the customer is paying for, comparable
+//   awaitsNewSignature(wo)   THE rule every gate reads: completion, the
+//                            cascade and create-invoice (server.js), and
+//                            the invoice's payment hold (invoices.scopeHold)
+//
+// The state is `wo.resignature = { required, flaggedAt, flaggedBy,
+// acceptedScopeKey, pricedAtRelock, satisfiedAt, satisfiedBy }`. It is set
+// in update() (the one write every scope edit goes through) and satisfied
+// by a new drawn signature or a new admin bypass. When the revised scope is
+// re-locked, the fee is re-priced and frozen (server.js relock route), and
+// the new signature is still required.
+function hasAcceptance(wo) {
+  return wo?.signature?.signed === true || !!wo?.signatureBypass;
+}
+function scopeLine(l) {
+  if (!l || typeof l !== "object") return null;
+  const raw = l.overridePrice != null ? l.overridePrice
+    : l.originalPrice != null ? l.originalPrice
+      : l.unitPrice != null ? l.unitPrice : l.price;
+  const cents = raw == null || raw === "" || !Number.isFinite(Number(raw)) ? null : Math.round(Number(raw) * 100);
+  return [String(l.key || l.itemKey || l.label || l.description || l.name || ""), Number(l.qty ?? l.quantity ?? 1) || 0, cents, l.priceStatus || ""];
+}
+function pricedScopeKey(wo) {
+  if (!wo) return "";
+  const seasonal = wo.type === "fall_closing" || wo.type === "spring_opening";
+  const list = (v) => (Array.isArray(v) ? v : []).map(scopeLine);
+  return JSON.stringify({
+    type: wo.type || "",
+    builder: list(wo.onSiteQuote?.builderLineItems),
+    lines: list(wo.lineItems),
+    repairs: list(wo.additionalRepairs),
+    // A seasonal fee is priced from the number of zones (pricing.js counts
+    // kind "zone"), so adding or removing one changes the price.
+    zones: seasonal ? (Array.isArray(wo.zones) ? wo.zones.filter((z) => z && (z.kind || "zone") === "zone").length : 0) : null,
+    waived: wo.serviceFeeWaiver?.waived === true,
+    warranty: wo.warrantyClaim?.claimId ? `${wo.warrantyClaim.claimId}:${wo.warrantyClaim.converted ? 1 : 0}` : null
+  });
+}
+function awaitsNewSignature(wo) {
+  return wo?.resignature?.required === true;
+}
+function archivedAcceptance(current, at, why) {
+  return {
+    archivedAt: at,
+    why,
+    signature: current.signature && current.signature.signed === true ? { ...current.signature } : null,
+    signatureBypass: current.signatureBypass ? { ...current.signatureBypass } : null
+  };
+}
+
 // Returns the protected field path that a payload would touch on a
 // locked WO, or null if no protected fields are touched. Caller decides
 // whether to 409 (most routes) or silently drop (legacy signature
@@ -1001,12 +1071,16 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy }, { ip, 
   }
   const current = records[idx];
 
-  if (current.signature && current.signature.signed === true) {
+  // Awaiting a new signature on a revised scope: the admin override can
+  // stand in for it, like it can for the first one. The earlier acceptance
+  // is archived below, never overwritten.
+  const reAccepting = awaitsNewSignature(current);
+  if (!reAccepting && current.signature && current.signature.signed === true) {
     const err = new Error("Work order is already signed — bypass not available.");
     err.code = "already_signed";
     throw err;
   }
-  if (current.signatureBypass) {
+  if (!reAccepting && current.signatureBypass) {
     const err = new Error("Signature bypass already recorded for this work order.");
     err.code = "already_bypassed";
     throw err;
@@ -1046,6 +1120,12 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy }, { ip, 
 
   const now = new Date().toISOString();
   const next = { ...current };
+  if (reAccepting) {
+    next.priorAcceptances = [...(Array.isArray(current.priorAcceptances) ? current.priorAcceptances : []),
+      archivedAcceptance(current, now, "priced scope changed; the revised work order was accepted by admin bypass")];
+    next.signature = null;
+    next.resignature = { ...current.resignature, required: false, satisfiedAt: now, satisfiedBy: "bypass" };
+  }
   next.signatureBypass = {
     reason: safeReason,
     note: trimmedNote.slice(0, 2000),
@@ -1066,6 +1146,10 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy }, { ip, 
   next.updatedAt = now;
 
   if (!Array.isArray(next.history)) next.history = [];
+  if (reAccepting) {
+    next.history.push({ ts: now, action: "resignature_captured", by: bypassedBy || "admin",
+      note: "Revised scope accepted by admin bypass — the earlier acceptance is kept in priorAcceptances" });
+  }
   next.history.push({
     ts: now,
     action: "signature_bypassed",
@@ -1088,6 +1172,7 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy }, { ip, 
 
   records[idx] = next;
   await writeAll(records);
+  announceResignature(current, next);
   return next;
 }
 
@@ -1184,7 +1269,7 @@ async function unlockWorkOrder(woId, { reason, unlockedBy } = {}, { ip, userAgen
 // file. A WO with no acceptance record on it was never locked by a
 // customer-facing event, so there's nothing to restore and this refuses;
 // use the signature or bypass path instead.
-async function relockWorkOrder(woId, { relockedBy } = {}, { ip, userAgent } = {}) {
+async function relockWorkOrder(woId, { relockedBy, onSiteQuote = null } = {}, { ip, userAgent } = {}) {
   const records = await readAll();
   const idx = records.findIndex((w) => w.id === woId);
   if (idx === -1) {
@@ -1211,19 +1296,29 @@ async function relockWorkOrder(woId, { relockedBy } = {}, { ip, userAgent } = {}
   const next = { ...current };
   next.locked = true;
   next.updatedAt = now;
+  // The revised scope, frozen: its price is set now (the route passes the
+  // re-priced quote), and the customer's new signature is still required.
+  const revised = awaitsNewSignature(current);
+  if (revised) {
+    if (onSiteQuote && typeof onSiteQuote === "object") next.onSiteQuote = onSiteQuote;
+    next.resignature = { ...current.resignature, pricedAtRelock: now };
+  }
 
   if (!Array.isArray(next.history)) next.history = [];
   next.history.push({
     ts: now,
     action: "wo_relocked",
     by: relockedBy || "admin",
-    note: "Re-locked after admin edit — scope frozen again against the acceptance already on file",
+    note: revised
+      ? "Re-locked with a revised scope — its price is frozen now, and the customer must sign the revised work order before it can be completed or paid"
+      : "Re-locked after admin edit — scope frozen again against the acceptance already on file",
     before: { locked: false },
     after: { locked: true, ip: ip || "", userAgent: userAgent || "" }
   });
 
   records[idx] = next;
   await writeAll(records);
+  announceResignature(current, next);
   return next;
 }
 
@@ -1667,7 +1762,7 @@ async function create({ type, lead, property, customId, quote = null, project = 
   return wo;
 }
 
-async function update(id, patch, { ifMatch = null } = {}) {
+async function update(id, patch, { ifMatch = null, systemWrite = false } = {}) {
   const records = await readAll();
   const idx = records.findIndex((w) => w.id === id);
   if (idx === -1) return null;
@@ -1845,7 +1940,28 @@ async function update(id, patch, { ifMatch = null } = {}) {
   if (patch.serviceChecklist && typeof patch.serviceChecklist === "object") {
     next.serviceChecklist = { ...patch.serviceChecklist };
   }
-  if (patch.signature && typeof patch.signature === "object") {
+  // A new acceptance on a work order that already has one — the customer
+  // signing the revised scope, or an unlocked WO signed again — replaces
+  // the record on file only after archiving it (never an overwrite).
+  const replacingAcceptance = Boolean(patch.signature && typeof patch.signature === "object"
+    && patch.signature.signed === true && typeof patch.signature.signedAt === "string"
+    && patch.signature.signedAt !== current.signature?.signedAt && hasAcceptance(current));
+  if (replacingAcceptance) {
+    const at = new Date().toISOString();
+    const awaited = awaitsNewSignature(current);
+    next.priorAcceptances = [...(Array.isArray(current.priorAcceptances) ? current.priorAcceptances : []),
+      archivedAcceptance(current, at, awaited ? "priced scope changed; the customer signed the revised work order" : "replaced by a new signature")];
+    next.signature = { ...patch.signature };
+    next.signatureBypass = null;
+    if (awaited) next.resignature = { ...current.resignature, required: false, satisfiedAt: at, satisfiedBy: "signature" };
+    if (!Array.isArray(next.history)) next.history = [];
+    next.history.push({
+      ts: at,
+      action: awaited ? "resignature_captured" : "signature_replaced",
+      by: patch.__by || "tech",
+      note: `${awaited ? "New signature on the revised scope" : "New signature"}${patch.signature.customerName ? ` by ${patch.signature.customerName}` : ""} — the earlier acceptance is kept in priorAcceptances`
+    });
+  } else if (patch.signature && typeof patch.signature === "object") {
     next.signature = { ...current.signature, ...patch.signature };
   }
   // Service-call fee waiver — set (validated object) or clear (explicit
@@ -1867,6 +1983,27 @@ async function update(id, patch, { ifMatch = null } = {}) {
     next.warrantyClaim = (patch.warrantyClaim && typeof patch.warrantyClaim === "object" && patch.warrantyClaim.claimId)
       ? { ...patch.warrantyClaim }
       : null;
+  }
+  // Re-signing (Patrick, 2026-09-26): an accepted WO that is unlocked and
+  // changed in what it bills now needs the customer's new signature. A
+  // system write (the cascade's own correction, the GET self-heal) is not a
+  // scope change by anyone; changing the scope back to what was signed
+  // clears the requirement.
+  if (!systemWrite && !replacingAcceptance && current.locked !== true && hasAcceptance(current)) {
+    const at = new Date().toISOString();
+    const before = pricedScopeKey(current);
+    const after = pricedScopeKey(next);
+    if (!awaitsNewSignature(current) && after !== before) {
+      next.resignature = { required: true, flaggedAt: at, flaggedBy: patch.__by || "admin", acceptedScopeKey: before, pricedAtRelock: null, satisfiedAt: null, satisfiedBy: null };
+      if (!Array.isArray(next.history)) next.history = [];
+      next.history.push({ ts: at, action: "resignature_required", by: patch.__by || "admin",
+        note: "The priced scope changed after the customer accepted it. A new signature is needed before this visit can be completed or paid. The earlier acceptance is kept." });
+    } else if (awaitsNewSignature(current) && current.resignature.acceptedScopeKey && after === current.resignature.acceptedScopeKey) {
+      next.resignature = { ...current.resignature, required: false, satisfiedAt: at, satisfiedBy: "scope_restored" };
+      if (!Array.isArray(next.history)) next.history = [];
+      next.history.push({ ts: at, action: "resignature_cleared", by: patch.__by || "admin",
+        note: "The scope is back to what the customer signed — no new signature needed." });
+    }
   }
   next.updatedAt = new Date().toISOString();
 
@@ -1910,6 +2047,7 @@ async function update(id, patch, { ifMatch = null } = {}) {
 
   records[idx] = next;
   await writeAll(records);
+  announceResignature(current, next);
   return next;
 }
 
@@ -2380,6 +2518,10 @@ module.exports = {
   canAdoptDeclaredZones,
   canBuildOnSiteQuote,
   isScopeFrozen,
+  events,
+  hasAcceptance,
+  pricedScopeKey,
+  awaitsNewSignature,
   workOrderForLeadBooking,
   findProtectedFieldTouched,
   summarizeScopeAdditions,

@@ -6227,6 +6227,62 @@ Tests: `scripts/test-visit-identity.mjs`, 13 of 19 fail on the parent and 19
 of 19 pass. `test-rebook-fresh-record` and `test-booking-lifecycle` controls
 that encoded the old reuse rule were updated to the ruling.
 
+## 2026-09-26 — FLOW-31/23: a priced-scope change after signing needs the customer's new signature
+
+Patrick's ruling. If an unlocked signed work order is changed in a way that affects priced scope, the
+customer must sign again. The original signed version and its history stay intact, and the revised
+work order is marked as requiring a new signature. When the revised scope is locked, its price is set
+and frozen, and the new signature is required before normal completion or payment. Changes that don't
+touch scope or price (tech notes, photos, zone labels) never need one.
+
+**What broke (verified on the parent):**
+- An unlocked signed WO could gain a zone and be re-locked with nothing asking the customer to sign
+  again. Its invoice stayed payable and sendable throughout.
+- A new signature on an unlocked WO silently **replaced** the customer's original, with no copy kept
+  and no history entry.
+
+**The rule, once (`server/lib/work-orders.js`):**
+- `pricedScopeKey(wo)` is what the customer pays for: builder, line-item and repair lines (key, qty,
+  price, pending), the zone count for seasonal types, the fee waiver and warranty.
+- `awaitsNewSignature(wo)` is `wo.resignature.required`. It is set in `update()`, the write every scope
+  edit goes through, when an accepted WO that isn't locked changes its `pricedScopeKey`. System writes
+  pass `{ systemWrite: true }`: the cascade's own correction, the GET self-heal and the bypass
+  pre-price. Returning the scope to what was signed clears the requirement.
+- A new signature or admin bypass satisfies it. The earlier acceptance moves to `priorAcceptances`,
+  never overwritten, and the history records `resignature_required`, `resignature_captured` or
+  `signature_replaced`.
+
+**Readers, all on that one rule:**
+- `PATCH` refuses completion without the new signature (409 `resign_required`). The new signature
+  alone, in the sign-and-complete shape, passes the lock.
+- `run-cascade` and `create-invoice` refuse (no bill for an unsigned revised scope).
+- **Re-lock** re-prices the fee from the revised scope (`seasonalQuoteAtLock`, PJL-96's lock-point
+  rule), freezes it, and keeps the requirement. A signature after re-lock does not re-price.
+- **The invoice (cascade to the linked record):** `invoices.scopeHold` is set and cleared through
+  `workOrders.events` "resignature", so every scope-editing route is covered. While it is held, the
+  following all refuse (`awaiting_signature`): `payBlockReason` (pay page, portal pay link),
+  `openForOnSitePayment` (Take payment now, Tap to Pay), `/send` and `/resend`, the invoice-ready text,
+  and the text reminder.
+- **Deliberately left alone:**
+  - An office-recorded cash or cheque payment is still accepted, because the money was already received.
+  - The invoice's lines are not re-cut. Re-billing a revised scope is still the explicit
+    void-and-regenerate after the new signature (unchanged since 2026-08-06).
+
+**Test:** `scripts/test-resign-scope.mjs` (build:check). It covers seven cases:
+- notes and a relabel need nothing;
+- an added zone marks the WO and holds every door;
+- reverting clears the mark;
+- re-lock freezes the revised price;
+- the new signature is accepted and the original is kept;
+- a bypass flow before completion;
+- a signature on an unlocked WO is archived, not overwritten.
+
+Parent: 26 of 40 fail. Now: 40 of 40 pass.
+
+**Patrick's walk:** unlock a finished signed closing, add a zone, and see "needs a new signature"
+with Take payment and Send refused. Re-lock, then have the customer sign. Check the original signature
+is still in the history and the invoice is released.
+
 ## 2026-09-23 — FLOW-23/31: what a work order bills has one answer, `billing.billingFor(wo)`
 
 Patrick: "I don't want separate pricing logic patched independently in Finish,

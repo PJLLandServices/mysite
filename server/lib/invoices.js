@@ -417,6 +417,11 @@ function hydrate(inv) {
     // commercial account with no price of its own); confirmed by
     // confirmPrice(). null for every other invoice.
     priceConfirm: normalizePriceConfirm(inv?.priceConfirm),
+    // The work order behind this invoice changed in price after the
+    // customer accepted it and awaits their new signature (Patrick,
+    // 2026-09-26). While set, nothing is payable, sent or texted. Written
+    // only by setScopeHold(), driven by workOrders.awaitsNewSignature.
+    scopeHold: inv?.scopeHold && inv.scopeHold.since ? { woId: inv.scopeHold.woId || null, since: inv.scopeHold.since } : null,
     createdAt: inv?.createdAt || new Date().toISOString(),
     updatedAt: inv?.updatedAt || new Date().toISOString(),
     history: Array.isArray(inv?.history) ? inv.history : []
@@ -878,6 +883,7 @@ function payBlockReason(inv) {
   if (!inv) return "not_issued";
   if (inv.status === "void") return "void";
   if (inv.status === "paid") return "paid";
+  if (inv.scopeHold?.since) return "awaiting_signature";
   if (isPriceUnconfirmed(inv)) return "price_unconfirmed";
   if (inv.status === "sent" || inv.status === "partially_paid") return null;
   if (inv.status === "draft" && Boolean(inv.onSitePayment?.openedAt)) return null;
@@ -910,6 +916,9 @@ async function openForOnSitePayment(id, { by = "" } = {}) {
   // Patrick prices it (fall-closing #7 round 2): never charge that.
   // PJL-96: the same for any price not yet confirmed (a custom size, or a
   // commercial account without its own price) — one rule, isPriceUnconfirmed.
+  if (inv.scopeHold?.since) {
+    return { ok: false, status: 409, code: "awaiting_signature", errors: ["The work order's scope changed after the customer signed. They need to sign the revised work order before anything is charged. Nothing was charged."] };
+  }
   if (isPriceUnconfirmed(inv)) {
     return { ok: false, status: 409, code: "needs_pricing", errors: ["PJL confirms this visit's price before the customer pays — the office sends the invoice once it's set. Nothing was charged."] };
   }
@@ -999,6 +1008,29 @@ async function confirmPrice(id, { amount = null, by = "admin" } = {}) {
   records[idx] = next;
   await writeAll(records);
   return { ok: true, invoice: hydrate(next) };
+}
+
+// Hold or release the work order's active invoice while the WO awaits the
+// customer's new signature on a revised scope. `hold` true/false; returns
+// the invoice, or null when the WO has none. Idempotent.
+async function setScopeHold(woId, hold, { by = "system" } = {}) {
+  const records = await readAll();
+  const inv = activeInvoiceForWorkOrder(records, woId);
+  if (!inv) return null;
+  const idx = records.indexOf(inv);
+  const on = Boolean(inv.scopeHold && inv.scopeHold.since);
+  if (on === Boolean(hold)) return hydrate(inv);
+  const now = new Date().toISOString();
+  const next = { ...inv, scopeHold: hold ? { woId, since: now } : null, updatedAt: now };
+  next.history = [...(inv.history || []), {
+    ts: now, action: hold ? "scope_hold_on" : "scope_hold_off", by,
+    note: hold
+      ? "Held: the work order's price changed after the customer signed — nothing is charged or sent until they sign the revised work order"
+      : "Released: the revised work order is accepted"
+  }];
+  records[idx] = next;
+  await writeAll(records);
+  return hydrate(next);
 }
 
 async function ensurePaymentToken(id) {
@@ -1658,6 +1690,7 @@ module.exports = {
   isPriceUnconfirmed,
   isPriceSetByPjl,
   confirmPrice: withStoreLock(confirmPrice),
+  setScopeHold: withStoreLock(setScopeHold),
   getByPaymentToken,
   ensurePortalToken: withStoreLock(ensurePortalToken),
   getByPortalToken
