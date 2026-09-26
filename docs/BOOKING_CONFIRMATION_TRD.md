@@ -64,14 +64,14 @@ Collateral from the same bug:
 
 ---
 
-## 2026-09-26 change: one way to confirm
+## 2026-09-26 change: an email reply doesn't confirm
 
-Patrick: *"the only way to accept the appointment is to click Confirm in the
-link."* Phase 3 (reply YES to confirm) is **reversed**: a texted YES now gets
-a reply with the customer's own appointment link ("tap this link and press
-Confirm") and confirms nothing. Every email and text says "tap and press
-Confirm"; emails add "replying to this email does not confirm your
-appointment". See the 2026-09-26 entry in `docs/FLOW_REGISTER.md`.
+Customers replied "confirmed" to the appointment email and kept getting
+reminders — nothing reads the inbox. Confirming stays exactly two ways:
+**Confirm on the link**, or **reply YES to the text**. Every appointment email
+now says so and adds "replying to this email does not confirm your
+appointment"; the cadence emails no longer invite a reply. See the
+2026-09-26 entry in `docs/FLOW_REGISTER.md`.
 
 ## As built (differences from the plan below)
 

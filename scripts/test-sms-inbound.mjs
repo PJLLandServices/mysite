@@ -5,11 +5,10 @@
 // WHY THIS EXISTS. 2026-09-25: customers replied "YES" to the automated
 // appointment text, into a number nobody reads. Nothing heard them, the
 // "we haven't heard from you" reminders kept coming, and two of them
-// phoned Patrick. This suite runs the REAL booking store and proves every
-// text is heard: questions reach Patrick, STOP is honoured — and, since
-// 2026-09-26 ("the only way to accept the appointment is to click Confirm
-// in the link"), a texted YES is answered with their link and never
-// confirms anything by itself.
+// phoned Patrick. This suite runs the REAL booking store and the REAL
+// appointment-page confirm, so a texted YES is proven to land exactly
+// where a tapped Confirm does — and every other text is proven to reach
+// Patrick instead of vanishing.
 process.env.TZ = "America/Toronto";
 
 import { createRequire } from "node:module";
@@ -82,6 +81,7 @@ const deps = (over = {}) => ({
   listBookings: () => bookings.list(),
   listProperties: () => properties.list(),
   summarize: appointment.summarize,
+  confirmByToken: (token, opts) => appointment.confirm(token, { ...opts, now: NOW }),
   updateProperty: (id, patch) => properties.update(id, patch),
   sendAlert: async (body) => { alerts.push(body); return { ok: true }; },
   ...over
@@ -106,41 +106,67 @@ ok("phone numbers match however they're written",
   && sms.phoneKey("19055550100") === "9055550100");
 ok("a short number matches nothing", sms.phoneKey("12345") === "");
 
-// ---- 2. A texted YES does NOT confirm — only the link's Confirm does ----
-//
-// Patrick, 2026-09-26: "the only way to accept the appointment is to
-// click Confirm in the link." A YES gets told exactly how, with their own
-// link when exactly one appointment is theirs.
+// ---- 2. YES from a customer with one upcoming appointment --------------
 
 alerts.length = 0;
-const yes = await text("+19055550100", "Yes!", { publicBaseUrl: "https://www.pjllandservices.com" });
+const yes = await text("+19055550100", "Yes!");
 const gregAfter = await bookings.get(greg.id);
-ok("a texted YES does not confirm the appointment",
-  !gregAfter.assignment.outreach?.respondedAt && yes.action === "told_to_use_link", yes.action);
-ok("…the reply says to tap the link and press Confirm",
-  /tap this link and press Confirm/.test(yes.reply || "") && /doesn't confirm/.test(yes.reply || ""), yes.reply);
-ok("…with THEIR appointment link in it",
-  (yes.reply || "").includes(`https://www.pjllandservices.com/a/${greg.assignment.outreach.token}`), yes.reply);
-ok("…and never says they're confirmed", !/you're confirmed/i.test(yes.reply || ""));
-ok("…Patrick is NOT pinged for a YES (nothing for him to answer)", alerts.length === 0, alerts.join(" | "));
-ok("the booking record never names a texted confirmation",
-  !(gregAfter.history || []).some((h) => h.action === "assignment_responded"));
+ok("YES confirms the appointment", yes.action === "confirmed", yes.action);
+ok("…stamped on the booking as a customer response",
+  Boolean(gregAfter.assignment.outreach.respondedAt) && gregAfter.assignment.outreach.responseVia === "sms_reply");
+ok("…the page now reads 'responded' (same rule as the button)",
+  appointment.summarize(gregAfter, { now: NOW }).state === "responded");
+ok("…and the customer state reads 'confirmed' everywhere",
+  bookings.customerState(gregAfter) === "confirmed", bookings.customerState(gregAfter));
+ok("…the reply thanks them by first name and names the day",
+  /thanks Greg/.test(yes.reply) && /Monday, October 5/.test(yes.reply) && /960-0181/.test(yes.reply), yes.reply);
+ok("…and does not also send the 'unmonitored' reply", !/automated texting system/.test(yes.reply));
+ok("…Patrick is NOT pinged for a clean YES", alerts.length === 0, alerts.join(" | "));
+ok("…the booking history records it",
+  gregAfter.history.some((h) => h.action === "assignment_responded" && /sms_reply/.test(h.note)));
+
+const again = await text("+19055550100", "yes");
+ok("a second YES still answers politely", again.action === "confirmed" && /confirmed/.test(again.reply));
+ok("…and keeps the first answer's time",
+  (await bookings.get(greg.id)).assignment.outreach.respondedAt === gregAfter.assignment.outreach.respondedAt);
+
+// A confirm that CLAIMS success but never reached the booking must not
+// tell the customer they're confirmed.
+const P6 = { id: "P-6", code: "P-6", customerName: "Lee Ghost", customerPhone: "+19055550166",
+  customerEmail: "l@example.com", address: "6 Ghost Rd, Newmarket, ON" };
+fs.writeFileSync(path.join(SANDBOX, "server/data/properties.json"),
+  JSON.stringify([...(await properties.list()), P6], null, 2));
+const ghost = await mk(P6, new Date(2026, 9, 9, 8, 15).toISOString());
+alerts.length = 0;
+const lying = await text("+19055550166", "YES", {
+  confirmByToken: async () => ({ ok: true, summary: { dateLabel: "Friday, October 9", bucketLabel: "Morning" } })
+});
+ok("a confirm that didn't actually save is NOT reported to the customer as confirmed",
+  !/you're confirmed/.test(lying.reply || "") && /confirm_refused/.test(lying.action), `${lying.action} | ${lying.reply}`);
+ok("…Patrick is told it couldn't be confirmed", alerts.length === 1 && /couldn't be confirmed/.test(alerts[0]));
+ok("…and the booking really is unconfirmed", !(await bookings.get(ghost.id)).assignment.outreach?.respondedAt);
+
+const throwing = await text("+19055550166", "yes", { confirmByToken: async () => { throw new Error("disk full"); } });
+ok("a confirm that crashes still answers Twilio and doesn't claim success",
+  !/you're confirmed/.test(throwing.reply || "") && /disk full/.test(throwing.action), throwing.action);
 
 // ---- 3. YES that can't be pinned to one appointment -------------------
 
 alerts.length = 0;
 const multi = await text("9055550199", "YES");
-ok("YES from a number with two upcoming appointments confirms neither", multi.action === "told_to_use_link_unmatched", multi.action);
+ok("YES from a number with two upcoming appointments is NOT auto-confirmed", multi.action === "yes_unmatched", multi.action);
 ok("…neither of them was touched",
   (await bookings.list()).filter((b) => b.propertyId === "P-2" || b.propertyId === "P-3")
     .every((b) => !b.assignment.outreach?.respondedAt));
-ok("…and they're told to use the link in our message", /tap the link in our message and press Confirm/.test(multi.reply || ""), multi.reply);
+ok("…Patrick gets it, told why", alerts.length === 1 && /2 upcoming appointments/.test(alerts[0]), alerts[0]);
+ok("…the customer gets the automated-number reply", /automated texting system/.test(multi.reply) && /960-0181/.test(multi.reply));
 
 alerts.length = 0;
 const stranger = await text("+12895550123", "yes");
-ok("YES from an unknown number confirms nothing", stranger.action === "told_to_use_link_unmatched");
-ok("…and the reply leaks no name, address, date or link",
-  !/Greg|Oriole|October|\/a\//.test(stranger.reply || ""), stranger.reply);
+ok("YES from an unknown number confirms nothing", stranger.action === "yes_unmatched");
+ok("…and the reply leaks no name, address or date",
+  !/Greg|Oriole|October/.test(stranger.reply || ""), stranger.reply);
+ok("…Patrick still sees it", alerts.length === 1 && /\+12895550123/.test(alerts[0]));
 
 // ---- 4. Anything else goes to Patrick ---------------------------------
 
@@ -191,7 +217,7 @@ const retry = await sms.handleInbound({ from: "+12895550999", body: "hi", messag
 ok("a retried MessageSid is handled once", first.action === "forwarded" && retry.action === "duplicate" && alerts.length === 1);
 ok("…and gets no second reply", retry.reply === null);
 
-// ---- 7. A cancelled appointment gets no link ---------------------------
+// ---- 7. A cancelled appointment can't be confirmed by text -------------
 
 const P5 = { id: "P-5", code: "P-5", customerName: "Dee Gone", customerPhone: "+19055550155",
   customerEmail: "d@example.com", address: "5 Gone Rd, Newmarket, ON" };
@@ -199,9 +225,9 @@ fs.writeFileSync(path.join(SANDBOX, "server/data/properties.json"),
   JSON.stringify([...(await properties.list()), P5], null, 2));
 const dead = await mk(P5, new Date(2026, 9, 7, 8, 15).toISOString());
 await bookings.cancel(dead.id, { reason: "test", by: "admin" });
+alerts.length = 0;
 const deadYes = await text("+19055550155", "yes");
-ok("YES for a cancelled appointment gets no link to it", deadYes.action === "told_to_use_link_unmatched"
-  && !(deadYes.reply || "").includes(dead.assignment.outreach.token), deadYes.action);
+ok("YES for a cancelled appointment confirms nothing", deadYes.action === "yes_unmatched", deadYes.action);
 ok("…the booking stays cancelled", (await bookings.get(dead.id)).status === "cancelled");
 
 // ---- 8. Patrick replying to a forward --------------------------------
@@ -216,7 +242,7 @@ ok("…he's told replies here don't reach the customer", /don't reach the custom
 
 const rows = await sms.readStore(STORE);
 ok("every text is logged", rows.length >= 12, String(rows.length));
-ok("…with what was done about it", rows.some((r) => r.action === "told_to_use_link") && rows.some((r) => r.action === "sms_opted_out"));
+ok("…with what was done about it", rows.some((r) => r.action === "confirmed") && rows.some((r) => r.action === "sms_opted_out"));
 
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 if (failures.length) {

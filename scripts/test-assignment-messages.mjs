@@ -290,7 +290,7 @@ ok("the messages module never calls sendBulk",
   const fresh = require(path.join(SB2, "server/lib/assignment-messages.js"));
   const list = fresh.listTemplates();
   ok("after the one-time step, the Step 1 text uses the new default",
-    list.assignment_sms.source === "default" && /press Confirm/.test(list.assignment_sms.body), list.assignment_sms.source);
+    list.assignment_sms.source === "default" && /Reply YES to confirm/.test(list.assignment_sms.body), list.assignment_sms.source);
   ok("…and so do the follow-up and 24-hour reminder texts",
     list.followup_sms.source === "default" && list.reminder24_sms.source === "default");
   ok("…the reminder now says the number is automated", /automated/.test(list.reminder24_sms.body));
@@ -322,12 +322,12 @@ ok("the messages module never calls sendBulk",
   fs.rmSync(SB2, { recursive: true, force: true });
 }
 
-// ---- ONE way to confirm: Confirm on the link (Patrick, 2026-09-26) ------
+// ---- TWO ways to confirm; an email reply isn't one (Patrick, 2026-09-26) --
 //
-// Customers replied "confirmed" to the email and "YES" to the text, and
-// neither reached the booking. Patrick: "the only way to accept the
-// appointment is to click Confirm in the link." Every message must say
-// that and nothing else.
+// Confirm on the link, or reply YES to the text. Customers replied
+// "confirmed" to the EMAIL and kept getting reminders, because nothing
+// reads the inbox. Every asking message names a way that works, and no
+// email invites a reply.
 {
   const ctx = messages.contextForBooking({
     customerName: "Frank Mazzuca", address: "67 Kirkbride Crescent, Newmarket, ON",
@@ -336,16 +336,13 @@ ok("the messages module never calls sendBulk",
   }, { appointmentLink: "https://www.pjllandservices.com/a/abcdefghijklmnopqrstuvwx", oldDate: "Monday, October 5" });
   const asking = ["assignment", "followup", "nudge", "daymove"];
   for (const t of asking) {
-    for (const ch of ["email", "sms"]) {
-      const key = `${t}_${ch}`;
-      const body = messages.render(key, { ...ctx }).body;
-      const d = messages.DEFAULT_TEMPLATES[key].body;
-      ok(`${key} tells them to press Confirm on the link`, /press Confirm/.test(body), body.slice(0, 160));
-      ok(`${key} never asks them to reply or text YES`,
-        !/reply YES|text YES|reply to this email/i.test(d), d.slice(0, 160));
-    }
     const email = messages.render(`${t}_email`, { ...ctx }).body;
-    ok(`${t}_email says a reply doesn't confirm`, /replying to this email does not confirm/i.test(email));
+    ok(`${t}_email tells them to press Confirm or reply YES to the text`,
+      /press Confirm/.test(email) && /reply YES to our text/.test(email), email.slice(0, 200));
+    ok(`${t}_email says a reply to the email doesn't confirm`, /replying to this email does not confirm/i.test(email));
+    ok(`${t}_email never invites a reply to the email`, !/reply to this email/i.test(messages.DEFAULT_TEMPLATES[`${t}_email`].body));
+    const sms = messages.render(`${t}_sms`, { ...ctx }).body;
+    ok(`${t}_sms offers reply YES`, /reply YES/i.test(sms), sms.slice(0, 200));
   }
   const reminder = messages.render("reminder24_sms", { ...ctx }).body;
   ok("the 24-hour reminder no longer reads as if Patrick's own number were automated",

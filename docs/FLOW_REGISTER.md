@@ -35,23 +35,18 @@ its Part B (`#sbBackLink` not found under its fully-mocked route table). Confirm
 the pre-#302 `sitebuilder.html`, so it is not a regression from the workspace route — it is a stale
 harness in an opt-in suite, and fixing it does not belong in a navigation change.
 
-**2026-09-26 (One way to confirm: Confirm on the link):** Customers kept "confirming" in ways the
-booking never hears — Frank Mazzuca and Nishka Potter replied to the email, Greg Davis texted the
-647 number before its webhook existed — and kept getting reminders. Patrick: *"the only way to
-accept the appointment is to click Confirm in the link."* So: every assignment email and text now
-says "tap the link/button and press Confirm" and nothing else (no "reply YES", no "reply to this
-email"); each appointment email carries "replying to this email does not confirm your
-appointment"; the cadence emails' footer drops "or reply to this email" (`invitesReply: false`);
-and a texted YES **no longer confirms** — `lib/sms-inbound.js` answers it with their own
-`/a/<token>` link ("tap this link and press Confirm") when exactly one live appointment is theirs,
-a generic "tap the link in our message" otherwise, and does not forward it. `sms_reply` stays in
-the label maps for bookings confirmed that way on 2026-09-25/26. Saved email wording from the
-original setup is retired once (`_migrations.confirmByTextEmails_2026_09_26`, backup under
-`_retired`), exactly as the texts were. The "(this number is automated)" suffix that sat right
-after (905) 960-0181 — reading as if Patrick's own number were automated — is now "(please don't
-reply to this automated text/message)". Pinned by `test-assignment-messages.mjs` (every asking
-message says press Confirm, none says reply/text YES, every email says a reply doesn't confirm) and
-`test-sms-inbound.mjs` (a YES never confirms; it gets their link; strangers get no link).
+**2026-09-26 (An email reply doesn't confirm — and every email says so):** Frank Mazzuca and
+Nishka Potter "confirmed" by replying to the appointment email; nothing reads the inbox, so they
+kept getting reminders. Patrick's rule: a customer confirms by pressing **Confirm on the link** or
+**replying YES to the text** — both already work (#308) — and never by replying to the email. So
+the four appointment emails now say "tap the button below and press Confirm — or reply YES to our
+text message" plus "replying to this email does not confirm your appointment"; the cadence emails'
+footer drops "or reply to this email" (`sendOutreachEmail({ invitesReply: false })`; seasonal
+outreach keeps it). Saved email wording from the original setup is retired once
+(`_migrations.confirmByTextEmails_2026_09_26`, backup under `_retired`), exactly as the texts were
+(#309). Also: "(this number is automated)" sat right after (905) 960-0181 and read as if Patrick's
+own number were automated — now "(please don't reply to this automated text/message)" in the 24h
+reminder and three self-booked texts. Pinned by `test-assignment-messages.mjs`.
 
 **2026-09-25 (Confirm visibly confirms; texts to the Twilio number are heard):** Two customers
 (Greg Davis, Behnaz) phoned Patrick saying "Confirm this appointment" didn't work, and customers
