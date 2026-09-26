@@ -586,7 +586,7 @@
 }
 .mlb-result {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
   gap: 8px 12px;
   align-items: center;
   padding: 10px 12px;
@@ -780,4 +780,181 @@
    savebar past it so the sidebar gradient doesn't bleed under the bar. */
 @media (min-width: 1181px) {
   .mlb-savebar { left: var(--side-nav-width, 240px); }
+}
+
+/* ---- Part photos in the picker (P-PJL-35) --------------------------------
+   The thumbnail is its own button, visually separate from Add. A verified
+   photo is shown whole (contain, never cropped) on a white tile with a
+   small green check. Anything else is the explicit striped "No photo"
+   tile: never a stand-in image that could be mistaken for the part. */
+.mlb-thumb {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  padding: 0;
+  border: 1px solid #D4D2CB;
+  border-radius: 8px;
+  background: #fff;
+  display: grid;
+  place-items: center;
+  cursor: zoom-in;
+  font: inherit;
+  color: inherit;
+  align-self: center;
+  touch-action: manipulation;
+}
+.mlb-thumb img {
+  width: 100%;
+  height: 100%;
+  padding: 5px;
+  object-fit: contain;
+  border-radius: inherit;
+  display: block;
+}
+.mlb-thumb:hover { border-color: #2D6A42; box-shadow: 0 0 0 3px rgba(45, 106, 66, 0.12); }
+.mlb-thumb:focus-visible { outline: 2px solid #2D6A42; outline-offset: 2px; }
+.mlb-thumb-badge {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: #2D6A42;
+  border: 2px solid #fff;
+  display: grid;
+  place-items: center;
+}
+.mlb-thumb-badge svg { width: 11px; height: 11px; }
+.mlb-thumb.is-nophoto {
+  cursor: help;
+  background: repeating-linear-gradient(135deg, #F3F1E8 0 6px, #FBFAF5 6px 12px);
+}
+.mlb-noph { display: flex; flex-direction: column; align-items: center; gap: 2px; color: #6B6B63; }
+.mlb-noph svg { width: 20px; height: 20px; }
+.mlb-noph span {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+.mlb-noph--big svg { width: 40px; height: 40px; }
+.mlb-noph--big span { font-size: 18px; }
+.mlb-noreli { font-style: italic; }
+
+/* Photo viewer: centred dialog on desktop, bottom sheet on phones. */
+.mlb-pv {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 31, 20, 0.62);
+  animation: mlbPvFade 0.14s ease-out;
+}
+@keyframes mlbPvFade { from { opacity: 0; } }
+.mlb-pv-dlg {
+  width: min(760px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 14px;
+}
+.mlb-pv-handle { display: none; }
+.mlb-pv-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 14px 10px 18px;
+  border-bottom: 1px solid #E2E0D4;
+}
+.mlb-pv-title { flex: 1; min-width: 0; }
+.mlb-pv .mlb-pv-title h2 {
+  margin: 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.15;
+  color: #1F2A22;
+  /* Keep the real case: FxFxF and FIPT mean different ends. */
+  text-transform: none;
+  letter-spacing: 0.01em;
+}
+.mlb-pv .mlb-pv-title p { margin: 2px 0 0; font-size: 13px; color: #6B6B63; }
+.mlb-pv-close {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border: 1px solid #D4D2CB;
+  border-radius: 10px;
+  background: #fff;
+  color: #1F2A22;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.mlb-pv-close:hover { border-color: #2D6A42; }
+.mlb-pv-close svg { width: 20px; height: 20px; }
+.mlb-pv-stage {
+  display: grid;
+  place-items: center;
+  height: min(56vh, 460px);
+  padding: 18px;
+  border-bottom: 1px solid #E2E0D4;
+  background: #fff;
+}
+.mlb-pv-stage img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+.mlb-pv-stage.is-empty {
+  height: 200px;
+  background: repeating-linear-gradient(135deg, #F3F1E8 0 10px, #FBFAF5 10px 20px);
+}
+.mlb-pv-trust {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 12px 18px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.mlb-pv-trust svg { flex: none; width: 18px; height: 18px; margin-top: 1px; }
+.mlb-pv-trust b { display: block; font-size: 13.5px; }
+.mlb-pv-trust.is-verified { background: #F4F9EF; color: #163A24; border: 1px solid rgba(45, 106, 66, 0.2); }
+.mlb-pv-trust.is-none { background: #F4F3EE; color: #3F3D37; border: 1px solid #D4D2CB; }
+.mlb-pv-shared { margin: 12px 18px 0; font-size: 13px; }
+.mlb-pv .mlb-pv-shared h3 {
+  margin: 0 0 4px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6B6B63;
+}
+.mlb-pv-shared ul { margin: 0; padding-left: 18px; }
+.mlb-pv .mlb-pv-manage { margin: 12px 18px 0; font-size: 13px; }
+.mlb-pv .mlb-pv-manage a { color: #1B4D2E; font-weight: 600; }
+
+@media (max-width: 640px) {
+  .mlb-pv { padding: 0; place-items: end stretch; }
+  .mlb-pv-dlg {
+    width: 100%;
+    max-height: calc(100% - 28px);
+    border-radius: 18px 18px 0 0;
+    animation: mlbPvUp 0.2s ease-out;
+    padding-bottom: calc(14px + env(safe-area-inset-bottom));
+  }
+  @keyframes mlbPvUp { from { transform: translateY(40px); opacity: 0.4; } }
+  .mlb-pv-handle { display: block; width: 44px; height: 5px; border-radius: 3px; background: #CFCCC0; margin: 8px auto 0; }
+  .mlb-pv-head { padding: 8px 10px 10px 16px; touch-action: none; }
+  .mlb-pv .mlb-pv-title h2 { font-size: 19px; }
+  .mlb-pv-stage { height: min(44vh, 360px); padding: 12px; }
 }

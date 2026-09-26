@@ -107,6 +107,19 @@ check('the System Builder\'s calculation engine is gated like the page it serves
   );
 });
 
+check('part photos are fenced — images, overview, writes and the admin page', () => {
+  // P-PJL-35. Every one of these would fall through to "open" if the
+  // prefix rule were missing. Writes additionally require requireAdmin()
+  // in the handler (the lock checks below cover that shape).
+  const hash = 'a'.repeat(64);
+  assert.equal(needsAuth('GET', `/api/part-photos/${hash}/160.webp`), 'user');
+  assert.equal(needsAuth('GET', '/api/part-photos'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photos/405010/photo'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photos/405010/link'), 'user');
+  assert.equal(needsAuth('DELETE', '/api/part-photo-groups/PG-0001/photo'), 'user');
+  assert.equal(needsAuth('GET', '/admin/part-photos'), 'user');
+});
+
 check('the admin surfaces around it did not move', () => {
   assert.equal(needsAuth('GET', '/api/users'), 'admin');
   assert.equal(needsAuth('GET', '/api/admin/territory-export'), 'admin');

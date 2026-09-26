@@ -364,20 +364,192 @@
     }).join("");
   }
 
+  // ---- Part photos (P-PJL-35) -----------------------------------------
+  // The server decides whether a photo may show (lib/part-photos.js,
+  // photoStateFor) and sends `photo` only when it is verified. This code
+  // never second-guesses that: no photo → the explicit "No photo" tile,
+  // never a stand-in image. The photo is identity, not decoration.
+  const NO_PHOTO_TITLE = {
+    none: "No verified photo yet",
+    tbd: "No verified photo yet",
+    changed: "No verified photo yet",
+    not_confident: "No reliable photo found"
+  };
+  const NO_PHOTO_REASON = {
+    none: "This part hasn't been given a verified photo yet.",
+    tbd: "A possible photo is waiting on the review screen. It stays hidden here until it's approved.",
+    changed: "This part's number or description changed after its photo was matched, so the photo is hidden until it's reconfirmed.",
+    not_confident: "No photo could be verified for this exact part, so none is shown rather than a guess."
+  };
+  const ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+  const ICON_NO_PHOTO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h3l2-2.5h6L17 7h3v11.5H4z"/><circle cx="12" cy="12.5" r="3.5"/><path d="M3 3l18 18"/></svg>';
+
+  function hasVerifiedPhoto(part) {
+    return !!(part && part.photoState === "verified" && part.photo && part.photo.thumb);
+  }
+  function noPhotoState(part) {
+    const s = part && part.photoState;
+    return NO_PHOTO_TITLE[s] ? s : "none";
+  }
+  function renderPartThumb(part) {
+    const desc = escapeHtml(part.description || part.sku);
+    if (hasVerifiedPhoto(part)) {
+      return `<button type="button" class="mlb-thumb is-verified" data-action="photo" aria-label="View larger photo of ${desc}" title="Verified photo">
+          <img src="${escapeHtml(part.photo.thumb)}" alt="" width="64" height="64" loading="lazy" decoding="async">
+          <span class="mlb-thumb-badge">${ICON_CHECK}</span>
+        </button>`;
+    }
+    const title = NO_PHOTO_TITLE[noPhotoState(part)];
+    return `<button type="button" class="mlb-thumb is-nophoto" data-action="photo" aria-label="${title} for ${desc}. Show why" title="${title}">
+        <span class="mlb-noph">${ICON_NO_PHOTO}<span>No photo</span></span>
+      </button>`;
+  }
+
   function renderResult(part, isInList) {
     const sizeBadge = part.size ? `<span class="crm-parts-size">${escapeHtml(part.size)}</span>` : "";
+    const noReliable = part.photoState === "not_confident" ? ` &middot; <span class="mlb-noreli">No reliable photo</span>` : "";
     return `
       <div class="mlb-result" data-sku="${escapeHtml(part.sku)}">
+        ${renderPartThumb(part)}
         <div class="mlb-result-info">
           <div class="mlb-result-desc">${sizeBadge} ${escapeHtml(part.description || part.sku)}</div>
           <div class="mlb-result-meta">
             <span class="mlb-line-sku">${escapeHtml(part.sku)}</span>
-            &middot; ${fmtCents(part.priceCents)} / ${escapeHtml(part.unit || "each")}
+            &middot; ${fmtCents(part.priceCents)} / ${escapeHtml(part.unit || "each")}${noReliable}
           </div>
         </div>
         <button type="button" class="mlb-result-add ${isInList ? "is-added" : ""}" data-action="add" aria-label="Add ${escapeHtml(part.sku)}">${isInList ? "+1" : "Add"}</button>
       </div>
     `;
+  }
+
+  // ---- Photo viewer ----------------------------------------------------
+  // Desktop: a centred dialog. Phone (≤640px): a bottom sheet with a drag
+  // handle. Closes on ×, Esc, a click outside, a swipe down, or the
+  // browser/phone Back button (the viewer pushes a history entry). It
+  // shows the photo and who verified it; it has no Add button, so looking
+  // at a part can never add it.
+  let viewer = null;
+  function fmtDay(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return isNaN(d) ? "" : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  }
+  function trustHtml(part) {
+    if (!hasVerifiedPhoto(part)) {
+      const s = noPhotoState(part);
+      return `<div class="mlb-pv-trust is-none">${ICON_NO_PHOTO}<div><b>${NO_PHOTO_TITLE[s]}</b>${escapeHtml(NO_PHOTO_REASON[s])}<br>You can still add this part. Pick it by part #.</div></div>`;
+    }
+    const p = part.photo;
+    const who = p.approvedBy ? escapeHtml(p.approvedBy) : "staff";
+    const when = fmtDay(p.approvedAt);
+    let line;
+    if (p.method === "url") line = `From ${escapeHtml(p.sourceDomain || "the web")}, approved by ${who}${when ? ` on ${when}` : ""}.`;
+    else if (p.method === "upload") line = `Photo set by ${who}${when ? ` on ${when}` : ""}.`;
+    else line = `Passed the automated photo checks${when ? ` on ${when}` : ""}.`;
+    return `<div class="mlb-pv-trust is-verified"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M7.5 12.5l3 3 6-6.5"/></svg><div><b>Verified photo</b>${line}</div></div>`;
+  }
+  function sharedHtml(part) {
+    const shared = (hasVerifiedPhoto(part) && part.photo.sharedWith) || [];
+    if (!shared.length) return "";
+    const items = shared.map((sku) => {
+      const other = state.catalog && state.catalog.parts[sku];
+      return `<li><span class="mlb-line-sku">${escapeHtml(sku)}</span> ${escapeHtml(other ? other.description : "")}</li>`;
+    }).join("");
+    return `<div class="mlb-pv-shared"><h3>Same fitting, same photo</h3><ul>${items}</ul></div>`;
+  }
+  function openPhotoViewer(part, trigger) {
+    closePhotoViewer(true);
+    const verified = hasVerifiedPhoto(part);
+    const desc = part.description || part.sku;
+    const sizeBadge = part.size ? `<span class="crm-parts-size">${escapeHtml(part.size)}</span> ` : "";
+    const stage = verified
+      ? `<div class="mlb-pv-stage"><img src="${escapeHtml(part.photo.large)}" srcset="${escapeHtml(part.photo.largeMobile)} 480w, ${escapeHtml(part.photo.large)} 1200w" sizes="(max-width: 640px) 100vw, 720px" alt="${escapeHtml(desc)}"></div>`
+      : `<div class="mlb-pv-stage is-empty"><span class="mlb-noph mlb-noph--big">${ICON_NO_PHOTO}<span>No photo</span></span></div>`;
+    const overlay = document.createElement("div");
+    overlay.className = "mlb-pv";
+    overlay.innerHTML = `
+      <div class="mlb-pv-dlg" role="dialog" aria-modal="true" aria-label="${escapeHtml((verified ? "Photo of " : "No photo for ") + desc)}">
+        <div class="mlb-pv-handle" aria-hidden="true"></div>
+        <div class="mlb-pv-head">
+          <div class="mlb-pv-title">
+            <h2>${sizeBadge}${escapeHtml(desc)}</h2>
+            <p><span class="mlb-line-sku">${escapeHtml(part.sku)}</span>${part.manufacturer ? ` &middot; ${escapeHtml(part.manufacturer)}` : ""}</p>
+          </div>
+          <button type="button" class="mlb-pv-close" data-pv="close" aria-label="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+        ${stage}
+        ${trustHtml(part)}
+        ${sharedHtml(part)}
+        <p class="mlb-pv-manage"><a href="/admin/part-photos?sku=${encodeURIComponent(part.sku)}">${verified ? "Manage this photo" : "Set a photo for this part"}</a></p>
+      </div>`;
+    document.body.appendChild(overlay);
+    const dlg = overlay.querySelector(".mlb-pv-dlg");
+    const img = overlay.querySelector(".mlb-pv-stage img");
+    if (img) img.addEventListener("error", () => {
+      img.parentElement.classList.add("is-empty");
+      img.outerHTML = `<span class="mlb-noph mlb-noph--big">${ICON_NO_PHOTO}<span>Photo unavailable</span></span>`;
+    });
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay || e.target.closest("[data-pv='close']")) closePhotoViewer();
+    });
+    overlay.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.preventDefault(); closePhotoViewer(); return; }
+      if (e.key !== "Tab") return;
+      const focusables = [...dlg.querySelectorAll("button, a[href]")];
+      if (!focusables.length) return;
+      const first = focusables[0], last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
+    enableSheetSwipe(dlg);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    viewer = { overlay, trigger, prevOverflow, pushed: false };
+    try { history.pushState({ mlbPhotoViewer: true }, ""); viewer.pushed = true; } catch (_) { /* ignore */ }
+    overlay.querySelector(".mlb-pv-close").focus({ preventScroll: true });
+  }
+  function closePhotoViewer(fromPopOrReplace) {
+    if (!viewer) return;
+    const v = viewer;
+    viewer = null;
+    v.overlay.remove();
+    document.body.style.overflow = v.prevOverflow;
+    // Closed by ×/Esc/outside/swipe: undo our history entry so Back still
+    // means "leave this page" afterwards.
+    if (v.pushed && !fromPopOrReplace) history.back();
+    if (!fromPopOrReplace && v.trigger && v.trigger.isConnected) v.trigger.focus({ preventScroll: true });
+  }
+  window.addEventListener("popstate", () => {
+    if (!viewer) return;
+    const trigger = viewer.trigger;
+    closePhotoViewer(true);
+    if (trigger && trigger.isConnected) trigger.focus({ preventScroll: true });
+  });
+  function enableSheetSwipe(dlg) {
+    const grips = [dlg.querySelector(".mlb-pv-handle"), dlg.querySelector(".mlb-pv-head")];
+    let y0 = null, dy = 0;
+    grips.forEach((el) => {
+      el.addEventListener("pointerdown", (e) => {
+        if (window.innerWidth > 640 || e.target.closest("button, a")) return;
+        y0 = e.clientY; dy = 0; dlg.style.transition = "none";
+        try { el.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+      });
+      el.addEventListener("pointermove", (e) => {
+        if (y0 == null) return;
+        dy = Math.max(0, e.clientY - y0);
+        dlg.style.transform = `translateY(${dy}px)`;
+      });
+      const end = () => {
+        if (y0 == null) return;
+        y0 = null; dlg.style.transition = "transform .18s ease-out";
+        if (dy > 90) closePhotoViewer(); else dlg.style.transform = "";
+      };
+      el.addEventListener("pointerup", end);
+      el.addEventListener("pointercancel", end);
+    });
   }
 
   function renderSearchResults() {
@@ -1138,6 +1310,15 @@
     // Search + browse — both render .mlb-result rows; one click handler
     // serves both surfaces.
     function onAddClick(event) {
+      // The photo is its own button. Opening it never adds the part —
+      // adding is always the deliberate press of Add.
+      const photoBtn = event.target.closest("[data-action='photo']");
+      if (photoBtn) {
+        const row = photoBtn.closest("[data-sku]");
+        const part = row && state.catalog && state.catalog.parts[row.dataset.sku];
+        if (part) openPhotoViewer(part, photoBtn);
+        return;
+      }
       const button = event.target.closest("[data-action='add']");
       if (!button) return;
       const result = event.target.closest("[data-sku]");
@@ -1149,6 +1330,20 @@
     }
     els.searchResults.addEventListener("click", onAddClick);
     els.catalogTree.addEventListener("click", onAddClick);
+    // A verified photo that fails to load (offline, or deleted on the
+    // server) becomes the "No photo" tile, never a broken image. `error`
+    // doesn't bubble, so listen in the capture phase.
+    function onThumbError(event) {
+      const img = event.target;
+      if (!(img instanceof HTMLImageElement)) return;
+      const btn = img.closest(".mlb-thumb.is-verified");
+      const row = btn && btn.closest("[data-sku]");
+      if (!row) return;
+      const part = state.catalog && state.catalog.parts[row.dataset.sku];
+      btn.outerHTML = renderPartThumb({ ...(part || {}), sku: row.dataset.sku, photoState: "none", photo: null });
+    }
+    els.searchResults.addEventListener("error", onThumbError, true);
+    els.catalogTree.addEventListener("error", onThumbError, true);
 
     let searchTimer = null;
     els.search.addEventListener("input", () => {
