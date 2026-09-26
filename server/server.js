@@ -175,6 +175,7 @@ const projects = require("./lib/projects");
 const partSuppliers = require("./lib/part-suppliers");
 const partSupplierPrices = require("./lib/part-supplier-prices");
 const partsLib = require("./lib/parts");
+const partPhotosLib = require("./lib/part-photos");
 const purchaseOrders = require("./lib/purchase-orders");
 const quoteRequests = require("./lib/quote-requests");
 const users = require("./lib/users");
@@ -256,6 +257,8 @@ const HOST = process.env.HOST || "0.0.0.0";
 const SITE_DIR = path.resolve(__dirname, "..");
 const SERVER_DIR = __dirname;
 const DATA_DIR = path.join(SERVER_DIR, "data");
+// Verified part photos for the parts picker (lib/part-photos.js, P-PJL-35).
+const partPhotos = partPhotosLib.createPartPhotos({ dataDir: DATA_DIR, sharp });
 const LEADS_FILE = path.join(DATA_DIR, "leads.json");
 const AUTH_FILE = path.join(DATA_DIR, "auth.json");
 // All AI chat transcripts (booked AND abandoned). Patrick uses this to see
@@ -508,6 +511,17 @@ function rebuildCatalogFromOverrides({ initial = false } = {}) {
   partSupplierPrices.mergeIntoCatalog(PARTS.parts, supplierPriceMap, {
     editedMap: (catalogOverrides && catalogOverrides.edited) || {}
   });
+  // Then verified photos. photoStateFor() is the only rule for whether a
+  // photo may show; a part that is not "verified" gets photo: null, so a
+  // To-be-determined candidate can never reach the picker. If the photo
+  // stores can't be read, every part shows "no photo" rather than
+  // failing the whole catalog.
+  try {
+    partPhotos.mergeInto(PARTS.parts);
+  } catch (err) {
+    console.warn("[parts] could not merge part photos:", err?.message);
+    for (const p of Object.values(PARTS.parts)) { p.photo = null; p.photoState = "none"; }
+  }
   if (!initial) CATALOG_VERSION++;
 }
 
@@ -1492,6 +1506,7 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/sitebuilder-help.js") return "user";
   // Catalog ↔ supplier assignments + Purchase Orders (Phase 3).
   if (pathname === "/admin/parts-suppliers" || pathname === "/admin/parts-suppliers/") return "user";
+  if (pathname === "/admin/part-photos" || pathname === "/admin/part-photos/") return "user";
   if (pathname === "/admin/purchase-orders" || pathname === "/admin/purchase-orders/") return "user";
   if (/^\/admin\/purchase-order\/[^/]+\/?$/.test(pathname)) return "user";
   // Quote Requests (RFQ — the "ask for a price" sibling of the PO).
@@ -1548,6 +1563,9 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/invoices")) return "user";
   if (pathname.startsWith("/api/settings")) return "user";
   if (pathname === "/api/parts" || pathname.startsWith("/api/parts/")) return "user";
+  // Part photos: images, groups, links. Reads are staff; every write
+  // additionally requires requireAdmin() in its handler.
+  if (pathname.startsWith("/api/part-photo")) return "user";
   if (pathname.startsWith("/api/custom-line-items")) return "user";
   if (pathname.startsWith("/api/admin/quickbooks")) return "user";
   // Portal-messages inbox (two-way thread with customers).
@@ -13817,6 +13835,124 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, ...result });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't restore part."] });
+    }
+  }
+
+  // ---------- Part photos (P-PJL-35, FLOW-47) ----------------------------
+  // One verified photo per real-world fitting, shown only in the parts
+  // picker. lib/part-photos.js owns the one rule (photoStateFor) for
+  // whether a photo may show; these routes only read or change the stores
+  // and then rebuild the catalog so /api/parts reflects it.
+  //
+  //   GET    /api/part-photos/<sha256>/<160|480|1200>.webp   image (staff)
+  //   GET    /api/part-photos                                overview (staff)
+  //   POST   /api/part-photos/:sku/photo      {data} | {imageUrl}   (admin)
+  //   POST   /api/part-photos/:sku/link       {sameAsSku} | {groupId} (admin)
+  //   DELETE /api/part-photos/:sku/link                              (admin)
+  //   POST   /api/part-photos/:sku/reconfirm                         (admin)
+  //   DELETE /api/part-photo-groups/:id/photo                        (admin)
+  const partPhotoImgMatch = pathname.match(/^\/api\/part-photos\/([a-f0-9]{64})\/(160|480|1200)\.webp$/);
+  if (partPhotoImgMatch && req.method === "GET") {
+    const p = partPhotos.imagePath(partPhotoImgMatch[1], partPhotoImgMatch[2]);
+    try {
+      const buf = await fs.readFile(p);
+      // The URL is the image's own hash, so its bytes can never change:
+      // cache it for good. "private" because it sits behind staff auth.
+      res.writeHead(200, { "content-type": "image/webp", "content-length": buf.length, "cache-control": "private, max-age=31536000, immutable" });
+      res.end(buf);
+    } catch (_) { sendJson(res, 404, { ok: false, errors: ["No such photo."] }); }
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/part-photos") {
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    try {
+      const { groups, links } = await partPhotos.snapshot();
+      const parts = Object.values(PARTS.parts || {}).map((p) => ({
+        sku: p.sku, partNumber: p.partNumber, description: p.description, size: p.size,
+        category: p.category, manufacturer: p.manufacturer || "",
+        photoState: p.photoState || "none", photo: p.photo || null,
+        groupId: links[p.sku] ? links[p.sku].groupId : null
+      }));
+      const groupSummary = {};
+      for (const [id, g] of Object.entries(groups)) {
+        groupSummary[id] = {
+          id, label: g.label || id, tier: g.tier || "none",
+          skus: Object.keys(links).filter((sku) => links[sku].groupId === id).sort()
+        };
+      }
+      return sendJson(res, 200, { ok: true, parts, groups: groupSummary, categories: PARTS.categories || [] });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't read part photos."] });
+    }
+  }
+
+  const partPhotoSkuMatch = pathname.match(/^\/api\/part-photos\/([^/]+)\/(photo|link|reconfirm)$/);
+  if (partPhotoSkuMatch && (req.method === "POST" || req.method === "DELETE")) {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    const sku = decodeURIComponent(partPhotoSkuMatch[1]);
+    const action = partPhotoSkuMatch[2];
+    const part = PARTS.parts[sku];
+    if (!part) return sendJson(res, 404, { ok: false, errors: ["Unknown part."] });
+    const by = await actorLabel(req);
+    try {
+      let result, note;
+      if (action === "photo" && req.method === "POST") {
+        // 8 MB image cap; base64 is ~4/3 of that.
+        const payload = await parseRequestBody(req, { maxBytes: 12 * 1024 * 1024 });
+        if (payload.imageUrl) {
+          result = await partPhotos.setPhotoFromUrl(sku, part, payload.imageUrl, { by });
+          note = `Set photo for ${sku} from ${new URL(String(payload.imageUrl)).hostname}`;
+        } else {
+          const buf = Buffer.from(String(payload.data || ""), "base64");
+          if (buf.length > 8 * 1024 * 1024) return sendJson(res, 413, { ok: false, errors: ["That image is too large (8 MB max)."] });
+          result = await partPhotos.setPhoto(sku, part, buf, { by, source: { method: "upload" } });
+          note = `Uploaded photo for ${sku}`;
+        }
+        if (result.sharedWith.length) note += ` (shared with ${result.sharedWith.join(", ")})`;
+      } else if (action === "link" && req.method === "POST") {
+        const payload = await parseRequestBody(req);
+        let groupId = payload.groupId;
+        if (!groupId && payload.sameAsSku) {
+          const { links } = await partPhotos.snapshot();
+          groupId = links[payload.sameAsSku] && links[payload.sameAsSku].groupId;
+          if (!groupId) return sendJson(res, 422, { ok: false, errors: ["That part has no photo to share yet."] });
+        }
+        if (!groupId) return sendJson(res, 422, { ok: false, errors: ["Choose the part this is the same fitting as."] });
+        result = await partPhotos.linkToGroup(sku, part, String(groupId), { by });
+        note = `Linked ${sku} to photo group ${groupId}${payload.sameAsSku ? ` (same fitting as ${payload.sameAsSku})` : ""}`;
+      } else if (action === "link" && req.method === "DELETE") {
+        result = await partPhotos.unlink(sku, { by });
+        note = `Unlinked ${sku} from its photo`;
+      } else if (action === "reconfirm" && req.method === "POST") {
+        result = await partPhotos.reconfirm(sku, part, { by });
+        note = `Reconfirmed the photo for ${sku} after an edit`;
+      } else {
+        return sendJson(res, 405, { ok: false, errors: ["Method not allowed."] });
+      }
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({ who: by, action: `part-photo.${action}`, note, after: { sku, ...result } });
+      return sendJson(res, 200, { ok: true, sku, ...result, photoState: PARTS.parts[sku]?.photoState || "none", photo: PARTS.parts[sku]?.photo || null });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't update the photo."] });
+    }
+  }
+
+  const partPhotoGroupMatch = pathname.match(/^\/api\/part-photo-groups\/([^/]+)\/photo$/);
+  if (partPhotoGroupMatch && req.method === "DELETE") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    const by = await actorLabel(req);
+    try {
+      const groupId = decodeURIComponent(partPhotoGroupMatch[1]);
+      const result = await partPhotos.removeGroupPhoto(groupId, { by });
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({ who: by, action: "part-photo.remove", note: `Removed the photo from ${groupId} (${result.skus.join(", ") || "no parts"})`, after: result });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't remove the photo."] });
     }
   }
 
@@ -27974,6 +28110,9 @@ function resolveStaticTarget(pathname) {
   // Phase 3 — catalog ↔ supplier assignments + Purchase Orders.
   if (pathname === "/admin/parts-suppliers" || pathname === "/admin/parts-suppliers/") {
     return { dir: SERVER_DIR, relative: "/parts-suppliers.html" };
+  }
+  if (pathname === "/admin/part-photos" || pathname === "/admin/part-photos/") {
+    return { dir: SERVER_DIR, relative: "/part-photos.html" };
   }
   if (pathname === "/admin/purchase-orders" || pathname === "/admin/purchase-orders/") {
     return { dir: SERVER_DIR, relative: "/purchase-orders.html" };

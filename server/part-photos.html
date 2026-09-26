@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0F1F14">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Purchase orders — PJL</title>
+  <title>Part photos — PJL</title>
   <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260518" />
   <link rel="shortcut icon" href="/favicon.ico?v=20260518" />
@@ -18,11 +18,11 @@
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/crm/crm.css">
   <link rel="stylesheet" href="/crm/pjl-dialog.css">
+  <link rel="stylesheet" href="/crm/crm-parts.css">
   <link rel="stylesheet" href="/crm/suppliers.css">
-  <link rel="stylesheet" href="/crm/material-lists.css">
-  <link rel="stylesheet" href="/crm/purchase-orders.css">
-</head>
-<body class="pjl-crm-body suppliers-body">
+  <link rel="stylesheet" href="/crm/part-photos.css">
+  </head>
+<body class="pjl-crm-body suppliers-body part-photos-body">
   <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
     <header class="pjl-side-brand">
       <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
@@ -67,7 +67,7 @@
         <span class="pjl-nav-toggle-bar"></span>
         <span class="pjl-nav-toggle-bar"></span>
       </button>
-      <span class="pjl-app-title">Purchase orders</span>
+      <span class="pjl-app-title">Part photos</span>
       <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
     </header>
 
@@ -76,60 +76,50 @@
         <div class="suppliers-subnav-strip">
           <a href="/admin/material-lists">Material lists</a>
           <a href="/admin/quote-requests">Quote requests</a>
-          <a href="/admin/purchase-orders" class="is-active" aria-current="page">Purchase orders</a>
+          <a href="/admin/purchase-orders">Purchase orders</a>
           <a href="/admin/suppliers">Suppliers</a>
           <a href="/admin/parts-suppliers">Catalog</a>
-          <a href="/admin/part-photos">Part photos</a>
+          <a href="/admin/part-photos" class="is-active" aria-current="page">Part photos</a>
         </div>
         <details class="suppliers-subnav-dropdown">
           <summary class="suppliers-subnav-trigger">
             <span class="suppliers-subnav-trigger-eyebrow">Materials</span>
-            <span class="suppliers-subnav-trigger-current">Purchase orders</span>
+            <span class="suppliers-subnav-trigger-current">Part photos</span>
             <span class="suppliers-subnav-trigger-chevron" aria-hidden="true"></span>
           </summary>
           <div class="suppliers-subnav-menu">
             <a href="/admin/material-lists">Material lists</a>
             <a href="/admin/quote-requests">Quote requests</a>
-            <a href="/admin/purchase-orders" class="is-active" aria-current="page">Purchase orders</a>
+            <a href="/admin/purchase-orders">Purchase orders</a>
             <a href="/admin/suppliers">Suppliers</a>
             <a href="/admin/parts-suppliers">Catalog</a>
-            <a href="/admin/part-photos">Part photos</a>
+            <a href="/admin/part-photos" class="is-active" aria-current="page">Part photos</a>
           </div>
         </details>
       </nav>
 
       <section class="suppliers-explainer">
-        <p>Generated from a material list, one PO per supplier. Draft → send (emails the PDF, locks lines as <em>ordered</em>) → receive (lines flip to <em>have</em>).</p>
+        <p>One verified photo per real fitting. Only verified photos show in the parts picker; every other part shows <b>No photo</b>. When two parts are the same fitting (say SiteOne's and Central's 1" PVC tee), use <b>Same fitting as…</b> so they share one photo.</p>
       </section>
 
-      <section class="suppliers-toolbar">
-        <input type="search" id="poSearch" class="ml-search" placeholder="Search by id, supplier, list">
-        <label class="suppliers-toggle">
-          <input type="checkbox" id="poShowClosed"> Show closed POs (received + cancelled)
-        </label>
-      </section>
-
-      <section class="ml-filters" aria-label="Status filter">
-        <button type="button" data-status-filter="" class="is-active">All</button>
-        <button type="button" data-status-filter="draft">Draft</button>
-        <button type="button" data-status-filter="sent">Sent</button>
-        <button type="button" data-status-filter="partially_received">Partial</button>
-        <button type="button" data-status-filter="received">Received</button>
-        <button type="button" data-status-filter="cancelled">Cancelled</button>
-      </section>
-
-      <p class="suppliers-empty" id="poEmpty" hidden>No purchase orders yet. Generate one from a material list.</p>
-      <ul class="ml-cards" id="poContainer" aria-label="Purchase orders"></ul>
+      <div class="pp-toolbar">
+        <input class="pp-search" id="ppSearch" type="search" placeholder="Search parts, part # or size" aria-label="Search parts" autocomplete="off">
+        <div class="pp-filters" role="group" aria-label="Show">
+          <button type="button" data-filter="all" aria-pressed="true">All</button>
+          <button type="button" data-filter="nophoto" aria-pressed="false">No photo</button>
+          <button type="button" data-filter="verified" aria-pressed="false">Verified</button>
+          <button type="button" data-filter="changed" aria-pressed="false">Needs reconfirm</button>
+        </div>
+      </div>
+      <p class="pp-count" id="ppCount" aria-live="polite"></p>
+      <p class="pp-error" id="ppError" role="alert" hidden></p>
+      <div class="pp-list" id="ppList"><p class="pp-empty">Loading…</p></div>
     </main>
   </div>
 
   <script src="/crm/pjl-dialog.js"></script>
   <script src="/crm/crm-nav.js"></script>
-  <script src="/crm/bulk-toast.js"></script>
-  <script src="/crm/bulk-modal.js"></script>
-  <script src="/crm/bulk-selection.js"></script>
-  <script src="/crm/bulk-wiring.js"></script>
-  <script src="/crm/purchase-orders.js"></script>
+  <script src="/crm/part-photos.js"></script>
   <script src="/crm/nav-badges.js?v=1"></script>
 </body>
 </html>
