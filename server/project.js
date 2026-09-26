@@ -172,6 +172,26 @@
     // pre-linked to this install so the saved design attaches here.
     const dsl = document.getElementById("projDesignSystemLink");
     if (dsl) dsl.href = `/admin/sitebuilder?project=${encodeURIComponent(state.projectId)}`;
+
+    // Workspace handoff (2026-09-26). The rebuilt Tasks and System Design
+    // screens live at /app/projects/<id>; this page had no way of saying
+    // so, which is how a shipped change looked like nothing had happened.
+    //
+    // The band points at the workspace root rather than a tab, so it
+    // cannot rot when tabs are added. The Tasks link goes straight to the
+    // tab, because that is the specific difference the reader is standing
+    // in front of.
+    //
+    // Shown as soon as the id is known — not gated on the project
+    // loading, since the whole point is that it is visible immediately.
+    const wsBase = `/app/projects/${encodeURIComponent(state.projectId)}`;
+    const band = document.getElementById("projWorkspaceBand");
+    const bandLink = document.getElementById("projWorkspaceLink");
+    if (bandLink) bandLink.href = wsBase;
+    if (band) band.hidden = false;
+    const tasksWs = document.getElementById("projTasksWorkspaceLink");
+    if (tasksWs) tasksWs.href = `${wsBase}/tasks`;
+
     await loadProject();
   }
 
