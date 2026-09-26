@@ -13855,12 +13855,18 @@ async function handleApi(req, res, pathname) {
   if (partPhotoImgMatch && req.method === "GET") {
     try {
       // t160/t320 are the normalized square tile thumbnails; a photo saved
-      // before they existed gets them made on this first request.
-      const p = await partPhotos.ensureThumb(partPhotoImgMatch[1], partPhotoImgMatch[2]);
-      const buf = await fs.readFile(p);
+      // before they existed gets them made on this first request, and one
+      // that can't be made falls back to the plain photo (resolveImageFile).
+      const file = await partPhotos.resolveImageFile(partPhotoImgMatch[1], partPhotoImgMatch[2]);
+      const buf = await fs.readFile(file.path);
       // The URL is the image's own hash, so its bytes can never change:
       // cache it for good. "private" because it sits behind staff auth.
-      res.writeHead(200, { "content-type": "image/webp", "content-length": buf.length, "cache-control": "private, max-age=31536000, immutable" });
+      // A fallback is NOT cached, so a later successful thumbnail replaces it.
+      res.writeHead(200, {
+        "content-type": "image/webp",
+        "content-length": buf.length,
+        "cache-control": file.fallback ? "private, no-store" : "private, max-age=31536000, immutable"
+      });
       res.end(buf);
     } catch (_) { sendJson(res, 404, { ok: false, errors: ["No such photo."] }); }
     return;

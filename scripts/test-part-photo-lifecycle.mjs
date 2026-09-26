@@ -331,5 +331,62 @@ const onDisk = () => true;
   }
 }
 
+// ---- 9. Thumbnail safeguards: concurrent first requests, and failure ------
+{
+  const tallPhoto = await sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1200"><rect width="900" height="1200" fill="#fff"/><rect x="420" y="60" width="60" height="1080" fill="#222"/></svg>`)).png().toBuffer();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "part-photos-safe-"));
+  try {
+    const store = createPartPhotos({ dataDir: dir, sharp });
+    const p = part("PROS04PRS30");
+    const saved = await store.setPhoto("PROS04PRS30", p, tallPhoto, { by: "patrick", source: { method: "upload" } });
+    const hashDir = path.dirname(store.imagePath(saved.hash, 160));
+
+    // (1) An older photo with no tile thumbnails, hit by 8 requests at once.
+    for (const s of ["t160", "t320"]) fs.rmSync(store.imagePath(saved.hash, s));
+    const results = await Promise.allSettled(Array.from({ length: 8 }, (_, i) => store.resolveImageFile(saved.hash, i % 2 ? "t320" : "t160")));
+    check("concurrent: all 8 simultaneous first requests succeed", results.every((r) => r.status === "fulfilled"), JSON.stringify(results.filter((r) => r.status === "rejected").map((r) => r.reason?.message)));
+    check("concurrent: none of them fell back — the thumbnails were made", results.every((r) => r.value && r.value.fallback === false));
+    const expected = (await normalizeThumbs(fs.readFileSync(store.imagePath(saved.hash, 1200)), sharp)).variants;
+    check("concurrent: the t160 on disk is complete and identical to a single generation",
+      Buffer.compare(fs.readFileSync(store.imagePath(saved.hash, "t160")), expected[160]) === 0);
+    check("concurrent: the t320 on disk is complete and identical to a single generation",
+      Buffer.compare(fs.readFileSync(store.imagePath(saved.hash, "t320")), expected[320]) === 0);
+    check("concurrent: no half-written temp files left behind", !fs.readdirSync(hashDir).some((f) => f.endsWith(".tmp")), fs.readdirSync(hashDir).join(","));
+    const again = await store.resolveImageFile(saved.hash, "t160");
+    check("concurrent: a later request just serves the file (idempotent)", again.fallback === false && again.path === store.imagePath(saved.hash, "t160"));
+
+    // (2a) Generation fails for an older photo (its 1200 source is unreadable):
+    // the tile gets the plain resized photo instead, never an error.
+    for (const s of ["t160", "t320"]) fs.rmSync(store.imagePath(saved.hash, s));
+    fs.writeFileSync(store.imagePath(saved.hash, 1200), "not an image");
+    const f160 = await store.resolveImageFile(saved.hash, "t160");
+    const f320 = await store.resolveImageFile(saved.hash, "t320");
+    check("fallback: t160 falls back to the plain 160 photo", f160.fallback === true && f160.path === store.imagePath(saved.hash, 160) && fs.existsSync(f160.path));
+    check("fallback: t320 falls back to the plain 480 photo", f320.fallback === true && f320.path === store.imagePath(saved.hash, 480) && fs.existsSync(f320.path));
+    const fm = await sharp(fs.readFileSync(f160.path)).metadata();
+    check("fallback: the fallback is a real, readable image (not a broken one)", fm.format === "webp" && fm.width > 0);
+
+    // (2b) Generation fails at upload time: the photo still saves and shows.
+    const failingSharp = (...args) => { const s = sharp(...args); s.raw = () => { throw new Error("simulated thumbnail failure"); }; return s; };
+    const processed = await processImage(tallPhoto, failingSharp);
+    check("fallback: a failed thumbnail does not fail the photo (variants still made)", processed.thumbs === null && [160, 480, 1200].every((s) => processed.variants[s]));
+    const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), "part-photos-fail-"));
+    try {
+      const failStore = createPartPhotos({ dataDir: dir2, sharp: failingSharp });
+      const q = part("PROS06SIPRS30");
+      const s2 = await failStore.setPhoto("PROS06SIPRS30", q, tallPhoto, { by: "patrick", source: { method: "upload" } });
+      const parts = { PROS06SIPRS30: { ...q } };
+      failStore.mergeInto(parts);
+      check("fallback: the part is still verified in the picker catalog", parts.PROS06SIPRS30.photoState === "verified" && !!parts.PROS06SIPRS30.photo);
+      const r = await failStore.resolveImageFile(s2.hash, "t160");
+      check("fallback: its tile serves the plain photo", r.fallback === true && fs.existsSync(r.path));
+    } finally {
+      fs.rmSync(dir2, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 console.log(`\ntest-part-photo-lifecycle: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

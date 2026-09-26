@@ -239,8 +239,13 @@ async function processImage(buffer, sharp) {
     variants[size] = data;
     if (size === 1200) { width = info.width; height = info.height; }
   }
-  const thumbs = await normalizeThumbs(buffer, sharp);
-  return { hash, variants, width, height, thumbs: thumbs.variants, thumbInfo: { trimmed: thumbs.trimmed } };
+  // The square tile thumbnail is an improvement, not a requirement: if it
+  // can't be made, the photo still saves and the tile falls back to the
+  // plain resized photo (resolveImageFile).
+  let thumbs = null;
+  try { thumbs = await normalizeThumbs(buffer, sharp); }
+  catch (err) { console.warn("[part-photos] normalized thumbnail failed; tile will use the plain photo:", err?.message); }
+  return { hash, variants, width, height, thumbs: thumbs ? thumbs.variants : null, thumbInfo: thumbs ? { trimmed: thumbs.trimmed } : null };
 }
 
 // ------------------------------------------------- normalized thumbnails
@@ -372,9 +377,18 @@ function createPartPhotos({ dataDir, sharp }) {
 
   async function writeFileAtomic(p, buf) {
     const tmp = `${p}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
-    await fs.writeFile(tmp, buf);
-    await fs.rename(tmp, p);
+    try {
+      await fs.writeFile(tmp, buf);
+      await fs.rename(tmp, p);
+    } finally {
+      await fs.rm(tmp, { force: true }).catch(() => {});
+    }
   }
+
+  // One generation per photo at a time. Simultaneous first requests for
+  // the same older photo (the picker asks for t160 and t320 together)
+  // share ONE in-flight build instead of racing two writers to one file.
+  const thumbBuilds = new Map();
 
   // Photos saved before normalized thumbnails existed have no t160/t320.
   // Make them on first request from the stored 1200 image (EXIF already
@@ -385,12 +399,37 @@ function createPartPhotos({ dataDir, sharp }) {
     if (fsSync.existsSync(p)) return p;
     const src = imagePath(hash, 1200);
     if (!src || !fsSync.existsSync(src)) return p;
-    const made = await normalizeThumbs(await fs.readFile(src), sharp);
-    for (const s of THUMB_SIZES) {
-      const out = imagePath(hash, `t${s}`);
-      if (!fsSync.existsSync(out)) await writeFileAtomic(out, made.variants[s]);
+    let build = thumbBuilds.get(hash);
+    if (!build) {
+      build = (async () => {
+        const made = await normalizeThumbs(await fs.readFile(src), sharp);
+        for (const s of THUMB_SIZES) {
+          const out = imagePath(hash, `t${s}`);
+          if (!fsSync.existsSync(out)) await writeFileAtomic(out, made.variants[s]);
+        }
+      })().finally(() => thumbBuilds.delete(hash));
+      thumbBuilds.set(hash, build);
     }
+    await build;
     return p;
+  }
+
+  // Which file to serve for a requested image. A tile thumbnail (t160/t320)
+  // that is missing and can't be made falls back to the plain resized photo
+  // of similar size — the tile's contain styling keeps it whole and inside
+  // the tile — so a verified part never shows a broken image. `fallback`
+  // tells the route not to cache it forever under the thumbnail's URL.
+  async function resolveImageFile(hash, size) {
+    const p = imagePath(hash, size);
+    if (!p) return null;
+    if (!/^t(160|320)$/.test(String(size))) return { path: p, fallback: false };
+    try {
+      await ensureThumb(hash, size);
+      if (fsSync.existsSync(p)) return { path: p, fallback: false };
+    } catch (err) {
+      console.warn(`[part-photos] thumbnail ${size} for ${hash.slice(0, 12)} failed; serving the plain photo:`, err?.message);
+    }
+    return { path: imagePath(hash, size === "t320" ? 480 : 160), fallback: true };
   }
   function fileExists(hash) {
     return fsSync.existsSync(path.join(IMG_DIR, hash, "160.webp"));
@@ -547,7 +586,7 @@ function createPartPhotos({ dataDir, sharp }) {
   }
 
   return {
-    imagePath, ensureThumb, fileExists, readStoresSync, mergeInto, snapshot,
+    imagePath, ensureThumb, resolveImageFile, fileExists, readStoresSync, mergeInto, snapshot,
     setPhoto, setPhotoFromUrl, linkToGroup, unlink, reconfirm, removeGroupPhoto
   };
 }
