@@ -123,6 +123,12 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy, onStrok
           <Button label="Retry recorded sign-off" onPress={() => onFinish(recordedSignoff)} disabled={busy || saving} />
         </Section>
       ) : null}
+      {wo?.resignature?.required === true ? (
+        <View style={styles.resign}>
+          <Text style={styles.resignTitle}>New signature needed</Text>
+          <Text style={styles.resignBody}>The work order changed after it was signed, and the price changed with it. The customer signs the revised work order. Their first signature stays on file.</Text>
+        </View>
+      ) : null}
       <Section title="Who is signing?" footer="Most closings happen with nobody home. Either answer is normal.">
         <View style={styles.who}>
           <Button
@@ -266,4 +272,7 @@ const styles = StyleSheet.create({
   feeTitle: { ...type.section },
   feeBody: { ...type.body, fontWeight: '600', fontVariant: ['tabular-nums'] },
   feeMeta: { ...type.caption, lineHeight: 19 },
+  resign: { backgroundColor: colors.card, borderRadius: radius.card, padding: space.lg, gap: 4, borderLeftWidth: 3, borderLeftColor: colors.warning },
+  resignTitle: { ...type.section, color: colors.warning },
+  resignBody: { ...type.body, lineHeight: 21 },
 });

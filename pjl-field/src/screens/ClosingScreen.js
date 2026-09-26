@@ -280,8 +280,11 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
       } else if (result.mode === 'customer') {
         data = await completeWorkOrder(workOrderId, {
           // Signed already (the lock landed, the response did not): the
-          // signature is on file — send the completion only.
-          signature: freshBeforeFinish?.signature?.signed ? null : result.signature,
+          // signature is on file — send the completion only. Unless the
+          // work order changed in price after that signature: then the
+          // customer's NEW signature is the one that counts (server rule
+          // workOrders.awaitsNewSignature).
+          signature: freshBeforeFinish?.signature?.signed && freshBeforeFinish?.resignature?.required !== true ? null : result.signature,
           arrivedAt: wo?.arrivedAt ? null : nowIso,
           departedAt: wo?.departedAt ? null : nowIso,
         });
@@ -289,7 +292,7 @@ export default function ClosingScreen({ workOrderId, onExit, onFinished, onSignI
         // If the prior attempt lost its response after locking, continue
         // from that accepted state rather than trying to bypass twice.
         const current = await getWorkOrder(workOrderId);
-        if (!current.signatureBypass) await signatureBypass(workOrderId, { reason: result.reason, note: result.note });
+        if (!current.signatureBypass || current.resignature?.required === true) await signatureBypass(workOrderId, { reason: result.reason, note: result.note });
         data = await completeWorkOrder(workOrderId, {
           arrivedAt: wo?.arrivedAt ? null : nowIso,
           departedAt: wo?.departedAt ? null : nowIso,

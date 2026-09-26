@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v52";
+const TECH_BUILD_VERSION = "tech-v53";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -1085,6 +1085,7 @@ function populateStateFromWO(wo) {
   state.signatureBypass = wo.signatureBypass || null;
   state.photos = Array.isArray(wo.photos) ? wo.photos : [];
   state.locked = wo.locked === true;
+  state.resignature = wo.resignature || null;
   state.intakeGuarantee = (wo.intakeGuarantee && typeof wo.intakeGuarantee === "object")
     ? wo.intakeGuarantee
     : state.intakeGuarantee;
@@ -2836,13 +2837,23 @@ document.getElementById("techPhotoLightbox")?.addEventListener("click", () => {
 //   bypassed   — signature-bypass path completed (admin authored)
 // Signature and bypass are mutually exclusive on the server; this UI
 // mirrors that posture.
+// Re-signing (Patrick, 2026-09-26): the work order changed in price after
+// the customer signed, so the server (workOrders.awaitsNewSignature) wants
+// their NEW signature — the form comes back even though a signature or
+// bypass is on file, and even on a re-locked work order.
+function awaitsNewSignature() {
+  return state.resignature?.required === true;
+}
+
 function renderSignoff() {
   const form = document.getElementById("techSignoffForm");
   const signed = document.getElementById("techSignoffSigned");
   const bypassed = document.getElementById("techSignoffBypassed");
   if (!form || !signed) return;
+  const resignNotice = document.getElementById("techResignNotice");
+  if (resignNotice) resignNotice.hidden = !awaitsNewSignature();
 
-  if (state.signatureBypass) {
+  if (state.signatureBypass && !awaitsNewSignature()) {
     form.hidden = true;
     signed.hidden = true;
     if (bypassed) {
@@ -2875,7 +2886,7 @@ function renderSignoff() {
     return;
   }
 
-  if (state.signature && state.signature.signed) {
+  if (state.signature && state.signature.signed && !awaitsNewSignature()) {
     form.hidden = true;
     signed.hidden = false;
     if (bypassed) bypassed.hidden = true;
@@ -3087,7 +3098,7 @@ function signGateBlockers() {
   const ig = state.intakeGuarantee || {};
   // Signature prerequisites — the literal act of signing. Skipped when the
   // WO is already signed (edge case: somehow back on this screen post-sign).
-  if (state.signature?.signed !== true) {
+  if (state.signature?.signed !== true || awaitsNewSignature()) {
     const name = (document.getElementById("techSignoffName")?.value || "").trim();
     const ack = !!document.getElementById("techSignoffAck")?.checked;
     const drawn = !!(state.signaturePad && state.signaturePad.isDirty());
@@ -3163,7 +3174,7 @@ function updateSignoffSubmitState() {
   // than an absent-customer bypass. The button stays tappable; tapping
   // surfaces the blocking-gates sheet. Only a locked WO disables it.
   const blockers = signGateBlockers();
-  submit.disabled = state.locked === true;
+  submit.disabled = state.locked === true && !awaitsNewSignature();
   if (!blockers.length) signGatesDismissed = false;
 
   if (blockers.length && signGatesDismissed) {
@@ -3289,12 +3300,12 @@ document.getElementById("techPreSignList")?.addEventListener("click", (event) =>
 document.getElementById("techSignoffName")?.addEventListener("input", updateSignoffSubmitState);
 document.getElementById("techSignoffAck")?.addEventListener("change", updateSignoffSubmitState);
 document.getElementById("techSignoffClear")?.addEventListener("click", () => {
-  if (state.locked) return;
+  if (state.locked && !awaitsNewSignature()) return;
   state.signaturePad?.clear();
 });
 
 document.getElementById("techSignoffSubmit")?.addEventListener("click", async () => {
-  if (state.locked) return;
+  if (state.locked && !awaitsNewSignature()) return;
   const submit = document.getElementById("techSignoffSubmit");
 
   // Option A (Patrick 2026-06-06): gather every unmet blocker — signature
@@ -3350,6 +3361,7 @@ document.getElementById("techSignoffSubmit")?.addEventListener("click", async ()
     }
     state.signature = data.workOrder.signature || state.signature;
     state.locked = data.workOrder.locked === true;
+    state.resignature = data.workOrder.resignature || null;
     state.status = data.workOrder.status || state.status;
     state.departedAt = data.workOrder.departedAt || state.departedAt;
     // Track the new updatedAt so any subsequent patchWorkOrder call
@@ -3504,7 +3516,9 @@ document.getElementById("techRunCascadeBtn")?.addEventListener("click", async ()
 // the customer isn't on-site to sign. No reason picker / no note / no
 // checkboxes — the server defaults reason to "admin_override".
 function openBypassSheet() {
-  if (state.locked || state.signature?.signed || state.signatureBypass) return;
+  // The admin override can also stand in for the new signature on a
+  // revised scope (the server allows it only then).
+  if (!awaitsNewSignature() && (state.locked || state.signature?.signed || state.signatureBypass)) return;
   const sheet = document.getElementById("techBypassSheet");
   if (!sheet) return;
   const err = document.getElementById("techBypassError");
@@ -3550,6 +3564,7 @@ async function submitBypass() {
 
     state.signatureBypass = data.workOrder.signatureBypass || null;
     state.locked = data.workOrder.locked === true;
+    state.resignature = data.workOrder.resignature || null;
     state.updatedAt = data.workOrder.updatedAt || state.updatedAt;
     if (Array.isArray(data.workOrder.history)) state.history = data.workOrder.history;
     closeBypassSheet();

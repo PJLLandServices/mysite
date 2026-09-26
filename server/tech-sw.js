@@ -428,7 +428,10 @@
 // no longer offers "Generate invoice now" on a no-charge visit (reads the
 // server's derived wo.noCharge). Touches work-order-tech.js (in
 // STATIC_ASSETS); TECH_BUILD_VERSION bumped to "tech-v52" alongside.
-const CACHE_VERSION = "pjl-tech-v52";
+// Bumped 2026-09-26 (v52 -> v53): re-signing after a priced-scope change —
+// work-order-tech.js/.html show the sign-off form again when the server
+// says a new signature is needed. TECH_BUILD_VERSION "tech-v53" alongside.
+const CACHE_VERSION = "pjl-tech-v53";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
