@@ -189,6 +189,56 @@ try {
     ok(elapsed < LISTENER_MS, `...and is not slowed by the awaiting machinery (${elapsed}ms)`);
   }
 
+  // ── The hold is NOT written while this store's lock is held ───────
+  //
+  // atomic-json's withStoreLocks() states the invariant this depends on:
+  // "Acquired in a fixed (sorted) order; no lib mutator ever holds two,
+  // so no deadlock." Sorted order puts invoices.json BEFORE
+  // work-orders.json, so the property-merge route takes invoices first.
+  //
+  // A mutator here that held work-orders and then reached for invoices
+  // would be the exact reverse, and the pair deadlocks: the merge
+  // waiting for work-orders, the mutator waiting for invoices, neither
+  // letting go, both stores wedged for every later request.
+  //
+  // The first cut of this fix did exactly that — awaited the hold
+  // INSIDE the lock. This proves it no longer does: while the listener
+  // is running, the work-orders store must be free for another write to
+  // take. If the announce were back inside the lock, the write below
+  // could not start until the listener finished, and the recorded order
+  // would flip.
+  {
+    let listenerStarted = null, otherWriteAt = null, listenerDone = null;
+    const slow = () => {
+      listenerStarted = Date.now();
+      return new Promise((resolve) => setTimeout(() => { listenerDone = Date.now(); resolve(); }, 300));
+    };
+    workOrders.events.on("resignature", slow);
+
+    // Flip the requirement again to fire the listener, and while it is
+    // in flight, write to the SAME store from another caller.
+    const flip = workOrders.update(WO_ID, {
+      onSiteQuote: {
+        status: "draft",
+        builderLineItems: [
+          { key: "fall_close_4z", label: "Fall closing — 4 zones", qty: 1, price: 180 },
+          { key: "extra_zone", label: "Sixth zone", qty: 1, price: 40 }
+        ]
+      },
+      __by: "admin"
+    });
+    await new Promise((r) => setTimeout(r, 120));   // listener is mid-flight
+    await workOrders.appendHistory(WO_ID, { action: "probe", by: "test", note: "lock probe" });
+    otherWriteAt = Date.now();
+    await flip;
+    workOrders.events.off("resignature", slow);
+
+    ok(listenerStarted !== null, "the listener fired for the lock probe");
+    ok(otherWriteAt !== null && listenerDone !== null && otherWriteAt < listenerDone,
+      "THE WORK-ORDERS STORE IS FREE WHILE THE HOLD IS BEING WRITTEN",
+      `other write at ${otherWriteAt}, listener finished ${listenerDone} — if the announce were inside the lock these would be reversed`);
+  }
+
   // ── The other half: server.js's listener must RETURN its promise ───
   //
   // Awaiting the emit achieves nothing if the listener starts the write

@@ -74,6 +74,24 @@ const events = new EventEmitter();
 // safe to retry, because setScopeHold() is idempotent (it returns early
 // when the hold is already in the state asked for). Silently leaving an
 // invoice unheld is neither.
+// The transition a mutator saw, handed to the wrapper below so the
+// announcement runs AFTER this store's lock is released.
+//
+// WHY NOT JUST AWAIT IT IN PLACE. Because that would hold two store
+// locks at once, and atomic-json's withStoreLocks() says in as many
+// words why that is unsafe: "Acquired in a fixed (sorted) order; no lib
+// mutator ever holds two, so no deadlock." Sorted order puts
+// invoices.json BEFORE work-orders.json, so the property merge takes
+// invoices first and work-orders second. A mutator here that held
+// work-orders and then reached for invoices would be the exact reverse
+// — and the two together deadlock: the merge waiting for work-orders,
+// the mutator waiting for invoices, neither ever letting go.
+//
+// Keyed by the returned object rather than by id, so two concurrent
+// writes to the same work order cannot collect each other's
+// transition, and nothing is added to what gets persisted.
+const pendingResignature = new WeakMap();
+
 async function announceResignature(before, after) {
   if (awaitsNewSignature(before) === awaitsNewSignature(after)) return;
   const pending = [];
@@ -262,6 +280,20 @@ async function writeAll(records) {
   await writeJsonAtomic(FILE, records);
 }
 const withStoreLock = (fn) => (...args) => serialize(FILE, () => fn(...args));
+
+// Same, for the mutators that must publish the invoice hold. The write
+// happens under this store's lock; the hold is written once that lock is
+// released and BEFORE the caller is resolved — so a route still cannot
+// reply ahead of the hold, and no two store locks are ever held at once.
+const withStoreLockThenAnnounce = (fn) => async (...args) => {
+  const result = await serialize(FILE, () => fn(...args));
+  if (result && pendingResignature.has(result)) {
+    const before = pendingResignature.get(result);
+    pendingResignature.delete(result);
+    await announceResignature(before, result);
+  }
+  return result;
+};
 
 // ---- Helpers ---------------------------------------------------------
 
@@ -1202,7 +1234,7 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy }, { ip, 
 
   records[idx] = next;
   await writeAll(records);
-  await announceResignature(current, next);
+  pendingResignature.set(next, current);
   return next;
 }
 
@@ -1348,7 +1380,7 @@ async function relockWorkOrder(woId, { relockedBy, onSiteQuote = null } = {}, { 
 
   records[idx] = next;
   await writeAll(records);
-  await announceResignature(current, next);
+  pendingResignature.set(next, current);
   return next;
 }
 
@@ -2077,7 +2109,7 @@ async function update(id, patch, { ifMatch = null, systemWrite = false } = {}) {
 
   records[idx] = next;
   await writeAll(records);
-  await announceResignature(current, next);
+  pendingResignature.set(next, current);
   return next;
 }
 
@@ -2699,9 +2731,9 @@ module.exports = {
   workOrderForLeadBooking,
   findProtectedFieldTouched,
   summarizeScopeAdditions,
-  captureSignatureBypass: withStoreLock(captureSignatureBypass),
+  captureSignatureBypass: withStoreLockThenAnnounce(captureSignatureBypass),
   unlockWorkOrder: withStoreLock(unlockWorkOrder),
-  relockWorkOrder: withStoreLock(relockWorkOrder),
+  relockWorkOrder: withStoreLockThenAnnounce(relockWorkOrder),
   recordOfflineQuoteAcceptance: withStoreLock(recordOfflineQuoteAcceptance),
   attachSignedCopyRef: withStoreLock(attachSignedCopyRef),
   appendReportSnapshot: withStoreLock(appendReportSnapshot),
@@ -2713,7 +2745,7 @@ module.exports = {
   listByProperty,
   listByLead,
   create: withStoreLock(create),
-  update: withStoreLock(update),
+  update: withStoreLockThenAnnounce(update),
   completeBackdated: withStoreLock(completeBackdated),
   remove: withStoreLock(remove),
   softDelete: withStoreLock(softDelete),
