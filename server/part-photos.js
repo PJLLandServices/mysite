@@ -66,7 +66,7 @@
 
   function thumbHtml(p) {
     if (p.photoState === "verified" && p.photo) {
-      return `<a class="pp-thumb is-verified" href="${esc(p.photo.large)}" target="_blank" rel="noopener" title="Open full size"><img src="${esc(p.photo.thumb)}" alt="" width="64" height="64" loading="lazy"></a>`;
+      return `<a class="pp-thumb is-verified" href="${esc(p.photo.large)}" target="_blank" rel="noopener" title="Open full size"><img src="${esc(p.photo.thumb)}"${p.photo.thumb2x ? ` srcset="${esc(p.photo.thumb)} 1x, ${esc(p.photo.thumb2x)} 2x"` : ""} alt="" width="64" height="64" loading="lazy"></a>`;
     }
     return `<span class="pp-thumb is-nophoto" title="${esc(STATE_LABEL[p.photoState] || "No photo")}"><span class="pp-noph">${NO_PHOTO_SVG}<span>No photo</span></span></span>`;
   }

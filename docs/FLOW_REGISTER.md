@@ -2,6 +2,21 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-26 (Part photos: tile thumbnails are normalized — the whole part, centred, inside the tile):**
+Found on the FLOW-47 production walk: tall, narrow photos (Hunter Pro-Spray bodies) ran out of the
+64px picker tile. Two fixes, one PR. (1) CSS: the tile image is pinned to the tile, so no image can
+ever leave it (the admin tile would otherwise have CLIPPED a tall part). (2) At Patrick's request
+(Sep 26) the tile no longer shows the raw photo: `normalizeThumbs()` in `lib/part-photos.js` makes a
+square `t160`/`t320` thumbnail — finds the part only when the photo's border is a plain even
+background, keeps its bounding box PLUS an 8% margin of ORIGINAL pixels (so a white fitting's faint
+edge on white is never cut), fits that whole and centred (contain, padded with the photo's own
+background). A busy background is never trimmed. Photos saved before this get their thumbnails made
+on first request (`ensureThumb`). The 480/1200 viewer images stay the untouched photo. The only
+region cut in the module is that plain-background trim (pinned by test). 18 new assertions in
+`test-part-photo-lifecycle.mjs` (81 total), mutation-checked: no margin, trimming a busy background,
+cover instead of contain, and an off-centre trim each fail it. Browser: 16/16 inside-tile
+measurements, desktop + 390px. **FLOW-47 step 3 (picker) must be re-walked after this deploys.**
+
 **2026-09-26 (Part photos M1 — a verified photo in the parts picker, and nothing unverified):**
 Linear P-PJL-35 (PRD/TRD attached there). Patrick checks a part number once and then recognises the
 part by its picture, so the design goal is that a wrong-but-plausible photo can never reach the
