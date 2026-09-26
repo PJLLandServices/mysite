@@ -106,6 +106,14 @@ try {
     if (inv) {
       const link = await srv.api("POST", `/api/invoices/${inv.id}/payment-link`, {});
       ok(link.status === 409 && link.body.code === "needs_pricing", `no pay link while unconfirmed (${link.status} ${link.body.code})`);
+      // Tap to Pay (#304) is a third payment door, after the pay link and
+      // the pay page. It goes through the same on-site rule, so an
+      // unconfirmed price takes no card there either, and Stripe is never asked.
+      const stripeBefore = srv.outbox().filter((m) => m.channel === "stripe" && m.path === "/v1/payment_intents").length;
+      const tap = await srv.api("POST", `/api/invoices/${inv.id}/terminal-intent`, {});
+      ok(tap.status === 409 && tap.body.code === "needs_pricing", `no Tap to Pay charge while unconfirmed (${tap.status} ${tap.body.code})`);
+      ok(srv.outbox().filter((m) => m.channel === "stripe" && m.path === "/v1/payment_intents").length === stripeBefore,
+        "…and no PaymentIntent is created at Stripe");
       const send = await srv.api("POST", `/api/invoices/${inv.id}/send`, {});
       ok(send.status === 409 && send.body.code === "price_unconfirmed", `not sendable while unconfirmed (${send.status} ${send.body.code})`);
       const after = srv.outbox().slice(before);
