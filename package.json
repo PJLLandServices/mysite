@@ -122,7 +122,8 @@
     "test:session-hours-protected": "node scripts/test-session-hours-protected.mjs",
     "test:corrected-hours-on-screen": "node scripts/test-corrected-hours-on-screen.mjs",
     "test:resignature-await": "node scripts/test-resignature-await.mjs",
-    "test:scope-hold-before-reply": "node scripts/test-scope-hold-before-reply.mjs"
+    "test:scope-hold-before-reply": "node scripts/test-scope-hold-before-reply.mjs",
+    "test:daily-records-tab": "node scripts/test-daily-records-tab.mjs"
   },
   "engines": {
     "node": ">=18"
