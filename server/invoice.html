@@ -185,6 +185,18 @@
             <p class="invoice-action-meta" id="invoiceStatusMeta"></p>
           </section>
 
+          <!-- Price to confirm (PJL-96). A closing Patrick prices himself — a
+               custom size (16+ residential, 9+ commercial) or a commercial
+               account without its own price — drafts with a SUGGESTED
+               amount. Until it is confirmed here the invoice can't be
+               sent, paid or texted. Hidden on every other invoice. -->
+          <section class="invoice-action-card" id="invoicePriceConfirmCard" hidden>
+            <span class="invoice-action-label">Price not confirmed</span>
+            <p class="invoice-action-meta" id="invoicePriceConfirmMeta"></p>
+            <button type="button" id="invoicePriceConfirmBtn" class="invoice-action-btn invoice-action-btn--amber">Confirm price</button>
+            <p class="invoice-action-status" id="invoicePriceConfirmStatus"></p>
+          </section>
+
           <!-- Payment ledger (invoice payment ledger, Jul 2026). Records
                money that arrived outside the online pay page — cash on
                site, e-transfer, cheque. The button is hidden on paid and

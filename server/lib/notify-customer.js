@@ -1887,6 +1887,26 @@ async function sendInvoiceReadySMS({ invoiceId, includeSpouse } = {}) {
     return { ok: true, skipped: "already_sent" };
   }
 
+  // PJL-96: an invoice whose price PJL sets is never texted automatically
+  // — not before Confirm price (the number isn't his yet) and not after
+  // (confirming and telling the customer are separate; the office uses
+  // Send). One rule, invoices.isPriceSetByPjl; the cascade doesn't
+  // schedule these, and this catches a record scheduled before the rule.
+  // The history records it once, not every sweep.
+  // The work order awaits the customer's new signature on a revised
+  // scope (invoices.scopeHold): nothing about this invoice goes out yet.
+  if (invoice.scopeHold?.since) return { ok: true, skipped: "awaiting_signature" };
+  if (invoices.isPriceSetByPjl(invoice)) {
+    if (!(invoice.history || []).some((h) => h.action === "customer_sms_not_sent_price_set_by_pjl")) {
+      await invoices.appendHistory(invoiceId, {
+        action: "customer_sms_not_sent_price_set_by_pjl",
+        by: "system",
+        note: "No automatic invoice text — PJL sets this price; the office sends the invoice."
+      });
+    }
+    return { ok: true, skipped: invoices.isPriceUnconfirmed(invoice) ? "price_unconfirmed" : "price_set_by_pjl" };
+  }
+
   // Nothing to pay — never text "your invoice is ready" for $0
   // (fall-closing fix #8). The completion cascade no longer drafts a $0
   // invoice, but one can still be made by hand.
@@ -2160,6 +2180,13 @@ async function sendInvoiceReminderSMS({ invoiceId, force, includeSpouse } = {}) 
   }
   if (invoice.status === "paid") {
     return { ok: false, error: "paid" };
+  }
+  // PJL-96: nothing to chase while Patrick has not confirmed the price.
+  if (invoice.scopeHold?.since) {
+    return { ok: false, error: "awaiting_signature" };
+  }
+  if (invoices.isPriceUnconfirmed(invoice)) {
+    return { ok: false, error: "price_unconfirmed" };
   }
 
   // Rate limit — minimum 1 hour between reminders, computed from the
@@ -2470,6 +2497,7 @@ async function sendInvoiceJunkMailWarningSMS({ invoiceId, force, includeSpouse }
 
   if (invoice.status === "void") return { ok: false, error: "voided" };
   if (invoice.status === "paid") return { ok: false, error: "paid" };
+  if (invoices.isPriceUnconfirmed(invoice)) return { ok: false, error: "price_unconfirmed" };
 
   if (!force) {
     // Redundancy with the auto-fire "invoice ready" SMS — if it landed

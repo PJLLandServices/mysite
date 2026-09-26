@@ -85,13 +85,27 @@ export async function bootServer({ port, env = {} } = {}) {
     async login({ role = "admin" } = {}) {
       const users = srv.lib("users.js");
       const email = `${role}-${Date.now()}@pjl.test`;
-      await users.create({ email, name: `Test ${role}`, role, password: "field-test-12345" });
-      const r = await fetch(`${BASE}/api/login`, {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email, password: "field-test-12345" })
-      });
-      cookie = (r.headers.getSetCookie?.() || []).map((c) => c.split(";")[0]).join("; ");
-      return r.status;
+      // The user is written from THIS process while the server process may
+      // still be creating its own empty users.json at boot (users.js
+      // ensureFile is check-then-write, not atomic across processes), which
+      // can wipe the record just written. So re-create it if it's gone and
+      // retry, and fail loudly: a silent 401 here surfaced later as
+      // "CRM login required" on an unrelated call.
+      let status = 0;
+      for (let attempt = 0; attempt < 5 && status !== 200; attempt++) {
+        if (attempt) await new Promise((r) => setTimeout(r, 150));
+        if (!(await users.getByEmail(email).catch(() => null))) {
+          await users.create({ email, name: `Test ${role}`, role, password: "field-test-12345" });
+        }
+        const r = await fetch(`${BASE}/api/login`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email, password: "field-test-12345" })
+        });
+        status = r.status;
+        cookie = (r.headers.getSetCookie?.() || []).map((c) => c.split(";")[0]).join("; ");
+      }
+      if (status !== 200) throw new Error(`test login failed (HTTP ${status})`);
+      return status;
     },
     async api(method, p, body, headers = {}) {
       const r = await fetch(BASE + p, {
