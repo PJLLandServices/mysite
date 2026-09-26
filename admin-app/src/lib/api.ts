@@ -231,3 +231,98 @@ export const projectsApi = {
       siteBuilderSummary?: SiteBuilderSummary | null;
     }>(`/api/projects/${encodeURIComponent(id)}`)
 };
+
+/* ---- Daily Records -------------------------------------------------
+ *
+ * Every figure here is calculated on the server (lib/daily-records.js
+ * over lib/session-hours.js). The screen renders these; it never works
+ * out hours of its own. On a screen where every number is money, a
+ * second opinion in React is a second answer.
+ */
+
+export interface SessionTimes {
+  inAt: string | null;
+  outAt: string | null;
+  labourersOnSite: number;
+}
+
+export interface SessionCorrection {
+  at: string | null;
+  by: string | null;
+  reason: string;
+  field: string | null;
+  from: string | number | null;
+  to: string | number | null;
+}
+
+export interface DailySession {
+  id: string;
+  startedBy: string | null;
+  note: string;
+  open: boolean;
+  corrected: boolean;
+  /* Which fields moved, so the clock and the crew count are marked
+     independently rather than flagging the whole row. */
+  correctedFields: string[];
+  recorded: SessionTimes;   // what the crew logged
+  effective: SessionTimes;  // what bills
+  corrections: SessionCorrection[];
+  personHours: number;
+  recordedPersonHours: number;
+}
+
+export interface DailyRecordDay {
+  woId: string;
+  workDate: string | null;
+  locked: boolean;
+  /* The server decides whether a correction is allowed and supplies the
+     sentence saying why not — it depends on the work order's signature
+     state, and a greyed-out button with no explanation is how somebody
+     concludes the system is broken. */
+  canCorrect: boolean;
+  lockReason: string | null;
+  signedOff: boolean;
+  sessions: DailySession[];
+  personHours: number;
+  recordedPersonHours: number;
+  hoursCorrected: boolean;
+  anyCorrection: boolean;
+  openSession: boolean;
+  notes: string;
+  tasksDoneToday: number;
+  materialsUsed: number;
+  photoCount: number;
+}
+
+export interface DailyRecords {
+  days: DailyRecordDay[];
+  totalPersonHours: number;
+  daysLogged: number;
+  correctedDays: number;
+}
+
+export const dailyRecordsApi = {
+  get: (projectId: string) =>
+    api.get<DailyRecords>(`/api/projects/${encodeURIComponent(projectId)}/daily-records`),
+
+  /* An office correction to a session's clock. A reason is required —
+     the server refuses without one, and so does the form, so nobody
+     discovers the rule only after typing the times. */
+  correctTimes: (
+    woId: string,
+    sessionId: string,
+    body: { inAt?: string; outAt?: string; reason: string }
+  ) =>
+    api.patch<{ ok: boolean }>(
+      `/api/work-orders/${encodeURIComponent(woId)}/sessions/${encodeURIComponent(sessionId)}/times`,
+      body
+    ),
+
+  /* The crew count. Same treatment: the original survives, the
+     correction is stamped with who, when and why. */
+  correctLabourers: (woId: string, sessionId: string, body: { count: number; reason: string }) =>
+    api.patch<{ ok: boolean }>(
+      `/api/work-orders/${encodeURIComponent(woId)}/sessions/${encodeURIComponent(sessionId)}/labourers`,
+      body
+    )
+};

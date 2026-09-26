@@ -1305,7 +1305,10 @@
           .catch(() => null))
       );
       state.exec.buildWos = all
-        .map((d) => d?.workOrder)
+        // personHours is a SIBLING of workOrder in the response, not a
+        // field on it — carry it across or the day list silently reads
+        // 0.00 hours for every day.
+        .map((d) => (d?.workOrder ? { ...d.workOrder, personHours: d.personHours } : null))
         .filter((w) => w && w.type === "build")
         .sort((a, b) => String(b.dailyLog?.workDate || b.createdAt).localeCompare(String(a.dailyLog?.workDate || a.createdAt)));
     } catch (err) { console.warn("[buildWos] load failed:", err?.message); }
@@ -1335,12 +1338,12 @@
     list.innerHTML = wos.map((w) => {
       const dl = w.dailyLog || {};
       const sessions = Array.isArray(dl.sessions) ? dl.sessions : [];
-      let totalH = 0;
-      for (const s of sessions) {
-        if (!s.inAt) continue;
-        const out = s.outAt || new Date().toISOString();
-        totalH += (new Date(out) - new Date(s.inAt)) / 3600000 * (Number(s.labourersOnSite) || 1);
-      }
+      // The server calculates this (GET /api/work-orders/:id → personHours,
+      // from lib/session-hours.js). This page used to run its own copy of
+      // the loop, which meant a third answer to "how many hours" and the
+      // only one that could not see an office correction. Read, never
+      // re-derive.
+      const totalH = Number(w.personHours) || 0;
       const dateStr = dl.workDate ? new Date(dl.workDate + "T12:00:00").toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }) : "—";
       const tasksToday = (dl.tasksCompletedToday || []).length;
       const matsToday = (dl.materialsConsumed || []).length;

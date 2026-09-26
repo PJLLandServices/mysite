@@ -163,7 +163,7 @@ const TEMPLATES = {
       "Hi {firstName}, your PJL Land Services {serviceLabel} has been moved to {dateStr} at {timeStr}. " +
       "Your work order ({workOrderId}) is up to date in your portal. " +
       "If this new time doesn't work, call (905) 960-0181 — we'll find another slot.",
-    sms: "{namePrefix}your PJL appointment moved to {dateStr} at {timeStr}. WO {workOrderId}. Details: {portalUrl}. Different time? Call or text (905) 960-0181 (this number is automated)"
+    sms: "{namePrefix}your PJL appointment moved to {dateStr} at {timeStr}. WO {workOrderId}. Details: {portalUrl}. Different time? Call or text (905) 960-0181 (please don't reply to this automated text)"
   },
   // Day-before reminder for SELF-BOOKED appointments (Patrick,
   // 2026-09-02: assignment customers get a D−1 text from the cadence;
@@ -178,7 +178,7 @@ const TEMPLATES = {
       "Hi {firstName}, a friendly reminder that PJL Land Services comes tomorrow, {dateStr}, " +
       "for your {serviceLabel} — {timeStr}. Please make sure we can reach what we need to. " +
       "If anything has changed, call or text (905) 960-0181.",
-    sms: "{namePrefix}reminder: PJL comes tomorrow ({dateStr}) for your {serviceLabel} — {timeStr}. Anything changed? Call or text (905) 960-0181 (this number is automated). Details: {portalUrl}"
+    sms: "{namePrefix}reminder: PJL comes tomorrow ({dateStr}) for your {serviceLabel} — {timeStr}. Anything changed? Call or text (905) 960-0181 (please don't reply to this automated text). Details: {portalUrl}"
   },
   // "First available" — the customer joined the open bucket instead of
   // picking a day. No date exists yet, so no {dateStr}/{timeStr}; the
@@ -204,7 +204,7 @@ const TEMPLATES = {
       "Hi {firstName}, this is PJL Land Services. Patrick is on his way to your property for your " +
       "{serviceLabel}. We'll see you soon — if you need to flag anything (gate codes, dogs, parking), " +
       "just call or text (905) 960-0181.",
-    sms: "{namePrefix}PJL is on the way for your {serviceLabel}. See you soon. Questions? Call or text (905) 960-0181 (this number is automated)"
+    sms: "{namePrefix}PJL is on the way for your {serviceLabel}. See you soon. Questions? Call or text (905) 960-0181 (please don't reply to this automated text)"
   }
 };
 
@@ -1512,7 +1512,11 @@ async function sendOutreachEmail({
   // Without it an outreach failure is an address and nothing else, which
   // is not enough to make good on it.
   refId = "",
-  resendOf = ""
+  resendOf = "",
+  // The footer's "or reply to this email". Seasonal outreach keeps it;
+  // the appointment cadence turns it off, because a reply there does NOT
+  // confirm the appointment and the body now says so (2026-09-26).
+  invitesReply = true
 }) {
   const transporter = getTransporter();
   if (!transporter) {
@@ -1570,7 +1574,7 @@ async function sendOutreachEmail({
     ${bodyHtml}
     ${portalLink ? `<p style="margin: 0 0 18px;"><a href="${escapeHtml(portalLink)}" style="display: inline-block; padding: 11px 20px; background: #E07B24; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600;">${escapeHtml(ctaLabel)}</a></p>` : ""}
     <p style="margin: 24px 0 0; font-size: 13px; color: #777;">
-      Questions? Call <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a> or reply to this email.
+      Questions? Call${invitesReply ? "" : " or text"} <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a>${invitesReply ? " or reply to this email" : ""}.
     </p>
     ${footerHtml}
   </div>

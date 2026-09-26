@@ -41,6 +41,7 @@ const crypto = require("node:crypto");
 
 const FILE = path.join(__dirname, "..", "data", "work-orders.json");
 const { writeJsonAtomic, serialize, parseJsonArrayStore } = require("./atomic-json");
+const sessionHours = require("./session-hours");
 const EventEmitter = require("node:events");
 
 // "resignature" fires with the saved WO whenever awaitsNewSignature(wo)
@@ -48,9 +49,56 @@ const EventEmitter = require("node:events");
 // listens once and holds or releases the WO's invoice (invoices.scopeHold),
 // so no scope-editing route can forget to.
 const events = new EventEmitter();
-function announceResignature(before, after) {
+
+// AWAITED, deliberately. `events.emit()` calls each listener
+// synchronously but does NOT wait for the promise a listener returns —
+// so the original `emit` here started the invoice-hold write and
+// returned immediately, and the route replied to the client before the
+// hold existed on disk. On a fast machine the write usually won that
+// race; under load it lost, and for that window an invoice the system
+// had just reported as held was still payable.
+//
+// That is the defect this replaces. Patrick: "The system must never
+// report that an invoice hold was applied before the hold actually
+// exists."
+//
+// So: collect what the listeners return and await it. A listener that
+// returns nothing costs nothing; one that returns a promise is now part
+// of the write.
+//
+// A FAILED hold is propagated, not logged and swallowed. A swallowed
+// failure reports success with no hold, which breaks the same rule the
+// race did — just less often, which is worse, not better. The work
+// order itself is already written by the time this runs, so the caller
+// sees an error against an edit that landed; that is recoverable and
+// safe to retry, because setScopeHold() is idempotent (it returns early
+// when the hold is already in the state asked for). Silently leaving an
+// invoice unheld is neither.
+// The transition a mutator saw, handed to the wrapper below so the
+// announcement runs AFTER this store's lock is released.
+//
+// WHY NOT JUST AWAIT IT IN PLACE. Because that would hold two store
+// locks at once, and atomic-json's withStoreLocks() says in as many
+// words why that is unsafe: "Acquired in a fixed (sorted) order; no lib
+// mutator ever holds two, so no deadlock." Sorted order puts
+// invoices.json BEFORE work-orders.json, so the property merge takes
+// invoices first and work-orders second. A mutator here that held
+// work-orders and then reached for invoices would be the exact reverse
+// — and the two together deadlock: the merge waiting for work-orders,
+// the mutator waiting for invoices, neither ever letting go.
+//
+// Keyed by the returned object rather than by id, so two concurrent
+// writes to the same work order cannot collect each other's
+// transition, and nothing is added to what gets persisted.
+const pendingResignature = new WeakMap();
+
+async function announceResignature(before, after) {
   if (awaitsNewSignature(before) === awaitsNewSignature(after)) return;
-  try { events.emit("resignature", after); } catch (err) { console.warn("[resign] listener failed:", err?.message); }
+  const pending = [];
+  for (const listener of events.listeners("resignature")) {
+    pending.push(listener(after));   // sync throws reject the await below
+  }
+  await Promise.all(pending);
 }
 
 const TEMPLATES = {
@@ -232,6 +280,20 @@ async function writeAll(records) {
   await writeJsonAtomic(FILE, records);
 }
 const withStoreLock = (fn) => (...args) => serialize(FILE, () => fn(...args));
+
+// Same, for the mutators that must publish the invoice hold. The write
+// happens under this store's lock; the hold is written once that lock is
+// released and BEFORE the caller is resolved — so a route still cannot
+// reply ahead of the hold, and no two store locks are ever held at once.
+const withStoreLockThenAnnounce = (fn) => async (...args) => {
+  const result = await serialize(FILE, () => fn(...args));
+  if (result && pendingResignature.has(result)) {
+    const before = pendingResignature.get(result);
+    pendingResignature.delete(result);
+    await announceResignature(before, result);
+  }
+  return result;
+};
 
 // ---- Helpers ---------------------------------------------------------
 
@@ -1172,7 +1234,7 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy }, { ip, 
 
   records[idx] = next;
   await writeAll(records);
-  announceResignature(current, next);
+  pendingResignature.set(next, current);
   return next;
 }
 
@@ -1318,7 +1380,7 @@ async function relockWorkOrder(woId, { relockedBy, onSiteQuote = null } = {}, { 
 
   records[idx] = next;
   await writeAll(records);
-  announceResignature(current, next);
+  pendingResignature.set(next, current);
   return next;
 }
 
@@ -2047,7 +2109,7 @@ async function update(id, patch, { ifMatch = null, systemWrite = false } = {}) {
 
   records[idx] = next;
   await writeAll(records);
-  announceResignature(current, next);
+  pendingResignature.set(next, current);
   return next;
 }
 
@@ -2273,7 +2335,52 @@ async function endSession(woId, sessionId, { by = "admin" } = {}) {
   return { workOrder: wo, session: sess };
 }
 
-async function setLabourersForSession(woId, sessionId, count, note = "", { by = "admin" } = {}) {
+// ---- Office corrections to a field record -------------------------
+//
+// Patrick's rule, verbatim: "Preserve the original value. Record the
+// corrected value, who changed it, when and why. Calculate billing from
+// the effective corrected value. Never represent an office correction as
+// a new field work session."
+//
+// So a correction never invents a session and never quietly replaces a
+// number. It stamps session.original ONCE — the field's own answer,
+// frozen — and appends to session.corrections, which is append-only.
+// The live field carries the effective value so every reader, including
+// ones written before this existed, bills the corrected figure.
+//
+// Why original is stamped once and not per-field: "the original" means
+// what the crew recorded, not what the last correction happened to
+// overwrite. Correcting the count twice must still show the count the
+// technician entered on site.
+function _stampCorrection(wo, sess, { field, from, to, by, reason, ts }) {
+  if (!sess.original) {
+    sess.original = {
+      inAt: sess.inAt ?? null,
+      outAt: sess.outAt ?? null,
+      labourersOnSite: Math.max(1, Math.floor(Number(sess.labourersOnSite) || 1))
+    };
+  }
+  const entry = {
+    at: ts,
+    by: String(by || "admin").slice(0, 80),
+    reason: String(reason || "").slice(0, 400),
+    field,
+    from: from ?? null,
+    to: to ?? null
+  };
+  sess.corrections = [...(sess.corrections || []), entry];
+  // The WO history gets its own line so the audit trail reads in order
+  // alongside every other change to this work order.
+  wo.history.push({
+    ts,
+    action: "session_corrected",
+    by,
+    note: `${sess.id} ${field}: ${from ?? "(none)"} → ${to ?? "(none)"}${entry.reason ? " — " + entry.reason : ""}`
+  });
+  return entry;
+}
+
+async function setLabourersForSession(woId, sessionId, count, note = "", { by = "admin", reason = "" } = {}) {
   const records = await readAll();
   const idx = records.findIndex((w) => w.id === woId);
   if (idx === -1) throw Object.assign(new Error("Work order not found."), { code: "wo_not_found" });
@@ -2283,16 +2390,115 @@ async function setLabourersForSession(woId, sessionId, count, note = "", { by = 
   if (!sess) throw Object.assign(new Error("Session not found."), { code: "session_not_found" });
   const safeCount = Math.max(1, Math.floor(Number(count) || 1));
   const ts = new Date().toISOString();
+  const previous = Math.max(1, Math.floor(Number(sess.labourersOnSite) || 1));
+
+  // A correction is a CHANGE. Re-sending the same count from the field
+  // app (or a double tap) must not manufacture an audit entry claiming
+  // somebody corrected something — a log full of 3 → 3 is how a real
+  // correction gets lost.
+  const corrections = [];
+  if (safeCount !== previous) {
+    corrections.push(_stampCorrection(wo, sess, {
+      field: "labourersOnSite", from: previous, to: safeCount, by, reason: reason || note, ts
+    }));
+  }
   sess.labourersOnSite = safeCount;
   if (typeof note === "string") sess.labourerNote = note.slice(0, 400);
+
+  // The original line stays in history regardless, so nothing that reads
+  // for "session_labourers_set" today stops working.
   wo.history.push({
     ts, action: "session_labourers_set", by,
-    note: `${sessionId} count=${safeCount}${note ? " — " + note : ""}`
+    note: `${sessionId} count=${safeCount} (was ${previous})${note ? " — " + note : ""}`
   });
   wo.updatedAt = ts;
   records[idx] = wo;
   await writeAll(records);
   return wo;
+}
+
+// Fix a wrong clock-in or clock-out. Until now there was NO way to do
+// this: a technician who forgot to clock out at 3pm and remembered at
+// 7pm left four phantom person-hours on a T&M invoice, and the only
+// remedy was editing the JSON by hand.
+//
+// Refusals are deliberate and loud, because every one of them is an
+// invoice that would otherwise be wrong in a way nobody notices:
+//   - no reason                → you cannot audit "why" later
+//   - locked work order        → already invoiced; reopen it instead
+//   - out before in            → negative hours
+//   - either time in the future → nobody worked tomorrow
+//   - over 24h                 → a year or month typed wrong, which
+//                                bills thousands of hours
+async function correctSessionTimes(woId, sessionId, { inAt = null, outAt = null, reason = "", by = "admin" } = {}) {
+  const cleanReason = String(reason || "").trim();
+  if (cleanReason.length < 3) {
+    throw Object.assign(new Error("A reason is required for a clock-time correction."), { code: "reason_required" });
+  }
+  if (inAt == null && outAt == null) {
+    throw Object.assign(new Error("Supply a corrected clock-in time, clock-out time, or both."), { code: "nothing_to_correct" });
+  }
+
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) throw Object.assign(new Error("Work order not found."), { code: "wo_not_found" });
+  const wo = records[idx];
+  _requireBuild(wo); // also refuses a locked (invoiced) work order
+  const sess = (wo.dailyLog.sessions || []).find((s) => s.id === sessionId);
+  if (!sess) throw Object.assign(new Error("Session not found."), { code: "session_not_found" });
+
+  const ts = new Date().toISOString();
+  const nowMs = Date.parse(ts);
+
+  const parse = (value, label) => {
+    const ms = Date.parse(value);
+    if (!Number.isFinite(ms)) {
+      throw Object.assign(new Error(`${label} is not a valid date and time.`), { code: "bad_timestamp" });
+    }
+    if (ms > nowMs + 60000) { // a minute of clock skew, not a workday
+      throw Object.assign(new Error(`${label} is in the future.`), { code: "future_timestamp" });
+    }
+    return new Date(ms).toISOString();
+  };
+
+  const nextIn = inAt == null ? sess.inAt : parse(inAt, "Clock-in");
+  const nextOut = outAt == null ? sess.outAt : parse(outAt, "Clock-out");
+
+  if (!nextIn) {
+    throw Object.assign(new Error("This session has no clock-in time to correct against."), { code: "bad_timestamp" });
+  }
+  if (nextOut) {
+    const spanMs = Date.parse(nextOut) - Date.parse(nextIn);
+    if (spanMs <= 0) {
+      throw Object.assign(new Error("Clock-out must be after clock-in."), { code: "inverted_times" });
+    }
+    if (spanMs / sessionHours.MS_PER_HOUR > sessionHours.MAX_SESSION_HOURS) {
+      throw Object.assign(
+        new Error(`That session would be longer than ${sessionHours.MAX_SESSION_HOURS} hours. Check the date.`),
+        { code: "implausible_duration" }
+      );
+    }
+  }
+
+  const applied = [];
+  if (inAt != null && nextIn !== sess.inAt) {
+    applied.push(_stampCorrection(wo, sess, { field: "inAt", from: sess.inAt, to: nextIn, by, reason: cleanReason, ts }));
+    sess.inAt = nextIn;
+  }
+  if (outAt != null && nextOut !== sess.outAt) {
+    applied.push(_stampCorrection(wo, sess, { field: "outAt", from: sess.outAt, to: nextOut, by, reason: cleanReason, ts }));
+    sess.outAt = nextOut;
+  }
+  if (!applied.length) {
+    // Nothing actually moved. Say so rather than writing an audit entry
+    // for a correction that corrected nothing.
+    return { workOrder: wo, session: sess, corrections: [], changed: false };
+  }
+
+  wo.updatedAt = ts;
+  records[idx] = wo;
+  await writeAll(records);
+  return { workOrder: wo, session: sess, corrections: applied, changed: true };
 }
 
 // Mark a task done in today's daily log. ALSO flips the project's
@@ -2525,9 +2731,9 @@ module.exports = {
   workOrderForLeadBooking,
   findProtectedFieldTouched,
   summarizeScopeAdditions,
-  captureSignatureBypass: withStoreLock(captureSignatureBypass),
+  captureSignatureBypass: withStoreLockThenAnnounce(captureSignatureBypass),
   unlockWorkOrder: withStoreLock(unlockWorkOrder),
-  relockWorkOrder: withStoreLock(relockWorkOrder),
+  relockWorkOrder: withStoreLockThenAnnounce(relockWorkOrder),
   recordOfflineQuoteAcceptance: withStoreLock(recordOfflineQuoteAcceptance),
   attachSignedCopyRef: withStoreLock(attachSignedCopyRef),
   appendReportSnapshot: withStoreLock(appendReportSnapshot),
@@ -2539,7 +2745,7 @@ module.exports = {
   listByProperty,
   listByLead,
   create: withStoreLock(create),
-  update: withStoreLock(update),
+  update: withStoreLockThenAnnounce(update),
   completeBackdated: withStoreLock(completeBackdated),
   remove: withStoreLock(remove),
   softDelete: withStoreLock(softDelete),
@@ -2553,6 +2759,7 @@ module.exports = {
   startSession: withStoreLock(startSession),
   endSession: withStoreLock(endSession),
   setLabourersForSession: withStoreLock(setLabourersForSession),
+  correctSessionTimes: withStoreLock(correctSessionTimes),
   markTaskDoneToday: withStoreLock(markTaskDoneToday),
   unmarkTaskDoneToday: withStoreLock(unmarkTaskDoneToday),
   addTaskProgressToday: withStoreLock(addTaskProgressToday),

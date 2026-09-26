@@ -294,9 +294,18 @@ ok("the messages module never calls sendBulk",
   ok("…and so do the follow-up and 24-hour reminder texts",
     list.followup_sms.source === "default" && list.reminder24_sms.source === "default");
   ok("…the reminder now says the number is automated", /automated/.test(list.reminder24_sms.body));
-  ok("saved EMAIL wording is left exactly as it was",
-    list.assignment_email.source === "custom" && list.assignment_email.body === "Patrick's email {appointmentLink}");
+  // The emails got the same one-time treatment a day later (2026-09-26):
+  // "tap the button and press Confirm" had to reach customers too.
+  ok("saved EMAIL wording from the original setup gives way to the new default",
+    list.assignment_email.source === "default" && /press Confirm/.test(list.assignment_email.body), list.assignment_email.source);
   const disk = JSON.parse(fs.readFileSync(store, "utf8"));
+  ok("…and the old email wording is kept as a backup too",
+    Object.entries(disk._retired || {}).some(([k, v]) => k.startsWith("assignment_email@") && v.body === "Patrick's email {appointmentLink}"));
+  ok("…with its own marker, so it runs once", Boolean(disk._migrations?.confirmByTextEmails_2026_09_26));
+  fresh.setTemplate("assignment_email", { subject: "Later subject {date}", body: "Later email {appointmentLink}" }, { actor: "patrick" });
+  const againEmail = fresh.retireOldEmailWording(JSON.parse(fs.readFileSync(store, "utf8")));
+  ok("…and email wording saved afterwards is kept",
+    againEmail.changed === false && againEmail.store.assignment_email?.body === "Later email {appointmentLink}");
   ok("the old text wording is kept as a backup, not deleted",
     Object.entries(disk._retired || {}).some(([k, v]) => k.startsWith("assignment_sms@") && v.body === OLD_SMS));
   ok("the step is marked done on disk", Boolean(disk._migrations?.replyYesTexts_2026_09_25));
@@ -311,6 +320,41 @@ ok("the messages module never calls sendBulk",
   const none = fresh.retireOldTextWording({});
   ok("with no saved wording the step retires nothing", none.retired.length === 0);
   fs.rmSync(SB2, { recursive: true, force: true });
+}
+
+// ---- TWO ways to confirm; an email reply isn't one (Patrick, 2026-09-26) --
+//
+// Confirm on the link, or reply YES to the text. Customers replied
+// "confirmed" to the EMAIL and kept getting reminders, because nothing
+// reads the inbox. Every asking message names a way that works, and no
+// email invites a reply.
+{
+  const ctx = messages.contextForBooking({
+    customerName: "Frank Mazzuca", address: "67 Kirkbride Crescent, Newmarket, ON",
+    scheduledFor: new Date(2026, 9, 6, 8, 15).toISOString(), serviceKey: "fall_close_4z",
+    assignment: { bucket: "morning" }
+  }, { appointmentLink: "https://www.pjllandservices.com/a/abcdefghijklmnopqrstuvwx", oldDate: "Monday, October 5" });
+  const asking = ["assignment", "followup", "nudge", "daymove"];
+  for (const t of asking) {
+    const email = messages.render(`${t}_email`, { ...ctx }).body;
+    ok(`${t}_email tells them to press Confirm or reply YES to the text`,
+      /press Confirm/.test(email) && /reply YES to our text/.test(email), email.slice(0, 200));
+    ok(`${t}_email says a reply to the email doesn't confirm`, /replying to this email does not confirm/i.test(email));
+    ok(`${t}_email never invites a reply to the email`, !/reply to this email/i.test(messages.DEFAULT_TEMPLATES[`${t}_email`].body));
+    const sms = messages.render(`${t}_sms`, { ...ctx }).body;
+    ok(`${t}_sms offers reply YES`, /reply YES/i.test(sms), sms.slice(0, 200));
+  }
+  const reminder = messages.render("reminder24_sms", { ...ctx }).body;
+  ok("the 24-hour reminder no longer reads as if Patrick's own number were automated",
+    !/960-0181 \(this number is automated\)/.test(reminder) && /don't reply to this automated message/.test(reminder), reminder);
+  ok("no template references a merge field that doesn't exist",
+    Object.values(messages.DEFAULT_TEMPLATES).every((t) =>
+      [...`${t.subject || ""} ${t.body}`.matchAll(/\{([a-zA-Z0-9_]+)\}/g)].every((m) => m[1] in messages.MERGE_FIELDS)));
+
+  // The email footer: appointment emails no longer say "or reply to this email".
+  const cadenceSrc = fs.readFileSync(path.join(ROOT, "server/lib/assignment-cadence.js"), "utf8");
+  ok("both cadence email sends turn the footer's 'reply to this email' off",
+    (cadenceSrc.match(/invitesReply: false/g) || []).length === 2);
 }
 
 // ---- Report ----------------------------------------------------------
