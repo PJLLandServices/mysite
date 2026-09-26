@@ -71,6 +71,24 @@
 
     <main class="proj-shell">
       <a class="proj-back" href="/admin/projects">&larr; All projects</a>
+
+      <!-- Workspace handoff (2026-09-26) ------------------------------
+           Patrick, after walking the Tasks release: "You were sent back
+           to an unchanged classic screen with no indication that the new
+           Tasks interface lives somewhere else."
+           Exactly right, and it was the predictable cost of building the
+           replacement beside the original without signposting it. This
+           page is still the complete one — six of the workspace's nine
+           tabs are placeholders — so the classic page stays the default
+           and this band says plainly what has moved and where.
+           The link is filled in by project.js once the id is known. -->
+      <aside class="proj-workspace-band" id="projWorkspaceBand" hidden>
+        <div class="proj-workspace-band-text">
+          <strong>The rebuilt workspace has this job's Tasks and System Design.</strong>
+          <span>Partial task progress, person-hours and the saved plan live there — this page shows tasks as done or not done.</span>
+        </div>
+        <a class="pjl-btn pjl-btn-primary proj-workspace-band-btn" id="projWorkspaceLink" href="#">Open Project Workspace</a>
+      </aside>
       <p class="proj-loading" id="projLoading">Loading…</p>
       <p class="proj-error" id="projError" role="alert" hidden></p>
 
@@ -227,6 +245,11 @@
           <summary><h2>Tasks</h2><span class="proj-tasks-progress" id="projTasksProgress"></span></summary>
           <div class="proj-section-head">
             <button type="button" class="pjl-btn pjl-btn-outline" id="projAddTaskBtn">+ Add task</button>
+            <!-- This list shows a task as done or not done. It CANNOT show
+                 a task at 60%, which is what sent Patrick looking for a
+                 change that had shipped somewhere else. Say so here, at
+                 the exact spot the difference shows. -->
+            <a class="proj-tasks-workspace" id="projTasksWorkspaceLink" href="#">Open in the workspace for partial progress &rarr;</a>
           </div>
           <ul class="proj-task-list" id="projTaskList"></ul>
         </details>

@@ -17,6 +17,7 @@
     "test:task-two-doors": "node scripts/test-task-two-doors.mjs",
     "test:task-history-protected": "node scripts/test-task-history-protected.mjs",
     "test:tasks-tab": "node scripts/test-tasks-tab.mjs",
+    "test:workspace-handoff": "node scripts/test-workspace-handoff.mjs",
     "sync:seasonal-meta": "node scripts/sync-seasonal-meta.mjs",
     "sync:seasonal-meta:check": "node scripts/sync-seasonal-meta.mjs --check",
     "sync:meta-prices": "node scripts/sync-meta-prices.mjs",

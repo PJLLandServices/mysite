@@ -2,6 +2,39 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-26 (A shipped change that looked like nothing happened — the classic page now says where the new one is):**
+Patrick walked the Tasks release, landed on `/admin/project/<id>`, and saw no change: *"It is still the
+classic project page, and it cannot display partial task progress — only checked or unchecked... we
+failed to make the transition obvious. You were sent back to an unchanged classic screen with no
+indication that the new Tasks interface lives somewhere else."*
+
+He was right, and it is a defect in the TRANSITION, not in either screen. Two pages for one job, both
+live, neither mentioning the other — so every natural link went to the older one and #307's work was
+invisible. Verified on the real deploy: `/app/projects/PROJ-2026-0008/tasks` showed 75% / 50% / 75%,
+31% overall, 3 of 16, 12.21 person-hours, while the classic page drew the same tasks as unticked boxes.
+
+**Why the classic page stays the default:** six of the workspace's nine tabs are still placeholders.
+Redirecting every project click there today would trade this confusion for a worse one — Materials
+would be a stub where the classic page has the real list. So the classic page keeps its job and gains
+a signpost; the default moves when the tabs are real. The band is deliberately loud (brand band above
+the job, filled primary button) because a quiet link is what it effectively had before.
+
+Two pointers, at the two places the reader actually is: a **workspace band** above the job header
+naming what moved, and a line in the **Tasks panel itself** — "Open in the workspace for partial
+progress" — because that list can say done or not done and nothing in between, which is exactly what
+sent him looking. Both carry the job's own id; a handoff to a generic index would be worse than none.
+
+`scripts/test-workspace-handoff.mjs` (20 assertions, `npm run test:workspace-handoff`, Playwright,
+opt-in) drives the real classic page on a real job with a 75% task: the band exists and is above the
+fold, both links carry that job, clicking lands on a workspace that renders it, the Tasks link reaches
+the tab reading **38%** where the classic page would say 0 of 2, the way back to classic survives, and
+the band neither overflows nor hides its button at 390px.
+
+**Noted, not fixed here:** `scripts/test-project-nav-and-density.mjs` has 4 pre-existing failures in
+its Part B (`#sbBackLink` not found under its fully-mocked route table). Confirmed identical against
+the pre-#302 `sitebuilder.html`, so it is not a regression from the workspace route — it is a stale
+harness in an opt-in suite, and fixing it does not belong in a navigation change.
+
 **2026-09-25 (Confirm visibly confirms; texts to the Twilio number are heard):** Two customers
 (Greg Davis, Behnaz) phoned Patrick saying "Confirm this appointment" didn't work, and customers
 were replying YES to the automated text from the unmonitored 647 number. PRD/TRD:
