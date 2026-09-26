@@ -395,7 +395,7 @@
     const desc = escapeHtml(part.description || part.sku);
     if (hasVerifiedPhoto(part)) {
       return `<button type="button" class="mlb-thumb is-verified" data-action="photo" aria-label="View larger photo of ${desc}" title="Verified photo">
-          <img src="${escapeHtml(part.photo.thumb)}" alt="" width="64" height="64" loading="lazy" decoding="async">
+          <img src="${escapeHtml(part.photo.thumb)}"${part.photo.thumb2x ? ` srcset="${escapeHtml(part.photo.thumb)} 1x, ${escapeHtml(part.photo.thumb2x)} 2x"` : ""} alt="" width="64" height="64" loading="lazy" decoding="async">
           <span class="mlb-thumb-badge">${ICON_CHECK}</span>
         </button>`;
     }
