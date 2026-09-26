@@ -803,11 +803,20 @@
   align-self: center;
   touch-action: manipulation;
 }
+/* Pinned to the tile's own box. As a grid item with a percentage height
+   in an auto-sized row, the image fell back to its natural height, so a
+   tall part (a Pro-Spray body) ran out of the tile. Absolute inset gives
+   it a definite 64x64 box; contain then shows the WHOLE part, centred,
+   never cropped. */
 .mlb-thumb img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
+  box-sizing: border-box;
   padding: 5px;
   object-fit: contain;
+  object-position: center;
   border-radius: inherit;
   display: block;
 }
@@ -903,14 +912,18 @@
 .mlb-pv-close:hover { border-color: #2D6A42; }
 .mlb-pv-close svg { width: 20px; height: 20px; }
 .mlb-pv-stage {
-  display: grid;
-  place-items: center;
+  /* Flex with a definite height, so max-height: 100% on the image has
+     something to resolve against (grid's auto row did not). */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
   height: min(56vh, 460px);
   padding: 18px;
   border-bottom: 1px solid #E2E0D4;
   background: #fff;
 }
-.mlb-pv-stage img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+.mlb-pv-stage img { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; display: block; }
 .mlb-pv-stage.is-empty {
   height: 200px;
   background: repeating-linear-gradient(135deg, #F3F1E8 0 10px, #FBFAF5 10px 20px);
