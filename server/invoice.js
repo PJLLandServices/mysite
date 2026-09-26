@@ -1749,7 +1749,58 @@ render = function (inv) {
   renderPaymentsTable(inv);
   renderPaymentCard(inv);
   renderReviseCard(inv);
+  renderPriceConfirmCard(inv);
 };
+
+// ---- Price to confirm (PJL-96) -------------------------------------------
+// The server decides (invoice.priceUnconfirmed); this only shows it. The
+// suggestion and its arithmetic are staff-only — they never reach the
+// customer's documents.
+function renderPriceConfirmCard(inv) {
+  const card = document.getElementById("invoicePriceConfirmCard");
+  const meta = document.getElementById("invoicePriceConfirmMeta");
+  if (!card || !meta) return;
+  card.hidden = inv?.priceUnconfirmed !== true;
+  if (card.hidden) return;
+  const pc = inv.priceConfirm || {};
+  const why = pc.reason === "commercial_unpriced"
+    ? "Commercial account with no price of its own."
+    : "Custom size — you set the price.";
+  const suggested = pc.suggestedAmount != null ? `Suggested ${fmt(pc.suggestedAmount)}` : "Suggested amount prefilled";
+  meta.textContent = `${why} ${suggested}${pc.basis ? ` (${pc.basis})` : ""}. Not sendable, payable or texted until you confirm.`;
+}
+
+document.getElementById("invoicePriceConfirmBtn")?.addEventListener("click", async () => {
+  if (!currentInvoice) return;
+  const status = document.getElementById("invoicePriceConfirmStatus");
+  const pc = currentInvoice.priceConfirm || {};
+  const start = pc.suggestedAmount != null ? Number(pc.suggestedAmount).toFixed(2) : "";
+  const value = await pjlDialog.prompt(
+    `Price for this visit, before HST.${pc.basis ? `\n\n${pc.basis}` : ""}`,
+    { title: "Confirm price", icon: "info", defaultValue: start, confirmLabel: "Confirm price" }
+  );
+  if (value === null || value === undefined) return;
+  const amount = Number(String(value).replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(amount) || amount <= 0) {
+    await pjlDialog.alert("Enter the price as a positive amount.", { title: "Confirm price", icon: "warning" });
+    return;
+  }
+  if (status) { status.textContent = "Saving…"; status.dataset.kind = ""; }
+  try {
+    const r = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}/confirm-price`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ amount })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || `Failed (${r.status})`);
+    currentInvoice = data.invoice;
+    render(currentInvoice);
+    if (status) { status.textContent = "✓ Price confirmed."; status.dataset.kind = "ok"; }
+  } catch (err) {
+    if (status) { status.textContent = err.message || "Couldn't confirm the price."; status.dataset.kind = "error"; }
+  }
+});
 
 // ---- Klarna financing (PJL-34, build order step 4b) --------------------
 //

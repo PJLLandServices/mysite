@@ -238,6 +238,112 @@ function holdsItsSlot(status) {
   return !DEAD_STATUSES.has(String(status || "").toLowerCase());
 }
 
+// Which of a record's linked work orders belong to the visit it describes
+// NOW (PJL-97).
+//
+// A record's workOrderIds is not always one visit. Nothing closes a booking
+// record when its work order completes, so a returning customer's April
+// record stayed `confirmed`, and the fall re-booking reused it: scheduledFor
+// moved to October and the fall WO id was APPENDED. That leaves one record
+// reading ["WO-APRIL", "WO-FALL"]. Every reader that treated "the
+// record's WOs" as "this visit's" then acted on April's finished job:
+// reschedule refused ("technician has already arrived") or re-dated it,
+// the portal refused to reschedule or cancel, and the calendar linked it.
+//
+// A WO that FINISHED (completed / cancelled / no_show — by completedAt, else
+// its last update) before the start of the record's local day is a previous
+// visit's and is dropped. Everything else stays, in record order: open WOs,
+// and this visit's own WO finished on the day (finished early, before the
+// booked minute, included). With no date on the record there is nothing to
+// judge by, and every linked WO is kept, which is the old answer.
+//
+// Takes WO objects rather than reading them, so this lib still never
+// requires work-orders.js (see remove()'s isActiveWo for the same seam).
+const WO_FINISHED_STATUSES = new Set(["completed", "cancelled", "no_show"]);
+
+// The one test behind it, also asked by workOrders.workOrderForLeadBooking:
+// does this WO belong to a visit BEFORE the one starting at `visitStart`?
+// Only a finished WO can. It is a previous visit's when it finished before
+// the visit's local day, unless it is a COMPLETED WO scheduled for that very
+// day: that is this visit's own job, done ahead of the booked date. With no
+// visit date there is nothing to judge by, and the answer is no.
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+function parseLocal(value) {
+  if (!value) return null;
+  const text = String(value).trim();
+  if (DATE_ONLY_RE.test(text)) {
+    const [y, m, d] = text.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  }
+  const when = new Date(text);
+  return Number.isNaN(when.getTime()) ? null : when;
+}
+function isPreviousVisitWo(wo, visitStart) {
+  if (!wo || !WO_FINISHED_STATUSES.has(wo.status)) return false;
+  const when = parseLocal(visitStart);
+  if (!when) return false;
+  const dayStart = new Date(when.getFullYear(), when.getMonth(), when.getDate()).getTime();
+  const dayEnd = new Date(when.getFullYear(), when.getMonth(), when.getDate() + 1).getTime();
+  if (wo.status === "completed") {
+    const sched = parseLocal(wo.scheduledFor);
+    if (sched && sched.getTime() >= dayStart && sched.getTime() < dayEnd) return false;
+  }
+  const finished = Date.parse(wo.completedAt || wo.updatedAt || "");
+  return !(Number.isFinite(finished) && finished >= dayStart);
+}
+
+function workOrdersForVisit(rec, wos) {
+  const ids = Array.isArray(rec?.workOrderIds) ? rec.workOrderIds : [];
+  const byId = new Map((Array.isArray(wos) ? wos : []).filter((w) => w && w.id).map((w) => [w.id, w]));
+  const linked = ids.map((id) => byId.get(id)).filter(Boolean);
+  return linked.filter((w) => !isPreviousVisitWo(w, rec?.scheduledFor));
+}
+
+// The canonical record that IS the lead's current booking (PJL-93): a live
+// record naming the booking envelope's WO id, else a live one at the
+// booking's start, else the lead's only live record. A WO raised for the
+// booking is linked to this record and nothing else. Last season's closed
+// record is never it.
+function recordForLeadBooking(records, lead) {
+  const booking = lead?.booking;
+  if (!lead?.id || !booking) return null;
+  const live = (Array.isArray(records) ? records : [])
+    .filter((r) => r && r.leadId === lead.id && holdsItsSlot(r.status));
+  const envelopeId = booking.workOrder?.id || null;
+  return (envelopeId && live.find((r) => (r.workOrderIds || []).includes(envelopeId)))
+    || (booking.start && live.find((r) => r.scheduledFor === booking.start))
+    // The lone live record only when it can't be another visit: it links no
+    // work order (or the booking names none). April's open record is never
+    // "the current booking" just because it is the only live one.
+    || (live.length === 1 && (!envelopeId || !(live[0].workOrderIds || []).length) ? live[0] : null);
+}
+
+// The booking record a CUSTOMER-FACING action (portal reschedule, its
+// availability, cancel, the actions preflight) is about: the lead's current
+// booking. These used to act on listByLead(lead)[0], the first record
+// stored for the lead, which for a returning customer can be last season's
+// visit. A live record by recordForLeadBooking, else the record that links
+// the booking's own work order on the booking's own day (so an already-
+// cancelled booking is still found, and answered idempotently).
+function currentRecordForLead(records, lead) {
+  const forLead = (Array.isArray(records) ? records : []).filter((r) => r && r.leadId === lead?.id);
+  const live = recordForLeadBooking(forLead, lead);
+  if (live) return live;
+  const woId = lead?.booking?.workOrder?.id || null;
+  return (woId && forLead.find((r) => (r.workOrderIds || []).includes(woId) && sameLocalDay(r.scheduledFor, lead.booking.start))) || null;
+}
+
+// The same rule, answered as ids: the record's workOrderIds minus those
+// whose WO belongs to a previous visit. An id with no WO behind it yet (the
+// booking envelope's id, before anyone opens the work order) is kept,
+// exactly as every id-counting reader saw it before.
+function workOrderIdsForVisit(rec, wos) {
+  const ids = Array.isArray(rec?.workOrderIds) ? rec.workOrderIds : [];
+  const known = new Set((Array.isArray(wos) ? wos : []).filter((w) => w && w.id).map((w) => w.id));
+  const visit = new Set(workOrdersForVisit(rec, wos).map((w) => w.id));
+  return ids.filter((id) => !known.has(id) || visit.has(id));
+}
+
 function blank() {
   const created = new Date().toISOString();
   return {
@@ -265,6 +371,12 @@ function blank() {
     // down over our outage) and flagged so the address gets a human's eye
     // before a tech drives to it. Null on every normally-booked record.
     verification: null,
+    // Set when this visit was booked while an earlier visit for the same
+    // customer was still open (upsertFromLead): { reason:
+    // "previous_visit_open", previousBookingId, previousScheduledFor,
+    // openWorkOrderIds, flaggedAt }. The earlier visit is left untouched;
+    // the office decides what happens to it.
+    officeReview: null,
     sourceQuoteId: null,
     workOrderIds: [],
     // Customer self-service guard. Bumped on every reschedule (admin
@@ -348,22 +460,111 @@ async function listByProperty(propertyId) {
 // start) gets a fresh confirmed record. A re-sync of the SAME booking
 // onto a dead record (the cascade re-syncing a completed job) is a
 // no-op on status: nothing revives a finished appointment by accident.
-async function upsertFromLead(lead) {
+//
+// WHICH VISIT A BOOKING IS (Patrick, 2026-09-23). A visit is its work
+// order. Only a reschedule of the SAME work order reuses a booking record;
+// a new booking always gets a new record, and an old visit is never
+// re-dated, relinked or recycled because something on it was left open.
+//
+// PJL-97's first cut reused the customer's live record unless EVERY work
+// order on it was finished, so April's record was moved to October (fall
+// WO appended) whenever an April WO was never closed out, another April
+// WO was still open, or the fall booking had no WO id yet. A stale
+// envelope still naming April's FINISHED WO matched April's record as the
+// same booking and moved it too.
+//
+// The record for this booking, or null for a new visit:
+//   * the booking names a work order → the record that links it, unless
+//     that WO is FINISHED and the record's visit is on another day (a stale
+//     envelope, not a reschedule: a finished WO can't be moved). A same-day
+//     re-sync of a finished visit (the cascade after Finish) still reuses.
+//   * otherwise, a live record at EXACTLY this start: the same appointment
+//     slot (the booking gained or replaced its WO id, or Open WO attached a
+//     fresh WO beside a stale envelope). Reusing it never moves anything —
+//     its date is already this date — and a second record would hold the
+//     slot twice.
+//   * a booking with no work order → also a live, not-yet-opened record
+//     (no work orders) that is not in the past, being moved. A past record
+//     is history and is never re-dated.
+// `finished(woId)` answers whether a WO is done; without it nothing counts
+// as finished (the heal path, which only runs for leads with no record).
+async function visitRecordForBooking(forLead, booking, finished, { now = Date.now() } = {}) {
+  const woId = booking?.workOrder?.id || null;
+  const noWos = (r) => !(Array.isArray(r.workOrderIds) && r.workOrderIds.length);
+  if (woId) {
+    const holder = forLead.find((r) => (r.workOrderIds || []).includes(woId)) || null;
+    if (holder && !((await finished(woId)) && !sameLocalDay(holder.scheduledFor, booking.start))) return holder;
+  }
+  const sameSlot = booking?.start
+    ? forLead.find((r) => holdsItsSlot(r.status) && r.scheduledFor === booking.start && !(woId && (r.workOrderIds || []).includes(woId)))
+    : null;
+  if (sameSlot) return sameSlot;
+  if (woId) return null;
+  const notPast = (r) => { const t = Date.parse(r.scheduledFor || ""); return !Number.isFinite(t) || t >= now - 24 * 60 * 60 * 1000; };
+  return forLead.find((r) => noWos(r) && holdsItsSlot(r.status) && notPast(r)) || null;
+}
+function sameLocalDay(a, b) {
+  const x = parseLocal(a);
+  const y = parseLocal(b);
+  return Boolean(x && y) && x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
+}
+
+async function upsertFromLead(lead, { isFinishedWo = null } = {}) {
   if (!lead || !lead.booking) return null;
   const records = await readAll();
   const now = new Date().toISOString();
   const booking = lead.booking;
   const forLead = records.filter((b) => b.leadId === lead.id);
-  const live = forLead.find((b) => holdsItsSlot(b.status));
-  const dead = forLead.find((b) => !holdsItsSlot(b.status));
-  const woId = booking.workOrder?.id || null;
-  const isSameBooking = (rec) => Boolean(rec) && (
-    (woId && (rec.workOrderIds || []).includes(woId))
-    || (booking.start && rec.scheduledFor === booking.start)
-  );
-  // Reuse: the live record, else a dead record that IS this booking.
-  const existing = live || (dead && isSameBooking(dead) ? dead : null);
-  const rebookedOver = !existing && dead ? dead : null;
+  const finished = async (id) => (typeof isFinishedWo === "function"
+    ? Boolean(await Promise.resolve(isFinishedWo(id)).catch(() => false))
+    : false);
+  const existing = await visitRecordForBooking(forLead, booking, finished);
+  // A stale envelope names a previous visit's WO; the new visit must not
+  // link it.
+  const envelopeWoId = booking.workOrder?.id || null;
+  const envelopeIsPrevious = Boolean(!existing && envelopeWoId
+    && forLead.some((r) => (r.workOrderIds || []).includes(envelopeWoId)));
+
+  // A NEW visit leaves every earlier live record exactly where it is. One
+  // whose work orders are all finished is closed as completed (nothing
+  // closes a booking record when its WO completes, so April's still said
+  // `confirmed`). One with anything unfinished — or no work order at all —
+  // is left untouched and flagged for the office on both records, instead
+  // of being moved into the new visit.
+  let rebookedOver = null;
+  let officeReview = null;
+  if (!existing) {
+    for (const rec of forLead) {
+      if (!holdsItsSlot(rec.status)) { rebookedOver = rebookedOver || rec; continue; }
+      const linked = Array.isArray(rec.workOrderIds) ? rec.workOrderIds : [];
+      const done = await Promise.all(linked.map(finished));
+      rec.history = Array.isArray(rec.history) ? rec.history : [];
+      if (linked.length && done.every(Boolean)) {
+        rec.status = "completed";
+        rec.updatedAt = now;
+        rec.history.push({ ts: now, action: "closed_by_rebook", by: "system",
+          note: `Visit done (${linked.join(", ")}); new booking ${envelopeWoId || "(no WO yet)"} gets its own record` });
+        rebookedOver = rec;
+        continue;
+      }
+      const open = linked.filter((_, i) => !done[i]);
+      rec.updatedAt = now;
+      rec.history.push({ ts: now, action: "left_open_for_review", by: "system",
+        note: `A new booking (${envelopeWoId || "no WO yet"}) got its own visit; this one was left as it was — `
+          + (open.length ? `${open.join(", ")} still open` : "no work order on it") + ". Office to review." });
+      officeReview = officeReview || {
+        reason: "previous_visit_open",
+        previousBookingId: rec.id,
+        previousScheduledFor: rec.scheduledFor || null,
+        openWorkOrderIds: open,
+        flaggedAt: now
+      };
+      rebookedOver = rebookedOver || rec;
+    }
+    if (officeReview) {
+      console.warn(`[bookings] lead ${lead.id}: new visit booked while ${officeReview.previousBookingId} is still open (${officeReview.openWorkOrderIds.join(", ") || "no WO"}) — flagged for office review`);
+    }
+  }
 
   // Admin force-booking marker. When the lead.booking was created via
   // the admin Custom-time override, we mirror the flag onto the
@@ -427,7 +628,8 @@ async function upsertFromLead(lead) {
   next.sourceQuoteId = lead.quoteId || null;
   if (carriesForceFlag) next.forcedByAdmin = true;
   if (booking.verification) next.verification = booking.verification;
-  if (booking.workOrder?.id) next.workOrderIds = [booking.workOrder.id];
+  if (envelopeWoId && !envelopeIsPrevious) next.workOrderIds = [envelopeWoId];
+  if (officeReview) next.officeReview = officeReview;
   next.history = [{
     ts: now,
     action: rebookedOver ? "rebooked_from_lead" : "created_from_lead",
@@ -968,6 +1170,10 @@ async function attachWorkOrder(bookingId, woId) {
 module.exports = {
   responseLabel,
   holdsItsSlot,
+  workOrdersForVisit,
+  workOrderIdsForVisit,
+  isPreviousVisitWo,
+  recordForLeadBooking,
   customerState,
   customerStateLabel,
   CUSTOMER_STATE_LABELS,
@@ -985,6 +1191,7 @@ module.exports = {
   listByLead,
   listByProperty,
   upsertFromLead,
+  currentRecordForLead,
   healFromLeads,
   createDirect,
   setAssignmentOutreach,

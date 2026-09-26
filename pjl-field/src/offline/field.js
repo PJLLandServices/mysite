@@ -135,8 +135,58 @@ export function startFieldSync() {
   owner().then(id => { if (!cancelled) stop = watchFieldQueue(forOwner(id)); }).catch(() => {});
   return () => { cancelled = true; stop?.(); };
 }
+// One place that writes to the visit's tech notes for the office (office-
+// only; never on the customer's report). Used when the phone has to keep
+// something the office would otherwise never see (PJL-98).
+const techNoteText = lines => [`Field app, ${new Date().toISOString().slice(0, 10)} — kept so nothing is lost:`, ...lines].join('\n');
+function appendTechNote(queue, key, lines, { clearDrafts = [] } = {}) {
+  if (!lines.length) return;
+  const current = queue.view(key)?.techNotes || '';
+  const text = techNoteText(lines);
+  queue.patch(key, { techNotes: current ? `${current}\n\n${text}` : text }, { clearDrafts });
+}
+const shownValue = v => {
+  if (v == null || v === '') return '(blank)';
+  const text = typeof v === 'string' ? `"${v}"` : JSON.stringify(v);
+  return text.length > 120 ? `${text.slice(0, 117)}…` : text;
+};
+const clashLabel = (path, onProperty) => `${onProperty ? 'Property: ' : ''}${path.replace(/^zones › zone (\S+)/, 'Zone $1')}`;
+const draftText = d => [d?.label ? `label "${d.label}"` : '', d?.notes ? `notes "${d.notes}"` : '',
+  d?.repairs && d?.types?.length ? `repairs: ${d.types.join(', ')}` : ''].filter(Boolean).join(', ') || 'no text';
+// The property half of removing a zone (PJL-98 gap 3). The visit half is
+// already saved, through the queue, before this runs — so a phantom zone
+// is never walked or billed whatever happens here. `removeOnServer` is
+// api.js removePropertyZone (the audited, admin-only DELETE). If the
+// property record cannot follow — a tech session until PJL-86, or no
+// signal — the office is told on the visit's notes, never "Not signed in".
+export async function removeZoneFromProperty(queue, key, { number, reason = '', note = '', reasonLabel = '' }, removeOnServer) {
+  const wo = queue.view(key);
+  const propertyId = wo?.property?.id || wo?.propertyId;
+  if (!propertyId) return { ok: true };
+  try {
+    const property = await removeOnServer(propertyId, number, { reason, note });
+    if (property?.id) queue.seed(`prop:${property.id}`, property);
+    return { ok: true };
+  } catch (err) {
+    const permission = err?.code === 'forbidden';
+    const why = [reasonLabel, note].filter(Boolean).join(' — ');
+    appendTechNote(queue, key, [`• Zone ${number} was removed on site${why ? ` (${why})` : ''}, but the property record still lists it: ${
+      permission ? 'removing zones needs the office for now' : 'the phone could not update it'}.`]);
+    queue.flush().catch(() => {});
+    return { ok: false, message: permission
+      ? `Zone ${number} is off this visit. Removing it from the property record needs the office for now — it's noted on the work order for them.`
+      : `Zone ${number} is off this visit. The property record couldn't be updated from here — it's noted on the work order for the office.` };
+  }
+}
 export async function flushBeforeFinish(queue, key) {
   if (queue.status(key).drafts) throw new Error('There are zone drafts on this phone. Open those zones and record their assessment before signing off.');
+  // A draft on a zone that has left the visit (the office removed it) can
+  // never be opened again: its text goes to the office, and it stops
+  // holding sign-off (PJL-98 gap 2).
+  const stale = queue.zoneDrafts ? queue.zoneDrafts(key).stale : [];
+  appendTechNote(queue, key, stale.map(name =>
+    `• Zone ${name.slice(5)} is no longer on this visit, so its unrecorded draft was not applied: ${draftText(queue.getDraft(key, name))}.`),
+  { clearDrafts: stale });
   await queue.flush({ retry: true });
   const state = queue.status(key);
   // The code travels with the message so Finish can offer the way out of a
@@ -149,10 +199,19 @@ export async function flushBeforeFinish(queue, key) {
 // A true conflict (the office changed the same zone field the tech did)
 // is the tech's call, and he must always be able to make it on the phone.
 // Resolves the visit and its property correction together, then syncs.
+//
+// Keep mine overrides the office, so what the office had goes into the
+// visit's tech notes in the same commit (PRD D4, PJL-98 gap 4): the field
+// copy wins and nothing the office typed is lost. Use office's needs no note.
 export async function resolveFieldConflicts(queue, key, prefer) {
   const propertyId = queue.view(key)?.property?.id;
   for (const k of [key, propertyId ? `prop:${propertyId}` : null]) {
-    if (k && queue.status(k).error?.code === 'conflict') queue.resolveConflict(k, prefer);
+    const error = k ? queue.status(k).error : null;
+    if (error?.code !== 'conflict') continue;
+    const lines = prefer === 'mine'
+      ? (error.clashes || []).map(c => `• ${clashLabel(c.path, k !== key)}: the office had ${shownValue(c.theirs)}; the phone's ${shownValue(c.mine)} was kept.`)
+      : [];
+    queue.resolveConflict(k, prefer, lines.length ? { note: { key, field: 'techNotes', text: techNoteText(lines) } } : {});
   }
   await queue.flush({ retry: true });
   return fieldStatus(queue, key);

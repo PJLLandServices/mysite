@@ -164,6 +164,15 @@
       <button type="button" class="wo-locked-unlock-btn" id="woRelockBtn">Re-lock</button>
     </div>
 
+    <!-- Re-signing (2026-09-26): the priced scope changed after the customer
+         accepted it. Completion, invoicing and payment wait for their new
+         signature (or an admin bypass); the first acceptance stays on file. -->
+    <div class="wo-unlocked-banner" id="woResignBanner" hidden role="status">
+      <span class="wo-unlocked-icon" aria-hidden="true">✍️</span>
+      <strong>New customer signature needed</strong>
+      <span>The price changed after the customer signed. This work order can't be completed, invoiced or paid until the customer signs the revised version. The first signature stays in the history.</span>
+    </div>
+
     <!-- Service-call fee waiver control. Three states (only one visible):
          · offer  — not waived, unsigned: a "Waive service call fee" button
          · form   — reason + notes + Apply/Cancel

@@ -55,6 +55,16 @@ function formatDateTime(iso) {
 // confirm." An assignment booking is `confirmed` from the moment he books
 // it — the truck is coming — so the engine's word and the customer's
 // acknowledgement were being shown as the same thing.
+// Booked while an earlier visit for the same customer was still open
+// (lib/bookings.js upsertFromLead). That earlier visit was left exactly as
+// it was — never moved into this one — so the office decides its fate.
+function reviewNote(b) {
+  const r = b && b.officeReview;
+  if (!r || r.reason !== "previous_visit_open") return "";
+  const open = Array.isArray(r.openWorkOrderIds) && r.openWorkOrderIds.length ? ` (${r.openWorkOrderIds.join(", ")} open)` : "";
+  return `<span class="crm-cell-sub bk-card__review">Review: earlier visit ${esc(r.previousBookingId || "")} still open${esc(open)}</span>`;
+}
+
 function badgeLabel(b) {
   return b.customerStateLabel || statusBadgeLabel(b.status || "confirmed");
 }
@@ -128,7 +138,7 @@ function render() {
       <span class="crm-cell bk-card__service">
         <span class="crm-identity">
         <span class="crm-cell-primary">${esc(b.serviceLabel || b.serviceKey || "—")}</span>
-        <span class="crm-cell-sub">${esc(b.id)}${woCount ? ` &middot; ${woCount} WO${woCount === 1 ? "" : "s"}` : ""}</span></span>
+        <span class="crm-cell-sub">${esc(b.id)}${woCount ? ` &middot; ${woCount} WO${woCount === 1 ? "" : "s"}` : ""}</span>${reviewNote(b)}</span>
       </span>
       <span class="crm-cell bk-card__customer">${esc(b.customerName) || '<span class="crm-cell-muted">(no customer)</span>'}</span>
       <span class="crm-cell bk-card__address"${b.address ? ` data-map-address="${esc(b.address)}"` : ""}>${esc(b.address) || '<span class="crm-cell-muted">—</span>'}</span>
