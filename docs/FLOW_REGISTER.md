@@ -267,9 +267,11 @@ FLOW-31, with FLOW-23 hops noted:** Patrick's rulings on fall-closing fix #7, bu
     - draft→sent through `update()`;
     - the portal Pay link;
     - the invoice-ready, reminder and junk-mail texts.
-  - The invoice-ready text is **held**. `POST /api/invoices/:id/confirm-price` (admin only) confirms the
-    suggestion or sets Patrick's price, clears the pending note, and re-arms the held text so the
-    normal 2-minute sweep sends it (coordinator default).
+  - `POST /api/invoices/:id/confirm-price` (admin only) confirms the suggestion or sets Patrick's
+    price, and clears the pending note. **Nothing goes to the customer by itself** (Patrick,
+    2026-09-26, replacing the earlier auto-release). Confirming and sending are separate actions.
+    `invoices.isPriceSetByPjl` means no automatic invoice-ready text is ever scheduled for a price PJL
+    sets, before or after confirming, including on a cascade re-run. The office uses **Send**.
   - A commercial suggestion inside a priced tier is that tier's price, unconfirmed.
 - **FLOW-23 (PASS) hops touched, additively:**
   - the pay page's `payable`, `sdk-config` and `payment-intent` now also refuse a price-unconfirmed
@@ -280,6 +282,8 @@ FLOW-31, with FLOW-23 hops noted:** Patrick's rulings on fall-closing fix #7, bu
   - Re-walk one real card payment.
 - **Tests (in build:check):**
   - `scripts/test-price-confirm.mjs`: 47 assertions; on the parent `fcf506ae`, 6 passed and 23 failed.
+    Now 53 with the Tap to Pay pin and the no-auto-text rule. That rule fails 4 on the code before it
+    (the re-arm) and keeps a control: an ordinary priced Bill-later invoice still texts.
   - `scripts/test-price-before-signing.mjs`: 18 assertions; on its parent, 8 passed and 10 failed.
   - `scripts/test-closing-price.mjs` expectations updated where the rulings changed them (named in
     the commits).
@@ -288,8 +292,8 @@ FLOW-31, with FLOW-23 hops noted:** Patrick's rulings on fall-closing fix #7, bu
      work order and the invoice both carry it.
   2. Close a 16+ zone system. The customer sees "PJL confirms the price" and no number. The office
      invoice shows the suggestion with its arithmetic. Send, Take payment and the text are all
-     refused until **Confirm price**. After confirming, the invoice sends, and the held text goes out
-     within minutes.
+     refused until **Confirm price**. After confirming, nothing reaches the customer until you press
+     **Send**, and no automatic text goes out.
   3. Repeat step 2 for a commercial account with no price set.
 **2026-09-23 (FLOW-31 — Fix #6b, PJL-98: the office's edits survive the tech's offline walk):** the
 PJL-77 audit of Fix #6 (`6332c076`, `78cff897`) found four gaps, each reproduced against the real

@@ -1887,19 +1887,21 @@ async function sendInvoiceReadySMS({ invoiceId, includeSpouse } = {}) {
     return { ok: true, skipped: "already_sent" };
   }
 
-  // PJL-96: a price Patrick has not confirmed is never texted to the
-  // customer. HELD, not consumed: customerSmsSentAt stays empty, so once
-  // he confirms (invoices.confirmPrice re-arms the schedule) the normal
-  // sweep sends it. The history records the hold once, not every sweep.
-  if (invoices.isPriceUnconfirmed(invoice)) {
-    if (!(invoice.history || []).some((h) => h.action === "customer_sms_held_price_unconfirmed")) {
+  // PJL-96: an invoice whose price PJL sets is never texted automatically
+  // — not before Confirm price (the number isn't his yet) and not after
+  // (confirming and telling the customer are separate; the office uses
+  // Send). One rule, invoices.isPriceSetByPjl; the cascade doesn't
+  // schedule these, and this catches a record scheduled before the rule.
+  // The history records it once, not every sweep.
+  if (invoices.isPriceSetByPjl(invoice)) {
+    if (!(invoice.history || []).some((h) => h.action === "customer_sms_not_sent_price_set_by_pjl")) {
       await invoices.appendHistory(invoiceId, {
-        action: "customer_sms_held_price_unconfirmed",
+        action: "customer_sms_not_sent_price_set_by_pjl",
         by: "system",
-        note: "Invoice text held until Patrick confirms the price"
+        note: "No automatic invoice text — PJL sets this price; the office sends the invoice."
       });
     }
-    return { ok: true, skipped: "price_unconfirmed" };
+    return { ok: true, skipped: invoices.isPriceUnconfirmed(invoice) ? "price_unconfirmed" : "price_set_by_pjl" };
   }
 
   // Nothing to pay — never text "your invoice is ready" for $0

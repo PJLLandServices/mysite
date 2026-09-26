@@ -443,7 +443,20 @@ async function run(wo, deps = {}) {
         // customerSmsScheduledAt — a prior cascade re-fire may have
         // already scheduled.
         const freshInv = await invoices.get(invoice.id);
-        if (freshInv && !freshInv.customerSmsSentAt && !freshInv.customerSmsScheduledAt) {
+        // PJL-96: a price PJL sets is sent by the office, never by timer
+        // (invoices.isPriceSetByPjl) — not scheduled, and a re-run of the
+        // cascade after Confirm price doesn't schedule it either.
+        if (freshInv && !freshInv.customerSmsSentAt && !freshInv.customerSmsScheduledAt && invoices.isPriceSetByPjl(freshInv)) {
+          if (!(freshInv.history || []).some((h) => h.action === "customer_sms_not_scheduled_price_set_by_pjl")) {
+            try {
+              await invoices.appendHistory(freshInv.id, {
+                action: "customer_sms_not_scheduled_price_set_by_pjl",
+                by: "system",
+                note: "No automatic invoice text — PJL sets this price; the office sends the invoice."
+              });
+            } catch (logErr) { console.warn("[cascade] SMS skip history failed:", logErr?.message); }
+          }
+        } else if (freshInv && !freshInv.customerSmsSentAt && !freshInv.customerSmsScheduledAt) {
           let smsAllowed = true;
           let skipReason = null;
           if (freshInv.customerId) {

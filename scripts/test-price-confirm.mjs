@@ -23,7 +23,10 @@
 //      line (no number), completion drafts an invoice prefilled with the
 //      suggestion, flagged; not payable, no link, no send, no text, and the
 //      customer's completion email names no price. Patrick confirms →
-//      payable, sendable, and the held text is re-armed.
+//      payable and sendable, but NOTHING goes to the customer by itself:
+//      confirming and sending are separate actions (Patrick, 2026-09-26).
+//      No automatic invoice text is scheduled, before or after confirming,
+//      and a cascade re-run after confirming does not text either.
 //   C. Commercial, no price of its own: suggested (the tier price),
 //      unconfirmed, not payable. 10 commercial zones: the slope.
 //   D. Commercial with a per-property price: billed that price, confirmed.
@@ -122,8 +125,8 @@ try {
       ok(custMail && /PJL will confirm the price/.test(custMail.html) && !/Total for today/.test(custMail.html),
         "the customer's completion email names no price");
       const rec = await getInv(inv.id);
-      ok(rec.customerSmsScheduledAt && !rec.customerSmsSentAt && (rec.history || []).some((h) => h.action === "customer_sms_held_price_unconfirmed"),
-        "the invoice text is HELD, not consumed");
+      ok(!rec.customerSmsScheduledAt && !rec.customerSmsSentAt && (rec.history || []).some((h) => h.action === "customer_sms_not_scheduled_price_set_by_pjl"),
+        `no automatic invoice text is scheduled for a price PJL sets (${j({ at: rec.customerSmsScheduledAt, sent: rec.customerSmsSentAt })})`);
 
       // Patrick confirms — his own price (any amount; this one is computed).
       await srv.login({ role: "tech" });
@@ -135,8 +138,19 @@ try {
       ok(conf.status === 200 && conf.body.invoice?.priceUnconfirmed === false, `Patrick confirms the price (${conf.status} ${j(conf.body.errors)})`);
       const line = feeLine(conf.body.invoice?.lineItems);
       ok(line?.unitPrice === want + 9 && line?.note === "", "…the line carries his price and no 'pending' note");
-      ok(Date.parse(conf.body.invoice?.customerSmsScheduledAt) >= t0 - 1000 && !conf.body.invoice?.customerSmsSentAt,
-        "…and the held text is re-armed for the normal schedule");
+      ok(!conf.body.invoice?.customerSmsScheduledAt && !conf.body.invoice?.customerSmsSentAt,
+        `…and confirming schedules no customer text (${j({ at: conf.body.invoice?.customerSmsScheduledAt, t0 })})`);
+      const confNote = (conf.body.invoice?.history || []).find((h) => h.action === "price_confirmed")?.note || "";
+      ok(/nothing sent to the customer/.test(confNote), `…the history says nothing was sent (${confNote})`);
+      // A desk re-run of the cascade after confirming must not text either.
+      const smsBefore = srv.outbox().filter((m) => m.channel === "sms" && /5550182/.test(m.to)).length;
+      const rerun = await srv.api("POST", `/api/work-orders/${f.wo.id}/run-cascade`, {});
+      ok(rerun.status === 200, `the desk re-runs the cascade (${rerun.status} ${j(rerun.body.errors)})`);
+      await sleep(800);
+      const afterRerun = await getInv(inv.id);
+      ok(srv.outbox().filter((m) => m.channel === "sms" && /5550182/.test(m.to)).length === smsBefore
+        && !afterRerun.customerSmsScheduledAt && !afterRerun.customerSmsSentAt,
+        `…and still no text is scheduled or sent (${j({ at: afterRerun.customerSmsScheduledAt, sent: afterRerun.customerSmsSentAt })})`);
       const send2 = await srv.api("POST", `/api/invoices/${inv.id}/send`, {});
       ok(send2.status === 200, `a confirmed price is sendable (${send2.status})`);
       const sent = await getInv(inv.id);
@@ -186,6 +200,10 @@ try {
     ok(line?.unitPrice === own, `…billed its own price (${line?.unitPrice} vs ${own})`);
     const full = inv ? await getInv(inv.id) : null;
     ok(full?.priceUnconfirmed === false, "…confirmed, nothing for Patrick to set");
+    // Control: an ordinary priced "Bill later" invoice still gets its
+    // automatic invoice-ready text. The rule stops only prices PJL sets.
+    ok(Boolean(full?.customerSmsScheduledAt || full?.customerSmsSentAt) && !(full?.history || []).some((h) => /price_set_by_pjl/.test(h.action || "")),
+      `…and its automatic invoice text is scheduled as before (${j({ at: full?.customerSmsScheduledAt, sent: full?.customerSmsSentAt })})`);
     if (inv) ok((await srv.api("POST", `/api/invoices/${inv.id}/send`, {})).status === 200, "…and sendable as usual");
   }
 

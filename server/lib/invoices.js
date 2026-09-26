@@ -463,6 +463,19 @@ function isPriceUnconfirmed(inv) {
   return Boolean(prefix) && noted.some((l) => String(l.note).startsWith(prefix));
 }
 
+// THE rule for "does this invoice's customer text go out by itself?" — no,
+// when PJL sets the price (PJL-96: a custom size, a commercial account
+// without its own price, or a pre-PJL-96 placeholder draft). Before
+// Confirm price the number is not his yet; after, confirming and telling
+// the customer are separate actions (Patrick, 2026-09-26): he uses Send
+// when he is ready. The automatic "invoice ready" text never fires for
+// such an invoice, and nothing re-arms it. Read by the completion
+// cascade (scheduling), sendInvoiceReadySMS (sending) and confirmPrice.
+function isPriceSetByPjl(inv) {
+  if (!inv) return false;
+  return inv.priceConfirm?.required === true || isPriceUnconfirmed(inv);
+}
+
 // Read lazily and tolerantly: hydrate() runs on every read, and suites
 // that sandbox this module alone (without pricing.js) must still load it.
 function legacyCustomNotePrefix() {
@@ -925,10 +938,11 @@ async function openForOnSitePayment(id, { by = "" } = {}) {
 // re-derived from any money already recorded. From here the invoice is an
 // ordinary one: payable on the usual rules, sendable, textable.
 //
-// The held "invoice ready" text: if one was scheduled and has not gone,
-// it is re-armed for now, so the normal sweep sends it (decision,
-// 2026-09-23: after Patrick confirms, the held text goes out on the
-// normal schedule automatically).
+// The "invoice ready" text is NOT released by confirming (Patrick,
+// 2026-09-26, replacing the 2026-09-23 auto-release): confirming the
+// price and telling the customer are separate actions. A pending
+// automatic text is cancelled here, and isPriceSetByPjl keeps it from
+// ever being scheduled again. The office sends the invoice with Send.
 //
 // A different amount is accepted only on a DRAFT; a price already issued
 // to the customer (an invoice sent before PJL-96) changes through Revise.
@@ -970,13 +984,18 @@ async function confirmPrice(id, { amount = null, by = "admin" } = {}) {
   if (next.status === "paid" && !next.paidAt) next.paidAt = now;
   const pc = current.priceConfirm || { required: true, reason: "custom_size", suggestedAmount: Number(line.unitPrice) || null, basis: "", lineIndex: lineIdx, lineKey: line.key || null };
   next.priceConfirm = { ...pc, required: true, lineIndex: lineIdx, lineKey: line.key || null, confirmedAt: now, confirmedBy: String(by || "admin"), confirmedAmount: unit };
-  if (current.customerSmsScheduledAt && !current.customerSmsSentAt) next.customerSmsScheduledAt = now;
+  const cancelledText = Boolean(current.customerSmsScheduledAt && !current.customerSmsSentAt);
+  if (cancelledText) next.customerSmsScheduledAt = null;
   next.updatedAt = now;
   const suggested = pc.suggestedAmount != null ? ` (suggested $${Number(pc.suggestedAmount).toFixed(2)})` : "";
   next.history = [...(current.history || []), {
     ts: now, action: "price_confirmed", by: String(by || "admin"),
-    note: `Price confirmed at $${unit.toFixed(2)}${suggested}${next.customerSmsScheduledAt && !current.customerSmsSentAt ? " · held invoice text released" : ""}`
+    note: `Price confirmed at $${unit.toFixed(2)}${suggested} · nothing sent to the customer — use Send when ready`
   }];
+  if (cancelledText) {
+    next.history.push({ ts: now, action: "customer_sms_cancelled_price_set_by_pjl", by: "system",
+      note: "Automatic invoice text cancelled — PJL set this price; the office sends the invoice." });
+  }
   records[idx] = next;
   await writeAll(records);
   return { ok: true, invoice: hydrate(next) };
@@ -1637,6 +1656,7 @@ module.exports = {
   // PJL-96
   payBlockReason,
   isPriceUnconfirmed,
+  isPriceSetByPjl,
   confirmPrice: withStoreLock(confirmPrice),
   getByPaymentToken,
   ensurePortalToken: withStoreLock(ensurePortalToken),
