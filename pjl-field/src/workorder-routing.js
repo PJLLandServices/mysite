@@ -38,6 +38,22 @@ export const templateForServiceKey = (serviceKey) => {
 const TERMINAL = ['completed', 'cancelled', 'no_show'];
 export const isOpenWorkOrder = (wo) => !!wo && !TERMINAL.includes(wo.status);
 
+// Reopening a FINISHED fall closing. It is a record, not a form, so it
+// must not reopen the editable closing flow — but its record is its
+// invoice, the one native screen a finished closing has. Only COMPLETED:
+// a cancelled or no-show visit has no invoice to show.
+// Covered by scripts/test-field-reopen-finished.mjs.
+export const reopensToInvoice = (wo) => !!wo && wo.type === 'fall_closing' && wo.status === 'completed';
+
+// The invoice that currently bills a work order: any status but void —
+// the same test as the server's activeInvoiceForWorkOrder. The server
+// sends /api/invoices newest first, so a re-raised invoice wins over the
+// void one it replaced.
+export const activeInvoiceFor = (invoices, woId) =>
+  (woId && Array.isArray(invoices)
+    ? invoices.find((i) => i && i.woId === woId && i.status !== 'void')
+    : null) || null;
+
 // Can this row produce a work order at all? It needs somewhere to hang
 // one: an existing work order, a lead, or a property.
 export const canStartWorkOrder = (b) => !!(b?.workOrder || b?.leadId || b?.propertyId);

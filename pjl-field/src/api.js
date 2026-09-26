@@ -241,6 +241,12 @@ export const getInvoice = (id) =>
 // still carries a balance, which is a question about two fields and a
 // date rather than a state anything stores. isOverdue() below is the one
 // place that decides it.
+// The invoices raised against one work order, newest first. Used to reopen
+// a finished closing on its invoice (workorder-routing.js activeInvoiceFor).
+export const listWorkOrderInvoices = (woId) =>
+  getJson(`/api/invoices?woId=${encodeURIComponent(woId)}`)
+    .then((d) => d.invoices || []);
+
 export const listPropertyInvoices = (propertyId) =>
   getJson(`/api/invoices?propertyId=${encodeURIComponent(propertyId)}`)
     .then((d) => d.invoices || []);
