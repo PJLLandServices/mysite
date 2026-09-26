@@ -195,7 +195,7 @@ Patrick's six rules, 2026-09-26, with a survey of each against the code
 
 | # | Rule | Where it stands |
 |---|---|---|
-| 1 | Field staff create work logs, photos, problems and clock events | **Mostly.** Logs, photos and clock events exist on the build WO's `dailyLog`. **"Problems" has no home** — the dailyLog carries `dailyNotes` (free text) and per-zone `issues[]` belongs to service visits, not builds. |
+| 1 | Field staff create work logs, photos, problems and clock events | **Logs, photos and clock events exist** on the build WO's `dailyLog`. **Problems are new** — settled below as a project-level record linked to the daily record it was found on. |
 | 2 | Office can add notes and correct records through an audit trail | **Partly.** Notes: the project journal already does this. **Correcting a clock time is impossible today** — there is no route to change `inAt`/`outAt` at all. |
 | 3 | Hours calculated from clock in/out, never a typed box | **Holds, and must keep holding.** `computeProjectMetrics()` derives person-hours from `session.inAt`/`outAt` × `labourersOnSite`. No hours field exists anywhere. Any box on this screen would be a second source of truth for money. |
 | 4 | Original time entries preserved when corrected | **FAILS.** `setLabourersForSession()` overwrites `sess.labourersOnSite` in place and its history entry records only the NEW count. Labourer count multiplies straight into person-hours, so correcting 3 → 2 silently loses the original figure that billing was based on. |
@@ -208,10 +208,74 @@ labourer count. The shape #307 settled is the precedent — corrections
 append, they never overwrite, and the audit trail grows rather than
 rewinding.
 
-**Open question for Patrick when step 2 starts:** where do "problems"
-live? Candidates are a first-class field on the daily log, or the project
-journal with a flag. It decides whether a crew's problem is attached to a
-DAY or to the JOB, and those are read in different places.
+### Problems — settled 2026-09-26
+
+**A problem belongs to the PROJECT, and links to the daily record where it
+was discovered.** Patrick:
+
+> *"Daily Records shows: 'This problem was discovered Tuesday during this
+> work session.' Project Overview shows: 'This problem remains open and
+> still needs resolution.' Resolving it later doesn't rewrite Tuesday's
+> record."*
+
+That settles the day-vs-job tension by separating the two things that were
+being conflated: the **problem** is a live thing that stays open until
+somebody deals with it, and its **discovery** is a fact about Tuesday that
+never changes. One record, two contexts, and neither has to lie.
+
+**The record:**
+
+| Field | |
+|---|---|
+| `title`, `description` | what it is |
+| `discoveredAt`, `discoveredOnWoId` | the date and the daily record it was found on |
+| `reportedBy` | who found it — the authenticated user, per #307 |
+| `status` | `open` · `monitoring` · `resolved` |
+| `resolutionNote`, `resolvedAt`, `resolvedBy` | how it ended, when, and who |
+| `taskId?`, `photoId?`, `scopeChangeId?` | optional links |
+
+**Resolving appends; it never edits the discovery.** `resolvedAt` and
+`resolutionNote` are new fields on the problem — Tuesday's daily record is
+not touched, exactly as archiving a task never touched the crew's log
+lines in #307.
+
+**`status` is a lifecycle state, so it gets the CLAUDE.md treatment from
+day one**: one named function for "still needs attention", called by every
+reader — the Overview's count, the Daily Records tab, any closeout
+preflight — rather than three copies of `status !== "resolved"`. A
+`monitoring` problem is not resolved and must not be counted as such. This
+is the `activeTasks()` / cancelled-booking lesson, applied before the bug
+rather than after it.
+
+### Clock and labour corrections — settled 2026-09-26
+
+The same rule as #307, stated as Patrick set it:
+
+1. **Preserve the original value.**
+2. **Record the corrected value, who changed it, when, and why.**
+3. **Calculate billing from the effective corrected value.**
+4. **Never represent an office correction as a new field work session.**
+
+Rule 4 is already how the office task route behaves — it writes no session
+and credits no visit — so this extends a precedent rather than setting one.
+
+**What rule 3 demands in practice:** `computeProjectMetrics()` and
+`computeTAndMBilling()` both derive hours from sessions, so "the effective
+corrected value" must be produced by **one named function** that both call.
+Two readers deriving effective hours separately is the progress-bar bug
+with money attached.
+
+**Shape to build:** a session carries its original `inAt`/`outAt`/
+`labourersOnSite` untouched, plus an append-only list of corrections, each
+with the new value, actor, timestamp and reason. The effective value is
+the latest correction or the original. `setLabourersForSession()` is
+rewritten to append rather than overwrite, which is the defect this fixes.
+
+**Forward dependency, noted not decided:** hours already invoiced. A
+correction changes the effective figure but does not reach an invoice
+already raised. Whether the workspace should say so belongs with
+Financials (step 5), alongside the purchased-material-list protection from
+2026-09-23.
 
 ## Out of scope for this phase
 
