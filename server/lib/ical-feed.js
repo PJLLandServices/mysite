@@ -20,6 +20,7 @@
 const bookings = require("./bookings");
 const settings = require("./settings");
 const properties = require("./properties");
+const workOrders = require("./work-orders");
 const { BOOKABLE_SERVICES } = require("./availability");
 const {
   escapeIcalValue,
@@ -154,7 +155,7 @@ function shortServiceName(booking) {
 // LOCATION renders in the iOS-Maps-friendly canonical form. Property
 // wins when set; falls back to lead structured fields, then parsed
 // booking.address. See formatMapsAddress() for precedence rules.
-function buildVevent(booking, { baseUrl, now, lead = null, property = null }) {
+function buildVevent(booking, { baseUrl, now, lead = null, property = null, workOrderId = undefined }) {
   const start = new Date(booking.scheduledFor);
   const duration = Number(booking.durationMinutes) || DEFAULT_DURATION_MIN;
   const end = new Date(start.getTime() + duration * 60 * 1000);
@@ -201,10 +202,14 @@ function buildVevent(booking, { baseUrl, now, lead = null, property = null }) {
   if (booking.prepNotes) descLines.push(`Notes: ${booking.prepNotes}`);
   const description = descLines.join("\n");
 
-  // Link target: linked WO if any, otherwise the booking detail page.
-  const woId = Array.isArray(booking.workOrderIds) && booking.workOrderIds.length
-    ? booking.workOrderIds[0]
-    : null;
+  // Link target: this visit's WO if any, otherwise the booking detail
+  // page. The caller passes `workOrderId` from bookings.workOrdersForVisit
+  // (PJL-97): a returning customer's reused record can list last spring's
+  // WO first, and the fall event linked straight to it. Callers that pass
+  // nothing get the old first-linked-id answer.
+  const woId = workOrderId !== undefined
+    ? workOrderId
+    : (Array.isArray(booking.workOrderIds) && booking.workOrderIds.length ? booking.workOrderIds[0] : null);
   const linkPath = woId
     ? `/admin/work-order/${encodeURIComponent(woId)}`
     : `/admin/booking/${encodeURIComponent(booking.id)}`;
@@ -356,7 +361,12 @@ async function generateIcsForToken(token, { baseUrl = "https://pjllandservices.c
     // property.address over any stale snapshot in booking.address or
     // stale structured fields on the lead. Defence-in-depth alongside
     // the cascade-on-property-PATCH that syncs snapshots eagerly.
-    events.push(...buildVevent(b, { baseUrl: cleanBase, now, lead, property }));
+    // This visit's WO, not whichever id the record happens to list first.
+    const linked = (await Promise.all((b.workOrderIds || []).map((id) =>
+      Promise.resolve(workOrders.get(id)).catch(() => null)))).filter(Boolean);
+    const visitIds = bookings.workOrderIdsForVisit(b, linked);
+    const workOrderId = visitIds.length ? visitIds[0] : null;
+    events.push(...buildVevent(b, { baseUrl: cleanBase, now, lead, property, workOrderId }));
     included++;
   }
 

@@ -204,6 +204,11 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
   // A draft signed off "Bill later" waits for Patrick's review; the server
   // refuses to open it for payment, so the button is not offered.
   const payableHere = !(invoice?.status === 'draft' && invoice?.paidOnSiteAtCompletion !== true);
+  // A price PJL sets after the visit (PJL-96: a custom size, or a commercial
+  // account without its own price). The server says so; the amount on the
+  // draft is only a suggestion for the office, so it is not shown here and
+  // nothing can be sent, charged or recorded against it yet.
+  const priceUnconfirmed = invoice?.priceUnconfirmed === true;
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -217,19 +222,21 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
       <View style={styles.card}>
         <Row label="Customer" value={invoice?.customerName || invoice?.billTo?.name || '—'} />
         <Row label="Property" value={invoice?.address || invoice?.propertyAddress || '—'} />
-        <Row label="Total" value={money(invoice?.total ?? invoice?.amountDue, invoice?.currency)} strong />
+        <Row label="Total" value={priceUnconfirmed ? 'Set by PJL after the visit' : money(invoice?.total ?? invoice?.amountDue, invoice?.currency)} strong />
         {partPaid ? (
           <Row label="Still owing" value={money(invoice?.balanceDue, invoice?.currency)} strong />
         ) : null}
         <Row
           label="Status"
-          value={paid ? 'Paid' : partPaid ? 'Part paid' : already ? 'Sent, awaiting payment' : 'Draft — not sent yet'}
+          value={paid ? 'Paid' : priceUnconfirmed ? 'Price to be confirmed by the office' : partPaid ? 'Part paid' : already ? 'Sent, awaiting payment' : 'Draft — not sent yet'}
           last
         />
       </View>
 
       {paid ? (
         <Text style={styles.note}>This one is already paid. Nothing left to do.</Text>
+      ) : priceUnconfirmed ? (
+        <Text style={styles.note}>PJL confirms the price for this visit and sends the invoice. Nothing to collect on site.</Text>
       ) : (
         <View style={styles.actions}>
           <Pressable

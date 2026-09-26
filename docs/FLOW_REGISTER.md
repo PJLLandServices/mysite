@@ -282,6 +282,141 @@ readouts, all four exits guarded, and — the one that closes 2026-09-21's *"it 
 zones"* — a ceiling change moving the same three areas from **five stations to seven**, saved, and
 **seven** being what the tab reads on return. Verified to FAIL on the pre-change tree. Deliberately
 **not** in `build:check`, same convention as the other Playwright suites.
+
+**2026-09-23 (PJL-96: the price is set before signing; Patrick sets custom and commercial prices) —
+FLOW-31, with FLOW-23 hops noted:** Patrick's rulings on fall-closing fix #7, built on it. Branch
+`pjl-96-price-before-signing`, two commits.
+- **Price set before signing (ruling 1).** The seasonal fee is re-priced from the zones recorded at
+  the moment the work order freezes: `pricing.pricedQuoteForLock`, called once at each lock point.
+  - Customer signature: the fresh-signature branch of `PATCH /api/work-orders/:id` carries the priced
+    line in the SAME write as the signature, so the If-Match check is unchanged.
+  - Nobody home: `POST /api/work-orders/:id/signature-bypass`.
+  - The line is stamped `source.pricedAtLock`. `refreshSeasonalBaseline(..., { frozen })` then leaves a
+    stamped line on a locked WO exactly as signed.
+  - Result: the signed WO, the Service Report and the invoice carry one number, and zones edited after
+    the lock move nothing. The completion-time re-resolve stays as the safety net for WOs locked
+    before this change.
+  - The manual `POST /api/work-orders/:id/create-invoice` now re-prices the same way (it billed the
+    booked tier as seeded).
+  - The sign-off screen shows the fee the customer is signing for.
+- **Commercial priced per account (ruling 2).** A per-property `seasonalPricing` price is billed as
+  set. A commercial account without one gets a **price-pending** line. The commercial tier (or its
+  slope) is only the suggestion. There is no account-level price on the customer record yet;
+  Patrick's decision on multi-site accounts is open on PJL-96.
+- **Custom sizes (ruling 3).**
+  - 16+ residential and 9+ commercial are price-pending.
+  - A property known to be that size at booking is seeded a pending line. It used to be seeded none,
+    drafted no invoice and read "no charge".
+  - `pricing.suggestSeasonalPrice` extends the per-zone slope of the last two priced tiers in
+    pricing.json and rounds to the dollar (16 residential → $171, 10 commercial → $310 on today's
+    table). No typed prices.
+- **The customer never sees a suggested number** (coordinator default). The signed line reads
+  "Custom size / Commercial account — PJL confirms the price" with no amount. The same goes for the
+  completion email ("PJL will confirm the price"), the web tech page and the app's invoice screen.
+  The suggestion and its arithmetic appear only on the office invoice ("Price not confirmed" card +
+  **Confirm price**) and in Patrick's completion alert.
+- **Unconfirmed prices are never payable (ruling 4).**
+  - `invoices.createDraft` flags the invoice (`priceConfirm`) when the cascade bills a pending line
+    as a suggestion (`pricing.billableLines`).
+  - `invoices.isPriceUnconfirmed` is the one rule. It also covers drafts made under fix #7 round 2
+    that carry only the old placeholder note.
+  - It is folded into `isPayableOnline` via a new `payBlockReason` ("price_unconfirmed"), for SENT
+    invoices too.
+  - Refused while unconfirmed:
+    - `openForOnSitePayment` (409 `needs_pricing`);
+    - `/send` and `/resend` (409 `price_unconfirmed`);
+    - draft→sent through `update()`;
+    - the portal Pay link;
+    - the invoice-ready, reminder and junk-mail texts.
+  - `POST /api/invoices/:id/confirm-price` (admin only) confirms the suggestion or sets Patrick's
+    price, and clears the pending note. **Nothing goes to the customer by itself** (Patrick,
+    2026-09-26, replacing the earlier auto-release). Confirming and sending are separate actions.
+    `invoices.isPriceSetByPjl` means no automatic invoice-ready text is ever scheduled for a price PJL
+    sets, before or after confirming, including on a cascade re-run. The office uses **Send**.
+  - A commercial suggestion inside a priced tier is that tier's price, unconfirmed.
+- **FLOW-23 (PASS) hops touched, additively:**
+  - the pay page's `payable`, `sdk-config` and `payment-intent` now also refuse a price-unconfirmed
+    invoice, and `payment-intent` names the reason;
+  - the portal `payUrl` is only handed out when `isPayableOnline`.
+  - Untouched: `finalizeStripeInvoicePayment`, `stripe.js`, the method list, the webhook and the
+    charge amount. Every sent / part-paid invoice with a confirmed price behaves as before.
+  - Re-walk one real card payment.
+- **Tests (in build:check):**
+  - `scripts/test-price-confirm.mjs`: 47 assertions; on the parent `fcf506ae`, 6 passed and 23 failed.
+    Now 53 with the Tap to Pay pin and the no-auto-text rule. That rule fails 4 on the code before it
+    (the re-arm) and keeps a control: an ordinary priced Bill-later invoice still texts.
+  - `scripts/test-price-before-signing.mjs`: 18 assertions; on its parent, 8 passed and 10 failed.
+  - `scripts/test-closing-price.mjs` expectations updated where the rulings changed them (named in
+    the commits).
+- **Acceptance walk for Patrick (FLOW-31):**
+  1. Book a 4-zone closing and walk 6. The sign-off screen shows the 5–6 price. After signing, the
+     work order and the invoice both carry it.
+  2. Close a 16+ zone system. The customer sees "PJL confirms the price" and no number. The office
+     invoice shows the suggestion with its arithmetic. Send, Take payment and the text are all
+     refused until **Confirm price**. After confirming, nothing reaches the customer until you press
+     **Send**, and no automatic text goes out.
+  3. Repeat step 2 for a commercial account with no price set.
+**2026-09-23 (FLOW-31 — Fix #6b, PJL-98: the office's edits survive the tech's offline walk):** the
+PJL-77 audit of Fix #6 (`6332c076`, `78cff897`) found four gaps, each reproduced against the real
+queue before fixing, one commit each on `pjl-98-offline-merge`:
+1. **A second queued zone edit silently undid an office edit.** Tech marks Zones 4 and 1 done with no
+   signal, office renames Zone 2: the first sync merged correctly, the second put the old name back —
+   same for property fields (an office shut-off correction). `queue.acknowledge()` rebased the next
+   edit onto the server copy even when office changes had been merged into what was sent. It now
+   rebases only when what went out was exactly the tech's edit.
+2. **A draft on a zone the office removed blocked Finish forever.** Drafts are stamped with "its zone
+   was on the visit"; one rule (`queue.zoneDrafts`) lets only drafts whose zone is still there block.
+   At Finish a stale draft's text goes to the visit's `techNotes` and the draft is cleared, one commit.
+3. **A tech could not remove a zone.** `ZoneStage.confirmRemove` called the admin-only property DELETE
+   first; the 403 read as "Not signed in" and the zone stayed on the visit — which fix #7 bills for.
+   The visit removal is now saved first (queued, offline-safe); then the property is tried
+   (`field.removeZoneFromProperty`). `removePropertyZone`'s 403 is code `forbidden` ("needs the office
+   for now"), never sign-in; on any failure the office is told in `techNotes`. **No permission change —
+   the DELETE rule is PJL-86.**
+4. **PRD D4.** Keep mine now appends each overridden office value to `techNotes` in the same commit, and
+   the answer applies only to the clashes the tech was shown (it was stamped on every pending edit of
+   the record, deciding clashes nobody saw). Main's design is kept: one prompt per clash, Keep mine /
+   Use office's on the banner and at Finish.
+`techNotes` is office-only (not on the customer's report); it is copied to the draft invoice's
+internal notes, and its first line is the service record's summary when the tech wrote none. App-only,
+OTA (SDK 54, no native module, no server change). `scripts/test-field-merge-gaps.mjs` (13 cases, in
+`build:check`): gap 1 failed 3 of 4 on main, gap 2 1 of 2, gap 3 4 of 4, gap 4 3 of 3 — each on its
+parent commit. `test-field-conflicts` 15/15, `test-findings-report` 31/31, `test-field-offline` 16/16,
+`test-field-client` 6/6, `test-app-shell` 25/25 unchanged. **No PASS flow touched; FLOW-31 stays
+awaiting iPhone acceptance** — walk: mark two zones done in airplane mode while the office renames a
+third; remove a zone as a tech; clash one zone label and choose Keep mine, then read the WO notes.
+**2026-09-23 (FLOW-32 — a returning customer's fall booking is its own visit, PJL-97 + PJL-93):**
+Found auditing Fix #2 (#2 above covers Today's card and Open WO). Nothing closes a booking record
+when its work order completes, so a spring customer's April record stayed `confirmed`, and the fall
+re-booking (`bookings.upsertFromLead`) REUSED it: `scheduledFor` moved to October and the fall WO id
+was appended, one record reading `["WO-APRIL","WO-FALL"]`. Every reader of the record's work orders
+then acted on April's finished job: admin reschedule 409'd "Technician has already arrived" (April's
+`arrivedAt`) or, without it, re-dated April's completed WO onto the new day, where Today drew it as a
+ghost ✓ stop; the portal refused online reschedule AND cancel (`multi_wo_booking` / `wo_locked`); the
+iCal event linked April's WO; route re-timing froze or re-dated it; admin delete refused. Three
+commits. (1) **Readers:** one rule, `bookings.workOrdersForVisit(rec, wos)` (+ `workOrderIdsForVisit`),
+backed by `bookings.isPreviousVisitWo(wo, visitStart)` — a finished WO belongs to an earlier visit if
+it finished before the visit's local day, unless it is a COMPLETED WO scheduled for that day (the
+visit done ahead of time). Called from `rescheduleBooking`, portal booking-actions, portal cancel
+(guards + cascade), `retimeCustomerBooking`, the iCal link, Today's canonical pass and admin delete's
+`isActiveWo`; live data already holds merged records, so this is the half that repairs them.
+(2) **Writer:** `upsertFromLead(lead, { isFinishedWo })` closes a live record whose linked WOs are ALL
+finished as `completed` (history `closed_by_rebook`) when a NEW booking (unseen envelope id, different
+start) arrives, and makes a fresh record; `mirrorBookingOnly` passes the checker. Reschedules, open
+work, records with no WO yet and callers without a checker are unchanged. `workOrderForLeadBooking`
+step 1 now skips an envelope-named WO that `isPreviousVisitWo` refuses (an old April booking moved to
+October kept April's envelope and reopened April's job). (3) **PJL-93:** the CRM new-WO form attaches
+to `bookings.recordForLeadBooking()` only, not every record the lead has; Open WO links a WO it had to
+create under a fresh id to that record too. Left alone on purpose: `lib/assignments.js` (per-season
+assignment records, "has any WO" is right there), `bookings.remove` (the caller's `isActiveWo` carries
+the rule), and the CRM history views (`server/bookings.js` count badge, `server/booking.js` detail,
+`server/work-order.js` booking lookup) which show a record's whole history, including records merged
+before this shipped. Tests (in `build:check`): `test-merged-booking-readers.mjs` (35; parent: 26
+fail), `test-rebook-fresh-record.mjs` (19; parent: 8 fail), `test-crm-wo-attach.mjs` (17; parent: 5
+fail). **No PASS flow touched.** UNMAPPED — Patrick's walk: open a returning customer's fall booking,
+move it to another day (no "technician has arrived"), confirm April's job keeps its April date and no
+✓ ghost appears on the new day; from their portal, confirm Reschedule and Cancel are offered; check the
+calendar event opens the fall work order.
 **2026-09-23 (A station, a valve and an area are three different things):** Patrick, on Dundalk:
 *"Trees A and Trees B must appear separately, even though they share one controller station. They
 are still two physical valves with separate lateral piping."* Closes SB-01 and SB-02, both opened
@@ -506,6 +641,55 @@ So the honest statement is: opening and saving changes no money-facing record ex
 own design blob and its material list, and correcting a split changes the station representation —
 plus the controller part and BOM total IF the new count crosses a band, which at 11 → 12 it does
 not.
+
+**2026-09-23 (FLOW-31 — integrity gaps left after the pressure-test fixes, PJL-100, branch
+`pjl-100-integrity-gaps`):** an audit of main against the must-fix briefs found each fix meets its
+"done when" and left seven should-fix gaps, each reproduced on main through the real routes. One
+commit each; every test boots the real server from a temp copy (`scripts/lib/field-server.mjs`,
+email/SMS/Stripe stubbed) and failed on its parent first.
+- **#7 A no-charge stop is finished, not broken.** Fix #8 creates no invoice for a $0 closing, but the
+  work-order list's "Needs invoice" filter listed every one forever, the tech page offered "Generate
+  invoice now", that button (`POST …/create-invoice`) drafted a $0 invoice and `/send` then **emailed
+  the customer a $0 invoice**. Now: both work-order GETs carry a derived `noCharge` (from the service
+  record, via `isNoChargeServiceRecord`); create-invoice refuses 409 `no_charge`; send/resend refuse any
+  $0 invoice; the filter and the banner skip them (tech cache v52).
+  `scripts/test-no-charge-recovery.mjs`. Old code: 201 $0 draft, 2 $0 emails.
+  - **Reportable (Patrick, 2026-09-26):** a no-charge visit keeps a clear internal state. It has no
+    customer invoice, no payment prompt, no "invoice coming" wording, nothing sent to QuickBooks, and
+    no $0 invoice for bookkeeping. The Work Orders page has a **No charge** filter (completed and
+    `noCharge`, from the same rule) and a "No charge" tag on the row. Section G runs the page's own
+    filter on the server's list; the old page listed nothing.
+- **#1 Photos.** The build "mark task done" route (`POST …/tasks-done`) numbered and wrote back its
+  photos from a stale read outside the per-WO photo lock; racing an upload it lost one photo 10/10.
+  Now under `fieldPhotoUploads.run(woId)` like upload and delete. `scripts/test-photo-races.mjs`.
+  (The audit's upload-vs-delete finding was a lib-level simulation; main's delete is already locked.)
+- **#4 + #5 Findings copied once, nothing erased, failures retried.** Two overlapping copies (bulk ×2,
+  per-issue + bulk, emergency + bulk) put the finding on the property twice (6/6, 6/6, 4/4); the routes
+  wrote back zones read before the copy, erasing a zone edit saved meanwhile (6/6); a failed copy was
+  never retried. Now one rule, `lib/wo-findings.js` `copyFindingsForward` — serialized per WO, stamps
+  via the locked `workOrders.stampDeferredIds` on the fresh record — used by all three routes and by a
+  fall closing's completion cascade (which copies anything still unstamped).
+  `scripts/test-defer-races.mjs`.
+- **#2 Finish retry after a crashed completion.** If the first Finish completed the WO but its cascade
+  never ran (restart or throw) and the response was lost, the retry answered "done" with 0 invoices,
+  0 service records, 0 emails. It now runs the (idempotent) cascade under the same per-WO lock.
+  `scripts/test-finish-after-crash.mjs`.
+- **#3 Finish's first call can't hang.** `api.js` `getJson` (so `getWorkOrder`, Finish's re-read) goes
+  through `fetchWithTimeout` (30 s) — a stall is the app's `TimeoutError`, never "signed out". Ships
+  over the air. `scripts/test-api-timeouts.mjs`.
+- **#6 Nobody-home email.** The bypass email's "your invoice will follow separately" is included only
+  when there is an invoice. Section F of `test-no-charge-recovery.mjs`.
+- **Nits.** The desk's "Run completion cascade" takes the per-WO cascade lock (racing Finish it doubled
+  the invoice 5/5); a client-sent `deferredId` the server never wrote is dropped; a re-sent signature
+  is a no-op only if the signer matches too. `scripts/test-integrity-nits.mjs`.
+- **Left alone, deliberately:** the properties backfill writing from an unlocked read (1/40, only
+  while a legacy backfill is due — a fix needs re-entrant locking); no watchdog on
+  `atomic-json.serialize` (releasing a held store lock would reintroduce the lost-write race); a
+  corrupt store still surfaces as each route's 400/500 (nothing is overwritten).
+- **Acceptance walk (Patrick):** complete a no-charge closing with nobody home — the email doesn't
+  promise an invoice, the WO is not under "Needs invoice", the tech page shows no "Generate invoice
+  now". Flag a finding, tap Finish twice on poor signal — the property lists it once. FLOW-31 stays
+  UNMAPPED/awaiting device acceptance; this entry claims no walkthrough.
 
 **2026-09-22 (Fall-closing pressure-test fixes, branch `fix/fall-closing-pressure-test`):** the eight
 MUST-FIX items from the fall-closing pressure test, one commit each. No PASS flow's route or wording
@@ -6036,6 +6220,158 @@ export are required before push; device acceptance is still outstanding.
 See docs/FIELD_OFFLINE_RELEASE.md for release order, limitations, the Mac/Xcode
 procedure, and airplane-mode/restart/signature/bypass checks. This entry does
 not mark FLOW-31 PASS or claim a production/iPhone walkthrough.
+
+## 2026-09-23 — FLOW-23/31: one active invoice per work order, enforced by the server
+
+Probe on main and PR #298: two simultaneous "Generate invoice now" taps made two
+invoices for one completed visit (5/5), and Generate racing the tech's Finish
+made two in 4 of 6 timings. The route checked, then drafted, outside the lock
+the completion cascade takes; `invoices.createDraft` had no per-WO rule.
+
+Now: "Generate invoice now" runs under `completion-cascade:<woId>` (the same
+lock as Finish and the desk re-run). `invoices.createDraft` (already under the
+store lock) refuses a second ACTIVE invoice for a work order with
+`wo_already_invoiced` and the existing id. The cascade, the project cascade
+and the route all treat that as "this is the visit's invoice". Active means
+any status but void (`invoices.activeInvoiceForWorkOrder`), so
+void-and-regenerate still works, now from the button too, which used to hand
+back the voided invoice. The explicit revision path, `invoices.revise`, edits
+the same invoice in place and is untouched. Invoices with no work order
+(deposits, balances) are untouched.
+
+Not changed: customer messaging, send, payment and QuickBooks. Existing
+duplicate invoices already on disk are not merged or voided. Test:
+`scripts/test-one-invoice-per-wo.mjs`, 7 of 10 fail on the parent, 10 of 10
+pass.
+
+## 2026-09-23 — FLOW-32: a visit is its work order (returning customers, Patrick's ruling)
+
+Ruling (Patrick, 2026-09-23): only a reschedule of the SAME work order may
+reuse a booking record. A new booking or work-order id always creates a new
+visit. An old visit is never re-dated or recycled because something on it was
+left open; unfinished old work is flagged for the office instead.
+
+Found against PR #298's first cut (PJL-97): `bookings.upsertFromLead` still
+moved April's record to October, with the fall WO appended, whenever an April
+WO was never closed out, another April WO was still open, or the booking
+arrived with no WO id. A stale envelope naming April's finished WO also moved
+it. The portal's booking-actions, reschedule-availability, reschedule and
+cancel routes acted on `listByLead(lead)[0]` (the first stored record), which
+can be the old visit. Reproduced: with April's open record stored first, the
+portal answered about April's record and refused to cancel the fall visit.
+
+Now `visitRecordForBooking` is the writer's one rule:
+- The record linking this WO is reused, unless the WO is finished and the
+  record is on another day (a stale envelope).
+- Otherwise, a live record at exactly this start is the same appointment slot.
+  It is reused without moving anything.
+- Otherwise, a not-yet-opened booking (no WO on either side) that is not in
+  the past is reused and moved.
+- Otherwise, the booking is a new record.
+
+On a new visit, every earlier live record stays where it is. One whose WOs
+are all finished is closed as completed (history `closed_by_rebook`).
+Anything else gets history `left_open_for_review`, and the new record
+carries `officeReview { reason: previous_visit_open, previousBookingId,
+openWorkOrderIds }`, shown on the Bookings page as "Review: earlier visit …
+still open". The portal routes use `bookings.currentRecordForLead` (a live
+record by `recordForLeadBooking`, else the record holding the booking's own
+WO on its day). The lone-live-record fallback no longer picks a record that
+links other work orders.
+
+**Capacity, deliberately:** an earlier visit left open keeps its own calendar
+slot until the office resolves it. That includes an upcoming booking
+superseded by a new one, which used to be moved (effectively rescheduled).
+Nothing is auto-cancelled, and no customer is messaged. Customer view, Patrick
+alerts, WOs, invoices and the season plan are unchanged.
+
+Tests: `scripts/test-visit-identity.mjs`, 13 of 19 fail on the parent and 19
+of 19 pass. `test-rebook-fresh-record` and `test-booking-lifecycle` controls
+that encoded the old reuse rule were updated to the ruling.
+
+## 2026-09-26 — FLOW-31/23: a priced-scope change after signing needs the customer's new signature
+
+Patrick's ruling. If an unlocked signed work order is changed in a way that affects priced scope, the
+customer must sign again. The original signed version and its history stay intact, and the revised
+work order is marked as requiring a new signature. When the revised scope is locked, its price is set
+and frozen, and the new signature is required before normal completion or payment. Changes that don't
+touch scope or price (tech notes, photos, zone labels) never need one.
+
+**What broke (verified on the parent):**
+- An unlocked signed WO could gain a zone and be re-locked with nothing asking the customer to sign
+  again. Its invoice stayed payable and sendable throughout.
+- A new signature on an unlocked WO silently **replaced** the customer's original, with no copy kept
+  and no history entry.
+
+**The rule, once (`server/lib/work-orders.js`):**
+- `pricedScopeKey(wo)` is what the customer pays for: builder, line-item and repair lines (key, qty,
+  price, pending), the zone count for seasonal types, the fee waiver and warranty.
+- `awaitsNewSignature(wo)` is `wo.resignature.required`. It is set in `update()`, the write every scope
+  edit goes through, when an accepted WO that isn't locked changes its `pricedScopeKey`. System writes
+  pass `{ systemWrite: true }`: the cascade's own correction, the GET self-heal and the bypass
+  pre-price. Returning the scope to what was signed clears the requirement.
+- A new signature or admin bypass satisfies it. The earlier acceptance moves to `priorAcceptances`,
+  never overwritten, and the history records `resignature_required`, `resignature_captured` or
+  `signature_replaced`.
+
+**Readers, all on that one rule:**
+- `PATCH` refuses completion without the new signature (409 `resign_required`). The new signature
+  alone, in the sign-and-complete shape, passes the lock.
+- `run-cascade` and `create-invoice` refuse (no bill for an unsigned revised scope).
+- **Re-lock** re-prices the fee from the revised scope (`seasonalQuoteAtLock`, PJL-96's lock-point
+  rule), freezes it, and keeps the requirement. A signature after re-lock does not re-price.
+- **The invoice (cascade to the linked record):** `invoices.scopeHold` is set and cleared through
+  `workOrders.events` "resignature", so every scope-editing route is covered. While it is held, the
+  following all refuse (`awaiting_signature`): `payBlockReason` (pay page, portal pay link),
+  `openForOnSitePayment` (Take payment now, Tap to Pay), `/send` and `/resend`, the invoice-ready text,
+  and the text reminder.
+- **Deliberately left alone:**
+  - An office-recorded cash or cheque payment is still accepted, because the money was already received.
+  - The invoice's lines are not re-cut. Re-billing a revised scope is still the explicit
+    void-and-regenerate after the new signature (unchanged since 2026-08-06).
+
+**Test:** `scripts/test-resign-scope.mjs` (build:check). It covers seven cases:
+- notes and a relabel need nothing;
+- an added zone marks the WO and holds every door;
+- reverting clears the mark;
+- re-lock freezes the revised price;
+- the new signature is accepted and the original is kept;
+- a bypass flow before completion;
+- a signature on an unlocked WO is archived, not overwritten.
+
+Parent: 26 of 40 fail. Now: 40 of 40 pass.
+
+**Patrick's walk:** unlock a finished signed closing, add a zone, and see "needs a new signature"
+with Take payment and Send refused. Re-lock, then have the customer sign. Check the original signature
+is still in the history and the invoice is released.
+
+## 2026-09-23 — FLOW-23/31: what a work order bills has one answer, `billing.billingFor(wo)`
+
+Patrick: "I don't want separate pricing logic patched independently in Finish,
+Generate Invoice, payment, etc."
+
+Before, Finish (the completion cascade), "Generate invoice now" and the
+technician's pre-Finish preview each assembled the price themselves. Each
+loaded the property, checked for a commercial account, re-resolved the
+seasonal fee (frozen once signed) and turned a price-pending line into its
+suggestion. The three agreed only because the copies matched.
+
+Now `server/lib/billing.js` `billingFor(wo)` returns the lines an invoice
+bills, the total, no-charge, the fee decision, and the corrected quote for
+an unlocked WO. All three call it. It is a pure read, and the cascade alone
+decides whether to store the correction on an unlocked WO. The duplicated
+preparation is gone from server.js and completion-cascade.js;
+`lineItemsFromWo` moved there too, re-exported by the cascade. The lock
+points still PRICE the fee through `pricing.pricedQuoteForLock`, but load
+their inputs through the same `billing.billingInputs`. Payment reads the
+invoice; it never priced anything. WO creation still seeds the baseline line
+through `seasonalFeeDecision`; that is seeding, not billing.
+
+No price or rule changed. Test: `scripts/test-billing-one-path.mjs`, 20 of
+32 fail on the parent. The failures are the single-path requirement; the
+three already agreed on numbers, which the test now locks in. With the
+change, 32 of 32 pass across five states: walked more than booked, a custom
+size, a commercial account, a per-property rate and a $0 rate.
 
 ## 2026-09-23 — FIELD-VERSION-01: the phone says which commit it runs (FLOW-31/32 release check, awaiting iPhone acceptance)
 
