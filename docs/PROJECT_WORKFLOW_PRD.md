@@ -196,15 +196,17 @@ Patrick's six rules, 2026-09-26, with a survey of each against the code
 | # | Rule | Where it stands |
 |---|---|---|
 | 1 | Field staff create work logs, photos, problems and clock events | **Logs, photos and clock events exist** on the build WO's `dailyLog`. **Problems are new** — settled below as a project-level record linked to the daily record it was found on. |
-| 2 | Office can add notes and correct records through an audit trail | **Partly.** Notes: the project journal already does this. **Correcting a clock time is impossible today** — there is no route to change `inAt`/`outAt` at all. |
+| 2 | Office can add notes and correct records through an audit trail | **Now holds (HOURS-01, 2026-09-26).** Notes: the project journal already did this. Clock times: `PATCH /api/work-orders/:id/sessions/:sid/times` is new — admin-only, reason required, originals preserved, and it refuses inverted, future, over-24h and already-invoiced corrections. |
 | 3 | Hours calculated from clock in/out, never a typed box | **Holds, and must keep holding.** `computeProjectMetrics()` derives person-hours from `session.inAt`/`outAt` × `labourersOnSite`. No hours field exists anywhere. Any box on this screen would be a second source of truth for money. |
-| 4 | Original time entries preserved when corrected | **FAILS.** `setLabourersForSession()` overwrites `sess.labourersOnSite` in place and its history entry records only the NEW count. Labourer count multiplies straight into person-hours, so correcting 3 → 2 silently loses the original figure that billing was based on. |
+| 4 | Original time entries preserved when corrected | **Was FAILING; fixed 2026-09-26 (HOURS-01).** `setLabourersForSession()` overwrote `sess.labourersOnSite` in place and recorded only the NEW count, so correcting 3 → 2 silently lost the figure billing had been based on. It now stamps `session.original` once and appends to `session.corrections[]`. |
 | 5 | Task progress uses the same records as #307 | **Holds.** One task record, both doors, already proven. |
 | 6 | Photos use the real upload/storage path from day one | **Available.** `savePhotosForWorkOrder()` writes real compressed files under `WO_PHOTOS_DIR/<woId>/` with meta records. Use it; do not invent a second path. |
 
-**So step 2 carries backend work before any screen:** a correction path for
-clock times that keeps the original, and the same treatment for the
-labourer count. The shape #307 settled is the precedent — corrections
+**So step 2 carried backend work before any screen** — done as HOURS-01 on
+2026-09-26: a correction path for clock times that keeps the original, the
+same treatment for the labourer count, and one shared effective-hours
+calculation behind both. What remains for step 2 is the **tab itself**:
+notes, photos and project problems linked to their discovery day. The shape #307 settled is the precedent — corrections
 append, they never overwrite, and the audit trail grows rather than
 rewinding.
 
@@ -265,11 +267,54 @@ corrected value" must be produced by **one named function** that both call.
 Two readers deriving effective hours separately is the progress-bar bug
 with money attached.
 
-**Shape to build:** a session carries its original `inAt`/`outAt`/
-`labourersOnSite` untouched, plus an append-only list of corrections, each
-with the new value, actor, timestamp and reason. The effective value is
-the latest correction or the original. `setLabourersForSession()` is
-rewritten to append rather than overwrite, which is the defect this fixes.
+**Shape BUILT — 2026-09-26, and it is the reverse of what this section
+first proposed.** The plan above was for the session's own
+`inAt`/`outAt`/`labourersOnSite` to stay frozen as the original, with
+every reader routed through a function to get the effective value. That
+was rejected during the build, for one reason: **it fails silently.** Any
+reader you miss quietly bills the *uncorrected* number and nothing looks
+wrong. What shipped instead:
+
+| | |
+|---|---|
+| `session.inAt` / `outAt` / `labourersOnSite` | always the **effective** value |
+| `session.original = { inAt, outAt, labourersOnSite }` | stamped **once**, on the first correction |
+| `session.corrections[]` | append-only `{ at, by, reason, field, from, to }` |
+
+A missed reader now shows the **correct** figure and loses only the audit
+detail. When one shape fails loudly and the other fails silently, and the
+subject is hours you invoice, take the one that fails loudly.
+
+`original` is stamped **once**, not per correction, because "the original
+value" means what the crew recorded — not what the previous correction
+happened to leave behind. Correcting a count twice still shows the
+technician's own number.
+
+`setLabourersForSession()` was rewritten to record a correction rather
+than overwrite, which is the defect this fixes, and
+`correctSessionTimes()` + `PATCH /api/work-orders/:id/sessions/:sid/times`
+are new. Re-sending an unchanged value writes **no** correction entry — an
+audit log full of `3 → 3` is how a real correction gets lost.
+
+**Rule 3 delivered:** `server/lib/session-hours.js` is the one loop.
+`computeProjectMetrics()` and `computeTAndMBilling()` both call
+`sumPersonHours()`, and the classic project page — a **third** copy nobody
+had counted — no longer calculates at all, reading a server-computed
+`personHours` instead. The only remaining difference between metrics and
+billing is one argument: `openSessions: "toNow"` versus `"skip"`.
+
+**Who may correct:** the times route is `"admin"` in `needsAuth()` — the
+third admin-only work-order route, alongside unlock/relock and the fee
+waiver, all three being decisions that change what the customer is
+charged. Setting the crew **count** stays `"user"`: that is a live field
+action, and Patrick's split puts clocking in and out in the field while
+"review daily records and labour" is desk work.
+
+Pinned by `scripts/test-session-hours-protected.mjs` (44 assertions, 29 of
+which fail on the pre-change code) and
+`scripts/test-corrected-hours-on-screen.mjs` (10, Playwright — it reads
+the rendered number, because the first cut served 9.00 correctly and
+displayed 0.00). Full write-up: FLOW_REGISTER, HOURS-01.
 
 **Forward dependency, noted not decided:** hours already invoiced. A
 correction changes the effective figure but does not reach an invoice

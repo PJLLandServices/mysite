@@ -41,6 +41,7 @@ const crypto = require("node:crypto");
 
 const FILE = path.join(__dirname, "..", "data", "work-orders.json");
 const { writeJsonAtomic, serialize, parseJsonArrayStore } = require("./atomic-json");
+const sessionHours = require("./session-hours");
 const EventEmitter = require("node:events");
 
 // "resignature" fires with the saved WO whenever awaitsNewSignature(wo)
@@ -2273,7 +2274,52 @@ async function endSession(woId, sessionId, { by = "admin" } = {}) {
   return { workOrder: wo, session: sess };
 }
 
-async function setLabourersForSession(woId, sessionId, count, note = "", { by = "admin" } = {}) {
+// ---- Office corrections to a field record -------------------------
+//
+// Patrick's rule, verbatim: "Preserve the original value. Record the
+// corrected value, who changed it, when and why. Calculate billing from
+// the effective corrected value. Never represent an office correction as
+// a new field work session."
+//
+// So a correction never invents a session and never quietly replaces a
+// number. It stamps session.original ONCE — the field's own answer,
+// frozen — and appends to session.corrections, which is append-only.
+// The live field carries the effective value so every reader, including
+// ones written before this existed, bills the corrected figure.
+//
+// Why original is stamped once and not per-field: "the original" means
+// what the crew recorded, not what the last correction happened to
+// overwrite. Correcting the count twice must still show the count the
+// technician entered on site.
+function _stampCorrection(wo, sess, { field, from, to, by, reason, ts }) {
+  if (!sess.original) {
+    sess.original = {
+      inAt: sess.inAt ?? null,
+      outAt: sess.outAt ?? null,
+      labourersOnSite: Math.max(1, Math.floor(Number(sess.labourersOnSite) || 1))
+    };
+  }
+  const entry = {
+    at: ts,
+    by: String(by || "admin").slice(0, 80),
+    reason: String(reason || "").slice(0, 400),
+    field,
+    from: from ?? null,
+    to: to ?? null
+  };
+  sess.corrections = [...(sess.corrections || []), entry];
+  // The WO history gets its own line so the audit trail reads in order
+  // alongside every other change to this work order.
+  wo.history.push({
+    ts,
+    action: "session_corrected",
+    by,
+    note: `${sess.id} ${field}: ${from ?? "(none)"} → ${to ?? "(none)"}${entry.reason ? " — " + entry.reason : ""}`
+  });
+  return entry;
+}
+
+async function setLabourersForSession(woId, sessionId, count, note = "", { by = "admin", reason = "" } = {}) {
   const records = await readAll();
   const idx = records.findIndex((w) => w.id === woId);
   if (idx === -1) throw Object.assign(new Error("Work order not found."), { code: "wo_not_found" });
@@ -2283,16 +2329,115 @@ async function setLabourersForSession(woId, sessionId, count, note = "", { by = 
   if (!sess) throw Object.assign(new Error("Session not found."), { code: "session_not_found" });
   const safeCount = Math.max(1, Math.floor(Number(count) || 1));
   const ts = new Date().toISOString();
+  const previous = Math.max(1, Math.floor(Number(sess.labourersOnSite) || 1));
+
+  // A correction is a CHANGE. Re-sending the same count from the field
+  // app (or a double tap) must not manufacture an audit entry claiming
+  // somebody corrected something — a log full of 3 → 3 is how a real
+  // correction gets lost.
+  const corrections = [];
+  if (safeCount !== previous) {
+    corrections.push(_stampCorrection(wo, sess, {
+      field: "labourersOnSite", from: previous, to: safeCount, by, reason: reason || note, ts
+    }));
+  }
   sess.labourersOnSite = safeCount;
   if (typeof note === "string") sess.labourerNote = note.slice(0, 400);
+
+  // The original line stays in history regardless, so nothing that reads
+  // for "session_labourers_set" today stops working.
   wo.history.push({
     ts, action: "session_labourers_set", by,
-    note: `${sessionId} count=${safeCount}${note ? " — " + note : ""}`
+    note: `${sessionId} count=${safeCount} (was ${previous})${note ? " — " + note : ""}`
   });
   wo.updatedAt = ts;
   records[idx] = wo;
   await writeAll(records);
   return wo;
+}
+
+// Fix a wrong clock-in or clock-out. Until now there was NO way to do
+// this: a technician who forgot to clock out at 3pm and remembered at
+// 7pm left four phantom person-hours on a T&M invoice, and the only
+// remedy was editing the JSON by hand.
+//
+// Refusals are deliberate and loud, because every one of them is an
+// invoice that would otherwise be wrong in a way nobody notices:
+//   - no reason                → you cannot audit "why" later
+//   - locked work order        → already invoiced; reopen it instead
+//   - out before in            → negative hours
+//   - either time in the future → nobody worked tomorrow
+//   - over 24h                 → a year or month typed wrong, which
+//                                bills thousands of hours
+async function correctSessionTimes(woId, sessionId, { inAt = null, outAt = null, reason = "", by = "admin" } = {}) {
+  const cleanReason = String(reason || "").trim();
+  if (cleanReason.length < 3) {
+    throw Object.assign(new Error("A reason is required for a clock-time correction."), { code: "reason_required" });
+  }
+  if (inAt == null && outAt == null) {
+    throw Object.assign(new Error("Supply a corrected clock-in time, clock-out time, or both."), { code: "nothing_to_correct" });
+  }
+
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) throw Object.assign(new Error("Work order not found."), { code: "wo_not_found" });
+  const wo = records[idx];
+  _requireBuild(wo); // also refuses a locked (invoiced) work order
+  const sess = (wo.dailyLog.sessions || []).find((s) => s.id === sessionId);
+  if (!sess) throw Object.assign(new Error("Session not found."), { code: "session_not_found" });
+
+  const ts = new Date().toISOString();
+  const nowMs = Date.parse(ts);
+
+  const parse = (value, label) => {
+    const ms = Date.parse(value);
+    if (!Number.isFinite(ms)) {
+      throw Object.assign(new Error(`${label} is not a valid date and time.`), { code: "bad_timestamp" });
+    }
+    if (ms > nowMs + 60000) { // a minute of clock skew, not a workday
+      throw Object.assign(new Error(`${label} is in the future.`), { code: "future_timestamp" });
+    }
+    return new Date(ms).toISOString();
+  };
+
+  const nextIn = inAt == null ? sess.inAt : parse(inAt, "Clock-in");
+  const nextOut = outAt == null ? sess.outAt : parse(outAt, "Clock-out");
+
+  if (!nextIn) {
+    throw Object.assign(new Error("This session has no clock-in time to correct against."), { code: "bad_timestamp" });
+  }
+  if (nextOut) {
+    const spanMs = Date.parse(nextOut) - Date.parse(nextIn);
+    if (spanMs <= 0) {
+      throw Object.assign(new Error("Clock-out must be after clock-in."), { code: "inverted_times" });
+    }
+    if (spanMs / sessionHours.MS_PER_HOUR > sessionHours.MAX_SESSION_HOURS) {
+      throw Object.assign(
+        new Error(`That session would be longer than ${sessionHours.MAX_SESSION_HOURS} hours. Check the date.`),
+        { code: "implausible_duration" }
+      );
+    }
+  }
+
+  const applied = [];
+  if (inAt != null && nextIn !== sess.inAt) {
+    applied.push(_stampCorrection(wo, sess, { field: "inAt", from: sess.inAt, to: nextIn, by, reason: cleanReason, ts }));
+    sess.inAt = nextIn;
+  }
+  if (outAt != null && nextOut !== sess.outAt) {
+    applied.push(_stampCorrection(wo, sess, { field: "outAt", from: sess.outAt, to: nextOut, by, reason: cleanReason, ts }));
+    sess.outAt = nextOut;
+  }
+  if (!applied.length) {
+    // Nothing actually moved. Say so rather than writing an audit entry
+    // for a correction that corrected nothing.
+    return { workOrder: wo, session: sess, corrections: [], changed: false };
+  }
+
+  wo.updatedAt = ts;
+  records[idx] = wo;
+  await writeAll(records);
+  return { workOrder: wo, session: sess, corrections: applied, changed: true };
 }
 
 // Mark a task done in today's daily log. ALSO flips the project's
@@ -2553,6 +2698,7 @@ module.exports = {
   startSession: withStoreLock(startSession),
   endSession: withStoreLock(endSession),
   setLabourersForSession: withStoreLock(setLabourersForSession),
+  correctSessionTimes: withStoreLock(correctSessionTimes),
   markTaskDoneToday: withStoreLock(markTaskDoneToday),
   unmarkTaskDoneToday: withStoreLock(unmarkTaskDoneToday),
   addTaskProgressToday: withStoreLock(addTaskProgressToday),
