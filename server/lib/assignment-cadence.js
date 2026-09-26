@@ -464,6 +464,9 @@ async function sendStepForBooking(booking, step, { season, year, deps = {}, by =
       seasonName: "",
       portalLink: appointmentLinkFor(token),
       ctaLabel: "Confirm or change my appointment",
+      // A reply to this email doesn't confirm — the body says to tap the
+      // button or text YES, so the footer mustn't invite a reply.
+      invitesReply: false,
       subject: messages.email.subject,
       emailBody: messages.email.body,
       unsubscribeUrlEmail: unsubscribe.email,
@@ -585,6 +588,9 @@ async function sendDayMoveForBooking(booking, { season, year, deps = {}, by = "c
       propertyAddress: "", seasonName: "",
       portalLink: appointmentLinkFor(token),
       ctaLabel: "Confirm or change my appointment",
+      // A reply to this email doesn't confirm — the body says to tap the
+      // button or text YES, so the footer mustn't invite a reply.
+      invitesReply: false,
       subject: messages.email.subject,
       emailBody: messages.email.body,
       unsubscribeUrlEmail: unsubscribe.email,

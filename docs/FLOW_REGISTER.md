@@ -35,6 +35,19 @@ its Part B (`#sbBackLink` not found under its fully-mocked route table). Confirm
 the pre-#302 `sitebuilder.html`, so it is not a regression from the workspace route — it is a stale
 harness in an opt-in suite, and fixing it does not belong in a navigation change.
 
+**2026-09-26 (An email reply doesn't confirm — and every email says so):** Frank Mazzuca and
+Nishka Potter "confirmed" by replying to the appointment email; nothing reads the inbox, so they
+kept getting reminders. Patrick's rule: a customer confirms by pressing **Confirm on the link** or
+**replying YES to the text** — both already work (#308) — and never by replying to the email. So
+the four appointment emails now say "tap the button below and press Confirm — or reply YES to our
+text message" plus "replying to this email does not confirm your appointment"; the cadence emails'
+footer drops "or reply to this email" (`sendOutreachEmail({ invitesReply: false })`; seasonal
+outreach keeps it). Saved email wording from the original setup is retired once
+(`_migrations.confirmByTextEmails_2026_09_26`, backup under `_retired`), exactly as the texts were
+(#309). Also: "(this number is automated)" sat right after (905) 960-0181 and read as if Patrick's
+own number were automated — now "(please don't reply to this automated text/message)" in the 24h
+reminder and three self-booked texts. Pinned by `test-assignment-messages.mjs`.
+
 **2026-09-25 (Confirm visibly confirms; texts to the Twilio number are heard):** Two customers
 (Greg Davis, Behnaz) phoned Patrick saying "Confirm this appointment" didn't work, and customers
 were replying YES to the automated text from the unmonitored 647 number. PRD/TRD:

@@ -64,6 +64,15 @@ Collateral from the same bug:
 
 ---
 
+## 2026-09-26 change: an email reply doesn't confirm
+
+Customers replied "confirmed" to the appointment email and kept getting
+reminders — nothing reads the inbox. Confirming stays exactly two ways:
+**Confirm on the link**, or **reply YES to the text**. Every appointment email
+now says so and adds "replying to this email does not confirm your
+appointment"; the cadence emails no longer invite a reply. See the
+2026-09-26 entry in `docs/FLOW_REGISTER.md`.
+
 ## As built (differences from the plan below)
 
 - Success note is `#doneNote` (not `#confirmedNote`) and is shown for every
