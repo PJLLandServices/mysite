@@ -23,6 +23,9 @@
 //   D. a billed closing is unchanged: create-invoice answers with the
 //      invoice on file, and send still emails it
 //   E. the list filter and the tech banner read noCharge
+//   G. no-charge visits keep a reportable internal state: the Work Orders
+//      page's "No charge" filter lists them (and only them), and they
+//      still have no invoice of any kind (Patrick, 2026-09-26)
 //
 // Run: node scripts/test-no-charge-recovery.mjs   (also in build:check)
 
@@ -36,6 +39,25 @@ let passed = 0, failed = 0;
 function ok(cond, label) {
   if (cond) passed += 1;
   else { failed += 1; console.error(`  FAIL: ${label}`); }
+}
+
+// The Work Orders page's own filter, lifted from server/work-orders-index.js
+// and run on real rows (the page needs a DOM; the filter does not).
+function pageFilter(status) {
+  const src = fs.readFileSync(path.join(ROOT, "server/work-orders-index.js"), "utf8");
+  const lift = (name) => {
+    const at = src.indexOf(`function ${name}(`);
+    return at < 0 ? "" : src.slice(at, src.indexOf("\n}\n", at) + 3);
+  };
+  if (!lift("applyFilters")) return null;
+  const run = new Function("currentStatus", "invoicedWoIds",
+    `const CLOSED_STATUSES = new Set(["completed","cancelled","no_show"]);
+     const els = { showClosed: { checked: true }, search: { value: "" } };
+     ${lift("isUnlockedByAdmin")}
+     ${lift("applyFilters")}
+     return applyFilters;`);
+  const fn = run(status, new Set());
+  return (rows) => fn(rows);
 }
 
 const srv = await bootServer({ port: 4911 });
@@ -92,6 +114,16 @@ try {
     ok(c1.status === 200 && invId, `D. a billed closing drafts its invoice (${c1.status} ${invId})`);
     const got = await srv.api("GET", `/api/work-orders/${f1.wo.id}`);
     ok(got.body.workOrder?.noCharge !== true, "D. …and is not marked noCharge");
+
+    // ---- G. the "No charge" report (Patrick, 2026-09-26) -------------------
+    // No-charge visits keep a clear internal state you can list: the Work
+    // Orders page's "No charge" filter, run here on the server's own list.
+    const rows = (await srv.api("GET", "/api/work-orders")).body.workOrders || [];
+    const pick = pageFilter("no_charge");
+    const shown = pick ? pick(rows).map((w) => w.id) : null;
+    ok(Array.isArray(shown) && shown.includes(id0), `G. the "No charge" filter lists the no-charge visit (${JSON.stringify(shown)})`);
+    ok(Array.isArray(shown) && !shown.includes(f1.wo.id), "G. …and not the billed one");
+    ok(!srv.data("invoices").some((i) => i.woId === id0), "G. …which still has no invoice of any kind, $0 or otherwise");
     const again = await srv.api("POST", `/api/work-orders/${f1.wo.id}/create-invoice`, {});
     ok(again.status === 200 && again.body.alreadyExisted === true && again.body.invoice?.id === invId, `D. create-invoice still answers with the invoice on file (${again.status})`);
     const send = await srv.api("POST", `/api/invoices/${invId}/send`, {});
@@ -135,6 +167,8 @@ try {
   const index = fs.readFileSync(path.join(ROOT, "server/work-orders-index.js"), "utf8");
   const needs = index.slice(index.indexOf('currentStatus === "needs_invoice"'), index.indexOf('currentStatus === "unlocked"'));
   ok(/noCharge/.test(needs), "E. the \"Needs invoice\" filter leaves no-charge work orders out");
+  const html = fs.readFileSync(path.join(ROOT, "server/work-orders.html"), "utf8");
+  ok(/data-status-filter="no_charge"[^>]*>No charge</.test(html), "E. the Work Orders page has a \"No charge\" filter");
   const tech = fs.readFileSync(path.join(ROOT, "server/work-order-tech.js"), "utf8");
   const banner = tech.slice(tech.indexOf("function renderCascadeRecovery"), tech.indexOf("function renderCascadeRecovery") + 1500);
   ok(/noCharge/.test(banner), "E. the tech page's recovery banner does not offer \"Generate invoice now\" on a no-charge visit");

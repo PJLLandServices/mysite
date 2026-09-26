@@ -106,6 +106,12 @@ function applyFilters(items) {
     // A no-charge visit (PJL-100 #7) has no invoice BY DESIGN — the server
     // marks it noCharge — so it is finished, not stranded.
     result = result.filter((w) => w.locked === true && !invoicedWoIds.has(w.id) && w.noCharge !== true);
+  } else if (currentStatus === "no_charge") {
+    // "No charge" (Patrick, 2026-09-26) — completed visits that billed
+    // nothing. They carry no invoice, no payment and nothing in QuickBooks
+    // on purpose; this is where they are reported on. `noCharge` is set by
+    // the server from the one rule, isNoChargeServiceRecord.
+    result = result.filter((w) => w.status === "completed" && w.noCharge === true);
   } else if (currentStatus === "unlocked") {
     // "Unlocked" (2026-08-06) — WOs an admin unlocked for editing and
     // hasn't re-locked. This filter exists because admin unlock created a
@@ -153,6 +159,8 @@ function render() {
         ? "No signed work orders are missing an invoice. Cascade is healthy."
         : currentStatus === "unlocked"
           ? "Nothing left unlocked. Every accepted work order is locked."
+          : currentStatus === "no_charge"
+            ? "No completed no-charge visits."
           : "No work orders match the current filter.";
     return;
   }
@@ -182,7 +190,7 @@ function render() {
           <span class="crm-cell ml-card-head">
             <span class="crm-identity">
             <span class="crm-cell-primary">${escapeHtml(customer)}</span>
-            <span class="crm-cell-sub">${escapeHtml(wo.id)}${wo.locked ? " &middot; \uD83D\uDD12 locked" : ""}${wo.followupOfWoId ? ` &middot; \u21AA ${escapeHtml(wo.followupOfWoId)}` : ""}${photoCount ? ` &middot; ${photoCount} photo${photoCount === 1 ? "" : "s"}` : ""}${wo.intakeGuarantee && wo.intakeGuarantee.applies ? " &middot; AI guarantee" : ""}</span></span>
+            <span class="crm-cell-sub">${escapeHtml(wo.id)}${wo.locked ? " &middot; \uD83D\uDD12 locked" : ""}${wo.noCharge ? " &middot; No charge" : ""}${wo.followupOfWoId ? ` &middot; \u21AA ${escapeHtml(wo.followupOfWoId)}` : ""}${photoCount ? ` &middot; ${photoCount} photo${photoCount === 1 ? "" : "s"}` : ""}${wo.intakeGuarantee && wo.intakeGuarantee.applies ? " &middot; AI guarantee" : ""}</span></span>
           </span>
           <span class="crm-cell wo-cell-type">
             <span>${escapeHtml(typeLabel)}</span>

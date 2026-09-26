@@ -593,6 +593,11 @@ email/SMS/Stripe stubbed) and failed on its parent first.
   record, via `isNoChargeServiceRecord`); create-invoice refuses 409 `no_charge`; send/resend refuse any
   $0 invoice; the filter and the banner skip them (tech cache v52).
   `scripts/test-no-charge-recovery.mjs`. Old code: 201 $0 draft, 2 $0 emails.
+  - **Reportable (Patrick, 2026-09-26):** a no-charge visit keeps a clear internal state. It has no
+    customer invoice, no payment prompt, no "invoice coming" wording, nothing sent to QuickBooks, and
+    no $0 invoice for bookkeeping. The Work Orders page has a **No charge** filter (completed and
+    `noCharge`, from the same rule) and a "No charge" tag on the row. Section G runs the page's own
+    filter on the server's list; the old page listed nothing.
 - **#1 Photos.** The build "mark task done" route (`POST …/tasks-done`) numbered and wrote back its
   photos from a stale read outside the per-WO photo lock; racing an upload it lost one photo 10/10.
   Now under `fieldPhotoUploads.run(woId)` like upload and delete. `scripts/test-photo-races.mjs`.
