@@ -6087,3 +6087,121 @@ Verified:
 **Needs a real tap:** one small live Tap to Pay payment from the Mac build,
 refunded in Stripe, with the invoice reading Paid and the ledger line
 reading "Tap to Pay on iPhone".
+
+## 2026-09-26 — HOURS-01: an office correction keeps the field's original, and one calculation bills it
+
+First of Patrick's four Daily Records backend-safety items: "1. Preserve
+original labourer counts when corrected. 2. Add audited clock-time
+corrections. 3. Make billing and project metrics use one shared
+effective-hours calculation." (Item 4, the Daily Records tab itself, is
+the next release.) His rule for the whole class of change, verbatim:
+
+> "Preserve the original value. Record the corrected value, who changed
+> it, when and why. Calculate billing from the effective corrected value.
+> Never represent an office correction as a new field work session."
+
+**What was wrong.** Three separate defects, all on the money path:
+
+1. `setLabourersForSession()` did `sess.labourersOnSite = safeCount` — a
+   straight overwrite — and its history line recorded only the NEW count.
+   The number the technician entered on site was gone, unrecoverably.
+2. **There was no route to correct a clock time at all.** A technician who
+   forgot to clock out at 3pm and noticed at 7pm left four phantom
+   person-hours on a T&M invoice, and the only remedy was hand-editing
+   `work-orders.json`.
+3. `(out − in) × labourers` existed in **three** places: `computeProjectMetrics()`,
+   `computeTAndMBilling()`, and the classic project page's day list in
+   `server/project.js`. Three copies of a money calculation is three
+   chances to drift, and the one that drifts silently is the one that bills.
+
+**The storage shape.** `session.inAt / outAt / labourersOnSite` always
+carry the **effective** value; `session.original = { inAt, outAt,
+labourersOnSite }` is stamped **once**, on the first correction, and
+`session.corrections[]` is append-only `{ at, by, reason, field, from, to }`.
+The live fields hold the effective value deliberately. The alternative —
+freeze the live field as the original and route every reader through a
+function — reads more elegantly and **fails silently**: any reader you miss
+quietly bills the uncorrected number and nothing looks wrong. This way a
+missed reader shows the *correct* figure and only loses audit detail. When
+one shape fails loudly and the other fails silently, and the subject is
+hours you invoice, take the one that fails loudly.
+
+`original` is stamped once rather than per-correction because "the
+original value" means what the crew recorded, not what the previous
+correction happened to leave behind — correcting a count twice still
+shows the technician's own number.
+
+**One calculation.** `server/lib/session-hours.js` (new, pure, no I/O) is
+now the only person-hours loop. Both `computeProjectMetrics()` and
+`computeTAndMBilling()` call `sumPersonHours()`; the classic page no
+longer calculates at all and reads a server-computed `personHours` served
+on `GET /api/work-orders/:id` (Patrick's standing rule from the Tasks
+release: "display server-calculated totals instead of independently
+recalculating them"). The **one** legitimate difference between metrics
+and billing is now a single argument — `openSessions: "toNow"` for
+metrics (a crew still clocked in shows hours so far) versus `"skip"` for
+billing (you cannot invoice a session that has not ended). They can no
+longer answer differently for any other reason.
+
+**The new route.** `PATCH /api/work-orders/:id/sessions/:sid/times`,
+body `{ inAt?, outAt?, reason }`. Refusals, each one an invoice that would
+otherwise be wrong in a way nobody notices: no reason (422), clock-out
+before clock-in (422), either time in the future (422), a result over 24h
+(422 — the classic year typo, which would otherwise bill thousands of
+hours), nothing supplied (422), a locked/invoiced work order (409).
+Re-sending an unchanged value writes **no** correction entry — an audit log
+full of `3 → 3` is how a real correction gets lost.
+
+**Gating.** The route is `"admin"` in `needsAuth()`. This is the **third**
+admin-only work-order route (after unlock/relock and the fee waiver) and
+`test-warranty-claims.mjs`'s canary was updated from two to three with the
+reasoning rather than the gate being weakened: all three change what the
+customer is charged. Setting the crew **count** stays at `"user"` — that is
+a live field action. Per Patrick's field/office split, "technicians clock
+in/out" but "review daily records and labour" is desk work.
+
+**Two defects found and fixed during the work, both mine, both caught by
+the repo's own guards rather than by me:**
+
+- The first cut of both routes called `await requireAdmin(req)` and threw
+  the result away. `requireAdmin` **returns null on failure rather than
+  throwing**, so that call gated nothing — a no-op wearing the shape of a
+  gate. `scripts/test-admin-gates.mjs` exists for exactly this and caught
+  it. The gate now lives in `needsAuth()` with the rest of them.
+- The classic page was rewired to read the server's figure, but
+  `personHours` is a **sibling** of `workOrder` in the response and the
+  page's loader does `.map((d) => d.workOrder)` — the field was dropped on
+  the floor. Every server-side assertion passed (the API really did serve
+  9.00) while the page would have drawn **0.00 person-hrs on every day of
+  every build job**. A total served correctly and displayed wrongly is
+  worse than one simply wrong, because everything upstream looks healthy.
+  This is why `test-corrected-hours-on-screen.mjs` reads rendered text.
+
+**Verified:**
+- `scripts/test-session-hours-protected.mjs` (44 assertions, in
+  `build:check`) — **run against the unfixed code first: 12 passed, 29
+  failed.** On old code the T&M invoice billed **12 hrs / $1,140** where
+  the corrected figure is **9 hrs / $855**, and the correction route
+  answered 404.
+- `scripts/test-corrected-hours-on-screen.mjs` (10 assertions, Playwright,
+  its own npm script) — the day list reads 12.00, the office corrects,
+  the day list reads 9.00. **Run against the dropped-field bug: 3 fail,
+  showing `0.00 person-hrs`.**
+- Four sandbox test harnesses that copy `work-orders.js` / `projects.js`
+  into a temp dir needed `session-hours.js` added to their dependency
+  lists (`test-wo-completedat`, `test-store-concurrency`, `test-wo-unlock`,
+  `test-siteplan-calibration`) — each verified green afterwards.
+- The rest of `build:check` is green; the only failures in this sandbox are
+  the pre-existing pjl-field ones (`npm ci` not run in `pjl-field/`; CI
+  installs them).
+
+**No flow marked PASS was touched.** FLOW-23 (payments) is untouched: this
+changes what `computeTAndMBilling` totals, not how an invoice is charged.
+
+**Patrick's acceptance test — not yet walked:** (1) open a build job with a
+logged day and note its person-hours on the classic project page; (2)
+correct that session's clock-out to an earlier time with a reason; (3)
+confirm the day list now shows fewer hours, and that the original time is
+still on the record; (4) confirm a technician signed in on the phone
+cannot reach the correction; (5) on a T&M job, confirm the labour line
+bills the corrected hours.

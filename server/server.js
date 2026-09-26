@@ -129,6 +129,7 @@ const { createLock } = require("./lib/booking-lock");
 const holds = require("./lib/booking-holds");
 const purgeTestData = require("./lib/purge-test-data");
 const workOrders = require("./lib/work-orders");
+const sessionHours = require("./lib/session-hours");
 const quotes = require("./lib/quotes");
 const quoteViews = require("./lib/quote-views");
 const invoices = require("./lib/invoices");
@@ -1375,6 +1376,11 @@ function needsAuth(method, pathname) {
   // The routes also call requireAdmin directly — the gate is the fence,
   // the route check is the lock.
   if (/^\/api\/work-orders\/[^/]+\/(unlock|relock)$/.test(pathname)) return "admin";
+  // Correcting a session's clock times rewrites billable hours after the
+  // fact. Techs clock in and out (that stays "user", below) but only the
+  // office corrects the record afterwards — a technician quietly editing
+  // their own hours is exactly what the audit trail exists to prevent.
+  if (/^\/api\/work-orders\/[^/]+\/sessions\/[^/]+\/times$/.test(pathname)) return "admin";
   // Klarna financing enable/disable (PJL-34) — ADMIN ONLY, deliberately
   // stricter than the generic quote-folder "user" (admin-or-tech) rule
   // below. Enabling is the one action that can gross up a real quote's
@@ -16573,13 +16579,63 @@ async function handleApi(req, res, pathname) {
       const woId = decodeURIComponent(sessionLabourersMatch[1]);
       const sessionId = decodeURIComponent(sessionLabourersMatch[2]);
       const payload = await parseRequestBody(req);
-      const session = await requireAdmin(req);
+      // No requireAdmin here: setting the crew count is a FIELD action and
+      // needsAuth fences this path at "user" so techs can reach it. (The
+      // call that used to sit here bound a value used only for `by:`,
+      // never for gating — actorLabel does that job now.)
+      // actorLabel resolves the signed-in user's NAME, not their uid, so
+      // the correction log reads "Dana Whitfield" rather than a token
+      // nobody recognises six months later. Same attribution the task
+      // writes use since #307.
       const wo = await workOrders.setLabourersForSession(woId, sessionId, payload.count, payload.note || "", {
-        by: session?.uid || "admin"
+        by: await actorLabel(req),
+        reason: payload.reason || ""
       });
       return sendJson(res, 200, { ok: true, workOrder: wo });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update labourers."] });
+    }
+  }
+
+  // ---- Correct a session's clock times (office) ----
+  //
+  // The office fix for a technician who forgot to clock out, or clocked
+  // in on the wrong job. It is a CORRECTION, not a second work session:
+  // the original times stay on the record, the new ones are stamped with
+  // who/when/why, and hours are billed from the corrected values.
+  //
+  // Body: { inAt?, outAt?, reason }  — reason is required.
+  const sessionTimesMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/sessions\/([^/]+)\/times$/);
+  if (sessionTimesMatch && req.method === "PATCH") {
+    try {
+      const woId = decodeURIComponent(sessionTimesMatch[1]);
+      const sessionId = decodeURIComponent(sessionTimesMatch[2]);
+      const payload = await parseRequestBody(req);
+      // Gated at "admin" by needsAuth above — not by a call here, because
+      // requireAdmin RETURNS NULL rather than throwing, so a bare call is
+      // a no-op wearing the shape of a gate.
+      const result = await workOrders.correctSessionTimes(woId, sessionId, {
+        inAt: payload.inAt ?? null,
+        outAt: payload.outAt ?? null,
+        reason: payload.reason || "",
+        by: await actorLabel(req)
+      });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      // 404 for a record that isn't there, 409 for a work order that is
+      // locked or a session that is gone, 422 for a correction the
+      // numbers refuse. Each one tells the office which it is.
+      const status =
+        err.code === "wo_not_found" ? 404 :
+        err.code === "session_not_found" ? 404 :
+        err.code === "wo_locked" ? 409 :
+        err.code === "wrong_mode" ? 409 :
+        422;
+      return sendJson(res, status, {
+        ok: false,
+        errors: [err.message || "Couldn't correct the session times."],
+        code: err.code || null
+      });
     }
   }
 
@@ -20329,7 +20385,21 @@ async function handleApi(req, res, pathname) {
         }
       } catch (err) { console.warn("[wo-get] seasonal fee preview failed:", err?.message); }
     }
-    return sendJson(res, 200, { ok: true, workOrder: wo, property, lead, lastService, propertyEdits, seasonalFee });
+    // Person-hours for this day, calculated HERE from the shared module
+    // rather than re-derived in the page. Patrick's standing rule after
+    // the Tasks release: "display server-calculated totals instead of
+    // independently recalculating them in React." The classic project
+    // page used to run its own (out − in) × labourers loop, which is a
+    // third copy of a money calculation and the one most likely to miss
+    // an office correction. It now reads this field.
+    //
+    // "toNow" matches the project metrics: a crew still clocked in shows
+    // hours so far. Billing is the one that skips open sessions.
+    const personHours = wo.type === "build"
+      ? sessionHours.sumPersonHours([wo], { openSessions: "toNow" })
+      : null;
+
+    return sendJson(res, 200, { ok: true, workOrder: wo, property, lead, lastService, propertyEdits, seasonalFee, personHours });
   }
 
   if (workOrderMatch && req.method === "PATCH") {

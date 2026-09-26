@@ -32,6 +32,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 
 const calibration = require("./site-plan-calibration");
+const sessionHours = require("./session-hours");
 
 const FILE = path.join(__dirname, "..", "data", "projects.json");
 
@@ -1408,7 +1409,6 @@ async function computeProjectMetrics(projectId) {
     ? Math.round(liveTasks.reduce((sum, t) => sum + taskPct(t), 0) / totalTasks)
     : 0;
 
-  let totalPersonHours = 0;
   let photoCount = 0;
   let daysLogged = 0;
   let lastWorkDate = null;
@@ -1422,17 +1422,13 @@ async function computeProjectMetrics(projectId) {
         lastWorkDate = dl.workDate;
       }
     }
-    for (const s of sessions) {
-      if (!s.inAt) continue;
-      const outAt = s.outAt || new Date().toISOString(); // active sessions count up to now
-      const ms = new Date(outAt) - new Date(s.inAt);
-      if (Number.isFinite(ms) && ms > 0) {
-        totalPersonHours += (ms / 3600000) * (Number(s.labourersOnSite) || 1);
-      }
-    }
     photoCount += Array.isArray(wo.photos) ? wo.photos.length : 0;
   }
-  totalPersonHours = Math.round(totalPersonHours * 100) / 100;
+  // Hours come from the shared calculation, not a loop of our own. The
+  // ONE thing metrics does differently from billing is count a session
+  // that is still running, so "hours so far" moves while the crew is on
+  // site — that difference is this argument and nothing else.
+  totalPersonHours = sessionHours.sumPersonHours(buildWos, { openSessions: "toNow" });
 
   const pendingScopeChanges = (proj.scopeChangeRequests || []).filter(
     (s) => s.status === "pending_admin_review" || s.status === "pending_customer_approval"
@@ -1462,19 +1458,11 @@ async function computeTAndMBilling(projectId, { partsCatalog = null } = {}) {
   const workOrders = require("./work-orders");
   const buildWos = await workOrders.listBuildWosForProject(projectId);
 
-  // Labour: sum across all sessions of (hours × labourers).
-  let totalHours = 0;
-  for (const wo of buildWos) {
-    const sessions = wo.dailyLog?.sessions || [];
-    for (const s of sessions) {
-      if (!s.inAt || !s.outAt) continue; // skip open sessions in billing
-      const ms = new Date(s.outAt) - new Date(s.inAt);
-      if (Number.isFinite(ms) && ms > 0) {
-        totalHours += (ms / 3600000) * (Number(s.labourersOnSite) || 1);
-      }
-    }
-  }
-  totalHours = Math.round(totalHours * 100) / 100;
+  // Labour: the SAME calculation the project metrics use, from the same
+  // module, on the same effective (corrected) session values. Billing
+  // skips a session that has not ended — you cannot invoice a crew that
+  // is still on site — and that is the only way it differs.
+  const totalHours = sessionHours.sumPersonHours(buildWos, { openSessions: "skip" });
   const rate = Number(proj.labourRateLocked);
 
   const lineItems = [];

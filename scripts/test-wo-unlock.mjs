@@ -64,7 +64,8 @@ fs.mkdirSync(path.join(SANDBOX, "lib"), { recursive: true });
 fs.mkdirSync(path.join(SANDBOX, "data"), { recursive: true });
 // atomic-json.js joined when work-orders.js stopped using a bare
 // fs.writeFile (fall-closing fix #1) — the sandbox copies what it requires.
-for (const f of ["work-orders.js", "atomic-json.js"]) {
+// session-hours.js joined the same way, for office session corrections.
+for (const f of ["work-orders.js", "atomic-json.js", "session-hours.js"]) {
   fs.copyFileSync(path.join(ROOT, "server", "lib", f), path.join(SANDBOX, "lib", f));
 }
 const require = createRequire(import.meta.url);
