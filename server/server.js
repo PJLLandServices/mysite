@@ -131,6 +131,7 @@ const holds = require("./lib/booking-holds");
 const purgeTestData = require("./lib/purge-test-data");
 const workOrders = require("./lib/work-orders");
 const sessionHours = require("./lib/session-hours");
+const atomicJson = require("./lib/atomic-json");
 const dailyRecords = require("./lib/daily-records");
 const quotes = require("./lib/quotes");
 const quoteViews = require("./lib/quote-views");
@@ -29114,14 +29115,51 @@ if (!String(process.env.PUBLIC_BASE_URL || "").trim()) {
 // then exit. A hard cap well under Render's 30 s makes sure we never
 // wait for SIGKILL. The periodic sweeps are not awaited: each is
 // best-effort and re-runs on the next boot or interval.
+// The periodic sweeps, held so shutdown can stop them.
+//
+// Eleven of them, none previously unref'd, each re-arming forever. They
+// never blocked the old exit — process.exit() does not care what is on
+// the event loop — but a sweep that fires WHILE the process is draining
+// can start a fresh store write just as we are trying to finish the
+// ones already queued. Clearing them first makes "finish what is in
+// flight" a set that stops growing.
+const sweepTimers = [];
+function trackSweep(fn, ms) {
+  const t = setInterval(fn, ms);
+  sweepTimers.push(t);
+  return t;
+}
+
 const SHUTDOWN_GRACE_MS = 8000;
+// Well inside SHUTDOWN_GRACE_MS, so the two together stay far under
+// Render's 30s default and cannot be what holds a deploy open.
+const DISK_DRAIN_MS = 3000;
+async function finishDiskWrites(label) {
+  // Bounded. writeJsonAtomic() renames a finished temp file over the
+  // target, so a store is never left as garbage even if we give up
+  // here — the cost of the bound is a lost change, not a broken file.
+  const pending = atomicJson.pendingStoreWrites();
+  if (!pending) return;
+  console.log(`[shutdown] waiting for ${pending} queued store write(s) (${label})`);
+  const raced = await Promise.race([
+    atomicJson.drainStores().then(() => "drained"),
+    new Promise((r) => setTimeout(() => r("timeout"), DISK_DRAIN_MS))
+  ]);
+  console.log(raced === "drained"
+    ? "[shutdown] store writes finished"
+    : `[shutdown] store writes still pending after ${DISK_DRAIN_MS / 1000}s — exiting anyway (writes are atomic; the files on disk stay whole)`);
+}
+
 function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[shutdown] ${signal} received — draining connections (max ${SHUTDOWN_GRACE_MS / 1000}s)`);
-  const forceExit = setTimeout(() => {
+  // Stop the sweeps first so nothing new is queued behind us.
+  for (const t of sweepTimers) clearInterval(t);
+  const forceExit = setTimeout(async () => {
     console.warn("[shutdown] grace period elapsed — closing remaining connections");
     if (typeof server.closeAllConnections === "function") server.closeAllConnections();
+    await finishDiskWrites("forced");
     process.exit(0);
   }, SHUTDOWN_GRACE_MS);
   forceExit.unref();
@@ -29132,11 +29170,13 @@ function shutdown(signal) {
     ? setInterval(() => server.closeIdleConnections(), 250)
     : null;
   if (idleSweep) idleSweep.unref();
-  server.close((err) => {
+  server.close(async (err) => {
     if (idleSweep) clearInterval(idleSweep);
     if (err) console.warn("[shutdown] server.close:", err?.message);
-    else console.log("[shutdown] all connections closed — exiting");
+    else console.log("[shutdown] all connections closed");
     clearTimeout(forceExit);
+    await finishDiskWrites("clean");
+    console.log("[shutdown] exiting");
     process.exit(0);
   });
   if (idleSweep) server.closeIdleConnections();
@@ -29183,7 +29223,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepQuotes();
-  setInterval(sweepQuotes, 6 * 60 * 60 * 1000);
+  trackSweep(sweepQuotes, 6 * 60 * 60 * 1000);
 
   // Invoice-ready SMS sweep (Invoice SMS brief, May 2026). The primary
   // fire path is a setTimeout inside the completion cascade; this sweep
@@ -29202,7 +29242,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepInvoiceSms();
-  setInterval(sweepInvoiceSms, 2 * 60 * 1000);
+  trackSweep(sweepInvoiceSms, 2 * 60 * 1000);
 
   // Google review request sweep (design handoff, Jul 2026). Due times
   // are persisted in review-requests.json (no in-memory timers — the
@@ -29220,7 +29260,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepReviewRequests();
-  setInterval(sweepReviewRequests, 5 * 60 * 1000);
+  trackSweep(sweepReviewRequests, 5 * 60 * 1000);
 
   // Assignment time sync sweep. Assigned bookings mirror the season
   // plan's sequenced arrival times, and the plan's clock moves — a
@@ -29247,7 +29287,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepAssignedTimes();
-  setInterval(sweepAssignedTimes, 10 * 60 * 1000);
+  trackSweep(sweepAssignedTimes, 10 * 60 * 1000);
 
   // Lead-booking heal sweep. A booking made through the public flow is
   // born on its LEAD; the canonical bookings.json record is a mirror
@@ -29274,7 +29314,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepLeadBookings();
-  setInterval(sweepLeadBookings, 10 * 60 * 1000);
+  trackSweep(sweepLeadBookings, 10 * 60 * 1000);
 
   // Day-before reminder sweep for SELF-BOOKED appointments. Assignment
   // customers get theirs from the cadence's step 6; the customer who
@@ -29306,7 +29346,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepBookingReminders();
-  setInterval(sweepBookingReminders, 5 * 60 * 1000);
+  trackSweep(sweepBookingReminders, 5 * 60 * 1000);
 
   // New-customer welcome sweep. Gated by settings.welcomeEmail.enabled
   // (default OFF); a customer's EARLIEST slot-holding booking, once it is
@@ -29330,7 +29370,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepWelcomeEmails();
-  setInterval(sweepWelcomeEmails, 5 * 60 * 1000);
+  trackSweep(sweepWelcomeEmails, 5 * 60 * 1000);
 
   // Assignment cadence sweep (stage 4) — dispatches steps 2–6 of the
   // follow-up cadence for blasted bookings, each step at most once,
@@ -29365,7 +29405,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepAssignmentCadence();
-  setInterval(sweepAssignmentCadence, 5 * 60 * 1000);
+  trackSweep(sweepAssignmentCadence, 5 * 60 * 1000);
 
   // Trash purge sweep (Session 2 brief). Hard-deletes records soft-deleted
   // more than 30 days ago. Runs at startup AND every 24 hours so the
@@ -29385,7 +29425,7 @@ server.listen(PORT, HOST, () => {
   // Initial sweep on boot — catches anything that aged out while the
   // server was down. After that, every 24 hours.
   sweepTrash();
-  setInterval(sweepTrash, 24 * 60 * 60 * 1000);
+  trackSweep(sweepTrash, 24 * 60 * 60 * 1000);
 
   // Outstanding warranty-claim reminder. The brief asks to "constantly be
   // reminded of outstanding warranty claims" — this is the push half of
@@ -29413,7 +29453,7 @@ server.listen(PORT, HOST, () => {
       console.warn("[warranty-claim] reminder sweep failed:", err?.message);
     }
   };
-  setInterval(sweepWarrantyClaims, 12 * 60 * 60 * 1000);
+  trackSweep(sweepWarrantyClaims, 12 * 60 * 60 * 1000);
 
   // Klarna financing capture-deadline reminders (PJL-34, build order
   // step 5). TRD §8: reminders are the WHOLE defense for the 28-day
@@ -29438,5 +29478,5 @@ server.listen(PORT, HOST, () => {
       console.warn("[financing] reminder sweep failed:", err?.message);
     }
   };
-  setInterval(sweepFinancingReminders, 3 * 60 * 60 * 1000);
+  trackSweep(sweepFinancingReminders, 3 * 60 * 60 * 1000);
 });
