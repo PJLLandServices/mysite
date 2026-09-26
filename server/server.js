@@ -6841,8 +6841,8 @@ async function handleApi(req, res, pathname) {
 
   // 5) A customer TEXTED the Twilio number. The number's Messaging
   //    "A message comes in" webhook points here. lib/sms-inbound.js decides:
-  //    YES confirms their one upcoming appointment (the appointment page's
-  //    own confirm), STOP turns off their seasonal texts, anything else is
+  //    YES gets "tap the link and press Confirm" (only the link confirms),
+  //    STOP turns off their seasonal texts, anything else is
   //    forwarded to Patrick's cell with an "automated number — call or text
   //    (905) 960-0181" reply. Same signature gate as the voice routes.
   if (req.method === "POST" && pathname === "/api/twilio-sms-incoming") {
@@ -6863,7 +6863,6 @@ async function handleApi(req, res, pathname) {
         listBookings: () => bookings.list(),
         listProperties: () => properties.list(),
         summarize: appointmentActions.summarize,
-        confirmByToken: (token, opts) => appointmentActions.confirm(token, opts),
         updateProperty: (id, patch) => properties.update(id, patch),
         sendAlert: (body) => sendInboundTextAlertSms(body),
         ownerPhone: process.env.NOTIFY_TO_PHONE || ""

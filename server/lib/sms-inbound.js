@@ -12,20 +12,18 @@
 //                      We turn off the property's seasonal texts so the
 //                      CRM agrees, and tell Patrick. No reply from us.
 //   START / HELP     → Twilio replies to START itself; HELP gets our line.
-//   YES & friends    → exactly ONE upcoming assignment appointment on that
-//                      phone number → confirmed through the SAME function
-//                      the appointment page's button uses
-//                      (appointmentActions.confirm), so the cadence, the
-//                      Season Plan and the page all agree without a second
-//                      copy of the rule. Thank-you reply naming the day.
-//                      Zero or several → never guess; treated as "other".
+//   YES & friends    → does NOT confirm (Patrick, 2026-09-26: "the only
+//                      way to accept the appointment is to click Confirm
+//                      in the link"). The reply says so, with their own
+//                      appointment link when exactly one is theirs.
 //   anything else    → forwarded to Patrick's cell, and the customer gets
 //                      "this is an automated number — call or text
 //                      (905) 960-0181" (at most once per 12 h per number).
 //
-// Patrick's decisions (2026-09-25): forwards go to his cell by text; a
-// YES confirms with no review; the auto-reply says the number is
-// automated and points to 905-960-0181.
+// Patrick's decisions: forwards go to his cell by text; the auto-reply
+// says the number is automated and points to 905-960-0181 (2026-09-25);
+// a texted YES no longer confirms — only Confirm on the link does
+// (2026-09-26).
 
 const path = require("node:path");
 const fsp = require("node:fs/promises");
@@ -53,6 +51,15 @@ const AUTO_REPLY = "PJL Land Services: this is an automated texting system and r
 // Patrick replying to a forward lands back on this number. Don't forward
 // him his own text; tell him where replies actually need to go.
 const OWNER_REPLY = "PJL auto line: replies here don't reach the customer. Text them directly from your phone at the number in the forward.";
+// A texted YES doesn't confirm (Patrick, 2026-09-26) — say how to.
+const CONFIRM_HOWTO_REPLY = "PJL Land Services: thanks! To confirm, please tap the link in our message and press Confirm "
+  + `(a text reply doesn't confirm). Questions? Call or text ${PJL_PHONE}.`;
+function appointmentLinkOf(booking, deps = {}) {
+  const token = booking?.assignment?.outreach?.token;
+  if (!token) return "";
+  const base = deps.publicBaseUrl || require("./public-base-url").resolvePublicBaseUrl();
+  return `${String(base).replace(/\/+$/, "")}/a/${encodeURIComponent(token)}`;
+}
 const HELP_REPLY = `PJL Land Services automated texts. To reach us, call or text ${PJL_PHONE}. Reply STOP to opt out.`;
 
 // "Yes!!", "yes.", " YES 👍 " → "YES". Emoji-only answers keep their emoji.
@@ -213,53 +220,28 @@ async function handleInbound({ from, to = "", body = "", messageSid = "", numMed
   } else if (cls === "help") {
     reply = HELP_REPLY;
     row.action = "help";
-  } else if (cls === "yes" && who.appointments.length === 1) {
-    const appt = who.appointments[0];
-    let result = null;
-    try {
-      result = await deps.confirmByToken(appt.assignment.outreach.token, { via: "sms_reply" });
-    } catch (err) {
-      result = { ok: false, errors: [err?.message || String(err)] };
-    }
-    // Patrick's rule: never tell a customer "you're confirmed" on the
-    // write's word alone. Read the booking back from the store and only
-    // reply once it really carries the confirmation — the date in the
-    // reply comes from that re-read record, not from the request.
-    let saved = null;
-    if (result?.ok) {
-      try {
-        saved = (await deps.listBookings()).find((b) => b && b.id === appt.id) || null;
-      } catch { saved = null; }
-      if (!saved?.assignment?.outreach?.respondedAt || !deps.summarize(saved, { now })) {
-        result = { ok: false, errors: ["the confirmation didn't show up on the booking when re-checked"] };
-      }
-    }
-    if (result?.ok) {
-      const s = deps.summarize(saved, { now });
-      const when = s.freeBucket ? s.dateLabel : `${s.dateLabel}, ${s.bucketLabel}`;
-      const first = firstNameOf(appt.customerName);
-      reply = `PJL Land Services: thanks${first ? ` ${first}` : ""} — you're confirmed for ${when}. `
-        + `Nothing else to do. Questions? Call or text ${PJL_PHONE}.`;
-      row.action = "confirmed";
-    } else {
-      // The page would have refused too — let a human look.
-      row.action = `confirm_refused: ${(result?.errors || []).join(" ")}`;
-      forward = forwardText({ ...who, appointment: appt, from, body, note: "They replied YES but it couldn't be confirmed automatically." });
-    }
+  } else if (cls === "yes") {
+    // Patrick, 2026-09-26: "the only way to accept the appointment is to
+    // click Confirm in the link." A texted YES no longer confirms — it
+    // gets a reply that says exactly how, with their own link when we
+    // can tell which appointment is theirs. Not forwarded: there's
+    // nothing for Patrick to answer.
+    const appt = who.appointments.length === 1 ? who.appointments[0] : null;
+    const link = appt ? appointmentLinkOf(appt, deps) : "";
+    reply = link
+      ? `PJL Land Services: thanks! To confirm, please tap this link and press Confirm: ${link} `
+        + `(a text reply doesn't confirm). Questions? Call or text ${PJL_PHONE}.`
+      : CONFIRM_HOWTO_REPLY;
+    row.action = appt ? "told_to_use_link" : "told_to_use_link_unmatched";
   } else {
-    const note = cls === "yes"
-      ? (who.appointments.length > 1
-        ? `They replied YES but have ${who.appointments.length} upcoming appointments — not auto-confirmed.`
-        : "They replied YES but no upcoming appointment matches this number — not auto-confirmed.")
-      : "";
-    forward = forwardText({ ...who, appointment: who.appointments[0], from, body, note });
-    row.action = cls === "yes" ? "yes_unmatched" : "forwarded";
+    forward = forwardText({ ...who, appointment: who.appointments[0], from, body });
+    row.action = "forwarded";
   }
 
   // The "automated number" reply, for anything we didn't answer properly.
   // Once per 12 hours per number: two auto-responders must not ping-pong,
   // and a customer mid-conversation doesn't need it five times.
-  if (!reply && (cls === "other" || cls === "yes")) {
+  if (!reply && cls === "other") {
     const recent = rows.find((r) => r.from && phoneKey(r.from) === who.key && r.autoReplied
       && now.getTime() - new Date(r.receivedAt).getTime() < AUTO_REPLY_EVERY_MS);
     if (!recent) {
@@ -288,6 +270,7 @@ module.exports = {
   AUTO_REPLY,
   HELP_REPLY,
   OWNER_REPLY,
+  CONFIRM_HOWTO_REPLY,
   STORE_FILE,
   classify,
   phoneKey,

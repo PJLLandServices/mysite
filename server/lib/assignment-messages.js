@@ -69,6 +69,16 @@ const TEMPLATE_KEYS = Object.freeze({
   daymove_sms: { label: "Day moved — re-notify (text)", channel: "sms", hasSubject: false }
 });
 
+// ONE WAY TO CONFIRM (Patrick, 2026-09-26): "the only way to accept the
+// appointment is to click Confirm in the link." Every message says so,
+// in the same words. Customers had replied "confirmed" to the email and
+// "YES" to the text, and kept getting reminders because neither of those
+// reaches the booking (Frank Mazzuca, Nishka Potter, Greg Davis).
+const REPLY_NOTE = [
+  "Please note: replying to this email does not confirm your appointment —",
+  "only the Confirm button on your appointment page does."
+];
+
 const DEFAULT_TEMPLATES = Object.freeze({
   // Patrick's wording from the stage-5 live review, lightly tidied. The
   // routing-efficiency pitch is his; keep his meaning when editing.
@@ -89,7 +99,8 @@ const DEFAULT_TEMPLATES = Object.freeze({
       "working this way lets us keep providing the same great service without",
       "raising our prices.",
       "",
-      "Please confirm — or make any changes — on your appointment page:",
+      "To confirm, tap the button below and press Confirm on your appointment page.",
+      "Need to make a change? The same page lets you:",
       "{appointmentLink}",
       "",
       "Please only choose a different day if no one can be home. We've tried to",
@@ -97,15 +108,17 @@ const DEFAULT_TEMPLATES = Object.freeze({
       "you have any others, or any restrictions beyond the available options,",
       "call or text us at {phone}.",
       "",
+      ...REPLY_NOTE,
+      "",
       "— PJL Land Services"
     ].join("\n")
   },
   assignment_sms: {
-    // "Reply YES" because customers reply to texts no matter what the text
-    // says — lib/sms-inbound.js now hears it. The last line tells them the
-    // number is automated, so a question goes to Patrick's real number.
+    // One way to confirm: the link's Confirm button (Patrick, 2026-09-26).
+    // The last line tells them the number is automated, so a question
+    // goes to Patrick's real number.
     body: "PJL Land Services: your fall sprinkler winterization is booked for {date} ({bucket}) at {street}. "
-      + "Reply YES to confirm, or tap to make changes: {appointmentLink} "
+      + "To confirm, tap this link and press Confirm: {appointmentLink} "
       + "This is an automated number - to reach us, call or text {phone}."
   },
   followup_email: {
@@ -116,18 +129,21 @@ const DEFAULT_TEMPLATES = Object.freeze({
       "A quick reminder: your fall sprinkler winterization is scheduled for",
       "{date} ({bucket}) at {street}, and we haven't heard a confirmation from you yet.",
       "",
-      "Confirm — or make any changes — on your appointment page:",
+      "To confirm, tap the button below and press Confirm on your appointment page.",
+      "To make a change, use the same page:",
       "{appointmentLink}",
       "",
       "If nothing changes on your end, we'll still be there as planned.",
       "Call or text {phone} any time.",
+      "",
+      ...REPLY_NOTE,
       "",
       "— PJL Land Services"
     ].join("\n")
   },
   followup_sms: {
     body: "PJL Land Services: reminder — winterization {date} ({bucket}) at {street}. "
-      + "Reply YES to confirm or tap to change: {appointmentLink} We'll come as planned unless we hear otherwise. "
+      + "To confirm, tap and press Confirm: {appointmentLink} We'll come as planned unless we hear otherwise. "
       + "Automated number - to reach us, call or text {phone}."
   },
   // Patrick's Part-3 escalation wording, copy-edited but keeping his
@@ -146,8 +162,11 @@ const DEFAULT_TEMPLATES = Object.freeze({
       "please make sure you've let our booking team know at {phone} — otherwise we",
       "will continue to make every effort to reach you.",
       "",
-      "Confirm, reschedule, or cancel on your appointment page:",
+      "To confirm, tap the button below and press Confirm on your appointment page.",
+      "The same page lets you reschedule or cancel:",
       "{appointmentLink}",
+      "",
+      ...REPLY_NOTE,
       "",
       "— PJL Land Services"
     ].join("\n")
@@ -155,11 +174,12 @@ const DEFAULT_TEMPLATES = Object.freeze({
   nudge_sms: {
     body: "PJL Land Services: we've tried several times to confirm your winterization on {date} at {street}, "
       + "and we'll keep sending reminders. If you no longer need us, please tell our booking team "
-      + "at {phone}. Otherwise reply YES, or tap: {appointmentLink}"
+      + "at {phone}. Otherwise tap and press Confirm: {appointmentLink}"
   },
   reminder24_sms: {
     body: "PJL Land Services: a reminder that your fall sprinkler winterization is tomorrow — "
-      + "{date}, {bucket}, at {street}. Questions or changes? Call or text {phone} (this number is automated)."
+      + "{date}, {bucket}, at {street}. Questions or changes? Call or text {phone} "
+      + "(please don't reply to this automated message)."
   },
   // Cadence rule 6: the re-notify NAMES THE CHANGE ("was X, now Y")
   // rather than restating the new date as if it were always so.
@@ -176,17 +196,20 @@ const DEFAULT_TEMPLATES = Object.freeze({
       "{street}",
       "",
       "Everything else stays the same — same service, same price ({price}).",
-      "Please confirm the new day — or make any changes — on your appointment page:",
+      "To confirm the new day, tap the button below and press Confirm.",
+      "To make a change, use the same page:",
       "{appointmentLink}",
       "",
       "Questions? Call or text us at {phone}.",
+      "",
+      ...REPLY_NOTE,
       "",
       "— PJL Land Services"
     ].join("\n")
   },
   daymove_sms: {
     body: "PJL Land Services: your winterization day has MOVED — was {oldDate}, now {date} ({bucket}) "
-      + "at {street}. Reply YES to confirm the new day or tap to change: {appointmentLink} "
+      + "at {street}. To confirm the new day, tap and press Confirm: {appointmentLink} "
       + "Automated number - to reach us, call or text {phone}."
   }
 });
@@ -239,13 +262,49 @@ function retireOldTextWording(store, { now = new Date() } = {}) {
   next._migrations = migrations;
   return { store: next, changed: true, retired };
 }
+// ONE-TIME, the emails (2026-09-26): same story as the texts. The four
+// appointment emails now say "tap the button and press Confirm" and that
+// a reply doesn't confirm; saved email wording from the original setup
+// would hide it. Patrick asked for the new wording across the board.
+const CONFIRM_BY_TEXT_EMAIL_MIGRATION = "confirmByTextEmails_2026_09_26";
+const CONFIRM_BY_TEXT_EMAIL_KEYS = ["assignment_email", "followup_email", "nudge_email", "daymove_email"];
+function retireOldEmailWording(store, { now = new Date() } = {}) {
+  return retireSaved(store, CONFIRM_BY_TEXT_EMAIL_MIGRATION, CONFIRM_BY_TEXT_EMAIL_KEYS, { now });
+}
+function retireSaved(store, marker, keys, { now = new Date() } = {}) {
+  const migrations = { ...(store._migrations || {}) };
+  if (migrations[marker]) return { store, changed: false, retired: [] };
+  const next = { ...store, _retired: { ...(store._retired || {}) } };
+  const retired = [];
+  for (const key of keys) {
+    if (!next[key]) continue;
+    next._retired[`${key}@${now.toISOString()}`] = next[key];
+    delete next[key];
+    retired.push(key);
+  }
+  migrations[marker] = now.toISOString();
+  next._migrations = migrations;
+  return { store: next, changed: true, retired };
+}
+try {
+  const out = retireOldEmailWording(OVERRIDES);
+  if (out.changed) {
+    OVERRIDES = out.store;
+    if (fs.existsSync(STORE_FILE) || out.retired.length) persist();
+    if (out.retired.length) {
+      console.log(`[assignment-messages] retired saved email wording for ${out.retired.join(", ")} — the "tap the button and press Confirm" defaults are now in use (old wording kept under _retired).`);
+    }
+  }
+} catch (err) {
+  console.warn(`[assignment-messages] couldn't retire old email wording: ${err?.message}`);
+}
 try {
   const out = retireOldTextWording(OVERRIDES);
   if (out.changed) {
     OVERRIDES = out.store;
     if (fs.existsSync(STORE_FILE) || out.retired.length) persist();
     if (out.retired.length) {
-      console.log(`[assignment-messages] retired saved text wording for ${out.retired.join(", ")} — the "Reply YES" defaults are now in use (old wording kept under _retired).`);
+      console.log(`[assignment-messages] retired saved text wording for ${out.retired.join(", ")} — the new default texts are now in use (old wording kept under _retired).`);
     }
   }
 } catch (err) {
@@ -409,7 +468,9 @@ function renderAllForBooking(booking, extra = {}) {
 
 module.exports = {
   retireOldTextWording,
+  retireOldEmailWording,
   REPLY_YES_KEYS,
+  CONFIRM_BY_TEXT_EMAIL_KEYS,
   MERGE_FIELDS,
   TEMPLATE_KEYS,
   DEFAULT_TEMPLATES,
