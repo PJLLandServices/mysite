@@ -1,5 +1,5 @@
 import { AppState } from 'react-native';
-import { HOST, AuthRequiredError } from '../api';
+import { HOST, AuthRequiredError, withClientVersion } from '../api';
 import { createQueue } from './queue.mjs';
 import { readLocal, writeLocal, storeForOwner } from './storage';
 
@@ -14,7 +14,7 @@ async function request(path, { method = 'GET', body, version, timeout = 15000 } 
   try {
     const response = await fetch(HOST + path, {
       method, credentials: 'include', cache: 'no-store', signal: abort.signal,
-      headers: { accept: 'application/json', 'content-type': 'application/json', ...(version ? { 'if-match': version } : {}) },
+      headers: withClientVersion({ accept: 'application/json', 'content-type': 'application/json', ...(version ? { 'if-match': version } : {}) }),
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
     if (response.status === 401 || response.status === 403) throw Object.assign(new AuthRequiredError(), { code: 'auth' });

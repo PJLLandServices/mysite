@@ -340,6 +340,9 @@ function hydrate(inv) {
     // flip can verify the intent it expects. stripeChargeId is the
     // settled charge (ch_/py_) from the successful payment.
     stripePaymentIntentId: inv?.stripePaymentIntentId || null,
+    // The open Tap to Pay on iPhone intent (card_present), on its own slot
+    // because the pay page's `card` intent is a different kind.
+    stripeTerminalIntentId: inv?.stripeTerminalIntentId || null,
     stripeChargeId: inv?.stripeChargeId || null,
     sentAt: inv?.sentAt || null,
     paidAt: inv?.paidAt || null,
@@ -741,7 +744,7 @@ async function update(id, patch) {
     throw err;
   }
   const next = { ...current };
-  const allowed = ["status", "notes", "quickbooksInvoiceId", "quickbooksChargeId", "quickbooksPaymentId", "stripePaymentIntentId", "stripeChargeId", "paymentToken", "portalToken", "customerSmsScheduledAt", "customerSmsSentAt", "customerReminderHistory", "customerJunkMailWarningSentAt", "customerJunkMailWarningHistory", "customerName", "customerEmail", "customerPhone", "address", "holdUntilCompletion"];
+  const allowed = ["status", "notes", "quickbooksInvoiceId", "quickbooksChargeId", "quickbooksPaymentId", "stripePaymentIntentId", "stripeTerminalIntentId", "stripeChargeId", "paymentToken", "portalToken", "customerSmsScheduledAt", "customerSmsSentAt", "customerReminderHistory", "customerJunkMailWarningSentAt", "customerJunkMailWarningHistory", "customerName", "customerEmail", "customerPhone", "address", "holdUntilCompletion"];
   for (const key of allowed) {
     if (patch && Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
   }

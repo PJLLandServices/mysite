@@ -2,6 +2,226 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-25 (Confirm visibly confirms; texts to the Twilio number are heard):** Two customers
+(Greg Davis, Behnaz) phoned Patrick saying "Confirm this appointment" didn't work, and customers
+were replying YES to the automated text from the unmonitored 647 number. PRD/TRD:
+`docs/BOOKING_CONFIRMATION_PRD.md` / `_TRD.md`.
+
+**The page.** The confirm POST always saved; `appointment.css` lacked the `[hidden]` polyfill, so
+`.ap-btn`/`.ap-badge` never hid — the button stayed, the "Confirmed" badge rendered off-screen, and
+Cancel/Reschedule stayed on offer inside the 24 h cutoff. Fixed, plus a `#doneNote` success line
+scrolled into view after every action. `scripts/lint-hidden-polyfill.mjs` (build:check) fails any
+page that toggles `.hidden` without the rule. `scripts/test-appointment-page-ui.mjs` (Playwright,
+phone viewport, not in build:check — CI has no Chromium): 9 of 14 fail on the old page, 14/14 after.
+
+**The texts.** New `POST /api/twilio-sms-incoming` (same `allowTwilioWebhook` signature gate as the
+voice routes) → `lib/sms-inbound.js`. YES with exactly one live assignment appointment on that
+phone → `appointmentActions.confirm(token, { via: "sms_reply" })`, the page button's own function,
+so `respondedAt` is the one fact every reader already honours (cadence steps 2–5 stop, step 6 still
+goes, Season Plan and page read "confirmed"; `REPLY_STATES.sms_reply = "confirmed"`). Zero or
+several matches never guess. Anything else is forwarded to Patrick's cell (`NOTIFY_TO_PHONE`) with
+the customer's name/street/appointment, and the customer gets "automated texting system — call or
+text (905) 960-0181" at most once per 12 h. STOP turns off `commPrefs.seasonalRemindersSMS` (Twilio
+blocks and replies itself); CANCEL is a carrier opt-out and never cancels an appointment. Log:
+`server/data/sms-inbound.json`. Untouched: dates, route, capacity, work orders, invoices.
+`scripts/test-sms-inbound.mjs` (build:check, 56 assertions, real booking store + real confirm).
+Templates now say "Reply YES to confirm" and that the number is automated (still ≤ 2 segments).
+
+**Patrick's acceptance test — not yet walked:** (1) after deploy, open an assignment link on your
+phone, tap Confirm, see the green "You're confirmed" line where you tapped; (2) set the 647 number's
+Messaging webhook in Twilio to `https://www.pjllandservices.com/api/twilio-sms-incoming` (POST);
+(3) from your own phone text "hello" to the 647 number — get the automated reply, and the forward
+lands on your cell. Saved template overrides on the Assignment Messages page win over the new
+default wording — re-save them if any exist.
+
+**2026-09-25 (Attribution comes from the signed-in user; an archive is undoable):** Two follow-ups
+Patrick required before merging the Tasks tab.
+
+**The actor is derived, never fixed.** `actorLabel(req)` resolves `requireUser(req)` →
+`users.get(session.uid)` → `user.name || user.email || uid`, re-reading the user record on **every
+request**, so it is neither hard-coded nor a value cached in the session. The name in the earlier
+test fixture was invented test data and never existed in any production path; fixtures now use
+plainly fictional names that are nobody's. Pinned by two different authenticated admins writing
+**alternately** to one task — a hard-coded name, a name baked into the cookie, or any per-process
+cache would make the second user's write carry the first user's name, which checking each in
+isolation would miss — plus a rename of a user's profile mid-run, whose very next write carries the
+NEW name, and a source scan asserting no operator name appears in `server.js` or `lib/projects.js`.
+
+**Restore.** `POST /api/projects/:id/tasks/:taskId/restore` puts an archived task back. It
+reconstructs **nothing**, because archiving removed nothing: archiving only ADDS `archivedAt`,
+`archivedBy` and `archivedReason`, and the progress, the work orders' daily-log lines, their
+photos, the recorded hours and the WO's own history were untouched throughout. Restoring clears
+those three fields and the task returns at exactly the percentage it held. The audit trail **grows**
+— the archive entry stays and a restore entry joins it, each carrying its own actor — so the record
+reads as what happened rather than as though it never did. Restoring a live task is a 409, an
+unknown one a 404, and both doors work on a restored task again.
+
+`scripts/test-task-history-protected.mjs` is now **82 assertions**; `test-tasks-tab.mjs` **52**,
+including the Restore button, its confirm ("comes back exactly where it was"), and the row moving
+out of the Archived section.
+
+**2026-09-25 (Office corrections must not erase field history — tasks archive, they do not vanish):**
+Patrick, reviewing the Tasks tab before merge, named five rules. **Two did not hold.**
+`removeTask()` spliced the record out of the array and refused only when the task was DONE — so a
+task at 40%, with the crew's daily-log lines and task-anchored photos pointing at its id, could be
+erased from the office and leave those references dangling against an id that existed nowhere.
+
+**Archiving.** `removeTask()` now checks whether anything has ever referenced the task —
+work-order daily-log lines, task-anchored photos, progress logged, a completion, or a non-planning
+history entry — and **archives** when any of it is found (`archivedAt`, `archivedBy`,
+`archivedReason` naming the evidence), deleting outright only a task nothing ever touched. The
+reference check deliberately over-reports: a false positive costs one archived row, a false
+negative costs a dangling reference. **Planning is not a reference** — `task_added`,
+`task_updated`, `tasks_seeded`, `task_archived` and `task_removed` are excluded, because a task you
+typed wrong and renamed is still a typo and the list must stay clearable. That exclusion was a real
+flaw in the first cut, caught by the browser walk.
+
+**`activeTasks()` is the one rule for "still counts"**, and every reader calls it — the
+cancelled-booking slot leak's lesson applied (CLAUDE.md, `bookingHoldsItsSlot`): `canReseedTasks`,
+`seedTasksFromQuote`'s guard, `computeProjectMetrics` (totals, done count AND percentage), the
+status-update generator's recent/upcoming lists, `pendingTasks`, the `/tasks` endpoint (archived
+served only under `?includeArchived=1`), and the client's `live()` in `format.ts`, which both
+`taskProgress()` and `projectPercentComplete()` filter through. **`seedTasksFromQuote()` replaces
+the task array**, which would have quietly undone all of it — it now preserves archived tasks
+across a re-seed. Neither door may move an archived task: office and field both answer 409.
+
+**Attribution.** All four task writes now stamp `actorLabel(req)` rather than a raw uid or the
+literal "admin" — `by` lands in history and, for an archive, on the record the Tasks tab renders,
+where "usr_a1b2c3" in front of Patrick is not a record of who did it.
+
+**The other three rules already held, and are now executed rather than asserted:** a 40%→20%
+correction appends `-20% → 20% via manual` with the actor's name and a timestamp while leaving the
+crew's original `+40%` entry untouched; reopening clears `completedAt` and `completedByWoId`
+without touching the work order's daily-log lines, its history, or the recorded hours; and the
+office route sits behind the same `needsAuth() === "user"` gate as the work-order route — **there
+is no per-project ACL anywhere in this system**, it is single-tenant and staff-only, and the test
+says so rather than implying a permission model that does not exist.
+
+`scripts/test-task-history-protected.mjs` (52 assertions, **in `build:check`**) walks all five
+rules against real projects, real build work orders, real sessions and real photos — including
+that the daily-log line still resolves after archiving, that hours and days-logged are unmoved,
+and that a re-seed does not wipe the archive. Verified to FAIL on the pre-change tree, headline
+first: *"THE RECORD IS STILL THERE — the task was spliced out, references now dangle."*
+
+**2026-09-25 (One task record, two doors — the office gets a way in):** Patrick set the split:
+*"Field app: technicians clock in/out, update task progress, record daily work, photos, parts used,
+and issues. Project Workspace: you plan and assign tasks, review daily records and labour, approve
+change orders, manage required materials, and prepare billing. Both: task status should
+synchronize immediately, but there must be only one underlying task record."*
+
+**That split ran straight into a gap.** `POST /api/work-orders/:woId/tasks-done` writes the day's
+log line and *then* flips the project's master task — the right order, and the project record is
+already the single source of truth. But it needs a work order, so **a task could not be corrected
+or finished from the desk at all.** The screen alone could not deliver "available from both
+places".
+
+Added `POST /api/projects/:id/tasks/:taskId/progress`: the second door onto the **same record**,
+calling the same `projects.addTaskProgress()` the field path calls, so the status invariant
+(0 pending / 1–99 in_progress / 100 done) is enforced in one place for both. It takes an absolute
+`percent` (what a person means by "set it to 60") and converts it to the cumulative delta the
+mutator takes. It deliberately writes **no daily-log line and no session** — an office correction
+is not a day's work, and inventing a session would put hours on a job nobody worked.
+`completedByWoId` stays **null**, so the history says plainly that this one was not closed out on
+a visit; the Tasks tab prints that as "finished from the office" rather than leaving it blank. The
+response carries `metrics` so the screen never computes what the change did to the job's
+percentage.
+
+**The Tasks tab** (`admin-app/src/routes/Tasks.tsx`) is step 1 of Patrick's build order (Tasks →
+Daily Records → Materials → Change Orders → Financials → Overview last; Materials ahead of Change
+Orders because a change order is tied to tasks and materials). Every figure on it is the server's:
+the job's percentage, task counts, days logged and person-hours all come from `/metrics`. A
+finished task offers no Edit, because `updateTask()` locks it server-side and offering one would
+be offering a 409. Finishing, reopening and removing each confirm first — in the app's **own**
+dialog: the CRM spent PJL-61 replacing every native `alert`/`confirm`/`prompt`, and the rebuilt app
+had no dialog primitive, so `ConfirmDialog` in `ui/primitives.tsx` carries the Help Centre's
+lessons (Escape closes, focus enters and returns to the opener, backdrop cancels).
+
+`scripts/test-task-two-doors.mjs` (43 assertions, **in `build:check`**) drives both doors
+alternately against one task and re-checks after **every** write that exactly one record carries
+that id, that both doors report the same percentage, and that status follows it — plus that the
+office door invents no work session, that reopening clears `completedAt` **and**
+`completedByWoId`, and that an office completion credits no visit.
+`scripts/test-tasks-tab.mjs` (40 assertions, Playwright, opt-in) walks the real bundle: the crew
+logs 40% from the field and the office screen shows it, the job reads **13%** where a
+finished-task count would still say 0, Escape cancels without moving the record, and no native
+dialog is ever raised. It caught two real defects before merge — a step control that could not
+correct a task downward, and 91px of horizontal overflow at phone width.
+
+**2026-09-25 (The progress bar and the server disagreed on every partly-finished job):**
+`computeProjectMetrics()` averages each task's own `percentComplete`, and `percentComplete` leads
+while `status` follows it (`addTaskProgress()` sets the status FROM the percentage: 0 = pending,
+1–99 = in_progress, 100 = done). The rebuilt app drew its bar from `done / total`, which reports a
+task logged at 60% as **zero**. On a four-task job with every task three-quarters done the server
+said **75% complete** and the Projects list and Overview drew an **empty bar**. Same defect as
+`zoneCount: areas.length` (2026-09-21) in a different corner: a figure the server already computes
+properly, re-derived in the browser by a different rule, disagreeing in silence.
+
+Fixed: `projectPercentComplete()` in `admin-app/src/lib/format.ts` mirrors the server's rule and
+draws both bars. `taskProgress()` stays, and stays a COUNT — "1 of 4 tasks" and "38% complete" are
+two different questions, which is why the server keeps `doneTasks` beside `percentComplete`. The
+rule is mirrored rather than fetched because a 40-job list cannot make one `/metrics` request per
+row. `scripts/test-task-progress-agrees.mjs` (44 assertions, **in `build:check`**) lifts the real
+function out of `format.ts`, builds real projects through `lib/projects.js`, drives each task with
+the real `addTaskProgress()`, and asserts both implementations agree on every shape — with a final
+case pinning that the replaced rule really would have drawn an empty bar.
+
+Opened alongside it: `docs/PROJECT_WORKFLOW_PRD.md`, for the next phase (tasks, logs, time, parts,
+change orders, billing status). **The load-bearing finding there: all six already have working
+server routes** — tasks, journal, `/metrics`, material lists, `/scope-changes` with its six-status
+customer-approval lifecycle, and `/billing-preview`. So that phase is screens over endpoints that
+already work, and its risk is not losing behaviour but re-deriving figures the server owns. Also
+recorded there, before anything is designed: **hours are captured in the field on work-order daily
+logs and never typed into the workspace** — open sessions count toward the metrics figure and are
+deliberately excluded from the billing figure, and those two must not be "tidied up" into
+agreement.
+**2026-09-24 (The System Builder belongs to a job — hand-off, not embedding):** Patrick decided
+option B off `docs/PROJECT_WORKSPACE_BUILDER_PRD.md`: *"a full-screen project route with return to
+the same project... Hide the workspace sidebar while building. Keep a compact project name,
+truthful save status and Back to Project control visible."* **The PRD's earlier iframe
+recommendation is withdrawn, and not for the reason first written down.** An iframe is its own
+document and its own stacking context, so the builder's overlays could NOT have collided with the
+app's chrome — the PRD had that right in option A's favour, and a later draft wrongly said the
+opposite; Patrick caught it before merge. What actually decides it: an iframe is a **box** (the
+builder's full-screen overlays fill the frame, not the viewport, so "full width" would have meant
+the frame's width), and the **unsaved-work guard gets harder, not easier** — moving between
+workspace tabs is a React route change, not an unload, so `beforeunload` never fires and an embed
+would have needed a new cross-frame guard for a loss that cannot happen today. Leaving a separate
+page IS an unload, so three of the four exits keep the guard the page already has.
+
+`resolveStaticTarget()` now serves `sitebuilder.html` at **`/app/projects/:id/design/build`**,
+matched **before** the `/app` SPA catch-all — falling through to it would have rendered an empty
+workspace, which looks like a broken tab rather than a routing mistake. `needsAuth` is untouched:
+`/app/*` was already staff-only, so the new route is gated by the rule that already existed. The
+job is read from the **path**; `?project=` stays for the classic address only, and the two can no
+longer be asked at once.
+
+In the page, workspace mode replaces the tall standalone header with one compact sticky bar —
+job name, save status, Back to Project. **`designSaveStatus()` is the single rule**; the project
+panel and the workspace bar both call it and neither re-derives it, for the reason
+`activeBookings()` has one status test. `describeSystemDesign()` joins `countSystemDesign()` in
+`lib/system-design-counts.js`, reporting the saved plan **station by station out of the same
+engine pass** that produces the three counts, so the list and the totals cannot disagree — a
+shared split station prints "2 valves, one station" and the list sums to the valve count.
+
+**Unsaved work, all four exits.** Hand-off makes three of them free: the builder is its own
+document, so browser Back, refresh and closing the tab are real unloads and the existing
+`beforeunload` guard covers them. Only Back to Project is new, and it confirms first; a departure
+already answered is not queried again by the browser.
+
+**One defect found while testing, and fixed:** a design saved by anything other than the page's
+own Save button (migration, import, server-side fix) read as *"No design saved yet"* in the
+builder while the project summary dated the same design on the same screen. The bar read only the
+blob's `savedAt`; it now falls back to the project's `system_design_saved` history entry.
+
+`scripts/test-workspace-builder-route.mjs` (71 assertions, `npm run test:workspace-builder-route`)
+boots the REAL server, creates REAL projects through `lib/projects.js`, and drives the REAL built
+bundle in a real browser. It pins the route serving the builder and not the shell, the job read
+from the path with no query, the bar's three elements, the save status agreeing across both
+readouts, all four exits guarded, and — the one that closes 2026-09-21's *"it is still saying 13
+zones"* — a ceiling change moving the same three areas from **five stations to seven**, saved, and
+**seven** being what the tab reads on return. Verified to FAIL on the pre-change tree. Deliberately
+**not** in `build:check`, same convention as the other Playwright suites.
+
 **2026-09-23 (PJL-96: the price is set before signing; Patrick sets custom and commercial prices) —
 FLOW-31, with FLOW-23 hops noted:** Patrick's rulings on fall-closing fix #7, built on it. Branch
 `pjl-96-price-before-signing`, two commits.
@@ -6025,3 +6245,83 @@ No price or rule changed. Test: `scripts/test-billing-one-path.mjs`, 20 of
 three already agreed on numbers, which the test now locks in. With the
 change, 32 of 32 pass across five states: walked more than booked, a custom
 size, a commercial account, a per-property rate and a $0 rate.
+
+## 2026-09-23 — FIELD-VERSION-01: the phone says which commit it runs (FLOW-31/32 release check, awaiting iPhone acceptance)
+
+On 2026-09-23 the server ran main while every phone still ran JavaScript from
+before 2026-09-11: the two OTA publishes since then had both refused ("no
+installed build can receive this update"), and the phone's only label was
+"App updated <time>". Nothing, on the phone or the server, named the commit.
+
+Now: the build and update workflows stamp `GITHUB_SHA` into
+`pjl-field/src/buildInfo.json` before EAS bundles (committed locally in the
+runner, never pushed; the file in git is a placeholder of nulls, and the
+stamper refuses to run without a commit). The Today tab footer shows the
+commit, whether it is the build's own bundle or an OTA update (with its update
+id), and the runtime. Every app request carries `x-pjl-client`; the server
+writes one `[field-client] <user> runs commit=… source=… run=… update=…
+runtime=… channel=…` log line per user per version, and
+`GET /api/admin/field-clients` (admin only, memory only) lists the latest.
+
+A release is on a phone only when the Today tab, the log line and main's
+commit all agree. A green TestFlight or EAS run is not that evidence.
+
+Boundaries: JavaScript only (no native module; the fingerprint is unchanged,
+4737af92… before and after). The header is informational: the server never
+rejects, delays or changes a request because of it, and a malformed value is
+not logged. Customer-facing pages, invoicing, booking and messaging are
+untouched.
+
+Tests: `scripts/test-field-version-stamp.mjs`, 17 of 21 fail on the parent
+commit and 31 of 31 pass; whole build:check and an iOS Metro export pass. Not
+PASS until the installed build shows the expected commit and the log agrees.
+
+## 2026-09-24 — TAPTOPAY-01: Tap to Pay charges go through the server (FLOW-23 touched additively, awaiting a real tap)
+
+The Tap to Pay on iPhone reference implementation (`claude/pjl-field-taptopay`,
+Sep 2026, never merged) had the phone create its own PaymentIntent for an
+amount read off the screen, then mark the invoice paid by POSTing
+`/payments` with the intent id in a note. That is the one thing
+`finalizeStripeInvoicePayment` exists to forbid: the client's word is not
+evidence. Before the app is ported onto current code, the server gets the
+door it should have gone through:
+
+- `POST /api/invoices/:id/terminal-intent` (admin). Runs the same on-site
+  rule as "Take payment now" (`invoices.openForOnSitePayment`: Bill-later
+  drafts wait for review; $0 and custom-quote placeholders take nothing),
+  charges the server's `balanceDue` (anything the phone sends is ignored),
+  creates a `card_present` + `interac_present` intent with
+  `metadata.invoiceId` and `metadata.source = pjl-field-taptopay`, and
+  reuses the open one on its own slot, `stripeTerminalIntentId`. It sits
+  apart from the pay page's `stripePaymentIntentId` because neither client
+  can confirm the other's kind of intent.
+- `POST /api/invoices/:id/terminal-intent/finalize` (admin). Re-reads the
+  intent from Stripe and runs `finalizeStripeInvoicePayment`, unchanged in
+  its checks. The webhook backstop already finalizes any intent carrying
+  `metadata.invoiceId`, so an app closed mid-payment still gets its
+  invoice flipped.
+
+**FLOW-23 IS PASS AND WAS TOUCHED, additively.** The finalizer's ledger
+line now reads "Tap to Pay on iPhone" (and `by` is the staff uid) when the
+intent's `metadata.source` says so, and is byte-identical otherwise.
+`cardFactsFrom` reads `card_present` / `interac_present` when `card` is
+absent. A `card` charge takes the same path as before. Payment invariants
+(HANDOFF_STRIPE_PAYMENTS §6):
+- One capture, on the reader, with no retries.
+- No card data on the server.
+- The pay page's two-file method list (`card`) is untouched; the terminal
+  list is separate and pay.js never sees it.
+- The server re-verifies every intent.
+- It charges `balanceDue`.
+- The webhook is untouched.
+- The ledger stays append-only.
+
+Verified:
+- `scripts/test-taptopay-server.mjs`: 26 of 33 fail on the old code, 33 of
+  33 pass after.
+- `test-stripe`, `test-onsite-payment` and the rest of build:check are
+  green.
+
+**Needs a real tap:** one small live Tap to Pay payment from the Mac build,
+refunded in Stripe, with the invoice reading Paid and the ledger line
+reading "Tap to Pay on iPhone".

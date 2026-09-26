@@ -84,6 +84,18 @@ jobs:
           npx expo-updates fingerprint:generate --platform ios \
             | node -pe "'runtime version: ' + JSON.parse(require('fs').readFileSync(0,'utf8')).hash"
 
+      # Stamp the commit into the bundle, so the installed app can say which
+      # commit it runs (Today tab footer) and send it on every request (the
+      # server logs "[field-client] … commit=…"). Committed LOCALLY, never
+      # pushed: EAS packs the project from git, and a clean tree is what it
+      # uploads. buildInfo.json is JavaScript-only — it does not move the
+      # native fingerprint, so builds and updates stay on one runtime.
+      - name: Stamp the commit into the app
+        run: |
+          node scripts/stamp-field-build-info.mjs build
+          git -c user.name="PJL field build" -c user.email="field-build@pjllandservices.invalid" \
+            commit -q -m "Stamp build ${GITHUB_SHA::7} (not pushed)" -- pjl-field/src/buildInfo.json
+
       # --wait so the run's success means the build succeeded, not merely that it
       # was queued. Free-tier queues can be long; the paid tier starts promptly.
       - name: Build

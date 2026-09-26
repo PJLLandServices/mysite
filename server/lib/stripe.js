@@ -174,7 +174,11 @@ function cardFactsFrom(charge) {
   if (!charge || typeof charge !== "object") {
     return { cardBrand: null, cardLast4: null, avsStreet: null, avsZip: null, cvcMatch: null };
   }
-  const card = charge.payment_method_details?.card || {};
+  // An in-person (Tap to Pay) charge reports its card under card_present,
+  // or interac_present for Interac debit, instead of `card`. No AVS/CVC
+  // there — the card was in the room — so those stay null.
+  const pmd = charge.payment_method_details || {};
+  const card = pmd.card || pmd.card_present || pmd.interac_present || {};
   const checks = card.checks || {};
   const last4 = String(card.last4 || "");
   return {
@@ -187,6 +191,9 @@ function cardFactsFrom(charge) {
 }
 
 // ---- PaymentIntents ---------------------------------------------------
+
+// metadata.source on an intent the field app's Tap to Pay reader took.
+const TAP_TO_PAY_SOURCE = "pjl-field-taptopay";
 
 // Create the PaymentIntent the browser's Payment Element confirms
 // against. Returns the intent (its `client_secret` is what the browser
@@ -232,6 +239,37 @@ async function createPaymentIntent({
     metadata: { invoiceId: invoiceId || "", source: "pjl-pay-page" }
   };
   if (customerEmail) body.receipt_email = customerEmail;
+  const { data } = await stripeRequest("POST", "/payment_intents", body, { idempotencyKey });
+  return data;
+}
+
+// The PaymentIntent a Tap to Pay on iPhone reader collects against.
+// Created HERE, not on the phone, so the amount is the server's balance
+// and the intent carries metadata.invoiceId — which is what lets
+// finalizeStripeInvoicePayment (confirm route and webhook alike) verify it
+// exactly as it verifies the pay page's. See scripts/test-taptopay-server.mjs.
+//
+// card_present AND interac_present: most debit handed over on a Canadian
+// driveway is Interac, and leaving it out declines those cards at the tap.
+// Captured on approval, like the pay page — nothing is held.
+async function createTerminalPaymentIntent({
+  amountCents,
+  currency = "CAD",
+  invoiceId,
+  description = "",
+  idempotencyKey = null
+}) {
+  if (!Number.isFinite(amountCents) || amountCents <= 0) {
+    throw paymentFailure("Payment amount must be a positive number of cents.");
+  }
+  const body = {
+    amount: Math.round(amountCents),
+    currency: String(currency || "CAD").toLowerCase(),
+    payment_method_types: ["card_present", "interac_present"],
+    capture_method: "automatic",
+    description: description || (invoiceId ? `PJL invoice ${invoiceId}` : undefined),
+    metadata: { invoiceId: invoiceId || "", source: TAP_TO_PAY_SOURCE }
+  };
   const { data } = await stripeRequest("POST", "/payment_intents", body, { idempotencyKey });
   return data;
 }
@@ -518,6 +556,8 @@ module.exports = {
   createPaymentLink,
   deactivatePaymentLink,
   createTerminalConnectionToken,
+  createTerminalPaymentIntent,
+  TAP_TO_PAY_SOURCE,
   resolveTerminalLocationId,
   summarizeIntent,
   cardFactsFrom,

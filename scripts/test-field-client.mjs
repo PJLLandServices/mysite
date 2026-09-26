@@ -35,7 +35,7 @@ function fixture() {
   };
   function load() {
     const context = { createQueue, readLocal, writeLocal, storeForOwner, HOST: 'https://field.local',
-      AuthRequiredError: class AuthRequiredError extends Error {}, fetch, AbortController, setTimeout, clearTimeout,
+      AuthRequiredError: class AuthRequiredError extends Error {}, withClientVersion: (headers) => headers, fetch, AbortController, setTimeout, clearTimeout,
       AppState: { currentState: 'active' } };
     return vm.runInNewContext(src + '\n({ openFieldWorkOrder, flushBeforeFinish, restoreFieldWorkOrder, fieldStatus });', context);
   }

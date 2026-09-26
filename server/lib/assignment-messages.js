@@ -101,8 +101,12 @@ const DEFAULT_TEMPLATES = Object.freeze({
     ].join("\n")
   },
   assignment_sms: {
+    // "Reply YES" because customers reply to texts no matter what the text
+    // says — lib/sms-inbound.js now hears it. The last line tells them the
+    // number is automated, so a question goes to Patrick's real number.
     body: "PJL Land Services: your fall sprinkler winterization is booked for {date} ({bucket}) at {street}. "
-      + "Confirm or make changes: {appointmentLink} Questions? {phone}"
+      + "Reply YES to confirm, or tap to make changes: {appointmentLink} "
+      + "This is an automated number - to reach us, call or text {phone}."
   },
   followup_email: {
     subject: "Please confirm — winterization on {date}",
@@ -123,7 +127,8 @@ const DEFAULT_TEMPLATES = Object.freeze({
   },
   followup_sms: {
     body: "PJL Land Services: reminder — winterization {date} ({bucket}) at {street}. "
-      + "Please confirm or make changes: {appointmentLink} We'll come as planned unless we hear otherwise."
+      + "Reply YES to confirm or tap to change: {appointmentLink} We'll come as planned unless we hear otherwise. "
+      + "Automated number - to reach us, call or text {phone}."
   },
   // Patrick's Part-3 escalation wording, copy-edited but keeping his
   // meaning: we will keep reminding; if your needs changed, tell the
@@ -149,12 +154,12 @@ const DEFAULT_TEMPLATES = Object.freeze({
   },
   nudge_sms: {
     body: "PJL Land Services: we've tried several times to confirm your winterization on {date} at {street}, "
-      + "and we'll keep sending reminders. If you no longer need our services, please tell our booking team "
-      + "at {phone}. Otherwise: {appointmentLink}"
+      + "and we'll keep sending reminders. If you no longer need us, please tell our booking team "
+      + "at {phone}. Otherwise reply YES, or tap: {appointmentLink}"
   },
   reminder24_sms: {
     body: "PJL Land Services: a reminder that your fall sprinkler winterization is tomorrow — "
-      + "{date}, {bucket}, at {street}. Questions or changes? Call or text {phone}."
+      + "{date}, {bucket}, at {street}. Questions or changes? Call or text {phone} (this number is automated)."
   },
   // Cadence rule 6: the re-notify NAMES THE CHANGE ("was X, now Y")
   // rather than restating the new date as if it were always so.
@@ -181,7 +186,8 @@ const DEFAULT_TEMPLATES = Object.freeze({
   },
   daymove_sms: {
     body: "PJL Land Services: your winterization day has MOVED — was {oldDate}, now {date} ({bucket}) "
-      + "at {street}. Please confirm the new day: {appointmentLink} Questions? {phone}"
+      + "at {street}. Reply YES to confirm the new day or tap to change: {appointmentLink} "
+      + "Automated number - to reach us, call or text {phone}."
   }
 });
 
@@ -202,6 +208,48 @@ let OVERRIDES = {};
 function persist() {
   fs.mkdirSync(path.dirname(STORE_FILE), { recursive: true });
   fs.writeFileSync(STORE_FILE, JSON.stringify(OVERRIDES, null, 2) + "\n", "utf8");
+}
+
+// ONE-TIME: the "Reply YES" texts (2026-09-25). The text defaults gained
+// "Reply YES to confirm" and "this is an automated number" when replies
+// to the Twilio number started being heard (lib/sms-inbound.js). Saved
+// wording always wins over a default, and saved text wording from the
+// original stage-5 setup was still on the live disk — so customers kept
+// getting the old texts. Patrick never meant to customise them and asked
+// for the new wording everywhere, so the saved TEXT wording for these
+// five steps is retired once, here, at load. Emails are untouched.
+//
+// Nothing is thrown away: each retired override is kept under
+// `_retired` with the time. The marker makes this run exactly once, so
+// wording Patrick saves AFTER this sticks like it always has.
+const REPLY_YES_MIGRATION = "replyYesTexts_2026_09_25";
+const REPLY_YES_KEYS = ["assignment_sms", "followup_sms", "nudge_sms", "reminder24_sms", "daymove_sms"];
+function retireOldTextWording(store, { now = new Date() } = {}) {
+  const migrations = { ...(store._migrations || {}) };
+  if (migrations[REPLY_YES_MIGRATION]) return { store, changed: false, retired: [] };
+  const next = { ...store, _retired: { ...(store._retired || {}) } };
+  const retired = [];
+  for (const key of REPLY_YES_KEYS) {
+    if (!next[key]) continue;
+    next._retired[`${key}@${now.toISOString()}`] = next[key];
+    delete next[key];
+    retired.push(key);
+  }
+  migrations[REPLY_YES_MIGRATION] = now.toISOString();
+  next._migrations = migrations;
+  return { store: next, changed: true, retired };
+}
+try {
+  const out = retireOldTextWording(OVERRIDES);
+  if (out.changed) {
+    OVERRIDES = out.store;
+    if (fs.existsSync(STORE_FILE) || out.retired.length) persist();
+    if (out.retired.length) {
+      console.log(`[assignment-messages] retired saved text wording for ${out.retired.join(", ")} — the "Reply YES" defaults are now in use (old wording kept under _retired).`);
+    }
+  }
+} catch (err) {
+  console.warn(`[assignment-messages] couldn't retire old text wording: ${err?.message}`);
 }
 
 // Every {placeholder} a text references. Doubled braces are not a thing
@@ -360,6 +408,8 @@ function renderAllForBooking(booking, extra = {}) {
 }
 
 module.exports = {
+  retireOldTextWording,
+  REPLY_YES_KEYS,
   MERGE_FIELDS,
   TEMPLATE_KEYS,
   DEFAULT_TEMPLATES,

@@ -718,3 +718,14 @@
   border: none; background: var(--pjl-green); color: #fff; font: inherit; font-weight: 700; cursor: pointer;
 }
 .sp-book-submit:disabled { opacity: 0.6; cursor: default; }
+
+/* Confirmation state on a stop (2026-09-25): "sent · no reply yet" is
+   amber-outline so it can't be mistaken for the customer's answer; the
+   customer's actual confirmation is solid green. */
+.sp-confirm { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sp-tag.is-awaiting {
+  background: #fff; border: 1px dashed var(--pjl-amber); color: #9A5314; font-weight: 600;
+}
+.sp-tag.is-answered {
+  background: var(--pjl-green, #1B4D2E); color: #fff; font-weight: 700;
+}

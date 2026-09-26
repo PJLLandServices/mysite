@@ -19,6 +19,24 @@ export class AuthRequiredError extends Error {
   }
 }
 
+// Every request says which bundle made it (header x-pjl-client), so the
+// server's log shows the commit each phone is really running — the check
+// that "the update landed" is read from the phone, not inferred from the
+// pipeline. App.js installs the provider at startup (clientVersion.js);
+// until then, and in the tests that run this file bare, no header is sent.
+let clientHeader = () => null;
+export function setClientVersionHeader(fn) {
+  clientHeader = typeof fn === 'function' ? fn : () => null;
+}
+export function withClientVersion(headers = {}) {
+  let value = null;
+  try { value = clientHeader(); } catch { value = null; }
+  return value ? { ...headers, 'x-pjl-client': value } : headers;
+}
+function clientFetch(url, options = {}) {
+  return fetch(url, { ...options, headers: withClientVersion(options.headers || {}) });
+}
+
 // Every read has a timeout too (PJL-100 #3): Finish's FIRST call is
 // getWorkOrder, and without one a stalled connection hung Finish before
 // any of the timed calls below ran. fetchWithTimeout is declared further
@@ -58,7 +76,7 @@ export function getToday(dateISO) {
 }
 
 async function postJson(path) {
-  const res = await fetch(`${HOST}${path}`, {
+  const res = await clientFetch(`${HOST}${path}`, {
     method: 'POST',
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     credentials: 'include',
@@ -119,11 +137,11 @@ export const listPropertyWorkOrders = (propertyId) =>
 // idempotent (fall-closing fix #4), so tapping Finish again is safe.
 export class TimeoutError extends Error {}
 async function fetchWithTimeout(url, options, ms) {
-  if (!ms) return fetch(url, options);
+  if (!ms) return clientFetch(url, options);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    return await clientFetch(url, { ...options, signal: controller.signal });
   } catch (err) {
     if (err?.name === 'AbortError') {
       throw new TimeoutError(`No answer from PJL after ${Math.round(ms / 1000)} seconds. Nothing is lost — tap Finish again when you have signal.`);
@@ -518,7 +536,7 @@ export async function uploadWoPhotos(id, photos) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 90_000);
   try {
-    const res = await fetch(`${HOST}/api/work-orders/${encodeURIComponent(id)}/photos`, {
+    const res = await clientFetch(`${HOST}/api/work-orders/${encodeURIComponent(id)}/photos`, {
       method: 'POST',
       headers: { accept: 'application/json', 'content-type': 'application/json' },
       credentials: 'include',

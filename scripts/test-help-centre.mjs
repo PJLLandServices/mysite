@@ -271,6 +271,50 @@ console.log("\nD2. Terminology, focus, mobile reach, and unsaved work");
   await ctx.close();
 }
 
+// ── D2b. The card is not wearing the page's clothes ──────────────────
+console.log("\nD2b. The help card is insulated from the page's own styles");
+{
+  const { ctx, pg, errs } = await open_({ width: 1280, height: 900 });
+  await pg.evaluate(() => mpHelpOpen());
+  await pg.waitForTimeout(250);
+
+  // sitebuilder.html styles the BARE element `header` with a full-width
+  // green gradient and white text. A <header> inside a help card therefore
+  // rendered as a green banner with a white glyph — the card inheriting
+  // the site's page-title styling. Computed style is the only honest test:
+  // the markup looked perfectly reasonable.
+  const look = await pg.evaluate(() => {
+    const card = document.querySelector(".hc-card");
+    const head = card.querySelector(".hc-head, header");
+    const h3 = head.querySelector("h3");
+    const cs = getComputedStyle(head), hs = getComputedStyle(h3);
+    const body = getComputedStyle(document.querySelector(".hc-body p"));
+    return { headBg: cs.backgroundColor, headImg: cs.backgroundImage,
+             headPad: cs.padding, titleColor: hs.color, bodyColor: body.color,
+             tag: head.tagName };
+  });
+  const transparent = (c) => c === "rgba(0, 0, 0, 0)" || c === "transparent";
+  check("the card heading has no background colour of its own", transparent(look.headBg), look.headBg);
+  check("...and no gradient painted behind it", look.headImg === "none", look.headImg);
+  check("...and does not take the site header's 20px/26px padding",
+        /^0px/.test(look.headPad), look.headPad);
+  check("...and its title is not white-on-nothing", look.titleColor !== "rgb(255, 255, 255)", look.titleColor);
+  check("...and reads in the same ink as the body", look.titleColor === look.bodyColor,
+        `${look.titleColor} vs ${look.bodyColor}`);
+  check("the card avoids bare <header>, which the page claims globally",
+        look.tag !== "HEADER", look.tag);
+
+  // Same question for the glyph: it inherits colour, so a white stroke is
+  // invisible on a white card and is the "bell" Patrick saw on the green.
+  const glyph = await pg.evaluate(() => {
+    const svg = document.querySelector(".hc-card .hc-sym svg");
+    return svg ? getComputedStyle(svg).stroke : null;
+  });
+  check("the glyph is not stroked white", glyph !== "rgb(255, 255, 255)", glyph);
+  check("no page errors", !errs.length, errs[0]);
+  await ctx.close();
+}
+
 // ── D3. Unsaved work survives, and the registry holds no job data ────
 console.log("\nD3. Unsaved work, and what the registry knows");
 {

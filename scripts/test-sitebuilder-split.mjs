@@ -162,6 +162,29 @@ check(after.peak >= Math.max(...halves.map(h => h.gpm)) - 1e-6, 'peak station fl
 // This is what every pre-version-9 split did, and what a migrated design
 // still does. It has to remain reachable, not just historical.
 {
+  // What the ZONE PANEL says about the arrangement, in both states. It
+  // printed "GPM together" for any split half regardless of whether the
+  // two valves shared a station — telling Patrick his separated tree
+  // valves ran together, which is the same false sentence the Split
+  // tooltip carried, one panel over.
+  const readPanel = (k) => page.evaluate((key) => {
+    const zi = LAST_ZONES.findIndex(z => z.key === key);
+    // Select AND render: mpSelectZone does not repaint the panel on its
+    // own, and reading straight after it returns the previous contents.
+    mp.zoneSel = zi;
+    mpZonePanel();
+    // ONLY the Flow line. The whole panel also carries the toggle's own
+    // label — "give each valve its own station" when the valves are
+    // shared — so a whole-panel match for "its own" finds the button and
+    // says nothing about what the readout claims.
+    const dd = document.querySelector('#mpZoneSel .mp-kv dd');
+    return dd ? dd.textContent.replace(/\s+/g, ' ').trim() : '';
+  }, k);
+
+  const apart = await readPanel(pick.key);
+  check(/station \d+, its own/.test(apart), 'a SEPARATED half says the station is its own (' + (apart.match(/valve A of 2[^·]*·[^·]*/) || [''])[0].trim() + ')');
+  check(!/together/.test(apart), 'and never claims the two valves run together');
+
   const shared = await page.evaluate(({ k, pg }) => {
     const zi = LAST_ZONES.findIndex(z => z.key === k);
     mpSetShareStation(zi, true);
@@ -178,7 +201,16 @@ check(after.peak >= Math.max(...halves.map(h => h.gpm)) - 1e-6, 'peak station fl
   check(shared.valves === base.zones.length + 1, 'while the valve count stays up — still two valves in the ground');
   check(shared.quote.some(d => /2 valves wired as one zone/.test(d)), 'the quote line says two valves are wired as one zone');
   check(shared.saved === true, 'the shared decision is what gets saved');
+
+  const joined = await readPanel(pick.key);
+  check(/with valve B/.test(joined), 'a SHARED half names the valve it shares the station with');
+  check(/GPM together/.test(joined), 'and only now says the flow is together');
+  check(!/its own/.test(joined), 'and stops calling the station its own');
+
   await page.evaluate(k => { const zi = LAST_ZONES.findIndex(z => z.key === k); mpSetShareStation(zi, false); }, pick.key);
+  const apartAgain = await readPanel(pick.key);
+  check(!/together/.test(apartAgain) && /its own/.test(apartAgain),
+        'and goes back to "its own" when separated again');
 }
 
 // --- pin B by hand, then save → reload ----------------------------------

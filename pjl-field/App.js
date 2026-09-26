@@ -43,10 +43,15 @@ import PropertyProfileScreen from './src/screens/PropertyProfileScreen';
 import SignInScreen from './src/screens/SignInScreen';
 import ThreadScreen from './src/screens/ThreadScreen';
 import WebScreen from './src/screens/WebScreen';
-import { getSession } from './src/api';
+import { getSession, setClientVersionHeader } from './src/api';
+import { clientVersionHeader } from './src/clientVersion';
 import { colors, space } from './src/theme';
 import { applyPendingUpdate } from './src/updates';
 import { startFieldSync, restoreFieldWorkOrder, forgetOpenFieldWorkOrder } from './src/offline/field';
+
+// Every API call carries the running commit/update (see clientVersion.mjs),
+// installed before anything can make a request.
+setClientVersionHeader(clientVersionHeader);
 
 // `admin: true` means the tab does not exist for a tech. Not disabled —
 // ABSENT. A locked tab teaches someone to press a thing that never works,

@@ -79,6 +79,9 @@ function world({ role = "tech" } = {}) {
   };
   const globals = () => ({ createQueue, readLocal, writeLocal, storeForOwner, HOST: "https://x.local",
     AuthRequiredError: class AuthRequiredError extends Error { constructor() { super("Not signed in"); this.name = "AuthRequiredError"; } },
+    // field.js imports this from api.js (the x-pjl-client header, #299); the
+    // test runs field.js bare, as test-field-conflicts does.
+    withClientVersion: (headers) => headers,
     fetch, AbortController, setTimeout, clearTimeout, AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) } });
   const load = () => vm.runInNewContext(FIELD + "\n({ openFieldWorkOrder, flushBeforeFinish, resolveFieldConflicts, fieldStatus });", globals());
   S.officeWo = (fn) => { fn(S.wo); S.wo.zones = S.wo.zones.map(hydrateZone); S.wo.updatedAt = tick(); };

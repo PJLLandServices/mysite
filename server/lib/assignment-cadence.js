@@ -60,12 +60,16 @@ const { resolveSeasonalPrice } = require("./pricing");
 const { resolvePublicBaseUrl } = require("./public-base-url");
 
 const STEPS = Object.freeze([
-  { n: 1, template: "assignment", channels: ["email", "sms"], blast: true, stopsOnResponse: false },
-  { n: 2, template: "followup", channels: ["email", "sms"], daysBefore: 15, stopsOnResponse: true },
-  { n: 3, template: "nudge", channels: ["email", "sms"], daysBefore: 10, stopsOnResponse: true },
-  { n: 4, template: "nudge", channels: ["email", "sms"], daysBefore: 7, stopsOnResponse: true },
-  { n: 5, template: "nudge", channels: ["email", "sms"], daysBefore: 5, stopsOnResponse: true },
-  { n: 6, template: "reminder24", channels: ["sms"], daysBefore: 1, stopsOnResponse: false }
+  // asksForAnswer: the message asks the customer to confirm, so once they
+  // have, it is never wanted again (stepStillWanted). Step 1 is sent by
+  // the blast regardless, but a LATE step 1 (catch-up) to someone who has
+  // already answered is exactly the stale "please confirm" to avoid.
+  { n: 1, template: "assignment", channels: ["email", "sms"], blast: true, stopsOnResponse: false, asksForAnswer: true },
+  { n: 2, template: "followup", channels: ["email", "sms"], daysBefore: 15, stopsOnResponse: true, asksForAnswer: true },
+  { n: 3, template: "nudge", channels: ["email", "sms"], daysBefore: 10, stopsOnResponse: true, asksForAnswer: true },
+  { n: 4, template: "nudge", channels: ["email", "sms"], daysBefore: 7, stopsOnResponse: true, asksForAnswer: true },
+  { n: 5, template: "nudge", channels: ["email", "sms"], daysBefore: 5, stopsOnResponse: true, asksForAnswer: true },
+  { n: 6, template: "reminder24", channels: ["sms"], daysBefore: 1, stopsOnResponse: false, asksForAnswer: false }
 ]);
 
 // Sends go out inside business-ish hours only, Toronto time (server.js
@@ -317,11 +321,40 @@ function channelsOwed(stepRecord) {
   return attempted.filter((channel) => !stepRecord.sent.includes(channel));
 }
 
-// Every owed channel on one booking, as [{ step, channels }].
-function owedForBooking(booking) {
+// Does this step still have anything to say to this customer? ONE rule,
+// asked by the sweep, by the catch-up (and its count), and by the send
+// itself on a fresh read of the booking.
+//
+// WHY. 2026-09-25: Behnaz confirmed her appointment and then received
+// another "please confirm" message. The sweep already skipped steps 2–5
+// for a customer who had answered — but the catch-up ("Send the messages
+// that never went out") asked only "was a channel attempted and not
+// sent?", never "have they answered since?". An email that failed during
+// the 2026-09-11 mail outage stayed owed forever, and pressing catch-up
+// delivered a stale "please confirm" to someone who already had. Two
+// readers, two answers — the drift CLAUDE.md warns about.
+//
+//   - Steps 1–5 all ask the customer to confirm. Once they have
+//     responded, none of them is wanted, late or on time.
+//   - Nothing about an appointment is wanted once it has passed.
+//   - Step 6 (the 24-hour reminder) is wanted after a response — that is
+//     the whole point of it — until the appointment passes.
+function stepStillWanted(booking, step, { now = new Date() } = {}) {
+  if (!booking || !step) return false;
+  const start = new Date(booking.scheduledFor).getTime();
+  if (Number.isFinite(start) && start <= now.getTime()) return false;
+  const answered = Boolean(booking.assignment?.outreach?.respondedAt);
+  if (answered && step.asksForAnswer) return false;
+  return true;
+}
+
+// Every owed channel on one booking, as [{ step, channels }]. A channel
+// is only owed while its step is still wanted (stepStillWanted).
+function owedForBooking(booking, { now = new Date() } = {}) {
   const steps = booking?.assignment?.outreach?.steps || {};
   const out = [];
   for (const step of STEPS) {
+    if (!stepStillWanted(booking, step, { now })) continue;
     const owed = channelsOwed(steps[String(step.n)]);
     if (owed.length) out.push({ step, channels: owed });
   }
@@ -337,6 +370,24 @@ async function sendStepForBooking(booking, step, { season, year, deps = {}, by =
   const sendSms = deps.sendSms || notify.sendOutreachSms;
   const recordTouch = deps.recordTouch || properties.recordOutreachTouch;
   const setOutreach = deps.setAssignmentOutreach || bookings.setAssignmentOutreach;
+
+  // The list a sweep or catch-up walks was read before its first send,
+  // and sends take seconds each. A customer who confirms in that gap must
+  // not get "please confirm" anyway — so ask again on the booking as it
+  // is NOW. (No stored copy — a test's in-memory booking — keeps the
+  // caller's.)
+  let current = booking;
+  try {
+    const fresh = await (deps.getBooking || bookings.get)(booking.id);
+    if (fresh) current = fresh;
+  } catch { /* keep the caller's copy */ }
+  // The blast's own step 1 always goes: it is the booking notice itself,
+  // and the cadence (the 24-hour reminder included) is anchored on it. A
+  // LATE step 1 — a catch-up — follows the rule like every other step.
+  const isCatchUp = Array.isArray(only);
+  if ((isCatchUp || !step.blast) && !stepStillWanted(current, step)) {
+    return { skipped: true, reason: current.assignment?.outreach?.respondedAt ? "already_responded" : "appointment_passed" };
+  }
 
   const property = booking.propertyId ? await getProperty(booking.propertyId) : null;
   const gate = cadenceGates(property, season, year);
@@ -412,7 +463,7 @@ async function sendStepForBooking(booking, step, { season, year, deps = {}, by =
       propertyAddress: "",
       seasonName: "",
       portalLink: appointmentLinkFor(token),
-      ctaLabel: "Open your appointment page",
+      ctaLabel: "Confirm or change my appointment",
       subject: messages.email.subject,
       emailBody: messages.email.body,
       unsubscribeUrlEmail: unsubscribe.email,
@@ -533,7 +584,7 @@ async function sendDayMoveForBooking(booking, { season, year, deps = {}, by = "c
       firstName: assignmentMessages.contextForBooking(booking).firstName,
       propertyAddress: "", seasonName: "",
       portalLink: appointmentLinkFor(token),
-      ctaLabel: "Open your appointment page",
+      ctaLabel: "Confirm or change my appointment",
       subject: messages.email.subject,
       emailBody: messages.email.body,
       unsubscribeUrlEmail: unsubscribe.email,
@@ -718,7 +769,7 @@ async function sweepDue(season, year, { deps = {}, now = new Date(), appointment
       for (const step of STEPS) {
         if (step.blast) continue;
         if (outreachState.steps[String(step.n)]) continue;               // rule 1
-        if (step.stopsOnResponse && outreachState.respondedAt) continue; // rule 3
+        if (!stepStillWanted(b, step, { now })) continue;                  // rule 3 (one rule)
         if (dueDateKeyFor(b, step) !== todayKey) continue;               // rules 2 + 4
         const outcome = await sendStepForBooking(b, step, { season, year, deps, by: "cadence-sweep" });
         if (outcome.skipped) result.skipped += 1;
@@ -755,7 +806,7 @@ async function catchUpOwed(season, year, { deps = {}, now = new Date(), by = "ca
   const mine = await cadenceBookings(season, year, listBookings);
   const work = [];
   for (const booking of mine) {
-    for (const item of owedForBooking(booking)) {
+    for (const item of owedForBooking(booking, { now })) {
       work.push({ booking, step: item.step, channels: item.channels });
     }
   }
@@ -824,7 +875,7 @@ async function status(season, year, { deps = {} } = {}) {
     if (o.steps?.["1"]) summary.blasted += 1;
     if (o.seenAt) summary.seen += 1;
     if (o.respondedAt) summary.responded += 1;
-    summary.owed += owedForBooking(b).reduce((n, item) => n + item.channels.length, 0);
+    summary.owed += owedForBooking(b, { now: new Date() }).reduce((n, item) => n + item.channels.length, 0);
     for (const n of Object.keys(o.steps || {})) {
       if (summary.steps[n] != null) summary.steps[n] += 1;
     }
@@ -856,6 +907,7 @@ module.exports = {
   sendDayMoveForBooking,
   channelsOwed,
   owedForBooking,
+  stepStillWanted,
   catchUpOwed,
   renderStep,
   dueDateKeyFor,

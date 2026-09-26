@@ -37,11 +37,13 @@ const sharp = require("sharp");
 })();
 
 const { sendNewLeadEmail, sendVoicemailEmail } = require("./lib/notify-email");
-const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms } = require("./lib/notify-sms");
+const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms, sendInboundTextAlertSms } = require("./lib/notify-sms");
+const smsInbound = require("./lib/sms-inbound");
 const testRecipients = require("./lib/test-recipients");
-const { countSystemDesign } = require("./lib/system-design-counts");
+const { countSystemDesign, describeSystemDesign } = require("./lib/system-design-counts");
 const fieldPhotoUploads = require("./lib/field-photo-uploads");
 const billing = require("./lib/billing");
+const fieldClients = require("./lib/field-clients");
 const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
 const voicemailStore = require("./lib/voicemail-store");
@@ -723,6 +725,20 @@ function signPayload(encodedPayload, secret) {
 
 // Read + verify the session cookie. Returns { uid, role, exp } on success
 // or null on any failure (missing / malformed / bad signature / expired).
+// The signed-in user behind a field-app request, for the [field-client]
+// log line (lib/field-clients.js). The email is looked up only when the
+// line is actually written — a new user or a new version.
+async function noteFieldClient(req) {
+  const header = String(req.headers[fieldClients.CLIENT_VERSION_HEADER] || "");
+  const session = await readSession(req).catch(() => null);
+  const who = session ? { id: session.uid, role: session.role } : null;
+  if (who && fieldClients.wouldLog(header, who)) {
+    const u = await users.get(session.uid).catch(() => null);
+    if (u?.email) who.email = u.email;
+  }
+  fieldClients.noteClientVersion(header, who);
+}
+
 async function readSession(req) {
   try {
     const config = await readAuthConfig();
@@ -1342,6 +1358,8 @@ function needsAuth(method, pathname) {
   // Email-health view (JOB-008) — admin-cookie gated, admin only.
   if (pathname.startsWith("/api/admin/email-health")) return "admin";
   if (pathname === "/api/admin/purge-test-data") return "admin";
+  // Which commit each phone reports running (lib/field-clients.js).
+  if (pathname === "/api/admin/field-clients") return "admin";
   // One-time backfill for pre-2026-09-20 project conversions — bulk
   // write across every project, same admin-only bar as purge-test-data.
   if (pathname === "/api/admin/projects/backfill-proposal-enrichment") return "admin";
@@ -3372,7 +3390,7 @@ async function markNoChargeWorkOrders(wos) {
   return wos;
 }
 
-async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "confirm" } = {}) {
+async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "confirm", by = "" } = {}) {
   const summary = stripe.summarizeIntent(intent, requestId);
   // What this intent SHOULD have charged: the outstanding balance at the
   // time it was created. Intents are created for balanceDue, so that's the
@@ -3463,12 +3481,15 @@ async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "con
   // had cash against it this settles the remainder rather than pretending
   // the card covered the whole total.
   try {
+    // Said by the intent itself, so the confirm route and the webhook write
+    // the same line whichever lands first.
+    const tapToPay = intent?.metadata?.source === stripe.TAP_TO_PAY_SOURCE;
     await invoices.addPayment(inv.id, {
       amount: (summary.amountCents ?? expectedCents) / 100,
       method: "card_qb",
       receivedAt: new Date().toISOString(),
-      by: "customer",
-      notes: `Online card payment · ${summary.chargeId || summary.paymentIntentId}`
+      by: tapToPay ? (by || "tap_to_pay") : "customer",
+      notes: `${tapToPay ? "Tap to Pay on iPhone" : "Online card payment"} · ${summary.chargeId || summary.paymentIntentId}`
     });
   } catch (ledgerErr) {
     console.warn(`[stripe] ledger record failed for ${inv.id}: ${ledgerErr?.message}`);
@@ -6736,8 +6757,8 @@ async function handleApi(req, res, pathname) {
   if (warrantyHandled !== false) return;
 
   // ===================================================================
-  // Twilio call-forward voicemail (additive — does NOT touch the SMS
-  // Messaging webhook). Telus stays Patrick's customer-facing number;
+  // Twilio call-forward voicemail (additive — the SMS Messaging webhook
+  // is route 5 below, /api/twilio-sms-incoming). Telus stays Patrick's customer-facing number;
   // unanswered calls forward to the existing Twilio number, whose
   // "A call comes in" Voice webhook points at /api/twilio-voice-incoming.
   // That plays a TTS greeting, records a voicemail, then Twilio fires two
@@ -6868,6 +6889,47 @@ async function handleApi(req, res, pathname) {
     res.writeHead(204, { "cache-control": "no-store" });
     res.end();
     return;
+  }
+
+  // 5) A customer TEXTED the Twilio number. The number's Messaging
+  //    "A message comes in" webhook points here. lib/sms-inbound.js decides:
+  //    YES confirms their one upcoming appointment (the appointment page's
+  //    own confirm), STOP turns off their seasonal texts, anything else is
+  //    forwarded to Patrick's cell with an "automated number — call or text
+  //    (905) 960-0181" reply. Same signature gate as the voice routes.
+  if (req.method === "POST" && pathname === "/api/twilio-sms-incoming") {
+    let params = {};
+    try { params = await parseFormBody(req); } catch { params = {}; }
+    if (!allowTwilioWebhook(req, pathname, params, "sms-incoming")) {
+      return sendJson(res, 403, { ok: false, errors: ["Invalid Twilio signature."] });
+    }
+    let reply = null;
+    try {
+      const out = await smsInbound.handleInbound({
+        from: params.From || "",
+        to: params.To || "",
+        body: params.Body || "",
+        messageSid: params.MessageSid || params.SmsSid || "",
+        numMedia: params.NumMedia || 0
+      }, {
+        listBookings: () => bookings.list(),
+        listProperties: () => properties.list(),
+        summarize: appointmentActions.summarize,
+        confirmByToken: (token, opts) => appointmentActions.confirm(token, opts),
+        updateProperty: (id, patch) => properties.update(id, patch),
+        sendAlert: (body) => sendInboundTextAlertSms(body),
+        ownerPhone: process.env.NOTIFY_TO_PHONE || ""
+      });
+      reply = out.reply;
+      console.log(`[sms-inbound] ${out.cls} → ${out.action || "none"}${reply ? " (replied)" : ""}`);
+    } catch (err) {
+      // Answer Twilio anyway — an error response makes it retry the same
+      // text, and the retry would hit the same fault.
+      console.error("[sms-inbound] failed:", err?.message || err);
+    }
+    return sendTwiml(res, 200, reply
+      ? `<Response><Message>${escapeXml(reply)}</Message></Response>`
+      : "<Response/>");
   }
 
   // 4) Public, token-gated audio proxy. The SMS/email "Listen" link points
@@ -8121,6 +8183,15 @@ async function handleApi(req, res, pathname) {
       console.error("[bulk-actions] dispatch error:", error);
       return sendJson(res, 500, { ok: false, error: error?.message || "Bulk action failed." });
     }
+  }
+
+  // GET /api/admin/field-clients — the latest commit/update/runtime each
+  // signed-in phone reported (x-pjl-client). A release is on a phone when
+  // this, the "[field-client]" log line and the phone's Today tab all name
+  // the same commit. Admin-only (needsAuth). Memory only: empty after a
+  // restart until each phone makes its next request.
+  if (pathname === "/api/admin/field-clients" && req.method === "GET") {
+    return sendJson(res, 200, { ok: true, clients: fieldClients.listClientVersions() });
   }
 
   // GET /api/admin/email-health — JOB-008 Task 4. Last-7-day sent/failed
@@ -15173,6 +15244,112 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // Tap to Pay on iPhone — the charge the reader collects, and the check
+  // that it happened. The phone takes the card; the SERVER decides what it
+  // charges and whether the invoice is paid. See scripts/test-taptopay-server.mjs.
+  //
+  //   POST /api/invoices/:id/terminal-intent           → { clientSecret, paymentIntentId, amountCents, currency }
+  //   POST /api/invoices/:id/terminal-intent/finalize  { paymentIntentId } → { invoice, alreadyPaid, warning }
+  //
+  // ADMIN ONLY, like the connection token and the payment link: starting a
+  // charge is an admin action. /api/invoices is fenced at "user", so the
+  // route checks the role itself.
+  const terminalIntentMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/terminal-intent$/);
+  if (terminalIntentMatch && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const id = decodeURIComponent(terminalIntentMatch[1]);
+      // The same on-site rule as "Take payment now" — a "Bill later" draft
+      // waits for Patrick, a $0 or custom-quote invoice takes nothing — and
+      // it stamps the draft as opened on site, so the ledger and the pay
+      // page agree about it afterwards.
+      const opened = await invoices.openForOnSitePayment(id, { by: session?.uid || "admin" });
+      if (!opened.ok) return sendJson(res, opened.status || 409, { ok: false, code: opened.code, errors: opened.errors });
+      const inv = opened.invoice;
+      // MONEY-CRITICAL: the outstanding balance, from the ledger. Whatever
+      // the phone sends is ignored.
+      const amountCents = Math.round(Number(inv.balanceDue) * 100);
+      if (!Number.isFinite(amountCents) || amountCents <= 0) {
+        return sendJson(res, 409, { ok: false, code: "nothing_owing", errors: ["This invoice has nothing left to pay."] });
+      }
+      const currency = inv.currency || "CAD";
+      const reply = (intent) => sendJson(res, 200, {
+        ok: true, clientSecret: intent.client_secret, paymentIntentId: intent.id, amountCents, currency
+      });
+
+      // A second tap reuses the open intent instead of minting a second
+      // chargeable one — the pay page's rule, on its own slot, because the
+      // two intents are different kinds (card_present vs card) and neither
+      // client can confirm the other's.
+      if (inv.stripeTerminalIntentId) {
+        try {
+          const { intent } = await stripe.retrievePaymentIntent(inv.stripeTerminalIntentId);
+          const open = ["requires_payment_method", "requires_confirmation", "requires_action"].includes(intent?.status);
+          if (open && Number(intent.amount) === amountCents) return reply(intent);
+          if (intent?.status === "succeeded") {
+            // Money already moved and the flip has not landed. Finalize,
+            // never charge again.
+            const result = await finalizeStripeInvoicePayment(inv, intent, null, { via: "terminal-reuse", by: session?.uid || "" });
+            return sendJson(res, 409, { ok: false, code: "already_paid", errors: ["This invoice has already been paid."], invoice: result.invoice });
+          }
+          if (open) {
+            // The balance changed under it (a part payment, a revision):
+            // cancel so the old amount can never be collected.
+            await stripe.cancelPaymentIntent(intent.id).catch((cancelErr) => {
+              console.warn(`[terminal-intent] stale-intent cancel failed for ${inv.id}: ${cancelErr.message}`);
+            });
+          }
+        } catch (lookupErr) {
+          console.warn(`[terminal-intent] stored intent lookup failed for ${inv.id}: ${lookupErr.message}`);
+        }
+      }
+
+      const intent = await stripe.createTerminalPaymentIntent({
+        amountCents,
+        currency,
+        invoiceId: inv.id,
+        description: `PJL invoice ${inv.id}`,
+        // Two taps racing before either stored its intent get ONE intent;
+        // keyed on the intent it replaces too, so a cancelled one is never
+        // handed back for the same amount later.
+        idempotencyKey: `pjl-ttp-${inv.id}-${amountCents}-${inv.stripeTerminalIntentId || "first"}`
+      });
+      await invoices.update(inv.id, { stripeTerminalIntentId: intent.id });
+      return reply(intent);
+    } catch (err) {
+      console.warn(`[terminal-intent] failed: ${err.message}`);
+      return sendJson(res, 502, { ok: false, errors: [err.message || "Couldn't start the payment."] });
+    }
+  }
+
+  const terminalFinalizeMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/terminal-intent\/finalize$/);
+  if (terminalFinalizeMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    const id = decodeURIComponent(terminalFinalizeMatch[1]);
+    const body = await parseRequestBody(req).catch(() => ({}));
+    const paymentIntentId = typeof body?.paymentIntentId === "string" ? body.paymentIntentId.trim() : "";
+    if (!paymentIntentId) return sendJson(res, 400, { ok: false, errors: ["paymentIntentId is required."] });
+    const inv = await invoices.get(id);
+    if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+    let intent, requestId;
+    try {
+      ({ intent, requestId } = await stripe.retrievePaymentIntent(paymentIntentId));
+    } catch (err) {
+      return sendJson(res, 502, { ok: false, errors: [`Couldn't read the payment from Stripe: ${err.message}`] });
+    }
+    try {
+      // The ONE paid-flip: belongs to this invoice, succeeded, right amount
+      // and currency, idempotent — the pay page's and the webhook's.
+      const result = await finalizeStripeInvoicePayment(inv, intent, requestId, { via: "terminal", by: session?.uid || "" });
+      return sendJson(res, 200, { ok: true, invoice: result.invoice, alreadyPaid: result.alreadyPaid, warning: result.warning || null });
+    } catch (err) {
+      console.warn(`[terminal-intent] finalize refused for ${inv.id}: ${err.message}`);
+      return sendJson(res, 409, { ok: false, code: "not_verified", errors: [err.message] });
+    }
+  }
+
   // Terminal connection token — what the Tap to Pay reader on the phone
   // trades for the right to talk to Stripe directly.
   //
@@ -16080,7 +16257,13 @@ async function handleApi(req, res, pathname) {
         stationCount: counts.stationCount,   // programmed outputs on the controller
         valveCount: counts.valveCount,       // physical valves, boxes and lateral runs
         areaCount: counts.areaCount,         // traced landscape areas
-        lastSavedAt: lastSave ? lastSave.ts : null
+        lastSavedAt: lastSave ? lastSave.ts : null,
+        // The saved plan, station by station, so the workspace can SHOW it
+        // rather than only count it (2026-09-24). Reading a plan is the
+        // half of the System Builder that has to work on a phone; drawing
+        // one stays a desktop job for now. Same engine pass as the counts
+        // above, so the list and the totals cannot disagree.
+        stations: describeSystemDesign(proj.systemDesign)
       };
     }
 
@@ -16309,7 +16492,15 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(taskListMatch[1]);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-      return sendJson(res, 200, { ok: true, tasks: proj.tasks || [] });
+      // Archived tasks are kept so the crew's records still point
+      // somewhere, but they are off the job's list. Ask for them
+      // explicitly with ?includeArchived=1.
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const all = proj.tasks || [];
+      const tasks = url.searchParams.get("includeArchived") === "1"
+        ? all
+        : all.filter((t) => !projects.taskIsArchived(t));
+      return sendJson(res, 200, { ok: true, tasks });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read tasks."] });
     }
@@ -16318,11 +16509,14 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(taskListMatch[1]);
       const payload = await parseRequestBody(req);
+      // actorLabel across all four task writes: `by` lands in history and,
+      // for an archive, on the record itself where the Tasks tab renders
+      // it. "admin" in front of Patrick is not a record of who did it.
       const task = await projects.addTask(id, {
         description: payload.description,
         sourceLineItemId: payload.sourceLineItemId || null,
         notes: payload.notes || ""
-      });
+      }, { by: await actorLabel(req) });
       return sendJson(res, 201, { ok: true, task });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't add task."] });
@@ -16335,7 +16529,7 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(taskItemMatch[1]);
       const taskId = decodeURIComponent(taskItemMatch[2]);
       const payload = await parseRequestBody(req);
-      const task = await projects.updateTask(id, taskId, payload);
+      const task = await projects.updateTask(id, taskId, payload, { by: await actorLabel(req) });
       return sendJson(res, 200, { ok: true, task });
     } catch (err) {
       const status = err.code === "task_locked" ? 409 : err.code === "task_not_found" ? 404 : 400;
@@ -16346,11 +16540,110 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(taskItemMatch[1]);
       const taskId = decodeURIComponent(taskItemMatch[2]);
-      const result = await projects.removeTask(id, taskId);
-      return sendJson(res, 200, { ok: true, removed: result.removed });
+      const result = await projects.removeTask(id, taskId, { by: await actorLabel(req) });
+      // removed = gone for good (nothing ever referenced it).
+      // archived = kept, because the crew's records point at it.
+      return sendJson(res, 200, {
+        ok: true, removed: result.removed, archived: result.archived, reasons: result.reasons || []
+      });
     } catch (err) {
       const status = err.code === "task_locked" ? 409 : err.code === "task_not_found" ? 404 : 400;
       return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't remove task."] });
+    }
+  }
+
+  // POST /api/projects/:id/tasks/:taskId/progress — move a task from the
+  // OFFICE (2026-09-25). Body: { percent } (0-100, absolute) or
+  // { percentDelta }.
+  //
+  // Patrick's split: technicians capture on site through the field app;
+  // the workspace is where he reviews and manages — "task status should
+  // synchronize immediately, but there must be only one underlying task
+  // record", and "task updates should remain available from both places."
+  //
+  // Until now there was only ONE door. `/api/work-orders/:woId/tasks-done`
+  // writes the day's log line and then flips the project's master task,
+  // which is the right order and already keeps one record — but it needs a
+  // work order, so a task could not be corrected or finished from the desk
+  // at all.
+  //
+  // This is the second door onto the SAME record: it calls the same
+  // `projects.addTaskProgress()` the field path calls, so the status
+  // invariant (0 pending / 1-99 in_progress / 100 done) is enforced in one
+  // place for both. It deliberately does NOT write a daily-log line —
+  // an office correction is not a day's work, and inventing a session
+  // would put hours on the job that nobody worked. `completedByWoId` is
+  // null for the same reason: the history then says plainly that this one
+  // was not closed out on a visit.
+  //
+  // Absolute `percent` is converted to a delta here because the mutator is
+  // cumulative; sending an absolute from a screen that has just read the
+  // task is what a person means by "set it to 60".
+  const taskProgressMatch = pathname.match(/^\/api\/projects\/([^/]+)\/tasks\/([^/]+)\/progress$/);
+  if (taskProgressMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(taskProgressMatch[1]);
+      const taskId = decodeURIComponent(taskProgressMatch[2]);
+      const payload = await parseRequestBody(req);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      const task = (proj.tasks || []).find((t) => t.id === taskId);
+      if (!task) return sendJson(res, 404, { ok: false, errors: ["Task not found."] });
+      if (projects.taskIsArchived(task)) {
+        return sendJson(res, 409, { ok: false, errors: ["That task was archived and is no longer on this job."] });
+      }
+
+      let delta;
+      if (payload.percent !== undefined && payload.percent !== null) {
+        const target = Number(payload.percent);
+        if (!Number.isFinite(target) || target < 0 || target > 100) {
+          return sendJson(res, 400, { ok: false, errors: ["percent must be between 0 and 100."] });
+        }
+        const current = task.status === "done" ? 100 : (Number(task.percentComplete) || 0);
+        delta = Math.round(target) - current;
+      } else {
+        delta = Number(payload.percentDelta);
+        if (!Number.isFinite(delta)) {
+          return sendJson(res, 400, { ok: false, errors: ["Send percent or percentDelta."] });
+        }
+      }
+
+      // actorLabel, not the raw uid: `by` is rendered straight to the
+      // screen in nine surfaces, and "usr_a1b2c3" in front of Patrick is
+      // not a record of who changed it.
+      const updated = await projects.addTaskProgress(id, taskId, delta, null, {
+        by: await actorLabel(req)
+      });
+      // The job's own figure comes back with it, from the server's
+      // calculation — so the screen never has to work out what the change
+      // did to the project's percentage.
+      const metrics = await projects.computeProjectMetrics(id);
+      return sendJson(res, 200, { ok: true, task: updated, metrics });
+    } catch (err) {
+      const status = err.code === "task_not_found" ? 404 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't update progress."] });
+    }
+  }
+
+  // POST /api/projects/:id/tasks/:taskId/restore — put an archived task
+  // back on the list (2026-09-25). Patrick: "an accidental archive must be
+  // recoverable without editing project data manually."
+  //
+  // Nothing is reconstructed, because archiving never removed anything:
+  // the progress, the work orders' daily-log lines, their photos and the
+  // recorded hours were untouched the whole time. This clears the three
+  // fields archiving added, and the audit trail keeps BOTH entries.
+  const taskRestoreMatch = pathname.match(/^\/api\/projects\/([^/]+)\/tasks\/([^/]+)\/restore$/);
+  if (taskRestoreMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(taskRestoreMatch[1]);
+      const taskId = decodeURIComponent(taskRestoreMatch[2]);
+      const task = await projects.restoreTask(id, taskId, { by: await actorLabel(req) });
+      const metrics = await projects.computeProjectMetrics(id);
+      return sendJson(res, 200, { ok: true, task, metrics });
+    } catch (err) {
+      const status = err.code === "task_not_found" ? 404 : err.code === "task_not_archived" ? 409 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't restore that task."] });
     }
   }
 
@@ -16380,7 +16673,7 @@ async function handleApi(req, res, pathname) {
       }
       const quote = await quotes.get(proj.sourceQuoteId);
       if (!quote) return sendJson(res, 422, { ok: false, errors: ["Source quote not found."] });
-      const updated = await projects.seedTasksFromQuote(id, quote);
+      const updated = await projects.seedTasksFromQuote(id, quote, { by: await actorLabel(req) });
       return sendJson(res, 200, { ok: true, project: updated });
     } catch (err) {
       const status = err.code === "tasks_partially_done" ? 409 : 400;
@@ -16463,6 +16756,9 @@ async function handleApi(req, res, pathname) {
         try {
           const proj = await projects.get(projectId);
           const t = (proj?.tasks || []).find((x) => x.id === taskId);
+          if (t && projects.taskIsArchived(t)) {
+            return sendJson(res, 409, { ok: false, errors: ["That task was archived and is no longer on this job."] });
+          }
           if (t) curPct = t.status === "done" ? 100 : (Number(t.percentComplete) || 0);
         } catch (_) {}
       }
@@ -25077,7 +25373,18 @@ async function orderDayForDriving(rows) {
     const confirmationFor = (bookingId) => {
       const b = bookingId && confirm ? confirm.byId.get(bookingId) : null;
       if (!b) return null;
-      return { bookingId: b.id, sentAt: b.assignment.outreach?.steps?.["1"]?.at || null };
+      // sentAt is when WE messaged them; respondedAt is when THEY answered.
+      // The panel used to show only the first and label it "confirmed",
+      // which read as the customer's answer (2026-09-25).
+      const o = b.assignment.outreach || {};
+      return {
+        bookingId: b.id,
+        sentAt: o.steps?.["1"]?.at || null,
+        seenAt: o.seenAt || null,
+        respondedAt: o.respondedAt || null,
+        responseVia: o.responseVia || null,
+        responseLabel: o.respondedAt ? bookings.responseLabel(o.responseVia) : ""
+      };
     };
     for (const row of booked) {
       const c = confirmationFor(row.bookingId);
@@ -27316,6 +27623,36 @@ function resolveStaticTarget(pathname) {
   // /app-assets/. Built output is committed (server/app-dist/), so
   // there is no build step to add on Render and no deploy config to
   // change — and the existing /admin/* CRM is untouched either way.
+  // The System Builder, as a full-screen route BELONGING TO A JOB
+  // (2026-09-24). Patrick chose hand-off over embedding it in the
+  // workspace tab: "a full-screen project route with return to the same
+  // project."
+  //
+  // Not because an iframe would have leaked its layers — it would not.
+  // An iframe is its own document and its own stacking context, so the
+  // builder's overlays and dialogs could not have collided with the
+  // app's chrome. Two other things decided it:
+  //
+  //   An iframe is a box. The builder's full-screen overlays fill the
+  //   FRAME, not the viewport, so "full width" would have meant the
+  //   frame's width under whatever workspace chrome sat above it.
+  //
+  //   The unsaved-work guard gets harder, not easier. Moving between
+  //   workspace tabs is a React route change, NOT an unload, so
+  //   beforeunload never fires — an embed would have needed a new guard
+  //   built from scratch and coordinated across the frame by
+  //   postMessage. Leaving a separate page IS an unload, so browser
+  //   Back, refresh and closing the tab keep the guard the page already
+  //   has, and only Back to Project is new.
+  //
+  // So it stays its own page and the URL does the joining: the job is in
+  // the PATH, not a query string, and Back to Project returns to the tab
+  // it was opened from. This must be tested BEFORE the /app catch-all —
+  // every other /app/* URL is the React shell, and if this fell through
+  // to it the route would render an empty workspace instead.
+  if (/^\/app\/projects\/[^/]+\/design\/build\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/sitebuilder.html" };
+  }
   if (pathname === "/app" || pathname.startsWith("/app/")) {
     return { dir: SERVER_DIR, relative: "/app-dist/index.html" };
   }
@@ -28128,6 +28465,12 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(204);
       res.end();
       return;
+    }
+
+    // Field app: record which commit this phone runs (x-pjl-client). Fire
+    // and forget — it never delays or refuses the request it rides on.
+    if (pathname.startsWith("/api/") && req.headers[fieldClients.CLIENT_VERSION_HEADER]) {
+      noteFieldClient(req).catch(() => {});
     }
 
     const authHandled = await handleAuth(req, res, pathname);

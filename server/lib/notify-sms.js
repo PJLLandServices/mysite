@@ -245,6 +245,46 @@ async function sendEmailFailureAlertSms(body) {
   }
 }
 
+// A customer texted the Twilio number (lib/sms-inbound.js). Nobody reads
+// that number, so the text is relayed to Patrick's cell — the caller
+// composes the body (who, which appointment, what they said). Same Twilio
+// creds + NOTIFY_TO_PHONE as every other admin alert; nothing new to set.
+async function sendInboundTextAlertSms(body) {
+  if (!isConfigured()) {
+    console.warn("[sms] Twilio env vars not set — skipping inbound-text forward (text still logged).");
+    return { ok: false, skipped: true };
+  }
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
+  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Basic ${auth}`,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({
+        To: process.env.NOTIFY_TO_PHONE,
+        From: process.env.TWILIO_FROM_NUMBER,
+        Body: String(body || "").trim().slice(0, 1500)
+      }).toString()
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error("[sms] Twilio rejected inbound-text forward:", response.status, data?.message || data?.code || "(no detail)");
+      return { ok: false, error: data?.message || `Twilio HTTP ${response.status}` };
+    }
+    console.log("[sms] Forwarded inbound text to Patrick:", data.sid);
+    return { ok: true, sid: data.sid };
+  } catch (error) {
+    console.error("[sms] Network or runtime error forwarding inbound text:", error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
 // Klarna financing capture-deadline alert (PJL-34, build order step 5).
 // Same dispatch shape as sendEmailFailureAlertSms — the caller (the
 // financing-reminders sweep) builds the body, this just sends it to the
@@ -285,4 +325,4 @@ async function sendFinancingReminderSms(body) {
   }
 }
 
-module.exports = { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms, sendEmailFailureAlertSms, sendFinancingReminderSms };
+module.exports = { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms, sendEmailFailureAlertSms, sendFinancingReminderSms, sendInboundTextAlertSms };
