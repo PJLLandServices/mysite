@@ -6405,6 +6405,36 @@ done by `invoices.reconcileToSignedScope(woId)`, under the invoice store lock:
   - `invoices.revise()` clears it. The history records `revision_resolved`, and says whether the
     revision matches the signed total.
   - A flagged invoice that isn't sent (a QuickBooks draft, or $0) is resolved by void and regenerate.
+- **Patrick's rulings on #325 (2026-09-26):**
+  1. **Revise and the signed amount.** A revision **at or below** the signed total releases the hold,
+     so a deliberate discount needs no new signature. A revision **above** it keeps the hold, because
+     the customer hasn't authorized the higher amount; it needs their approval (a re-sign). The
+     history always records the signed amount, the revised amount, and whether it matched or was
+     discounted (`revision_resolved`, `revision_above_signed`). A signed scope that is $0 or couldn't
+     be priced is never released by a revision.
+  2. **Flagged drafts keep Void → Generate invoice**, including a part-paid draft: reverse the
+     deposit, void, generate, then record the deposit again. The test proves this path isn't a dead
+     end. An unsent, **unpaid**, non-QuickBooks draft still re-prices by itself.
+  3. **$0 signed scope → No Charge, never a $0 invoice.** An untouched draft is voided
+     (`voided_no_charge`). A sent one is flagged, and voiding it completes the path. Either way the
+     visit's service record is settled as no charge (`properties.settleServiceRecordAsNoCharge`), so
+     the visit reads **No charge**, not "Needs invoice".
+  4. **A hold blocks every way of taking or recording money.** `invoices.paymentHoldFor` is the one
+     rule. It covers:
+     - the pay page, pay link, Take payment and Tap to Pay;
+     - cash, cheque, e-transfer, card recorded by hand, and other (POST `…/payments`, checked under
+       the store lock through `refuseWhileHeld`);
+     - correcting a payment;
+     - Klarna capture;
+     - a manual Paid, Partially paid or Sent.
+
+     A card intent opened **before** the hold (a pay page left open, a reader armed) is cancelled at
+     Stripe when the hold goes on. Two things stay allowed:
+     - reversing a payment, because it takes no money and is what makes Void possible;
+     - the Stripe and Klarna finalizers recording money that has **already moved** at the processor
+       (FLOW-23, untouched), since refusing it would hide a real charge.
+
+     A static check fails if a new payment-recording call skips the rule.
 - **Idempotent.** A retried signature doesn't flip the resignature state, so the listener doesn't run.
   A repeated reconcile finds "matches", or the same flag already set, and writes nothing.
 - `setScopeHold(false)` can no longer release a revision-required hold.
@@ -6426,12 +6456,17 @@ done by `invoices.reconcileToSignedScope(woId)`, under the invoice store lock:
     next tap or pay-page visit.
 
 **Tests:**
-- `scripts/test-resign-reprice.mjs` (build:check): 24 of 56 fail on the parent, and 56 of 56 pass
-  with the change. It covers:
+- `scripts/test-resign-reprice.mjs` (build:check): 80 of 126 fail on the parent, 51 of 126 fail on
+  #325's first version, and 126 of 126 pass now. It covers:
   - the draft re-priced in both directions;
   - a sent invoice flagged, every door blocked, then Revise clears it;
   - money recorded means flagged, not rewritten;
   - a confirmed custom price kept, and a real size change re-confirmed;
+  - Revise below, at and above the signed amount;
+  - every payment door under both kinds of hold, each reopened only after a legitimate reconcile;
+  - open intents cancelled;
+  - $0 leading to No Charge;
+  - the static every-caller check;
   - a retry is a no-op;
   - nothing is sent;
   - the office card.

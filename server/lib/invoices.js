@@ -928,6 +928,23 @@ function scopeHoldCode(inv) {
   return inv.scopeHold.reason === "revision_required" ? "revision_required" : "awaiting_signature";
 }
 
+// Every route that collects or records money on an invoice asks this ONE
+// question (Patrick, 2026-09-26): while the invoice is held for a revised
+// scope — awaiting the customer's new signature, or awaiting a revision
+// to what they signed — no money is taken or recorded against it by ANY
+// method (card, Tap to Pay, cash, cheque, e-transfer, a manual "paid").
+// null when payment may proceed; otherwise the refusal to send.
+function paymentHoldFor(inv) {
+  const code = scopeHoldCode(inv);
+  if (!code) return null;
+  return {
+    ok: false, status: 409, code,
+    errors: [code === "revision_required"
+      ? "The customer signed a revised work order and this invoice still bills the old one. Revise it to the signed scope first — no payment can be taken or recorded until then."
+      : "The work order's scope changed after the customer signed. They need to sign the revised work order first — no payment can be taken or recorded until then."]
+  };
+}
+
 function isPayableOnline(inv) {
   return payBlockReason(inv) === null;
 }
@@ -1145,8 +1162,25 @@ async function reconcileToSignedScope(woId, { lineItems = null, by = "system" } 
   }
 
   const money = amountPaidOf(inv) > 0 || (inv.payments || []).length > 0;
-  const repriceable = target && totals.total > 0
-    && inv.status === "draft" && !inv.sentAt && !money && !inv.quickbooksInvoiceId;
+  const untouched = inv.status === "draft" && !inv.sentAt && !money && !inv.quickbooksInvoiceId;
+  // The signed scope bills NOTHING (fall-closing fix #8, No Charge): no $0
+  // invoice. An untouched draft is voided; the caller then records the
+  // visit's service record as no charge, so it reads "No charge" — never
+  // "Needs invoice".
+  if (target && !(totals.total > 0) && untouched) {
+    const next = { ...inv, status: "void", voidedAt: now, scopeHold: null, updatedAt: now };
+    next.scopeReconciliations = [...(inv.scopeReconciliations || []), {
+      ts: now, by, woId, action: "voided_no_charge",
+      previousLineItems: inv.lineItems || [], previousSubtotal: inv.subtotal, previousHst: inv.hst, previousTotal: inv.total,
+      newTotal: 0
+    }];
+    pushHistory(next, [{ ts: now, action: "voided_no_charge_after_resignature", by,
+      note: `Voided: the revised work order the customer signed is no charge (was ${fmtMoneyPlain(inv.total)}) · nothing sent to the customer` }]);
+    records[idx] = next;
+    await writeAll(records);
+    return { action: "voided_no_charge", invoice: hydrate(next), lineItems: target, totals };
+  }
+  const repriceable = target && totals.total > 0 && untouched;
   if (repriceable) {
     const next = { ...inv, lineItems: target, subtotal: totals.subtotal, hst: totals.hst, total: totals.total };
     next.amountPaid = amountPaidOf(next);
@@ -1489,17 +1523,35 @@ async function revise(id, { lineItems, reason = "", by = "admin" } = {}) {
   // revised scope after this invoice went out) is resolved — Patrick's
   // explicit, reasoned change. The history says whether it now matches
   // the total the customer signed.
+  //
+  // Patrick's rule (2026-09-26): a revision at or BELOW the amount the
+  // customer signed for clears the hold — he may discount without another
+  // signature. ABOVE it, the customer has not authorized that amount: the
+  // hold stays until they approve it (re-sign the revised work order). A
+  // signed scope that is no charge, or couldn't be priced, is never cleared
+  // here (no $0 invoice): void it instead.
+  let holdNote = null;
   if (scopeHoldCode(current) === "revision_required") {
     const want = current.scopeHold.requiredTotal;
-    next.scopeHold = null;
-    next.history.push({ ts: now, action: "revision_resolved", by,
-      note: want === null || want === undefined
-        ? "Revision required after re-signing — resolved by this revision"
-        : `Revision required after re-signing — resolved by this revision (${fmtMoneyPlain(totals.total)}; the signed work order bills ${fmtMoneyPlain(want)}${round2(want) === totals.total ? " — matches" : " — DIFFERS"})` });
+    const signed = want === null || want === undefined ? null : round2(want);
+    if (signed !== null && signed > 0 && totals.total <= signed) {
+      next.scopeHold = null;
+      const how = totals.total === signed ? "matches the signed amount" : `discounted ${fmtMoneyPlain(round2(signed - totals.total))} below the signed amount`;
+      next.history.push({ ts: now, action: "revision_resolved", by,
+        note: `Revision required after re-signing — resolved: revised ${fmtMoneyPlain(totals.total)}, signed ${fmtMoneyPlain(signed)} (${how})` });
+    } else {
+      holdNote = signed === null
+        ? "The signed work order's amount couldn't be determined, so this revision can't release the invoice. Void it and generate a new invoice from the work order."
+        : signed === 0
+          ? "The signed work order is no charge, so there is nothing to bill. Void this invoice — the visit then reads No Charge."
+          : `Revised to ${fmtMoneyPlain(totals.total)}, which is MORE than the ${fmtMoneyPlain(signed)} the customer signed for. It stays held until the customer approves the higher amount (have them sign the revised work order).`;
+      next.history.push({ ts: now, action: signed !== null && signed > 0 ? "revision_above_signed" : "revision_not_releasable", by,
+        note: `Still held: ${holdNote} (revised ${fmtMoneyPlain(totals.total)}${signed !== null ? `, signed ${fmtMoneyPlain(signed)}` : ""})` });
+    }
   }
   records[idx] = next;
   await writeAll(records);
-  return { ok: true, invoice: next };
+  return { ok: true, invoice: next, holdNote };
 }
 
 // Stamp notifiedAt on the latest revision after the revised-invoice
@@ -1698,11 +1750,19 @@ async function remove(id, { reason = "", by = "admin", qbVoidConfirmed = false }
 // reconstructed even if a payment is later corrected or reversed.
 const PAYABLE_STATUSES = new Set(["draft", "sent", "partially_paid", "paid"]);
 
-async function addPayment(id, { amount, method, receivedAt, notes, by = "admin" } = {}) {
+// `refuseWhileHeld` — set by every staff route that RECORDS money (cash,
+// cheque, e-transfer, a card taken outside the pay page): the hold is
+// checked here, under the store lock, so it can't be slipped past between
+// a route's check and the write. Not set by the Stripe finalizer, which
+// records money that has ALREADY moved at the processor — refusing that
+// would hide a real charge from the ledger (charges are refused upstream,
+// and open intents are cancelled when the hold goes on).
+async function addPayment(id, { amount, method, receivedAt, notes, by = "admin", refuseWhileHeld = false } = {}) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return { ok: false, status: 404, errors: ["Invoice not found."] };
   const current = records[idx];
+  if (refuseWhileHeld && paymentHoldFor(current)) return paymentHoldFor(current);
   if (current.status === "void") {
     return { ok: false, status: 409, code: "invoice_void", errors: ["Can't record a payment against a void invoice."] };
   }
@@ -1744,11 +1804,12 @@ async function addPayment(id, { amount, method, receivedAt, notes, by = "admin" 
   return { ok: true, invoice: hydrate(next), payment };
 }
 
-async function updatePayment(id, paymentId, patch = {}, { by = "admin" } = {}) {
+async function updatePayment(id, paymentId, patch = {}, { by = "admin", refuseWhileHeld = false } = {}) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return { ok: false, status: 404, errors: ["Invoice not found."] };
   const current = records[idx];
+  if (refuseWhileHeld && paymentHoldFor(current)) return paymentHoldFor(current);
   if (current.status === "void") {
     return { ok: false, status: 409, code: "invoice_void", errors: ["Can't edit payments on a void invoice."] };
   }
@@ -1865,6 +1926,7 @@ module.exports = {
   setScopeHold: withStoreLock(setScopeHold),
   reconcileToSignedScope: withStoreLock(reconcileToSignedScope),
   scopeHoldCode,
+  paymentHoldFor,
   getByPaymentToken,
   ensurePortalToken: withStoreLock(ensurePortalToken),
   getByPortalToken

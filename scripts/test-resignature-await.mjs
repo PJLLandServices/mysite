@@ -258,8 +258,9 @@ try {
     const body = `${listener}\n${helper}`;
     ok(/return\s+invoices\.setScopeHold\(/.test(listener)
       || (/return\s+holdOrReconcileInvoice\(/.test(listener)
-        && /return\s+invoices\.setScopeHold\(/.test(helper)
-        && /return\s+invoices\.reconcileToSignedScope\(/.test(helper)),
+        && /(return|await)\s+invoices\.setScopeHold\(/.test(helper)
+        && /(return|await)\s+invoices\.reconcileToSignedScope\(/.test(helper)
+        && /return\s+(held|result)\b/.test(helper)),
       "server.js's resignature listener RETURNS the hold write",
       body.replace(/\s+/g, " ").slice(0, 300));
     ok(!/\.catch\(/.test(body),

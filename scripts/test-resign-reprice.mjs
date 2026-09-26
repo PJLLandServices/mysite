@@ -34,6 +34,24 @@
 //        the new suggestion and needs his confirmation again — held, not
 //        charged at either number meanwhile
 //
+// Patrick's rulings on #325 (2026-09-26):
+//   K.   Revise releases a "revision required" hold only at or BELOW the
+//        amount the customer signed (a discount needs no new signature);
+//        ABOVE it the hold stays; the history records signed vs revised and
+//        whether it matched or was discounted
+//   L.   while held — awaiting the signature OR awaiting a revision — EVERY
+//        way of taking or recording money refuses: pay page, pay link, Take
+//        payment, Tap to Pay, cash, cheque, e-transfer, card recorded by
+//        hand, other, Klarna capture, correcting a payment, a manual
+//        "Paid"/"Partially paid"/"Sent"; each reopens only once the invoice
+//        is legitimately reconciled
+//   N.   a card payment opened BEFORE the hold (pay page left open, Tap to
+//        Pay armed) is cancelled at Stripe when the hold goes on
+//   M.   a signed scope that bills nothing follows the No Charge rules: an
+//        untouched draft is voided and the visit reads No Charge (never a
+//        $0 invoice); a sent one can't be "revised" to $0 — it is voided,
+//        and then reads No Charge
+//
 // Booted server, temp data, email/SMS/Stripe stubbed (nothing leaves).
 //
 // Run: node scripts/test-resign-reprice.mjs   (also in build:check)
@@ -57,6 +75,26 @@ const NEW_SIGNATURE = { acknowledgement: true, imageData: "data:image/png;base64
   const js = fs.readFileSync(new URL("../server/invoice.js", import.meta.url), "utf8");
   ok(/id="invoiceRevisionRequiredCard"[^>]*hidden/.test(html), "H. the invoice page has a hidden \"Revision required\" card");
   ok(/card\.hidden = hold\?\.reason !== "revision_required"/.test(js) && /renderRevisionRequiredCard\(inv\);/.test(js), "H. …shown exactly when the server flags it");
+}
+
+// ---- L. no payment-recording route can forget the hold ---------------------------
+// Every call that records money in server.js either asks the hold rule under
+// the store lock (refuseWhileHeld), or is one of the two finalizers that
+// record money ALREADY moved at the processor (Stripe, Klarna — the Klarna
+// route asks paymentHoldFor before it captures anything).
+{
+  const src = fs.readFileSync(new URL("../server/server.js", import.meta.url), "utf8");
+  const calls = [...src.matchAll(/invoices\.(addPayment|updatePayment)\(/g)].map((m) => {
+    const fnAt = src.lastIndexOf("\nasync function ", m.index);
+    const fn = src.slice(fnAt + 16, src.indexOf("(", fnAt + 16));
+    const call = src.slice(m.index, src.indexOf(");", m.index));
+    return { fn, guarded: /refuseWhileHeld:\s*true/.test(call) };
+  });
+  const unguarded = calls.filter((c) => !c.guarded && !["finalizeStripeInvoicePayment", "finalizeKlarnaCapture"].includes(c.fn));
+  ok(calls.length >= 4 && unguarded.length === 0, `L. every payment-recording call asks the hold, or is a processor finalizer (${JSON.stringify(unguarded)})`);
+  const kAt = src.indexOf("const klarnaCaptureMatch");
+  const klarna = src.slice(kAt, src.indexOf("finalizeKlarnaCapture(inv, quote", kAt));
+  ok(/invoices\.paymentHoldFor\(inv\)/.test(klarna), "L. the Klarna capture route asks the hold before capturing");
 }
 
 const srv = await bootServer({ port: 4925 });
@@ -251,6 +289,155 @@ try {
     const link = await srv.api("POST", `/api/invoices/${inv.id}/payment-link`, {});
     ok(link.status === 409 && link.body.code === "needs_pricing", `J. …and not payable until Patrick confirms it (${link.status} ${link.body.code})`);
     ok((inv.scopeReconciliations || [])[0]?.previousTotal === withTax(theirs), "J. his earlier confirmed price is kept in the audit trail");
+  }
+
+  // ---- helpers for the payment doors -----------------------------------------
+  const METHODS = ["cash", "cheque", "e_transfer", "card_qb", "other"];
+  async function everyPaymentDoor(inv, label, want) {
+    const rec = srv.data("invoices").find((i) => i.id === inv.id);
+    const doors = [];
+    for (const method of METHODS) {
+      doors.push([`record ${method}`, await srv.api("POST", `/api/invoices/${inv.id}/payments`, { amount: 10, method, receivedAt: now(), notes: "" })]);
+    }
+    doors.push(["Take payment / pay link", await srv.api("POST", `/api/invoices/${inv.id}/payment-link`, {})]);
+    doors.push(["Tap to Pay", await srv.api("POST", `/api/invoices/${inv.id}/terminal-intent`, {})]);
+    doors.push(["Klarna capture", await srv.api("POST", `/api/admin/invoices/${inv.id}/klarna/capture`, { amountCents: 1000 })]);
+    doors.push(["manual Paid", await srv.api("PATCH", `/api/invoices/${inv.id}`, { status: "paid" })]);
+    doors.push(["manual Partially paid", await srv.api("PATCH", `/api/invoices/${inv.id}`, { status: "partially_paid" })]);
+    if (rec.status === "draft") doors.push(["manual Sent", await srv.api("PATCH", `/api/invoices/${inv.id}`, { status: "sent" })]);
+    if (rec.paymentToken) doors.push(["the pay page", await srv.api("POST", `/api/pay/invoice/${inv.id}/payment-intent`, { t: rec.paymentToken })]);
+    if ((rec.payments || []).length) {
+      doors.push(["correcting a payment", await srv.api("PATCH", `/api/invoices/${inv.id}/payments/${rec.payments[0].id}`, { amount: 5 })]);
+    }
+    for (const [what, r] of doors) ok(r.status === 409 && r.body.code === want, `${label}: ${what} refused (${r.status} ${r.body.code})`);
+    const after = srv.data("invoices").find((i) => i.id === inv.id);
+    ok((after.payments || []).length === (rec.payments || []).length && after.status === rec.status && after.total === rec.total,
+      `${label}: …and nothing was recorded, marked or changed (${(after.payments || []).length} payments, ${after.status})`);
+  }
+
+  // ---- K. Revise vs the signed amount ----------------------------------------
+  {
+    const c = await signedClosing(4, { paidOnSite: false });
+    await srv.api("POST", `/api/invoices/${c.inv.id}/send`, {});
+    await reviseAndResign(c.id, 6);
+    await sleep(200);
+    let inv = srv.data("invoices").find((i) => i.id === c.inv.id);
+    const signed = withTax(price("fall_close_6z"));
+    ok(inv.scopeHold?.reason === "revision_required" && inv.scopeHold.requiredTotal === signed, "K. setup: a sent invoice flagged at the signed 6-zone total");
+    const at = (sub) => inv.lineItems.map((l) => (/^fall_close_/.test(l.key || "") ? { ...l, key: "fall_close_6z", unitPrice: sub } : l));
+
+    // ABOVE the signed amount: the hold stays.
+    let rev = await srv.api("POST", `/api/invoices/${inv.id}/revise`, { lineItems: at(price("fall_close_6z") + 20), reason: "Added a surcharge" });
+    inv = srv.data("invoices").find((i) => i.id === c.inv.id);
+    ok(rev.status === 200 && rev.body.stillHeld === true && /MORE than/.test(rev.body.warning || ""), `K. revising ABOVE the signed amount is saved but says it stays held (${rev.body.warning})`);
+    ok(inv.scopeHold?.reason === "revision_required", "K. …the hold stays: the customer never authorized the higher amount");
+    ok((inv.history || []).some((h) => h.action === "revision_above_signed" && h.note.includes(`signed $${signed.toFixed(2)}`)), "K. …and the history records signed vs revised");
+    await everyPaymentDoor(inv, "K. above the signed amount", "revision_required");
+    const send = await srv.api("POST", `/api/invoices/${inv.id}/resend`, {});
+    ok(send.status === 409 && send.body.code === "revision_required", `K. …and Resend refuses (${send.body.code})`);
+
+    // BELOW (a discount): released, recorded as discounted.
+    rev = await srv.api("POST", `/api/invoices/${inv.id}/revise`, { lineItems: at(price("fall_close_6z") - 10), reason: "Goodwill discount" });
+    inv = srv.data("invoices").find((i) => i.id === c.inv.id);
+    ok(rev.status === 200 && rev.body.stillHeld === false && !inv.scopeHold, `K. revising BELOW the signed amount releases it (${j(inv.scopeHold)})`);
+    const resolved = (inv.history || []).find((h) => h.action === "revision_resolved");
+    ok(resolved && /discounted \$[\d.]+ below the signed amount/.test(resolved.note) && resolved.note.includes(`signed $${signed.toFixed(2)}`),
+      `K. …and the history says it was discounted, with both amounts (${resolved?.note})`);
+    const paid = await srv.api("POST", `/api/invoices/${inv.id}/payments`, { amount: 10, method: "cash", receivedAt: now() });
+    ok(paid.status === 201, `L. once legitimately revised, cash can be recorded again (${paid.status} ${paid.body.code})`);
+  }
+
+  // ---- L. every payment path while AWAITING the signature ----------------------
+  {
+    const c = await signedClosing(4);
+    const opened = await srv.api("POST", `/api/invoices/${c.inv.id}/payment-link`, {});
+    ok(opened.status === 200, "L. setup: a paid-on-site draft, opened for payment on site");
+    await reviseAndResign(c.id, 6, { sign: false });
+    await sleep(200);
+    await everyPaymentDoor(c.inv, "L. awaiting the new signature", "awaiting_signature");
+    const s2 = await srv.api("PATCH", `/api/work-orders/${c.id}`, { status: "completed", signature: NEW_SIGNATURE, arrivedAt: now(), departedAt: now() });
+    ok(s2.status === 200, "L. the customer signs");
+    await sleep(200);
+    const cash = await srv.api("POST", `/api/invoices/${c.inv.id}/payments`, { amount: withTax(price("fall_close_6z")), method: "cash", receivedAt: now() });
+    ok(cash.status === 201 && cash.body.invoice?.status === "paid", `L. once re-priced to what was signed, payment works again (${cash.status} ${cash.body.invoice?.status})`);
+  }
+
+  // ---- L. every payment path while a REVISION is required (money on file) ------
+  {
+    const c = await signedClosing(4);
+    await srv.api("POST", `/api/invoices/${c.inv.id}/payments`, { amount: 20, method: "cash", receivedAt: now() });
+    await reviseAndResign(c.id, 6);
+    await sleep(200);
+    const inv = srv.data("invoices").find((i) => i.id === c.inv.id);
+    ok(inv.scopeHold?.reason === "revision_required", "L. setup: a part-paid invoice flagged for revision");
+    await everyPaymentDoor(inv, "L. revision required", "revision_required");
+    // A part-paid DRAFT is a flagged draft (Patrick: only an unsent, UNPAID
+    // draft re-prices by itself), so it takes the rare-case path — and that
+    // path must not be a dead end: reverse the deposit (reversing is not
+    // taking money, so it stays allowed while held), Void, Generate invoice
+    // from the signed work order, record the deposit again.
+    const reverse = await srv.api("DELETE", `/api/invoices/${inv.id}/payments/${inv.payments[0].id}`, { reason: "Re-recording on the corrected invoice" });
+    ok(reverse.status === 200, `L. the deposit can be reversed while held (${reverse.status} ${reverse.body.code})`);
+    const v = await srv.api("POST", `/api/invoices/${inv.id}/void`, { reason: "Superseded by the revised work order" });
+    ok(v.status === 200, `L. …then Void (${v.status} ${j(v.body.errors)})`);
+    const gen = await srv.api("POST", `/api/work-orders/${c.id}/create-invoice`, {});
+    const fresh = gen.body.invoice;
+    ok(gen.status < 300 && fresh && fresh.id !== inv.id && fee(fresh)?.key === "fall_close_6z" && fresh.total === withTax(price("fall_close_6z")) && !fresh.scopeHold,
+      `L. …then Generate invoice bills the signed 6-zone scope, unheld (${gen.status} ${j([fresh?.id, fee(fresh)?.key, fresh?.total])})`);
+    ok(invoicesFor(c.id).filter((i) => i.status !== "void").length === 1, "L. …still one active invoice for the visit");
+    const more = await srv.api("POST", `/api/invoices/${fresh?.id}/payments`, { amount: 20, method: "cash", receivedAt: now() });
+    ok(more.status === 201, `L. …and the deposit is recorded again on it (${more.status} ${more.body.code})`);
+  }
+
+  // ---- N. a card payment opened before the hold is cancelled -------------------
+  {
+    const c = await signedClosing(4);
+    const link = await srv.api("POST", `/api/invoices/${c.inv.id}/payment-link`, {});
+    const t = new URL(link.body.url).searchParams.get("t");
+    const page = await srv.api("POST", `/api/pay/invoice/${c.inv.id}/payment-intent`, { t });
+    const tap = await srv.api("POST", `/api/invoices/${c.inv.id}/terminal-intent`, {});
+    ok(page.status === 200 && tap.status === 200, "N. setup: the customer's pay page and the tech's reader both have an open intent");
+    await reviseAndResign(c.id, 6, { sign: false });
+    await sleep(200);
+    const cancels = srv.outbox().filter((e) => e.channel === "stripe" && e.method === "POST" && /\/cancel$/.test(e.path)).map((e) => e.path);
+    ok(cancels.includes(`/v1/payment_intents/${page.body.paymentIntentId}/cancel`) && cancels.includes(`/v1/payment_intents/${tap.body.paymentIntentId}/cancel`),
+      `N. both are cancelled at Stripe when the hold goes on (${j(cancels)})`);
+    const inv = srv.data("invoices").find((i) => i.id === c.inv.id);
+    ok((inv.history || []).filter((h) => h.action === "payment_intent_cancelled_while_held").length === 2, "N. …and the history says so");
+  }
+
+  // ---- M. the signed scope bills nothing → No Charge, never a $0 invoice ---------
+  {
+    const setZero = (propId) => srv.api("PATCH", `/api/properties/${propId}`, { seasonalPricing: { fallClosingPrice: 0 } });
+    const c = await signedClosing(4);
+    const z = await setZero(c.f.prop.id);
+    ok(z.status === 200, "M. setup: Patrick sets this property's fall price to $0 after the first signature");
+    const s = await reviseAndResign(c.id, 5);
+    ok(s.status === 200, `M. the customer re-signs the revised (now $0) work order (${s.status})`);
+    await sleep(300);
+    ok(!active(c.id), `M. the untouched draft is voided — no $0 invoice (${j(invoicesFor(c.id).map((i) => [i.status, i.total]))})`);
+    ok(invoicesFor(c.id).every((i) => i.total > 0), "M. …and none was ever written at $0");
+    const wo = (await srv.api("GET", `/api/work-orders/${c.id}`)).body.workOrder;
+    ok(wo?.noCharge === true, `M. the visit reads No Charge (${wo?.noCharge})`);
+    const gen = await srv.api("POST", `/api/work-orders/${c.id}/create-invoice`, {});
+    ok(gen.status === 409 && gen.body.code === "no_charge", `M. "Generate invoice" refuses it as no charge (${gen.status} ${gen.body.code})`);
+
+    const d = await signedClosing(4, { paidOnSite: false });
+    await srv.api("POST", `/api/invoices/${d.inv.id}/send`, {});
+    await setZero(d.f.prop.id);
+    await reviseAndResign(d.id, 5);
+    await sleep(300);
+    let inv = srv.data("invoices").find((i) => i.id === d.inv.id);
+    ok(inv.status === "sent" && inv.scopeHold?.reason === "revision_required" && inv.scopeHold.requiredTotal === 0, `M. a SENT invoice is flagged, not rewritten (${j([inv.status, inv.scopeHold?.requiredTotal])})`);
+    const zeroLines = inv.lineItems.map((l) => ({ ...l, unitPrice: 0 }));
+    const rev = await srv.api("POST", `/api/invoices/${inv.id}/revise`, { lineItems: zeroLines, reason: "No charge after all" });
+    inv = srv.data("invoices").find((i) => i.id === d.inv.id);
+    ok(rev.body.stillHeld === true && inv.scopeHold?.reason === "revision_required", "M. a $0 revision doesn't release it — there is no $0 invoice to collect on");
+    const v = await srv.api("POST", `/api/invoices/${inv.id}/void`, { reason: "The revised work order is no charge" });
+    ok(v.status === 200, `M. Patrick voids it (${v.status})`);
+    await sleep(200);
+    const wo2 = (await srv.api("GET", `/api/work-orders/${d.id}`)).body.workOrder;
+    ok(wo2?.noCharge === true && !active(d.id), `M. …and the visit reads No Charge (${wo2?.noCharge})`);
   }
 
   // ---- still held before the signature --------------------------------------

@@ -1764,10 +1764,12 @@ function renderRevisionRequiredCard(inv) {
   card.hidden = hold?.reason !== "revision_required";
   if (card.hidden) return;
   const signed = hold.requiredTotal != null ? ` billing ${fmt(hold.requiredTotal)}` : "";
-  const how = inv.status === "sent" || inv.status === "partially_paid"
-    ? "Revise it to the signed scope below"
-    : "Void it and generate a new invoice from the work order";
-  meta.textContent = `The customer signed a revised work order${signed}; this invoice (${fmt(inv.total)}) was left as it was. ${how}. Payment and Send stay blocked until then.`;
+  const how = hold.requiredTotal === 0
+    ? "The signed work order is no charge: void this invoice"
+    : hold.requiredTotal == null || !(inv.status === "sent" || inv.status === "partially_paid")
+      ? "Void it and generate a new invoice from the work order"
+      : `Revise it below, at or under ${fmt(hold.requiredTotal)} (a higher amount needs the customer's approval first)`;
+  meta.textContent = `The customer signed a revised work order${signed}; this invoice (${fmt(inv.total)}) was left as it was. ${how}. No payment, of any kind, and no Send until then.`;
 }
 
 // ---- Price to confirm (PJL-96) -------------------------------------------
