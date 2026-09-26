@@ -74,7 +74,9 @@
 .pp-state.is-verified { color: #2D6A42; }
 .pp-state.is-changed { color: #8B4413; }
 
-.pp-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.pp-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; max-width: 470px; }
+/* The part info never gets squeezed below a readable width by the buttons. */
+.pp-row { grid-template-columns: minmax(280px, 1fr) auto; }
 .pp-btn {
   min-height: 40px;
   padding: 0 12px;
@@ -123,3 +125,7 @@
   .pp-row { grid-template-columns: 1fr; }
   .pp-actions { justify-content: flex-start; }
 }
+
+/* "Default for this fitting" (M2a) */
+.pp-default { font-size: 12px; font-weight: 700; color: #1B4D2E; }
+.pp-default-auto { font-weight: 500; color: #6B6B63; }
