@@ -18006,15 +18006,23 @@ async function handleApi(req, res, pathname) {
       // mid-cascade or wrong-amount invoice.
       if (payload.notify === false) delete deps.notifyCustomer;
 
+      // Overriding the completion checks is an office decision: the checks
+      // exist to stop a job being billed on a scope nobody has signed. A
+      // technician gets a real refusal, not a quiet pass (requireAdmin
+      // returns null rather than throwing, so the result must be checked).
+      if (payload.allowOverride === true && !session) {
+        return sendJson(res, 403, { ok: false, errors: ["Only the office can override the completion checks."] });
+      }
       const result = await projects.completeProject(id, {
-        by: session?.uid || "admin",
+        by: await actorLabel(req, session?.uid || "admin"),
         allowOverride: payload.allowOverride === true,
+        overrideReason: String(payload.overrideReason || "").slice(0, 1000),
         attestationNote: payload.attestationNote || "",
         deps
       });
       return sendJson(res, 200, { ok: true, ...result });
     } catch (err) {
-      const status = err.code === "preflight_blockers" ? 409 : 400;
+      const status = err.code === "preflight_blockers" || err.code === "override_reason_required" ? 409 : 400;
       return sendJson(res, status, {
         ok: false,
         errors: [err.message || "Couldn't complete project."],
@@ -19753,6 +19761,18 @@ async function handleApi(req, res, pathname) {
       const dupe = existing.find((p) => p.sourceQuoteId === quoteId);
       if (dupe) {
         return sendJson(res, 200, { ok: true, project: dupe, alreadyExisted: true });
+      }
+      // ...or for a signed REVISION of a quote that already has one. A
+      // revision is the same job re-priced; a second project for it would
+      // bill the job twice. The project already follows the revision
+      // (currentQuoteId), so hand that one back.
+      {
+        const chainOf = (await quotes.resolveQuoteChain(quoteId)).chain.map((q) => q.id);
+        const jobProject = existing.find((p) =>
+          (p.sourceQuoteId && chainOf.includes(p.sourceQuoteId)) || (p.currentQuoteId && chainOf.includes(p.currentQuoteId)));
+        if (jobProject) {
+          return sendJson(res, 200, { ok: true, project: jobProject, alreadyExisted: true });
+        }
       }
 
       // A quote built FROM a project's System Builder design already

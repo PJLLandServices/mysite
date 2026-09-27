@@ -160,6 +160,11 @@ function blankProject() {
     // sourceQuoteId points back to it so we can render "from Q-2026-0042"
     // on the project header.
     sourceQuoteId: null,
+    // currentQuoteId — the signed agreement governing the job NOW. Starts
+    // as the source quote; moves to a change-order revision only when the
+    // customer SIGNS it (adoptSignedRevision). sourceQuoteId never moves:
+    // deposits, the quote folder and convert-to-project all key on it.
+    currentQuoteId: null,
 
     // -------- project_proposal enrichment (Brief 1, May 2026) --------
     // Populated when the source quote is a project_proposal. Stay at
@@ -644,6 +649,34 @@ async function _updateUnlocked(id, patch = {}) {
 // Idempotent at the caller — the convert-to-project endpoint checks
 // for an existing project with sourceQuoteId === quote.id before
 // invoking this and returns the existing one if found.
+// The frozen copy of a signed proposal the project bills from. ONE builder:
+// conversion, re-enrichment and a newly signed change-order revision all
+// use it, so the three can never disagree about what a snapshot holds.
+function buildProposalSnapshot(quote, { customerName = "", customerEmail = "", customerPhone = "", address = "" } = {}) {
+  return {
+    quoteId: quote.id,
+    version: quote.version || 1,
+    branch: quote.branch || null,
+    billingMode: quote.billingMode || null,
+    acceptanceMethod: quote.acceptanceMethod || null,
+    acceptedAt: quote.acceptedAt || null,
+    customerName,
+    customerEmail,
+    customerPhone,
+    address,
+    proposalSections: Array.isArray(quote.proposalSections)
+      ? quote.proposalSections.map((s) => ({ ...s, attachmentIds: [...(s.attachmentIds || [])] }))
+      : [],
+    lineItems: Array.isArray(quote.lineItems) ? quote.lineItems.map((li) => ({ ...li })) : [],
+    subtotal: Number(quote.subtotal) || 0,
+    hst: Number(quote.hst) || 0,
+    total: Number(quote.total) || 0,
+    customRates: { ...(quote.customRates || {}) },
+    scope: quote.scope || "",
+    frozenAt: nowIso()
+  };
+}
+
 async function createFromProposal(quote, { customerName = "", customerEmail = "", customerPhone = "", address = "", propertyId = null, by = "admin" } = {}) {
   if (!quote) throw new Error("createFromProposal requires a quote.");
 
@@ -681,28 +714,7 @@ async function createFromProposal(quote, { customerName = "", customerEmail = ""
     }));
 
   // Freeze the proposal snapshot.
-  const proposalSnapshot = {
-    quoteId: quote.id,
-    version: quote.version || 1,
-    branch: quote.branch || null,
-    billingMode: quote.billingMode || null,
-    acceptanceMethod: quote.acceptanceMethod || null,
-    acceptedAt: quote.acceptedAt || null,
-    customerName,
-    customerEmail,
-    customerPhone,
-    address,
-    proposalSections: Array.isArray(quote.proposalSections)
-      ? quote.proposalSections.map((s) => ({ ...s, attachmentIds: [...(s.attachmentIds || [])] }))
-      : [],
-    lineItems: Array.isArray(quote.lineItems) ? quote.lineItems.map((li) => ({ ...li })) : [],
-    subtotal: Number(quote.subtotal) || 0,
-    hst: Number(quote.hst) || 0,
-    total: Number(quote.total) || 0,
-    customRates: { ...(quote.customRates || {}) },
-    scope: quote.scope || "",
-    frozenAt: nowIso()
-  };
+  const proposalSnapshot = buildProposalSnapshot(quote, { customerName, customerEmail, customerPhone, address });
 
   // Delegate to the standard create() so the id-generation + file-write
   // path is single-source. Then patch the proposal-only fields.
@@ -776,28 +788,7 @@ async function enrichFromProposal(projectId, quote, { customerName = "", custome
       order: i
     }));
 
-  const proposalSnapshot = {
-    quoteId: quote.id,
-    version: quote.version || 1,
-    branch: quote.branch || null,
-    billingMode: quote.billingMode || null,
-    acceptanceMethod: quote.acceptanceMethod || null,
-    acceptedAt: quote.acceptedAt || null,
-    customerName,
-    customerEmail,
-    customerPhone,
-    address,
-    proposalSections: Array.isArray(quote.proposalSections)
-      ? quote.proposalSections.map((s) => ({ ...s, attachmentIds: [...(s.attachmentIds || [])] }))
-      : [],
-    lineItems: Array.isArray(quote.lineItems) ? quote.lineItems.map((li) => ({ ...li })) : [],
-    subtotal: Number(quote.subtotal) || 0,
-    hst: Number(quote.hst) || 0,
-    total: Number(quote.total) || 0,
-    customRates: { ...(quote.customRates || {}) },
-    scope: quote.scope || "",
-    frozenAt: nowIso()
-  };
+  const proposalSnapshot = buildProposalSnapshot(quote, { customerName, customerEmail, customerPhone, address });
 
   const canReseedTasks = !activeTasks(current).some((t) => t.status === "done");
   const tasks = canReseedTasks
@@ -1773,49 +1764,118 @@ async function resolveScopeChangeRequest(projectId, scrId, { resolution, note = 
   });
 }
 
-// Generate a Q-vN revision from an approved scope change. Calls
-// quotes.createRevision and seeds the new revision with the original
-// line items + the SCR's suggested line items, then flips the SCR to
-// executed_under_revision. Caller is responsible for sending the
-// revision to the customer for signature.
-async function generateQuoteRevisionFromScopeChange(projectId, scrId, { by = "admin" } = {}) {
-  const proj = await get(projectId);
-  if (!proj) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
-  const scr = (proj.scopeChangeRequests || []).find((s) => s.id === scrId);
-  if (!scr) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
-  if (scr.status !== "approved") {
-    throw Object.assign(new Error("Scope change must be approved before revision."), { code: "scr_not_approved" });
-  }
-  if (!proj.sourceQuoteId) {
-    throw Object.assign(new Error("Project has no source quote to revise."), { code: "no_source_quote" });
-  }
-
+// ---- The signed agreement governing a project ------------------------
+//
+// Which quote the job is billed on, whether a newer revision is still
+// waiting for the customer's signature, and what the next change order
+// builds on — all from ONE walk of the quote chain (quotes.describeChain),
+// so billing, the completion hold and revision generation cannot drift.
+async function resolveProjectQuote(proj) {
   const quotes = require("./quotes");
-  const revision = await quotes.createRevision(proj.sourceQuoteId, {
-    by,
-    note: `Revision from scope change ${scrId}`
-  });
+  if (!proj) return { chain: [], governing: null, pending: null, head: null };
+  return quotes.resolveQuoteChain(proj.currentQuoteId || proj.sourceQuoteId);
+}
 
-  // Append the SCR's suggested line items to the revision's lineItems.
-  const newLines = [
-    ...(revision.lineItems || []),
-    ...(scr.suggestedLineItems || []).map((li) => quotes.normalizeProposalLineItem(li))
-  ];
-  await quotes.updateProposal(revision.id, { lineItems: newLines }, {
-    by, note: `Scope-change additions from ${scrId}`
-  });
+// The customer has SIGNED a revision: move every project on its chain onto
+// it — the project's current quote and the billing snapshot. Called by
+// quotes.js right after the signature's write lands. Idempotent: a project
+// already on this quote is left alone (a re-sent signature, a retry).
+async function adoptSignedRevision(signed, { by = "system" } = {}) {
+  const quotes = require("./quotes");
+  if (!signed || !signed.id) return [];
+  const info = await quotes.resolveQuoteChain(signed.id);
+  if (!info.governing || info.governing.id !== signed.id) return []; // not the newest signed agreement
+  const ids = new Set(info.chain.map((q) => q.id));
+  const moved = [];
+  for (const p of await readAll()) {
+    if (!(ids.has(p.sourceQuoteId) || ids.has(p.currentQuoteId))) continue;
+    if (p.currentQuoteId === signed.id) continue;
+    await _mutate(p.id, (proj) => {
+      const prev = proj.currentQuoteId || proj.sourceQuoteId;
+      const who = proj.proposalSnapshot || {};
+      proj.currentQuoteId = signed.id;
+      proj.proposalSnapshot = buildProposalSnapshot(signed, {
+        customerName: who.customerName || proj.customerName || "",
+        customerEmail: who.customerEmail || proj.customerEmail || "",
+        customerPhone: who.customerPhone || proj.customerPhone || "",
+        address: who.address || proj.address || ""
+      });
+      appendHistory(proj, { action: "revision_signed", by, note: `${prev} → ${signed.id} (v${signed.version || "?"}) signed — now the governing agreement` });
+    });
+    moved.push(p.id);
+  }
+  return moved;
+}
 
-  // Mark SCR as executed_under_revision.
-  await _mutate(projectId, (p) => {
-    const s = (p.scopeChangeRequests || []).find((x) => x.id === scrId);
-    if (s) {
-      s.status = "executed_under_revision";
-      s.linkedRevisionQuoteId = revision.id;
-      appendHistory(p, { action: "scope_change_executed", by, note: `${scrId} → ${revision.id}` });
+// One revision job at a time per project. A double click, or a retry while
+// the first request is still running, waits its turn and then finds the
+// revision the first one made (below) instead of making a second.
+const _revisionQueues = new Map();
+function onProjectRevisionQueue(projectId, fn) {
+  const prev = _revisionQueues.get(projectId) || Promise.resolve();
+  const run = prev.catch(() => {}).then(fn);
+  const tail = run.catch(() => {});
+  _revisionQueues.set(projectId, tail);
+  tail.then(() => { if (_revisionQueues.get(projectId) === tail) _revisionQueues.delete(projectId); });
+  return run;
+}
+
+// Turn an approved scope change into a revised quote for the customer to
+// sign. It builds on the NEWEST version in the chain, never the original:
+//   - a revision already in flight and still a draft → the change is added
+//     to THAT draft (one offer, not two competing ones);
+//   - otherwise → a new revision of the newest version (the pending one if
+//     the customer has not signed it yet, else the governing agreement).
+// Either way every earlier change is already in the base, so it appears
+// exactly once. Idempotent: a change that already produced a revision
+// returns that revision.
+async function generateQuoteRevisionFromScopeChange(projectId, scrId, { by = "admin" } = {}) {
+  return onProjectRevisionQueue(projectId, async () => {
+    const quotes = require("./quotes");
+    const proj = await get(projectId);
+    if (!proj) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
+    const scr = (proj.scopeChangeRequests || []).find((s) => s.id === scrId);
+    if (!scr) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
+
+    if (scr.linkedRevisionQuoteId) {
+      const existing = await quotes.get(scr.linkedRevisionQuoteId);
+      if (existing) return existing;
     }
-  });
+    if (scr.status !== "approved") {
+      throw Object.assign(new Error("Scope change must be approved before revision."), { code: "scr_not_approved" });
+    }
+    if (!proj.sourceQuoteId) {
+      throw Object.assign(new Error("Project has no source quote to revise."), { code: "no_source_quote" });
+    }
+    const { head } = await resolveProjectQuote(proj);
+    if (!head) {
+      throw Object.assign(new Error("Project has no signed quote to revise."), { code: "no_signed_agreement" });
+    }
 
-  return revision;
+    const target = head.status === "draft"
+      ? head
+      : await quotes.createRevision(head.id, { by, note: `Revision from scope change ${scrId}` });
+
+    const base = await quotes.get(target.id);
+    const newLines = [
+      ...(base.lineItems || []),
+      ...(scr.suggestedLineItems || []).map((li) => quotes.normalizeProposalLineItem(li))
+    ];
+    await quotes.updateProposal(target.id, { lineItems: newLines }, {
+      by, note: `Scope-change additions from ${scrId}`
+    });
+
+    await _mutate(projectId, (p) => {
+      const s = (p.scopeChangeRequests || []).find((x) => x.id === scrId);
+      if (s) {
+        s.status = "executed_under_revision";
+        s.linkedRevisionQuoteId = target.id;
+        appendHistory(p, { action: "scope_change_executed", by, note: `${scrId} → ${target.id}` });
+      }
+    });
+
+    return quotes.get(target.id);
+  });
 }
 
 // ---- Brief 2: Status updates --------------------------------------
@@ -1966,6 +2026,42 @@ async function completionPreflight(projectId) {
     }
   }
 
+  // The completion hold (Patrick, 2026-09-27). A fixed-price job is billed
+  // on its signed agreement, so it cannot close while a newer revision is
+  // still waiting for the customer's signature — the invoice would be
+  // written against a scope nobody has agreed to. Rejecting or signing the
+  // revision lifts it; an office override (with a reason) can too.
+  if (proj.billingMode !== "time_and_material") {
+    const { governing, pending } = await resolveProjectQuote(proj);
+    if (pending) {
+      checks.blockers.push({
+        key: "revision_unsigned",
+        message: `Revision ${pending.id} is not signed yet — the job is still on ${governing ? governing.id : "its original quote"}. Get it signed or rejected before billing.`
+      });
+    }
+    // A deposit job's balance invoice is built from the quote the deposit
+    // was taken on. Once a later revision is signed, that held invoice is
+    // the wrong amount — and the final invoice REUSES it. Hold the job
+    // rather than under-bill it.
+    if (governing) {
+      try {
+        const ctx = await require("./deposits").depositContextForQuote(proj.sourceQuoteId);
+        const builtFromOlder = ctx && ctx.quote && ctx.quote.id !== governing.id
+          && ((ctx.balanceInvoice && ctx.balanceInvoice.status !== "void") || ctx.depositInvoice);
+        if (builtFromOlder) {
+          checks.blockers.push({
+            key: "deposit_balance_predates_revision",
+            message: ctx.balanceInvoice && ctx.balanceInvoice.status !== "void"
+              ? `The balance invoice ${ctx.balanceInvoice.id} was built from ${ctx.quote.id}, but ${governing.id} is now the signed agreement. Adjust the balance before completing, or override with a reason.`
+              : `The deposit was taken on ${ctx.quote.id}, but ${governing.id} is now the signed agreement, so the balance would be built from the old amount. Settle the balance by hand, or override with a reason.`
+          });
+        }
+      } catch (err) {
+        console.warn("[projects] deposit check failed:", err?.message);
+      }
+    }
+  }
+
   // T&M without locked rate = blocker
   if (proj.billingMode === "time_and_material") {
     if (!Number.isFinite(Number(proj.labourRateLocked)) || Number(proj.labourRateLocked) <= 0) {
@@ -2005,7 +2101,7 @@ async function completionPreflight(projectId) {
 // record creation is done by completion-cascade.js's
 // runProjectFinalCascade(). This function is responsible for the
 // project-side state machine: stamps + status flip + history.
-async function completeProject(projectId, { by = "admin", allowOverride = false, attestationNote = "", deps = {} } = {}) {
+async function completeProject(projectId, { by = "admin", allowOverride = false, overrideReason = "", attestationNote = "", deps = {} } = {}) {
   const proj = await get(projectId);
   if (!proj) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
 
@@ -2026,6 +2122,16 @@ async function completeProject(projectId, { by = "admin", allowOverride = false,
     err.warnings = checks.warnings;
     throw err;
   }
+  // Overriding a blocker bills a job the checks say is not ready — only
+  // with a written reason, and it goes on the record (Patrick, 2026-09-27).
+  const overriddenBlockers = checks.blockers.length ? checks.blockers.map((b) => b.key) : [];
+  const reason = String(overrideReason || "").trim();
+  if (overriddenBlockers.length && !reason) {
+    throw Object.assign(
+      new Error("Overriding the completion checks needs a written reason."),
+      { code: "override_reason_required", blockers: checks.blockers }
+    );
+  }
 
   // Delegate the actual invoice generation + emails + service record
   // to completion-cascade.js. That module is the long-standing home
@@ -2043,10 +2149,19 @@ async function completeProject(projectId, { by = "admin", allowOverride = false,
     p.invoiceGeneratedAt = cascadeResult.invoiceId ? nowIso() : null;
     p.finalInvoiceId = cascadeResult.invoiceId || null;
     if (cascadeResult.propertyEditsApplied) p.propertyEditsAppliedAt = nowIso();
+    if (overriddenBlockers.length) {
+      // The override's own entry, separate from the completion, so the
+      // record says plainly who waved which checks through and why.
+      appendHistory(p, {
+        action: "completion_override",
+        by,
+        note: `${reason.slice(0, 1000)} — overrode: ${overriddenBlockers.join(", ")}`
+      });
+    }
     appendHistory(p, {
       action: "project_completed",
       by,
-      note: `invoice=${cascadeResult.invoiceId || "none"}${allowOverride ? " (override)" : ""}${attestationNote ? " — " + attestationNote.slice(0, 200) : ""}`
+      note: `invoice=${cascadeResult.invoiceId || "none"}${overriddenBlockers.length ? " (override)" : ""}${attestationNote ? " — " + attestationNote.slice(0, 200) : ""}`
     });
     return { project: p, invoiceId: cascadeResult.invoiceId, cascade: cascadeResult };
   });
@@ -2622,6 +2737,9 @@ module.exports = {
   sendScopeChangeRequest,
   resolveScopeChangeRequest,
   generateQuoteRevisionFromScopeChange,
+  resolveProjectQuote,
+  adoptSignedRevision,
+  buildProposalSnapshot,
   // Brief 2 — status updates
   generateStatusUpdate,
   // Brief 2 — project completion
