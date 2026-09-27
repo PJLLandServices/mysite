@@ -41,6 +41,7 @@
               invoice <strong>{{invoice.number}}</strong> cleared on
               {{invoice.paidDate}}. This email is your receipt.
             </p>
+            {{overpaymentNoticeHtml}}
 
             <!-- Receipt block -->
             <div style="background:#F4F8EE;border:1px solid #E2E0D4;
@@ -110,7 +111,7 @@ Hi {{customer.firstName}},
 Thanks — your payment of {{invoice.totalFormatted}} for invoice
 {{invoice.number}} cleared on {{invoice.paidDate}}. This email is
 your receipt.
-
+{{overpaymentNoticeText}}
 RECEIPT
 Invoice:       {{invoice.number}}
 Date paid:     {{invoice.paidDate}}
