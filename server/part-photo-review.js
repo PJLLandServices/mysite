@@ -252,6 +252,20 @@
   }
   const TIER_LABEL = { tbd: "To be determined", not_confident: "Not confident", confident: "Auto-approved", approved: "Approved" };
 
+  // "Pages our server checked": what happened on each product page the
+  // finder named — the reason "no reliable photo" is never a mystery.
+  function pagesHtml(pages) {
+    if (!pages || !pages.length) return "";
+    const short = (u) => { const s = String(u || "").replace(/^https?:\/\/(www\.)?/, ""); return s.length > 72 ? s.slice(0, 69) + "…" : s; };
+    const what = (p) => p.fetch !== "ok" ? (p.note || "fetch failed")
+      : `${p.images} image${p.images === 1 ? "" : "s"} · part # ${p.partNumber || "?"}${p.note ? ` · ${p.note}` : ""}`;
+    return `<div class="pr-pages"><span class="pr-pages-title">Pages our server checked</span><ul>${pages.map((p) => {
+      const href = safeHref(p.url);
+      const label = href ? `<a href="${href}" target="_blank" rel="noopener noreferrer">${esc(short(p.url))}</a>` : esc(short(p.url));
+      return `<li class="${p.fetch !== "ok" ? "is-failed" : p.images ? "is-ok" : "is-empty"}">${label}${p.official ? ' <span class="pr-official">official</span>' : ""} — ${esc(what(p))}</li>`;
+    }).join("")}</ul></div>`;
+  }
+
   function reviewCardHtml(card, idx, queue) {
     card.queue = queue;
     const isCur = idx === state.cur;
@@ -269,7 +283,8 @@
       ? `<div class="pp-meta">Brand proposed from the description: <b>${esc(card.proposedBrand)}</b> (the catalog's manufacturer is blank and was not changed)</div>` : "")
       + (card.identified && card.identified.manufacturerPartNumber
       ? `<div class="pp-meta">AI matched it to <b>${esc(card.identified.manufacturer || "")} ${esc(card.identified.manufacturerPartNumber)}</b></div>` : "");
-    const reason = `<div class="pr-reason is-${esc(card.tier)}"><b>${TIER_LABEL[card.tier] || card.tier}</b>${card.reason ? ` — ${esc(card.reason)}` : ""}</div>`;
+    const reason = `<div class="pr-reason is-${esc(card.tier)}"><b>${TIER_LABEL[card.tier] || card.tier}</b>${card.reason ? ` — ${esc(card.reason)}` : ""}</div>`
+      + pagesHtml(card.pages);
     const actions = queue === "autoApproved"
       ? `<button type="button" class="pp-btn pp-btn-danger" data-act="reject">Reject — take it down</button>
          <button type="button" class="pp-btn pp-btn-quiet" data-act="next">Next →</button>`

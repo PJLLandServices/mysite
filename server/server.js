@@ -14161,7 +14161,11 @@ async function handleApi(req, res, pathname) {
         // Only the calibration parts that still have no live photo (approved
         // by Patrick, 2026-09-27) — never the whole sample, never the catalog.
         if (!process.env.ANTHROPIC_API_KEY) return sendJson(res, 503, { ok: false, errors: ["ANTHROPIC_API_KEY isn't set on the server — nothing was started."] });
-        status = await photoBackfill.startCalibrationRerun({ by });
+        // `only`: an optional subset of the unresolved calibration parts;
+        // the engine refuses anything outside that set.
+        const payload = await parseRequestBody(req).catch(() => ({}));
+        const only = Array.isArray(payload && payload.only) ? payload.only.map(String).slice(0, 20) : null;
+        status = await photoBackfill.startCalibrationRerun({ by, only });
         note = `Re-ran the unresolved calibration parts (${status.run.counts.total}, auto-approve off): ${status.run.calibration.skus.join(", ")}`;
       } else if (action === "pause") {
         status = await photoBackfill.pause();
