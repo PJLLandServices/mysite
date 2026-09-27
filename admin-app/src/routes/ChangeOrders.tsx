@@ -54,7 +54,9 @@ function VersionRow({ v }: { v: AgreementVersion }) {
       <a className="font-medium text-ink underline" href={v.href}>{v.id}</a>
       <span className="text-[13px] text-ink-muted">v{v.version}</span>
       <span className="text-[13px] text-ink-muted">· {v.status.replace(/_/g, " ")}</span>
-      <span className="text-[14px] text-ink">{money(v.subtotal)} <span className="text-[12px] text-ink-muted">before HST</span></span>
+      {/* The contract figure everywhere is WITH HST (the workspace header,
+          the projects list, the Dashboard); before-HST rides alongside. */}
+      <span className="text-[14px] text-ink">{money(v.total)} <span className="text-[12px] text-ink-muted">with HST · {money(v.subtotal)} before HST</span></span>
       {v.acceptedAt ? <span className="text-[13px] text-ink-muted">· signed {shortDate(v.acceptedAt)}</span> : null}
     </li>
   );
@@ -169,11 +171,17 @@ export function ChangeOrdersTab() {
           <Stat label="Open" value={String(summary.open)} hint="need the office or the customer" />
           <Stat label="Waiting on customer" value={String(summary.awaitingCustomer + summary.awaitingSignature)} hint="an answer or a signature" />
           <Stat label="Signed" value={String(summary.signed)} hint="in the agreement" />
+          {/* With HST first, like every contract figure (header, list,
+              Dashboard); before-HST in the hint. Newest signed − original. */}
           <Stat
             label="Signed changes"
             tone="money"
-            value={agreement.netChangeSubtotal === null ? "—" : signedChange(agreement.netChangeSubtotal)}
-            hint={agreement.netChangeTotal === null ? "before HST, vs the original" : `before HST (${signedChange(agreement.netChangeTotal)} with HST), newest signed vs original`}
+            value={agreement.netChangeTotal === null ? "—" : signedChange(agreement.netChangeTotal)}
+            hint={agreement.netChangeTotal === null
+              ? "no signed agreement"
+              : agreement.netChangeTotal === 0 && agreement.netChangeSubtotal === 0
+                ? "nothing signed beyond the original"
+                : `with HST · ${signedChange(agreement.netChangeSubtotal ?? 0)} before HST · newest signed vs original`}
           />
         </div>
       </Card>
@@ -206,13 +214,13 @@ export function ChangeOrdersTab() {
           <>
             <p className="px-4 pb-1 pt-3 text-[14px] text-ink" data-testid="agreement-line">
               {data.billingBlocked ? "Signed agreement" : "Billed on"} <strong>{agreement.governing.id}</strong> (v{agreement.governing.version}) —{" "}
-              <strong>{money(agreement.governing.subtotal)}</strong> before HST
+              <strong data-testid="agreement-total">{money(agreement.governing.total)}</strong> with HST ({money(agreement.governing.subtotal)} before HST)
               {agreement.original && agreement.original.id !== agreement.governing.id
-                ? <>, up from {money(agreement.original.subtotal)} on {agreement.original.id}</>
+                ? <>, up from {money(agreement.original.total)} with HST on {agreement.original.id}</>
                 : null}
               .
               {agreement.pending
-                ? <> Revision <strong>{agreement.pending.id}</strong> ({money(agreement.pending.subtotal)}) is waiting for the customer's signature.</>
+                ? <> Revision <strong>{agreement.pending.id}</strong> ({money(agreement.pending.total)} with HST) is waiting for the customer's signature — not part of the contract until it is signed.</>
                 : null}
             </p>
             <ul data-testid="agreement-versions">
