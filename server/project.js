@@ -165,9 +165,24 @@
   }
 
   // ---- Boot ---------------------------------------------------------
+  // The signed-in ACCOUNT's role, not the device, decides which change-
+  // request buttons show (Patrick, 2026-09-27). Fail closed: until the
+  // role is known a technician's view is shown; the server enforces it
+  // independently (403) either way.
+  let viewerIsAdmin = false;
+  async function resolveViewerRole() {
+    try {
+      const r = await fetch("/api/session", { cache: "no-store", credentials: "same-origin" });
+      const data = await r.json().catch(() => ({}));
+      viewerIsAdmin = data?.role === "admin";
+    } catch (_) { viewerIsAdmin = false; }
+    if (state.project) renderScopeChanges();
+  }
+
   async function boot() {
     state.projectId = getProjectIdFromUrl();
     if (!state.projectId) { showError("No project id in URL."); return; }
+    resolveViewerRole();
     // Point the "Design system" button at the Sprinkler System Builder,
     // pre-linked to this install so the saved design attaches here.
     const dsl = document.getElementById("projDesignSystemLink");
@@ -1409,17 +1424,34 @@
         withdrawn: "Withdrawn",
         executed_under_revision: "Executed (revision)"
       }[s.status] || s.status;
+      // Office-only actions (the server refuses them to a technician too).
       const actions = [];
-      if (s.status === "pending_admin_review") {
-        actions.push(`<button type="button" data-action="send-scr" data-scr-id="${escapeHtml(s.id)}">Send to customer</button>`);
-        actions.push(`<button type="button" data-action="withdraw-scr" data-scr-id="${escapeHtml(s.id)}">Withdraw</button>`);
-      } else if (s.status === "pending_customer_approval") {
-        actions.push(`<button type="button" data-action="approve-scr" data-scr-id="${escapeHtml(s.id)}">Mark approved</button>`);
-        actions.push(`<button type="button" data-action="reject-scr" data-scr-id="${escapeHtml(s.id)}">Mark rejected</button>`);
-        actions.push(`<button type="button" data-action="withdraw-scr" data-scr-id="${escapeHtml(s.id)}">Withdraw</button>`);
-      } else if (s.status === "approved" && !s.linkedRevisionQuoteId && state.project.billingMode === "fixed_price") {
-        actions.push(`<button type="button" data-action="revise-scr" data-scr-id="${escapeHtml(s.id)}">Generate quote revision</button>`);
+      const btn = (action, label) => `<button type="button" data-action="${action}" data-scr-id="${escapeHtml(s.id)}">${label}</button>`;
+      if (viewerIsAdmin) {
+        if (s.status === "pending_admin_review") {
+          actions.push(btn("send-scr", "Send to customer"));
+          // A customer with no email, or who answered by phone first.
+          actions.push(btn("approve-scr", "Customer approved"));
+          actions.push(btn("reject-scr", "Customer declined"));
+          actions.push(btn("withdraw-scr", "Withdraw"));
+        } else if (s.status === "pending_customer_approval") {
+          actions.push(btn("approve-scr", "Customer approved"));
+          actions.push(btn("reject-scr", "Customer declined"));
+          actions.push(btn("withdraw-scr", "Withdraw"));
+        } else if (s.status === "approved" && !s.linkedRevisionQuoteId && state.project.billingMode !== "time_and_material") {
+          actions.push(btn("revise-scr", "Generate quote revision"));
+          actions.push(btn("withdraw-scr", "Withdraw"));
+        }
       }
+      // A send that did not go stays visible until one does.
+      const attempts = Array.isArray(s.sendAttempts) ? s.sendAttempts : [];
+      const lastAttempt = attempts[attempts.length - 1];
+      const sendProblem = lastAttempt && lastAttempt.ok === false && s.status === "pending_admin_review"
+        ? `<p class="proj-scope-meta proj-scope-send-failed">⚠ Not sent (${escapeHtml(new Date(lastAttempt.at).toLocaleDateString("en-CA"))}): ${escapeHtml(lastAttempt.reason || "unknown reason")}</p>`
+        : "";
+      const decidedBy = s.recordedBy && (s.status === "approved" || s.status === "rejected" || s.status === "withdrawn" || s.status === "executed_under_revision")
+        ? ` · ${s.decisionSource === "office" ? "withdrawn by" : "recorded by"} ${escapeHtml(s.recordedBy)}`
+        : "";
       const revisionLink = s.linkedRevisionQuoteId
         ? `<a href="/admin/quote/${encodeURIComponent(s.linkedRevisionQuoteId)}/proposal" class="proj-scope-revision">↗ ${escapeHtml(s.linkedRevisionQuoteId)}</a>`
         : "";
@@ -1431,7 +1463,8 @@
             ${revisionLink}
           </header>
           <p class="proj-scope-description">${escapeHtml(s.description)}</p>
-          <p class="proj-scope-meta">${escapeHtml(dateStr)} · est. $${Number(s.estimatedTotal || 0).toFixed(2)}${s.sentAt ? " · sent " + escapeHtml(new Date(s.sentAt).toLocaleDateString("en-CA")) : ""}</p>
+          <p class="proj-scope-meta">${escapeHtml(dateStr)} · est. $${Number(s.estimatedTotal || 0).toFixed(2)}${s.capturedBy ? " · by " + escapeHtml(s.capturedBy) : ""}${s.sentAt ? " · sent " + escapeHtml(new Date(s.sentAt).toLocaleDateString("en-CA")) : ""}${decidedBy}</p>
+          ${sendProblem}
           ${actions.length ? `<div class="proj-scope-actions">${actions.join(" ")}</div>` : ""}
         </li>
       `;
@@ -1447,10 +1480,15 @@
       if (action === "send-scr") {
         if (!await askConfirm("Send to customer?", "Email this scope addition to the customer for approval. The proposal will move to 'awaiting customer'.", { okLabel: "Send" })) return;
         const r = await fetch(`${base}/send`, { method: "POST" });
-        if (!r.ok) { showToast((await r.json()).errors?.[0] || "Send failed.", { variant: "error" }); return; }
-        showToast("Scope addition sent to customer.", { variant: "success" });
+        if (!r.ok) {
+          // Not sent — the reason is on the change request now; show it.
+          showToast((await r.json().catch(() => ({}))).errors?.[0] || "Not sent.", { variant: "error", durationMs: 8000 });
+          await refreshProject();
+          return;
+        }
+        showToast("Scope addition emailed to the customer.", { variant: "success" });
       } else if (action === "approve-scr") {
-        if (!await askConfirm("Mark approved?", "Mark this scope change as approved by the customer. For fixed-price projects, generate a quote revision next.", { okLabel: "Mark approved" })) return;
+        if (!await askConfirm("Customer approved?", "Record that the customer approved this change. It is saved as the customer's decision, recorded by you. For a fixed-price job, generate the quote revision next.", { okLabel: "Record approval" })) return;
         const r = await fetch(`${base}/resolve`, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -1459,7 +1497,7 @@
         if (!r.ok) { showToast((await r.json()).errors?.[0] || "Approve failed.", { variant: "error" }); return; }
         showToast("Scope change approved.", { variant: "success" });
       } else if (action === "reject-scr") {
-        if (!await askConfirm("Mark rejected?", "Mark this scope change as rejected by the customer. Work does not proceed.", { okLabel: "Mark rejected" })) return;
+        if (!await askConfirm("Customer declined?", "Record that the customer declined this change. It is saved as the customer's decision, recorded by you. Work does not proceed.", { okLabel: "Record decline" })) return;
         const r = await fetch(`${base}/resolve`, {
           method: "POST",
           headers: { "content-type": "application/json" },

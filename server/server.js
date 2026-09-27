@@ -2321,7 +2321,11 @@ function renderStatusUpdateHtml(snap, { photoUrlFor = null } = {}) {
     `<li style="margin-bottom:4px;">${esc(t.description)}</li>`
   ).join("");
   const scrRows = (snap.pendingScopeChanges || []).map((s) =>
-    `<li style="margin-bottom:4px;">${esc(s.description)} — ${esc(s.status === "pending_customer_approval" ? "awaiting your approval" : "in review")}${s.sentAt ? " (sent " + esc(fmtDate(s.sentAt)) + ")" : ""}</li>`
+    `<li style="margin-bottom:4px;">${esc(s.description)} — ${esc(
+      // stage: projects.scopeChangeStage (older snapshots carry only status)
+      (s.stage || (s.status === "pending_customer_approval" ? "awaiting_customer" : "in_review")) === "awaiting_customer" ? "awaiting your approval"
+        : (s.stage === "awaiting_revision" ? "approved — revised quote to follow" : "in review")
+    )}${s.sentAt ? " (sent " + esc(fmtDate(s.sentAt)) + ")" : ""}</li>`
   ).join("");
 
   return `
@@ -17680,15 +17684,28 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read scope changes."] });
     }
   }
+  // Change requests (Patrick, 2026-09-27). The ACCOUNT's role decides —
+  // not the page or the device: a technician may capture a draft (notes,
+  // line items, photos) and edit its notes; only the office may send it,
+  // edit the customer email, record the customer's answer, withdraw it, or
+  // generate the revised quote. Patrick signed in as admin on site keeps
+  // every office action. `by` is the person's name (actorLabel).
+  const OFFICE_ONLY_SCOPE = "Only the office can do this. Your change request is saved for the office to review.";
+  const scopeErrorStatus = (err) => ({
+    scr_not_found: 404, project_not_found: 404, scr_locked: 409, scr_wrong_state: 409, scr_already_resolved: 409, scr_send_in_progress: 409,
+    no_recipient: 409, email_not_configured: 503, delivery_failed: 502
+  }[err?.code] || 400);
+
   if (scopeListMatch && req.method === "POST") {
     try {
       const id = decodeURIComponent(scopeListMatch[1]);
       const payload = await parseRequestBody(req);
-      const session = await requireAdmin(req);
-      const scr = await projects.createScopeChangeRequest(id, payload, { by: session?.uid || "admin" });
+      const session = await requireUser(req);
+      if (!session) return sendJson(res, 401, { ok: false, errors: ["Sign in first."] });
+      const scr = await projects.createScopeChangeRequest(id, payload, { by: await actorLabel(req, session.uid || "staff") });
       return sendJson(res, 201, { ok: true, scopeChange: scr });
     } catch (err) {
-      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create scope change."] });
+      return sendJson(res, scopeErrorStatus(err), { ok: false, errors: [err.message || "Couldn't create scope change."] });
     }
   }
 
@@ -17698,12 +17715,17 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(scopeItemMatch[1]);
       const scrId = decodeURIComponent(scopeItemMatch[2]);
       const payload = await parseRequestBody(req);
-      const session = await requireAdmin(req);
-      const scr = await projects.updateScopeChangeRequest(id, scrId, payload, { by: session?.uid || "admin" });
+      const session = await requireUser(req);
+      if (!session) return sendJson(res, 401, { ok: false, errors: ["Sign in first."] });
+      // The customer-facing email (recipient, subject, wording) is the office's.
+      const officeSession = await requireAdmin(req);
+      if (payload && payload.draftEmail && !officeSession) {
+        return sendJson(res, 403, { ok: false, errors: ["Only the office can change the email to the customer."] });
+      }
+      const scr = await projects.updateScopeChangeRequest(id, scrId, payload, { by: await actorLabel(req, session.uid || "staff") });
       return sendJson(res, 200, { ok: true, scopeChange: scr });
     } catch (err) {
-      const status = err.code === "scr_locked" ? 409 : err.code === "scr_not_found" ? 404 : 400;
-      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't update scope change."] });
+      return sendJson(res, scopeErrorStatus(err), { ok: false, errors: [err.message || "Couldn't update scope change."] });
     }
   }
 
@@ -17713,40 +17735,46 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(scopeSendMatch[1]);
       const scrId = decodeURIComponent(scopeSendMatch[2]);
       const session = await requireAdmin(req);
-      const scr = await projects.sendScopeChangeRequest(id, scrId, { by: session?.uid || "admin" });
+      if (!session) return sendJson(res, 403, { ok: false, errors: [OFFICE_ONLY_SCOPE] });
 
-      // Send the email via existing notify infrastructure.
+      // The sender. None when email is not set up — then nothing is sent
+      // and the change stays unsent (projects.sendScopeChangeRequest).
+      let deliver = null;
       if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
-        try {
-          let nodemailer;
-          try { nodemailer = require("nodemailer"); } catch { nodemailer = null; }
-          if (nodemailer) {
+        let nodemailer;
+        try { nodemailer = require("nodemailer"); } catch { nodemailer = null; }
+        if (nodemailer) {
+          deliver = async (email) => {
             const transporter = nodemailer.createTransport({
               service: "gmail",
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
             // Nothing goes to a load-test record — lib/test-recipients.js.
             testRecipients.guardTransport(transporter);
-            await transporter.sendMail({
-              from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
-              to: scr.draftEmail.to,
-              replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
-              subject: scr.draftEmail.subject,
-              text: scr.draftEmail.body
-            }).catch(async (err) => {
-              await mailerLog.logSend({ kind: "other", to: scr.draftEmail.to, ok: false, error: err.message, refId: scrId });
+            try {
+              await transporter.sendMail({
+                from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
+                to: email.to,
+                replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
+                subject: email.subject,
+                text: email.body
+              });
+            } catch (err) {
+              await mailerLog.logSend({ kind: "other", to: email.to, ok: false, error: err.message, refId: scrId });
               throw err;
-            });
-            await mailerLog.logSend({ kind: "other", to: scr.draftEmail.to, ok: true, refId: scrId });
-          }
-        } catch (err) {
-          console.warn("[scope-change send] email failed:", err?.message);
+            }
+            await mailerLog.logSend({ kind: "other", to: email.to, ok: true, refId: scrId });
+          };
         }
       }
 
+      const scr = await projects.sendScopeChangeRequest(id, scrId, { by: await actorLabel(req, session.uid || "admin"), deliver });
       return sendJson(res, 200, { ok: true, scopeChange: scr });
     } catch (err) {
-      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't send scope change."] });
+      if (err.code === "delivery_failed" || err.code === "email_not_configured") {
+        console.warn("[scope-change send] not sent:", err.message);
+      }
+      return sendJson(res, scopeErrorStatus(err), { ok: false, code: err.code || null, errors: [err.message || "Couldn't send scope change."], scopeChange: err.scopeChange || null });
     }
   }
 
@@ -17757,13 +17785,16 @@ async function handleApi(req, res, pathname) {
       const scrId = decodeURIComponent(scopeResolveMatch[2]);
       const payload = await parseRequestBody(req);
       const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: [OFFICE_ONLY_SCOPE] });
+      // From this route an approve/reject is always the office recording
+      // the customer's answer; the library stamps it that way.
       const scr = await projects.resolveScopeChangeRequest(id, scrId, {
         resolution: payload.resolution,
         note: payload.note || ""
-      }, { by: session?.uid || "admin" });
+      }, { by: await actorLabel(req, session.uid || "admin"), source: "recorded_by_office" });
       return sendJson(res, 200, { ok: true, scopeChange: scr });
     } catch (err) {
-      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't resolve scope change."] });
+      return sendJson(res, scopeErrorStatus(err), { ok: false, errors: [err.message || "Couldn't resolve scope change."] });
     }
   }
 
@@ -17773,10 +17804,11 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(scopeRevisionMatch[1]);
       const scrId = decodeURIComponent(scopeRevisionMatch[2]);
       const session = await requireAdmin(req);
-      const revision = await projects.generateQuoteRevisionFromScopeChange(id, scrId, { by: session?.uid || "admin" });
+      if (!session) return sendJson(res, 403, { ok: false, errors: [OFFICE_ONLY_SCOPE] });
+      const revision = await projects.generateQuoteRevisionFromScopeChange(id, scrId, { by: await actorLabel(req, session.uid || "admin") });
       return sendJson(res, 201, { ok: true, quote: revision });
     } catch (err) {
-      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate revision."] });
+      return sendJson(res, scopeErrorStatus(err), { ok: false, errors: [err.message || "Couldn't generate revision."] });
     }
   }
 

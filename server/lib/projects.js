@@ -1518,9 +1518,7 @@ async function computeProjectMetrics(projectId) {
   // site — that difference is this argument and nothing else.
   totalPersonHours = sessionHours.sumPersonHours(buildWos, { openSessions: "toNow" });
 
-  const pendingScopeChanges = (proj.scopeChangeRequests || []).filter(
-    (s) => s.status === "pending_admin_review" || s.status === "pending_customer_approval"
-  ).length;
+  const pendingScopeChanges = openScopeChanges(proj).length;
 
   return {
     totalTasks, doneTasks, percentComplete,
@@ -1641,6 +1639,40 @@ const SCR_STATUSES = [
   "executed_under_revision"
 ];
 
+// ---- The ONE "is this change still open?" rule (2026-09-27) ----------
+//
+// Every reader — the Overview count (computeProjectMetrics), the
+// completion check (completionPreflight) and the customer's status email
+// (generateStatusUpdate) — asks this, so they cannot disagree. Before,
+// each carried its own copy: two counted only drafts and changes awaiting
+// the customer, and the completion check tested billingMode ===
+// "fixed_price", so a legacy project with no billingMode recorded (billed
+// as fixed price, like everything that is not T&M) could close with an
+// approved change that never reached its revised quote.
+//
+//   in_review          drafted, not yet sent (or its send failed)
+//   awaiting_customer  sent; waiting on the customer's answer
+//   awaiting_revision  approved on a fixed-price job, revised quote not yet
+//                      generated — the job is billed on its signed quote,
+//                      so the change is not in the price until that happens
+//
+// Everything else is closed: rejected, withdrawn, executed under a
+// revision (from there the quote chain's own hold — revision_unsigned —
+// holds the job until the customer signs), and on a time & material job an
+// approved change, which is billed as the hours it takes.
+function scopeChangeStage(scr, proj) {
+  if (!scr) return null;
+  if (scr.status === "pending_admin_review") return "in_review";
+  if (scr.status === "pending_customer_approval") return "awaiting_customer";
+  if (scr.status === "approved" && !scr.linkedRevisionQuoteId && proj?.billingMode !== "time_and_material") {
+    return "awaiting_revision";
+  }
+  return null;
+}
+function openScopeChanges(proj) {
+  return (proj?.scopeChangeRequests || []).filter((s) => scopeChangeStage(s, proj) !== null);
+}
+
 async function createScopeChangeRequest(projectId, fields, { by = "admin" } = {}) {
   const description = String(fields?.description || "").trim();
   if (!description) {
@@ -1729,37 +1761,117 @@ async function updateScopeChangeRequest(projectId, scrId, patch, { by = "admin" 
   });
 }
 
-async function sendScopeChangeRequest(projectId, scrId, { by = "admin" } = {}) {
-  return _mutate(projectId, (proj) => {
-    const scr = (proj.scopeChangeRequests || []).find((s) => s.id === scrId);
-    if (!scr) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
-    if (scr.status !== "pending_admin_review") {
-      throw Object.assign(new Error(`Scope change is already ${scr.status}.`), { code: "scr_wrong_state" });
+// Send a change request to the customer — and mark it SENT only once the
+// email has actually gone (Patrick, 2026-09-27). `deliver(draftEmail)` is
+// the caller's email sender; it must resolve on delivery and throw on
+// failure. No recipient, no sender (email not set up) or a failed delivery
+// leaves the change unsent and records the attempt, with its reason and
+// who tried, in scr.sendAttempts — kept even after a later send succeeds.
+// One send per change request at a time: a double click must not email
+// the customer twice (the email goes out before the record is written).
+const _scopeSendsInFlight = new Set();
+async function sendScopeChangeRequest(projectId, scrId, opts = {}) {
+  const key = `${projectId}:${scrId}`;
+  if (_scopeSendsInFlight.has(key)) {
+    throw Object.assign(new Error("This change request is already being sent."), { code: "scr_send_in_progress" });
+  }
+  _scopeSendsInFlight.add(key);
+  try { return await _sendScopeChangeRequest(projectId, scrId, opts); }
+  finally { _scopeSendsInFlight.delete(key); }
+}
+async function _sendScopeChangeRequest(projectId, scrId, { by = "admin", deliver = null } = {}) {
+  const proj = await get(projectId);
+  if (!proj) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
+  const current = (proj.scopeChangeRequests || []).find((s) => s.id === scrId);
+  if (!current) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
+  if (current.status !== "pending_admin_review") {
+    throw Object.assign(new Error(`Scope change is already ${current.status}.`), { code: "scr_wrong_state" });
+  }
+
+  const to = String(current.draftEmail?.to || "").trim();
+  let failure = null;
+  if (!to) {
+    failure = { code: "no_recipient", reason: "The customer has no email address on this change request — add one, or record their answer by hand." };
+  } else if (typeof deliver !== "function") {
+    failure = { code: "email_not_configured", reason: "Email is not set up on the server, so nothing was sent." };
+  } else {
+    try {
+      await deliver({ ...current.draftEmail, to });
+    } catch (err) {
+      failure = { code: "delivery_failed", reason: `The email did not go: ${String(err?.message || err).slice(0, 300)}` };
     }
-    scr.status = "pending_customer_approval";
-    scr.sentAt = nowIso();
-    appendHistory(proj, { action: "scope_change_sent", by, note: scrId });
+  }
+
+  const at = nowIso();
+  const updated = await _mutate(projectId, (p) => {
+    const scr = (p.scopeChangeRequests || []).find((s) => s.id === scrId);
+    if (!scr) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
+    scr.sendAttempts = [
+      ...(Array.isArray(scr.sendAttempts) ? scr.sendAttempts : []),
+      failure ? { at, by, to, ok: false, reason: failure.reason } : { at, by, to, ok: true, reason: null }
+    ];
+    if (failure) {
+      appendHistory(p, { action: "scope_change_send_failed", by, note: `${scrId} — ${failure.reason}` });
+      return scr;
+    }
+    // A concurrent send may have landed first; the attempt is kept either way.
+    if (scr.status === "pending_admin_review") {
+      scr.status = "pending_customer_approval";
+      scr.sentAt = at;
+      scr.sentBy = by;
+      appendHistory(p, { action: "scope_change_sent", by, note: `${scrId} → ${to}` });
+    }
     return scr;
   });
+  if (failure) {
+    throw Object.assign(new Error(failure.reason), { code: failure.code, scopeChange: updated });
+  }
+  return updated;
 }
 
-async function resolveScopeChangeRequest(projectId, scrId, { resolution, note = "" }, { by = "admin" } = {}) {
+// Record the outcome of a change request.
+//   approved / rejected — the CUSTOMER's decision. `source` says how it
+//     arrived: "recorded_by_office" (the office entered the answer the
+//     customer gave by phone, email or in person — the default, and today
+//     the only path) or "customer" (the customer answered directly).
+//     resolvedAs always says it was the customer's decision; recordedBy
+//     names the person who entered it.
+//   withdrawn — the OFFICE's decision, from any open stage, including an
+//     approved change that has not reached a revised quote yet (so a job
+//     is never stuck on a change nobody will carry out).
+async function resolveScopeChangeRequest(projectId, scrId, { resolution, note = "" }, { by = "admin", source = "recorded_by_office" } = {}) {
   if (!["approved", "rejected", "withdrawn"].includes(resolution)) {
     throw Object.assign(new Error(`Unknown resolution: ${resolution}`), { code: "bad_resolution" });
   }
   return _mutate(projectId, (proj) => {
     const scr = (proj.scopeChangeRequests || []).find((s) => s.id === scrId);
     if (!scr) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
-    if (scr.status === "approved" || scr.status === "rejected" || scr.status === "withdrawn" || scr.status === "executed_under_revision") {
+    const openForDecision = scr.status === "pending_admin_review" || scr.status === "pending_customer_approval";
+    const openForWithdrawal = openForDecision || (scr.status === "approved" && !scr.linkedRevisionQuoteId);
+    if (resolution === "withdrawn" ? !openForWithdrawal : !openForDecision) {
       throw Object.assign(new Error(`Scope change is already ${scr.status}.`), { code: "scr_already_resolved" });
     }
+    const cleanNote = String(note || "").slice(0, 2000);
     scr.status = resolution;
     scr.resolvedAt = nowIso();
-    scr.resolvedAs = resolution === "approved" ? "approved_by_customer"
-      : resolution === "rejected" ? "rejected_by_customer"
-      : "withdrawn_by_admin";
-    scr.resolutionNote = String(note || "").slice(0, 2000);
-    appendHistory(proj, { action: `scope_change_${resolution}`, by, note: scrId });
+    if (resolution === "withdrawn") {
+      scr.resolvedAs = "withdrawn_by_office";
+      scr.decisionSource = "office";
+      scr.recordedBy = by;
+    } else {
+      scr.resolvedAs = resolution === "approved" ? "approved_by_customer" : "rejected_by_customer";
+      scr.decisionSource = source === "customer" ? "customer" : "recorded_by_office";
+      scr.recordedBy = source === "customer" ? null : by;
+    }
+    scr.resolutionNote = cleanNote;
+    const what = resolution === "withdrawn"
+      ? "withdrawn by the office"
+      : `customer ${resolution}${scr.decisionSource === "recorded_by_office" ? " — recorded by the office" : ""}`;
+    appendHistory(proj, {
+      action: `scope_change_${resolution}`,
+      by: scr.decisionSource === "customer" ? "customer" : by,
+      note: `${scrId} — ${what}${cleanNote ? `: ${cleanNote.slice(0, 200)}` : ""}`
+    });
     return scr;
   });
 }
@@ -1936,9 +2048,7 @@ async function generateStatusUpdate(projectId, { recipient, preamble = "" }, { b
       .sort((a, b) => (a.order || 0) - (b.order || 0))
       .slice(0, 3);
 
-    const pendingScrs = (proj.scopeChangeRequests || []).filter(
-      (s) => s.status === "pending_admin_review" || s.status === "pending_customer_approval"
-    );
+    const pendingScrs = openScopeChanges(proj);
 
     // Recent photos (4-6) for the email's photo strip per Brief §3.5.
     const photos = recentPhotos || (await listRecentProjectPhotos(projectId, { limit: 6 }));
@@ -1963,6 +2073,7 @@ async function generateStatusUpdate(projectId, { recipient, preamble = "" }, { b
       pendingScopeChanges: pendingScrs.map((s) => ({
         description: s.description,
         status: s.status,
+        stage: scopeChangeStage(s, proj),
         sentAt: s.sentAt
       })),
       recentPhotos: photos.map((p) => ({
@@ -2043,9 +2154,8 @@ async function completionPreflight(projectId) {
   }
 
   // Scope changes
-  const unresolvedScrs = (proj.scopeChangeRequests || []).filter(
-    (s) => s.status === "pending_admin_review" || s.status === "pending_customer_approval"
-  );
+  const openScrs = openScopeChanges(proj);
+  const unresolvedScrs = openScrs.filter((s) => scopeChangeStage(s, proj) !== "awaiting_revision");
   if (unresolvedScrs.length > 0) {
     checks.blockers.push({
       key: "scope_changes_unresolved",
@@ -2053,17 +2163,14 @@ async function completionPreflight(projectId) {
     });
   }
 
-  // Fixed-price + approved SCR without revision = blocker
-  if (proj.billingMode === "fixed_price") {
-    const approvedWithoutRevision = (proj.scopeChangeRequests || []).filter(
-      (s) => s.status === "approved" && !s.linkedRevisionQuoteId
-    );
-    if (approvedWithoutRevision.length > 0) {
-      checks.blockers.push({
-        key: "approved_scr_no_revision",
-        message: `${approvedWithoutRevision.length} approved scope change${approvedWithoutRevision.length === 1 ? "" : "s"} need a quote revision before billing (fixed-price).`
-      });
-    }
+  // Approved on a fixed-price job, revised quote not yet generated. (Not
+  // T&M — that is scopeChangeStage's rule, shared with every reader.)
+  const approvedWithoutRevision = openScrs.filter((s) => scopeChangeStage(s, proj) === "awaiting_revision");
+  if (approvedWithoutRevision.length > 0) {
+    checks.blockers.push({
+      key: "approved_scr_no_revision",
+      message: `${approvedWithoutRevision.length} approved scope change${approvedWithoutRevision.length === 1 ? "" : "s"} need a quote revision before billing (fixed-price). Generate the revision, or withdraw the change.`
+    });
   }
 
   // The completion hold (Patrick, 2026-09-27). A fixed-price job is billed
@@ -2779,6 +2886,8 @@ module.exports = {
   generateQuoteRevisionFromScopeChange,
   resolveProjectQuote,
   fixedPriceBillingSource,
+  scopeChangeStage,
+  openScopeChanges,
   adoptSignedRevision,
   buildProposalSnapshot,
   // Brief 2 — status updates

@@ -97,7 +97,7 @@ async function signedJob(label = "Base install", price = 5000) {
 // Raise, send and approve one change order, then generate its revision.
 async function changeOrder(projId, description, price) {
   const s = await projects.createScopeChangeRequest(projId, { description, suggestedLineItems: [{ label: description, qty: 1, price }] });
-  await projects.sendScopeChangeRequest(projId, s.id);
+  await projects.sendScopeChangeRequest(projId, s.id, { deliver: async () => {} }); // email "delivered"
   await projects.resolveScopeChangeRequest(projId, s.id, { resolution: "approved" });
   const rev = await projects.generateQuoteRevisionFromScopeChange(projId, s.id);
   return { scrId: s.id, rev };
@@ -199,7 +199,7 @@ try {
   await scenario("6. double-clicking or retrying Generate revision creates ONE quote", async () => {
     const { proj } = await signedJob();
     const s = await projects.createScopeChangeRequest(proj.id, { description: "Add drip zone", suggestedLineItems: [{ label: "Add drip zone", qty: 1, price: 400 }] });
-    await projects.sendScopeChangeRequest(proj.id, s.id);
+    await projects.sendScopeChangeRequest(proj.id, s.id, { deliver: async () => {} });
     await projects.resolveScopeChangeRequest(proj.id, s.id, { resolution: "approved" });
     const countBefore = rawQuotes().length;
     // Force the collision instead of hoping for it: hold every revision
