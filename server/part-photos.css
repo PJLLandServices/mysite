@@ -152,11 +152,11 @@
 .pr-bar-seg { min-width: 3px; }
 .pr-bar-seg.is-live, .pr-stat.is-live b { background: #2D6A42; }
 .pr-bar-seg.is-review, .pr-stat.is-review b { background: #C96A2A; }
-.pr-bar-seg.is-noreliable, .pr-stat.is-noreliable b { background: #8A8A80; }
+.pr-bar-seg.is-noreliable, .pr-stat.is-noreliable b { background: #6B6B63; }
 .pr-bar-seg.is-pending { background: #E2E0D4; }
 .pr-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
 .pr-stat { display: flex; flex-direction: column; gap: 1px; font-size: 12.5px; color: #6B6B63; }
-.pr-stat b { align-self: flex-start; min-width: 30px; padding: 1px 8px; border-radius: 6px; color: #fff; font-size: 16px; text-align: center; background: #B9B7AC; }
+.pr-stat b { align-self: flex-start; min-width: 30px; padding: 1px 8px; border-radius: 6px; color: #fff; font-size: 16px; text-align: center; background: #6B6B63; }
 .pr-stat.is-pending b { background: #E2E0D4; color: #1F2A22; }
 .pr-stat.is-errors b { background: #fff; color: #B71C1C; border: 1px solid rgba(183, 28, 28, 0.35); }
 .pr-stat span { font-weight: 600; color: #1F2A22; }
@@ -211,7 +211,7 @@
 .pr-checks li.is-pass { background: #E6F0E8; color: #1B4D2E; }
 .pr-checks li.is-fail { background: #FDEAEA; color: #B71C1C; }
 .pr-checks li.is-unknown { background: #FDF3EA; color: #8B4413; }
-.pr-checks li.is-na { color: #8A8A80; }
+.pr-checks li.is-na { color: #6B6B63; }
 .pr-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .pr-why { margin: 0; padding-left: 16px; font-size: 12.5px; color: #1F2A22; }
 .part-photos-body .pr-nochecks { margin: 0; font-size: 12.5px; color: #6B6B63; }
