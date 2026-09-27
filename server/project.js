@@ -533,9 +533,14 @@
         ? `<button type="button" class="proj-task-delete" data-task-id="${escapeHtml(t.id)}" aria-label="Remove">×</button>`
         : "";
       const photos = photosByTask.get(t.id) || [];
+      // SINGULAR /photo/:n — that is the GET route that serves the file.
+      // The plural /photos/:n is the DELETE route, so a GET to it falls
+      // through to a 404 and every thumbnail here rendered broken.
+      // This page is admin-gated, so the staff session cookie rides
+      // along and the authenticated route is the correct one to use.
       const photoStrip = photos.length
         ? `<div class="proj-task-photos">${photos.slice(0, 4).map((p) =>
-            `<a href="/api/work-orders/${encodeURIComponent(p.woId)}/photos/${encodeURIComponent(p.n)}" target="_blank" rel="noopener" title="From ${escapeHtml(p.woId)}"><img src="/api/work-orders/${encodeURIComponent(p.woId)}/photos/${encodeURIComponent(p.n)}" alt=""></a>`
+            `<a href="/api/work-orders/${encodeURIComponent(p.woId)}/photo/${encodeURIComponent(p.n)}" target="_blank" rel="noopener" title="From ${escapeHtml(p.woId)}"><img src="/api/work-orders/${encodeURIComponent(p.woId)}/photo/${encodeURIComponent(p.n)}" alt=""></a>`
           ).join("")}${photos.length > 4 ? `<span class="proj-task-photos-more">+${photos.length - 4}</span>` : ""}</div>`
         : "";
       return `
