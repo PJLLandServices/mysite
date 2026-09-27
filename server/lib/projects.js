@@ -1673,6 +1673,38 @@ function openScopeChanges(proj) {
   return (proj?.scopeChangeRequests || []).filter((s) => scopeChangeStage(s, proj) !== null);
 }
 
+// Where a change that went into a revised quote now stands — ONE answer for
+// the withdraw guard and the Change Orders tab (2026-09-27):
+//   signed   — in a signed agreement (the revision itself, or carried into a
+//              newer version that was signed). Never rewritten: taking it
+//              out needs a NEW change order and a new signed revision.
+//   unsigned — in a revised quote the customer can still sign.
+//   dead     — its revision was declined, withdrawn or trashed without
+//              being signed: not in any price.
+//   missing  — the linked quote is not on file.
+function scopeChangeRevisionState(scr, chainInfo) {
+  const quotes = require("./quotes");
+  if (!scr || !scr.linkedRevisionQuoteId) return { state: null, quote: null };
+  const byId = new Map(((chainInfo && chainInfo.chain) || []).map((q) => [q.id, q]));
+  const rev = byId.get(scr.linkedRevisionQuoteId);
+  if (!rev) return { state: "missing", quote: null };
+  const gov = chainInfo.governing;
+  const pend = chainInfo.pending;
+  const v = Number(rev.version) || 1;
+  if (quotes.isSignedAgreement(rev)) return { state: "signed", quote: rev };
+  if (gov && (Number(gov.version) || 1) > v) return { state: "signed", quote: gov };
+  if (quotes.isUnsignedLive(rev)) return { state: "unsigned", quote: rev };
+  if (pend && (Number(pend.version) || 1) >= v) return { state: "unsigned", quote: pend };
+  return { state: "dead", quote: rev };
+}
+
+// A completed, invoiced job's change orders are closed: the invoice was
+// written from them. A correction is a credit or a new invoice, never a
+// rewritten change.
+function projectIsClosedForChanges(proj) {
+  return Boolean(proj && (proj.status === "complete" || proj.projectCompletionAt || proj.finalInvoiceId));
+}
+
 async function createScopeChangeRequest(projectId, fields, { by = "admin" } = {}) {
   const description = String(fields?.description || "").trim();
   if (!description) {
@@ -1767,8 +1799,16 @@ async function updateScopeChangeRequest(projectId, scrId, patch, { by = "admin" 
 // failure. No recipient, no sender (email not set up) or a failed delivery
 // leaves the change unsent and records the attempt, with its reason and
 // who tried, in scr.sendAttempts — kept even after a later send succeeds.
-// One send per change request at a time: a double click must not email
-// the customer twice (the email goes out before the record is written).
+// One send per change request, protected by the SAVED record, not only by
+// memory (2026-09-27). Before the email goes, the change is marked
+// `sendInFlight` on disk (inside the project lock). If the server stops
+// between the email leaving and the outcome being written, that mark
+// survives the restart, and the next send is refused as
+// `delivery_uncertain` — nobody can tell whether the customer got it, so
+// the office checks and records the outcome (resolveUncertainScopeSend)
+// instead of the system guessing and emailing twice. The in-memory set
+// only tells a send still running in THIS process (a double click →
+// "already being sent") apart from one a restart interrupted.
 const _scopeSendsInFlight = new Set();
 async function sendScopeChangeRequest(projectId, scrId, opts = {}) {
   const key = `${projectId}:${scrId}`;
@@ -1779,6 +1819,48 @@ async function sendScopeChangeRequest(projectId, scrId, opts = {}) {
   try { return await _sendScopeChangeRequest(projectId, scrId, opts); }
   finally { _scopeSendsInFlight.delete(key); }
 }
+
+function uncertainSendError(scr) {
+  const f = scr.sendInFlight || {};
+  return Object.assign(
+    new Error(`A send to ${f.to || "the customer"} started ${f.at || "earlier"}${f.by ? ` by ${f.by}` : ""} was interrupted before its result was saved, so we can't tell whether the email arrived. Check the sent mail or ask the customer, then record whether it went — it will not be sent again until you do.`),
+    { code: "delivery_uncertain", sendInFlight: f }
+  );
+}
+
+// The office's answer to an interrupted send: "sent" (the email did arrive
+// — the change moves to awaiting the customer, dated when it went) or
+// "not_sent" (it did not — the change stays a draft and can be sent).
+// Either way the interrupted attempt stays on record.
+async function resolveUncertainScopeSend(projectId, scrId, { outcome, by = "admin" } = {}) {
+  if (outcome !== "sent" && outcome !== "not_sent") {
+    throw Object.assign(new Error("Say whether the email went: sent or not_sent."), { code: "bad_outcome" });
+  }
+  if (_scopeSendsInFlight.has(`${projectId}:${scrId}`)) {
+    throw Object.assign(new Error("This change request is being sent right now."), { code: "scr_send_in_progress" });
+  }
+  return _mutate(projectId, (p) => {
+    const scr = (p.scopeChangeRequests || []).find((s) => s.id === scrId);
+    if (!scr) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
+    const f = scr.sendInFlight;
+    if (!f) throw Object.assign(new Error("There is no interrupted send to settle."), { code: "no_uncertain_send" });
+    const at = nowIso();
+    scr.sendInFlight = null;
+    scr.sendAttempts = [
+      ...(Array.isArray(scr.sendAttempts) ? scr.sendAttempts : []),
+      outcome === "sent"
+        ? { at: f.at || at, by: f.by || by, to: f.to || null, ok: true, reason: `Interrupted send — ${by} confirmed the email arrived` }
+        : { at: f.at || at, by: f.by || by, to: f.to || null, ok: false, reason: `Interrupted send — ${by} confirmed it did not arrive` }
+    ];
+    if (outcome === "sent" && scr.status === "pending_admin_review") {
+      scr.status = "pending_customer_approval";
+      scr.sentAt = f.at || at;
+      scr.sentBy = f.by || by;
+    }
+    appendHistory(p, { action: outcome === "sent" ? "scope_change_send_confirmed" : "scope_change_send_failed", by, note: `${scrId} — interrupted send ${outcome === "sent" ? "confirmed delivered" : "confirmed not delivered"}` });
+    return scr;
+  });
+}
 async function _sendScopeChangeRequest(projectId, scrId, { by = "admin", deliver = null } = {}) {
   const proj = await get(projectId);
   if (!proj) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
@@ -1788,6 +1870,8 @@ async function _sendScopeChangeRequest(projectId, scrId, { by = "admin", deliver
     throw Object.assign(new Error(`Scope change is already ${current.status}.`), { code: "scr_wrong_state" });
   }
 
+  if (current.sendInFlight) throw uncertainSendError(current);
+
   const to = String(current.draftEmail?.to || "").trim();
   let failure = null;
   if (!to) {
@@ -1795,6 +1879,18 @@ async function _sendScopeChangeRequest(projectId, scrId, { by = "admin", deliver
   } else if (typeof deliver !== "function") {
     failure = { code: "email_not_configured", reason: "Email is not set up on the server, so nothing was sent." };
   } else {
+    // Claim the send ON DISK before anything leaves (see above). Checked
+    // again inside the lock, so two requests cannot both claim it.
+    const startedAt = nowIso();
+    await _mutate(projectId, (p) => {
+      const scr = (p.scopeChangeRequests || []).find((s) => s.id === scrId);
+      if (!scr) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
+      if (scr.status !== "pending_admin_review") {
+        throw Object.assign(new Error(`Scope change is already ${scr.status}.`), { code: "scr_wrong_state" });
+      }
+      if (scr.sendInFlight) throw uncertainSendError(scr);
+      scr.sendInFlight = { at: startedAt, by, to };
+    });
     try {
       await deliver({ ...current.draftEmail, to });
     } catch (err) {
@@ -1806,6 +1902,7 @@ async function _sendScopeChangeRequest(projectId, scrId, { by = "admin", deliver
   const updated = await _mutate(projectId, (p) => {
     const scr = (p.scopeChangeRequests || []).find((s) => s.id === scrId);
     if (!scr) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
+    scr.sendInFlight = null; // the outcome is known and about to be saved
     scr.sendAttempts = [
       ...(Array.isArray(scr.sendAttempts) ? scr.sendAttempts : []),
       failure ? { at, by, to, ok: false, reason: failure.reason } : { at, by, to, ok: true, reason: null }
@@ -1829,6 +1926,81 @@ async function _sendScopeChangeRequest(projectId, scrId, { by = "admin", deliver
   return updated;
 }
 
+// Withdrawing a change that already went into a revised quote (Patrick,
+// 2026-09-27). Explicit, by where that quote stands:
+//   signed   → REFUSED. The customer signed it; a signed agreement is never
+//              rewritten. Taking the work out needs a new change order (a
+//              reduction) and a new revision for the customer to sign.
+//   unsigned → the revised quote is CANCELLED (retireUnsignedRevision: the
+//              customer's link stops working, the signed agreement stands),
+//              this change is withdrawn, and any OTHER change that was in
+//              the same revised quote goes back to "approved — needs revised
+//              quote", so nothing is dropped silently.
+//   dead     → already out of every price; the change is simply withdrawn.
+// A completed, invoiced job refuses all of it (projectIsClosedForChanges).
+async function _withdrawFromRevision(projectId, scrId, { note = "", by = "admin" } = {}) {
+  const quotes = require("./quotes");
+  const proj = await get(projectId);
+  if (!proj) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
+  if (projectIsClosedForChanges(proj)) {
+    throw Object.assign(new Error("This job is complete and invoiced, so its change orders are closed. A correction is a credit or a new invoice, not a change to this record."), { code: "project_closed" });
+  }
+  const scr = (proj.scopeChangeRequests || []).find((s) => s.id === scrId);
+  if (!scr) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
+  if (scr.status !== "executed_under_revision") {
+    throw Object.assign(new Error(`Scope change is already ${scr.status}.`), { code: "scr_already_resolved" });
+  }
+  const signedRefusal = (q) => Object.assign(
+    new Error(`This change is in the signed agreement ${q.id} (v${q.version || 1}). A signed agreement is never rewritten — to take this work out, raise a new change order for the reduction and have the customer sign that revision.`),
+    { code: "scr_in_signed_agreement", quoteId: q.id }
+  );
+  const { state, quote } = scopeChangeRevisionState(scr, await resolveProjectQuote(proj));
+  if (state === "signed") throw signedRefusal(quote);
+
+  let cancelledRevisionId = null;
+  if (state === "unsigned") {
+    try {
+      await quotes.retireUnsignedRevision(quote.id, { by, reason: `Change ${scrId} withdrawn by the office` });
+      cancelledRevisionId = quote.id;
+    } catch (err) {
+      // The customer signed while we were deciding: the signature wins.
+      if (err.code === "revision_signed") throw signedRefusal(quote);
+      throw err;
+    }
+  }
+
+  const cleanNote = String(note || "").slice(0, 2000);
+  return _mutate(projectId, (p) => {
+    const s = (p.scopeChangeRequests || []).find((x) => x.id === scrId);
+    if (!s) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
+    s.status = "withdrawn";
+    s.resolvedAt = nowIso();
+    s.resolvedAs = "withdrawn_by_office";
+    s.decisionSource = "office";
+    s.recordedBy = by;
+    s.resolutionNote = cleanNote;
+    s.withdrawnFromRevisionQuoteId = s.linkedRevisionQuoteId;
+    appendHistory(p, {
+      action: "scope_change_withdrawn",
+      by,
+      note: `${scrId} — withdrawn by the office${cancelledRevisionId ? `; revised quote ${cancelledRevisionId} cancelled (unsigned)` : "; its revised quote was never signed"}${cleanNote ? `: ${cleanNote.slice(0, 200)}` : ""}`
+    });
+    if (cancelledRevisionId) {
+      for (const other of p.scopeChangeRequests || []) {
+        if (other.id === scrId || other.status !== "executed_under_revision" || other.linkedRevisionQuoteId !== cancelledRevisionId) continue;
+        other.status = "approved";
+        other.linkedRevisionQuoteId = null;
+        appendHistory(p, {
+          action: "scope_change_revision_cancelled",
+          by,
+          note: `${other.id} — back to approved: revised quote ${cancelledRevisionId} was cancelled when ${scrId} was withdrawn. Generate a new revised quote for it.`
+        });
+      }
+    }
+    return s;
+  });
+}
+
 // Record the outcome of a change request.
 //   approved / rejected — the CUSTOMER's decision. `source` says how it
 //     arrived: "recorded_by_office" (the office entered the answer the
@@ -1843,7 +2015,20 @@ async function resolveScopeChangeRequest(projectId, scrId, { resolution, note = 
   if (!["approved", "rejected", "withdrawn"].includes(resolution)) {
     throw Object.assign(new Error(`Unknown resolution: ${resolution}`), { code: "bad_resolution" });
   }
+  // A change already in a revised quote has its own rules (below). Queued
+  // with revision generation, so a withdrawal and a new revision for the
+  // same job can never interleave.
+  if (resolution === "withdrawn") {
+    const current = await get(projectId);
+    const scr = (current?.scopeChangeRequests || []).find((s) => s.id === scrId);
+    if (scr && scr.status === "executed_under_revision") {
+      return onProjectRevisionQueue(projectId, () => _withdrawFromRevision(projectId, scrId, { note, by }));
+    }
+  }
   return _mutate(projectId, (proj) => {
+    if (projectIsClosedForChanges(proj)) {
+      throw Object.assign(new Error("This job is complete and invoiced, so its change orders are closed. A correction is a credit or a new invoice, not a change to this record."), { code: "project_closed" });
+    }
     const scr = (proj.scopeChangeRequests || []).find((s) => s.id === scrId);
     if (!scr) throw Object.assign(new Error("Scope change not found."), { code: "scr_not_found" });
     const openForDecision = scr.status === "pending_admin_review" || scr.status === "pending_customer_approval";
@@ -1852,6 +2037,14 @@ async function resolveScopeChangeRequest(projectId, scrId, { resolution, note = 
       throw Object.assign(new Error(`Scope change is already ${scr.status}.`), { code: "scr_already_resolved" });
     }
     const cleanNote = String(note || "").slice(0, 2000);
+    // An interrupted send is moot once the answer is recorded; keep it on
+    // record rather than leave a mark that blocks nothing and explains less.
+    if (scr.sendInFlight && !_scopeSendsInFlight.has(`${projectId}:${scrId}`)) {
+      const f = scr.sendInFlight;
+      scr.sendAttempts = [...(Array.isArray(scr.sendAttempts) ? scr.sendAttempts : []),
+        { at: f.at || nowIso(), by: f.by || by, to: f.to || null, ok: false, reason: "Interrupted send — delivery never confirmed; settled by the recorded decision" }];
+      scr.sendInFlight = null;
+    }
     scr.status = resolution;
     scr.resolvedAt = nowIso();
     if (resolution === "withdrawn") {
@@ -2888,6 +3081,9 @@ module.exports = {
   fixedPriceBillingSource,
   scopeChangeStage,
   openScopeChanges,
+  scopeChangeRevisionState,
+  projectIsClosedForChanges,
+  resolveUncertainScopeSend,
   adoptSignedRevision,
   buildProposalSnapshot,
   // Brief 2 — status updates

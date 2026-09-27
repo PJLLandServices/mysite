@@ -17697,7 +17697,9 @@ async function handleApi(req, res, pathname) {
   const OFFICE_ONLY_SCOPE = "Only the office can do this. Your change request is saved for the office to review.";
   const scopeErrorStatus = (err) => ({
     scr_not_found: 404, project_not_found: 404, scr_locked: 409, scr_wrong_state: 409, scr_already_resolved: 409, scr_send_in_progress: 409,
-    no_recipient: 409, email_not_configured: 503, delivery_failed: 502
+    no_recipient: 409, email_not_configured: 503, delivery_failed: 502,
+    delivery_uncertain: 409, no_uncertain_send: 409, bad_outcome: 400,
+    project_closed: 409, scr_in_signed_agreement: 409
   }[err?.code] || 400);
 
   if (scopeListMatch && req.method === "POST") {
@@ -17782,6 +17784,23 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // After an interrupted send (delivery_uncertain): the office says whether
+  // the email actually arrived. Office-only, like sending.
+  const scopeSendOutcomeMatch = pathname.match(/^\/api\/projects\/([^/]+)\/scope-changes\/([^/]+)\/send-outcome$/);
+  if (scopeSendOutcomeMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(scopeSendOutcomeMatch[1]);
+      const scrId = decodeURIComponent(scopeSendOutcomeMatch[2]);
+      const payload = await parseRequestBody(req);
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: [OFFICE_ONLY_SCOPE] });
+      const scr = await projects.resolveUncertainScopeSend(id, scrId, { outcome: payload.outcome, by: await actorLabel(req, session.uid || "admin") });
+      return sendJson(res, 200, { ok: true, scopeChange: scr });
+    } catch (err) {
+      return sendJson(res, scopeErrorStatus(err), { ok: false, code: err.code || null, errors: [err.message || "Couldn't record the send outcome."] });
+    }
+  }
+
   const scopeResolveMatch = pathname.match(/^\/api\/projects\/([^/]+)\/scope-changes\/([^/]+)\/resolve$/);
   if (scopeResolveMatch && req.method === "POST") {
     try {
@@ -17798,7 +17817,7 @@ async function handleApi(req, res, pathname) {
       }, { by: await actorLabel(req, session.uid || "admin"), source: "recorded_by_office" });
       return sendJson(res, 200, { ok: true, scopeChange: scr });
     } catch (err) {
-      return sendJson(res, scopeErrorStatus(err), { ok: false, errors: [err.message || "Couldn't resolve scope change."] });
+      return sendJson(res, scopeErrorStatus(err), { ok: false, code: err.code || null, errors: [err.message || "Couldn't resolve scope change."] });
     }
   }
 

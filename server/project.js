@@ -1428,7 +1428,14 @@
       const actions = [];
       const btn = (action, label) => `<button type="button" data-action="${action}" data-scr-id="${escapeHtml(s.id)}">${label}</button>`;
       if (viewerIsAdmin) {
-        if (s.status === "pending_admin_review") {
+        if (s.status === "pending_admin_review" && s.sendInFlight) {
+          // An interrupted send: nobody knows whether the email arrived.
+          actions.push(btn("send-outcome-sent", "It arrived — mark sent"));
+          actions.push(btn("send-outcome-not-sent", "It didn't arrive"));
+          actions.push(btn("approve-scr", "Customer approved"));
+          actions.push(btn("reject-scr", "Customer declined"));
+          actions.push(btn("withdraw-scr", "Withdraw"));
+        } else if (s.status === "pending_admin_review") {
           actions.push(btn("send-scr", "Send to customer"));
           // A customer with no email, or who answered by phone first.
           actions.push(btn("approve-scr", "Customer approved"));
@@ -1441,12 +1448,16 @@
         } else if (s.status === "approved" && !s.linkedRevisionQuoteId && state.project.billingMode !== "time_and_material") {
           actions.push(btn("revise-scr", "Generate quote revision"));
           actions.push(btn("withdraw-scr", "Withdraw"));
+        } else if (s.status === "executed_under_revision") {
+          actions.push(btn("withdraw-revised-scr", "Withdraw"));
         }
       }
       // A send that did not go stays visible until one does.
       const attempts = Array.isArray(s.sendAttempts) ? s.sendAttempts : [];
       const lastAttempt = attempts[attempts.length - 1];
-      const sendProblem = lastAttempt && lastAttempt.ok === false && s.status === "pending_admin_review"
+      const sendProblem = s.sendInFlight && s.status === "pending_admin_review"
+        ? `<p class="proj-scope-meta proj-scope-send-failed">⚠ Delivery uncertain: a send to ${escapeHtml(s.sendInFlight.to || "the customer")} started ${escapeHtml(new Date(s.sendInFlight.at).toLocaleString("en-CA"))} was interrupted before its result was saved. Check the sent mail or ask the customer, then record whether it arrived. It will not be sent again until you do.</p>`
+        : lastAttempt && lastAttempt.ok === false && s.status === "pending_admin_review"
         ? `<p class="proj-scope-meta proj-scope-send-failed">⚠ Not sent (${escapeHtml(new Date(lastAttempt.at).toLocaleDateString("en-CA"))}): ${escapeHtml(lastAttempt.reason || "unknown reason")}</p>`
         : "";
       const decidedBy = s.recordedBy && (s.status === "approved" || s.status === "rejected" || s.status === "withdrawn" || s.status === "executed_under_revision")
@@ -1514,6 +1525,28 @@
         });
         if (!r.ok) { showToast((await r.json()).errors?.[0] || "Withdraw failed.", { variant: "error" }); return; }
         showToast("Scope change withdrawn.", { variant: "success" });
+      } else if (action === "send-outcome-sent" || action === "send-outcome-not-sent") {
+        const sent = action === "send-outcome-sent";
+        if (!await askConfirm(sent ? "The email arrived?" : "The email did not arrive?",
+          sent ? "Record that the customer received this change request. It moves to 'awaiting customer'."
+               : "Record that the email never arrived. The change stays a draft and you can send it again.",
+          { okLabel: sent ? "It arrived" : "It didn't arrive" })) return;
+        const r = await fetch(`${base}/send-outcome`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ outcome: sent ? "sent" : "not_sent" })
+        });
+        if (!r.ok) { showToast((await r.json().catch(() => ({}))).errors?.[0] || "Couldn't record it.", { variant: "error", durationMs: 8000 }); return; }
+        showToast(sent ? "Recorded as sent." : "Recorded as not sent — you can send it again.", { variant: "success" });
+      } else if (action === "withdraw-revised-scr") {
+        if (!await askConfirm("Withdraw a change that is in a revised quote?",
+          "If the customer has NOT signed the revised quote: that revised quote is cancelled (their link stops working), the signed agreement stays as it is, and any other change in it goes back to 'approved — needs revised quote'. If the customer HAS signed it, this is refused: a signed agreement is never rewritten — raise a new change order for the reduction instead.",
+          { okLabel: "Withdraw" })) return;
+        const r = await fetch(`${base}/resolve`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ resolution: "withdrawn" })
+        });
+        if (!r.ok) { showToast((await r.json().catch(() => ({}))).errors?.[0] || "Withdraw failed.", { variant: "error", durationMs: 10000 }); return; }
+        showToast("Change withdrawn. See the project history for what happened to its revised quote.", { variant: "success", durationMs: 7000 });
       } else if (action === "revise-scr") {
         if (!await askConfirm("Generate revision?", "Create a Q-vN containing the original line items plus the approved additions. Customer will need to sign the new revision.", { okLabel: "Generate" })) return;
         const r = await fetch(`${base}/generate-revision`, { method: "POST" });
