@@ -669,14 +669,24 @@ function createBackfill({
   // the exact SKU list that was shown, so a changed catalog can never run a
   // list Patrick didn't see. Auto-approve OFF, one run at a time. There is
   // still no whole-catalog door.
-  const WAVE_MAX = 30;
-  function processedByCalibration() {
+  // Waves of up to 50 (Patrick, Sep 27 2026, after the 30-part wave). Never
+  // the whole catalog in one run.
+  const WAVE_MAX = 50;
+  // Every part any calibration or wave has already processed — from the
+  // current run and the history — so a later wave never repeats one, even
+  // a part that ended in an error and still shows no photo state.
+  function processedByRuns() {
     const out = new Set();
-    const add = (run) => { if (run && run.calibration && Array.isArray(run.calibration.skus)) run.calibration.skus.forEach((s) => out.add(s)); };
+    const add = (run) => {
+      if (!run) return;
+      for (const key of ["calibration", "wave"]) if (run[key] && Array.isArray(run[key].skus)) run[key].skus.forEach((s) => out.add(s));
+      if (Array.isArray(run.order)) run.order.forEach((s) => out.add(s));
+    };
     add(state && state.run);
     for (const h of (state && state.history) || []) add(h);
     return out;
   }
+  const processedByCalibration = processedByRuns;
   function estimateRows(rows) {
     const sum = (f) => rows.reduce((n, r) => n + f(r), 0);
     const finderMin = sum((r) => r.calls.finderMin), finderMax = sum((r) => r.calls.finderMax);
@@ -789,11 +799,26 @@ function createBackfill({
       else c.inProgress++;
     }
     const current = run.order.find((s) => !["done", "error", "queued"].includes(run.items[s].step)) || null;
+    // Usage split by kind (Patrick, Sep 27 2026): what a branded part costs
+    // against a generic one, from each part's own counters.
+    const parts = getParts() || {};
+    const byKind = { branded: { ...USAGE0, parts: 0 }, generic: { ...USAGE0, parts: 0 } };
+    for (const s of run.order) {
+      const k = parts[s] ? kindOf(enrich(parts[s])) : "generic";
+      const u = (run.items[s] && run.items[s].usage) || {};
+      byKind[k].parts += 1;
+      for (const key of Object.keys(USAGE0)) byKind[k][key] += u[key] || 0;
+    }
+    for (const k of Object.keys(byKind)) {
+      const n = byKind[k].parts;
+      byKind[k].perPart = n ? { calls: +(byKind[k].calls / n).toFixed(1), in: Math.round(byKind[k].in / n), out: Math.round(byKind[k].out / n), searches: +(byKind[k].searches / n).toFixed(1) } : null;
+    }
     return {
       id: run.id, label: run.label, status: run.status, autoApprove: run.options.autoApprove, createdAt: run.createdAt, finishedAt: run.finishedAt || null,
       interruptedAt: run.interruptedAt || null,
       calibration: run.calibration ? { skus: run.calibration.skus, by: run.calibration.by, rerunOf: run.calibration.rerunOf || null, unresolved: (() => { const parts = getParts() || {}; return run.calibration.skus.filter((s) => parts[s] && !isLive(parts[s])); })() } : null,
       wave: run.wave ? { skus: run.wave.skus, by: run.wave.by } : null,
+      usageByKind: byKind,
       current: current ? { sku: current, step: run.items[current].step } : null,
       errors: run.order.filter((s) => run.items[s].step === "error").map((s) => ({ sku: s, step: run.items[s].failedStep || null, error: run.items[s].lastError })),
       counts: c, usage: run.usage

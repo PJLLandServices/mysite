@@ -121,7 +121,8 @@
       const where = run.current ? ` · now on <span class="pp-mono">${esc(run.current.sku)}</span> (${esc(run.current.step)})` : "";
       const u = run.usage || {};
       runLine = `${run.calibration ? (run.calibration.rerunOf ? "Calibration re-run" : "Calibration run") : run.wave ? "Wave" : "AI run"} <b>${esc(run.label || run.id)}</b> · <b>${esc(run.status === "paused" && run.interruptedAt ? "interrupted by a restart — press Resume" : run.status)}</b> · ${c.done} of ${c.total} done${c.error ? ` · ${c.error} error${c.error > 1 ? "s" : ""}` : ""}${where} · auto-approve <b>${run.autoApprove ? "ON" : "off"}</b>`
-        + `<br><span class="pr-usage">${(u.calls || 0)} Claude calls · ${(u.searches || 0)} web searches · ${(u.webFetches || 0)} model fetches · ${(u.pageFetches || 0)} pages + ${(u.imageFetches || 0)} images fetched by our server · ${(u.in || 0).toLocaleString()} in / ${(u.out || 0).toLocaleString()} out tokens</span>`;
+        + `<br><span class="pr-usage">${(u.calls || 0)} Claude calls · ${(u.searches || 0)} web searches · ${(u.webFetches || 0)} model fetches · ${(u.pageFetches || 0)} pages + ${(u.imageFetches || 0)} images fetched by our server · ${(u.in || 0).toLocaleString()} in / ${(u.out || 0).toLocaleString()} out tokens</span>`
+        + (run.usageByKind ? `<br><span class="pr-usage">${["branded", "generic"].map((k) => { const b = run.usageByKind[k]; return b && b.parts ? `${k}: ${b.parts} part${b.parts === 1 ? "" : "s"} · ${b.perPart.calls} calls · ${b.perPart.searches} searches · ${b.perPart.in.toLocaleString()} in / ${b.perPart.out.toLocaleString()} out tokens per part` : `${k}: none`; }).join(" — ")}</span>` : "");
     }
     const errors = run && run.errors && run.errors.length
       ? `<ul class="pr-run-errors">${run.errors.map((e) => `<li><span class="pp-mono">${esc(e.sku)}</span> at ${esc(e.step || "?")}: ${esc(e.error || "")}</li>`).join("")}</ul>` : "";
@@ -137,7 +138,7 @@
         ? `<button type="button" class="pp-btn pp-btn-primary" data-act="rerun"${d.apiKeySet === false ? " disabled" : ""}>Re-run the ${unresolved.length} unresolved calibration part${unresolved.length > 1 ? "s" : ""} (auto-approve off)</button>`
         : "")
         + `<button type="button" class="pp-btn${unresolved.length ? "" : " pp-btn-primary"}" data-act="start-cal"${d.apiKeySet === false ? " disabled" : ""}>Start calibration run (15 parts, auto-approve off)</button>`
-        + `<button type="button" class="pp-btn" data-act="start-wave"${d.apiKeySet === false ? " disabled" : ""}>Start a 30-part wave (auto-approve off)</button>${d.apiKeySet === false ? `<span class="pr-held">ANTHROPIC_API_KEY isn't set on the server.</span>` : ""}`;
+        + `<button type="button" class="pp-btn" data-act="start-wave"${d.apiKeySet === false ? " disabled" : ""}>Start the next wave (up to 50 parts, auto-approve off)</button>${d.apiKeySet === false ? `<span class="pr-held">ANTHROPIC_API_KEY isn't set on the server.</span>` : ""}`;
     }
     return `<div class="pr-progress-head"><h2>Photos across the catalog</h2><span>${total} parts</span></div>
       <div class="pr-bar" role="img" aria-label="${p.live || 0} live, ${p.review || 0} review needed, ${p.noReliable || 0} no reliable photo, ${p.notProcessed || 0} not processed">${bar || '<span class="pr-bar-seg is-pending" style="flex-grow:1"></span>'}</div>

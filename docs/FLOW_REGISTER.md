@@ -212,6 +212,20 @@ and the safety rule are untouched.
 **Test:** `test-part-photo-lifecycle.mjs` section 11 runs the fitting on a frozen clock, where the old
 code fails 4 of 7 every time. It now passes 113 of 113, including the whole file under a frozen clock
 (the CI failure's exact scenario). FLOW-47 re-verified by its suite; nothing changes on screen.
+**2026-09-27 (Part photos — 30-part wave accepted; waves of 50 next; FLOW-49 still UNMAPPED):**
+The 30-part wave (`BF-202609271811-d509`, auto-approve OFF) processed 30/30 with 0 errors: 23 To be
+determined, 7 No reliable photo, 60 candidates, 29/30 parts with a candidate, 1 fitting proposal;
+106 Claude calls, 233 searches, 70 model fetches, 42 page + 65 image fetches by our server,
+5,241,323 in / 170,416 out tokens. Patrick's call: retrieval works; "size/ends unknown from the
+photo" is a legitimate limit and the evidence rules are NOT to be weakened. **What changed:** the
+wave cap is 50 (`WAVE_MAX`), the plan excludes every part any calibration or wave processed
+(`processedByRuns`, from the current run and the history, including parts that errored and still
+show no photo state), and the run status carries `usageByKind` (branded vs generic: parts, calls,
+searches, fetches, tokens, per-part averages), shown on the Review tab. Same protections: exact plan
+shown first, `POST /wave {skus}` must equal the current plan in order, auto-approve OFF, one run at a
+time, no automatic start, no whole-catalog button. Watch-list from the wave (not changed): Hunter
+pages where the large-image fallback picked family images (HC075FLOW, HC100FLOW, PCZ10140).
+`test-photo-backfill.mjs` 296. **Next:** the first 50-part plan is shown to Patrick before anything runs.
 **2026-09-27 (Part photos M3c follow-up — after the first calibration; FLOW-49 still UNMAPPED):**
 The first production calibration (15 parts, auto-approve OFF, 0 errors) left 7 parts with "no reliable
 photo" for one reason: the finder found the right product page but could not capture an image URL
