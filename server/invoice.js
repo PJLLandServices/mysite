@@ -1752,7 +1752,82 @@ render = function (inv) {
   renderReviseCard(inv);
   renderPriceConfirmCard(inv);
   renderRevisionRequiredCard(inv);
+  renderPaymentExceptionsCard(inv);
 };
+
+// ---- Payment exceptions (2026-09-27) -------------------------------------
+// The server decides (invoice.paymentExceptions / needsReconciliation);
+// this shows each one — charge, applied, excess, card, Stripe id — and
+// closes it with a note. Resolved ones stay listed, greyed, for the record.
+const PAYMENT_EXCEPTION_REASON_TEXT = {
+  already_covered: "arrived after the invoice was already paid in full",
+  over_balance: "was more than the balance left owing",
+  invoice_void: "arrived for a void invoice"
+};
+function renderPaymentExceptionsCard(inv) {
+  const card = document.getElementById("invoicePaymentExceptionsCard");
+  const list = document.getElementById("invoicePaymentExceptionsList");
+  const label = document.getElementById("invoicePaymentExceptionsLabel");
+  if (!card || !list) return;
+  const all = Array.isArray(inv?.paymentExceptions) ? inv.paymentExceptions : [];
+  card.hidden = all.length === 0;
+  if (card.hidden) return;
+  const open = all.filter((e) => e.status === "open");
+  card.classList.toggle("is-resolved", open.length === 0);
+  if (label) label.textContent = open.length ? "Needs refund / reconciliation" : "Payment exceptions — resolved";
+  const card4 = (e) => [e.cardBrand ? String(e.cardBrand).replace(/^\w/, (c) => c.toUpperCase()) : "", e.cardLast4 ? `••${e.cardLast4}` : ""].filter(Boolean).join(" ");
+  list.innerHTML = all.map((e) => `
+    <div class="invoice-exception${e.status === "open" ? " is-open" : ""}" data-exception-id="${escapeHtml(e.id)}">
+      <p class="invoice-exception-head">${e.status === "open"
+        ? `<strong>${escapeHtml(fmt(e.excess))} extra</strong> — needs refund or reconciliation`
+        : `${escapeHtml(fmt(e.excess))} extra — <strong>${escapeHtml(e.status)}</strong>`}</p>
+      <dl class="invoice-exception-facts">
+        <dt>Total charge</dt><dd>${escapeHtml(fmt(e.chargedTotal))}</dd>
+        <dt>Applied to invoice</dt><dd>${escapeHtml(fmt(e.applied))}</dd>
+        <dt>Excess</dt><dd>${escapeHtml(fmt(e.excess))}</dd>
+        <dt>Method / card</dt><dd>${escapeHtml(e.methodLabel || "Card")}${card4(e) ? ` — ${escapeHtml(card4(e))}` : ""}</dd>
+        <dt>Stripe payment</dt><dd class="invoice-exception-mono">${escapeHtml(e.paymentIntentId || "—")}</dd>
+        <dt>Arrived</dt><dd>${escapeHtml(fmtDate(e.detectedAt))}${e.via ? ` via ${escapeHtml(e.via)}` : ""}</dd>
+      </dl>
+      <p class="invoice-action-meta">This payment ${escapeHtml(PAYMENT_EXCEPTION_REASON_TEXT[e.reason] || e.reasonNote || "")}.${e.status === "open" ? " PJL refunds nothing by itself: refund it in Stripe, or settle it with the customer, then mark it here." : ""}${e.alert?.sentAt ? " Alert emailed." : e.alert?.failedAt ? " The alert email failed to send." : ""}</p>
+      ${e.resolution ? `<p class="invoice-action-meta">Marked ${escapeHtml(e.resolution.status)} ${escapeHtml(fmtDate(e.resolution.at))} by ${escapeHtml(e.resolution.by || "—")}: ${escapeHtml(e.resolution.note || "")}</p>` : ""}
+      ${e.status === "open" ? `
+      <div class="invoice-exception-actions">
+        <button type="button" class="invoice-action-btn invoice-action-btn--danger" data-exception-resolve="refunded" data-exception-id="${escapeHtml(e.id)}">Mark refunded</button>
+        <button type="button" class="invoice-action-btn" data-exception-resolve="reconciled" data-exception-id="${escapeHtml(e.id)}">Mark reconciled</button>
+      </div>` : ""}
+    </div>`).join("");
+}
+
+document.getElementById("invoicePaymentExceptionsList")?.addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("[data-exception-resolve]");
+  if (!btn || !currentInvoice) return;
+  const status = document.getElementById("invoicePaymentExceptionsStatus");
+  const resolution = btn.dataset.exceptionResolve;
+  const note = await pjlDialog.prompt(
+    resolution === "refunded"
+      ? "How was the extra refunded? (e.g. \"Refunded in the Stripe dashboard, Sep 28\")"
+      : "How was it reconciled? (e.g. \"Customer asked to keep it as credit toward spring\")",
+    { title: resolution === "refunded" ? "Mark refunded" : "Mark reconciled", icon: "info", confirmLabel: resolution === "refunded" ? "Mark refunded" : "Mark reconciled" }
+  );
+  if (note == null) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/invoices/${encodeURIComponent(currentInvoice.id)}/payment-exceptions/${encodeURIComponent(btn.dataset.exceptionId)}/resolve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ resolution, note })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't save that.");
+    currentInvoice = data.invoice;
+    render(data.invoice);
+    if (status) { status.textContent = `✓ Marked ${resolution}.`; status.dataset.kind = "ok"; }
+  } catch (e) {
+    if (status) { status.textContent = e.message || "Failed."; status.dataset.kind = "error"; }
+    btn.disabled = false;
+  }
+});
 
 // ---- Revision required after re-signing (2026-09-26) ---------------------
 // The server decides (invoice.scopeHold.reason); this only says what it

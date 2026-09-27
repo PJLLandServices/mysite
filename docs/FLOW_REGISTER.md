@@ -6757,6 +6757,70 @@ done by `invoices.reconcileToSignedScope(woId)`, under the invoice store lock:
 - `test-resignature-await` and `test-scope-hold-before-reply` now follow the release write into
   `reconcileToSignedScope`. The latter still fails if that write isn't awaited (checked by mutation).
 
+## 2026-09-27 — FLOW-23: a second card payment is a payment exception, never a log line (FLOW-23 touched — re-verified by tests, awaiting a walked acceptance)
+
+Found by E2E journey 4, reproduced as eight scenarios. Money that reached Stripe but not the invoice
+was hidden:
+- **S1:** the pay page and Tap to Pay were both approved. The second payment was only a server log.
+- **S2:** cash in full, then the open pay page's card. **Silent**: the pay page had stored its intent
+  id, so the charge looked like a repeat.
+- **S3:** part cash, then the card for the full total. The ledger refused the card, so the invoice
+  said $61.02 owing on a $40.68 overpayment.
+- **S4:** cash, then an open Tap to Pay intent. A warning on the phone only.
+- **S7:** the invoice was revised down while the pay page was open. The "wrong amount" check refused
+  the charge: $0 paid.
+- **Controls:** S5 (the same webhook twice) and S8 (two confirms and the webhook at once) were
+  idempotent in the ledger. S8 sent three receipts.
+
+**The rule, once — Patrick's rulings:** `invoices.recordProcessorPayment`, inside the invoice store
+lock, keyed on the Stripe payment id, makes ONE accounting decision per distinct payment.
+- **Already decided** (a ledger line with that `processorRef`, a pre-rule ledger line naming the
+  charge in its notes, an exception with that payment, or the invoice's own `stripeChargeId`): no
+  change, no receipt, no alert.
+- **Otherwise:** apply up to the balance owed. Any excess becomes ONE open **payment exception**
+  (`paymentExceptions[]`, off the ledger). It keeps the total charge, the amount applied, the excess,
+  method/card, the Stripe payment and charge ids, the arrival path and time, the reason, the alert
+  status, the resolution, and its own history.
+- **Void invoices:** a void invoice owes nothing, so the whole charge is excess.
+- **The balance:** the ledger never exceeds the total, so the balance never goes negative.
+
+**The whole workflow:**
+- **Customer:**
+  - **Normal payment:** unchanged.
+  - **Overpayment:** the pay page, the thanks page and the receipt say *"Payment received. We
+    received more than the remaining invoice balance. PJL will review the extra amount and contact
+    you if any action is required."* No refund is promised. The receipt is for what was charged.
+  - **Customer views:** the pay and portal views stay whitelisted, so no exception or Stripe id
+    reaches them.
+- **Patrick:**
+  - one admin alert per new exception: invoice, work order, customer, charge, applied, excess,
+    card, Stripe id, and a link to the invoice;
+  - a red **Needs refund / reconciliation** card at the top of the invoice, with **Mark refunded** /
+    **Mark reconciled** (admin, note required, nothing deleted);
+  - a **Needs refund** list filter and row badge (`invoices.needsReconciliation`, the one rule).
+- **Linked records:** a partly applied charge settles the invoice as before (deposits hook, stored
+  Stripe ids). A wholly excess charge leaves them alone. Capacity and the calendar are untouched.
+- **Audit:** the exception and its history, plus `payment_exception_opened` and `..._resolved` on
+  the invoice history. The success attempt is written once per decided payment.
+
+**Deliberately left alone:**
+- **QuickBooks:** the finalizer's QBO payment call is byte-for-byte the same, in the same cases, at
+  the same amount. S3 still sends QuickBooks the full intent amount; that is for the QuickBooks work.
+- **Nothing is refunded automatically** (PAY-03 unchanged).
+- **Staff cash/cheque over the balance** is still refused on screen.
+- **S6**, a reversed payment re-recorded by a reopened pay page, is its own PR. This change only
+  guarantees a reversal raises no false exception.
+- **Stopping stale/open intents and Tap to Pay's second tap** is item 4.
+- **Invariant 4** of `HANDOFF_STRIPE_PAYMENTS.md` §6 is amended accordingly.
+
+**Re-verification of FLOW-23 (PASS):**
+- The suites all pass: `test-stripe` 74, `test-taptopay-server` 33, `test-onsite-payment` 34,
+  `test-resign-reprice` 126 (its structural "every recording call asks the hold" check now counts
+  `recordProcessorPayment`), and journey 4 (64).
+- `test-payment-exceptions.mjs` (63; **the old code fails 44**) covers S1–S8, resolving, the list
+  filter, and the customer views.
+- **Awaiting a walked acceptance:** the next real payment must still receipt normally; the exception
+  path can only be walked with a real double payment.
 ## 2026-09-27 — FLOW-22/31: the invoice text never says "emailed" before it is
 
 Found by E2E journey 1 (a FINDING until now). Five minutes after a **Bill later** Finish the

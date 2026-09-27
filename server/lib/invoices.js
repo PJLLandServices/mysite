@@ -117,7 +117,10 @@ function normalizePayment(raw) {
     method,
     receivedAt: raw.receivedAt || new Date().toISOString(),
     receivedBy: String(raw.receivedBy || "admin").slice(0, 80),
-    notes: String(raw.notes || "").slice(0, 500)
+    notes: String(raw.notes || "").slice(0, 500),
+    // The Stripe payment (pi_…) this line came from, when it came from one:
+    // the key recordProcessorPayment() decides "already recorded?" by.
+    ...(raw.processorRef ? { processorRef: String(raw.processorRef).slice(0, 100) } : {})
   };
 }
 
@@ -440,13 +443,30 @@ function hydrate(inv) {
     // and total it had before a re-price, or why it was flagged instead.
     // The audit trail for reconcileToSignedScope().
     scopeReconciliations: Array.isArray(inv?.scopeReconciliations) ? inv.scopeReconciliations : [],
+    // Money a processor took that this invoice did not owe (a second card
+    // payment, or more than the balance), kept OFF the ledger so the
+    // balance can never go negative, and never deleted: resolving one
+    // (refunded / reconciled, with a note) only closes it. Written only by
+    // recordProcessorPayment() and resolvePaymentException(); update()'s
+    // allowlist excludes it.
+    paymentExceptions: Array.isArray(inv?.paymentExceptions) ? inv.paymentExceptions : [],
     createdAt: inv?.createdAt || new Date().toISOString(),
     updatedAt: inv?.updatedAt || new Date().toISOString(),
     history: Array.isArray(inv?.history) ? inv.history : []
   };
   // Derived, never stored: the one answer every surface reads.
   out.priceUnconfirmed = isPriceUnconfirmed(out);
+  out.needsReconciliation = needsReconciliation(out);
   return out;
+}
+
+// "Needs refund / reconciliation": a payment exception still open. The one
+// rule the invoice page, the list filter and the badge all read.
+function openPaymentExceptions(inv) {
+  return (Array.isArray(inv?.paymentExceptions) ? inv.paymentExceptions : []).filter((e) => e && e.status === "open");
+}
+function needsReconciliation(inv) {
+  return openPaymentExceptions(inv).length > 0;
 }
 
 // ---- Price confirmation (PJL-96) --------------------------------------
@@ -1882,10 +1902,199 @@ async function removePayment(id, paymentId, { by = "admin", reason = "" } = {}) 
   return { ok: true, invoice: hydrate(next), removed: gone };
 }
 
+// ---- Processor payments and payment exceptions ----------------------------
+//
+// ONE accounting decision per distinct processor payment (Patrick,
+// 2026-09-27). The Stripe finalizer (pay page, webhook, Tap to Pay, the
+// reopened pay page) calls this for money that has ALREADY moved. Under the
+// store lock, keyed on the Stripe payment id:
+//   - already decided (a ledger line or an exception carries this payment)
+//     → nothing changes: a webhook retry, the confirm and the webhook racing
+//   - otherwise apply up to what is owed to the ledger; any excess becomes
+//     ONE open payment exception. The ledger never takes more than the
+//     invoice owes, so the balance can never go negative, and the excess is
+//     never discarded.
+// A void invoice owes nothing: all of it is excess.
+const OVERPAYMENT_CUSTOMER_MESSAGE = "Payment received. We received more than the remaining invoice balance. PJL will review the extra amount and contact you if any action is required.";
+const PAYMENT_EXCEPTION_RESOLUTIONS = ["refunded", "reconciled"];
+const PAYMENT_EXCEPTION_REASONS = {
+  already_covered: "The invoice was already paid in full when this payment arrived.",
+  over_balance: "This payment was more than the balance left owing.",
+  invoice_void: "The invoice was void when this payment arrived."
+};
+
+// Has this processor payment already been decided on this invoice? A ledger
+// line written since this rule carries processorRef; one written before it
+// carries the Stripe charge (or intent) id in its notes, and the invoice's
+// stripeChargeId names the charge that paid it.
+function processorPaymentSeen(inv, paymentIntentId, chargeId) {
+  const refs = [paymentIntentId, chargeId].filter(Boolean);
+  if (!refs.length) return false;
+  const inNotes = (notes) => String(notes || "").split(/[\s·]+/).some((tok) => refs.includes(tok));
+  if ((inv.payments || []).some((p) => p && (refs.includes(p.processorRef) || (!p.processorRef && inNotes(p.notes))))) return true;
+  if ((inv.paymentExceptions || []).some((e) => e && refs.includes(e.paymentIntentId))) return true;
+  return Boolean(chargeId && inv.stripeChargeId === chargeId);
+}
+
+async function recordProcessorPayment(id, {
+  paymentIntentId, chargeId = null, amount, currency = "CAD", method = "card_qb",
+  methodLabel = "Card", cardBrand = null, cardLast4 = null, via = "", by = "customer", notes = "", attempt = null
+} = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return { ok: false, status: 404, errors: ["Invoice not found."] };
+  const current = records[idx];
+  const pi = String(paymentIntentId || "").trim();
+  if (!pi) return { ok: false, status: 422, code: "no_processor_ref", errors: ["A processor payment needs its payment id."] };
+  if (processorPaymentSeen(current, pi, chargeId)) return { ok: true, duplicate: true, invoice: current };
+  const charged = round2(amount);
+  if (!(charged > 0)) return { ok: false, status: 422, code: "bad_amount", errors: ["Payment amount must be a positive number."] };
+
+  const now = new Date().toISOString();
+  const statusBefore = current.status;
+  const owing = statusBefore === "void" ? 0 : balanceDueOf(current);
+  // Within a cent of the balance is the balance (the ledger's tolerance).
+  const applied = charged <= round2(owing + 0.01) ? charged : owing;
+  const excess = round2(charged - applied);
+  const next = { ...current, history: [...(current.history || [])], updatedAt: now };
+
+  if (attempt) {
+    // The success attempt, once per decided payment.
+    const last4 = String(attempt.cardLast4 || "");
+    const cap = (v, n) => (v == null ? null : String(v).slice(0, n));
+    next.paymentAttempts = [...(current.paymentAttempts || []), {
+      ts: now, outcome: "success", processor: "stripe", amount: charged, currency,
+      chargeId: cap(chargeId, 100), chargeStatus: cap(attempt.chargeStatus, 40), httpStatus: 200,
+      errorCode: null, declineCode: null, errorMessage: null,
+      processorRef: cap(attempt.processorRef, 100), paymentIntentId: cap(pi, 100),
+      customerMessage: cap(excess > 0 ? OVERPAYMENT_CUSTOMER_MESSAGE : "Payment received.", 300),
+      cardBrand: cap(attempt.cardBrand, 40), cardLast4: /^\d{4}$/.test(last4) ? last4 : null,
+      avsStreet: cap(attempt.avsStreet, 20), avsZip: cap(attempt.avsZip, 20), cvcMatch: cap(attempt.cvcMatch, 20)
+    }];
+    next.history.push({ ts: now, action: "payment_attempt:success", by: "customer", note: `Card charge approved${chargeId ? ` (${chargeId})` : ""}.` });
+  }
+
+  let payment = null;
+  if (applied > 0) {
+    payment = normalizePayment({ amount: applied, method, receivedAt: now, notes, receivedBy: by, processorRef: pi });
+    next.payments = [...(current.payments || []), payment];
+    next.amountPaid = amountPaidOf(next);
+    next.balanceDue = balanceDueOf(next);
+    next.status = statusForPayments(next, statusBefore);
+    if (next.status === "paid" && !next.paidAt) next.paidAt = now;
+    next.history.push({
+      ts: now, action: "payment_recorded", by,
+      note: `${PAYMENT_METHOD_LABELS[payment.method] || payment.method} $${payment.amount.toFixed(2)} — balance now $${next.balanceDue.toFixed(2)}${payment.notes ? ` · ${payment.notes}` : ""}`
+    });
+  }
+
+  let exception = null;
+  if (excess > 0) {
+    const reason = statusBefore === "void" ? "invoice_void" : applied === 0 ? "already_covered" : "over_balance";
+    const card = [cardBrand ? String(cardBrand).replace(/^\w/, (c) => c.toUpperCase()) : null, cardLast4 ? `••${cardLast4}` : null].filter(Boolean).join(" ");
+    exception = {
+      id: "pex_" + crypto.randomBytes(5).toString("hex"),
+      status: "open",
+      processor: "stripe",
+      paymentIntentId: pi,
+      chargeId: chargeId || null,
+      method,
+      methodLabel,
+      cardBrand: cardBrand || null,
+      cardLast4: /^\d{4}$/.test(String(cardLast4 || "")) ? String(cardLast4) : null,
+      currency,
+      chargedTotal: charged,
+      applied,
+      excess,
+      balanceBefore: owing,
+      invoiceStatusBefore: statusBefore,
+      reason,
+      reasonNote: PAYMENT_EXCEPTION_REASONS[reason],
+      via: String(via || ""),
+      detectedAt: now,
+      alert: null,
+      resolution: null,
+      history: [{ ts: now, action: "opened", by: "system", note: `${methodLabel}${card ? ` ${card}` : ""} charged $${charged.toFixed(2)}; $${applied.toFixed(2)} applied; $${excess.toFixed(2)} needs refund or reconciliation. ${PAYMENT_EXCEPTION_REASONS[reason]}` }]
+    };
+    next.paymentExceptions = [...(current.paymentExceptions || []), exception];
+    next.history.push({ ts: now, action: "payment_exception_opened", by: "system", note: `Needs refund / reconciliation: $${excess.toFixed(2)} extra (${methodLabel}${card ? ` ${card}` : ""}, ${pi}). ${PAYMENT_EXCEPTION_REASONS[reason]}` });
+  }
+
+  records[idx] = next;
+  await writeAll(records);
+  return { ok: true, duplicate: false, invoice: hydrate(next), statusBefore, charged, applied, excess, payment, exception };
+}
+
+// Close an open exception: refunded (the excess went back) or reconciled
+// (settled some other way). A note is required; nothing is deleted.
+async function resolvePaymentException(id, exceptionId, { resolution, note, by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return { ok: false, status: 404, errors: ["Invoice not found."] };
+  const current = records[idx];
+  const list = Array.isArray(current.paymentExceptions) ? current.paymentExceptions : [];
+  const eIdx = list.findIndex((e) => e && e.id === exceptionId);
+  if (eIdx === -1) return { ok: false, status: 404, errors: ["Payment exception not found."] };
+  if (!PAYMENT_EXCEPTION_RESOLUTIONS.includes(resolution)) {
+    return { ok: false, status: 422, code: "bad_resolution", errors: ["Mark it refunded or reconciled."] };
+  }
+  const text = String(note || "").trim().slice(0, 1000);
+  if (text.length < 3) return { ok: false, status: 422, code: "note_required", errors: ["Add a note saying how it was settled."] };
+  const before = list[eIdx];
+  if (before.status !== "open") {
+    return { ok: false, status: 409, code: "already_resolved", errors: [`This was already marked ${before.status}.`] };
+  }
+  const now = new Date().toISOString();
+  const who = String(by || "admin").slice(0, 80);
+  const after = {
+    ...before,
+    status: resolution,
+    resolution: { status: resolution, note: text, by: who, at: now },
+    history: [...(before.history || []), { ts: now, action: resolution, by: who, note: text }]
+  };
+  const nextList = [...list];
+  nextList[eIdx] = after;
+  const next = { ...current, paymentExceptions: nextList, updatedAt: now };
+  next.history = [...(current.history || []), {
+    ts: now, action: "payment_exception_resolved", by: who,
+    note: `$${Number(before.excess).toFixed(2)} extra (${before.paymentIntentId}) marked ${resolution}: ${text}`
+  }];
+  records[idx] = next;
+  await writeAll(records);
+  return { ok: true, invoice: hydrate(next), exception: after };
+}
+
+// Record whether the admin alert for an exception went out (audit only).
+async function markPaymentExceptionAlert(id, exceptionId, { ok, to = "", error = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return null;
+  const list = Array.isArray(records[idx].paymentExceptions) ? records[idx].paymentExceptions : [];
+  const eIdx = list.findIndex((e) => e && e.id === exceptionId);
+  if (eIdx === -1) return null;
+  const now = new Date().toISOString();
+  const nextList = [...list];
+  nextList[eIdx] = {
+    ...list[eIdx],
+    alert: ok ? { sentAt: now, to: String(to || "") } : { failedAt: now, error: String(error || "").slice(0, 300) },
+    history: [...(list[eIdx].history || []), { ts: now, action: ok ? "alert_sent" : "alert_failed", by: "system", note: ok ? `Alert emailed to ${to}` : String(error || "").slice(0, 300) }]
+  };
+  records[idx] = { ...records[idx], paymentExceptions: nextList };
+  await writeAll(records);
+  return hydrate(records[idx]);
+}
+
 module.exports = {
   STATUSES,
   PAYMENT_METHODS,
   PAYMENT_METHOD_LABELS,
+  OVERPAYMENT_CUSTOMER_MESSAGE,
+  PAYMENT_EXCEPTION_REASONS,
+  recordProcessorPayment: withStoreLock(recordProcessorPayment),
+  resolvePaymentException: withStoreLock(resolvePaymentException),
+  markPaymentExceptionAlert: withStoreLock(markPaymentExceptionAlert),
+  openPaymentExceptions,
+  needsReconciliation,
   addPayment: withStoreLock(addPayment),
   updatePayment: withStoreLock(updatePayment),
   removePayment: withStoreLock(removePayment),

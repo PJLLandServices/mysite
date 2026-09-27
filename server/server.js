@@ -44,7 +44,7 @@ const { countSystemDesign, describeSystemDesign } = require("./lib/system-design
 const fieldPhotoUploads = require("./lib/field-photo-uploads");
 const billing = require("./lib/billing");
 const fieldClients = require("./lib/field-clients");
-const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
+const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendPaymentExceptionAlert, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
 const photoLinks = require("./lib/photo-links");
 const voicemailStore = require("./lib/voicemail-store");
@@ -3593,14 +3593,22 @@ async function markNoChargeWorkOrders(wos) {
   return wos;
 }
 
+// Where a Stripe payment reached the finalizer, as the office reads it.
+const STRIPE_ARRIVAL_LABELS = {
+  confirm: "pay page",
+  webhook: "Stripe webhook",
+  "intent-reuse": "pay page (reopened)",
+  terminal: "Tap to Pay",
+  "terminal-reuse": "Tap to Pay (retry)"
+};
+
 async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "confirm", by = "" } = {}) {
   const summary = stripe.summarizeIntent(intent, requestId);
-  // What this intent SHOULD have charged: the outstanding balance at the
-  // time it was created. Intents are created for balanceDue, so that's the
-  // primary expectation. `total` is still accepted because an intent
-  // created before the payment ledger existed — or on an invoice with no
-  // payments, where the two are equal — is equally legitimate. Anything
-  // else is the alarming "succeeded for the wrong amount" branch below.
+  // What this intent was created to charge: the outstanding balance at the
+  // time (or the total — equal on an invoice with no payments, and what an
+  // intent from before the payment ledger charged). Used only to keep the
+  // QuickBooks call exactly as it was; how much of the charge the invoice
+  // takes is invoices.recordProcessorPayment's decision below.
   const balanceCents = Math.round(Number(inv.balanceDue) * 100);
   const totalCents = Math.round(Number(inv.total) * 100);
   const expectedCents = summary.amountCents === totalCents ? totalCents : balanceCents;
@@ -3612,129 +3620,121 @@ async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "con
   if (intent?.status !== "succeeded") {
     throw new Error(`intent ${summary.paymentIntentId} status is "${intent?.status}", not succeeded`);
   }
-  if (summary.amountCents !== expectedCents) {
-    // A succeeded intent for the WRONG amount is the one genuinely
-    // alarming branch: money moved but not the invoice's total. Do not
-    // flip paid — record it loudly and leave the invoice open for
-    // Patrick to reconcile by hand.
-    throw new Error(`intent ${summary.paymentIntentId} charged ${summary.amountCents}¢, invoice total is ${expectedCents}¢ — NOT flipping to paid, reconcile manually`);
+  if (!(Number(summary.amountCents) > 0)) {
+    throw new Error(`intent ${summary.paymentIntentId} has no charged amount`);
   }
   if ((summary.currency || "CAD") !== (inv.currency || "CAD")) {
     throw new Error(`intent ${summary.paymentIntentId} currency ${summary.currency} != invoice ${inv.currency || "CAD"}`);
   }
 
-  // Idempotency check — webhook after confirm, or a double webhook.
-  const fresh = await invoices.get(inv.id);
-  if (!fresh) throw new Error(`invoice ${inv.id} vanished mid-finalize`);
-  if (fresh.status === "paid") {
-    if (fresh.stripePaymentIntentId === summary.paymentIntentId || fresh.stripeChargeId === summary.chargeId) {
-      return { invoice: fresh, alreadyPaid: true, warning: null };
-    }
-    // Paid via some OTHER charge and now a second successful intent
-    // exists — a real double payment. Loud log; refund is a manual
-    // dashboard action, deliberately not automated.
-    console.error(`[stripe] DOUBLE PAYMENT? ${inv.id} already paid but intent ${summary.paymentIntentId} also succeeded (${via}). Refund one in the Stripe dashboard.`);
-    return { invoice: fresh, alreadyPaid: true, warning: "Invoice was already paid — a second successful payment exists in Stripe and needs a manual refund." };
-  }
+  // ONE accounting decision per Stripe payment, inside the invoice lock
+  // (Patrick, 2026-09-27). A payment already decided — the webhook after
+  // the confirm, a retry, the two racing — changes nothing and sends
+  // nothing. Otherwise up to what is owed goes on the ledger and any
+  // excess becomes one open payment exception: a charge that arrives
+  // after the invoice was covered (a second card, cash first), for more
+  // than the balance, or at an amount the invoice was since revised down
+  // from, is never hidden and never drives the balance negative.
+  const tapToPay = intent?.metadata?.source === stripe.TAP_TO_PAY_SOURCE;
+  const decided = await invoices.recordProcessorPayment(inv.id, {
+    paymentIntentId: summary.paymentIntentId,
+    chargeId: summary.chargeId,
+    amount: summary.amountCents / 100,
+    currency: summary.currency || inv.currency || "CAD",
+    method: "card_qb",
+    methodLabel: tapToPay ? "Tap to Pay on iPhone" : "Online card payment",
+    cardBrand: summary.cardBrand,
+    cardLast4: summary.cardLast4,
+    via: STRIPE_ARRIVAL_LABELS[via] || via,
+    by: tapToPay ? (by || "tap_to_pay") : "customer",
+    notes: `${tapToPay ? "Tap to Pay on iPhone" : "Online card payment"} · ${summary.chargeId || summary.paymentIntentId}`,
+    attempt: summary
+  });
+  if (!decided.ok) throw new Error(`invoice ${inv.id}: ${(decided.errors || [])[0] || "payment not recorded"}`);
+  if (decided.duplicate) return { invoice: decided.invoice, alreadyPaid: true, warning: null };
+  const exception = decided.exception || null;
 
-  // Success attempt record, before anything else can fail.
-  try {
-    await invoices.appendPaymentAttempt(inv.id, {
-      outcome: "success",
-      processor: "stripe",
-      amount: (summary.amountCents ?? expectedCents) / 100,
-      currency: summary.currency || inv.currency || "CAD",
-      httpStatus: 200,
-      chargeId: summary.chargeId,
-      chargeStatus: summary.status,
-      paymentIntentId: summary.paymentIntentId,
-      processorRef: summary.processorRef,
-      customerMessage: "Payment received.",
-      cardBrand: summary.cardBrand,
-      cardLast4: summary.cardLast4,
-      avsStreet: summary.avsStreet,
-      avsZip: summary.avsZip,
-      cvcMatch: summary.cvcMatch
-    });
-  } catch (recordErr) {
-    console.error(`[stripe] FAILED TO RECORD SUCCESSFUL ATTEMPT on ${inv.id}: ${recordErr.message}`);
-  }
-
-  // QBO Payment record — QuickBooks is still the ledger. Best effort:
-  // the money is already in Stripe; a QBO hiccup must not stop the
-  // customer seeing a paid invoice. The warning surfaces to the admin.
+  // QBO Payment record — unchanged by the rule above (QuickBooks is kept
+  // out of it): the same call, at the same amount, in exactly the cases it
+  // ran before — an invoice not already paid, charged the amount its
+  // intent was created for. Best effort: the money is already in Stripe.
   let qbPaymentId = null;
   let qbWarning = null;
-  try {
-    if (inv.quickbooksInvoiceId) {
-      const payment = await quickbooks.recordPaymentForInvoice({
-        qbInvoiceId: inv.quickbooksInvoiceId,
-        amountCents: expectedCents,
-        chargeId: summary.chargeId || summary.paymentIntentId
-      });
-      qbPaymentId = payment?.id || null;
+  if (decided.statusBefore !== "paid" && summary.amountCents === expectedCents) {
+    try {
+      if (inv.quickbooksInvoiceId) {
+        const payment = await quickbooks.recordPaymentForInvoice({
+          qbInvoiceId: inv.quickbooksInvoiceId,
+          amountCents: expectedCents,
+          chargeId: summary.chargeId || summary.paymentIntentId
+        });
+        qbPaymentId = payment?.id || null;
+      }
+    } catch (paymentErr) {
+      console.warn(`[stripe] QB payment record failed for ${inv.id}: ${paymentErr.message}`);
+      qbWarning = paymentErr.message;
     }
-  } catch (paymentErr) {
-    console.warn(`[stripe] QB payment record failed for ${inv.id}: ${paymentErr.message}`);
-    qbWarning = paymentErr.message;
   }
 
-  // Record the card payment in OUR ledger so amountPaid / balanceDue stay
-  // truthful and the status derives correctly. On an invoice that already
-  // had cash against it this settles the remainder rather than pretending
-  // the card covered the whole total.
-  try {
-    // Said by the intent itself, so the confirm route and the webhook write
-    // the same line whichever lands first.
-    const tapToPay = intent?.metadata?.source === stripe.TAP_TO_PAY_SOURCE;
-    await invoices.addPayment(inv.id, {
-      amount: (summary.amountCents ?? expectedCents) / 100,
-      method: "card_qb",
-      receivedAt: new Date().toISOString(),
-      by: tapToPay ? (by || "tap_to_pay") : "customer",
-      notes: `${tapToPay ? "Tap to Pay on iPhone" : "Online card payment"} · ${summary.chargeId || summary.paymentIntentId}`
+  let updated = decided.invoice;
+  if (decided.applied > 0) {
+    // Status comes from the ledger; stamp the Stripe ids of the payment
+    // that settled it. (A charge wholly in excess leaves them alone: it
+    // isn't what paid the invoice.)
+    const settled = Number(updated.balanceDue) <= 0.01;
+    updated = await invoices.update(inv.id, {
+      ...(settled && updated.status !== "paid" && updated.status !== "void" ? { status: "paid" } : {}),
+      stripePaymentIntentId: summary.paymentIntentId,
+      stripeChargeId: summary.chargeId,
+      quickbooksPaymentId: qbPaymentId,
+      notes: inv.notes
+        ? `${inv.notes}\n\nPaid via Stripe ${summary.chargeId || summary.paymentIntentId} on ${new Date().toISOString()}.`
+        : `Paid via Stripe ${summary.chargeId || summary.paymentIntentId} on ${new Date().toISOString()}.`
     });
-  } catch (ledgerErr) {
-    console.warn(`[stripe] ledger record failed for ${inv.id}: ${ledgerErr?.message}`);
+    // Threshold deposit — a paid deposit invoice spawns the held balance
+    // invoice; a paid balance invoice closes the quote's deposit stage.
+    try {
+      await deposits.onInvoicePaid(updated);
+    } catch (depErr) {
+      console.warn(`[stripe] deposit paid-hook failed for ${inv.id}:`, depErr?.message);
+    }
   }
 
-  // Status comes from the ledger; only force "paid" if the ledger didn't
-  // settle it (e.g. addPayment failed), so a successful charge can never
-  // leave the invoice looking unpaid.
-  const afterLedger = await invoices.get(inv.id);
-  const settled = afterLedger && Number(afterLedger.balanceDue) <= 0.01;
-  const updated = await invoices.update(inv.id, {
-    ...(settled && afterLedger.status !== "paid" ? { status: "paid" } : {}),
-    stripePaymentIntentId: summary.paymentIntentId,
-    stripeChargeId: summary.chargeId,
-    quickbooksPaymentId: qbPaymentId,
-    notes: inv.notes
-      ? `${inv.notes}\n\nPaid via Stripe ${summary.chargeId || summary.paymentIntentId} on ${new Date().toISOString()}.`
-      : `Paid via Stripe ${summary.chargeId || summary.paymentIntentId} on ${new Date().toISOString()}.`
-  });
-
-  // Threshold deposit — a paid deposit invoice spawns the held balance
-  // invoice; a paid balance invoice closes the quote's deposit stage.
-  try {
-    await deposits.onInvoicePaid(updated);
-  } catch (depErr) {
-    console.warn(`[stripe] deposit paid-hook failed for ${inv.id}:`, depErr?.message);
+  // The office alert, once: only the call that opened the exception
+  // reaches here with one.
+  if (exception) {
+    console.error(`[stripe] PAYMENT EXCEPTION ${inv.id}: ${summary.paymentIntentId} charged $${exception.chargedTotal.toFixed(2)}, applied $${exception.applied.toFixed(2)}, excess $${exception.excess.toFixed(2)} (${exception.reason}).`);
+    try {
+      const sent = await sendPaymentExceptionAlert(updated, exception);
+      await invoices.markPaymentExceptionAlert(inv.id, exception.id, sent || { ok: false, error: "no result" });
+    } catch (alertErr) {
+      console.error(`[stripe] payment exception alert failed for ${inv.id}: ${alertErr.message}`);
+      await invoices.markPaymentExceptionAlert(inv.id, exception.id, { ok: false, error: alertErr.message }).catch(() => {});
+    }
   }
 
-  // Receipt email. Best effort — a receipt failure does not roll back
-  // anything. Skipped when the webhook finalizes an invoice the confirm
-  // POST already handled (alreadyPaid short-circuits above), so the
-  // customer can't get two receipts.
+  // Receipt email — one per decided Stripe payment (a duplicate returned
+  // above). An overpayment's receipt is for what was charged and says so
+  // neutrally. Best effort — a receipt failure rolls nothing back.
   let receiptWarning = null;
   try {
     const receiptPdf = await generateInvoicePdf(updated);
-    await sendPaymentReceipt(updated, receiptPdf);
+    await sendPaymentReceipt(updated, receiptPdf, exception ? { overpayment: { charged: exception.chargedTotal } } : {});
   } catch (receiptErr) {
     console.warn(`[stripe] receipt email failed for ${inv.id}: ${receiptErr.message}`);
     receiptWarning = `Payment recorded but receipt email failed to send: ${receiptErr.message}`;
   }
 
-  return { invoice: updated, alreadyPaid: false, warning: qbWarning || receiptWarning };
+  return {
+    invoice: updated,
+    alreadyPaid: decided.applied === 0,
+    warning: exception
+      ? `This payment was more than the invoice owed: $${exception.excess.toFixed(2)} is flagged on the invoice for refund or reconciliation.`
+      : (qbWarning || receiptWarning),
+    exception,
+    overpayment: Boolean(exception),
+    customerMessage: exception ? invoices.OVERPAYMENT_CUSTOMER_MESSAGE : null
+  };
 }
 
 // Klarna capture (PJL-34, build order step 4b) — the admin "Capture"
@@ -11945,7 +11945,12 @@ async function handleApi(req, res, pathname) {
             total: updated.total,
             stripeChargeId: updated.stripeChargeId
           },
-          warning: result.warning
+          // More than the invoice owed (a payment exception): the page shows
+          // the neutral wording instead of a plain "Payment received". The
+          // office-facing warning stays in the office.
+          overpayment: result.overpayment === true,
+          customerMessage: result.customerMessage || null,
+          warning: result.overpayment ? null : result.warning
         });
       } catch (finErr) {
         // Verification failed — wrong invoice, wrong amount, or the
@@ -15623,6 +15628,9 @@ async function handleApi(req, res, pathname) {
     // business on a screen asking for one address's. Absent is still
     // `null` from searchParams.get, so an unfiltered call is unchanged.
     if (propertyId !== null) all = all.filter((i) => i.propertyId === propertyId);
+    // The office's "Needs refund / reconciliation" filter: an open payment
+    // exception (invoices.needsReconciliation, the one rule).
+    if (url.searchParams.get("needsReconciliation") === "1") all = all.filter((i) => invoices.needsReconciliation(i));
     all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     // The two BEARER tokens never leave the server on this route.
     //
@@ -15669,6 +15677,29 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 201, { ok: true, invoice: result.invoice, payment: result.payment });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record the payment."] });
+    }
+  }
+
+  // POST /api/invoices/:id/payment-exceptions/:exceptionId/resolve
+  //   { resolution: "refunded" | "reconciled", note }  — admin only.
+  // Closes a payment exception once the excess is refunded (in Stripe —
+  // PJL refunds nothing by itself) or settled some other way. A note is
+  // required; the exception and its history are kept.
+  const paymentExceptionResolveMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/payment-exceptions\/([^/]+)\/resolve$/);
+  if (paymentExceptionResolveMatch && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const result = await invoices.resolvePaymentException(
+        decodeURIComponent(paymentExceptionResolveMatch[1]),
+        decodeURIComponent(paymentExceptionResolveMatch[2]),
+        { resolution: payload?.resolution, note: payload?.note, by: session?.uid || "admin" }
+      );
+      if (!result.ok) return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
+      return sendJson(res, 200, { ok: true, invoice: result.invoice, exception: result.exception });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't resolve the payment exception."] });
     }
   }
 
@@ -15864,7 +15895,10 @@ async function handleApi(req, res, pathname) {
       // The ONE paid-flip: belongs to this invoice, succeeded, right amount
       // and currency, idempotent — the pay page's and the webhook's.
       const result = await finalizeStripeInvoicePayment(inv, intent, requestId, { via: "terminal", by: session?.uid || "" });
-      return sendJson(res, 200, { ok: true, invoice: result.invoice, alreadyPaid: result.alreadyPaid, warning: result.warning || null });
+      return sendJson(res, 200, {
+        ok: true, invoice: result.invoice, alreadyPaid: result.alreadyPaid, warning: result.warning || null,
+        overpayment: result.overpayment === true, customerMessage: result.customerMessage || null, exception: result.exception || null
+      });
     } catch (err) {
       console.warn(`[terminal-intent] finalize refused for ${inv.id}: ${err.message}`);
       return sendJson(res, 409, { ok: false, code: "not_verified", errors: [err.message] });
