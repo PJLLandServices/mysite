@@ -2084,10 +2084,55 @@ async function resolveScopeChangeRequest(projectId, scrId, { resolution, note = 
 // waiting for the customer's signature, and what the next change order
 // builds on — all from ONE walk of the quote chain (quotes.describeChain),
 // so billing, the completion hold and revision generation cannot drift.
+// Where a project's quote chain is entered: the signed revision it moved
+// to (currentQuoteId), else the quote it was converted from. A legacy
+// project written before currentQuoteId existed enters at its source quote;
+// the chain walk then finds any revision signed since.
+function projectQuoteAnchor(proj) {
+  return proj ? (proj.currentQuoteId || proj.sourceQuoteId || null) : null;
+}
+
 async function resolveProjectQuote(proj) {
   const quotes = require("./quotes");
   if (!proj) return { chain: [], governing: null, pending: null, head: null };
-  return quotes.resolveQuoteChain(proj.currentQuoteId || proj.sourceQuoteId);
+  return quotes.resolveQuoteChain(projectQuoteAnchor(proj));
+}
+
+// The signed agreement for MANY projects — the projects list and the
+// Dashboard (2026-09-27). One read of the quotes store, then, per project,
+// exactly what resolveProjectQuote + describeAgreement do for one (the
+// workspace header and the Change Orders tab): the same anchor, the same
+// chain rule (quotes.describeChain), the same describeAgreement. So the
+// list, the Dashboard and the workspace can never show different contracts.
+async function agreementsForProjects(projs) {
+  const quotes = require("./quotes");
+  const records = await quotes.list({ includeDeleted: true }); // what resolveQuoteChain reads
+  const out = new Map();
+  for (const p of projs || []) {
+    const anchor = projectQuoteAnchor(p);
+    const info = anchor
+      ? quotes.describeChain(quotes.chainFromRecords(records, anchor))
+      : { chain: [], governing: null, pending: null, head: null };
+    out.set(p.id, describeAgreement(info));
+  }
+  return out;
+}
+
+// The Dashboard's "Active contract value", added up HERE — never in the
+// browser — from the signed agreement of every active project, in cents.
+// A project with no signed agreement adds nothing and is counted, so the
+// screen can say so rather than hide it.
+function contractTotals(projs, agreements) {
+  let cents = 0;
+  let activeSigned = 0;
+  let activeUnsigned = 0;
+  for (const p of projs || []) {
+    if (p.status !== "active") continue;
+    const g = agreements.get(p.id)?.governing;
+    if (g) { cents += Math.round((Number(g.total) || 0) * 100); activeSigned += 1; }
+    else activeUnsigned += 1;
+  }
+  return { activeContractValue: cents / 100, activeSigned, activeUnsigned };
 }
 
 // THE signed agreement, as every screen shows it (2026-09-27). ONE server
@@ -3123,6 +3168,9 @@ module.exports = {
   generateQuoteRevisionFromScopeChange,
   resolveProjectQuote,
   describeAgreement,
+  projectQuoteAnchor,
+  agreementsForProjects,
+  contractTotals,
   fixedPriceBillingSource,
   scopeChangeStage,
   openScopeChanges,

@@ -16654,7 +16654,17 @@ async function handleApi(req, res, pathname) {
     const includeArchived = url.searchParams.get("includeArchived") === "1";
     const all = await projects.list({ status, propertyId, includeArchived });
     all.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-    return sendJson(res, 200, { ok: true, projects: all });
+    // Each project's signed agreement, and the Dashboard's total, from the
+    // SAME resolver as the workspace header and the Change Orders tab
+    // (projects.agreementsForProjects → describeAgreement). The list and the
+    // Dashboard show these; they never read the frozen proposalSnapshot or
+    // add money up in the browser (2026-09-27).
+    const agreements = await projects.agreementsForProjects(all);
+    return sendJson(res, 200, {
+      ok: true,
+      projects: all.map((p) => ({ ...p, agreement: agreements.get(p.id) || null })),
+      totals: projects.contractTotals(all, agreements)
+    });
   }
 
   if (req.method === "POST" && pathname === "/api/projects") {
