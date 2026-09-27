@@ -68,3 +68,22 @@ jobs:
 
       - name: Run build + price-lint checks
         run: npm run build:check
+
+      # The business journeys, end to end against a throwaway server: new
+      # customer to paid invoice, custom prices held, card outcomes, Tap to
+      # Pay's server rules, re-signing, no charge, a returning customer's
+      # portal (scripts/e2e/). Temp data, email/SMS/Stripe stubbed, and the
+      # harness refuses to boot at all with a production host, a live key or
+      # a .env in reach (scripts/lib/test-tripwires.cjs). Every message a
+      # journey sends must be one it expected. Findings — behaviour that is a
+      # decision for Patrick, not a failure — go to the step summary.
+      - name: E2E business journeys
+        run: npm run test:e2e
+
+      # The REAL Field app bundle: `expo export --platform ios`, the Metro
+      # build an OTA update ships, offline. The checks above read the app's
+      # source; this is the first place a change is actually bundled before
+      # it merges and the OTA workflow tries. Also prints the runtime
+      # fingerprint, so a native change is visible on the PR.
+      - name: Field app bundle
+        run: npm run check:field-bundle
