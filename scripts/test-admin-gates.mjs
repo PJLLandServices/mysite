@@ -131,6 +131,8 @@ check('part photos are fenced — images, overview, writes and the admin page', 
   assert.equal(needsAuth('POST', '/api/part-photo-backfill/pause'), 'user');
   assert.equal(needsAuth('POST', '/api/part-photo-backfill/resume'), 'user');
   assert.equal(needsAuth('POST', '/api/part-photo-backfill/probe'), 'user');
+  assert.equal(needsAuth('GET', '/api/part-photo-backfill/wave-plan'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-backfill/wave'), 'user');
   assert.equal(needsAuth('GET', `/api/supplier-logos/${hash}.png`), 'user');
   assert.equal(needsAuth('POST', '/api/suppliers/SUP-001/logo'), 'user');
   assert.equal(needsAuth('DELETE', '/api/suppliers/SUP-001/logo'), 'user');
@@ -219,6 +221,7 @@ check('Photo Review writes (M3b) and backfill actions (M3c) check the admin answ
     'photoReviewFittingMatch && req.method === "POST"',
     'backfillActionMatch && req.method === "POST"',
     'pathname === "/api/part-photo-backfill/probe"',
+    'pathname === "/api/part-photo-backfill/wave"',
   ]) {
     const at = SRC.indexOf(marker);
     assert.ok(at > 0, `route not found: ${marker}`);
@@ -246,6 +249,15 @@ check('the only start door is the hard-limited calibration (M3c): no general sta
   // with the unresolved calibration parts and refuses anything outside.
   assert.match(block, /startCalibrationRerun\(\{ by, only \}\)/, 'the re-run passes only a subset request, never a SKU list of its own');
   assert.ok(!/part-photo-backfill\/(full|catalog|all|run)/.test(SRC), 'a full-catalog route exists');
+  // The wave (≤30 unprocessed parts): exactly one start site, and the route
+  // only relays the list Patrick confirmed — the engine refuses any list
+  // that isn't the plan it would run now.
+  assert.equal((SRC.match(/photoBackfill\.startWave\(/g) || []).length, 1, 'exactly one startWave call site');
+  const wat = SRC.indexOf('pathname === "/api/part-photo-backfill/wave"');
+  const wblock = SRC.slice(wat, wat + 1800);
+  assert.ok(!/autoApprove\s*:\s*true/.test(wblock), 'the wave route must never pass autoApprove: true');
+  assert.match(wblock, /startWave\(\{ by, skus: Array\.isArray\(payload && payload\.skus\)/, 'the wave route passes only the confirmed list');
+  assert.ok(!/size\s*:/.test(wblock), 'the wave route must not widen the size');
   // Nothing starts when the process boots: the client is created lazily and
   // the runner is only ever kicked from startCalibration()/resume().
   const boot = SRC.slice(SRC.indexOf('const photoAi = (() => {'), SRC.indexOf('const { buildReviewQueues }'));
