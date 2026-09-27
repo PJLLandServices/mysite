@@ -134,6 +134,7 @@ const workOrders = require("./lib/work-orders");
 const sessionHours = require("./lib/session-hours");
 const atomicJson = require("./lib/atomic-json");
 const dailyRecords = require("./lib/daily-records");
+const changeOrdersView = require("./lib/change-orders-view");
 const projectMaterials = require("./lib/project-materials");
 const quotes = require("./lib/quotes");
 const quoteViews = require("./lib/quote-views");
@@ -16760,8 +16761,24 @@ async function handleApi(req, res, pathname) {
             // Prefer the balance invoice if the deposit's already been
             // paid and superseded by one; else the deposit invoice.
             depositInvoiceId: null,
-            chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status }))
+            chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status })),
+            // The SIGNED agreement the job is billed on (quotes.describeChain's
+            // governing) — which is not `current` while a revision is still a
+            // draft. The workspace's "Contract value" reads this, so an
+            // unsigned revision never shows as the contract (2026-09-27).
+            agreement: null
           };
+          try {
+            const { governing } = await quotes.resolveQuoteChain(quoteAnchorId);
+            if (governing) {
+              linkedQuote.agreement = {
+                id: governing.id,
+                version: governing.version || 1,
+                subtotal: Number(governing.subtotal) || 0,
+                total: Number(governing.total) || 0
+              };
+            }
+          } catch (err) { /* tolerate — the header falls back to the project's snapshot */ }
           try {
             const chainInvoices = await invoices.listByQuote(chain.map((q) => q.id));
             const byRole = (role) => chainInvoices
@@ -17249,6 +17266,31 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, ...model });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the materials."] });
+    }
+  }
+
+  // GET /api/projects/:id/change-orders — the Change Orders tab
+  // (2026-09-27). Read-only: every figure and sentence the tab shows comes
+  // from lib/change-orders-view.js over the rules that already exist —
+  // the shared "open" rule, the quote chain, and the completion check's
+  // own blockers. Actions stay on the classic page's office-only routes.
+  const changeOrdersViewMatch = pathname.match(/^\/api\/projects\/([^/]+)\/change-orders$/);
+  if (changeOrdersViewMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(changeOrdersViewMatch[1]);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      const chainInfo = await projects.resolveProjectQuote(proj);
+      const preflight = await projects.completionPreflight(id);
+      const model = changeOrdersView.describeChangeOrders({
+        project: proj,
+        chainInfo,
+        blockers: preflight.blockers || [],
+        stageOf: projects.scopeChangeStage
+      });
+      return sendJson(res, 200, { ok: true, ...model });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the change orders."] });
     }
   }
 

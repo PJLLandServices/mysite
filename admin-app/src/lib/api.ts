@@ -88,6 +88,8 @@ export interface LinkedQuote {
   confirmed?: boolean | null;
   lineItems?: Array<{ label: string; total: number }>;
   chain?: Array<{ id: string; version: number }>;
+  /** The signed agreement the job is billed on — not `id` while a revision is still a draft. */
+  agreement?: { id: string; version: number; subtotal: number; total: number } | null;
 }
 
 export interface InvoiceSummary {
@@ -445,4 +447,89 @@ export interface ProjectMaterials {
 export const materialsApi = {
   get: (projectId: string) =>
     api.get<ProjectMaterials>(`/api/projects/${encodeURIComponent(projectId)}/materials`)
+};
+
+/* ── Change Orders (GET /api/projects/:id/change-orders) ──────────────
+   Read-only. Every figure and sentence below is the server's
+   (server/lib/change-orders-view.js): the phase, the "what happens
+   next" line, which changes are open (the one shared rule), the signed
+   agreement and the completion holds. The tab displays; it does not
+   decide. */
+
+export type ChangePhase =
+  | "in_review"
+  | "awaiting_customer"
+  | "awaiting_revision"
+  | "awaiting_signature"
+  | "signed"
+  | "revision_declined"
+  | "revision_missing"
+  | "rejected"
+  | "withdrawn"
+  | "approved_tm";
+
+export interface AgreementVersion {
+  id: string;
+  version: number;
+  status: string;
+  role: string;
+  signed: boolean;
+  acceptedAt: string | null;
+  subtotal: number;
+  total: number;
+  href: string;
+}
+
+export interface ChangeOrder {
+  id: string;
+  description: string;
+  status: string;
+  phase: ChangePhase;
+  phaseLabel: string;
+  next: string;
+  open: boolean;
+  capturedBy: string | null;
+  capturedAt: string | null;
+  capturedFromWoId: string | null;
+  photos: Array<{ n: string; href: string | null }>;
+  lineItems: Array<{ label: string; qty: number; price: number; lineTotal: number }>;
+  estimatedTotal: number;
+  sent: { at: string; by: string | null; to: string | null } | null;
+  sendAttempts: Array<{ at: string | null; by: string | null; to: string | null; ok: boolean; reason: string | null }>;
+  decision: {
+    as: string | null;
+    source: "recorded_by_office" | "customer" | "office" | null;
+    recordedBy: string | null;
+    at: string;
+    note: string;
+  } | null;
+  revision: { id: string; version: number | null; status: string | null; signed: boolean; href: string } | null;
+}
+
+export interface ProjectChangeOrders {
+  projectId: string;
+  billingMode: string | null;
+  agreement: {
+    original: AgreementVersion | null;
+    governing: AgreementVersion | null;
+    pending: AgreementVersion | null;
+    netChangeSubtotal: number | null;
+    versions: AgreementVersion[];
+  };
+  summary: {
+    total: number;
+    open: number;
+    awaitingOffice: number;
+    awaitingCustomer: number;
+    awaitingSignature: number;
+    signed: number;
+  };
+  holds: Array<{ key: string; message: string }>;
+  changes: ChangeOrder[];
+  classicHref: string | null;
+}
+
+export const changeOrdersApi = {
+  get: (projectId: string) =>
+    api.get<ProjectChangeOrders>(`/api/projects/${encodeURIComponent(projectId)}/change-orders`)
 };

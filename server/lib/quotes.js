@@ -3517,6 +3517,7 @@ module.exports = {
   resolveRevisionChain,
   hasAcceptanceRecord,
   isSignedAgreement,
+  isUnsignedLive,
   chainFromRecords,
   describeChain,
   resolveQuoteChain,

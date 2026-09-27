@@ -63,7 +63,9 @@ export function ProjectWorkspace() {
   const p = data.project;
   const status = (p.status || "planning") as ProjectStatus;
   const { done, total } = taskProgress(p.tasks);
-  const value = data.linkedQuote?.total ?? p.proposalSnapshot?.total;
+  // The contract is what the customer SIGNED (the server's governing
+  // agreement) — never a revision still waiting for a signature.
+  const value = data.linkedQuote?.agreement?.total ?? p.proposalSnapshot?.total;
   const invoice = data.invoiceSummary;
   const design = data.siteBuilderSummary;
   const goTab = (tab: string) => navigate(`/app/projects/${encodeURIComponent(p.id)}/${tab}`);
