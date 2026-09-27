@@ -8,12 +8,15 @@ import { PROJECT_STATUS_LABELS, PROJECT_STATUS_TONES } from "../lib/format";
 import type { ProjectStatus } from "../lib/api";
 
 export function Dashboard() {
-  const { data, isLoading } = useQuery({ queryKey: ["projects"], queryFn: projectsApi.list });
+  const { data, isLoading } = useQuery({ queryKey: ["projects", "with-totals"], queryFn: projectsApi.listWithTotals });
 
-  const all = data || [];
+  const all = data?.projects || [];
   const active = all.filter((p) => p.status === "active");
   const planning = all.filter((p) => p.status === "planning");
-  const openValue = active.reduce((sum, p) => sum + (Number(p.proposalSnapshot?.total) || 0), 0);
+  // Added up by the SERVER from each active job's signed agreement
+  // (projects.contractTotals) — the browser does no money arithmetic.
+  const openValue = data?.totals?.activeContractValue ?? 0;
+  const unsignedActive = data?.totals?.activeUnsigned ?? 0;
   const openTasks = active.reduce((sum, p) => {
     const { done, total } = taskProgress(p.tasks);
     return sum + (total - done);
@@ -28,10 +31,15 @@ export function Dashboard() {
             { label: "Active jobs", value: String(active.length) },
             { label: "In planning", value: String(planning.length) },
             { label: "Work outstanding", value: `${openTasks} tasks` },
-            { label: "Active contract value", value: money(openValue), tone: "money" as const }
+            {
+              label: "Active contract value",
+              value: money(openValue),
+              tone: "money" as const,
+              hint: unsignedActive ? `signed agreements only — ${unsignedActive} active job${unsignedActive === 1 ? "" : "s"} not yet signed` : "signed agreements"
+            }
           ].map((s) => (
             <Card key={s.label} className="px-4 py-3.5">
-              <Stat label={s.label} value={s.value} tone={s.tone} />
+              <Stat label={s.label} value={s.value} tone={s.tone} hint={"hint" in s ? s.hint : undefined} />
             </Card>
           ))}
         </div>

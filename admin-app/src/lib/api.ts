@@ -65,6 +65,10 @@ export interface ProjectSummary {
      60% as not started — see projectPercentComplete() in format.ts. */
   tasks?: Array<{ id: string; status: string; percentComplete?: number; archivedAt?: string | null }>;
   proposalSnapshot?: { quoteId?: string; version?: number; total?: number; acceptedAt?: string } | null;
+  /** The signed agreement (server: projects.agreementsForProjects → the
+      same describeAgreement the workspace header uses). The list shows
+      this; the snapshot above is a frozen copy and is never a contract value. */
+  agreement?: Agreement | null;
   updatedAt?: string;
   createdAt?: string;
 }
@@ -110,6 +114,14 @@ export interface Agreement {
   pending: AgreementQuote | null;
   netChangeSubtotal: number | null;
   netChangeTotal: number | null;
+}
+
+export interface ContractTotals {
+  /** Sum of the signed agreements of every active project, in dollars. */
+  activeContractValue: number;
+  activeSigned: number;
+  /** Active projects with no signed agreement — they add nothing. */
+  activeUnsigned: number;
 }
 
 export interface InvoiceSummary {
@@ -244,6 +256,13 @@ export const metricsApi = {
 
 export const projectsApi = {
   list: () => api.get<{ projects: ProjectSummary[] }>("/api/projects").then((d) => d.projects || []),
+  /* The Dashboard: the same list, plus the totals the SERVER added up
+     (projects.contractTotals) — the browser never sums money. */
+  listWithTotals: () =>
+    api.get<{ projects: ProjectSummary[]; totals: ContractTotals }>("/api/projects").then((d) => ({
+      projects: d.projects || [],
+      totals: d.totals
+    })),
   get: (id: string) =>
     api.get<{
       project: ProjectDetail;

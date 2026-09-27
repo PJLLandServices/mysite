@@ -2,6 +2,30 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-27 (One contract value everywhere: projects list and Dashboard; stacked on the Change Orders tab; no PASS flow touched):**
+Patrick: *"Otherwise the workspace will show the correct signed contract while the list and Dashboard
+show old snapshot values, and the Dashboard total will still be browser arithmetic."*
+- `GET /api/projects` now carries each project's `agreement`. It comes from
+  `projects.agreementsForProjects`, which reads the quotes store once and then, per project, runs
+  exactly what the workspace header and the Change Orders tab run: the same anchor
+  (`projectQuoteAnchor`: `currentQuoteId`, else `sourceQuoteId`), the same `quotes.describeChain`,
+  and the same `describeAgreement`.
+- It also carries `totals`: the Dashboard's **active contract value**, summed on the server in
+  cents from each active job's signed agreement (`projects.contractTotals`), plus a count of active
+  jobs with nothing signed.
+- The projects list shows `agreement.governing.total`. The Dashboard shows `totals` and adds up no
+  money. Neither reads `proposalSnapshot` any more.
+
+**Test:** `scripts/test-contract-value-consistency.mjs` (in `build:check`) covers:
+- an original-only job;
+- two signed revisions;
+- a newer unsigned draft, which is never the contract;
+- a legacy job with no `currentQuoteId` and a stale snapshot, which the chain still finds;
+- a planning job, left out of the total;
+- an active job with nothing signed.
+
+For every one, the list, header and tab agree, and the Dashboard total is the server's sum. The
+test fails 16 checks without this change.
 **2026-09-27 (Change Orders tab, read-only — PR 3 of Change Orders; no PASS flow touched):**
 The workspace's Change Orders tab replaces its placeholder. `GET /api/projects/:id/change-orders`
 (`lib/change-orders-view.js`) returns every figure and sentence the tab shows. Open counts come from

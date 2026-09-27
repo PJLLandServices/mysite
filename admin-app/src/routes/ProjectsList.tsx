@@ -50,7 +50,9 @@ function ProgressCell({ project }: { project: ProjectSummary }) {
 
 function ProjectRow({ project }: { project: ProjectSummary }) {
   const status = (project.status || "planning") as ProjectStatus;
-  const total = project.proposalSnapshot?.total;
+  // The signed contract — the server's describeAgreement, the same answer
+  // the workspace header shows. Never the frozen proposalSnapshot.
+  const total = project.agreement?.governing?.total;
 
   return (
     <Link
