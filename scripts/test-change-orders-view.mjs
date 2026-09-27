@@ -317,6 +317,14 @@ try {
     .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
   const valueLine = (overview.match(/const value = [^;]+;/) || [""])[0];
   ok("the header's Contract value is the server's agreement, with no fallback", valueLine === "const value = data.agreement?.governing?.total;", valueLine);
+  // Nothing signed reads as nothing signed — never "$0" or a bare dash.
+  ok("the header says 'Not signed' when there is no signed agreement", /"Not signed"/.test(overview) && !/money\(value \?\? 0\)/.test(overview));
+  // One HST treatment: the contract figure is the agreement's TOTAL with HST,
+  // as in the header (and the projects list / Dashboard); before-HST alongside.
+  ok("the tab's agreement line leads with the total WITH HST, like the header",
+    /money\(agreement\.governing\.total\)\}<\/strong> with HST/.test(code));
+  ok("...and so do the version rows and 'Signed changes'",
+    /money\(v\.total\)\} <span[^>]*>with HST/.test(code) && /signedChange\(agreement\.netChangeTotal\)/.test(code));
   const main = fs.readFileSync(path.join(ROOT, "admin-app", "src", "main.tsx"), "utf8");
   ok("the workspace's Change Orders tab is this screen, not the placeholder", /path="changes" element=\{<ChangeOrdersTab \/>\}/.test(main));
   const dist = fs.readdirSync(path.join(ROOT, "server", "app-dist", "assets")).filter((f) => f.endsWith(".js"))

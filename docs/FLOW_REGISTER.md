@@ -15,12 +15,11 @@ show old snapshot values, and the Dashboard total will still be browser arithmet
   jobs with nothing signed.
 - The projects list shows `agreement.governing.total`. The Dashboard shows `totals` and adds up no
   money. Neither reads `proposalSnapshot` any more.
-- **One HST treatment.** Every contract figure is the agreement's total **with HST**: header,
-  list, Dashboard, and the tab's agreement line and version rows. Before-HST rides alongside.
-  "Signed changes" leads with HST too.
-- **Truthful empty states.** A job with nothing signed shows **"Not signed"** in the list and
-  header. With no signed active job, the Dashboard shows **"None signed"**, never $0.00. An
-  unsigned revision is named as awaiting signature, never counted.
+- **One HST treatment.** The list and the Dashboard show the agreement's total **with HST**, the
+  same figure the header and the Change Orders tab lead with (those two are corrected in the
+  Change Orders tab PR itself).
+- **Truthful empty states.** A job with nothing signed shows **"Not signed"** in the list. With no
+  signed active job, the Dashboard shows **"None signed"**, never $0.00.
 
 **Test:** `scripts/test-contract-value-consistency.mjs` (in `build:check`) covers:
 - an original-only job;
@@ -47,6 +46,12 @@ before this, the route does not exist. **Patrick's four checks (2026-09-27):**
   and drafts are excluded (tested with two signed revisions and a pending draft).
 - A deposit job shows **"Billing on hold"** and never "billed at completion".
 - An interrupted send shows "Delivery uncertain".
+
+- **One HST treatment:** the header and the tab both lead with the agreement's total **with HST**,
+  with before-HST alongside. That covers the tab's agreement line, its version rows, and "Signed
+  changes".
+- **Truthful empty state:** a job with nothing signed shows **"Not signed"** in the header, never "$0"
+  or a bare dash.
 
 **Still reading the snapshot:** the projects list and the Dashboard's summed "Active contract value",
 flagged for a follow-up. **Patrick's walk (UNMAPPED until done):** open a job with a
