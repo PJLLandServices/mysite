@@ -130,6 +130,7 @@ check('part photos are fenced — images, overview, writes and the admin page', 
   assert.equal(needsAuth('POST', '/api/part-photo-backfill/calibration'), 'user');
   assert.equal(needsAuth('POST', '/api/part-photo-backfill/pause'), 'user');
   assert.equal(needsAuth('POST', '/api/part-photo-backfill/resume'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-backfill/probe'), 'user');
   assert.equal(needsAuth('GET', `/api/supplier-logos/${hash}.png`), 'user');
   assert.equal(needsAuth('POST', '/api/suppliers/SUP-001/logo'), 'user');
   assert.equal(needsAuth('DELETE', '/api/suppliers/SUP-001/logo'), 'user');
@@ -217,6 +218,7 @@ check('Photo Review writes (M3b) and backfill actions (M3c) check the admin answ
     'photoReviewSkuMatch && req.method === "POST"',
     'photoReviewFittingMatch && req.method === "POST"',
     'backfillActionMatch && req.method === "POST"',
+    'pathname === "/api/part-photo-backfill/probe"',
   ]) {
     const at = SRC.indexOf(marker);
     assert.ok(at > 0, `route not found: ${marker}`);
