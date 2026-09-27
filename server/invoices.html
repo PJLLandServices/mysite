@@ -83,6 +83,10 @@
         <button type="button" data-status-filter="partially_paid">Partly paid</button>
         <button type="button" data-status-filter="paid">Paid</button>
         <button type="button" data-status-filter="void">Void</button>
+        <!-- An open payment exception: a card payment brought in more than
+             the invoice owed (2026-09-27). Not a status — any status can
+             carry one — so the list asks for it separately. -->
+        <button type="button" data-status-filter="needs_reconciliation" class="invoices-filter--alert">Needs refund</button>
       </section>
       <p class="invoices-empty" id="invoicesEmpty" hidden>No invoices yet — complete a work order to generate your first one.</p>
       <table class="invoices-table" id="invoicesTable" hidden>

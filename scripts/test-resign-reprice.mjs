@@ -84,7 +84,9 @@ const NEW_SIGNATURE = { acknowledgement: true, imageData: "data:image/png;base64
 // route asks paymentHoldFor before it captures anything).
 {
   const src = fs.readFileSync(new URL("../server/server.js", import.meta.url), "utf8");
-  const calls = [...src.matchAll(/invoices\.(addPayment|updatePayment)\(/g)].map((m) => {
+  // recordProcessorPayment: the Stripe finalizer's one accounting decision
+  // (payment exceptions, 2026-09-27) — it records money too.
+  const calls = [...src.matchAll(/invoices\.(addPayment|updatePayment|recordProcessorPayment)\(/g)].map((m) => {
     const fnAt = src.lastIndexOf("\nasync function ", m.index);
     const fn = src.slice(fnAt + 16, src.indexOf("(", fnAt + 16));
     const call = src.slice(m.index, src.indexOf(");", m.index));

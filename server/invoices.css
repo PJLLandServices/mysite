@@ -87,6 +87,9 @@
 .invoices-status--partially_paid { background: #FDF0DC; color: #8A5313; }
 .invoices-status--paid { background: #E8F4ED; color: #1B4D2E; }
 .invoices-status--void { background: #EFEFE5; color: #6B6B63; text-decoration: line-through; }
+/* An open payment exception (2026-09-27). */
+.invoices-status--exception { margin-top: 4px; background: #FBEAEA; color: #9B1C1C; font-weight: 700; }
+.invoices-filter--alert { color: #9B1C1C; }
 
 /* invoices.js relocates the bulk-checkbox wrap into the invoice-id <td>
  * and hides the leading bulk-cell/<th>, so on desktop the checkbox sits
