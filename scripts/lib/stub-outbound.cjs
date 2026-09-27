@@ -33,6 +33,7 @@
 // Stripe outcomes a test can set per intent (or "*" for every call), in
 // $PJL_STUB_OUTBOX.stripe as JSONL {id, mode}:
 //   succeeded    the customer's card was approved (also: $OUTBOX.succeeded)
+//   canceled     the intent was cancelled at Stripe (never chargeable again)
 //   declined     requires_payment_method + last_payment_error card_declined
 //   processing   the reader never finished (a Tap to Pay that timed out)
 //   unreachable  the request never reaches Stripe (network timeout)
@@ -174,6 +175,8 @@ globalThis.fetch = async function stubFetch(input, init = {}) {
         message: "Your card was declined.", payment_method: { card: { brand: "visa", last4: "0002" } } };
     }
     if (mode === "processing" && obj.status !== "canceled" && obj.status !== "succeeded") obj.status = "processing";
+    // Stripe (or the reader) cancelled it — e.g. a Tap to Pay collection abandoned.
+    if (mode === "canceled" && obj.status !== "succeeded") obj.status = "canceled";
     if ((succeeded.includes(obj.id) || mode === "succeeded") && obj.status !== "canceled") {
       obj.status = "succeeded";
       obj.latest_charge = { id: `ch_${obj.id}`, status: "succeeded",

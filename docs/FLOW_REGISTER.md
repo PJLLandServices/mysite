@@ -6812,6 +6812,63 @@ done by `invoices.reconcileToSignedScope(woId)`, under the invoice store lock:
 - `test-resignature-await` and `test-scope-hold-before-reply` now follow the release write into
   `reconcileToSignedScope`. The latter still fails if that write isn't awaited (checked by mutation).
 
+## 2026-09-27 — FLOW-23 / TAPTOPAY-01: a second tap never starts a second charge (FLOW-23 touched — re-verified by tests)
+
+This was E2E journey 5's finding, item 4. `POST /api/invoices/:id/terminal-intent` read the invoice's
+stored Tap to Pay intent but recognised only two states:
+- "collectable": reuse it (or cancel and replace it if the balance changed);
+- "succeeded": finalize it.
+
+Everything else fell through and **created a new intent**. That included `processing`, where the
+reader dropped mid-charge. The idempotency key includes the stored intent's id, so Stripe saw a new
+key and made a real second charge, while the first was still processing and couldn't be cancelled.
+Three more ways to reach a second intent:
+- If Stripe couldn't be read, the route also fell through and created one.
+- A finalize error on a succeeded intent was caught as a "lookup failure" and fell through the same
+  way.
+- A failed cancel of a stale open intent fell through to create, even though the intent might have
+  started moving money in the meantime.
+
+**The rule, once — `stripe.intentPhase(intent)`:**
+- **collectable** (`requires_payment_method` / `_confirmation` / `_action`): reuse it for the same
+  amount, or cancel it and replace it if the balance changed. It can't have taken money. If Stripe
+  refuses the cancel, start nothing.
+- **in flight** (`processing`, `requires_capture`, or any state Stripe adds later): **refuse**, with
+  409 `payment_in_progress`, the intent's id and its state. Create nothing and cancel nothing; the
+  reader's own outcome decides.
+- **succeeded:** finalize it through #332's rule. If it paid in full, 409 `already_paid`. If it paid
+  less than is now owed (the invoice was revised up), a new intent for the rest. If finalizing fails,
+  409 `payment_not_finalized`: never charge again.
+- **canceled** (or no longer at Stripe, 404): a fresh intent.
+- **unreadable** (a network error): 502 `stripe_unreadable`. Never charge beside a payment we can't
+  see.
+
+**One tap at a time per invoice:** `withTerminalIntentLock` queues simultaneous starts, so the second
+sees the first's intent. It's in-process, and the server runs as one instance.
+
+**Deliberately left alone:**
+- **Pay page:** its intent route (`/api/pay/invoice/:id/payment-intent`) has the same "processing
+  falls through" shape. There, the idempotency key doesn't include the stored intent, so Stripe
+  returns the original intent instead of minting a second. Noted, not changed.
+- **Field app (#305, on hold):** its InvoiceScreen should show `payment_in_progress` as "already
+  processing, check the invoice" when that branch is next updated.
+- **Unchanged:** eligibility (held, unconfirmed, Bill later, paid, void), finalize, and #332's
+  accounting.
+
+**Tests:**
+- `scripts/test-taptopay-second-tap.mjs` (38 checks; **the old code fails 17**, 7 of them the new
+  structure/rule checks) covers:
+  - a second tap while processing;
+  - simultaneous first taps, and simultaneous taps while processing;
+  - a stored intent that already succeeded;
+  - declined → same intent, cancelled → fresh intent;
+  - a balance change while open (replaced) and while processing (refused);
+  - Stripe unreadable;
+  - #332 interplay (cash in full while processing, then the charge completes → one exception);
+  - a Bill-later draft and an unconfirmed price still refused.
+- Journey 5's finding is now an assertion. **The old code fails 3**; the new code passes 52/52.
+- The test Stripe stub gains a `canceled` outcome.
+
 ## 2026-09-27 — FLOW-23: a second card payment is a payment exception, never a log line (FLOW-23 touched — re-verified by tests, awaiting a walked acceptance)
 
 Found by E2E journey 4, reproduced as eight scenarios. Money that reached Stripe but not the invoice
