@@ -256,6 +256,10 @@ try {
       writeRawQuotes(all);
       const p = rawProjects().find((x) => x.id === proj.id);
       ok("(b) setup: the stale snapshot still names the original", p.proposalSnapshot.quoteId === q1.id);
+      // The Complete dialog's preview and the invoice share one source.
+      const preview = await projects.fixedPriceBillingSource(await projects.get(proj.id));
+      const previewSum = money(preview.lineItems.reduce((s, l) => s + Number(l.qty || 1) * Number(l.price || 0), 0));
+      ok("(b) the Complete dialog's preview shows $5,400 too", previewSum === 5400, String(previewSum));
       const inv = await complete(proj.id);
       ok("(b) billing follows the chain to the signed revision: $5,400", inv && invoiceSubtotal(inv) === 5400, inv ? String(invoiceSubtotal(inv)) : "no invoice");
     }

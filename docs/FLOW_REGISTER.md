@@ -30,7 +30,8 @@ on the old code: 25 of 44 failed):
   (what the next change order builds on). Readers: the completion preflight (`revision_unsigned`,
   and `deposit_balance_predates_revision` for a deposit job whose balance invoice was built from an
   older version), the final invoice (`completion-cascade.js` bills the governing agreement's lines
-  and adds on-site extras once), the change-order revision builder, the project page's quote panel
+  and adds on-site extras once) and the Complete dialog's invoice preview, through one function
+  (`projects.fixedPriceBillingSource`), the change-order revision builder, the project page's quote panel
   (`resolveRevisionChain`), and convert-to-project (a signed revision of a converted job returns
   that job's project instead of creating a second one).
 - Legacy chains, where the old code superseded a signed original too early, resolve through

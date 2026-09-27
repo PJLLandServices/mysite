@@ -669,52 +669,13 @@ async function runProjectFinalCascade(project, opts = {}) {
     unknownSkus = billing.unknownSkus || [];
     billingNote = `T&M: ${billing.totalHours} person-hours @ $${billing.rate}/hr`;
   } else {
-    // Fixed-price — bill the SIGNED AGREEMENT governing the job: the
-    // newest signed quote in its revision chain. Before 2026-09-27 this
-    // read proposalSnapshot, frozen once at conversion, so a change-order
-    // revision the customer signed was never billed (a $5,400 job
-    // invoiced at $5,000). The snapshot still wins whenever it IS the
-    // governing quote, so a job with no signed revision bills exactly as
-    // before; the chain only takes over when a newer signed version exists
-    // (including legacy projects whose snapshot the old code never moved).
-    const snap = project.proposalSnapshot;
-    let governing = null;
-    try { governing = (await projects.resolveProjectQuote(project)).governing; }
-    catch (err) { console.warn("[project-cascade] quote chain read failed:", err?.message); }
-    const snapIsGoverning = !governing || (snap && snap.quoteId === governing.id);
-    if (!snapIsGoverning && Array.isArray(governing.lineItems) && governing.lineItems.length) {
-      lineItems = governing.lineItems.map((li) => ({
-        key: li.sourceKey || "custom",
-        label: li.label,
-        qty: li.qty,
-        price: li.price,
-        lineTotal: li.lineTotal
-      }));
-      billingNote = `Fixed price: signed agreement ${governing.id}${Number(governing.version) > 1 ? ` (v${governing.version})` : ""}`;
-    } else if (snap && Array.isArray(snap.lineItems) && snap.lineItems.length) {
-      lineItems = snap.lineItems.map((li) => ({
-        key: li.sourceKey || "custom",
-        label: li.label,
-        qty: li.qty,
-        price: li.price,
-        lineTotal: li.lineTotal
-      }));
-      billingNote = `Fixed price: from proposal ${snap.quoteId}`;
-    } else if (project.sourceQuoteId) {
-      try {
-        const quotes = require("./quotes");
-        const q = await quotes.get(project.sourceQuoteId);
-        if (q && Array.isArray(q.lineItems)) {
-          lineItems = q.lineItems.map((li) => ({
-            key: li.sourceKey || "custom",
-            label: li.label,
-            qty: li.qty,
-            price: li.price,
-            lineTotal: li.lineTotal
-          }));
-          billingNote = `Fixed price: live quote ${q.id}`;
-        }
-      } catch (err) { console.warn("[project-cascade] sourceQuote read failed:", err?.message); }
+    // Fixed-price — bill the SIGNED AGREEMENT governing the job. One
+    // answer, shared with the Complete dialog's invoice preview:
+    // projects.fixedPriceBillingSource() (2026-09-27).
+    const src = await projects.fixedPriceBillingSource(project);
+    if (src.lineItems.length) {
+      lineItems = src.lineItems;
+      billingNote = src.note;
     }
   }
 

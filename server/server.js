@@ -18043,15 +18043,16 @@ async function handleApi(req, res, pathname) {
         const billing = await projects.computeTAndMBilling(id, { partsCatalog: PARTS });
         return sendJson(res, 200, { ok: true, billingMode: "time_and_material", ...billing });
       }
-      // Fixed-price: mirror proposal snapshot.
-      const snap = proj.proposalSnapshot;
+      // Fixed-price: the same source the final invoice bills.
+      const src = await projects.fixedPriceBillingSource(proj);
       return sendJson(res, 200, {
         ok: true,
         billingMode: "fixed_price",
-        lineItems: snap?.lineItems || [],
-        subtotal: snap?.subtotal || 0,
-        hst: snap?.hst || 0,
-        total: snap?.total || 0
+        lineItems: src.lineItems,
+        subtotal: src.subtotal,
+        hst: src.hst,
+        total: src.total,
+        note: src.note
       });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't compute billing."] });

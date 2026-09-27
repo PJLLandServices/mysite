@@ -1776,6 +1776,46 @@ async function resolveProjectQuote(proj) {
   return quotes.resolveQuoteChain(proj.currentQuoteId || proj.sourceQuoteId);
 }
 
+// What a fixed-price job is billed: the SIGNED AGREEMENT governing it —
+// the newest signed quote in its revision chain. ONE answer for the final
+// invoice (completion-cascade) and the Complete dialog's preview, so the
+// preview can never show a different amount from the invoice.
+//
+// Before 2026-09-27 both read proposalSnapshot, frozen once at conversion,
+// so a change-order revision the customer signed was never billed (a
+// $5,400 job invoiced at $5,000). The snapshot still wins whenever it IS
+// the governing quote, so a job with no signed revision bills exactly as
+// before; the chain only takes over when a newer signed version exists
+// (including legacy projects whose snapshot the old code never moved).
+async function fixedPriceBillingSource(proj) {
+  const toLine = (li) => ({ key: li.sourceKey || "custom", label: li.label, qty: li.qty, price: li.price, lineTotal: li.lineTotal });
+  const pick = (from, note) => ({
+    lineItems: from.lineItems.map(toLine),
+    subtotal: Number(from.subtotal) || 0,
+    hst: Number(from.hst) || 0,
+    total: Number(from.total) || 0,
+    note
+  });
+  const snap = proj && proj.proposalSnapshot;
+  let governing = null;
+  try { governing = (await resolveProjectQuote(proj)).governing; }
+  catch (err) { console.warn("[projects] quote chain read failed:", err?.message); }
+  const snapIsGoverning = !governing || (snap && snap.quoteId === governing.id);
+  if (!snapIsGoverning && Array.isArray(governing.lineItems) && governing.lineItems.length) {
+    return pick(governing, `Fixed price: signed agreement ${governing.id}${Number(governing.version) > 1 ? ` (v${governing.version})` : ""}`);
+  }
+  if (snap && Array.isArray(snap.lineItems) && snap.lineItems.length) {
+    return pick(snap, `Fixed price: from proposal ${snap.quoteId}`);
+  }
+  if (proj && proj.sourceQuoteId) {
+    try {
+      const q = await require("./quotes").get(proj.sourceQuoteId);
+      if (q && Array.isArray(q.lineItems)) return pick(q, `Fixed price: live quote ${q.id}`);
+    } catch (err) { console.warn("[projects] sourceQuote read failed:", err?.message); }
+  }
+  return { lineItems: [], subtotal: 0, hst: 0, total: 0, note: "" };
+}
+
 // The customer has SIGNED a revision: move every project on its chain onto
 // it — the project's current quote and the billing snapshot. Called by
 // quotes.js right after the signature's write lands. Idempotent: a project
@@ -2738,6 +2778,7 @@ module.exports = {
   resolveScopeChangeRequest,
   generateQuoteRevisionFromScopeChange,
   resolveProjectQuote,
+  fixedPriceBillingSource,
   adoptSignedRevision,
   buildProposalSnapshot,
   // Brief 2 — status updates
