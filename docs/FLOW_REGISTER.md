@@ -2,6 +2,20 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-27 (PJL-105 — "first in the fitting" no longer depends on clock resolution; FLOW-47/48 touched, one rule):**
+`fittingDefaultFor()`'s last rule, "the member linked first", sorted on `firstLinkedAt`, a millisecond
+ISO timestamp, and broke ties by SKU. Two links written in the same millisecond therefore made the
+alphabetically first part the default, even when it joined second. CI hit this at random (PR #325,
+run 935); the same could happen to a real batch link.
+**Now:** each link records `firstLinkSeq`, the order it first joined its fitting, when it is written
+(`keepFirstLinked`, inside `mutate()`'s locks, as one past the highest on file). A re-upload or
+reconfirm keeps it. `fittingDefaultFor` uses it only when the timestamps tie, so different timestamps
+decide exactly as before, and records written before this change fall back to the SKU as they did.
+Rules 1 and 2 (Patrick's choice, the single original-catalog part), photos, the picker, `/api/parts`
+and the safety rule are untouched.
+**Test:** `test-part-photo-lifecycle.mjs` section 11 runs the fitting on a frozen clock, where the old
+code fails 4 of 7 every time. It now passes 113 of 113, including the whole file under a frozen clock
+(the CI failure's exact scenario). FLOW-47 re-verified by its suite; nothing changes on screen.
 **2026-09-27 (Part photos M3c — the calibration run is wired, NOT yet run; FLOW-49 still UNMAPPED):**
 P-PJL-35 M3c, approved by Patrick to build after M3b was accepted on production. **What changed:** the
 server's backfill engine is wired to the real Claude client (`lib/photo-ai.createAnthropicClient`,
@@ -6636,6 +6650,47 @@ lock, keyed on the Stripe payment id, makes ONE accounting decision per distinct
   filter, and the customer views.
 - **Awaiting a walked acceptance:** the next real payment must still receipt normally; the exception
   path can only be walked with a real double payment.
+## 2026-09-27 — FLOW-22/31: the invoice text never says "emailed" before it is
+
+Found by E2E journey 1 (a FINDING until now). Five minutes after a **Bill later** Finish the
+customer was texted *"PJL Land Services: Your invoice for <street> has been emailed to you. If you
+don't see it, please check spam/junk. View or pay it here: …"*. Nothing had been emailed: a Bill-later
+invoice is a draft until the office reviews and Sends it, and the texted portal page showed the draft
+with no Pay button. The customer's completion email, meanwhile, correctly said "An invoice will
+follow".
+
+**The rule, once:** `notify-customer.sendInvoiceReadySMS` sends only for an invoice that has been
+emailed (`sentAt`). Both fire paths go through it: the cascade's timer and the 2-minute
+`sweepPendingInvoiceSMS`. An unsent invoice is skipped, `customerSmsScheduledAt` is cleared (so the
+sweep doesn't retry), and `customer_sms_skipped_not_emailed` goes on the invoice history once. The
+invoice page's text status reads "Not sent — the invoice hadn't been emailed; Send texts the
+customer".
+
+**The whole workflow:**
+- **Customer:** gets the completion email at Finish ("An invoice will follow") and no text. When the
+  office Sends, they get the invoice email and, 30s later, the existing "we just emailed your invoice…
+  check Junk/Spam" text. That text is true, and it is unchanged.
+- **Patrick:** gets the same alerts as before. The invoice page shows why no text went.
+- **Capacity/calendar:** untouched.
+- **Linked records:** no work order, property or season-plan change; the invoice changes only its
+  SMS fields and history.
+- **Audit:** the skip is on the invoice history. `customer_sms_scheduled` stays, so it shows that the
+  timer was set and then held back.
+
+**Deliberately left alone:**
+- The cascade still schedules the timer for Bill-later invoices, so an invoice Sent inside those five
+  minutes is texted as before.
+- In that case the customer can get both the timer's text and Send's junk-mail text. This is
+  pre-existing, not new.
+- The body's wording is unchanged.
+- Paid-on-site invoices are not scheduled, as before.
+- Manual reminders (`sendInvoiceReminderSMS`) are separate and unchanged.
+
+**Tests:**
+- `scripts/test-invoice-text-truthful.mjs` (12; the old code fails 5).
+- Journey 1 now asserts no text at Finish (the old code fails 3).
+- The control in `test-price-confirm.mjs` D now reads "scheduled" from history, because the timer
+  clears the schedule once it fires.
 
 ## 2026-09-23 — FLOW-23/31: what a work order bills has one answer, `billing.billingFor(wo)`
 

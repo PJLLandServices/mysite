@@ -438,5 +438,71 @@ const onDisk = () => true;
   }
 }
 
+// ---- 11. "First in the fitting" with a clock that doesn't tick (PJL-105) ----------
+// Two links written in the same millisecond used to tie on firstLinkedAt and
+// fall to alphabetical order, so the part that joined SECOND could become the
+// default. CI hit it at random (PR #325, run 935). Here the clock is frozen
+// for the whole scenario, so the old code fails every time, not sometimes.
+{
+  // Every link write numbers itself from the links on file. A call that
+  // forgets them numbers every new link 1, which ties with the first ever
+  // link and brings the race back (the M3a/M3b auto-link and approve paths
+  // did, until this merge).
+  const src11 = fs.readFileSync(path.join(ROOT, "server", "lib", "part-photos.js"), "utf8");
+  const writes = [...src11.matchAll(/links\[[^\]]+\] = keepFirstLinked\(([\s\S]*?)\);\n/g)].map((m) => m[1]);
+  check(`every link write passes the links on file to keepFirstLinked (${writes.length} writes)`, writes.length >= 6 && writes.every((a) => /,\s*links\s*$/.test(a)));
+  const { fittingDefaultFor } = lib;
+  const same = "2026-09-27T01:00:00.000Z";
+  // The rule itself: equal timestamps → the link sequence decides; a record
+  // written before sequences existed still falls back to the SKU.
+  const tied = {
+    ZED: { groupId: "PG-1", firstLinkedAt: same, firstLinkSeq: 1 },
+    AAA: { groupId: "PG-1", firstLinkedAt: same, firstLinkSeq: 2 }
+  };
+  check("tie: same millisecond → the lower link sequence is first", fittingDefaultFor({}, ["AAA", "ZED"], tied, () => false).sku === "ZED");
+  const legacy = { ZED: { groupId: "PG-1", firstLinkedAt: same }, AAA: { groupId: "PG-1", firstLinkedAt: same } };
+  check("tie: records with no sequence keep the old order (SKU)", fittingDefaultFor({}, ["AAA", "ZED"], legacy, () => false).sku === "AAA");
+  const apart = {
+    ZED: { groupId: "PG-1", firstLinkedAt: "2026-09-27T01:00:00.002Z", firstLinkSeq: 1 },
+    AAA: { groupId: "PG-1", firstLinkedAt: "2026-09-27T01:00:00.001Z", firstLinkSeq: 2 }
+  };
+  check("tie: different timestamps still decide first (unchanged)", fittingDefaultFor({}, ["AAA", "ZED"], apart, () => false).sku === "AAA");
+
+  // The store, end to end, on a frozen clock.
+  const RealDate = globalThis.Date;
+  const T = RealDate.parse(same);
+  globalThis.Date = class extends RealDate {
+    constructor(...a) { super(...(a.length ? a : [T])); }
+    static now() { return T; }
+  };
+  const img = await sharp({ create: { width: 40, height: 40, channels: 3, background: "#321" } }).png().toBuffer();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "part-photos-tie-"));
+  try {
+    const part = (sku) => ({ sku, description: `Part ${sku}`, manufacturer: "Hunter", category: "Heads" });
+    const store = createPartPhotos({ dataDir: dir, sharp });
+    const z = part("ZED-JOINED-FIRST"), a = part("AAA-JOINED-SECOND");
+    const first = await store.setPhoto("ZED-JOINED-FIRST", z, img, { by: "patrick", source: { method: "upload" } });
+    await store.linkToGroup("AAA-JOINED-SECOND", a, first.groupId, { by: "patrick" });
+    const merged = () => { const ps = { "ZED-JOINED-FIRST": { ...z }, "AAA-JOINED-SECOND": { ...a } }; store.mergeInto(ps, { isBaseline: () => false }); return ps; };
+    let ps = merged();
+    const snap = await store.snapshot();
+    check("tie: both links really share one millisecond (the clock is frozen)",
+      snap.links["ZED-JOINED-FIRST"].firstLinkedAt === snap.links["AAA-JOINED-SECOND"].firstLinkedAt);
+    check("tie: the part that joined FIRST is the default, not the alphabetical one",
+      ps["AAA-JOINED-SECOND"].photo.fittingDefaultSku === "ZED-JOINED-FIRST", ps["AAA-JOINED-SECOND"].photo.fittingDefaultSku);
+    // The CI scenario: re-uploading on the first part must not change it.
+    await store.setPhoto("ZED-JOINED-FIRST", z, img, { by: "patrick", source: { method: "upload" } });
+    ps = merged();
+    check("tie: …and re-uploading the photo doesn't change who was first",
+      ps["ZED-JOINED-FIRST"].photo.fittingDefaultSku === "ZED-JOINED-FIRST", ps["ZED-JOINED-FIRST"].photo.fittingDefaultSku);
+    const snap2 = await store.snapshot();
+    check("tie: a re-upload keeps the part's original sequence",
+      snap2.links["ZED-JOINED-FIRST"].firstLinkSeq === snap.links["ZED-JOINED-FIRST"].firstLinkSeq && Number.isFinite(snap.links["ZED-JOINED-FIRST"].firstLinkSeq));
+  } finally {
+    globalThis.Date = RealDate;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 console.log(`\ntest-part-photo-lifecycle: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -200,10 +200,12 @@ try {
     ok(line?.unitPrice === own, `…billed its own price (${line?.unitPrice} vs ${own})`);
     const full = inv ? await getInv(inv.id) : null;
     ok(full?.priceUnconfirmed === false, "…confirmed, nothing for Patrick to set");
-    // Control: an ordinary priced "Bill later" invoice still gets its
-    // automatic invoice-ready text. The rule stops only prices PJL sets.
-    ok(Boolean(full?.customerSmsScheduledAt || full?.customerSmsSentAt) && !(full?.history || []).some((h) => /price_set_by_pjl/.test(h.action || "")),
-      `…and its automatic invoice text is scheduled as before (${j({ at: full?.customerSmsScheduledAt, sent: full?.customerSmsSentAt })})`);
+    // Control: an ordinary priced "Bill later" invoice still has its
+    // automatic invoice-ready text scheduled. The rule stops only prices
+    // PJL sets. (The text itself then waits until the invoice is emailed:
+    // test-invoice-text-truthful.mjs.)
+    ok((full?.history || []).some((h) => h.action === "customer_sms_scheduled") && !(full?.history || []).some((h) => /price_set_by_pjl/.test(h.action || "")),
+      `…and its automatic invoice text is scheduled as before (${j((full?.history || []).map((h) => h.action))})`);
     if (inv) ok((await srv.api("POST", `/api/invoices/${inv.id}/send`, {})).status === 200, "…and sendable as usual");
   }
 

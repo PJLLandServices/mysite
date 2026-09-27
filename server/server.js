@@ -14127,6 +14127,19 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't build the plan."] });
     }
   }
+  // POST /api/part-photo-backfill/probe — ONE isolated web-search call to
+  // check the organisation/key can use the tool (approved by Patrick,
+  // 2026-09-27). Touches no backfill state, no candidates, no photos.
+  if (req.method === "POST" && pathname === "/api/part-photo-backfill/probe") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!process.env.ANTHROPIC_API_KEY) return sendJson(res, 503, { ok: false, errors: ["ANTHROPIC_API_KEY isn't set on the server."] });
+    const by = await actorLabel(req);
+    const probe = await photoAiLib.probeWebSearch({ client: photoAiLib.createAnthropicClient() });
+    await settings.recordAudit({ who: by, action: "part-photo.backfill.probe", note: probe.ok ? `Web-search probe succeeded (${probe.webSearchRequests} search)` : `Web-search probe failed: ${probe.toolResultError || (probe.apiError && probe.apiError.message) || probe.stopReason}`, after: probe });
+    return sendJson(res, 200, { ok: true, probe });
+  }
+
   const backfillActionMatch = pathname.match(/^\/api\/part-photo-backfill\/(calibration|pause|resume)$/);
   if (backfillActionMatch && req.method === "POST") {
     const session = await requireAdmin(req);

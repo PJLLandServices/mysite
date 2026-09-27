@@ -2021,6 +2021,23 @@ async function sendInvoiceReadySMS({ invoiceId, includeSpouse } = {}) {
     return { ok: true, skipped: "paid" };
   }
 
+  // The body says the invoice "has been emailed" — so it goes only for one
+  // that has been (sentAt). A Bill-later invoice is a draft until the
+  // office Sends it, and Send texts the customer itself (the junk-mail
+  // warning). Clearing the schedule stops the sweep retrying; the history
+  // records it once, however often a cascade re-run reschedules it.
+  if (!invoice.sentAt) {
+    await invoices.update(invoiceId, { customerSmsScheduledAt: null });
+    if (!(invoice.history || []).some((h) => h.action === "customer_sms_skipped_not_emailed")) {
+      await invoices.appendHistory(invoiceId, {
+        action: "customer_sms_skipped_not_emailed",
+        by: "system",
+        note: "No invoice text — the invoice hasn't been emailed yet. Send emails it and texts the customer."
+      });
+    }
+    return { ok: true, skipped: "not_emailed" };
+  }
+
   const allowed = await resolveSmsAllowed(invoice);
   if (!allowed) {
     await invoices.appendHistory(invoiceId, {

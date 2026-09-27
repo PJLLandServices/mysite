@@ -27,9 +27,12 @@ const FINDER_SCHEMA = {
   properties: {
     manufacturer: { type: "string", description: "Manufacturer name as the page states it, or empty." },
     manufacturerPartNumber: { type: "string", description: "The manufacturer's own part/model number for this exact item, as printed on the page, or empty." },
+    // No maxItems: structured outputs reject array constraints (the first
+    // production calibration failed on exactly this, 2026-09-27). The prompt
+    // asks for at most 3 and the runner keeps only the first 3.
     candidates: {
       type: "array",
-      maxItems: 3,
+      description: "At most 3 candidates, best first.",
       items: {
         type: "object",
         additionalProperties: false,
@@ -171,6 +174,35 @@ function createPhotoAI({ client, model = MODEL, maxPauseResumes = 4, onUsage = (
   return { find, verify, compare, passesFor };
 }
 
+// One isolated probe: can this organisation/key execute the web-search
+// tool? Exactly ONE API call (no pause_turn resume), the tool capped at one
+// use, a generic query with nothing to do with the catalog. Reads nothing,
+// writes nothing; the caller reports what came back.
+async function probeWebSearch({ client, model = MODEL }) {
+  const started = Date.now();
+  try {
+    const res = await client.messages.create({
+      model, max_tokens: 300,
+      tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }],
+      messages: [{ role: "user", content: "Use the web search tool exactly once to find today's date in Toronto, then answer in one short sentence." }]
+    });
+    const blocks = res.content || [];
+    const used = blocks.find((b) => b.type === "server_tool_use" && b.name === "web_search") || null;
+    const result = blocks.find((b) => b.type === "web_search_tool_result") || null;
+    const resultError = result && result.content && !Array.isArray(result.content) && result.content.type === "web_search_tool_result_error" ? result.content.error_code : null;
+    const text = blocks.filter((b) => b.type === "text").map((b) => b.text).join(" ").trim().slice(0, 200);
+    const searches = (res.usage && res.usage.server_tool_use && res.usage.server_tool_use.web_search_requests) || 0;
+    return {
+      ok: !!used && !!result && !resultError && searches >= 1,
+      stopReason: res.stop_reason, toolCalled: !!used, toolResultReturned: !!result, toolResultError: resultError,
+      webSearchRequests: searches, resultCount: result && Array.isArray(result.content) ? result.content.length : 0,
+      answer: text, usage: { in: res.usage && res.usage.input_tokens, out: res.usage && res.usage.output_tokens }, ms: Date.now() - started
+    };
+  } catch (err) {
+    return { ok: false, apiError: { status: err.status || null, type: err.error && err.error.error && err.error.error.type || err.name || null, message: String(err.message || err).slice(0, 400) }, ms: Date.now() - started };
+  }
+}
+
 // The real client, created lazily so nothing loads the SDK (or needs a key)
 // until a backfill actually runs.
 function createAnthropicClient({ apiKey = process.env.ANTHROPIC_API_KEY } = {}) {
@@ -179,4 +211,4 @@ function createAnthropicClient({ apiKey = process.env.ANTHROPIC_API_KEY } = {}) 
   return new Anthropic({ apiKey, maxRetries: 2, timeout: 10 * 60 * 1000 });
 }
 
-module.exports = { createPhotoAI, createAnthropicClient, passesFor, passDomains, FINDER_SCHEMA, VERIFY_SCHEMA, COMPARE_SCHEMA, MODEL };
+module.exports = { createPhotoAI, createAnthropicClient, probeWebSearch, passesFor, passDomains, FINDER_SCHEMA, VERIFY_SCHEMA, COMPARE_SCHEMA, MODEL };
