@@ -120,6 +120,11 @@ check('part photos are fenced — images, overview, writes and the admin page', 
   assert.equal(needsAuth('GET', '/admin/part-photos'), 'user');
   // M2a: the fitting default and supplier logos.
   assert.equal(needsAuth('POST', '/api/part-photo-groups/PG-0001/default'), 'user');
+  // M3b: the Photo Review queue and its actions.
+  assert.equal(needsAuth('GET', '/api/part-photo-review'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-review/405010/approve'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-review/405010/reject'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-review/fittings/A%7CB'), 'user');
   assert.equal(needsAuth('GET', `/api/supplier-logos/${hash}.png`), 'user');
   assert.equal(needsAuth('POST', '/api/suppliers/SUP-001/logo'), 'user');
   assert.equal(needsAuth('DELETE', '/api/suppliers/SUP-001/logo'), 'user');
@@ -200,6 +205,21 @@ check('the three routes that had the no-op gate now check the answer', () => {
     assert.match(block, /const session = await requireAdmin\(req\);/, `${marker}: binds the result`);
     assert.match(block, /if \(!session\) return sendJson\(res, 403/, `${marker}: rejects when it is null`);
   }
+});
+
+check('Photo Review writes (M3b) check the admin answer, and no route runs the backfill', () => {
+  for (const marker of [
+    'photoReviewSkuMatch && req.method === "POST"',
+    'photoReviewFittingMatch && req.method === "POST"',
+  ]) {
+    const at = SRC.indexOf(marker);
+    assert.ok(at > 0, `route not found: ${marker}`);
+    const block = SRC.slice(at, at + 600);
+    assert.match(block, /const session = await requireAdmin\(req\);/, `${marker}: binds the result`);
+    assert.match(block, /if \(!session\) return sendJson\(res, 403/, `${marker}: rejects when it is null`);
+  }
+  // M3c (the live AI run) is held for Patrick's separate approval.
+  assert.ok(!/photoBackfill\.(start|resume|kick|retry|applyGrouping)\(/.test(SRC), 'a route can start/resume the AI backfill');
 });
 
 check('the check catches the exact bug it was written for', () => {
