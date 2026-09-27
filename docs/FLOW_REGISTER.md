@@ -22,6 +22,37 @@ before this, the route does not exist. **Patrick's four checks (2026-09-27):**
 flagged for a follow-up. **Patrick's walk (UNMAPPED until done):** open a job with a
 change order in the new app → Change Orders. The counts, stages and "Billed on …" amount should
 match the classic page and the quote.
+**2026-09-27 (Change-order guards: follow-up to #338 before the first manual deploy; no PASS flow touched):**
+Patrick's checks, run against the merged code. **Proven on main** (`test-change-order-guards.mjs`: 20 of 30 checks failed):
+- A crash between the email leaving and the result being saved left no trace, so the next Send
+  emailed the customer **a second time**.
+- A change on a **completed, invoiced** job could still be approved or withdrawn.
+- A change already in a revised quote could not be withdrawn at all. The refusal was a bare
+  "already executed_under_revision", with nothing on what to do.
+- A **trashed** draft revision still held completion, and the next change order added its lines to
+  the trashed quote.
+
+**Now:**
+- **Withdrawing a change that is in a revised quote** depends on where that quote stands, through
+  one shared rule, `projects.scopeChangeRevisionState`:
+  - **Signed:** refused (`scr_in_signed_agreement`). A signed agreement is never rewritten; the
+    reduction needs a new change order and a new signed revision.
+  - **Unsigned:** that revised quote is **cancelled**. `quotes.retireUnsignedRevision` marks it
+    superseded, pointing at the agreement that stands, so every customer approval route refuses it.
+    It is queued with the signature writers, so if the customer signed first the withdrawal is
+    refused. The change is withdrawn, and any **other** change in the same revised quote returns
+    to "approved — needs revised quote" with a history entry.
+  - **Declined:** the change is simply withdrawn.
+- **A completed or invoiced job** refuses every decision on its changes (`project_closed`).
+- **Send once is on disk.** `sendInFlight` is saved inside the project lock before the email goes,
+  and cleared when the outcome is saved. A send interrupted by a restart leaves it behind, and the
+  next Send is refused as `delivery_uncertain`, with no email. The office records the outcome
+  (`POST …/scope-changes/:id/send-outcome`, office-only, "sent" or "not_sent"). The classic page
+  shows "⚠ Delivery uncertain" with "It arrived / It didn't arrive".
+- `quotes.isUnsignedLive` ignores trashed quotes.
+
+**Test:** `scripts/test-change-order-guards.mjs` (in `build:check`). It includes a real process crash
+after the email and before the save.
 **2026-09-27 (Change-order safety: office-only actions, real names, honest sends, one "open" rule; PR 2 of Change Orders, stacked on the quote lifecycle PR; no PASS flow touched):**
 **Defects proven before the fix** (`test-change-order-safety.mjs` on the old code: 40 of 53 failed):
 - Every change-order route called `requireAdmin()` and **ignored the answer**. A technician could send

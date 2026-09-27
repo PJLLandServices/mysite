@@ -848,6 +848,187 @@ const pageWith = (visible, images = [], extra = "") => `<html><head>${images.map
   fs.rmSync(dir2, { recursive: true, force: true });
 }
 
+// ---- 12. Page diagnostics (Patrick, Sep 27 2026) -------------------------
+// "No reliable photo" must always say why: every product page our server
+// checked is recorded (URL, official, fetch result, part-number result,
+// image candidates, a concise note) and shown on the review card.
+{
+  const line = bf.pageDiagnosticsLine;
+  check("diagnostics line: empty → nothing", line([]) === "" && line(null) === "");
+  check("diagnostics line: 404, no image, and a good page read plainly",
+    line([{ domain: "hunterirrigation.com", official: true, fetch: "failed", status: 404, note: "HTTP 404" }, { domain: "siteone.com", official: false, fetch: "ok", partNumber: "pass", images: 0, note: "no product image found" }, { domain: "centralpros.com", fetch: "ok", partNumber: "pass", images: 2, note: "" }])
+      === "Pages checked: hunterirrigation.com (official) — HTTP 404; siteone.com — no product image found; centralpros.com — 2 images, part # pass.");
+
+  const catalog = {
+    P404: { sku: "P404", partNumber: "P404", description: "Hunter PGP rotor", category: "sprinkler_heads", manufacturer: "hunter" },
+    PGV100G: { sku: "PGV100G", partNumber: "PGV100G", description: "1\" globe valve", category: "valves", manufacturer: "hunter" },
+    HCHPC400: { sku: "HCHPC400", partNumber: "HCHPC400", description: "Hydrawise 4-23 station controller", category: "controllers", manufacturer: "hunter" }
+  };
+  const finds = {
+    P404: { 1: { manufacturer: "Hunter", manufacturerPartNumber: "PGP-04", candidates: [{ pageUrl: `${OFFICIAL}/does-not-exist`, imageUrl: "", partNumberAsShown: "" }] } },
+    PGV100G: { 1: { manufacturer: "Hunter", manufacturerPartNumber: "PGV100G", candidates: [{ pageUrl: `${OFFICIAL}/pgv-noimg`, imageUrl: "", partNumberAsShown: "PGV100G" }] } },
+    HCHPC400: { 1: { manufacturer: "Hunter", manufacturerPartNumber: "HPC-400", candidates: [{ pageUrl: `${OFFICIAL}/hpc`, imageUrl: "", partNumberAsShown: "HCHPC400" }] } }
+  };
+  const mkFind = (part, pass) => { const f = (finds[part.sku] || {})[pass]; return { manufacturer: "", manufacturerPartNumber: "", notes: "", candidates: [], ...(f || {}) }; };
+  // P403 fails the way the REAL fetcher fails: a message, no status property.
+  catalog.P403 = { sku: "P403", partNumber: "P403", description: "Hunter PGP rotor", category: "sprinkler_heads", manufacturer: "hunter" };
+  finds.P403 = { 1: { manufacturer: "Hunter", manufacturerPartNumber: "PGP-04", candidates: [{ pageUrl: `${OFFICIAL}/blocked`, imageUrl: "", partNumberAsShown: "" }] } };
+  const dir = tmp();
+  const h = harness(dir, { catalog, find: mkFind, fetchPage: (url) => { if (url.endsWith("/blocked")) throw new Error("The page couldn't be read (HTTP 403)."); } });
+  await h.b.start({ skus: Object.keys(catalog), autoApprove: false }); await h.b.idle();
+  const st = h.b._state().run;
+  const s = h.store.readStoresSync();
+  const aiOf = (sku) => s.groups[s.links[sku].groupId].ai;
+  const q = require(path.join(ROOT, "server", "lib", "photo-review.js")).buildReviewQueues({ parts: h.parts(), groups: s.groups, links: s.links });
+  const card = (sku) => [...q.tbd, ...q.notConfident].find((c) => c.sku === sku);
+
+  const p404 = st.items.P404.work.pages;
+  check("404 page: recorded as failed with the status and a concise note", p404.length === 1 && p404[0].fetch === "failed" && p404[0].status === 404 && p404[0].note === "HTTP 404" && p404[0].official === true && p404[0].url === `${OFFICIAL}/does-not-exist`, JSON.stringify(p404));
+  check("404 page: the reason says so", /Pages checked: hunterirrigation\.com \(official\) — HTTP 404\./.test(st.items.P404.result.reason), st.items.P404.result.reason);
+  check("404 page: on the stored result and the review card", aiOf("P404").pages[0].note === "HTTP 404" && card("P404").pages[0].note === "HTTP 404" && card("P404").pages[0].fetch === "failed");
+  const p403 = st.items.P403.work.pages;
+  check("real fetcher error shape ('…(HTTP 403).', no status property) → HTTP 403", p403[0].fetch === "failed" && p403[0].status === 403 && p403[0].note === "HTTP 403", JSON.stringify(p403));
+
+  const pNo = st.items.PGV100G.work.pages;
+  check("page with 0 images: fetched ok, part # pass, 0 images, note says no product image", pNo[0].fetch === "ok" && pNo[0].partNumber === "pass" && pNo[0].images === 0 && pNo[0].note === "no product image found", JSON.stringify(pNo));
+  check("page with 0 images: the reason says so", /hunterirrigation\.com \(official\) — no product image found\./.test(st.items.PGV100G.result.reason), st.items.PGV100G.result.reason);
+
+  const pOk = st.items.HCHPC400.work.pages;
+  check("page with extracted images: 1 image, part # pass, no note; result Confident", pOk[0].fetch === "ok" && pOk[0].images === 1 && pOk[0].partNumber === "pass" && pOk[0].note === "" && st.items.HCHPC400.result.tier === "confident", JSON.stringify(pOk));
+  check("page with extracted images: diagnostics stored even when the result is good, and the reason stays clean", aiOf("HCHPC400").pages.length === 1 && !/Pages checked/.test(st.items.HCHPC400.result.reason));
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+{
+  // Diagnostics survive a pause/restart in the middle of a part: the pages
+  // were recorded at the check step and saved before the vision step.
+  const dir = tmp();
+  let hang = true, hung = 0;
+  const A = harness(dir, { concurrency: 1, catalog: { HCHPC400: { sku: "HCHPC400", partNumber: "HCHPC400", description: "Hydrawise controller", category: "controllers", manufacturer: "hunter" } },
+    find: () => ({ manufacturer: "Hunter", manufacturerPartNumber: "HPC-400", notes: "", candidates: [{ pageUrl: `${OFFICIAL}/hpc`, imageUrl: "", partNumberAsShown: "HCHPC400" }] }),
+    verify: () => { if (hang) { hung++; return new Promise(() => {}); } return undefined; } });
+  await A.b.start({ skus: ["HCHPC400"], autoApprove: false });
+  for (let i = 0; i < 300 && !hung; i++) await new Promise((r) => setTimeout(r, 10));
+  await new Promise((r) => setTimeout(r, 40));
+  const onDisk = JSON.parse(fs.readFileSync(path.join(dir, "part-photos-backfill.json"), "utf8"));
+  check("pause/restart: the pages were saved before the vision step", onDisk.run.items.HCHPC400.step === "verify" && onDisk.run.items.HCHPC400.work.pages.length === 1 && onDisk.run.items.HCHPC400.work.pages[0].images === 1);
+  hang = false;
+  const B = harness(dir, { catalog: { HCHPC400: { sku: "HCHPC400", partNumber: "HCHPC400", description: "Hydrawise controller", category: "controllers", manufacturer: "hunter" } } });
+  await B.b.resume(); await B.b.idle();
+  const s = B.store.readStoresSync();
+  check("pause/restart: after Resume the finished result carries the same diagnostics", B.b._state().run.status === "done" && s.groups[s.links.HCHPC400.groupId].ai.pages.length === 1 && s.groups[s.links.HCHPC400.groupId].ai.pages[0].url === `${OFFICIAL}/hpc`);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+{
+  // Re-run subset: `only` narrows to some of the unresolved parts and
+  // refuses anything outside them.
+  const dir = tmp();
+  const h = harness(dir);
+  await h.b.startCalibration({ by: "patrick" }); await h.b.idle();
+  const unresolved = h.b.unresolvedCalibrationSkus();
+  const two = unresolved.slice(0, 2);
+  await rejects("re-run subset: a part outside the unresolved set is refused", () => h.b.startCalibrationRerun({ by: "patrick", only: [two[0], "NOT-A-CALIBRATION-PART"] }), /Not among the unresolved/);
+  check("…and nothing started", h.b._state().run.status === "done");
+  await h.b.startCalibrationRerun({ by: "patrick", only: two });
+  const run = h.b._state().run;
+  check("re-run subset: exactly the two requested, auto-approve off", JSON.stringify(run.order.slice().sort()) === JSON.stringify(two.slice().sort()) && run.options.autoApprove === false && run.calibration.skus.length === 2);
+  await h.b.idle();
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// ---- 13. Unreachable official pages (Patrick, Sep 27 2026) ---------------
+// The re-run showed the real blocker: watts.com, oilcreekplastics.com and
+// hunterirrigation.com answer our server with HTTP 403 — and when Hunter's
+// model page did load, its product photo carried no gallery markers.
+
+// 13a. Extraction: Hunter's real model-page markup.
+{
+  const HUNTER = `<html><head><title>PGV-100-G | Hunter Industries</title></head><body>
+    <header><img src="/themes/hunter_industries/img/Hunter_Logo_100Black.svg" alt="Hunter" /><img src="/themes/hunter_industries/img/Hunter_Logo.svg" alt="Home" class="img-fluid d-inline-block align-top" /></header>
+    <div class="field--name-field-photo"><img loading="lazy" src="/sites/default/files/styles/photo_library_medium/public/PGV-100G.jpeg?itok=BbYSnpwz" width="717" height="713" alt="pgv-100g.jpeg" typeof="foaf:Image" class="image-style-photo-library-medium" /></div>
+    <img src="/sites/default/files/PGV-100G.jpeg" alt="PGV-100-G">
+    <img typeof="foaf:Image" src="">
+    <img src="/sites/default/files/related/PRO-C.jpeg" width="200" height="200" alt="Pro-C controller">
+    <img src="/sites/default/files/banner-wide.jpg" width="1600" height="400" alt="">
+    <img src="/sites/default/files/big-lifestyle.jpg" width="1200" height="800" alt="lawn">
+    <img src="/themes/hunter_industries/img/icons/cart.svg" width="400" height="400" alt="cart">
+    <footer><img src="/sites/default/files/footer-award.jpg" width="500" height="500" alt="award"></footer>
+    </body></html>`;
+  const x = ev.extractProductImages;
+  const base = "https://www.hunterirrigation.com/irrigation-product/1-pgv/pgv-100-g";
+  const out = x(HUNTER, base, { keys: ["PGV100G"], max: 10 });
+  const urls = out.map((o) => o.url), via = Object.fromEntries(out.map((o) => [o.url, o.via]));
+  check("Hunter markup: the 717×713 photo named PGV-100G is accepted (part number in src/alt)", urls.includes("https://www.hunterirrigation.com/sites/default/files/styles/photo_library_medium/public/PGV-100G.jpeg?itok=BbYSnpwz"), JSON.stringify(out));
+  check("Hunter markup: alt 'PGV-100-G' matches PGV100G (formatting ignored) even with no size", urls.includes("https://www.hunterirrigation.com/sites/default/files/PGV-100G.jpeg") && via["https://www.hunterirrigation.com/sites/default/files/PGV-100G.jpeg"] === "img:part-number");
+  check("Hunter markup: a large 300+ image with no name is accepted", urls.includes("https://www.hunterirrigation.com/sites/default/files/big-lifestyle.jpg") && via["https://www.hunterirrigation.com/sites/default/files/big-lifestyle.jpg"] === "img:large");
+  check("Hunter markup: header logos, footer, svg, empty src, small related image and the 1600×400 banner are excluded", !urls.some((u) => /Hunter_Logo|footer-award|cart\.svg|PRO-C|banner-wide/.test(u)) && !urls.includes(base), urls.join(" "));
+  check("Hunter markup: without keys, the named-but-small image is NOT accepted (large one still is)", (() => { const u = x(HUNTER, base, { max: 10 }).map((o) => o.url); return !u.includes("https://www.hunterirrigation.com/sites/default/files/PGV-100G.jpeg") && u.includes("https://www.hunterirrigation.com/sites/default/files/big-lifestyle.jpg"); })());
+  check("Hunter markup: a too-short key never matches", !x(HUNTER, base, { keys: ["PGV"], max: 10 }).some((o) => o.via === "img:part-number"));
+  check("extraction order: named/large images come after og:image and JSON-LD", (() => { const o = x(`<meta property="og:image" content="https://a/og.jpg">` + HUNTER, base, { keys: ["PGV100G"], max: 10 }); return o[0].via === "og:image"; })());
+}
+
+// 13b. Browser-like headers on both fetchers (best effort, nothing more).
+{
+  const seen = [];
+  const fetchImpl = async (url, opts) => { seen.push({ url: String(url), headers: opts.headers }); return { status: 200, headers: new Map([["content-type", "text/html"]]), body: (async function* () { yield Buffer.from("<html><body>ok</body></html>"); })(), arrayBuffer: async () => new ArrayBuffer(0) }; };
+  try { await pp.fetchPageSafely("https://www.example.com/p", { fetchImpl, lookup: async () => [{ address: "93.184.216.34", family: 4 }] }); } catch (_) { /* body shape may differ; headers are what matters */ }
+  const h = seen[0] && seen[0].headers || {};
+  check("page fetch sends a browser-like user-agent and accept-language", /Mozilla\/5\.0/.test(h["user-agent"] || "") && /en/.test(h["accept-language"] || "") && /text\/html/.test(h.accept || ""), JSON.stringify(h));
+  const seen2 = [];
+  try { await pp.fetchImageSafely("https://www.example.com/p.jpg", { fetchImpl: async (u, o) => { seen2.push(o.headers); throw new Error("stop"); }, lookup: async () => [{ address: "93.184.216.34", family: 4 }] }); } catch (_) { /* expected */ }
+  check("image fetch sends the same headers", seen2[0] && /Mozilla\/5\.0/.test(seen2[0]["user-agent"] || "") && /image/.test(seen2[0].accept || ""), JSON.stringify(seen2[0]));
+}
+
+// 13c. Fall through to the next pass only when every page was unreachable.
+{
+  Object.assign(WEB, {
+    "https://www.siteone.com/en/pgv-100g": pageWith("Hunter PGV-100G 1 in. globe valve PGV100G", ["https://img.example.com/pgv-s1.jpg"]),
+    [`${OFFICIAL}/pgv-readable-but-wrong`]: pageWith("PGV series valves", ["https://img.example.com/pgv-series.jpg"])
+  });
+  const catalog = {
+    PGV100G: { sku: "PGV100G", partNumber: "PGV100G", description: "1\" globe valve", category: "valves", manufacturer: "hunter" },
+    PGV151G: { sku: "PGV151G", partNumber: "PGV151G", description: "1.5\" globe valve", category: "valves", manufacturer: "hunter" },
+    PGV201G: { sku: "PGV201G", partNumber: "PGV201G", description: "2\" globe valve", category: "valves", manufacturer: "hunter" }
+  };
+  const finds = {
+    // pass 1: two official pages, both 403 → pass 2 (suppliers) finds a readable page.
+    PGV100G: { 1: { manufacturer: "Hunter", manufacturerPartNumber: "PGV100G", candidates: [{ pageUrl: `${OFFICIAL}/blocked-a`, imageUrl: "", partNumberAsShown: "" }, { pageUrl: `${OFFICIAL}/blocked-b`, imageUrl: "", partNumberAsShown: "" }] },
+               2: { manufacturer: "Hunter", manufacturerPartNumber: "PGV100G", candidates: [{ pageUrl: "https://www.siteone.com/en/pgv-100g", imageUrl: "", partNumberAsShown: "PGV100G" }] } },
+    // pass 1: a READABLE official page that fails verification → no fall-through.
+    PGV151G: { 1: { manufacturer: "Hunter", manufacturerPartNumber: "PGV-151-G", candidates: [{ pageUrl: `${OFFICIAL}/pgv-readable-but-wrong`, imageUrl: "", partNumberAsShown: "" }] },
+               2: { manufacturer: "Hunter", manufacturerPartNumber: "PGV-151-G", candidates: [{ pageUrl: "https://www.siteone.com/en/pgv-100g", imageUrl: "", partNumberAsShown: "" }] } },
+    // pass 1 unreachable, pass 2 finds nothing → done, two finder calls, never a third.
+    PGV201G: { 1: { manufacturer: "Hunter", manufacturerPartNumber: "PGV201G", candidates: [{ pageUrl: `${OFFICIAL}/blocked-c`, imageUrl: "", partNumberAsShown: "" }] }, 2: null }
+  };
+  const asked = {};
+  const dir = tmp();
+  const h = harness(dir, { catalog,
+    find: (part, pass) => { (asked[part.sku] ||= []).push(pass); const f = (finds[part.sku] || {})[pass]; return { manufacturer: "", manufacturerPartNumber: "", notes: f ? "" : "nothing", candidates: [], ...(f || {}) }; },
+    fetchPage: (url) => { if (/\/blocked-/.test(url)) throw new Error("The page couldn't be read (HTTP 403)."); } });
+  await h.b.start({ skus: Object.keys(catalog), autoApprove: false }); await h.b.idle();
+  const st = h.b._state().run;
+  const it = (s) => st.items[s];
+  check("all pass-1 pages 403 → pass 2 runs, once", JSON.stringify(asked.PGV100G) === "[1,2]" && it("PGV100G").work.fellThrough && it("PGV100G").work.fellThrough.from === 1 && it("PGV100G").work.fellThrough.to === 2);
+  check("…the supplier page is checked under the normal rules and the part ends Confident", it("PGV100G").result.tier === "confident" && it("PGV100G").work.checked.some((c) => c.hash && c.source.pass === 2), JSON.stringify(it("PGV100G").result));
+  check("…and the diagnostics keep BOTH passes' pages (2 × HTTP 403, then the readable one)", it("PGV100G").work.pages.length === 3 && it("PGV100G").work.pages.slice(0, 2).every((p) => p.note === "HTTP 403" && p.pass === 1) && it("PGV100G").work.pages[2].fetch === "ok" && it("PGV100G").work.pages[2].pass === 2);
+  check("a READABLE page that fails verification does NOT fall through", JSON.stringify(asked.PGV151G) === "[1]" && !it("PGV151G").work.fellThrough && it("PGV151G").result.tier !== "confident");
+  check("pass 1 unreachable, pass 2 empty → not confident, exactly two finder calls, pages recorded", JSON.stringify(asked.PGV201G) === "[1,2]" && it("PGV201G").result.tier === "not_confident" && /HTTP 403/.test(it("PGV201G").result.reason) && it("PGV201G").work.fellThrough.found === 0);
+  check("counters: the fallback finder call is counted", it("PGV100G").usage.calls >= 3 && it("PGV201G").usage.calls === 2);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+{
+  // Generic parts fall through from suppliers (pass 2) to the open web (pass 3) the same way; never beyond the last pass.
+  Object.assign(WEB, { "https://www.plumbing-example.com/tee34": pageWith('Poly Insert Tee 3/4" barb 1401007', ["https://img.example.com/tee-open.jpg"]) });
+  const asked = [];
+  const dir = tmp();
+  const h = harness(dir, { catalog: { TEE34: CATALOG.TEE34 },
+    find: (part, pass) => { asked.push(pass); return pass === 2 ? { manufacturer: "", manufacturerPartNumber: "", notes: "", candidates: [{ pageUrl: "https://www.siteone.com/en/blocked-tee", imageUrl: "", partNumberAsShown: "" }] } : { manufacturer: "", manufacturerPartNumber: "", notes: "", candidates: [{ pageUrl: "https://www.plumbing-example.com/tee34", imageUrl: "", partNumberAsShown: "" }] }; },
+    fetchPage: (url) => { if (/blocked/.test(url)) throw Object.assign(new Error("404"), { status: 404 }); } });
+  await h.b.start({ skus: ["TEE34"], autoApprove: false }); await h.b.idle();
+  const it = h.b._state().run.items.TEE34;
+  check("generic: suppliers unreachable → open web tried once; result follows the normal generic rules (single source → TBD)", JSON.stringify(asked) === "[2,3]" && it.work.fellThrough.to === 3 && it.result.tier === "tbd" && it.work.pages[0].note === "HTTP 404");
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 if (REPORT) {
   console.log("\nMocked verification results (auto-approve OFF → ON)");
   console.log("SKU        kind     part#    spec     2nd src  tier            OFF      ON");

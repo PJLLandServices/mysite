@@ -37,6 +37,19 @@ const ev = require("./photo-evidence");
 const STEPS = ["queued", "find", "check", "map", "verify", "cross", "tier", "record", "done"];
 const BRAND_ORDER = ["hunter", "rainbird", "netafim", "oilcreek", "dawn", "blulock", "watts"];
 
+// "Pages checked: hunterirrigation.com (official) — HTTP 404; siteone.com —
+// 2 images, part # pass." One readable line for the reason field.
+function pageDiagnosticsLine(pages) {
+  if (!pages || !pages.length) return "";
+  const one = (p) => {
+    const where = `${String(p.domain || "?").replace(/^www\./, "")}${p.official ? " (official)" : ""}`;
+    if (p.fetch !== "ok") return `${where} — ${p.note || "fetch failed"}`;
+    const ok = `${p.images} image${p.images === 1 ? "" : "s"}, part # ${p.partNumber || "?"}`;
+    return `${where} — ${p.note ? p.note : ok}`;
+  };
+  return `Pages checked: ${pages.map(one).join("; ")}.`;
+}
+
 function isTransient(err) {
   if (!err) return false;
   if (err.permanent) return false;
@@ -257,8 +270,9 @@ function createBackfill({
     }
 
     if (it.step === "find") {
-      let found = { identified: null, candidates: [], notes: [] };
-      for (const pass of ai.passesFor(part)) {
+      let found = { identified: null, candidates: [], notes: [], pass: null, remainingPasses: [] };
+      const passes = ai.passesFor(part);
+      for (const pass of passes) {
         const res = await ai.find(part, pass, usage);
         // A product PAGE is enough: our server reads its images (check step).
         const cands = (res.candidates || []).filter((c) => /^https:\/\//i.test(c.pageUrl || "")).slice(0, MAX_CANDIDATES);
@@ -269,6 +283,10 @@ function createBackfill({
             pageUrl: c.pageUrl, imageUrl: /^https:\/\//i.test(c.imageUrl || "") ? c.imageUrl : "", partNumberAsShown: c.partNumberAsShown || "", pass,
             domain: ev.hostOf(c.pageUrl), official: ev.isOfficialManufacturerPage(c.pageUrl, part.manufacturer)
           }));
+          // Remembered for the check step: if OUR server can't read any of
+          // these pages, the next pass may still be tried (once).
+          found.pass = pass;
+          found.remainingPasses = passes.slice(passes.indexOf(pass) + 1);
           break;
         }
       }
@@ -278,63 +296,119 @@ function createBackfill({
     }
 
     if (it.step === "check") {
-      const checked = [];
       const spec = ev.parseSpec(part);
       const ours = [part.partNumber, part.sku, ...part.supplierSkus];
       const theirs = it.work.found.identified ? [it.work.found.identified.manufacturerPartNumber] : [];
+      // Names an <img> may carry on the page: our numbers and the model's.
+      const imageKeys = [...ours, ...theirs];
       let withImage = 0;
-      for (const c of it.work.found.candidates) {
-        if (withImage >= MAX_CANDIDATES) break;
-        const base = { source: { pageUrl: c.pageUrl, imageUrl: c.imageUrl || "", domain: c.domain, pass: c.pass, official: c.official }, notes: [] };
-        let page;
-        try { page = await getPage(c.pageUrl); }
-        catch (err) { if (isTransient(err)) throw err; base.notes.push(`page: ${err.message}`); checked.push(base); continue; }
-        const pageUrl = page.finalUrl || c.pageUrl;
-        base.source.pageUrl = pageUrl;
-        // The part number must be in the VISIBLE product text of the page
-        // we downloaded. Ours (or a supplier's) → pass. Only the
-        // manufacturer's number the finder named → "unknown": the page may
-        // be right, but nothing ties it to OUR part, so Patrick looks.
-        let pn = ev.partNumberOnPage(page.html, ours);
-        if (pn.result !== "pass" && theirs.length) {
-          const t = ev.partNumberOnPage(page.html, theirs);
-          if (t.result === "pass") pn = { result: "unknown", reason: "Only the manufacturer's number (not ours) is on the page.", matched: t.matched };
-        }
-        // An OFFICIAL manufacturer page that doesn't print our number is
-        // "needs a look", not a failure: manufacturers often show a base
-        // SKU with the size as an option (Oil Creek's IRR100 for
-        // POPO100300). It can never be Confident this way — unknown ≠ pass.
-        if (pn.result === "fail" && c.official) pn = { result: "unknown", reason: "Official manufacturer page, but our part number isn't printed on it (variant / base-SKU pages do this) — needs a look.", matched: null };
-        base.partNumber = pn;
-        base.manufacturerNumberOnPage = theirs.length ? ev.partNumberOnPage(page.html, theirs).result === "pass" : false;
-        if (kind === "generic") base.specMatch = ev.pageMatchesSpec(page.html, spec);
-        // Images: the finder's URL if it gave one, then what OUR server
-        // reads from the page's own structures (og:image, Product JSON-LD,
-        // product <img>). Each is a candidate, nothing more, until the
-        // safe download and the vision check have had their say.
-        const images = [];
-        if (c.imageUrl) images.push({ url: c.imageUrl, via: "finder" });
-        for (const im of ev.extractProductImages(page.html, pageUrl)) if (!images.some((x) => x.url === im.url)) images.push(im);
-        base.imagesOnPage = images.length;
-        if (!images.length) { base.notes.push("image: no product image found on the page (no og:image, product JSON-LD or product <img>)"); checked.push(base); continue; }
-        let got = 0;
-        for (const im of images) {
-          if (got >= MAX_IMAGES_PER_PAGE || withImage >= MAX_CANDIDATES) break;
-          const entry = { ...base, source: { ...base.source, imageUrl: im.url, imageVia: im.via }, notes: [...base.notes] };
-          try {
-            const img = await getImage(im.url);
-            const saved = await store.saveCandidateImage(img.buffer);
-            Object.assign(entry, saved);
-            entry.source.imageUrl = img.finalUrl || im.url;
-            checked.push(entry); got++; withImage++;
-          } catch (err) {
+      const toCandidates = (res, pass) => (res.candidates || []).filter((c) => /^https:\/\//i.test(c.pageUrl || "")).slice(0, MAX_CANDIDATES).map((c) => ({
+        pageUrl: c.pageUrl, imageUrl: /^https:\/\//i.test(c.imageUrl || "") ? c.imageUrl : "", partNumberAsShown: c.partNumberAsShown || "", pass,
+        domain: ev.hostOf(c.pageUrl), official: ev.isOfficialManufacturerPage(c.pageUrl, part.manufacturer)
+      }));
+      // Diagnostics (Patrick, Sep 27 2026): one line per product page OUR
+      // server checked — the URL, official or not, how the fetch went, the
+      // part-number result, how many image candidates came out, and a
+      // concise note when it went nowhere. Kept on the result and shown on
+      // the review card, so "no reliable photo" always says why.
+      const checkCandidates = async (candidates) => {
+        const checked = [], pages = [];
+        for (const c of candidates) {
+          if (withImage >= MAX_CANDIDATES) break;
+          const base = { source: { pageUrl: c.pageUrl, imageUrl: c.imageUrl || "", domain: c.domain, pass: c.pass, official: c.official }, notes: [] };
+          const pg = { url: c.pageUrl, domain: c.domain, official: !!c.official, pass: c.pass, fetch: "ok", status: null, partNumber: null, images: 0, note: "" };
+          pages.push(pg);
+          let page;
+          try { page = await getPage(c.pageUrl); }
+          catch (err) {
             if (isTransient(err)) throw err;
-            base.notes.push(`image ${im.via}: ${err.message}`);
+            const m = String(err.message || "").match(/HTTP (\d{3})|^(\d{3})$/);
+            const status = Number(err.status || err.statusCode || (m && (m[1] || m[2])) || 0) || null;
+            pg.fetch = "failed"; pg.status = status; pg.note = status ? `HTTP ${status}` : String(err.message || "fetch failed").slice(0, 120);
+            base.notes.push(`page: ${err.message}`); checked.push(base); continue;
           }
+          const pageUrl = page.finalUrl || c.pageUrl;
+          base.source.pageUrl = pageUrl;
+          pg.url = pageUrl;
+          // The part number must be in the VISIBLE product text of the page
+          // we downloaded. Ours (or a supplier's) → pass. Only the
+          // manufacturer's number the finder named → "unknown": the page may
+          // be right, but nothing ties it to OUR part, so Patrick looks.
+          let pn = ev.partNumberOnPage(page.html, ours);
+          if (pn.result !== "pass" && theirs.length) {
+            const t = ev.partNumberOnPage(page.html, theirs);
+            if (t.result === "pass") pn = { result: "unknown", reason: "Only the manufacturer's number (not ours) is on the page.", matched: t.matched };
+          }
+          // An OFFICIAL manufacturer page that doesn't print our number is
+          // "needs a look", not a failure: manufacturers often show a base
+          // SKU with the size as an option (Oil Creek's IRR100 for
+          // POPO100300). It can never be Confident this way — unknown ≠ pass.
+          if (pn.result === "fail" && c.official) pn = { result: "unknown", reason: "Official manufacturer page, but our part number isn't printed on it (variant / base-SKU pages do this) — needs a look.", matched: null };
+          base.partNumber = pn;
+          base.manufacturerNumberOnPage = theirs.length ? ev.partNumberOnPage(page.html, theirs).result === "pass" : false;
+          if (kind === "generic") base.specMatch = ev.pageMatchesSpec(page.html, spec);
+          // Images: the finder's URL if it gave one, then what OUR server
+          // reads from the page's own structures (og:image, Product JSON-LD,
+          // product <img>, an <img> named after the part, a large <img>).
+          // Each is a candidate, nothing more, until the safe download and
+          // the vision check have had their say.
+          const images = [];
+          if (c.imageUrl) images.push({ url: c.imageUrl, via: "finder" });
+          for (const im of ev.extractProductImages(page.html, pageUrl, { keys: imageKeys })) if (!images.some((x) => x.url === im.url)) images.push(im);
+          base.imagesOnPage = images.length;
+          pg.partNumber = pn.result; pg.images = images.length;
+          const pgNotes = [];
+          if (pn.result === "fail") pgNotes.push("part number missing");
+          if (pn.result === "unknown") pgNotes.push("part number not confirmed");
+          if (!images.length) {
+            pgNotes.push("no product image found");
+            pg.note = pgNotes.join("; ");
+            base.notes.push("image: no product image found on the page (no og:image, product JSON-LD or product <img>)"); checked.push(base); continue;
+          }
+          let got = 0;
+          for (const im of images) {
+            if (got >= MAX_IMAGES_PER_PAGE || withImage >= MAX_CANDIDATES) break;
+            const entry = { ...base, source: { ...base.source, imageUrl: im.url, imageVia: im.via }, notes: [...base.notes] };
+            try {
+              const img = await getImage(im.url);
+              const saved = await store.saveCandidateImage(img.buffer);
+              Object.assign(entry, saved);
+              entry.source.imageUrl = img.finalUrl || im.url;
+              checked.push(entry); got++; withImage++;
+            } catch (err) {
+              if (isTransient(err)) throw err;
+              base.notes.push(`image ${im.via}: ${err.message}`);
+            }
+          }
+          if (!got) { pgNotes.push("image download failed"); checked.push(base); }
+          pg.note = pgNotes.join("; ");
         }
-        if (!got) checked.push(base);
+        return { checked, pages };
+      };
+      let { checked, pages } = await checkCandidates(it.work.found.candidates);
+      // Fall through (Patrick, Sep 27 2026): the pass found pages, but OUR
+      // server could read NONE of them (403/404/…). Then — once — the next
+      // search pass runs, exactly as it would have if the first had found
+      // nothing. A reachable page that merely fails verification is
+      // evidence, not a reason to look elsewhere.
+      const unreachable = pages.length > 0 && pages.every((p) => p.fetch !== "ok");
+      const remaining = it.work.found.remainingPasses || [];
+      if (unreachable && remaining.length && !it.work.fellThrough) {
+        const nextPass = remaining[0];
+        const res = await ai.find(part, nextPass, usage);
+        const cands = toCandidates(res, nextPass);
+        it.work.found.notes.push(`pass ${nextPass} (after unreachable pages): ${res.notes || ""}`.trim());
+        if (res.manufacturerPartNumber && !it.work.found.identified) it.work.found.identified = { manufacturer: res.manufacturer || part.manufacturerLabel, manufacturerPartNumber: res.manufacturerPartNumber };
+        it.work.fellThrough = { from: it.work.found.pass, to: nextPass, found: cands.length, at: new Date(now()).toISOString() };
+        if (cands.length) {
+          it.work.found.candidates = [...it.work.found.candidates, ...cands];
+          const more = await checkCandidates(cands);
+          checked = [...checked, ...more.checked];
+          pages = [...pages, ...more.pages];
+        }
       }
       it.work.checked = checked;
+      it.work.pages = pages;
       it.step = kind === "branded" ? "map" : "verify";
       return;
     }
@@ -402,9 +476,10 @@ function createBackfill({
       const best = scored[0];
       const t = best ? best.t : ev.tierFor({ kind, hasCandidate: false });
       const notes = (it.work.found && it.work.found.notes || []).join(" ");
+      const pagesLine = pageDiagnosticsLine(it.work.pages || []);
       it.work.tier = {
         tier: t.tier,
-        reason: best ? t.reason : `${t.reason} ${notes}`.trim(),
+        reason: best ? t.reason : `${t.reason}${pagesLine ? " " + pagesLine : ""} ${notes}`.trim(),
         chosenHash: best ? best.c.hash : null,
         candidates: scored.map(({ c, t: ct }) => ({ hash: c.hash, width: c.width, height: c.height, source: c.source, tier: ct.tier,
           checks: { partNumber: c.partNumber || null, specMatch: c.specMatch || null, vision: c.vision || null, crossSource: kind === "generic" ? it.work.cross || null : null } }))
@@ -419,7 +494,8 @@ function createBackfill({
       const res = await store.recordAiResult(sku, raw, {
         tier: t.tier, kind, reason: t.reason, runId: r.id,
         identified: it.work.found && it.work.found.identified, candidates: t.candidates, chosen,
-        proposedBrand: part.manufacturerProposed ? part.manufacturer : null
+        proposedBrand: part.manufacturerProposed ? part.manufacturer : null,
+        pages: it.work.pages || []
       }, { autoApprove: r.options.autoApprove });
       it.result = { tier: t.tier, reason: t.reason, live: !!res.live, skipped: res.skipped || null, groupId: res.groupId || null };
       it.step = "done";
@@ -601,13 +677,21 @@ function createBackfill({
   }
   // Re-run ONLY those (Patrick, Sep 27 2026): never the whole sample, never
   // the catalog, auto-approve OFF, one run at a time.
-  async function startCalibrationRerun({ by = null } = {}) {
+  // `only`: an optional subset — every entry must be one of the unresolved
+  // calibration parts, or the whole request is refused.
+  async function startCalibrationRerun({ by = null, only = null } = {}) {
     await load();
     if (state.run && ["running", "paused"].includes(state.run.status)) throw new Error("A run is already active — pause or finish it first.");
     const cal = lastCalibration();
     if (!cal) throw new Error("There is no calibration run to re-run.");
-    const skus = unresolvedCalibrationSkus();
+    let skus = unresolvedCalibrationSkus();
     if (!skus.length) throw new Error("Every calibration part already has a live photo — nothing to re-run.");
+    if (Array.isArray(only) && only.length) {
+      const wanted = [...new Set(only.map(String))];
+      const outside = wanted.filter((s) => !skus.includes(s));
+      if (outside.length) throw new Error(`Not among the unresolved calibration parts: ${outside.join(", ")}.`);
+      skus = skus.filter((s) => wanted.includes(s));
+    }
     const rerunOf = (state.run && state.run.calibration === cal) ? state.run.id : null;
     await start({ skus, autoApprove: false, label: "Calibration re-run" });
     state.run.calibration = { by, skus, rerunOf, at: new Date(now()).toISOString(), estimate: null };
@@ -668,4 +752,4 @@ function createBackfill({
   return { load, start, pause, resume, retry, status, idle, kick, groupingProposals, applyGrouping, calibrationSkus, calibrationPlan, startCalibration, startCalibrationRerun, unresolvedCalibrationSkus, fittingsToConfirm, resolveFitting, catalogProgress, _state: () => state };
 }
 
-module.exports = { createBackfill, isTransient, STEPS };
+module.exports = { createBackfill, isTransient, pageDiagnosticsLine, STEPS };

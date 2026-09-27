@@ -52,7 +52,7 @@ function quoteSummary(q, role) {
 
 // Where a change actually stands, one step past its own status: an
 // executed change's fate is its revised quote's.
-function phaseOf(scr, proj, chainInfo, byId, stageOf) {
+function phaseOf(scr, proj, chainInfo, byId, stageOf, revisionStateOf) {
   const stage = stageOf(scr, proj);
   if (stage === "in_review" && scr.sendInFlight) {
     // An interrupted send (saved before the email went; see
@@ -83,30 +83,28 @@ function phaseOf(scr, proj, chainInfo, byId, stageOf) {
     case "withdrawn":
       return { phase: "withdrawn", label: "Withdrawn", next: "Withdrawn by the office. Not in the price." };
     case "executed_under_revision": {
-      const rev = byId.get(scr.linkedRevisionQuoteId);
-      if (!rev) return { phase: "revision_missing", label: "Revision not found", next: `Revised quote ${scr.linkedRevisionQuoteId || "?"} is not on file.` };
+      // projects.scopeChangeRevisionState — the SAME rule the withdraw guard
+      // uses, so the tab and the guard can never disagree about whether a
+      // change is signed, still awaiting a signature, or out of the price.
+      const { state, quote } = revisionStateOf(scr, chainInfo);
       const gov = chainInfo.governing;
-      const pend = chainInfo.pending;
-      const revVersion = Number(rev.version) || 1;
-      // Signed itself, or carried into a newer version that was signed.
-      if (quotesLib.isSignedAgreement(rev) || (gov && (Number(gov.version) || 1) > revVersion)) {
-        const into = quotesLib.isSignedAgreement(rev) ? rev : gov;
-        return { phase: "signed", label: "Signed", next: `In the signed agreement ${into.id} (v${Number(into.version) || 1}) — billed at completion.` };
+      if (state === "missing") return { phase: "revision_missing", label: "Revision not found", next: `Revised quote ${scr.linkedRevisionQuoteId || "?"} is not on file.` };
+      if (state === "signed") {
+        return { phase: "signed", label: "Signed", next: `In the signed agreement ${quote.id} (v${Number(quote.version) || 1}) — billed at completion.` };
       }
-      if (quotesLib.isUnsignedLive(rev) || (pend && (Number(pend.version) || 1) >= revVersion)) {
-        const on = quotesLib.isUnsignedLive(rev) ? rev : pend;
-        return on.status === "draft"
-          ? { phase: "awaiting_signature", label: "In revised quote (draft)", next: `In revised quote ${on.id}, still a draft — the office sends it for the customer's signature. Completion is held until it is signed or declined.` }
-          : { phase: "awaiting_signature", label: "Awaiting signature", next: `In revised quote ${on.id}, waiting on the customer's signature. Completion is held until it is signed or declined.` };
+      if (state === "unsigned") {
+        return quote.status === "draft"
+          ? { phase: "awaiting_signature", label: "In revised quote (draft)", next: `In revised quote ${quote.id}, still a draft — the office sends it for the customer's signature. Completion is held until it is signed or declined.` }
+          : { phase: "awaiting_signature", label: "Awaiting signature", next: `In revised quote ${quote.id}, waiting on the customer's signature. Completion is held until it is signed or declined.` };
       }
-      return { phase: "revision_declined", label: "Revision not signed", next: `The customer did not sign revised quote ${rev.id}. Not in the price — the job stays on ${gov ? gov.id : "its signed agreement"}.` };
+      return { phase: "revision_declined", label: "Revision not signed", next: `The customer did not sign revised quote ${quote.id}. Not in the price — the job stays on ${gov ? gov.id : "its signed agreement"}.` };
     }
     default:
       return { phase: String(scr.status || "unknown"), label: String(scr.status || "Unknown"), next: "" };
   }
 }
 
-function describeChangeOrders({ project, chainInfo, blockers = [], stageOf, describeAgreement }) {
+function describeChangeOrders({ project, chainInfo, blockers = [], stageOf, describeAgreement, revisionStateOf }) {
   const proj = project || {};
   const info = chainInfo || { chain: [], governing: null, pending: null };
   const byId = new Map((info.chain || []).map((q) => [q.id, q]));
@@ -128,7 +126,7 @@ function describeChangeOrders({ project, chainInfo, blockers = [], stageOf, desc
   });
 
   const changes = (proj.scopeChangeRequests || []).map((s) => {
-    const p = phaseOf(s, proj, info, byId, stageOf);
+    const p = phaseOf(s, proj, info, byId, stageOf, revisionStateOf);
     const attempts = Array.isArray(s.sendAttempts) ? s.sendAttempts : [];
     const woId = s.capturedFromWoId || null;
     const rev = s.linkedRevisionQuoteId ? byId.get(s.linkedRevisionQuoteId) : null;

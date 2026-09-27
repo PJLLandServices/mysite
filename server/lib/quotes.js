@@ -2268,7 +2268,9 @@ function isSignedAgreement(q) {
 // An unsigned version still in play — something the customer could yet sign.
 const UNSIGNED_LIVE_STATUSES = new Set(["draft", "sent", "pending_admin_attestation"]);
 function isUnsignedLive(q) {
-  return !!q && UNSIGNED_LIVE_STATUSES.has(q.status) && !hasAcceptanceRecord(q);
+  // A trashed draft is not waiting for anyone: it must not hold completion
+  // or collect the next change order's lines.
+  return !!q && !q.deletedAt && UNSIGNED_LIVE_STATUSES.has(q.status) && !hasAcceptanceRecord(q);
 }
 
 function versionOrder(a, b) {
@@ -2345,6 +2347,36 @@ function supersedeOlderVersions(records, signed, by) {
     changed.push(q.id);
   }
   return changed;
+}
+
+// Retire an UNSIGNED revision because the change it carried was withdrawn
+// (2026-09-27). It is marked superseded — pointing back at the signed
+// agreement that keeps governing — because "superseded" is what every
+// customer approval route already refuses (the Q-2026-0078 dead-link
+// protection), so the customer can no longer sign it. Queued on the quotes
+// store with the signature writers: if the customer signed first, this
+// refuses (code revision_signed) and the signed agreement stands.
+async function retireUnsignedRevision(id, { by = "admin", reason = "" } = {}) {
+  return serialize(FILE, async () => {
+    const records = await readAll();
+    const q = records.find((x) => x.id === id);
+    if (!q) throw Object.assign(new Error(`Quote ${id} not found.`), { code: "quote_not_found" });
+    if (hasAcceptanceRecord(q)) {
+      throw Object.assign(new Error(`Revised quote ${id} has already been signed.`), { code: "revision_signed" });
+    }
+    if (!isUnsignedLive(q)) {
+      throw Object.assign(new Error(`Revised quote ${id} is ${q.status} — nothing to retire.`), { code: "revision_not_live" });
+    }
+    const info = describeChain(chainFromRecords(records, id));
+    q.status = "superseded";
+    q.supersededBy = info.governing ? info.governing.id : null;
+    (q.history ||= []).push({
+      ts: nowIso(), action: "revision_withdrawn", by,
+      note: `${reason || "Withdrawn by the office"} — the customer can no longer sign it${info.governing ? `; ${info.governing.id} (v${info.governing.version || 1}) stands` : ""}.`
+    });
+    await writeAll(records);
+    return q;
+  });
 }
 
 // After the quote write: bring any project on this chain onto the newly
@@ -3518,6 +3550,7 @@ module.exports = {
   hasAcceptanceRecord,
   isSignedAgreement,
   isUnsignedLive,
+  retireUnsignedRevision,
   chainFromRecords,
   describeChain,
   resolveQuoteChain,
