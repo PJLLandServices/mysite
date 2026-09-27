@@ -27,9 +27,12 @@ const FINDER_SCHEMA = {
   properties: {
     manufacturer: { type: "string", description: "Manufacturer name as the page states it, or empty." },
     manufacturerPartNumber: { type: "string", description: "The manufacturer's own part/model number for this exact item, as printed on the page, or empty." },
+    // No maxItems: structured outputs reject array constraints (the first
+    // production calibration failed on exactly this, 2026-09-27). The prompt
+    // asks for at most 3 and the runner keeps only the first 3.
     candidates: {
       type: "array",
-      maxItems: 3,
+      description: "At most 3 candidates, best first.",
       items: {
         type: "object",
         additionalProperties: false,

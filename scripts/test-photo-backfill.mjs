@@ -165,6 +165,25 @@ const V = (over = {}) => Object.fromEntries(ev.VISION_KEYS.map((k) => [k, { resu
   check("verify has no web tools", !v.tools);
   check("usage reported globally and per call", usageSeen > 0 && perCall === 1);
   check("no API key → clear error, no SDK load", (() => { try { ai.createAnthropicClient({ apiKey: "" }); return false; } catch (e) { return /ANTHROPIC_API_KEY/.test(e.message); } })());
+
+  // Structured outputs accept only a subset of JSON Schema. The first
+  // production calibration (2026-09-27) failed every part at the first call
+  // with "For 'array' type, property 'maxItems' is not supported" — a 400
+  // before any tokens. Keep every schema inside the supported subset.
+  const SUPPORTED = new Set(["type", "properties", "required", "additionalProperties", "items", "enum", "description", "const"]);
+  function schemaOffenders(schema, at, out = []) {
+    for (const [k, v] of Object.entries(schema)) {
+      if (!SUPPORTED.has(k)) out.push(`${at}.${k}`);
+      if (k === "properties") for (const [pk, pv] of Object.entries(v)) schemaOffenders(pv, `${at}.${pk}`, out);
+      else if (k === "items") schemaOffenders(v, `${at}.items`, out);
+    }
+    return out;
+  }
+  const offenders = [];
+  for (const [name, s] of Object.entries({ finder: ai.FINDER_SCHEMA, verify: ai.VERIFY_SCHEMA, compare: ai.COMPARE_SCHEMA })) schemaOffenders(s, name, offenders);
+  check("schemas use only keywords structured outputs support (no maxItems/minItems/pattern/min/max…)", offenders.length === 0, offenders.join(", "));
+  check("every object schema closes additionalProperties", [ai.FINDER_SCHEMA, ai.VERIFY_SCHEMA, ai.COMPARE_SCHEMA, ai.FINDER_SCHEMA.properties.candidates.items].every((s) => s.additionalProperties === false));
+  check("the schema check catches the exact bug", schemaOffenders({ type: "object", properties: { candidates: { type: "array", maxItems: 3, items: { type: "string" } } } }, "x").join() === "x.candidates.maxItems");
 }
 
 // ---- 5. Runner end-to-end on a mocked web ----------------------------------
