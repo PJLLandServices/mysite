@@ -118,6 +118,23 @@ check('part photos are fenced — images, overview, writes and the admin page', 
   assert.equal(needsAuth('POST', '/api/part-photos/405010/link'), 'user');
   assert.equal(needsAuth('DELETE', '/api/part-photo-groups/PG-0001/photo'), 'user');
   assert.equal(needsAuth('GET', '/admin/part-photos'), 'user');
+  // M2a: the fitting default and supplier logos.
+  assert.equal(needsAuth('POST', '/api/part-photo-groups/PG-0001/default'), 'user');
+  assert.equal(needsAuth('GET', `/api/supplier-logos/${hash}.png`), 'user');
+  assert.equal(needsAuth('POST', '/api/suppliers/SUP-001/logo'), 'user');
+  assert.equal(needsAuth('DELETE', '/api/suppliers/SUP-001/logo'), 'user');
+});
+
+check('M2a writes require the admin role in the handler, not just a session', () => {
+  // The fence above lets any staff session reach these; the handler must
+  // then insist on admin. Shape check on the real source: the handler's
+  // first statement is requireAdmin with its result checked.
+  for (const marker of ['partPhotoDefaultMatch && req.method === "POST"', 'supplierLogoMatch && (req.method === "POST" || req.method === "DELETE")']) {
+    const at = SRC.indexOf(marker);
+    assert.ok(at > 0, `handler not found: ${marker}`);
+    const head = SRC.slice(at, at + 400);
+    assert.match(head, /const session = await requireAdmin\(req\);\s*\n\s*if \(!session\) return sendJson\(res, 403/, `${marker} must reject non-admins`);
+  }
 });
 
 check('the admin surfaces around it did not move', () => {

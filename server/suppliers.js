@@ -19,7 +19,13 @@ const els = {
   fEmail: document.getElementById("supplierEmail"),
   fPhone: document.getElementById("supplierPhone"),
   fAddress: document.getElementById("supplierAddress"),
-  fNotes: document.getElementById("supplierNotes")
+  fNotes: document.getElementById("supplierNotes"),
+  fShortName: document.getElementById("supplierShortName"),
+  logoField: document.getElementById("supplierLogoField"),
+  logoPreview: document.getElementById("supplierLogoPreview"),
+  logoFile: document.getElementById("supplierLogoFile"),
+  logoRemove: document.getElementById("supplierLogoRemove"),
+  logoStatus: document.getElementById("supplierLogoStatus")
 };
 
 function escapeHtml(s) {
@@ -64,7 +70,7 @@ function renderList() {
       <li class="crm-table-row supplier-card${s.archived ? " is-archived" : ""}" data-supplier-id="${escapeHtml(s.id)}">
         <span class="crm-cell supplier-card-name">
         <span class="crm-identity">
-          <span class="crm-cell-primary">${escapeHtml(s.name)}</span>
+          <span class="crm-cell-primary">${logoImg(s, "supplier-list-logo")}${escapeHtml(s.name)}</span>
           <span class="crm-cell-sub">${escapeHtml(s.id)}${s.archived ? " &middot; archived" : ""}</span></span>
         </span>
         <span class="crm-cell supplier-card-contact">
@@ -108,7 +114,10 @@ function openForm({ supplier = null } = {}) {
     els.fPhone.value = supplier.phone || "";
     els.fAddress.value = supplier.address || "";
     els.fNotes.value = supplier.notes || "";
+    els.fShortName.value = supplier.shortName || "";
+    showLogo(supplier);
   } else {
+    els.logoField.hidden = true;
     els.formTitle.textContent = "New supplier";
     els.fId.value = "";
     els.form.reset();
@@ -136,7 +145,8 @@ async function saveForm(event) {
     email: els.fEmail.value,
     phone: els.fPhone.value,
     address: els.fAddress.value,
-    notes: els.fNotes.value
+    notes: els.fNotes.value,
+    shortName: els.fShortName.value
   };
   if (!payload.name.trim()) {
     els.formError.textContent = "Name is required.";
@@ -170,6 +180,54 @@ async function saveForm(event) {
     els.formSave.disabled = false;
   }
 }
+
+// ---- Logo (P-PJL-35 M2a) ----------------------------------------------
+// The official company logo for the parts picker's supplier chip. Uploaded
+// on its own (not through Save) and only resized by the server.
+function logoImg(s, cls) {
+  return s && s.logo && s.logo.hash
+    ? `<img class="${cls}" src="/api/supplier-logos/${escapeHtml(s.logo.hash)}.png" alt="" loading="lazy">`
+    : "";
+}
+function showLogo(supplier) {
+  els.logoField.hidden = false;
+  els.logoStatus.textContent = "";
+  els.logoFile.value = "";
+  els.logoPreview.innerHTML = supplier.logo ? logoImg(supplier, "supplier-logo-img") : '<span class="crm-cell-muted">No logo yet</span>';
+  els.logoRemove.hidden = !supplier.logo;
+}
+async function sendLogo(method, body) {
+  const id = els.fId.value;
+  if (!id) return;
+  els.logoStatus.textContent = method === "POST" ? "Uploading…" : "Removing…";
+  try {
+    const r = await fetch(`/api/suppliers/${encodeURIComponent(id)}/logo`, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || `HTTP ${r.status}`);
+    showLogo(data.supplier);
+    els.logoStatus.textContent = method === "POST" ? "Logo saved." : "Logo removed.";
+    await loadSuppliers();
+  } catch (err) {
+    els.logoStatus.textContent = err.message || "Couldn't save the logo.";
+  }
+}
+els.logoFile.addEventListener("change", () => {
+  const file = els.logoFile.files[0];
+  if (!file) return;
+  if (file.size > 4 * 1024 * 1024) { els.logoStatus.textContent = "That logo file is too large (4 MB max)."; return; }
+  const reader = new FileReader();
+  reader.onload = () => sendLogo("POST", { data: String(reader.result).split(",")[1] || "" });
+  reader.onerror = () => { els.logoStatus.textContent = "Couldn't read that file."; };
+  reader.readAsDataURL(file);
+});
+els.logoRemove.addEventListener("click", async () => {
+  const ok = await window.pjlDialog.confirm("Remove this supplier's logo? The parts picker will show a lettered badge instead.", { confirmLabel: "Remove logo", cancelLabel: "Cancel", destructive: true });
+  if (ok) sendLogo("DELETE");
+});
 
 async function toggleArchive(supplier) {
   const verb = supplier.archived ? "restore" : "archive";
