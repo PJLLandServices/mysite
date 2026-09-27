@@ -103,6 +103,23 @@ function partNumberOnPage(html, partNumbers) {
   return { result: "fail", reason: "The part number is not in the page's visible product text.", matched: null };
 }
 
+// Supplier-code mapping (Patrick, Sep 27 2026). Our catalog number is often
+// a distributor/internal code (HSPGPADJ) that the manufacturer's page never
+// prints; the manufacturer prints its own model (PGP-ADJ). The code maps to
+// the model ONLY when one product page on a known supplier or the official
+// manufacturer site shows BOTH in its visible product text — never from the
+// URL, filename, alt text, metadata, hidden code or the model's say-so.
+function supplierCodeMapping(html, pageUrl, ours, theirs, manufacturer) {
+  const host = hostOf(pageUrl);
+  const trusted = SUPPLIER_DOMAINS.some((d) => domainMatches(host, d)) || isOfficialManufacturerPage(pageUrl, manufacturer);
+  if (!trusted) return { result: "unknown", reason: "Not a supplier or manufacturer page." };
+  const o = partNumberOnPage(html, ours), t = partNumberOnPage(html, theirs);
+  if (o.result === "pass" && t.result === "pass" && o.matched !== t.matched) {
+    return { result: "pass", reason: `${o.matched} → ${t.matched} shown together on ${host}.`, ours: o.matched, theirs: t.matched, pageUrl };
+  }
+  return { result: "unknown", reason: "The page doesn't show both numbers in its product text." };
+}
+
 // ------------------------------------------------------------ generic spec
 
 const TYPE_WORDS = {
@@ -288,7 +305,7 @@ function groupingDecision(a, b) {
 module.exports = {
   MANUFACTURER_DOMAINS, SUPPLIER_DOMAINS, MIN_PART_NUMBER_LENGTH, VISION_KEYS,
   hostOf, isOfficialManufacturerPage,
-  normalizePartNumber, visibleProductText, partNumberOnPage,
+  normalizePartNumber, visibleProductText, partNumberOnPage, supplierCodeMapping,
   parseSpec, pageMatchesSpec, tierFor, visionSummary,
   pickCalibrationSample, groupingDecision, shapeOf, endsOf
 };

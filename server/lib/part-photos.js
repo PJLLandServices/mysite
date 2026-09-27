@@ -765,6 +765,14 @@ function createPartPhotos({ dataDir, sharp }) {
       const own = links[sku] && groups[links[sku].groupId];
       const ownIsPatricks = own && own.photo && SHOWABLE_GROUP_TIERS.has(own.tier) && !String(own.approvedBy || "").startsWith("auto:");
       if (own && links[sku].groupId !== target.groupId && ownIsPatricks) return { skipped: "has its own photo, approved by Patrick" };
+      // Both already show a live photo: the same image may merge; two
+      // DIFFERENT live photos are never silently collapsed — Patrick picks.
+      const tg = groups[target.groupId];
+      const liveHash = (g) => (g && g.photo && SHOWABLE_GROUP_TIERS.has(g.tier) ? g.photo.hash : null);
+      if (own && links[sku].groupId !== target.groupId && liveHash(own)) {
+        if (!liveHash(tg)) return { skipped: "only this part has a live photo — link the other way", propose: false };
+        if (liveHash(own) !== liveHash(tg)) return { skipped: "both have different live photos", propose: true };
+      }
       if (links[sku] && links[sku].linkTier === "confirmed" && links[sku].linkedBy && !String(links[sku].linkedBy).startsWith("auto:") && links[sku].groupId !== target.groupId) {
         return { skipped: "Patrick linked it to a different fitting" };
       }

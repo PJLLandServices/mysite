@@ -330,46 +330,113 @@ const report = [];
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-// 5c'. Grouping on a fresh run (auto-approve ON).
+// 5c'. Grouping. Auto-link needs same mfr + mfr part # on official pages,
+// AND must not silently collapse two DIFFERENT live photos.
+const pairIn = (x, a, b) => x.some((p) => (p.a === a && p.b === b) || (p.a === b && p.b === a) || (p.sku === a && p.into === b) || (p.sku === b && p.into === a));
 {
+  // Neither live yet (auto-approve OFF) → auto-link.
   const dir = tmp();
   const h = harness(dir);
-  await h.b.start({ skus: RUN_SKUS, autoApprove: true });
+  await h.b.start({ skus: RUN_SKUS, autoApprove: false });
   await h.b.idle();
   const gr = await h.b.applyGrouping();
-  const pair = (x, a, b) => x.some((p) => (p.a === a && p.b === b) || (p.a === b && p.b === a) || (p.sku === a && p.into === b) || (p.sku === b && p.into === a));
-  check("auto-link: same Hunter part # on the official page", gr.applied.filter((a) => !a.skipped).length === 1 && pair(gr.applied, "PGPADJ", "PGPADJB"), JSON.stringify(gr.applied));
-  check("same Rain Bird number from a SUPPLIER page → proposal only", pair(gr.proposals, "RBXFD1", "RBXFD2"));
-  check("same generic spec → proposal only", pair(gr.proposals, "TEE34", "TEE34B"));
+  check("neither live: same Hunter part # on the official page → auto-link", gr.applied.length === 1 && pairIn(gr.applied, "PGPADJ", "PGPADJB"), JSON.stringify(gr.applied));
+  check("same Rain Bird number from a SUPPLIER page → proposal only", pairIn(gr.proposals, "RBXFD1", "RBXFD2"));
+  check("same generic spec → proposal only", pairIn(gr.proposals, "TEE34", "TEE34B"));
   const s = h.store.readStoresSync();
   check("auto-linked SKU now shares the fitting", s.links.PGPADJB.groupId === s.links.PGPADJ.groupId && s.links.PGPADJB.linkedBy === "auto:mfr-part");
   check("proposed SKUs stay separate", s.links.RBXFD1.groupId !== s.links.RBXFD2.groupId && s.links.TEE34.groupId !== s.links.TEE34B.groupId);
-  const p = h.parts();
-  check("picker sees one fitting for the auto-linked pair", p.PGPADJ.photo && p.PGPADJ.photo.sharedWith.includes("PGPADJB"));
   check("grouping is audit-logged", fs.readFileSync(path.join(dir, "part-photos-log.jsonl"), "utf8").includes('"link.auto"'));
-  check("the moved SKU's old group + photo stay on file", Object.values(s.groups).filter((g) => g.photo).length >= 2);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+{
+  // Both live with DIFFERENT AI photos → Fittings to confirm, no link.
+  const dir = tmp();
+  const h = harness(dir);
+  await h.b.start({ skus: ["PGPADJ", "PGPADJB"], autoApprove: true });
+  await h.b.idle();
+  const p0 = h.parts();
+  check("fixture: both live, different photos", p0.PGPADJ.photoState === "verified" && p0.PGPADJB.photoState === "verified" && p0.PGPADJ.photo.thumb !== p0.PGPADJB.photo.thumb);
+  const gr = await h.b.applyGrouping();
+  const s = h.store.readStoresSync();
+  check("both live, different photos → proposal, not auto-link", gr.applied.length === 0 && pairIn(gr.proposals, "PGPADJ", "PGPADJB") && s.links.PGPADJ.groupId !== s.links.PGPADJB.groupId, JSON.stringify(gr));
+  check("…and each keeps its own photo", h.parts().PGPADJ.photo.thumb === p0.PGPADJ.photo.thumb && h.parts().PGPADJB.photo.thumb === p0.PGPADJB.photo.thumb);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+{
+  // Both live with the SAME stored image → auto-link.
+  const dir = tmp();
+  const same = { manufacturer: "Hunter", manufacturerPartNumber: "PGP-ADJ", candidates: [cand(HUNTER + "/pgp-adj", "pgp")], notes: "" };
+  const h = harness(dir, { find: (part, pass) => (part.sku === "PGPADJB" && pass === 1 ? same : undefined) });
+  await h.b.start({ skus: ["PGPADJ", "PGPADJB"], autoApprove: true });
+  await h.b.idle();
+  const gr = await h.b.applyGrouping();
+  const s = h.store.readStoresSync();
+  check("both live, same image hash → auto-link", gr.applied.length === 1 && s.links.PGPADJ.groupId === s.links.PGPADJB.groupId, JSON.stringify(gr));
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+{
+  // Only one live (AI) → allowed, and the one without a photo joins it.
+  const dir = tmp();
+  const h = harness(dir);
+  await h.b.start({ skus: ["PGPADJ"], autoApprove: true }); await h.b.idle();
+  await h.b.start({ skus: ["PGPADJB"], autoApprove: false }); await h.b.idle();
+  const r1 = await h.store.autoLinkSameFitting("PGPADJ", CATALOG.PGPADJ, "PGPADJB", { reason: "test" });
+  check("the live one is never moved onto a fitting without a photo", r1.skipped && !r1.propose);
+  const r2 = await h.store.autoLinkSameFitting("PGPADJB", CATALOG.PGPADJB, "PGPADJ", { reason: "test" });
+  check("one live AI photo → the other joins it and shows it", !r2.skipped && h.parts().PGPADJB.photo && h.parts().PGPADJB.photo.sharedWith.includes("PGPADJ"));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-// 5d. A photo Patrick approved himself is never moved by automation.
+// 5d. Patrick's own photos and links are never touched by automation.
 {
   const dir = tmp();
   const h = harness(dir);
-  const mine = await h.store.setPhoto("PGPADJB", CATALOG.PGPADJB, await pngFor("patricks"), { by: "patrick", source: { method: "upload" } });
-  await h.b.start({ skus: RUN_SKUS, autoApprove: true });
+  await h.store.setPhoto("PGPADJB", CATALOG.PGPADJB, await pngFor("patricks"), { by: "patrick", source: { method: "upload" } });
+  await h.b.start({ skus: RUN_SKUS, autoApprove: false });
   await h.b.idle();
   const before = h.store.readStoresSync();
   check("fixture: PGPADJB has Patrick's photo and was not re-queued", h.parts().PGPADJB.photoState === "verified" && !h.b._state().run.order.includes("PGPADJB"));
-  // PGPADJB wasn't in this run, so link it by hand the way a later run would.
   const res = await h.store.autoLinkSameFitting("PGPADJB", CATALOG.PGPADJB, "PGPADJ", { reason: "test" });
-  const after = h.store.readStoresSync();
-  check("Patrick's photo is never auto-moved", res.skipped && after.links.PGPADJB.groupId === before.links.PGPADJB.groupId);
+  check("Patrick's photo is never auto-moved", res.skipped && h.store.readStoresSync().links.PGPADJB.groupId === before.links.PGPADJB.groupId);
   const res2 = await h.store.autoLinkSameFitting("PGPADJ", CATALOG.PGPADJ, "PGPADJB", { reason: "test" });
-  const after2 = h.store.readStoresSync();
-  check("…the AI-approved twin joins Patrick's fitting instead", !res2.skipped && after2.links.PGPADJ.groupId === after2.links.PGPADJB.groupId);
-  check("…and shows Patrick's photo", h.parts().PGPADJ.photo.approvedBy === "patrick");
+  check("a part with no live photo joins Patrick's fitting", !res2.skipped && h.parts().PGPADJ.photo.approvedBy === "patrick");
   fs.rmSync(dir, { recursive: true, force: true });
 }
+
+// 5e. Supplier-code mapping: HSPGPADJ → SiteOne page → PGP-ADJ → Hunter.
+{
+  const M = ev.supplierCodeMapping;
+  const both = html("Hunter PGP Adjustable Rotor. Item # HSPGPADJ. Mfr. Part # PGP-ADJ.");
+  check("mapping: both numbers visible on a SiteOne page → pass", M(both, "https://www.siteone.com/en/hspgpadj", ["HSPGPADJ"], ["PGP-ADJ"], "hunter").result === "pass");
+  check("mapping: our code only in URL/alt/title/link → no mapping", M(html("Hunter PGP Adjustable Rotor. Mfr. Part # PGP-ADJ.", "HSPGPADJ"), "https://www.siteone.com/en/hspgpadj", ["HSPGPADJ"], ["PGP-ADJ"], "hunter").result === "unknown");
+  check("mapping: unknown site never maps", M(both, "https://www.random-shop.com/p", ["HSPGPADJ"], ["PGP-ADJ"], "hunter").result === "unknown");
+  check("mapping: manufacturer number missing → no mapping", M(html("Item # HSPGPADJ rotor"), "https://www.siteone.com/x", ["HSPGPADJ"], ["PGP-ADJ"], "hunter").result === "unknown");
+
+  WEB["https://www.siteone.com/en/hspgpadj"] = both;
+  WEB["https://www.siteone.com/en/hspgpadj-alt-only"] = html("Hunter PGP Adjustable Rotor. Mfr. Part # PGP-ADJ.", "HSPGPADJX");
+  const map = {
+    HSPGPADJ:  { 1: { manufacturer: "Hunter", manufacturerPartNumber: "PGP-ADJ", candidates: [cand(HUNTER + "/pgp-adj", "pgp")] },
+                 2: { manufacturer: "Hunter", manufacturerPartNumber: "PGP-ADJ", candidates: [cand("https://www.siteone.com/en/hspgpadj", "so")] } },
+    HSPGPADJX: { 1: { manufacturer: "Hunter", manufacturerPartNumber: "PGP-ADJ", candidates: [cand(HUNTER + "/pgp-adj", "pgp")] },
+                 2: { manufacturer: "Hunter", manufacturerPartNumber: "PGP-ADJ", candidates: [cand("https://www.siteone.com/en/hspgpadj-alt-only", "so")] } }
+  };
+  const catalog = { ...CATALOG,
+    HSPGPADJ:  { sku: "HSPGPADJ", partNumber: "HSPGPADJ", description: "PGP 4\" rotor adjustable", category: "sprinkler_heads", manufacturer: "hunter" },
+    HSPGPADJX: { sku: "HSPGPADJX", partNumber: "HSPGPADJX", description: "PGP 4\" rotor adjustable", category: "sprinkler_heads", manufacturer: "hunter" } };
+  const dir = tmp();
+  const h = harness(dir, { catalog, find: (part, pass) => (map[part.sku] ? { notes: "", ...(map[part.sku][pass] || { candidates: [] }) } : undefined) });
+  await h.b.start({ skus: ["HSPGPADJ", "HSPGPADJX"], autoApprove: true });
+  await h.b.idle();
+  const st = h.b._state().run;
+  const pn = st.items.HSPGPADJ.work.checked[0].partNumber;
+  check("HSPGPADJ → SiteOne → PGP-ADJ → official Hunter page = Confident", st.items.HSPGPADJ.result.tier === "confident" && h.parts().HSPGPADJ.photoState === "verified", JSON.stringify(st.items.HSPGPADJ.result));
+  check("…the mapping page is recorded as the evidence", pn.result === "pass" && pn.mappedVia === "https://www.siteone.com/en/hspgpadj");
+  check("our code only in hidden page parts → stays TBD", st.items.HSPGPADJX.result.tier === "tbd" && h.parts().HSPGPADJX.photoState === "tbd");
+  check("mapping search runs once per SKU, only when needed", h.counts.find.HSPGPADJ === 2 && h.counts.find.HSPGPADJX === 2);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 
 // 6. Stop / restart.
 {

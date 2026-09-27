@@ -1,7 +1,7 @@
 // Photo backfill runner — works through the catalog one SKU at a time,
 // step by step, saving after every step (P-PJL-35 M3).
 //
-// Per SKU:  find → check → verify → cross (generic only) → tier → record
+// Per SKU:  find → check → map (branded) → verify → cross (generic) → tier → record
 //   find    AI web search: product page + image URL candidates, official
 //           manufacturer site first, then SiteOne / Central, then (generic
 //           only) the open web.
@@ -9,6 +9,9 @@
 //           be in the page's visible product text (photo-evidence); generic
 //           pages are matched against the spec; images are stored resize-only
 //           as candidates (never live on their own).
+//   map     branded, when our number is a distributor code the official page
+//           doesn't print: a supplier page must show our code AND the
+//           manufacturer's model in visible text (supplierCodeMapping).
 //   verify  a separate AI vision call per candidate — image bytes + our spec,
 //           nothing else.
 //   cross   generic fittings: a second source from a different domain must
@@ -31,7 +34,7 @@ const crypto = require("node:crypto");
 const { writeJsonAtomic, serialize } = require("./atomic-json");
 const ev = require("./photo-evidence");
 
-const STEPS = ["queued", "find", "check", "verify", "cross", "tier", "record", "done"];
+const STEPS = ["queued", "find", "check", "map", "verify", "cross", "tier", "record", "done"];
 const BRAND_ORDER = ["hunter", "rainbird", "netafim", "oilcreek", "dawn", "blulock", "watts"];
 
 function isTransient(err) {
@@ -277,6 +280,34 @@ function createBackfill({
         checked.push(entry);
       }
       it.work.checked = checked;
+      it.step = kind === "branded" ? "map" : "verify";
+      return;
+    }
+
+    // Branded only: our number isn't on the official page, but the
+    // manufacturer's model is. Look for a supplier/manufacturer page that
+    // shows BOTH in visible product text; if one does, the official page's
+    // model number stands for ours. Otherwise nothing changes (TBD).
+    if (it.step === "map") {
+      const theirs = it.work.found && it.work.found.identified ? [it.work.found.identified.manufacturerPartNumber] : [];
+      const needs = (it.work.checked || []).filter((c) => c.source.official && c.manufacturerNumberOnPage && c.partNumber && c.partNumber.result === "unknown");
+      if (needs.length && theirs.length && !it.work.mapping) {
+        const ours = [part.partNumber, part.sku, ...part.supplierSkus];
+        const res = await ai.find(part, 2, usage);
+        let mapping = null;
+        for (const c of (res.candidates || []).slice(0, 3)) {
+          if (!/^https:\/\//i.test(c.pageUrl || "")) continue;
+          let page;
+          try { page = await fetchPage(c.pageUrl); }
+          catch (err) { if (isTransient(err)) throw err; continue; }
+          const m = ev.supplierCodeMapping(page.html, page.finalUrl || c.pageUrl, ours, theirs, part.manufacturer);
+          if (m.result === "pass") { mapping = m; break; }
+        }
+        it.work.mapping = mapping || { result: "unknown", reason: "No supplier page shows our number next to the manufacturer's." };
+      }
+      if (it.work.mapping && it.work.mapping.result === "pass") {
+        for (const c of needs) c.partNumber = { result: "pass", reason: `Official page shows ${it.work.mapping.theirs}; ${it.work.mapping.reason}`, matched: it.work.mapping.theirs, mappedVia: it.work.mapping.pageUrl };
+      }
       it.step = "verify";
       return;
     }
@@ -383,7 +414,8 @@ function createBackfill({
       const weight = (p) => !isLive(p) ? 0 : String(p.photo.approvedBy || "").startsWith("auto:") ? 1 : 2;
       const [target, mover] = weight(parts[pair.b]) > weight(parts[pair.a]) ? [pair.b, pair.a] : [pair.a, pair.b];
       const res = await store.autoLinkSameFitting(mover, parts[mover], target, { reason: pair.reason });
-      applied.push({ sku: mover, into: target, ...res });
+      if (res.propose) proposals.push({ a: pair.a, b: pair.b, reason: "Same manufacturer part number, but both already have different live photos — pick one." });
+      else applied.push({ sku: mover, into: target, ...res });
     }
     state.run.grouping = { at: new Date(now()).toISOString(), applied, proposals };
     await save();
