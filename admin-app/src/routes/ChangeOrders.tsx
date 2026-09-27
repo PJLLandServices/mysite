@@ -173,10 +173,19 @@ export function ChangeOrdersTab() {
             label="Signed changes"
             tone="money"
             value={agreement.netChangeSubtotal === null ? "—" : signedChange(agreement.netChangeSubtotal)}
-            hint="before HST, vs the original"
+            hint={agreement.netChangeTotal === null ? "before HST, vs the original" : `before HST (${signedChange(agreement.netChangeTotal)} with HST), newest signed vs original`}
           />
         </div>
       </Card>
+
+      {data.billingBlocked ? (
+        <Card className="border-l-4 border-l-danger-500">
+          <div className="px-4 py-3" data-testid="billing-blocked">
+            <StatusPill tone="danger">Billing on hold</StatusPill>
+            <p className="mt-1 text-[14px] text-ink">{data.billingBlocked.message}</p>
+          </div>
+        </Card>
+      ) : null}
 
       {holds.length ? (
         <Card>
@@ -196,7 +205,7 @@ export function ChangeOrdersTab() {
         {agreement.governing ? (
           <>
             <p className="px-4 pb-1 pt-3 text-[14px] text-ink" data-testid="agreement-line">
-              Billed on <strong>{agreement.governing.id}</strong> (v{agreement.governing.version}) —{" "}
+              {data.billingBlocked ? "Signed agreement" : "Billed on"} <strong>{agreement.governing.id}</strong> (v{agreement.governing.version}) —{" "}
               <strong>{money(agreement.governing.subtotal)}</strong> before HST
               {agreement.original && agreement.original.id !== agreement.governing.id
                 ? <>, up from {money(agreement.original.subtotal)} on {agreement.original.id}</>

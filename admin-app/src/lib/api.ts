@@ -88,8 +88,28 @@ export interface LinkedQuote {
   confirmed?: boolean | null;
   lineItems?: Array<{ label: string; total: number }>;
   chain?: Array<{ id: string; version: number }>;
-  /** The signed agreement the job is billed on — not `id` while a revision is still a draft. */
-  agreement?: { id: string; version: number; subtotal: number; total: number } | null;
+}
+
+export interface AgreementQuote {
+  id: string;
+  version: number;
+  status: string;
+  acceptedAt: string | null;
+  subtotal: number;
+  hst: number;
+  total: number;
+  href: string;
+}
+
+/* projects.describeAgreement: original (first signed), governing (newest
+   signed — what the invoice bills), pending (unsigned, never the
+   contract), and the net change between original and governing. */
+export interface Agreement {
+  original: AgreementQuote | null;
+  governing: AgreementQuote | null;
+  pending: AgreementQuote | null;
+  netChangeSubtotal: number | null;
+  netChangeTotal: number | null;
 }
 
 export interface InvoiceSummary {
@@ -229,6 +249,10 @@ export const projectsApi = {
       project: ProjectDetail;
       materialLists?: Array<{ id: string; name?: string; status: string; totals?: { lineCount?: number } }>;
       linkedQuote?: LinkedQuote | null;
+      /** The signed agreement (server: projects.describeAgreement) — the
+          same answer the Change Orders tab shows. Contract value reads
+          this and nothing else. */
+      agreement?: Agreement | null;
       invoiceSummary?: InvoiceSummary | null;
       siteBuilderSummary?: SiteBuilderSummary | null;
     }>(`/api/projects/${encodeURIComponent(id)}`)
@@ -514,8 +538,11 @@ export interface ProjectChangeOrders {
     governing: AgreementVersion | null;
     pending: AgreementVersion | null;
     netChangeSubtotal: number | null;
+    netChangeTotal: number | null;
     versions: AgreementVersion[];
   };
+  /** Set on a deposit job whose balance predates the signed revision. */
+  billingBlocked: { key: string; message: string } | null;
   summary: {
     total: number;
     open: number;

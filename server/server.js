@@ -16761,24 +16761,8 @@ async function handleApi(req, res, pathname) {
             // Prefer the balance invoice if the deposit's already been
             // paid and superseded by one; else the deposit invoice.
             depositInvoiceId: null,
-            chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status })),
-            // The SIGNED agreement the job is billed on (quotes.describeChain's
-            // governing) — which is not `current` while a revision is still a
-            // draft. The workspace's "Contract value" reads this, so an
-            // unsigned revision never shows as the contract (2026-09-27).
-            agreement: null
+            chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status }))
           };
-          try {
-            const { governing } = await quotes.resolveQuoteChain(quoteAnchorId);
-            if (governing) {
-              linkedQuote.agreement = {
-                id: governing.id,
-                version: governing.version || 1,
-                subtotal: Number(governing.subtotal) || 0,
-                total: Number(governing.total) || 0
-              };
-            }
-          } catch (err) { /* tolerate — the header falls back to the project's snapshot */ }
           try {
             const chainInvoices = await invoices.listByQuote(chain.map((q) => q.id));
             const byRole = (role) => chainInvoices
@@ -16849,7 +16833,13 @@ async function handleApi(req, res, pathname) {
       };
     }
 
-    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote, invoiceSummary, siteBuilderSummary });
+    // The signed agreement — projects.describeAgreement, the SAME function
+    // the Change Orders tab reads — so "Contract value" is never an
+    // unsigned revision and never a second interpretation in React.
+    let agreement = null;
+    try { agreement = projects.describeAgreement(await projects.resolveProjectQuote(proj)); }
+    catch (err) { /* tolerate — the header shows "—" */ }
+    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote, invoiceSummary, siteBuilderSummary, agreement });
   }
   if (projectMatch && req.method === "PATCH") {
     try {
@@ -17286,7 +17276,8 @@ async function handleApi(req, res, pathname) {
         project: proj,
         chainInfo,
         blockers: preflight.blockers || [],
-        stageOf: projects.scopeChangeStage
+        stageOf: projects.scopeChangeStage,
+        describeAgreement: projects.describeAgreement
       });
       return sendJson(res, 200, { ok: true, ...model });
     } catch (err) {

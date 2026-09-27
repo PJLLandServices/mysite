@@ -63,9 +63,10 @@ export function ProjectWorkspace() {
   const p = data.project;
   const status = (p.status || "planning") as ProjectStatus;
   const { done, total } = taskProgress(p.tasks);
-  // The contract is what the customer SIGNED (the server's governing
-  // agreement) — never a revision still waiting for a signature.
-  const value = data.linkedQuote?.agreement?.total ?? p.proposalSnapshot?.total;
+  // The contract is what the customer SIGNED — the server's
+  // describeAgreement, the same answer the Change Orders tab shows. No
+  // fallback here: a second source would be a second interpretation.
+  const value = data.agreement?.governing?.total;
   const invoice = data.invoiceSummary;
   const design = data.siteBuilderSummary;
   const goTab = (tab: string) => navigate(`/app/projects/${encodeURIComponent(p.id)}/${tab}`);

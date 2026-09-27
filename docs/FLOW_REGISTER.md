@@ -10,7 +10,16 @@ holds are `completionPreflight`'s blockers word for word. The tab has no buttons
 the classic page's office-only routes. **Also fixed:** the workspace header's "Contract value" showed
 a draft revision's total while it was unsigned. It now reads `linkedQuote.agreement`, the signed
 quote the invoice bills. **Test:** `scripts/test-change-orders-view.mjs` (in `build:check`); on main
-before this, the route does not exist. **Patrick's walk (UNMAPPED until done):** open a job with a
+before this, the route does not exist. **Patrick's four checks (2026-09-27):**
+- The header and the tab both read `projects.describeAgreement`, one server function, and React has
+  no fallback.
+- Signed change value = newest signed minus original, before HST and with HST. It is never a sum,
+  and drafts are excluded (tested with two signed revisions and a pending draft).
+- A deposit job shows **"Billing on hold"** and never "billed at completion".
+- An interrupted send shows "Delivery uncertain".
+
+**Still reading the snapshot:** the projects list and the Dashboard's summed "Active contract value",
+flagged for a follow-up. **Patrick's walk (UNMAPPED until done):** open a job with a
 change order in the new app → Change Orders. The counts, stages and "Billed on …" amount should
 match the classic page and the quote.
 **2026-09-27 (Change-order safety: office-only actions, real names, honest sends, one "open" rule; PR 2 of Change Orders, stacked on the quote lifecycle PR; no PASS flow touched):**

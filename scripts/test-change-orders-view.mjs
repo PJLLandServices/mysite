@@ -174,13 +174,17 @@ try {
     ok("the job is still billed on the $5,000 original", v.agreement.governing?.subtotal === 5000 && v.agreement.pending?.id === rev.id && v.agreement.pending?.subtotal === 5400,
       JSON.stringify({ g: v.agreement.governing?.subtotal, p: v.agreement.pending?.subtotal }));
     ok("the revision hold is shown", v.holds.some((h) => h.key === "revision_unsigned"));
-    // The workspace header's "Contract value" reads linkedQuote.agreement:
-    // the SIGNED $5,000 (+HST), not the $5,400 draft being worked on.
+    // The workspace header's "Contract value" reads the project payload's
+    // `agreement` — projects.describeAgreement, the SAME function the tab
+    // uses: the SIGNED $5,000 (+HST), not the $5,400 draft being worked on.
     const pr = await fetch(`${BASE}/api/projects/${encodeURIComponent(proj.id)}`, { headers: { cookie } });
     const pj = await pr.json().catch(() => ({}));
     ok("header: the quote panel shows the draft being worked on", pj.linkedQuote?.id === rev.id, String(pj.linkedQuote?.id));
-    ok("header: ...but the contract value is the SIGNED agreement", pj.linkedQuote?.agreement?.id === v.agreement.governing?.id && pj.linkedQuote?.agreement?.total === 5650,
-      JSON.stringify(pj.linkedQuote?.agreement));
+    ok("header: ...but the contract value is the SIGNED agreement", pj.agreement?.governing?.id === v.agreement.governing?.id && pj.agreement?.governing?.total === 5650,
+      JSON.stringify(pj.agreement?.governing));
+    ok("header and tab give the same agreement, field for field",
+      JSON.stringify([pj.agreement?.governing?.id, pj.agreement?.governing?.total, pj.agreement?.netChangeSubtotal, pj.agreement?.pending?.id]) ===
+      JSON.stringify([v.agreement.governing?.id, v.agreement.governing?.total, v.agreement.netChangeSubtotal, v.agreement.pending?.id]));
     await agreesWithTheServer(proj.id, v, "(2 unsigned)");
 
     await quotes.recordPortalSignAcceptance(rev.id, SIG);
@@ -191,6 +195,69 @@ try {
     ok("no hold left", v.holds.length === 0, JSON.stringify(v.holds));
     ok("versions list both, original then current", v.agreement.versions.map((x) => x.role).join() === "original,governing", v.agreement.versions.map((x) => x.role).join());
     await agreesWithTheServer(proj.id, v, "(2 signed)");
+  });
+
+  // ====================================================================
+  await scenario("2b. two signed changes and a pending draft: net change = newest signed − original, never a sum", async () => {
+    const proj = await signedJob();
+    const a = await raise(proj.id, "Drip zone", 400);
+    await approve(proj.id, a.id);
+    const r1 = await projects.generateQuoteRevisionFromScopeChange(proj.id, a.id, { by: OFFICE });
+    await quotes.recordPortalSignAcceptance(r1.id, SIG);                 // 5,400
+    const b = await raise(proj.id, "Extra head", 150);
+    await approve(proj.id, b.id);
+    const r2 = await projects.generateQuoteRevisionFromScopeChange(proj.id, b.id, { by: OFFICE });
+    await quotes.recordPortalSignAcceptance(r2.id, SIG);                 // 5,550
+    const c = await raise(proj.id, "Lighting", 250);
+    await approve(proj.id, c.id);
+    const r3 = await projects.generateQuoteRevisionFromScopeChange(proj.id, c.id, { by: OFFICE }); // 5,800, UNSIGNED
+
+    const v = (await get(proj.id)).data;
+    const q1 = await quotes.get(v.agreement.original.id), q2 = await quotes.get(r2.id), q1r = await quotes.get(r1.id), q3 = await quotes.get(r3.id);
+    ok("setup: v1 5,000 → v2 5,400 → v3 5,550 signed; v4 5,800 unsigned",
+      [q1.subtotal, q1r.subtotal, q2.subtotal, q3.subtotal].join() === "5000,5400,5550,5800", [q1.subtotal, q1r.subtotal, q2.subtotal, q3.subtotal].join());
+    ok("net change before HST = 5,550 − 5,000 = +550", v.agreement.netChangeSubtotal === 550, String(v.agreement.netChangeSubtotal));
+    ok("...not the sum of the revisions' increases counted per revision (400 + 550 = 950)", v.agreement.netChangeSubtotal !== 950);
+    ok("...and the unsigned 5,800 draft is not in it", v.agreement.netChangeSubtotal !== 800);
+    ok("net change with HST = the newest signed total − the original total, from the quotes themselves",
+      v.agreement.netChangeTotal === Math.round((Number(q2.total) - Number(q1.total)) * 100) / 100, `${v.agreement.netChangeTotal} vs ${q2.total} − ${q1.total}`);
+    ok("the governing agreement is v3, the pending one v4", v.agreement.governing.id === r2.id && v.agreement.pending.id === r3.id);
+    await agreesWithTheServer(proj.id, v, "(2b)");
+  });
+
+  // ====================================================================
+  await scenario("2c. a deposit job: billing is shown as on hold, never as automatic", async () => {
+    const invoices = require(path.join(ROOT, "server", "lib", "invoices.js"));
+    const proj = await signedJob();
+    const q1 = await quotes.get((await projects.get(proj.id)).sourceQuoteId);
+    const bal = await invoices.createDraft({ quoteId: q1.id, lineItems: [{ key: "balance", label: "Balance of Q", qty: 1, price: 2500 }], invoiceRole: "balance" });
+    const all = JSON.parse(fs.readFileSync(path.join(DATA, "quotes.json"), "utf8"));
+    all.find((x) => x.id === q1.id).deposit = { enabled: true, mode: "percent", value: 50, balanceInvoiceId: bal.id };
+    fs.writeFileSync(path.join(DATA, "quotes.json"), JSON.stringify(all, null, 2));
+    const c = await raise(proj.id, "Drip zone", 400);
+    await approve(proj.id, c.id);
+    const rev = await projects.generateQuoteRevisionFromScopeChange(proj.id, c.id, { by: OFFICE });
+    await quotes.recordPortalSignAcceptance(rev.id, SIG);
+
+    const v = (await get(proj.id)).data;
+    ok("the tab says billing is on hold for the office's correction", v.billingBlocked?.key === "deposit_balance_predates_revision" && /on hold until the office corrects the deposit balance/.test(v.billingBlocked.message),
+      JSON.stringify(v.billingBlocked));
+    ok("...and says the revision will NOT be invoiced automatically", /will not be invoiced automatically/.test(v.billingBlocked?.message || ""));
+    const ch = phaseOf(v, c.id);
+    ok("the signed change does not claim it will be billed at completion", ch?.phase === "signed" && !/billed at completion/.test(ch.next) && /will not be invoiced automatically/.test(ch.next), ch?.next);
+    ok("the hold itself is the completion check's, word for word", v.holds.some((h) => h.key === "deposit_balance_predates_revision"));
+    await agreesWithTheServer(proj.id, v, "(2c)");
+  });
+
+  // ====================================================================
+  await scenario("2d. an interrupted send shows as delivery uncertain", async () => {
+    const proj = await signedJob();
+    const c = await raise(proj.id, "Move the backflow", 250);
+    const all = JSON.parse(fs.readFileSync(path.join(DATA, "projects.json"), "utf8"));
+    all.find((p) => p.id === proj.id).scopeChangeRequests.find((x) => x.id === c.id).sendInFlight = { at: "2026-09-27T12:00:00.000Z", by: OFFICE, to: "adaeze@example.test" };
+    fs.writeFileSync(path.join(DATA, "projects.json"), JSON.stringify(all, null, 2));
+    const ch = phaseOf((await get(proj.id)).data, c.id);
+    ok("labelled Delivery uncertain, saying it will not be sent again until the office records it", ch?.phaseLabel === "Delivery uncertain" && /will not be sent again/.test(ch.next), JSON.stringify(ch && [ch.phaseLabel, ch.next]));
   });
 
   // ====================================================================
@@ -244,6 +311,12 @@ try {
   ok("...and does no arithmetic on money", !MONEY_MATH.some((re) => re.test(code)),
     "found arithmetic on a money field, or a reduce");
   ok("...and decides nothing about 'open' itself (uses the server's flag)", /c\.open/.test(code) && !/pending_admin_review|pending_customer_approval/.test(code));
+  // The header reads the server's agreement and nothing else — no
+  // fallback that would be a second interpretation of the contract.
+  const overview = fs.readFileSync(path.join(ROOT, "admin-app", "src", "routes", "ProjectOverview.tsx"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  const valueLine = (overview.match(/const value = [^;]+;/) || [""])[0];
+  ok("the header's Contract value is the server's agreement, with no fallback", valueLine === "const value = data.agreement?.governing?.total;", valueLine);
   const main = fs.readFileSync(path.join(ROOT, "admin-app", "src", "main.tsx"), "utf8");
   ok("the workspace's Change Orders tab is this screen, not the placeholder", /path="changes" element=\{<ChangeOrdersTab \/>\}/.test(main));
   const dist = fs.readdirSync(path.join(ROOT, "server", "app-dist", "assets")).filter((f) => f.endsWith(".js"))

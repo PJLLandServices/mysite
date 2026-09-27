@@ -54,6 +54,11 @@ function quoteSummary(q, role) {
 // executed change's fate is its revised quote's.
 function phaseOf(scr, proj, chainInfo, byId, stageOf) {
   const stage = stageOf(scr, proj);
+  if (stage === "in_review" && scr.sendInFlight) {
+    // An interrupted send (saved before the email went; see
+    // projects.sendScopeChangeRequest): nobody knows whether it arrived.
+    return { phase: "in_review", label: "Delivery uncertain", next: `A send to ${scr.sendInFlight.to || "the customer"} was interrupted before its result was saved, so nobody can tell whether it arrived. The office checks and records whether it went; it will not be sent again until then.` };
+  }
   if (stage === "in_review") {
     const attempts = Array.isArray(scr.sendAttempts) ? scr.sendAttempts : [];
     const last = attempts[attempts.length - 1];
@@ -101,14 +106,16 @@ function phaseOf(scr, proj, chainInfo, byId, stageOf) {
   }
 }
 
-function describeChangeOrders({ project, chainInfo, blockers = [], stageOf }) {
+function describeChangeOrders({ project, chainInfo, blockers = [], stageOf, describeAgreement }) {
   const proj = project || {};
   const info = chainInfo || { chain: [], governing: null, pending: null };
   const byId = new Map((info.chain || []).map((q) => [q.id, q]));
   // Revisions linked from a change but outside the project's chain (should
   // not happen; shown honestly as "not found" rather than guessed at).
-  const signedVersions = (info.chain || []).filter(quotesLib.isSignedAgreement);
-  const original = signedVersions[0] || null;
+  // The agreement is projects.describeAgreement's — the same answer the
+  // workspace header shows. Roles for the version list come from it too.
+  const agreement = describeAgreement(info);
+  const original = agreement.original ? byId.get(agreement.original.id) : null;
   const governing = info.governing || null;
   const pending = info.pending || null;
 
@@ -177,6 +184,21 @@ function describeChangeOrders({ project, chainInfo, blockers = [], stageOf }) {
   const holds = (blockers || [])
     .filter((b) => CHANGE_BLOCKERS.has(b.key))
     .map((b) => ({ key: b.key, message: b.message }));
+  // A deposit job whose balance was built from an older version is held
+  // until the office corrects it — the signed revision is NOT invoiced
+  // automatically, and the tab must not suggest it will be.
+  const depositHold = holds.find((h) => h.key === "deposit_balance_predates_revision") || null;
+  const billingBlocked = depositHold ? {
+    key: depositHold.key,
+    message: `Billing is on hold until the office corrects the deposit balance. ${depositHold.message} The signed revision will not be invoiced automatically.`
+  } : null;
+  if (billingBlocked) {
+    for (const c of changes) {
+      if (c.phase === "signed") {
+        c.next = "In the signed agreement — but billing is on hold until the office corrects the deposit balance. It will not be invoiced automatically.";
+      }
+    }
+  }
 
   return {
     projectId: proj.id || null,
@@ -185,10 +207,12 @@ function describeChangeOrders({ project, chainInfo, blockers = [], stageOf }) {
       original: quoteSummary(original, "original"),
       governing: quoteSummary(governing, "governing"),
       pending: quoteSummary(pending, "pending"),
-      // What signed changes have added to the agreement so far, pre-tax.
-      netChangeSubtotal: original && governing ? dollars(cents(governing.subtotal) - cents(original.subtotal)) : null,
+      // Newest signed minus original (describeAgreement) — never a sum.
+      netChangeSubtotal: agreement.netChangeSubtotal,
+      netChangeTotal: agreement.netChangeTotal,
       versions
     },
+    billingBlocked,
     summary: {
       total: changes.length,
       open: count((c) => c.open),
