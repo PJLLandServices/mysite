@@ -242,6 +242,9 @@ check('the only start door is the hard-limited calibration (M3c): no general sta
   const block = SRC.slice(at, at + 2500);
   assert.ok(!/autoApprove\s*:\s*true/.test(block), 'the route must never pass autoApprove: true');
   assert.ok(!/skus\s*:/.test(block), 'the route must never choose its own SKU list');
+  // The re-run may narrow to a subset (`only`), but the engine intersects it
+  // with the unresolved calibration parts and refuses anything outside.
+  assert.match(block, /startCalibrationRerun\(\{ by, only \}\)/, 'the re-run passes only a subset request, never a SKU list of its own');
   assert.ok(!/part-photo-backfill\/(full|catalog|all|run)/.test(SRC), 'a full-catalog route exists');
   // Nothing starts when the process boots: the client is created lazily and
   // the runner is only ever kicked from startCalibration()/resume().
