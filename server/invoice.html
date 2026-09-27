@@ -185,6 +185,16 @@
             <p class="invoice-action-meta" id="invoiceStatusMeta"></p>
           </section>
 
+          <!-- Revision required (2026-09-26). The customer signed a revised
+               work order after this invoice went out (or after money was
+               recorded against it), so it was NOT rewritten. Payment and
+               Send stay blocked until it is revised to the signed scope.
+               Hidden on every other invoice. -->
+          <section class="invoice-action-card" id="invoiceRevisionRequiredCard" hidden>
+            <span class="invoice-action-label">Revision required</span>
+            <p class="invoice-action-meta" id="invoiceRevisionRequiredMeta"></p>
+          </section>
+
           <!-- Price to confirm (PJL-96). A closing Patrick prices himself — a
                custom size (16+ residential, 9+ commercial) or a commercial
                account without its own price — drafts with a SUGGESTED
