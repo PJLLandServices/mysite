@@ -206,6 +206,42 @@ try {
     /private/.test(String(mailRes.headers.get("cache-control"))), String(mailRes.headers.get("cache-control")));
 
   // ================================================================
+  // EXPIRY — what the customer actually gets, and when
+  // ================================================================
+  console.log("\n  -- expiry --");
+  {
+    // The lifetime stated in the PR is read out of the email that was
+    // actually sent, not assumed from the constant.
+    const sentSig = new URL(srcs[0]).searchParams.get("s");
+    const payload = JSON.parse(Buffer.from(sentSig.split(".")[0], "base64url").toString("utf8"));
+    const days = (payload.exp - Date.now()) / 86400000;
+    ok("the emailed link lives 365 days from the moment it was sent",
+      days > 364.99 && days <= 365, `${days.toFixed(4)} days`);
+
+    // An AUTHENTIC link for our own photo, signed with the server's real
+    // secret, that has run out. This is exactly the customer reopening
+    // the email a year later.
+    const { sessionSecret } = JSON.parse(fs.readFileSync(path.join(DATA, "auth.json"), "utf8"));
+    const photoLinks = require(path.join(ROOT, "server", "lib", "photo-links.js"));
+    const expired = photoLinks.mint(ours.wo.id, ours.n, sessionSecret, { ttlMs: -1000 });
+    const freshNow = photoLinks.mint(ours.wo.id, ours.n, sessionSecret);
+    const control = await fetch(`${BASE}${photoLinks.pathFor(ours.wo.id, ours.n, freshNow)}`);
+    ok("(control) the same link, unexpired and signed with the server's secret, loads",
+      control.status === 200 && isImage(control));
+    const r = await fetch(`${BASE}${photoLinks.pathFor(ours.wo.id, ours.n, expired)}`);
+    const body = await bytesOf(r);
+    ok("after expiry the photo is refused — the customer sees an empty image box",
+      r.status === 403 && !isImage(r) && !body.equals(PNG_A),
+      `${r.status} ${r.headers.get("content-type")}`);
+
+    // Stated plainly because it decides what "later" means for this
+    // customer: nothing in the email leads back to the photo once the
+    // link has expired.
+    ok("the email carries no portal link (so no in-email path after expiry)",
+      !/href="[^"]*\/portal\//.test(String(email?.html)));
+  }
+
+  // ================================================================
   // NEGATIVE AUTHORIZATION
   // ================================================================
   console.log("\n  -- negative authorization --");
