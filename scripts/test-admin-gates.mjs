@@ -125,6 +125,11 @@ check('part photos are fenced — images, overview, writes and the admin page', 
   assert.equal(needsAuth('POST', '/api/part-photo-review/405010/approve'), 'user');
   assert.equal(needsAuth('POST', '/api/part-photo-review/405010/reject'), 'user');
   assert.equal(needsAuth('POST', '/api/part-photo-review/fittings/A%7CB'), 'user');
+  // M3c: the calibration run's plan and its start / pause / resume.
+  assert.equal(needsAuth('GET', '/api/part-photo-backfill/plan'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-backfill/calibration'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-backfill/pause'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-backfill/resume'), 'user');
   assert.equal(needsAuth('GET', `/api/supplier-logos/${hash}.png`), 'user');
   assert.equal(needsAuth('POST', '/api/suppliers/SUP-001/logo'), 'user');
   assert.equal(needsAuth('DELETE', '/api/suppliers/SUP-001/logo'), 'user');
@@ -207,10 +212,11 @@ check('the three routes that had the no-op gate now check the answer', () => {
   }
 });
 
-check('Photo Review writes (M3b) check the admin answer, and no route runs the backfill', () => {
+check('Photo Review writes (M3b) and backfill actions (M3c) check the admin answer', () => {
   for (const marker of [
     'photoReviewSkuMatch && req.method === "POST"',
     'photoReviewFittingMatch && req.method === "POST"',
+    'backfillActionMatch && req.method === "POST"',
   ]) {
     const at = SRC.indexOf(marker);
     assert.ok(at > 0, `route not found: ${marker}`);
@@ -218,8 +224,24 @@ check('Photo Review writes (M3b) check the admin answer, and no route runs the b
     assert.match(block, /const session = await requireAdmin\(req\);/, `${marker}: binds the result`);
     assert.match(block, /if \(!session\) return sendJson\(res, 403/, `${marker}: rejects when it is null`);
   }
-  // M3c (the live AI run) is held for Patrick's separate approval.
-  assert.ok(!/photoBackfill\.(start|resume|kick|retry|applyGrouping)\(/.test(SRC), 'a route can start/resume the AI backfill');
+});
+
+check('the only start door is the hard-limited calibration (M3c): no general start, no full catalog, nothing at boot', () => {
+  // startCalibration() fixes the SKU list (the approved 15-part sample),
+  // forces auto-approve OFF and refuses while a run is active. The general
+  // start()/kick()/retry() must never be reachable from a route.
+  assert.ok(!/photoBackfill\.(start|kick|retry)\(/.test(SRC), 'server.js calls the general start/kick/retry');
+  assert.equal((SRC.match(/photoBackfill\.startCalibration\(/g) || []).length, 1, 'exactly one startCalibration call site');
+  const at = SRC.indexOf('backfillActionMatch && req.method === "POST"');
+  const block = SRC.slice(at, at + 2500);
+  assert.ok(!/autoApprove\s*:\s*true/.test(block), 'the route must never pass autoApprove: true');
+  assert.ok(!/skus\s*:/.test(block), 'the route must never choose its own SKU list');
+  assert.ok(!/part-photo-backfill\/(full|catalog|all|run)/.test(SRC), 'a full-catalog route exists');
+  // Nothing starts when the process boots: the client is created lazily and
+  // the runner is only ever kicked from startCalibration()/resume().
+  const boot = SRC.slice(SRC.indexOf('const photoAi = (() => {'), SRC.indexOf('const { buildReviewQueues }'));
+  assert.match(boot, /real \|\|= photoAiLib\.createPhotoAI\(\{ client: photoAiLib\.createAnthropicClient\(\) \}\)/, 'the Claude client is created lazily, not at boot');
+  assert.ok(!/photoBackfill\.(resume|startCalibration|load)\(\)/.test(boot), 'the backfill is touched at boot');
 });
 
 check('the check catches the exact bug it was written for', () => {

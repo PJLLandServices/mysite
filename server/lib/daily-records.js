@@ -139,7 +139,8 @@ function describeDay(wo, { now = null, problems = [] } = {}) {
     // The crew's photos for this day, as references the page turns into
     // <img src>. They come from wo.photos — the meta that
     // savePhotosForWorkOrder() already writes — and are served by the
-    // existing GET /api/work-orders/:id/photos/:n. No second upload
+    // existing GET /api/work-orders/:id/photo/:n (SINGULAR — the
+    // plural path is the DELETE route). No second upload
     // path, no second place the files can live.
     photos: (Array.isArray(wo.photos) ? wo.photos : []).map((ph) => ({
       n: ph.n,
