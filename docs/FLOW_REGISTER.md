@@ -50,9 +50,24 @@ Patrick's checks, run against the merged code. **Proven on main** (`test-change-
   (`POST …/scope-changes/:id/send-outcome`, office-only, "sent" or "not_sent"). The classic page
   shows "⚠ Delivery uncertain" with "It arrived / It didn't arrive".
 - `quotes.isUnsignedLive` ignores trashed quotes.
+- **Signing guard, in the domain (Patrick's second pass).** The approval routes refused only
+  superseded quotes; the five acceptance functions checked nothing. Each now calls `assertSignable`
+  **inside the quotes-store lock it shares with `retireUnsignedRevision`**. It refuses trashed,
+  cancelled, superseded and **replaced** quotes (a newer live or signed version exists), with
+  `quote_not_signable`, so only the current offer can be signed. A withdrawal and a signature on
+  the same revision resolve to exactly one outcome. Before this, the retire-first race let
+  **both** happen. Each writer's idempotent re-sign return runs first, unchanged. **FLOW-02 (PASS)
+  touched additively:** a normal first-time accept is unchanged.
+- **A staged PDF is not a signature.** `hasAcceptanceRecord` counted any quote with staged evidence
+  as signed, because every quote starts with `acceptanceMethod: "pending"`. So a customer's uploaded
+  PDF made a revision the billed agreement **before the office attested it**. Evidence now counts
+  only with a real method, and never while `pending_admin_attestation`.
+- An interrupted send settled by the office records `settledBy`, `settledAt` and `outcome`
+  (`confirmed_delivered` / `confirmed_not_delivered`) on the attempt, next to who started it and when.
 
-**Test:** `scripts/test-change-order-guards.mjs` (in `build:check`). It includes a real process crash
-after the email and before the save.
+**Test:** `scripts/test-change-order-guards.mjs` (in `build:check`, 83 checks; 12 fail on the previous
+head). It includes a real process crash after the email and before the save, a forced signature
+mid-withdrawal, and 12 simultaneous withdraw/sign races.
 **2026-09-27 (Change-order safety: office-only actions, real names, honest sends, one "open" rule; PR 2 of Change Orders, stacked on the quote lifecycle PR; no PASS flow touched):**
 **Defects proven before the fix** (`test-change-order-safety.mjs` on the old code: 40 of 53 failed):
 - Every change-order route called `requireAdmin()` and **ignored the answer**. A technician could send
