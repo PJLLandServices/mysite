@@ -131,7 +131,9 @@ const holds = require("./lib/booking-holds");
 const purgeTestData = require("./lib/purge-test-data");
 const workOrders = require("./lib/work-orders");
 const sessionHours = require("./lib/session-hours");
+const atomicJson = require("./lib/atomic-json");
 const dailyRecords = require("./lib/daily-records");
+const projectMaterials = require("./lib/project-materials");
 const quotes = require("./lib/quotes");
 const quoteViews = require("./lib/quote-views");
 const invoices = require("./lib/invoices");
@@ -175,6 +177,7 @@ const projects = require("./lib/projects");
 const partSuppliers = require("./lib/part-suppliers");
 const partSupplierPrices = require("./lib/part-supplier-prices");
 const partsLib = require("./lib/parts");
+const partPhotosLib = require("./lib/part-photos");
 const purchaseOrders = require("./lib/purchase-orders");
 const quoteRequests = require("./lib/quote-requests");
 const users = require("./lib/users");
@@ -256,6 +259,10 @@ const HOST = process.env.HOST || "0.0.0.0";
 const SITE_DIR = path.resolve(__dirname, "..");
 const SERVER_DIR = __dirname;
 const DATA_DIR = path.join(SERVER_DIR, "data");
+// Verified part photos for the parts picker (lib/part-photos.js, P-PJL-35).
+const partPhotos = partPhotosLib.createPartPhotos({ dataDir: DATA_DIR, sharp });
+// Supplier company logos for the picker's supplier chip (P-PJL-35 M2a).
+const supplierLogos = require("./lib/supplier-logos").createSupplierLogos({ dataDir: DATA_DIR, sharp });
 const LEADS_FILE = path.join(DATA_DIR, "leads.json");
 const AUTH_FILE = path.join(DATA_DIR, "auth.json");
 // All AI chat transcripts (booked AND abandoned). Patrick uses this to see
@@ -508,6 +515,19 @@ function rebuildCatalogFromOverrides({ initial = false } = {}) {
   partSupplierPrices.mergeIntoCatalog(PARTS.parts, supplierPriceMap, {
     editedMap: (catalogOverrides && catalogOverrides.edited) || {}
   });
+  // Then verified photos. photoStateFor() is the only rule for whether a
+  // photo may show; a part that is not "verified" gets photo: null, so a
+  // To-be-determined candidate can never reach the picker. If the photo
+  // stores can't be read, every part shows "no photo" rather than
+  // failing the whole catalog.
+  try {
+    // isBaseline: a fitting's canonical default is the part from the
+    // original catalog (lib/part-photos.js fittingDefaultFor).
+    partPhotos.mergeInto(PARTS.parts, { isBaseline: (sku) => !!(BASELINE_PARTS && BASELINE_PARTS[sku]) });
+  } catch (err) {
+    console.warn("[parts] could not merge part photos:", err?.message);
+    for (const p of Object.values(PARTS.parts)) { p.photo = null; p.photoState = "none"; }
+  }
   if (!initial) CATALOG_VERSION++;
 }
 
@@ -1492,6 +1512,7 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/sitebuilder-help.js") return "user";
   // Catalog ↔ supplier assignments + Purchase Orders (Phase 3).
   if (pathname === "/admin/parts-suppliers" || pathname === "/admin/parts-suppliers/") return "user";
+  if (pathname === "/admin/part-photos" || pathname === "/admin/part-photos/") return "user";
   if (pathname === "/admin/purchase-orders" || pathname === "/admin/purchase-orders/") return "user";
   if (/^\/admin\/purchase-order\/[^/]+\/?$/.test(pathname)) return "user";
   // Quote Requests (RFQ — the "ask for a price" sibling of the PO).
@@ -1548,12 +1569,18 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/invoices")) return "user";
   if (pathname.startsWith("/api/settings")) return "user";
   if (pathname === "/api/parts" || pathname.startsWith("/api/parts/")) return "user";
+  // Part photos: images, groups, links. Reads are staff; every write
+  // additionally requires requireAdmin() in its handler.
+  if (pathname.startsWith("/api/part-photo")) return "user";
   if (pathname.startsWith("/api/custom-line-items")) return "user";
   if (pathname.startsWith("/api/admin/quickbooks")) return "user";
   // Portal-messages inbox (two-way thread with customers).
   if (pathname === "/api/admin/portal-messages" || pathname.startsWith("/api/admin/portal-messages/")) return "user";
   if (pathname.startsWith("/api/bookings")) return "user";
   if (pathname.startsWith("/api/suppliers")) return "user";
+  // Supplier logo images; uploads go through /api/suppliers/:id/logo
+  // (requireAdmin in the handler).
+  if (pathname.startsWith("/api/supplier-logos")) return "user";
   if (pathname.startsWith("/api/material-lists")) return "user";
   if (pathname.startsWith("/api/projects")) return "user";
   if (pathname.startsWith("/api/part-suppliers")) return "user";
@@ -3394,16 +3421,88 @@ async function seasonalQuoteAtLock(wo, zones) {
 // No .catch() either: a failure belongs to the caller now. Swallowing
 // it here would report a hold that was never written, which is the
 // defect this exists to prevent.
+//
+// RELEASING reconciles first (2026-09-26). The hold used to be lifted the
+// moment the new acceptance landed, with the invoice still billing the OLD
+// scope — so the pay link and Send then charged the customer the old price
+// for a scope they had re-signed at a different one (signed 4 zones and
+// re-signed at 6: billed 4; the reverse: overcharged). Now the invoice is
+// brought to the price the customer just accepted (billing.billingFor —
+// the re-locked, frozen scope) BEFORE the hold goes: an unsent draft is
+// re-priced in place; anything the customer may already have seen is left
+// as it is and flagged "revision required", still held, until Patrick
+// revises it (invoices.reconcileToSignedScope). Idempotent — a retried
+// signature finds the invoice already matching and writes nothing.
+//
+// While held, no card can complete either: an intent opened BEFORE the hold
+// (a pay page left open, a Tap to Pay reader armed) is cancelled at Stripe
+// when the hold goes on, so it can't be confirmed for the unresolved amount
+// (cancelOpenIntentsWhileHeld). And a signed scope that bills nothing
+// follows the No Charge rules: the untouched draft is voided and the
+// visit's service record reads no charge (settleNoCharge).
+async function holdOrReconcileInvoice(wo) {
+  if (workOrders.awaitsNewSignature(wo)) {
+    const held = await invoices.setScopeHold(wo.id, true);
+    await cancelOpenIntentsWhileHeld(held);
+    return held;
+  }
+  const bill = await billing.billingFor(wo);
+  const result = await invoices.reconcileToSignedScope(wo.id, { lineItems: bill.error ? null : bill.lines, by: "system" });
+  if (result?.action === "voided_no_charge") {
+    await settleNoCharge(wo.propertyId, wo.id, { lineItems: bill.lines, voidedInvoiceId: result.invoice?.id || null });
+  }
+  if (result?.action === "revision_required") await cancelOpenIntentsWhileHeld(result.invoice);
+  return result;
+}
+async function cancelOpenIntentsWhileHeld(inv) {
+  if (!inv?.scopeHold?.since || inv.status === "paid" || inv.status === "void") return;
+  const ids = [...new Set([inv.stripePaymentIntentId, inv.stripeTerminalIntentId].filter(Boolean))];
+  for (const id of ids) {
+    try {
+      const { intent } = await stripe.retrievePaymentIntent(id);
+      if (["requires_payment_method", "requires_confirmation", "requires_action"].includes(intent?.status)) {
+        await stripe.cancelPaymentIntent(id);
+        await invoices.appendHistory(inv.id, { action: "payment_intent_cancelled_while_held", by: "system",
+          note: `Open card payment ${id} cancelled: the invoice is held for a revised work order` });
+      }
+    } catch (err) {
+      // Best effort: a charge that completes anyway is still recorded by
+      // the finalizer (the money moved) and the invoice stays held.
+      console.warn(`[resign] couldn't cancel open intent ${id} on ${inv.id}: ${err?.message}`);
+    }
+  }
+}
+// The visit's service record, when its signed scope bills nothing.
+async function settleNoCharge(propertyId, woId, { lineItems = [], voidedInvoiceId = null } = {}) {
+  if (!propertyId || !woId) return null;
+  const t = invoices.totalsForLines(lineItems);
+  return properties.settleServiceRecordAsNoCharge(propertyId, woId, { lineItems, subtotal: t.subtotal, hst: t.hst, total: t.total, voidedInvoiceId });
+}
+// Voiding an invoice flagged "revision required" whose signed scope is no
+// charge completes the No Charge path (no $0 invoice, the visit reads No
+// charge). Any other void is untouched.
+async function settleNoChargeOnVoid(before) {
+  try {
+    if (invoices.scopeHoldCode(before) !== "revision_required" || before.scopeHold.requiredTotal !== 0 || !before.woId) return;
+    const wo = await workOrders.get(before.woId);
+    if (!wo) return;
+    const bill = await billing.billingFor(wo);
+    if (!bill.noCharge) return;
+    await settleNoCharge(wo.propertyId, wo.id, { lineItems: bill.lines, voidedInvoiceId: before.id });
+  } catch (err) {
+    console.warn(`[resign] no-charge settle after void failed for ${before?.id}: ${err?.message}`);
+  }
+}
 workOrders.events.on("resignature", (wo) => {
   if (!wo?.id) return;
-  return invoices.setScopeHold(wo.id, workOrders.awaitsNewSignature(wo));
+  return holdOrReconcileInvoice(wo);
 });
 async function syncResignatureHold(before, after) {
   try {
     const was = workOrders.awaitsNewSignature(before);
     const now = workOrders.awaitsNewSignature(after);
     if (!after?.id || was === now) return;
-    await invoices.setScopeHold(after.id, now);
+    await holdOrReconcileInvoice(after);
   } catch (err) {
     console.warn(`[resign] invoice hold sync failed for ${after?.id}: ${err?.message}`);
   }
@@ -10948,6 +11047,9 @@ async function handleApi(req, res, pathname) {
       }
       // Re-signing (2026-09-26): the work order behind it changed in price
       // after the customer signed; they sign the revised scope first.
+      if (invoices.scopeHoldCode(inv) === "revision_required") {
+        return sendJson(res, 409, { ok: false, code: "revision_required", errors: ["The customer signed a revised work order and this invoice still bills the old one. Revise it to the signed scope before sending."] });
+      }
       if (inv.scopeHold?.since) {
         return sendJson(res, 409, { ok: false, code: "awaiting_signature", errors: ["The work order changed after the customer signed. Get their signature on the revised work order before sending this invoice."] });
       }
@@ -11647,7 +11749,7 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 409, { ok: false, code: invoices.payBlockReason(inv), errors: [
           invoices.payBlockReason(inv) === "price_unconfirmed"
             ? "PJL is still confirming this invoice's price — nothing can be charged yet."
-            : invoices.payBlockReason(inv) === "awaiting_signature"
+            : ["awaiting_signature", "revision_required"].includes(invoices.payBlockReason(inv))
               ? "This invoice is being updated — nothing can be charged yet."
               : `This invoice is "${inv.status}" and isn't ready for payment.`
         ] });
@@ -13820,6 +13922,159 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ---------- Part photos (P-PJL-35, FLOW-47) ----------------------------
+  // One verified photo per real-world fitting, shown only in the parts
+  // picker. lib/part-photos.js owns the one rule (photoStateFor) for
+  // whether a photo may show; these routes only read or change the stores
+  // and then rebuild the catalog so /api/parts reflects it.
+  //
+  //   GET    /api/part-photos/<sha256>/<160|480|1200|t160|t320>.webp   image (staff)
+  //   GET    /api/part-photos                                overview (staff)
+  //   POST   /api/part-photos/:sku/photo      {data} | {imageUrl}   (admin)
+  //   POST   /api/part-photos/:sku/link       {sameAsSku} | {groupId} (admin)
+  //   DELETE /api/part-photos/:sku/link                              (admin)
+  //   POST   /api/part-photos/:sku/reconfirm                         (admin)
+  //   DELETE /api/part-photo-groups/:id/photo                        (admin)
+  const partPhotoImgMatch = pathname.match(/^\/api\/part-photos\/([a-f0-9]{64})\/(160|480|1200|t160|t320)\.webp$/);
+  if (partPhotoImgMatch && req.method === "GET") {
+    try {
+      // t160/t320 are the normalized square tile thumbnails; a photo saved
+      // before they existed gets them made on this first request, and one
+      // that can't be made falls back to the plain photo (resolveImageFile).
+      const file = await partPhotos.resolveImageFile(partPhotoImgMatch[1], partPhotoImgMatch[2]);
+      const buf = await fs.readFile(file.path);
+      // The URL is the image's own hash, so its bytes can never change:
+      // cache it for good. "private" because it sits behind staff auth.
+      // A fallback is NOT cached, so a later successful thumbnail replaces it.
+      res.writeHead(200, {
+        "content-type": "image/webp",
+        "content-length": buf.length,
+        "cache-control": file.fallback ? "private, no-store" : "private, max-age=31536000, immutable"
+      });
+      res.end(buf);
+    } catch (_) { sendJson(res, 404, { ok: false, errors: ["No such photo."] }); }
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/part-photos") {
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    try {
+      const { groups, links } = await partPhotos.snapshot();
+      const parts = Object.values(PARTS.parts || {}).map((p) => ({
+        sku: p.sku, partNumber: p.partNumber, description: p.description, size: p.size,
+        category: p.category, manufacturer: p.manufacturer || "",
+        photoState: p.photoState || "none", photo: p.photo || null,
+        groupId: links[p.sku] ? links[p.sku].groupId : null
+      }));
+      const groupSummary = {};
+      for (const [id, g] of Object.entries(groups)) {
+        const skus = Object.keys(links).filter((sku) => links[sku].groupId === id).sort();
+        // The effective default is whatever the merge decided for the
+        // fitting's visible members (one rule, lib/part-photos.js).
+        const member = skus.map((s) => PARTS.parts[s]).find((p) => p && p.photo && p.photo.groupId === id);
+        groupSummary[id] = {
+          id, label: g.label || id, tier: g.tier || "none", skus,
+          defaultSku: member ? member.photo.fittingDefaultSku : null,
+          defaultChosen: member ? !!member.photo.fittingDefaultChosen : false
+        };
+      }
+      return sendJson(res, 200, { ok: true, parts, groups: groupSummary, categories: PARTS.categories || [] });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't read part photos."] });
+    }
+  }
+
+  const partPhotoSkuMatch = pathname.match(/^\/api\/part-photos\/([^/]+)\/(photo|link|reconfirm)$/);
+  if (partPhotoSkuMatch && (req.method === "POST" || req.method === "DELETE")) {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    const sku = decodeURIComponent(partPhotoSkuMatch[1]);
+    const action = partPhotoSkuMatch[2];
+    const part = PARTS.parts[sku];
+    if (!part) return sendJson(res, 404, { ok: false, errors: ["Unknown part."] });
+    const by = await actorLabel(req);
+    try {
+      let result, note;
+      if (action === "photo" && req.method === "POST") {
+        // 8 MB image cap; base64 is ~4/3 of that.
+        const payload = await parseRequestBody(req, { maxBytes: 12 * 1024 * 1024 });
+        if (payload.imageUrl) {
+          result = await partPhotos.setPhotoFromUrl(sku, part, payload.imageUrl, { by });
+          note = `Set photo for ${sku} from ${new URL(String(payload.imageUrl)).hostname}`;
+        } else {
+          const buf = Buffer.from(String(payload.data || ""), "base64");
+          if (buf.length > 8 * 1024 * 1024) return sendJson(res, 413, { ok: false, errors: ["That image is too large (8 MB max)."] });
+          result = await partPhotos.setPhoto(sku, part, buf, { by, source: { method: "upload" } });
+          note = `Uploaded photo for ${sku}`;
+        }
+        if (result.sharedWith.length) note += ` (shared with ${result.sharedWith.join(", ")})`;
+      } else if (action === "link" && req.method === "POST") {
+        const payload = await parseRequestBody(req);
+        let groupId = payload.groupId;
+        if (!groupId && payload.sameAsSku) {
+          const { links } = await partPhotos.snapshot();
+          groupId = links[payload.sameAsSku] && links[payload.sameAsSku].groupId;
+          if (!groupId) return sendJson(res, 422, { ok: false, errors: ["That part has no photo to share yet."] });
+        }
+        if (!groupId) return sendJson(res, 422, { ok: false, errors: ["Choose the part this is the same fitting as."] });
+        result = await partPhotos.linkToGroup(sku, part, String(groupId), { by });
+        note = `Linked ${sku} to photo group ${groupId}${payload.sameAsSku ? ` (same fitting as ${payload.sameAsSku})` : ""}`;
+      } else if (action === "link" && req.method === "DELETE") {
+        result = await partPhotos.unlink(sku, { by });
+        note = `Unlinked ${sku} from its photo`;
+      } else if (action === "reconfirm" && req.method === "POST") {
+        result = await partPhotos.reconfirm(sku, part, { by });
+        note = `Reconfirmed the photo for ${sku} after an edit`;
+      } else {
+        return sendJson(res, 405, { ok: false, errors: ["Method not allowed."] });
+      }
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({ who: by, action: `part-photo.${action}`, note, after: { sku, ...result } });
+      return sendJson(res, 200, { ok: true, sku, ...result, photoState: PARTS.parts[sku]?.photoState || "none", photo: PARTS.parts[sku]?.photo || null });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't update the photo."] });
+    }
+  }
+
+  // POST /api/part-photo-groups/:id/default {sku} — Patrick's "Default for
+  // this fitting": the part whose description, part #, price and supplier
+  // the picker's one-row fitting shows and whose Add it uses. (admin)
+  const partPhotoDefaultMatch = pathname.match(/^\/api\/part-photo-groups\/([^/]+)\/default$/);
+  if (partPhotoDefaultMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    const by = await actorLabel(req);
+    try {
+      const groupId = decodeURIComponent(partPhotoDefaultMatch[1]);
+      const payload = await parseRequestBody(req);
+      const sku = String(payload.sku || "");
+      const result = await partPhotos.setFittingDefault(groupId, sku, PARTS.parts[sku], { by });
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({ who: by, action: "part-photo.default", note: `Default for fitting ${groupId} → ${sku}${result.previous ? ` (was ${result.previous})` : ""}`, after: result });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't set the default."] });
+    }
+  }
+
+  const partPhotoGroupMatch = pathname.match(/^\/api\/part-photo-groups\/([^/]+)\/photo$/);
+  if (partPhotoGroupMatch && req.method === "DELETE") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    const by = await actorLabel(req);
+    try {
+      const groupId = decodeURIComponent(partPhotoGroupMatch[1]);
+      const result = await partPhotos.removeGroupPhoto(groupId, { by });
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({ who: by, action: "part-photo.remove", note: `Removed the photo from ${groupId} (${result.skus.join(", ") || "no parts"})`, after: result });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't remove the photo."] });
+    }
+  }
+
   // POST /api/parts/import/preview — accept parsed rows from the browser
   // (SheetJS parses xlsx client-side; see parts-suppliers.js), return a
   // diff against the current merged catalog. Stages the parsed data in
@@ -15195,7 +15450,8 @@ async function handleApi(req, res, pathname) {
         method: payload?.method,
         receivedAt: payload?.receivedAt,
         notes: payload?.notes,
-        by: session?.uid || "admin"
+        by: session?.uid || "admin",
+        refuseWhileHeld: true
       });
       if (!result.ok) return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
       return sendJson(res, 201, { ok: true, invoice: result.invoice, payment: result.payment });
@@ -15216,7 +15472,7 @@ async function handleApi(req, res, pathname) {
         method: payload?.method,
         receivedAt: payload?.receivedAt,
         notes: payload?.notes
-      }, { by: session?.uid || "admin" });
+      }, { by: session?.uid || "admin", refuseWhileHeld: true });
       if (!result.ok) return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
       return sendJson(res, 200, { ok: true, invoice: result.invoice, payment: result.payment });
     } catch (err) {
@@ -15460,8 +15716,17 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(invoiceMatch[1]);
       const payload = await parseRequestBody(req);
       const before = await invoices.get(id);
+      // A manual "Paid" / "Partially paid" is recording money, and a manual
+      // "Sent" is Send: neither while the invoice is held for a revised
+      // scope (invoices.paymentHoldFor — the same rule every payment route
+      // asks).
+      if (before && ["paid", "partially_paid", "sent"].includes(payload?.status) && payload.status !== before.status) {
+        const held = invoices.paymentHoldFor(before);
+        if (held) return sendJson(res, held.status, { ok: false, code: held.code, errors: held.errors });
+      }
       const updated = await invoices.update(id, payload);
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      if (before && before.status !== "void" && updated.status === "void") await settleNoChargeOnVoid(before);
 
       // Threshold deposit — paid/void transitions on deposit invoices
       // drive the quote's deposit lifecycle. Best-effort.
@@ -15538,7 +15803,8 @@ async function handleApi(req, res, pathname) {
         }
       }
       const updated = await invoices.get(id);
-      return sendJson(res, 200, { ok: true, invoice: updated || result.invoice, qbAction, warning: qbWarning });
+      const warning = [result.holdNote, qbWarning].filter(Boolean).join(" ") || null;
+      return sendJson(res, 200, { ok: true, invoice: updated || result.invoice, qbAction, warning, stillHeld: Boolean(result.holdNote) });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't revise invoice."] });
     }
@@ -15622,10 +15888,12 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(invoiceVoidMatch[1]);
       const body = await parseRequestBody(req).catch(() => ({}));
       const reason = typeof body?.reason === "string" ? body.reason : "";
+      const beforeVoid = await invoices.get(id);
       const result = await invoices.voidInvoice(id, { reason, by: session.uid || "admin" });
       if (!result.ok) {
         return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
       }
+      if (!result.alreadyVoid) await settleNoChargeOnVoid(beforeVoid);
 
       // Mirror the void to QuickBooks — best-effort, non-blocking, same as
       // the legacy PATCH→void path. A QB failure surfaces as a warning; the
@@ -15739,6 +16007,42 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, supplier: updated });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update supplier."] });
+    }
+  }
+
+  // ---------- Supplier logos (P-PJL-35 M2a) -------------------------
+  //   GET    /api/supplier-logos/<sha256>.png   the logo image (staff)
+  //   POST   /api/suppliers/:id/logo {data}     upload/replace (admin)
+  //   DELETE /api/suppliers/:id/logo            remove (admin)
+  // The official logo, resized only (lib/supplier-logos.js).
+  const supplierLogoImgMatch = pathname.match(/^\/api\/supplier-logos\/([a-f0-9]{64})\.png$/);
+  if (supplierLogoImgMatch && req.method === "GET") {
+    try {
+      const buf = await fs.readFile(supplierLogos.logoPath(supplierLogoImgMatch[1]));
+      res.writeHead(200, { "content-type": "image/png", "content-length": buf.length, "cache-control": "private, max-age=31536000, immutable" });
+      res.end(buf);
+    } catch (_) { sendJson(res, 404, { ok: false, errors: ["No such logo."] }); }
+    return;
+  }
+  const supplierLogoMatch = pathname.match(/^\/api\/suppliers\/([^/]+)\/logo$/);
+  if (supplierLogoMatch && (req.method === "POST" || req.method === "DELETE")) {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    const id = decodeURIComponent(supplierLogoMatch[1]);
+    const current = await suppliers.get(id);
+    if (!current) return sendJson(res, 404, { ok: false, errors: ["Supplier not found."] });
+    const by = await actorLabel(req);
+    try {
+      let logo = null;
+      if (req.method === "POST") {
+        const payload = await parseRequestBody(req, { maxBytes: 6 * 1024 * 1024 });
+        logo = await supplierLogos.save(Buffer.from(String(payload.data || ""), "base64"));
+      }
+      const updated = await suppliers.setLogo(id, logo);
+      await settings.recordAudit({ who: by, action: logo ? "supplier.logo.set" : "supplier.logo.remove", note: `${logo ? "Set" : "Removed"} the logo for ${current.name} (${id})`, after: { id, logo } });
+      return sendJson(res, 200, { ok: true, supplier: updated });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't save the logo."] });
     }
   }
 
@@ -16697,6 +17001,46 @@ async function handleApi(req, res, pathname) {
     } catch (err) {
       const status = err.code === "task_not_found" ? 404 : err.code === "task_not_archived" ? 409 : 400;
       return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't restore that task."] });
+    }
+  }
+
+  // GET /api/projects/:id/materials — the Materials tab (2026-09-27).
+  //
+  // Three sections, and the split between them is the whole point:
+  //
+  //   planning   — each material list SEPARATELY, with its own totals.
+  //                Never summed across lists, because re-syncing the
+  //                System Builder after purchasing produces a second
+  //                list repeating the same BOM.
+  //   stock      — physical facts, so safe to aggregate project-wide:
+  //                received (from PO receipts), used on site, and the
+  //                balance between them.
+  //   exceptions — mismatches for the office to look at. They never
+  //                block the crew and are never folded into a list.
+  const projectMaterialsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/materials$/);
+  if (projectMaterialsMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(projectMaterialsMatch[1]);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+
+      const lists = await materialLists.list({ parentType: "project", parentId: id, includeArchived: true });
+      // Every PO that came from any of this job's lists. Receipts are
+      // counted from these, not from a line's "have" status, which a
+      // human can set by hand.
+      const listIds = new Set(lists.map((l) => l.id));
+      const allPos = await purchaseOrders.list({});
+      const pos = allPos.filter((po) =>
+        (po.sourceMaterialListIds || []).some((lid) => listIds.has(lid)));
+      const buildWos = await workOrders.listBuildWosForProject(id);
+
+      const model = projectMaterials.describeProject({
+        lists, purchaseOrders: pos, buildWos,
+        partsMap: (PARTS && PARTS.parts) || {}
+      });
+      return sendJson(res, 200, { ok: true, ...model });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the materials."] });
     }
   }
 
@@ -19121,6 +19465,8 @@ async function handleApi(req, res, pathname) {
       }
       const inv = await invoices.get(invoiceId);
       if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      const held = invoices.paymentHoldFor(inv);
+      if (held) return sendJson(res, held.status, { ok: false, code: held.code, errors: held.errors });
       if (!inv.quoteId) return sendJson(res, 400, { ok: false, errors: ["This invoice isn't linked to a quote — nothing to capture."] });
       const quote = await quotes.get(inv.quoteId);
       if (!quote) return sendJson(res, 404, { ok: false, errors: ["The quote linked to this invoice wasn't found."] });
@@ -28023,6 +28369,9 @@ function resolveStaticTarget(pathname) {
   if (pathname === "/admin/parts-suppliers" || pathname === "/admin/parts-suppliers/") {
     return { dir: SERVER_DIR, relative: "/parts-suppliers.html" };
   }
+  if (pathname === "/admin/part-photos" || pathname === "/admin/part-photos/") {
+    return { dir: SERVER_DIR, relative: "/part-photos.html" };
+  }
   if (pathname === "/admin/purchase-orders" || pathname === "/admin/purchase-orders/") {
     return { dir: SERVER_DIR, relative: "/purchase-orders.html" };
   }
@@ -29023,14 +29372,51 @@ if (!String(process.env.PUBLIC_BASE_URL || "").trim()) {
 // then exit. A hard cap well under Render's 30 s makes sure we never
 // wait for SIGKILL. The periodic sweeps are not awaited: each is
 // best-effort and re-runs on the next boot or interval.
+// The periodic sweeps, held so shutdown can stop them.
+//
+// Eleven of them, none previously unref'd, each re-arming forever. They
+// never blocked the old exit — process.exit() does not care what is on
+// the event loop — but a sweep that fires WHILE the process is draining
+// can start a fresh store write just as we are trying to finish the
+// ones already queued. Clearing them first makes "finish what is in
+// flight" a set that stops growing.
+const sweepTimers = [];
+function trackSweep(fn, ms) {
+  const t = setInterval(fn, ms);
+  sweepTimers.push(t);
+  return t;
+}
+
 const SHUTDOWN_GRACE_MS = 8000;
+// Well inside SHUTDOWN_GRACE_MS, so the two together stay far under
+// Render's 30s default and cannot be what holds a deploy open.
+const DISK_DRAIN_MS = 3000;
+async function finishDiskWrites(label) {
+  // Bounded. writeJsonAtomic() renames a finished temp file over the
+  // target, so a store is never left as garbage even if we give up
+  // here — the cost of the bound is a lost change, not a broken file.
+  const pending = atomicJson.pendingStoreWrites();
+  if (!pending) return;
+  console.log(`[shutdown] waiting for ${pending} queued store write(s) (${label})`);
+  const raced = await Promise.race([
+    atomicJson.drainStores().then(() => "drained"),
+    new Promise((r) => setTimeout(() => r("timeout"), DISK_DRAIN_MS))
+  ]);
+  console.log(raced === "drained"
+    ? "[shutdown] store writes finished"
+    : `[shutdown] store writes still pending after ${DISK_DRAIN_MS / 1000}s — exiting anyway (writes are atomic; the files on disk stay whole)`);
+}
+
 function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[shutdown] ${signal} received — draining connections (max ${SHUTDOWN_GRACE_MS / 1000}s)`);
-  const forceExit = setTimeout(() => {
+  // Stop the sweeps first so nothing new is queued behind us.
+  for (const t of sweepTimers) clearInterval(t);
+  const forceExit = setTimeout(async () => {
     console.warn("[shutdown] grace period elapsed — closing remaining connections");
     if (typeof server.closeAllConnections === "function") server.closeAllConnections();
+    await finishDiskWrites("forced");
     process.exit(0);
   }, SHUTDOWN_GRACE_MS);
   forceExit.unref();
@@ -29041,11 +29427,13 @@ function shutdown(signal) {
     ? setInterval(() => server.closeIdleConnections(), 250)
     : null;
   if (idleSweep) idleSweep.unref();
-  server.close((err) => {
+  server.close(async (err) => {
     if (idleSweep) clearInterval(idleSweep);
     if (err) console.warn("[shutdown] server.close:", err?.message);
-    else console.log("[shutdown] all connections closed — exiting");
+    else console.log("[shutdown] all connections closed");
     clearTimeout(forceExit);
+    await finishDiskWrites("clean");
+    console.log("[shutdown] exiting");
     process.exit(0);
   });
   if (idleSweep) server.closeIdleConnections();
@@ -29092,7 +29480,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepQuotes();
-  setInterval(sweepQuotes, 6 * 60 * 60 * 1000);
+  trackSweep(sweepQuotes, 6 * 60 * 60 * 1000);
 
   // Invoice-ready SMS sweep (Invoice SMS brief, May 2026). The primary
   // fire path is a setTimeout inside the completion cascade; this sweep
@@ -29111,7 +29499,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepInvoiceSms();
-  setInterval(sweepInvoiceSms, 2 * 60 * 1000);
+  trackSweep(sweepInvoiceSms, 2 * 60 * 1000);
 
   // Google review request sweep (design handoff, Jul 2026). Due times
   // are persisted in review-requests.json (no in-memory timers — the
@@ -29129,7 +29517,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepReviewRequests();
-  setInterval(sweepReviewRequests, 5 * 60 * 1000);
+  trackSweep(sweepReviewRequests, 5 * 60 * 1000);
 
   // Assignment time sync sweep. Assigned bookings mirror the season
   // plan's sequenced arrival times, and the plan's clock moves — a
@@ -29156,7 +29544,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepAssignedTimes();
-  setInterval(sweepAssignedTimes, 10 * 60 * 1000);
+  trackSweep(sweepAssignedTimes, 10 * 60 * 1000);
 
   // Lead-booking heal sweep. A booking made through the public flow is
   // born on its LEAD; the canonical bookings.json record is a mirror
@@ -29183,7 +29571,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepLeadBookings();
-  setInterval(sweepLeadBookings, 10 * 60 * 1000);
+  trackSweep(sweepLeadBookings, 10 * 60 * 1000);
 
   // Day-before reminder sweep for SELF-BOOKED appointments. Assignment
   // customers get theirs from the cadence's step 6; the customer who
@@ -29215,7 +29603,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepBookingReminders();
-  setInterval(sweepBookingReminders, 5 * 60 * 1000);
+  trackSweep(sweepBookingReminders, 5 * 60 * 1000);
 
   // New-customer welcome sweep. Gated by settings.welcomeEmail.enabled
   // (default OFF); a customer's EARLIEST slot-holding booking, once it is
@@ -29239,7 +29627,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepWelcomeEmails();
-  setInterval(sweepWelcomeEmails, 5 * 60 * 1000);
+  trackSweep(sweepWelcomeEmails, 5 * 60 * 1000);
 
   // Assignment cadence sweep (stage 4) — dispatches steps 2–6 of the
   // follow-up cadence for blasted bookings, each step at most once,
@@ -29274,7 +29662,7 @@ server.listen(PORT, HOST, () => {
     }
   };
   sweepAssignmentCadence();
-  setInterval(sweepAssignmentCadence, 5 * 60 * 1000);
+  trackSweep(sweepAssignmentCadence, 5 * 60 * 1000);
 
   // Trash purge sweep (Session 2 brief). Hard-deletes records soft-deleted
   // more than 30 days ago. Runs at startup AND every 24 hours so the
@@ -29294,7 +29682,7 @@ server.listen(PORT, HOST, () => {
   // Initial sweep on boot — catches anything that aged out while the
   // server was down. After that, every 24 hours.
   sweepTrash();
-  setInterval(sweepTrash, 24 * 60 * 60 * 1000);
+  trackSweep(sweepTrash, 24 * 60 * 60 * 1000);
 
   // Outstanding warranty-claim reminder. The brief asks to "constantly be
   // reminded of outstanding warranty claims" — this is the push half of
@@ -29322,7 +29710,7 @@ server.listen(PORT, HOST, () => {
       console.warn("[warranty-claim] reminder sweep failed:", err?.message);
     }
   };
-  setInterval(sweepWarrantyClaims, 12 * 60 * 60 * 1000);
+  trackSweep(sweepWarrantyClaims, 12 * 60 * 60 * 1000);
 
   // Klarna financing capture-deadline reminders (PJL-34, build order
   // step 5). TRD §8: reminders are the WHOLE defense for the 28-day
@@ -29347,5 +29735,5 @@ server.listen(PORT, HOST, () => {
       console.warn("[financing] reminder sweep failed:", err?.message);
     }
   };
-  setInterval(sweepFinancingReminders, 3 * 60 * 60 * 1000);
+  trackSweep(sweepFinancingReminders, 3 * 60 * 60 * 1000);
 });

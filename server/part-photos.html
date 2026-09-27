@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Part photos — PJL</title>
+  <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260518" />
+  <link rel="shortcut icon" href="/favicon.ico?v=20260518" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=20260518" />
+  <meta name="apple-mobile-web-app-title" content="PJL" />
+  <link rel="manifest" href="/site.webmanifest?v=20260518" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/pjl-dialog.css">
+  <link rel="stylesheet" href="/crm/crm-parts.css">
+  <link rel="stylesheet" href="/crm/suppliers.css">
+  <link rel="stylesheet" href="/crm/part-photos.css">
+  </head>
+<body class="pjl-crm-body suppliers-body part-photos-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/season-plan">Season plan</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/outreach">Outreach</a>
+      <a href="/admin/review-requests">Reviews</a>
+      <a href="/admin/welcome-email">Welcome</a>
+      <a href="/admin/booking-funnel">Booking Funnel</a>
+      <a href="/admin/bookings">Bookings</a>
+      <a href="/admin/customers">Customers</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
+      <a href="/admin/sitebuilder">System Builder</a>
+      <a href="/admin/work-orders">Work orders</a>
+      <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/pending-financing">Financing <span class="pjl-nav-badge" data-financing-badge hidden></span></a>
+      <a href="/admin/warranty-claims">Warranty <span class="pjl-nav-badge" data-warranty-badge hidden></span></a>
+      <a href="/admin/material-lists" class="is-active">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/trash">Trash</a>
+      <a href="/admin/users">Users</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Part photos</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="suppliers-shell">
+      <nav class="suppliers-subnav" aria-label="Materials sub-section">
+        <div class="suppliers-subnav-strip">
+          <a href="/admin/material-lists">Material lists</a>
+          <a href="/admin/quote-requests">Quote requests</a>
+          <a href="/admin/purchase-orders">Purchase orders</a>
+          <a href="/admin/suppliers">Suppliers</a>
+          <a href="/admin/parts-suppliers">Catalog</a>
+          <a href="/admin/part-photos" class="is-active" aria-current="page">Part photos</a>
+        </div>
+        <details class="suppliers-subnav-dropdown">
+          <summary class="suppliers-subnav-trigger">
+            <span class="suppliers-subnav-trigger-eyebrow">Materials</span>
+            <span class="suppliers-subnav-trigger-current">Part photos</span>
+            <span class="suppliers-subnav-trigger-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="suppliers-subnav-menu">
+            <a href="/admin/material-lists">Material lists</a>
+            <a href="/admin/quote-requests">Quote requests</a>
+            <a href="/admin/purchase-orders">Purchase orders</a>
+            <a href="/admin/suppliers">Suppliers</a>
+            <a href="/admin/parts-suppliers">Catalog</a>
+            <a href="/admin/part-photos" class="is-active" aria-current="page">Part photos</a>
+          </div>
+        </details>
+      </nav>
+
+      <section class="suppliers-explainer">
+        <p>One verified photo per real fitting. Only verified photos show in the parts picker; every other part shows <b>No photo</b>. When two parts are the same fitting (say SiteOne's and Central's 1" PVC tee), use <b>Same fitting as…</b> so they share one photo.</p>
+      </section>
+
+      <div class="pp-toolbar">
+        <input class="pp-search" id="ppSearch" type="search" placeholder="Search parts, part # or size" aria-label="Search parts" autocomplete="off">
+        <div class="pp-filters" role="group" aria-label="Show">
+          <button type="button" data-filter="all" aria-pressed="true">All</button>
+          <button type="button" data-filter="nophoto" aria-pressed="false">No photo</button>
+          <button type="button" data-filter="verified" aria-pressed="false">Verified</button>
+          <button type="button" data-filter="changed" aria-pressed="false">Needs reconfirm</button>
+        </div>
+      </div>
+      <p class="pp-count" id="ppCount" aria-live="polite"></p>
+      <p class="pp-error" id="ppError" role="alert" hidden></p>
+      <div class="pp-list" id="ppList"><p class="pp-empty">Loading…</p></div>
+    </main>
+  </div>
+
+  <script src="/crm/pjl-dialog.js"></script>
+  <script src="/crm/crm-nav.js"></script>
+  <script src="/crm/part-photos.js"></script>
+  <script src="/crm/nav-badges.js?v=1"></script>
+</body>
+</html>

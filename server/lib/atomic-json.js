@@ -125,4 +125,27 @@ function withStoreLocks(files, fn) {
   return run(0);
 }
 
-module.exports = { writeJsonAtomic, serialize, parseJsonArrayStore, updateJsonStore, withStoreLocks };
+// Wait for every queued read-modify-write to settle.
+//
+// For shutdown. writeJsonAtomic() already guarantees a store is never
+// left as garbage — it writes a sibling temp file and renames it over
+// the target, so a process killed mid-write leaves the PREVIOUS file
+// whole. What it does not guarantee is that a change already accepted
+// by a request actually reached the disk before the process went away.
+//
+// So on SIGTERM the shutdown path waits for these queues, bounded by
+// its own grace period. Not forever: a wedged queue must not hold the
+// deploy open, and the atomic rename means the cost of giving up is a
+// lost change, never a corrupt store.
+//
+// Rejections are swallowed: this asks "has the queue drained", not
+// "did every write succeed" — the caller that owns a failed write has
+// already seen its own rejection.
+function pendingStoreWrites() {
+  return queues.size;
+}
+function drainStores() {
+  return Promise.all([...queues.values()].map((p) => p.catch(() => {})));
+}
+
+module.exports = { writeJsonAtomic, serialize, parseJsonArrayStore, updateJsonStore, withStoreLocks, drainStores, pendingStoreWrites };

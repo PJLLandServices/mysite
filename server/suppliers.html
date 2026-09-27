@@ -78,6 +78,7 @@
           <a href="/admin/purchase-orders">Purchase orders</a>
           <a href="/admin/suppliers" class="is-active" aria-current="page">Suppliers</a>
           <a href="/admin/parts-suppliers">Catalog</a>
+          <a href="/admin/part-photos">Part photos</a>
         </div>
         <details class="suppliers-subnav-dropdown">
           <summary class="suppliers-subnav-trigger">
@@ -91,6 +92,7 @@
             <a href="/admin/purchase-orders">Purchase orders</a>
             <a href="/admin/suppliers" class="is-active" aria-current="page">Suppliers</a>
             <a href="/admin/parts-suppliers">Catalog</a>
+            <a href="/admin/part-photos">Part photos</a>
           </div>
         </details>
       </nav>
@@ -114,6 +116,19 @@
             <span>Name <abbr title="required">*</abbr></span>
             <input type="text" id="supplierName" required maxlength="200" autocomplete="off">
           </label>
+          <label class="supplier-field">
+            <span>Short name <small>(parts picker chip)</small></span>
+            <input type="text" id="supplierShortName" maxlength="24" autocomplete="off" placeholder="e.g. SiteOne">
+          </label>
+          <div class="supplier-field supplier-field--wide supplier-logo-field" id="supplierLogoField" hidden>
+            <span>Logo <small>(the supplier's official file, PNG or SVG. It's resized only, never cropped.)</small></span>
+            <div class="supplier-logo-row">
+              <span class="supplier-logo-preview" id="supplierLogoPreview"></span>
+              <input type="file" id="supplierLogoFile" accept="image/png,image/svg+xml,image/webp,image/jpeg" aria-label="Upload logo">
+              <button type="button" class="pjl-btn pjl-btn-outline" id="supplierLogoRemove" hidden>Remove logo</button>
+            </div>
+            <p class="supplier-logo-status" id="supplierLogoStatus" aria-live="polite"></p>
+          </div>
           <label class="supplier-field">
             <span>Contact name</span>
             <input type="text" id="supplierContactName" maxlength="120" autocomplete="off">
