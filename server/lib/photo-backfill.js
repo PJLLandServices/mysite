@@ -52,7 +52,8 @@ function createBackfill({
   store,             // part-photos store (createPartPhotos)
   ai,                // photo-ai (createPhotoAI) — or a fake in tests
   getParts,          // () => the live merged catalog { sku: part }
-  manufacturers = [],// [{ key, label }]
+  manufacturers = [],// [{ key, label }] or a function returning them
+  afterRun = null,   // async (run) => {} — called once when a run finishes (grouping, catalog rebuild)
   fetchPage,         // (url) => { html, finalUrl }
   fetchImage,        // (url) => { buffer, finalUrl }
   now = () => Date.now(),
@@ -63,7 +64,11 @@ function createBackfill({
   log = () => {}
 }) {
   const FILE = path.join(dataDir, "part-photos-backfill.json");
-  const labelOf = Object.fromEntries(manufacturers.map((m) => [m.key, m.label]));
+  const labelOf = (key) => {
+    const list = typeof manufacturers === "function" ? manufacturers() || [] : manufacturers;
+    const m = list.find((x) => x && x.key === key);
+    return m ? (m.label || m.name || "") : "";
+  };
   let state = null;
   let running = 0;
   let wake = null;
@@ -75,8 +80,13 @@ function createBackfill({
       if (err.code !== "ENOENT") throw new Error(`part-photos-backfill.json is unreadable (${err.message}) — refusing to treat it as empty.`);
       state = { run: null, history: [] };
     }
-    // A step that was running when the process stopped runs again.
+    // A step that was running when the process stopped runs again — but
+    // only when an admin presses Resume. Nothing runs on startup or deploy.
     if (state.run) for (const it of Object.values(state.run.items)) delete it.inFlight;
+    if (state.run && state.run.status === "running") {
+      state.run.status = "paused";
+      state.run.interruptedAt = new Date(now()).toISOString();
+    }
     return state;
   }
   function save() {
@@ -86,7 +96,7 @@ function createBackfill({
 
   function enrich(part) {
     const supplierSkus = Object.values(part.supplierPrices || {}).map((v) => v && v.supplierSku).filter(Boolean);
-    return { ...part, manufacturerLabel: labelOf[part.manufacturer] || "", supplierSkus: [...new Set(supplierSkus)] };
+    return { ...part, manufacturerLabel: labelOf(part.manufacturer), supplierSkus: [...new Set(supplierSkus)] };
   }
   function kindOf(part) { return ev.MANUFACTURER_DOMAINS[part.manufacturer] ? "branded" : "generic"; }
   function isLive(part) { return !!(part && part.photoState === "verified"); }
@@ -171,6 +181,10 @@ function createBackfill({
       r.status = "done"; r.finishedAt = new Date(now()).toISOString();
       await save();
       log({ action: "backfill.done", runId: r.id });
+      if (afterRun) {
+        try { await afterRun(r); }
+        catch (err) { log({ action: "backfill.after-run-error", runId: r.id, error: String(err && err.message || err) }); }
+      }
     }
   }
   async function worker() {
@@ -468,10 +482,65 @@ function createBackfill({
     return { fitting: f, result };
   }
 
-  // The 15-part calibration sample (8 branded, 7 generic), not yet live.
-  function calibrationSkus() {
+  // ---- The calibration run (M3c) ------------------------------------------
+  // The ONLY way the server starts a run. Hard limits, not options: the
+  // approved 15-part mixed sample (8 branded, 7 generic), auto-approve OFF,
+  // parts that already have a live photo excluded, one run at a time.
+  const CALIBRATION = Object.freeze({ branded: 8, generic: 7 });
+  const CALIBRATION_MAX = CALIBRATION.branded + CALIBRATION.generic;
+
+  function calibrationSkus() { return calibrationPlan().skus; }
+
+  // What the run WOULD do, with an honest worst-case count of the calls it
+  // can make. Per SKU: one finder call per search pass until something is
+  // found (branded: manufacturer site, then suppliers; generic: suppliers,
+  // then the open web), one extra finder call for a branded part whose
+  // number turns out to be a distributor code, one vision call per
+  // candidate (≤3), one compare call for a generic part with two sources.
+  // Each finder call may use up to 6 web searches and 6 web fetches.
+  function calibrationPlan() {
     const parts = getParts() || {};
-    return ev.pickCalibrationSample(Object.values(parts), { branded: 8, generic: 7, isLive }).skus;
+    const sample = ev.pickCalibrationSample(Object.values(parts), { ...CALIBRATION, isLive });
+    const skus = sample.skus.slice(0, CALIBRATION_MAX).filter((s) => parts[s] && !isLive(parts[s]));
+    const rows = skus.map((sku) => {
+      const p = enrich(parts[sku]);
+      const kind = kindOf(p);
+      const passes = ai.passesFor(p);
+      const finderMax = passes.length + (kind === "branded" ? 1 : 0);
+      return {
+        sku, kind, manufacturer: p.manufacturer || "", description: p.description || "", size: p.size || "", category: p.category || "",
+        passes,
+        calls: { finderMin: 1, finderMax, verifyMax: 3, compareMax: kind === "generic" ? 1 : 0 }
+      };
+    });
+    const sum = (f) => rows.reduce((n, r) => n + f(r), 0);
+    const finderMin = sum((r) => r.calls.finderMin), finderMax = sum((r) => r.calls.finderMax);
+    const verifyMax = sum((r) => r.calls.verifyMax), compareMax = sum((r) => r.calls.compareMax);
+    return {
+      skus, rows, autoApprove: false,
+      counts: { total: rows.length, branded: rows.filter((r) => r.kind === "branded").length, generic: rows.filter((r) => r.kind === "generic").length },
+      estimate: {
+        apiCalls: { min: finderMin, max: finderMax + verifyMax + compareMax },
+        finderCalls: { min: finderMin, max: finderMax }, verifyCalls: { max: verifyMax }, compareCalls: { max: compareMax },
+        webSearches: { max: finderMax * 6 }, webFetchesByModel: { max: finderMax * 6 },
+        pagesFetchedByOurServer: { max: sum((r) => 3 + (r.kind === "branded" ? 3 : 0)) },
+        imagesFetchedByOurServer: { max: rows.length * 3 }
+      }
+    };
+  }
+
+  async function startCalibration({ by = null } = {}) {
+    await load();
+    if (state.run && ["running", "paused"].includes(state.run.status)) throw new Error("A run is already active — pause or finish it first.");
+    const plan = calibrationPlan();
+    if (!plan.skus.length) throw new Error("Nothing to calibrate — every sample part already has a live photo.");
+    if (plan.skus.length > CALIBRATION_MAX) throw new Error("Calibration sample is larger than allowed.");
+    await start({ skus: plan.skus, autoApprove: false, label: "Calibration" });
+    state.run.calibration = { by, skus: plan.skus, estimate: plan.estimate, at: new Date(now()).toISOString() };
+    state.run.options.autoApprove = false; // belt and braces: never on for a calibration
+    await save();
+    log({ action: "backfill.calibration.start", runId: state.run.id, by, skus: plan.skus });
+    return status();
   }
 
   // ---- progress -----------------------------------------------------------
@@ -490,7 +559,14 @@ function createBackfill({
       else if (it.step === "queued") c.queued++;
       else c.inProgress++;
     }
-    return { id: run.id, label: run.label, status: run.status, autoApprove: run.options.autoApprove, createdAt: run.createdAt, finishedAt: run.finishedAt || null, counts: c, usage: run.usage };
+    const current = run.order.find((s) => !["done", "error", "queued"].includes(run.items[s].step)) || null;
+    return {
+      id: run.id, label: run.label, status: run.status, autoApprove: run.options.autoApprove, createdAt: run.createdAt, finishedAt: run.finishedAt || null,
+      interruptedAt: run.interruptedAt || null, calibration: run.calibration ? { skus: run.calibration.skus, by: run.calibration.by } : null,
+      current: current ? { sku: current, step: run.items[current].step } : null,
+      errors: run.order.filter((s) => run.items[s].step === "error").map((s) => ({ sku: s, step: run.items[s].failedStep || null, error: run.items[s].lastError })),
+      counts: c, usage: run.usage
+    };
   }
   // Whole-catalog view (Patrick's progress panel): every SKU is Live,
   // Review needed, No reliable photo or Not processed yet.
@@ -514,7 +590,7 @@ function createBackfill({
     while (pumping) await pumping;
   }
 
-  return { load, start, pause, resume, retry, status, idle, kick, groupingProposals, applyGrouping, calibrationSkus, fittingsToConfirm, resolveFitting, catalogProgress, _state: () => state };
+  return { load, start, pause, resume, retry, status, idle, kick, groupingProposals, applyGrouping, calibrationSkus, calibrationPlan, startCalibration, fittingsToConfirm, resolveFitting, catalogProgress, _state: () => state };
 }
 
 module.exports = { createBackfill, isTransient, STEPS };

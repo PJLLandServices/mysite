@@ -253,7 +253,8 @@ function harness(dir, over = {}) {
       if (!WEB[url]) throw Object.assign(new Error("404"), { status: 404 }); return { html: WEB[url], finalUrl: url }; },
     fetchImage: async (url) => ({ buffer: await pngFor(url), finalUrl: url }),
     now: () => clock, sleep: async (ms) => { clock += ms; await new Promise((r) => setImmediate(r)); },
-    concurrency: over.concurrency || 2
+    concurrency: over.concurrency || 2,
+    afterRun: over.afterRun || null
   });
   return { b, store, counts, peak, catalog, parts: () => store.mergeInto(structuredClone(catalog)), clock: () => clock };
 }
@@ -540,6 +541,102 @@ const sample = ev.pickCalibrationSample(realParts, { branded: 8, generic: 7 });
   const s2 = ev.pickCalibrationSample(realParts, { branded: 8, generic: 7, isLive: (p) => p.sku === liveSku });
   check("calibration: live parts are excluded", !s2.skus.includes(liveSku) && s2.skus.length === 15);
   check("calibration: reproducible", JSON.stringify(ev.pickCalibrationSample(realParts, {}).skus) === JSON.stringify(sample.skus));
+}
+
+// ---- 10. The calibration run (M3c): the only start door, hard-limited ----
+{
+  const dir = tmp();
+  let afterRuns = [];
+  const h = harness(dir, { afterRun: async (run) => { afterRuns.push(run.status); } });
+  // LIVE1 already has a photo → never in the sample.
+  const saved = await h.store.saveCandidateImage(await pngFor("live1"));
+  await h.store.recordAiResult("LIVE1", CATALOG.LIVE1, { tier: "confident", candidates: [{ ...saved, source: {} }], chosen: 0 }, { autoApprove: true });
+  const plan = h.b.calibrationPlan();
+  check("calibration plan: auto-approve is OFF, at most 15 parts, ≤8 branded, ≤7 generic", plan.autoApprove === false && plan.skus.length <= 15 && plan.counts.branded <= 8 && plan.counts.generic <= 7 && plan.skus.length === plan.rows.length, JSON.stringify(plan.counts));
+  check("calibration plan: a part with a live photo is excluded", !plan.skus.includes("LIVE1"));
+  check("calibration plan: mixed kinds", plan.counts.branded > 0 && plan.counts.generic > 0);
+  const e = plan.estimate;
+  const rowsMax = plan.rows.reduce((n, r) => n + r.calls.finderMax + r.calls.verifyMax + r.calls.compareMax, 0);
+  check("calibration plan: the estimate adds up (branded ≤3 finder, generic ≤2 finder, ≤3 vision each, compare for generic only)",
+    e.apiCalls.max === rowsMax && e.webSearches.max === e.finderCalls.max * 6 && plan.rows.every((r) => r.calls.finderMax === (r.kind === "branded" ? 3 : 2) && r.calls.compareMax === (r.kind === "generic" ? 1 : 0)), JSON.stringify(e));
+  const st = await h.b.startCalibration({ by: "patrick" });
+  await rejects("calibration: a second start while one is active is refused", () => h.b.startCalibration({ by: "patrick" }), /already active/);
+  await rejects("calibration: the general start is refused too while active", () => h.b.start({ skus: ["PGPADJ"], autoApprove: true }), /already in progress/);
+  const run = h.b._state().run;
+  check("calibration: the run is exactly the plan's SKUs, labelled, auto-approve off, attributed", JSON.stringify(run.order.slice().sort()) === JSON.stringify(plan.skus.slice().sort()) && run.label === "Calibration" && run.options.autoApprove === false && run.calibration.by === "patrick" && st.run.calibration.skus.length === plan.skus.length);
+  await h.b.idle();
+  const parts = h.parts();
+  const done = h.b._state().run;
+  check("calibration: every sample part finished", done.status === "done" && done.order.every((s) => ["done", "error"].includes(done.items[s].step)));
+  check("calibration: Confident results exist but NOTHING went live", done.order.some((s) => done.items[s].result && done.items[s].result.tier === "confident") && done.order.every((s) => parts[s].photoState !== "verified"));
+  const g = h.store.readStoresSync();
+  check("calibration: no group touched by the run holds a live photo", done.order.every((s) => { const gr = g.links[s] && g.groups[g.links[s].groupId]; return !gr || !gr.photo; }));
+  check("calibration: only sample parts were processed", Object.keys(h.counts.find).every((s) => plan.skus.includes(s)) && !h.counts.find.LIVE1);
+  check("calibration: LIVE1's photo untouched", parts.LIVE1.photoState === "verified");
+  check("calibration: afterRun ran once, when the run was done", afterRuns.length === 1 && afterRuns[0] === "done");
+  check("calibration: status reports it", h.b.status().run.calibration && h.b.status().run.calibration.skus.length === plan.skus.length && h.b.status().run.autoApprove === false);
+  // Done → a new calibration may start again (and re-queues the not-live ones).
+  await h.b.startCalibration({ by: "patrick" });
+  check("calibration: can run again once the previous run is done", h.b._state().run.status === "running");
+  await h.b.idle();
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+{
+  // A refused or failed AI call can never make anything live.
+  const dir = tmp();
+  const h = harness(dir, { find: (part) => {
+    if (part.sku === "PGPADJ") throw Object.assign(new Error("The model declined this request."), { permanent: true });
+    if (part.sku === "TEE34") throw Object.assign(new Error("overloaded"), { status: 529 });
+  }, verify: (part) => { if (part.sku === "PGV100G") throw Object.assign(new Error("vision refused"), { permanent: true }); } });
+  await h.b.startCalibration({ by: "patrick" }); await h.b.idle();
+  const run = h.b._state().run, parts = h.parts(), s = h.store.readStoresSync();
+  const errored = run.order.filter((x) => run.items[x].step === "error");
+  check("calibration: refused / failed calls end as errors, not results", errored.includes("PGPADJ") && errored.includes("TEE34") && errored.includes("PGV100G"));
+  check("calibration: an errored part has no link and no photo", errored.every((x) => !s.links[x]) && errored.every((x) => parts[x].photoState === "none"));
+  check("calibration: errors are listed on the status", h.b.status().run.errors.length === errored.length && h.b.status().run.errors.every((e) => e.error));
+  check("calibration: still nothing live at all", run.order.every((x) => parts[x].photoState !== "verified"));
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+{
+  // Nothing to calibrate → refuse.
+  const dir = tmp();
+  const catalog = { LIVE1: CATALOG.LIVE1 };
+  const h = harness(dir, { catalog });
+  const saved = await h.store.saveCandidateImage(await pngFor("live1"));
+  await h.store.recordAiResult("LIVE1", CATALOG.LIVE1, { tier: "confident", candidates: [{ ...saved, source: {} }], chosen: 0 }, { autoApprove: true });
+  await rejects("calibration: refuses when every sample part is already live", () => h.b.startCalibration({ by: "patrick" }), /Nothing to calibrate/);
+  check("…and no run was created", !h.b._state().run);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+{
+  // A run interrupted by a restart/deploy does NOT continue by itself.
+  const dir = tmp();
+  let hung = 0;
+  const A = harness(dir, { concurrency: 1, find: (part) => { if (part.sku === "TEE34") { hung++; return new Promise(() => {}); } } });
+  await A.b.start({ skus: ["PGPADJ", "TEE34"], autoApprove: false });
+  for (let i = 0; i < 300 && !hung; i++) await new Promise((r) => setTimeout(r, 10));
+  await new Promise((r) => setTimeout(r, 30));
+  check("setup: process 'died' with the run running", JSON.parse(fs.readFileSync(path.join(dir, "part-photos-backfill.json"), "utf8")).run.status === "running");
+  const B = harness(dir);
+  await B.b.load();
+  const st = B.b.status().run;
+  check("restart: the run is shown as paused/interrupted, not running", st.status === "paused" && !!st.interruptedAt);
+  await new Promise((r) => setTimeout(r, 60));
+  check("restart: nothing ran on its own", Object.keys(B.counts.find).length === 0);
+  await B.b.resume(); await B.b.idle();
+  check("restart: Resume finishes it", B.b._state().run.status === "done" && B.counts.find.TEE34 === 1 && !B.counts.find.PGPADJ);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+
+{
+  // On the REAL catalog (143 parts) the plan is exactly the 15-part sample.
+  const dir = tmp();
+  const h = harness(dir, { catalog: Object.fromEntries(realParts.map((p) => [p.sku, p])) });
+  const plan = h.b.calibrationPlan();
+  check("calibration plan on the real catalog: exactly the 15-part sample, 8 branded + 7 generic", plan.skus.length === 15 && plan.counts.branded === 8 && plan.counts.generic === 7 && JSON.stringify(plan.skus) === JSON.stringify(sample.skus), plan.skus.join(","));
+  check("calibration plan on the real catalog: worst case ≤ 15 finder + 45 vision + 7 compare", plan.estimate.finderCalls.max === 8 * 3 + 7 * 2 && plan.estimate.verifyCalls.max === 45 && plan.estimate.compareCalls.max === 7 && plan.estimate.apiCalls.max === 38 + 45 + 7);
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 if (REPORT) {
