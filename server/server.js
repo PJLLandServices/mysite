@@ -261,20 +261,39 @@ const SERVER_DIR = __dirname;
 const DATA_DIR = path.join(SERVER_DIR, "data");
 // Verified part photos for the parts picker (lib/part-photos.js, P-PJL-35).
 const partPhotos = partPhotosLib.createPartPhotos({ dataDir: DATA_DIR, sharp });
-// AI photo backfill (P-PJL-35 M3). M3b reads its progress and its
-// "Fittings to confirm" list only: there is NO route that starts, pauses or
-// resumes a run, and its AI is a stub that refuses — the calibration run
-// (M3c) waits for Patrick's separate approval.
+// AI photo backfill (P-PJL-35 M3c). The engine is wired to the real Claude
+// client and to our own safe fetchers (https only, never a private address,
+// images/HTML only, size-capped). NOTHING runs on its own: the client is
+// created only when an admin starts the calibration run, no run starts at
+// boot, and a run interrupted by a deploy waits for Resume. The only start
+// door is startCalibration(): the approved 15-part sample, auto-approve OFF.
+const photoAiLib = require("./lib/photo-ai");
+const photoAi = (() => {
+  let real = null;
+  const get = () => (real ||= photoAiLib.createPhotoAI({ client: photoAiLib.createAnthropicClient() }));
+  return {
+    passesFor: photoAiLib.passesFor,
+    find: (...a) => get().find(...a),
+    verify: (...a) => get().verify(...a),
+    compare: (...a) => get().compare(...a)
+  };
+})();
 const photoBackfill = require("./lib/photo-backfill").createBackfill({
   dataDir: DATA_DIR,
   store: partPhotos,
   getParts: () => (PARTS && PARTS.parts) || {},
-  ai: (() => {
-    const held = () => { throw Object.assign(new Error("The AI photo backfill is held until Patrick approves the calibration run (M3c)."), { permanent: true }); };
-    return { passesFor: () => [], find: held, verify: held, compare: held };
-  })(),
-  fetchPage: () => { throw new Error("held"); },
-  fetchImage: () => { throw new Error("held"); }
+  manufacturers: () => (PARTS && PARTS.manufacturers) || [],
+  ai: photoAi,
+  fetchPage: (url) => partPhotosLib.fetchPageSafely(url),
+  fetchImage: (url) => partPhotosLib.fetchImageSafely(url),
+  log: (entry) => console.log("[photo-backfill]", JSON.stringify(entry)),
+  afterRun: async () => {
+    // Same-fitting grouping (auto-link only same mfr + mfr part # on
+    // official pages; the rest → Fittings to confirm), then the catalog
+    // reflects every result's state.
+    await photoBackfill.applyGrouping();
+    rebuildCatalogFromOverrides();
+  }
 });
 const { buildReviewQueues } = require("./lib/photo-review");
 // Supplier company logos for the picker's supplier chip (P-PJL-35 M2a).
@@ -14060,10 +14079,56 @@ async function handleApi(req, res, pathname) {
   //   POST /api/part-photo-review/fittings/:id {action: confirm|dismiss, keep} (admin)
   // "Upload my own" uses POST /api/part-photos/:sku/photo (above).
   // Nothing here starts, pauses or resumes a backfill run (held for M3c).
+  // ---------- Calibration run (P-PJL-35 M3c) --------------------------------
+  //   GET  /api/part-photo-backfill/plan         the exact 15 SKUs + call estimate (staff)
+  //   POST /api/part-photo-backfill/calibration  start it (admin) — the ONLY start door
+  //   POST /api/part-photo-backfill/pause|resume (admin)
+  // Hard limits live in lib/photo-backfill.startCalibration: the approved
+  // 15-part mixed sample, auto-approve OFF, live photos skipped, one run at
+  // a time. There is no "whole catalog" route.
+  if (req.method === "GET" && pathname === "/api/part-photo-backfill/plan") {
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    try {
+      await photoBackfill.load();
+      return sendJson(res, 200, { ok: true, ...photoBackfill.calibrationPlan(), run: photoBackfill.status().run, apiKeySet: !!process.env.ANTHROPIC_API_KEY });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't build the plan."] });
+    }
+  }
+  const backfillActionMatch = pathname.match(/^\/api\/part-photo-backfill\/(calibration|pause|resume)$/);
+  if (backfillActionMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    const by = await actorLabel(req);
+    const action = backfillActionMatch[1];
+    try {
+      let status, note;
+      if (action === "calibration") {
+        if (!process.env.ANTHROPIC_API_KEY) return sendJson(res, 503, { ok: false, errors: ["ANTHROPIC_API_KEY isn't set on the server — nothing was started."] });
+        status = await photoBackfill.startCalibration({ by });
+        note = `Started the photo calibration run (${status.run.counts.total} parts, auto-approve off): ${status.run.calibration.skus.join(", ")}`;
+      } else if (action === "pause") {
+        status = await photoBackfill.pause();
+        note = "Paused the photo backfill run";
+      } else {
+        status = await photoBackfill.resume();
+        note = "Resumed the photo backfill run";
+      }
+      await settings.recordAudit({ who: by, action: `part-photo.backfill.${action}`, note, after: status.run });
+      return sendJson(res, 200, { ok: true, ...status });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't do that."] });
+    }
+  }
+
   if (req.method === "GET" && pathname === "/api/part-photo-review") {
     if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
     try {
       await photoBackfill.load();
+      // Results land in the stores as the run goes; the catalog's photo
+      // states follow them here so the queues are current.
+      rebuildCatalogFromOverrides();
       const { groups, links } = await partPhotos.snapshot();
       const status = photoBackfill.status();
       const queues = buildReviewQueues({
@@ -14072,7 +14137,7 @@ async function handleApi(req, res, pathname) {
       });
       const liveAuto = Object.values(PARTS.parts).filter((p) => p.photoState === "verified" && p.photo && String(p.photo.approvedBy || "").startsWith("auto:")).length;
       const progress = { ...status.catalog, liveAuto, errors: status.run ? status.run.counts.error : 0 };
-      return sendJson(res, 200, { ok: true, ...queues, progress, run: status.run, backfillHeld: true });
+      return sendJson(res, 200, { ok: true, ...queues, progress, run: status.run, apiKeySet: !!process.env.ANTHROPIC_API_KEY });
     } catch (err) {
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't read the review queue."] });
     }
