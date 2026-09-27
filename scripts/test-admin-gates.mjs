@@ -234,6 +234,10 @@ check('the only start door is the hard-limited calibration (M3c): no general sta
   // start()/kick()/retry() must never be reachable from a route.
   assert.ok(!/photoBackfill\.(start|kick|retry)\(/.test(SRC), 'server.js calls the general start/kick/retry');
   assert.equal((SRC.match(/photoBackfill\.startCalibration\(/g) || []).length, 1, 'exactly one startCalibration call site');
+  // The re-run door (approved 2026-09-27) is limited by the engine to the
+  // last calibration's parts that still have no live photo.
+  assert.equal((SRC.match(/photoBackfill\.startCalibrationRerun\(/g) || []).length, 1, 'exactly one startCalibrationRerun call site');
+  assert.equal(needsAuth('POST', '/api/part-photo-backfill/rerun-unresolved'), 'user');
   const at = SRC.indexOf('backfillActionMatch && req.method === "POST"');
   const block = SRC.slice(at, at + 2500);
   assert.ok(!/autoApprove\s*:\s*true/.test(block), 'the route must never pass autoApprove: true');

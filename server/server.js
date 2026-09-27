@@ -14135,7 +14135,7 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, probe });
   }
 
-  const backfillActionMatch = pathname.match(/^\/api\/part-photo-backfill\/(calibration|pause|resume)$/);
+  const backfillActionMatch = pathname.match(/^\/api\/part-photo-backfill\/(calibration|rerun-unresolved|pause|resume)$/);
   if (backfillActionMatch && req.method === "POST") {
     const session = await requireAdmin(req);
     if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
@@ -14148,6 +14148,12 @@ async function handleApi(req, res, pathname) {
         if (!process.env.ANTHROPIC_API_KEY) return sendJson(res, 503, { ok: false, errors: ["ANTHROPIC_API_KEY isn't set on the server — nothing was started."] });
         status = await photoBackfill.startCalibration({ by });
         note = `Started the photo calibration run (${status.run.counts.total} parts, auto-approve off): ${status.run.calibration.skus.join(", ")}`;
+      } else if (action === "rerun-unresolved") {
+        // Only the calibration parts that still have no live photo (approved
+        // by Patrick, 2026-09-27) — never the whole sample, never the catalog.
+        if (!process.env.ANTHROPIC_API_KEY) return sendJson(res, 503, { ok: false, errors: ["ANTHROPIC_API_KEY isn't set on the server — nothing was started."] });
+        status = await photoBackfill.startCalibrationRerun({ by });
+        note = `Re-ran the unresolved calibration parts (${status.run.counts.total}, auto-approve off): ${status.run.calibration.skus.join(", ")}`;
       } else if (action === "pause") {
         status = await photoBackfill.pause();
         note = "Paused the photo backfill run";

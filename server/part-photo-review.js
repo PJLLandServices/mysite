@@ -119,7 +119,9 @@
     if (run) {
       const c = run.counts;
       const where = run.current ? ` · now on <span class="pp-mono">${esc(run.current.sku)}</span> (${esc(run.current.step)})` : "";
-      runLine = `${run.calibration ? "Calibration run" : "AI run"} <b>${esc(run.label || run.id)}</b> · <b>${esc(run.status === "paused" && run.interruptedAt ? "interrupted by a restart — press Resume" : run.status)}</b> · ${c.done} of ${c.total} done${c.error ? ` · ${c.error} error${c.error > 1 ? "s" : ""}` : ""}${where} · auto-approve <b>${run.autoApprove ? "ON" : "off"}</b> · ${run.usage.in.toLocaleString()} in / ${run.usage.out.toLocaleString()} out tokens, ${run.usage.searches} searches`;
+      const u = run.usage || {};
+      runLine = `${run.calibration ? (run.calibration.rerunOf ? "Calibration re-run" : "Calibration run") : "AI run"} <b>${esc(run.label || run.id)}</b> · <b>${esc(run.status === "paused" && run.interruptedAt ? "interrupted by a restart — press Resume" : run.status)}</b> · ${c.done} of ${c.total} done${c.error ? ` · ${c.error} error${c.error > 1 ? "s" : ""}` : ""}${where} · auto-approve <b>${run.autoApprove ? "ON" : "off"}</b>`
+        + `<br><span class="pr-usage">${(u.calls || 0)} Claude calls · ${(u.searches || 0)} web searches · ${(u.webFetches || 0)} model fetches · ${(u.pageFetches || 0)} pages + ${(u.imageFetches || 0)} images fetched by our server · ${(u.in || 0).toLocaleString()} in / ${(u.out || 0).toLocaleString()} out tokens</span>`;
     }
     const errors = run && run.errors && run.errors.length
       ? `<ul class="pr-run-errors">${run.errors.map((e) => `<li><span class="pp-mono">${esc(e.sku)}</span> at ${esc(e.step || "?")}: ${esc(e.error || "")}</li>`).join("")}</ul>` : "";
@@ -129,7 +131,13 @@
     let controls = "";
     if (run && run.status === "running") controls = `<button type="button" class="pp-btn" data-act="pause">Pause</button>`;
     else if (run && run.status === "paused") controls = `<button type="button" class="pp-btn pp-btn-primary" data-act="resume">Resume</button>`;
-    else controls = `<button type="button" class="pp-btn pp-btn-primary" data-act="start-cal"${d.apiKeySet === false ? " disabled" : ""}>Start calibration run (15 parts, auto-approve off)</button>${d.apiKeySet === false ? `<span class="pr-held">ANTHROPIC_API_KEY isn't set on the server.</span>` : ""}`;
+    else {
+      const unresolved = run && run.calibration && run.calibration.unresolved ? run.calibration.unresolved : [];
+      controls = (unresolved.length
+        ? `<button type="button" class="pp-btn pp-btn-primary" data-act="rerun"${d.apiKeySet === false ? " disabled" : ""}>Re-run the ${unresolved.length} unresolved calibration part${unresolved.length > 1 ? "s" : ""} (auto-approve off)</button>`
+        : "")
+        + `<button type="button" class="pp-btn${unresolved.length ? "" : " pp-btn-primary"}" data-act="start-cal"${d.apiKeySet === false ? " disabled" : ""}>Start calibration run (15 parts, auto-approve off)</button>${d.apiKeySet === false ? `<span class="pr-held">ANTHROPIC_API_KEY isn't set on the server.</span>` : ""}`;
+    }
     return `<div class="pr-progress-head"><h2>Photos across the catalog</h2><span>${total} parts</span></div>
       <div class="pr-bar" role="img" aria-label="${p.live || 0} live, ${p.review || 0} review needed, ${p.noReliable || 0} no reliable photo, ${p.notProcessed || 0} not processed">${bar || '<span class="pr-bar-seg is-pending" style="flex-grow:1"></span>'}</div>
       <div class="pr-stats">${stats}</div>
@@ -164,6 +172,16 @@
     if (!ok) return;
     await backfillAction("calibration", "Starting…");
   }
+  async function rerunUnresolved() {
+    const run = state.data && state.data.run;
+    const skus = run && run.calibration && run.calibration.unresolved || [];
+    if (!skus.length) return;
+    const ok = await window.pjlDialog.confirm(
+      `Re-run only the ${skus.length} calibration part${skus.length > 1 ? "s" : ""} that still have no live photo? Auto-approve is OFF: nothing goes live until you approve it here.\n\n${skus.join(", ")}`,
+      { confirmLabel: "Re-run these parts", cancelLabel: "Cancel" });
+    if (!ok) return;
+    await backfillAction("rerun-unresolved", "Starting…");
+  }
   async function backfillAction(action, busy) {
     const s = els.progress.querySelector("[data-status]");
     if (s) { s.textContent = busy; s.classList.remove("is-error"); }
@@ -180,6 +198,7 @@
     const b = e.target.closest("[data-act]");
     if (!b || state.busy) return;
     if (b.dataset.act === "start-cal") startCalibration();
+    else if (b.dataset.act === "rerun") rerunUnresolved();
     else if (b.dataset.act === "pause") backfillAction("pause", "Pausing…");
     else if (b.dataset.act === "resume") backfillAction("resume", "Resuming…");
   });
@@ -246,8 +265,10 @@
         ? card.candidates.map((c, i) => candHtml(card, c, i, i === picked)).join("")
         : `<div class="pr-nocand"><b>No candidate photo.</b> Upload your own if you have one.</div>`;
     }
-    const ident = card.identified && card.identified.manufacturerPartNumber
-      ? `<div class="pp-meta">AI matched it to <b>${esc(card.identified.manufacturer || "")} ${esc(card.identified.manufacturerPartNumber)}</b></div>` : "";
+    const ident = (card.proposedBrand
+      ? `<div class="pp-meta">Brand proposed from the description: <b>${esc(card.proposedBrand)}</b> (the catalog's manufacturer is blank and was not changed)</div>` : "")
+      + (card.identified && card.identified.manufacturerPartNumber
+      ? `<div class="pp-meta">AI matched it to <b>${esc(card.identified.manufacturer || "")} ${esc(card.identified.manufacturerPartNumber)}</b></div>` : "");
     const reason = `<div class="pr-reason is-${esc(card.tier)}"><b>${TIER_LABEL[card.tier] || card.tier}</b>${card.reason ? ` — ${esc(card.reason)}` : ""}</div>`;
     const actions = queue === "autoApproved"
       ? `<button type="button" class="pp-btn pp-btn-danger" data-act="reject">Reject — take it down</button>
