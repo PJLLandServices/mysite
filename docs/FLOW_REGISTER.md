@@ -3,7 +3,7 @@
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
 **2026-09-27 (Change-order safety: office-only actions, real names, honest sends, one "open" rule; PR 2 of Change Orders, stacked on the quote lifecycle PR; no PASS flow touched):**
-**Defects proven before the fix** (`test-change-order-safety.mjs` on the old code: 39 of 51 failed):
+**Defects proven before the fix** (`test-change-order-safety.mjs` on the old code: 40 of 53 failed):
 - Every change-order route called `requireAdmin()` and **ignored the answer**. A technician could send
   a change to the customer, record the customer's approval, withdraw it, and generate the revised
   quote, and all of it was logged as "admin".

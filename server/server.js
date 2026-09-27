@@ -17718,7 +17718,8 @@ async function handleApi(req, res, pathname) {
       const session = await requireUser(req);
       if (!session) return sendJson(res, 401, { ok: false, errors: ["Sign in first."] });
       // The customer-facing email (recipient, subject, wording) is the office's.
-      if (payload && payload.draftEmail && !(await requireAdmin(req))) {
+      const officeSession = await requireAdmin(req);
+      if (payload && payload.draftEmail && !officeSession) {
         return sendJson(res, 403, { ok: false, errors: ["Only the office can change the email to the customer."] });
       }
       const scr = await projects.updateScopeChangeRequest(id, scrId, payload, { by: await actorLabel(req, session.uid || "staff") });
