@@ -15,6 +15,12 @@ show old snapshot values, and the Dashboard total will still be browser arithmet
   jobs with nothing signed.
 - The projects list shows `agreement.governing.total`. The Dashboard shows `totals` and adds up no
   money. Neither reads `proposalSnapshot` any more.
+- **One HST treatment.** Every contract figure is the agreement's total **with HST**: header,
+  list, Dashboard, and the tab's agreement line and version rows. Before-HST rides alongside.
+  "Signed changes" leads with HST too.
+- **Truthful empty states.** A job with nothing signed shows **"Not signed"** in the list and
+  header. With no signed active job, the Dashboard shows **"None signed"**, never $0.00. An
+  unsigned revision is named as awaiting signature, never counted.
 
 **Test:** `scripts/test-contract-value-consistency.mjs` (in `build:check`) covers:
 - an original-only job;

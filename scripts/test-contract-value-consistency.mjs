@@ -170,6 +170,17 @@ try {
     /const total = project\.agreement\?\.governing\?\.total;/.test(listTsx) && !/proposalSnapshot/.test(listTsx));
   ok("the Dashboard shows the server's total and adds up no money",
     /data\?\.totals\?\.activeContractValue/.test(dash) && !/proposalSnapshot/.test(dash) && !/reduce\([^)]*(total|Total|price)/.test(dash));
+  // Nothing signed reads as nothing signed — never "$0", which would look
+  // like a signed contract worth nothing (Patrick, 2026-09-27).
+  const overview = strip("ProjectOverview.tsx");
+  const tab = strip("ChangeOrders.tsx");
+  ok("list: a job with no signed agreement shows 'Not signed', not $0 or a dash",
+    (listTsx.match(/Not signed/g) || []).length >= 2 && !/money\(total \?\? 0\)|money\(0\)/.test(listTsx));
+  ok("header: 'Not signed' when there is no signed agreement", /"Not signed"/.test(overview));
+  ok("Dashboard: 'None signed' instead of $0.00 when no active job is signed", /signedActive \? money\(openValue\) : "None signed"/.test(dash));
+  // One HST treatment: every contract figure is the agreement's TOTAL (with HST).
+  ok("tab: the agreement line leads with the total WITH HST, like the header, list and Dashboard",
+    /money\(agreement\.governing\.total\)\}<\/strong> with HST/.test(tab), "tab agreement line");
   const dist = fs.readdirSync(path.join(ROOT, "server", "app-dist", "assets")).filter((f) => f.endsWith(".js"))
     .map((f) => fs.readFileSync(path.join(ROOT, "server", "app-dist", "assets", f), "utf8")).join("\n");
   ok("the committed app build includes it", dist.includes("activeContractValue"));

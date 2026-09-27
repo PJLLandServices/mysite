@@ -16,6 +16,7 @@ export function Dashboard() {
   // Added up by the SERVER from each active job's signed agreement
   // (projects.contractTotals) — the browser does no money arithmetic.
   const openValue = data?.totals?.activeContractValue ?? 0;
+  const signedActive = data?.totals?.activeSigned ?? 0;
   const unsignedActive = data?.totals?.activeUnsigned ?? 0;
   const openTasks = active.reduce((sum, p) => {
     const { done, total } = taskProgress(p.tasks);
@@ -33,9 +34,12 @@ export function Dashboard() {
             { label: "Work outstanding", value: `${openTasks} tasks` },
             {
               label: "Active contract value",
-              value: money(openValue),
-              tone: "money" as const,
-              hint: unsignedActive ? `signed agreements only — ${unsignedActive} active job${unsignedActive === 1 ? "" : "s"} not yet signed` : "signed agreements"
+              // No signed active job → say so; "$0.00" would read as signed work worth nothing.
+              value: signedActive ? money(openValue) : "None signed",
+              tone: signedActive ? ("money" as const) : ("muted" as const),
+              hint: signedActive
+                ? `with HST · ${signedActive} signed${unsignedActive ? `, ${unsignedActive} not yet signed (not counted)` : ""}`
+                : unsignedActive ? `${unsignedActive} active job${unsignedActive === 1 ? "" : "s"}, none signed yet` : "no active jobs"
             }
           ].map((s) => (
             <Card key={s.label} className="px-4 py-3.5">
