@@ -2,6 +2,25 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-27 (Part photos: "who joined the fitting first" no longer depends on the clock — FLOW-47 hops touched, FLOW-48's rule fixed):**
+main's CI went red on `test-part-photo-lifecycle` ("re-uploading the photo doesn't change who was
+first"). Root cause, not a flake: `fittingDefaultFor()` rule 3 ordered a fitting's members by their
+millisecond first-link timestamp and broke ties ALPHABETICALLY, so a photo and a link made in the same
+millisecond (a fast CI runner) handed the default to the alphabetically-first part. Fix: every NEW
+member of a fitting gets a persisted `linkSeq` on its link record, assigned under the store lock
+(`nextLinkSeq`, one past the highest live sequence), and ONE named rule, `compareJoinOrder()`, decides
+order. Re-upload, reconfirm and same-fitting re-link keep the sequence exactly (`keepFirstLinked`).
+**Existing records without a sequence** keep their place: an unsequenced link precedes every sequenced
+one (it cannot have joined later — every join since this change gets a sequence); between two
+unsequenced links the OLD rule applies unchanged (earliest first-link time, then part number), so no
+existing fitting's default moves on deploy; touching an unsequenced member never assigns it a
+sequence. **FLOW-47 (PASS)**: its upload / same-fitting / reconfirm writes pass through the changed
+function; its visible behaviour is unchanged and its automated coverage re-run green
+(`test-part-photo-lifecycle.mjs` 106, now with the clock FROZEN so the collision runs every time —
+5/5 red on the old code, 5/5 green on the fix; `test-admin-gates.mjs`). The production walk is not
+redone here. **FLOW-48** (UNMAPPED) reads the fixed rule. New `test-part-photo-order.mjs` (28,
+build:check): identical timestamps forced for the whole store run, join order in both alphabetical
+directions, concurrent links, leave-and-rejoin, and the pre-sequence fallback.
 **2026-09-27 (Part photos M3a — AI photo backfill ENGINE only, no routes/UI; FLOW-49 opened):**
 P-PJL-35 M3a, approved by Patrick with these rules: grouping auto-links ONLY same manufacturer + same
 manufacturer part # backed by an official manufacturer page (everything else → "Fittings to confirm");

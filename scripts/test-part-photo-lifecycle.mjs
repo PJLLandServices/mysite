@@ -411,14 +411,28 @@ const onDisk = () => true;
   try {
     const store = createPartPhotos({ dataDir: dir, sharp });
     const a = part("RUNTIME-A"), b = part("CATALOG-B");
-    const first = await store.setPhoto("RUNTIME-A", a, img, { by: "patrick", source: { method: "upload" } });
-    await store.linkToGroup("CATALOG-B", b, first.groupId, { by: "patrick" });
+    // The clock is FROZEN for the photo, the link and the re-upload below,
+    // so all three carry the identical timestamp. That is exactly what a
+    // fast CI runner produced by accident on 2026-09-27 — this assertion
+    // went red on main when the photo and the link landed in one
+    // millisecond and the alphabetical tie-break picked CATALOG-B. Forcing
+    // it makes the case run every time instead of on a lucky runner.
+    // The full treatment is scripts/test-part-photo-order.mjs.
+    const RealDate = Date;
+    const FROZEN_AT = RealDate.parse("2026-09-27T12:00:00.000Z");
+    class FrozenDate extends RealDate {
+      constructor(...args) { if (args.length) super(...args); else super(FROZEN_AT); }
+      static now() { return FROZEN_AT; }
+    }
+    const frozen = async (fn) => { globalThis.Date = FrozenDate; try { return await fn(); } finally { globalThis.Date = RealDate; } };
+    const first = await frozen(() => store.setPhoto("RUNTIME-A", a, img, { by: "patrick", source: { method: "upload" } }));
+    await frozen(() => store.linkToGroup("CATALOG-B", b, first.groupId, { by: "patrick" }));
     const merged = (isBaseline) => { const ps = { "RUNTIME-A": { ...a }, "CATALOG-B": { ...b } }; store.mergeInto(ps, { isBaseline }); return ps; };
     let ps = merged((s) => s === "CATALOG-B");
     check("default: the part that got the photo is NOT automatically the default", ps["RUNTIME-A"].photo.fittingDefaultSku === "CATALOG-B");
     check("default: both members agree on the default", ps["CATALOG-B"].photo.fittingDefaultSku === "CATALOG-B");
     // Re-uploading the photo on A must not make A "first".
-    await store.setPhoto("RUNTIME-A", a, img, { by: "patrick", source: { method: "upload" } });
+    await frozen(() => store.setPhoto("RUNTIME-A", a, img, { by: "patrick", source: { method: "upload" } }));
     ps = merged(() => false);
     check("default: re-uploading the photo doesn't change who was first", ps["RUNTIME-A"].photo.fittingDefaultSku === "RUNTIME-A");
 

@@ -103,9 +103,8 @@ function photoUrls(hash) {
 //      visible member of the fitting;
 //   2. otherwise the canonical part: the one from the original catalog
 //      (parts.json) when exactly one member is;
-//   3. otherwise the member that was in the fitting first (earliest link),
-//      i.e. the part the others were linked TO;
-//   4. ties by part number.
+//   3. otherwise the member that was in the fitting first, i.e. the part
+//      the others were linked TO — decided by compareJoinOrder below.
 // Never "whichever part received the photo", and never a supplier rule.
 function fittingDefaultFor(group, memberSkus, links, isBaseline) {
   if (!memberSkus.length) return { sku: null, chosen: false };
@@ -113,9 +112,55 @@ function fittingDefaultFor(group, memberSkus, links, isBaseline) {
   const baseline = isBaseline ? memberSkus.filter((s) => isBaseline(s)) : [];
   if (baseline.length === 1) return { sku: baseline[0], chosen: false };
   const pool = baseline.length > 1 ? baseline : memberSkus;
-  const at = (s) => (links[s] && links[s].firstLinkedAt) || (links[s] && links[s].at) || "";
-  const sorted = [...pool].sort((a, b) => (at(a) < at(b) ? -1 : at(a) > at(b) ? 1 : a.localeCompare(b)));
+  const sorted = [...pool].sort((a, b) => compareJoinOrder(a, b, links));
   return { sku: sorted[0], chosen: false };
+}
+
+// ONE definition of "which of these two parts joined the fitting first".
+//
+// It used to be the millisecond timestamp, ties broken by part number. Two
+// links made in the same millisecond tied, and the ALPHABETICALLY first
+// part won — so the fitting's default depended on how fast the machine
+// was (main's CI, 2026-09-27: the photo and the link landed in one
+// millisecond on the runner and "CATALOG-B" beat "RUNTIME-A").
+//
+// Now every NEW member of a fitting gets `linkSeq`, a persisted join
+// sequence assigned under the store lock (nextLinkSeq), so it cannot tie
+// and cannot race. Re-uploading, reconfirming or re-linking a member of
+// the SAME fitting never changes it (keepFirstLinked).
+//
+// Records written before sequences existed have none, and get a defined
+// place rather than a guessed one:
+//   * an unsequenced link precedes every sequenced link — it cannot have
+//     joined later, because any join since this shipped gets a sequence;
+//   * between two unsequenced links, the old rule, unchanged: earliest
+//     first-link time, then part number. A tie there is two records that
+//     were already indistinguishable; part number is at least stable, and
+//     keeping the old rule means no existing fitting's default moves.
+function compareJoinOrder(a, b, links) {
+  const ra = (links && links[a]) || {};
+  const rb = (links && links[b]) || {};
+  const sa = Number.isInteger(ra.linkSeq) ? ra.linkSeq : null;
+  const sb = Number.isInteger(rb.linkSeq) ? rb.linkSeq : null;
+  if (sa === null && sb !== null) return -1;
+  if (sa !== null && sb === null) return 1;
+  if (sa !== null && sb !== null && sa !== sb) return sa - sb;
+  const ta = ra.firstLinkedAt || ra.at || "";
+  const tb = rb.firstLinkedAt || rb.at || "";
+  if (ta !== tb) return ta < tb ? -1 : 1;
+  return a.localeCompare(b);
+}
+
+// The next join sequence: one past the highest on any live link. Called
+// only inside mutate(), which holds both store locks, so two joins cannot
+// read the same maximum. Global rather than per fitting, so a part that
+// moves between fittings always lands behind everyone already there.
+function nextLinkSeq(links) {
+  let max = 0;
+  for (const rec of Object.values(links || {})) {
+    if (rec && Number.isInteger(rec.linkSeq) && rec.linkSeq > max) max = rec.linkSeq;
+  }
+  return max + 1;
 }
 
 function mergeIntoCatalog(parts, groups, links, fileExists, { isBaseline } = {}) {
@@ -573,11 +618,25 @@ function createPartPhotos({ dataDir, sharp }) {
   function linkRecord(part, by) {
     return { linkTier: "confirmed", linkedBy: by, fingerprint: fingerprintOf(part), at: new Date().toISOString() };
   }
-  // When a SKU first joined its fitting. Reconfirming or re-uploading the
-  // photo must not make it "newer" — the fitting default's rule 3 reads it.
-  function keepFirstLinked(prev, groupId, rec) {
-    const first = prev && prev.groupId === groupId ? (prev.firstLinkedAt || prev.at) : rec.at;
-    return { ...rec, firstLinkedAt: first };
+  // When a SKU joined its fitting. Reconfirming or re-uploading the photo
+  // must not make it "newer" — the fitting default's rule 3 reads it
+  // (compareJoinOrder).
+  //
+  // Same fitting as before → it is the SAME membership: keep its first-link
+  // time and its sequence exactly, including a pre-sequence record's LACK
+  // of one. Handing an old record a sequence now would move it behind
+  // every sequenced member and silently change its fitting's default.
+  //
+  // New fitting (first link, or moved from another) → a new membership,
+  // with a fresh sequence.
+  function keepFirstLinked(prev, groupId, rec, links) {
+    if (prev && prev.groupId === groupId) {
+      const out = { ...rec, firstLinkedAt: prev.firstLinkedAt || prev.at };
+      if (Number.isInteger(prev.linkSeq)) out.linkSeq = prev.linkSeq;
+      else delete out.linkSeq;
+      return out;
+    }
+    return { ...rec, firstLinkedAt: rec.at, linkSeq: nextLinkSeq(links) };
   }
 
   // Set Patrick's photo for the fitting this SKU is. If the SKU already
@@ -608,7 +667,7 @@ function createPartPhotos({ dataDir, sharp }) {
       g.approvedBy = by;
       g.approvedAt = now;
       g.updatedAt = now;
-      links[sku] = keepFirstLinked(links[sku], groupId, { groupId, ...linkRecord(part, by) });
+      links[sku] = keepFirstLinked(links[sku], groupId, { groupId, ...linkRecord(part, by) }, links);
       const sharedWith = Object.keys(links).filter((s) => s !== sku && links[s].groupId === groupId);
       await log({ action: "photo.set", sku, groupId, hash: processed.hash, method: source.method, by, sharedWith });
       return { groupId, hash: processed.hash, sharedWith };
@@ -626,7 +685,7 @@ function createPartPhotos({ dataDir, sharp }) {
     return mutate(async (groups, links) => {
       if (!groups[groupId]) throw new Error("That photo group doesn't exist.");
       const previous = links[sku] ? links[sku].groupId : null;
-      links[sku] = keepFirstLinked(links[sku], groupId, { groupId, ...linkRecord(part, by) });
+      links[sku] = keepFirstLinked(links[sku], groupId, { groupId, ...linkRecord(part, by) }, links);
       await log({ action: "link.set", sku, groupId, previous, by });
       return { groupId, previous };
     });
@@ -649,7 +708,7 @@ function createPartPhotos({ dataDir, sharp }) {
     if (!part) throw new Error("Unknown part.");
     return mutate(async (groups, links) => {
       if (!links[sku]) throw new Error("That part has no photo to reconfirm.");
-      links[sku] = keepFirstLinked(links[sku], links[sku].groupId, { ...links[sku], ...linkRecord(part, by) });
+      links[sku] = keepFirstLinked(links[sku], links[sku].groupId, { ...links[sku], ...linkRecord(part, by) }, links);
       await log({ action: "link.reconfirm", sku, groupId: links[sku].groupId, by });
       return { groupId: links[sku].groupId };
     });
@@ -717,7 +776,7 @@ function createPartPhotos({ dataDir, sharp }) {
       if (!links[sku]) {
         // The SKU's own link to its photo group — not a claim that it is the
         // same fitting as anything else.
-        links[sku] = keepFirstLinked(null, groupId, { groupId, linkTier: "confident", linkedBy: "auto:self", fingerprint: fingerprintOf(part), at: now });
+        links[sku] = keepFirstLinked(null, groupId, { groupId, linkTier: "confident", linkedBy: "auto:self", fingerprint: fingerprintOf(part), at: now }, links);
       }
       const byHash = new Map((g.candidates || []).map((c) => [c.hash, c]));
       for (const c of result.candidates || []) {
@@ -777,7 +836,7 @@ function createPartPhotos({ dataDir, sharp }) {
         return { skipped: "Patrick linked it to a different fitting" };
       }
       const previous = links[sku] ? links[sku].groupId : null;
-      links[sku] = keepFirstLinked(links[sku], target.groupId, { groupId: target.groupId, linkTier: "confident", linkedBy: "auto:mfr-part", fingerprint: fingerprintOf(part), at: new Date().toISOString() });
+      links[sku] = keepFirstLinked(links[sku], target.groupId, { groupId: target.groupId, linkTier: "confident", linkedBy: "auto:mfr-part", fingerprint: fingerprintOf(part), at: new Date().toISOString() }, links);
       await log({ action: "link.auto", sku, groupId: target.groupId, previous, reason });
       return { groupId: target.groupId, previous };
     });
@@ -816,7 +875,7 @@ function createPartPhotos({ dataDir, sharp }) {
 
 module.exports = {
   createPartPhotos,
-  photoStateFor, mergeIntoCatalog, fingerprintOf, photoUrls, fittingDefaultFor,
+  photoStateFor, mergeIntoCatalog, fingerprintOf, photoUrls, fittingDefaultFor, compareJoinOrder,
   isPublicAddress, fetchImageSafely, fetchPageSafely, processImage, normalizeThumbs, findSubjectRegion,
   SIZES, HASH_RE
 };
