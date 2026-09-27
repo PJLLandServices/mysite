@@ -37,6 +37,19 @@ const ev = require("./photo-evidence");
 const STEPS = ["queued", "find", "check", "map", "verify", "cross", "tier", "record", "done"];
 const BRAND_ORDER = ["hunter", "rainbird", "netafim", "oilcreek", "dawn", "blulock", "watts"];
 
+// "Pages checked: hunterirrigation.com (official) — HTTP 404; siteone.com —
+// 2 images, part # pass." One readable line for the reason field.
+function pageDiagnosticsLine(pages) {
+  if (!pages || !pages.length) return "";
+  const one = (p) => {
+    const where = `${String(p.domain || "?").replace(/^www\./, "")}${p.official ? " (official)" : ""}`;
+    if (p.fetch !== "ok") return `${where} — ${p.note || "fetch failed"}`;
+    const ok = `${p.images} image${p.images === 1 ? "" : "s"}, part # ${p.partNumber || "?"}`;
+    return `${where} — ${p.note ? p.note : ok}`;
+  };
+  return `Pages checked: ${pages.map(one).join("; ")}.`;
+}
+
 function isTransient(err) {
   if (!err) return false;
   if (err.permanent) return false;
@@ -282,15 +295,30 @@ function createBackfill({
       const spec = ev.parseSpec(part);
       const ours = [part.partNumber, part.sku, ...part.supplierSkus];
       const theirs = it.work.found.identified ? [it.work.found.identified.manufacturerPartNumber] : [];
+      // Diagnostics (Patrick, Sep 27 2026): one line per product page OUR
+      // server checked — the URL, official or not, how the fetch went, the
+      // part-number result, how many image candidates came out, and a
+      // concise note when it went nowhere. Kept on the result and shown on
+      // the review card, so "no reliable photo" always says why.
+      const pages = [];
       let withImage = 0;
       for (const c of it.work.found.candidates) {
         if (withImage >= MAX_CANDIDATES) break;
         const base = { source: { pageUrl: c.pageUrl, imageUrl: c.imageUrl || "", domain: c.domain, pass: c.pass, official: c.official }, notes: [] };
+        const pg = { url: c.pageUrl, domain: c.domain, official: !!c.official, fetch: "ok", status: null, partNumber: null, images: 0, note: "" };
+        pages.push(pg);
         let page;
         try { page = await getPage(c.pageUrl); }
-        catch (err) { if (isTransient(err)) throw err; base.notes.push(`page: ${err.message}`); checked.push(base); continue; }
+        catch (err) {
+          if (isTransient(err)) throw err;
+          const m = String(err.message || "").match(/HTTP (\d{3})|^(\d{3})$/);
+          const status = Number(err.status || err.statusCode || (m && (m[1] || m[2])) || 0) || null;
+          pg.fetch = "failed"; pg.status = status; pg.note = status ? `HTTP ${status}` : String(err.message || "fetch failed").slice(0, 120);
+          base.notes.push(`page: ${err.message}`); checked.push(base); continue;
+        }
         const pageUrl = page.finalUrl || c.pageUrl;
         base.source.pageUrl = pageUrl;
+        pg.url = pageUrl;
         // The part number must be in the VISIBLE product text of the page
         // we downloaded. Ours (or a supplier's) → pass. Only the
         // manufacturer's number the finder named → "unknown": the page may
@@ -316,7 +344,15 @@ function createBackfill({
         if (c.imageUrl) images.push({ url: c.imageUrl, via: "finder" });
         for (const im of ev.extractProductImages(page.html, pageUrl)) if (!images.some((x) => x.url === im.url)) images.push(im);
         base.imagesOnPage = images.length;
-        if (!images.length) { base.notes.push("image: no product image found on the page (no og:image, product JSON-LD or product <img>)"); checked.push(base); continue; }
+        pg.partNumber = pn.result; pg.images = images.length;
+        const pgNotes = [];
+        if (pn.result === "fail") pgNotes.push("part number missing");
+        if (pn.result === "unknown") pgNotes.push("part number not confirmed");
+        if (!images.length) {
+          pgNotes.push("no product image found");
+          pg.note = pgNotes.join("; ");
+          base.notes.push("image: no product image found on the page (no og:image, product JSON-LD or product <img>)"); checked.push(base); continue;
+        }
         let got = 0;
         for (const im of images) {
           if (got >= MAX_IMAGES_PER_PAGE || withImage >= MAX_CANDIDATES) break;
@@ -332,9 +368,11 @@ function createBackfill({
             base.notes.push(`image ${im.via}: ${err.message}`);
           }
         }
-        if (!got) checked.push(base);
+        if (!got) { pgNotes.push("image download failed"); checked.push(base); }
+        pg.note = pgNotes.join("; ");
       }
       it.work.checked = checked;
+      it.work.pages = pages;
       it.step = kind === "branded" ? "map" : "verify";
       return;
     }
@@ -402,9 +440,10 @@ function createBackfill({
       const best = scored[0];
       const t = best ? best.t : ev.tierFor({ kind, hasCandidate: false });
       const notes = (it.work.found && it.work.found.notes || []).join(" ");
+      const pagesLine = pageDiagnosticsLine(it.work.pages || []);
       it.work.tier = {
         tier: t.tier,
-        reason: best ? t.reason : `${t.reason} ${notes}`.trim(),
+        reason: best ? t.reason : `${t.reason}${pagesLine ? " " + pagesLine : ""} ${notes}`.trim(),
         chosenHash: best ? best.c.hash : null,
         candidates: scored.map(({ c, t: ct }) => ({ hash: c.hash, width: c.width, height: c.height, source: c.source, tier: ct.tier,
           checks: { partNumber: c.partNumber || null, specMatch: c.specMatch || null, vision: c.vision || null, crossSource: kind === "generic" ? it.work.cross || null : null } }))
@@ -419,7 +458,8 @@ function createBackfill({
       const res = await store.recordAiResult(sku, raw, {
         tier: t.tier, kind, reason: t.reason, runId: r.id,
         identified: it.work.found && it.work.found.identified, candidates: t.candidates, chosen,
-        proposedBrand: part.manufacturerProposed ? part.manufacturer : null
+        proposedBrand: part.manufacturerProposed ? part.manufacturer : null,
+        pages: it.work.pages || []
       }, { autoApprove: r.options.autoApprove });
       it.result = { tier: t.tier, reason: t.reason, live: !!res.live, skipped: res.skipped || null, groupId: res.groupId || null };
       it.step = "done";
@@ -601,13 +641,21 @@ function createBackfill({
   }
   // Re-run ONLY those (Patrick, Sep 27 2026): never the whole sample, never
   // the catalog, auto-approve OFF, one run at a time.
-  async function startCalibrationRerun({ by = null } = {}) {
+  // `only`: an optional subset — every entry must be one of the unresolved
+  // calibration parts, or the whole request is refused.
+  async function startCalibrationRerun({ by = null, only = null } = {}) {
     await load();
     if (state.run && ["running", "paused"].includes(state.run.status)) throw new Error("A run is already active — pause or finish it first.");
     const cal = lastCalibration();
     if (!cal) throw new Error("There is no calibration run to re-run.");
-    const skus = unresolvedCalibrationSkus();
+    let skus = unresolvedCalibrationSkus();
     if (!skus.length) throw new Error("Every calibration part already has a live photo — nothing to re-run.");
+    if (Array.isArray(only) && only.length) {
+      const wanted = [...new Set(only.map(String))];
+      const outside = wanted.filter((s) => !skus.includes(s));
+      if (outside.length) throw new Error(`Not among the unresolved calibration parts: ${outside.join(", ")}.`);
+      skus = skus.filter((s) => wanted.includes(s));
+    }
     const rerunOf = (state.run && state.run.calibration === cal) ? state.run.id : null;
     await start({ skus, autoApprove: false, label: "Calibration re-run" });
     state.run.calibration = { by, skus, rerunOf, at: new Date(now()).toISOString(), estimate: null };
@@ -668,4 +716,4 @@ function createBackfill({
   return { load, start, pause, resume, retry, status, idle, kick, groupingProposals, applyGrouping, calibrationSkus, calibrationPlan, startCalibration, startCalibrationRerun, unresolvedCalibrationSkus, fittingsToConfirm, resolveFitting, catalogProgress, _state: () => state };
 }
 
-module.exports = { createBackfill, isTransient, STEPS };
+module.exports = { createBackfill, isTransient, pageDiagnosticsLine, STEPS };

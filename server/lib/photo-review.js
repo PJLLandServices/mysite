@@ -49,6 +49,7 @@ function buildReviewQueues({ parts, groups, links, fittings = [], photoUrl }) {
     const card = {
       groupId, sku, part: partCard(part), also: members.filter((s) => s !== sku).map((s) => partCard(parts[s])),
       tier: g.tier || "none", kind: g.ai.kind || null, aiTier: g.ai.tier || null, proposedBrand: g.ai.proposedBrand || null,
+      pages: Array.isArray(g.ai.pages) ? g.ai.pages : [],
       reason: g.reason || g.ai.reason || "", identified: g.ai.identified || null, runId: g.ai.runId || null, at: g.updatedAt || g.ai.at || null,
       candidates: (g.candidates || []).filter((c) => !rejected.has(c.hash)).slice(-3).reverse().map(candidateCard),
       photo: g.photo ? { hash: g.photo.hash, url: photoUrl ? photoUrl(g.photo.hash) : null } : null,

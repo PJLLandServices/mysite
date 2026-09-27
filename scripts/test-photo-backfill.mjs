@@ -848,6 +848,93 @@ const pageWith = (visible, images = [], extra = "") => `<html><head>${images.map
   fs.rmSync(dir2, { recursive: true, force: true });
 }
 
+// ---- 12. Page diagnostics (Patrick, Sep 27 2026) -------------------------
+// "No reliable photo" must always say why: every product page our server
+// checked is recorded (URL, official, fetch result, part-number result,
+// image candidates, a concise note) and shown on the review card.
+{
+  const line = bf.pageDiagnosticsLine;
+  check("diagnostics line: empty → nothing", line([]) === "" && line(null) === "");
+  check("diagnostics line: 404, no image, and a good page read plainly",
+    line([{ domain: "hunterirrigation.com", official: true, fetch: "failed", status: 404, note: "HTTP 404" }, { domain: "siteone.com", official: false, fetch: "ok", partNumber: "pass", images: 0, note: "no product image found" }, { domain: "centralpros.com", fetch: "ok", partNumber: "pass", images: 2, note: "" }])
+      === "Pages checked: hunterirrigation.com (official) — HTTP 404; siteone.com — no product image found; centralpros.com — 2 images, part # pass.");
+
+  const catalog = {
+    P404: { sku: "P404", partNumber: "P404", description: "Hunter PGP rotor", category: "sprinkler_heads", manufacturer: "hunter" },
+    PGV100G: { sku: "PGV100G", partNumber: "PGV100G", description: "1\" globe valve", category: "valves", manufacturer: "hunter" },
+    HCHPC400: { sku: "HCHPC400", partNumber: "HCHPC400", description: "Hydrawise 4-23 station controller", category: "controllers", manufacturer: "hunter" }
+  };
+  const finds = {
+    P404: { 1: { manufacturer: "Hunter", manufacturerPartNumber: "PGP-04", candidates: [{ pageUrl: `${OFFICIAL}/does-not-exist`, imageUrl: "", partNumberAsShown: "" }] } },
+    PGV100G: { 1: { manufacturer: "Hunter", manufacturerPartNumber: "PGV100G", candidates: [{ pageUrl: `${OFFICIAL}/pgv-noimg`, imageUrl: "", partNumberAsShown: "PGV100G" }] } },
+    HCHPC400: { 1: { manufacturer: "Hunter", manufacturerPartNumber: "HPC-400", candidates: [{ pageUrl: `${OFFICIAL}/hpc`, imageUrl: "", partNumberAsShown: "HCHPC400" }] } }
+  };
+  const mkFind = (part, pass) => { const f = (finds[part.sku] || {})[pass]; return { manufacturer: "", manufacturerPartNumber: "", notes: "", candidates: [], ...(f || {}) }; };
+  // P403 fails the way the REAL fetcher fails: a message, no status property.
+  catalog.P403 = { sku: "P403", partNumber: "P403", description: "Hunter PGP rotor", category: "sprinkler_heads", manufacturer: "hunter" };
+  finds.P403 = { 1: { manufacturer: "Hunter", manufacturerPartNumber: "PGP-04", candidates: [{ pageUrl: `${OFFICIAL}/blocked`, imageUrl: "", partNumberAsShown: "" }] } };
+  const dir = tmp();
+  const h = harness(dir, { catalog, find: mkFind, fetchPage: (url) => { if (url.endsWith("/blocked")) throw new Error("The page couldn't be read (HTTP 403)."); } });
+  await h.b.start({ skus: Object.keys(catalog), autoApprove: false }); await h.b.idle();
+  const st = h.b._state().run;
+  const s = h.store.readStoresSync();
+  const aiOf = (sku) => s.groups[s.links[sku].groupId].ai;
+  const q = require(path.join(ROOT, "server", "lib", "photo-review.js")).buildReviewQueues({ parts: h.parts(), groups: s.groups, links: s.links });
+  const card = (sku) => [...q.tbd, ...q.notConfident].find((c) => c.sku === sku);
+
+  const p404 = st.items.P404.work.pages;
+  check("404 page: recorded as failed with the status and a concise note", p404.length === 1 && p404[0].fetch === "failed" && p404[0].status === 404 && p404[0].note === "HTTP 404" && p404[0].official === true && p404[0].url === `${OFFICIAL}/does-not-exist`, JSON.stringify(p404));
+  check("404 page: the reason says so", /Pages checked: hunterirrigation\.com \(official\) — HTTP 404\./.test(st.items.P404.result.reason), st.items.P404.result.reason);
+  check("404 page: on the stored result and the review card", aiOf("P404").pages[0].note === "HTTP 404" && card("P404").pages[0].note === "HTTP 404" && card("P404").pages[0].fetch === "failed");
+  const p403 = st.items.P403.work.pages;
+  check("real fetcher error shape ('…(HTTP 403).', no status property) → HTTP 403", p403[0].fetch === "failed" && p403[0].status === 403 && p403[0].note === "HTTP 403", JSON.stringify(p403));
+
+  const pNo = st.items.PGV100G.work.pages;
+  check("page with 0 images: fetched ok, part # pass, 0 images, note says no product image", pNo[0].fetch === "ok" && pNo[0].partNumber === "pass" && pNo[0].images === 0 && pNo[0].note === "no product image found", JSON.stringify(pNo));
+  check("page with 0 images: the reason says so", /hunterirrigation\.com \(official\) — no product image found\./.test(st.items.PGV100G.result.reason), st.items.PGV100G.result.reason);
+
+  const pOk = st.items.HCHPC400.work.pages;
+  check("page with extracted images: 1 image, part # pass, no note; result Confident", pOk[0].fetch === "ok" && pOk[0].images === 1 && pOk[0].partNumber === "pass" && pOk[0].note === "" && st.items.HCHPC400.result.tier === "confident", JSON.stringify(pOk));
+  check("page with extracted images: diagnostics stored even when the result is good, and the reason stays clean", aiOf("HCHPC400").pages.length === 1 && !/Pages checked/.test(st.items.HCHPC400.result.reason));
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+{
+  // Diagnostics survive a pause/restart in the middle of a part: the pages
+  // were recorded at the check step and saved before the vision step.
+  const dir = tmp();
+  let hang = true, hung = 0;
+  const A = harness(dir, { concurrency: 1, catalog: { HCHPC400: { sku: "HCHPC400", partNumber: "HCHPC400", description: "Hydrawise controller", category: "controllers", manufacturer: "hunter" } },
+    find: () => ({ manufacturer: "Hunter", manufacturerPartNumber: "HPC-400", notes: "", candidates: [{ pageUrl: `${OFFICIAL}/hpc`, imageUrl: "", partNumberAsShown: "HCHPC400" }] }),
+    verify: () => { if (hang) { hung++; return new Promise(() => {}); } return undefined; } });
+  await A.b.start({ skus: ["HCHPC400"], autoApprove: false });
+  for (let i = 0; i < 300 && !hung; i++) await new Promise((r) => setTimeout(r, 10));
+  await new Promise((r) => setTimeout(r, 40));
+  const onDisk = JSON.parse(fs.readFileSync(path.join(dir, "part-photos-backfill.json"), "utf8"));
+  check("pause/restart: the pages were saved before the vision step", onDisk.run.items.HCHPC400.step === "verify" && onDisk.run.items.HCHPC400.work.pages.length === 1 && onDisk.run.items.HCHPC400.work.pages[0].images === 1);
+  hang = false;
+  const B = harness(dir, { catalog: { HCHPC400: { sku: "HCHPC400", partNumber: "HCHPC400", description: "Hydrawise controller", category: "controllers", manufacturer: "hunter" } } });
+  await B.b.resume(); await B.b.idle();
+  const s = B.store.readStoresSync();
+  check("pause/restart: after Resume the finished result carries the same diagnostics", B.b._state().run.status === "done" && s.groups[s.links.HCHPC400.groupId].ai.pages.length === 1 && s.groups[s.links.HCHPC400.groupId].ai.pages[0].url === `${OFFICIAL}/hpc`);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+{
+  // Re-run subset: `only` narrows to some of the unresolved parts and
+  // refuses anything outside them.
+  const dir = tmp();
+  const h = harness(dir);
+  await h.b.startCalibration({ by: "patrick" }); await h.b.idle();
+  const unresolved = h.b.unresolvedCalibrationSkus();
+  const two = unresolved.slice(0, 2);
+  await rejects("re-run subset: a part outside the unresolved set is refused", () => h.b.startCalibrationRerun({ by: "patrick", only: [two[0], "NOT-A-CALIBRATION-PART"] }), /Not among the unresolved/);
+  check("…and nothing started", h.b._state().run.status === "done");
+  await h.b.startCalibrationRerun({ by: "patrick", only: two });
+  const run = h.b._state().run;
+  check("re-run subset: exactly the two requested, auto-approve off", JSON.stringify(run.order.slice().sort()) === JSON.stringify(two.slice().sort()) && run.options.autoApprove === false && run.calibration.skus.length === 2);
+  await h.b.idle();
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 if (REPORT) {
   console.log("\nMocked verification results (auto-approve OFF → ON)");
   console.log("SKU        kind     part#    spec     2nd src  tier            OFF      ON");
