@@ -405,6 +405,39 @@ function pickCalibrationSample(parts, { branded = 8, generic = 7, isLive = () =>
   };
 }
 
+// ---------------------------------------------------------- backfill wave
+// A controlled wave (Patrick, Sep 27 2026): `size` parts that nothing has
+// touched yet, deliberately mixed — half branded (round-robin across
+// manufacturer × category) and half generic (round-robin across category
+// × shape × material) — never simply the first N. Deterministic: the same
+// catalog always gives the same wave. `isExcluded` removes live parts,
+// parts waiting for review, and anything a calibration already processed.
+function pickWave(parts, { size = 30, isExcluded = () => false } = {}) {
+  const pool = (parts || []).filter((p) => p && p.sku && !isExcluded(p)).sort((a, b) => a.sku.localeCompare(b.sku));
+  const branded = pool.filter((p) => MANUFACTURER_DOMAINS[effectiveManufacturer(p)]);
+  const generic = pool.filter((p) => !MANUFACTURER_DOMAINS[effectiveManufacturer(p)]);
+  const rank = (m) => { const i = BRAND_PRIORITY.indexOf(m); return i < 0 ? 99 : i; };
+  // Round-robin over ordered buckets: one from each bucket per lap.
+  const roundRobin = (list, keyOf, orderBuckets, n) => {
+    const buckets = new Map();
+    for (const p of list) { const k = keyOf(p); if (!buckets.has(k)) buckets.set(k, []); buckets.get(k).push(p); }
+    const keys = [...buckets.keys()].sort(orderBuckets);
+    const out = [];
+    for (let lap = 0; out.length < n && keys.some((k) => buckets.get(k).length > lap); lap++) {
+      for (const k of keys) { if (out.length >= n) break; const b = buckets.get(k); if (b[lap]) out.push(b[lap]); }
+    }
+    return out;
+  };
+  const half = Math.ceil(size / 2);
+  const wantBranded = Math.min(half, branded.length);
+  const wantGeneric = Math.min(size - wantBranded, generic.length);
+  const fillBranded = Math.min(branded.length, size - wantGeneric); // if generic is short, branded fills
+  const b = roundRobin(branded, (p) => `${effectiveManufacturer(p)}|${p.category || ""}`,
+    (x, y) => { const [mx, cx] = x.split("|"), [my, cy] = y.split("|"); return rank(mx) - rank(my) || cx.localeCompare(cy); }, fillBranded);
+  const g = roundRobin(generic, (p) => `${p.category || ""}|${shapeOf(p)}|${materialOf(p)}`, (x, y) => x.localeCompare(y), size - b.length);
+  return { branded: b, generic: g, skus: [...b, ...g].map((p) => p.sku) };
+}
+
 // ---------------------------------------------------------------- grouping
 
 // Two parts are the same fitting AUTOMATICALLY only when both were matched
@@ -429,5 +462,5 @@ module.exports = {
   normalizePartNumber, visibleProductText, partNumberOnPage, supplierCodeMapping,
   normalizeSize, sameSize, sizeForms, proposedBrand, effectiveManufacturer, extractProductImages,
   parseSpec, pageMatchesSpec, tierFor, visionSummary,
-  pickCalibrationSample, groupingDecision, shapeOf, endsOf
+  pickCalibrationSample, pickWave, groupingDecision, shapeOf, endsOf, materialOf
 };
