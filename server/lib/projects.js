@@ -187,6 +187,10 @@ function blankProject() {
     // (Brief 2 takes over from there). { id, description, sourceLineItemId,
     // status, completedAt?, completedByWoId?, order }
     tasks: [],
+    // problems[] — things found on site that outlive the day they were
+    // found on. The PROBLEM is live until somebody deals with it; its
+    // DISCOVERY is a fact about that day and never changes.
+    problems: [],
     // attachments[] — references to the quote's attachments by id, so
     // the project page can render the same map / diagram thumbnails
     // without re-uploading. { id, sourceQuoteAttachmentId, kind,
@@ -274,6 +278,10 @@ function hydrate(rec) {
     buildTracking: rec?.buildTracking === true,
     labourRateLocked: rec?.labourRateLocked == null ? null : Number(rec.labourRateLocked),
     scopeChangeRequests: Array.isArray(rec?.scopeChangeRequests) ? rec.scopeChangeRequests : [],
+    // Problems belong to the PROJECT and link to the daily record they
+    // were found on — see lib/project-problems.js for why the status is
+    // tested in exactly one place.
+    problems: Array.isArray(rec?.problems) ? rec.problems : [],
     statusUpdates: Array.isArray(rec?.statusUpdates) ? rec.statusUpdates : [],
     finalWoId: typeof rec?.finalWoId === "string" ? rec.finalWoId : null,
     projectCompletionAt: typeof rec?.projectCompletionAt === "string" ? rec.projectCompletionAt : null,
@@ -1019,6 +1027,95 @@ async function addTask(projectId, { description, sourceLineItemId = null, notes 
     proj.tasks.push(task);
     appendHistory(proj, { action: "task_added", by, note: task.id });
     return task;
+  });
+}
+
+// ---- Project problems (2026-09-26) --------------------------------
+//
+// "The problem should belong to the project, with a link to the daily
+// record where it was discovered." Resolving one APPENDS — it never
+// edits the discovery, exactly as archiving a task never touched the
+// crew's log lines in #307.
+
+async function addProblem(projectId, {
+  title, description = "", discoveredOnWoId = null, discoveredWorkDate = null,
+  taskId = null, photoRef = null, scopeChangeId = null
+} = {}, { by = "admin" } = {}) {
+  if (!title || !String(title).trim()) {
+    throw Object.assign(new Error("A problem needs a title."), { code: "missing_title" });
+  }
+  return _mutate(projectId, (proj) => {
+    if (!Array.isArray(proj.problems)) proj.problems = [];
+    const ts = nowIso();
+    const problem = {
+      id: "prob_" + random8(),
+      title: String(title).trim().slice(0, 200),
+      description: String(description || "").slice(0, 4000),
+      status: "open",
+      // The discovery is a fact about that day. Nothing below ever
+      // writes to these again.
+      discoveredAt: ts,
+      discoveredOnWoId: discoveredOnWoId || null,
+      discoveredWorkDate: discoveredWorkDate || null,
+      reportedBy: String(by || "admin").slice(0, 80),
+      resolvedAt: null,
+      resolvedBy: null,
+      resolutionNote: "",
+      taskId: taskId || null,
+      photoRef: photoRef || null,
+      scopeChangeId: scopeChangeId || null,
+      history: [{ ts, action: "problem_opened", by, note: String(title).trim().slice(0, 200) }]
+    };
+    proj.problems.push(problem);
+    appendHistory(proj, { action: "problem_opened", by, note: `${problem.id} — ${problem.title}` });
+    return problem;
+  });
+}
+
+// Move a problem between open / monitoring / resolved.
+//
+// Resolving REQUIRES a note: "resolved" with no account of how is a
+// record that answers the wrong question in six months. Re-opening a
+// resolved problem clears the resolution fields but KEEPS every history
+// entry, so the fact it was once called resolved is not erased.
+async function setProblemStatus(projectId, problemId, status, { note = "", by = "admin" } = {}) {
+  const problemsLib = require("./project-problems");
+  if (!problemsLib.isStatus(status)) {
+    throw Object.assign(new Error("Unknown problem status."), { code: "bad_status" });
+  }
+  const cleanNote = String(note || "").trim();
+  if (status === "resolved" && cleanNote.length < 3) {
+    throw Object.assign(
+      new Error("Say how it was resolved — that note is the record."),
+      { code: "resolution_note_required" }
+    );
+  }
+  return _mutate(projectId, (proj) => {
+    const prob = (proj.problems || []).find((x) => x.id === problemId);
+    if (!prob) throw Object.assign(new Error("Problem not found."), { code: "problem_not_found" });
+    const ts = nowIso();
+    const from = prob.status;
+    if (from === status && status !== "resolved") return prob;   // no-op, no noise
+
+    if (status === "resolved") {
+      prob.resolvedAt = ts;
+      prob.resolvedBy = String(by || "admin").slice(0, 80);
+      prob.resolutionNote = cleanNote.slice(0, 4000);
+    } else {
+      // Re-opening: the resolution is no longer true, so it goes — but
+      // the history below keeps the fact that it was made.
+      prob.resolvedAt = null;
+      prob.resolvedBy = null;
+      prob.resolutionNote = "";
+    }
+    prob.status = status;
+    if (!Array.isArray(prob.history)) prob.history = [];
+    prob.history.push({
+      ts, action: "problem_status", by,
+      note: `${from} → ${status}${cleanNote ? " — " + cleanNote : ""}`
+    });
+    appendHistory(proj, { action: "problem_status", by, note: `${prob.id} ${from} → ${status}` });
+    return prob;
   });
 }
 
@@ -2498,6 +2595,8 @@ module.exports = {
   listByWorkOrder,
   // Brief 2 — task ops
   seedTasksFromQuote,
+  addProblem,
+  setProblemStatus,
   addTask,
   updateTask,
   removeTask,
