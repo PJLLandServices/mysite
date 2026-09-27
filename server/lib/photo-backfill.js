@@ -94,11 +94,23 @@ function createBackfill({
     return serialize(FILE, async () => { await fs.mkdir(dataDir, { recursive: true }); await writeJsonAtomic(FILE, snapshot); });
   }
 
+  // The part as the run sees it. A blank catalog manufacturer whose
+  // description names a known brand gets that brand PROPOSED for the
+  // branded path (photo-evidence.proposedBrand); the catalog row itself is
+  // never changed, and the official page still has to prove the product.
   function enrich(part) {
     const supplierSkus = Object.values(part.supplierPrices || {}).map((v) => v && v.supplierSku).filter(Boolean);
-    return { ...part, manufacturerLabel: labelOf(part.manufacturer), supplierSkus: [...new Set(supplierSkus)] };
+    const manufacturer = ev.effectiveManufacturer(part);
+    const proposed = !String(part.manufacturer || "").trim() && !!manufacturer;
+    return { ...part, manufacturer, catalogManufacturer: part.manufacturer || "", manufacturerProposed: proposed, manufacturerLabel: labelOf(manufacturer), supplierSkus: [...new Set(supplierSkus)] };
   }
-  function kindOf(part) { return ev.MANUFACTURER_DOMAINS[part.manufacturer] ? "branded" : "generic"; }
+  function kindOf(part) { return ev.MANUFACTURER_DOMAINS[ev.effectiveManufacturer(part)] ? "branded" : "generic"; }
+  // Everything a run costs, counted where it happens: Claude calls and the
+  // model's own searches/fetches from each response's usage; page and image
+  // downloads where OUR server makes them. Tokens are kept too.
+  const USAGE0 = Object.freeze({ in: 0, out: 0, calls: 0, searches: 0, webFetches: 0, pageFetches: 0, imageFetches: 0 });
+  const MAX_CANDIDATES = 3;      // per part — bounds the vision calls
+  const MAX_IMAGES_PER_PAGE = 2; // finder's URL (if any) + extracted ones
   function isLive(part) { return !!(part && part.photoState === "verified"); }
 
   // ---- control ---------------------------------------------------------
@@ -115,8 +127,8 @@ function createBackfill({
       label, status: "running", createdAt: new Date(now()).toISOString(),
       options: { autoApprove: !!autoApprove },
       order,
-      items: Object.fromEntries(order.map((s) => [s, { step: "queued", attempts: 0, nextAt: 0, lastError: null, work: {}, result: null, usage: { in: 0, out: 0, searches: 0 } }])),
-      usage: { in: 0, out: 0, searches: 0 }
+      items: Object.fromEntries(order.map((s) => [s, { step: "queued", attempts: 0, nextAt: 0, lastError: null, work: {}, result: null, usage: { ...USAGE0 } }])),
+      usage: { ...USAGE0 }
     };
     await save();
     log({ action: "backfill.start", runId: state.run.id, count: order.length, autoApprove: !!autoApprove });
@@ -228,10 +240,15 @@ function createBackfill({
     if (!raw) { it.result = { tier: "skipped", reason: "No longer in the catalog." }; it.step = "done"; return; }
     const part = enrich(raw);
     const kind = kindOf(part);
+    const bump = (k, n = 1) => { it.usage[k] = (it.usage[k] || 0) + n; r.usage[k] = (r.usage[k] || 0) + n; };
+    // One call of this = one Claude API response (pause_turn resumes count too).
     const usage = (u) => {
-      const add = { in: u.input_tokens || 0, out: u.output_tokens || 0, searches: (u.server_tool_use && u.server_tool_use.web_search_requests) || 0 };
-      for (const k of Object.keys(add)) { it.usage[k] += add[k]; r.usage[k] += add[k]; }
+      const st = (u && u.server_tool_use) || {};
+      bump("calls"); bump("in", u.input_tokens || 0); bump("out", u.output_tokens || 0);
+      bump("searches", st.web_search_requests || 0); bump("webFetches", st.web_fetch_requests || 0);
     };
+    const getPage = async (url) => { bump("pageFetches"); return fetchPage(url); };
+    const getImage = async (url) => { bump("imageFetches"); return fetchImage(url); };
 
     if (it.step === "queued") {
       if (isLive(raw)) { it.result = { tier: "skipped", reason: "Already has a live photo." }; it.step = "done"; return; }
@@ -243,12 +260,13 @@ function createBackfill({
       let found = { identified: null, candidates: [], notes: [] };
       for (const pass of ai.passesFor(part)) {
         const res = await ai.find(part, pass, usage);
-        const cands = (res.candidates || []).filter((c) => /^https:\/\//i.test(c.pageUrl || "") && /^https:\/\//i.test(c.imageUrl || "")).slice(0, 3);
+        // A product PAGE is enough: our server reads its images (check step).
+        const cands = (res.candidates || []).filter((c) => /^https:\/\//i.test(c.pageUrl || "")).slice(0, MAX_CANDIDATES);
         found.notes.push(`pass ${pass}: ${res.notes || ""}`.trim());
         if (res.manufacturerPartNumber) found.identified = { manufacturer: res.manufacturer || part.manufacturerLabel, manufacturerPartNumber: res.manufacturerPartNumber };
         if (cands.length) {
           found.candidates = cands.map((c) => ({
-            pageUrl: c.pageUrl, imageUrl: c.imageUrl, partNumberAsShown: c.partNumberAsShown || "", pass,
+            pageUrl: c.pageUrl, imageUrl: /^https:\/\//i.test(c.imageUrl || "") ? c.imageUrl : "", partNumberAsShown: c.partNumberAsShown || "", pass,
             domain: ev.hostOf(c.pageUrl), official: ev.isOfficialManufacturerPage(c.pageUrl, part.manufacturer)
           }));
           break;
@@ -264,12 +282,15 @@ function createBackfill({
       const spec = ev.parseSpec(part);
       const ours = [part.partNumber, part.sku, ...part.supplierSkus];
       const theirs = it.work.found.identified ? [it.work.found.identified.manufacturerPartNumber] : [];
+      let withImage = 0;
       for (const c of it.work.found.candidates) {
-        const entry = { source: { pageUrl: c.pageUrl, imageUrl: c.imageUrl, domain: c.domain, pass: c.pass, official: c.official }, notes: [] };
+        if (withImage >= MAX_CANDIDATES) break;
+        const base = { source: { pageUrl: c.pageUrl, imageUrl: c.imageUrl || "", domain: c.domain, pass: c.pass, official: c.official }, notes: [] };
         let page;
-        try { page = await fetchPage(c.pageUrl); }
-        catch (err) { if (isTransient(err)) throw err; entry.notes.push(`page: ${err.message}`); checked.push(entry); continue; }
-        entry.source.pageUrl = page.finalUrl || c.pageUrl;
+        try { page = await getPage(c.pageUrl); }
+        catch (err) { if (isTransient(err)) throw err; base.notes.push(`page: ${err.message}`); checked.push(base); continue; }
+        const pageUrl = page.finalUrl || c.pageUrl;
+        base.source.pageUrl = pageUrl;
         // The part number must be in the VISIBLE product text of the page
         // we downloaded. Ours (or a supplier's) → pass. Only the
         // manufacturer's number the finder named → "unknown": the page may
@@ -279,19 +300,39 @@ function createBackfill({
           const t = ev.partNumberOnPage(page.html, theirs);
           if (t.result === "pass") pn = { result: "unknown", reason: "Only the manufacturer's number (not ours) is on the page.", matched: t.matched };
         }
-        entry.partNumber = pn;
-        entry.manufacturerNumberOnPage = theirs.length ? ev.partNumberOnPage(page.html, theirs).result === "pass" : false;
-        if (kind === "generic") entry.specMatch = ev.pageMatchesSpec(page.html, spec);
-        try {
-          const img = await fetchImage(c.imageUrl);
-          const saved = await store.saveCandidateImage(img.buffer);
-          Object.assign(entry, saved);
-          entry.source.imageUrl = img.finalUrl || c.imageUrl;
-        } catch (err) {
-          if (isTransient(err)) throw err;
-          entry.notes.push(`image: ${err.message}`);
+        // An OFFICIAL manufacturer page that doesn't print our number is
+        // "needs a look", not a failure: manufacturers often show a base
+        // SKU with the size as an option (Oil Creek's IRR100 for
+        // POPO100300). It can never be Confident this way — unknown ≠ pass.
+        if (pn.result === "fail" && c.official) pn = { result: "unknown", reason: "Official manufacturer page, but our part number isn't printed on it (variant / base-SKU pages do this) — needs a look.", matched: null };
+        base.partNumber = pn;
+        base.manufacturerNumberOnPage = theirs.length ? ev.partNumberOnPage(page.html, theirs).result === "pass" : false;
+        if (kind === "generic") base.specMatch = ev.pageMatchesSpec(page.html, spec);
+        // Images: the finder's URL if it gave one, then what OUR server
+        // reads from the page's own structures (og:image, Product JSON-LD,
+        // product <img>). Each is a candidate, nothing more, until the
+        // safe download and the vision check have had their say.
+        const images = [];
+        if (c.imageUrl) images.push({ url: c.imageUrl, via: "finder" });
+        for (const im of ev.extractProductImages(page.html, pageUrl)) if (!images.some((x) => x.url === im.url)) images.push(im);
+        base.imagesOnPage = images.length;
+        if (!images.length) { base.notes.push("image: no product image found on the page (no og:image, product JSON-LD or product <img>)"); checked.push(base); continue; }
+        let got = 0;
+        for (const im of images) {
+          if (got >= MAX_IMAGES_PER_PAGE || withImage >= MAX_CANDIDATES) break;
+          const entry = { ...base, source: { ...base.source, imageUrl: im.url, imageVia: im.via }, notes: [...base.notes] };
+          try {
+            const img = await getImage(im.url);
+            const saved = await store.saveCandidateImage(img.buffer);
+            Object.assign(entry, saved);
+            entry.source.imageUrl = img.finalUrl || im.url;
+            checked.push(entry); got++; withImage++;
+          } catch (err) {
+            if (isTransient(err)) throw err;
+            base.notes.push(`image ${im.via}: ${err.message}`);
+          }
         }
-        checked.push(entry);
+        if (!got) checked.push(base);
       }
       it.work.checked = checked;
       it.step = kind === "branded" ? "map" : "verify";
@@ -312,7 +353,7 @@ function createBackfill({
         for (const c of (res.candidates || []).slice(0, 3)) {
           if (!/^https:\/\//i.test(c.pageUrl || "")) continue;
           let page;
-          try { page = await fetchPage(c.pageUrl); }
+          try { page = await getPage(c.pageUrl); }
           catch (err) { if (isTransient(err)) throw err; continue; }
           const m = ev.supplierCodeMapping(page.html, page.finalUrl || c.pageUrl, ours, theirs, part.manufacturer);
           if (m.result === "pass") { mapping = m; break; }
@@ -377,7 +418,8 @@ function createBackfill({
       const chosen = t.candidates.findIndex((c) => c.hash === t.chosenHash);
       const res = await store.recordAiResult(sku, raw, {
         tier: t.tier, kind, reason: t.reason, runId: r.id,
-        identified: it.work.found && it.work.found.identified, candidates: t.candidates, chosen
+        identified: it.work.found && it.work.found.identified, candidates: t.candidates, chosen,
+        proposedBrand: part.manufacturerProposed ? part.manufacturer : null
       }, { autoApprove: r.options.autoApprove });
       it.result = { tier: t.tier, reason: t.reason, live: !!res.live, skipped: res.skipped || null, groupId: res.groupId || null };
       it.step = "done";
@@ -508,7 +550,8 @@ function createBackfill({
       const passes = ai.passesFor(p);
       const finderMax = passes.length + (kind === "branded" ? 1 : 0);
       return {
-        sku, kind, manufacturer: p.manufacturer || "", description: p.description || "", size: p.size || "", category: p.category || "",
+        sku, kind, manufacturer: p.manufacturer || "", proposedBrand: p.manufacturerProposed ? p.manufacturer : null,
+        description: p.description || "", size: p.size || "", category: p.category || "",
         passes,
         calls: { finderMin: 1, finderMax, verifyMax: 3, compareMax: kind === "generic" ? 1 : 0 }
       };
@@ -543,6 +586,37 @@ function createBackfill({
     return status();
   }
 
+  // The calibration parts that still have no live photo — from the most
+  // recent calibration run on file (current or history).
+  function lastCalibration() {
+    if (state.run && state.run.calibration) return state.run.calibration;
+    const past = [...(state.history || [])].reverse().find((h) => h.calibration && h.calibration.skus);
+    return past ? past.calibration : null;
+  }
+  function unresolvedCalibrationSkus() {
+    const cal = lastCalibration();
+    if (!cal) return [];
+    const parts = getParts() || {};
+    return cal.skus.filter((s) => parts[s] && !isLive(parts[s]));
+  }
+  // Re-run ONLY those (Patrick, Sep 27 2026): never the whole sample, never
+  // the catalog, auto-approve OFF, one run at a time.
+  async function startCalibrationRerun({ by = null } = {}) {
+    await load();
+    if (state.run && ["running", "paused"].includes(state.run.status)) throw new Error("A run is already active — pause or finish it first.");
+    const cal = lastCalibration();
+    if (!cal) throw new Error("There is no calibration run to re-run.");
+    const skus = unresolvedCalibrationSkus();
+    if (!skus.length) throw new Error("Every calibration part already has a live photo — nothing to re-run.");
+    const rerunOf = (state.run && state.run.calibration === cal) ? state.run.id : null;
+    await start({ skus, autoApprove: false, label: "Calibration re-run" });
+    state.run.calibration = { by, skus, rerunOf, at: new Date(now()).toISOString(), estimate: null };
+    state.run.options.autoApprove = false;
+    await save();
+    log({ action: "backfill.calibration.rerun", runId: state.run.id, by, skus, rerunOf });
+    return status();
+  }
+
   // ---- progress -----------------------------------------------------------
   function summary(run) {
     const c = { total: run.order.length, queued: 0, inProgress: 0, done: 0, error: 0, live: 0, review: 0, noReliable: 0, skipped: 0 };
@@ -562,7 +636,8 @@ function createBackfill({
     const current = run.order.find((s) => !["done", "error", "queued"].includes(run.items[s].step)) || null;
     return {
       id: run.id, label: run.label, status: run.status, autoApprove: run.options.autoApprove, createdAt: run.createdAt, finishedAt: run.finishedAt || null,
-      interruptedAt: run.interruptedAt || null, calibration: run.calibration ? { skus: run.calibration.skus, by: run.calibration.by } : null,
+      interruptedAt: run.interruptedAt || null,
+      calibration: run.calibration ? { skus: run.calibration.skus, by: run.calibration.by, rerunOf: run.calibration.rerunOf || null, unresolved: (() => { const parts = getParts() || {}; return run.calibration.skus.filter((s) => parts[s] && !isLive(parts[s])); })() } : null,
       current: current ? { sku: current, step: run.items[current].step } : null,
       errors: run.order.filter((s) => run.items[s].step === "error").map((s) => ({ sku: s, step: run.items[s].failedStep || null, error: run.items[s].lastError })),
       counts: c, usage: run.usage
@@ -590,7 +665,7 @@ function createBackfill({
     while (pumping) await pumping;
   }
 
-  return { load, start, pause, resume, retry, status, idle, kick, groupingProposals, applyGrouping, calibrationSkus, calibrationPlan, startCalibration, fittingsToConfirm, resolveFitting, catalogProgress, _state: () => state };
+  return { load, start, pause, resume, retry, status, idle, kick, groupingProposals, applyGrouping, calibrationSkus, calibrationPlan, startCalibration, startCalibrationRerun, unresolvedCalibrationSkus, fittingsToConfirm, resolveFitting, catalogProgress, _state: () => state };
 }
 
 module.exports = { createBackfill, isTransient, STEPS };

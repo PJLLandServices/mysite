@@ -144,12 +144,29 @@ const END_WORDS = {
   insert: ["insert", "barb", "barbed", "ixf", "ixm", "ixi"],
   slip: ["slip", "socket", "sxs", "sxsxs"]
 };
-const FRACTIONS = { "0.25": "1/4", "0.5": "1/2", "0.75": "3/4", "1.25": "1-1/4", "1.5": "1-1/2", "2.5": "2-1/2" };
+const FRACTIONS = { "0.25": "1/4", "0.375": "3/8", "0.5": "1/2", "0.75": "3/4", "1.25": "1-1/4", "1.5": "1-1/2", "2.5": "2-1/2" };
+// One canonical spelling for a pipe size, so `.5"`, `0.5"`, `1/2"`, `1/2 in`
+// and `½` all compare equal (Patrick, Sep 27 2026): decimals become the
+// trade fraction where one exists, a bare fraction stays, mixed numbers
+// read "1-1/4". Deterministic — no model involved.
+const VULGAR = { "¼": "1/4", "½": "1/2", "¾": "3/4", "⅜": "3/8", "⅛": "1/8" };
+function normalizeSize(size) {
+  let s = String(size == null ? "" : size).toLowerCase().replace(/["″”]|inch(es)?|\bin\b/g, "").replace(/[¼½¾⅜⅛]/g, (m) => " " + VULGAR[m]).trim();
+  s = s.replace(/\s+/g, " ").replace(/^(\d+) (\d+\/\d+)$/, "$1-$2").replace(/\s*x\s*/g, "x").trim();
+  if (!s) return "";
+  if (/^\d*\.\d+$/.test(s)) { const d = (s.startsWith(".") ? "0" : "") + s; return FRACTIONS[d] || String(Number(d)); }
+  if (/^\d+$/.test(s)) return String(Number(s));
+  if (/^\d+\/\d+$/.test(s) || /^\d+-\d+\/\d+$/.test(s)) return s;
+  return s;
+}
+function sameSize(a, b) { return normalizeSize(a) !== "" && normalizeSize(a) === normalizeSize(b); }
 function sizeForms(size) {
-  const s = String(size).replace(/["″]|in\b|inch(es)?/gi, "").trim();
-  const forms = new Set([s]);
-  const dec = Object.keys(FRACTIONS).find((d) => d === s || FRACTIONS[d] === s || FRACTIONS[d].replace("-", " ") === s);
+  const canon = normalizeSize(size);
+  const forms = new Set([canon]);
+  const dec = Object.keys(FRACTIONS).find((d) => FRACTIONS[d] === canon || d === canon);
   if (dec) { forms.add(dec); forms.add(FRACTIONS[dec]); forms.add(FRACTIONS[dec].replace("-", " ")); forms.add(dec.replace(/^0/, "")); }
+  const raw = String(size).replace(/["″]|in\b|inch(es)?/gi, "").trim();
+  if (raw) forms.add(raw);
   return [...forms].filter(Boolean);
 }
 
@@ -160,9 +177,102 @@ function parseSpec(part) {
   const type = Object.keys(TYPE_WORDS).find((t) => TYPE_WORDS[t].some((w) => w !== "90" && words.includes(w))) || null;
   const ends = Object.keys(END_WORDS).filter((e) => END_WORDS[e].some((w) => words.includes(w)));
   const sizes = [];
-  for (const m of text.matchAll(/(\d+-\d\/\d|\d+\/\d+|\d*\.\d+|\d+)\s*(?:"|″|in\b|inch)/g)) sizes.push(m[1]);
-  if (!sizes.length && part.size) sizes.push(String(part.size));
-  return { type, ends, sizes: [...new Set(sizes)] };
+  for (const m of text.matchAll(/(\d+-\d\/\d|\d+\s\d\/\d|\d+\/\d+|\d*\.\d+|\d+|[¼½¾⅜⅛])\s*(?:"|″|”|in\b|inch)/g)) sizes.push(normalizeSize(m[1]));
+  if (!sizes.length && part.size) sizes.push(normalizeSize(part.size));
+  return { type, ends, sizes: [...new Set(sizes.filter(Boolean))] };
+}
+
+// Known-brand recovery (Patrick, Sep 27 2026). A catalog row with a blank
+// manufacturer whose description clearly names a brand we know is treated
+// as a PROPOSED brand for the branded path — the official manufacturer
+// page still has to prove the product, and the catalog field is never
+// rewritten. Word-boundary matches on the description only.
+const BRAND_WORDS = {
+  hunter: [/\bhunter\b/i],
+  rainbird: [/\brain ?bird\b/i],
+  netafim: [/\bnetafim\b/i],
+  blulock: [/\bblu[ -]?lock\b/i],
+  oilcreek: [/\boil ?creek\b/i],
+  dawn: [/\bdawn\b/i],
+  watts: [/\bwatts\b/i]
+};
+function proposedBrand(part) {
+  if (!part || String(part.manufacturer || "").trim()) return null;
+  const d = String(part.description || "");
+  for (const [key, res] of Object.entries(BRAND_WORDS)) if (res.some((re) => re.test(d))) return key;
+  return null;
+}
+function effectiveManufacturer(part) {
+  const own = String((part && part.manufacturer) || "").trim();
+  return own || proposedBrand(part) || "";
+}
+
+// ---------------------------------------------------- product images
+// Once the finder has named a product page, OUR server reads the page's
+// HTML and collects product-image candidates from trusted structures, in
+// order of trust: og:image / twitter:image, Product JSON-LD `image`, then
+// product-ish <img> elements (itemprop="image", or inside an element whose
+// class/id says product/gallery/main). Logos, icons, sprites, svg, tiny
+// images and tracking pixels are skipped. These are CANDIDATES only: they
+// still go through the safe downloader and the vision check.
+const IMG_SKIP = /logo|icon|sprite|favicon|badge|banner|placeholder|spacer|pixel|tracking|avatar|flag|payment|social|\.svg(\?|$)|\.gif(\?|$)|data:/i;
+function absolutize(u, base) {
+  try { const url = new URL(String(u).trim().replace(/&amp;/g, "&"), base); return url.protocol === "https:" ? url.toString() : null; } catch { return null; }
+}
+function pickSrcset(srcset) {
+  let best = null, bestW = -1;
+  for (const cand of String(srcset).split(",")) {
+    const [u, d] = cand.trim().split(/\s+/);
+    const w = d && /w$/.test(d) ? parseInt(d, 10) : d && /x$/.test(d) ? parseFloat(d) * 1000 : 0;
+    if (u && w > bestW) { best = u; bestW = w; }
+  }
+  return best;
+}
+function attr(tag, name) {
+  const m = tag.match(new RegExp(`\\s${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s>]+))`, "i"));
+  return m ? (m[2] ?? m[3] ?? m[4] ?? "") : null;
+}
+function extractProductImages(html, pageUrl, { max = 4 } = {}) {
+  const s = String(html || "");
+  const out = [];
+  const seen = new Set();
+  const push = (u, via) => {
+    const abs = u && absolutize(u, pageUrl);
+    if (!abs || seen.has(abs) || IMG_SKIP.test(abs)) return;
+    seen.add(abs); out.push({ url: abs, via });
+  };
+  // 1. Open Graph / Twitter cards (product pages almost always set these).
+  for (const m of s.matchAll(/<meta\b[^>]*>/gi)) {
+    const tag = m[0];
+    const key = (attr(tag, "property") || attr(tag, "name") || "").toLowerCase();
+    if (["og:image", "og:image:secure_url", "og:image:url", "twitter:image", "twitter:image:src"].includes(key)) push(attr(tag, "content"), key);
+  }
+  // 2. Product JSON-LD `image` (string, array, ImageObject, or nested @graph).
+  for (const m of s.matchAll(/<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    let data; try { data = JSON.parse(m[1].trim()); } catch { continue; }
+    const nodes = [];
+    (function walk(n) { if (!n || typeof n !== "object") return; if (Array.isArray(n)) return n.forEach(walk); nodes.push(n); if (n["@graph"]) walk(n["@graph"]); })(data);
+    for (const n of nodes) {
+      const type = [].concat(n["@type"] || []).map(String);
+      if (!type.some((t) => /product/i.test(t))) continue;
+      const imgs = [].concat(n.image || []);
+      for (const im of imgs) push(typeof im === "string" ? im : im && (im.url || im.contentUrl), "json-ld");
+    }
+  }
+  // 3. Product-ish <img> elements. Skip the header/nav/footer, and anything
+  //    declared tiny.
+  const body = s.replace(/<(header|nav|footer)\b[\s\S]*?<\/\1\s*>/gi, " ");
+  for (const m of body.matchAll(/<img\b[^>]*>/gi)) {
+    const tag = m[0];
+    const w = parseInt(attr(tag, "width") || "0", 10), h = parseInt(attr(tag, "height") || "0", 10);
+    if ((w && w < 120) || (h && h < 120)) continue;
+    const marker = `${attr(tag, "itemprop") || ""} ${attr(tag, "class") || ""} ${attr(tag, "id") || ""} ${attr(tag, "data-zoom-image") || ""} ${attr(tag, "alt") || ""}`;
+    const productish = /itemprop|product|gallery|main-image|hero|zoom|primary|pdp/i.test(marker) || /^\s*image\s*$/i.test(attr(tag, "itemprop") || "");
+    if (!productish) continue;
+    const src = attr(tag, "data-zoom-image") || attr(tag, "data-large") || (attr(tag, "srcset") && pickSrcset(attr(tag, "srcset"))) || attr(tag, "data-src") || attr(tag, "src");
+    push(src, "img");
+  }
+  return out.slice(0, max);
 }
 
 // pass = the page names the same type, every size, and every end type;
@@ -297,7 +407,7 @@ function groupingDecision(a, b) {
   const official = a.officialPage === true && b.officialPage === true;
   if (sameMfr && sameNumber && official) return { action: "auto-link", reason: "Same manufacturer and manufacturer part number on official pages." };
   const sa = parseSpec(a.part || {}), sb = parseSpec(b.part || {});
-  const sameSpec = sa.type && sa.type === sb.type && JSON.stringify(sa.sizes) === JSON.stringify(sb.sizes) && JSON.stringify(sa.ends) === JSON.stringify(sb.ends);
+  const sameSpec = sa.type && sa.type === sb.type && JSON.stringify(sa.sizes.map(normalizeSize)) === JSON.stringify(sb.sizes.map(normalizeSize)) && JSON.stringify(sa.ends) === JSON.stringify(sb.ends);
   if ((sameMfr && sameNumber) || sameSpec) return { action: "propose", reason: sameSpec ? "Same fitting type, size and ends." : "Same manufacturer part number, but not confirmed on an official page." };
   return { action: "none" };
 }
@@ -306,6 +416,7 @@ module.exports = {
   MANUFACTURER_DOMAINS, SUPPLIER_DOMAINS, MIN_PART_NUMBER_LENGTH, VISION_KEYS,
   hostOf, isOfficialManufacturerPage,
   normalizePartNumber, visibleProductText, partNumberOnPage, supplierCodeMapping,
+  normalizeSize, sameSize, sizeForms, proposedBrand, effectiveManufacturer, extractProductImages,
   parseSpec, pageMatchesSpec, tierFor, visionSummary,
   pickCalibrationSample, groupingDecision, shapeOf, endsOf
 };

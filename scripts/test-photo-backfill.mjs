@@ -216,7 +216,7 @@ const HUNTER = "https://www.hunterirrigation.com/en-metric/irrigation-product";
 const html = (visible, hidden = "") => `<html><head><title>${hidden}</title></head><body><nav><a href="#">${hidden}</a></nav><h1>${visible}</h1><img alt="${hidden}" src="/${hidden}.jpg"></body></html>`;
 const WEB = {
   [`${HUNTER}/pgp-adj`]: html("PGP-ADJ adjustable rotor, 4 in. pop-up"),
-  [`${HUNTER}/pgv`]: html('PGV 1" globe valve', "PGV-100G"),
+  "https://www.siteone.com/en/pgv": html('PGV 1" globe valve', "PGV-100G"), // supplier page: hidden-only number FAILS
   [`${HUNTER}/pro-spray`]: html("Pro-Spray PROS-04 4 in. spray body"),
   "https://www.rainbird.com/products/rbn": html("RBN10H nozzle"),
   "https://www.siteone.com/en/rb-xfd": html("Rain Bird XFD-09-12 dripline"),
@@ -246,7 +246,7 @@ const CATALOG = {
 const FIND = {
   PGPADJ:   { 1: { manufacturer: "Hunter", manufacturerPartNumber: "PGP-ADJ", candidates: [cand(`${HUNTER}/pgp-adj`, "pgp")] } },
   PGPADJB:  { 1: { manufacturer: "Hunter", manufacturerPartNumber: "PGP-ADJ", candidates: [cand(`${HUNTER}/pgp-adj`, "pgp-b")] } },
-  PGV100G:  { 1: { manufacturer: "Hunter", manufacturerPartNumber: "PGV-100G", candidates: [cand(`${HUNTER}/pgv`, "pgv")] } },
+  PGV100G:  { 1: null, 2: { manufacturer: "Hunter", manufacturerPartNumber: "PGV-100G", candidates: [cand("https://www.siteone.com/en/pgv", "pgv")] } },
   HSPROS04: { 1: { manufacturer: "Hunter", manufacturerPartNumber: "PROS-04", candidates: [cand(`${HUNTER}/pro-spray`, "pros")] } },
   RBN10H:   { 1: { manufacturer: "Rain Bird", manufacturerPartNumber: "RBN10H", candidates: [cand("https://www.rainbird.com/products/rbn", "rbn")] } },
   RBXFD1:   { 1: null, 2: { manufacturer: "Rain Bird", manufacturerPartNumber: "XFD-09-12", candidates: [cand("https://www.siteone.com/en/rb-xfd", "xfd1")] } },
@@ -273,20 +273,22 @@ function harness(dir, over = {}) {
   let inFlight = 0; const peak = { v: 0 };
   const fake = {
     passesFor: ai.passesFor,
-    async find(part, pass) {
+    async find(part, pass, usage) {
       inc(counts.find, part.sku); inFlight++; peak.v = Math.max(peak.v, inFlight);
       await new Promise((r) => setTimeout(r, 5));
       inFlight--;
+      if (usage) usage({ input_tokens: 100, output_tokens: 10, server_tool_use: { web_search_requests: 2, web_fetch_requests: 1 } });
       if (over.find) { const o = await over.find(part, pass); if (o !== undefined) return o; }
       const f = (FIND[part.sku] || {})[pass];
       return { manufacturer: "", manufacturerPartNumber: "", notes: f ? "" : `nothing on pass ${pass}`, candidates: [], ...(f || {}) };
     },
-    async verify(part, bytes, mediaType) {
+    async verify(part, bytes, mediaType, usage) {
       inc(counts.verify, part.sku);
+      if (usage) usage({ input_tokens: 500, output_tokens: 20 });
       if (over.verify) { const o = await over.verify(part, bytes); if (o !== undefined) return o; }
       return VISION[part.sku] || V();
     },
-    async compare(part) { inc(counts.compare, part.sku); return { result: COMPARE[part.sku] || "unknown", reason: "mock" }; }
+    async compare(part, a, b, mt, usage) { inc(counts.compare, part.sku); if (usage) usage({ input_tokens: 300, output_tokens: 10 }); return { result: COMPARE[part.sku] || "unknown", reason: "mock" }; }
   };
   let clock = 1_000_000;
   const b = bf.createBackfill({
@@ -681,6 +683,169 @@ const sample = ev.pickCalibrationSample(realParts, { branded: 8, generic: 7 });
   check("calibration plan on the real catalog: exactly the 15-part sample, 8 branded + 7 generic", plan.skus.length === 15 && plan.counts.branded === 8 && plan.counts.generic === 7 && JSON.stringify(plan.skus) === JSON.stringify(sample.skus), plan.skus.join(","));
   check("calibration plan on the real catalog: worst case ≤ 15 finder + 45 vision + 7 compare", plan.estimate.finderCalls.max === 8 * 3 + 7 * 2 && plan.estimate.verifyCalls.max === 45 && plan.estimate.compareCalls.max === 7 && plan.estimate.apiCalls.max === 38 + 45 + 7);
   fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// ---- 11. Follow-up after the first calibration (Patrick, Sep 27 2026) ----
+// The seven unresolved parts all failed the same way: the right product
+// page was found but no image URL came back. OUR server now reads the
+// page's images; known brands are recovered from blank manufacturer
+// fields; sizes compare on a canonical spelling; every call is counted.
+
+// 11a. Sizes: deterministic normalisation.
+{
+  const n = ev.normalizeSize;
+  const cases = [['.5"', "1/2"], ['0.5"', "1/2"], ['1/2"', "1/2"], ["1/2 in", "1/2"], ["1/2 inch", "1/2"], ['½"', "1/2"], [".5", "1/2"], ["0.75", "3/4"], ['3/4"', "3/4"],
+    ['1.25"', "1-1/4"], ['1 1/4"', "1-1/4"], ['1-1/4"', "1-1/4"], ["1.5", "1-1/2"], ['2"', "2"], ["2.0", "2"], ["1", "1"], ['1"', "1"], ["", ""]];
+  for (const [inp, want] of cases) check(`normalizeSize(${JSON.stringify(inp)}) = ${want}`, n(inp) === want, `got ${JSON.stringify(n(inp))}`);
+  check("sameSize: .5 / 0.5 / 1/2 are equal", ev.sameSize('.5"', '1/2"') && ev.sameSize("0.5", "1/2") && ev.sameSize("1/2 in", ".5"));
+  check("sameSize: 3/4 ≠ 1/2, 1 ≠ 1-1/4, empty never matches", !ev.sameSize("3/4", "1/2") && !ev.sameSize("1", "1.25") && !ev.sameSize("", ""));
+  const a = ev.parseSpec({ description: 'Blu-Lock SX 1/2" elbow MIPT', size: '0.5"' });
+  const b = ev.parseSpec({ description: "BLU-LOCK .5X.5IN ELBOW MIPT", size: '.5"' });
+  check("parseSpec: BL37070 and BL37970 read as the same elbow", a.type === "elbow" && b.type === "elbow" && JSON.stringify(a.sizes) === JSON.stringify(["1/2"]) && JSON.stringify(b.sizes) === JSON.stringify(["1/2"]) && a.ends.includes("male") && b.ends.includes("male"), JSON.stringify([a, b]));
+  const g = ev.groupingDecision({ manufacturer: "blulock", manufacturerPartNumber: "", officialPage: false, part: { description: 'Blu-Lock SX 1/2" elbow MIPT', size: '0.5"' } },
+    { manufacturer: "", manufacturerPartNumber: "", officialPage: false, part: { description: "BLU-LOCK .5X.5IN ELBOW MIPT", size: '.5"' } });
+  check("grouping: BL37070 / BL37970 are now proposed as the same fitting", g.action === "propose", JSON.stringify(g));
+  check("pageMatchesSpec: a page saying 1/2 in. matches a .5\" spec", ev.pageMatchesSpec("<html><body><h1>PVC Elbow 1/2 in. slip</h1></body></html>", ev.parseSpec({ description: 'PVC elbow .5" slip' })).result === "pass");
+  check("pageMatchesSpec: a page saying 0.5 in matches a 1/2\" spec", ev.pageMatchesSpec("<html><body><h1>PVC Elbow 0.5 in slip</h1></body></html>", ev.parseSpec({ description: 'PVC elbow 1/2" slip' })).result === "pass");
+}
+
+// 11b. Known-brand recovery for blank manufacturer fields.
+{
+  const pb = ev.proposedBrand;
+  check("proposedBrand: Watts in the description → watts", pb({ manufacturer: "", description: "Watts LF7RU2-2 3/4 in. DUAL CHECK VALVE LEAD FREE WATTS" }) === "watts");
+  check("proposedBrand: BLU-LOCK → blulock (hyphen, space or none)", pb({ manufacturer: "", description: "BLU-LOCK .5X.5IN ELBOW MIPT" }) === "blulock" && pb({ manufacturer: "", description: "Blu Lock tee" }) === "blulock" && pb({ manufacturer: "", description: "BluLock cap" }) === "blulock");
+  check("proposedBrand: Rain Bird / Oil Creek / Hunter", pb({ manufacturer: "", description: "RB Rain Bird 1804" }) === "rainbird" && pb({ manufacturer: "", description: "Oil Creek pipe 1\"" }) === "oilcreek" && pb({ manufacturer: "", description: "Hunter PGP rotor" }) === "hunter");
+  check("proposedBrand: no brand word → null; 'hunters green paint' isn't Hunter", pb({ manufacturer: "", description: "3/4 Insert Coupling Poly Fitting" }) === null && pb({ manufacturer: "", description: "hunters green paint" }) === null);
+  check("proposedBrand: never overrides a set manufacturer", pb({ manufacturer: "rainbird", description: "Watts valve" }) === null && ev.effectiveManufacturer({ manufacturer: "rainbird", description: "Watts valve" }) === "rainbird");
+  check("effectiveManufacturer: blank + Watts → watts; blank + nothing → ''", ev.effectiveManufacturer({ manufacturer: "", description: "Watts LF7RU2-2" }) === "watts" && ev.effectiveManufacturer({ manufacturer: " ", description: "Poly tee" }) === "");
+}
+
+// 11c. Product-image extraction from the page HTML.
+{
+  const x = ev.extractProductImages;
+  const page = `<html><head>
+    <meta property="og:image" content="/media/catalog/product/hpc-400-front.jpg?width=1200">
+    <meta name="twitter:image" content="https://cdn.example.com/hpc-400-front.jpg?width=1200">
+    <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","logo":"https://cdn.example.com/logo.png"},{"@type":"Product","name":"HPC-400","image":["https://cdn.example.com/hpc-400-side.jpg",{"@type":"ImageObject","url":"https://cdn.example.com/hpc-400-open.jpg"}]}]}</script>
+    </head><body>
+    <header><img src="https://cdn.example.com/site-logo.png" class="logo" width="300"></header>
+    <div class="product-gallery"><img class="product-image" data-zoom-image="https://cdn.example.com/hpc-400-zoom.jpg" src="https://cdn.example.com/hpc-400-thumb.jpg"></div>
+    <img itemprop="image" srcset="https://cdn.example.com/hpc-400-480.jpg 480w, https://cdn.example.com/hpc-400-1600.jpg 1600w" src="https://cdn.example.com/hpc-400-480.jpg">
+    <img src="https://cdn.example.com/icons/cart.svg" class="product-icon"><img src="https://cdn.example.com/pixel.gif" width="1" height="1" class="product">
+    <img src="http://insecure.example.com/hpc.jpg" class="product-image"><img src="https://cdn.example.com/related/pgv.jpg" width="80" height="80" class="product">
+    <footer><img src="https://cdn.example.com/payment-visa.png" class="product-image"></footer>
+    </body></html>`;
+  const out = x(page, "https://www.hunterirrigation.com/en-metric/irrigation-product/controllers/hpc", { max: 10 });
+  const urls = out.map((o) => o.url);
+  check("extract: og:image first, made absolute against the page", urls[0] === "https://www.hunterirrigation.com/media/catalog/product/hpc-400-front.jpg?width=1200" && out[0].via === "og:image", JSON.stringify(out));
+  check("extract: twitter:image and Product JSON-LD images (array + ImageObject, inside @graph)", urls.includes("https://cdn.example.com/hpc-400-front.jpg?width=1200") && urls.includes("https://cdn.example.com/hpc-400-side.jpg") && urls.includes("https://cdn.example.com/hpc-400-open.jpg"));
+  check("extract: product <img> uses the zoom image and the largest srcset entry", urls.includes("https://cdn.example.com/hpc-400-zoom.jpg") && urls.includes("https://cdn.example.com/hpc-400-1600.jpg") && !urls.includes("https://cdn.example.com/hpc-400-thumb.jpg"));
+  check("extract: logos, icons, svg, pixels, tiny, http and header/footer images are skipped", !urls.some((u) => /logo|cart\.svg|pixel|related|payment|insecure/.test(u)), urls.join(" "));
+  check("extract: the Organization logo in JSON-LD is not a product image", !urls.includes("https://cdn.example.com/logo.png"));
+  check("extract: default cap of 4, best first", x(page, "https://www.hunterirrigation.com/p").length === 4);
+  check("extract: nothing on a page without product images", x("<html><body><h1>PGV</h1><nav><img src='https://a/x.png' class='product'></nav></body></html>", "https://a/").length === 0);
+  check("extract: broken JSON-LD is ignored, not fatal", x('<script type="application/ld+json">{not json</script><meta property="og:image" content="https://a/p.jpg">', "https://a/").length === 1);
+}
+
+// 11d. The runner on the calibration's failure patterns.
+const OFFICIAL = "https://www.hunterirrigation.com/en-metric/irrigation-product";
+const pageWith = (visible, images = [], extra = "") => `<html><head>${images.map((u) => `<meta property="og:image" content="${u}">`).join("")}${extra}</head><body><h1>${visible}</h1></body></html>`;
+{
+  // Pattern 1: correct official page, finder gives NO image URL → our server
+  // finds og:image → candidate → vision → Confident. Counters count it all.
+  Object.assign(WEB, {
+    [`${OFFICIAL}/hpc`]: pageWith("Hydrawise HPC-400 controller HCHPC400", ["https://img.example.com/hpc-front.jpg"]),
+    [`${OFFICIAL}/pgv-noimg`]: pageWith("PGV 1 in. globe valve PGV100G"),
+    "https://www.oilcreekplastics.com/irrigation-pipe": pageWith('Irrigation Pipe SIDR-15 IRR100 1" x 300\' selected', ["https://img.example.com/irr100.jpg"]),
+    "https://www.watts.com/products/lf7ru2-2": pageWith("LF7RU2-2 3/4 X 3/4 lead free dual check valve. Ordering Code 0072204", ["https://img.example.com/lf7ru2.jpg"]),
+    "https://www.siteone.com/en/two-images": pageWith("PGP-ADJ rotor PGPADJ", ["https://img.example.com/og-a.jpg", "https://img.example.com/og-b.jpg", "https://img.example.com/og-c.jpg"])
+  });
+  const catalog = {
+    HCHPC400: { sku: "HCHPC400", partNumber: "HCHPC400", description: "Hydrawise 4-23 station controller", category: "controllers", manufacturer: "hunter" },
+    PGV100G: { sku: "PGV100G", partNumber: "PGV100G", description: "1\" globe valve", category: "valves", manufacturer: "hunter" },
+    POPO100300: { sku: "POPO100300", partNumber: "POPO100300", description: "Oil Creek utility pipe 100PSI 1\" × 300ft", category: "pipe", manufacturer: "oilcreek" },
+    "0072204": { sku: "0072204", partNumber: "0072204", description: "Watts LF7RU2-2 3/4 in. DUAL CHECK VALVE LEAD FREE WATTS", category: "accessories", manufacturer: "" },
+    PGPADJ: { sku: "PGPADJ", partNumber: "PGPADJ", description: "PGP rotor adjustable", category: "sprinkler_heads", manufacturer: "hunter" }
+  };
+  const finds = {
+    HCHPC400: { 1: { manufacturer: "Hunter", manufacturerPartNumber: "HPC-400", candidates: [{ pageUrl: `${OFFICIAL}/hpc`, imageUrl: "", partNumberAsShown: "HCHPC400" }] } },
+    PGV100G: { 1: { manufacturer: "Hunter", manufacturerPartNumber: "PGV100G", candidates: [{ pageUrl: `${OFFICIAL}/pgv-noimg`, imageUrl: "", partNumberAsShown: "PGV100G" }] } },
+    POPO100300: { 1: { manufacturer: "Oil Creek", manufacturerPartNumber: "", candidates: [{ pageUrl: "https://www.oilcreekplastics.com/irrigation-pipe", imageUrl: "", partNumberAsShown: "IRR100" }] } },
+    "0072204": { 1: { manufacturer: "Watts", manufacturerPartNumber: "LF7RU2-2", candidates: [{ pageUrl: "https://www.watts.com/products/lf7ru2-2", imageUrl: "", partNumberAsShown: "0072204" }] } },
+    PGPADJ: { 1: null, 2: { manufacturer: "Hunter", manufacturerPartNumber: "PGP-ADJ", candidates: [{ pageUrl: "https://www.siteone.com/en/two-images", imageUrl: "https://img.example.com/finder.jpg", partNumberAsShown: "PGPADJ" }] } }
+  };
+  const asked = {};
+  const dir = tmp();
+  const h = harness(dir, { catalog, find: (part, pass) => { (asked[part.sku] ||= []).push({ pass, mfr: part.manufacturer, proposed: !!part.manufacturerProposed, catalogMfr: part.catalogManufacturer }); const f = (finds[part.sku] || {})[pass]; return { manufacturer: "", manufacturerPartNumber: "", notes: "", candidates: [], ...(f || {}) }; } });
+  await h.b.start({ skus: Object.keys(catalog), autoApprove: false }); await h.b.idle();
+  const st = h.b._state().run;
+  const it = (s) => st.items[s];
+  const cands = (s) => (it(s).work.checked || []).filter((c) => c.hash);
+
+  check("pattern 1 (HCHPC400): official page, no finder image → og:image candidate → Confident", it("HCHPC400").result.tier === "confident" && cands("HCHPC400").length === 1 && cands("HCHPC400")[0].source.imageVia === "og:image", JSON.stringify(it("HCHPC400").result));
+  check("pattern 1: the page's image count is recorded", cands("HCHPC400")[0].imagesOnPage === 1);
+  const u = it("HCHPC400").usage;
+  check("counters: 2 Claude calls (find + vision), 2 searches, 1 model fetch, 1 page + 1 image by our server, tokens kept", u.calls === 2 && u.searches === 2 && u.webFetches === 1 && u.pageFetches === 1 && u.imageFetches === 1 && u.in === 600 && u.out === 30, JSON.stringify(u));
+  check("counters: the run totals add up across parts", st.usage.calls === st.order.reduce((n, s) => n + it(s).usage.calls, 0) && st.usage.pageFetches === st.order.reduce((n, s) => n + it(s).usage.pageFetches, 0) && st.usage.calls > 2);
+
+  check("pattern: official page with NO product image at all → No reliable photo, with the reason", it("PGV100G").result.tier === "not_confident" && cands("PGV100G").length === 0 && (it("PGV100G").work.checked[0].notes || []).some((n) => /no product image found/.test(n)));
+  check("pattern 2 (POPO100300, Oil Creek base SKU): official page, our number absent → To be determined WITH the photo, not 'no reliable photo'", it("POPO100300").result.tier === "tbd" && cands("POPO100300").length === 1 && it("POPO100300").work.checked[0].partNumber.result === "unknown" && /base-SKU|needs a look/.test(it("POPO100300").work.checked[0].partNumber.reason), JSON.stringify(it("POPO100300").result));
+  check("pattern 2: unknown ≠ pass — it can never be Confident this way", it("POPO100300").result.tier !== "confident");
+  check("pattern 3 (0072204, blank manufacturer, Watts): searched as BRANDED on the Watts site first", asked["0072204"][0].pass === 1 && asked["0072204"][0].mfr === "watts" && asked["0072204"][0].proposed === true && asked["0072204"][0].catalogMfr === "");
+  check("pattern 3: the official Watts page proves it → Confident; the brand is recorded as PROPOSED", it("0072204").result.tier === "confident" && h.store.readStoresSync().groups[h.store.readStoresSync().links["0072204"].groupId].ai.proposedBrand === "watts");
+  check("pattern 3: the catalog's manufacturer field is untouched", h.parts()["0072204"].manufacturer === "" && catalog["0072204"].manufacturer === "");
+  check("pattern 3: the review card shows the proposed brand", (() => { const s = h.store.readStoresSync(); const q = require(path.join(ROOT, "server", "lib", "photo-review.js")).buildReviewQueues({ parts: h.parts(), groups: s.groups, links: s.links }); return q.tbd.find((c) => c.sku === "0072204").proposedBrand === "watts"; })());
+  check("finder image first, then the page's own, at most 2 per page", cands("PGPADJ").length === 2 && cands("PGPADJ")[0].source.imageVia === "finder" && cands("PGPADJ")[1].source.imageVia === "og:image" && h.counts.verify.PGPADJ === 2);
+  check("nothing went live (auto-approve off) even with two Confident results", Object.values(h.parts()).every((p) => p.photoState !== "verified"));
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+{
+  // Cap across pages: three pages each with a finder image and og:image →
+  // at most 3 candidates, so at most 3 vision calls.
+  const pages = ["a", "b", "c"].map((k) => `https://www.siteone.com/en/cap-${k}`);
+  for (const p of pages) WEB[p] = pageWith("PGPADJ rotor", [`https://img.example.com/${p.slice(-1)}-og.jpg`]);
+  const dir = tmp();
+  const h = harness(dir, { catalog: { PGPADJ: CATALOG.PGPADJ }, find: (part, pass) => (pass === 1 ? { manufacturer: "", manufacturerPartNumber: "", notes: "", candidates: pages.map((p) => ({ pageUrl: p, imageUrl: p + ".jpg", partNumberAsShown: "" })) } : undefined) });
+  await h.b.start({ skus: ["PGPADJ"], autoApprove: false }); await h.b.idle();
+  const c = h.b._state().run.items.PGPADJ.work.checked.filter((x) => x.hash);
+  check("cap: never more than 3 candidates / 3 vision calls per part, however many pages and images", c.length === 3 && h.counts.verify.PGPADJ === 3 && h.b._state().run.items.PGPADJ.usage.imageFetches === 3);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// 11e. The re-run door: only the calibration parts still without a live photo.
+{
+  const dir = tmp();
+  const h = harness(dir);
+  await h.b.startCalibration({ by: "patrick" }); await h.b.idle();
+  const first = h.b._state().run;
+  await rejects("re-run: refused while the calibration is active", async () => { const h2 = harness(dir); await h2.b.load(); h2.b._state().run.status = "running"; try { await h2.b.startCalibrationRerun({ by: "patrick" }); } finally { h2.b._state().run.status = "done"; } }, /already active/);
+  // Patrick approves one and uploads one → those two are resolved.
+  const s = h.store.readStoresSync();
+  const withCand = first.order.find((k) => { const g = s.links[k] && s.groups[s.links[k].groupId]; return g && g.candidates && g.candidates.length; });
+  await h.store.approveCandidate(withCand, CATALOG[withCand], s.groups[s.links[withCand].groupId].candidates[0].hash, { by: "patrick" });
+  const other = first.order.find((k) => k !== withCand);
+  await h.store.setPhoto(other, CATALOG[other], await pngFor("mine-" + other), { by: "patrick", source: { method: "upload" } });
+  const unresolved = h.b.unresolvedCalibrationSkus();
+  check("re-run: unresolved = calibration parts minus the ones now live", unresolved.length === first.order.length - 2 && !unresolved.includes(withCand) && !unresolved.includes(other));
+  check("re-run: status lists them", JSON.stringify(h.b.status().run.calibration.unresolved) === JSON.stringify(unresolved));
+  const st = await h.b.startCalibrationRerun({ by: "patrick" });
+  const run = h.b._state().run;
+  check("re-run: exactly the unresolved parts, auto-approve off, tied to the calibration it re-runs", JSON.stringify(run.order.slice().sort()) === JSON.stringify(unresolved.slice().sort()) && run.options.autoApprove === false && run.label === "Calibration re-run" && run.calibration.rerunOf === first.id && st.run.calibration.rerunOf === first.id);
+  // The recorded list must be the unresolved ones too — start()'s own
+  // live-part filter is a second layer, not the rule.
+  check("re-run: the recorded re-run list is the unresolved parts, not the whole sample", JSON.stringify(run.calibration.skus.slice().sort()) === JSON.stringify(unresolved.slice().sort()) && run.calibration.skus.length < first.order.length);
+  await rejects("re-run: the general start is still refused while it runs", () => h.b.start({ skus: ["PGPADJ"] }), /already in progress/);
+  await h.b.idle();
+  check("re-run: finished; the two live parts untouched; still nothing live from the AI", h.b._state().run.status === "done" && h.parts()[withCand].photoState === "verified" && h.parts()[other].photoState === "verified" && run.order.every((k) => h.parts()[k].photoState !== "verified"));
+  // A re-run of the re-run still works from the run on file; after a restart too.
+  const h3 = harness(dir);
+  await h3.b.load();
+  check("re-run: the last calibration is found after a restart", h3.b.unresolvedCalibrationSkus().length === unresolved.length);
+  fs.rmSync(dir, { recursive: true, force: true });
+  const dir2 = tmp();
+  const h4 = harness(dir2);
+  await rejects("re-run: nothing to re-run without a calibration", () => h4.b.startCalibrationRerun({ by: "patrick" }), /no calibration run/);
+  fs.rmSync(dir2, { recursive: true, force: true });
 }
 
 if (REPORT) {

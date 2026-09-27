@@ -739,7 +739,7 @@ function createPartPhotos({ dataDir, sharp }) {
         byHash.set(c.hash, { hash: c.hash, width: c.width || null, height: c.height || null, source: c.source || {}, checks: c.checks || {}, tier: c.tier || null, runId: result.runId || null, foundAt: now, forSku: sku });
       }
       g.candidates = [...byHash.values()].slice(-12);
-      g.ai = { tier, kind: result.kind || null, reason: result.reason || "", runId: result.runId || null, identified: result.identified || null, at: now, forSku: sku };
+      g.ai = { tier, kind: result.kind || null, reason: result.reason || "", runId: result.runId || null, identified: result.identified || null, proposedBrand: result.proposedBrand || null, at: now, forSku: sku };
       const chosen = result.chosen >= 0 ? (result.candidates || [])[result.chosen] : null;
       let live = false;
       const chosenRejected = !!(chosen && rejected.has(chosen.hash));
