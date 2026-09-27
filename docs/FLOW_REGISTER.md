@@ -2,6 +2,53 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-27 (Change-order safety: office-only actions, real names, honest sends, one "open" rule; PR 2 of Change Orders, stacked on the quote lifecycle PR; no PASS flow touched):**
+**Defects proven before the fix** (`test-change-order-safety.mjs` on the old code: 39 of 51 failed):
+- Every change-order route called `requireAdmin()` and **ignored the answer**. A technician could send
+  a change to the customer, record the customer's approval, withdraw it, and generate the revised
+  quote, and all of it was logged as "admin".
+- The office's actions were logged as a user id (`USR-002`), not a name.
+- A change was marked **Sent before the email was tried**. No customer email, email not set up, or a
+  bounce still showed "Awaiting customer", and the failure was only a server log line.
+- An approve or reject entered by the office was stored as `approved_by_customer` with nothing
+  saying the office recorded it.
+- The readers disagreed about "open". The Overview count and the customer's status email ignored an
+  approved change still waiting for its revised quote. The completion check tested
+  `billingMode === "fixed_price"`, so a job with no billing mode recorded could close without it.
+- An approved change could not be withdrawn.
+
+**Now:**
+- **Permissions follow the account's role, not the device.** A technician may create a change
+  (notes, line items, photos) and edit its notes. Send, editing the customer email, recording the
+  customer's answer, withdraw, and generate revision are **office-only**, and a technician gets a
+  403 with nothing changed. The classic project page and the build work order's "Save & send" show
+  those buttons from `/api/session`, so Patrick signed in as admin on the tech page keeps them.
+- **Names:** `by` is `actorLabel()`, the person's name, on capture, send, decisions, withdrawals and
+  revisions.
+- **Customer vs office:** approve/reject keep `resolvedAs: *_by_customer` and add
+  `decisionSource: "recorded_by_office"` and `recordedBy`; the history says "recorded by the
+  office". A withdrawal is `withdrawn_by_office`. The customer signing the revised quote in the
+  portal stays attributed to `customer`.
+- **Honest send:** `projects.sendScopeChangeRequest` takes the email sender (`deliver`) and marks
+  the change sent only after delivery succeeds. No recipient (409), email not set up (503) or a
+  failed delivery (502) leaves it unsent. The attempt is recorded in `sendAttempts` (when, who, to,
+  reason) with a `scope_change_send_failed` history entry, and it stays on record after a later
+  send succeeds. The project page shows "⚠ Not sent: reason". The office can record a customer's
+  answer without sending, for a customer with no email.
+- **One "open" rule:** `projects.scopeChangeStage()` / `openScopeChanges()`, read by the Overview
+  count, the completion check and the status email. A change is open while `in_review`,
+  `awaiting_customer`, or `awaiting_revision` (approved, not time & material, no revised quote). The
+  status email says "approved — revised quote to follow". An approved change can be withdrawn,
+  which lifts its block.
+
+**Left alone on purpose:** quote signing and billing (the previous entry), the status-update send
+itself, and the new app's screens (the read-only Change Orders tab is PR 3).
+**Test:** `scripts/test-change-order-safety.mjs`, in `build:check`, boots the real server with a
+technician and an office account. The stub mailer (`scripts/lib/stub-outbound.cjs`) gains
+`$PJL_STUB_OUTBOX.email-fail` to simulate a bounce. **Patrick's walk (UNMAPPED until done):** sign
+in as a technician and add a change from the build work order. There should be no "Save & send",
+and on the project page no Send/Approve/Withdraw buttons. Sign in as yourself and send it to a
+customer with no email: it stays unsent, with the reason shown.
 **2026-09-27 (Quote lifecycle and billing: a signed agreement governs until its revision is signed; FLOW-02 accept path and FLOW-20/21/22 touched; no PASS flow's behaviour changes for a quote with no revisions):**
 Patrick's rule: *"The quote's status is operational data… Creating an unsigned draft should not
 eliminate the accepted agreement."* **Defects proven before the fix** (`test-quote-lifecycle-billing.mjs`

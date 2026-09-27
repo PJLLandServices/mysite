@@ -27,6 +27,9 @@
 // refused, so http.request, https.request, SMTP or any library with its
 // own client is caught too — not just fetch.
 //
+// Email delivery a test can make fail: one recipient address per line in
+// $PJL_STUB_OUTBOX.email-fail (sendMail then rejects, as a bounce would).
+//
 // Stripe outcomes a test can set per intent (or "*" for every call), in
 // $PJL_STUB_OUTBOX.stripe as JSONL {id, mode}:
 //   succeeded    the customer's card was approved (also: $OUTBOX.succeeded)
@@ -78,6 +81,15 @@ const nodemailer = require("nodemailer");
 nodemailer.createTransport = function createStubTransport() {
   return {
     sendMail: async (msg) => {
+      // A test can make delivery to an address FAIL, the way a bounced
+      // mailbox or an SMTP outage would: one address per line in
+      // $PJL_STUB_OUTBOX.email-fail.
+      let failing = [];
+      try { failing = fs.readFileSync(`${OUTBOX}.email-fail`, "utf8").split("\n").map((l) => l.trim()).filter(Boolean); } catch {}
+      if (failing.includes(String(msg.to || "").trim())) {
+        log({ channel: "email-failed", to: String(msg.to || ""), subject: String(msg.subject || "") });
+        throw new Error("stub: 550 mailbox unavailable");
+      }
       log({ channel: "email", to: String(msg.to || ""), cc: msg.cc || "", subject: String(msg.subject || ""),
         text: String(msg.text || ""), html: String(msg.html || "") });
       return { messageId: `<stub-${Date.now()}-${Math.random().toString(36).slice(2)}@stub>`, accepted: [msg.to] };

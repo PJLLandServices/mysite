@@ -1114,6 +1114,21 @@
     els.scopeCancel.addEventListener("click", closeScopeModal);
     els.scopeSave.addEventListener("click", () => saveScope(false));
     document.getElementById("tbScopeSaveAndSend")?.addEventListener("click", () => saveScope(true));
+    // Sending to the customer is the office's (Patrick, 2026-09-27) — and it
+    // follows the signed-in ACCOUNT, not which page or device this is:
+    // Patrick signed in as admin on the tech page keeps it; a technician on
+    // the office page does not. Hidden until the role is known (fail
+    // closed); the server refuses a technician's send regardless.
+    (async () => {
+      const sendBtn = document.getElementById("tbScopeSaveAndSend");
+      if (!sendBtn) return;
+      sendBtn.hidden = true;
+      try {
+        const r = await fetch("/api/session", { cache: "no-store", credentials: "same-origin" });
+        const data = await r.json().catch(() => ({}));
+        sendBtn.hidden = data?.role !== "admin";
+      } catch (_) { sendBtn.hidden = true; }
+    })();
     els.scopeModal.addEventListener("click", (e) => { if (e.target === els.scopeModal) closeScopeModal(); });
 
     // Task-done modal
