@@ -662,6 +662,77 @@ function createBackfill({
     return status();
   }
 
+  // ---- The controlled wave (Patrick, Sep 27 2026) --------------------------
+  // At most WAVE_MAX unprocessed parts, deliberately mixed (photo-evidence
+  // .pickWave). Excluded: live parts, parts waiting for review or already
+  // judged, and everything any calibration run processed. Start requires
+  // the exact SKU list that was shown, so a changed catalog can never run a
+  // list Patrick didn't see. Auto-approve OFF, one run at a time. There is
+  // still no whole-catalog door.
+  const WAVE_MAX = 30;
+  function processedByCalibration() {
+    const out = new Set();
+    const add = (run) => { if (run && run.calibration && Array.isArray(run.calibration.skus)) run.calibration.skus.forEach((s) => out.add(s)); };
+    add(state && state.run);
+    for (const h of (state && state.history) || []) add(h);
+    return out;
+  }
+  function estimateRows(rows) {
+    const sum = (f) => rows.reduce((n, r) => n + f(r), 0);
+    const finderMin = sum((r) => r.calls.finderMin), finderMax = sum((r) => r.calls.finderMax);
+    const verifyMax = sum((r) => r.calls.verifyMax), compareMax = sum((r) => r.calls.compareMax);
+    return {
+      apiCalls: { min: finderMin, max: finderMax + verifyMax + compareMax },
+      finderCalls: { min: finderMin, max: finderMax }, verifyCalls: { max: verifyMax }, compareCalls: { max: compareMax },
+      webSearches: { max: finderMax * 6 }, webFetchesByModel: { max: finderMax * 6 },
+      pagesFetchedByOurServer: { max: sum((r) => 3 + (r.kind === "branded" ? 3 : 0)) },
+      imagesFetchedByOurServer: { max: rows.length * 3 }
+    };
+  }
+  function rowFor(sku, parts) {
+    const p = enrich(parts[sku]);
+    const kind = kindOf(p);
+    const passes = ai.passesFor(p);
+    return {
+      sku, kind, manufacturer: p.manufacturer || "", proposedBrand: p.manufacturerProposed ? p.manufacturer : null,
+      description: p.description || "", size: p.size || "", category: p.category || "",
+      passes, calls: { finderMin: 1, finderMax: passes.length + (kind === "branded" ? 1 : 0), verifyMax: 3, compareMax: kind === "generic" ? 1 : 0 }
+    };
+  }
+  function wavePlan({ size = WAVE_MAX } = {}) {
+    const n = Math.max(1, Math.min(WAVE_MAX, Number(size) || WAVE_MAX));
+    const parts = getParts() || {};
+    const done = processedByCalibration();
+    const isExcluded = (p) => isLive(p) || (p.photoState && p.photoState !== "none") || done.has(p.sku);
+    const wave = ev.pickWave(Object.values(parts), { size: n, isExcluded });
+    const rows = wave.skus.map((s) => rowFor(s, parts));
+    return {
+      skus: wave.skus, rows, autoApprove: false, max: WAVE_MAX,
+      counts: { total: rows.length, branded: rows.filter((r) => r.kind === "branded").length, generic: rows.filter((r) => r.kind === "generic").length,
+        categories: [...new Set(rows.map((r) => r.category))].sort(), manufacturers: [...new Set(rows.map((r) => r.manufacturer).filter(Boolean))].sort() },
+      eligible: Object.values(parts).filter((p) => !isExcluded(p)).length,
+      estimate: estimateRows(rows)
+    };
+  }
+  async function startWave({ by = null, skus = null, size = WAVE_MAX } = {}) {
+    await load();
+    if (state.run && ["running", "paused"].includes(state.run.status)) throw new Error("A run is already active — pause or finish it first.");
+    const plan = wavePlan({ size });
+    if (!plan.skus.length) throw new Error("Nothing left to process — every eligible part is live, waiting for review, or already run.");
+    if (plan.skus.length > WAVE_MAX) throw new Error("Wave is larger than allowed.");
+    // The list Patrick approved must be the list that runs — no more, no
+    // less, and in the same order the plan shows it.
+    if (!Array.isArray(skus) || JSON.stringify(skus.map(String)) !== JSON.stringify(plan.skus)) {
+      throw new Error("The wave plan has changed since it was shown — reload the plan and confirm the exact list.");
+    }
+    await start({ skus: plan.skus, autoApprove: false, label: `Wave (${plan.skus.length} parts)` });
+    state.run.wave = { by, skus: plan.skus, estimate: plan.estimate, at: new Date(now()).toISOString() };
+    state.run.options.autoApprove = false;
+    await save();
+    log({ action: "backfill.wave.start", runId: state.run.id, by, skus: plan.skus });
+    return status();
+  }
+
   // The calibration parts that still have no live photo — from the most
   // recent calibration run on file (current or history).
   function lastCalibration() {
@@ -722,6 +793,7 @@ function createBackfill({
       id: run.id, label: run.label, status: run.status, autoApprove: run.options.autoApprove, createdAt: run.createdAt, finishedAt: run.finishedAt || null,
       interruptedAt: run.interruptedAt || null,
       calibration: run.calibration ? { skus: run.calibration.skus, by: run.calibration.by, rerunOf: run.calibration.rerunOf || null, unresolved: (() => { const parts = getParts() || {}; return run.calibration.skus.filter((s) => parts[s] && !isLive(parts[s])); })() } : null,
+      wave: run.wave ? { skus: run.wave.skus, by: run.wave.by } : null,
       current: current ? { sku: current, step: run.items[current].step } : null,
       errors: run.order.filter((s) => run.items[s].step === "error").map((s) => ({ sku: s, step: run.items[s].failedStep || null, error: run.items[s].lastError })),
       counts: c, usage: run.usage
@@ -749,7 +821,7 @@ function createBackfill({
     while (pumping) await pumping;
   }
 
-  return { load, start, pause, resume, retry, status, idle, kick, groupingProposals, applyGrouping, calibrationSkus, calibrationPlan, startCalibration, startCalibrationRerun, unresolvedCalibrationSkus, fittingsToConfirm, resolveFitting, catalogProgress, _state: () => state };
+  return { load, start, pause, resume, retry, status, idle, kick, groupingProposals, applyGrouping, calibrationSkus, calibrationPlan, startCalibration, startCalibrationRerun, unresolvedCalibrationSkus, wavePlan, startWave, fittingsToConfirm, resolveFitting, catalogProgress, _state: () => state };
 }
 
 module.exports = { createBackfill, isTransient, pageDiagnosticsLine, STEPS };

@@ -120,7 +120,7 @@
       const c = run.counts;
       const where = run.current ? ` · now on <span class="pp-mono">${esc(run.current.sku)}</span> (${esc(run.current.step)})` : "";
       const u = run.usage || {};
-      runLine = `${run.calibration ? (run.calibration.rerunOf ? "Calibration re-run" : "Calibration run") : "AI run"} <b>${esc(run.label || run.id)}</b> · <b>${esc(run.status === "paused" && run.interruptedAt ? "interrupted by a restart — press Resume" : run.status)}</b> · ${c.done} of ${c.total} done${c.error ? ` · ${c.error} error${c.error > 1 ? "s" : ""}` : ""}${where} · auto-approve <b>${run.autoApprove ? "ON" : "off"}</b>`
+      runLine = `${run.calibration ? (run.calibration.rerunOf ? "Calibration re-run" : "Calibration run") : run.wave ? "Wave" : "AI run"} <b>${esc(run.label || run.id)}</b> · <b>${esc(run.status === "paused" && run.interruptedAt ? "interrupted by a restart — press Resume" : run.status)}</b> · ${c.done} of ${c.total} done${c.error ? ` · ${c.error} error${c.error > 1 ? "s" : ""}` : ""}${where} · auto-approve <b>${run.autoApprove ? "ON" : "off"}</b>`
         + `<br><span class="pr-usage">${(u.calls || 0)} Claude calls · ${(u.searches || 0)} web searches · ${(u.webFetches || 0)} model fetches · ${(u.pageFetches || 0)} pages + ${(u.imageFetches || 0)} images fetched by our server · ${(u.in || 0).toLocaleString()} in / ${(u.out || 0).toLocaleString()} out tokens</span>`;
     }
     const errors = run && run.errors && run.errors.length
@@ -136,7 +136,8 @@
       controls = (unresolved.length
         ? `<button type="button" class="pp-btn pp-btn-primary" data-act="rerun"${d.apiKeySet === false ? " disabled" : ""}>Re-run the ${unresolved.length} unresolved calibration part${unresolved.length > 1 ? "s" : ""} (auto-approve off)</button>`
         : "")
-        + `<button type="button" class="pp-btn${unresolved.length ? "" : " pp-btn-primary"}" data-act="start-cal"${d.apiKeySet === false ? " disabled" : ""}>Start calibration run (15 parts, auto-approve off)</button>${d.apiKeySet === false ? `<span class="pr-held">ANTHROPIC_API_KEY isn't set on the server.</span>` : ""}`;
+        + `<button type="button" class="pp-btn${unresolved.length ? "" : " pp-btn-primary"}" data-act="start-cal"${d.apiKeySet === false ? " disabled" : ""}>Start calibration run (15 parts, auto-approve off)</button>`
+        + `<button type="button" class="pp-btn" data-act="start-wave"${d.apiKeySet === false ? " disabled" : ""}>Start a 30-part wave (auto-approve off)</button>${d.apiKeySet === false ? `<span class="pr-held">ANTHROPIC_API_KEY isn't set on the server.</span>` : ""}`;
     }
     return `<div class="pr-progress-head"><h2>Photos across the catalog</h2><span>${total} parts</span></div>
       <div class="pr-bar" role="img" aria-label="${p.live || 0} live, ${p.review || 0} review needed, ${p.noReliable || 0} no reliable photo, ${p.notProcessed || 0} not processed">${bar || '<span class="pr-bar-seg is-pending" style="flex-grow:1"></span>'}</div>
@@ -172,6 +173,36 @@
     if (!ok) return;
     await backfillAction("calibration", "Starting…");
   }
+  // The wave: show the exact plan, then send back the very list that was
+  // shown — the server refuses anything else.
+  async function startWave() {
+    const s = els.progress.querySelector("[data-status]");
+    const say = (t, bad) => { if (s) { s.textContent = t; s.classList.toggle("is-error", !!bad); } };
+    say("Building the wave plan…");
+    let plan;
+    try {
+      const r = await fetch("/api/part-photo-backfill/wave-plan", { cache: "no-store" });
+      plan = await r.json();
+      if (!r.ok || !plan.ok) throw new Error((plan.errors && plan.errors[0]) || `HTTP ${r.status}`);
+    } catch (err) { say(`Couldn't build the plan: ${err.message}`, true); return; }
+    say("");
+    if (!plan.skus.length) { say("Nothing left to process — every eligible part is live, waiting for review, or already run.", true); return; }
+    const e = plan.estimate;
+    const list = plan.rows.map((r) => `${r.sku} (${r.kind}${r.manufacturer ? ", " + r.manufacturer : ""}) — ${r.description}`).join("\n");
+    const ok = await window.pjlDialog.confirm(
+      `Start a wave on these ${plan.counts.total} unprocessed parts (${plan.counts.branded} branded, ${plan.counts.generic} generic; categories: ${plan.counts.categories.join(", ")})? Auto-approve is OFF: nothing goes live until you approve it on this tab.\n\n${list}\n\nWorst case: ${e.apiCalls.max} Claude calls (${e.finderCalls.max} finder, ${e.verifyCalls.max} vision, ${e.compareCalls.max} compare), up to ${e.webSearches.max} web searches, and up to ${e.pagesFetchedByOurServer.max} pages + ${e.imagesFetchedByOurServer.max} images fetched by our server.`,
+      { confirmLabel: "Start this wave", cancelLabel: "Cancel" });
+    if (!ok) return;
+    if (s) { s.textContent = "Starting…"; s.classList.remove("is-error"); }
+    els.progress.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+    try {
+      await post("/api/part-photo-backfill/wave", { skus: plan.skus });
+      await load(true);
+    } catch (err) {
+      els.progress.querySelectorAll("button").forEach((b) => { b.disabled = false; });
+      say(err.message, true);
+    }
+  }
   async function rerunUnresolved() {
     const run = state.data && state.data.run;
     const skus = run && run.calibration && run.calibration.unresolved || [];
@@ -198,6 +229,7 @@
     const b = e.target.closest("[data-act]");
     if (!b || state.busy) return;
     if (b.dataset.act === "start-cal") startCalibration();
+    else if (b.dataset.act === "start-wave") startWave();
     else if (b.dataset.act === "rerun") rerunUnresolved();
     else if (b.dataset.act === "pause") backfillAction("pause", "Pausing…");
     else if (b.dataset.act === "resume") backfillAction("resume", "Resuming…");

@@ -14139,6 +14139,38 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, probe });
   }
 
+  // ---------- The controlled wave (P-PJL-35 M3c, Patrick 2026-09-27) --------
+  //   GET  /api/part-photo-backfill/wave-plan   the exact ≤30-part plan + estimate (staff)
+  //   POST /api/part-photo-backfill/wave {skus} start it (admin) — the engine
+  //        refuses unless `skus` is exactly the plan it would run now.
+  // Auto-approve OFF, one run at a time. There is no whole-catalog route.
+  if (req.method === "GET" && pathname === "/api/part-photo-backfill/wave-plan") {
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    try {
+      await photoBackfill.load();
+      return sendJson(res, 200, { ok: true, ...photoBackfill.wavePlan(), run: photoBackfill.status().run, apiKeySet: !!process.env.ANTHROPIC_API_KEY });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't build the wave plan."] });
+    }
+  }
+  if (req.method === "POST" && pathname === "/api/part-photo-backfill/wave") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    if (!process.env.ANTHROPIC_API_KEY) return sendJson(res, 503, { ok: false, errors: ["ANTHROPIC_API_KEY isn't set on the server — nothing was started."] });
+    const by = await actorLabel(req);
+    try {
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      // `skus` is the list Patrick confirmed in the dialog; the engine
+      // compares it with the plan it would run and refuses any difference.
+      const status = await photoBackfill.startWave({ by, skus: Array.isArray(payload && payload.skus) ? payload.skus.map(String) : null });
+      await settings.recordAudit({ who: by, action: "part-photo.backfill.wave", note: `Started a photo backfill wave (${status.run.counts.total} parts, auto-approve off): ${status.run.wave.skus.join(", ")}`, after: status.run });
+      return sendJson(res, 200, { ok: true, ...status });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't start the wave."] });
+    }
+  }
+
   const backfillActionMatch = pathname.match(/^\/api\/part-photo-backfill\/(calibration|rerun-unresolved|pause|resume)$/);
   if (backfillActionMatch && req.method === "POST") {
     const session = await requireAdmin(req);
