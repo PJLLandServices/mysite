@@ -139,7 +139,9 @@ globalThis.fetch = async function stubFetch(input, init = {}) {
       log({ channel: "stripe", method, path: url.pathname, form, unreachable: true });
       throw new TypeError("fetch failed (stub: Stripe unreachable — connect ETIMEDOUT)");
     }
-    log({ channel: "stripe", method, path: url.pathname, form });
+    // The Idempotency-Key is logged so a test can see which retry key a
+    // create used (the stub itself does not replay keys the way Stripe does).
+    log({ channel: "stripe", method, path: url.pathname, form, idempotencyKey: init.headers?.["Idempotency-Key"] || null });
     // Terminal (Tap to Pay): the reader's connection token and its one
     // Location, the shapes Stripe answers with.
     if (url.pathname === "/v1/terminal/connection_tokens") {

@@ -450,6 +450,10 @@ function hydrate(inv) {
     // recordProcessorPayment() and resolvePaymentException(); update()'s
     // allowlist excludes it.
     paymentExceptions: Array.isArray(inv?.paymentExceptions) ? inv.paymentExceptions : [],
+    // Processor payments reversed off the ledger (refunded in Stripe), kept
+    // for good so the same Stripe payment is never recorded again (S6).
+    // Written only by removePayment(); update()'s allowlist excludes it.
+    reversedProcessorPayments: Array.isArray(inv?.reversedProcessorPayments) ? inv.reversedProcessorPayments : [],
     createdAt: inv?.createdAt || new Date().toISOString(),
     updatedAt: inv?.updatedAt || new Date().toISOString(),
     history: Array.isArray(inv?.history) ? inv.history : []
@@ -1891,6 +1895,24 @@ async function removePayment(id, paymentId, { by = "admin", reason = "" } = {}) 
   // Reversing the payment that settled the invoice un-settles it.
   if (next.status !== "paid") next.paidAt = null;
   next.updatedAt = new Date().toISOString();
+  // A processor payment's line is the record that it was decided. Its ids
+  // outlive the line, so the same Stripe payment arriving again (the
+  // reopened pay page, a webhook or confirm retry, Tap to Pay) is known as
+  // reversed, never recorded as new money (S6).
+  const refs = processorRefsOfPayment(gone);
+  if (refs.length) {
+    next.reversedProcessorPayments = [...(current.reversedProcessorPayments || []), {
+      paymentIntentId: refs.find((r) => r.startsWith("pi_")) || null,
+      refs,
+      paymentId: gone.id,
+      amount: gone.amount,
+      method: gone.method,
+      recordedAt: gone.receivedAt || null,
+      reversedAt: next.updatedAt,
+      by,
+      reason: String(reason || "").slice(0, 300)
+    }];
+  }
   next.history = [...(current.history || []), {
     ts: next.updatedAt,
     action: "payment_reversed",
@@ -1923,17 +1945,33 @@ const PAYMENT_EXCEPTION_REASONS = {
   invoice_void: "The invoice was void when this payment arrived."
 };
 
-// Has this processor payment already been decided on this invoice? A ledger
-// line written since this rule carries processorRef; one written before it
-// carries the Stripe charge (or intent) id in its notes, and the invoice's
-// stripeChargeId names the charge that paid it.
+// The Stripe ids a ledger line came from: processorRef (pi_…), and the
+// charge or intent id its notes carry (all a line written before
+// processorRef existed has).
+function processorRefsOfPayment(p) {
+  const refs = new Set();
+  if (p?.processorRef) refs.add(String(p.processorRef));
+  for (const tok of String(p?.notes || "").split(/[\s·]+/)) {
+    if (/^(pi|ch|py)_[A-Za-z0-9_]+$/.test(tok)) refs.add(tok);
+  }
+  return [...refs];
+}
+
+// Has this processor payment already been decided on this invoice?
+//   "reversed" — it was recorded and then reversed off the ledger (refunded
+//                in Stripe). It stays decided for good: never new money.
+//   "decided"  — a ledger line carries it (processorRef, or its id in the
+//                notes of a line from before processorRef), an exception
+//                does, or the invoice's stripeChargeId names its charge.
+//   null       — never seen: a new payment.
 function processorPaymentSeen(inv, paymentIntentId, chargeId) {
   const refs = [paymentIntentId, chargeId].filter(Boolean);
-  if (!refs.length) return false;
+  if (!refs.length) return null;
+  if ((inv.reversedProcessorPayments || []).some((r) => r && (r.refs || [r.paymentIntentId]).some((x) => refs.includes(x)))) return "reversed";
   const inNotes = (notes) => String(notes || "").split(/[\s·]+/).some((tok) => refs.includes(tok));
-  if ((inv.payments || []).some((p) => p && (refs.includes(p.processorRef) || (!p.processorRef && inNotes(p.notes))))) return true;
-  if ((inv.paymentExceptions || []).some((e) => e && refs.includes(e.paymentIntentId))) return true;
-  return Boolean(chargeId && inv.stripeChargeId === chargeId);
+  if ((inv.payments || []).some((p) => p && (refs.includes(p.processorRef) || (!p.processorRef && inNotes(p.notes))))) return "decided";
+  if ((inv.paymentExceptions || []).some((e) => e && refs.includes(e.paymentIntentId))) return "decided";
+  return chargeId && inv.stripeChargeId === chargeId ? "decided" : null;
 }
 
 async function recordProcessorPayment(id, {
@@ -1946,7 +1984,20 @@ async function recordProcessorPayment(id, {
   const current = records[idx];
   const pi = String(paymentIntentId || "").trim();
   if (!pi) return { ok: false, status: 422, code: "no_processor_ref", errors: ["A processor payment needs its payment id."] };
-  if (processorPaymentSeen(current, pi, chargeId)) return { ok: true, duplicate: true, invoice: current };
+  const seen = processorPaymentSeen(current, pi, chargeId);
+  if (seen === "reversed") {
+    // Refunded and reversed: changes nothing on the ledger and sends
+    // nothing, but the delivery is kept in the audit trail.
+    const now = new Date().toISOString();
+    const next = { ...current, history: [...(current.history || []), {
+      ts: now, action: "processor_payment_after_reversal", by: "system",
+      note: `Stripe payment ${pi}${chargeId ? ` (${chargeId})` : ""} arrived again${via ? ` via ${via}` : ""} after it was reversed; not recorded again.`
+    }] };
+    records[idx] = next;
+    await writeAll(records);
+    return { ok: true, duplicate: true, reversed: true, invoice: hydrate(next) };
+  }
+  if (seen) return { ok: true, duplicate: true, invoice: current };
   const charged = round2(amount);
   if (!(charged > 0)) return { ok: false, status: 422, code: "bad_amount", errors: ["Payment amount must be a positive number."] };
 
