@@ -261,6 +261,22 @@ const SERVER_DIR = __dirname;
 const DATA_DIR = path.join(SERVER_DIR, "data");
 // Verified part photos for the parts picker (lib/part-photos.js, P-PJL-35).
 const partPhotos = partPhotosLib.createPartPhotos({ dataDir: DATA_DIR, sharp });
+// AI photo backfill (P-PJL-35 M3). M3b reads its progress and its
+// "Fittings to confirm" list only: there is NO route that starts, pauses or
+// resumes a run, and its AI is a stub that refuses — the calibration run
+// (M3c) waits for Patrick's separate approval.
+const photoBackfill = require("./lib/photo-backfill").createBackfill({
+  dataDir: DATA_DIR,
+  store: partPhotos,
+  getParts: () => (PARTS && PARTS.parts) || {},
+  ai: (() => {
+    const held = () => { throw Object.assign(new Error("The AI photo backfill is held until Patrick approves the calibration run (M3c)."), { permanent: true }); };
+    return { passesFor: () => [], find: held, verify: held, compare: held };
+  })(),
+  fetchPage: () => { throw new Error("held"); },
+  fetchImage: () => { throw new Error("held"); }
+});
+const { buildReviewQueues } = require("./lib/photo-review");
 // Supplier company logos for the picker's supplier chip (P-PJL-35 M2a).
 const supplierLogos = require("./lib/supplier-logos").createSupplierLogos({ dataDir: DATA_DIR, sharp });
 const LEADS_FILE = path.join(DATA_DIR, "leads.json");
@@ -14037,6 +14053,83 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ---------- Photo Review (P-PJL-35 M3b, FLOW-49) ------------------------
+  //   GET  /api/part-photo-review                       queues + progress (staff)
+  //   POST /api/part-photo-review/:sku/approve {hash}   approve a candidate (admin)
+  //   POST /api/part-photo-review/:sku/reject {reason}  reject the AI result (admin)
+  //   POST /api/part-photo-review/fittings/:id {action: confirm|dismiss, keep} (admin)
+  // "Upload my own" uses POST /api/part-photos/:sku/photo (above).
+  // Nothing here starts, pauses or resumes a backfill run (held for M3c).
+  if (req.method === "GET" && pathname === "/api/part-photo-review") {
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    try {
+      await photoBackfill.load();
+      const { groups, links } = await partPhotos.snapshot();
+      const status = photoBackfill.status();
+      const queues = buildReviewQueues({
+        parts: PARTS.parts, groups, links,
+        fittings: await photoBackfill.fittingsToConfirm()
+      });
+      const liveAuto = Object.values(PARTS.parts).filter((p) => p.photoState === "verified" && p.photo && String(p.photo.approvedBy || "").startsWith("auto:")).length;
+      const progress = { ...status.catalog, liveAuto, errors: status.run ? status.run.counts.error : 0 };
+      return sendJson(res, 200, { ok: true, ...queues, progress, run: status.run, backfillHeld: true });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't read the review queue."] });
+    }
+  }
+
+  const photoReviewSkuMatch = pathname.match(/^\/api\/part-photo-review\/([^/]+)\/(approve|reject)$/);
+  if (photoReviewSkuMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    const sku = decodeURIComponent(photoReviewSkuMatch[1]);
+    const part = PARTS.parts[sku];
+    if (!part) return sendJson(res, 404, { ok: false, errors: ["Unknown part."] });
+    const by = await actorLabel(req);
+    try {
+      const payload = await parseRequestBody(req);
+      let result, note;
+      if (photoReviewSkuMatch[2] === "approve") {
+        result = await partPhotos.approveCandidate(sku, part, String(payload.hash || ""), { by });
+        note = `Approved the AI's photo for ${sku}${result.sharedWith.length ? ` (shared with ${result.sharedWith.join(", ")})` : ""}`;
+      } else {
+        const reason = String(payload.reason || "").slice(0, 300);
+        result = await partPhotos.rejectAiResult(sku, part, { by, reason });
+        note = `Rejected the AI's photo for ${sku}${reason ? `: ${reason}` : ""}`;
+        if (result.sentBack.length) note += `; sent back ${result.sentBack.length} other auto-approved photo(s) from the same run`;
+      }
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({ who: by, action: `part-photo.review.${photoReviewSkuMatch[2]}`, note, after: { sku, ...result } });
+      return sendJson(res, 200, { ok: true, sku, ...result, photoState: PARTS.parts[sku]?.photoState || "none" });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't save the review."] });
+    }
+  }
+
+  const photoReviewFittingMatch = pathname.match(/^\/api\/part-photo-review\/fittings\/([^/]+)$/);
+  if (photoReviewFittingMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    const by = await actorLabel(req);
+    try {
+      const id = decodeURIComponent(photoReviewFittingMatch[1]);
+      const payload = await parseRequestBody(req);
+      const action = String(payload.action || "");
+      const out = await photoBackfill.resolveFitting(id, { action, keep: payload.keep ? String(payload.keep) : null, by });
+      rebuildCatalogFromOverrides();
+      const f = out.fitting;
+      const note = action === "confirm"
+        ? `Confirmed ${f.a} and ${f.b} are the same fitting (kept ${f.kept}'s photo)`
+        : `${f.a} and ${f.b} are not the same fitting`;
+      await settings.recordAudit({ who: by, action: `part-photo.fitting.${f.status}`, note, after: { ...f, ...(out.result || {}) } });
+      return sendJson(res, 200, { ok: true, fitting: f });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't save that."] });
+    }
+  }
+
   // POST /api/part-photo-groups/:id/default {sku} — Patrick's "Default for
   // this fitting": the part whose description, part #, price and supplier
   // the picker's one-row fitting shows and whose Add it uses. (admin)
@@ -17060,10 +17153,58 @@ async function handleApi(req, res, pathname) {
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
       const buildWos = await workOrders.listBuildWosForProject(id);
-      const model = dailyRecords.describeProject(buildWos);
+      const model = dailyRecords.describeProject(buildWos, { project: proj });
       return sendJson(res, 200, { ok: true, ...model });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the daily records."] });
+    }
+  }
+
+  // ---- Project problems (2026-09-26) ----
+  //
+  // A problem belongs to the PROJECT and links to the daily record it
+  // was found on. Same gate as the rest of /api/projects/* ("user"):
+  // a technician finding a problem on site is exactly who should be
+  // able to raise one, and the audit trail names them.
+  const problemsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/problems$/);
+  if (problemsMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(problemsMatch[1]);
+      const payload = await parseRequestBody(req);
+      const problem = await projects.addProblem(id, {
+        title: payload.title,
+        description: payload.description || "",
+        discoveredOnWoId: payload.discoveredOnWoId || null,
+        discoveredWorkDate: payload.discoveredWorkDate || null,
+        taskId: payload.taskId || null,
+        photoRef: payload.photoRef || null,
+        scopeChangeId: payload.scopeChangeId || null
+      }, { by: await actorLabel(req) });
+      return sendJson(res, 201, { ok: true, problem });
+    } catch (err) {
+      const status = err.code === "project_not_found" ? 404 : err.code === "missing_title" ? 422 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't record that problem."], code: err.code || null });
+    }
+  }
+
+  // PATCH /api/projects/:id/problems/:problemId — open / monitoring /
+  // resolved. Resolving requires a note; re-opening keeps the history.
+  const problemStatusMatch = pathname.match(/^\/api\/projects\/([^/]+)\/problems\/([^/]+)$/);
+  if (problemStatusMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(problemStatusMatch[1]);
+      const problemId = decodeURIComponent(problemStatusMatch[2]);
+      const payload = await parseRequestBody(req);
+      const problem = await projects.setProblemStatus(id, problemId, payload.status, {
+        note: payload.note || "",
+        by: await actorLabel(req)
+      });
+      return sendJson(res, 200, { ok: true, problem });
+    } catch (err) {
+      const status =
+        err.code === "project_not_found" || err.code === "problem_not_found" ? 404 :
+        err.code === "bad_status" || err.code === "resolution_note_required" ? 422 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't update that problem."], code: err.code || null });
     }
   }
 
