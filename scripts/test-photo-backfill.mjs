@@ -166,6 +166,31 @@ const V = (over = {}) => Object.fromEntries(ev.VISION_KEYS.map((k) => [k, { resu
   check("usage reported globally and per call", usageSeen > 0 && perCall === 1);
   check("no API key → clear error, no SDK load", (() => { try { ai.createAnthropicClient({ apiKey: "" }); return false; } catch (e) { return /ANTHROPIC_API_KEY/.test(e.message); } })());
 
+  // The web-search probe: exactly one call, tool capped at one use, honest
+  // about what came back. Patrick approved one such call on production.
+  {
+    const seen = [];
+    const mk = (reply) => ({ messages: { create: async (p) => { seen.push(p); if (reply instanceof Error) throw reply; return reply; } } });
+    const good = { stop_reason: "end_turn", usage: { input_tokens: 50, output_tokens: 20, server_tool_use: { web_search_requests: 1 } }, content: [
+      { type: "server_tool_use", id: "s1", name: "web_search", input: { query: "today's date Toronto" } },
+      { type: "web_search_tool_result", tool_use_id: "s1", content: [{ type: "web_search_result", url: "https://example.com", title: "x" }] },
+      { type: "text", text: "It is Saturday." }] };
+    const pr = await ai.probeWebSearch({ client: mk(good) });
+    check("probe: success reports the tool ran once", pr.ok === true && pr.toolCalled && pr.toolResultReturned && pr.webSearchRequests === 1 && pr.resultCount === 1 && /Saturday/.test(pr.answer));
+    check("probe: exactly one API call, tool capped at one use, no structured output", seen.length === 1 && seen[0].tools.length === 1 && seen[0].tools[0].max_uses === 1 && !seen[0].output_config);
+    check("probe: the query has nothing to do with the catalog", !/hunter|rain ?bird|pgp|sku|part/i.test(seen[0].messages[0].content));
+    const disabled = { stop_reason: "end_turn", usage: { server_tool_use: { web_search_requests: 0 } }, content: [
+      { type: "server_tool_use", id: "s1", name: "web_search", input: {} },
+      { type: "web_search_tool_result", tool_use_id: "s1", content: { type: "web_search_tool_result_error", error_code: "unavailable" } },
+      { type: "text", text: "I couldn't search." }] };
+    const pd = await ai.probeWebSearch({ client: mk(disabled) });
+    check("probe: a tool-result error is reported, not ok", pd.ok === false && pd.toolResultError === "unavailable" && pd.toolCalled);
+    const pe = await ai.probeWebSearch({ client: mk(Object.assign(new Error("400 web search is not enabled for this organization"), { status: 400 })) });
+    check("probe: an API error is reported with status and message, never thrown", pe.ok === false && pe.apiError.status === 400 && /not enabled/.test(pe.apiError.message));
+    const pn = await ai.probeWebSearch({ client: mk({ stop_reason: "end_turn", usage: {}, content: [{ type: "text", text: "no tool" }] }) });
+    check("probe: an answer without a search is NOT a pass", pn.ok === false && !pn.toolCalled);
+  }
+
   // Structured outputs accept only a subset of JSON Schema. The first
   // production calibration (2026-09-27) failed every part at the first call
   // with "For 'array' type, property 'maxItems' is not supported" — a 400
