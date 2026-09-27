@@ -776,7 +776,12 @@ async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
 
   const { html: htmlTpl, text: textTpl } = loadReceiptTemplate();
   const firstName = (invoice.customerName || "").trim().split(/\s+/)[0] || "there";
-  const totalFormatted = moneyTextCurrency(invoice.total);
+  // A payment that brought in more than the invoice still owed (a payment
+  // exception): the receipt is for what was charged, and says so neutrally
+  // — no refund is promised. Every other receipt is unchanged.
+  const over = opts.overpayment && Number(opts.overpayment.charged) > 0 ? opts.overpayment : null;
+  const overNotice = over ? require("./invoices").OVERPAYMENT_CUSTOMER_MESSAGE.replace(/^Payment received\. /, "") : "";
+  const totalFormatted = moneyTextCurrency(over ? over.charged : invoice.total);
   const paidDate = invoice.paidAt
     ? new Date(invoice.paidAt).toLocaleDateString("en-CA", {
         timeZone: "America/Toronto",
@@ -804,7 +809,10 @@ async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
       chargeId: escapeHtml(chargeId)
     },
     confirmationVisible,
-    publicBaseUrl: escapeHtml(publicBaseUrl)
+    publicBaseUrl: escapeHtml(publicBaseUrl),
+    overpaymentNoticeHtml: over
+      ? `<p style="margin:0 0 16px;padding:12px 14px;background:#FFF8E6;border:1px solid #E8D9A8;border-radius:8px;">${escapeHtml(overNotice)}</p>`
+      : ""
   };
   const textVars = {
     customer: { firstName },
@@ -815,7 +823,8 @@ async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
       chargeId
     },
     confirmationLineText,
-    publicBaseUrl
+    publicBaseUrl,
+    overpaymentNoticeText: over ? `\n${overNotice}\n` : ""
   };
 
   const html = renderTemplate(htmlTpl, vars);
@@ -1386,6 +1395,70 @@ async function sendPortalMessageAlertEmail(lead, message) {
     console.error(`[portal-msg-alert] failed leadId=${lead?.id}:`, error.message);
     await logSend({ kind: "other", to, ok: false, error: error.message, refId: lead?.id });
     return { ok: false, error: error.message };
+  }
+}
+
+// Office alert for a new payment exception (Patrick, 2026-09-27): money a
+// card processor took that the invoice did not owe. Sent ONCE, by the call
+// that opened the exception — invoices.recordProcessorPayment decides each
+// Stripe payment once, so a webhook retry or a racing confirm never gets
+// here. Same recipient as the new-lead alerts.
+async function sendPaymentExceptionAlert(invoice, exception) {
+  const transporter = getTransporter();
+  if (!transporter) return { ok: false, skipped: true, error: "Email is not configured" };
+  const to = process.env.NOTIFY_TO_EMAIL || process.env.GMAIL_USER;
+  if (!to) return { ok: false, skipped: true, error: "no admin email configured" };
+  const m = (n) => moneyTextCurrency(n);
+  const card = [exception.cardBrand ? String(exception.cardBrand).replace(/^\w/, (c) => c.toUpperCase()) : null, exception.cardLast4 ? `••${exception.cardLast4}` : null].filter(Boolean).join(" ");
+  const method = `${exception.methodLabel || "Card"}${card ? ` — ${card}` : ""}`;
+  const arrived = new Date(exception.detectedAt || Date.now()).toLocaleString("en-CA", { timeZone: "America/Toronto", dateStyle: "medium", timeStyle: "short" });
+  const invoiceUrl = `${resolvePublicBaseUrl()}/admin/invoice/${encodeURIComponent(invoice.id)}`;
+  const rows = [
+    ["Invoice", invoice.id],
+    ["Work order", invoice.woId || "—"],
+    ["Customer", [invoice.customerName, invoice.customerEmail, invoice.customerPhone].filter(Boolean).join(" · ") || "—"],
+    ["Address", invoice.address || "—"],
+    ["Total charge", m(exception.chargedTotal)],
+    ["Applied to invoice", m(exception.applied)],
+    ["Excess — needs attention", m(exception.excess)],
+    ["Method / card", method],
+    ["Stripe payment", `${exception.paymentIntentId}${exception.chargeId ? ` (charge ${exception.chargeId})` : ""}`],
+    ["Arrived", `${arrived} via ${exception.via || "—"}`],
+    ["Why", exception.reasonNote || exception.reason || "—"]
+  ];
+  const { html, text } = brandedEmail({
+    headline: "Refund / reconciliation needed",
+    bodyHtml: `
+      <p style="margin: 0 0 12px;">A card payment brought in <strong>${escapeHtml(m(exception.excess))}</strong> more than invoice <strong>${escapeHtml(invoice.id)}</strong> owed. Nothing has been refunded. The invoice is flagged until you mark it refunded or reconciled.</p>
+      <table cellpadding="0" cellspacing="0" border="0" style="font-size: 14px; margin: 0 0 16px;">
+        ${rows.map(([k, v]) => `<tr><td style="padding: 3px 12px 3px 0; color: #666; vertical-align: top;">${escapeHtml(k)}</td><td style="padding: 3px 0;"><strong>${escapeHtml(v)}</strong></td></tr>`).join("")}
+      </table>
+    `,
+    bodyText: [
+      `A card payment brought in ${m(exception.excess)} more than invoice ${invoice.id} owed. Nothing has been refunded. The invoice is flagged until you mark it refunded or reconciled.`,
+      "",
+      ...rows.map(([k, v]) => `${k}: ${v}`),
+      "",
+      `Open the invoice: ${invoiceUrl}`
+    ].join("\n"),
+    ctaLabel: "Open the invoice",
+    ctaUrl: invoiceUrl,
+    footerNote: `Exception ${escapeHtml(exception.id)}`
+  });
+  try {
+    const info = await transporter.sendMail({
+      from: `"PJL Payments" <${process.env.GMAIL_USER}>`,
+      to,
+      subject: `REFUND / RECONCILIATION NEEDED — ${m(exception.excess)} extra on invoice ${invoice.id} — ${invoice.customerName || "customer"}`,
+      html,
+      text
+    });
+    await logSend({ kind: "other", to, ok: true, refId: invoice.id });
+    return { ok: true, to, messageId: info.messageId };
+  } catch (error) {
+    console.error(`[payment-exception] alert failed for ${invoice.id}:`, error.message);
+    await logSend({ kind: "other", to, ok: false, error: error.message, refId: invoice.id });
+    return { ok: false, to, error: error.message };
   }
 }
 
@@ -2664,6 +2737,7 @@ module.exports = {
   sendPortalReplyToCustomer,
   sendInvoiceToCustomer,
   sendPaymentReceipt,
+  sendPaymentExceptionAlert,
   sendCustomerLoginLink,
   sendQuoteAcceptedConfirmation,
   sendFinancingLinkEmail,

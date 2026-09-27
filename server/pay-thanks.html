@@ -164,7 +164,12 @@
           document.getElementById("thanksConfirm").textContent = inv.quickbooksChargeId;
         }
 
-        if (inv.status !== "paid") {
+        if (new URLSearchParams(location.search).get("review") === "1") {
+          // The payment brought in more than the invoice still owed
+          // (invoices.OVERPAYMENT_CUSTOMER_MESSAGE, after its first sentence).
+          document.getElementById("thanksLine").textContent =
+            "We received more than the remaining invoice balance. PJL will review the extra amount and contact you if any action is required.";
+        } else if (inv.status !== "paid") {
           document.getElementById("thanksLine").textContent =
             "We're processing your payment — you'll receive a receipt by email once it clears.";
         }

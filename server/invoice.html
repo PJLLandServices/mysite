@@ -170,6 +170,17 @@
 
         <!-- RIGHT: admin actions (sticky on desktop). -->
         <aside class="invoice-actions">
+          <!-- Payment exceptions (2026-09-27). A card payment brought in more
+               than this invoice owed: the excess is kept here, off the
+               ledger, until it is marked refunded or reconciled (with a
+               note). First on the page so it can't be missed. Hidden when
+               there has never been one. -->
+          <section class="invoice-action-card invoice-action-card--exception" id="invoicePaymentExceptionsCard" hidden>
+            <span class="invoice-action-label" id="invoicePaymentExceptionsLabel">Needs refund / reconciliation</span>
+            <div id="invoicePaymentExceptionsList"></div>
+            <p class="invoice-action-status" id="invoicePaymentExceptionsStatus"></p>
+          </section>
+
           <section class="invoice-action-card">
             <span class="invoice-action-label">Status</span>
             <select id="invoiceStatus" class="invoice-action-select">

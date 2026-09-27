@@ -467,6 +467,16 @@ async function handleConfirmOutcome(confirmError, paymentIntent, paymentIntentId
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) throw new Error(data?.errors?.[0] || "");
+    // More than the invoice still owed (a payment exception, flagged for
+    // the office): neutral wording, never the plain "Payment received" —
+    // and no promise of a refund. The thanks page repeats it.
+    if (data.overpayment) {
+      setStatus(`✓ ${data.customerMessage || "Payment received."}`, "ok");
+      setTimeout(() => {
+        location.href = `/pay/invoice/${encodeURIComponent(currentInvoice.id)}/thanks?t=${encodeURIComponent(token)}&review=1`;
+      }, 4000);
+      return true;
+    }
     setStatus("✓ Payment received. Redirecting…", "ok");
     setTimeout(() => {
       location.href = `/pay/invoice/${encodeURIComponent(currentInvoice.id)}/thanks?t=${encodeURIComponent(token)}`;

@@ -728,3 +728,21 @@
   .invoice-revise-table td.total-cell { text-align: right; align-self: center; }
   .invoice-revise-table td.remove-cell { text-align: right; }
 }
+
+/* Payment exceptions (2026-09-27): money a card processor took that the
+   invoice did not owe. Red while open; muted once resolved. */
+.invoice-action-card--exception { border: 2px solid #C23A3A; background: #FDF3F3; }
+.invoice-action-card--exception .invoice-action-label { color: #9B1C1C; }
+.invoice-action-card--exception.is-resolved { border: 1px solid #E2E0D4; background: #fff; }
+.invoice-action-card--exception.is-resolved .invoice-action-label { color: #6B6B63; }
+.invoice-exception { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-top: 1px solid #F0D6D6; }
+.invoice-exception:first-child { border-top: 0; padding-top: 0; }
+.invoice-exception:not(.is-open) { opacity: 0.75; }
+.invoice-exception-head { margin: 0; font-size: 14px; color: #1A1A1A; }
+.invoice-exception.is-open .invoice-exception-head strong { color: #9B1C1C; }
+.invoice-exception-facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; font-size: 12px; }
+.invoice-exception-facts dt { color: #6B6B63; }
+.invoice-exception-facts dd { margin: 0; font-weight: 600; text-align: right; overflow-wrap: anywhere; }
+.invoice-exception-mono { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+.invoice-exception-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.invoice-exception-actions .invoice-action-btn { flex: 1 1 auto; }

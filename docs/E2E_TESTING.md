@@ -58,7 +58,7 @@ then it crashes on the missing webhook helper.
 | 1 | New customer → 4 zones → Bill later → sign → Finish → draft invoice → reopen lands on it → Send → pay link | 33 |
 | 2 | Booked 4, walked 6: the price at signing = the signed scope = the invoice = the email = the pay page | 25 |
 | 3 | 16 zones: custom price held (no link, Tap to Pay, Send or text) → Confirm price sends nothing → manual Send | 30 |
-| 4 | Card on site: approved, declined, three timeouts, duplicate webhook, double payment, refund | 61 |
+| 4 | Card on site: approved, declined, three timeouts, duplicate webhook, double payment, refund | 64 |
 | 5 | Tap to Pay: which invoices may charge, and how the reader's result is finalized (no NFC) | 50 |
 | 6 | Unlock → add zones → new signature needed → held → re-lock → re-sign (both directions) | 39 |
 | 7 | No Charge: no invoice, prompt, promise, text or QuickBooks; reportable | 22 |
@@ -83,10 +83,10 @@ becomes an assertion.
    minutes after Finish, the customer is texted "Your invoice … has been
    emailed to you … check spam/junk". The invoice is still a draft that
    nobody has sent, and its portal page has no Pay button.
-3. **A double card payment reaches nobody** (journey 4). Pay page and Tap to
-   Pay both approved: the ledger records it once and says "needs a manual
-   refund", but only in a server log and on whichever screen confirmed
-   second.
+3. ~~**A double card payment reaches nobody**~~ (journey 4). **Fixed**: a
+   second payment is an open payment exception (Needs refund /
+   reconciliation) with one admin alert, and journey 4 asserts it.
+   `test-payment-exceptions.mjs` covers every way it happens (S1–S8).
 4. **Tap to Pay while processing** (journey 5). A second tap while the first
    intent is still `processing` creates a new intent without cancelling the
    first. If the first then completes, the customer is charged twice.

@@ -21,9 +21,10 @@
 //                        (3) Stripe unreachable at confirm: not marked
 //                        paid on the browser's word; the retry settles it
 //   D. double payment    the pay page and Tap to Pay both succeed for one
-//                        invoice: paid ONCE in the ledger, the second is
-//                        flagged "needs a manual refund", and PJL never
-//                        refunds anything by itself
+//                        invoice: paid ONCE in the ledger; the second is a
+//                        payment exception (Needs refund / reconciliation)
+//                        with one admin alert, the customer is told
+//                        neutrally, and PJL never refunds anything by itself
 //   E. refund            a refund made in the Stripe dashboard does not
 //                        change the invoice by itself; Patrick reverses the
 //                        payment in the ledger, which calls no one
@@ -183,16 +184,25 @@ try {
   const fin = await srv.api("POST", `/api/invoices/${d.inv.id}/terminal-intent/finalize`, { paymentIntentId: tap.body.paymentIntentId });
   J.ok(fin.status === 200 && fin.body.invoice?.status === "paid", `Tap to Pay settles it (${fin.status})`);
   const second = await confirm(d, onPage.body.paymentIntentId);
-  J.ok(second.status === 200 && second.body.alreadyPaid === true && /manual refund/i.test(second.body.warning || ""), `the second success is flagged for a manual refund (${j(second.body.warning)})`);
+  J.ok(second.status === 200 && second.body.overpayment === true && /more than the remaining invoice balance/.test(second.body.customerMessage || ""),
+    `the second payment's customer is told neutrally, not a plain "Payment received" (${j([second.body.overpayment, second.body.customerMessage])})`);
   const recD = await read(d);
-  J.ok((recD.payments || []).length === 1 && Number(recD.amountPaid) === d.inv.total, `paid ONCE in the ledger (${(recD.payments || []).length} · ${recD.amountPaid})`);
+  J.ok((recD.payments || []).length === 1 && Number(recD.amountPaid) === d.inv.total && recD.balanceDue === 0, `paid ONCE in the ledger, $0 due (${(recD.payments || []).length} · ${recD.amountPaid} · ${recD.balanceDue})`);
   await J.sent(L, "D: double payment", [
     { channel: "stripe", method: "POST", path: "/v1/payment_intents", n: 2 },
-    { channel: "email", to: d.email, subject: /receipt|payment/i },
+    { channel: "email", to: d.email, subject: /receipt|payment/i, n: 2 },
+    { channel: "email", to: "stub@pjl.test", subject: /REFUND \/ RECONCILIATION NEEDED/ },
     STRIPE_READS
   ]);   // and no /v1/refunds — PJL refunds nothing by itself
-  const flagged = (recD.history || []).some((h) => /double|refund/i.test(`${h.action} ${h.note}`)) || (recD.paymentAttempts || []).filter((x) => x.outcome === "success").length > 1;
-  J.finding(flagged, "a double card payment (pay page + Tap to Pay, both approved) is only a server log line and a warning on whichever screen confirmed second — nothing reaches Patrick (no email, no CRM flag) telling him a refund is owed");
+  // Was a FINDING: the second payment reached nobody but a server log.
+  const pex = recD.paymentExceptions || [];
+  J.ok(recD.needsReconciliation === true && pex.length === 1 && pex[0].status === "open" && pex[0].paymentIntentId === onPage.body.paymentIntentId
+    && pex[0].applied === 0 && pex[0].excess === d.inv.total,
+    `the second payment is an open payment exception for the whole charge, flagged Needs refund / reconciliation (${j(pex.map((e) => [e.status, e.chargedTotal, e.applied, e.excess]))})`);
+  await srv.stripeWebhook({ type: "payment_intent.succeeded", data: { object: intentOf(onPage.body.paymentIntentId, { invoiceId: d.inv.id }) } });
+  await sleep(500);
+  J.ok(((await read(d)).paymentExceptions || []).length === 1, "…and a webhook retry of that payment adds nothing");
+  await J.sent(L, "D: webhook retry", [STRIPE_READS]);
 
   // ---- E. refund ------------------------------------------------------------------
   J.step("E. refund");
