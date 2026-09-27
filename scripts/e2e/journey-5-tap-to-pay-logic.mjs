@@ -22,8 +22,9 @@
 //   · the customer never tapped (reader timed out) → refused, nothing
 //     recorded; the next tap reuses the SAME intent
 //   · declined → refused; another card on the same intent pays it
-//   · reader dropped mid-processing → refused while processing (see the
-//     FINDING below on what a second tap does then)
+//   · reader dropped mid-processing → refused while processing, and a
+//     second tap then starts NO second charge: it is refused as in
+//     progress, naming the first (was a FINDING until item 4)
 //   · Stripe unreachable at finalize → not paid; the retry settles it
 //   · finalized twice, then Stripe's webhook → still one payment
 //   · another invoice's approved intent → refused
@@ -190,12 +191,13 @@ try {
   const proc = await finalize(part.inv, pi5);
   J.ok(proc.status === 409 && (await read(part.inv)).status !== "paid", `not paid while Stripe says processing (${proc.status})`);
   const tapWhileProcessing = await start(part.inv);
-  const mintedSecond = tapWhileProcessing.status === 200 && tapWhileProcessing.body.paymentIntentId !== pi5;
   const cancelledFirst = srv.outbox().some((e) => e.channel === "stripe" && e.path === `/v1/payment_intents/${pi5}/cancel`);
-  J.finding(!(mintedSecond && !cancelledFirst),
-    "Tap to Pay: tapping again while the first intent is still PROCESSING creates a second intent without cancelling the first — if the first then completes, the customer can be charged twice (it would surface only as the manual-refund warning)");
-  await J.sent(L, "processing", [CREATE(mintedSecond ? 1 : 0), READS,
-    { channel: "stripe", method: "POST", path: /\/cancel$/, n: [0, 1] }]);
+  // Was a FINDING: this created a second intent without cancelling the first,
+  // so the customer could be charged twice.
+  J.ok(tapWhileProcessing.status === 409 && tapWhileProcessing.body.code === "payment_in_progress" && tapWhileProcessing.body.paymentIntentId === pi5,
+    `a second tap while the first is PROCESSING starts no second charge — refused as in progress, naming the first (${tapWhileProcessing.status} ${tapWhileProcessing.body.code})`);
+  J.ok(!cancelledFirst && (await read(part.inv)).stripeTerminalIntentId === pi5, "…the processing intent is left alone and the invoice still points at it");
+  await J.sent(L, "processing", [READS]);   // no create, no cancel
 } catch (err) {
   J.crashed(err);
 } finally {

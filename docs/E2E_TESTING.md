@@ -59,7 +59,7 @@ then it crashes on the missing webhook helper.
 | 2 | Booked 4, walked 6: the price at signing = the signed scope = the invoice = the email = the pay page | 25 |
 | 3 | 16 zones: custom price held (no link, Tap to Pay, Send or text) → Confirm price sends nothing → manual Send | 30 |
 | 4 | Card on site: approved, declined, three timeouts, duplicate webhook, double payment, refund | 64 |
-| 5 | Tap to Pay: which invoices may charge, and how the reader's result is finalized (no NFC) | 50 |
+| 5 | Tap to Pay: which invoices may charge, and how the reader's result is finalized (no NFC) | 52 |
 | 6 | Unlock → add zones → new signature needed → held → re-lock → re-sign (both directions) | 39 |
 | 7 | No Charge: no invoice, prompt, promise, text or QuickBooks; reportable | 22 |
 | 8 | Returning customer: spring kept intact → fall booked → portal move and cancel as the customer | 39 |
@@ -86,9 +86,10 @@ becomes an assertion.
    second payment is an open payment exception (Needs refund /
    reconciliation) with one admin alert, and journey 4 asserts it.
    `test-payment-exceptions.mjs` covers every way it happens (S1–S8).
-4. **Tap to Pay while processing** (journey 5). A second tap while the first
-   intent is still `processing` creates a new intent without cancelling the
-   first. If the first then completes, the customer is charged twice.
+4. ~~**Tap to Pay while processing**~~ (journey 5). **Fixed (item 4)**: a
+   second tap while the first intent is still `processing` is refused as in
+   progress, naming the first; nothing is created or cancelled. Journey 5
+   asserts it, and `test-taptopay-second-tap.mjs` covers every case.
 
 Pinned as found, and questions rather than findings:
 
