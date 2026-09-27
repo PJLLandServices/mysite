@@ -232,10 +232,17 @@ function attr(tag, name) {
   const m = tag.match(new RegExp(`\\s${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s>]+))`, "i"));
   return m ? (m[2] ?? m[3] ?? m[4] ?? "") : null;
 }
-function extractProductImages(html, pageUrl, { max = 4 } = {}) {
+// `keys`: our part number(s) and the manufacturer's model — an <img> whose
+// src filename or alt names one of them is a product image even without
+// gallery markers (Hunter's model pages: `/PGV-100G.jpeg`, alt "PGV-100-G").
+// Large declared images (≥300×300) count too. The skip list still wins.
+const MIN_LARGE = 300;
+function extractProductImages(html, pageUrl, { max = 4, keys = [] } = {}) {
   const s = String(html || "");
   const out = [];
   const seen = new Set();
+  const wanted = [...new Set((keys || []).map(normalizePartNumber).filter((k) => k.length >= MIN_PART_NUMBER_LENGTH))];
+  const namesKey = (text) => { const n = normalizePartNumber(String(text || "")); return !!n && wanted.some((k) => n.includes(k)); };
   const push = (u, via) => {
     const abs = u && absolutize(u, pageUrl);
     if (!abs || seen.has(abs) || IMG_SKIP.test(abs)) return;
@@ -268,9 +275,13 @@ function extractProductImages(html, pageUrl, { max = 4 } = {}) {
     if ((w && w < 120) || (h && h < 120)) continue;
     const marker = `${attr(tag, "itemprop") || ""} ${attr(tag, "class") || ""} ${attr(tag, "id") || ""} ${attr(tag, "data-zoom-image") || ""} ${attr(tag, "alt") || ""}`;
     const productish = /itemprop|product|gallery|main-image|hero|zoom|primary|pdp/i.test(marker) || /^\s*image\s*$/i.test(attr(tag, "itemprop") || "");
-    if (!productish) continue;
     const src = attr(tag, "data-zoom-image") || attr(tag, "data-large") || (attr(tag, "srcset") && pickSrcset(attr(tag, "srcset"))) || attr(tag, "data-src") || attr(tag, "src");
-    push(src, "img");
+    if (!src) continue;
+    const fileName = (() => { try { return decodeURIComponent(new URL(src, pageUrl).pathname.split("/").pop() || ""); } catch { return String(src).split("/").pop() || ""; } })();
+    const named = wanted.length && (namesKey(fileName) || namesKey(attr(tag, "alt")));
+    const large = w >= MIN_LARGE && h >= MIN_LARGE;
+    if (!productish && !named && !large) continue;
+    push(src, productish ? "img" : named ? "img:part-number" : "img:large");
   }
   return out.slice(0, max);
 }

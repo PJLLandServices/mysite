@@ -205,6 +205,14 @@ async function assertPublicHost(hostname, lookup) {
 // Fetch an image from a URL Patrick pasted (and, in M3, one the AI found).
 // https only, public addresses only (re-checked on every redirect), image
 // content only, capped size and time.
+// Best-effort browser-like headers (Patrick, Sep 27 2026): some sites refuse
+// a bare Node fetch. This is ordinary request shaping only — no proxies, no
+// browser automation, nothing that works around a challenge page.
+const BROWSER_HEADERS = Object.freeze({
+  "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+  "accept-language": "en-CA,en;q=0.9"
+});
+
 async function fetchImageSafely(rawUrl, {
   fetchImpl = globalThis.fetch,
   lookup = dns.promises.lookup,
@@ -221,7 +229,7 @@ async function fetchImageSafely(rawUrl, {
     const res = await fetchImpl(url.toString(), {
       redirect: "manual",
       signal: AbortSignal.timeout(timeoutMs),
-      headers: { accept: "image/*" }
+      headers: { accept: "image/*", ...BROWSER_HEADERS }
     });
     if (res.status >= 300 && res.status < 400) {
       if (hop >= maxRedirects) throw new Error("That link redirects too many times.");
@@ -274,7 +282,7 @@ async function fetchPageSafely(rawUrl, {
     const res = await fetchImpl(url.toString(), {
       redirect: "manual",
       signal: AbortSignal.timeout(timeoutMs),
-      headers: { accept: "text/html,application/xhtml+xml" }
+      headers: { accept: "text/html,application/xhtml+xml", ...BROWSER_HEADERS }
     });
     if (res.status >= 300 && res.status < 400) {
       if (hop >= maxRedirects) throw new Error("That page redirects too many times.");

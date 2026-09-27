@@ -2,6 +2,52 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-27 (Change-order guards: follow-up to #338 before the first manual deploy; no PASS flow touched):**
+Patrick's checks, run against the merged code. **Proven on main** (`test-change-order-guards.mjs`: 20 of 30 checks failed):
+- A crash between the email leaving and the result being saved left no trace, so the next Send
+  emailed the customer **a second time**.
+- A change on a **completed, invoiced** job could still be approved or withdrawn.
+- A change already in a revised quote could not be withdrawn at all. The refusal was a bare
+  "already executed_under_revision", with nothing on what to do.
+- A **trashed** draft revision still held completion, and the next change order added its lines to
+  the trashed quote.
+
+**Now:**
+- **Withdrawing a change that is in a revised quote** depends on where that quote stands, through
+  one shared rule, `projects.scopeChangeRevisionState`:
+  - **Signed:** refused (`scr_in_signed_agreement`). A signed agreement is never rewritten; the
+    reduction needs a new change order and a new signed revision.
+  - **Unsigned:** that revised quote is **cancelled**. `quotes.retireUnsignedRevision` marks it
+    superseded, pointing at the agreement that stands, so every customer approval route refuses it.
+    It is queued with the signature writers, so if the customer signed first the withdrawal is
+    refused. The change is withdrawn, and any **other** change in the same revised quote returns
+    to "approved — needs revised quote" with a history entry.
+  - **Declined:** the change is simply withdrawn.
+- **A completed or invoiced job** refuses every decision on its changes (`project_closed`).
+- **Send once is on disk.** `sendInFlight` is saved inside the project lock before the email goes,
+  and cleared when the outcome is saved. A send interrupted by a restart leaves it behind, and the
+  next Send is refused as `delivery_uncertain`, with no email. The office records the outcome
+  (`POST …/scope-changes/:id/send-outcome`, office-only, "sent" or "not_sent"). The classic page
+  shows "⚠ Delivery uncertain" with "It arrived / It didn't arrive".
+- `quotes.isUnsignedLive` ignores trashed quotes.
+- **Signing guard, in the domain (Patrick's second pass).** The approval routes refused only
+  superseded quotes; the five acceptance functions checked nothing. Each now calls `assertSignable`
+  **inside the quotes-store lock it shares with `retireUnsignedRevision`**. It refuses trashed,
+  cancelled, superseded and **replaced** quotes (a newer live or signed version exists), with
+  `quote_not_signable`, so only the current offer can be signed. A withdrawal and a signature on
+  the same revision resolve to exactly one outcome. Before this, the retire-first race let
+  **both** happen. Each writer's idempotent re-sign return runs first, unchanged. **FLOW-02 (PASS)
+  touched additively:** a normal first-time accept is unchanged.
+- **A staged PDF is not a signature.** `hasAcceptanceRecord` counted any quote with staged evidence
+  as signed, because every quote starts with `acceptanceMethod: "pending"`. So a customer's uploaded
+  PDF made a revision the billed agreement **before the office attested it**. Evidence now counts
+  only with a real method, and never while `pending_admin_attestation`.
+- An interrupted send settled by the office records `settledBy`, `settledAt` and `outcome`
+  (`confirmed_delivered` / `confirmed_not_delivered`) on the attempt, next to who started it and when.
+
+**Test:** `scripts/test-change-order-guards.mjs` (in `build:check`, 83 checks; 12 fail on the previous
+head). It includes a real process crash after the email and before the save, a forced signature
+mid-withdrawal, and 12 simultaneous withdraw/sign races.
 **2026-09-27 (Change-order safety: office-only actions, real names, honest sends, one "open" rule; PR 2 of Change Orders, stacked on the quote lifecycle PR; no PASS flow touched):**
 **Defects proven before the fix** (`test-change-order-safety.mjs` on the old code: 40 of 53 failed):
 - Every change-order route called `requireAdmin()` and **ignored the answer**. A technician could send

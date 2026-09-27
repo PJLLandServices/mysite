@@ -1704,6 +1704,7 @@ async function _acceptLocked(id, { leadId = null, bookingId = null, by = "custom
   if (idx === -1) return null;
   const q = records[idx];
   if (q.status === "accepted") return q; // idempotent
+  assertSignable(records, q);
 
   q.status = "accepted";
   q.acceptedAt = nowIso();
@@ -1745,6 +1746,7 @@ async function _acceptWithSignatureLocked(id, {
   if (idx === -1) return null;
   const q = records[idx];
   if (q.signature && q.signature.signed) return q; // idempotent — already signed
+  assertSignable(records, q);
 
   const ts = nowIso();
   q.status = partial ? "partially_accepted" : "accepted";
@@ -1802,6 +1804,7 @@ async function _recordOfflineAcceptanceLocked(id, {
   if (idx === -1) return null;
   const q = records[idx];
   if (q.status === "accepted" || (q.signature && q.signature.signed)) return q; // idempotent
+  assertSignable(records, q);
 
   const ts = nowIso();
   const acceptedIso = acceptedAt || ts;
@@ -2253,7 +2256,12 @@ function hasAcceptanceRecord(q) {
   if (!q) return false;
   return Boolean(
     q.acceptedAt ||
-    (q.acceptanceEvidence && q.acceptanceEvidence.method && q.acceptanceMethod) ||
+    // Evidence counts only once an acceptance METHOD is recorded. Every quote
+    // starts with acceptanceMethod "pending" (blankQuote), and a customer's
+    // uploaded PDF is STAGED evidence (status pending_admin_attestation)
+    // until the office attests it — neither is a signature (2026-09-27).
+    (q.acceptanceEvidence && q.acceptanceEvidence.method && q.acceptanceMethod &&
+      q.acceptanceMethod !== "pending" && q.status !== "pending_admin_attestation") ||
     (q.signature && q.signature.signed) ||
     q.offlineAcceptance
   );
@@ -2268,7 +2276,9 @@ function isSignedAgreement(q) {
 // An unsigned version still in play — something the customer could yet sign.
 const UNSIGNED_LIVE_STATUSES = new Set(["draft", "sent", "pending_admin_attestation"]);
 function isUnsignedLive(q) {
-  return !!q && UNSIGNED_LIVE_STATUSES.has(q.status) && !hasAcceptanceRecord(q);
+  // A trashed draft is not waiting for anyone: it must not hold completion
+  // or collect the next change order's lines.
+  return !!q && !q.deletedAt && UNSIGNED_LIVE_STATUSES.has(q.status) && !hasAcceptanceRecord(q);
 }
 
 function versionOrder(a, b) {
@@ -2321,6 +2331,40 @@ function describeChain(chain) {
   return { chain, governing, pending, head: pending || governing || null };
 }
 
+// ---- May this quote be signed right now? (2026-09-27) -----------------
+//
+// The customer approval ROUTES refuse a superseded quote, but the signing
+// functions themselves did not look — so any other caller, or a withdrawal
+// racing a signature, could sign a quote that is no longer the offer. This
+// is the domain-level rule, checked by all five acceptance writers INSIDE
+// the quotes-store lock they share with retireUnsignedRevision, so a
+// withdrawal and a signature on the same revision resolve to exactly one
+// outcome: whichever takes the lock first wins, and the other is refused.
+//
+// Signable means: not trashed, not cancelled or superseded, and not
+// replaced — no NEWER version of the same job that is still live or has
+// been signed. So the only version of a chain the customer can sign is the
+// current offer. (Already-signed quotes keep each writer's own idempotent
+// early return, which runs before this.)
+function signingRefusal(records, q) {
+  if (!q) return "Quote not found.";
+  if (q.deletedAt) return `Quote ${q.id} has been removed and can no longer be signed.`;
+  if (q.status === "cancelled") return `Quote ${q.id} has been cancelled and can no longer be signed.`;
+  if (q.status === "superseded") return `Quote ${q.id} has been replaced${q.supersededBy ? ` (see ${q.supersededBy})` : ""} and can no longer be signed.`;
+  const newer = chainFromRecords(records, q.id).filter((x) =>
+    x.id !== q.id && versionOrder(x, q) > 0 && !x.deletedAt &&
+    (isSignedAgreement(x) || (UNSIGNED_LIVE_STATUSES.has(x.status) && !hasAcceptanceRecord(x))));
+  if (newer.length) {
+    const latest = newer[newer.length - 1];
+    return `Quote ${q.id} has been replaced by ${latest.id} (v${Number(latest.version) || 1}) and can no longer be signed.`;
+  }
+  return null;
+}
+function assertSignable(records, q) {
+  const why = signingRefusal(records, q);
+  if (why) throw Object.assign(new Error(why), { code: "quote_not_signable", quoteId: q ? q.id : null });
+}
+
 async function resolveQuoteChain(anchorId) {
   if (!anchorId) return { chain: [], governing: null, pending: null, head: null };
   return describeChain(chainFromRecords(await readAll(), anchorId));
@@ -2345,6 +2389,36 @@ function supersedeOlderVersions(records, signed, by) {
     changed.push(q.id);
   }
   return changed;
+}
+
+// Retire an UNSIGNED revision because the change it carried was withdrawn
+// (2026-09-27). It is marked superseded — pointing back at the signed
+// agreement that keeps governing — because "superseded" is what every
+// customer approval route already refuses (the Q-2026-0078 dead-link
+// protection), so the customer can no longer sign it. Queued on the quotes
+// store with the signature writers: if the customer signed first, this
+// refuses (code revision_signed) and the signed agreement stands.
+async function retireUnsignedRevision(id, { by = "admin", reason = "" } = {}) {
+  return serialize(FILE, async () => {
+    const records = await readAll();
+    const q = records.find((x) => x.id === id);
+    if (!q) throw Object.assign(new Error(`Quote ${id} not found.`), { code: "quote_not_found" });
+    if (hasAcceptanceRecord(q)) {
+      throw Object.assign(new Error(`Revised quote ${id} has already been signed.`), { code: "revision_signed" });
+    }
+    if (!isUnsignedLive(q)) {
+      throw Object.assign(new Error(`Revised quote ${id} is ${q.status} — nothing to retire.`), { code: "revision_not_live" });
+    }
+    const info = describeChain(chainFromRecords(records, id));
+    q.status = "superseded";
+    q.supersededBy = info.governing ? info.governing.id : null;
+    (q.history ||= []).push({
+      ts: nowIso(), action: "revision_withdrawn", by,
+      note: `${reason || "Withdrawn by the office"} — the customer can no longer sign it${info.governing ? `; ${info.governing.id} (v${info.governing.version || 1}) stands` : ""}.`
+    });
+    await writeAll(records);
+    return q;
+  });
 }
 
 // After the quote write: bring any project on this chain onto the newly
@@ -2956,6 +3030,7 @@ async function _recordPortalSignAcceptanceLocked(quoteId, {
   if (idx === -1) return null;
   const q = records[idx];
   if (q.acceptanceMethod === "portal_esign" && q.status === "accepted") return q; // idempotent
+  assertSignable(records, q);
 
   const ts = nowIso();
   q.status = "accepted";
@@ -3063,6 +3138,7 @@ async function _recordPdfReturnAcceptanceLocked(quoteId, { adminUser, adminNote 
   if (idx === -1) return null;
   const q = records[idx];
   if (q.status === "accepted" && q.acceptanceMethod === "pdf_return") return q; // idempotent
+  assertSignable(records, q);
   if (!q.acceptanceEvidence || q.acceptanceEvidence.method !== "pdf_return") {
     throw new Error("No PDF return is staged for this quote.");
   }
@@ -3517,6 +3593,9 @@ module.exports = {
   resolveRevisionChain,
   hasAcceptanceRecord,
   isSignedAgreement,
+  isUnsignedLive,
+  retireUnsignedRevision,
+  signingRefusal,
   chainFromRecords,
   describeChain,
   resolveQuoteChain,
