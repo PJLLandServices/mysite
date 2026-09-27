@@ -129,3 +129,120 @@
 /* "Default for this fitting" (M2a) */
 .pp-default { font-size: 12px; font-weight: 700; color: #1B4D2E; }
 .pp-default-auto { font-weight: 500; color: #6B6B63; }
+
+/* ---- Tabs: Review | All parts (M3b) ---------------------------------- */
+.pp-tabs { display: flex; gap: 4px; margin: 0 0 12px; border-bottom: 1px solid #E2E0D4; }
+.pp-tabs [role="tab"] {
+  min-height: 44px; padding: 0 16px; border: 0; border-bottom: 3px solid transparent; background: none;
+  font-family: "Barlow Condensed", sans-serif; font-size: 17px; font-weight: 700; letter-spacing: 0.03em; color: #6B6B63; cursor: pointer;
+}
+.pp-tabs [role="tab"][aria-selected="true"] { color: #1B4D2E; border-bottom-color: #1B4D2E; }
+.pp-tab-badge { display: inline-block; min-width: 20px; padding: 1px 6px; border-radius: 999px; background: #C96A2A; color: #fff; font-family: "DM Sans", sans-serif; font-size: 12px; line-height: 18px; text-align: center; }
+
+/* ---- Photo Review (M3b) ---------------------------------------------- */
+/* min-width 0: the sideways-scrolling strips (queues, phone candidates)
+   must not stretch the page wider than the phone. */
+.pr-view { display: flex; flex-direction: column; gap: 12px; min-width: 0; max-width: 100%; }
+#partsView, .pr-list, .pr-queues, .pr-cands { min-width: 0; max-width: 100%; }
+.pr-progress { background: #fff; border: 1px solid #E2E0D4; border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.pr-progress-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.pr-progress-head h2 { margin: 0; font-family: "Barlow Condensed", sans-serif; font-size: 18px; font-weight: 700; color: #1F2A22; }
+.pr-progress-head span { font-size: 13px; color: #6B6B63; }
+.pr-bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: #F0EEE3; }
+.pr-bar-seg { min-width: 3px; }
+.pr-bar-seg.is-live, .pr-stat.is-live b { background: #2D6A42; }
+.pr-bar-seg.is-review, .pr-stat.is-review b { background: #C96A2A; }
+.pr-bar-seg.is-noreliable, .pr-stat.is-noreliable b { background: #6B6B63; }
+.pr-bar-seg.is-pending { background: #E2E0D4; }
+.pr-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.pr-stat { display: flex; flex-direction: column; gap: 1px; font-size: 12.5px; color: #6B6B63; }
+.pr-stat b { align-self: flex-start; min-width: 30px; padding: 1px 8px; border-radius: 6px; color: #fff; font-size: 16px; text-align: center; background: #6B6B63; }
+.pr-stat.is-pending b { background: #E2E0D4; color: #1F2A22; }
+.pr-stat.is-errors b { background: #fff; color: #B71C1C; border: 1px solid rgba(183, 28, 28, 0.35); }
+.pr-stat span { font-weight: 600; color: #1F2A22; }
+.pr-stat small { font-size: 11.5px; }
+.part-photos-body .pr-run { margin: 0; font-size: 13px; color: #6B6B63; }
+.pr-held { display: inline-block; margin-top: 2px; color: #8B4413; font-weight: 600; }
+
+.pr-queues { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+.pr-queues::-webkit-scrollbar { display: none; }
+.pr-queues [role="tab"] {
+  flex: none; min-height: 40px; padding: 0 12px; border: 1px solid #D4D2CB; border-radius: 999px; background: #fff;
+  font: inherit; font-size: 13px; font-weight: 700; color: #1F2A22; cursor: pointer; white-space: nowrap;
+}
+.pr-queues [role="tab"][aria-selected="true"] { background: #1B4D2E; border-color: #1B4D2E; color: #fff; }
+.pr-count { display: inline-block; min-width: 18px; margin-left: 4px; padding: 0 5px; border-radius: 999px; background: rgba(0, 0, 0, 0.08); font-size: 12px; }
+.pr-queues [aria-selected="true"] .pr-count { background: rgba(255, 255, 255, 0.22); }
+.part-photos-body .pr-keys { margin: 0; font-size: 12px; color: #6B6B63; }
+.pr-keys kbd { display: inline-block; min-width: 16px; padding: 0 4px; border: 1px solid #D4D2CB; border-bottom-width: 2px; border-radius: 4px; background: #fff; font: 600 11px ui-monospace, Consolas, monospace; text-align: center; }
+@media (hover: none) { .part-photos-body .pr-keys { display: none; } }
+
+.pr-list { display: flex; flex-direction: column; gap: 12px; }
+.part-photos-body .pr-pos { margin: 0; font-size: 13px; color: #6B6B63; }
+.pr-card {
+  background: #fff; border: 1px solid #E2E0D4; border-radius: 12px; padding: 12px;
+  display: flex; flex-direction: column; gap: 12px; scroll-margin-top: 72px; outline: none; min-width: 0;
+}
+.pr-card.is-current { border-color: #2D6A42; box-shadow: 0 0 0 3px rgba(45, 106, 66, 0.12); }
+.pr-part { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.pr-reason { margin: 2px 0 0; font-size: 13px; color: #1F2A22; }
+.pr-reason b { font-family: "Barlow Condensed", sans-serif; font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; }
+.pr-reason.is-tbd b { color: #C96A2A; }
+.pr-reason.is-not_confident b { color: #6B6B63; }
+.pr-reason.is-confident b, .pr-reason.is-approved b { color: #2D6A42; }
+
+.pr-cands { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.pr-cands.is-single { grid-template-columns: minmax(0, 360px); }
+.pr-cand { margin: 0; border: 2px solid #E8E5D7; border-radius: 10px; padding: 8px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pr-cand.is-selected { border-color: #1B4D2E; }
+.pr-cand-img {
+  position: relative; display: block; width: 100%; aspect-ratio: 1; padding: 0; border: 1px solid #E2E0D4; border-radius: 8px;
+  background: #fff; overflow: hidden; cursor: zoom-in;
+}
+/* Whole photo, never cropped: contained inside the square. */
+.pr-cand-img img { position: absolute; inset: 0; width: 100%; height: 100%; box-sizing: border-box; padding: 6px; object-fit: contain; }
+.pr-cand-n { position: absolute; top: 6px; left: 6px; min-width: 22px; height: 22px; border-radius: 999px; background: #1F2A22; color: #fff; font-size: 12px; font-weight: 700; line-height: 22px; text-align: center; }
+.pr-cand figcaption { display: flex; flex-direction: column; gap: 6px; }
+.part-photos-body .pr-src { margin: 0; font-size: 12.5px; color: #6B6B63; overflow-wrap: anywhere; }
+.pr-src a { color: #1B4D2E; font-weight: 600; }
+.pr-official { padding: 0 5px; border-radius: 4px; background: #E6F0E8; color: #1B4D2E; font-size: 11px; font-weight: 700; }
+.pr-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.pr-checks li { display: inline-flex; gap: 3px; align-items: center; padding: 2px 7px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #F3F1E8; color: #1F2A22; }
+.pr-checks li.is-pass { background: #E6F0E8; color: #1B4D2E; }
+.pr-checks li.is-fail { background: #FDEAEA; color: #B71C1C; }
+.pr-checks li.is-unknown { background: #FDF3EA; color: #8B4413; }
+.pr-checks li.is-na { color: #6B6B63; }
+.pr-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.pr-why { margin: 0; padding-left: 16px; font-size: 12.5px; color: #1F2A22; }
+.part-photos-body .pr-nochecks { margin: 0; font-size: 12.5px; color: #6B6B63; }
+.pr-approve { width: 100%; min-height: 44px; }
+.pr-nocand { grid-column: 1 / -1; padding: 18px; border: 1px dashed #D4D2CB; border-radius: 10px; text-align: center; font-size: 13.5px; color: #6B6B63; background: repeating-linear-gradient(135deg, #F7F5EE 0 6px, #FCFBF6 6px 12px); }
+.pr-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; border-top: 1px solid #F0EEE3; padding-top: 10px; }
+.pr-actions .pp-btn { min-height: 44px; }
+.pr-upload { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+
+.pr-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pr-side { display: flex; flex-direction: column; gap: 8px; border: 1px solid #E8E5D7; border-radius: 10px; padding: 8px; min-width: 0; }
+.pr-side .pr-cand-img { max-width: 260px; }
+.pr-side .pp-btn { min-height: 44px; white-space: normal; }
+
+.pr-zoom { padding: 0; border: 0; border-radius: 12px; max-width: min(96vw, 1000px); max-height: 92vh; background: #fff; }
+.pr-zoom::backdrop { background: rgba(15, 31, 20, 0.7); }
+.pr-zoom img { display: block; max-width: min(96vw, 1000px); max-height: 92vh; object-fit: contain; }
+.pr-zoom-close { position: absolute; top: 6px; right: 6px; width: 40px; height: 40px; border: 0; border-radius: 999px; background: rgba(0, 0, 0, 0.6); color: #fff; font-size: 24px; line-height: 40px; cursor: pointer; }
+
+@media (max-width: 760px) {
+  .pr-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  /* Phone: candidates stack as compact rows — thumbnail left, checks
+     right, Approve full width — so nothing scrolls sideways and the page
+     stays exactly the phone's width (a sideways strip made Chromium widen
+     the whole layout to the strip's content). */
+  .pr-cands, .pr-cands.is-single { grid-template-columns: 1fr; }
+  .pr-cand { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 8px 10px; align-items: start; }
+  .pr-cand .pr-cand-img { width: 132px; }
+  .pr-cand figcaption { min-width: 0; }
+  .pr-cand .pr-approve { grid-column: 1 / -1; }
+  .pr-sides { grid-template-columns: 1fr; }
+  .pr-side .pr-cand-img { max-width: none; }
+  .pr-actions .pp-btn { flex: 1 1 auto; }
+}
