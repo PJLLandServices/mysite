@@ -418,9 +418,54 @@ function createBackfill({
       else applied.push({ sku: mover, into: target, ...res });
     }
     state.run.grouping = { at: new Date(now()).toISOString(), applied, proposals };
+    // The "Fittings to confirm" list outlives the run. A pair Patrick has
+    // already answered is never asked again.
+    const known = new Set((state.fittings || []).map((f) => f.id));
+    for (const p of proposals) {
+      const id = pairId(p.a, p.b);
+      if (known.has(id)) continue;
+      known.add(id);
+      (state.fittings ||= []).push({ id, a: p.a, b: p.b, reason: p.reason, runId: state.run.id, at: new Date(now()).toISOString(), status: "open" });
+    }
     await save();
     log({ action: "backfill.grouping", runId: state.run.id, autoLinked: applied.length, proposals: proposals.length });
     return state.run.grouping;
+  }
+
+  function pairId(a, b) { return [a, b].sort().join("|"); }
+
+  // "Fittings to confirm" (M3b). confirm: `keep` is the SKU whose photo the
+  // fitting keeps; the other SKU joins its fitting as Patrick's link.
+  // dismiss: not the same fitting; never proposed again.
+  async function fittingsToConfirm() {
+    await load();
+    return (state.fittings || []).filter((f) => f.status === "open");
+  }
+  async function resolveFitting(id, { action, keep, by }) {
+    await load();
+    const f = (state.fittings || []).find((x) => x.id === id);
+    if (!f) throw new Error("That fitting proposal doesn't exist.");
+    if (f.status !== "open") throw new Error("That proposal was already answered.");
+    let result = null;
+    if (action === "confirm") {
+      if (keep !== f.a && keep !== f.b) throw new Error("Choose which photo the fitting keeps.");
+      const mover = keep === f.a ? f.b : f.a;
+      const parts = getParts() || {};
+      if (!parts[mover] || !parts[keep]) throw new Error("One of these parts is no longer in the catalog.");
+      const { links } = await store.snapshot();
+      const targetGroup = links[keep] && links[keep].groupId;
+      if (!targetGroup) throw new Error(`${keep} has no photo group to share.`);
+      result = await store.linkToGroup(mover, parts[mover], targetGroup, { by });
+      f.kept = keep;
+    } else if (action !== "dismiss") {
+      throw new Error("Unknown action.");
+    }
+    f.status = action === "confirm" ? "confirmed" : "dismissed";
+    f.resolvedBy = by;
+    f.resolvedAt = new Date(now()).toISOString();
+    await save();
+    log({ action: `backfill.fitting.${f.status}`, id, keep: f.kept || null, by });
+    return { fitting: f, result };
   }
 
   // The 15-part calibration sample (8 branded, 7 generic), not yet live.
@@ -469,7 +514,7 @@ function createBackfill({
     while (pumping) await pumping;
   }
 
-  return { load, start, pause, resume, retry, status, idle, kick, groupingProposals, applyGrouping, calibrationSkus, catalogProgress, _state: () => state };
+  return { load, start, pause, resume, retry, status, idle, kick, groupingProposals, applyGrouping, calibrationSkus, fittingsToConfirm, resolveFitting, catalogProgress, _state: () => state };
 }
 
 module.exports = { createBackfill, isTransient, STEPS };
