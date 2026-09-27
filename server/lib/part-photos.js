@@ -719,16 +719,19 @@ function createPartPhotos({ dataDir, sharp }) {
         // same fitting as anything else.
         links[sku] = keepFirstLinked(null, groupId, { groupId, linkTier: "confident", linkedBy: "auto:self", fingerprint: fingerprintOf(part), at: now });
       }
-      const byHash = new Map((g.candidates || []).map((c) => [c.hash, c]));
+      // An image Patrick rejected never comes back as a candidate (M3b).
+      const rejected = new Set(g.rejectedHashes || []);
+      const byHash = new Map((g.candidates || []).filter((c) => !rejected.has(c.hash)).map((c) => [c.hash, c]));
       for (const c of result.candidates || []) {
-        if (!HASH_RE.test(String(c.hash || ""))) continue;
+        if (!HASH_RE.test(String(c.hash || "")) || rejected.has(c.hash)) continue;
         byHash.set(c.hash, { hash: c.hash, width: c.width || null, height: c.height || null, source: c.source || {}, checks: c.checks || {}, tier: c.tier || null, runId: result.runId || null, foundAt: now, forSku: sku });
       }
       g.candidates = [...byHash.values()].slice(-12);
       g.ai = { tier, kind: result.kind || null, reason: result.reason || "", runId: result.runId || null, identified: result.identified || null, at: now, forSku: sku };
       const chosen = result.chosen >= 0 ? (result.candidates || [])[result.chosen] : null;
       let live = false;
-      if (tier === "confident" && autoApprove && chosen && HASH_RE.test(String(chosen.hash || ""))) {
+      const chosenRejected = !!(chosen && rejected.has(chosen.hash));
+      if (tier === "confident" && autoApprove && chosen && !chosenRejected && HASH_RE.test(String(chosen.hash || ""))) {
         if (g.photo && g.photo.hash !== chosen.hash) (g.history ||= []).push({ hash: g.photo.hash, replacedAt: now, replacedBy: "auto:confident" });
         g.photo = { hash: chosen.hash, width: chosen.width || null, height: chosen.height || null };
         g.tier = "confident";
@@ -743,7 +746,7 @@ function createPartPhotos({ dataDir, sharp }) {
       } else {
         // TBD, or Confident while auto-approve is off: waits for Patrick.
         g.tier = "tbd";
-        g.reason = tier === "confident" ? "Passed every check — waiting for your review (auto-approve is off)." : (result.reason || "Needs a look.");
+        g.reason = chosenRejected ? "It found a photo you rejected before — needs a look." : tier === "confident" ? "Passed every check — waiting for your review (auto-approve is off)." : (result.reason || "Needs a look.");
       }
       g.updatedAt = now;
       await log({ action: "ai.result", sku, groupId, tier, live, autoApprove, runId: result.runId || null, candidates: (result.candidates || []).length });
@@ -783,6 +786,86 @@ function createPartPhotos({ dataDir, sharp }) {
     });
   }
 
+  // ---- M3b: Patrick's review of AI results ---------------------------
+  // Approve one of the AI's candidate images for this SKU's fitting. It
+  // becomes an "approved" photo exactly as if Patrick had uploaded it, and
+  // the SKU's link is re-recorded as his (confirmed, current fingerprint).
+  async function approveCandidate(sku, part, hash, { by }) {
+    if (!part) throw new Error("Unknown part.");
+    if (!HASH_RE.test(String(hash || ""))) throw new Error("Choose a photo to approve.");
+    return mutate(async (groups, links) => {
+      const groupId = links[sku] && groups[links[sku].groupId] ? links[sku].groupId : null;
+      const g = groupId && groups[groupId];
+      const cand = g && (g.candidates || []).find((c) => c.hash === hash);
+      if (!cand) throw new Error("That photo isn't one of this part's candidates.");
+      if (!fileExists(hash)) throw new Error("That photo's file is missing — ask for a new search.");
+      const now = new Date().toISOString();
+      if (g.photo && g.photo.hash !== hash) (g.history ||= []).push({ hash: g.photo.hash, replacedAt: now, replacedBy: by });
+      g.photo = { hash, width: cand.width || null, height: cand.height || null };
+      g.tier = "approved";
+      g.source = { method: "ai-reviewed", ...(cand.source || {}) };
+      g.approvedBy = by;
+      g.approvedAt = now;
+      delete g.autoApprovedRun;
+      delete g.reason;
+      g.review = { action: "approved", by, at: now, hash };
+      g.updatedAt = now;
+      links[sku] = keepFirstLinked(links[sku], groupId, { groupId, ...linkRecord(part, by) });
+      const sharedWith = Object.keys(links).filter((s) => s !== sku && links[s].groupId === groupId);
+      await log({ action: "review.approve", sku, groupId, hash, by, sharedWith });
+      return { groupId, hash, sharedWith };
+    });
+  }
+
+  // Reject the AI's result for this SKU: none of its candidates is right.
+  // Rejected images are remembered so a later run can never auto-approve
+  // them. Rejecting an AUTO-APPROVED photo also takes down every other
+  // photo that went live by the same rule (same kind) in the same run and
+  // sends it back to "To be determined" — the M3 plan's safety net.
+  // A photo Patrick approved himself is not rejected here (Remove photo).
+  async function rejectAiResult(sku, part, { by, reason = "" }) {
+    if (!part) throw new Error("Unknown part.");
+    return mutate(async (groups, links) => {
+      const groupId = links[sku] && groups[links[sku].groupId] ? links[sku].groupId : null;
+      const g = groupId && groups[groupId];
+      if (!g || !g.ai) throw new Error("This part has no AI result to reject.");
+      const live = !!(g.photo && SHOWABLE_GROUP_TIERS.has(g.tier));
+      const auto = live && String(g.approvedBy || "").startsWith("auto:");
+      if (live && !auto) throw new Error("This photo was approved by a person — use Remove photo instead.");
+      const now = new Date().toISOString();
+      const note = `Rejected by ${by}${reason ? `: ${reason}` : ""}`;
+      const rejected = new Set(g.rejectedHashes || []);
+      for (const c of g.candidates || []) rejected.add(c.hash);
+      if (g.photo) rejected.add(g.photo.hash);
+      g.rejectedHashes = [...rejected];
+      if (g.photo) (g.history ||= []).push({ hash: g.photo.hash, removedAt: now, removedBy: by, reason: note });
+      const runId = g.autoApprovedRun || null;
+      const kind = g.ai.kind || null;
+      g.photo = null;
+      g.tier = "not_confident";
+      g.reason = note;
+      g.review = { action: "rejected", by, at: now, reason };
+      delete g.autoApprovedRun;
+      g.updatedAt = now;
+      const sentBack = [];
+      if (auto && runId) {
+        for (const [id, other] of Object.entries(groups)) {
+          if (id === groupId || other.autoApprovedRun !== runId || other.approvedBy !== "auto:confident") continue;
+          if (!other.photo || !SHOWABLE_GROUP_TIERS.has(other.tier) || (other.ai && other.ai.kind) !== kind) continue;
+          (other.history ||= []).push({ hash: other.photo.hash, removedAt: now, removedBy: by, reason: `Sent back: ${sku}'s auto-approval in the same run was rejected` });
+          other.photo = null;
+          other.tier = "tbd";
+          other.reason = `Sent back for re-checking — another ${kind || ""} auto-approval in the same run (${sku}) was rejected.`.replace("  ", " ");
+          delete other.autoApprovedRun;
+          other.updatedAt = now;
+          sentBack.push({ groupId: id, skus: Object.keys(links).filter((s) => links[s].groupId === id) });
+        }
+      }
+      await log({ action: "review.reject", sku, groupId, by, reason, wasAutoApproved: auto, runId, sentBack });
+      return { groupId, wasAutoApproved: auto, sentBack };
+    });
+  }
+
   // Patrick's deliberate "Default for this fitting". Only a part that is
   // linked to this fitting (confirmed) can be chosen.
   async function setFittingDefault(groupId, sku, part, { by }) {
@@ -810,7 +893,8 @@ function createPartPhotos({ dataDir, sharp }) {
   return {
     imagePath, ensureThumb, resolveImageFile, fileExists, readStoresSync, mergeInto, snapshot,
     setPhoto, setPhotoFromUrl, linkToGroup, unlink, reconfirm, removeGroupPhoto, setFittingDefault,
-    saveCandidateImage, readCandidateImage, recordAiResult, autoLinkSameFitting
+    saveCandidateImage, readCandidateImage, recordAiResult, autoLinkSameFitting,
+    approveCandidate, rejectAiResult
   };
 }
 

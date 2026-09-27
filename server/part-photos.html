@@ -102,6 +102,20 @@
         <p>One verified photo per real fitting. Only verified photos show in the parts picker; every other part shows <b>No photo</b>. When two parts are the same fitting (say SiteOne's and Central's 1" PVC tee), use <b>Same fitting as…</b> so they share one photo.</p>
       </section>
 
+      <div class="pp-tabs" role="tablist" aria-label="Part photos">
+        <button type="button" role="tab" id="ppTabReview" data-tab="review" aria-selected="false" aria-controls="reviewView">Review <span class="pp-tab-badge" id="ppReviewBadge" hidden></span></button>
+        <button type="button" role="tab" id="ppTabParts" data-tab="parts" aria-selected="true" aria-controls="partsView">All parts</button>
+      </div>
+
+      <section id="reviewView" class="pr-view" role="tabpanel" aria-labelledby="ppTabReview" hidden>
+        <div class="pr-progress" id="prProgress" aria-live="polite"></div>
+        <div class="pr-queues" id="prQueues" role="tablist" aria-label="Review queues"></div>
+        <p class="pr-keys" id="prKeys"><kbd>A</kbd> approve · <kbd>R</kbd> reject · <kbd>→</kbd> next · <kbd>←</kbd> back · <kbd>1</kbd>–<kbd>3</kbd> pick a photo</p>
+        <p class="pp-error" id="prError" role="alert" hidden></p>
+        <div class="pr-list" id="prList"><p class="pp-empty">Loading…</p></div>
+      </section>
+
+      <section id="partsView" role="tabpanel" aria-labelledby="ppTabParts">
       <div class="pp-toolbar">
         <input class="pp-search" id="ppSearch" type="search" placeholder="Search parts, part # or size" aria-label="Search parts" autocomplete="off">
         <div class="pp-filters" role="group" aria-label="Show">
@@ -114,12 +128,19 @@
       <p class="pp-count" id="ppCount" aria-live="polite"></p>
       <p class="pp-error" id="ppError" role="alert" hidden></p>
       <div class="pp-list" id="ppList"><p class="pp-empty">Loading…</p></div>
+      </section>
     </main>
+
+  <dialog class="pr-zoom" id="prZoom" aria-label="Photo, full size">
+    <form method="dialog"><button class="pr-zoom-close" aria-label="Close">×</button></form>
+    <img id="prZoomImg" alt="">
+  </dialog>
   </div>
 
   <script src="/crm/pjl-dialog.js"></script>
   <script src="/crm/crm-nav.js"></script>
   <script src="/crm/part-photos.js"></script>
+  <script src="/crm/part-photo-review.js"></script>
   <script src="/crm/nav-badges.js?v=1"></script>
 </body>
 </html>
