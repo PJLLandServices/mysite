@@ -388,5 +388,55 @@ const onDisk = () => true;
   }
 }
 
+// ---- 10. "Default for this fitting" (M2a) --------------------------------------
+{
+  const { fittingDefaultFor } = lib;
+  const links = {
+    NEWSKU: { groupId: "PG-1", at: "2026-09-26T10:00:00Z", firstLinkedAt: "2026-09-26T10:00:00Z" },
+    OLDSKU: { groupId: "PG-1", at: "2026-09-26T12:00:00Z", firstLinkedAt: "2026-09-26T12:00:00Z" }
+  };
+  const baseline = (s) => s === "OLDSKU";
+  check("default: the original-catalog part is the automatic default, even if it joined later",
+    fittingDefaultFor({}, ["NEWSKU", "OLDSKU"], links, baseline).sku === "OLDSKU");
+  check("default: automatic when not chosen", fittingDefaultFor({}, ["NEWSKU", "OLDSKU"], links, baseline).chosen === false);
+  check("default: no single catalog part → the part that was in the fitting first",
+    fittingDefaultFor({}, ["NEWSKU", "OLDSKU"], links, () => false).sku === "NEWSKU");
+  check("default: Patrick's choice wins", fittingDefaultFor({ defaultSku: "NEWSKU" }, ["NEWSKU", "OLDSKU"], links, baseline).sku === "NEWSKU"
+    && fittingDefaultFor({ defaultSku: "NEWSKU" }, ["NEWSKU", "OLDSKU"], links, baseline).chosen === true);
+  check("default: a chosen part that is no longer a visible member is ignored",
+    fittingDefaultFor({ defaultSku: "GONE" }, ["NEWSKU", "OLDSKU"], links, baseline).sku === "OLDSKU");
+
+  const img = await sharp({ create: { width: 40, height: 40, channels: 3, background: "#123" } }).png().toBuffer();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "part-photos-default-"));
+  try {
+    const store = createPartPhotos({ dataDir: dir, sharp });
+    const a = part("RUNTIME-A"), b = part("CATALOG-B");
+    const first = await store.setPhoto("RUNTIME-A", a, img, { by: "patrick", source: { method: "upload" } });
+    await store.linkToGroup("CATALOG-B", b, first.groupId, { by: "patrick" });
+    const merged = (isBaseline) => { const ps = { "RUNTIME-A": { ...a }, "CATALOG-B": { ...b } }; store.mergeInto(ps, { isBaseline }); return ps; };
+    let ps = merged((s) => s === "CATALOG-B");
+    check("default: the part that got the photo is NOT automatically the default", ps["RUNTIME-A"].photo.fittingDefaultSku === "CATALOG-B");
+    check("default: both members agree on the default", ps["CATALOG-B"].photo.fittingDefaultSku === "CATALOG-B");
+    // Re-uploading the photo on A must not make A "first".
+    await store.setPhoto("RUNTIME-A", a, img, { by: "patrick", source: { method: "upload" } });
+    ps = merged(() => false);
+    check("default: re-uploading the photo doesn't change who was first", ps["RUNTIME-A"].photo.fittingDefaultSku === "RUNTIME-A");
+
+    const r = await store.setFittingDefault(first.groupId, "CATALOG-B", b, { by: "patrick" });
+    ps = merged(() => false);
+    check("default: choosing CATALOG-B makes it the default", r.defaultSku === "CATALOG-B" && ps["RUNTIME-A"].photo.fittingDefaultSku === "CATALOG-B" && ps["RUNTIME-A"].photo.fittingDefaultChosen === true);
+    await rejects("default: only a linked part can be chosen", () => store.setFittingDefault(first.groupId, "OTHER", part("OTHER"), { by: "patrick" }), /isn't linked/);
+    await rejects("default: an edited (unconfirmed) member can't be chosen",
+      () => store.setFittingDefault(first.groupId, "RUNTIME-A", { ...a, description: "changed" }, { by: "patrick" }), /needs confirming/);
+    await store.unlink("CATALOG-B", { by: "patrick" });
+    const snap = await store.snapshot();
+    check("default: unlinking the chosen default clears the choice", !snap.groups[first.groupId].defaultSku);
+    const log = fs.readFileSync(path.join(dir, "part-photos-log.jsonl"), "utf8");
+    check("default: the choice is in the audit log", /"action":"fitting.default"/.test(log));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 console.log(`\ntest-part-photo-lifecycle: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
