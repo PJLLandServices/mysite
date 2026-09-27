@@ -87,6 +87,7 @@
       showError("");
       renderBadge();
       render();
+      schedulePoll();
     } catch (err) {
       showError(`Couldn't load the review queue: ${err.message}`);
       els.list.innerHTML = "";
@@ -113,14 +114,75 @@
     const stats = seg.map(([k, label, n, sub]) => `<div class="pr-stat is-${k}"><b>${n}</b><span>${label}</span>${sub ? `<small>${esc(sub)}</small>` : ""}</div>`).join("")
       + `<div class="pr-stat is-errors"><b>${p.errors || 0}</b><span>Errors</span></div>`;
     const run = d.run;
-    const runLine = run
-      ? `Last AI run <b>${esc(run.label || run.id)}</b> · ${esc(run.status)} · ${run.counts.done} of ${run.counts.total} done · auto-approve ${run.autoApprove ? "on" : "off"} · ${run.usage.in.toLocaleString()} in / ${run.usage.out.toLocaleString()} out tokens, ${run.usage.searches} searches`
-      : "No AI run yet.";
+    const active = run && (run.status === "running" || run.status === "paused");
+    let runLine = "No AI run yet.";
+    if (run) {
+      const c = run.counts;
+      const where = run.current ? ` · now on <span class="pp-mono">${esc(run.current.sku)}</span> (${esc(run.current.step)})` : "";
+      runLine = `${run.calibration ? "Calibration run" : "AI run"} <b>${esc(run.label || run.id)}</b> · <b>${esc(run.status === "paused" && run.interruptedAt ? "interrupted by a restart — press Resume" : run.status)}</b> · ${c.done} of ${c.total} done${c.error ? ` · ${c.error} error${c.error > 1 ? "s" : ""}` : ""}${where} · auto-approve <b>${run.autoApprove ? "ON" : "off"}</b> · ${run.usage.in.toLocaleString()} in / ${run.usage.out.toLocaleString()} out tokens, ${run.usage.searches} searches`;
+    }
+    const errors = run && run.errors && run.errors.length
+      ? `<ul class="pr-run-errors">${run.errors.map((e) => `<li><span class="pp-mono">${esc(e.sku)}</span> at ${esc(e.step || "?")}: ${esc(e.error || "")}</li>`).join("")}</ul>` : "";
+    // Controls. Start is the calibration run ONLY (15 parts, auto-approve
+    // off) and is offered only when no run is active. There is no
+    // whole-catalog button yet.
+    let controls = "";
+    if (run && run.status === "running") controls = `<button type="button" class="pp-btn" data-act="pause">Pause</button>`;
+    else if (run && run.status === "paused") controls = `<button type="button" class="pp-btn pp-btn-primary" data-act="resume">Resume</button>`;
+    else controls = `<button type="button" class="pp-btn pp-btn-primary" data-act="start-cal"${d.apiKeySet === false ? " disabled" : ""}>Start calibration run (15 parts, auto-approve off)</button>${d.apiKeySet === false ? `<span class="pr-held">ANTHROPIC_API_KEY isn't set on the server.</span>` : ""}`;
     return `<div class="pr-progress-head"><h2>Photos across the catalog</h2><span>${total} parts</span></div>
       <div class="pr-bar" role="img" aria-label="${p.live || 0} live, ${p.review || 0} review needed, ${p.noReliable || 0} no reliable photo, ${p.notProcessed || 0} not processed">${bar || '<span class="pr-bar-seg is-pending" style="flex-grow:1"></span>'}</div>
       <div class="pr-stats">${stats}</div>
-      <p class="pr-run">${runLine}${d.backfillHeld ? ` <span class="pr-held">Running the AI backfill is held until you approve the calibration run.</span>` : ""}</p>`;
+      <p class="pr-run">${runLine}</p>${errors}
+      <div class="pr-controls">${controls}<span class="pp-panel-status" data-status aria-live="polite"></span></div>`;
   }
+
+  // While a run is going, the panel refreshes itself every few seconds.
+  function schedulePoll() {
+    clearTimeout(state.poll);
+    const run = state.data && state.data.run;
+    if (state.tab === "review" && run && run.status === "running") state.poll = setTimeout(() => load(true), 5000);
+  }
+
+  async function startCalibration() {
+    const s = els.progress.querySelector("[data-status]");
+    const say = (t, bad) => { if (s) { s.textContent = t; s.classList.toggle("is-error", !!bad); } };
+    say("Checking the plan…");
+    let plan;
+    try {
+      const r = await fetch("/api/part-photo-backfill/plan", { cache: "no-store" });
+      plan = await r.json();
+      if (!r.ok || !plan.ok) throw new Error((plan.errors && plan.errors[0]) || `HTTP ${r.status}`);
+    } catch (err) { say(`Couldn't read the plan: ${err.message}`, true); return; }
+    say("");
+    if (!plan.skus.length) { say("Nothing to calibrate — every sample part already has a live photo.", true); return; }
+    const e = plan.estimate;
+    const list = plan.rows.map((r) => `${r.sku} (${r.kind}${r.manufacturer ? ", " + r.manufacturer : ""}) — ${r.description}`).join("\n");
+    const ok = await window.pjlDialog.confirm(
+      `Start the calibration run on these ${plan.counts.total} parts (${plan.counts.branded} branded, ${plan.counts.generic} generic)? Auto-approve is OFF: nothing goes live until you approve it on this tab.\n\n${list}\n\nAt most ${e.apiCalls.max} Claude calls (${e.finderCalls.max} finder, ${e.verifyCalls.max} vision, ${e.compareCalls.max} compare), up to ${e.webSearches.max} web searches, and up to ${e.pagesFetchedByOurServer.max} pages + ${e.imagesFetchedByOurServer.max} images fetched by our server.`,
+      { confirmLabel: "Start calibration", cancelLabel: "Cancel" });
+    if (!ok) return;
+    await backfillAction("calibration", "Starting…");
+  }
+  async function backfillAction(action, busy) {
+    const s = els.progress.querySelector("[data-status]");
+    if (s) { s.textContent = busy; s.classList.remove("is-error"); }
+    els.progress.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+    try {
+      await post(`/api/part-photo-backfill/${action}`, {});
+      await load(true);
+    } catch (err) {
+      els.progress.querySelectorAll("button").forEach((b) => { b.disabled = false; });
+      if (s) { s.textContent = err.message; s.classList.add("is-error"); }
+    }
+  }
+  els.progress.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-act]");
+    if (!b || state.busy) return;
+    if (b.dataset.act === "start-cal") startCalibration();
+    else if (b.dataset.act === "pause") backfillAction("pause", "Pausing…");
+    else if (b.dataset.act === "resume") backfillAction("resume", "Resuming…");
+  });
 
   function queuesHtml(d) {
     return QUEUES.map((q) => `<button type="button" role="tab" data-queue="${q.key}" aria-selected="${q.key === state.queue}">${q.label} <span class="pr-count">${d[q.key].length}</span></button>`).join("");

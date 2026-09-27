@@ -46,6 +46,7 @@ const billing = require("./lib/billing");
 const fieldClients = require("./lib/field-clients");
 const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendPaymentExceptionAlert, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer, sendQuoteAcceptedConfirmation } = require("./lib/notify-customer");
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
+const photoLinks = require("./lib/photo-links");
 const voicemailStore = require("./lib/voicemail-store");
 const { geocode, PJL_BASE, isConfigured: geocodeIsConfigured } = require("./lib/geocode");
 const bookingGate = require("./lib/booking-gate");
@@ -261,20 +262,39 @@ const SERVER_DIR = __dirname;
 const DATA_DIR = path.join(SERVER_DIR, "data");
 // Verified part photos for the parts picker (lib/part-photos.js, P-PJL-35).
 const partPhotos = partPhotosLib.createPartPhotos({ dataDir: DATA_DIR, sharp });
-// AI photo backfill (P-PJL-35 M3). M3b reads its progress and its
-// "Fittings to confirm" list only: there is NO route that starts, pauses or
-// resumes a run, and its AI is a stub that refuses — the calibration run
-// (M3c) waits for Patrick's separate approval.
+// AI photo backfill (P-PJL-35 M3c). The engine is wired to the real Claude
+// client and to our own safe fetchers (https only, never a private address,
+// images/HTML only, size-capped). NOTHING runs on its own: the client is
+// created only when an admin starts the calibration run, no run starts at
+// boot, and a run interrupted by a deploy waits for Resume. The only start
+// door is startCalibration(): the approved 15-part sample, auto-approve OFF.
+const photoAiLib = require("./lib/photo-ai");
+const photoAi = (() => {
+  let real = null;
+  const get = () => (real ||= photoAiLib.createPhotoAI({ client: photoAiLib.createAnthropicClient() }));
+  return {
+    passesFor: photoAiLib.passesFor,
+    find: (...a) => get().find(...a),
+    verify: (...a) => get().verify(...a),
+    compare: (...a) => get().compare(...a)
+  };
+})();
 const photoBackfill = require("./lib/photo-backfill").createBackfill({
   dataDir: DATA_DIR,
   store: partPhotos,
   getParts: () => (PARTS && PARTS.parts) || {},
-  ai: (() => {
-    const held = () => { throw Object.assign(new Error("The AI photo backfill is held until Patrick approves the calibration run (M3c)."), { permanent: true }); };
-    return { passesFor: () => [], find: held, verify: held, compare: held };
-  })(),
-  fetchPage: () => { throw new Error("held"); },
-  fetchImage: () => { throw new Error("held"); }
+  manufacturers: () => (PARTS && PARTS.manufacturers) || [],
+  ai: photoAi,
+  fetchPage: (url) => partPhotosLib.fetchPageSafely(url),
+  fetchImage: (url) => partPhotosLib.fetchImageSafely(url),
+  log: (entry) => console.log("[photo-backfill]", JSON.stringify(entry)),
+  afterRun: async () => {
+    // Same-fitting grouping (auto-link only same mfr + mfr part # on
+    // official pages; the rest → Fittings to confirm), then the catalog
+    // reflects every result's state.
+    await photoBackfill.applyGrouping();
+    rebuildCatalogFromOverrides();
+  }
 });
 const { buildReviewQueues } = require("./lib/photo-review");
 // Supplier company logos for the picker's supplier chip (P-PJL-35 M2a).
@@ -1634,6 +1654,13 @@ function needsAuth(method, pathname) {
   // this needed both.
   if (pathname === "/api/terminal/connection-token") return "admin";
   if (pathname === "/api/outreach/unsubscribe") return null;
+  // Signed single-photo links (lib/photo-links.js). PUBLIC on purpose:
+  // the signature in ?s= IS the credential, scoped to one photo on one
+  // work order and expiring — the same model as the unsubscribe link
+  // above. Named here rather than left to the default so the intent is
+  // on the page. It lives OUTSIDE /api/work-orders/ so the admin rule for
+  // that prefix is untouched.
+  if (pathname.startsWith("/api/photo-link/")) return null;
   if (pathname.startsWith("/api/outreach/")) return "user";
   // Availability lookups + the public booking endpoint stay public.
   return null;
@@ -2274,9 +2301,15 @@ function moneyCad(n) {
 
 // Brief 2 — render the project status-update email HTML. Pure
 // function — input is the snapshot stored on project.statusUpdates[],
-// output is the HTML string for the email body. Used at send time AND
-// by the "View snapshot" UI on the project page.
-function renderStatusUpdateHtml(snap) {
+// output is the HTML string for the email body. Used at send time only —
+// the project page's "View snapshot" modal renders the plain snapshot data
+// itself (server/project.js openStatusUpdateSnapshot) and shows no photos.
+// `photoUrlFor(photo)` returns the <img src> for one recent photo, or
+// null. It is passed in rather than built here because the only safe URL
+// for a customer's inbox is a signed one, and signing needs the secret —
+// which a pure renderer should not go and fetch. No function (or null for
+// every photo) means no photo strip, never a strip of broken images.
+function renderStatusUpdateHtml(snap, { photoUrlFor = null } = {}) {
   const esc = escapeHtmlServer;
   const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }) : "—";
   const greeting = snap.recipientFirstName ? `Hi ${esc(snap.recipientFirstName)},` : "Hi,";
@@ -2316,15 +2349,28 @@ function renderStatusUpdateHtml(snap) {
     ${scrRows ? `
     <h3 style="margin:18px 0 6px;font-family:Barlow Condensed,sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:#8A4A12;font-size:14px;border-bottom:2px solid #F5C691;padding-bottom:4px;">Pending scope additions</h3>
     <ul style="margin:6px 0 14px;padding-left:20px;font-size:14px;">${scrRows}</ul>` : ""}
-    ${(snap.recentPhotos || []).length ? (() => {
-      const baseUrl = process.env.PUBLIC_BASE_URL || "";
-      const strip = snap.recentPhotos.map((p) =>
-        `<img src="${baseUrl}/api/work-orders/${esc(p.woId)}/photos/${esc(p.n)}" alt="" style="width:120px;height:120px;object-fit:cover;border:1px solid #E5E5DD;border-radius:4px;margin-right:6px;margin-bottom:6px;">`
+    ${(() => {
+      // These URLs land in a CUSTOMER'S INBOX. The old strip pointed at
+      // /api/work-orders/:id/photos/:n — the DELETE route's path, and an
+      // admin-gated prefix besides — so it was broken twice over: a 404
+      // for staff, a refusal for everyone else.
+      //
+      // Each image is now a signed link to that ONE photo
+      // (lib/photo-links.js). Not the admin route (no session in an
+      // inbox), not the customer's portal token (that unlocks their whole
+      // portal, and the recipient here is whoever the office typed), and
+      // not a public photo (never).
+      const urls = typeof photoUrlFor === "function"
+        ? (snap.recentPhotos || []).map((p) => ({ p, src: photoUrlFor(p) })).filter((x) => x.src)
+        : [];
+      if (!urls.length) return "";
+      const strip = urls.map(({ src }) =>
+        `<img src="${esc(src)}" alt="" style="width:120px;height:120px;object-fit:cover;border:1px solid #E5E5DD;border-radius:4px;margin-right:6px;margin-bottom:6px;">`
       ).join("");
       return `
     <h3 style="margin:18px 0 6px;font-family:Barlow Condensed,sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:#1B4D2E;font-size:14px;border-bottom:2px solid #C7E0A8;padding-bottom:4px;">Recent on-site photos</h3>
     <div style="margin:6px 0 14px;">${strip}</div>`;
-    })() : ""}
+    })()}
     <p style="margin:18px 0 0;font-size:13px;">Let me know if you need anything else.</p>
     <p style="margin:6px 0 0;font-size:13px;">Patrick<br/>PJL Land Services<br/><a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a></p>
   </div>
@@ -14065,10 +14111,56 @@ async function handleApi(req, res, pathname) {
   //   POST /api/part-photo-review/fittings/:id {action: confirm|dismiss, keep} (admin)
   // "Upload my own" uses POST /api/part-photos/:sku/photo (above).
   // Nothing here starts, pauses or resumes a backfill run (held for M3c).
+  // ---------- Calibration run (P-PJL-35 M3c) --------------------------------
+  //   GET  /api/part-photo-backfill/plan         the exact 15 SKUs + call estimate (staff)
+  //   POST /api/part-photo-backfill/calibration  start it (admin) — the ONLY start door
+  //   POST /api/part-photo-backfill/pause|resume (admin)
+  // Hard limits live in lib/photo-backfill.startCalibration: the approved
+  // 15-part mixed sample, auto-approve OFF, live photos skipped, one run at
+  // a time. There is no "whole catalog" route.
+  if (req.method === "GET" && pathname === "/api/part-photo-backfill/plan") {
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    try {
+      await photoBackfill.load();
+      return sendJson(res, 200, { ok: true, ...photoBackfill.calibrationPlan(), run: photoBackfill.status().run, apiKeySet: !!process.env.ANTHROPIC_API_KEY });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't build the plan."] });
+    }
+  }
+  const backfillActionMatch = pathname.match(/^\/api\/part-photo-backfill\/(calibration|pause|resume)$/);
+  if (backfillActionMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    const by = await actorLabel(req);
+    const action = backfillActionMatch[1];
+    try {
+      let status, note;
+      if (action === "calibration") {
+        if (!process.env.ANTHROPIC_API_KEY) return sendJson(res, 503, { ok: false, errors: ["ANTHROPIC_API_KEY isn't set on the server — nothing was started."] });
+        status = await photoBackfill.startCalibration({ by });
+        note = `Started the photo calibration run (${status.run.counts.total} parts, auto-approve off): ${status.run.calibration.skus.join(", ")}`;
+      } else if (action === "pause") {
+        status = await photoBackfill.pause();
+        note = "Paused the photo backfill run";
+      } else {
+        status = await photoBackfill.resume();
+        note = "Resumed the photo backfill run";
+      }
+      await settings.recordAudit({ who: by, action: `part-photo.backfill.${action}`, note, after: status.run });
+      return sendJson(res, 200, { ok: true, ...status });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't do that."] });
+    }
+  }
+
   if (req.method === "GET" && pathname === "/api/part-photo-review") {
     if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
     try {
       await photoBackfill.load();
+      // Results land in the stores as the run goes; the catalog's photo
+      // states follow them here so the queues are current.
+      rebuildCatalogFromOverrides();
       const { groups, links } = await partPhotos.snapshot();
       const status = photoBackfill.status();
       const queues = buildReviewQueues({
@@ -14077,7 +14169,7 @@ async function handleApi(req, res, pathname) {
       });
       const liveAuto = Object.values(PARTS.parts).filter((p) => p.photoState === "verified" && p.photo && String(p.photo.approvedBy || "").startsWith("auto:")).length;
       const progress = { ...status.catalog, liveAuto, errors: status.run ? status.run.counts.error : 0 };
-      return sendJson(res, 200, { ok: true, ...queues, progress, run: status.run, backfillHeld: true });
+      return sendJson(res, 200, { ok: true, ...queues, progress, run: status.run, apiKeySet: !!process.env.ANTHROPIC_API_KEY });
     } catch (err) {
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't read the review queue."] });
     }
@@ -17748,7 +17840,17 @@ async function handleApi(req, res, pathname) {
             });
             // Nothing goes to a load-test record — lib/test-recipients.js.
             testRecipients.guardTransport(transporter);
-            const html = renderStatusUpdateHtml(entry.snapshot);
+            // One signed link per photo, minted at send time. Scoped to
+            // that photo alone, so a forwarded email exposes those photos
+            // and nothing else.
+            const { sessionSecret } = await readAuthConfig();
+            const baseUrl = resolvePublicBaseUrl();
+            const html = renderStatusUpdateHtml(entry.snapshot, {
+              photoUrlFor: (p) => {
+                try { return baseUrl + photoLinks.pathFor(p.woId, p.n, photoLinks.mint(p.woId, p.n, sessionSecret)); }
+                catch { return null; }
+              }
+            });
             await transporter.sendMail({
               from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
               to: recipient.email,
@@ -21984,6 +22086,40 @@ async function handleApi(req, res, pathname) {
       });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't delete photo."] });
+    }
+  }
+
+  // GET /api/photo-link/:woId/:n?s=<signed> — ONE photo, for a reader
+  // with no staff session (the customer status-update email). The
+  // signature is checked against this exact work order and photo number,
+  // so it cannot be replayed onto any other photo. Everything that is not
+  // a valid link for THIS photo is a 403 with no image bytes.
+  const photoLinkMatch = pathname.match(/^\/api\/photo-link\/([^/]+)\/(\d+)$/);
+  if (photoLinkMatch && req.method === "GET") {
+    try {
+      const woId = decodeURIComponent(photoLinkMatch[1]);
+      const n = Number(photoLinkMatch[2]);
+      const sig = new URL(req.url, baseUrlFromReq(req)).searchParams.get("s") || "";
+      const config = await readAuthConfig();
+      if (!photoLinks.verify(sig, woId, n, config.sessionSecret)) {
+        return sendJson(res, 403, { ok: false, errors: ["This photo link is not valid."] });
+      }
+      const wo = await workOrders.get(woId);
+      const photoMeta = wo && (wo.photos || []).find((p) => Number(p.n) === n);
+      if (!photoMeta) return sendJson(res, 404, { ok: false, errors: ["Photo not found."] });
+      const file = await readWorkOrderPhotoFile(woId, n);
+      if (!file) return sendJson(res, 404, { ok: false, errors: ["Photo not found on disk."] });
+      res.writeHead(200, {
+        "content-type": file.mediaType,
+        // private: an email proxy may cache it for this reader, a shared
+        // cache may not.
+        "cache-control": "private, max-age=86400",
+        "content-length": file.data.length
+      });
+      res.end(file.data);
+      return;
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't serve photo."] });
     }
   }
 
