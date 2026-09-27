@@ -309,6 +309,7 @@ function render(inv) {
           customer_sms_skipped_no_phone: "Not scheduled — no customer phone on invoice",
           customer_sms_skipped_voided: "Not scheduled — invoice voided",
           customer_sms_skipped_paid: "Not scheduled — invoice already paid",
+          customer_sms_skipped_not_emailed: "Not sent — the invoice hadn't been emailed; Send texts the customer",
           customer_sms_failed: "Failed — see invoice history"
         };
         smsStatusLine.textContent = reasonMap[lastSmsEntry.action] || "Not scheduled";
