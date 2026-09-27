@@ -455,3 +455,10 @@
   border: 1px dashed #C7C0A8;
   border-radius: 12px;
 }
+
+/* Supplier logo (P-PJL-35 M2a) — the official file, shown whole. */
+.supplier-logo-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.supplier-logo-preview { display: inline-flex; align-items: center; min-height: 44px; padding: 6px 10px; border: 1px solid #E2E0D4; border-radius: 8px; background: #fff; }
+.supplier-logo-img { height: 32px; width: auto; max-width: 220px; object-fit: contain; display: block; }
+.supplier-list-logo { height: 16px; width: auto; max-width: 80px; object-fit: contain; vertical-align: -3px; margin-right: 8px; }
+.suppliers-body .supplier-logo-status { margin: 4px 0 0; font-size: 13px; color: #6B6B63; }

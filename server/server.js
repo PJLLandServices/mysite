@@ -260,6 +260,8 @@ const SERVER_DIR = __dirname;
 const DATA_DIR = path.join(SERVER_DIR, "data");
 // Verified part photos for the parts picker (lib/part-photos.js, P-PJL-35).
 const partPhotos = partPhotosLib.createPartPhotos({ dataDir: DATA_DIR, sharp });
+// Supplier company logos for the picker's supplier chip (P-PJL-35 M2a).
+const supplierLogos = require("./lib/supplier-logos").createSupplierLogos({ dataDir: DATA_DIR, sharp });
 const LEADS_FILE = path.join(DATA_DIR, "leads.json");
 const AUTH_FILE = path.join(DATA_DIR, "auth.json");
 // All AI chat transcripts (booked AND abandoned). Patrick uses this to see
@@ -518,7 +520,9 @@ function rebuildCatalogFromOverrides({ initial = false } = {}) {
   // stores can't be read, every part shows "no photo" rather than
   // failing the whole catalog.
   try {
-    partPhotos.mergeInto(PARTS.parts);
+    // isBaseline: a fitting's canonical default is the part from the
+    // original catalog (lib/part-photos.js fittingDefaultFor).
+    partPhotos.mergeInto(PARTS.parts, { isBaseline: (sku) => !!(BASELINE_PARTS && BASELINE_PARTS[sku]) });
   } catch (err) {
     console.warn("[parts] could not merge part photos:", err?.message);
     for (const p of Object.values(PARTS.parts)) { p.photo = null; p.photoState = "none"; }
@@ -1573,6 +1577,9 @@ function needsAuth(method, pathname) {
   if (pathname === "/api/admin/portal-messages" || pathname.startsWith("/api/admin/portal-messages/")) return "user";
   if (pathname.startsWith("/api/bookings")) return "user";
   if (pathname.startsWith("/api/suppliers")) return "user";
+  // Supplier logo images; uploads go through /api/suppliers/:id/logo
+  // (requireAdmin in the handler).
+  if (pathname.startsWith("/api/supplier-logos")) return "user";
   if (pathname.startsWith("/api/material-lists")) return "user";
   if (pathname.startsWith("/api/projects")) return "user";
   if (pathname.startsWith("/api/part-suppliers")) return "user";
@@ -13885,9 +13892,14 @@ async function handleApi(req, res, pathname) {
       }));
       const groupSummary = {};
       for (const [id, g] of Object.entries(groups)) {
+        const skus = Object.keys(links).filter((sku) => links[sku].groupId === id).sort();
+        // The effective default is whatever the merge decided for the
+        // fitting's visible members (one rule, lib/part-photos.js).
+        const member = skus.map((s) => PARTS.parts[s]).find((p) => p && p.photo && p.photo.groupId === id);
         groupSummary[id] = {
-          id, label: g.label || id, tier: g.tier || "none",
-          skus: Object.keys(links).filter((sku) => links[sku].groupId === id).sort()
+          id, label: g.label || id, tier: g.tier || "none", skus,
+          defaultSku: member ? member.photo.fittingDefaultSku : null,
+          defaultChosen: member ? !!member.photo.fittingDefaultChosen : false
         };
       }
       return sendJson(res, 200, { ok: true, parts, groups: groupSummary, categories: PARTS.categories || [] });
@@ -13946,6 +13958,28 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, sku, ...result, photoState: PARTS.parts[sku]?.photoState || "none", photo: PARTS.parts[sku]?.photo || null });
     } catch (err) {
       return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't update the photo."] });
+    }
+  }
+
+  // POST /api/part-photo-groups/:id/default {sku} — Patrick's "Default for
+  // this fitting": the part whose description, part #, price and supplier
+  // the picker's one-row fitting shows and whose Add it uses. (admin)
+  const partPhotoDefaultMatch = pathname.match(/^\/api\/part-photo-groups\/([^/]+)\/default$/);
+  if (partPhotoDefaultMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    const by = await actorLabel(req);
+    try {
+      const groupId = decodeURIComponent(partPhotoDefaultMatch[1]);
+      const payload = await parseRequestBody(req);
+      const sku = String(payload.sku || "");
+      const result = await partPhotos.setFittingDefault(groupId, sku, PARTS.parts[sku], { by });
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({ who: by, action: "part-photo.default", note: `Default for fitting ${groupId} → ${sku}${result.previous ? ` (was ${result.previous})` : ""}`, after: result });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't set the default."] });
     }
   }
 
@@ -15884,6 +15918,42 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, supplier: updated });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update supplier."] });
+    }
+  }
+
+  // ---------- Supplier logos (P-PJL-35 M2a) -------------------------
+  //   GET    /api/supplier-logos/<sha256>.png   the logo image (staff)
+  //   POST   /api/suppliers/:id/logo {data}     upload/replace (admin)
+  //   DELETE /api/suppliers/:id/logo            remove (admin)
+  // The official logo, resized only (lib/supplier-logos.js).
+  const supplierLogoImgMatch = pathname.match(/^\/api\/supplier-logos\/([a-f0-9]{64})\.png$/);
+  if (supplierLogoImgMatch && req.method === "GET") {
+    try {
+      const buf = await fs.readFile(supplierLogos.logoPath(supplierLogoImgMatch[1]));
+      res.writeHead(200, { "content-type": "image/png", "content-length": buf.length, "cache-control": "private, max-age=31536000, immutable" });
+      res.end(buf);
+    } catch (_) { sendJson(res, 404, { ok: false, errors: ["No such logo."] }); }
+    return;
+  }
+  const supplierLogoMatch = pathname.match(/^\/api\/suppliers\/([^/]+)\/logo$/);
+  if (supplierLogoMatch && (req.method === "POST" || req.method === "DELETE")) {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    const id = decodeURIComponent(supplierLogoMatch[1]);
+    const current = await suppliers.get(id);
+    if (!current) return sendJson(res, 404, { ok: false, errors: ["Supplier not found."] });
+    const by = await actorLabel(req);
+    try {
+      let logo = null;
+      if (req.method === "POST") {
+        const payload = await parseRequestBody(req, { maxBytes: 6 * 1024 * 1024 });
+        logo = await supplierLogos.save(Buffer.from(String(payload.data || ""), "base64"));
+      }
+      const updated = await suppliers.setLogo(id, logo);
+      await settings.recordAudit({ who: by, action: logo ? "supplier.logo.set" : "supplier.logo.remove", note: `${logo ? "Set" : "Removed"} the logo for ${current.name} (${id})`, after: { id, logo } });
+      return sendJson(res, 200, { ok: true, supplier: updated });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't save the logo."] });
     }
   }
 

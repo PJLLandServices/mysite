@@ -95,7 +95,30 @@ function photoUrls(hash) {
 // Attach `photo` and `photoState` to every part, in place. Pure apart from
 // the fileExists callback. Candidate images are never exposed here: a part
 // that is not "verified" gets photo: null and nothing else.
-function mergeIntoCatalog(parts, groups, links, fileExists) {
+// "Default for this fitting" (P-PJL-35 M2a). When several part numbers
+// are the same real fitting, the picker shows ONE row, and that row's
+// description, part #, price, supplier chip and main Add all come from the
+// fitting's default part. The rule, in order:
+//   1. the default Patrick chose on the Part photos page, if it is still a
+//      visible member of the fitting;
+//   2. otherwise the canonical part: the one from the original catalog
+//      (parts.json) when exactly one member is;
+//   3. otherwise the member that was in the fitting first (earliest link),
+//      i.e. the part the others were linked TO;
+//   4. ties by part number.
+// Never "whichever part received the photo", and never a supplier rule.
+function fittingDefaultFor(group, memberSkus, links, isBaseline) {
+  if (!memberSkus.length) return { sku: null, chosen: false };
+  if (group && group.defaultSku && memberSkus.includes(group.defaultSku)) return { sku: group.defaultSku, chosen: true };
+  const baseline = isBaseline ? memberSkus.filter((s) => isBaseline(s)) : [];
+  if (baseline.length === 1) return { sku: baseline[0], chosen: false };
+  const pool = baseline.length > 1 ? baseline : memberSkus;
+  const at = (s) => (links[s] && links[s].firstLinkedAt) || (links[s] && links[s].at) || "";
+  const sorted = [...pool].sort((a, b) => (at(a) < at(b) ? -1 : at(a) > at(b) ? 1 : a.localeCompare(b)));
+  return { sku: sorted[0], chosen: false };
+}
+
+function mergeIntoCatalog(parts, groups, links, fileExists, { isBaseline } = {}) {
   const states = {};
   for (const [sku, part] of Object.entries(parts || {})) {
     states[sku] = photoStateFor(sku, part, groups, links, fileExists);
@@ -104,6 +127,10 @@ function mergeIntoCatalog(parts, groups, links, fileExists) {
   const byGroup = {};
   for (const [sku, st] of Object.entries(states)) {
     if (st.state === "verified") (byGroup[links[sku].groupId] ||= []).push(sku);
+  }
+  const defaults = {};
+  for (const [groupId, members] of Object.entries(byGroup)) {
+    defaults[groupId] = fittingDefaultFor(groups[groupId], members, links, isBaseline);
   }
   for (const [sku, part] of Object.entries(parts || {})) {
     const st = states[sku];
@@ -120,7 +147,11 @@ function mergeIntoCatalog(parts, groups, links, fileExists) {
       sourceDomain: (g.source && g.source.domain) || null,
       approvedBy: g.approvedBy || null,
       approvedAt: g.approvedAt || null,
-      sharedWith: byGroup[groupId].filter((s) => s !== sku).sort()
+      sharedWith: byGroup[groupId].filter((s) => s !== sku).sort(),
+      // Only VERIFIED members are part of the picker's one-row fitting; a
+      // member waiting for review or hidden after an edit stays its own row.
+      fittingDefaultSku: defaults[groupId].sku,
+      fittingDefaultChosen: defaults[groupId].chosen
     };
   }
   return parts;
@@ -439,9 +470,9 @@ function createPartPhotos({ dataDir, sharp }) {
   function readStoresSync() {
     return { groups: readMapSync(GROUPS_FILE), links: readMapSync(LINKS_FILE) };
   }
-  function mergeInto(parts) {
+  function mergeInto(parts, opts = {}) {
     const { groups, links } = readStoresSync();
-    return mergeIntoCatalog(parts, groups, links, fileExists);
+    return mergeIntoCatalog(parts, groups, links, fileExists, opts);
   }
 
   async function log(entry) {
@@ -489,6 +520,12 @@ function createPartPhotos({ dataDir, sharp }) {
   function linkRecord(part, by) {
     return { linkTier: "confirmed", linkedBy: by, fingerprint: fingerprintOf(part), at: new Date().toISOString() };
   }
+  // When a SKU first joined its fitting. Reconfirming or re-uploading the
+  // photo must not make it "newer" — the fitting default's rule 3 reads it.
+  function keepFirstLinked(prev, groupId, rec) {
+    const first = prev && prev.groupId === groupId ? (prev.firstLinkedAt || prev.at) : rec.at;
+    return { ...rec, firstLinkedAt: first };
+  }
 
   // Set Patrick's photo for the fitting this SKU is. If the SKU already
   // belongs to a group, the GROUP's photo changes — every SKU that is the
@@ -518,7 +555,7 @@ function createPartPhotos({ dataDir, sharp }) {
       g.approvedBy = by;
       g.approvedAt = now;
       g.updatedAt = now;
-      links[sku] = { groupId, ...linkRecord(part, by) };
+      links[sku] = keepFirstLinked(links[sku], groupId, { groupId, ...linkRecord(part, by) });
       const sharedWith = Object.keys(links).filter((s) => s !== sku && links[s].groupId === groupId);
       await log({ action: "photo.set", sku, groupId, hash: processed.hash, method: source.method, by, sharedWith });
       return { groupId, hash: processed.hash, sharedWith };
@@ -536,7 +573,7 @@ function createPartPhotos({ dataDir, sharp }) {
     return mutate(async (groups, links) => {
       if (!groups[groupId]) throw new Error("That photo group doesn't exist.");
       const previous = links[sku] ? links[sku].groupId : null;
-      links[sku] = { groupId, ...linkRecord(part, by) };
+      links[sku] = keepFirstLinked(links[sku], groupId, { groupId, ...linkRecord(part, by) });
       await log({ action: "link.set", sku, groupId, previous, by });
       return { groupId, previous };
     });
@@ -546,6 +583,8 @@ function createPartPhotos({ dataDir, sharp }) {
     return mutate(async (groups, links) => {
       const previous = links[sku] ? links[sku].groupId : null;
       delete links[sku];
+      // A part that leaves the fitting stops being its chosen default.
+      if (previous && groups[previous] && groups[previous].defaultSku === sku) delete groups[previous].defaultSku;
       await log({ action: "link.remove", sku, previous, by });
       return { previous };
     });
@@ -557,7 +596,7 @@ function createPartPhotos({ dataDir, sharp }) {
     if (!part) throw new Error("Unknown part.");
     return mutate(async (groups, links) => {
       if (!links[sku]) throw new Error("That part has no photo to reconfirm.");
-      links[sku] = { ...links[sku], ...linkRecord(part, by) };
+      links[sku] = keepFirstLinked(links[sku], links[sku].groupId, { ...links[sku], ...linkRecord(part, by) });
       await log({ action: "link.reconfirm", sku, groupId: links[sku].groupId, by });
       return { groupId: links[sku].groupId };
     });
@@ -581,19 +620,39 @@ function createPartPhotos({ dataDir, sharp }) {
     });
   }
 
+  // Patrick's deliberate "Default for this fitting". Only a part that is
+  // linked to this fitting (confirmed) can be chosen.
+  async function setFittingDefault(groupId, sku, part, { by }) {
+    if (!part) throw new Error("Unknown part.");
+    return mutate(async (groups, links) => {
+      const g = groups[groupId];
+      if (!g) throw new Error("That fitting doesn't exist.");
+      const link = links[sku];
+      if (!link || link.groupId !== groupId) throw new Error("That part isn't linked to this fitting.");
+      if (!SHOWABLE_LINK_TIERS.has(link.linkTier) || link.fingerprint !== fingerprintOf(part)) {
+        throw new Error("That part's link needs confirming before it can be the default.");
+      }
+      const previous = g.defaultSku || null;
+      g.defaultSku = sku;
+      g.updatedAt = new Date().toISOString();
+      await log({ action: "fitting.default", groupId, sku, previous, by });
+      return { groupId, defaultSku: sku, previous };
+    });
+  }
+
   async function snapshot() {
     return { groups: await readMap(GROUPS_FILE), links: await readMap(LINKS_FILE) };
   }
 
   return {
     imagePath, ensureThumb, resolveImageFile, fileExists, readStoresSync, mergeInto, snapshot,
-    setPhoto, setPhotoFromUrl, linkToGroup, unlink, reconfirm, removeGroupPhoto
+    setPhoto, setPhotoFromUrl, linkToGroup, unlink, reconfirm, removeGroupPhoto, setFittingDefault
   };
 }
 
 module.exports = {
   createPartPhotos,
-  photoStateFor, mergeIntoCatalog, fingerprintOf, photoUrls,
+  photoStateFor, mergeIntoCatalog, fingerprintOf, photoUrls, fittingDefaultFor,
   isPublicAddress, fetchImageSafely, processImage, normalizeThumbs, findSubjectRegion,
   SIZES, HASH_RE
 };

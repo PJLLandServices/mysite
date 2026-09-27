@@ -71,11 +71,24 @@
     return `<span class="pp-thumb is-nophoto" title="${esc(STATE_LABEL[p.photoState] || "No photo")}"><span class="pp-noph">${NO_PHOTO_SVG}<span>No photo</span></span></span>`;
   }
 
+  // Shown on the fitting's default member when the fitting has 2+ parts.
+  function defaultBadgeHtml(p) {
+    const g = p.groupId && state.groups[p.groupId];
+    if (!g || g.skus.length < 2 || g.defaultSku !== p.sku) return "";
+    return `<div class="pp-default">Default for this fitting${g.defaultChosen ? "" : ' <span class="pp-default-auto">(automatic — choose one to set it)</span>'}</div>`;
+  }
+
   function actionsHtml(p) {
     const b = [];
     b.push(`<button type="button" class="pp-btn pp-btn-primary" data-act="set">${p.photoState === "verified" ? "Replace photo" : "Set photo"}</button>`);
     b.push(`<button type="button" class="pp-btn" data-act="same">Same fitting as…</button>`);
     if (p.photoState === "changed") b.push(`<button type="button" class="pp-btn" data-act="reconfirm">Photo is still right</button>`);
+    // "Default for this fitting": which part the picker's one row shows and
+    // adds. Offered on any verified member that isn't already the default.
+    const g = p.groupId && state.groups[p.groupId];
+    if (g && g.skus.length > 1 && p.photoState === "verified" && g.defaultSku !== p.sku) {
+      b.push(`<button type="button" class="pp-btn" data-act="make-default">Make default for this fitting</button>`);
+    }
     if (p.groupId) b.push(`<button type="button" class="pp-btn pp-btn-quiet" data-act="unlink">Unlink</button>`);
     if (p.photoState === "verified") b.push(`<button type="button" class="pp-btn pp-btn-danger" data-act="remove">Remove photo</button>`);
     return b.join("");
@@ -125,6 +138,7 @@
           <div class="pp-desc">${p.size ? `<span class="crm-parts-size pp-size">${esc(p.size)}</span> ` : ""}${esc(p.description || p.sku)}</div>
           <div class="pp-meta"><span class="pp-mono">${esc(p.sku)}</span>${p.manufacturer ? ` · ${esc(p.manufacturer)}` : ""}</div>
           <div class="pp-state is-${esc(p.photoState)}">${esc(STATE_LABEL[p.photoState] || "No photo")}${shared ? ` · shared with ${esc(sharedNames)}` : ""}</div>
+          ${defaultBadgeHtml(p)}
         </div>
       </div>
       <div class="pp-actions">${actionsHtml(p)}</div>
@@ -249,6 +263,16 @@
         { confirmLabel: "Photo is still right", cancelLabel: "Cancel" });
       if (!ok) return;
       await run(row, () => post(`/api/part-photos/${enc}/reconfirm`), "Saving…");
+      return;
+    }
+    if (act === "make-default") {
+      const g = state.groups[p.groupId];
+      const current = g && g.defaultSku ? bySku(g.defaultSku) : null;
+      const ok = await window.pjlDialog.confirm(
+        `Make ${p.sku} (${p.description}) the default for this fitting? In the parts picker the fitting's row will show this part's description, part # and price, and its main Add will add ${p.sku} from its default supplier.${current ? ` It's currently ${current.sku}.` : ""}`,
+        { confirmLabel: "Make default", cancelLabel: "Cancel" });
+      if (!ok) return;
+      await run(row, () => post(`/api/part-photo-groups/${encodeURIComponent(p.groupId)}/default`, { sku: p.sku }), "Saving…");
       return;
     }
     if (act === "unlink") {
