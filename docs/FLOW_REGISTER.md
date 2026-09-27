@@ -6586,6 +6586,48 @@ done by `invoices.reconcileToSignedScope(woId)`, under the invoice store lock:
 - `test-resignature-await` and `test-scope-hold-before-reply` now follow the release write into
   `reconcileToSignedScope`. The latter still fails if that write isn't awaited (checked by mutation).
 
+## 2026-09-27 — FLOW-22/31: the invoice text never says "emailed" before it is
+
+Found by E2E journey 1 (a FINDING until now). Five minutes after a **Bill later** Finish the
+customer was texted *"PJL Land Services: Your invoice for <street> has been emailed to you. If you
+don't see it, please check spam/junk. View or pay it here: …"*. Nothing had been emailed: a Bill-later
+invoice is a draft until the office reviews and Sends it, and the texted portal page showed the draft
+with no Pay button. The customer's completion email, meanwhile, correctly said "An invoice will
+follow".
+
+**The rule, once:** `notify-customer.sendInvoiceReadySMS` sends only for an invoice that has been
+emailed (`sentAt`). Both fire paths go through it: the cascade's timer and the 2-minute
+`sweepPendingInvoiceSMS`. An unsent invoice is skipped, `customerSmsScheduledAt` is cleared (so the
+sweep doesn't retry), and `customer_sms_skipped_not_emailed` goes on the invoice history once. The
+invoice page's text status reads "Not sent — the invoice hadn't been emailed; Send texts the
+customer".
+
+**The whole workflow:**
+- **Customer:** gets the completion email at Finish ("An invoice will follow") and no text. When the
+  office Sends, they get the invoice email and, 30s later, the existing "we just emailed your invoice…
+  check Junk/Spam" text. That text is true, and it is unchanged.
+- **Patrick:** gets the same alerts as before. The invoice page shows why no text went.
+- **Capacity/calendar:** untouched.
+- **Linked records:** no work order, property or season-plan change; the invoice changes only its
+  SMS fields and history.
+- **Audit:** the skip is on the invoice history. `customer_sms_scheduled` stays, so it shows that the
+  timer was set and then held back.
+
+**Deliberately left alone:**
+- The cascade still schedules the timer for Bill-later invoices, so an invoice Sent inside those five
+  minutes is texted as before.
+- In that case the customer can get both the timer's text and Send's junk-mail text. This is
+  pre-existing, not new.
+- The body's wording is unchanged.
+- Paid-on-site invoices are not scheduled, as before.
+- Manual reminders (`sendInvoiceReminderSMS`) are separate and unchanged.
+
+**Tests:**
+- `scripts/test-invoice-text-truthful.mjs` (12; the old code fails 5).
+- Journey 1 now asserts no text at Finish (the old code fails 3).
+- The control in `test-price-confirm.mjs` D now reads "scheduled" from history, because the timer
+  clears the schedule once it fires.
+
 ## 2026-09-23 — FLOW-23/31: what a work order bills has one answer, `billing.billingFor(wo)`
 
 Patrick: "I don't want separate pricing logic patched independently in Finish,

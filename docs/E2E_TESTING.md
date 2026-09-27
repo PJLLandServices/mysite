@@ -55,7 +55,7 @@ then it crashes on the missing webhook helper.
 
 | # | Journey | Checks |
 |---|---|---|
-| 1 | New customer → 4 zones → Bill later → sign → Finish → draft invoice → reopen lands on it → Send → pay link | 33 |
+| 1 | New customer → 4 zones → Bill later → sign → Finish → draft invoice → reopen lands on it → Send → pay link | 32 |
 | 2 | Booked 4, walked 6: the price at signing = the signed scope = the invoice = the email = the pay page | 25 |
 | 3 | 16 zones: custom price held (no link, Tap to Pay, Send or text) → Confirm price sends nothing → manual Send | 30 |
 | 4 | Card on site: approved, declined, three timeouts, duplicate webhook, double payment, refund | 61 |
@@ -79,10 +79,9 @@ becomes an assertion.
 1. ~~**Re-signing doesn't re-price the invoice**~~ (journey 6). **Fixed by
    #325**: the invoice is reconciled to the signed scope before its hold is
    released, and journey 6 now asserts it in both directions.
-2. **Bill later: the invoice text says it was emailed** (journey 1). Five
-   minutes after Finish, the customer is texted "Your invoice … has been
-   emailed to you … check spam/junk". The invoice is still a draft that
-   nobody has sent, and its portal page has no Pay button.
+2. ~~**Bill later: the invoice text says it was emailed**~~ (journey 1). **Fixed**:
+   the automatic invoice text goes only once the invoice has been emailed, and
+   journey 1 now asserts that no text goes out at a Bill-later Finish.
 3. **A double card payment reaches nobody** (journey 4). Pay page and Tap to
    Pay both approved: the ledger records it once and says "needs a manual
    refund", but only in a server log and on whichever screen confirmed

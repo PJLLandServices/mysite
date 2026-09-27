@@ -10,9 +10,9 @@
 //   walk 4 zones, sign   → the price shown at signing is the tier price
 //   Finish (Bill later)  → a DRAFT invoice for that price + HST; the
 //                          customer's "complete" email, Patrick's alert;
-//                          the "invoice ready" text fires on its timer
-//                          (FINDING: it says the invoice was emailed; it
-//                          wasn't — reported, not pinned, until decided)
+//                          NO text: the timer's "invoice ready" text says
+//                          the invoice was emailed, and it hasn't been
+//                          (was a FINDING; the text now waits for Send)
 //   reopen from the day  → the app opens that invoice, not the web record
 //   Send (Patrick)       → one invoice email with a working pay link; the
 //                          pay page shows the same balance
@@ -72,21 +72,18 @@ try {
   J.ok(inv?.total === withTax(srv, priceOf(TIER)), `total is that price plus HST (${inv?.total})`);
   const finishMail = await J.sent(L, "finish", [
     { channel: "email", to: "nora@example.com", subject: /complete/i },
-    { channel: "email", to: "stub@pjl.test", subject: /WO COMPLETED/ },
-    { channel: "sms", to: PHONE, text: /invoice/i }
+    { channel: "email", to: "stub@pjl.test", subject: /WO COMPLETED/ }
   ]);
   const custMail = finishMail.find((m) => m.channel === "email" && m.to.includes("nora@"));
   J.ok(custMail && new RegExp(String(inv?.total?.toFixed(2)).replace(".", "\\.")).test(strip(custMail.html)), "the completion email shows the invoice total");
-  const text = finishMail.find((m) => m.channel === "sms");
-  J.ok(text && /http:\/\/127\.0\.0\.1:\d+\//.test(text.body) && !/pjllandservices\.com/.test(text.body), `the invoice text links to this server, never production (${text?.body})`);
+  J.ok(custMail && /An invoice will follow/.test(custMail.html), "…and says an invoice will follow");
+  // Was a FINDING: five minutes after Finish the customer was texted
+  // "Your invoice … has been emailed to you", and it hadn't been.
   const afterText = (await srv.api("GET", `/api/invoices/${inv.id}`)).body.invoice;
-  J.ok(Boolean(afterText?.customerSmsSentAt), "…and the invoice records it was texted");
-  const portalLink = (text?.body || "").match(/\/portal\/invoice\/([^?\s]+)\?t=([^\s]+)/);
-  const portalView = portalLink ? (await srv.api("GET", `/api/portal/invoice/${portalLink[1]}?t=${portalLink[2]}`)).body.invoice : null;
-  J.ok(portalView?.id === inv.id && portalView?.total === inv.total, `the texted link opens this invoice in the portal (${j([portalView?.id, portalView?.total])})`);
-  J.ok(portalView?.status === "draft" && portalView?.payUrl === null, `…still a draft with no Pay button (${j([portalView?.status, portalView?.payUrl])})`);
-  J.finding(!(/has been emailed to you/.test(text?.body || "") && !afterText?.sentAt),
-    "Bill later: the invoice text says \"Your invoice … has been emailed to you … check spam/junk\", but the invoice is still a draft nobody has sent, and its portal page has no Pay button until Patrick sends it");
+  J.ok(!finishMail.some((m) => m.channel === "sms") && !afterText?.customerSmsSentAt,
+    "Bill later: no \"your invoice has been emailed\" text while the invoice is a draft nobody has sent");
+  J.ok((afterText?.history || []).some((h) => h.action === "customer_sms_skipped_not_emailed") && !afterText?.customerSmsScheduledAt,
+    `…the skip is on the invoice's history and nothing is left for the sweep (${j((afterText?.history || []).map((h) => h.action))})`);
 
   J.step("reopen from the day");
   const back = await reopen(srv, wo.id);
