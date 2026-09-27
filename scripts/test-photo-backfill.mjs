@@ -1035,16 +1035,16 @@ const pageWith = (visible, images = [], extra = "") => `<html><head>${images.map
 {
   const catalogAll = Object.fromEntries(realParts.map((p) => [p.sku, p]));
   // 14a. Selection on the real catalog: mixed, deterministic, never "first 30".
-  const wave = ev.pickWave(realParts, { size: 30 });
-  check("wave: 30 parts, 15 branded + 15 generic", wave.skus.length === 30 && wave.branded.length === 15 && wave.generic.length === 15);
-  check("wave: deterministic", JSON.stringify(ev.pickWave(realParts, { size: 30 }).skus) === JSON.stringify(wave.skus));
-  check("wave: not the first 30 by SKU", JSON.stringify(wave.skus.slice().sort()) !== JSON.stringify(realParts.map((p) => p.sku).sort().slice(0, 30)));
+  const wave = ev.pickWave(realParts, { size: 50 });
+  check("wave: 50 parts, 25 branded + 25 generic", wave.skus.length === 50 && wave.branded.length === 25 && wave.generic.length === 25);
+  check("wave: deterministic", JSON.stringify(ev.pickWave(realParts, { size: 50 }).skus) === JSON.stringify(wave.skus));
+  check("wave: not the first 50 by SKU", JSON.stringify(wave.skus.slice().sort()) !== JSON.stringify(realParts.map((p) => p.sku).sort().slice(0, 50)));
   check("wave: branded spans ≥3 manufacturers and ≥3 categories", new Set(wave.branded.map(ev.effectiveManufacturer)).size >= 3 && new Set(wave.branded.map((p) => p.category)).size >= 3, wave.branded.map((p) => `${p.manufacturer}/${p.category}`).join(","));
   check("wave: generic spans ≥4 shapes and ≥2 categories", new Set(wave.generic.map(ev.shapeOf)).size >= 4 && new Set(wave.generic.map((p) => p.category)).size >= 2, wave.generic.map((p) => `${p.category}/${ev.shapeOf(p)}`).join(","));
   check("wave: no manufacturer×category bucket takes more than its share (round-robin)", (() => { const c = {}; for (const p of wave.branded) { const k = `${ev.effectiveManufacturer(p)}|${p.category}`; c[k] = (c[k] || 0) + 1; } return Math.max(...Object.values(c)) <= 3; })());
-  check("wave: exclusions honoured", (() => { const ex = new Set(wave.skus.slice(0, 5)); const w2 = ev.pickWave(realParts, { size: 30, isExcluded: (p) => ex.has(p.sku) }); return w2.skus.length === 30 && !w2.skus.some((s) => ex.has(s)); })());
+  check("wave: exclusions honoured", (() => { const ex = new Set(wave.skus.slice(0, 5)); const w2 = ev.pickWave(realParts, { size: 50, isExcluded: (p) => ex.has(p.sku) }); return w2.skus.length === 50 && !w2.skus.some((s) => ex.has(s)); })());
   check("wave: a smaller size still mixes", (() => { const w = ev.pickWave(realParts, { size: 6 }); return w.skus.length === 6 && w.branded.length === 3 && w.generic.length === 3; })());
-  check("wave: when one pool runs short the other fills", (() => { const w = ev.pickWave(realParts.filter((p) => !ev.MANUFACTURER_DOMAINS[ev.effectiveManufacturer(p)]).concat(realParts.filter((p) => ev.MANUFACTURER_DOMAINS[ev.effectiveManufacturer(p)]).slice(0, 4)), { size: 30 }); return w.skus.length === 30 && w.branded.length === 4 && w.generic.length === 26; })());
+  check("wave: when one pool runs short the other fills", (() => { const w = ev.pickWave(realParts.filter((p) => !ev.MANUFACTURER_DOMAINS[ev.effectiveManufacturer(p)]).concat(realParts.filter((p) => ev.MANUFACTURER_DOMAINS[ev.effectiveManufacturer(p)]).slice(0, 4)), { size: 50 }); return w.skus.length === 50 && w.branded.length === 4 && w.generic.length === 46; })());
 
   // 14b. The engine's plan excludes live, waiting/judged and calibration-processed parts.
   const dir = tmp();
@@ -1052,27 +1052,58 @@ const pageWith = (visible, images = [], extra = "") => `<html><head>${images.map
   await h.b.startCalibration({ by: "patrick" }); await h.b.idle();
   const cal = h.b._state().run.calibration.skus;
   const plan = h.b.wavePlan();
-  check("wave plan: 30 parts, auto-approve off, worst-case estimate present", plan.skus.length === 30 && plan.autoApprove === false && plan.max === 30 && plan.estimate.apiCalls.max === plan.estimate.finderCalls.max + plan.estimate.verifyCalls.max + plan.estimate.compareCalls.max);
+  check("wave plan: 50 parts, auto-approve off, worst-case estimate present", plan.skus.length === 50 && plan.autoApprove === false && plan.max === 50 && plan.estimate.apiCalls.max === plan.estimate.finderCalls.max + plan.estimate.verifyCalls.max + plan.estimate.compareCalls.max);
   check("wave plan: nothing the calibration processed", !plan.skus.some((s) => cal.includes(s)));
   check("wave plan: nothing waiting for review or judged", plan.skus.every((s) => (h.parts()[s].photoState || "none") === "none"));
   check("wave plan: eligible count excludes the calibration parts", plan.eligible === realParts.length - cal.length);
-  check("wave plan: worst case for 15 branded + 15 generic = 75 finder + 90 vision + 15 compare = 180 calls, 450 searches", plan.estimate.finderCalls.max === 15 * 3 + 15 * 2 && plan.estimate.verifyCalls.max === 90 && plan.estimate.compareCalls.max === 15 && plan.estimate.apiCalls.max === 180 && plan.estimate.webSearches.max === 450, JSON.stringify(plan.estimate));
-  check("wave plan: size is capped at 30 even if asked for more", h.b.wavePlan({ size: 100 }).skus.length === 30);
+  check("wave plan: worst case for 25 branded + 25 generic = 125 finder + 150 vision + 25 compare = 300 calls, 750 searches", plan.estimate.finderCalls.max === 25 * 3 + 25 * 2 && plan.estimate.verifyCalls.max === 150 && plan.estimate.compareCalls.max === 25 && plan.estimate.apiCalls.max === 300 && plan.estimate.webSearches.max === 750, JSON.stringify(plan.estimate));
+  check("wave plan: size is capped at 50 even if asked for more", h.b.wavePlan({ size: 100 }).skus.length === 50);
 
   // 14c. Start requires the exact shown list; auto-approve forced off; one run at a time.
   await rejects("wave start: refuses without the confirmed list", () => h.b.startWave({ by: "patrick" }), /plan has changed/);
-  await rejects("wave start: refuses a different list (one SKU swapped)", () => h.b.startWave({ by: "patrick", skus: [...plan.skus.slice(0, 29), cal[0]] }), /plan has changed/);
+  await rejects("wave start: refuses a different list (one SKU swapped)", () => h.b.startWave({ by: "patrick", skus: [...plan.skus.slice(0, 49), cal[0]] }), /plan has changed/);
   await rejects("wave start: refuses a reordered list", () => h.b.startWave({ by: "patrick", skus: plan.skus.slice().reverse() }), /plan has changed/);
   await rejects("wave start: refuses a longer list", () => h.b.startWave({ by: "patrick", skus: [...plan.skus, "EXTRA"] }), /plan has changed/);
   check("…and nothing started", h.b._state().run.status === "done");
   const st = await h.b.startWave({ by: "patrick", skus: plan.skus });
   const run = h.b._state().run;
-  check("wave start: exactly the plan, auto-approve off, labelled and attributed", JSON.stringify(run.order.slice().sort()) === JSON.stringify(plan.skus.slice().sort()) && run.options.autoApprove === false && /^Wave/.test(run.label) && run.wave.by === "patrick" && st.run.wave.skus.length === 30);
+  check("wave start: exactly the plan, auto-approve off, labelled and attributed", JSON.stringify(run.order.slice().sort()) === JSON.stringify(plan.skus.slice().sort()) && run.options.autoApprove === false && /^Wave/.test(run.label) && run.wave.by === "patrick" && st.run.wave.skus.length === 50);
   await rejects("wave start: refused while active", () => h.b.startWave({ by: "patrick", skus: plan.skus }), /already active/);
   await h.b.idle();
   const parts = h.parts();
   check("wave: finished, nothing live, only wave parts touched", h.b._state().run.status === "done" && run.order.every((s) => parts[s].photoState !== "verified") && Object.keys(h.counts.find).every((s) => run.order.includes(s) || cal.includes(s)));
   check("wave: the next plan excludes everything this wave processed", !h.b.wavePlan().skus.some((s) => run.order.includes(s)));
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// ---- 15. Waves of 50 (Patrick, Sep 27 2026) -------------------------------
+// Prior waves are excluded (even a part that errored and still shows no
+// photo state), the usage split by kind is on the status, and the cap is 50.
+{
+  const catalogAll = Object.fromEntries(realParts.map((p) => [p.sku, p]));
+  const dir = tmp();
+  let failOnce = null;
+  const h = harness(dir, { catalog: catalogAll, find: (part) => { if (part.sku === failOnce) throw Object.assign(new Error("The model declined this request."), { permanent: true }); } });
+  const plan1 = h.b.wavePlan();
+  failOnce = plan1.skus[3]; // one part of the wave errors → keeps photoState "none"
+  await h.b.startWave({ by: "patrick", skus: plan1.skus }); await h.b.idle();
+  const run1 = h.b._state().run;
+  check("wave 1: one part ended in error and still has no photo state", run1.items[failOnce].step === "error" && (h.parts()[failOnce].photoState || "none") === "none");
+  const st = h.b.status().run;
+  check("status: usage split by kind is exposed with per-part averages", st.usageByKind && st.usageByKind.branded.parts === 25 && st.usageByKind.generic.parts === 25 && st.usageByKind.branded.perPart && typeof st.usageByKind.branded.perPart.in === "number", JSON.stringify(st.usageByKind));
+  check("status: the split adds up to the run totals", st.usageByKind.branded.calls + st.usageByKind.generic.calls === st.usage.calls && st.usageByKind.branded.in + st.usageByKind.generic.in === st.usage.in && st.usageByKind.branded.pageFetches + st.usageByKind.generic.pageFetches === st.usage.pageFetches);
+  check("status: branded parts cost more finder calls than generic here (map step)", st.usageByKind.branded.perPart.calls >= st.usageByKind.generic.perPart.calls - 1);
+  const plan2 = h.b.wavePlan();
+  check("wave 2: none of wave 1's parts — including the errored one — come back", !plan2.skus.some((s) => plan1.skus.includes(s)) && !plan2.skus.includes(failOnce) && plan2.skus.length === 50);
+  check("wave 2: eligible count dropped by the whole of wave 1", plan2.eligible === plan1.eligible - 50);
+  // After a restart the exclusion still holds (history carries the wave).
+  const h2 = harness(dir, { catalog: catalogAll });
+  await h2.b.load();
+  const plan3 = h2.b.wavePlan();
+  check("wave 2 after a restart: same plan, still nothing from wave 1", JSON.stringify(plan3.skus) === JSON.stringify(plan2.skus));
+  await h2.b.startWave({ by: "patrick", skus: plan3.skus }); await h2.b.idle();
+  const plan4 = h2.b.wavePlan();
+  check("wave 3: excludes both earlier waves (history + current run)", !plan4.skus.some((s) => plan1.skus.includes(s) || plan3.skus.includes(s)) && plan4.eligible === plan1.eligible - 100);
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
