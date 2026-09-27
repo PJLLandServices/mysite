@@ -1846,18 +1846,26 @@ async function resolveUncertainScopeSend(projectId, scrId, { outcome, by = "admi
     if (!f) throw Object.assign(new Error("There is no interrupted send to settle."), { code: "no_uncertain_send" });
     const at = nowIso();
     scr.sendInFlight = null;
+    // The attempt keeps BOTH people and times: who started the send and
+    // when (at/by), and who settled it, when, and what they found
+    // (settledBy/settledAt/outcome).
+    const settled = { interrupted: true, settledBy: by, settledAt: at, outcome: outcome === "sent" ? "confirmed_delivered" : "confirmed_not_delivered" };
     scr.sendAttempts = [
       ...(Array.isArray(scr.sendAttempts) ? scr.sendAttempts : []),
       outcome === "sent"
-        ? { at: f.at || at, by: f.by || by, to: f.to || null, ok: true, reason: `Interrupted send — ${by} confirmed the email arrived` }
-        : { at: f.at || at, by: f.by || by, to: f.to || null, ok: false, reason: `Interrupted send — ${by} confirmed it did not arrive` }
+        ? { at: f.at || at, by: f.by || by, to: f.to || null, ok: true, reason: `Interrupted send — ${by} confirmed the email arrived`, ...settled }
+        : { at: f.at || at, by: f.by || by, to: f.to || null, ok: false, reason: `Interrupted send — ${by} confirmed it did not arrive`, ...settled }
     ];
     if (outcome === "sent" && scr.status === "pending_admin_review") {
       scr.status = "pending_customer_approval";
       scr.sentAt = f.at || at;
       scr.sentBy = f.by || by;
     }
-    appendHistory(p, { action: outcome === "sent" ? "scope_change_send_confirmed" : "scope_change_send_failed", by, note: `${scrId} — interrupted send ${outcome === "sent" ? "confirmed delivered" : "confirmed not delivered"}` });
+    appendHistory(p, {
+      action: outcome === "sent" ? "scope_change_send_confirmed" : "scope_change_send_failed",
+      by,
+      note: `${scrId} — interrupted send (started ${f.at || "?"}${f.by ? ` by ${f.by}` : ""}) ${outcome === "sent" ? "confirmed DELIVERED" : "confirmed NOT delivered"} by ${by}`
+    });
     return scr;
   });
 }
@@ -2042,7 +2050,8 @@ async function resolveScopeChangeRequest(projectId, scrId, { resolution, note = 
     if (scr.sendInFlight && !_scopeSendsInFlight.has(`${projectId}:${scrId}`)) {
       const f = scr.sendInFlight;
       scr.sendAttempts = [...(Array.isArray(scr.sendAttempts) ? scr.sendAttempts : []),
-        { at: f.at || nowIso(), by: f.by || by, to: f.to || null, ok: false, reason: "Interrupted send — delivery never confirmed; settled by the recorded decision" }];
+        { at: f.at || nowIso(), by: f.by || by, to: f.to || null, ok: false, reason: "Interrupted send — delivery never confirmed; settled by the recorded decision",
+          interrupted: true, settledBy: by, settledAt: nowIso(), outcome: "unconfirmed_decision_recorded" }];
       scr.sendInFlight = null;
     }
     scr.status = resolution;
