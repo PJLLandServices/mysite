@@ -266,6 +266,42 @@ console.log("\n  -- existing records without a sequence --");
 }
 
 // ======================================================================
+// 3b. Patrick approving an AI photo (M3b) keeps the order too
+// ======================================================================
+console.log("\n  -- approving an AI candidate (Photo Review) --");
+{
+  const { dir, store } = freshStore();
+  try {
+    // Alphabet deliberately OPPOSITE to join order.
+    const first = "ZZ-AI-FIRST", later = "AA-LATER";
+    let cand;
+    await frozen(async () => {
+      cand = await store.saveCandidateImage(img);
+      await store.recordAiResult(first, part(first), {
+        tier: "tbd", reason: "needs a look", runId: "run-1",
+        candidates: [{ hash: cand.hash, width: cand.width, height: cand.height, source: { domain: "example.test" }, checks: {}, tier: "tbd" }],
+        chosen: 0
+      }, { autoApprove: false });
+      const gid = readLinks(dir)[first].groupId;
+      await store.linkToGroup(later, part(later), gid, { by: "patrick" });
+    });
+    const before = readLinks(dir);
+    ok("(setup) the AI-found part joined first and the other second, in one instant",
+      before[first].linkSeq < before[later].linkSeq && before[first].firstLinkedAt === before[later].firstLinkedAt,
+      JSON.stringify({ first: before[first].linkSeq, later: before[later].linkSeq }));
+
+    await frozen(() => store.approveCandidate(later, part(later), cand.hash, { by: "patrick" }));
+    await frozen(() => store.approveCandidate(first, part(first), cand.hash, { by: "patrick" }));
+    const after = readLinks(dir);
+    ok("approving the photo through EITHER member keeps both sequences",
+      after[first].linkSeq === before[first].linkSeq && after[later].linkSeq === before[later].linkSeq,
+      JSON.stringify({ before: [before[first].linkSeq, before[later].linkSeq], after: [after[first].linkSeq, after[later].linkSeq] }));
+    ok("...and the part that joined first is still the default",
+      defaultOf(store, [first, later]) === first, defaultOf(store, [first, later]));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+
+// ======================================================================
 // 4. One rule
 // ======================================================================
 console.log("\n  -- one rule --");
@@ -278,6 +314,13 @@ console.log("\n  -- one rule --");
   ok("every link write goes through the one join-recording function",
     (src.match(/links\[[^\]]+\]\s*=(?!=)/g) || []).length === (src.match(/links\[[^\]]+\]\s*=\s*keepFirstLinked\(/g) || []).length,
     "a link assignment bypasses keepFirstLinked");
+  // ...AND passes the links map. The first version of this file checked
+  // only the line above, and #331's approveCandidate slipped past it
+  // without the map — which would number a new member 1, the FRONT.
+  const calls = src.split("\n").filter((l) => /keepFirstLinked\(/.test(l) && !/function keepFirstLinked/.test(l));
+  const missing = calls.filter((l) => !/,\s*links\);\s*$/.test(l));
+  ok("every call to it passes the links map",
+    calls.length >= 6 && missing.length === 0, missing.map((l) => l.trim().slice(0, 90)).join(" | ") || `${calls.length} calls`);
 }
 
 console.log(`\npart photo order: ${pass} passed, ${failures.length} failed`);

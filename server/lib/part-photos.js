@@ -629,7 +629,17 @@ function createPartPhotos({ dataDir, sharp }) {
   //
   // New fitting (first link, or moved from another) → a new membership,
   // with a fresh sequence.
+  //
+  // `links` is REQUIRED on every call, even the same-fitting ones that do
+  // not number anything: a caller that forgot it would hand every new
+  // member sequence 1 — the FRONT of the fitting — silently, and only on
+  // the rarer new-join path. Refusing always makes the mistake fail on
+  // its first test run instead. (M3b's approveCandidate shipped without
+  // it; harmless there, since it only re-records an existing member.)
   function keepFirstLinked(prev, groupId, rec, links) {
+    if (!links || typeof links !== "object") {
+      throw new Error("keepFirstLinked needs the links map (to number a new member of a fitting).");
+    }
     if (prev && prev.groupId === groupId) {
       const out = { ...rec, firstLinkedAt: prev.firstLinkedAt || prev.at };
       if (Number.isInteger(prev.linkSeq)) out.linkSeq = prev.linkSeq;
@@ -869,7 +879,7 @@ function createPartPhotos({ dataDir, sharp }) {
       delete g.reason;
       g.review = { action: "approved", by, at: now, hash };
       g.updatedAt = now;
-      links[sku] = keepFirstLinked(links[sku], groupId, { groupId, ...linkRecord(part, by) });
+      links[sku] = keepFirstLinked(links[sku], groupId, { groupId, ...linkRecord(part, by) }, links);
       const sharedWith = Object.keys(links).filter((s) => s !== sku && links[s].groupId === groupId);
       await log({ action: "review.approve", sku, groupId, hash, by, sharedWith });
       return { groupId, hash, sharedWith };
