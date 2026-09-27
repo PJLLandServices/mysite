@@ -2,6 +2,54 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-27 (Quote lifecycle and billing: a signed agreement governs until its revision is signed; FLOW-02 accept path and FLOW-20/21/22 touched; no PASS flow's behaviour changes for a quote with no revisions):**
+Patrick's rule: *"The quote's status is operational data… Creating an unsigned draft should not
+eliminate the accepted agreement."* **Defects proven before the fix** (`test-quote-lifecycle-billing.mjs`
+on the old code: 25 of 44 failed):
+- A second change order failed with "Original has already been superseded", leaving a fixed-price
+  job with two approved changes **permanently blocked**.
+- A signed $5,400 revision was **invoiced at $5,000**, because the final invoice read the original's
+  frozen snapshot.
+- Two simultaneous "Generate revision" clicks built two quotes with the **same number**, and the
+  second silently overwrote the first.
+- A technician could override the completion checks, and no reason was required.
+- "Convert to project" on a signed revision of a converted job created a **second project** for
+  the same job.
+
+**Now:**
+- `createRevision` leaves a **signed** original Accepted and logs `revision_drafted`. An **unsigned**
+  sent original is still superseded immediately, so the Q-2026-0078 dead-link protection stands.
+  Only one revision can be in progress at a time (`revision_in_progress`).
+- Every acceptance writer (`accept`, `acceptWithSignature`, `recordOfflineAcceptance`,
+  `recordPortalSignAcceptance`, `recordPdfReturnAcceptance`) calls `supersedeOlderVersions()` in the
+  **same file write**. The older versions become Superseded, and the project moves to the revision
+  (`currentQuoteId`, `proposalSnapshot`, history `revision_signed`). `sourceQuoteId` never moves,
+  because deposits, the quote folder and convert-to-project key on it.
+- **One rule decides which quote governs.** `quotes.describeChain()` returns `governing` (the newest
+  signed agreement), `pending` (an unsigned newer version, which is the completion hold) and `head`
+  (what the next change order builds on). Readers: the completion preflight (`revision_unsigned`,
+  and `deposit_balance_predates_revision` for a deposit job whose balance invoice was built from an
+  older version), the final invoice (`completion-cascade.js` bills the governing agreement's lines
+  and adds on-site extras once) and the Complete dialog's invoice preview, through one function
+  (`projects.fixedPriceBillingSource`), the change-order revision builder, the project page's quote panel
+  (`resolveRevisionChain`), and convert-to-project (a signed revision of a converted job returns
+  that job's project instead of creating a second one).
+- Legacy chains, where the old code superseded a signed original too early, resolve through
+  acceptance evidence (`hasAcceptanceRecord`), not status.
+- Revisions and signatures are queued on the quotes store (`serialize`). Change-order revisions
+  are queued per project, and a retry returns the same revision.
+- A completion override needs a written reason and is recorded in the project history
+  (`completion_override`: who, why, which blockers). The route refuses it from a technician (403).
+  The classic Complete dialog now asks for the reason.
+
+**Left alone on purpose:** a quote's lines, signature and frozen PDF (the test asserts that they
+are byte-identical after both the draft and the signing); deposit amounts and the payment routes
+(FLOW-23 untouched; a deposit job with a stale balance invoice is **held**, not re-computed);
+emails; and change-order permissions and send status, which are the next PR.
+**Test:** `scripts/test-quote-lifecycle-billing.mjs`, in `build:check`. **Patrick's walk
+(UNMAPPED until done):** on a test job, sign a $5,000 proposal, approve a $400 change, then
+generate the revision. The original should still say Accepted and Complete should be blocked. Sign
+the revision; the original should say Superseded, and completing should bill $5,400.
 **2026-09-27 (PJL-105 — "first in the fitting" no longer depends on clock resolution; FLOW-47/48 touched, one rule):**
 `fittingDefaultFor()`'s last rule, "the member linked first", sorted on `firstLinkedAt`, a millisecond
 ISO timestamp, and broke ties by SKU. Two links written in the same millisecond therefore made the

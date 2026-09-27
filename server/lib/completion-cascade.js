@@ -669,33 +669,13 @@ async function runProjectFinalCascade(project, opts = {}) {
     unknownSkus = billing.unknownSkus || [];
     billingNote = `T&M: ${billing.totalHours} person-hours @ $${billing.rate}/hr`;
   } else {
-    // Fixed-price — mirror the proposal snapshot. If for some reason
-    // the snapshot is missing, fall back to the source quote.
-    const snap = project.proposalSnapshot;
-    if (snap && Array.isArray(snap.lineItems) && snap.lineItems.length) {
-      lineItems = snap.lineItems.map((li) => ({
-        key: li.sourceKey || "custom",
-        label: li.label,
-        qty: li.qty,
-        price: li.price,
-        lineTotal: li.lineTotal
-      }));
-      billingNote = `Fixed price: from proposal ${snap.quoteId}`;
-    } else if (project.sourceQuoteId) {
-      try {
-        const quotes = require("./quotes");
-        const q = await quotes.get(project.sourceQuoteId);
-        if (q && Array.isArray(q.lineItems)) {
-          lineItems = q.lineItems.map((li) => ({
-            key: li.sourceKey || "custom",
-            label: li.label,
-            qty: li.qty,
-            price: li.price,
-            lineTotal: li.lineTotal
-          }));
-          billingNote = `Fixed price: live quote ${q.id}`;
-        }
-      } catch (err) { console.warn("[project-cascade] sourceQuote read failed:", err?.message); }
+    // Fixed-price — bill the SIGNED AGREEMENT governing the job. One
+    // answer, shared with the Complete dialog's invoice preview:
+    // projects.fixedPriceBillingSource() (2026-09-27).
+    const src = await projects.fixedPriceBillingSource(project);
+    if (src.lineItems.length) {
+      lineItems = src.lineItems;
+      billingNote = src.note;
     }
   }
 
@@ -723,7 +703,11 @@ async function runProjectFinalCascade(project, opts = {}) {
     const quotesLib = require("./quotes");
     const allInvoices = await invoices.list();
     const woIds = Array.isArray(project.workOrderIds) ? project.workOrderIds : [];
-    const seenQuote = new Set([project.sourceQuoteId].filter(Boolean));
+    // Every version of the job's own proposal is already billed above (or
+    // deliberately not) — never pick one up again as an "on-site" add-on.
+    const seenQuote = new Set([project.sourceQuoteId, project.currentQuoteId].filter(Boolean));
+    try { for (const q of (await projects.resolveProjectQuote(project)).chain) seenQuote.add(q.id); }
+    catch (_) { /* the plain source-quote guard above still applies */ }
     for (const woId of woIds) {
       const w = await workOrders.get(woId);
       const qid = w && w.onSiteQuote && w.onSiteQuote.quoteId;

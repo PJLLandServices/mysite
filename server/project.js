@@ -1822,6 +1822,8 @@
       // Override checkbox visible only when blockers exist.
       document.getElementById("cpOverrideWrap").hidden = checks.blockers.length === 0;
       document.getElementById("cpAllowOverride").checked = false;
+      document.getElementById("cpOverrideReason").value = "";
+      document.getElementById("cpOverrideReasonWrap").hidden = true;
       document.getElementById("cpAttestationNote").value = "";
       // Invoice preview
       const invHtml = (billing.lineItems || []).map((li) =>
@@ -1842,11 +1844,17 @@
   async function confirmCompleteProject() {
     const allowOverride = document.getElementById("cpAllowOverride").checked;
     const attestationNote = document.getElementById("cpAttestationNote").value.trim();
+    const overrideReason = allowOverride ? document.getElementById("cpOverrideReason").value.trim() : "";
+    if (allowOverride && !overrideReason) {
+      showToast("Say why you are overriding the checks — it goes in the project history.", { variant: "error" });
+      document.getElementById("cpOverrideReason").focus();
+      return;
+    }
     try {
       const r = await fetch(`/api/projects/${encodeURIComponent(state.project.id)}/complete`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ allowOverride, attestationNote })
+        body: JSON.stringify({ allowOverride, overrideReason, attestationNote })
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
@@ -1926,6 +1934,9 @@
     document.getElementById("projCompleteBtn")?.addEventListener("click", openCompleteProjectModal);
     document.getElementById("cpCancel")?.addEventListener("click", () => closeModal("completeProjectModal"));
     document.getElementById("cpConfirm")?.addEventListener("click", confirmCompleteProject);
+    document.getElementById("cpAllowOverride")?.addEventListener("change", (e) => {
+      document.getElementById("cpOverrideReasonWrap").hidden = !e.target.checked;
+    });
 
     // Final WO
     document.getElementById("projSetFinalWoBtn")?.addEventListener("click", setFinalWo);
