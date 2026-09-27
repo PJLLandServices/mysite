@@ -3667,7 +3667,9 @@ async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "con
     attempt: summary
   });
   if (!decided.ok) throw new Error(`invoice ${inv.id}: ${(decided.errors || [])[0] || "payment not recorded"}`);
-  if (decided.duplicate) return { invoice: decided.invoice, alreadyPaid: true, warning: null };
+  // A payment reversed off the ledger (refunded) stays reversed (S6): the
+  // caller is told so, and nothing is recorded, sent or flagged.
+  if (decided.duplicate) return { invoice: decided.invoice, alreadyPaid: true, reversed: decided.reversed === true, warning: null };
   const exception = decided.exception || null;
 
   // QBO Payment record — unchanged by the rule above (QuickBooks is kept
@@ -11866,6 +11868,7 @@ async function handleApi(req, res, pathname) {
       const phone = await paymentSupportPhone();
 
       // Reuse the persisted open intent when it still matches.
+      let replacesReversed = null;
       if (inv.stripePaymentIntentId) {
         try {
           const { intent } = await stripe.retrievePaymentIntent(inv.stripePaymentIntentId);
@@ -11877,13 +11880,19 @@ async function handleApi(req, res, pathname) {
             // Paid but our flip hasn't landed yet (webhook in flight, or
             // it was missed). Don't mint a second chargeable intent for
             // an invoice whose money already moved — finalize now.
+            let result;
             try {
-              const result = await finalizeStripeInvoicePayment(inv, intent, null, { via: "intent-reuse" });
-              return sendJson(res, 409, { ok: false, errors: ["This invoice has already been paid."], invoiceStatus: result.invoice.status });
+              result = await finalizeStripeInvoicePayment(inv, intent, null, { via: "intent-reuse" });
             } catch (finErr) {
               console.error(`[payment-intent] succeeded-intent finalize failed for ${inv.id}: ${finErr.message}`);
               return sendJson(res, 409, { ok: false, errors: [`This invoice shows a completed payment. Please call us at ${phone} before paying again.`] });
             }
+            if (!result.reversed) {
+              return sendJson(res, 409, { ok: false, errors: ["This invoice has already been paid."], invoiceStatus: result.invoice.status });
+            }
+            // That payment was refunded and reversed off the ledger (S6): it
+            // no longer counts, so what is owed is paid on a new intent.
+            replacesReversed = intent.id;
           }
           if (reusable && Number(intent.amount) !== amountCents) {
             // Amount changed under the open intent — kill it so the old
@@ -11907,8 +11916,11 @@ async function handleApi(req, res, pathname) {
         description: `PJL invoice ${inv.id}`,
         // Scoped to invoice + amount: a retry of this call reuses the
         // same intent at Stripe's end instead of creating a twin, and an
-        // amount change gets a genuinely new key.
-        idempotencyKey: `pjl-${inv.id}-${amountCents}`
+        // amount change gets a genuinely new key. After a refunded payment
+        // the balance is back at the same amount, so the key also names
+        // the payment it replaces; the plain key would hand back the
+        // refunded intent.
+        idempotencyKey: `pjl-${inv.id}-${amountCents}${replacesReversed ? `-after-${replacesReversed}` : ""}`
       });
       await invoices.update(inv.id, { stripePaymentIntentId: intent.id });
       return sendJson(res, 200, { ok: true, clientSecret: intent.client_secret, paymentIntentId: intent.id });
@@ -11950,6 +11962,11 @@ async function handleApi(req, res, pathname) {
       const { intent, requestId } = await stripe.retrievePaymentIntent(paymentIntentId);
       try {
         const result = await finalizeStripeInvoicePayment(inv, intent, requestId, { via: "confirm" });
+        if (result.reversed) {
+          return sendJson(res, 409, { ok: false, code: "payment_reversed", errors: [
+            `This card payment was refunded, so it no longer counts toward this invoice. Please refresh the page to see what's owing, or call us at ${phone}.`
+          ] });
+        }
         const updated = result.invoice;
         return sendJson(res, 200, {
           ok: true,
@@ -15992,6 +16009,11 @@ async function handleApi(req, res, pathname) {
       // The ONE paid-flip: belongs to this invoice, succeeded, right amount
       // and currency, idempotent — the pay page's and the webhook's.
       const result = await finalizeStripeInvoicePayment(inv, intent, requestId, { via: "terminal", by: session?.uid || "" });
+      if (result.reversed) {
+        return sendJson(res, 409, { ok: false, code: "payment_reversed", paymentIntentId: intent.id, invoice: result.invoice, errors: [
+          "This Tap to Pay payment was refunded and reversed on the invoice, so it wasn't recorded again. Check the invoice before taking another payment."
+        ] });
+      }
       return sendJson(res, 200, {
         ok: true, invoice: result.invoice, alreadyPaid: result.alreadyPaid, warning: result.warning || null,
         overpayment: result.overpayment === true, customerMessage: result.customerMessage || null, exception: result.exception || null

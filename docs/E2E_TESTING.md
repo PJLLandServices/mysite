@@ -58,7 +58,7 @@ then it crashes on the missing webhook helper.
 | 1 | New customer → 4 zones → Bill later → sign → Finish → draft invoice → reopen lands on it → Send → pay link | 32 |
 | 2 | Booked 4, walked 6: the price at signing = the signed scope = the invoice = the email = the pay page | 25 |
 | 3 | 16 zones: custom price held (no link, Tap to Pay, Send or text) → Confirm price sends nothing → manual Send | 30 |
-| 4 | Card on site: approved, declined, three timeouts, duplicate webhook, double payment, refund | 64 |
+| 4 | Card on site: approved, declined, three timeouts, duplicate webhook, double payment, refund, the refunded payment redelivered | 71 |
 | 5 | Tap to Pay: which invoices may charge, and how the reader's result is finalized (no NFC) | 52 |
 | 6 | Unlock → add zones → new signature needed → held → re-lock → re-sign (both directions) | 39 |
 | 7 | No Charge: no invoice, prompt, promise, text or QuickBooks; reportable | 22 |
@@ -95,7 +95,9 @@ Pinned as found, and questions rather than findings:
 
 - Cash recorded by staff emails no receipt; a card payment does.
 - A refund made in the Stripe dashboard changes nothing in PJL by itself.
-  Patrick reverses the payment in the ledger.
+  Patrick reverses the payment in the ledger. Once reversed, that Stripe
+  payment can never be recorded again (S6, journey 4 step E2 and
+  `test-payment-reversal.mjs`).
 
 ### Known limits
 

@@ -6812,6 +6812,84 @@ done by `invoices.reconcileToSignedScope(woId)`, under the invoice store lock:
 - `test-resignature-await` and `test-scope-hold-before-reply` now follow the release write into
   `reconcileToSignedScope`. The latter still fails if that write isn't awaited (checked by mutation).
 
+## 2026-09-27 — FLOW-23: a reversed Stripe payment stays reversed (S6) (FLOW-23 touched — re-verified by tests, awaiting a walked acceptance)
+
+A Stripe payment is recorded, refunded in the Stripe dashboard, and Patrick reverses it in the ledger
+(`DELETE /api/invoices/:id/payments/:pid`). `invoices.removePayment` **deleted the ledger line**, and
+that line was the only lasting record that the Stripe payment had been decided. A refund does not
+change the intent: it stays `succeeded` at Stripe. So every path that finalizes it again asked
+`processorPaymentSeen` "decided?" and could get **no**.
+
+**The paths that re-ingest a Stripe payment** are the five callers of
+`finalizeStripeInvoicePayment`. There is no reconciliation sweep.
+- the reopened pay page (`/api/pay/invoice/:id/payment-intent` reads the stored intent);
+- the pay page's confirm (`/api/pay/invoice/:id/charge`);
+- the `payment_intent.succeeded` webhook;
+- the Tap to Pay retry (`/terminal-intent`, the stored terminal intent);
+- Tap to Pay finalize (`/terminal-intent/finalize`).
+
+**What main did (reproduced, `scripts/test-payment-reversal.mjs`):**
+- **The simplest case was masked by coincidence:** `inv.stripeChargeId` still named the refunded
+  charge, so it read as a duplicate. The side effects were still wrong:
+  - the customer reopening the pay page was told **"This invoice has already been paid"** while the
+    whole balance was owing, and couldn't pay;
+  - a stale confirm of the refunded payment returned **200**, so the pay page would say "Payment
+    received".
+- **Once a later card had moved `stripeChargeId` on,** there was nothing left to match:
+  - **Another card settled the invoice, then the refunded one reappeared:** it opened a false
+    payment exception, alerted the office, and sent a second receipt.
+  - **Two cards were each refunded and reversed, then the older one reappeared:** it went back on
+    the ledger, the invoice read **Paid** again, and a receipt went out.
+
+**The rule, once — `processorPaymentSeen` in `invoices.js`:**
+- `removePayment` keeps a reversed processor payment's ids for good in
+  **`reversedProcessorPayments[]`**. It records `processorRef`, and the `pi_`/`ch_` ids from the
+  notes of a line from before `processorRef`. It also keeps the payment id, amount, method, when it
+  was recorded and reversed, by whom, and why. Cash and cheque carry no processor id and record
+  nothing.
+- `processorPaymentSeen` answers `"reversed"` first, then `"decided"`, then `null`.
+  `recordProcessorPayment` on a reversed payment changes nothing on the ledger, sends nothing, and
+  opens no exception. It appends one `processor_payment_after_reversal` history line per arrival,
+  naming the payment.
+- The field is excluded from `update()`'s allowlist, so nothing else can overwrite it.
+
+**Each path:**
+- **Webhook:** no-op, audit line only.
+- **Confirm:** 409 `payment_reversed` ("refunded, no longer counts, refresh"), never "Payment
+  received".
+- **Tap to Pay finalize:** 409 `payment_reversed`.
+- **Reopened pay page:** a **new** intent for what is owed. Its idempotency key adds
+  `-after-<refunded intent>`, because the plain `pjl-<invoice>-<amount>` key would make real Stripe
+  (keys live 24 hours) hand back the refunded intent.
+- **Tap to Pay retry:** unchanged. Its key already names the stored intent, so it starts a new
+  payment for the balance.
+- **A genuinely new Stripe payment** (a different id) is decided exactly as before.
+
+**The whole workflow:**
+- **Customer:** after a refund, can pay again; is never told a refunded payment was received; gets
+  no second receipt.
+- **Patrick:** no false exception or alert; the invoice history shows the original payment, the
+  reversal and every later arrival.
+- **Linked records:** the ledger, status, `paidAt`, deposits and QuickBooks are untouched by a
+  redelivery, because the finalizer returns before any of them.
+
+**Deliberately left alone:**
+- **Refunds:** `charge.refunded` is still not handled (PAY-03). Reversing in the ledger stays
+  Patrick's step.
+- **Klarna capture:** records through its own path, not the Stripe finalizer.
+- **QuickBooks.**
+
+**Tests:**
+- `scripts/test-payment-reversal.mjs` (47 checks; **the old code fails 20**) covers:
+  - A: reopen, webhook ×2, confirm retry, then a new payment and the refunded one again;
+  - B: another card settles it;
+  - C: Tap to Pay finalize retry and next tap;
+  - D: the retry key;
+  - F: two refunded cards;
+  - E: cash.
+- Journey 4 gains step E2. **The old code fails 5**; the new code passes 71/71.
+- The test Stripe stub now logs each call's Idempotency-Key.
+
 ## 2026-09-27 — FLOW-23 / TAPTOPAY-01: a second tap never starts a second charge (FLOW-23 touched — re-verified by tests)
 
 This was E2E journey 5's finding, item 4. `POST /api/invoices/:id/terminal-intent` read the invoice's
@@ -6921,7 +6999,8 @@ lock, keyed on the Stripe payment id, makes ONE accounting decision per distinct
 - **Nothing is refunded automatically** (PAY-03 unchanged).
 - **Staff cash/cheque over the balance** is still refused on screen.
 - **S6**, a reversed payment re-recorded by a reopened pay page, is its own PR. This change only
-  guarantees a reversal raises no false exception.
+  guarantees a reversal raises no false exception. (Fixed since: see "a reversed Stripe payment
+  stays reversed" above.)
 - **Stopping stale/open intents and Tap to Pay's second tap** is item 4.
 - **Invariant 4** of `HANDOFF_STRIPE_PAYMENTS.md` §6 is amended accordingly.
 

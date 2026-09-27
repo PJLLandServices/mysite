@@ -115,6 +115,10 @@ The two features merged cleanly — this is already DONE, do not redo it:
    on the ledger, any excess becomes an open payment exception (flagged in
    the office, one admin alert). The ledger never exceeds the total, so the
    balance never goes negative.
+   *Amended 2026-09-27 (S6):* reversing a Stripe payment off the ledger keeps
+   its ids in `reversedProcessorPayments[]` for good. The same payment
+   arriving again (it stays "succeeded" at Stripe after a refund) is
+   recognised as reversed: nothing recorded, sent or flagged, one audit line.
 5. **Charge `balanceDue`, never `total`.**
 6. **The webhook URL keeps its `www`.** And the webhook handler acks before it
    works — don't move slow work back in front of the response.
