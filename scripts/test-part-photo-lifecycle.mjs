@@ -444,6 +444,13 @@ const onDisk = () => true;
 // default. CI hit it at random (PR #325, run 935). Here the clock is frozen
 // for the whole scenario, so the old code fails every time, not sometimes.
 {
+  // Every link write numbers itself from the links on file. A call that
+  // forgets them numbers every new link 1, which ties with the first ever
+  // link and brings the race back (the M3a/M3b auto-link and approve paths
+  // did, until this merge).
+  const src11 = fs.readFileSync(path.join(ROOT, "server", "lib", "part-photos.js"), "utf8");
+  const writes = [...src11.matchAll(/links\[[^\]]+\] = keepFirstLinked\(([\s\S]*?)\);\n/g)].map((m) => m[1]);
+  check(`every link write passes the links on file to keepFirstLinked (${writes.length} writes)`, writes.length >= 6 && writes.every((a) => /,\s*links\s*$/.test(a)));
   const { fittingDefaultFor } = lib;
   const same = "2026-09-27T01:00:00.000Z";
   // The rule itself: equal timestamps → the link sequence decides; a record

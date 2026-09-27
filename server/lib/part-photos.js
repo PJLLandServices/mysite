@@ -729,7 +729,7 @@ function createPartPhotos({ dataDir, sharp }) {
       if (!links[sku]) {
         // The SKU's own link to its photo group — not a claim that it is the
         // same fitting as anything else.
-        links[sku] = keepFirstLinked(null, groupId, { groupId, linkTier: "confident", linkedBy: "auto:self", fingerprint: fingerprintOf(part), at: now });
+        links[sku] = keepFirstLinked(null, groupId, { groupId, linkTier: "confident", linkedBy: "auto:self", fingerprint: fingerprintOf(part), at: now }, links);
       }
       // An image Patrick rejected never comes back as a candidate (M3b).
       const rejected = new Set(g.rejectedHashes || []);
@@ -792,7 +792,7 @@ function createPartPhotos({ dataDir, sharp }) {
         return { skipped: "Patrick linked it to a different fitting" };
       }
       const previous = links[sku] ? links[sku].groupId : null;
-      links[sku] = keepFirstLinked(links[sku], target.groupId, { groupId: target.groupId, linkTier: "confident", linkedBy: "auto:mfr-part", fingerprint: fingerprintOf(part), at: new Date().toISOString() });
+      links[sku] = keepFirstLinked(links[sku], target.groupId, { groupId: target.groupId, linkTier: "confident", linkedBy: "auto:mfr-part", fingerprint: fingerprintOf(part), at: new Date().toISOString() }, links);
       await log({ action: "link.auto", sku, groupId: target.groupId, previous, reason });
       return { groupId: target.groupId, previous };
     });
@@ -822,7 +822,7 @@ function createPartPhotos({ dataDir, sharp }) {
       delete g.reason;
       g.review = { action: "approved", by, at: now, hash };
       g.updatedAt = now;
-      links[sku] = keepFirstLinked(links[sku], groupId, { groupId, ...linkRecord(part, by) });
+      links[sku] = keepFirstLinked(links[sku], groupId, { groupId, ...linkRecord(part, by) }, links);
       const sharedWith = Object.keys(links).filter((s) => s !== sku && links[s].groupId === groupId);
       await log({ action: "review.approve", sku, groupId, hash, by, sharedWith });
       return { groupId, hash, sharedWith };
