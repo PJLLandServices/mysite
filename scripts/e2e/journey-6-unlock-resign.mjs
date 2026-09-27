@@ -15,11 +15,10 @@
 //   re-lock (Patrick)      → the 5-6 zone price freezes now; still held
 //   the customer re-signs  → the app's Finish sends the new signature; the
 //                            original is in priorAcceptances; hold released
-//   billing                → what is charged/sent should be the price the
-//                            customer just signed for (FINDING: the invoice
-//                            keeps the OLD scope's price, in both directions
-//                            — undercharge when zones are added, OVERCHARGE
-//                            when they're removed)
+//   billing                → what is charged/sent is the price the customer
+//                            just signed for, in both directions (was a
+//                            FINDING — undercharge / OVERCHARGE — until
+//                            #325 reconciled the invoice before releasing it)
 //
 // Run: node scripts/e2e/journey-6-unlock-resign.mjs
 
@@ -129,8 +128,9 @@ try {
   J.step("what is charged is what was signed");
   const billed = feeLine(after?.lineItems);
   const matchesSigned = billed?.key === "fall_close_6z" && after?.total === withTax(srv, priceOf("fall_close_6z"));
-  J.finding(matchesSigned,
-    `after the customer re-signs for 6 zones, the invoice still bills ${billed?.key} ($${after?.total}) — the price frozen at re-lock (${fee6?.key}) never reaches the invoice, so the pay link and Send would charge the OLD scope`);
+  // Was a FINDING until #325: the invoice kept the OLD scope's price.
+  J.ok(matchesSigned && after?.id === inv.id,
+    `after the customer re-signs for 6 zones, the SAME invoice bills the price frozen at re-lock (${billed?.key} $${after?.total}, want ${fee6?.key})`);
   const link = await srv.api("POST", `/api/invoices/${after.id}/payment-link`, {});
   J.ok(link.status === 200, `payment opens again after the new signature (${link.status} ${link.body.code})`);
   await J.sent(L, "released", [], { settleMs: 800 });
@@ -159,8 +159,9 @@ try {
   const after4 = invoiceFor(srv, g.wo.id);
   const pay4 = await srv.api("POST", `/api/invoices/${after4.id}/payment-link`, {});
   J.ok(pay4.status === 200, "payment is open again");
-  J.finding(feeLine(after4?.lineItems)?.key === "fall_close_4z",
-    `…and would OVERCHARGE: signed for 4 zones, the payable invoice still bills ${feeLine(after4?.lineItems)?.key} ($${after4?.total} instead of $${withTax(srv, priceOf("fall_close_4z"))})`);
+  // Was a FINDING until #325: an OVERCHARGE at the old 6-zone price.
+  J.ok(feeLine(after4?.lineItems)?.key === "fall_close_4z" && after4?.total === withTax(srv, priceOf("fall_close_4z")),
+    `…and no overcharge: signed for 4 zones, the payable invoice bills the 1-4 zone price (${feeLine(after4?.lineItems)?.key} $${after4?.total})`);
   await J.sent(L, "fewer: released", [], { settleMs: 800 });
 } catch (err) {
   J.crashed(err);
