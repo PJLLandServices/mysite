@@ -133,6 +133,7 @@ const workOrders = require("./lib/work-orders");
 const sessionHours = require("./lib/session-hours");
 const atomicJson = require("./lib/atomic-json");
 const dailyRecords = require("./lib/daily-records");
+const projectMaterials = require("./lib/project-materials");
 const quotes = require("./lib/quotes");
 const quoteViews = require("./lib/quote-views");
 const invoices = require("./lib/invoices");
@@ -16912,6 +16913,46 @@ async function handleApi(req, res, pathname) {
     } catch (err) {
       const status = err.code === "task_not_found" ? 404 : err.code === "task_not_archived" ? 409 : 400;
       return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't restore that task."] });
+    }
+  }
+
+  // GET /api/projects/:id/materials — the Materials tab (2026-09-27).
+  //
+  // Three sections, and the split between them is the whole point:
+  //
+  //   planning   — each material list SEPARATELY, with its own totals.
+  //                Never summed across lists, because re-syncing the
+  //                System Builder after purchasing produces a second
+  //                list repeating the same BOM.
+  //   stock      — physical facts, so safe to aggregate project-wide:
+  //                received (from PO receipts), used on site, and the
+  //                balance between them.
+  //   exceptions — mismatches for the office to look at. They never
+  //                block the crew and are never folded into a list.
+  const projectMaterialsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/materials$/);
+  if (projectMaterialsMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(projectMaterialsMatch[1]);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+
+      const lists = await materialLists.list({ parentType: "project", parentId: id, includeArchived: true });
+      // Every PO that came from any of this job's lists. Receipts are
+      // counted from these, not from a line's "have" status, which a
+      // human can set by hand.
+      const listIds = new Set(lists.map((l) => l.id));
+      const allPos = await purchaseOrders.list({});
+      const pos = allPos.filter((po) =>
+        (po.sourceMaterialListIds || []).some((lid) => listIds.has(lid)));
+      const buildWos = await workOrders.listBuildWosForProject(id);
+
+      const model = projectMaterials.describeProject({
+        lists, purchaseOrders: pos, buildWos,
+        partsMap: (PARTS && PARTS.parts) || {}
+      });
+      return sendJson(res, 200, { ok: true, ...model });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the materials."] });
     }
   }
 
