@@ -3593,6 +3593,21 @@ async function markNoChargeWorkOrders(wos) {
   return wos;
 }
 
+// One Tap to Pay start at a time per invoice (item 4, 2026-09-27). The start
+// route reads the invoice's stored intent and may create one; two taps
+// racing must queue, so the second sees the first's intent instead of making
+// its own. In-process, which is enough: the server runs as one instance (its
+// JSON store is on one disk).
+const terminalIntentLocks = new Map();
+function withTerminalIntentLock(invoiceId, fn) {
+  const prev = terminalIntentLocks.get(invoiceId) || Promise.resolve();
+  const run = prev.catch(() => {}).then(fn);
+  const tail = run.catch(() => {});
+  terminalIntentLocks.set(invoiceId, tail);
+  tail.then(() => { if (terminalIntentLocks.get(invoiceId) === tail) terminalIntentLocks.delete(invoiceId); });
+  return run;
+}
+
 // Where a Stripe payment reached the finalizer, as the office reads it.
 const STRIPE_ARRIVAL_LABELS = {
   confirm: "pay page",
@@ -15812,63 +15827,112 @@ async function handleApi(req, res, pathname) {
       const session = await requireAdmin(req);
       if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
       const id = decodeURIComponent(terminalIntentMatch[1]);
-      // The same on-site rule as "Take payment now" — a "Bill later" draft
-      // waits for Patrick, a $0 or custom-quote invoice takes nothing — and
-      // it stamps the draft as opened on site, so the ledger and the pay
-      // page agree about it afterwards.
-      const opened = await invoices.openForOnSitePayment(id, { by: session?.uid || "admin" });
-      if (!opened.ok) return sendJson(res, opened.status || 409, { ok: false, code: opened.code, errors: opened.errors });
-      const inv = opened.invoice;
-      // MONEY-CRITICAL: the outstanding balance, from the ledger. Whatever
-      // the phone sends is ignored.
-      const amountCents = Math.round(Number(inv.balanceDue) * 100);
-      if (!Number.isFinite(amountCents) || amountCents <= 0) {
-        return sendJson(res, 409, { ok: false, code: "nothing_owing", errors: ["This invoice has nothing left to pay."] });
-      }
-      const currency = inv.currency || "CAD";
-      const reply = (intent) => sendJson(res, 200, {
-        ok: true, clientSecret: intent.client_secret, paymentIntentId: intent.id, amountCents, currency
-      });
+      // One tap at a time per invoice (item 4, 2026-09-27): what follows
+      // reads the invoice's stored intent and may create one, so two taps
+      // racing must see each other's result, not both start a charge.
+      return await withTerminalIntentLock(id, async () => {
+        // The same on-site rule as "Take payment now" — a "Bill later" draft
+        // waits for Patrick, a $0 or custom-quote invoice takes nothing — and
+        // it stamps the draft as opened on site, so the ledger and the pay
+        // page agree about it afterwards.
+        const opened = await invoices.openForOnSitePayment(id, { by: session?.uid || "admin" });
+        if (!opened.ok) return sendJson(res, opened.status || 409, { ok: false, code: opened.code, errors: opened.errors });
+        let inv = opened.invoice;
+        // MONEY-CRITICAL: the outstanding balance, from the ledger. Whatever
+        // the phone sends is ignored.
+        let amountCents = Math.round(Number(inv.balanceDue) * 100);
+        if (!Number.isFinite(amountCents) || amountCents <= 0) {
+          return sendJson(res, 409, { ok: false, code: "nothing_owing", errors: ["This invoice has nothing left to pay."] });
+        }
+        const currency = inv.currency || "CAD";
+        const reply = (intent) => sendJson(res, 200, {
+          ok: true, clientSecret: intent.client_secret, paymentIntentId: intent.id, amountCents, currency
+        });
 
-      // A second tap reuses the open intent instead of minting a second
-      // chargeable one — the pay page's rule, on its own slot, because the
-      // two intents are different kinds (card_present vs card) and neither
-      // client can confirm the other's.
-      if (inv.stripeTerminalIntentId) {
-        try {
-          const { intent } = await stripe.retrievePaymentIntent(inv.stripeTerminalIntentId);
-          const open = ["requires_payment_method", "requires_confirmation", "requires_action"].includes(intent?.status);
-          if (open && Number(intent.amount) === amountCents) return reply(intent);
-          if (intent?.status === "succeeded") {
-            // Money already moved and the flip has not landed. Finalize,
-            // never charge again.
-            const result = await finalizeStripeInvoicePayment(inv, intent, null, { via: "terminal-reuse", by: session?.uid || "" });
-            return sendJson(res, 409, { ok: false, code: "already_paid", errors: ["This invoice has already been paid."], invoice: result.invoice });
+        // A second tap never starts a second charge while the first can still
+        // take the customer's money. stripe.intentPhase() is the one rule:
+        //   collectable → reuse it (or replace it, if the balance changed —
+        //                 it can't have taken money)
+        //   in flight   → refuse: start nothing, cancel nothing
+        //   succeeded   → finalize it, start nothing
+        //   canceled    → a fresh attempt
+        // and a stored intent Stripe can't tell us about is never charged
+        // beside. Its own slot, apart from the pay page's: the two intents are
+        // different kinds (card_present vs card) and neither client can
+        // confirm the other's.
+        if (inv.stripeTerminalIntentId) {
+          let intent = null;
+          try {
+            ({ intent } = await stripe.retrievePaymentIntent(inv.stripeTerminalIntentId));
+          } catch (lookupErr) {
+            const gone = lookupErr?.httpStatus === 404 || lookupErr?.errorCode === "resource_missing";
+            if (!gone) {
+              console.warn(`[terminal-intent] stored intent ${inv.stripeTerminalIntentId} unreadable for ${inv.id}: ${lookupErr.message}`);
+              return sendJson(res, 502, {
+                ok: false, code: "stripe_unreadable", paymentIntentId: inv.stripeTerminalIntentId,
+                errors: ["Couldn't check the earlier Tap to Pay payment with Stripe, so no new charge was started. Try again in a moment."]
+              });
+            }
+            console.warn(`[terminal-intent] stored intent ${inv.stripeTerminalIntentId} no longer exists at Stripe for ${inv.id}; starting a fresh one`);
           }
-          if (open) {
-            // The balance changed under it (a part payment, a revision):
-            // cancel so the old amount can never be collected.
-            await stripe.cancelPaymentIntent(intent.id).catch((cancelErr) => {
-              console.warn(`[terminal-intent] stale-intent cancel failed for ${inv.id}: ${cancelErr.message}`);
+          const phase = intent ? stripe.intentPhase(intent) : "canceled";
+          if (phase === "in_flight") {
+            return sendJson(res, 409, {
+              ok: false, code: "payment_in_progress", paymentIntentId: intent.id, intentStatus: intent.status || null,
+              errors: ["A Tap to Pay charge for this invoice is still being processed. Don't take another payment — wait for it to finish, then check the invoice."]
             });
           }
-        } catch (lookupErr) {
-          console.warn(`[terminal-intent] stored intent lookup failed for ${inv.id}: ${lookupErr.message}`);
+          if (phase === "succeeded") {
+            // Money already moved and the flip has not landed. Finalize,
+            // never charge again.
+            let result;
+            try {
+              result = await finalizeStripeInvoicePayment(inv, intent, null, { via: "terminal-reuse", by: session?.uid || "" });
+            } catch (finErr) {
+              console.error(`[terminal-intent] succeeded intent ${intent.id} not finalized for ${inv.id}: ${finErr.message}`);
+              return sendJson(res, 409, {
+                ok: false, code: "payment_not_finalized", paymentIntentId: intent.id,
+                errors: ["This invoice has a completed Tap to Pay charge that couldn't be recorded automatically. Don't take another payment — check the invoice."]
+              });
+            }
+            const left = Math.round(Number(result.invoice?.balanceDue) * 100);
+            if (!(left > 0)) {
+              return sendJson(res, 409, { ok: false, code: "already_paid", errors: ["This invoice has already been paid."], invoice: result.invoice });
+            }
+            // It paid less than is owed now (the invoice was revised up): the
+            // rest can be taken, on a new intent.
+            inv = result.invoice;
+            amountCents = left;
+          } else if (phase === "collectable") {
+            if (Number(intent.amount) === amountCents) return reply(intent);
+            // The balance changed under it (a part payment, a revision):
+            // cancel so the old amount can never be collected. If Stripe won't
+            // cancel it, it may have started moving money — start nothing.
+            try {
+              await stripe.cancelPaymentIntent(intent.id);
+            } catch (cancelErr) {
+              console.warn(`[terminal-intent] stale-intent cancel failed for ${inv.id}: ${cancelErr.message}`);
+              return sendJson(res, 409, {
+                ok: false, code: "payment_in_progress", paymentIntentId: intent.id, intentStatus: intent.status || null,
+                errors: ["The earlier Tap to Pay charge for this invoice couldn't be cancelled, so no new charge was started. Check the invoice before taking payment."]
+              });
+            }
+          }
+          // canceled (or gone) → a fresh attempt below.
         }
-      }
 
-      const intent = await stripe.createTerminalPaymentIntent({
-        amountCents,
-        currency,
-        invoiceId: inv.id,
-        description: `PJL invoice ${inv.id}`,
-        // Two taps racing before either stored its intent get ONE intent;
-        // keyed on the intent it replaces too, so a cancelled one is never
-        // handed back for the same amount later.
-        idempotencyKey: `pjl-ttp-${inv.id}-${amountCents}-${inv.stripeTerminalIntentId || "first"}`
+        const created = await stripe.createTerminalPaymentIntent({
+          amountCents,
+          currency,
+          invoiceId: inv.id,
+          description: `PJL invoice ${inv.id}`,
+          // Keyed on the intent it replaces too, so a cancelled one is never
+          // handed back for the same amount later.
+          idempotencyKey: `pjl-ttp-${inv.id}-${amountCents}-${inv.stripeTerminalIntentId || "first"}`
+        });
+        await invoices.update(inv.id, { stripeTerminalIntentId: created.id });
+        return reply(created);
       });
-      await invoices.update(inv.id, { stripeTerminalIntentId: intent.id });
-      return reply(intent);
     } catch (err) {
       console.warn(`[terminal-intent] failed: ${err.message}`);
       return sendJson(res, 502, { ok: false, errors: [err.message || "Couldn't start the payment."] });
