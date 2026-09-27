@@ -2,6 +2,20 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-27 (PJL-105 — "first in the fitting" no longer depends on clock resolution; FLOW-47/48 touched, one rule):**
+`fittingDefaultFor()`'s last rule, "the member linked first", sorted on `firstLinkedAt`, a millisecond
+ISO timestamp, and broke ties by SKU. Two links written in the same millisecond therefore made the
+alphabetically first part the default, even when it joined second. CI hit this at random (PR #325,
+run 935); the same could happen to a real batch link.
+**Now:** each link records `firstLinkSeq`, the order it first joined its fitting, when it is written
+(`keepFirstLinked`, inside `mutate()`'s locks, as one past the highest on file). A re-upload or
+reconfirm keeps it. `fittingDefaultFor` uses it only when the timestamps tie, so different timestamps
+decide exactly as before, and records written before this change fall back to the SKU as they did.
+Rules 1 and 2 (Patrick's choice, the single original-catalog part), photos, the picker, `/api/parts`
+and the safety rule are untouched.
+**Test:** `test-part-photo-lifecycle.mjs` section 11 runs the fitting on a frozen clock, where the old
+code fails 4 of 7 every time. It now passes 113 of 113, including the whole file under a frozen clock
+(the CI failure's exact scenario). FLOW-47 re-verified by its suite; nothing changes on screen.
 **2026-09-26 (Part photos M2a — supplier identity and one row per fitting in the picker; FLOW-48 opened):**
 P-PJL-35 M2a, approved by Patrick with these decisions: an explicit "Default for this fitting" per
 fitting (never a company-wide SiteOne-first/Central-first rule, and never "whichever part got the

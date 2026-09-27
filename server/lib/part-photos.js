@@ -114,7 +114,12 @@ function fittingDefaultFor(group, memberSkus, links, isBaseline) {
   if (baseline.length === 1) return { sku: baseline[0], chosen: false };
   const pool = baseline.length > 1 ? baseline : memberSkus;
   const at = (s) => (links[s] && links[s].firstLinkedAt) || (links[s] && links[s].at) || "";
-  const sorted = [...pool].sort((a, b) => (at(a) < at(b) ? -1 : at(a) > at(b) ? 1 : a.localeCompare(b)));
+  // Two links can share one millisecond (PJL-105): then the order they were
+  // written in decides (firstLinkSeq, see keepFirstLinked), not the SKU.
+  // Records written before the sequence existed fall back to the SKU.
+  const seq = (s) => (links[s] && Number.isFinite(links[s].firstLinkSeq) ? links[s].firstLinkSeq : null);
+  const bySeq = (a, b) => (seq(a) !== null && seq(b) !== null && seq(a) !== seq(b) ? seq(a) - seq(b) : 0);
+  const sorted = [...pool].sort((a, b) => (at(a) < at(b) ? -1 : at(a) > at(b) ? 1 : bySeq(a, b) || a.localeCompare(b)));
   return { sku: sorted[0], chosen: false };
 }
 
@@ -522,9 +527,16 @@ function createPartPhotos({ dataDir, sharp }) {
   }
   // When a SKU first joined its fitting. Reconfirming or re-uploading the
   // photo must not make it "newer" — the fitting default's rule 3 reads it.
-  function keepFirstLinked(prev, groupId, rec) {
-    const first = prev && prev.groupId === groupId ? (prev.firstLinkedAt || prev.at) : rec.at;
-    return { ...rec, firstLinkedAt: first };
+  // firstLinkSeq (PJL-105) is the ORDER links were first written in — a
+  // counter, so two links in the same millisecond still have a first and a
+  // second. Every link write runs under mutate()'s locks, so the next
+  // number is simply one past the highest on file.
+  function keepFirstLinked(prev, groupId, rec, links) {
+    const same = prev && prev.groupId === groupId;
+    const first = same ? (prev.firstLinkedAt || prev.at) : rec.at;
+    const nextSeq = () => 1 + Object.values(links || {}).reduce((m, l) => (Number.isFinite(l && l.firstLinkSeq) ? Math.max(m, l.firstLinkSeq) : m), 0);
+    const firstLinkSeq = same ? (Number.isFinite(prev.firstLinkSeq) ? prev.firstLinkSeq : undefined) : nextSeq();
+    return { ...rec, firstLinkedAt: first, ...(firstLinkSeq !== undefined ? { firstLinkSeq } : {}) };
   }
 
   // Set Patrick's photo for the fitting this SKU is. If the SKU already
@@ -555,7 +567,7 @@ function createPartPhotos({ dataDir, sharp }) {
       g.approvedBy = by;
       g.approvedAt = now;
       g.updatedAt = now;
-      links[sku] = keepFirstLinked(links[sku], groupId, { groupId, ...linkRecord(part, by) });
+      links[sku] = keepFirstLinked(links[sku], groupId, { groupId, ...linkRecord(part, by) }, links);
       const sharedWith = Object.keys(links).filter((s) => s !== sku && links[s].groupId === groupId);
       await log({ action: "photo.set", sku, groupId, hash: processed.hash, method: source.method, by, sharedWith });
       return { groupId, hash: processed.hash, sharedWith };
@@ -573,7 +585,7 @@ function createPartPhotos({ dataDir, sharp }) {
     return mutate(async (groups, links) => {
       if (!groups[groupId]) throw new Error("That photo group doesn't exist.");
       const previous = links[sku] ? links[sku].groupId : null;
-      links[sku] = keepFirstLinked(links[sku], groupId, { groupId, ...linkRecord(part, by) });
+      links[sku] = keepFirstLinked(links[sku], groupId, { groupId, ...linkRecord(part, by) }, links);
       await log({ action: "link.set", sku, groupId, previous, by });
       return { groupId, previous };
     });
@@ -596,7 +608,7 @@ function createPartPhotos({ dataDir, sharp }) {
     if (!part) throw new Error("Unknown part.");
     return mutate(async (groups, links) => {
       if (!links[sku]) throw new Error("That part has no photo to reconfirm.");
-      links[sku] = keepFirstLinked(links[sku], links[sku].groupId, { ...links[sku], ...linkRecord(part, by) });
+      links[sku] = keepFirstLinked(links[sku], links[sku].groupId, { ...links[sku], ...linkRecord(part, by) }, links);
       await log({ action: "link.reconfirm", sku, groupId: links[sku].groupId, by });
       return { groupId: links[sku].groupId };
     });
