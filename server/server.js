@@ -3420,16 +3420,88 @@ async function seasonalQuoteAtLock(wo, zones) {
 // No .catch() either: a failure belongs to the caller now. Swallowing
 // it here would report a hold that was never written, which is the
 // defect this exists to prevent.
+//
+// RELEASING reconciles first (2026-09-26). The hold used to be lifted the
+// moment the new acceptance landed, with the invoice still billing the OLD
+// scope — so the pay link and Send then charged the customer the old price
+// for a scope they had re-signed at a different one (signed 4 zones and
+// re-signed at 6: billed 4; the reverse: overcharged). Now the invoice is
+// brought to the price the customer just accepted (billing.billingFor —
+// the re-locked, frozen scope) BEFORE the hold goes: an unsent draft is
+// re-priced in place; anything the customer may already have seen is left
+// as it is and flagged "revision required", still held, until Patrick
+// revises it (invoices.reconcileToSignedScope). Idempotent — a retried
+// signature finds the invoice already matching and writes nothing.
+//
+// While held, no card can complete either: an intent opened BEFORE the hold
+// (a pay page left open, a Tap to Pay reader armed) is cancelled at Stripe
+// when the hold goes on, so it can't be confirmed for the unresolved amount
+// (cancelOpenIntentsWhileHeld). And a signed scope that bills nothing
+// follows the No Charge rules: the untouched draft is voided and the
+// visit's service record reads no charge (settleNoCharge).
+async function holdOrReconcileInvoice(wo) {
+  if (workOrders.awaitsNewSignature(wo)) {
+    const held = await invoices.setScopeHold(wo.id, true);
+    await cancelOpenIntentsWhileHeld(held);
+    return held;
+  }
+  const bill = await billing.billingFor(wo);
+  const result = await invoices.reconcileToSignedScope(wo.id, { lineItems: bill.error ? null : bill.lines, by: "system" });
+  if (result?.action === "voided_no_charge") {
+    await settleNoCharge(wo.propertyId, wo.id, { lineItems: bill.lines, voidedInvoiceId: result.invoice?.id || null });
+  }
+  if (result?.action === "revision_required") await cancelOpenIntentsWhileHeld(result.invoice);
+  return result;
+}
+async function cancelOpenIntentsWhileHeld(inv) {
+  if (!inv?.scopeHold?.since || inv.status === "paid" || inv.status === "void") return;
+  const ids = [...new Set([inv.stripePaymentIntentId, inv.stripeTerminalIntentId].filter(Boolean))];
+  for (const id of ids) {
+    try {
+      const { intent } = await stripe.retrievePaymentIntent(id);
+      if (["requires_payment_method", "requires_confirmation", "requires_action"].includes(intent?.status)) {
+        await stripe.cancelPaymentIntent(id);
+        await invoices.appendHistory(inv.id, { action: "payment_intent_cancelled_while_held", by: "system",
+          note: `Open card payment ${id} cancelled: the invoice is held for a revised work order` });
+      }
+    } catch (err) {
+      // Best effort: a charge that completes anyway is still recorded by
+      // the finalizer (the money moved) and the invoice stays held.
+      console.warn(`[resign] couldn't cancel open intent ${id} on ${inv.id}: ${err?.message}`);
+    }
+  }
+}
+// The visit's service record, when its signed scope bills nothing.
+async function settleNoCharge(propertyId, woId, { lineItems = [], voidedInvoiceId = null } = {}) {
+  if (!propertyId || !woId) return null;
+  const t = invoices.totalsForLines(lineItems);
+  return properties.settleServiceRecordAsNoCharge(propertyId, woId, { lineItems, subtotal: t.subtotal, hst: t.hst, total: t.total, voidedInvoiceId });
+}
+// Voiding an invoice flagged "revision required" whose signed scope is no
+// charge completes the No Charge path (no $0 invoice, the visit reads No
+// charge). Any other void is untouched.
+async function settleNoChargeOnVoid(before) {
+  try {
+    if (invoices.scopeHoldCode(before) !== "revision_required" || before.scopeHold.requiredTotal !== 0 || !before.woId) return;
+    const wo = await workOrders.get(before.woId);
+    if (!wo) return;
+    const bill = await billing.billingFor(wo);
+    if (!bill.noCharge) return;
+    await settleNoCharge(wo.propertyId, wo.id, { lineItems: bill.lines, voidedInvoiceId: before.id });
+  } catch (err) {
+    console.warn(`[resign] no-charge settle after void failed for ${before?.id}: ${err?.message}`);
+  }
+}
 workOrders.events.on("resignature", (wo) => {
   if (!wo?.id) return;
-  return invoices.setScopeHold(wo.id, workOrders.awaitsNewSignature(wo));
+  return holdOrReconcileInvoice(wo);
 });
 async function syncResignatureHold(before, after) {
   try {
     const was = workOrders.awaitsNewSignature(before);
     const now = workOrders.awaitsNewSignature(after);
     if (!after?.id || was === now) return;
-    await invoices.setScopeHold(after.id, now);
+    await holdOrReconcileInvoice(after);
   } catch (err) {
     console.warn(`[resign] invoice hold sync failed for ${after?.id}: ${err?.message}`);
   }
@@ -10974,6 +11046,9 @@ async function handleApi(req, res, pathname) {
       }
       // Re-signing (2026-09-26): the work order behind it changed in price
       // after the customer signed; they sign the revised scope first.
+      if (invoices.scopeHoldCode(inv) === "revision_required") {
+        return sendJson(res, 409, { ok: false, code: "revision_required", errors: ["The customer signed a revised work order and this invoice still bills the old one. Revise it to the signed scope before sending."] });
+      }
       if (inv.scopeHold?.since) {
         return sendJson(res, 409, { ok: false, code: "awaiting_signature", errors: ["The work order changed after the customer signed. Get their signature on the revised work order before sending this invoice."] });
       }
@@ -11673,7 +11748,7 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 409, { ok: false, code: invoices.payBlockReason(inv), errors: [
           invoices.payBlockReason(inv) === "price_unconfirmed"
             ? "PJL is still confirming this invoice's price — nothing can be charged yet."
-            : invoices.payBlockReason(inv) === "awaiting_signature"
+            : ["awaiting_signature", "revision_required"].includes(invoices.payBlockReason(inv))
               ? "This invoice is being updated — nothing can be charged yet."
               : `This invoice is "${inv.status}" and isn't ready for payment.`
         ] });
@@ -15374,7 +15449,8 @@ async function handleApi(req, res, pathname) {
         method: payload?.method,
         receivedAt: payload?.receivedAt,
         notes: payload?.notes,
-        by: session?.uid || "admin"
+        by: session?.uid || "admin",
+        refuseWhileHeld: true
       });
       if (!result.ok) return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
       return sendJson(res, 201, { ok: true, invoice: result.invoice, payment: result.payment });
@@ -15395,7 +15471,7 @@ async function handleApi(req, res, pathname) {
         method: payload?.method,
         receivedAt: payload?.receivedAt,
         notes: payload?.notes
-      }, { by: session?.uid || "admin" });
+      }, { by: session?.uid || "admin", refuseWhileHeld: true });
       if (!result.ok) return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
       return sendJson(res, 200, { ok: true, invoice: result.invoice, payment: result.payment });
     } catch (err) {
@@ -15639,8 +15715,17 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(invoiceMatch[1]);
       const payload = await parseRequestBody(req);
       const before = await invoices.get(id);
+      // A manual "Paid" / "Partially paid" is recording money, and a manual
+      // "Sent" is Send: neither while the invoice is held for a revised
+      // scope (invoices.paymentHoldFor — the same rule every payment route
+      // asks).
+      if (before && ["paid", "partially_paid", "sent"].includes(payload?.status) && payload.status !== before.status) {
+        const held = invoices.paymentHoldFor(before);
+        if (held) return sendJson(res, held.status, { ok: false, code: held.code, errors: held.errors });
+      }
       const updated = await invoices.update(id, payload);
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      if (before && before.status !== "void" && updated.status === "void") await settleNoChargeOnVoid(before);
 
       // Threshold deposit — paid/void transitions on deposit invoices
       // drive the quote's deposit lifecycle. Best-effort.
@@ -15717,7 +15802,8 @@ async function handleApi(req, res, pathname) {
         }
       }
       const updated = await invoices.get(id);
-      return sendJson(res, 200, { ok: true, invoice: updated || result.invoice, qbAction, warning: qbWarning });
+      const warning = [result.holdNote, qbWarning].filter(Boolean).join(" ") || null;
+      return sendJson(res, 200, { ok: true, invoice: updated || result.invoice, qbAction, warning, stillHeld: Boolean(result.holdNote) });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't revise invoice."] });
     }
@@ -15801,10 +15887,12 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(invoiceVoidMatch[1]);
       const body = await parseRequestBody(req).catch(() => ({}));
       const reason = typeof body?.reason === "string" ? body.reason : "";
+      const beforeVoid = await invoices.get(id);
       const result = await invoices.voidInvoice(id, { reason, by: session.uid || "admin" });
       if (!result.ok) {
         return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
       }
+      if (!result.alreadyVoid) await settleNoChargeOnVoid(beforeVoid);
 
       // Mirror the void to QuickBooks — best-effort, non-blocking, same as
       // the legacy PATCH→void path. A QB failure surfaces as a warning; the
@@ -19288,6 +19376,8 @@ async function handleApi(req, res, pathname) {
       }
       const inv = await invoices.get(invoiceId);
       if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      const held = invoices.paymentHoldFor(inv);
+      if (held) return sendJson(res, held.status, { ok: false, code: held.code, errors: held.errors });
       if (!inv.quoteId) return sendJson(res, 400, { ok: false, errors: ["This invoice isn't linked to a quote — nothing to capture."] });
       const quote = await quotes.get(inv.quoteId);
       if (!quote) return sendJson(res, 404, { ok: false, errors: ["The quote linked to this invoice wasn't found."] });

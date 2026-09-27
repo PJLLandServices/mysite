@@ -595,6 +595,33 @@ async function addServiceRecord(propertyId, payload) {
   return entry;
 }
 
+// Bring a visit's service record to what the customer signed when a
+// re-signed scope turns out to be no charge (2026-09-26): its lines and
+// totals follow the signed scope and it no longer names the voided
+// invoice, so isNoChargeServiceRecord() reads it as No Charge — the
+// visit is finished, not stranded under "Needs invoice". Only the billing
+// fields change; the record itself (dates, notes, warranty) is kept.
+// Returns the updated entry, or null when the visit has no record.
+async function settleServiceRecordAsNoCharge(propertyId, woId, { lineItems = [], subtotal = 0, hst = 0, total = 0, voidedInvoiceId = null } = {}) {
+  if (!propertyId || !woId) return null;
+  const properties = await readAll();
+  const idx = properties.findIndex((p) => p.id === propertyId);
+  if (idx === -1) return null;
+  const target = properties[idx];
+  const records = Array.isArray(target.serviceRecords) ? target.serviceRecords : [];
+  const i = records.findIndex((r) => r && r.woId === woId);
+  if (i === -1) return null;
+  const now = new Date().toISOString();
+  const entry = { ...records[i], lineItems, subtotal, hst, total, invoiceId: null,
+    noChargeSettledAt: now, ...(voidedInvoiceId ? { voidedInvoiceId } : {}) };
+  records[i] = entry;
+  target.serviceRecords = records;
+  target.updatedAt = now;
+  properties[idx] = target;
+  await writeAll(properties);
+  return entry;
+}
+
 async function findServiceRecordByWo(propertyId, woId) {
   if (!propertyId || !woId) return null;
   const properties = await readAll();
@@ -1998,6 +2025,7 @@ module.exports = {
   updateDeferredIssue: withStoreLock(updateDeferredIssue),
   listDeferred,
   addServiceRecord: withStoreLock(addServiceRecord),
+  settleServiceRecordAsNoCharge: withStoreLock(settleServiceRecordAsNoCharge),
   findServiceRecordByWo,
   applySystemUpdates: withStoreLock(applySystemUpdates),
   softDelete: withStoreLock(softDelete),

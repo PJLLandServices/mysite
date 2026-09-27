@@ -76,12 +76,9 @@ business but is Patrick's decision, not a test to quietly pin either way.
 Findings print on every run and never fail it. Once decided, a finding
 becomes an assertion.
 
-1. **Re-signing doesn't re-price the invoice** (journey 6; a live billing
-   defect in the #298 re-sign work). Releasing the hold only clears
-   `scopeHold`. The invoice keeps the old scope's lines, so when payment
-   reopens it charges the old price:
-   - signed for 6 zones, billed for 4;
-   - signed for 4 zones, billed for 6 (an overcharge).
+1. ~~**Re-signing doesn't re-price the invoice**~~ (journey 6). **Fixed by
+   #325**: the invoice is reconciled to the signed scope before its hold is
+   released, and journey 6 now asserts it in both directions.
 2. **Bill later: the invoice text says it was emailed** (journey 1). Five
    minutes after Finish, the customer is texted "Your invoice … has been
    emailed to you … check spam/junk". The invoice is still a draft that
