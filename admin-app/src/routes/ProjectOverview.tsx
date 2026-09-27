@@ -63,7 +63,10 @@ export function ProjectWorkspace() {
   const p = data.project;
   const status = (p.status || "planning") as ProjectStatus;
   const { done, total } = taskProgress(p.tasks);
-  const value = data.linkedQuote?.total ?? p.proposalSnapshot?.total;
+  // The contract is what the customer SIGNED — the server's
+  // describeAgreement, the same answer the Change Orders tab shows. No
+  // fallback here: a second source would be a second interpretation.
+  const value = data.agreement?.governing?.total;
   const invoice = data.invoiceSummary;
   const design = data.siteBuilderSummary;
   const goTab = (tab: string) => navigate(`/app/projects/${encodeURIComponent(p.id)}/${tab}`);
@@ -141,7 +144,17 @@ export function ProjectWorkspace() {
           the way into the section behind it. */}
       <div className="bg-surface border-b border-line">
         <div className="mx-auto max-w-[1180px] px-4 lg:px-8 py-4 grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <Stat label="Contract value" value={value ? money(value) : "—"} tone={value ? "money" : "muted"} onClick={() => goTab("scope")} />
+          {/* A job with nothing signed says so — never "$0", which would read
+              as a signed contract worth nothing. */}
+          <Stat
+            label="Contract value"
+            value={value !== undefined && value !== null ? money(value) : "Not signed"}
+            tone={value !== undefined && value !== null ? "money" : "muted"}
+            hint={value !== undefined && value !== null
+              ? (data.agreement?.pending ? `with HST · revision ${data.agreement.pending.id} awaiting signature` : "with HST, signed")
+              : (data.agreement?.pending ? `quote ${data.agreement.pending.id} awaiting signature` : "no signed agreement yet")}
+            onClick={() => goTab("scope")}
+          />
           <Stat
             label="Project progress"
             value={total ? `${done} of ${total} tasks` : "No tasks yet"}

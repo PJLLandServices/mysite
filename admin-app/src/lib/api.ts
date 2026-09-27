@@ -90,6 +90,28 @@ export interface LinkedQuote {
   chain?: Array<{ id: string; version: number }>;
 }
 
+export interface AgreementQuote {
+  id: string;
+  version: number;
+  status: string;
+  acceptedAt: string | null;
+  subtotal: number;
+  hst: number;
+  total: number;
+  href: string;
+}
+
+/* projects.describeAgreement: original (first signed), governing (newest
+   signed — what the invoice bills), pending (unsigned, never the
+   contract), and the net change between original and governing. */
+export interface Agreement {
+  original: AgreementQuote | null;
+  governing: AgreementQuote | null;
+  pending: AgreementQuote | null;
+  netChangeSubtotal: number | null;
+  netChangeTotal: number | null;
+}
+
 export interface InvoiceSummary {
   id: string;
   status: string;
@@ -227,6 +249,10 @@ export const projectsApi = {
       project: ProjectDetail;
       materialLists?: Array<{ id: string; name?: string; status: string; totals?: { lineCount?: number } }>;
       linkedQuote?: LinkedQuote | null;
+      /** The signed agreement (server: projects.describeAgreement) — the
+          same answer the Change Orders tab shows. Contract value reads
+          this and nothing else. */
+      agreement?: Agreement | null;
       invoiceSummary?: InvoiceSummary | null;
       siteBuilderSummary?: SiteBuilderSummary | null;
     }>(`/api/projects/${encodeURIComponent(id)}`)
@@ -445,4 +471,92 @@ export interface ProjectMaterials {
 export const materialsApi = {
   get: (projectId: string) =>
     api.get<ProjectMaterials>(`/api/projects/${encodeURIComponent(projectId)}/materials`)
+};
+
+/* ── Change Orders (GET /api/projects/:id/change-orders) ──────────────
+   Read-only. Every figure and sentence below is the server's
+   (server/lib/change-orders-view.js): the phase, the "what happens
+   next" line, which changes are open (the one shared rule), the signed
+   agreement and the completion holds. The tab displays; it does not
+   decide. */
+
+export type ChangePhase =
+  | "in_review"
+  | "awaiting_customer"
+  | "awaiting_revision"
+  | "awaiting_signature"
+  | "signed"
+  | "revision_declined"
+  | "revision_missing"
+  | "rejected"
+  | "withdrawn"
+  | "approved_tm";
+
+export interface AgreementVersion {
+  id: string;
+  version: number;
+  status: string;
+  role: string;
+  signed: boolean;
+  acceptedAt: string | null;
+  subtotal: number;
+  total: number;
+  href: string;
+}
+
+export interface ChangeOrder {
+  id: string;
+  description: string;
+  status: string;
+  phase: ChangePhase;
+  phaseLabel: string;
+  next: string;
+  open: boolean;
+  capturedBy: string | null;
+  capturedAt: string | null;
+  capturedFromWoId: string | null;
+  photos: Array<{ n: string; href: string | null }>;
+  lineItems: Array<{ label: string; qty: number; price: number; lineTotal: number }>;
+  estimatedTotal: number;
+  sent: { at: string; by: string | null; to: string | null } | null;
+  sendAttempts: Array<{ at: string | null; by: string | null; to: string | null; ok: boolean; reason: string | null }>;
+  decision: {
+    as: string | null;
+    source: "recorded_by_office" | "customer" | "office" | null;
+    recordedBy: string | null;
+    at: string;
+    note: string;
+  } | null;
+  revision: { id: string; version: number | null; status: string | null; signed: boolean; href: string } | null;
+}
+
+export interface ProjectChangeOrders {
+  projectId: string;
+  billingMode: string | null;
+  agreement: {
+    original: AgreementVersion | null;
+    governing: AgreementVersion | null;
+    pending: AgreementVersion | null;
+    netChangeSubtotal: number | null;
+    netChangeTotal: number | null;
+    versions: AgreementVersion[];
+  };
+  /** Set on a deposit job whose balance predates the signed revision. */
+  billingBlocked: { key: string; message: string } | null;
+  summary: {
+    total: number;
+    open: number;
+    awaitingOffice: number;
+    awaitingCustomer: number;
+    awaitingSignature: number;
+    signed: number;
+  };
+  holds: Array<{ key: string; message: string }>;
+  changes: ChangeOrder[];
+  classicHref: string | null;
+}
+
+export const changeOrdersApi = {
+  get: (projectId: string) =>
+    api.get<ProjectChangeOrders>(`/api/projects/${encodeURIComponent(projectId)}/change-orders`)
 };

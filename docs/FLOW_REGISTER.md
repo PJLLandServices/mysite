@@ -2,6 +2,32 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-27 (Change Orders tab, read-only — PR 3 of Change Orders; no PASS flow touched):**
+The workspace's Change Orders tab replaces its placeholder. `GET /api/projects/:id/change-orders`
+(`lib/change-orders-view.js`) returns every figure and sentence the tab shows. Open counts come from
+the shared `scopeChangeStage` rule, the agreement from the quote chain's governing quote, and the
+holds are `completionPreflight`'s blockers word for word. The tab has no buttons; actions stay on
+the classic page's office-only routes. **Also fixed:** the workspace header's "Contract value" showed
+a draft revision's total while it was unsigned. It now reads `linkedQuote.agreement`, the signed
+quote the invoice bills. **Test:** `scripts/test-change-orders-view.mjs` (in `build:check`); on main
+before this, the route does not exist. **Patrick's four checks (2026-09-27):**
+- The header and the tab both read `projects.describeAgreement`, one server function, and React has
+  no fallback.
+- Signed change value = newest signed minus original, before HST and with HST. It is never a sum,
+  and drafts are excluded (tested with two signed revisions and a pending draft).
+- A deposit job shows **"Billing on hold"** and never "billed at completion".
+- An interrupted send shows "Delivery uncertain".
+
+- **One HST treatment:** the header and the tab both lead with the agreement's total **with HST**,
+  with before-HST alongside. That covers the tab's agreement line, its version rows, and "Signed
+  changes".
+- **Truthful empty state:** a job with nothing signed shows **"Not signed"** in the header, never "$0"
+  or a bare dash.
+
+**Still reading the snapshot:** the projects list and the Dashboard's summed "Active contract value",
+flagged for a follow-up. **Patrick's walk (UNMAPPED until done):** open a job with a
+change order in the new app → Change Orders. The counts, stages and "Billed on …" amount should
+match the classic page and the quote.
 **2026-09-27 (Change-order guards: follow-up to #338 before the first manual deploy; no PASS flow touched):**
 Patrick's checks, run against the merged code. **Proven on main** (`test-change-order-guards.mjs`: 20 of 30 checks failed):
 - A crash between the email leaving and the result being saved left no trace, so the next Send

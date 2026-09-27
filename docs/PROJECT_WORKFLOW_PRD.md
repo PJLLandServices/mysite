@@ -170,7 +170,10 @@ classic link until the replacement has been walked on a real job.
 3. **Change Orders: read or raise?** Deferred to step 4, where it will be
    decided against a screen that exists rather than in the abstract. The
    lifecycle's last step raises a priced document, so the default stays
-   read-first.
+   read-first. **Built read-only (2026-09-27), after the billing fix (#337)
+   and the change-order safety fix (#338) — Patrick's order.** Actions stay
+   on the classic project page's office-only routes until this screen has
+   been walked on a real job (R5).
 
 4. **Financials: does "raise the invoice" live here?** Deferred to step 5,
    same reason.
@@ -329,3 +332,33 @@ Financials (step 5), alongside the purchased-material-list protection from
 - Anything in the field app.
 - Retiring classic project screens — nothing is deleted until its
   replacement has been walked on a real job.
+
+## Step 4 — Change Orders (read-only), 2026-09-27
+
+Built third of three, after the money path was made safe: #337 (a signed
+revision is billed; the original governs until then) and #338 (office-only
+actions, real names, honest sends, one "open" rule).
+
+**`GET /api/projects/:id/change-orders`** (`server/lib/change-orders-view.js`)
+returns everything the tab shows, from rules that already exist:
+
+| On screen | Comes from |
+|---|---|
+| Open / waiting / signed counts | `projects.scopeChangeStage` — the one rule the Overview count, completion check and status email use |
+| Each change's stage and "what happens next" | its own status, and for one already in a revised quote, that quote's fate in the chain |
+| The agreement (original, current signed, waiting for signature, net change) | `quotes.describeChain` via `projects.resolveProjectQuote` — what the invoice bills |
+| Holding completion | `projects.completionPreflight`'s own blockers, word for word |
+
+The tab has **no buttons** and does **no arithmetic** on money;
+`scripts/test-change-orders-view.mjs` runs the view and the server's own
+rules over the same records and checks the tab's source for both.
+
+**Found on the way:** the workspace header's **Contract value** read the
+quote panel's "current" version — which, while a revision is still a draft,
+is the unsigned draft. It now reads the signed agreement
+(`linkedQuote.agreement`), the amount the invoice bills.
+
+**Not in this step:** linking a change to specific tasks or materials. The
+change request carries line items and photos but no task or SKU link; adding
+one is a data change, deliberately left for when actions move here.
+

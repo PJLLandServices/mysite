@@ -134,6 +134,7 @@ const workOrders = require("./lib/work-orders");
 const sessionHours = require("./lib/session-hours");
 const atomicJson = require("./lib/atomic-json");
 const dailyRecords = require("./lib/daily-records");
+const changeOrdersView = require("./lib/change-orders-view");
 const projectMaterials = require("./lib/project-materials");
 const quotes = require("./lib/quotes");
 const quoteViews = require("./lib/quote-views");
@@ -16966,7 +16967,13 @@ async function handleApi(req, res, pathname) {
       };
     }
 
-    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote, invoiceSummary, siteBuilderSummary });
+    // The signed agreement — projects.describeAgreement, the SAME function
+    // the Change Orders tab reads — so "Contract value" is never an
+    // unsigned revision and never a second interpretation in React.
+    let agreement = null;
+    try { agreement = projects.describeAgreement(await projects.resolveProjectQuote(proj)); }
+    catch (err) { /* tolerate — the header shows "—" */ }
+    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote, invoiceSummary, siteBuilderSummary, agreement });
   }
   if (projectMatch && req.method === "PATCH") {
     try {
@@ -17383,6 +17390,33 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, ...model });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the materials."] });
+    }
+  }
+
+  // GET /api/projects/:id/change-orders — the Change Orders tab
+  // (2026-09-27). Read-only: every figure and sentence the tab shows comes
+  // from lib/change-orders-view.js over the rules that already exist —
+  // the shared "open" rule, the quote chain, and the completion check's
+  // own blockers. Actions stay on the classic page's office-only routes.
+  const changeOrdersViewMatch = pathname.match(/^\/api\/projects\/([^/]+)\/change-orders$/);
+  if (changeOrdersViewMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(changeOrdersViewMatch[1]);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      const chainInfo = await projects.resolveProjectQuote(proj);
+      const preflight = await projects.completionPreflight(id);
+      const model = changeOrdersView.describeChangeOrders({
+        project: proj,
+        chainInfo,
+        blockers: preflight.blockers || [],
+        stageOf: projects.scopeChangeStage,
+        describeAgreement: projects.describeAgreement,
+        revisionStateOf: projects.scopeChangeRevisionState
+      });
+      return sendJson(res, 200, { ok: true, ...model });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the change orders."] });
     }
   }
 

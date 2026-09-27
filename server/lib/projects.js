@@ -2090,6 +2090,41 @@ async function resolveProjectQuote(proj) {
   return quotes.resolveQuoteChain(proj.currentQuoteId || proj.sourceQuoteId);
 }
 
+// THE signed agreement, as every screen shows it (2026-09-27). ONE server
+// answer for the workspace header's "Contract value" and the Change Orders
+// tab, so React never interprets the chain a second way:
+//   original  — the FIRST signed version (what the job was sold at)
+//   governing — the NEWEST signed version (what the invoice bills)
+//   pending   — an unsigned newer version, never counted as the contract
+//   netChange — governing minus original. Not a sum of revisions: each
+//               signed revision already carries every earlier change, so
+//               adding them would count a change once per later revision.
+//               Unsigned drafts are excluded by construction.
+function describeAgreement(chainInfo) {
+  const quotes = require("./quotes");
+  const info = chainInfo || { chain: [], governing: null, pending: null };
+  const cents = (n) => Math.round((Number(n) || 0) * 100);
+  const summary = (q) => q ? {
+    id: q.id,
+    version: Number(q.version) || 1,
+    status: q.status,
+    acceptedAt: q.acceptedAt || null,
+    subtotal: cents(q.subtotal) / 100,
+    hst: cents(q.hst) / 100,
+    total: cents(q.total) / 100,
+    href: `/admin/quote/${encodeURIComponent(q.id)}/proposal`
+  } : null;
+  const original = (info.chain || []).find(quotes.isSignedAgreement) || null;
+  const governing = info.governing || null;
+  return {
+    original: summary(original),
+    governing: summary(governing),
+    pending: summary(info.pending || null),
+    netChangeSubtotal: original && governing ? (cents(governing.subtotal) - cents(original.subtotal)) / 100 : null,
+    netChangeTotal: original && governing ? (cents(governing.total) - cents(original.total)) / 100 : null
+  };
+}
+
 // What a fixed-price job is billed: the SIGNED AGREEMENT governing it —
 // the newest signed quote in its revision chain. ONE answer for the final
 // invoice (completion-cascade) and the Complete dialog's preview, so the
@@ -3087,6 +3122,7 @@ module.exports = {
   resolveScopeChangeRequest,
   generateQuoteRevisionFromScopeChange,
   resolveProjectQuote,
+  describeAgreement,
   fixedPriceBillingSource,
   scopeChangeStage,
   openScopeChanges,
