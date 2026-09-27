@@ -265,7 +265,11 @@ try {
 
     const r2 = await post(office, "/send-outcome", { outcome: "not_sent" });
     ok("the office records it did not arrive", r2.status === 200 && !r2.data.scopeChange?.sendInFlight && r2.data.scopeChange?.status === "pending_admin_review", `${r2.status} ${JSON.stringify(r2.data.errors || "")}`);
-    ok("...the interrupted attempt is kept on record", r2.data.scopeChange?.sendAttempts?.some((a) => a.ok === false && /Interrupted send/.test(a.reason || "")));
+    const settledAttempt = (r2.data.scopeChange?.sendAttempts || []).find((a) => a.interrupted);
+    ok("...the interrupted attempt is kept on record", settledAttempt && settledAttempt.ok === false && /Interrupted send/.test(settledAttempt.reason || ""));
+    ok("...with who started it and when", settledAttempt?.by === OFFICE && settledAttempt?.at === after.sendInFlight.at, JSON.stringify(settledAttempt));
+    ok("...and who settled it, when, and the outcome", settledAttempt?.settledBy === OFFICE && Boolean(Date.parse(settledAttempt?.settledAt)) && settledAttempt?.outcome === "confirmed_not_delivered",
+      JSON.stringify(settledAttempt));
     const r3 = await post(office, "/send");
     ok("now it can be sent — once", r3.status === 200 && r3.data.scopeChange?.status === "pending_customer_approval", `${r3.status} ${JSON.stringify(r3.data.errors || "")}`);
     ok("...two emails in total: the crashed one and this one", emails().filter((e) => e.to === "crash@example.test").length === 2);
@@ -279,6 +283,148 @@ try {
     const settled = await projects.resolveUncertainScopeSend(p2.id, s2.id, { outcome: "sent", by: OFFICE });
     ok("'it arrived' → awaiting the customer, dated when it went", settled.status === "pending_customer_approval" && settled.sentAt === "2026-09-27T12:00:00.000Z" && !settled.sendInFlight,
       `${settled.status} ${settled.sentAt}`);
+    const arrived = settled.sendAttempts.find((a) => a.interrupted);
+    ok("...recorded as confirmed delivered, by whom and when", arrived?.ok === true && arrived.outcome === "confirmed_delivered" && arrived.settledBy === OFFICE && Boolean(Date.parse(arrived.settledAt)),
+      JSON.stringify(arrived));
+  });
+  // ====================================================================
+  // Patrick: "Every acceptance function must, inside the same lock used by
+  // withdrawal: confirm the quote is still signable; confirm it is the
+  // active revision the customer is allowed to sign; reject cancelled,
+  // trashed, superseded or replaced quotes."
+  const SIGNERS = {
+    accept: (id) => quotes.accept(id, { by: "customer" }),
+    acceptWithSignature: (id) => quotes.acceptWithSignature(id, { customerName: "Adaeze", imageData: SIG.imageData, ip: SIG.ip, userAgent: "t" }),
+    recordOfflineAcceptance: (id) => quotes.recordOfflineAcceptance(id, { customerName: "Adaeze", recordedBy: OFFICE }),
+    recordPortalSignAcceptance: (id) => quotes.recordPortalSignAcceptance(id, SIG),
+    recordPdfReturnAcceptance: (id) => quotes.recordPdfReturnAcceptance(id, { adminUser: OFFICE })
+  };
+  const rawQuotes = () => JSON.parse(fs.readFileSync(path.join(DATA, "quotes.json"), "utf8"));
+  const writeRawQuotes = (all) => fs.writeFileSync(path.join(DATA, "quotes.json"), JSON.stringify(all, null, 2));
+  // A fresh unsigned, sendable quote — with a staged PDF return, so the
+  // PDF-return writer has something to attest.
+  async function offer() {
+    const q = await quotes.create({ type: "project_proposal", status: "sent", customerEmail: "adaeze@example.test", branch: "direct_residential", billingMode: "fixed_price",
+      lineItems: [{ label: "Base install", qty: 1, price: 5000, lineTotal: 5000 }], subtotal: 5000, hst: 650, total: 5650 });
+    const all = rawQuotes();
+    all.find((x) => x.id === q.id).acceptanceEvidence = { method: "pdf_return", stagedAt: new Date().toISOString() };
+    writeRawQuotes(all);
+    return q;
+  }
+  const setRaw = (id, patch) => { const all = rawQuotes(); Object.assign(all.find((x) => x.id === id), patch); writeRawQuotes(all); };
+
+  await scenario("H. every signing function refuses a quote that is no longer the offer", async () => {
+    for (const [name, sign] of Object.entries(SIGNERS)) {
+      // trashed
+      const t = await offer();
+      await quotes.softDelete(t.id, { adminId: OFFICE });
+      let e = await refusal(() => sign(t.id));
+      ok(`${name}: refuses a TRASHED quote`, e?.code === "quote_not_signable" && !(await quotes.get(t.id)).acceptedAt, e ? e.code : "signed");
+      // cancelled
+      const c = await offer(); setRaw(c.id, { status: "cancelled" });
+      e = await refusal(() => sign(c.id));
+      ok(`${name}: refuses a CANCELLED quote`, e?.code === "quote_not_signable" && (await quotes.get(c.id)).status === "cancelled", e ? e.code : "signed");
+      // superseded — a withdrawn revision (retireUnsignedRevision)
+      const { proj } = await signedJob();
+      const ch = await approvedChange(proj.id, "Drip zone", 400);
+      const rev = await projects.generateQuoteRevisionFromScopeChange(proj.id, ch.id, { by: OFFICE });
+      setRaw(rev.id, { acceptanceEvidence: { method: "pdf_return", stagedAt: new Date().toISOString() } });
+      await projects.resolveScopeChangeRequest(proj.id, ch.id, { resolution: "withdrawn" }, { by: OFFICE });
+      e = await refusal(() => sign(rev.id));
+      ok(`${name}: refuses a SUPERSEDED (withdrawn) revision`, e?.code === "quote_not_signable" && (await quotes.get(rev.id)).status === "superseded" && !(await quotes.get(rev.id)).acceptedAt,
+        e ? e.code : "signed");
+      ok(`${name}: ...and the job stays on its signed agreement`, (await projects.resolveProjectQuote(await projects.get(proj.id))).governing?.id !== rev.id);
+      // replaced — an older unsigned version while a newer one is the offer
+      const old = await offer();
+      const newer = await offer();
+      setRaw(newer.id, { revisionOf: old.id, version: 2 });
+      e = await refusal(() => sign(old.id));
+      ok(`${name}: refuses a REPLACED version (a newer offer exists)`, e?.code === "quote_not_signable" && /replaced by/.test(e.message) && !(await quotes.get(old.id)).acceptedAt,
+        e ? `${e.code} ${e.message}` : "signed");
+      // …while the current offer still signs normally.
+      const good = await sign(newer.id);
+      ok(`${name}: the current offer still signs`, good && quotes.hasAcceptanceRecord(good), good ? good.status : "null");
+    }
+  });
+
+  // ====================================================================
+  await scenario("H2. a customer's uploaded PDF is not a signature until the office attests it", async () => {
+    const { q1, proj } = await signedJob();
+    const ch = await approvedChange(proj.id, "Drip zone", 400);
+    const rev = await projects.generateQuoteRevisionFromScopeChange(proj.id, ch.id, { by: OFFICE });
+    await quotes.stagePdfReturn(rev.id, { buffer: Buffer.from("%PDF-1.4 test"), filename: "signed.pdf", senderEmail: "adaeze@example.test" });
+    const staged = await quotes.get(rev.id);
+    ok("setup: the revision is waiting for the office to attest the PDF", staged.status === "pending_admin_attestation", staged.status);
+    ok("a staged PDF is not a signature", !quotes.hasAcceptanceRecord(staged));
+    const chain = await projects.resolveProjectQuote(await projects.get(proj.id));
+    ok("the job is still billed on the signed original, not the unattested revision", chain.governing?.id === q1.id, chain.governing?.id);
+    ok("...and completion is still held for the revision", (await blockers(proj.id)).includes("revision_unsigned"));
+    await quotes.recordPdfReturnAcceptance(rev.id, { adminUser: OFFICE });
+    ok("once the office attests it, it is the signed agreement", (await projects.resolveProjectQuote(await projects.get(proj.id))).governing?.id === rev.id);
+  });
+
+  // ====================================================================
+  await scenario("I. a withdrawal racing a signature ends in exactly ONE outcome", async () => {
+    const outcomeOf = async (proj, ch, rev) => {
+      const q = await quotes.get(rev.id), s = await scr(proj.id, ch.id);
+      const gov = (await projects.resolveProjectQuote(await projects.get(proj.id))).governing;
+      const signed = quotes.hasAcceptanceRecord(q) && q.status === "accepted" && gov?.id === rev.id && s.status === "executed_under_revision";
+      const withdrawn = q.status === "superseded" && !quotes.hasAcceptanceRecord(q) && gov?.id !== rev.id && s.status === "withdrawn";
+      return { signed, withdrawn };
+    };
+    const setup = async () => {
+      const { proj } = await signedJob();
+      const ch = await approvedChange(proj.id, "Drip zone", 400);
+      const rev = await projects.generateQuoteRevisionFromScopeChange(proj.id, ch.id, { by: OFFICE });
+      return { proj, ch, rev };
+    };
+
+    // 1. Forced worst case: the withdrawal has already decided "unsigned"
+    //    when the customer's signature lands, just before it cancels.
+    {
+      const { proj, ch, rev } = await setup();
+      const real = quotes.retireUnsignedRevision;
+      quotes.retireUnsignedRevision = async (id, opts) => { await quotes.recordPortalSignAcceptance(id, SIG); return real(id, opts); };
+      let e;
+      try { e = await refusal(() => projects.resolveScopeChangeRequest(proj.id, ch.id, { resolution: "withdrawn" }, { by: OFFICE })); }
+      finally { quotes.retireUnsignedRevision = real; }
+      const o = await outcomeOf(proj, ch, rev);
+      ok("signature lands mid-withdrawal → the signature wins, the withdrawal is refused", e?.code === "scr_in_signed_agreement" && o.signed && !o.withdrawn, `${e?.code} ${JSON.stringify(o)}`);
+    }
+    // 2. Forced the other way: the revision is cancelled, THEN the customer signs.
+    {
+      const { proj, ch, rev } = await setup();
+      await projects.resolveScopeChangeRequest(proj.id, ch.id, { resolution: "withdrawn" }, { by: OFFICE });
+      const e = await refusal(() => quotes.recordPortalSignAcceptance(rev.id, SIG));
+      const o = await outcomeOf(proj, ch, rev);
+      ok("cancelled first → the signature is refused", e?.code === "quote_not_signable" && o.withdrawn && !o.signed, `${e?.code} ${JSON.stringify(o)}`);
+    }
+    // 3. Truly simultaneous, both orders of issue, repeated: never both, never neither.
+    let bothOrNeither = 0, signedWins = 0, withdrawWins = 0;
+    for (let i = 0; i < 12; i++) {
+      const { proj, ch, rev } = await setup();
+      const withdraw = () => projects.resolveScopeChangeRequest(proj.id, ch.id, { resolution: "withdrawn" }, { by: OFFICE });
+      const sign = () => quotes.recordPortalSignAcceptance(rev.id, SIG);
+      const res = await Promise.allSettled(i % 2 ? [withdraw(), sign()] : [sign(), withdraw()]);
+      const fulfilled = res.filter((r) => r.status === "fulfilled").length;
+      const o = await outcomeOf(proj, ch, rev);
+      if (fulfilled !== 1 || o.signed === o.withdrawn) bothOrNeither += 1;
+      if (o.signed) signedWins += 1;
+      if (o.withdrawn) withdrawWins += 1;
+    }
+    ok("12 simultaneous races: every one ends with exactly one outcome", bothOrNeither === 0, `${bothOrNeither} ended with both or neither (signed ${signedWins}, withdrawn ${withdrawWins})`);
+    // Straight at the quote lock, both orders.
+    for (const order of ["retire-first", "sign-first"]) {
+      const { rev } = await setup();
+      const retire = () => quotes.retireUnsignedRevision(rev.id, { by: OFFICE });
+      const sign = () => quotes.recordPortalSignAcceptance(rev.id, SIG);
+      const res = await Promise.allSettled(order === "retire-first" ? [retire(), sign()] : [sign(), retire()]);
+      const q = await quotes.get(rev.id);
+      const oneWon = res.filter((r) => r.status === "fulfilled").length === 1;
+      const consistent = (q.status === "superseded" && !quotes.hasAcceptanceRecord(q)) || (q.status === "accepted" && quotes.hasAcceptanceRecord(q));
+      ok(`quote lock, ${order}: exactly one wins, and the quote says which`, oneWon && consistent && res[0].status === "fulfilled",
+        `${res.map((r) => r.status)} → ${q.status}`);
+    }
   });
 } finally {
   try { child?.kill("SIGTERM"); } catch {}
