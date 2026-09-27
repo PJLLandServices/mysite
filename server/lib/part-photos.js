@@ -225,7 +225,11 @@ async function fetchImageSafely(rawUrl, {
       url = new URL(loc, url);
       continue;
     }
-    if (!res.ok) throw new Error(`The image couldn't be downloaded (HTTP ${res.status}).`);
+    if (!res.ok) {
+      const e = new Error(`The image couldn't be downloaded (HTTP ${res.status}).`);
+      e.transient = res.status === 429 || res.status >= 500;
+      throw e;
+    }
     const type = String(res.headers.get("content-type") || "").toLowerCase();
     if (!type.startsWith("image/") || type.includes("svg")) {
       throw new Error("That link isn't an image. Use the link to the picture itself.");
@@ -240,6 +244,55 @@ async function fetchImageSafely(rawUrl, {
       chunks.push(Buffer.from(chunk));
     }
     return { buffer: Buffer.concat(chunks), finalUrl: url.toString() };
+  }
+}
+
+// Fetch a product PAGE for the deterministic part-number check (M3). The
+// same protections as fetchImageSafely — https only, public addresses only
+// (re-checked on every redirect), capped size and time — but HTML only.
+// The server reads the page itself: the part number must be found in what
+// WE downloaded, never in what a model says it saw.
+const MAX_PAGE_BYTES = 3 * 1024 * 1024;
+async function fetchPageSafely(rawUrl, {
+  fetchImpl = globalThis.fetch,
+  lookup = dns.promises.lookup,
+  maxBytes = MAX_PAGE_BYTES,
+  timeoutMs = 15_000,
+  maxRedirects = 5
+} = {}) {
+  let url;
+  try { url = new URL(String(rawUrl || "").trim()); } catch { throw new Error("That isn't a valid link."); }
+  for (let hop = 0; ; hop++) {
+    if (url.protocol !== "https:") throw new Error("Only https:// pages are read.");
+    if (url.username || url.password) throw new Error("Links with a login in them aren't read.");
+    await assertPublicHost(url.hostname, lookup);
+    const res = await fetchImpl(url.toString(), {
+      redirect: "manual",
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { accept: "text/html,application/xhtml+xml" }
+    });
+    if (res.status >= 300 && res.status < 400) {
+      if (hop >= maxRedirects) throw new Error("That page redirects too many times.");
+      const loc = res.headers.get("location");
+      if (!loc) throw new Error("That page redirects nowhere.");
+      url = new URL(loc, url);
+      continue;
+    }
+    if (!res.ok) {
+      const e = new Error(`The page couldn't be read (HTTP ${res.status}).`);
+      e.transient = res.status === 429 || res.status >= 500;
+      throw e;
+    }
+    const type = String(res.headers.get("content-type") || "").toLowerCase();
+    if (!type.includes("html")) throw new Error("That link isn't a web page.");
+    const chunks = [];
+    let total = 0;
+    for await (const chunk of res.body) {
+      total += chunk.length;
+      if (total > maxBytes) break; // the product text is near the top; keep what we have
+      chunks.push(Buffer.from(chunk));
+    }
+    return { html: Buffer.concat(chunks).toString("utf8"), finalUrl: url.toString() };
   }
 }
 
@@ -620,6 +673,108 @@ function createPartPhotos({ dataDir, sharp }) {
     });
   }
 
+  // ---- M3: AI photo inventory -----------------------------------------
+  // Store a candidate image (resize only, content-addressed). Never live by
+  // itself: it only becomes a photo through recordAiResult (Confident +
+  // auto-approve) or Patrick's approval on the review page.
+  async function saveCandidateImage(buffer) {
+    const processed = await processImage(buffer, sharp);
+    await saveImage(processed);
+    return { hash: processed.hash, width: processed.width, height: processed.height };
+  }
+
+  // The stored bytes of a candidate (for the vision check).
+  async function readCandidateImage(hash, size = 1200) {
+    const p = imagePath(hash, size);
+    if (!p) throw new Error("Bad image hash.");
+    return fs.readFile(p);
+  }
+
+  // Record what the AI backfill decided for one SKU.
+  //   result: { tier: confident|tbd|not_confident, kind, reason, runId,
+  //             identified, candidates: [{ hash, width, height, source, checks, tier }],
+  //             chosen: index of the best candidate or -1 }
+  //   autoApprove: only then can a Confident result go live.
+  // Safety: a fitting that already has a LIVE photo (Patrick's, or an
+  // earlier auto-approval) is never touched — the AI never overwrites a
+  // photo. To-be-determined and Not-confident results never go live.
+  async function recordAiResult(sku, part, result, { autoApprove = false } = {}) {
+    if (!part) throw new Error("Unknown part.");
+    const { tier } = result;
+    if (!["confident", "tbd", "not_confident"].includes(tier)) throw new Error(`Unknown tier: ${tier}`);
+    return mutate(async (groups, links) => {
+      const now = new Date().toISOString();
+      const existing = links[sku] && groups[links[sku].groupId];
+      if (existing && existing.photo && SHOWABLE_GROUP_TIERS.has(existing.tier)) {
+        return { skipped: "already has a live photo", groupId: links[sku].groupId };
+      }
+      let groupId = existing ? links[sku].groupId : null;
+      if (!groupId) {
+        groupId = nextGroupId(groups);
+        groups[groupId] = { id: groupId, label: part.description || sku, createdAt: now, history: [] };
+      }
+      const g = groups[groupId];
+      if (!links[sku]) {
+        // The SKU's own link to its photo group — not a claim that it is the
+        // same fitting as anything else.
+        links[sku] = keepFirstLinked(null, groupId, { groupId, linkTier: "confident", linkedBy: "auto:self", fingerprint: fingerprintOf(part), at: now });
+      }
+      const byHash = new Map((g.candidates || []).map((c) => [c.hash, c]));
+      for (const c of result.candidates || []) {
+        if (!HASH_RE.test(String(c.hash || ""))) continue;
+        byHash.set(c.hash, { hash: c.hash, width: c.width || null, height: c.height || null, source: c.source || {}, checks: c.checks || {}, tier: c.tier || null, runId: result.runId || null, foundAt: now, forSku: sku });
+      }
+      g.candidates = [...byHash.values()].slice(-12);
+      g.ai = { tier, kind: result.kind || null, reason: result.reason || "", runId: result.runId || null, identified: result.identified || null, at: now, forSku: sku };
+      const chosen = result.chosen >= 0 ? (result.candidates || [])[result.chosen] : null;
+      let live = false;
+      if (tier === "confident" && autoApprove && chosen && HASH_RE.test(String(chosen.hash || ""))) {
+        if (g.photo && g.photo.hash !== chosen.hash) (g.history ||= []).push({ hash: g.photo.hash, replacedAt: now, replacedBy: "auto:confident" });
+        g.photo = { hash: chosen.hash, width: chosen.width || null, height: chosen.height || null };
+        g.tier = "confident";
+        g.source = { method: "ai", ...(chosen.source || {}) };
+        g.approvedBy = "auto:confident";
+        g.approvedAt = now;
+        g.autoApprovedRun = result.runId || null;
+        live = true;
+      } else if (tier === "not_confident") {
+        g.tier = "not_confident";
+        g.reason = result.reason || "No reliable photo found.";
+      } else {
+        // TBD, or Confident while auto-approve is off: waits for Patrick.
+        g.tier = "tbd";
+        g.reason = tier === "confident" ? "Passed every check — waiting for your review (auto-approve is off)." : (result.reason || "Needs a look.");
+      }
+      g.updatedAt = now;
+      await log({ action: "ai.result", sku, groupId, tier, live, autoApprove, runId: result.runId || null, candidates: (result.candidates || []).length });
+      return { groupId, tier, live };
+    });
+  }
+
+  // Automatic same-fitting link (manufacturer + manufacturer part # on
+  // official pages — decided by photo-evidence.groupingDecision). Moves `sku`
+  // into `targetSku`'s fitting. A photo Patrick approved himself is never
+  // moved away from by automation; an AI auto-approved one can be, because
+  // the two SKUs are the same fitting and get one photo (the SKU's old group
+  // and its photo stay on file, unchanged).
+  async function autoLinkSameFitting(sku, part, targetSku, { reason }) {
+    if (!part) throw new Error("Unknown part.");
+    return mutate(async (groups, links) => {
+      const target = links[targetSku];
+      if (!target || !groups[target.groupId]) return { skipped: "target has no fitting" };
+      const own = links[sku] && groups[links[sku].groupId];
+      const ownIsPatricks = own && own.photo && SHOWABLE_GROUP_TIERS.has(own.tier) && !String(own.approvedBy || "").startsWith("auto:");
+      if (own && links[sku].groupId !== target.groupId && ownIsPatricks) return { skipped: "has its own photo, approved by Patrick" };
+      if (links[sku] && links[sku].linkTier === "confirmed" && links[sku].linkedBy && !String(links[sku].linkedBy).startsWith("auto:") && links[sku].groupId !== target.groupId) {
+        return { skipped: "Patrick linked it to a different fitting" };
+      }
+      const previous = links[sku] ? links[sku].groupId : null;
+      links[sku] = keepFirstLinked(links[sku], target.groupId, { groupId: target.groupId, linkTier: "confident", linkedBy: "auto:mfr-part", fingerprint: fingerprintOf(part), at: new Date().toISOString() });
+      await log({ action: "link.auto", sku, groupId: target.groupId, previous, reason });
+      return { groupId: target.groupId, previous };
+    });
+  }
+
   // Patrick's deliberate "Default for this fitting". Only a part that is
   // linked to this fitting (confirmed) can be chosen.
   async function setFittingDefault(groupId, sku, part, { by }) {
@@ -646,13 +801,14 @@ function createPartPhotos({ dataDir, sharp }) {
 
   return {
     imagePath, ensureThumb, resolveImageFile, fileExists, readStoresSync, mergeInto, snapshot,
-    setPhoto, setPhotoFromUrl, linkToGroup, unlink, reconfirm, removeGroupPhoto, setFittingDefault
+    setPhoto, setPhotoFromUrl, linkToGroup, unlink, reconfirm, removeGroupPhoto, setFittingDefault,
+    saveCandidateImage, readCandidateImage, recordAiResult, autoLinkSameFitting
   };
 }
 
 module.exports = {
   createPartPhotos,
   photoStateFor, mergeIntoCatalog, fingerprintOf, photoUrls, fittingDefaultFor,
-  isPublicAddress, fetchImageSafely, processImage, normalizeThumbs, findSubjectRegion,
+  isPublicAddress, fetchImageSafely, fetchPageSafely, processImage, normalizeThumbs, findSubjectRegion,
   SIZES, HASH_RE
 };
