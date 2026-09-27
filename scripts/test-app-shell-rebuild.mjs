@@ -342,11 +342,13 @@ try {
 
   // A tab switch is client-side: the URL changes, the shell does not
   // reload, and the pending tabs are honest rather than dead.
-  await page.click('a:has-text("Change Orders")');
+  // (Financials — Change Orders was the example until it was built,
+  // 2026-09-27.)
+  await page.click('a:has-text("Financials")');
   await page.waitForTimeout(200);
-  ok("a tab switch is client-side routing", page.url().endsWith("/changes"));
+  ok("a tab switch is client-side routing", page.url().endsWith("/financials"));
   const tabText = await page.locator("main").innerText();
-  ok("an unbuilt tab names its workflow and offers the classic screen", /Change orders/i.test(tabText) && /classic CRM/i.test(tabText));
+  ok("an unbuilt tab names its workflow and offers the classic screen", /Financials/i.test(tabText) && /classic CRM/i.test(tabText));
 
   ok("no page errors in the rebuilt app", pageErrors.length === 0, pageErrors.join(" | "));
 

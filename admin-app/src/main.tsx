@@ -11,6 +11,7 @@ import { SystemDesignTab } from "./routes/SystemDesign";
 import { TasksTab } from "./routes/Tasks";
 import { DailyRecordsTab } from "./routes/DailyRecords";
 import { MaterialsTab } from "./routes/Materials";
+import { ChangeOrdersTab } from "./routes/ChangeOrders";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -51,10 +52,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="tasks" element={<TasksTab />} />
               <Route path="materials" element={<MaterialsTab />} />
               <Route path="records" element={<DailyRecordsTab />} />
-              <Route
-                path="changes"
-                element={<PendingTab title="Change orders" body="Scope additions, customer approval and the revision they produce." />}
-              />
+              <Route path="changes" element={<ChangeOrdersTab />} />
               <Route
                 path="financials"
                 element={<PendingTab title="Financials" body="Deposit, balance, payments and the invoice handoff." />}
