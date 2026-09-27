@@ -326,3 +326,79 @@ export const dailyRecordsApi = {
       body
     )
 };
+
+/* ---- Materials ------------------------------------------------------
+ *
+ * Three sections, and the split is the point (Patrick, 2026-09-27):
+ *
+ *   planning   — each list SEPARATELY with its own totals. Required
+ *                quantities and dollars are NEVER summed across lists,
+ *                because a later design list repeats the earlier BOM.
+ *   stock      — physical facts, so safe to aggregate project-wide.
+ *   exceptions — mismatches for the office; they never block the crew.
+ *
+ * Every figure is computed server-side. Nothing here is re-added in
+ * React — that rule came out of the progress bar and the person-hours,
+ * and `computeTotals` still exists twice in this repo as a warning.
+ */
+
+export interface MaterialListSummary {
+  id: string;
+  name: string;
+  status: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  notes: string;
+  totals: {
+    lineCount: number; needCount: number; orderedCount: number; haveCount: number;
+    unknownSkuCount: number; priceUnavailableCount: number;
+    needSubtotalCents: number; haveSubtotalCents: number;
+    orderedSubtotalCents: number; grandSubtotalCents: number;
+  };
+  lineCount: number;
+  poIds: string[];
+  href: string;
+}
+
+export interface StockRow {
+  sku: string;
+  name: string | null;
+  known: boolean;
+  /* 0 = on no list. A number = that one list's figure. null with
+     requiredAmbiguous = on several lists, so there is no single answer
+     and the per-list figures are shown instead of an invented total. */
+  required: number | null;
+  requiredAmbiguous: boolean;
+  requiredByList: Array<{ listId: string; listName: string; qty: number; status: string; poId: string | null }>;
+  received: number;
+  receivedFromPoIds: string[];
+  usedOnsite: number;
+  usedEntries: Array<{ woId: string; workDate: string | null; qty: number; note: string; addedAt: string | null }>;
+  projectBalance: number;
+}
+
+export type MaterialExceptionKind = "unplanned" | "over_consumed" | "unknown_sku" | "price_unavailable";
+
+export interface MaterialException {
+  kind: MaterialExceptionKind;
+  sku: string;
+  name: string | null;
+  detail: string;
+  qty: number;
+  entries: Array<{ woId: string; workDate: string | null; qty: number; note: string; addedAt: string | null }>;
+}
+
+export interface ProjectMaterials {
+  planning: MaterialListSummary[];
+  stock: StockRow[];
+  exceptions: MaterialException[];
+  summary: {
+    listCount: number; skuCount: number;
+    receivedUnits: number; usedUnits: number; balanceUnits: number; exceptionCount: number;
+  };
+}
+
+export const materialsApi = {
+  get: (projectId: string) =>
+    api.get<ProjectMaterials>(`/api/projects/${encodeURIComponent(projectId)}/materials`)
+};

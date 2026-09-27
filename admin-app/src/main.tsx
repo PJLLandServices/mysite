@@ -10,6 +10,7 @@ import { PendingTab, ProjectOverviewTab, ProjectWorkspace } from "./routes/Proje
 import { SystemDesignTab } from "./routes/SystemDesign";
 import { TasksTab } from "./routes/Tasks";
 import { DailyRecordsTab } from "./routes/DailyRecords";
+import { MaterialsTab } from "./routes/Materials";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -48,10 +49,7 @@ createRoot(document.getElementById("root")!).render(
                 }
               />
               <Route path="tasks" element={<TasksTab />} />
-              <Route
-                path="materials"
-                element={<PendingTab title="Materials" body="Material lists and parts for this job." />}
-              />
+              <Route path="materials" element={<MaterialsTab />} />
               <Route path="records" element={<DailyRecordsTab />} />
               <Route
                 path="changes"
