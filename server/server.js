@@ -3628,14 +3628,6 @@ const STRIPE_ARRIVAL_LABELS = {
 
 async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "confirm", by = "" } = {}) {
   const summary = stripe.summarizeIntent(intent, requestId);
-  // What this intent was created to charge: the outstanding balance at the
-  // time (or the total — equal on an invoice with no payments, and what an
-  // intent from before the payment ledger charged). Used only to keep the
-  // QuickBooks call exactly as it was; how much of the charge the invoice
-  // takes is invoices.recordProcessorPayment's decision below.
-  const balanceCents = Math.round(Number(inv.balanceDue) * 100);
-  const totalCents = Math.round(Number(inv.total) * 100);
-  const expectedCents = summary.amountCents === totalCents ? totalCents : balanceCents;
 
   // Verification gauntlet — every check names its failure for the log.
   if (intent?.metadata?.invoiceId !== inv.id) {
@@ -3680,18 +3672,21 @@ async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "con
   if (decided.duplicate) return { invoice: decided.invoice, alreadyPaid: true, reversed: decided.reversed === true, warning: null };
   const exception = decided.exception || null;
 
-  // QBO Payment record — unchanged by the rule above (QuickBooks is kept
-  // out of it): the same call, at the same amount, in exactly the cases it
-  // ran before — an invoice not already paid, charged the amount its
-  // intent was created for. Best effort: the money is already in Stripe.
+  // QBO Payment record: exactly what the ledger applied to this invoice
+  // (Patrick, 2026-09-28), never the processor charge. An excess stays a
+  // PJL payment exception and is not a payment of this invoice in
+  // QuickBooks either; nothing applied (wholly excess) posts nothing. Once
+  // per decided payment: a duplicate or reversed one returned above. Best
+  // effort: the money is already in Stripe and on the ledger.
   let qbPaymentId = null;
   let qbWarning = null;
-  if (decided.statusBefore !== "paid" && summary.amountCents === expectedCents) {
+  const appliedCents = Math.round(Number(decided.applied) * 100);
+  if (appliedCents > 0) {
     try {
       if (inv.quickbooksInvoiceId) {
         const payment = await quickbooks.recordPaymentForInvoice({
           qbInvoiceId: inv.quickbooksInvoiceId,
-          amountCents: expectedCents,
+          amountCents: appliedCents,
           chargeId: summary.chargeId || summary.paymentIntentId
         });
         qbPaymentId = payment?.id || null;
