@@ -820,11 +820,11 @@ async function runProjectFinalCascade(project, opts = {}) {
     // as due separately.
     try {
       invoice = await depositsLib.createBalanceInvoice(depositCtx.quote, depositCtx.depositInvoice, {
-        depositPaid: depositCtx.depositInvoice.status === "paid",
+        depositPaid: invoices.isSettled(depositCtx.depositInvoice),
         projectId: project.id
       });
       invoice = (await invoices.update(invoice.id, { holdUntilCompletion: false })) || invoice;
-      billingNote = `${billingNote}${billingNote ? " — " : ""}balance invoice (deposit ${depositCtx.depositInvoice.status === "paid" ? "paid" : "still owing on " + depositCtx.depositInvoice.id})`;
+      billingNote = `${billingNote}${billingNote ? " — " : ""}balance invoice (deposit ${invoices.isSettled(depositCtx.depositInvoice) ? "paid" : "still owing on " + depositCtx.depositInvoice.id})`;
     } catch (err) {
       invoiceDraftError = err?.message || "balance-invoice draft failed";
       console.warn("[project-cascade] balance invoice draft failed:", invoiceDraftError);
@@ -836,7 +836,7 @@ async function runProjectFinalCascade(project, opts = {}) {
     const tAndMDeposit = depositCtx && depositCtx.depositInvoice && project.billingMode === "time_and_material";
     if (tAndMDeposit) {
       const depInv = depositCtx.depositInvoice;
-      const paid = depInv.status === "paid";
+      const paid = invoices.isSettled(depInv);
       lineItems.push({
         key: "deposit_credit",
         label: paid
@@ -889,7 +889,7 @@ async function runProjectFinalCascade(project, opts = {}) {
   if (depositCtx && invoice) {
     try {
       const quotesLib = require("./quotes");
-      const depositSettled = depositCtx.depositInvoice?.status === "paid";
+      const depositSettled = invoices.isSettled(depositCtx.depositInvoice);
       await quotesLib.updateDepositLifecycle(depositCtx.quote.id, {
         stage: depositSettled ? "awaiting_balance_payment" : "awaiting_deposit",
         balanceInvoiceId: invoice.id
