@@ -37,8 +37,15 @@ const crypto = require("node:crypto");
 const net = require("node:net");
 const dns = require("node:dns");
 const { writeJsonAtomic, withStoreLocks } = require("./atomic-json");
+const pq = require("./photo-quality");
 
 const SIZES = [160, 480, 1200];
+// The enlarged viewer's copy (Patrick, Sep 28 2026): made from the source
+// when the source is larger than 1200px, never upscaled, alongside the
+// untouched original bytes. The 160/480/1200 set is unchanged.
+const FULL_SIZE = 2000;
+const LARGE_QUALITY = 85; // 1200 and 2000: was 80 (PSNR 46.5 dB → 48.8 dB, +25% bytes)
+const ORIG_FORMATS = { jpeg: "jpg", png: "png", webp: "webp", gif: "gif", avif: "avif" };
 const HASH_RE = /^[a-f0-9]{64}$/;
 // Group tiers. "approved" = Patrick set or approved it. "confident" = the
 // M3 AI checks all passed. Only those two ever reach the picker.
@@ -87,9 +94,12 @@ function photoStateFor(sku, part, groups, links, fileExists) {
 
 // thumb / thumb2x are the normalized square tile images (part found,
 // centred, contained); largeMobile / large are the untouched photo.
-function photoUrls(hash) {
+// `full` (2000px) exists only for photos saved from a source larger than
+// 1200px; older photos and small sources have no upscaled pretender.
+function photoUrls(hash, photo = null) {
   const base = `/api/part-photos/${hash}`;
-  return { thumb: `${base}/t160.webp`, thumb2x: `${base}/t320.webp`, largeMobile: `${base}/480.webp`, large: `${base}/1200.webp` };
+  const hasFull = !!(photo && Array.isArray(photo.sizes) && photo.sizes.includes(FULL_SIZE));
+  return { thumb: `${base}/t160.webp`, thumb2x: `${base}/t320.webp`, largeMobile: `${base}/480.webp`, large: `${base}/1200.webp`, full: hasFull ? `${base}/${FULL_SIZE}.webp` : null };
 }
 
 // Attach `photo` and `photoState` to every part, in place. Pure apart from
@@ -145,9 +155,13 @@ function mergeIntoCatalog(parts, groups, links, fileExists, { isBaseline } = {})
     const groupId = links[sku].groupId;
     part.photo = {
       groupId,
-      ...photoUrls(g.photo.hash),
+      ...photoUrls(g.photo.hash, g.photo),
       width: g.photo.width || null,
       height: g.photo.height || null,
+      // What the source measured and how the gate graded it (photos saved
+      // before the gate carry neither).
+      source: g.photo.source || null,
+      quality: g.photo.quality || null,
       method: (g.source && g.source.method) || null,
       sourceDomain: (g.source && g.source.domain) || null,
       approvedBy: g.approvedBy || null,
@@ -318,31 +332,58 @@ const ACCEPTED_FORMATS = new Set(["jpeg", "png", "webp", "gif", "avif", "tiff", 
 // the result displays exactly as the original. No flip, flop or
 // rotate(angle) appears in this module, and the only extract is
 // normalizeThumbs' plain-background trim; the test pins both.
-async function processImage(buffer, sharp) {
+// Source dimensions as displayed (EXIF orientation applied), plus the
+// sharpness score — the two inputs of the quality gate. Cheap: no encode.
+async function inspectImage(buffer, sharp) {
   if (!buffer || !buffer.length) throw new Error("The image was empty.");
   let meta;
   try { meta = await sharp(buffer, { limitInputPixels: 50e6 }).metadata(); }
   catch { throw new Error("That doesn't look like an image we can read. Try a JPG or PNG."); }
   if (!ACCEPTED_FORMATS.has(meta.format)) throw new Error("That image type isn't supported. Try a JPG or PNG.");
+  const swapped = Number(meta.orientation) >= 5;
+  const width = swapped ? meta.height : meta.width, height = swapped ? meta.width : meta.height;
+  let sharpness = null;
+  try { sharpness = await pq.sharpnessOf(buffer, sharp); } catch { sharpness = null; }
+  return { width, height, format: meta.format, bytes: buffer.length, sharpness, quality: pq.gradeImage({ width, height, sharpness }) };
+}
+
+async function processImage(buffer, sharp) {
+  const look = await inspectImage(buffer, sharp);
   const hash = crypto.createHash("sha256").update(buffer).digest("hex");
   const variants = {};
+  const sizes = [];
   let width = null, height = null;
-  for (const size of SIZES) {
+  const longest = Math.max(look.width || 0, look.height || 0);
+  for (const size of [...SIZES, FULL_SIZE]) {
+    // Never upscale: a 2000 copy of a ≤1200 source would be the 1200 copy
+    // wearing a bigger name. It is made only from a genuinely larger source.
+    if (size === FULL_SIZE && longest <= 1200) continue;
     const { data, info } = await sharp(buffer, { limitInputPixels: 50e6 })
       .rotate()
       .resize({ width: size, height: size, fit: "inside", withoutEnlargement: true })
-      .webp({ quality: 80 })
+      .webp({ quality: size >= 1200 ? LARGE_QUALITY : 80, smartSubsample: size >= 1200 })
       .toBuffer({ resolveWithObject: true });
     variants[size] = data;
+    sizes.push(size);
     if (size === 1200) { width = info.width; height = info.height; }
   }
+  // The original bytes stay on disk untouched (the high-quality source);
+  // the derived sizes never replace or alter it.
+  const ext = ORIG_FORMATS[look.format] || null;
+  const orig = ext ? { ext, buffer } : null;
   // The square tile thumbnail is an improvement, not a requirement: if it
   // can't be made, the photo still saves and the tile falls back to the
-  // plain resized photo (resolveImageFile).
+  // plain resized photo (resolveImageFile). It is derived separately from
+  // the source and never touches the stored full-size copies.
   let thumbs = null;
   try { thumbs = await normalizeThumbs(buffer, sharp); }
   catch (err) { console.warn("[part-photos] normalized thumbnail failed; tile will use the plain photo:", err?.message); }
-  return { hash, variants, width, height, thumbs: thumbs ? thumbs.variants : null, thumbInfo: thumbs ? { trimmed: thumbs.trimmed } : null };
+  return {
+    hash, variants, sizes, width, height, orig,
+    source: { width: look.width, height: look.height, format: look.format, bytes: look.bytes },
+    sharpness: look.sharpness, quality: look.quality,
+    thumbs: thumbs ? thumbs.variants : null, thumbInfo: thumbs ? { trimmed: thumbs.trimmed } : null
+  };
 }
 
 // ------------------------------------------------- normalized thumbnails
@@ -467,7 +508,7 @@ function createPartPhotos({ dataDir, sharp }) {
   function imagePath(hash, size) {
     if (!HASH_RE.test(String(hash))) return null;
     const s = String(size);
-    if (SIZES.includes(Number(s))) return path.join(IMG_DIR, hash, `${Number(s)}.webp`);
+    if (SIZES.includes(Number(s)) || Number(s) === FULL_SIZE) return path.join(IMG_DIR, hash, `${Number(s)}.webp`);
     if (/^t(160|320)$/.test(s)) return path.join(IMG_DIR, hash, `${s}.webp`);
     return null;
   }
@@ -549,14 +590,22 @@ function createPartPhotos({ dataDir, sharp }) {
   async function saveImage(processed) {
     const dir = path.join(IMG_DIR, processed.hash);
     await fs.mkdir(dir, { recursive: true });
-    for (const size of SIZES) {
+    for (const size of Object.keys(processed.variants).map(Number)) {
       const p = path.join(dir, `${size}.webp`);
       if (!fsSync.existsSync(p)) await fs.writeFile(p, processed.variants[size]);
+    }
+    if (processed.orig) {
+      const p = path.join(dir, `orig.${processed.orig.ext}`);
+      if (!fsSync.existsSync(p)) await fs.writeFile(p, processed.orig.buffer);
     }
     for (const size of THUMB_SIZES) {
       const p = path.join(dir, `t${size}.webp`);
       if (!fsSync.existsSync(p) && processed.thumbs) await fs.writeFile(p, processed.thumbs[size]);
     }
+  }
+  // Everything the store knows about one saved image's quality.
+  function photoRecordOf(processed) {
+    return { hash: processed.hash, width: processed.width, height: processed.height, sizes: processed.sizes || null, source: processed.source || null, quality: processed.quality || null };
   }
 
   function nextGroupId(groups) {
@@ -622,7 +671,7 @@ function createPartPhotos({ dataDir, sharp }) {
       if (g.photo && g.photo.hash !== processed.hash) {
         (g.history ||= []).push({ hash: g.photo.hash, replacedAt: now, replacedBy: by });
       }
-      g.photo = { hash: processed.hash, width: processed.width, height: processed.height };
+      g.photo = photoRecordOf(processed);
       g.tier = "approved";
       g.source = { method: source.method, ...(source.imageUrl ? { imageUrl: source.imageUrl, domain: new URL(source.imageUrl).hostname } : {}) };
       g.approvedBy = by;
@@ -697,11 +746,17 @@ function createPartPhotos({ dataDir, sharp }) {
   // Store a candidate image (resize only, content-addressed). Never live by
   // itself: it only becomes a photo through recordAiResult (Confident +
   // auto-approve) or Patrick's approval on the review page.
+  // Returns the stored 1200-copy dimensions (width/height, as before) plus
+  // the quality facts: `imageSource` (the source's own dimensions), the
+  // sizes on disk, the sharpness score and the gate's grade.
   async function saveCandidateImage(buffer) {
     const processed = await processImage(buffer, sharp);
     await saveImage(processed);
-    return { hash: processed.hash, width: processed.width, height: processed.height };
+    return { hash: processed.hash, width: processed.width, height: processed.height, sizes: processed.sizes, imageSource: processed.source, sharpness: processed.sharpness, quality: processed.quality };
   }
+  // Measure before saving: dimensions, format, sharpness and the grade —
+  // so an obviously too-small or blurry download is never stored.
+  function inspect(buffer) { return inspectImage(buffer, sharp); }
 
   // The stored bytes of a candidate (for the vision check).
   async function readCandidateImage(hash, size = 1200) {
@@ -744,7 +799,7 @@ function createPartPhotos({ dataDir, sharp }) {
       const byHash = new Map((g.candidates || []).filter((c) => !rejected.has(c.hash)).map((c) => [c.hash, c]));
       for (const c of result.candidates || []) {
         if (!HASH_RE.test(String(c.hash || "")) || rejected.has(c.hash)) continue;
-        byHash.set(c.hash, { hash: c.hash, width: c.width || null, height: c.height || null, source: c.source || {}, checks: c.checks || {}, tier: c.tier || null, runId: result.runId || null, foundAt: now, forSku: sku });
+        byHash.set(c.hash, { hash: c.hash, width: c.width || null, height: c.height || null, sizes: c.sizes || null, imageSource: c.imageSource || null, sharpness: c.sharpness ?? null, quality: c.quality || null, source: c.source || {}, checks: c.checks || {}, tier: c.tier || null, runId: result.runId || null, foundAt: now, forSku: sku });
       }
       g.candidates = [...byHash.values()].slice(-12);
       g.ai = { tier, kind: result.kind || null, reason: result.reason || "", runId: result.runId || null, identified: result.identified || null, proposedBrand: result.proposedBrand || null, pages: Array.isArray(result.pages) ? result.pages.slice(0, 6) : [], at: now, forSku: sku };
@@ -753,7 +808,7 @@ function createPartPhotos({ dataDir, sharp }) {
       const chosenRejected = !!(chosen && rejected.has(chosen.hash));
       if (tier === "confident" && autoApprove && chosen && !chosenRejected && HASH_RE.test(String(chosen.hash || ""))) {
         if (g.photo && g.photo.hash !== chosen.hash) (g.history ||= []).push({ hash: g.photo.hash, replacedAt: now, replacedBy: "auto:confident" });
-        g.photo = { hash: chosen.hash, width: chosen.width || null, height: chosen.height || null };
+        g.photo = { hash: chosen.hash, width: chosen.width || null, height: chosen.height || null, sizes: chosen.sizes || null, source: chosen.imageSource || null, quality: chosen.quality || null };
         g.tier = "confident";
         g.source = { method: "ai", ...(chosen.source || {}) };
         g.approvedBy = "auto:confident";
@@ -821,7 +876,7 @@ function createPartPhotos({ dataDir, sharp }) {
       if (!fileExists(hash)) throw new Error("That photo's file is missing — ask for a new search.");
       const now = new Date().toISOString();
       if (g.photo && g.photo.hash !== hash) (g.history ||= []).push({ hash: g.photo.hash, replacedAt: now, replacedBy: by });
-      g.photo = { hash, width: cand.width || null, height: cand.height || null };
+      g.photo = { hash, width: cand.width || null, height: cand.height || null, sizes: cand.sizes || null, source: cand.imageSource || null, quality: cand.quality || null };
       g.tier = "approved";
       g.source = { method: "ai-reviewed", ...(cand.source || {}) };
       g.approvedBy = by;
@@ -913,7 +968,7 @@ function createPartPhotos({ dataDir, sharp }) {
   return {
     imagePath, ensureThumb, resolveImageFile, fileExists, readStoresSync, mergeInto, snapshot,
     setPhoto, setPhotoFromUrl, linkToGroup, unlink, reconfirm, removeGroupPhoto, setFittingDefault,
-    saveCandidateImage, readCandidateImage, recordAiResult, autoLinkSameFitting,
+    saveCandidateImage, inspect, readCandidateImage, recordAiResult, autoLinkSameFitting,
     approveCandidate, rejectAiResult
   };
 }
@@ -921,6 +976,6 @@ function createPartPhotos({ dataDir, sharp }) {
 module.exports = {
   createPartPhotos,
   photoStateFor, mergeIntoCatalog, fingerprintOf, photoUrls, fittingDefaultFor,
-  isPublicAddress, fetchImageSafely, fetchPageSafely, processImage, normalizeThumbs, findSubjectRegion,
-  SIZES, HASH_RE
+  isPublicAddress, fetchImageSafely, fetchPageSafely, processImage, inspectImage, normalizeThumbs, findSubjectRegion,
+  SIZES, FULL_SIZE, LARGE_QUALITY, HASH_RE
 };
