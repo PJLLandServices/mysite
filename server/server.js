@@ -4374,6 +4374,27 @@ async function customerPortalSections(lead) {
     });
   } catch (err) { console.warn("[portal] service history build failed:", err?.message); }
 
+  // The customer's projects and each one's invoices — projects.
+  // invoicesForProjects, the ONE rule (Financials Fix B, 2026-09-28). A
+  // deposit or held balance invoice never carries projectId (it is made at
+  // acceptance, before the project exists), so matching projectId alone
+  // listed the deposit as a loose invoice and never on its project card,
+  // whose "deposit paid" stage could not be reached. Archived projects
+  // count for "whose invoice is it", as projectId did; only live ones get
+  // a card.
+  let customerProjects = [];
+  let projectInvoiceMap = new Map();
+  if (customerId) {
+    try {
+      const everyProject = (await projects.list({ includeArchived: true }))
+        .filter((p) => p.customerId === customerId && !p.deletedAt);
+      projectInvoiceMap = await projects.invoicesForProjects(everyProject, { invoiceRecords: allInvoices });
+      const liveIds = new Set((await projects.list({ includeArchived: false })).map((p) => p.id));
+      customerProjects = everyProject.filter((p) => liveIds.has(p.id));
+    } catch (err) { console.warn("[portal] project invoices failed:", err?.message); }
+  }
+  const projectInvoiceIds = new Set([...projectInvoiceMap.values()].flat().map((i) => i.id));
+
   // ---- PJL-21: invoices with no Work Order behind them (a normal,
   // supported creation path — invoices.createDraft accepts woId: null)
   // were otherwise invisible on the portal: Service History was
@@ -4397,7 +4418,7 @@ async function customerPortalSections(lead) {
       .filter(Boolean));
     const orphanInvoices = allInvoices.filter((i) => {
       if (!visibleInvoice(i)) return false;
-      if (i.projectId) return false; // surfaced via Projects instead
+      if (i.projectId || projectInvoiceIds.has(i.id)) return false; // surfaced via Projects instead
       if (i.woId && historyWoIds.has(i.woId)) return false; // already listed above
       if (customerId && i.customerId === customerId) return true;
       if (i.customerId) return false; // belongs to a different customer
@@ -4426,14 +4447,10 @@ async function customerPortalSections(lead) {
   let projectCards = [];
   if (customerId) {
     try {
-      const projs = (await projects.list({ includeArchived: false }))
-        .filter((p) => p.customerId === customerId && !p.deletedAt);
-      projectCards = await Promise.all(projs.map(async (p) => {
+      projectCards = await Promise.all(customerProjects.map(async (p) => {
         let metrics = null;
         try { metrics = await projects.computeProjectMetrics(p.id); } catch (_) { metrics = null; }
-        const projInvoices = allInvoices
-          .filter((i) => i.projectId === p.id && visibleInvoice(i))
-          .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+        const projInvoices = (projectInvoiceMap.get(p.id) || []).filter(visibleInvoice);
         // Customer-facing stage rail. Derived, furthest-reached wins:
         //   accepted  — project exists (converted from an accepted quote)
         //   deposit   — a deposit invoice has been paid
@@ -16929,24 +16946,36 @@ async function handleApi(req, res, pathname) {
             depositInvoiceId: null,
             chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status }))
           };
-          try {
-            const chainInvoices = await invoices.listByQuote(chain.map((q) => q.id));
-            const byRole = (role) => chainInvoices
-              .filter((inv) => inv.invoiceRole === role)
-              .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
-            const best = byRole("balance") || byRole("deposit");
-            if (best) linkedQuote.depositInvoiceId = best.id;
-          } catch (err) { /* tolerate — Invoice tab just falls back to finalInvoiceId or greys out */ }
         }
       } catch (err) { /* tolerate — panel just doesn't render */ }
+    }
+
+    // The project's invoices — projects.invoicesForProject, the ONE rule
+    // (Financials Fix B, 2026-09-28): tagged with the project, its final
+    // invoice, or a deposit/balance invoice on its quote chain. A VOID
+    // invoice is never "the" invoice here: it used to be picked when it
+    // was the newest, and the Overview then showed it as money owed.
+    let projInvoices = [];
+    try { projInvoices = await projects.invoicesForProject(proj); } catch (err) { /* tolerate — panels just don't render */ }
+    const liveProjInvoices = projInvoices.filter(projects.isLiveInvoice);
+    if (linkedQuote) {
+      // Prefer the balance invoice if the deposit's already been paid and
+      // superseded by one; else the deposit invoice.
+      const byRole = (role) => liveProjInvoices
+        .filter((inv) => inv.invoiceRole === role)
+        .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+      const best = byRole("balance") || byRole("deposit");
+      if (best) linkedQuote.depositInvoiceId = best.id;
     }
 
     // Invoice summary (2026-09-21) — real numbers inline (status, total,
     // amount paid, balance due), not just a link out. Prefers the
     // project's final invoice (set at completion); falls back to the
     // deposit/balance invoice resolved above for a job still in progress.
+    // Never a void one.
     let invoiceSummary = null;
-    const invoiceId = proj.finalInvoiceId || (linkedQuote && linkedQuote.depositInvoiceId) || null;
+    const liveFinal = proj.finalInvoiceId && liveProjInvoices.some((i) => i.id === proj.finalInvoiceId) ? proj.finalInvoiceId : null;
+    const invoiceId = liveFinal || (linkedQuote && linkedQuote.depositInvoiceId) || null;
     if (invoiceId) {
       try {
         const inv = await invoices.get(invoiceId);
@@ -18148,6 +18177,12 @@ async function handleApi(req, res, pathname) {
       // them as part of the cascade. Both are best-effort — the lib
       // catches errors so an email outage doesn't roll back completion.
       const deps = {
+        // The parts catalog the T&M bill is priced from: the SAME effective
+        // catalog (baseline + admin edits + supplier prices) the billing
+        // preview shows (Financials Fix B). The cascade used to re-read raw
+        // parts.json, so an edited price previewed at one figure and billed
+        // at another — or blocked the invoice as an unknown SKU.
+        partsCatalog: PARTS,
         notifyAdmin: async ({ project, invoice, serviceRecord }) => {
           if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) return;
           let nodemailer;

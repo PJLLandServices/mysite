@@ -650,14 +650,20 @@ async function runProjectFinalCascade(project, opts = {}) {
   let unknownSkus = [];
   const projects = require("./projects");
   if (project.billingMode === "time_and_material") {
-    // Lazy-load parts.json from disk to avoid a load-order coupling with
-    // server.js's PARTS global.
-    let partsCatalog = null;
-    try {
-      const fsSync = require("node:fs");
-      const path = require("node:path");
-      partsCatalog = JSON.parse(fsSync.readFileSync(path.resolve(__dirname, "..", "..", "parts.json"), "utf8"));
-    } catch (err) { console.warn("[project-cascade] parts.json read failed:", err?.message); }
+    // Priced from the catalog the route hands in (deps.partsCatalog): the
+    // same effective catalog — admin edits and supplier prices merged — the
+    // billing preview uses, so the invoice is what the preview showed
+    // (Financials Fix B). Raw parts.json is only the fallback for a caller
+    // that has none, and it says so.
+    let partsCatalog = deps.partsCatalog || null;
+    if (!partsCatalog) {
+      console.warn("[project-cascade] no effective parts catalog passed — pricing from raw parts.json (admin price edits NOT applied)");
+      try {
+        const fsSync = require("node:fs");
+        const path = require("node:path");
+        partsCatalog = JSON.parse(fsSync.readFileSync(path.resolve(__dirname, "..", "..", "parts.json"), "utf8"));
+      } catch (err) { console.warn("[project-cascade] parts.json read failed:", err?.message); }
+    }
     const billing = await projects.computeTAndMBilling(project.id, { partsCatalog });
     lineItems = billing.lineItems.map((li) => ({
       key: li.sourceKey || (li.source === "labour" ? "project_labour" : "custom"),
@@ -684,7 +690,7 @@ async function runProjectFinalCascade(project, opts = {}) {
       ok: false,
       mode: "project_final",
       errors: [
-        `Cannot bill project — these consumed SKUs have no retail price in parts.json: ${unknownSkus.join(", ")}. Set retail prices and retry.`
+        `Cannot bill project — these consumed SKUs have no retail price in the parts catalog: ${unknownSkus.join(", ")}. Set retail prices and retry.`
       ],
       unknownSkus
     };
