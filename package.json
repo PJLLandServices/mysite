@@ -15,6 +15,8 @@
     "test:change-orders-view": "node scripts/test-change-orders-view.mjs",
     "test:project-invoices": "node scripts/test-project-invoices.mjs",
     "test:payment-reconciliation": "node scripts/test-payment-reconciliation.mjs",
+    "test:financials-view": "node scripts/test-financials-view.mjs",
+    "test:financials-tab-screen": "node scripts/test-financials-view.mjs --screen",
     "test:deposit-payment-lifecycle": "node scripts/test-deposit-payment-lifecycle.mjs",
     "test:contract-value-consistency": "node scripts/test-contract-value-consistency.mjs",
     "check:field-bundle": "node scripts/check-field-bundle.mjs",
