@@ -33,6 +33,13 @@ const fs = require("node:fs/promises");
 const crypto = require("node:crypto");
 const { writeJsonAtomic, serialize } = require("./atomic-json");
 const ev = require("./photo-evidence");
+const pq = require("./photo-quality");
+// Fast Product Lookup (Patrick, Sep 28 2026): before the finder, the
+// supplier's own search + product page (photo-fast-lookup). Its pages are
+// candidates like any other; the finder runs only when it falls short.
+// Image-quality gate (same day): every downloaded image is measured before
+// it is saved; a larger member of the same picture is preferred over a
+// thumbnail URL; low quality can never back a Confident result.
 
 const STEPS = ["queued", "find", "check", "map", "verify", "cross", "tier", "record", "done"];
 const BRAND_ORDER = ["hunter", "rainbird", "netafim", "oilcreek", "dawn", "blulock", "watts"];
@@ -64,6 +71,7 @@ function createBackfill({
   dataDir,
   store,             // part-photos store (createPartPhotos)
   ai,                // photo-ai (createPhotoAI) — or a fake in tests
+  fastLookup = null, // photo-fast-lookup (createFastLookup) — null = finder only
   getParts,          // () => the live merged catalog { sku: part }
   manufacturers = [],// [{ key, label }] or a function returning them
   afterRun = null,   // async (run) => {} — called once when a run finishes (grouping, catalog rebuild)
@@ -121,30 +129,47 @@ function createBackfill({
   // Everything a run costs, counted where it happens: Claude calls and the
   // model's own searches/fetches from each response's usage; page and image
   // downloads where OUR server makes them. Tokens are kept too.
-  const USAGE0 = Object.freeze({ in: 0, out: 0, calls: 0, searches: 0, webFetches: 0, pageFetches: 0, imageFetches: 0 });
+  const USAGE0 = Object.freeze({ in: 0, out: 0, calls: 0, searches: 0, webFetches: 0, pageFetches: 0, imageFetches: 0, fastSearches: 0 });
   const MAX_CANDIDATES = 3;      // per part — bounds the vision calls
   const MAX_IMAGES_PER_PAGE = 2; // finder's URL (if any) + extracted ones
+  const MAX_IMAGE_TRIES = 4;     // URLs downloaded and measured per page to find MAX_IMAGES_PER_PAGE usable ones
   function isLive(part) { return !!(part && part.photoState === "verified"); }
 
+  // Pages our server read in the last few minutes: the fast path's product
+  // page is not fetched a second time by the check step. Counted once.
+  const PAGE_CACHE_MS = 10 * 60 * 1000, PAGE_CACHE_MAX = 60;
+  const pageCache = new Map();
+  async function fetchPageCached(url) {
+    const hit = pageCache.get(url);
+    if (hit && now() - hit.at < PAGE_CACHE_MS) return { html: hit.html, finalUrl: hit.finalUrl, cached: true };
+    const res = await fetchPage(url);
+    pageCache.set(url, { html: res.html, finalUrl: res.finalUrl || url, at: now() });
+    if (pageCache.size > PAGE_CACHE_MAX) pageCache.delete(pageCache.keys().next().value);
+    return { html: res.html, finalUrl: res.finalUrl || url, cached: false };
+  }
+
   // ---- control ---------------------------------------------------------
-  async function start({ skus = null, autoApprove = false, label = "" } = {}) {
+  // dryRun: the benchmark — live parts are included (nothing is written,
+  // so nothing can be overwritten) and the record step keeps the verdict
+  // on the run instead of in the stores.
+  async function start({ skus = null, autoApprove = false, label = "", dryRun = false } = {}) {
     await load();
     if (state.run && ["running", "paused"].includes(state.run.status)) throw new Error("A backfill run is already in progress — pause or finish it first.");
     const parts = getParts() || {};
-    const pick = (skus || Object.keys(parts)).filter((s) => parts[s] && !isLive(parts[s]));
+    const pick = (skus || Object.keys(parts)).filter((s) => parts[s] && (dryRun || !isLive(parts[s])));
     const rank = (p) => { const i = BRAND_ORDER.indexOf(p.manufacturer); return i < 0 ? 99 : i; };
     const order = pick.sort((a, b) => rank(parts[a]) - rank(parts[b]) || a.localeCompare(b));
     if (state.run) state.history = [...(state.history || []), summary(state.run)].slice(-20);
     state.run = {
       id: "BF-" + new Date(now()).toISOString().replace(/[-:T]/g, "").slice(0, 12) + "-" + crypto.randomBytes(2).toString("hex"),
       label, status: "running", createdAt: new Date(now()).toISOString(),
-      options: { autoApprove: !!autoApprove },
+      options: { autoApprove: !!autoApprove, dryRun: !!dryRun },
       order,
       items: Object.fromEntries(order.map((s) => [s, { step: "queued", attempts: 0, nextAt: 0, lastError: null, work: {}, result: null, usage: { ...USAGE0 } }])),
       usage: { ...USAGE0 }
     };
     await save();
-    log({ action: "backfill.start", runId: state.run.id, count: order.length, autoApprove: !!autoApprove });
+    log({ action: "backfill.start", runId: state.run.id, count: order.length, autoApprove: !!autoApprove, dryRun: !!dryRun });
     kick();
     return status();
   }
@@ -206,7 +231,8 @@ function createBackfill({
       r.status = "done"; r.finishedAt = new Date(now()).toISOString();
       await save();
       log({ action: "backfill.done", runId: r.id });
-      if (afterRun) {
+      // A dry run changed nothing, so there is nothing to group or rebuild.
+      if (afterRun && !r.options.dryRun) {
         try { await afterRun(r); }
         catch (err) { log({ action: "backfill.after-run-error", runId: r.id, error: String(err && err.message || err) }); }
       }
@@ -239,6 +265,12 @@ function createBackfill({
         }
         log({ action: "backfill.step-error", sku, step: it.failedStep || it.step, error: it.lastError, transient: isTransient(err) });
       } finally {
+        // Wall time per part: from leaving the queue to done/error
+        // (retry back-offs included — they are part of what it cost).
+        if ((it.step === "done" || it.step === "error") && !it.finishedAt) {
+          it.finishedAt = now();
+          it.ms = it.startedAt ? it.finishedAt - it.startedAt : null;
+        }
         delete it.inFlight;
         await save();
       }
@@ -260,33 +292,62 @@ function createBackfill({
       bump("calls"); bump("in", u.input_tokens || 0); bump("out", u.output_tokens || 0);
       bump("searches", st.web_search_requests || 0); bump("webFetches", st.web_fetch_requests || 0);
     };
-    const getPage = async (url) => { bump("pageFetches"); return fetchPage(url); };
+    const getPage = async (url) => { const res = await fetchPageCached(url); if (!res.cached) bump("pageFetches"); return res; };
     const getImage = async (url) => { bump("imageFetches"); return fetchImage(url); };
 
     if (it.step === "queued") {
-      if (isLive(raw)) { it.result = { tier: "skipped", reason: "Already has a live photo." }; it.step = "done"; return; }
+      it.startedAt = it.startedAt || now();
+      // A live photo is never re-searched — except in a dry run, which
+      // writes nothing and exists to compare against what is live.
+      if (isLive(raw) && !r.options.dryRun) { it.result = { tier: "skipped", reason: "Already has a live photo." }; it.step = "done"; return; }
       it.step = "find";
       return;
     }
 
     if (it.step === "find") {
-      let found = { identified: null, candidates: [], notes: [], pass: null, remainingPasses: [] };
+      let found = { identified: null, candidates: [], notes: [], pass: null, remainingPasses: [], via: "ai" };
       const passes = ai.passesFor(part);
-      for (const pass of passes) {
+      // Fast path first (Patrick, Sep 28 2026): the supplier's own search
+      // and product page, no model. Its pages become candidates exactly
+      // like the finder's; the check step judges them the same way.
+      if (fastLookup) {
+        const fast = await fastLookup.lookup(part, { kind, fetchPage: getPage });
+        bump("fastSearches", fast.searches.filter((s) => s.fetch === "ok").length);
+        it.work.fast = { candidates: fast.candidates.length, searches: fast.searches, sources: fast.sources, notes: fast.notes, identified: fast.identified || null };
+        if (fast.candidates.length) {
+          found.candidates = fast.candidates.slice(0, MAX_CANDIDATES).map((c) => ({
+            pageUrl: c.pageUrl, imageUrl: "", partNumberAsShown: c.partNumberAsShown || "", pass: 0, via: `fast:${c.source}`, maxImages: c.maxImages || MAX_IMAGES_PER_PAGE,
+            domain: c.domain, official: !!c.official, title: c.title || "", supplierSku: c.supplierSku || "", specs: c.specs || []
+          }));
+          if (fast.identified) found.identified = { manufacturer: fast.identified.manufacturer || part.manufacturerLabel, manufacturerPartNumber: fast.identified.manufacturerPartNumber };
+          found.pass = 0; found.remainingPasses = passes; found.via = "fast";
+          found.notes.push(`fast path: ${fast.candidates.length} product page${fast.candidates.length === 1 ? "" : "s"} (${[...new Set(fast.candidates.map((c) => c.source))].join(", ")})`);
+        } else {
+          found.notes.push(`fast path: ${fast.notes.join("; ") || "nothing found"}`);
+        }
+      }
+      // The finder runs only when the fast path fell short: nothing found,
+      // or (generic) a single source — a Confident generic result needs a
+      // second, independent one, so the LAST pass looks for it.
+      const domains = new Set(found.candidates.map((c) => c.domain));
+      const needAi = !found.candidates.length || (kind === "generic" && domains.size < 2);
+      const passList = !found.candidates.length ? passes : [passes[passes.length - 1]];
+      if (needAi) for (const pass of passList) {
         const res = await ai.find(part, pass, usage);
         // A product PAGE is enough: our server reads its images (check step).
-        const cands = (res.candidates || []).filter((c) => /^https:\/\//i.test(c.pageUrl || "")).slice(0, MAX_CANDIDATES);
+        const cands = (res.candidates || []).filter((c) => /^https:\/\//i.test(c.pageUrl || "") && !found.candidates.some((f) => f.pageUrl === c.pageUrl)).slice(0, MAX_CANDIDATES);
         found.notes.push(`pass ${pass}: ${res.notes || ""}`.trim());
-        if (res.manufacturerPartNumber) found.identified = { manufacturer: res.manufacturer || part.manufacturerLabel, manufacturerPartNumber: res.manufacturerPartNumber };
+        if (res.manufacturerPartNumber && !found.identified) found.identified = { manufacturer: res.manufacturer || part.manufacturerLabel, manufacturerPartNumber: res.manufacturerPartNumber };
         if (cands.length) {
-          found.candidates = cands.map((c) => ({
+          found.candidates = [...found.candidates, ...cands.map((c) => ({
             pageUrl: c.pageUrl, imageUrl: /^https:\/\//i.test(c.imageUrl || "") ? c.imageUrl : "", partNumberAsShown: c.partNumberAsShown || "", pass,
             domain: ev.hostOf(c.pageUrl), official: ev.isOfficialManufacturerPage(c.pageUrl, part.manufacturer)
-          }));
+          }))].slice(0, MAX_CANDIDATES + 1);
           // Remembered for the check step: if OUR server can't read any of
           // these pages, the next pass may still be tried (once).
           found.pass = pass;
           found.remainingPasses = passes.slice(passes.indexOf(pass) + 1);
+          found.via = found.via === "fast" ? "fast+ai" : "ai";
           break;
         }
       }
@@ -352,11 +413,17 @@ function createBackfill({
           // product <img>, an <img> named after the part, a large <img>).
           // Each is a candidate, nothing more, until the safe download and
           // the vision check have had their say.
-          const images = [];
-          if (c.imageUrl) images.push({ url: c.imageUrl, via: "finder" });
-          for (const im of ev.extractProductImages(page.html, pageUrl, { keys: imageKeys })) if (!images.some((x) => x.url === im.url)) images.push(im);
-          base.imagesOnPage = images.length;
-          pg.partNumber = pn.result; pg.images = images.length;
+          // Then RANKED (photo-quality.rankImageUrls): a larger member of the
+          // same picture's family on the page is tried before a thumbnail
+          // URL. Every download is measured before it is saved; an
+          // obviously too-small or blurry image is skipped and noted, never
+          // stored (Patrick, Sep 28 2026).
+          const extracted = [];
+          if (c.imageUrl) extracted.push({ url: c.imageUrl, via: "finder" });
+          for (const im of ev.extractProductImages(page.html, pageUrl, { keys: imageKeys })) if (!extracted.some((x) => x.url === im.url)) extracted.push(im);
+          const images = pq.rankImageUrls(extracted, { html: page.html, pageUrl, max: MAX_IMAGE_TRIES, skip: ev.IMG_SKIP });
+          base.imagesOnPage = extracted.length;
+          pg.partNumber = pn.result; pg.images = 0; pg.skipped = 0;
           const pgNotes = [];
           if (pn.result === "fail") pgNotes.push("part number missing");
           if (pn.result === "unknown") pgNotes.push("part number not confirmed");
@@ -365,22 +432,41 @@ function createBackfill({
             pg.note = pgNotes.join("; ");
             base.notes.push("image: no product image found on the page (no og:image, product JSON-LD or product <img>)"); checked.push(base); continue;
           }
-          let got = 0;
+          const perPage = Math.min(MAX_IMAGES_PER_PAGE, c.maxImages || MAX_IMAGES_PER_PAGE);
+          let got = 0, downloadFailed = 0;
+          const skipped = [];
+          // One picture, several sizes: once a usable member of a family is
+          // saved, its smaller copies are not downloaded — the largest clean
+          // shot of each picture is what gets kept.
+          const savedFamilies = new Set();
           for (const im of images) {
-            if (got >= MAX_IMAGES_PER_PAGE || withImage >= MAX_CANDIDATES) break;
-            const entry = { ...base, source: { ...base.source, imageUrl: im.url, imageVia: im.via }, notes: [...base.notes] };
+            if (got >= perPage || withImage >= MAX_CANDIDATES) break;
+            const family = pq.familyKeyOf(im.url);
+            if (family && savedFamilies.has(family)) continue;
+            const entry = { ...base, source: { ...base.source, imageUrl: im.url, imageVia: im.via, ...(im.upgradedFrom ? { upgradedFrom: im.upgradedFrom } : {}) }, notes: [...base.notes] };
             try {
               const img = await getImage(im.url);
+              const look = await store.inspect(img.buffer);
+              if (look.quality.grade === "reject") {
+                skipped.push({ url: img.finalUrl || im.url, width: look.width, height: look.height, reason: look.quality.reason });
+                base.notes.push(`image ${im.via}: skipped — ${look.quality.reason}`);
+                pg.skipped++;
+                continue;
+              }
               const saved = await store.saveCandidateImage(img.buffer);
               Object.assign(entry, saved);
               entry.source.imageUrl = img.finalUrl || im.url;
+              if (family) savedFamilies.add(family);
               checked.push(entry); got++; withImage++;
             } catch (err) {
               if (isTransient(err)) throw err;
+              downloadFailed++;
               base.notes.push(`image ${im.via}: ${err.message}`);
             }
           }
-          if (!got) { pgNotes.push("image download failed"); checked.push(base); }
+          pg.images = got;
+          if (skipped.length) { pg.skippedImages = skipped; pgNotes.push(`${skipped.length} image${skipped.length === 1 ? "" : "s"} skipped: ${skipped.map((s) => s.reason).join("; ")}`); }
+          if (!got) { pgNotes.push(skipped.length && !downloadFailed ? "no usable image" : "image download failed"); checked.push(base); }
           pg.note = pgNotes.join("; ");
         }
         return { checked, pages };
@@ -472,7 +558,16 @@ function createBackfill({
       const cs = (it.work.checked || []).filter((c) => c.hash);
       const scored = cs.map((c) => ({ c, t: ev.tierFor({ kind, hasCandidate: true, partNumber: c.partNumber, vision: c.vision, specMatch: c.specMatch, crossSource: it.work.cross }) }));
       const order = { confident: 0, tbd: 1, not_confident: 2 };
-      scored.sort((x, y) => order[x.t.tier] - order[y.t.tier] || (y.c.source.official ? 1 : 0) - (x.c.source.official ? 1 : 0) || x.c.source.pass - y.c.source.pass);
+      // Among candidates of the same tier the highest-quality clean shot
+      // wins: grade (good > ok > low), then the source's longest side, then
+      // official pages, then the earlier pass. Low quality can never back
+      // a Confident result (photo-quality.qualityCap) — the evidence checks
+      // that produced the tier are untouched.
+      const grade = { good: 0, ok: 1, low: 2 };
+      const q = (c) => (c.quality && grade[c.quality.grade] !== undefined ? grade[c.quality.grade] : 3);
+      const longest = (c) => (c.imageSource ? Math.max(c.imageSource.width || 0, c.imageSource.height || 0) : Math.max(c.width || 0, c.height || 0));
+      for (const s of scored) s.t = pq.qualityCap(s.t, s.c.quality);
+      scored.sort((x, y) => order[x.t.tier] - order[y.t.tier] || q(x.c) - q(y.c) || longest(y.c) - longest(x.c) || (y.c.source.official ? 1 : 0) - (x.c.source.official ? 1 : 0) || x.c.source.pass - y.c.source.pass);
       const best = scored[0];
       const t = best ? best.t : ev.tierFor({ kind, hasCandidate: false });
       const notes = (it.work.found && it.work.found.notes || []).join(" ");
@@ -480,8 +575,10 @@ function createBackfill({
       it.work.tier = {
         tier: t.tier,
         reason: best ? t.reason : `${t.reason}${pagesLine ? " " + pagesLine : ""} ${notes}`.trim(),
+        qualityCapped: !!(best && t.qualityCapped),
+        via: it.work.found ? it.work.found.via || "ai" : null,
         chosenHash: best ? best.c.hash : null,
-        candidates: scored.map(({ c, t: ct }) => ({ hash: c.hash, width: c.width, height: c.height, source: c.source, tier: ct.tier,
+        candidates: scored.map(({ c, t: ct }) => ({ hash: c.hash, width: c.width, height: c.height, sizes: c.sizes || null, imageSource: c.imageSource || null, sharpness: c.sharpness ?? null, quality: c.quality || null, source: c.source, tier: ct.tier,
           checks: { partNumber: c.partNumber || null, specMatch: c.specMatch || null, vision: c.vision || null, crossSource: kind === "generic" ? it.work.cross || null : null } }))
       };
       it.step = "record";
@@ -491,13 +588,21 @@ function createBackfill({
     if (it.step === "record") {
       const t = it.work.tier;
       const chosen = t.candidates.findIndex((c) => c.hash === t.chosenHash);
+      // Dry run (the fast-path benchmark): the verdict stays on the run for
+      // the report and NOTHING is written to the photo stores — no group,
+      // no link, no review card, no live photo.
+      if (r.options.dryRun) {
+        it.result = { tier: t.tier, reason: t.reason, live: false, dryRun: true, groupId: null, via: t.via || null, qualityCapped: !!t.qualityCapped, candidates: t.candidates.length, chosen: chosen >= 0 ? t.candidates[chosen] : null };
+        it.step = "done";
+        return;
+      }
       const res = await store.recordAiResult(sku, raw, {
         tier: t.tier, kind, reason: t.reason, runId: r.id,
         identified: it.work.found && it.work.found.identified, candidates: t.candidates, chosen,
         proposedBrand: part.manufacturerProposed ? part.manufacturer : null,
         pages: it.work.pages || []
       }, { autoApprove: r.options.autoApprove });
-      it.result = { tier: t.tier, reason: t.reason, live: !!res.live, skipped: res.skipped || null, groupId: res.groupId || null };
+      it.result = { tier: t.tier, reason: t.reason, live: !!res.live, skipped: res.skipped || null, groupId: res.groupId || null, via: t.via || null, qualityCapped: !!t.qualityCapped };
       it.step = "done";
       return;
     }
@@ -743,6 +848,66 @@ function createBackfill({
     return status();
   }
 
+  // ---- The fast-path benchmark (Patrick, Sep 28 2026) ----------------------
+  // A DRY RUN on at most BENCHMARK_MAX parts that earlier runs already
+  // processed. The whole pipeline runs — fast path, finder fallback, our
+  // fetches, the vision check, the quality gate, the tier — and every
+  // verdict stays on the run for the report. Nothing reaches the photo
+  // stores: no group, no link, no review card, no live photo, and no
+  // grouping afterwards. Auto-approve OFF, one run at a time, and the exact
+  // list shown must be the list sent.
+  const BENCHMARK_MAX = 10;
+  // Ten parts from the completed calibration and waves, mixed on purpose:
+  // five branded (a Confident Hunter module, the Hunter flow meter that
+  // ended on a family image, a Rain Bird nozzle, an Oil Creek roll whose
+  // official site blocks us, a Dawn saddle) and five generic (poly plug,
+  // clamp, PVC bushing, poly pipe roll, PVC nipple).
+  const BENCHMARK_DEFAULT = Object.freeze(["HCPCM300", "HC150FLOW", "R12H", "POPO150250", "DS75C", "1449-007", "SC8112", "439211", "PP075X400", "205020"]);
+  // The most recent finished run with a usage split, for the comparison.
+  function baselineUsage() {
+    const list = [...((state && state.history) || [])].reverse();
+    if (state && state.run && state.run.status === "done") list.unshift(summary(state.run));
+    const pick = list.find((r) => r && r.wave && r.status === "done" && r.usageByKind) || list.find((r) => r && r.status === "done" && r.usageByKind && !r.dryRun);
+    if (!pick) return null;
+    return { runId: pick.id, label: pick.label, usageByKind: pick.usageByKind, usage: pick.usage, counts: pick.counts, createdAt: pick.createdAt, finishedAt: pick.finishedAt };
+  }
+  function benchmarkPlan({ skus = BENCHMARK_DEFAULT } = {}) {
+    const parts = getParts() || {};
+    const done = processedByRuns();
+    // Canonical order (the agreed list's order, then alphabetical), so the
+    // list sent back must be THE plan, not merely a shuffle of it.
+    const rank = (s) => { const i = BENCHMARK_DEFAULT.indexOf(s); return i < 0 ? 1000 : i; };
+    const list = [...new Set((skus || []).map(String))].slice(0, BENCHMARK_MAX).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+    const rows = list.filter((s) => parts[s]).map((s) => ({ ...rowFor(s, parts), live: isLive(parts[s]), photoState: parts[s].photoState || "none", processedBefore: done.has(s) }));
+    const problems = [];
+    for (const s of list) if (!parts[s]) problems.push(`${s}: not in the catalog`);
+    for (const r of rows) if (!r.processedBefore) problems.push(`${r.sku}: no earlier run processed it`);
+    return {
+      skus: rows.map((r) => r.sku), rows, autoApprove: false, dryRun: true, max: BENCHMARK_MAX, problems,
+      counts: { total: rows.length, branded: rows.filter((r) => r.kind === "branded").length, generic: rows.filter((r) => r.kind === "generic").length },
+      estimate: estimateRows(rows), baseline: baselineUsage(), fastSources: fastLookup ? fastLookup.sources : []
+    };
+  }
+  async function startBenchmark({ by = null, skus = null } = {}) {
+    await load();
+    if (state.run && ["running", "paused"].includes(state.run.status)) throw new Error("A run is already active — pause or finish it first.");
+    const plan = benchmarkPlan(Array.isArray(skus) && skus.length ? { skus } : {});
+    if (plan.problems.length) throw new Error(`Benchmark list refused: ${plan.problems.join("; ")}.`);
+    if (!plan.skus.length) throw new Error("Nothing to benchmark.");
+    if (plan.skus.length > BENCHMARK_MAX) throw new Error("Benchmark is larger than allowed.");
+    if (!Array.isArray(skus) || JSON.stringify(skus.map(String)) !== JSON.stringify(plan.skus)) {
+      throw new Error("The benchmark list differs from the plan shown — reload the plan and confirm the exact list.");
+    }
+    const baseline = plan.baseline;
+    await start({ skus: plan.skus, autoApprove: false, dryRun: true, label: `Fast-path benchmark (${plan.skus.length} parts, dry run)` });
+    state.run.benchmark = { by, skus: plan.skus, at: new Date(now()).toISOString(), baseline };
+    state.run.options.autoApprove = false;
+    state.run.options.dryRun = true;
+    await save();
+    log({ action: "backfill.benchmark.start", runId: state.run.id, by, skus: plan.skus });
+    return status();
+  }
+
   // The calibration parts that still have no live photo — from the most
   // recent calibration run on file (current or history).
   function lastCalibration() {
@@ -813,9 +978,41 @@ function createBackfill({
       const n = byKind[k].parts;
       byKind[k].perPart = n ? { calls: +(byKind[k].calls / n).toFixed(1), in: Math.round(byKind[k].in / n), out: Math.round(byKind[k].out / n), searches: +(byKind[k].searches / n).toFixed(1) } : null;
     }
+    // Fast path (Patrick, Sep 28 2026): how many finished parts the
+    // supplier lookup resolved alone, how many needed the finder too, and
+    // the wall time per part.
+    const fast = { hits: 0, fastAndAi: 0, aiOnly: 0, none: 0 };
+    let msSum = 0, msN = 0;
+    for (const s of run.order) {
+      const it = run.items[s];
+      if (it.step === "done" && it.result && it.result.tier !== "skipped") {
+        const via = (it.work && it.work.found && it.work.found.via) || (it.work && it.work.found ? "ai" : null);
+        if (via === "fast") fast.hits++; else if (via === "fast+ai") fast.fastAndAi++; else if (via === "ai") fast.aiOnly++; else fast.none++;
+      }
+      if (typeof it.ms === "number") { msSum += it.ms; msN++; }
+    }
+    // Per-part rows for a benchmark run (small by construction).
+    const rows = run.benchmark ? run.order.map((s) => {
+      const it = run.items[s];
+      const p = parts[s];
+      const u = it.usage || {};
+      const chosen = it.result && it.result.chosen;
+      return {
+        sku: s, kind: p ? kindOf(enrich(p)) : null, step: it.step, via: (it.work && it.work.found && it.work.found.via) || null,
+        tier: it.result ? it.result.tier : null, reason: it.result ? it.result.reason : (it.lastError || null), qualityCapped: !!(it.result && it.result.qualityCapped),
+        candidates: it.result ? it.result.candidates || 0 : 0,
+        chosen: chosen ? { hash: chosen.hash, quality: chosen.quality || null, imageSource: chosen.imageSource || null, width: chosen.width, height: chosen.height, domain: chosen.source && chosen.source.domain, pageUrl: chosen.source && chosen.source.pageUrl, imageVia: chosen.source && chosen.source.imageVia } : null,
+        fast: it.work && it.work.fast ? { candidates: it.work.fast.candidates, searches: it.work.fast.searches.length } : null,
+        usage: { calls: u.calls || 0, in: u.in || 0, out: u.out || 0, searches: u.searches || 0, webFetches: u.webFetches || 0, pageFetches: u.pageFetches || 0, imageFetches: u.imageFetches || 0, fastSearches: u.fastSearches || 0 },
+        ms: typeof it.ms === "number" ? it.ms : null,
+        livePhoto: p && p.photo ? { width: p.photo.width, height: p.photo.height, domain: p.photo.sourceDomain || null } : null
+      };
+    }) : null;
     return {
-      id: run.id, label: run.label, status: run.status, autoApprove: run.options.autoApprove, createdAt: run.createdAt, finishedAt: run.finishedAt || null,
+      id: run.id, label: run.label, status: run.status, autoApprove: run.options.autoApprove, dryRun: !!run.options.dryRun, createdAt: run.createdAt, finishedAt: run.finishedAt || null,
       interruptedAt: run.interruptedAt || null,
+      fast, timing: { avgMs: msN ? Math.round(msSum / msN) : null, parts: msN },
+      benchmark: run.benchmark ? { skus: run.benchmark.skus, by: run.benchmark.by, baseline: run.benchmark.baseline || null, rows } : null,
       calibration: run.calibration ? { skus: run.calibration.skus, by: run.calibration.by, rerunOf: run.calibration.rerunOf || null, unresolved: (() => { const parts = getParts() || {}; return run.calibration.skus.filter((s) => parts[s] && !isLive(parts[s])); })() } : null,
       wave: run.wave ? { skus: run.wave.skus, by: run.wave.by } : null,
       usageByKind: byKind,
@@ -846,7 +1043,7 @@ function createBackfill({
     while (pumping) await pumping;
   }
 
-  return { load, start, pause, resume, retry, status, idle, kick, groupingProposals, applyGrouping, calibrationSkus, calibrationPlan, startCalibration, startCalibrationRerun, unresolvedCalibrationSkus, wavePlan, startWave, fittingsToConfirm, resolveFitting, catalogProgress, _state: () => state };
+  return { load, start, pause, resume, retry, status, idle, kick, groupingProposals, applyGrouping, calibrationSkus, calibrationPlan, startCalibration, startCalibrationRerun, unresolvedCalibrationSkus, wavePlan, startWave, benchmarkPlan, startBenchmark, BENCHMARK_DEFAULT, fittingsToConfirm, resolveFitting, catalogProgress, _state: () => state };
 }
 
 module.exports = { createBackfill, isTransient, pageDiagnosticsLine, STEPS };
