@@ -164,6 +164,9 @@ export async function bootServer({ port, env = {} } = {}) {
     // What (stubbed) Stripe reports next for this intent, or "*" for every
     // call: "succeeded" | "declined" | "processing" | "unreachable" | null.
     stripeMode(intentId, mode) { fs.appendFileSync(`${OUTBOX}.stripe`, JSON.stringify({ id: intentId, mode }) + "\n"); },
+    // (Stubbed, sandbox) QuickBooks: "fail" makes the next payment posts
+    // answer 500; null restores them.
+    quickbooksMode(mode) { fs.writeFileSync(`${OUTBOX}.quickbooks`, mode || ""); },
     // A Stripe event, signed the way Stripe signs one (or with `secret`,
     // to prove a forged one is refused).
     async stripeWebhook(event, { secret = WEBHOOK_SECRET, timestamp = Math.floor(Date.now() / 1000) } = {}) {

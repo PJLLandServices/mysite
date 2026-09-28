@@ -38,6 +38,14 @@
 //   processing   the reader never finished (a Tap to Pay that timed out)
 //   unreachable  the request never reaches Stripe (network timeout)
 //
+// QuickBooks Accounting, SANDBOX host only (sandbox-quickbooks.api.intuit.com;
+// the production host stays refused). A test that sets QB_CLIENT_ID /
+// QB_CLIENT_SECRET to "stub" and writes a stub token file gets:
+//   GET  …/invoice/<id>  → the invoice with a CustomerRef
+//   POST …/payment       → a created Payment, logged as channel "quickbooks"
+// $PJL_STUB_OUTBOX.quickbooks holding "fail" makes POST …/payment answer 500.
+// Anything else it does not model answers 400.
+//
 // Test-only. Never required by the server itself.
 
 const fs = require("node:fs");
@@ -105,6 +113,7 @@ const realFetch = globalThis.fetch;
 let stripeSeq = 0;
 const intents = new Map();
 // The last mode a test set for this intent id (or "*"), if any.
+let qbSeq = 0;
 function modeFor(id) {
   let mode = null;
   try {
@@ -188,6 +197,27 @@ globalThis.fetch = async function stubFetch(input, init = {}) {
           : { card: { brand: "visa", last4: "4242", checks: {} } } };
     }
     return new Response(JSON.stringify(obj), { status: 200, headers: { "content-type": "application/json" } });
+  }
+  if (url.hostname === "sandbox-quickbooks.api.intuit.com") {
+    const method = init.method || "GET";
+    let body = null;
+    try { body = init.body ? JSON.parse(init.body) : null; } catch { body = { _raw: String(init.body).slice(0, 400) }; }
+    let failing = false;
+    try { failing = fs.readFileSync(`${OUTBOX}.quickbooks`, "utf8").trim() === "fail"; } catch {}
+    const json = (status, obj) => new Response(JSON.stringify(obj), { status, headers: { "content-type": "application/json" } });
+    const invoiceGet = url.pathname.match(/^\/v3\/company\/[^/]+\/invoice\/([^/]+)$/);
+    if (method === "GET" && invoiceGet) {
+      log({ channel: "quickbooks", method, path: url.pathname });
+      return json(200, { Invoice: { Id: decodeURIComponent(invoiceGet[1]), SyncToken: "0", CustomerRef: { value: "qbcust_stub" } } });
+    }
+    if (method === "POST" && /^\/v3\/company\/[^/]+\/payment$/.test(url.pathname)) {
+      log({ channel: "quickbooks", method, path: url.pathname, body, failed: failing });
+      if (failing) return json(500, { Fault: { Error: [{ Message: "stub: QuickBooks unavailable", code: "500" }] } });
+      qbSeq += 1;
+      return json(200, { Payment: { Id: `qbpay_stub_${qbSeq}`, TotalAmt: Number(body?.TotalAmt) } });
+    }
+    log({ channel: "quickbooks", method, path: url.pathname, body, unmodelled: true });
+    return json(400, { Fault: { Error: [{ Message: "stub: not modelled", code: "400" }] } });
   }
   log({ channel: "refused", url: url.href, host: url.hostname, production: PRODUCTION_HOST.test(url.hostname) });
   throw new TypeError(`stub-outbound: outbound request to ${url.hostname} refused in tests`);
