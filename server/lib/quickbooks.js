@@ -784,8 +784,11 @@ async function chargeCard({ amountCents, currency = "CAD", cardToken, invoiceId,
 }
 
 // Record a Payment in QB Accounting against an existing QB invoice.
-// Flips the QB invoice from "Open" to "Paid" in the books. Idempotent
-// at the QB end via the chargeId pinned in the payment's privateNote.
+// Flips the QB invoice from "Open" to "Paid" in the books. NOT idempotent
+// at the QB end: QuickBooks does not dedupe on the privateNote, and no
+// requestid is sent. What keeps it to one payment is the caller — the
+// Stripe finalizer calls this once per decided Stripe payment, for the
+// amount the ledger applied, and never again for a duplicate.
 async function recordPaymentForInvoice({ qbInvoiceId, amountCents, chargeId }) {
   if (!qbInvoiceId) throw new Error("Missing QB invoice ID — can't record a payment without one.");
   if (!Number.isFinite(amountCents) || amountCents <= 0) throw new Error("Payment amount must be positive.");
