@@ -6880,6 +6880,68 @@ done by `invoices.reconcileToSignedScope(woId)`, under the invoice store lock:
 - `test-resignature-await` and `test-scope-hold-before-reply` now follow the release write into
   `reconcileToSignedScope`. The latter still fails if that write isn't awaited (checked by mutation).
 
+## 2026-09-28 — FLOW-23: QuickBooks gets what the ledger applied (FLOW-23 touched — re-verified by tests, awaiting a real QuickBooks payment)
+
+After #332 the ledger applies a Stripe charge only up to what the invoice owes; any excess is a
+payment exception. The finalizer's QuickBooks call was left on its old rule: post the amount the
+intent was created for, and only when the charge equalled the invoice's total or balance.
+
+**What main did (reproduced, `scripts/test-qbo-payment-amount.mjs`, against a stubbed sandbox QuickBooks):**
+- **Part cash, then the open pay page's card for the full total (S3):** QuickBooks was posted the
+  **full $101.70 charge** while the ledger applied $61.02. The $40.68 excess became a payment of
+  that invoice in QuickBooks.
+- **Revised down (S7) or up while the pay page was open:** the charge equalled neither the new
+  total nor the balance, so QuickBooks was posted **nothing** even though the ledger applied a
+  payment.
+- **Everything else already agreed:** exact, part cash + card for the balance, Tap to Pay, a
+  duplicate delivery, a wholly excess charge, a reversal, and an invoice never pushed to
+  QuickBooks.
+
+**The paths:** there is exactly one QuickBooks payment call, `quickbooks.recordPaymentForInvoice`,
+and it is made only by `finalizeStripeInvoicePayment`. The pay page, the confirm, the webhook,
+Tap to Pay and its retry all go through it. Staff cash/cheque and Klarna capture never post a
+QuickBooks payment.
+
+**The rule:** post `decided.applied` (`invoices.recordProcessorPayment`'s decision), linked to the
+invoice's `quickbooksInvoiceId`, when it is above zero.
+- An excess stays a PJL payment exception and is posted nowhere.
+- Nothing applied posts nothing.
+- A duplicate or reversed (#348) payment returns before the call, so each decided Stripe payment
+  posts at most once.
+
+**Exact QuickBooks behavior (unchanged apart from the amount):**
+- **The request:** `GET /invoice/<id>` (for its CustomerRef), then `POST /payment` with `TotalAmt` =
+  the applied amount, one `Line` of that amount linked to the invoice, and
+  `PrivateNote: "Auto-recorded from QB Payments charge <ch_…>"`. The returned id is stored as
+  `quickbooksPaymentId`.
+- **Idempotency is ours, not QuickBooks':** no `requestid` is sent, and QuickBooks does not dedupe
+  on the note. The code comment that said otherwise is corrected.
+- **If QuickBooks fails after the ledger took the payment:** the payment stands, the invoice reads
+  Paid, the failure is logged and returned as `warning`, and `quickbooksPaymentId` stays empty.
+  **It is never retried automatically:** every redelivery is a duplicate. Recovering it is a
+  manual QuickBooks entry.
+
+**Deliberately left alone (QuickBooks follow-ups, not this fix):**
+- **A reversal (#348) does not remove the payment from QuickBooks.** After a refund plus a new
+  payment, QuickBooks holds both payments against one invoice.
+- **A failed QuickBooks post** leaves no invoice-history line and has no retry queue.
+- **After a revision,** the invoice push to QuickBooks is still best-effort, as before.
+
+**Tests:**
+- `scripts/test-qbo-payment-amount.mjs` (39 checks; **the old code fails 7**) covers:
+  - Q1 exact;
+  - Q2 duplicate delivery;
+  - Q3 partial;
+  - Q4 overpayment;
+  - Q5 wholly excess;
+  - Q6/Q7 revised down/up;
+  - Q8 Tap to Pay;
+  - Q9 QuickBooks fails;
+  - Q10 reversal then a new payment;
+  - Q11 no QuickBooks invoice.
+- **The test stub gains a sandbox-only QuickBooks:** invoice read and payment post, with a "fail"
+  mode. The production Intuit host stays refused.
+
 ## 2026-09-27 — FLOW-23: a reversed Stripe payment stays reversed (S6) (FLOW-23 touched — re-verified by tests, awaiting a walked acceptance)
 
 A Stripe payment is recorded, refunded in the Stripe dashboard, and Patrick reverses it in the ledger
@@ -7064,6 +7126,7 @@ lock, keyed on the Stripe payment id, makes ONE accounting decision per distinct
 **Deliberately left alone:**
 - **QuickBooks:** the finalizer's QBO payment call is byte-for-byte the same, in the same cases, at
   the same amount. S3 still sends QuickBooks the full intent amount; that is for the QuickBooks work.
+  (Fixed since: see "QuickBooks gets what the ledger applied" above.)
 - **Nothing is refunded automatically** (PAY-03 unchanged).
 - **Staff cash/cheque over the balance** is still refused on screen.
 - **S6**, a reversed payment re-recorded by a reopened pay page, is its own PR. This change only
