@@ -120,10 +120,16 @@
       const c = run.counts;
       const where = run.current ? ` · now on <span class="pp-mono">${esc(run.current.sku)}</span> (${esc(run.current.step)})` : "";
       const u = run.usage || {};
-      runLine = `${run.calibration ? (run.calibration.rerunOf ? "Calibration re-run" : "Calibration run") : run.wave ? "Wave" : "AI run"} <b>${esc(run.label || run.id)}</b> · <b>${esc(run.status === "paused" && run.interruptedAt ? "interrupted by a restart — press Resume" : run.status)}</b> · ${c.done} of ${c.total} done${c.error ? ` · ${c.error} error${c.error > 1 ? "s" : ""}` : ""}${where} · auto-approve <b>${run.autoApprove ? "ON" : "off"}</b>`
-        + `<br><span class="pr-usage">${(u.calls || 0)} Claude calls · ${(u.searches || 0)} web searches · ${(u.webFetches || 0)} model fetches · ${(u.pageFetches || 0)} pages + ${(u.imageFetches || 0)} images fetched by our server · ${(u.in || 0).toLocaleString()} in / ${(u.out || 0).toLocaleString()} out tokens</span>`
-        + (run.usageByKind ? `<br><span class="pr-usage">${["branded", "generic"].map((k) => { const b = run.usageByKind[k]; return b && b.parts ? `${k}: ${b.parts} part${b.parts === 1 ? "" : "s"} · ${b.perPart.calls} calls · ${b.perPart.searches} searches · ${b.perPart.in.toLocaleString()} in / ${b.perPart.out.toLocaleString()} out tokens per part` : `${k}: none`; }).join(" — ")}</span>` : "");
+      const what = run.benchmark ? "Fast-path benchmark (dry run — nothing saved)" : run.calibration ? (run.calibration.rerunOf ? "Calibration re-run" : "Calibration run") : run.wave ? "Wave" : "AI run";
+      const f = run.fast || {};
+      const fastLine = (f.hits || f.fastAndAi || f.aiOnly)
+        ? `<br><span class="pr-usage">fast path: ${f.hits || 0} resolved without the finder · ${f.fastAndAi || 0} with finder help · ${f.aiOnly || 0} finder only${run.timing && run.timing.avgMs ? ` · ${Math.round(run.timing.avgMs / 1000)} s per part` : ""}</span>` : "";
+      runLine = `${what} <b>${esc(run.label || run.id)}</b> · <b>${esc(run.status === "paused" && run.interruptedAt ? "interrupted by a restart — press Resume" : run.status)}</b> · ${c.done} of ${c.total} done${c.error ? ` · ${c.error} error${c.error > 1 ? "s" : ""}` : ""}${where} · auto-approve <b>${run.autoApprove ? "ON" : "off"}</b>`
+        + `<br><span class="pr-usage">${(u.calls || 0)} Claude calls · ${(u.searches || 0)} web searches · ${(u.webFetches || 0)} model fetches · ${(u.fastSearches || 0)} supplier searches + ${(u.pageFetches || 0)} pages + ${(u.imageFetches || 0)} images fetched by our server · ${(u.in || 0).toLocaleString()} in / ${(u.out || 0).toLocaleString()} out tokens</span>`
+        + (run.usageByKind ? `<br><span class="pr-usage">${["branded", "generic"].map((k) => { const b = run.usageByKind[k]; return b && b.parts ? `${k}: ${b.parts} part${b.parts === 1 ? "" : "s"} · ${b.perPart.calls} calls · ${b.perPart.searches} searches · ${b.perPart.in.toLocaleString()} in / ${b.perPart.out.toLocaleString()} out tokens per part` : `${k}: none`; }).join(" — ")}</span>` : "")
+        + fastLine;
     }
+    const bench = run && run.benchmark && run.benchmark.rows ? benchmarkHtml(run) : "";
     const errors = run && run.errors && run.errors.length
       ? `<ul class="pr-run-errors">${run.errors.map((e) => `<li><span class="pp-mono">${esc(e.sku)}</span> at ${esc(e.step || "?")}: ${esc(e.error || "")}</li>`).join("")}</ul>` : "";
     // Controls. Start is the calibration run ONLY (15 parts, auto-approve
@@ -138,13 +144,32 @@
         ? `<button type="button" class="pp-btn pp-btn-primary" data-act="rerun"${d.apiKeySet === false ? " disabled" : ""}>Re-run the ${unresolved.length} unresolved calibration part${unresolved.length > 1 ? "s" : ""} (auto-approve off)</button>`
         : "")
         + `<button type="button" class="pp-btn${unresolved.length ? "" : " pp-btn-primary"}" data-act="start-cal"${d.apiKeySet === false ? " disabled" : ""}>Start calibration run (15 parts, auto-approve off)</button>`
-        + `<button type="button" class="pp-btn" data-act="start-wave"${d.apiKeySet === false ? " disabled" : ""}>Start the next wave (up to 50 parts, auto-approve off)</button>${d.apiKeySet === false ? `<span class="pr-held">ANTHROPIC_API_KEY isn't set on the server.</span>` : ""}`;
+        + `<button type="button" class="pp-btn" data-act="start-wave"${d.apiKeySet === false ? " disabled" : ""}>Start the next wave (up to 50 parts, auto-approve off)</button>`
+        + `<button type="button" class="pp-btn" data-act="benchmark"${d.apiKeySet === false ? " disabled" : ""}>Run the fast-path benchmark (10 parts, dry run — nothing saved)</button>${d.apiKeySet === false ? `<span class="pr-held">ANTHROPIC_API_KEY isn't set on the server.</span>` : ""}`;
     }
     return `<div class="pr-progress-head"><h2>Photos across the catalog</h2><span>${total} parts</span></div>
       <div class="pr-bar" role="img" aria-label="${p.live || 0} live, ${p.review || 0} review needed, ${p.noReliable || 0} no reliable photo, ${p.notProcessed || 0} not processed">${bar || '<span class="pr-bar-seg is-pending" style="flex-grow:1"></span>'}</div>
       <div class="pr-stats">${stats}</div>
-      <p class="pr-run">${runLine}</p>${errors}
+      <p class="pr-run">${runLine}</p>${errors}${bench}
       <div class="pr-controls">${controls}<span class="pp-panel-status" data-status aria-live="polite"></span></div>`;
+  }
+  // The benchmark report: one row per part — how it was resolved, the
+  // verdict, the chosen photo's source size and grade, what it cost and how
+  // long it took — under the last wave's per-part averages for comparison.
+  function benchmarkHtml(run) {
+    const b = run.benchmark;
+    const base = b.baseline;
+    const baseLine = base && base.usageByKind
+      ? `<p class="pr-bench-base">Baseline — ${esc(base.label || base.runId)}: ${["branded", "generic"].map((k) => { const x = base.usageByKind[k]; return x && x.parts && x.perPart ? `${k} ${x.perPart.calls} calls · ${x.perPart.searches} searches · ${x.perPart.in.toLocaleString()} in tokens per part` : ""; }).filter(Boolean).join(" — ")}</p>`
+      : `<p class="pr-bench-base">No earlier run on file to compare with.</p>`;
+    const via = { fast: "fast path", "fast+ai": "fast path + finder", ai: "finder only" };
+    const rows = b.rows.map((r) => {
+      const ch = r.chosen;
+      const photo = ch ? `${ch.imageSource ? `${ch.imageSource.width}×${ch.imageSource.height}` : `${ch.width || "?"}×${ch.height || "?"}`}${ch.quality ? ` · ${esc(ch.quality.grade)}` : ""}${ch.domain ? ` · ${esc(ch.domain)}` : ""}` : (r.step === "done" ? "none" : "…");
+      const result = r.step === "done" ? `${TIER_LABEL[r.tier] === "Auto-approved" ? "Confident" : TIER_LABEL[r.tier] || r.tier || ""}${r.qualityCapped ? " (quality cap)" : ""}` : r.step === "error" ? `error: ${esc(r.reason || "")}` : esc(r.step);
+      return `<tr><td class="pp-mono">${esc(r.sku)}</td><td>${esc(r.kind || "")}</td><td>${esc(via[r.via] || (r.step === "done" ? "—" : "…"))}</td><td>${result}</td><td>${photo}</td><td>${r.usage.calls}</td><td>${r.usage.in.toLocaleString()}</td><td>${r.usage.searches}</td><td>${r.usage.fastSearches}</td><td>${r.ms != null ? Math.round(r.ms / 1000) : "…"}</td></tr>`;
+    }).join("");
+    return `<div class="pr-bench">${baseLine}<div class="pr-bench-scroll"><table><thead><tr><th>SKU</th><th>Kind</th><th>Resolved by</th><th>Result</th><th>Chosen photo (source)</th><th>Claude calls</th><th>In tokens</th><th>Web searches</th><th>Supplier searches</th><th>Seconds</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
   }
 
   // While a run is going, the panel refreshes itself every few seconds.
@@ -204,6 +229,38 @@
       say(err.message, true);
     }
   }
+  // The benchmark: show the exact 10-part dry-run plan, the sources' status
+  // and the baseline, then send back the very list shown.
+  async function startBenchmark() {
+    const s = els.progress.querySelector("[data-status]");
+    const say = (t, bad) => { if (s) { s.textContent = t; s.classList.toggle("is-error", !!bad); } };
+    say("Building the benchmark plan…");
+    let plan;
+    try {
+      const r = await fetch("/api/part-photo-backfill/benchmark-plan", { cache: "no-store" });
+      plan = await r.json();
+      if (!r.ok || !plan.ok) throw new Error((plan.errors && plan.errors[0]) || `HTTP ${r.status}`);
+    } catch (err) { say(`Couldn't build the plan: ${err.message}`, true); return; }
+    say("");
+    if (plan.problems && plan.problems.length) { say(`Benchmark list refused: ${plan.problems.join("; ")}`, true); return; }
+    if (!plan.skus.length) { say("Nothing to benchmark.", true); return; }
+    const e = plan.estimate;
+    const list = plan.rows.map((r) => `${r.sku} (${r.kind}${r.manufacturer ? ", " + r.manufacturer : ""}${r.live ? ", live photo — compared, not touched" : ""}) — ${r.description}`).join("\n");
+    const sources = (plan.fastSources || []).map((x) => `${x.id}: ${x.status}${x.note ? ` (${x.note})` : ""}`).join("\n");
+    const ok = await window.pjlDialog.confirm(
+      `Run the fast-path benchmark on these ${plan.counts.total} already-processed parts (${plan.counts.branded} branded, ${plan.counts.generic} generic)? DRY RUN: nothing is saved — no photo, no review card, no link changes. Auto-approve is OFF.\n\n${list}\n\nFast-path sources:\n${sources}\n\nWorst case: ${e.apiCalls.max} Claude calls (${e.finderCalls.max} finder, ${e.verifyCalls.max} vision, ${e.compareCalls.max} compare), up to ${e.webSearches.max} web searches, and up to ${e.pagesFetchedByOurServer.max} pages + ${e.imagesFetchedByOurServer.max} images fetched by our server.`,
+      { confirmLabel: "Run the benchmark", cancelLabel: "Cancel" });
+    if (!ok) return;
+    if (s) { s.textContent = "Starting…"; s.classList.remove("is-error"); }
+    els.progress.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+    try {
+      await post("/api/part-photo-backfill/benchmark", { skus: plan.skus });
+      await load(true);
+    } catch (err) {
+      els.progress.querySelectorAll("button").forEach((b) => { b.disabled = false; });
+      say(err.message, true);
+    }
+  }
   async function rerunUnresolved() {
     const run = state.data && state.data.run;
     const skus = run && run.calibration && run.calibration.unresolved || [];
@@ -231,6 +288,7 @@
     if (!b || state.busy) return;
     if (b.dataset.act === "start-cal") startCalibration();
     else if (b.dataset.act === "start-wave") startWave();
+    else if (b.dataset.act === "benchmark") startBenchmark();
     else if (b.dataset.act === "rerun") rerunUnresolved();
     else if (b.dataset.act === "pause") backfillAction("pause", "Pausing…");
     else if (b.dataset.act === "resume") backfillAction("resume", "Resuming…");
@@ -268,16 +326,37 @@
       ${extra || ""}
     </div>`;
   }
+  // The quality gate's verdict on the picture itself (Patrick, Sep 28 2026):
+  // the SOURCE dimensions and the grade, so a thumbnail never looks like a
+  // photo. Older candidates carry only the stored 1200-copy dimensions.
+  function qualityHtml(c) {
+    const src = c.source || {};
+    const up = src.upgradedFrom ? " · larger than the page's thumbnail" : "";
+    if (c.quality && c.imageSource) {
+      const q = c.quality;
+      const dims = `${c.imageSource.width}×${c.imageSource.height} source`;
+      if (q.grade === "good") return `<p class="pr-quality is-good">✓ ${esc(dims)} · high resolution${up}</p>`;
+      if (q.grade === "ok") return `<p class="pr-quality is-ok">✓ ${esc(dims)} · acceptable resolution${up}</p>`;
+      return `<p class="pr-quality is-low">! Low quality — review needed: ${esc(q.reason)}${up}</p>`;
+    }
+    if (c.width && c.height) {
+      const longest = Math.max(c.width, c.height);
+      return `<p class="pr-quality ${longest < 800 ? "is-low" : "is-unknown"}">${longest < 800 ? "! " : ""}${c.width}×${c.height} stored · saved before the quality gate${longest < 800 ? " — low resolution" : ""}</p>`;
+    }
+    return "";
+  }
   function candHtml(card, c, i, selected) {
     const src = c.source || {};
     const href = safeHref(src.pageUrl);
+    const via = src.pass === 0 || src.pass === "0" ? "fast path" : (src.pass ? PASS_LABEL[src.pass] || "" : "");
     return `<figure class="pr-cand${selected ? " is-selected" : ""}" data-hash="${esc(c.hash)}" data-idx="${i}">
       <button type="button" class="pr-cand-img" data-act="zoom" data-hash="${esc(c.hash)}" aria-label="Photo ${i + 1}, open full size">
         <img src="${img(c.hash, 480)}" alt="Candidate photo ${i + 1} for ${esc(card.part.description)}" loading="lazy">
         <span class="pr-cand-n" aria-hidden="true">${i + 1}</span>
       </button>
       <figcaption>
-        <p class="pr-src">${esc(src.domain || "unknown site")}${src.official ? ' <span class="pr-official">official</span>' : ""}${src.pass ? ` · ${PASS_LABEL[src.pass] || ""}` : ""}${href ? ` · <a href="${href}" target="_blank" rel="noopener noreferrer">Open page ↗</a>` : ""}</p>
+        <p class="pr-src">${esc(src.domain || "unknown site")}${src.official ? ' <span class="pr-official">official</span>' : ""}${via ? ` · ${esc(via)}` : ""}${href ? ` · <a href="${href}" target="_blank" rel="noopener noreferrer">Open page ↗</a>` : ""}</p>
+        ${qualityHtml(c)}
         ${checksHtml(c.checks)}
       </figcaption>
       ${card.queue === "autoApproved" ? "" : `<button type="button" class="pp-btn pp-btn-primary pr-approve" data-act="approve" data-hash="${esc(c.hash)}">Approve this photo</button>`}
