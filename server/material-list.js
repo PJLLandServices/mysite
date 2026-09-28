@@ -599,7 +599,9 @@
     const verified = hasVerifiedPhoto(part);
     const desc = part.description || part.sku;
     const stage = verified
-      ? `<div class="mlb-pv-stage"><img src="${escapeHtml(part.photo.large)}" srcset="${escapeHtml(part.photo.largeMobile)} 480w, ${escapeHtml(part.photo.large)} 1200w" sizes="(max-width: 640px) 100vw, 720px" alt="${escapeHtml(desc)}"></div>`
+      // The 2000 copy exists only when the source was larger than 1200 —
+      // never an upscale — so a retina phone or a desktop monitor gets it.
+      ? `<div class="mlb-pv-stage"><img src="${escapeHtml(part.photo.large)}" srcset="${escapeHtml(part.photo.largeMobile)} 480w, ${escapeHtml(part.photo.large)} 1200w${part.photo.full ? `, ${escapeHtml(part.photo.full)} 2000w` : ""}" sizes="(max-width: 640px) 100vw, 720px" alt="${escapeHtml(desc)}"></div>`
       : `<div class="mlb-pv-stage is-empty"><span class="mlb-noph mlb-noph--big">${ICON_NO_PHOTO}<span>No photo</span></span></div>`;
     const overlay = mountOverlay({
       label: (verified ? "Photo of " : "No photo for ") + desc,

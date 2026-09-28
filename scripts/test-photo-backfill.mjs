@@ -260,9 +260,32 @@ const FIND = {
 const VISION = { RBN10H: V({ type: "fail" }) };
 const COMPARE = { TEE34: "pass", ELB12: "fail" };
 
-async function pngFor(url) {
+// A fake "product photo" that passes the quality gate the way a real one
+// does: 1000×800, a plain background, and a sharp textured subject in the
+// middle (deterministic per URL). Flat colour blocks have no edges and
+// would — correctly — read as blurry.
+const PNG_CACHE = new Map();
+async function pngFor(url, { width = 1000, height = 800 } = {}) {
+  const key = `${url}|${width}x${height}`;
+  if (PNG_CACHE.has(key)) return PNG_CACHE.get(key);
   const h = crypto.createHash("sha256").update(url).digest();
-  return sharp({ create: { width: 320, height: 240, channels: 3, background: { r: h[0], g: h[1], b: h[2] } } }).png().toBuffer();
+  const channels = 3;
+  const data = Buffer.alloc(width * height * channels);
+  const bg = [h[0], h[1], h[2]];
+  const sx = Math.floor(width * 0.3), sy = Math.floor(height * 0.25), sw = Math.floor(width * 0.4), sh = Math.floor(height * 0.5);
+  let seed = h.readUInt32LE(4) || 1;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed >>> 24; };
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * channels;
+      const inside = x >= sx && x < sx + sw && y >= sy && y < sy + sh;
+      if (inside) { const v = rnd(); data[i] = v; data[i + 1] = 255 - v; data[i + 2] = (v * 7) & 255; }
+      else { data[i] = bg[0]; data[i + 1] = bg[1]; data[i + 2] = bg[2]; }
+    }
+  }
+  const png = await sharp(data, { raw: { width, height, channels } }).png().toBuffer();
+  PNG_CACHE.set(key, png);
+  return png;
 }
 
 function harness(dir, over = {}) {

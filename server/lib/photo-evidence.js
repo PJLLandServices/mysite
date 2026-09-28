@@ -457,7 +457,7 @@ function groupingDecision(a, b) {
 }
 
 module.exports = {
-  MANUFACTURER_DOMAINS, SUPPLIER_DOMAINS, MIN_PART_NUMBER_LENGTH, VISION_KEYS,
+  MANUFACTURER_DOMAINS, SUPPLIER_DOMAINS, MIN_PART_NUMBER_LENGTH, VISION_KEYS, TYPE_WORDS, END_WORDS, IMG_SKIP,
   hostOf, isOfficialManufacturerPage,
   normalizePartNumber, visibleProductText, partNumberOnPage, supplierCodeMapping,
   normalizeSize, sameSize, sizeForms, proposedBrand, effectiveManufacturer, extractProductImages,
