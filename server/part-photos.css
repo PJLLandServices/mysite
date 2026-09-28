@@ -257,3 +257,16 @@
   .pr-side .pr-cand-img { max-width: none; }
   .pr-actions .pp-btn { flex: 1 1 auto; }
 }
+
+/* Image-quality gate (Patrick, Sep 28 2026): the source size and grade on
+   every candidate, and the fast-path benchmark table under the run line. */
+.pr-quality { margin: 0; font-size: 12px; font-weight: 600; color: #4E5A50; }
+.pr-quality.is-good, .pr-quality.is-ok { color: #1B4D2E; }
+.pr-quality.is-low { color: #8A3B12; }
+.pr-quality.is-unknown { color: #6B6B63; font-weight: 500; }
+.pr-bench { margin: 8px 0 0; }
+.pr-bench-base { margin: 0 0 6px; font-size: 12px; color: #4E5A50; }
+.pr-bench-scroll { overflow-x: auto; max-width: 100%; }
+.pr-bench table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 12px; }
+.pr-bench th, .pr-bench td { padding: 4px 6px; border-bottom: 1px solid #E8E5D7; text-align: left; vertical-align: top; }
+.pr-bench th { font-weight: 700; color: #1F2A22; white-space: nowrap; }

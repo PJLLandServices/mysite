@@ -280,12 +280,20 @@ const photoAi = (() => {
     compare: (...a) => get().compare(...a)
   };
 })();
+// Fast Product Lookup (Patrick, Sep 28 2026): the supplier's own search
+// and product page through the same safe page fetcher, before any finder
+// call. No model, no key needed.
+const photoFastLookup = require("./lib/photo-fast-lookup").createFastLookup({
+  fetchPage: (url) => partPhotosLib.fetchPageSafely(url),
+  log: (entry) => console.log("[photo-fast-lookup]", JSON.stringify(entry))
+});
 const photoBackfill = require("./lib/photo-backfill").createBackfill({
   dataDir: DATA_DIR,
   store: partPhotos,
   getParts: () => (PARTS && PARTS.parts) || {},
   manufacturers: () => (PARTS && PARTS.manufacturers) || [],
   ai: photoAi,
+  fastLookup: photoFastLookup,
   fetchPage: (url) => partPhotosLib.fetchPageSafely(url),
   fetchImage: (url) => partPhotosLib.fetchImageSafely(url),
   log: (entry) => console.log("[photo-backfill]", JSON.stringify(entry)),
@@ -14051,7 +14059,7 @@ async function handleApi(req, res, pathname) {
   // whether a photo may show; these routes only read or change the stores
   // and then rebuild the catalog so /api/parts reflects it.
   //
-  //   GET    /api/part-photos/<sha256>/<160|480|1200|t160|t320>.webp   image (staff)
+  //   GET    /api/part-photos/<sha256>/<160|480|1200|2000|t160|t320>.webp   image (staff; 2000 = the enlarged-viewer copy, only for sources larger than 1200)
   //   GET    /api/part-photos                                overview (staff)
   //   POST   /api/part-photos/:sku/photo      {data} | {imageUrl}   (admin)
   //   POST   /api/part-photos/:sku/link       {sameAsSku} | {groupId} (admin)
@@ -14225,6 +14233,41 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, ...status });
     } catch (err) {
       return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't start the wave."] });
+    }
+  }
+
+  // ---------- The fast-path benchmark (Patrick, Sep 28 2026) -----------------
+  //   GET  /api/part-photo-backfill/benchmark-plan[?skus=a,b]  the exact ≤10-part
+  //        dry-run plan, the baseline it is compared with, and the status of
+  //        the fast-path sources (staff)
+  //   POST /api/part-photo-backfill/benchmark {skus}  start it (admin) — a
+  //        DRY RUN: the engine refuses unless `skus` is exactly the plan;
+  //        nothing is written to the photo stores; auto-approve OFF.
+  if (req.method === "GET" && pathname === "/api/part-photo-backfill/benchmark-plan") {
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    try {
+      await photoBackfill.load();
+      const q = String(url.searchParams.get("skus") || "").split(",").map((s) => s.trim()).filter(Boolean);
+      return sendJson(res, 200, { ok: true, ...photoBackfill.benchmarkPlan(q.length ? { skus: q } : {}), run: photoBackfill.status().run, apiKeySet: !!process.env.ANTHROPIC_API_KEY });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't build the benchmark plan."] });
+    }
+  }
+  if (req.method === "POST" && pathname === "/api/part-photo-backfill/benchmark") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    if (!process.env.ANTHROPIC_API_KEY) return sendJson(res, 503, { ok: false, errors: ["ANTHROPIC_API_KEY isn't set on the server — nothing was started."] });
+    const by = await actorLabel(req);
+    try {
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      // `skus` is the list confirmed in the dialog; the engine compares it
+      // with the plan it would run and refuses any difference.
+      const status = await photoBackfill.startBenchmark({ by, skus: Array.isArray(payload && payload.skus) ? payload.skus.map(String) : null });
+      await settings.recordAudit({ who: by, action: "part-photo.backfill.benchmark", note: `Started the fast-path benchmark (dry run, ${status.run.counts.total} parts, auto-approve off, nothing saved): ${status.run.benchmark.skus.join(", ")}`, after: status.run });
+      return sendJson(res, 200, { ok: true, ...status });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't start the benchmark."] });
     }
   }
 
