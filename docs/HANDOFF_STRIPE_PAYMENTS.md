@@ -20,7 +20,10 @@ QuickBooks was **kept as the accounting ledger** — invoices still push to QBO
 and every successful Stripe charge still creates a QBO Payment record.
 *Amended 2026-09-28:* for exactly the amount the invoice ledger applied, never
 the processor charge; an excess stays a PJL payment exception, and a charge
-with nothing applied posts nothing.
+with nothing applied posts nothing. The post is safe to repeat: a
+deterministic `requestid` from the Stripe payment id, plus a lookup of the
+payments already on the QuickBooks invoice, so one Stripe payment is at most
+one QuickBooks payment.
 Follow-up work through Aug 2: Apple Pay (one-tap via Express Checkout
 Element), form slimmed to required fields only, Link removed, webhook
 delivery fixed (307-redirect — see §5), and integration with the

@@ -40,10 +40,23 @@
 //
 // QuickBooks Accounting, SANDBOX host only (sandbox-quickbooks.api.intuit.com;
 // the production host stays refused). A test that sets QB_CLIENT_ID /
-// QB_CLIENT_SECRET to "stub" and writes a stub token file gets:
-//   GET  …/invoice/<id>  → the invoice with a CustomerRef
-//   POST …/payment       → a created Payment, logged as channel "quickbooks"
-// $PJL_STUB_OUTBOX.quickbooks holding "fail" makes POST …/payment answer 500.
+// QB_CLIENT_SECRET to "stub" and writes a stub token file gets a small
+// QuickBooks whose payments live in $PJL_STUB_OUTBOX.qb-store.json, so they
+// survive a server restart the way QuickBooks' own would:
+//   GET  …/invoice/<id>   → the invoice with a CustomerRef, and LinkedTxn
+//                           listing every stub payment applied to it
+//   GET  …/payment/<id>   → that payment
+//   POST …/payment[?requestid=…] → a created Payment, logged as channel
+//        "quickbooks". A repeat of a requestid already seen answers the
+//        ORIGINAL response and creates nothing — Intuit's documented
+//        requestid behaviour.
+// $PJL_STUB_OUTBOX.quickbooks holds comma-separated modes:
+//   fail              POST …/payment answers 500 and creates nothing
+//   accept-drop       POST …/payment creates the payment, then the
+//                     response is lost (the request "times out")
+//   ignore-requestid  requestid is not honoured (a second payment is made)
+//   no-linkedtxn      the invoice read omits LinkedTxn (a blind lookup)
+//   lookup-fail       GET …/payment/<id> fails (the network drops)
 // Anything else it does not model answers 400.
 //
 // Test-only. Never required by the server itself.
@@ -110,10 +123,65 @@ nodemailer.createTransport = function createStubTransport() {
 
 // ---- sms + stripe + everything else ----------------------------------
 const realFetch = globalThis.fetch;
+// Intent ids never repeat for the life of a test, even across a server
+// restart (srv.restart): real Stripe ids are unique, and a reused one would
+// read as the same payment everywhere it is used as a key.
 let stripeSeq = 0;
+try { stripeSeq = Number(fs.readFileSync(`${OUTBOX}.stripe-seq`, "utf8")) || 0; } catch {}
 const intents = new Map();
 // The last mode a test set for this intent id (or "*"), if any.
-let qbSeq = 0;
+// ---- the QuickBooks stub (see the header) -------------------------------
+const QB_STORE = `${OUTBOX}.qb-store.json`;
+function qbStore() {
+  try { return JSON.parse(fs.readFileSync(QB_STORE, "utf8")); } catch { return { seq: 0, payments: [], requests: {} }; }
+}
+function qbModes() {
+  try { return new Set(fs.readFileSync(`${OUTBOX}.quickbooks`, "utf8").split(",").map((m) => m.trim()).filter(Boolean)); } catch { return new Set(); }
+}
+function quickbooksStub(url, init) {
+  const method = init.method || "GET";
+  let body = null;
+  try { body = init.body ? JSON.parse(init.body) : null; } catch { body = { _raw: String(init.body).slice(0, 400) }; }
+  const modes = qbModes();
+  const store = qbStore();
+  const json = (status, obj) => new Response(JSON.stringify(obj), { status, headers: { "content-type": "application/json" } });
+  const requestid = url.searchParams.get("requestid");
+  const invoiceGet = url.pathname.match(/^\/v3\/company\/[^/]+\/invoice\/([^/]+)$/);
+  if (method === "GET" && invoiceGet) {
+    const id = decodeURIComponent(invoiceGet[1]);
+    log({ channel: "quickbooks", method, path: url.pathname });
+    const linked = modes.has("no-linkedtxn") ? [] : store.payments
+      .filter((p) => (p.Line || []).some((l) => (l.LinkedTxn || []).some((t) => t.TxnId === id)))
+      .map((p) => ({ TxnId: p.Id, TxnType: "Payment" }));
+    return json(200, { Invoice: { Id: id, SyncToken: "0", CustomerRef: { value: "qbcust_stub" }, LinkedTxn: linked } });
+  }
+  const paymentGet = url.pathname.match(/^\/v3\/company\/[^/]+\/payment\/([^/]+)$/);
+  if (method === "GET" && paymentGet) {
+    log({ channel: "quickbooks", method, path: url.pathname, failed: modes.has("lookup-fail") });
+    if (modes.has("lookup-fail")) throw new TypeError("fetch failed (stub: QuickBooks lookup dropped)");
+    const p = store.payments.find((x) => x.Id === decodeURIComponent(paymentGet[1]));
+    return p ? json(200, { Payment: p }) : json(400, { Fault: { Error: [{ Message: "Object Not Found", code: "610" }] } });
+  }
+  if (method === "POST" && /^\/v3\/company\/[^/]+\/payment$/.test(url.pathname)) {
+    if (requestid && store.requests[requestid] && !modes.has("ignore-requestid")) {
+      log({ channel: "quickbooks", method, path: url.pathname, requestid, body, deduped: true });
+      return json(200, store.requests[requestid]);
+    }
+    const failing = modes.has("fail");
+    log({ channel: "quickbooks", method, path: url.pathname, requestid, body, failed: failing, dropped: !failing && modes.has("accept-drop") });
+    if (failing) return json(500, { Fault: { Error: [{ Message: "stub: QuickBooks unavailable", code: "500" }] } });
+    store.seq += 1;
+    const payment = { Id: `qbpay_stub_${store.seq}`, TotalAmt: Number(body?.TotalAmt), CustomerRef: body?.CustomerRef, PrivateNote: body?.PrivateNote || "", Line: body?.Line || [] };
+    store.payments.push(payment);
+    if (requestid) store.requests[requestid] = { Payment: payment };
+    fs.writeFileSync(QB_STORE, JSON.stringify(store));
+    if (modes.has("accept-drop")) throw new TypeError("fetch failed (stub: QuickBooks accepted the payment, the response was lost)");
+    return json(200, { Payment: payment });
+  }
+  log({ channel: "quickbooks", method, path: url.pathname, body, unmodelled: true });
+  return json(400, { Fault: { Error: [{ Message: "stub: not modelled", code: "400" }] } });
+}
+
 function modeFor(id) {
   let mode = null;
   try {
@@ -164,6 +232,7 @@ globalThis.fetch = async function stubFetch(input, init = {}) {
     let obj = existingId ? intents.get(existingId) : null;
     if (!obj) {
       stripeSeq += 1;
+      fs.writeFileSync(`${OUTBOX}.stripe-seq`, String(stripeSeq));
       const id = existingId || `pi_stub_${stripeSeq}`;
       obj = { id, object: "payment_intent", status: "requires_payment_method",
         amount: Number(form.amount || 0), currency: form.currency || "cad",
@@ -198,27 +267,7 @@ globalThis.fetch = async function stubFetch(input, init = {}) {
     }
     return new Response(JSON.stringify(obj), { status: 200, headers: { "content-type": "application/json" } });
   }
-  if (url.hostname === "sandbox-quickbooks.api.intuit.com") {
-    const method = init.method || "GET";
-    let body = null;
-    try { body = init.body ? JSON.parse(init.body) : null; } catch { body = { _raw: String(init.body).slice(0, 400) }; }
-    let failing = false;
-    try { failing = fs.readFileSync(`${OUTBOX}.quickbooks`, "utf8").trim() === "fail"; } catch {}
-    const json = (status, obj) => new Response(JSON.stringify(obj), { status, headers: { "content-type": "application/json" } });
-    const invoiceGet = url.pathname.match(/^\/v3\/company\/[^/]+\/invoice\/([^/]+)$/);
-    if (method === "GET" && invoiceGet) {
-      log({ channel: "quickbooks", method, path: url.pathname });
-      return json(200, { Invoice: { Id: decodeURIComponent(invoiceGet[1]), SyncToken: "0", CustomerRef: { value: "qbcust_stub" } } });
-    }
-    if (method === "POST" && /^\/v3\/company\/[^/]+\/payment$/.test(url.pathname)) {
-      log({ channel: "quickbooks", method, path: url.pathname, body, failed: failing });
-      if (failing) return json(500, { Fault: { Error: [{ Message: "stub: QuickBooks unavailable", code: "500" }] } });
-      qbSeq += 1;
-      return json(200, { Payment: { Id: `qbpay_stub_${qbSeq}`, TotalAmt: Number(body?.TotalAmt) } });
-    }
-    log({ channel: "quickbooks", method, path: url.pathname, body, unmodelled: true });
-    return json(400, { Fault: { Error: [{ Message: "stub: not modelled", code: "400" }] } });
-  }
+  if (url.hostname === "sandbox-quickbooks.api.intuit.com") return quickbooksStub(url, init);
   log({ channel: "refused", url: url.href, host: url.hostname, production: PRODUCTION_HOST.test(url.hostname) });
   throw new TypeError(`stub-outbound: outbound request to ${url.hostname} refused in tests`);
 };

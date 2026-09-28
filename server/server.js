@@ -3684,10 +3684,14 @@ async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "con
   if (appliedCents > 0) {
     try {
       if (inv.quickbooksInvoiceId) {
+        // Safe to repeat: keyed on the Stripe payment (requestid + a lookup
+        // of the payments already on the QuickBooks invoice), so a lost
+        // response, a restart or a later sync never makes a second one.
         const payment = await quickbooks.recordPaymentForInvoice({
           qbInvoiceId: inv.quickbooksInvoiceId,
           amountCents: appliedCents,
-          chargeId: summary.chargeId || summary.paymentIntentId
+          chargeId: summary.chargeId || summary.paymentIntentId,
+          sourceRef: summary.paymentIntentId
         });
         qbPaymentId = payment?.id || null;
       }

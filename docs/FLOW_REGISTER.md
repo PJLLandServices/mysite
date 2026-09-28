@@ -6826,6 +6826,69 @@ done by `invoices.reconcileToSignedScope(woId)`, under the invoice store lock:
 - `test-resignature-await` and `test-scope-hold-before-reply` now follow the release write into
   `reconcileToSignedScope`. The latter still fails if that write isn't awaited (checked by mutation).
 
+## 2026-09-28 — FLOW-23: a QuickBooks payment sync is safe to repeat (FLOW-23 touched — re-verified by tests, awaiting a real QuickBooks payment)
+
+QuickBooks item 2. One distinct PJL/Stripe payment must create at most one QuickBooks payment,
+however many times the sync runs.
+
+**Root cause (reproduced on main against the stubbed QuickBooks):**
+`quickbooks.recordPaymentForInvoice` POSTed a new Payment on every call. It sent no `requestid`
+and did not look for an earlier payment; its comment claimed QuickBooks deduped on the note, which
+it does not. Today the finalizer calls it only once per decided Stripe payment, so nothing repeats
+it yet. But any repeat made a second QuickBooks payment for the same money:
+- a retry after QuickBooks accepted the payment but the response was lost;
+- a sync after a restart that lost the stored QuickBooks payment id;
+- a later retry queue.
+
+**What QuickBooks' API does (Intuit's documentation):** a lowercase `requestid` query parameter on a
+create, update or delete. A repeat of the same `requestid` gets the **original response**, not a
+second transaction. The id must be unique per company.
+- **Not published:** a retention window.
+- **Not guaranteed:** the behaviour while the first request is still in flight.
+
+It was not exercised against a live QuickBooks company (there are no credentials, by design), so
+it is not relied on alone.
+
+**The strategy, two layers, each enough on its own:**
+1. **Request key:** `requestid = pjl-pay-<Stripe payment id>`, which is deterministic (at most 50
+   characters).
+2. **Lookup before create:** read the QuickBooks invoice's `LinkedTxn`, the payments already applied
+   to it, and reuse the one whose note carries `[pjl:<Stripe payment id>]` (or, for one posted
+   before this rule, its charge id).
+   - If the lookup can't be completed, **nothing is created**; the call throws.
+   - A different Stripe payment is its own QuickBooks payment.
+   - The call returns `{ id, existing }`.
+
+The finalizer passes `sourceRef: summary.paymentIntentId`; nothing else changed. The amount is
+still the ledger's applied amount (#349). A duplicate or reversed Stripe payment (#348) still
+returns before the call.
+
+**Not built (as asked):**
+- the retry queue: nothing re-attempts a failed sync by itself yet; this makes that safe;
+- reversal sync;
+- staff-payment sync;
+- a per-payment stored QuickBooks id. The invoice keeps `quickbooksPaymentId` as before.
+
+**Tests:**
+- `scripts/test-qbo-payment-idempotency.mjs` (26 checks; **the old code fails 18**) covers:
+  - 1 normal first post;
+  - 2 exact retry;
+  - 3 duplicate Stripe delivery;
+  - 4 timeout after QuickBooks accepted;
+  - 5 a server restart before the id was recorded, using the harness's new `srv.restart()`;
+  - 6 each layer alone (lookup blind, requestid ignored), and an uncertain lookup that refuses to
+    post;
+  - 7 an older payment with no requestid, and a different payment;
+  - 8 partial;
+  - 9 overpayment;
+  - 10 a reversed payment ignored.
+- **The repeat runs in a fresh process** with the server's clean environment and stub, as a later
+  attempt would.
+- **The stub's QuickBooks** now keeps its payments in a file, so they survive a restart. It lists
+  them in `Invoice.LinkedTxn`, serves `GET /payment/<id>`, honours `requestid`, and has modes
+  `accept-drop`, `ignore-requestid`, `no-linkedtxn` and `lookup-fail`.
+- **Stripe stub intent ids** no longer repeat after a restart.
+
 ## 2026-09-28 — FLOW-23: QuickBooks gets what the ledger applied (FLOW-23 touched — re-verified by tests, awaiting a real QuickBooks payment)
 
 After #332 the ledger applies a Stripe charge only up to what the invoice owes; any excess is a
@@ -6861,7 +6924,8 @@ invoice's `quickbooksInvoiceId`, when it is above zero.
   `PrivateNote: "Auto-recorded from QB Payments charge <ch_…>"`. The returned id is stored as
   `quickbooksPaymentId`.
 - **Idempotency is ours, not QuickBooks':** no `requestid` is sent, and QuickBooks does not dedupe
-  on the note. The code comment that said otherwise is corrected.
+  on the note. The code comment that said otherwise is corrected. (Fixed since: see "a QuickBooks
+  payment sync is safe to repeat" above.)
 - **If QuickBooks fails after the ledger took the payment:** the payment stands, the invoice reads
   Paid, the failure is logged and returned as `warning`, and `quickbooksPaymentId` stays empty.
   **It is never retried automatically:** every redelivery is a duplicate. Recovering it is a
