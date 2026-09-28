@@ -91,20 +91,27 @@ export async function bootServer({ port, env = {} } = {}) {
     throw new Error(`refusing to boot a test server:\n  - ${problems.join("\n  - ")}`);
   }
 
-  const child = spawn(process.execPath, ["--require", STUB, path.join(TMP, "server", "server.js")], {
-    cwd: TMP, env: childEnv, stdio: ["ignore", "pipe", "pipe"]
-  });
+  let child = null;
   let logs = "";
   let exited = null;
-  child.stdout.on("data", (c) => { logs += c; });
-  child.stderr.on("data", (c) => { logs += c; });
-  child.on("exit", (code) => { exited = code ?? "signal"; });
-  let up = false;
-  for (let i = 0; i < 100 && !up && exited === null; i++) {
-    await new Promise((r) => setTimeout(r, 150));
-    try { await fetch(`${BASE}/api/booking/services`); up = true; } catch {}
+  // Spawn the server on this copy and wait until it answers. Used at boot
+  // and by srv.restart(), which keeps the data (a real process restart).
+  async function startChild() {
+    child = spawn(process.execPath, ["--require", STUB, path.join(TMP, "server", "server.js")], {
+      cwd: TMP, env: childEnv, stdio: ["ignore", "pipe", "pipe"]
+    });
+    exited = null;
+    child.stdout.on("data", (c) => { logs += c; });
+    child.stderr.on("data", (c) => { logs += c; });
+    child.on("exit", (code) => { exited = code ?? "signal"; });
+    let up = false;
+    for (let i = 0; i < 100 && !up && exited === null; i++) {
+      await new Promise((r) => setTimeout(r, 150));
+      try { await fetch(`${BASE}/api/booking/services`); up = true; } catch {}
+    }
+    return up;
   }
-  if (!up) {
+  if (!(await startChild())) {
     child.kill();
     fs.rmSync(TMP, { recursive: true, force: true });
     throw new Error(`server never came up${exited !== null ? ` (exited ${exited})` : ""}:\n` + logs.slice(-2000));
@@ -276,6 +283,14 @@ export async function bootServer({ port, env = {} } = {}) {
         serviceChecklist: { controller_off: true, water_off: true, compressor_disconnected: true, system_winterized: true } });
       if (r.status !== 200) throw new Error("answers patch " + r.status + " " + JSON.stringify(r.body).slice(0, 300));
       return r.body.workOrder;
+    },
+    // Kill the server process and start it again on the same data and
+    // outbox — what a deploy or a crash does between two requests.
+    async restart() {
+      const gone = new Promise((r) => (exited !== null ? r() : child.once("exit", r)));
+      child.kill();
+      await gone;
+      if (!(await startChild())) throw new Error("server never came back after restart:\n" + logs.slice(-2000));
     },
     async stop() {
       child.kill();

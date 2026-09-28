@@ -39,8 +39,8 @@ Every journey boots the real `server/server.js` through
   (`scripts/lib/stub-outbound.cjs`):
   - nodemailer, Twilio and Stripe calls are written to an outbox file
     instead of being sent, and so are QuickBooks calls to the sandbox host
-    (only `test-qbo-payment-amount.mjs` connects it; the production Intuit
-    host stays refused);
+    (only the `test-qbo-*` suites connect it; its payments survive a server
+    restart; the production Intuit host stays refused);
   - below fetch, every TCP/TLS socket to anything but this machine is
     refused and logged, and production hosts are flagged.
 - **Every message is accounted for.** `srv.ledger()` works step by step:

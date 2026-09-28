@@ -784,32 +784,71 @@ async function chargeCard({ amountCents, currency = "CAD", cardToken, invoiceId,
 }
 
 // Record a Payment in QB Accounting against an existing QB invoice.
-// Flips the QB invoice from "Open" to "Paid" in the books. NOT idempotent
-// at the QB end: QuickBooks does not dedupe on the privateNote, and no
-// requestid is sent. What keeps it to one payment is the caller — the
-// Stripe finalizer calls this once per decided Stripe payment, for the
-// amount the ledger applied, and never again for a duplicate.
-async function recordPaymentForInvoice({ qbInvoiceId, amountCents, chargeId }) {
+// Flips the QB invoice from "Open" to "Paid" in the books.
+//
+// SAFE TO REPEAT (QuickBooks item 2, Patrick 2026-09-28): one distinct
+// source payment (a Stripe payment, `sourceRef`) makes at most one QuickBooks
+// payment, however many times this runs — a retry after QuickBooks accepted
+// the payment but the response was lost, a call after a restart that lost the
+// stored QuickBooks payment id, a later sync. Two layers, each enough alone:
+//   1. requestid = pjl-pay-<sourceRef>, deterministic. Intuit documents that
+//      a repeat of a requestid gets the ORIGINAL response instead of a second
+//      transaction; it publishes no retention window and does not guarantee
+//      it while the first request is still in flight, so it is not relied on
+//      alone.
+//   2. before creating, the payments already linked to the QuickBooks invoice
+//      (Invoice.LinkedTxn) are read, and one carrying this source's marker
+//      "[pjl:<sourceRef>]" — or, for one posted before this rule, the charge
+//      id in its note — is returned instead. If that lookup can't be
+//      completed, this throws and creates nothing: never post while unsure.
+// Returns { id, existing } — existing: true when an earlier payment was reused.
+const QB_REQUESTID_MAX = 50;
+function paymentRequestId(sourceRef) {
+  return `pjl-pay-${String(sourceRef).replace(/[^A-Za-z0-9_-]/g, "")}`.slice(0, QB_REQUESTID_MAX);
+}
+function paymentMarker(sourceRef) {
+  return `[pjl:${sourceRef}]`;
+}
+async function findPaymentForSource(qbInvoice, { sourceRef, chargeId }) {
+  const linked = (qbInvoice?.LinkedTxn || []).filter((t) => t && t.TxnType === "Payment" && t.TxnId);
+  const marker = paymentMarker(sourceRef);
+  const tokens = (note) => String(note || "").split(/\s+/);
+  for (const t of linked) {
+    // A failed read throws: an unfinished lookup must not lead to a create.
+    const got = await requestQB(`/payment/${encodeURIComponent(t.TxnId)}?minorversion=70`);
+    const note = got?.Payment?.PrivateNote || "";
+    if (note.includes(marker) || (chargeId && tokens(note).includes(chargeId)) || tokens(note).includes(String(sourceRef))) {
+      return got.Payment;
+    }
+  }
+  return null;
+}
+async function recordPaymentForInvoice({ qbInvoiceId, amountCents, chargeId, sourceRef = null }) {
   if (!qbInvoiceId) throw new Error("Missing QB invoice ID — can't record a payment without one.");
   if (!Number.isFinite(amountCents) || amountCents <= 0) throw new Error("Payment amount must be positive.");
+  const source = sourceRef || chargeId;
+  if (!source) throw new Error("A QuickBooks payment needs its source payment id — can't make it safe to repeat without one.");
 
-  // Pull the QB invoice so we can grab its CustomerRef.
+  // Pull the QB invoice for its CustomerRef — and the payments already on it.
   const inv = await requestQB(`/invoice/${encodeURIComponent(qbInvoiceId)}?minorversion=70`).catch(() => null);
   if (!inv?.Invoice?.Id) throw new Error(`QB invoice ${qbInvoiceId} not found — payment record skipped.`);
   const customerId = inv.Invoice.CustomerRef?.value;
   if (!customerId) throw new Error("QB invoice has no CustomerRef — payment record skipped.");
 
+  const earlier = await findPaymentForSource(inv.Invoice, { sourceRef: source, chargeId });
+  if (earlier?.Id) return { id: earlier.Id, existing: true };
+
   const payload = {
     TotalAmt: (amountCents / 100).toFixed(2),
     CustomerRef: { value: customerId },
-    PrivateNote: `Auto-recorded from QB Payments charge ${chargeId}`,
+    PrivateNote: `Auto-recorded from Stripe payment ${source}${chargeId && chargeId !== source ? ` (charge ${chargeId})` : ""} ${paymentMarker(source)}`,
     Line: [{
       Amount: (amountCents / 100).toFixed(2),
       LinkedTxn: [{ TxnId: qbInvoiceId, TxnType: "Invoice" }]
     }]
   };
-  const created = await requestQB(`/payment?minorversion=70`, { method: "POST", body: payload });
-  return { id: created?.Payment?.Id || null };
+  const created = await requestQB(`/payment?minorversion=70&requestid=${encodeURIComponent(paymentRequestId(source))}`, { method: "POST", body: payload });
+  return { id: created?.Payment?.Id || null, existing: false };
 }
 
 // Mark a QB invoice as voided. Used by status mirror when admin sets
@@ -1184,6 +1223,7 @@ module.exports = {
   clearTokens,
   chargeCard,
   recordPaymentForInvoice,
+  paymentRequestId,
   voidInvoice,
   // Phase 1 additions
   listTaxCodes,
