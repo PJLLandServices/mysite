@@ -25,17 +25,30 @@ held balance invoice "outstanding" and offered "Collect payment" on an invoice n
 
 **Read-only:** payments, sending, revising and voiding stay on the classic invoice pages.
 
-**Test:** `scripts/test-financials-view.mjs` (29 checks, in `build:check`). It covers:
+**Marked paid, not recorded — flagged, never hidden** (Patrick, 2026-09-28: *"an invoice marked Paid
+with $1,000 recorded against $1,260 must visibly flag the $260 discrepancy"*). When an invoice is
+marked Paid but its recorded payments fall short of its total:
+- it owes nothing, since the office said it was paid;
+- the gap is its `unrecorded` amount, with a red "$260.00 not recorded" flag on the invoice;
+- a red "Marked paid, not recorded" card at the top of the tab names the invoice, what was
+  recorded, the total and the gap;
+- the header's Billing line leads with "⚠ $260.00 marked paid, not recorded".
+
+The gap is neither received nor owed until the office records it or corrects the status.
+
+**Test:** `scripts/test-financials-view.mjs` (37 checks, in `build:check`). It covers:
 - the route's totals equal the invoices' own sums, worked out independently;
 - part-paid, marked-paid and held deposits;
+- a $1,260 invoice with $1,000 recorded and marked Paid, flagged $260;
 - a void invoice;
 - a T&M job with no rate;
 - the header agreeing with the tab;
 - the screen does no money arithmetic.
 
-`npm run test:financials-tab-screen` adds 15 browser checks: desktop and phone renders showing the
-server's figures, the header agreeing, no actions and no sideways scroll. Like the other `*-tab`
-screen tests it is outside `build:check`, because the CI runner has no browser.
+`npm run test:financials-tab-screen` adds 19 browser checks: desktop and phone renders showing the
+server's figures, the header agreeing, the $260 flag visible on the card and the invoice, no
+actions and no sideways scroll. Like the other `*-tab` screen tests it is outside `build:check`,
+because the CI runner has no browser.
 **2026-09-28 (Financials Fix B: one rule for a job's invoices, a void invoice is never owed, a T&M job is billed at its preview's prices; FLOW-01/02 (customer portal, PASS) touched — re-verified by its suites, awaiting a walked acceptance):**
 Found mapping the Financials tab.
 1. **Three rules for "this job's invoices".**

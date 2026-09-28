@@ -123,6 +123,8 @@ export interface BillingSummary {
   kind: "none" | "owed" | "settled" | "paid";
   owed: number;
   received: number;
+  /** Marked paid but not recorded as payments; the hint leads with it. */
+  unrecorded: number;
   hint: string;
   actionInvoice: InvoiceSummary | null;
 }
@@ -622,6 +624,8 @@ export interface FinancialsInvoice {
   sentAt: string | null;
   paidAt: string | null;
   needsReconciliation: boolean;
+  /** Marked paid, but recorded payments fall short of the total by this. */
+  unrecorded: number;
   payments: FinancialsPayment[];
   note: string | null;
   href: string;
@@ -642,6 +646,7 @@ export interface ProjectFinancials {
     drafts: { count: number; total: number };
     issuedCount: number;
     voidCount: number;
+    unrecorded: number;
   };
   deposit: {
     amount: number;
@@ -655,6 +660,7 @@ export interface ProjectFinancials {
   invoices: FinancialsInvoice[];
   payments: FinancialsPayment[];
   reconcile: string[];
+  unrecorded: Array<{ invoiceId: string; total: number; recorded: number; amount: number; sentence: string }>;
   preview: {
     billingMode: string | null;
     subtotal?: number;

@@ -67,7 +67,7 @@ function invoiceRow(inv, { finalInvoiceId, methodLabels }) {
   if (!live) note = "Void — not owed, kept for the record.";
   else if (held) note = "Held until the job is complete — not sent to the customer yet.";
   else if (inv.status === "draft") note = "A draft — not sent to the customer yet.";
-  else if (unrecordedC > 0) note = `Marked paid — ${fmt(dollars(unrecordedC))} of it isn't recorded as a payment.`;
+  else if (unrecordedC > 0) note = `Marked paid, but only ${fmt(inv.amountPaid)} of ${fmt(inv.total)} is recorded as payments — ${fmt(dollars(unrecordedC))} isn't. Record it on the invoice page, or correct the status.`;
   if (openExceptions.length) {
     note = `${note ? `${note} ` : ""}${openExceptions.length === 1 ? "A payment" : `${openExceptions.length} payments`} on this invoice need reconciling.`;
   }
@@ -89,6 +89,9 @@ function invoiceRow(inv, { finalInvoiceId, methodLabels }) {
     sentAt: inv.sentAt || null,
     paidAt: inv.paidAt || null,
     needsReconciliation: openExceptions.length > 0,
+    // Marked paid, but the recorded payments fall short of the total: the
+    // gap, flagged on the tab (Patrick, 2026-09-28). 0 otherwise.
+    unrecorded: live ? dollars(unrecordedC) : 0,
     payments: (inv.payments || []).map((p) => ({
       id: p.id,
       invoiceId: inv.id,
@@ -181,6 +184,14 @@ function describeFinancials({ project, agreement, invoices = [], depositQuote = 
 
   const holds = (blockers || []).filter((b) => b && MONEY_BLOCKERS.has(b.key)).map((b) => ({ key: b.key, message: b.message }));
   const reconcile = rows.filter((r) => r.needsReconciliation).map((r) => r.id);
+  const unrecorded = rows.filter((r) => r.unrecorded > 0).map((r) => ({
+    invoiceId: r.id,
+    total: r.total,
+    recorded: r.amountPaid,
+    amount: r.unrecorded,
+    sentence: `${r.id} is marked Paid, but only ${fmt(r.amountPaid)} is recorded against ${fmt(r.total)} — ${fmt(r.unrecorded)} isn't recorded as a payment.`
+  }));
+  const unrecordedTotalC = unrecorded.reduce((s, u) => s + cents(u.amount), 0);
 
   return {
     projectId: proj.id || null,
@@ -201,12 +212,15 @@ function describeFinancials({ project, agreement, invoices = [], depositQuote = 
       notYetInvoiced,
       drafts: { count: drafts.length, total: dollars(draftC) },
       issuedCount: issued.length,
-      voidCount: rows.length - live.length
+      voidCount: rows.length - live.length,
+      // Marked paid but not recorded as payments — neither received nor owed.
+      unrecorded: dollars(unrecordedTotalC)
     },
     deposit: depositFor(depositQuote, rows),
     invoices: rows,
     payments,
     reconcile,
+    unrecorded,
     preview: previewFor(billing),
     holds,
     classicHref: proj.id ? `/admin/project/${encodeURIComponent(proj.id)}` : null
@@ -249,10 +263,14 @@ function billingSummary(model) {
     hint = lastPaid ? `paid in full · ${String(lastPaid).slice(0, 10)}` : "nothing owed";
   }
   const lastPaidInvoice = live.find((r) => r.paidAt === lastPaid) || null;
+  // A gap between "marked paid" and what is recorded leads the line, so the
+  // header can't read a clean "None owed" / "Paid" over it.
+  if (t.unrecorded > 0) hint = `⚠ ${fmt(t.unrecorded)} marked paid, not recorded · ${hint}`;
   return {
     kind,
     owed: t.owed,
     received: t.received,
+    unrecorded: t.unrecorded,
     hint,
     // Shaped like the workspace's InvoiceSummary, for the next-action rule.
     actionInvoice: action ? {

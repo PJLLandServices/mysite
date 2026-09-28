@@ -180,6 +180,35 @@ try {
     ok((m.invoices || []).length === 0, "T1: no invoices yet");
   }
 
+  // ---- M marked Paid with less recorded: the gap is flagged, not hidden -------------
+  // Patrick, 2026-09-28: "an invoice marked Paid with $1,000 recorded against
+  // $1,260 must visibly flag the $260 discrepancy."
+  const mj = await signedJob("M", { deposit: false });
+  let mInv;
+  {
+    mInv = await invoices.createDraft({
+      projectId: mj.proj.id, customerId: mj.cust.id, customerEmail: mj.cust.email, customerName: mj.cust.name,
+      lineItems: [{ key: "custom", label: "Mid-job progress billing", qty: 1, price: deposits.preTaxForTotal(1260) }]
+    });
+    await srv.api("PATCH", `/api/invoices/${mInv.id}`, { status: "sent" });
+    await srv.api("POST", `/api/invoices/${mInv.id}/payments`, { amount: 1000, method: "cheque" });
+    await srv.api("PATCH", `/api/invoices/${mInv.id}`, { status: "paid" });
+    const m = (await fin(mj)).body;
+    const row = (m.invoices || []).find((i) => i.id === mInv.id);
+    ok(row?.total === 1260 && row.amountPaid === 1000 && row.status === "paid", `M0: a $1,260 invoice, $1,000 recorded, marked Paid (${j(row && { total: row.total, paid: row.amountPaid, status: row.status })})`);
+    ok(row?.unrecorded === 260, `M1: the $260 gap is on the invoice (${row?.unrecorded})`);
+    ok(m.totals?.unrecorded === 260 && m.unrecorded?.length === 1 && m.unrecorded[0].amount === 260,
+      `M1: …and on the tab, as its own flagged item (${j(m.unrecorded)} / ${m.totals?.unrecorded})`);
+    ok(/\$1,000\.00/.test(m.unrecorded?.[0]?.sentence || "") && /\$1,260\.00/.test(m.unrecorded?.[0]?.sentence || "") && /\$260\.00/.test(m.unrecorded?.[0]?.sentence || ""),
+      `M1: the sentence names what was recorded, the total and the gap (${m.unrecorded?.[0]?.sentence})`);
+    ok(m.totals.owed === 0 && m.totals.received === 1000, `M2: it is not called owed, and received stays what was recorded (${j(m.totals)})`);
+    ok(((await fin(a)).body.unrecorded || []).length === 1, "M3: the deposit job marked paid short is flagged too");
+    ok(((await fin(v)).body.unrecorded || []).length === 0, "M4: a job with nothing marked paid short flags nothing");
+    const head = (await srv.api("GET", `/api/projects/${mj.proj.id}`)).body.billing;
+    ok(head?.unrecorded === 260 && /^⚠ \$260\.00 marked paid, not recorded/.test(head?.hint || ""),
+      `M5: the header's Billing line leads with the $260 gap (${head?.hint})`);
+  }
+
   // ---- The screen, desktop and phone (--screen) ---------------------------------------
   if (SCREEN) {
   const { chromium } = await import("playwright");
@@ -209,8 +238,20 @@ try {
     const overflow = await page.evaluate(() => Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth));
     ok(overflow === 0, `${name}: no sideways scrolling (${overflow}px)`);
     ok(errors.length === 0, `${name}: no page errors (${j(errors)})`);
+    // The $260 gap is visible: a warning card at the top and a flag on the invoice.
+    await page.goto(`${srv.BASE}/app/projects/${encodeURIComponent(mj.proj.id)}/financials`, { waitUntil: "networkidle" });
+    await page.waitForSelector("[data-testid=fin-unrecorded]", { timeout: 15000 });
+    const card = (await page.locator("[data-testid=fin-unrecorded]").innerText()).replace(/\s+/g, " ");
+    const pill = await page.locator("[data-testid=fin-unrecorded-pill]").first().innerText();
+    ok(/\$260\.00 not recorded/i.test(card) && /\$1,000\.00/.test(card) && /\$1,260\.00/.test(card),
+      `${name}: the warning card shows the $260 gap and what it came from (${card})`);
+    ok(/\$260\.00 not recorded/i.test(pill) && (await page.locator("[data-testid=fin-unrecorded-pill]").first().isVisible()),
+      `${name}: the invoice carries a visible "$260.00 not recorded" flag (${pill})`);
     if (SHOTS) {
       fs.mkdirSync(SHOTS, { recursive: true });
+      await page.screenshot({ path: path.join(SHOTS, `financials-unrecorded-${name}.png`), fullPage: true });
+      await page.goto(`${srv.BASE}/app/projects/${encodeURIComponent(a.proj.id)}/financials`, { waitUntil: "networkidle" });
+      await page.waitForSelector("[data-testid=fin-totals]", { timeout: 15000 });
       await page.screenshot({ path: path.join(SHOTS, `financials-deposit-${name}.png`), fullPage: true });
       await page.goto(`${srv.BASE}/app/projects/${encodeURIComponent(v.proj.id)}/financials`, { waitUntil: "networkidle" });
       await page.waitForSelector("[data-testid=fin-totals]", { timeout: 15000 });

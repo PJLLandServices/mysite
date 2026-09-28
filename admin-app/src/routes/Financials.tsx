@@ -40,6 +40,9 @@ function InvoiceRow({ inv }: { inv: FinancialsInvoice }) {
         <a className="font-display text-[15px] font-semibold text-ink underline" href={inv.href}>{inv.id}</a>
         <span className="text-[13px] text-ink-muted">{inv.roleLabel}</span>
         {inv.needsReconciliation ? <StatusPill tone="danger">Needs reconciling</StatusPill> : null}
+        {inv.unrecorded > 0 ? (
+          <span data-testid="fin-unrecorded-pill"><StatusPill tone="danger">{money(inv.unrecorded)} not recorded</StatusPill></span>
+        ) : null}
       </div>
       <div className="mt-1 grid grid-cols-3 gap-2 text-[13px] sm:max-w-[520px]">
         <div>
@@ -60,7 +63,9 @@ function InvoiceRow({ inv }: { inv: FinancialsInvoice }) {
         {inv.sentAt ? <span>· sent {shortDate(inv.sentAt)}</span> : null}
         {inv.paidAt ? <span>· paid {shortDate(inv.paidAt)}</span> : null}
       </div>
-      {inv.note ? <p className="mt-1 text-[13px] text-ink-muted">{inv.note}</p> : null}
+      {inv.note ? (
+        <p className={`mt-1 text-[13px] ${inv.unrecorded > 0 ? "font-semibold text-danger-700" : "text-ink-muted"}`}>{inv.note}</p>
+      ) : null}
     </li>
   );
 }
@@ -119,6 +124,21 @@ export function FinancialsTab() {
             {holds.map((h) => (
               <li key={h.key} className="text-[14px] text-ink">
                 <StatusPill tone="warn">Hold</StatusPill> <span className="ml-1">{h.message}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
+
+      {data.unrecorded.length ? (
+        <Card className="border-l-4 border-l-danger-500">
+          <CardHeader title="Marked paid, not recorded" meta={`${money(totals.unrecorded)} not recorded as payments`} />
+          <ul className="space-y-2 px-4 py-3" data-testid="fin-unrecorded">
+            {data.unrecorded.map((u) => (
+              <li key={u.invoiceId} className="text-[14px] text-ink">
+                <StatusPill tone="danger">{money(u.amount)} not recorded</StatusPill>{" "}
+                <span className="ml-1">{u.sentence}</span>{" "}
+                <a className="underline" href={`/admin/invoice/${encodeURIComponent(u.invoiceId)}`}>Open the invoice</a>
               </li>
             ))}
           </ul>
