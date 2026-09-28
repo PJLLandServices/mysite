@@ -3709,13 +3709,9 @@ async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "con
         ? `${inv.notes}\n\nPaid via Stripe ${summary.chargeId || summary.paymentIntentId} on ${new Date().toISOString()}.`
         : `Paid via Stripe ${summary.chargeId || summary.paymentIntentId} on ${new Date().toISOString()}.`
     });
-    // Threshold deposit — a paid deposit invoice spawns the held balance
-    // invoice; a paid balance invoice closes the quote's deposit stage.
-    try {
-      await deposits.onInvoicePaid(updated);
-    } catch (depErr) {
-      console.warn(`[stripe] deposit paid-hook failed for ${inv.id}:`, depErr?.message);
-    }
+    // Threshold deposit: the invoice store reports this write's change to
+    // "paid" (only when the payment SETTLED it — never a part payment) to
+    // deposits.onInvoiceStatusChange. Nothing to call here (Fix A).
   }
 
   // The office alert, once: only the call that opened the exception
@@ -16093,18 +16089,9 @@ async function handleApi(req, res, pathname) {
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
       if (before && before.status !== "void" && updated.status === "void") await settleNoChargeOnVoid(before);
 
-      // Threshold deposit — paid/void transitions on deposit invoices
-      // drive the quote's deposit lifecycle. Best-effort.
-      try {
-        if (before && before.status !== "paid" && updated.status === "paid") {
-          await deposits.onInvoicePaid(updated);
-        }
-        if (before && before.status !== "void" && updated.status === "void") {
-          await deposits.onInvoiceVoided(updated);
-        }
-      } catch (depErr) {
-        console.warn(`[invoice-patch] deposit hook failed for ${id}:`, depErr?.message);
-      }
+      // Threshold deposit — paid / un-paid / void transitions drive the
+      // quote's deposit lifecycle; the invoice store reports this write's
+      // change to deposits.onInvoiceStatusChange itself (Fix A).
 
       // PR 3 — status mirror to QuickBooks. When admin sets status to
       // void in PJL, push the same change to QB. Best-effort: a QB
@@ -16276,14 +16263,8 @@ async function handleApi(req, res, pathname) {
         }
       }
       // Threshold deposit — voiding a deposit invoice reverts the quote
-      // to awaiting-deposit and withdraws a held balance invoice.
-      if (!result.alreadyVoid) {
-        try {
-          await deposits.onInvoiceVoided(result.invoice);
-        } catch (depErr) {
-          console.warn(`[invoice-void] deposit hook failed for ${id}:`, depErr?.message);
-        }
-      }
+      // to awaiting-deposit and withdraws a held balance invoice; the
+      // invoice store reports the void to deposits.onInvoiceStatusChange.
       return sendJson(res, 200, { ok: true, invoice: result.invoice, warning: qbWarning });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't void invoice."] });

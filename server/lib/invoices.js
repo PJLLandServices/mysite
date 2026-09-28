@@ -163,6 +163,20 @@ function statusForPayments(inv, currentStatus) {
   return "partially_paid";
 }
 
+// After a payment is reversed or corrected, the MONEY decides the status
+// (Financials Fix A, 2026-09-28). statusForPayments keeps a "paid" with
+// nothing on the ledger, so a person's "Mark paid" survives. But once the
+// ledger itself has changed, "paid" is what the payments said — and when
+// they no longer cover the invoice it falls back to where it stood before
+// it was paid: "sent" if it went to the customer, "draft" if it never did.
+// Without this, reversing the only payment on an emailed invoice (a
+// refunded card, #348) left it Paid with $0 received, and its pay link
+// refused the customer's next payment.
+function statusAfterLedgerChange(next, current) {
+  const base = current.status === "paid" ? (current.sentAt ? "sent" : "draft") : current.status;
+  return statusForPayments(next, base);
+}
+
 // Invoice disclaimers — keyed by stable slug, rendered verbatim below
 // the line items in both the admin editor and the customer PDF.
 // (feature-per-property-seasonal-pricing-brief.md §3.6 + §3.7).
@@ -214,9 +228,71 @@ async function readAll() {
 // serializes each read-modify-write so neither save erases the other.
 async function writeAll(records) {
   await ensureFile();
+  if (pendingPaidStateChanges) await notePaidStateChanges(records);
   await writeJsonAtomic(FILE, records);
 }
-const withStoreLock = (fn) => (...args) => serialize(FILE, () => fn(...args));
+
+// Paid-state changes, observed at the store (Financials Fix A, 2026-09-28).
+//
+// An invoice becoming paid, stopping being paid, or being voided means
+// something beyond the invoice: a paid deposit counts toward the job and
+// makes the held balance invoice; a reversed one stops counting. That used
+// to be told by two routes (the manual "Mark paid" and the Stripe
+// finalizer) and missed by every other way money is recorded or reversed
+// — "Record payment", a corrected or reversed payment, Klarna — while the
+// Stripe path told it on a part payment too.
+//
+// So the store itself notices: every locked write compares each record's
+// status with what is on disk, and after the lock is released hands each
+// change to deposits.onInvoiceStatusChange — the one place that decides
+// what it means. After the lock, because that hook writes invoices too.
+let pendingPaidStateChanges = null;
+
+async function notePaidStateChanges(records) {
+  let onDisk = [];
+  try { onDisk = parseJsonArrayStore(await fs.readFile(FILE, "utf8"), FILE); } catch (_) { return; }
+  const before = new Map(onDisk.map((r) => [r?.id, r]));
+  for (const rec of records) {
+    const prev = before.get(rec?.id) || null;
+    const was = prev ? prev.status : null;
+    const now = rec?.status;
+    if (was === now) continue;
+    if (now === "paid" || was === "paid" || now === "void") {
+      pendingPaidStateChanges.push({ before: prev ? hydrate(prev) : null, after: hydrate(rec) });
+    }
+  }
+}
+
+async function reportPaidStateChanges(changes) {
+  let deposits;
+  try { deposits = require("./deposits"); } catch (err) {
+    console.warn(`[invoices] deposit lifecycle unavailable: ${err.message}`);
+    return;
+  }
+  for (const change of changes) {
+    try {
+      await deposits.onInvoiceStatusChange(change.before, change.after);
+    } catch (err) {
+      // Best-effort, as the route-level hooks were: the invoice write stands.
+      console.warn(`[invoices] deposit lifecycle failed for ${change.after?.id}: ${err.message}`);
+    }
+  }
+}
+
+const withStoreLock = (fn) => async (...args) => {
+  let changes = [];
+  try {
+    return await serialize(FILE, async () => {
+      pendingPaidStateChanges = [];
+      try { return await fn(...args); } finally {
+        changes = pendingPaidStateChanges || [];
+        pendingPaidStateChanges = null;
+      }
+    });
+  } finally {
+    if (changes.length) await reportPaidStateChanges(changes);
+  }
+};
 
 // Append one entry to the tombstone log, atomically. Read-modify-write
 // under the same flat-file model as the rest of the module; the log is
@@ -1862,7 +1938,7 @@ async function updatePayment(id, paymentId, patch = {}, { by = "admin", refuseWh
   const next = { ...current, payments: nextPayments };
   next.amountPaid = amountPaidOf(next);
   next.balanceDue = balanceDueOf(next);
-  next.status = statusForPayments(next, current.status);
+  next.status = statusAfterLedgerChange(next, current);
   if (next.status !== "paid") next.paidAt = null;
   next.updatedAt = new Date().toISOString();
   next.history = [...(current.history || []), {
@@ -1891,7 +1967,7 @@ async function removePayment(id, paymentId, { by = "admin", reason = "" } = {}) 
   const next = { ...current, payments: list.filter((p) => p.id !== paymentId) };
   next.amountPaid = amountPaidOf(next);
   next.balanceDue = balanceDueOf(next);
-  next.status = statusForPayments(next, current.status);
+  next.status = statusAfterLedgerChange(next, current);
   // Reversing the payment that settled the invoice un-settles it.
   if (next.status !== "paid") next.paidAt = null;
   next.updatedAt = new Date().toISOString();
@@ -2155,6 +2231,7 @@ module.exports = {
   // re-derive is the rule that decides whether a customer who paid a
   // deposit on site sees "partially paid" or a stale "sent".
   statusForPayments,
+  statusAfterLedgerChange,
   HST_RATE,
   INVOICE_DISCLAIMERS,
   PAYMENT_ATTEMPT_OUTCOMES,

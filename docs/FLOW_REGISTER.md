@@ -2,6 +2,72 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-28 (Financials Fix A: a deposit counts when its invoice is PAID, however it was paid, and stops counting when that payment is reversed; FLOW-23 (PASS) touched — re-verified by its suites, awaiting a walked acceptance):**
+Found mapping the Financials tab. The deposit lifecycle (`quote.deposit.stage`, the held balance
+invoice) was advanced by explicit `deposits.onInvoicePaid()` calls in two routes only: the manual
+"Mark paid" PATCH and the Stripe finalizer.
+- **"Record payment" never counted a deposit.** Cash, e-transfer and cheque (`POST /payments`), a
+  corrected payment, and a Klarna capture never told it. So the deposit invoice read Paid while the
+  job read "awaiting deposit", no balance invoice was made, and completion was blocked with
+  *"Deposit … hasn't been paid"*.
+- **The Stripe path counted a PART payment** as the whole deposit: it called the hook whenever
+  money was applied.
+- **Nothing un-counted a deposit.** A reversed payment (#348: "refunded in Stripe", a bounced
+  e-transfer) left the deposit counted, and the held balance invoice still credited it.
+- **Found testing against #348's reversal rules:** reversing the ONLY payment on an emailed
+  invoice left it **Paid with $0 received**. `statusForPayments` keeps a "paid" that has nothing
+  on the ledger, to protect a manual "Mark paid". So the pay link refused the customer's next
+  payment. #348's own test used never-sent invoices, which take the draft branch and were right.
+
+**The rule, once:**
+- **The invoice store reports every change of an invoice to or from "paid", and to "void",** from
+  every writer. Each locked write compares status with what is on disk, then hands each change,
+  after the lock is released, to `deposits.onInvoiceStatusChange`. It is the one place that
+  decides what the change means. No route calls the deposit hooks itself any more (the PATCH,
+  void and Stripe calls are gone).
+- **Paid means PAID:** a `partially_paid` invoice never reaches `onInvoicePaid`.
+- **`onInvoiceUnpaid` (new) is the reverse:**
+  - A deposit before completion stops counting (`awaiting_deposit`), and its unsent held balance
+    invoice is withdrawn (voided, unlinked), exactly as a voided deposit's is. Paying again makes a
+    fresh one.
+  - A reversal after the balance invoice was sent does not rewrite what the customer has. Both
+    the balance invoice and the quote say the deposit it credits was reversed, naming the invoice
+    to correct.
+  - A balance invoice's reversal re-opens `closed` → `awaiting_balance_payment`.
+- **`invoices.statusAfterLedgerChange` (new):** when a payment is reversed or corrected, the money
+  decides the status. A "paid" the payments no longer cover falls back to `sent`, or `draft` if it
+  was never sent. It is used by `removePayment` and `updatePayment`.
+
+**The workflow, walked:**
+- **Customer:** sees nothing new. The held balance invoice was never sent to them. A refunded
+  customer's pay link works again, for what is owed.
+- **Patrick:** receives nothing new; no email or alert was added.
+- **Completion:** the `deposit_unpaid` blocker now tells the truth both ways.
+- **Linked records:** the held balance invoice (withdrawn or flagged as above); the portal's
+  "deposit paid" stage already reads the invoice status.
+- **Audit:** every transition writes a `deposit_lifecycle` note on the quote. A withdrawn balance
+  invoice keeps its void reason. A flagged one gets a `deposit_reversed` history line.
+- **Deliberately untouched:** deleting a whole invoice (`remove`, which refuses paid ones), QuickBooks
+  mirroring, and the T&M rollup's deposit credit at completion.
+
+**Test:** `scripts/test-deposit-payment-lifecycle.mjs` (36 checks, in `build:check`; **the old code
+fails 19**). It covers:
+- a recorded part payment, then the rest;
+- a reversal, then paying again;
+- a payment corrected down and back up;
+- a card paid, refunded and reversed, the refunded payment redelivered (S6), then a new card;
+- a card that is only part of the deposit;
+- "Mark paid" and its undo;
+- a T&M deposit;
+- a reversal after the balance invoice was sent;
+- a balance invoice paid and reversed.
+
+**Re-verification of FLOW-23 (PASS):**
+- **Handoff §6 invariants are unchanged:** no retry, no card data, method lists unchanged,
+  `balanceDue` still charged, webhook still acks first, ledger still append-only. The finalizer
+  only lost its own best-effort deposit call; the store makes it.
+- **Suites:** listed in the PR.
+- **Awaiting a walked acceptance:** the next real deposit payment.
 **2026-09-27 (One contract value everywhere: projects list and Dashboard; stacked on the Change Orders tab; no PASS flow touched):**
 Patrick: *"Otherwise the workspace will show the correct signed contract while the list and Dashboard
 show old snapshot values, and the Dashboard total will still be browser arithmetic."*

@@ -234,9 +234,11 @@ async function createBalanceInvoice(q, depositInv, { depositPaid = true, project
   });
 }
 
-// Paid hook. Call after ANY invoice flips to paid; no-ops unless the
-// invoice is a deposit invoice on a deposit-enabled quote. Creates the
-// held balance invoice (fixed-price) and moves the stage forward.
+// Paid hook — reached through onInvoiceStatusChange when ANY invoice
+// becomes paid (fully: a part payment is "partially_paid" and never gets
+// here); no-ops unless the invoice is a deposit invoice on a
+// deposit-enabled quote. Creates the held balance invoice (fixed-price)
+// and moves the stage forward.
 async function onInvoicePaid(invoice) {
   const inv = typeof invoice === "string" ? await invoices.get(invoice) : invoice;
   if (!inv || inv.invoiceRole === "balance") {
@@ -283,7 +285,8 @@ async function onInvoicePaid(invoice) {
   return { ok: true, balanceInvoice: balanceInv };
 }
 
-// Void hook. Call after ANY invoice is voided; no-ops unless it's the
+// Void hook — reached through onInvoiceStatusChange when ANY invoice is
+// voided; no-ops unless it's the
 // quote's live deposit invoice. Reverts the stage to awaiting_deposit
 // and voids + unlinks a still-held balance invoice (§6: "deposit invoice
 // voided → revert status and remove any held balance invoice").
@@ -306,6 +309,83 @@ async function onInvoiceVoided(invoice) {
     balanceInvoiceId: null
   }, { note: `Deposit invoice ${inv.id} voided — reverted to awaiting deposit; held balance invoice removed` });
   return { ok: true };
+}
+
+// Unpaid hook (Financials Fix A, 2026-09-28). An invoice that WAS paid
+// and no longer is — its payment reversed (#348: "refunded in Stripe", a
+// bounced e-transfer), corrected down, or un-marked. The reverse of
+// onInvoicePaid:
+//
+//   deposit invoice, before completion → the deposit stops counting
+//     (stage back to awaiting_deposit) and the held balance invoice that
+//     credits it is withdrawn, exactly as a voided deposit's is. Paying
+//     again makes a fresh one, dated from the new payment.
+//   deposit invoice, balance invoice already sent (past completion) → the
+//     sent invoice is NOT rewritten behind the customer's back: the stage
+//     stays, and the balance invoice and the quote both say the deposit it
+//     credits was reversed, naming the invoice the office must correct.
+//   balance invoice → the lifecycle re-opens (closed → awaiting payment).
+async function onInvoiceUnpaid(invoice) {
+  const inv = typeof invoice === "string" ? await invoices.get(invoice) : invoice;
+  if (!inv || !inv.quoteId || (inv.invoiceRole !== "deposit" && inv.invoiceRole !== "balance")) {
+    return { ok: true, skipped: "not_deposit" };
+  }
+  const q = await quotes.get(inv.quoteId);
+  if (!q?.deposit?.enabled) return { ok: true, skipped: "quote_missing" };
+
+  if (inv.invoiceRole === "balance") {
+    if (q.deposit.balanceInvoiceId !== inv.id || q.deposit.stage !== "closed") return { ok: true, skipped: "not_closed" };
+    await quotes.updateDepositLifecycle(q.id, { stage: "awaiting_balance_payment" }, {
+      note: `Balance invoice ${inv.id} is no longer paid (payment reversed or corrected) — balance owing again`
+    });
+    return { ok: true, reopened: true };
+  }
+
+  if (q.deposit.depositInvoiceId !== inv.id) return { ok: true, skipped: "stale_deposit_invoice" };
+  const bal = q.deposit.balanceInvoiceId ? await invoices.get(q.deposit.balanceInvoiceId) : null;
+
+  if (bal && bal.status !== "draft" && bal.status !== "void") {
+    // Already sent to the customer: say so, change nothing they have seen.
+    const note = `The deposit this invoice credits (invoice ${inv.id}) is no longer paid — its payment was reversed. The deposit credit here is not backed by a payment; the office must correct this invoice.`;
+    try { await invoices.appendHistory(bal.id, { action: "deposit_reversed", by: "system", note }); } catch (err) {
+      console.warn("[deposits] balance note failed:", err?.message);
+    }
+    await quotes.updateDepositLifecycle(q.id, {}, {
+      note: `Deposit invoice ${inv.id} payment reversed after balance invoice ${bal.id} was sent — ${bal.id} still credits the deposit; correct it`
+    });
+    return { ok: true, flagged: bal.id };
+  }
+
+  if (bal && bal.status === "draft") {
+    try {
+      await invoices.voidInvoice(bal.id, {
+        reason: `The deposit payment on invoice ${inv.id} was reversed — this held balance invoice is withdrawn. A new one is made when the deposit is paid again.`,
+        by: "system"
+      });
+    } catch (err) { console.warn("[deposits] balance withdraw failed:", err?.message); }
+  }
+  const counted = q.deposit.stage === "deposit_paid" || Boolean(bal);
+  if (!counted && q.deposit.stage === "awaiting_deposit") return { ok: true, skipped: "not_counted" };
+  await quotes.updateDepositLifecycle(q.id, {
+    stage: "awaiting_deposit",
+    balanceInvoiceId: null
+  }, { note: `Deposit invoice ${inv.id} is no longer paid (payment reversed or corrected) — the deposit no longer counts${bal ? `; held balance invoice ${bal.id} withdrawn` : ""}` });
+  return { ok: true, reverted: true };
+}
+
+// THE rule for what an invoice's paid state means to the deposit lifecycle
+// (Financials Fix A). The invoice store calls this for every change of an
+// invoice to or from "paid", and to "void" — whatever wrote it: a recorded,
+// corrected or reversed payment, a card, Klarna, "Mark paid". Nothing else
+// calls the hooks below. Paid means PAID: a part payment never counts.
+async function onInvoiceStatusChange(before, after) {
+  if (!after) return { ok: true, skipped: "no_record" };
+  const was = before ? before.status : null;
+  const now = after.status;
+  if (now === "void" && was !== "void") return onInvoiceVoided(after);
+  if (now === "paid" && was !== "paid") return onInvoicePaid(after);
+  if (was === "paid" && now !== "paid") return onInvoiceUnpaid(after);
+  return { ok: true, skipped: "no_paid_state_change" };
 }
 
 // Completion helper for the project-final cascade. Returns the deposit
@@ -340,8 +420,10 @@ module.exports = {
   preTaxForTotal,
   sendInvoiceNow,
   onQuoteAccepted,
+  onInvoiceStatusChange,
   onInvoicePaid,
   onInvoiceVoided,
+  onInvoiceUnpaid,
   createBalanceInvoice,
   depositContextForQuote,
   autoSendBalanceEnabled
