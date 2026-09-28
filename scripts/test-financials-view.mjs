@@ -13,15 +13,17 @@
 //     every live invoice's ledger, owed = what sent live invoices still
 //     owe. A held (unsent) balance invoice is not owed; a void one is not
 //     anything.
-//   - The screen shows those figures, desktop and phone, adds nothing up
-//     itself, and offers no action.
+//   - The screen adds nothing up itself and offers no action (source
+//     checks, always), and shows those figures desktop and phone (a real
+//     browser, with --screen).
 //
-// Run: node scripts/test-financials-view.mjs   (also in build:check)
-// Screenshots: FIN_SHOTS=<dir> node scripts/test-financials-view.mjs
+// Run: node scripts/test-financials-view.mjs   (in build:check — the CI
+//      runner has no browser, like the other *-tab screen tests)
+// Screen: npm run test:financials-tab-screen   (= … --screen; needs Chromium)
+// Screenshots: FIN_SHOTS=<dir> npm run test:financials-tab-screen
 
 import fs from "node:fs";
 import path from "node:path";
-import { chromium } from "playwright";
 import { bootServer, j } from "./e2e/lib/journey.mjs";
 
 let passed = 0, failed = 0;
@@ -32,6 +34,7 @@ function ok(cond, label) {
 const cents = (n) => Math.round((Number(n) || 0) * 100);
 const money = (n) => "$" + (Number(n) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const SHOTS = process.env.FIN_SHOTS || "";
+const SCREEN = process.argv.includes("--screen");
 function chromiumLaunchOpts() {
   if (process.env.PW_CHROMIUM) return { executablePath: process.env.PW_CHROMIUM };
   return fs.existsSync("/opt/pw-browsers/chromium") ? { executablePath: "/opt/pw-browsers/chromium" } : {};
@@ -177,7 +180,9 @@ try {
     ok((m.invoices || []).length === 0, "T1: no invoices yet");
   }
 
-  // ---- The screen, desktop and phone -------------------------------------------------
+  // ---- The screen, desktop and phone (--screen) ---------------------------------------
+  if (SCREEN) {
+  const { chromium } = await import("playwright");
   await users.create({ email: "fin-screen@pjl.test", name: "Odessa Brightwater", role: "admin", password: "fin-screen-12345" });
   const login = await fetch(`${srv.BASE}/api/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "fin-screen@pjl.test", password: "fin-screen-12345" }) });
   const cookieValue = ((login.headers.getSetCookie?.() || []).map((c) => c.split(";")[0]).find((c) => c.startsWith("pjl_crm_session=")) || "").slice("pjl_crm_session=".length);
@@ -216,10 +221,11 @@ try {
     }
     await ctx.close();
   }
+  }
 } finally {
   try { await browser?.close(); } catch {}
   await srv.stop();
 }
 
-console.log(`\nfinancials view: ${passed} passed, ${failed} failed`);
+console.log(`\nfinancials view${SCREEN ? " + screen" : ""}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

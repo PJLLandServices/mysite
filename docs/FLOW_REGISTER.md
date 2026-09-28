@@ -25,14 +25,17 @@ held balance invoice "outstanding" and offered "Collect payment" on an invoice n
 
 **Read-only:** payments, sending, revising and voiding stay on the classic invoice pages.
 
-**Test:** `scripts/test-financials-view.mjs` (44 checks, in `build:check`). It covers:
+**Test:** `scripts/test-financials-view.mjs` (29 checks, in `build:check`). It covers:
 - the route's totals equal the invoices' own sums, worked out independently;
 - part-paid, marked-paid and held deposits;
 - a void invoice;
 - a T&M job with no rate;
 - the header agreeing with the tab;
-- desktop and phone renders: the server's figures, no actions, no sideways scroll;
 - the screen does no money arithmetic.
+
+`npm run test:financials-tab-screen` adds 15 browser checks: desktop and phone renders showing the
+server's figures, the header agreeing, no actions and no sideways scroll. Like the other `*-tab`
+screen tests it is outside `build:check`, because the CI runner has no browser.
 **2026-09-28 (Financials Fix B: one rule for a job's invoices, a void invoice is never owed, a T&M job is billed at its preview's prices; FLOW-01/02 (customer portal, PASS) touched — re-verified by its suites, awaiting a walked acceptance):**
 Found mapping the Financials tab.
 1. **Three rules for "this job's invoices".**
