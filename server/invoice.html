@@ -188,7 +188,10 @@
               <option value="sent">Sent</option>
               <!-- Partially paid is DERIVED from the payment ledger, never
                    chosen by hand — disabled so the select can display it
-                   without offering it as a manual transition. -->
+                   without offering it as a manual transition. The one
+                   exception: an invoice marked Paid with its payments short
+                   (payment reconciliation) — invoice.js enables it there,
+                   and the server checks the ledger bears it out. -->
               <option value="partially_paid" disabled>Partially paid</option>
               <option value="paid">Paid</option>
               <option value="void">Void</option>

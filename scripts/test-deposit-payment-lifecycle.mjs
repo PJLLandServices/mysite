@@ -221,19 +221,23 @@ try {
       `C2: with the cash reversed, the card alone is PART of the deposit — it does not count (${now.status} ${d.stage} ${live(balances(c)).length})`);
   }
 
-  // ---- D the manual "Mark paid" and its undo ----------------------------------------
+  // ---- D "Mark paid" never stands in for a payment (payment reconciliation) --------
   const dd = await depositJob("D");
   {
     const m = await srv.api("PATCH", `/api/invoices/${dd.dep.id}`, { status: "paid" });
     let d = await stage(dd);
-    ok(m.status === 200 && d.stage === "deposit_paid" && live(balances(dd)).length === 1, `D1: "Mark paid" still counts the deposit, one balance invoice (${d.stage}, ${live(balances(dd)).length})`);
-    await srv.api("PATCH", `/api/invoices/${dd.dep.id}`, { status: "sent" });
+    ok(m.status === 409 && m.body.code === "record_payment_required" && /Record payment/.test(m.body.errors?.[0] || ""),
+      `D1: "Mark paid" with nothing recorded is refused and points to Record payment (${m.status} ${j(m.body)})`);
+    ok((await inv(dd.dep.id)).status === "sent" && d.stage === "awaiting_deposit" && live(balances(dd)).length === 0,
+      `D1: …the invoice stays Sent, the deposit uncounted, no balance invoice (${d.stage}, ${live(balances(dd)).length})`);
+    // Recording the deposit makes it Paid by itself — the ledger decides.
+    const p = await pay(dd.dep.id, dd.dep.total, "cheque");
     d = await stage(dd);
-    ok(d.stage === "awaiting_deposit" && live(balances(dd)).length === 0, `D2: un-marking it un-counts the deposit and withdraws the balance invoice (${d.stage}, ${live(balances(dd)).length})`);
-    await srv.api("PATCH", `/api/invoices/${dd.dep.id}`, { status: "paid" });
-    await srv.api("PATCH", `/api/invoices/${dd.dep.id}`, { status: "paid", notes: "marked paid twice" });
+    ok(p.status === 201 && p.body.invoice.status === "paid" && d.stage === "deposit_paid" && live(balances(dd)).length === 1,
+      `D2: recording it pays the invoice and counts the deposit, one balance invoice (${p.body.invoice?.status}, ${d.stage}, ${live(balances(dd)).length})`);
+    const again = await srv.api("PATCH", `/api/invoices/${dd.dep.id}`, { status: "paid", notes: "marked paid twice" });
     d = await stage(dd);
-    ok(d.stage === "deposit_paid" && live(balances(dd)).length === 1, `D3: marked paid again → one balance invoice, never two (${live(balances(dd)).length})`);
+    ok(again.status === 200 && d.stage === "deposit_paid" && live(balances(dd)).length === 1, `D3: "Paid" on a covered invoice is harmless — one balance invoice, never two (${again.status}, ${live(balances(dd)).length})`);
   }
 
   // ---- E time & materials: no balance invoice until completion ----------------------

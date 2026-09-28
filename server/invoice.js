@@ -160,6 +160,31 @@ function render(inv) {
 
   const statusMeta = document.getElementById("invoiceStatusMeta");
   statusMeta.textContent = inv.quickbooksInvoiceId ? `QB: ${inv.quickbooksInvoiceId}` : "Not synced to QuickBooks";
+  // Payment reconciliation (2026-09-28): marked Paid, but the recorded
+  // payments fall short. The server decides (inv.paymentReconciliation);
+  // this page says so and offers the two ways out: record the missing
+  // payment, or correct the status to Partially paid (the only time that
+  // option can be chosen by hand).
+  const recon = inv.paymentReconciliation || {};
+  const partialOpt = document.querySelector('#invoiceStatus option[value="partially_paid"]');
+  if (partialOpt) partialOpt.disabled = !recon.required;
+  let reconEl = document.getElementById("invoiceReconciliation");
+  if (!reconEl) {
+    reconEl = document.createElement("p");
+    reconEl.id = "invoiceReconciliation";
+    reconEl.className = "invoice-action-meta";
+    reconEl.setAttribute("role", "alert");
+    reconEl.style.cssText = "color:#b71c1c;font-weight:600;margin-top:6px;";
+    statusMeta.insertAdjacentElement("afterend", reconEl);
+  }
+  const money = (n) => "$" + (Number(n) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (recon.required) {
+    reconEl.hidden = false;
+    reconEl.textContent = `⚠ Payment reconciliation required · ${money(recon.unresolved)} unresolved. Marked Paid, but only ${money(recon.recorded)} of ${money(recon.total)} is recorded — ${money(recon.unresolved)} not recorded. Record the missing payment below, or set the status to Partially paid.`;
+  } else {
+    reconEl.hidden = true;
+    reconEl.textContent = "";
+  }
 
   // Bill-to vs service address (billing-party brief). The billTo
   // snapshot is set at draft time; when it names a different payer or

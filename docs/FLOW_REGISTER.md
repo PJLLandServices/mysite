@@ -2,6 +2,91 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-28 (Payment reconciliation: the ledger is the source of truth for money received; "Mark paid" never stands in for a payment; FLOW-23 (PASS) touched — re-verified by its suites, awaiting a walked acceptance):**
+Patrick: *"A manually marked-Paid invoice with less money recorded must not display 'None owed.'"*
+The example is a $1,260 invoice with $1,000 recorded and marked Paid: **$1,000 received, $260
+unresolved, payment reconciliation required**, and the customer's amount owed not determined until
+it is reconciled.
+
+**The rules, once (`server/lib/invoices.js`):**
+1. **The payment ledger is the source of truth for money received.** It is the net valid payments
+   (`amountPaidOf`): a reversed or refunded payment is off it, and a processor excess never went on
+   it.
+2. **A status never proves money.**
+   - `ledgerCovers(inv)` is true when the recorded payments cover the total.
+   - `isSettled(inv)` is paid AND covered.
+   - `reconciliationFor(inv)` returns `{required, total, recorded, unresolved}`. Required means
+     marked Paid with the ledger short.
+   - It is derived on every read as `invoice.paymentReconciliation`.
+3. **"Mark paid" never stands in for a payment.** `update()` refuses a change to `paid` the ledger
+   doesn't cover, with 409 `record_payment_required`. The error names what is recorded, the total
+   and the outstanding amount, and directs the office to Record payment (method, date, reference,
+   amount); the invoice becomes Paid when that payment is recorded. A change to `partially_paid`
+   is refused unless money is recorded that doesn't cover it (`status_mismatch`).
+4. **An existing invoice marked Paid with payments short is in reconciliation.**
+   - The gap is **neither received nor collectible**.
+   - `payBlockReason` returns `reconciliation_required`: no pay page charge, no Tap to Pay
+     (`openForOnSitePayment`), and no collection reminder or invoice text, which already skip
+     Paid.
+   - The claim, and the gap, is **preserved through any ledger change**
+     (`statusAfterMoneyChange`): a part payment toward the gap or a reversal that widens it keeps
+     it Paid-in-reconciliation.
+   - It ends only when the ledger covers it (the missing payment recorded, by hand or by a card
+     that lands) or the status is corrected (to Partially paid, or back to Sent, where the ledger
+     then decides).
+5. **Deposits.**
+   - The deposit lifecycle follows **settled**, not status (`deposits.onInvoiceStatusChange`, and
+     the store's change detection).
+   - So a deposit in reconciliation is **not satisfied** and makes no balance invoice.
+   - Completion's new `payment_reconciliation_required` blocker (which replaces "deposit unpaid"
+     for it) is in `HARD_BLOCKERS`: **no admin override** can complete the job, because that would
+     release the balance invoice.
+   - The cascade's and the portal's "deposit paid" read `isSettled`.
+6. **Audit.** Leaving reconciliation writes `invoice.reconciliations[]` with who, when, and how
+   (`recorded_payment`, `status_corrected` or `voided`), plus the unresolved amount, what was
+   recorded, the total and the payment id. A `payment_reconciled` history line goes with it, and
+   any change to the gap is logged (`payment_reconciliation_changed`). The PATCH route now passes
+   the signed-in person as `by`.
+7. **Resolution stays on the classic invoice page.** When one is required, the page shows *"⚠
+   Payment reconciliation required · $260.00 unresolved …"*, and **Partially paid becomes
+   selectable there only then**.
+
+**Test:** `scripts/test-payment-reconciliation.mjs` (46 checks, in `build:check`; **the code before
+this change fails 33**). It covers:
+- the exact $1,260 / $1,000 / $260 case;
+- full and partial payment;
+- Mark paid refused, with its message;
+- a part payment toward the gap and a reversal, both preserving it;
+- resolution by recorded payment and by status correction, both audited;
+- Partially paid refused where the ledger doesn't bear it out;
+- void (refused while Paid; resolved, then voided);
+- no reminder, no pay-page or Tap to Pay charge, and no Stripe intent started;
+- a real card that lands for the gap reconciles it, then is refunded and reversed; the
+  redelivery adds nothing (S6);
+- a deposit in reconciliation: no balance invoice, completion blocked even with override, then
+  satisfied once the missing payment is recorded.
+
+`test-deposit-payment-lifecycle` case D now proves Mark paid is refused and a recorded payment pays
+the invoice.
+
+**Re-verification of FLOW-23 (PASS):** the handoff §6 invariants are unchanged. These suites pass:
+
+| Suite | Checks |
+|---|---|
+| `test-payment-reversal` (#348) | 47 |
+| `test-qbo-payment-amount` (#349) | 39 |
+| `test-payment-exceptions` | 66 |
+| `test-stripe` | 74 |
+| `test-taptopay-server` | 33 |
+| `test-taptopay-second-tap` | 38 |
+| `test-klarna-financing` | 269 |
+| `test-invoice-balance-surfaces` | 47 |
+| `test-resign-reprice` | 126 |
+| `test-store-concurrency` | 29 |
+| `test-billing-one-path` | 32 |
+| `test-no-charge-recovery` | 24 |
+| `test-price-confirm` | 53 |
+
 **2026-09-28 (Financials Fix A: a deposit counts when its invoice is PAID, however it was paid, and stops counting when that payment is reversed; FLOW-23 (PASS) touched — re-verified by its suites, awaiting a walked acceptance):**
 Found mapping the Financials tab. The deposit lifecycle (`quote.deposit.stage`, the held balance
 invoice) was advanced by explicit `deposits.onInvoicePaid()` calls in two routes only: the manual

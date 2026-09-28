@@ -4431,7 +4431,9 @@ async function customerPortalSections(lead) {
         //   scheduled — build underway or work orders attached
         //   complete  — project status flipped to complete
         //   invoiced  — a non-deposit invoice exists post-completion
-        const depositPaid = projInvoices.some((i) => i.invoiceRole === "deposit" && i.status === "paid");
+        // Paid by the ledger, not by a status (payment reconciliation):
+        // a deposit marked Paid with its payments short has not been paid.
+        const depositPaid = projInvoices.some((i) => i.invoiceRole === "deposit" && invoices.isSettled(i));
         const finalInvoiced = projInvoices.some((i) => i.invoiceRole !== "deposit");
         const stage =
           p.status === "complete" ? (finalInvoiced ? "invoiced" : "complete")
@@ -11807,6 +11809,13 @@ async function handleApi(req, res, pathname) {
       const body = await parseRequestBody(req);
       const inv = await invoices.getByPaymentToken(id, body?.t || "");
       if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found or link expired."] });
+      // Marked Paid with its payments short: nothing is collectible until
+      // the office reconciles it (payment reconciliation, 2026-09-28).
+      if (invoices.payBlockReason(inv) === "reconciliation_required") {
+        return sendJson(res, 409, { ok: false, code: "reconciliation_required", errors: [
+          `Our office is reviewing the payments on this invoice — nothing can be charged online right now. Please call us at ${await paymentSupportPhone()} with any questions.`
+        ] });
+      }
       if (inv.status === "paid") {
         return sendJson(res, 409, { ok: false, errors: ["This invoice has already been paid."] });
       }
@@ -11824,6 +11833,8 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 409, { ok: false, code: invoices.payBlockReason(inv), errors: [
           invoices.payBlockReason(inv) === "price_unconfirmed"
             ? "PJL is still confirming this invoice's price — nothing can be charged yet."
+            : invoices.payBlockReason(inv) === "reconciliation_required"
+              ? `Our office is reviewing the payments on this invoice — nothing can be charged online right now. Please call us at ${await paymentSupportPhone()} with any questions.`
             : ["awaiting_signature", "revision_required"].includes(invoices.payBlockReason(inv))
               ? "This invoice is being updated — nothing can be charged yet."
               : `This invoice is "${inv.status}" and isn't ready for payment.`
@@ -16080,7 +16091,10 @@ async function handleApi(req, res, pathname) {
         const held = invoices.paymentHoldFor(before);
         if (held) return sendJson(res, held.status, { ok: false, code: held.code, errors: held.errors });
       }
-      const updated = await invoices.update(id, payload);
+      // Who changed it — the audit for a status change, and for resolving a
+      // payment reconciliation (never the body's say-so).
+      const patchSession = await requireUser(req);
+      const updated = await invoices.update(id, { ...payload, by: await actorLabel(req, patchSession?.uid || "admin") });
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
       if (before && before.status !== "void" && updated.status === "void") await settleNoChargeOnVoid(before);
 
@@ -16107,6 +16121,9 @@ async function handleApi(req, res, pathname) {
 
       return sendJson(res, 200, { ok: true, invoice: updated, warning: qbWarning });
     } catch (err) {
+      // A refused "Mark paid" (record_payment_required) or a Partially paid
+      // the ledger doesn't bear out (status_mismatch) says why, with its code.
+      if (err && err.code && err.status) return sendJson(res, err.status, { ok: false, code: err.code, errors: [err.message] });
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update invoice."] });
     }
   }

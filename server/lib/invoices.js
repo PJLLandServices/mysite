@@ -172,6 +172,85 @@ function statusForPayments(inv, currentStatus) {
 // Without this, reversing the only payment on an emailed invoice (a
 // refunded card, #348) left it Paid with $0 received, and its pay link
 // refused the customer's next payment.
+// ---- Payment reconciliation (Patrick, 2026-09-28) ----------------------
+//
+// The payment LEDGER is the source of truth for money received: the net
+// valid payments on it (amountPaidOf — a reversed payment is off it, a
+// processor excess never went on it). An invoice's status is a claim, not
+// proof: "paid" only proves money when the ledger covers the total.
+//
+// An invoice marked Paid whose ledger falls short (a manual "Mark paid"
+// from before this rule, which refused it going forward) is in
+// RECONCILIATION: the gap is unresolved — neither received nor collectible
+// — and stays so until the office records the missing payment or corrects
+// the status (to Partially paid). Every reader asks these, never the status:
+//   ledgerCovers(inv)      — the recorded payments cover the total
+//   isSettled(inv)         — paid AND covered: money actually in
+//   reconciliationFor(inv) — { required, total, recorded, unresolved }
+const fmtMoneyCa = (n) => "$" + (Number(n) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function ledgerCovers(inv) {
+  const totalC = Math.round((Number(inv?.total) || 0) * 100);
+  return Math.round(amountPaidOf(inv) * 100) >= totalC - 1;
+}
+function isSettled(inv) {
+  return Boolean(inv) && inv.status === "paid" && ledgerCovers(inv);
+}
+function reconciliationFor(inv) {
+  const total = round2(Number(inv?.total) || 0);
+  const recorded = amountPaidOf(inv);
+  const required = Boolean(inv) && inv.status === "paid" && !ledgerCovers(inv);
+  return { required, total, recorded, unresolved: required ? round2(Math.max(0, total - recorded)) : 0 };
+}
+
+// The status after the money on an invoice changes. An invoice in
+// reconciliation KEEPS its "paid" claim through any ledger change — a
+// partial payment toward the gap, or a reversal that widens it — so the
+// discrepancy is preserved, not silently turned into an ordinary balance
+// the system would then collect. Only a ledger that covers it (resolved:
+// the missing payment was recorded) or an explicit status correction ends
+// it. Everything else follows the ledger as before.
+function statusAfterMoneyChange(next, current, { ledgerEdit = false } = {}) {
+  if (reconciliationFor(current).required) return "paid";
+  return ledgerEdit ? statusAfterLedgerChange(next, current) : statusForPayments(next, current.status);
+}
+
+// The audit when an invoice leaves reconciliation: who, when, how (the
+// missing payment recorded, the status corrected, or voided), and what was
+// unresolved. Kept on the invoice (reconciliations[]) and in its history.
+function noteReconciliation(current, next, { by = "admin", via = "", paymentId = null } = {}) {
+  const before = reconciliationFor(current);
+  if (!before.required) return;
+  const after = reconciliationFor(next);
+  const at = next.updatedAt || new Date().toISOString();
+  if (after.required) {
+    if (after.unresolved !== before.unresolved) {
+      next.history = [...(next.history || []), {
+        ts: at, action: "payment_reconciliation_changed", by,
+        note: `Still marked Paid with payments short: unresolved ${fmtMoneyCa(before.unresolved)} → ${fmtMoneyCa(after.unresolved)}${via ? ` (${via})` : ""}.`
+      }];
+    }
+    return;
+  }
+  const resolution = next.status === "paid" ? "recorded_payment" : next.status === "void" ? "voided" : "status_corrected";
+  const entry = {
+    at, by, resolution,
+    unresolvedBefore: before.unresolved,
+    recordedBefore: before.recorded,
+    total: before.total,
+    statusAfter: next.status,
+    paymentId: paymentId || null,
+    via: via || null
+  };
+  next.reconciliations = [...(current.reconciliations || []), entry];
+  const how = resolution === "recorded_payment"
+    ? `the missing payment was recorded${paymentId ? ` (${paymentId})` : ""}`
+    : resolution === "voided" ? "the invoice was voided" : `the status was corrected to ${next.status.replace(/_/g, " ")}`;
+  next.history = [...(next.history || []), {
+    ts: at, action: "payment_reconciled", by,
+    note: `Payment reconciliation resolved — ${how}. It was marked Paid with ${fmtMoneyCa(before.recorded)} of ${fmtMoneyCa(before.total)} recorded (${fmtMoneyCa(before.unresolved)} unresolved).`
+  }];
+}
+
 function statusAfterLedgerChange(next, current) {
   const base = current.status === "paid" ? (current.sentAt ? "sent" : "draft") : current.status;
   return statusForPayments(next, base);
@@ -254,12 +333,13 @@ async function notePaidStateChanges(records) {
   const before = new Map(onDisk.map((r) => [r?.id, r]));
   for (const rec of records) {
     const prev = before.get(rec?.id) || null;
-    const was = prev ? prev.status : null;
-    const now = rec?.status;
-    if (was === now) continue;
-    if (now === "paid" || was === "paid" || now === "void") {
-      pendingPaidStateChanges.push({ before: prev ? hydrate(prev) : null, after: hydrate(rec) });
-    }
+    const b = prev ? hydrate(prev) : null;
+    const a = hydrate(rec);
+    // Settled = paid AND covered by the ledger: a status alone never
+    // proves money (payment reconciliation, 2026-09-28).
+    const settledChanged = isSettled(b) !== isSettled(a);
+    const voided = a.status === "void" && (!b || b.status !== "void");
+    if (settledChanged || voided) pendingPaidStateChanges.push({ before: b, after: a });
   }
 }
 
@@ -530,6 +610,9 @@ function hydrate(inv) {
     // for good so the same Stripe payment is never recorded again (S6).
     // Written only by removePayment(); update()'s allowlist excludes it.
     reversedProcessorPayments: Array.isArray(inv?.reversedProcessorPayments) ? inv.reversedProcessorPayments : [],
+    // Each time an invoice left payment reconciliation: who, when, how.
+    // Written only by noteReconciliation(); update()'s allowlist excludes it.
+    reconciliations: Array.isArray(inv?.reconciliations) ? inv.reconciliations : [],
     createdAt: inv?.createdAt || new Date().toISOString(),
     updatedAt: inv?.updatedAt || new Date().toISOString(),
     history: Array.isArray(inv?.history) ? inv.history : []
@@ -537,6 +620,7 @@ function hydrate(inv) {
   // Derived, never stored: the one answer every surface reads.
   out.priceUnconfirmed = isPriceUnconfirmed(out);
   out.needsReconciliation = needsReconciliation(out);
+  out.paymentReconciliation = reconciliationFor(out);
   return out;
 }
 
@@ -963,6 +1047,31 @@ async function update(id, patch) {
     ]);
     next.disclaimers = Array.from(merged);
   }
+  // "Mark paid" never stands in for a payment (Patrick, 2026-09-28): an
+  // invoice becomes Paid only when its recorded payments cover it. The
+  // office records the payment (method, date, reference, amount) instead.
+  if (patch && patch.status === "paid" && current.status !== "paid" && !ledgerCovers(next)) {
+    const recorded = amountPaidOf(next);
+    const err = new Error(
+      `An invoice can only be marked Paid when its recorded payments cover it — ${fmtMoneyCa(recorded)} of ${fmtMoneyCa(next.total)} is recorded. ` +
+      `Use Record payment (method, date, reference and amount) for the ${fmtMoneyCa(round2((Number(next.total) || 0) - recorded))} outstanding; it becomes Paid when that payment is recorded.`
+    );
+    err.code = "record_payment_required";
+    err.status = 409;
+    throw err;
+  }
+  // Partially paid is what the ledger says, not a label: only for money
+  // recorded that does not cover the invoice — the correction for an
+  // invoice marked Paid with its payments short.
+  if (patch && patch.status === "partially_paid" && current.status !== "partially_paid") {
+    const recorded = amountPaidOf(next);
+    if (!(recorded > 0) || ledgerCovers(next)) {
+      const err = new Error(`Partially paid needs recorded payments that don't cover the invoice — ${fmtMoneyCa(recorded)} of ${fmtMoneyCa(next.total)} is recorded.`);
+      err.code = "status_mismatch";
+      err.status = 409;
+      throw err;
+    }
+  }
   if (patch && patch.status === "sent" && !current.sentAt) next.sentAt = new Date().toISOString();
   if (patch && patch.status === "paid" && !current.paidAt) next.paidAt = new Date().toISOString();
   if (patch && patch.status === "void" && !current.voidedAt) next.voidedAt = new Date().toISOString();
@@ -974,9 +1083,10 @@ async function update(id, patch) {
   // balance owing. It should read partially_paid (or paid, if the
   // on-site payment covered the whole thing).
   //
-  // Deliberately scoped to the sent transition: re-deriving on EVERY
-  // update would fight a manual "paid" that an admin set on an invoice
-  // with no payment records, which is a legitimate thing to do.
+  // Scoped to the sent transition. (A manual "paid" the ledger does not
+  // cover is refused above since 2026-09-28; setting "sent" on an invoice
+  // in payment reconciliation is one way to correct it — the ledger then
+  // decides: Partially paid.)
   if (patch && patch.status === "sent") {
     next.status = statusForPayments(next, "sent");
     if (next.status === "paid" && !next.paidAt) next.paidAt = new Date().toISOString();
@@ -986,10 +1096,13 @@ async function update(id, patch) {
     next.history = [...(next.history || []), {
       ts: next.updatedAt, action: `status:${patch.status}`, by: patch.by || "admin", note: patch.note || ""
     }];
+    if (next.status !== "paid") next.paidAt = null;
   }
+  noteReconciliation(current, next, { by: patch?.by || "admin", via: patch?.status ? `status set to ${next.status}` : "" });
   records[idx] = next;
   await writeAll(records);
-  return next;
+  // Hydrated, so the caller sees the derived answers (paymentReconciliation).
+  return hydrate(next);
 }
 
 // Generate (and persist) a paymentToken for the public /pay/invoice/:id?t=
@@ -1012,6 +1125,10 @@ const cryptoMod = require("node:crypto");
 function payBlockReason(inv) {
   if (!inv) return "not_issued";
   if (inv.status === "void") return "void";
+  // Marked Paid with its payments short: the gap is not collectible until
+  // the office reconciles it — taking it online could charge the customer
+  // twice (payment reconciliation, 2026-09-28).
+  if (reconciliationFor(inv).required) return "reconciliation_required";
   if (inv.status === "paid") return "paid";
   if (inv.scopeHold?.since) return scopeHoldCode(inv);
   if (isPriceUnconfirmed(inv)) return "price_unconfirmed";
@@ -1063,6 +1180,10 @@ async function openForOnSitePayment(id, { by = "" } = {}) {
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return { ok: false, status: 404, code: "not_found", errors: ["Invoice not found."] };
   const inv = records[idx];
+  if (reconciliationFor(inv).required) {
+    const r = reconciliationFor(inv);
+    return { ok: false, status: 409, code: "reconciliation_required", errors: [`This invoice is marked Paid, but only ${fmtMoneyCa(r.recorded)} of ${fmtMoneyCa(r.total)} is recorded — ${fmtMoneyCa(r.unresolved)} unresolved. The office reconciles it before anything is charged. Nothing was charged.`] };
+  }
   if (inv.status === "paid") return { ok: false, status: 409, code: "already_paid", errors: ["This invoice is already paid."] };
   if (inv.status === "void") return { ok: false, status: 409, code: "void", errors: ["This invoice has been voided."] };
   // Nothing to pay on a $0 invoice — no link, no card form (fall-closing #8).
@@ -1147,7 +1268,7 @@ async function confirmPrice(id, { amount = null, by = "admin" } = {}) {
   const next = { ...current, lineItems: lines, subtotal: totals.subtotal, hst: totals.hst, total: totals.total };
   next.amountPaid = amountPaidOf(next);
   next.balanceDue = balanceDueOf(next);
-  next.status = statusForPayments(next, current.status);
+  next.status = statusAfterMoneyChange(next, current);
   if (next.status === "paid" && !next.paidAt) next.paidAt = now;
   const pc = current.priceConfirm || { required: true, reason: "custom_size", suggestedAmount: Number(line.unitPrice) || null, basis: "", lineIndex: lineIdx, lineKey: line.key || null };
   next.priceConfirm = { ...pc, required: true, lineIndex: lineIdx, lineKey: line.key || null, confirmedAt: now, confirmedBy: String(by || "admin"), confirmedAmount: unit };
@@ -1607,7 +1728,7 @@ async function revise(id, { lineItems, reason = "", by = "admin" } = {}) {
   next.total = totals.total;
   next.amountPaid = amountPaidOf(next);
   next.balanceDue = balanceDueOf(next);
-  next.status = statusForPayments(next, current.status);
+  next.status = statusAfterMoneyChange(next, current);
   if (next.status === "paid" && !next.paidAt) next.paidAt = now;
   next.updatedAt = now;
   next.history = [...(next.history || []), {
@@ -1890,7 +2011,7 @@ async function addPayment(id, { amount, method, receivedAt, notes, by = "admin",
   const next = { ...current, payments: [...(current.payments || []), payment] };
   next.amountPaid = amountPaidOf(next);
   next.balanceDue = balanceDueOf(next);
-  next.status = statusForPayments(next, current.status);
+  next.status = statusAfterMoneyChange(next, current);
   if (next.status === "paid" && !next.paidAt) next.paidAt = new Date().toISOString();
   next.updatedAt = new Date().toISOString();
   next.history = [...(current.history || []), {
@@ -1899,6 +2020,7 @@ async function addPayment(id, { amount, method, receivedAt, notes, by = "admin",
     by,
     note: `${PAYMENT_METHOD_LABELS[payment.method] || payment.method} $${payment.amount.toFixed(2)} — balance now $${next.balanceDue.toFixed(2)}${payment.notes ? ` · ${payment.notes}` : ""}`
   }];
+  noteReconciliation(current, next, { by, via: "payment recorded", paymentId: payment.id });
   records[idx] = next;
   await writeAll(records);
   return { ok: true, invoice: hydrate(next), payment };
@@ -1938,7 +2060,7 @@ async function updatePayment(id, paymentId, patch = {}, { by = "admin", refuseWh
   const next = { ...current, payments: nextPayments };
   next.amountPaid = amountPaidOf(next);
   next.balanceDue = balanceDueOf(next);
-  next.status = statusAfterLedgerChange(next, current);
+  next.status = statusAfterMoneyChange(next, current, { ledgerEdit: true });
   if (next.status !== "paid") next.paidAt = null;
   next.updatedAt = new Date().toISOString();
   next.history = [...(current.history || []), {
@@ -1947,6 +2069,7 @@ async function updatePayment(id, paymentId, patch = {}, { by = "admin", refuseWh
     by,
     note: `$${before.amount.toFixed(2)} → $${merged.amount.toFixed(2)} (${PAYMENT_METHOD_LABELS[merged.method] || merged.method}) — balance now $${next.balanceDue.toFixed(2)}`
   }];
+  noteReconciliation(current, next, { by, via: "payment corrected", paymentId: merged.id });
   records[idx] = next;
   await writeAll(records);
   return { ok: true, invoice: hydrate(next), payment: merged };
@@ -1967,8 +2090,10 @@ async function removePayment(id, paymentId, { by = "admin", reason = "" } = {}) 
   const next = { ...current, payments: list.filter((p) => p.id !== paymentId) };
   next.amountPaid = amountPaidOf(next);
   next.balanceDue = balanceDueOf(next);
-  next.status = statusAfterLedgerChange(next, current);
-  // Reversing the payment that settled the invoice un-settles it.
+  next.status = statusAfterMoneyChange(next, current, { ledgerEdit: true });
+  // Reversing the payment that settled the invoice un-settles it — unless
+  // it is in payment reconciliation, whose Paid claim (and now wider gap)
+  // stands until the office resolves it.
   if (next.status !== "paid") next.paidAt = null;
   next.updatedAt = new Date().toISOString();
   // A processor payment's line is the record that it was decided. Its ids
@@ -1995,6 +2120,7 @@ async function removePayment(id, paymentId, { by = "admin", reason = "" } = {}) 
     by,
     note: `Reversed ${PAYMENT_METHOD_LABELS[gone.method] || gone.method} $${gone.amount.toFixed(2)}${reason ? ` — ${reason}` : ""} — balance now $${next.balanceDue.toFixed(2)}`
   }];
+  noteReconciliation(current, next, { by, via: "payment reversed" });
   records[idx] = next;
   await writeAll(records);
   return { ok: true, invoice: hydrate(next), removed: gone };
@@ -2107,8 +2233,9 @@ async function recordProcessorPayment(id, {
     next.payments = [...(current.payments || []), payment];
     next.amountPaid = amountPaidOf(next);
     next.balanceDue = balanceDueOf(next);
-    next.status = statusForPayments(next, statusBefore);
+    next.status = statusAfterMoneyChange(next, current);
     if (next.status === "paid" && !next.paidAt) next.paidAt = now;
+    noteReconciliation(current, next, { by, via: "card payment", paymentId: payment.id });
     next.history.push({
       ts: now, action: "payment_recorded", by,
       note: `${PAYMENT_METHOD_LABELS[payment.method] || payment.method} $${payment.amount.toFixed(2)} — balance now $${next.balanceDue.toFixed(2)}${payment.notes ? ` · ${payment.notes}` : ""}`
@@ -2232,6 +2359,9 @@ module.exports = {
   // deposit on site sees "partially paid" or a stale "sent".
   statusForPayments,
   statusAfterLedgerChange,
+  ledgerCovers,
+  isSettled,
+  reconciliationFor,
   HST_RATE,
   INVOICE_DISCLAIMERS,
   PAYMENT_ATTEMPT_OUTCOMES,
