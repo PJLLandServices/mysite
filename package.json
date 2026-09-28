@@ -13,6 +13,7 @@
     "test:change-order-safety": "node scripts/test-change-order-safety.mjs",
     "test:change-order-guards": "node scripts/test-change-order-guards.mjs",
     "test:change-orders-view": "node scripts/test-change-orders-view.mjs",
+    "test:project-invoices": "node scripts/test-project-invoices.mjs",
     "test:payment-reconciliation": "node scripts/test-payment-reconciliation.mjs",
     "test:deposit-payment-lifecycle": "node scripts/test-deposit-payment-lifecycle.mjs",
     "test:contract-value-consistency": "node scripts/test-contract-value-consistency.mjs",
