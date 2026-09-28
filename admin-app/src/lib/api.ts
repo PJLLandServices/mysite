@@ -120,11 +120,11 @@ export interface Agreement {
     kind: none — nothing invoiced; owed — money owed on sent invoices;
     settled — nothing owed now, more still to invoice or send; paid. */
 export interface BillingSummary {
-  kind: "none" | "owed" | "settled" | "paid";
+  kind: "reconcile" | "none" | "owed" | "settled" | "paid";
   owed: number;
   received: number;
-  /** Marked paid but not recorded as payments; the hint leads with it. */
-  unrecorded: number;
+  /** Marked Paid with payments short: unresolved, never received or owed. */
+  unresolved: number;
   hint: string;
   actionInvoice: InvoiceSummary | null;
 }
@@ -145,6 +145,10 @@ export interface InvoiceSummary {
   amountPaid?: number;
   balanceDue?: number;
   paidAt?: string | null;
+  /** Marked Paid with its recorded payments short (server: invoices.
+      reconciliationFor) — nothing to collect until the office reconciles. */
+  reconciliationRequired?: boolean;
+  unresolved?: number;
 }
 
 /* Three different counts, and they are not interchangeable.
@@ -618,14 +622,18 @@ export interface FinancialsInvoice {
   held: boolean;
   total: number;
   amountPaid: number;
-  /** What is still owed on it — 0 for a void invoice. */
-  owed: number;
+  /** What is still owed on it — 0 for a void invoice; null (not
+      determined) while it is in payment reconciliation. */
+  owed: number | null;
   createdAt: string | null;
   sentAt: string | null;
   paidAt: string | null;
   needsReconciliation: boolean;
-  /** Marked paid, but recorded payments fall short of the total by this. */
-  unrecorded: number;
+  /** Marked Paid, recorded payments short: payment reconciliation. */
+  reconciliationRequired: boolean;
+  /** The unresolved gap — neither received nor owed. 0 otherwise. */
+  unresolved: number;
+  lastReconciliation: { at: string | null; by: string | null; resolution: string | null } | null;
   payments: FinancialsPayment[];
   note: string | null;
   href: string;
@@ -646,7 +654,10 @@ export interface ProjectFinancials {
     drafts: { count: number; total: number };
     issuedCount: number;
     voidCount: number;
-    unrecorded: number;
+    unresolved: number;
+    /** false while any invoice is in reconciliation: what the customer
+        owes is not determined until it is reconciled. */
+    owedDetermined: boolean;
   };
   deposit: {
     amount: number;
@@ -660,7 +671,7 @@ export interface ProjectFinancials {
   invoices: FinancialsInvoice[];
   payments: FinancialsPayment[];
   reconcile: string[];
-  unrecorded: Array<{ invoiceId: string; total: number; recorded: number; amount: number; sentence: string }>;
+  reconciliation: Array<{ invoiceId: string; total: number; received: number; unresolved: number; status: string; customerOwes: string; sentence: string }>;
   preview: {
     billingMode: string | null;
     subtotal?: number;

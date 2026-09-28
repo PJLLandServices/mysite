@@ -25,29 +25,37 @@ held balance invoice "outstanding" and offered "Collect payment" on an invoice n
 
 **Read-only:** payments, sending, revising and voiding stay on the classic invoice pages.
 
-**Marked paid, not recorded — flagged, never hidden** (Patrick, 2026-09-28: *"an invoice marked Paid
-with $1,000 recorded against $1,260 must visibly flag the $260 discrepancy"*). When an invoice is
-marked Paid but its recorded payments fall short of its total:
-- it owes nothing, since the office said it was paid;
-- the gap is its `unrecorded` amount, with a red "$260.00 not recorded" flag on the invoice;
-- a red "Marked paid, not recorded" card at the top of the tab names the invoice, what was
-  recorded, the total and the gap;
-- the header's Billing line leads with "⚠ $260.00 marked paid, not recorded".
+**Payment reconciliation, displayed** (Patrick, 2026-09-28: *"A manually marked-Paid invoice with
+less money recorded must not display 'None owed.'"*). The rule itself is #350's
+(`invoices.reconciliationFor`, derived on every read as `invoice.paymentReconciliation`); the
+tab only shows it. For a $1,260 invoice with $1,000 recorded and marked Paid:
+- **the tab's first card**, red, reads *Received $1,000.00 · Unresolved $260.00 · Status: Payment
+  reconciliation required · Customer amount owed: Not determined until reconciled*, and links to
+  the invoice page;
+- **"Owed now"** reads *Not determined*;
+- **the invoice** carries a red *"$260.00 not recorded"* flag, the status "Payment reconciliation
+  required", and "Unresolved" in place of "Owed";
+- **the header's Billing card** reads *"⚠ Payment reconciliation required · $260.00 unresolved"*,
+  never "None owed";
+- **the next action** is *Reconcile payment*, never "Collect payment";
+- **a deposit in reconciliation** shows as not satisfied, with no balance invoice and the
+  completion hold;
+- **a resolved invoice** says when, by whom and how it was reconciled.
 
-The gap is neither received nor owed until the office records it or corrects the status.
+The $260 counts as neither received nor owed.
 
-**Test:** `scripts/test-financials-view.mjs` (37 checks, in `build:check`). It covers:
+**Test:** `scripts/test-financials-view.mjs` (in `build:check`). It covers:
 - the route's totals equal the invoices' own sums, worked out independently;
-- part-paid, marked-paid and held deposits;
-- a $1,260 invoice with $1,000 recorded and marked Paid, flagged $260;
+- part-paid, reconciliation (marked Paid with $1,000 of $2,260) and held deposits;
+- the exact $1,260 / $1,000 / $260 case, in the tab and the header;
 - a void invoice;
 - a T&M job with no rate;
 - the header agreeing with the tab;
 - the screen does no money arithmetic.
 
-`npm run test:financials-tab-screen` adds 19 browser checks: desktop and phone renders showing the
-server's figures, the header agreeing, the $260 flag visible on the card and the invoice, no
-actions and no sideways scroll. Like the other `*-tab` screen tests it is outside `build:check`,
+`npm run test:financials-tab-screen` adds browser checks: desktop and phone renders showing the
+server's figures, the header agreeing, the red reconciliation card first with its four facts, the
+$260 flag on the invoice, "Owed now" Not determined, no actions and no sideways scroll. Like the other `*-tab` screen tests it is outside `build:check`,
 because the CI runner has no browser.
 **2026-09-28 (Financials Fix B: one rule for a job's invoices, a void invoice is never owed, a T&M job is billed at its preview's prices; FLOW-01/02 (customer portal, PASS) touched — re-verified by its suites, awaiting a walked acceptance):**
 Found mapping the Financials tab.

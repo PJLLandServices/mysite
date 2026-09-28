@@ -21,6 +21,7 @@ import type { Tone } from "../ui/primitives.tsx";
 
 function statusTone(inv: FinancialsInvoice): Tone {
   if (!inv.live) return "neutral";
+  if (inv.reconciliationRequired) return "danger";
   if (inv.status === "paid") return "good";
   if (inv.held || inv.status === "draft") return "neutral";
   if (inv.status === "partially_paid") return "progress";
@@ -40,8 +41,8 @@ function InvoiceRow({ inv }: { inv: FinancialsInvoice }) {
         <a className="font-display text-[15px] font-semibold text-ink underline" href={inv.href}>{inv.id}</a>
         <span className="text-[13px] text-ink-muted">{inv.roleLabel}</span>
         {inv.needsReconciliation ? <StatusPill tone="danger">Needs reconciling</StatusPill> : null}
-        {inv.unrecorded > 0 ? (
-          <span data-testid="fin-unrecorded-pill"><StatusPill tone="danger">{money(inv.unrecorded)} not recorded</StatusPill></span>
+        {inv.unresolved > 0 ? (
+          <span data-testid="fin-unrecorded-pill"><StatusPill tone="danger">{money(inv.unresolved)} not recorded</StatusPill></span>
         ) : null}
       </div>
       <div className="mt-1 grid grid-cols-3 gap-2 text-[13px] sm:max-w-[520px]">
@@ -54,8 +55,12 @@ function InvoiceRow({ inv }: { inv: FinancialsInvoice }) {
           <span className="text-ink">{money(inv.amountPaid)}</span>
         </div>
         <div>
-          <span className="block text-ink-muted">Owed</span>
-          <span className={inv.owed > 0 && inv.issued ? "font-semibold text-ink" : "text-ink"} data-testid="fin-invoice-owed">{money(inv.owed)}</span>
+          <span className="block text-ink-muted">{inv.reconciliationRequired ? "Unresolved" : "Owed"}</span>
+          {inv.reconciliationRequired ? (
+            <span className="font-semibold text-danger-700" data-testid="fin-invoice-unresolved">{money(inv.unresolved)}</span>
+          ) : (
+            <span className={(inv.owed ?? 0) > 0 && inv.issued ? "font-semibold text-ink" : "text-ink"} data-testid="fin-invoice-owed">{money(inv.owed ?? 0)}</span>
+          )}
         </div>
       </div>
       <div className="mt-1 flex flex-wrap gap-x-3 text-[12px] text-ink-muted">
@@ -64,7 +69,7 @@ function InvoiceRow({ inv }: { inv: FinancialsInvoice }) {
         {inv.paidAt ? <span>· paid {shortDate(inv.paidAt)}</span> : null}
       </div>
       {inv.note ? (
-        <p className={`mt-1 text-[13px] ${inv.unrecorded > 0 ? "font-semibold text-danger-700" : "text-ink-muted"}`}>{inv.note}</p>
+        <p className={`mt-1 text-[13px] ${inv.reconciliationRequired ? "font-semibold text-danger-700" : "text-ink-muted"}`}>{inv.note}</p>
       ) : null}
     </li>
   );
@@ -86,6 +91,31 @@ export function FinancialsTab() {
 
   return (
     <div className="space-y-4">
+      {/* Payment reconciliation — first on the tab, red. An invoice marked
+          Paid with its recorded payments short: the ledger's received, the
+          unresolved gap, the status, and that what the customer owes is not
+          determined until it is reconciled. Resolved on the invoice page. */}
+      {data.reconciliation.length ? (
+        <Card className="border-2 border-danger-500 bg-danger-50">
+          <CardHeader title="⚠ Payment reconciliation required" meta={`${money(totals.unresolved)} unresolved`} />
+          <ul className="space-y-3 px-4 py-3" data-testid="fin-unrecorded">
+            {data.reconciliation.map((u) => (
+              <li key={u.invoiceId} className="text-[14px] text-ink" data-testid="fin-reconciliation" data-invoice-id={u.invoiceId}>
+                <StatusPill tone="danger">{money(u.unresolved)} not recorded</StatusPill>{" "}
+                <a className="ml-1 font-semibold underline" href={`/admin/invoice/${encodeURIComponent(u.invoiceId)}`}>{u.invoiceId}</a>
+                <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
+                  <div><dt className="text-[12px] text-ink-muted">Received</dt><dd className="font-semibold">{money(u.received)}</dd></div>
+                  <div><dt className="text-[12px] text-ink-muted">Unresolved</dt><dd className="font-semibold text-danger-700">{money(u.unresolved)}</dd></div>
+                  <div><dt className="text-[12px] text-ink-muted">Status</dt><dd className="font-semibold">{u.status}</dd></div>
+                  <div><dt className="text-[12px] text-ink-muted">Customer amount owed</dt><dd className="font-semibold">{u.customerOwes}</dd></div>
+                </dl>
+                <p className="mt-2 text-[13px]">{u.sentence}</p>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
+
       <Card>
         <CardHeader
           title="Financials"
@@ -107,12 +137,17 @@ export function FinancialsTab() {
           />
           <Stat label="Invoiced" value={money(totals.invoiced)} hint={`${totals.issuedCount} sent${totals.drafts.count ? ` · ${totals.drafts.count} not sent yet` : ""}`} />
           <Stat label="Received" tone="money" value={money(totals.received)} hint={payments.length ? `${payments.length} payment${payments.length === 1 ? "" : "s"}` : "nothing received yet"} />
+          {/* While a payment is unresolved, what the customer owes is not
+              determined — the server says so (totals.owedDetermined). */}
           <Stat
             label="Owed now"
-            value={money(totals.owed)}
-            hint={totals.notYetInvoiced !== null && totals.notYetInvoiced > 0
-              ? `${money(totals.notYetInvoiced)} of the contract not invoiced yet`
-              : "on invoices sent to the customer"}
+            tone={totals.owedDetermined ? "default" : "muted"}
+            value={totals.owedDetermined ? money(totals.owed) : "Not determined"}
+            hint={!totals.owedDetermined
+              ? `until ${money(totals.unresolved)} is reconciled${totals.owed > 0 ? ` · ${money(totals.owed)} owed on other invoices` : ""}`
+              : totals.notYetInvoiced !== null && totals.notYetInvoiced > 0
+                ? `${money(totals.notYetInvoiced)} of the contract not invoiced yet`
+                : "on invoices sent to the customer"}
           />
         </div>
       </Card>
@@ -124,21 +159,6 @@ export function FinancialsTab() {
             {holds.map((h) => (
               <li key={h.key} className="text-[14px] text-ink">
                 <StatusPill tone="warn">Hold</StatusPill> <span className="ml-1">{h.message}</span>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      ) : null}
-
-      {data.unrecorded.length ? (
-        <Card className="border-l-4 border-l-danger-500">
-          <CardHeader title="Marked paid, not recorded" meta={`${money(totals.unrecorded)} not recorded as payments`} />
-          <ul className="space-y-2 px-4 py-3" data-testid="fin-unrecorded">
-            {data.unrecorded.map((u) => (
-              <li key={u.invoiceId} className="text-[14px] text-ink">
-                <StatusPill tone="danger">{money(u.amount)} not recorded</StatusPill>{" "}
-                <span className="ml-1">{u.sentence}</span>{" "}
-                <a className="underline" href={`/admin/invoice/${encodeURIComponent(u.invoiceId)}`}>Open the invoice</a>
               </li>
             ))}
           </ul>

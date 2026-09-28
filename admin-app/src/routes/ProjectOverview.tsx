@@ -75,7 +75,9 @@ export function ProjectWorkspace() {
   // job, and a held balance invoice nobody has been sent is not owed: the
   // server decides which it is and says so in the hint.
   const b = data.billing;
-  const billing = !b || b.kind === "none"
+  const billing = b && b.kind === "reconcile"
+    ? { value: "⚠ Reconcile", hint: b.hint, tone: "default" as const }
+    : !b || b.kind === "none"
     ? { value: "—", hint: b?.hint || "not invoiced yet", tone: "muted" as const }
     : b.kind === "owed"
       ? { value: money(b.owed), hint: b.hint, tone: "money" as const }

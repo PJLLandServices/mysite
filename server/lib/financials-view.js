@@ -49,7 +49,8 @@ const MONEY_BLOCKERS = new Set([
   "deposit_balance_predates_revision",
   "revision_unsigned",
   "approved_scr_no_revision",
-  "no_labour_rate"
+  "no_labour_rate",
+  "payment_reconciliation_required"
 ]);
 
 function invoiceRow(inv, { finalInvoiceId, methodLabels }) {
@@ -59,15 +60,23 @@ function invoiceRow(inv, { finalInvoiceId, methodLabels }) {
   const role = inv.invoiceRole || "standard";
   const isFinal = finalInvoiceId && inv.id === finalInvoiceId;
   const openExceptions = (inv.paymentExceptions || []).filter((e) => e && e.status === "open");
-  // "Paid" is the office's word as well as the ledger's: an invoice marked
-  // paid owes nothing, and when the recorded payments fall short of it the
-  // tab says so rather than calling the difference owed.
-  const unrecordedC = inv.status === "paid" ? Math.max(0, cents(inv.total) - cents(inv.amountPaid)) : 0;
+  // The ledger is the source of truth for money received; a status never
+  // proves it (payment reconciliation, 2026-09-28). An invoice marked Paid
+  // with its payments short is in reconciliation — invoices.
+  // reconciliationFor, derived on every read as paymentReconciliation, the
+  // ONE rule: its gap is unresolved, neither received nor owed, and what
+  // the customer owes is not determined until the office reconciles it.
+  const recon = live && inv.paymentReconciliation && inv.paymentReconciliation.required ? inv.paymentReconciliation : null;
+  const lastRecon = Array.isArray(inv.reconciliations) && inv.reconciliations.length ? inv.reconciliations[inv.reconciliations.length - 1] : null;
   let note = null;
   if (!live) note = "Void — not owed, kept for the record.";
   else if (held) note = "Held until the job is complete — not sent to the customer yet.";
   else if (inv.status === "draft") note = "A draft — not sent to the customer yet.";
-  else if (unrecordedC > 0) note = `Marked paid, but only ${fmt(inv.amountPaid)} of ${fmt(inv.total)} is recorded as payments — ${fmt(dollars(unrecordedC))} isn't. Record it on the invoice page, or correct the status.`;
+  else if (recon) note = `Marked Paid, but only ${fmt(recon.recorded)} of ${fmt(recon.total)} is recorded — ${fmt(recon.unresolved)} unresolved. What the customer owes is not determined until it is reconciled: record the missing payment, or correct the status to Partially paid, on the invoice page.`;
+  else if (lastRecon) {
+    const how = lastRecon.resolution === "recorded_payment" ? "the missing payment was recorded" : lastRecon.resolution === "voided" ? "the invoice was voided" : `the status was corrected to ${String(lastRecon.statusAfter || "").replace(/_/g, " ")}`;
+    note = `Payment reconciliation resolved ${String(lastRecon.at || "").slice(0, 10)}${lastRecon.by ? ` by ${lastRecon.by}` : ""} — ${how} (${fmt(lastRecon.unresolvedBefore)} had been unresolved).`;
+  }
   if (openExceptions.length) {
     note = `${note ? `${note} ` : ""}${openExceptions.length === 1 ? "A payment" : `${openExceptions.length} payments`} on this invoice need reconciling.`;
   }
@@ -76,22 +85,24 @@ function invoiceRow(inv, { finalInvoiceId, methodLabels }) {
     role,
     roleLabel: isFinal && role === "standard" ? "Final invoice" : (ROLE_LABEL[role] || "Invoice"),
     status: inv.status,
-    statusLabel: held ? "Held until completion" : (STATUS_LABEL[inv.status] || inv.status),
+    statusLabel: recon ? "Payment reconciliation required" : held ? "Held until completion" : (STATUS_LABEL[inv.status] || inv.status),
     live,
     issued,
     held,
     total: dollars(cents(inv.total)),
     amountPaid: dollars(cents(inv.amountPaid)),
-    // A void invoice owes nothing, whatever its arithmetic says; nor does
-    // one marked paid.
-    owed: live && inv.status !== "paid" ? dollars(cents(inv.balanceDue)) : 0,
+    // A void invoice owes nothing, whatever its arithmetic says. One in
+    // reconciliation owes an amount NOT DETERMINED yet (null) — never its
+    // gap, which could charge the customer twice.
+    owed: !live ? 0 : recon ? null : dollars(cents(inv.balanceDue)),
     createdAt: inv.createdAt || null,
     sentAt: inv.sentAt || null,
     paidAt: inv.paidAt || null,
     needsReconciliation: openExceptions.length > 0,
-    // Marked paid, but the recorded payments fall short of the total: the
-    // gap, flagged on the tab (Patrick, 2026-09-28). 0 otherwise.
-    unrecorded: live ? dollars(unrecordedC) : 0,
+    reconciliationRequired: Boolean(recon),
+    // Marked Paid, recorded payments short: the unresolved gap. 0 otherwise.
+    unresolved: recon ? dollars(cents(recon.unresolved)) : 0,
+    lastReconciliation: lastRecon ? { at: lastRecon.at || null, by: lastRecon.by || null, resolution: lastRecon.resolution || null } : null,
     payments: (inv.payments || []).map((p) => ({
       id: p.id,
       invoiceId: inv.id,
@@ -114,6 +125,8 @@ function depositFor(quote, rows) {
   let sentence;
   if (!inv) {
     sentence = `A deposit of ${fmt(amount)} is due, but its invoice isn't on this job.`;
+  } else if (inv.reconciliationRequired) {
+    sentence = `Deposit not satisfied — ${inv.id} is marked Paid, but only ${fmt(inv.amountPaid)} of ${fmt(inv.total)} is recorded (${fmt(inv.unresolved)} unresolved). No balance invoice is released and the job can't be completed until the office reconciles it.`;
   } else if (!inv.live) {
     sentence = `The deposit invoice ${inv.id} was voided — no deposit is being collected.`;
   } else if (dep.stage === "awaiting_deposit") {
@@ -127,7 +140,9 @@ function depositFor(quote, rows) {
     amount,
     stage: dep.stage,
     stageLabel,
-    counted: dep.stage !== "awaiting_deposit",
+    // Counted only when its invoice is settled by the ledger — never on a
+    // Paid in reconciliation, whatever stage an older write left.
+    counted: dep.stage !== "awaiting_deposit" && Boolean(inv) && inv.live && !inv.reconciliationRequired,
     invoiceId: inv ? inv.id : dep.depositInvoiceId || null,
     balanceInvoiceId: dep.balanceInvoiceId || null,
     sentence
@@ -170,7 +185,9 @@ function describeFinancials({ project, agreement, invoices = [], depositQuote = 
 
   const invoicedC = issued.reduce((s, r) => s + cents(r.total), 0);
   const receivedC = live.reduce((s, r) => s + cents(r.amountPaid), 0);
-  const owedC = issued.reduce((s, r) => s + cents(r.owed), 0);
+  // Owed: only what is determined — an invoice in reconciliation owes an
+  // amount not yet known, and is counted as unresolved instead.
+  const owedC = issued.filter((r) => r.owed !== null).reduce((s, r) => s + cents(r.owed), 0);
   const draftC = drafts.reduce((s, r) => s + cents(r.total), 0);
 
   const governing = agreement?.governing || null;
@@ -184,14 +201,19 @@ function describeFinancials({ project, agreement, invoices = [], depositQuote = 
 
   const holds = (blockers || []).filter((b) => b && MONEY_BLOCKERS.has(b.key)).map((b) => ({ key: b.key, message: b.message }));
   const reconcile = rows.filter((r) => r.needsReconciliation).map((r) => r.id);
-  const unrecorded = rows.filter((r) => r.unrecorded > 0).map((r) => ({
+  // Invoices in payment reconciliation, each with the four facts Patrick
+  // set out: received (the ledger), unresolved, the status, and that what
+  // the customer owes is not determined until it is reconciled.
+  const reconciliation = rows.filter((r) => r.reconciliationRequired).map((r) => ({
     invoiceId: r.id,
     total: r.total,
-    recorded: r.amountPaid,
-    amount: r.unrecorded,
-    sentence: `${r.id} is marked Paid, but only ${fmt(r.amountPaid)} is recorded against ${fmt(r.total)} — ${fmt(r.unrecorded)} isn't recorded as a payment.`
+    received: r.amountPaid,
+    unresolved: r.unresolved,
+    status: "Payment reconciliation required",
+    customerOwes: "Not determined until reconciled",
+    sentence: `${r.id} is marked Paid, but only ${fmt(r.amountPaid)} is recorded against ${fmt(r.total)} — ${fmt(r.unresolved)} unresolved. Record the missing payment, or correct the status to Partially paid, on the invoice page.`
   }));
-  const unrecordedTotalC = unrecorded.reduce((s, u) => s + cents(u.amount), 0);
+  const unresolvedC = reconciliation.reduce((s, u) => s + cents(u.unresolved), 0);
 
   return {
     projectId: proj.id || null,
@@ -213,14 +235,17 @@ function describeFinancials({ project, agreement, invoices = [], depositQuote = 
       drafts: { count: drafts.length, total: dollars(draftC) },
       issuedCount: issued.length,
       voidCount: rows.length - live.length,
-      // Marked paid but not recorded as payments — neither received nor owed.
-      unrecorded: dollars(unrecordedTotalC)
+      // Marked Paid but not recorded as payments — neither received nor
+      // owed; while any is unresolved, what the customer owes is not
+      // determined (owedDetermined: false).
+      unresolved: dollars(unresolvedC),
+      owedDetermined: unresolvedC === 0
     },
     deposit: depositFor(depositQuote, rows),
     invoices: rows,
     payments,
     reconcile,
-    unrecorded,
+    reconciliation,
     preview: previewFor(billing),
     holds,
     classicHref: proj.id ? `/admin/project/${encodeURIComponent(proj.id)}` : null
@@ -231,6 +256,8 @@ function describeFinancials({ project, agreement, invoices = [], depositQuote = 
 // and its next-action prompt (2026-09-28). Decided from the SAME model the
 // Financials tab shows, so the header can never say "$3,390 outstanding"
 // for a held balance invoice the tab says nobody owes yet.
+//   reconcile — an invoice is marked Paid with its payments short: payment
+//              reconciliation required; what is owed is not determined
 //   none     — nothing invoiced
 //   owed     — money owed on invoices sent to the customer
 //   settled  — nothing owed now, but more of the job is still to invoice
@@ -241,15 +268,21 @@ function describeFinancials({ project, agreement, invoices = [], depositQuote = 
 function billingSummary(model) {
   const t = model.totals;
   const live = model.invoices.filter((r) => r.live);
+  const reconciling = live.find((r) => r.reconciliationRequired);
   const owing = live.find((r) => r.issued && r.owed > 0);
   const toSend = live.find((r) => !r.issued && !r.held && r.total > 0);
-  const action = owing || toSend || null;
+  const action = reconciling || owing || toSend || null;
   const paidDates = live.filter((r) => r.paidAt).map((r) => r.paidAt).sort();
   const lastPaid = paidDates.length ? paidDates[paidDates.length - 1] : null;
   const leftToInvoice = t.notYetInvoiced !== null && t.notYetInvoiced > 0;
   let kind;
   let hint;
-  if (!live.length) {
+  if (t.unresolved > 0) {
+    // Never "None owed" / "Paid" over an unresolved gap, and never "owed":
+    // collecting it could charge the customer twice.
+    kind = "reconcile";
+    hint = `⚠ Payment reconciliation required · ${fmt(t.unresolved)} unresolved`;
+  } else if (!live.length) {
     kind = "none";
     hint = "not invoiced yet";
   } else if (t.owed > 0) {
@@ -263,19 +296,19 @@ function billingSummary(model) {
     hint = lastPaid ? `paid in full · ${String(lastPaid).slice(0, 10)}` : "nothing owed";
   }
   const lastPaidInvoice = live.find((r) => r.paidAt === lastPaid) || null;
-  // A gap between "marked paid" and what is recorded leads the line, so the
-  // header can't read a clean "None owed" / "Paid" over it.
-  if (t.unrecorded > 0) hint = `⚠ ${fmt(t.unrecorded)} marked paid, not recorded · ${hint}`;
   return {
     kind,
     owed: t.owed,
     received: t.received,
-    unrecorded: t.unrecorded,
+    unresolved: t.unresolved,
     hint,
     // Shaped like the workspace's InvoiceSummary, for the next-action rule.
+    // An invoice in reconciliation says so, with no balance to collect.
     actionInvoice: action ? {
       id: action.id, status: action.status, invoiceRole: action.role,
-      total: action.total, amountPaid: action.amountPaid, balanceDue: action.owed, paidAt: action.paidAt
+      total: action.total, amountPaid: action.amountPaid,
+      balanceDue: action.reconciliationRequired ? 0 : action.owed, paidAt: action.paidAt,
+      reconciliationRequired: action.reconciliationRequired, unresolved: action.unresolved
     } : kind === "paid" && lastPaidInvoice ? {
       id: lastPaidInvoice.id, status: "paid", invoiceRole: lastPaidInvoice.role,
       total: lastPaidInvoice.total, amountPaid: lastPaidInvoice.amountPaid, balanceDue: 0, paidAt: lastPaid

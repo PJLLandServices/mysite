@@ -99,6 +99,15 @@ try {
     return { label, cust, q, proj: await projects.get(proj.id), dep };
   }
   const fin = async (v) => (await srv.api("GET", `/api/projects/${v.proj.id}/financials`));
+  // An invoice marked Paid with its payments short, as the old "Mark paid"
+  // left it (the route refuses it now) — written straight to the store.
+  function forcePaid(id) {
+    const f = path.join(srv.DATA, "invoices.json");
+    const all = JSON.parse(fs.readFileSync(f, "utf8"));
+    const r = all.find((x) => x.id === id);
+    r.status = "paid"; r.paidAt = r.paidAt || new Date().toISOString();
+    fs.writeFileSync(f, JSON.stringify(all, null, 2));
+  }
   // The same sums, worked out here from the invoice records themselves.
   function expectedTotals(quoteId) {
     const mine = srv.data("invoices").filter((i) => i.quoteId === quoteId);
@@ -134,24 +143,40 @@ try {
     ok(/1,000\.00/.test(m.deposit?.sentence || "") && /still owed/.test(m.deposit?.sentence || ""), `A1: the deposit sentence says what came in and what is owed (${m.deposit?.sentence})`);
     ok(m.payments?.length === 1 && m.payments[0].methodLabel === "e-Transfer", `A1: the payment is listed with its method (${j(m.payments)})`);
 
-    // Mark the deposit paid (the path that counts it on main; Fix A makes
-    // every path count it) — the held balance invoice appears, not owed.
-    await srv.api("PATCH", `/api/invoices/${a.dep.id}`, { status: "paid" });
+    // "Mark paid" with $1,000 of the deposit recorded is refused (#350) …
+    const mk = await srv.api("PATCH", `/api/invoices/${a.dep.id}`, { status: "paid" });
+    ok(mk.status === 409 && mk.body.code === "record_payment_required", `A2: Mark paid on a part-paid deposit is refused (${mk.status} ${mk.body.code})`);
+    // … but one marked Paid before that rule is in payment reconciliation.
+    forcePaid(a.dep.id);
+    m = (await fin(a)).body;
+    let depRow = (m.invoices || []).find((i) => i.id === a.dep.id);
+    ok(depRow?.reconciliationRequired === true && depRow.unresolved === 1260 && depRow.owed === null && depRow.amountPaid === 1000 && depRow.statusLabel === "Payment reconciliation required",
+      `A2: marked Paid with $1,000 of $2,260: $1,260 unresolved, owed not determined, status "Payment reconciliation required" (${j(depRow)})`);
+    ok(m.totals.received === 1000 && m.totals.unresolved === 1260 && m.totals.owedDetermined === false && m.totals.owed === 0,
+      `A2: received is the ledger's $1,000; the $1,260 is neither received nor owed (${j(m.totals)})`);
+    ok(m.deposit?.counted === false && /not satisfied/i.test(m.deposit?.sentence || ""), `A2: the deposit is NOT satisfied (${j(m.deposit)})`);
+    ok(!(m.invoices || []).some((i) => i.role === "balance"), "A2: …and no balance invoice is released");
+    ok((m.holds || []).some((h) => h.key === "payment_reconciliation_required"), `A2: completion's reconciliation block is a billing hold (${j(m.holds)})`);
+    let head = (await srv.api("GET", `/api/projects/${a.proj.id}`)).body.billing;
+    ok(head?.kind === "reconcile" && head.hint === "⚠ Payment reconciliation required · $1,260.00 unresolved" && head.actionInvoice?.reconciliationRequired === true && head.actionInvoice.balanceDue === 0,
+      `A2: the header says "⚠ Payment reconciliation required · $1,260.00 unresolved", nothing to collect (${j(head)})`);
+
+    // Reconciled by recording the missing payment: satisfied, balance held.
+    await srv.api("POST", `/api/invoices/${a.dep.id}/payments`, { amount: 1260, method: "cheque", notes: "ref #4471" });
     m = (await fin(a)).body;
     exp = expectedTotals(a.q.id);
     const held = (m.invoices || []).find((i) => i.role === "balance");
-    ok(held && held.held === true && held.statusLabel === "Held until completion" && held.issued === false, `A2: the balance invoice shows as held, not sent (${j(held)})`);
-    ok(m.totals.owed === exp.owed && m.totals.invoiced === exp.invoiced && m.totals.drafts.count === 1, `A2: a held invoice is not owed or invoiced (${j(m.totals)} vs ${j(exp)})`);
-    ok(m.deposit?.counted === true && !(m.holds || []).some((h) => h.key === "deposit_unpaid"), `A2: the deposit counts; the hold is gone (${j(m.deposit)})`);
-    const depRow = (m.invoices || []).find((i) => i.id === a.dep.id);
-    ok(depRow?.owed === 0 && /Marked paid/.test(depRow?.note || "") && /1,260\.00/.test(depRow?.note || ""),
-      `A2: marked paid with $1,000 recorded → owes nothing, and says $1,260 isn't recorded as a payment (${j(depRow)})`);
-    ok(m.totals.owed === 0, `A2: nothing is owed now (${m.totals.owed})`);
-    // The workspace header's Billing card is the same model's answer.
-    const head = (await srv.api("GET", `/api/projects/${a.proj.id}`)).body.billing;
+    ok(held && held.held === true && held.statusLabel === "Held until completion" && held.issued === false, `A3: once reconciled, the balance invoice shows as held, not sent (${j(held)})`);
+    ok(m.totals.owed === exp.owed && m.totals.invoiced === exp.invoiced && m.totals.drafts.count === 1 && m.totals.unresolved === 0 && m.totals.owedDetermined === true,
+      `A3: a held invoice is not owed or invoiced; nothing unresolved (${j(m.totals)} vs ${j(exp)})`);
+    ok(m.deposit?.counted === true && !(m.holds || []).some((h) => h.key === "deposit_unpaid" || h.key === "payment_reconciliation_required"), `A3: the deposit counts; the holds are gone (${j(m.deposit)})`);
+    depRow = (m.invoices || []).find((i) => i.id === a.dep.id);
+    ok(depRow?.reconciliationRequired === false && depRow.lastReconciliation?.resolution === "recorded_payment" && /reconciliation resolved/i.test(depRow.note || ""),
+      `A3: the invoice shows how it was reconciled, and by whom (${j(depRow)})`);
+    head = (await srv.api("GET", `/api/projects/${a.proj.id}`)).body.billing;
     ok(head?.kind === "settled" && head.owed === m.totals.owed && head.received === m.totals.received && /3,390\.00 not invoiced yet/.test(head.hint),
-      `A2: the header's Billing agrees with the tab — nothing owed, $3,390 not invoiced yet, never the held invoice as "outstanding" (${j(head)})`);
-    ok(head?.actionInvoice === null, `A2: …and the next step is not "collect payment" on the held invoice (${j(head?.actionInvoice)})`);
+      `A3: the header's Billing agrees with the tab — nothing owed, $3,390 not invoiced yet, never the held invoice as "outstanding" (${j(head)})`);
+    ok(head?.actionInvoice === null, `A3: …and the next step is not "collect payment" on the held invoice (${j(head?.actionInvoice)})`);
   }
 
   // ---- V a void invoice is shown, never owed -----------------------------------------
@@ -180,9 +205,10 @@ try {
     ok((m.invoices || []).length === 0, "T1: no invoices yet");
   }
 
-  // ---- M marked Paid with less recorded: the gap is flagged, not hidden -------------
-  // Patrick, 2026-09-28: "an invoice marked Paid with $1,000 recorded against
-  // $1,260 must visibly flag the $260 discrepancy."
+  // ---- M THE case: $1,260 invoice, $1,000 recorded, status Paid, $260 unresolved ------
+  // Patrick, 2026-09-28: it must show Received $1,000 · Unresolved $260 ·
+  // Status: Payment reconciliation required · Customer amount owed: not
+  // determined until reconciled — never "None owed".
   const mj = await signedJob("M", { deposit: false });
   let mInv;
   {
@@ -192,21 +218,25 @@ try {
     });
     await srv.api("PATCH", `/api/invoices/${mInv.id}`, { status: "sent" });
     await srv.api("POST", `/api/invoices/${mInv.id}/payments`, { amount: 1000, method: "cheque" });
-    await srv.api("PATCH", `/api/invoices/${mInv.id}`, { status: "paid" });
+    const mk = await srv.api("PATCH", `/api/invoices/${mInv.id}`, { status: "paid" });
+    ok(mk.status === 409 && mk.body.code === "record_payment_required", `M0: Mark paid is refused going forward (${mk.status} ${mk.body.code})`);
+    forcePaid(mInv.id); // as the old "Mark paid" left it
     const m = (await fin(mj)).body;
     const row = (m.invoices || []).find((i) => i.id === mInv.id);
-    ok(row?.total === 1260 && row.amountPaid === 1000 && row.status === "paid", `M0: a $1,260 invoice, $1,000 recorded, marked Paid (${j(row && { total: row.total, paid: row.amountPaid, status: row.status })})`);
-    ok(row?.unrecorded === 260, `M1: the $260 gap is on the invoice (${row?.unrecorded})`);
-    ok(m.totals?.unrecorded === 260 && m.unrecorded?.length === 1 && m.unrecorded[0].amount === 260,
-      `M1: …and on the tab, as its own flagged item (${j(m.unrecorded)} / ${m.totals?.unrecorded})`);
-    ok(/\$1,000\.00/.test(m.unrecorded?.[0]?.sentence || "") && /\$1,260\.00/.test(m.unrecorded?.[0]?.sentence || "") && /\$260\.00/.test(m.unrecorded?.[0]?.sentence || ""),
-      `M1: the sentence names what was recorded, the total and the gap (${m.unrecorded?.[0]?.sentence})`);
-    ok(m.totals.owed === 0 && m.totals.received === 1000, `M2: it is not called owed, and received stays what was recorded (${j(m.totals)})`);
-    ok(((await fin(a)).body.unrecorded || []).length === 1, "M3: the deposit job marked paid short is flagged too");
-    ok(((await fin(v)).body.unrecorded || []).length === 0, "M4: a job with nothing marked paid short flags nothing");
+    const r = m.reconciliation?.[0] || {};
+    ok(row?.total === 1260 && row.amountPaid === 1000 && row.status === "paid", `M0: a $1,260 invoice, $1,000 recorded, status Paid (${j(row && { total: row.total, paid: row.amountPaid, status: row.status })})`);
+    ok(r.received === 1000 && r.unresolved === 260 && r.status === "Payment reconciliation required" && r.customerOwes === "Not determined until reconciled",
+      `M1: Received $1,000 · Unresolved $260 · Status: Payment reconciliation required · Customer amount owed: not determined (${j(r)})`);
+    ok(row?.unresolved === 260 && row.owed === null && row.statusLabel === "Payment reconciliation required", `M1: …on the invoice too (${j(row)})`);
+    ok(m.totals.received === 1000 && m.totals.unresolved === 260 && m.totals.owedDetermined === false && m.totals.owed === 0,
+      `M2: the $260 is not counted as received, nor as owed; owed is not determined (${j(m.totals)})`);
+    ok(/\$1,000\.00/.test(r.sentence || "") && /\$1,260\.00/.test(r.sentence || "") && /\$260\.00 unresolved/.test(r.sentence || ""), `M2: the sentence names what was recorded, the total and the $260 (${r.sentence})`);
     const head = (await srv.api("GET", `/api/projects/${mj.proj.id}`)).body.billing;
-    ok(head?.unrecorded === 260 && /^⚠ \$260\.00 marked paid, not recorded/.test(head?.hint || ""),
-      `M5: the header's Billing line leads with the $260 gap (${head?.hint})`);
+    ok(head?.kind === "reconcile" && head.hint === "⚠ Payment reconciliation required · $260.00 unresolved" && head.unresolved === 260,
+      `M3: the header shows "⚠ Payment reconciliation required · $260.00 unresolved" — never "None owed" (${j(head)})`);
+    ok(head?.actionInvoice?.id === mInv.id && head.actionInvoice.reconciliationRequired === true && head.actionInvoice.balanceDue === 0,
+      `M3: …and its next step is reconciling, with no balance to collect (${j(head?.actionInvoice)})`);
+    ok(((await fin(v)).body.reconciliation || []).length === 0, "M4: a job with nothing marked Paid short flags nothing");
   }
 
   // ---- The screen, desktop and phone (--screen) ---------------------------------------
@@ -247,6 +277,16 @@ try {
       `${name}: the warning card shows the $260 gap and what it came from (${card})`);
     ok(/\$260\.00 not recorded/i.test(pill) && (await page.locator("[data-testid=fin-unrecorded-pill]").first().isVisible()),
       `${name}: the invoice carries a visible "$260.00 not recorded" flag (${pill})`);
+    ok(/Received \$1,000\.00/i.test(card) && /Unresolved \$260\.00/i.test(card) && /Status Payment reconciliation required/i.test(card) && /Customer amount owed Not determined until reconciled/i.test(card),
+      `${name}: the card reads Received $1,000 · Unresolved $260 · Status: Payment reconciliation required · Customer amount owed: not determined (${card})`);
+    const firstCard = (await page.locator("main [data-testid=fin-unrecorded]").first().boundingBox())?.y ?? 9e9;
+    const totalsY = (await page.locator("[data-testid=fin-totals]").boundingBox())?.y ?? 0;
+    ok(firstCard < totalsY, `${name}: the red warning comes first on the tab, above the totals (${firstCard} < ${totalsY})`);
+    const mHeader = (await page.locator("text=Billing").first().locator("xpath=..").innerText()).replace(/\s+/g, " ");
+    ok(/⚠ Payment reconciliation required · \$260\.00 unresolved/.test(mHeader) && !/none owed|outstanding/i.test(mHeader),
+      `${name}: the header reads "⚠ Payment reconciliation required · $260.00 unresolved", never "None owed" (${mHeader})`);
+    const owedStat = (await page.locator("text=Owed now").first().locator("xpath=..").innerText()).replace(/\s+/g, " ");
+    ok(/Not determined/i.test(owedStat), `${name}: "Owed now" is Not determined (${owedStat})`);
     if (SHOTS) {
       fs.mkdirSync(SHOTS, { recursive: true });
       await page.screenshot({ path: path.join(SHOTS, `financials-unrecorded-${name}.png`), fullPage: true });

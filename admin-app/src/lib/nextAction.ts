@@ -44,6 +44,20 @@ export function nextAction(
     return { headline: "Archived", detail: "This job is archived. Nothing is outstanding.", tone: "done" };
   }
 
+  // An invoice marked Paid with its payments short outranks everything:
+  // what the customer owes isn't known, so it must not be chased as a
+  // balance (that could charge them twice). The office reconciles it on
+  // the invoice page (payment reconciliation, 2026-09-28).
+  if (invoice && invoice.reconciliationRequired) {
+    return {
+      headline: "Reconcile payment",
+      detail: `${invoice.id} is marked Paid, but ${money(invoice.unresolved || 0)} of it isn't recorded as a payment. Record the missing payment, or correct the status to Partially paid.`,
+      href: `/admin/invoice/${encodeURIComponent(invoice.id)}`,
+      ctaLabel: "Open invoice",
+      tone: "act"
+    };
+  }
+
   // Money owed outranks everything else on a finished job — it's the
   // only thing left that costs something to forget.
   if (invoice && Number(invoice.balanceDue) > 0) {

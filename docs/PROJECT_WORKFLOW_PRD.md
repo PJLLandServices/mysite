@@ -382,9 +382,10 @@ the tab shows:
 - **invoiced:** sent live invoices;
 - **received:** every live invoice's ledger;
 - **owed now:** what sent live invoices still owe. A held balance invoice is not owed, a void one
-  is nothing, and one marked paid owes nothing — but a gap between "Paid" and what is recorded
-  is flagged in red on the invoice, in a card at the top of the tab and at the front of the
-  header's Billing line (Patrick: $1,000 recorded against $1,260 must visibly flag the $260);
+  is nothing, and one marked Paid with its payments short is in **payment reconciliation**
+  (#350's rule): Received $1,000 · Unresolved $260 · Status: Payment reconciliation required ·
+  Customer amount owed: not determined — a red card first on the tab, a red flag on the invoice,
+  "⚠ Payment reconciliation required · $260.00 unresolved" in the header, never "None owed";
 - **not yet invoiced:** fixed price only;
 - **the deposit and its stage;**
 - **every invoice and payment;**
