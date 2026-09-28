@@ -88,6 +88,15 @@ try {
     return { label, cust, q, proj: await projects.get(proj.id), dep };
   }
   const project = async (v) => (await srv.api("GET", `/api/projects/${v.proj.id}`)).body;
+  // An invoice marked Paid with its payments short, as the old "Mark paid"
+  // left it (the route refuses it since #350) — written straight to the store.
+  function forcePaid(id) {
+    const f = path.join(srv.DATA, "invoices.json");
+    const all = JSON.parse(fs.readFileSync(f, "utf8"));
+    const r = all.find((x) => x.id === id);
+    r.status = "paid"; r.paidAt = r.paidAt || new Date().toISOString();
+    fs.writeFileSync(f, JSON.stringify(all, null, 2));
+  }
   // (Guarded so the old code, which has no such rule, reports every check.)
   const projInvoices = async (id) => typeof projects.invoicesForProject === "function" ? projects.invoicesForProject(await projects.get(id)) : [];
   const isLive = (inv) => typeof projects.isLiveInvoice === "function" ? projects.isLiveInvoice(inv) : false;
@@ -98,7 +107,8 @@ try {
     let body = await project(a);
     ok(body.invoiceSummary?.id === a.dep.id && body.linkedQuote?.depositInvoiceId === a.dep.id,
       `A1: an unpaid deposit is the job's invoice (${j(body.invoiceSummary?.id)} / ${j(body.linkedQuote?.depositInvoiceId)})`);
-    await srv.api("PATCH", `/api/invoices/${a.dep.id}`, { status: "paid" });
+    // Paid by a recorded payment ("Mark paid" alone is refused since #350).
+    await srv.api("POST", `/api/invoices/${a.dep.id}/payments`, { amount: a.dep.total, method: "cheque" });
     const bal = srv.data("invoices").find((i) => i.quoteId === a.q.id && i.invoiceRole === "balance" && i.status !== "void");
     body = await project(a);
     ok(bal && body.invoiceSummary?.id === bal.id, `A2: once paid, the held balance invoice is (${j(body.invoiceSummary?.id)} vs ${bal?.id})`);
@@ -129,7 +139,6 @@ try {
   // ---- P the customer portal: the deposit is on the project card --------------------
   const p = await signedJob("P", { status: "planning" });
   {
-    await srv.api("PATCH", `/api/invoices/${p.dep.id}`, { status: "paid" });
     const TOKEN = `portal-fixb-${Date.now()}`;
     const leadsFile = path.join(srv.DATA, "leads.json");
     const leads = fs.existsSync(leadsFile) ? JSON.parse(fs.readFileSync(leadsFile, "utf8")) : [];
@@ -139,11 +148,22 @@ try {
       portal: { token: TOKEN }
     });
     fs.writeFileSync(leadsFile, JSON.stringify(leads, null, 2));
-    const res = await fetch(`${srv.BASE}/api/portal/${TOKEN}`, { cache: "no-store" });
-    const portal = (await res.json()).portal || {};
-    const cards = portal.projects || portal.projectCards || [];
-    const card = cards.find((c) => c.id === p.proj.id) || cards[0];
-    const history = portal.serviceHistory || portal.history || [];
+    const readPortal = async () => {
+      const r = await fetch(`${srv.BASE}/api/portal/${TOKEN}`, { cache: "no-store" });
+      const portal = (await r.json()).portal || {};
+      const cards = portal.projects || portal.projectCards || [];
+      return { res: r, cards, card: cards.find((c) => c.id === p.proj.id) || cards[0], history: portal.serviceHistory || portal.history || [] };
+    };
+    // Marked Paid with only $1,000 of the deposit recorded (as the old
+    // "Mark paid" left it): a status never proves money (#350) — the card
+    // must NOT claim the deposit is paid.
+    await srv.api("POST", `/api/invoices/${p.dep.id}/payments`, { amount: 1000, method: "e_transfer" });
+    forcePaid(p.dep.id);
+    const short = await readPortal();
+    ok(short.card && short.card.stage !== "deposit", `P0: a deposit marked Paid with its payments short does not show "deposit paid" (${short.card?.stage})`);
+    // The rest recorded: now it is paid.
+    await srv.api("POST", `/api/invoices/${p.dep.id}/payments`, { amount: Math.round((p.dep.total - 1000) * 100) / 100, method: "cheque" });
+    const { res, cards, card, history } = await readPortal();
     ok(res.ok && card, `P0: the portal shows the customer's project (${res.status} ${j(cards.map((c) => c.id))})`);
     ok((card?.invoices || []).some((i) => i.id === p.dep.id && i.role === "deposit"),
       `P1: the paid deposit invoice is on the project card (${j(card?.invoices)})`);

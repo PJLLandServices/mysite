@@ -3705,13 +3705,9 @@ async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "con
         ? `${inv.notes}\n\nPaid via Stripe ${summary.chargeId || summary.paymentIntentId} on ${new Date().toISOString()}.`
         : `Paid via Stripe ${summary.chargeId || summary.paymentIntentId} on ${new Date().toISOString()}.`
     });
-    // Threshold deposit — a paid deposit invoice spawns the held balance
-    // invoice; a paid balance invoice closes the quote's deposit stage.
-    try {
-      await deposits.onInvoicePaid(updated);
-    } catch (depErr) {
-      console.warn(`[stripe] deposit paid-hook failed for ${inv.id}:`, depErr?.message);
-    }
+    // Threshold deposit: the invoice store reports this write's change to
+    // "paid" (only when the payment SETTLED it — never a part payment) to
+    // deposits.onInvoiceStatusChange. Nothing to call here (Fix A).
   }
 
   // The office alert, once: only the call that opened the exception
@@ -4453,7 +4449,9 @@ async function customerPortalSections(lead) {
         //   scheduled — build underway or work orders attached
         //   complete  — project status flipped to complete
         //   invoiced  — a non-deposit invoice exists post-completion
-        const depositPaid = projInvoices.some((i) => i.invoiceRole === "deposit" && i.status === "paid");
+        // Paid by the ledger, not by a status (payment reconciliation):
+        // a deposit marked Paid with its payments short has not been paid.
+        const depositPaid = projInvoices.some((i) => i.invoiceRole === "deposit" && invoices.isSettled(i));
         const finalInvoiced = projInvoices.some((i) => i.invoiceRole !== "deposit");
         const stage =
           p.status === "complete" ? (finalInvoiced ? "invoiced" : "complete")
@@ -11849,6 +11847,13 @@ async function handleApi(req, res, pathname) {
       const body = await parseRequestBody(req);
       const inv = await invoices.getByPaymentToken(id, body?.t || "");
       if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found or link expired."] });
+      // Marked Paid with its payments short: nothing is collectible until
+      // the office reconciles it (payment reconciliation, 2026-09-28).
+      if (invoices.payBlockReason(inv) === "reconciliation_required") {
+        return sendJson(res, 409, { ok: false, code: "reconciliation_required", errors: [
+          `Our office is reviewing the payments on this invoice — nothing can be charged online right now. Please call us at ${await paymentSupportPhone()} with any questions.`
+        ] });
+      }
       if (inv.status === "paid") {
         return sendJson(res, 409, { ok: false, errors: ["This invoice has already been paid."] });
       }
@@ -11866,6 +11871,8 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 409, { ok: false, code: invoices.payBlockReason(inv), errors: [
           invoices.payBlockReason(inv) === "price_unconfirmed"
             ? "PJL is still confirming this invoice's price — nothing can be charged yet."
+            : invoices.payBlockReason(inv) === "reconciliation_required"
+              ? `Our office is reviewing the payments on this invoice — nothing can be charged online right now. Please call us at ${await paymentSupportPhone()} with any questions.`
             : ["awaiting_signature", "revision_required"].includes(invoices.payBlockReason(inv))
               ? "This invoice is being updated — nothing can be charged yet."
               : `This invoice is "${inv.status}" and isn't ready for payment.`
@@ -16122,22 +16129,16 @@ async function handleApi(req, res, pathname) {
         const held = invoices.paymentHoldFor(before);
         if (held) return sendJson(res, held.status, { ok: false, code: held.code, errors: held.errors });
       }
-      const updated = await invoices.update(id, payload);
+      // Who changed it — the audit for a status change, and for resolving a
+      // payment reconciliation (never the body's say-so).
+      const patchSession = await requireUser(req);
+      const updated = await invoices.update(id, { ...payload, by: await actorLabel(req, patchSession?.uid || "admin") });
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
       if (before && before.status !== "void" && updated.status === "void") await settleNoChargeOnVoid(before);
 
-      // Threshold deposit — paid/void transitions on deposit invoices
-      // drive the quote's deposit lifecycle. Best-effort.
-      try {
-        if (before && before.status !== "paid" && updated.status === "paid") {
-          await deposits.onInvoicePaid(updated);
-        }
-        if (before && before.status !== "void" && updated.status === "void") {
-          await deposits.onInvoiceVoided(updated);
-        }
-      } catch (depErr) {
-        console.warn(`[invoice-patch] deposit hook failed for ${id}:`, depErr?.message);
-      }
+      // Threshold deposit — paid / un-paid / void transitions drive the
+      // quote's deposit lifecycle; the invoice store reports this write's
+      // change to deposits.onInvoiceStatusChange itself (Fix A).
 
       // PR 3 — status mirror to QuickBooks. When admin sets status to
       // void in PJL, push the same change to QB. Best-effort: a QB
@@ -16158,6 +16159,9 @@ async function handleApi(req, res, pathname) {
 
       return sendJson(res, 200, { ok: true, invoice: updated, warning: qbWarning });
     } catch (err) {
+      // A refused "Mark paid" (record_payment_required) or a Partially paid
+      // the ledger doesn't bear out (status_mismatch) says why, with its code.
+      if (err && err.code && err.status) return sendJson(res, err.status, { ok: false, code: err.code, errors: [err.message] });
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update invoice."] });
     }
   }
@@ -16309,14 +16313,8 @@ async function handleApi(req, res, pathname) {
         }
       }
       // Threshold deposit — voiding a deposit invoice reverts the quote
-      // to awaiting-deposit and withdraws a held balance invoice.
-      if (!result.alreadyVoid) {
-        try {
-          await deposits.onInvoiceVoided(result.invoice);
-        } catch (depErr) {
-          console.warn(`[invoice-void] deposit hook failed for ${id}:`, depErr?.message);
-        }
-      }
+      // to awaiting-deposit and withdraws a held balance invoice; the
+      // invoice store reports the void to deposits.onInvoiceStatusChange.
       return sendJson(res, 200, { ok: true, invoice: result.invoice, warning: qbWarning });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't void invoice."] });
