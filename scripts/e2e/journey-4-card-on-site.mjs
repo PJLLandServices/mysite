@@ -227,6 +227,29 @@ try {
   J.ok(recE.status !== "paid" && Number(recE.balanceDue) === e.inv.total, `the balance is owing again (${j([recE.status, recE.balanceDue])})`);
   J.ok((recE.history || []).some((h) => h.action === "payment_reversed" && /Refunded in Stripe/.test(h.note)), "the history keeps why");
   await J.sent(L, "E: refund + reversal", []);   // not one call to Stripe, nothing to the customer
+
+  // S6: the refunded payment is still "succeeded" at Stripe. Its webhook
+  // redelivered, a stale confirm, and the customer reopening the pay page
+  // must never put it back on the ledger.
+  J.step("E2. the refunded payment comes back");
+  const refundedPi = ie.body.paymentIntentId;
+  await srv.stripeWebhook({ type: "payment_intent.succeeded", data: { object: intentOf(refundedPi, { invoiceId: e.inv.id }) } });
+  await sleep(500);
+  const stale = await confirm(e, refundedPi);
+  J.ok(stale.status === 409 && stale.body.code === "payment_reversed", `a stale confirm of the refunded payment is refused as refunded (${stale.status} ${stale.body.code})`);
+  const reopened = await tapPay(e);
+  J.ok(reopened.status === 200 && reopened.body.paymentIntentId && reopened.body.paymentIntentId !== refundedPi,
+    `the reopened pay page offers a new payment for the balance, not the refunded one (${reopened.status})`);
+  recE = await read(e);
+  J.ok((recE.payments || []).length === 0 && recE.status !== "paid" && Number(recE.balanceDue) === e.inv.total,
+    `the refunded payment is not re-recorded: still owing (${j([(recE.payments || []).length, recE.status, recE.balanceDue])})`);
+  J.ok((recE.paymentExceptions || []).length === 0, "…and it is not a payment exception either");
+  J.ok((recE.reversedProcessorPayments || []).some((x) => x.paymentIntentId === refundedPi), "the reversal keeps the Stripe payment id for good");
+  J.ok((recE.history || []).some((h) => h.action === "processor_payment_after_reversal" && h.note.includes(refundedPi)), "each later arrival is in the audit trail");
+  await J.sent(L, "E2: refunded payment redelivered", [
+    { channel: "stripe", method: "POST", path: "/v1/payment_intents", n: 1 },   // the new payment only
+    STRIPE_READS
+  ]);   // no receipt, no alert
 } catch (err) {
   J.crashed(err);
 } finally {

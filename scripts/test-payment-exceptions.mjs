@@ -25,8 +25,9 @@
 //   S5 the same payment's webhook delivered twice → nothing new
 //   S8 two confirms and the webhook for the same payment at once → one
 //      payment, one receipt, no exception, no alert
-//   S6 (a reversed payment re-recorded by a reopened pay page) is a
-//      separate PR; here only: a reversal never raises a false exception
+//   S6 (a reversed payment re-recorded by a reopened pay page) is
+//      test-payment-reversal.mjs; here only: a reversal never raises a
+//      false exception
 //
 // The office sees it (the invoice, the list filter) and resolves it with
 // a note (refunded / reconciled); the history is never deleted. The
