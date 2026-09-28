@@ -124,7 +124,9 @@ export function Stat({
   tone,
   progress,
   onClick,
-  hint
+  hint,
+  warnHint,
+  full
 }: {
   label: string;
   value: ReactNode;
@@ -133,6 +135,10 @@ export function Stat({
   progress?: number;
   onClick?: () => void;
   hint?: string;
+  /** A warning hint: red, and shown in full (it wraps, never truncates) — for a discrepancy whose amount must stay visible. */
+  warnHint?: boolean;
+  /** Show the figure and its hint in full (they wrap, never truncate) — for words that must not be cut. */
+  full?: boolean;
 }) {
   const body = (
     <>
@@ -141,7 +147,8 @@ export function Stat({
       </span>
       <span
         className={cx(
-          "block font-display text-[22px] font-bold leading-tight truncate",
+          "block font-display text-[22px] font-bold leading-tight",
+          full ? "" : "truncate",
           tone === "money" ? "text-brand-700" : tone === "muted" ? "text-ink-muted" : "text-ink"
         )}
       >
@@ -155,7 +162,7 @@ export function Stat({
           />
         </span>
       ) : null}
-      {hint ? <span className="mt-0.5 block text-[12px] text-ink-muted truncate">{hint}</span> : null}
+      {hint ? <span className={cx("mt-0.5 block text-[12px]", warnHint ? "text-danger-700 font-semibold" : "text-ink-muted", warnHint || full ? "" : "truncate")}>{hint}</span> : null}
     </>
   );
 

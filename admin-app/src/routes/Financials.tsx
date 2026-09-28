@@ -141,6 +141,7 @@ export function FinancialsTab() {
               determined — the server says so (totals.owedDetermined). */}
           <Stat
             label="Owed now"
+            full={!totals.owedDetermined}
             tone={totals.owedDetermined ? "default" : "muted"}
             value={totals.owedDetermined ? money(totals.owed) : "Not determined"}
             hint={!totals.owedDetermined

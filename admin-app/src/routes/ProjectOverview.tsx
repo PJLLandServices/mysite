@@ -76,7 +76,7 @@ export function ProjectWorkspace() {
   // server decides which it is and says so in the hint.
   const b = data.billing;
   const billing = b && b.kind === "reconcile"
-    ? { value: "⚠ Reconcile", hint: b.hint, tone: "default" as const }
+    ? { value: "⚠ Reconcile", hint: b.hint, tone: "default" as const, warnHint: true }
     : !b || b.kind === "none"
     ? { value: "—", hint: b?.hint || "not invoiced yet", tone: "muted" as const }
     : b.kind === "owed"
@@ -182,7 +182,7 @@ export function ProjectWorkspace() {
             ].filter(Boolean).join(" · ") || undefined}
             onClick={() => goTab("design")}
           />
-          <Stat label="Billing" value={billing.value} tone={billing.tone} hint={billing.hint} onClick={() => goTab("financials")} />
+          <Stat label="Billing" value={billing.value} tone={billing.tone} hint={billing.hint} warnHint={"warnHint" in billing && billing.warnHint} onClick={() => goTab("financials")} />
         </div>
       </div>
 

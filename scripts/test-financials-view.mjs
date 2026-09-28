@@ -285,8 +285,18 @@ try {
     const mHeader = (await page.locator("text=Billing").first().locator("xpath=..").innerText()).replace(/\s+/g, " ");
     ok(/⚠ Payment reconciliation required · \$260\.00 unresolved/.test(mHeader) && !/none owed|outstanding/i.test(mHeader),
       `${name}: the header reads "⚠ Payment reconciliation required · $260.00 unresolved", never "None owed" (${mHeader})`);
+    // Truncation hides text without removing it, so innerText alone can't see
+    // a clipped "$260.00": the reconciliation line must fit, not be ellipsised.
+    const hintClip = await page.locator("text=Billing").first().locator("xpath=..").evaluate((el) =>
+      [...el.querySelectorAll("span")].filter((s) => /reconciliation required/i.test(s.textContent || ""))
+        .map((s) => ({ text: s.textContent, clipped: s.scrollWidth > s.clientWidth + 1 })));
+    ok(hintClip.length > 0 && hintClip.every((h) => !h.clipped),
+      `${name}: the header's reconciliation line is shown in full, amount included — not cut off (${j(hintClip)})`);
     const owedStat = (await page.locator("text=Owed now").first().locator("xpath=..").innerText()).replace(/\s+/g, " ");
     ok(/Not determined/i.test(owedStat), `${name}: "Owed now" is Not determined (${owedStat})`);
+    const owedClip = await page.locator("text=Owed now").first().locator("xpath=..").evaluate((el) =>
+      [...el.querySelectorAll("span")].map((s) => ({ text: s.textContent, clipped: s.scrollWidth > s.clientWidth + 1 })).filter((s) => s.clipped));
+    ok(owedClip.length === 0, `${name}: "Owed now — Not determined" and its reason are shown in full, not cut off (${j(owedClip)})`);
     if (SHOTS) {
       fs.mkdirSync(SHOTS, { recursive: true });
       await page.screenshot({ path: path.join(SHOTS, `financials-unrecorded-${name}.png`), fullPage: true });
