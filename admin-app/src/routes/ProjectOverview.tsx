@@ -67,20 +67,21 @@ export function ProjectWorkspace() {
   // describeAgreement, the same answer the Change Orders tab shows. No
   // fallback here: a second source would be a second interpretation.
   const value = data.agreement?.governing?.total;
-  const invoice = data.invoiceSummary;
   const design = data.siteBuilderSummary;
   const goTab = (tab: string) => navigate(`/app/projects/${encodeURIComponent(p.id)}/${tab}`);
 
-  // A settled DEPOSIT is not a settled job. Reading "Paid" on a job with
-  // the balance still to raise is the kind of glance that loses money,
-  // so the deposit case says what it actually is.
-  const billing = !invoice
-    ? { value: "—", hint: "not invoiced yet", tone: "muted" as const }
-    : Number(invoice.balanceDue) > 0
-      ? { value: money(invoice.balanceDue), hint: "outstanding", tone: "money" as const }
-      : invoice.invoiceRole === "deposit"
-        ? { value: "Deposit paid", hint: "balance not invoiced yet", tone: "default" as const }
-        : { value: "Paid", hint: invoice.paidAt ? shortDate(invoice.paidAt) : "nothing outstanding", tone: "default" as const };
+  // Billing is the server's answer (financials-view billingSummary) — the
+  // same model the Financials tab shows. A settled DEPOSIT is not a settled
+  // job, and a held balance invoice nobody has been sent is not owed: the
+  // server decides which it is and says so in the hint.
+  const b = data.billing;
+  const billing = !b || b.kind === "none"
+    ? { value: "—", hint: b?.hint || "not invoiced yet", tone: "muted" as const }
+    : b.kind === "owed"
+      ? { value: money(b.owed), hint: b.hint, tone: "money" as const }
+      : b.kind === "settled"
+        ? { value: "None owed", hint: b.hint, tone: "default" as const }
+        : { value: "Paid", hint: b.hint, tone: "default" as const };
 
   return (
     <>
@@ -201,7 +202,10 @@ export function ProjectOverviewTab() {
   const quote = data.linkedQuote;
   const snap = p.proposalSnapshot;
   const journal = (p.journalEntries || []).slice().sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
-  const action = nextAction(p, quote, data.invoiceSummary, data.siteBuilderSummary);
+  // The invoice the next step is about — the server's (billingSummary):
+  // a sent one still owing, else an unsent draft to send. Never a held
+  // balance invoice, which nobody can send or pay yet.
+  const action = nextAction(p, quote, data.billing?.actionInvoice ?? null, data.siteBuilderSummary);
 
   return (
     <div className="grid gap-4 lg:grid-cols-3">

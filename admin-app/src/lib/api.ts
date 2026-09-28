@@ -116,6 +116,17 @@ export interface Agreement {
   netChangeTotal: number | null;
 }
 
+/** The job's billing in one line (server: financials-view billingSummary).
+    kind: none — nothing invoiced; owed — money owed on sent invoices;
+    settled — nothing owed now, more still to invoice or send; paid. */
+export interface BillingSummary {
+  kind: "none" | "owed" | "settled" | "paid";
+  owed: number;
+  received: number;
+  hint: string;
+  actionInvoice: InvoiceSummary | null;
+}
+
 export interface ContractTotals {
   /** Sum of the signed agreements of every active project, in dollars. */
   activeContractValue: number;
@@ -274,6 +285,9 @@ export const projectsApi = {
       agreement?: Agreement | null;
       invoiceSummary?: InvoiceSummary | null;
       siteBuilderSummary?: SiteBuilderSummary | null;
+      /** The header's Billing card (server: financials-view billingSummary)
+          — the same model the Financials tab shows. */
+      billing?: BillingSummary | null;
     }>(`/api/projects/${encodeURIComponent(id)}`)
 };
 
@@ -578,4 +592,86 @@ export interface ProjectChangeOrders {
 export const changeOrdersApi = {
   get: (projectId: string) =>
     api.get<ProjectChangeOrders>(`/api/projects/${encodeURIComponent(projectId)}/change-orders`)
+};
+
+/* The Financials tab (2026-09-28): everything comes from the server
+   (lib/financials-view.js). The screen adds up nothing. */
+export interface FinancialsPayment {
+  id: string;
+  invoiceId: string;
+  amount: number;
+  method: string;
+  methodLabel: string;
+  receivedAt: string | null;
+}
+
+export interface FinancialsInvoice {
+  id: string;
+  role: string;
+  roleLabel: string;
+  status: string;
+  statusLabel: string;
+  live: boolean;
+  issued: boolean;
+  held: boolean;
+  total: number;
+  amountPaid: number;
+  /** What is still owed on it — 0 for a void invoice. */
+  owed: number;
+  createdAt: string | null;
+  sentAt: string | null;
+  paidAt: string | null;
+  needsReconciliation: boolean;
+  payments: FinancialsPayment[];
+  note: string | null;
+  href: string;
+}
+
+export interface ProjectFinancials {
+  projectId: string;
+  billingMode: "fixed_price" | "time_and_material";
+  billingModeLabel: string;
+  contract: { id: string; version: number; subtotal: number; total: number; href: string } | null;
+  pendingRevision: { id: string; total: number } | null;
+  totals: {
+    invoiced: number;
+    received: number;
+    owed: number;
+    /** Fixed price with a signed contract only; null otherwise. */
+    notYetInvoiced: number | null;
+    drafts: { count: number; total: number };
+    issuedCount: number;
+    voidCount: number;
+  };
+  deposit: {
+    amount: number;
+    stage: string;
+    stageLabel: string;
+    counted: boolean;
+    invoiceId: string | null;
+    balanceInvoiceId: string | null;
+    sentence: string;
+  } | null;
+  invoices: FinancialsInvoice[];
+  payments: FinancialsPayment[];
+  reconcile: string[];
+  preview: {
+    billingMode: string | null;
+    subtotal?: number;
+    hst?: number;
+    total?: number;
+    totalHours?: number | null;
+    rate?: number | null;
+    unknownSkus?: string[];
+    lineItems?: Array<{ label: string; qty: number; price: number; lineTotal: number }>;
+    note?: string | null;
+    error?: string;
+  } | null;
+  holds: Array<{ key: string; message: string }>;
+  classicHref: string | null;
+}
+
+export const financialsApi = {
+  get: (projectId: string) =>
+    api.get<ProjectFinancials>(`/api/projects/${encodeURIComponent(projectId)}/financials`)
 };

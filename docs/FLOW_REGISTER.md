@@ -2,6 +2,37 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-28 (Financials tab, read-only — step 5 of the Project Workspace; stacked on Fix B #351; no PASS flow touched):**
+The workspace's Financials tab replaces its placeholder. `GET /api/projects/:id/financials`
+(`lib/financials-view.js`) returns every figure and sentence the tab shows, over rules that already
+exist:
+- the job's invoices: `projects.invoicesForProject`;
+- `isLiveInvoice`;
+- the signed agreement;
+- the deposit lifecycle;
+- the billing preview: `billingPreviewFor`, now shared with `GET …/billing-preview`;
+- the completion check's money blockers.
+
+Totals are added up there in cents:
+- **invoiced:** sent live invoices;
+- **received:** the live ledgers;
+- **owed now:** sent live invoices, where held, void and marked-paid invoices owe nothing;
+- **not yet invoiced:** fixed price only.
+
+**The header now agrees with the tab.** Its Billing card and next action read `billingSummary` of
+the same model, instead of classifying one invoice in the browser. That classification called a
+held balance invoice "outstanding" and offered "Collect payment" on an invoice nobody could send.
+
+**Read-only:** payments, sending, revising and voiding stay on the classic invoice pages.
+
+**Test:** `scripts/test-financials-view.mjs` (44 checks, in `build:check`). It covers:
+- the route's totals equal the invoices' own sums, worked out independently;
+- part-paid, marked-paid and held deposits;
+- a void invoice;
+- a T&M job with no rate;
+- the header agreeing with the tab;
+- desktop and phone renders: the server's figures, no actions, no sideways scroll;
+- the screen does no money arithmetic.
 **2026-09-28 (Financials Fix B: one rule for a job's invoices, a void invoice is never owed, a T&M job is billed at its preview's prices; FLOW-01/02 (customer portal, PASS) touched — re-verified by its suites, awaiting a walked acceptance):**
 Found mapping the Financials tab.
 1. **Three rules for "this job's invoices".**

@@ -176,7 +176,12 @@ classic link until the replacement has been walked on a real job.
    been walked on a real job (R5).
 
 4. **Financials: does "raise the invoice" live here?** Deferred to step 5,
-   same reason.
+   same reason. **Built read-only (2026-09-28), after Fix A (#350: a deposit
+   counts when its invoice is paid, however it was paid) and Fix B (#351:
+   one rule for a job's invoices, a void invoice never owed, one parts
+   catalog) — Patrick's order.** Recording payments, sending, revising and
+   voiding stay on the classic invoice pages until this screen has been
+   walked on a real job (R5).
 
 ## The rule for every tab in this phase
 
@@ -361,4 +366,39 @@ is the unsigned draft. It now reads the signed agreement
 **Not in this step:** linking a change to specific tasks or materials. The
 change request carries line items and photos but no task or SKU link; adding
 one is a data change, deliberately left for when actions move here.
+
+## Step 5 — Financials (read-only), 2026-09-28
+
+Built after the money path was made safe:
+- **#350 (Fix A):** the deposit follows its invoice's paid state from every writer, and reversals
+  un-count it.
+- **#351 (Fix B):** one rule for a job's invoices, a void invoice is never owed, and the preview
+  and final invoice share one parts catalog.
+
+`GET /api/projects/:id/financials` (`lib/financials-view.js`) returns every figure and sentence
+the tab shows:
+- **the signed contract**, with HST: `describeAgreement`, as the header, list and Dashboard show
+  it; for T&M it is labelled an estimate;
+- **invoiced:** sent live invoices;
+- **received:** every live invoice's ledger;
+- **owed now:** what sent live invoices still owe. A held balance invoice is not owed, a void one
+  is nothing, and one marked paid owes nothing but says what isn't recorded as a payment;
+- **not yet invoiced:** fixed price only;
+- **the deposit and its stage;**
+- **every invoice and payment;**
+- **open payment exceptions;**
+- **the billing preview:** the same `billingPreviewFor` the preview route uses;
+- **the completion check's money blockers.**
+
+All of it is added up on the server, in cents.
+
+**The header now agrees with the tab.** The workspace header's Billing card and next action read
+the same model (`billingSummary`), not one invoice classified in the browser. Before, a job with a
+paid deposit and a held balance invoice read **"$3,390.00 outstanding"** in the header, and
+"Collect payment … invoice not sent yet" for an invoice nobody could send. It now reads
+**"None owed · $1,000.00 received · $3,390.00 not invoiced yet"**, as the tab does.
+`invoiceSummary` stays on the response for the classic page.
+
+**Not in this step:** hours already invoiced when a correction lands (the forward dependency
+noted under Step 2), and the final-invoice review, which belongs to Closeout (out of scope for this phase).
 
