@@ -897,6 +897,31 @@ function createPartPhotos({ dataDir, sharp }) {
     });
   }
 
+  // Quality upgrade (Patrick, Sep 28 2026): the same picture at a larger
+  // size replaces the group's photo. Nothing about the decision changes —
+  // tier, approvedBy, approvedAt, links, the AI result and the fitting all
+  // stay; the old hash goes to the history as "quality-upgrade" and the
+  // source records what it was upgraded from. Refused (skipped, not
+  // thrown) when the photo is no longer the one the plan looked at.
+  async function upgradePhotoQuality(groupId, { fromHash, to, imageUrl, by }) {
+    if (!HASH_RE.test(String(fromHash || "")) || !to || !HASH_RE.test(String(to.hash || ""))) throw new Error("Bad upgrade.");
+    if (!fileExists(to.hash)) throw new Error("The larger copy's file is missing — rebuild the plan.");
+    return mutate(async (groups) => {
+      const g = groups[groupId];
+      if (!g) return { skipped: "group no longer exists" };
+      if (!g.photo || g.photo.hash !== fromHash) return { skipped: "the photo changed since the plan was built" };
+      if (!SHOWABLE_GROUP_TIERS.has(g.tier)) return { skipped: "the photo is no longer live" };
+      const now = new Date().toISOString();
+      const before = { hash: g.photo.hash, width: g.photo.width || null, height: g.photo.height || null, imageUrl: (g.source && g.source.imageUrl) || null };
+      (g.history ||= []).push({ hash: before.hash, replacedAt: now, replacedBy: "quality-upgrade", by });
+      g.photo = { hash: to.hash, width: to.width || null, height: to.height || null, sizes: to.sizes || null, source: to.source || null, quality: to.quality || null };
+      g.source = { ...(g.source || {}), imageUrl: imageUrl || (g.source && g.source.imageUrl) || null, upgradedFrom: { ...before, at: now, by } };
+      g.updatedAt = now;
+      await log({ action: "photo.quality-upgrade", groupId, from: before.hash, to: to.hash, by });
+      return { groupId, from: before.hash, to: to.hash };
+    });
+  }
+
   // Reject the AI's result for this SKU: none of its candidates is right.
   // Rejected images are remembered so a later run can never auto-approve
   // them. Rejecting an AUTO-APPROVED photo also takes down every other
@@ -973,7 +998,7 @@ function createPartPhotos({ dataDir, sharp }) {
   return {
     imagePath, ensureThumb, resolveImageFile, fileExists, readStoresSync, mergeInto, snapshot,
     setPhoto, setPhotoFromUrl, linkToGroup, unlink, reconfirm, removeGroupPhoto, setFittingDefault,
-    saveCandidateImage, inspect, readCandidateImage, recordAiResult, autoLinkSameFitting,
+    saveCandidateImage, inspect, readCandidateImage, recordAiResult, autoLinkSameFitting, upgradePhotoQuality,
     approveCandidate, rejectAiResult
   };
 }

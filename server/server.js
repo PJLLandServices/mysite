@@ -313,6 +313,16 @@ const photoBackfill = require("./lib/photo-backfill").createBackfill({
   }
 });
 const { buildReviewQueues } = require("./lib/photo-review");
+// Quality upgrade of live photos (Patrick, Sep 28 2026): the same picture at
+// a larger size, from the page it came from — a plan first, applied only
+// for the exact list shown; everything unprovable goes to a review queue.
+const photoQuality = require("./lib/photo-quality-upgrade").createQualityUpgrade({
+  dataDir: DATA_DIR, store: partPhotos, sharp,
+  getParts: () => (PARTS && PARTS.parts) || {},
+  fetchPage: (url) => partPhotosLib.fetchPageSafely(url),
+  fetchImage: (url) => partPhotosLib.fetchImageSafely(url),
+  log: (entry) => console.log("[photo-quality]", JSON.stringify(entry))
+});
 // Supplier company logos for the picker's supplier chip (P-PJL-35 M2a).
 const supplierLogos = require("./lib/supplier-logos").createSupplierLogos({ dataDir: DATA_DIR, sharp });
 const LEADS_FILE = path.join(DATA_DIR, "leads.json");
@@ -14338,6 +14348,57 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ---------- Quality upgrade of live photos (Patrick, Sep 28 2026) ----------
+  //   GET  /api/part-photo-quality/plan            the cached plan: deterministic upgrades + review rows (staff)
+  //   POST /api/part-photo-quality/plan            (re)build it — reads each photo's product page (admin)
+  //   POST /api/part-photo-quality/upgrade {hashes} apply exactly the upgrades shown (admin)
+  //   POST /api/part-photo-quality/review/:groupId {action: keep} (admin)
+  // A replacement of the picture only: part match, fitting, approval and
+  // confidence are never touched (lib/part-photos.upgradePhotoQuality).
+  if (req.method === "GET" && pathname === "/api/part-photo-quality/plan") {
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    try { return sendJson(res, 200, { ok: true, ...(await photoQuality.summary()) }); }
+    catch (err) { return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't read the quality plan."] }); }
+  }
+  if (req.method === "POST" && pathname === "/api/part-photo-quality/plan") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    const by = await actorLabel(req);
+    try {
+      // Slow (a page and 1–3 images per photo): start it and answer at once; GET reports progress.
+      photoQuality.buildPlan({ by }).catch((err) => console.error("[photo-quality] plan failed:", err && err.message));
+      await settings.recordAudit({ who: by, action: "part-photo.quality.plan", note: "Started building the photo quality-upgrade plan" });
+      return sendJson(res, 200, { ok: true, ...(await photoQuality.summary()) });
+    } catch (err) { return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't build the plan."] }); }
+  }
+  if (req.method === "POST" && pathname === "/api/part-photo-quality/upgrade") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    const by = await actorLabel(req);
+    try {
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const out = await photoQuality.apply({ by, hashes: Array.isArray(payload && payload.hashes) ? payload.hashes.map(String) : null });
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({ who: by, action: "part-photo.quality.upgrade", note: `Upgraded ${out.applied.length} live photo(s) to a larger copy of the same picture${out.skipped.length ? `; ${out.skipped.length} skipped` : ""}`, after: out });
+      return sendJson(res, 200, { ok: true, ...out });
+    } catch (err) { return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't apply the upgrades."] }); }
+  }
+  const qualityReviewMatch = pathname.match(new RegExp("^/api/part-photo-quality/review/([^/]+)$"));
+  if (qualityReviewMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    const by = await actorLabel(req);
+    try {
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const groupId = decodeURIComponent(qualityReviewMatch[1]);
+      const out = await photoQuality.resolveReview(groupId, { action: String(payload.action || ""), by });
+      await settings.recordAudit({ who: by, action: "part-photo.quality.review", note: `Quality review: kept ${groupId} as is`, after: out });
+      return sendJson(res, 200, { ok: true, groupId, ...out });
+    } catch (err) { return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't save the review."] }); }
+  }
+
   if (req.method === "GET" && pathname === "/api/part-photo-review") {
     if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
     try {
@@ -14351,9 +14412,11 @@ async function handleApi(req, res, pathname) {
         parts: PARTS.parts, groups, links,
         fittings: await photoBackfill.fittingsToConfirm()
       });
+      const quality = await photoQuality.summary();
       const liveAuto = Object.values(PARTS.parts).filter((p) => p.photoState === "verified" && p.photo && String(p.photo.approvedBy || "").startsWith("auto:")).length;
       const progress = { ...status.catalog, liveAuto, errors: status.run ? status.run.counts.error : 0 };
-      return sendJson(res, 200, { ok: true, ...queues, progress, run: status.run, apiKeySet: !!process.env.ANTHROPIC_API_KEY });
+      // Quality review rows are a queue of their own; the plan summary and the deterministic upgrades ride alongside.
+      return sendJson(res, 200, { ok: true, ...queues, quality: quality.review, qualityPlan: { plan: quality.plan, counts: quality.counts, upgrades: quality.upgrades }, progress, run: status.run, apiKeySet: !!process.env.ANTHROPIC_API_KEY });
     } catch (err) {
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't read the review queue."] });
     }

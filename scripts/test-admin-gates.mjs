@@ -285,3 +285,22 @@ process.exit(fail ? 1 : 0);
   assert.match(block, /new URL\(req\.url, "http:\/\/localhost"\)\.searchParams\.get\("skus"\)/, 'benchmark-plan parses its query from req.url');
   passed++;
 }
+
+// Quality upgrade of live photos (Patrick, Sep 28 2026): every write is
+// admin-gated, the apply route passes only the confirmed hash list, and
+// the plan never runs on its own.
+{
+  assert.equal(needsAuth('GET', '/api/part-photo-quality/plan'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-quality/plan'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-quality/upgrade'), 'user');
+  assert.equal(needsAuth('POST', '/api/part-photo-quality/review/PG-0001'), 'user');
+  for (const p of ['pathname === "/api/part-photo-quality/plan"', 'pathname === "/api/part-photo-quality/upgrade"']) {
+    const at = SRC.indexOf('req.method === "POST" && ' + p);
+    assert.ok(at > 0, `POST route for ${p} exists`);
+    assert.match(SRC.slice(at, at + 400), /requireAdmin\(req\)/, `${p} POST requires admin`);
+  }
+  assert.equal((SRC.match(/photoQuality\.apply\(/g) || []).length, 1, 'exactly one apply call site');
+  assert.match(SRC, /photoQuality\.apply\(\{ by, hashes: Array\.isArray\(payload && payload\.hashes\)/, 'apply passes only the confirmed list');
+  assert.equal((SRC.match(/photoQuality\.buildPlan\(/g) || []).length, 1, 'the plan is built only from its admin route');
+  passed++;
+}
