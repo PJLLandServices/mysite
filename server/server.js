@@ -14247,7 +14247,9 @@ async function handleApi(req, res, pathname) {
     if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
     try {
       await photoBackfill.load();
-      const q = String(url.searchParams.get("skus") || "").split(",").map((s) => s.trim()).filter(Boolean);
+      // This handler has no parsed `url` in scope (the first production call
+      // answered "url is not defined", 2026-09-28): parse the query here.
+      const q = String(new URL(req.url, "http://localhost").searchParams.get("skus") || "").split(",").map((s) => s.trim()).filter(Boolean);
       return sendJson(res, 200, { ok: true, ...photoBackfill.benchmarkPlan(q.length ? { skus: q } : {}), run: photoBackfill.status().run, apiKeySet: !!process.env.ANTHROPIC_API_KEY });
     } catch (err) {
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't build the benchmark plan."] });
