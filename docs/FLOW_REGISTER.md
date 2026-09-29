@@ -153,6 +153,60 @@ fails 19**). It covers:
   only lost its own best-effort deposit call; the store makes it.
 - **Suites:** listed in the PR.
 - **Awaiting a walked acceptance:** the next real deposit payment.
+**2026-09-28 (Financials Fix B: one rule for a job's invoices, a void invoice is never owed, a T&M job is billed at its preview's prices; FLOW-01/02 (customer portal, PASS) touched — re-verified by its suites, awaiting a walked acceptance):**
+Found mapping the Financials tab.
+1. **Three rules for "this job's invoices".**
+   - The workspace looked up deposit and balance invoices on the quote chain.
+   - The deposit lifecycle used the quote's own pointers.
+   - The **customer portal** matched `invoice.projectId`, which a deposit invoice (made at
+     acceptance, before the project exists) and the held balance invoice never carry. So the portal
+     listed the deposit as a loose invoice in service history, never on its project card, and the
+     card's **"deposit paid" stage could not be reached**.
+2. **A void invoice was "the" invoice.** The workspace picked the newest deposit or balance
+   invoice, void or not. The Overview's "Billing" and "Collect payment" then showed a voided
+   invoice's balance as money owed.
+3. **Two parts catalogs.**
+   - The T&M billing preview priced materials from the effective catalog (admin edits, supplier
+     prices).
+   - The completion cascade re-read raw `parts.json`.
+   - So an edited price previewed at one figure and billed at another (test: $123.45 previewed,
+     $109.74 billed), or blocked the invoice as an unknown SKU.
+
+**The rules, once:**
+- **`projects.invoiceBelongsToProject` / `invoicesForProject(s)`.** An invoice is the project's
+  when any of these holds:
+  - it is tagged with it (a tag for another project is final);
+  - it is its final invoice;
+  - it is a deposit or balance invoice on the project's quote chain. The chain includes every
+    version of its billing anchor, its `sourceQuoteId`, and, before acceptance, the design's
+    linked quote.
+- **Both readers now ask it:** the workspace (`GET /api/projects/:id`) and the portal. The portal
+  uses one read: its loose-invoice list excludes a project's invoices, and the project card shows
+  them.
+- **`projects.isLiveInvoice`:** a void invoice stays in the history but is never picked as the
+  job's invoice or its final invoice.
+- **Completion passes the route's effective catalog** (`deps.partsCatalog: PARTS`) to the cascade.
+  Raw `parts.json` is a logged fallback only.
+
+**The workflow, walked:**
+- **Customer: a visible change.** On the portal, a paid or sent deposit (and a sent balance)
+  invoice now appears on the project card, and not as a loose service-history entry. The card
+  reaches "deposit paid". Drafts and voids stay hidden, as before.
+- **Patrick:** the Overview's Billing card and "Collect payment" no longer read a voided invoice.
+  A T&M invoice matches its preview.
+- **Linked records and money are unchanged:** no invoice, payment or lifecycle write was added.
+- **Deliberately untouched (for the Financials tab):** the Overview still summarises ONE invoice,
+  and its paid/outstanding wording is still decided in the browser. The pay page, receipts and
+  every payment route (FLOW-23) are untouched.
+
+**Test:** `scripts/test-project-invoices.mjs` (21 checks, in `build:check`; **the old code fails
+14**). It covers:
+- deposit, then balance;
+- a newer voided duplicate deposit;
+- the portal card, stage and loose list;
+- a T&M part at an edited price, from preview to final invoice.
+
+`test-project-invoice-resolution` (the pre-acceptance design-linked quote) still passes.
 **2026-09-27 (One contract value everywhere: projects list and Dashboard; stacked on the Change Orders tab; no PASS flow touched):**
 Patrick: *"Otherwise the workspace will show the correct signed contract while the list and Dashboard
 show old snapshot values, and the Dashboard total will still be browser arithmetic."*
