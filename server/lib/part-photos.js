@@ -72,7 +72,8 @@ function fingerprintOf(part) {
 //   verified       — may be shown
 //   none           — no photo yet (not linked, or the group has none)
 //   tbd            — something is waiting on the review screen
-//   not_confident  — no reliable photo exists
+//   not_confident  — evidence was checked and found insufficient or wrong
+//   needs_research — the cheap lookup found nothing to check (Patrick, Sep 28 2026)
 //   changed        — the part was edited after the photo was matched
 // Only "verified" carries a photo. The order matters: a To-be-determined
 // LINK hides even a verified group's photo, because the question "is this
@@ -85,6 +86,7 @@ function photoStateFor(sku, part, groups, links, fileExists) {
   if (!SHOWABLE_LINK_TIERS.has(link.linkTier)) return { state: "tbd", group };
   if (link.fingerprint !== fingerprintOf(part)) return { state: "changed", group };
   if (group.tier === "not_confident") return { state: "not_confident", group };
+  if (group.tier === "needs_research") return { state: "needs_research", group };
   if (group.tier === "tbd") return { state: "tbd", group };
   if (!SHOWABLE_GROUP_TIERS.has(group.tier) || !group.photo) return { state: "none", group };
   if (!HASH_RE.test(group.photo.hash || "")) return { state: "none", group };
@@ -766,7 +768,7 @@ function createPartPhotos({ dataDir, sharp }) {
   }
 
   // Record what the AI backfill decided for one SKU.
-  //   result: { tier: confident|tbd|not_confident, kind, reason, runId,
+  //   result: { tier: confident|tbd|not_confident|needs_research, kind, reason, runId,
   //             identified, candidates: [{ hash, width, height, source, checks, tier }],
   //             chosen: index of the best candidate or -1 }
   //   autoApprove: only then can a Confident result go live.
@@ -776,7 +778,7 @@ function createPartPhotos({ dataDir, sharp }) {
   async function recordAiResult(sku, part, result, { autoApprove = false } = {}) {
     if (!part) throw new Error("Unknown part.");
     const { tier } = result;
-    if (!["confident", "tbd", "not_confident"].includes(tier)) throw new Error(`Unknown tier: ${tier}`);
+    if (!["confident", "tbd", "not_confident", "needs_research"].includes(tier)) throw new Error(`Unknown tier: ${tier}`);
     return mutate(async (groups, links) => {
       const now = new Date().toISOString();
       const existing = links[sku] && groups[links[sku].groupId];
@@ -815,6 +817,9 @@ function createPartPhotos({ dataDir, sharp }) {
         g.approvedAt = now;
         g.autoApprovedRun = result.runId || null;
         live = true;
+      } else if (tier === "needs_research") {
+        g.tier = "needs_research";
+        g.reason = result.reason || "Needs research: the deterministic lookup found nothing.";
       } else if (tier === "not_confident") {
         g.tier = "not_confident";
         g.reason = result.reason || "No reliable photo found.";

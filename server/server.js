@@ -277,7 +277,8 @@ const photoAi = (() => {
     passesFor: photoAiLib.passesFor,
     find: (...a) => get().find(...a),
     verify: (...a) => get().verify(...a),
-    compare: (...a) => get().compare(...a)
+    compare: (...a) => get().compare(...a),
+    models: { finder: photoAiLib.MODEL, vision: photoAiLib.MODEL_VISION }
   };
 })();
 // Fast Product Lookup (Patrick, Sep 28 2026): the supplier's own search
@@ -294,6 +295,11 @@ const photoBackfill = require("./lib/photo-backfill").createBackfill({
   manufacturers: () => (PARTS && PARTS.manufacturers) || [],
   ai: photoAi,
   fastLookup: photoFastLookup,
+  // The standing model-spend cap across runs, in dollars (Patrick, Sep 28
+  // 2026: "this should not cost me any more than $10"), and the web-search
+  // finder off unless a wave is started with it on.
+  budgetUsd: Number.isFinite(Number(process.env.PHOTO_BUDGET_USD)) && process.env.PHOTO_BUDGET_USD !== "" ? Number(process.env.PHOTO_BUDGET_USD) : 10,
+  finderDefault: false,
   fetchPage: (url) => partPhotosLib.fetchPageSafely(url),
   fetchImage: (url) => partPhotosLib.fetchImageSafely(url),
   log: (entry) => console.log("[photo-backfill]", JSON.stringify(entry)),
@@ -14228,8 +14234,9 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req).catch(() => ({}));
       // `skus` is the list Patrick confirmed in the dialog; the engine
       // compares it with the plan it would run and refuses any difference.
+      // No other field of the payload is read: a wave has no finder switch.
       const status = await photoBackfill.startWave({ by, skus: Array.isArray(payload && payload.skus) ? payload.skus.map(String) : null });
-      await settings.recordAudit({ who: by, action: "part-photo.backfill.wave", note: `Started a photo backfill wave (${status.run.counts.total} parts, auto-approve off): ${status.run.wave.skus.join(", ")}`, after: status.run });
+      await settings.recordAudit({ who: by, action: "part-photo.backfill.wave", note: `Started a photo backfill wave (${status.run.counts.total} parts, auto-approve off, no web search, budget $${status.run.budget.spentUsd.toFixed(2)} spent of $${status.run.budget.usd}): ${status.run.wave.skus.join(", ")}`, after: status.run });
       return sendJson(res, 200, { ok: true, ...status });
     } catch (err) {
       return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't start the wave."] });

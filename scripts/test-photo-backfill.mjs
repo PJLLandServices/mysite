@@ -84,7 +84,10 @@ const V = (over = {}) => Object.fromEntries(ev.VISION_KEYS.map((k) => [k, { resu
 {
   const P = { result: "pass" }, F = { result: "fail" }, U = { result: "unknown" };
   const t = (o) => ev.tierFor({ hasCandidate: true, ...o }).tier;
-  check("no candidate → not confident", ev.tierFor({ kind: "branded", hasCandidate: false }).tier === "not_confident");
+  // No candidate image = nothing was evaluated → Needs research (Patrick,
+  // Sep 28 2026), never "Not confident", which is reserved for evidence
+  // that was checked and found wrong.
+  check("no candidate → needs research", ev.tierFor({ kind: "branded", hasCandidate: false }).tier === "needs_research" && ev.tierFor({ kind: "generic", hasCandidate: false }).tier === "needs_research");
   check("branded: part # pass + photo pass → confident", t({ kind: "branded", partNumber: P, vision: V() }) === "confident");
   check("branded: n/a vision attributes still pass", t({ kind: "branded", partNumber: P, vision: V({ angle: "n/a", reducing: "n/a" }) }) === "confident");
   check("branded: part # unknown → TBD", t({ kind: "branded", partNumber: U, vision: V() }) === "tbd");
@@ -323,6 +326,7 @@ function harness(dir, over = {}) {
     fetchImage: async (url) => ({ buffer: await pngFor(url), finalUrl: url }),
     now: () => clock, sleep: async (ms) => { clock += ms; await new Promise((r) => setImmediate(r)); },
     concurrency: over.concurrency || 2,
+    finderDefault: true, // these suites exercise the finder path; the engine default is off (Patrick, Sep 28 2026)
     afterRun: over.afterRun || null
   });
   return { b, store, counts, peak, catalog, parts: () => store.mergeInto(structuredClone(catalog)), clock: () => clock };
@@ -348,12 +352,12 @@ const report = [];
   check("every SKU finished", st.order.every((s) => st.items[s].step === "done"), JSON.stringify(Object.fromEntries(st.order.map((s) => [s, st.items[s].step + ":" + st.items[s].lastError]))));
   const tiers = Object.fromEntries(st.order.map((s) => [s, st.items[s].result.tier]));
   const expect = { PGPADJ: "confident", PGPADJB: "confident", PGV100G: "not_confident", HSPROS04: "tbd", RBN10H: "not_confident",
-    RBXFD1: "tbd", RBXFD2: "tbd", NOPE: "not_confident", TEE34: "confident", TEE34B: "tbd", ELB12: "not_confident", CPL1: "tbd" };
+    RBXFD1: "tbd", RBXFD2: "tbd", NOPE: "needs_research", TEE34: "confident", TEE34B: "tbd", ELB12: "not_confident", CPL1: "tbd" };
   for (const [sku, t] of Object.entries(expect)) check(`tier ${sku} = ${t}`, tiers[sku] === t, `got ${tiers[sku]} (${st.items[sku].result.reason})`);
   const parts = h.parts();
   check("auto-approve OFF: no AI photo is live", RUN_SKUS.every((s) => parts[s].photoState !== "verified"));
   check("auto-approve OFF: Confident waits as TBD with a clear reason", parts.PGPADJ.photoState === "tbd" && /auto-approve is off/.test((await h.store.snapshot()).groups[(await h.store.snapshot()).links.PGPADJ.groupId].reason));
-  check("Not confident shows as not_confident", parts.PGV100G.photoState === "not_confident" && parts.NOPE.photoState === "not_confident");
+  check("Not confident shows as not_confident (evidence checked and found wrong); a part nothing was found for shows as needs_research", parts.PGV100G.photoState === "not_confident" && parts.NOPE.photoState === "needs_research");
   check("LIVE1's photo untouched", (await h.store.snapshot()).groups[(await h.store.snapshot()).links.LIVE1.groupId].photo.hash === liveBefore);
   check("generic: compare only runs with two independent sources", h.counts.compare.TEE34 === 1 && h.counts.compare.ELB12 === 1 && !h.counts.compare.TEE34B && !h.counts.compare.CPL1);
   check("branded never uses the open web", !Object.keys(FIND).filter((s) => CATALOG[s].manufacturer).some((s) => st.items[s].work.found && st.items[s].work.found.candidates.some((c) => c.pass === 3)));
@@ -363,7 +367,7 @@ const report = [];
   check("HSPROS04: only the manufacturer's number on page → unknown", st.items.HSPROS04.work.checked[0].partNumber.result === "unknown");
   check("candidates stored on the group with their checks", (() => { const s = h.store.readStoresSync(); const g = s.groups[s.links.TEE34.groupId]; return g.candidates.length === 2 && g.candidates.every((c) => c.checks && c.source.domain); })());
   check("every AI result is logged", fs.readFileSync(path.join(dir, "part-photos-log.jsonl"), "utf8").split("\n").filter((l) => l.includes('"ai.result"')).length === 13); // 12 + LIVE1's fixture
-  check("progress counts add up", (() => { const c = h.b.status().run.counts; return c.total === 12 && c.done === 12 && c.live === 0 && c.review + c.noReliable === 12; })(), JSON.stringify(h.b.status().run.counts));
+  check("progress counts add up", (() => { const c = h.b.status().run.counts; return c.total === 12 && c.done === 12 && c.live === 0 && c.review + c.noReliable + c.needsResearch === 12 && c.needsResearch === 1; })(), JSON.stringify(h.b.status().run.counts));
   check("never more than 2 SKUs in flight", h.peak.v <= 2 && h.peak.v >= 2, `peak ${h.peak.v}`);
   for (const sku of st.order) report.push({ sku, kind: CATALOG[sku].manufacturer ? "branded" : "generic", off: tiers[sku], reason: st.items[sku].result.reason,
     pn: !CATALOG[sku].manufacturer ? "n/a" : st.items[sku].work.checked && st.items[sku].work.checked[0] && st.items[sku].work.checked[0].partNumber ? st.items[sku].work.checked[0].partNumber.result : "-",
@@ -377,7 +381,8 @@ const report = [];
   const liveNow = RUN_SKUS.filter((s) => p2[s].photoState === "verified").sort();
   check("auto-approve ON: exactly the Confident SKUs go live", JSON.stringify(liveNow) === JSON.stringify(["PGPADJ", "PGPADJB", "TEE34"]), liveNow.join());
   check("TBD never live, even with auto-approve ON", ["HSPROS04", "RBXFD1", "RBXFD2", "TEE34B", "CPL1"].every((s) => p2[s].photoState === "tbd"));
-  check("Not confident never live, even with auto-approve ON", ["PGV100G", "RBN10H", "NOPE", "ELB12"].every((s) => p2[s].photoState === "not_confident"));
+  check("Not confident never live, even with auto-approve ON", ["PGV100G", "RBN10H", "ELB12"].every((s) => p2[s].photoState === "not_confident"));
+  check("Needs research never live, even with auto-approve ON", p2.NOPE.photoState === "needs_research" && p2.NOPE.photo === null);
   const g2 = h.store.readStoresSync();
   const liveG = g2.groups[g2.links.PGPADJ.groupId];
   check("auto-approved photo is marked as such", liveG.approvedBy === "auto:confident" && liveG.source.method === "ai" && liveG.tier === "confident");
@@ -811,7 +816,7 @@ const pageWith = (visible, images = [], extra = "") => `<html><head>${images.map
   check("counters: 2 Claude calls (find + vision), 2 searches, 1 model fetch, 1 page + 1 image by our server, tokens kept", u.calls === 2 && u.searches === 2 && u.webFetches === 1 && u.pageFetches === 1 && u.imageFetches === 1 && u.in === 600 && u.out === 30, JSON.stringify(u));
   check("counters: the run totals add up across parts", st.usage.calls === st.order.reduce((n, s) => n + it(s).usage.calls, 0) && st.usage.pageFetches === st.order.reduce((n, s) => n + it(s).usage.pageFetches, 0) && st.usage.calls > 2);
 
-  check("pattern: official page with NO product image at all → No reliable photo, with the reason", it("PGV100G").result.tier === "not_confident" && cands("PGV100G").length === 0 && (it("PGV100G").work.checked[0].notes || []).some((n) => /no product image found/.test(n)));
+  check("pattern: official page with NO product image at all → Needs research (nothing to evaluate), with the reason", it("PGV100G").result.tier === "needs_research" && cands("PGV100G").length === 0 && (it("PGV100G").work.checked[0].notes || []).some((n) => /no product image found/.test(n)));
   check("pattern 2 (POPO100300, Oil Creek base SKU): official page, our number absent → To be determined WITH the photo, not 'no reliable photo'", it("POPO100300").result.tier === "tbd" && cands("POPO100300").length === 1 && it("POPO100300").work.checked[0].partNumber.result === "unknown" && /base-SKU|needs a look/.test(it("POPO100300").work.checked[0].partNumber.reason), JSON.stringify(it("POPO100300").result));
   check("pattern 2: unknown ≠ pass — it can never be Confident this way", it("POPO100300").result.tier !== "confident");
   check("pattern 3 (0072204, blank manufacturer, Watts): searched as BRANDED on the Watts site first", asked["0072204"][0].pass === 1 && asked["0072204"][0].mfr === "watts" && asked["0072204"][0].proposed === true && asked["0072204"][0].catalogMfr === "");
@@ -903,7 +908,7 @@ const pageWith = (visible, images = [], extra = "") => `<html><head>${images.map
   const s = h.store.readStoresSync();
   const aiOf = (sku) => s.groups[s.links[sku].groupId].ai;
   const q = require(path.join(ROOT, "server", "lib", "photo-review.js")).buildReviewQueues({ parts: h.parts(), groups: s.groups, links: s.links });
-  const card = (sku) => [...q.tbd, ...q.notConfident].find((c) => c.sku === sku);
+  const card = (sku) => [...q.tbd, ...q.notConfident, ...q.needsResearch].find((c) => c.sku === sku);
 
   const p404 = st.items.P404.work.pages;
   check("404 page: recorded as failed with the status and a concise note", p404.length === 1 && p404[0].fetch === "failed" && p404[0].status === 404 && p404[0].note === "HTTP 404" && p404[0].official === true && p404[0].url === `${OFFICIAL}/does-not-exist`, JSON.stringify(p404));
@@ -1034,7 +1039,7 @@ const pageWith = (visible, images = [], extra = "") => `<html><head>${images.map
   check("…the supplier page is checked under the normal rules and the part ends Confident", it("PGV100G").result.tier === "confident" && it("PGV100G").work.checked.some((c) => c.hash && c.source.pass === 2), JSON.stringify(it("PGV100G").result));
   check("…and the diagnostics keep BOTH passes' pages (2 × HTTP 403, then the readable one)", it("PGV100G").work.pages.length === 3 && it("PGV100G").work.pages.slice(0, 2).every((p) => p.note === "HTTP 403" && p.pass === 1) && it("PGV100G").work.pages[2].fetch === "ok" && it("PGV100G").work.pages[2].pass === 2);
   check("a READABLE page that fails verification does NOT fall through", JSON.stringify(asked.PGV151G) === "[1]" && !it("PGV151G").work.fellThrough && it("PGV151G").result.tier !== "confident");
-  check("pass 1 unreachable, pass 2 empty → not confident, exactly two finder calls, pages recorded", JSON.stringify(asked.PGV201G) === "[1,2]" && it("PGV201G").result.tier === "not_confident" && /HTTP 403/.test(it("PGV201G").result.reason) && it("PGV201G").work.fellThrough.found === 0);
+  check("pass 1 unreachable, pass 2 empty → needs research, exactly two finder calls, pages recorded", JSON.stringify(asked.PGV201G) === "[1,2]" && it("PGV201G").result.tier === "needs_research" && /HTTP 403/.test(it("PGV201G").result.reason) && it("PGV201G").work.fellThrough.found === 0);
   check("counters: the fallback finder call is counted", it("PGV100G").usage.calls >= 3 && it("PGV201G").usage.calls === 2);
   fs.rmSync(dir, { recursive: true, force: true });
 }

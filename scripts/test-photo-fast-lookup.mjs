@@ -284,7 +284,8 @@ function harness(dir, over = {}) {
     fetchPage,
     fetchImage: async (u) => { counts.images++; const d = IMAGES[u]; if (!d) throw new Error("The image couldn't be downloaded (HTTP 404)."); return { buffer: await photo(d[0], d[1], u), finalUrl: u }; },
     now: () => clock, sleep: async (ms) => { clock += ms; await new Promise((r) => setImmediate(r)); },
-    afterRun: async () => { counts.afterRun++; }
+    afterRun: async () => { counts.afterRun++; },
+    finderDefault: true // this suite exercises the finder fallback; the engine default is off (Patrick, Sep 28 2026)
   });
   return { b, store, counts, parts: () => store.mergeInto(structuredClone(catalog)), catalog };
 }
@@ -307,7 +308,7 @@ function harness(dir, over = {}) {
   check("quality cap: every check passed but the only photo is 515px → TBD, reason names the size", low.result.tier === "tbd" && low.result.qualityCapped === true && /515×515/.test(low.result.reason) && /needs|needed/.test(low.result.reason), low.result.reason);
   check("quality cap: the low candidate is kept for review, graded low", low.work.tier.candidates.length === 1 && low.work.tier.candidates[0].quality.grade === "low" && low.work.tier.candidates[0].tier === "tbd");
   const tiny = run.items.TINY1;
-  check("tiny only: nothing stored, no vision call, 'no reliable photo' says the image was skipped as too small", tiny.result.tier === "not_confident" && !h.counts.verify.TINY1 && /too small \(96×96/.test(tiny.result.reason) && tiny.work.pages[0].images === 0 && tiny.work.pages[0].skipped === 1, tiny.result.reason);
+  check("tiny only: nothing stored, no vision call → Needs research, and the reason says the image was skipped as too small", tiny.result.tier === "needs_research" && !h.counts.verify.TINY1 && /too small \(96×96/.test(tiny.result.reason) && tiny.work.pages[0].images === 0 && tiny.work.pages[0].skipped === 1, tiny.result.reason);
   const none = run.items.NOWHERE;
   check("fast miss: the finder runs its passes as before (1 then 2) and the notes say the fast path found nothing", JSON.stringify(h.counts.findPasses.NOWHERE) === "[1,2]" && none.work.found.via === "ai" && none.work.found.notes[0].startsWith("fast path:"));
   const st = h.b.status().run;
@@ -327,7 +328,7 @@ function harness(dir, over = {}) {
   const h = harness(dir, { noFast: true });
   await h.b.start({ skus: ["HCPCM300"], autoApprove: false }); await h.b.idle();
   const it = h.b._state().run.items.HCPCM300;
-  check("no fast lookup injected: finder passes 1 and 2 run, nothing found, via 'ai'", JSON.stringify(h.counts.findPasses.HCPCM300) === "[1,2]" && it.result.tier === "not_confident" && it.work.found.via === "ai" && !it.work.fast);
+  check("no fast lookup injected: finder passes 1 and 2 run, nothing found → needs research, via 'ai'", JSON.stringify(h.counts.findPasses.HCPCM300) === "[1,2]" && it.result.tier === "needs_research" && it.work.found.via === "ai" && !it.work.fast);
   fs.rmSync(dir, { recursive: true, force: true });
 }
 {
