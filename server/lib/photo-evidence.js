@@ -318,7 +318,11 @@ function visionSummary(vision) {
 // (spec on page, photo, a second source agreeing). "n/a" counts as pass for
 // vision attributes that don't apply (e.g. angle on a straight coupling).
 function tierFor({ kind, hasCandidate, partNumber, vision, specMatch, crossSource }) {
-  if (!hasCandidate) return { tier: "not_confident", reason: "No usable product photo was found." };
+  // No candidate image at all: nothing was evaluated, so this is not a
+  // verdict on evidence — it is "Needs research" (Patrick, Sep 28 2026):
+  // the cheap lookup could not locate sufficient evidence. "Not confident"
+  // below is reserved for evidence that was checked and found wrong.
+  if (!hasCandidate) return { tier: "needs_research", reason: "Needs research: the deterministic lookup found no usable product photo." };
   const v = visionSummary(vision);
   const checks = kind === "branded" ? [partNumber, { result: v.result }] : [specMatch, { result: v.result }, crossSource];
   const results = checks.map((c) => (c && c.result) || "unknown");

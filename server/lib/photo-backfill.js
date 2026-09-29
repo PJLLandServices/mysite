@@ -74,7 +74,12 @@ function createBackfill({
   ai,                // photo-ai (createPhotoAI) — or a fake in tests
   fastLookup = null, // photo-fast-lookup (createFastLookup) — null = finder only
   budgetUsd = 10,    // the standing cap on model spend across runs (Patrick, Sep 28 2026); null = no cap
-  finderDefault = false, // the web-search finder runs only when a run is started with finder: true
+  // The paid web-search finder (Patrick, Sep 28 2026: "bulk waves cannot invoke
+  // the finder"). No server door can turn it on: start() takes no finder
+  // option and the wave route accepts none. It exists only for the test
+  // harnesses of the finder path (finderDefault: true) and, later, a separate
+  // one-part manual research action with its cost shown first (not built).
+  finderDefault = false,
   getParts,          // () => the live merged catalog { sku: part }
   manufacturers = [],// [{ key, label }] or a function returning them
   afterRun = null,   // async (run) => {} — called once when a run finishes (grouping, catalog rebuild)
@@ -140,14 +145,16 @@ function createBackfill({
   // Worst-case dollars for a plan, from the same price table as the ledger:
   // a vision call ≈ 4,000 in / 500 out, a compare ≈ 8,000 in / 200 out, a
   // finder call ≈ 200,000 in / 3,000 out + 6 searches (what the waves measured).
-  function estimateCost(rows, { finder = false } = {}) {
+  function estimateCost(rows) {
     const models = ai.models || { finder: aiLib.MODEL, vision: aiLib.MODEL_VISION };
     const pv = aiLib.priceFor(models.vision), pf = aiLib.priceFor(models.finder);
     let vision = 0, compare = 0, finderCalls = 0;
     for (const r of rows) { vision += r.calls.verifyMax; compare += r.calls.compareMax; finderCalls += r.calls.finderMax; }
     const visionUsd = vision * (4000 * pv.in + 500 * pv.out) / 1e6 + compare * (8000 * pv.in + 200 * pv.out) / 1e6;
     const finderUsd = finderCalls * ((200000 * pf.in + 3000 * pf.out) / 1e6 + 6 * aiLib.SEARCH_USD);
-    return { finderOff: +visionUsd.toFixed(2), finderOn: +(visionUsd + finderUsd).toFixed(2), thisRun: +(finder ? visionUsd + finderUsd : visionUsd).toFixed(2), models, budgetUsd, spentUsd: +spent().toFixed(2), remainingUsd: typeof budgetUsd === "number" ? +Math.max(0, budgetUsd - spent()).toFixed(2) : null };
+    // worstCaseUsd is what a wave can cost: vision + compare calls only. The
+    // finder figure is kept for the (future) one-part manual research door.
+    return { worstCaseUsd: +visionUsd.toFixed(2), finderWouldCostUsd: +finderUsd.toFixed(2), models, budgetUsd, spentUsd: +spent().toFixed(2), remainingUsd: typeof budgetUsd === "number" ? +Math.max(0, budgetUsd - spent()).toFixed(2) : null };
   }
   const MAX_CANDIDATES = 3;      // per part — bounds the vision calls
   const MAX_IMAGES_PER_PAGE = 2; // finder's URL (if any) + extracted ones
@@ -171,7 +178,7 @@ function createBackfill({
   // dryRun: the benchmark — live parts are included (nothing is written,
   // so nothing can be overwritten) and the record step keeps the verdict
   // on the run instead of in the stores.
-  async function start({ skus = null, autoApprove = false, label = "", dryRun = false, finder = finderDefault } = {}) {
+  async function start({ skus = null, autoApprove = false, label = "", dryRun = false } = {}) {
     await load();
     if (state.run && ["running", "paused"].includes(state.run.status)) throw new Error("A backfill run is already in progress — pause or finish it first.");
     if (overBudget()) throw new Error(`The photo budget is used up ($${spent().toFixed(2)} of $${budgetUsd.toFixed(2)}) — nothing was started.`);
@@ -183,7 +190,7 @@ function createBackfill({
     state.run = {
       id: "BF-" + new Date(now()).toISOString().replace(/[-:T]/g, "").slice(0, 12) + "-" + crypto.randomBytes(2).toString("hex"),
       label, status: "running", createdAt: new Date(now()).toISOString(),
-      options: { autoApprove: !!autoApprove, dryRun: !!dryRun, finder: finder === true },
+      options: { autoApprove: !!autoApprove, dryRun: !!dryRun, finder: finderDefault === true },
       order,
       items: Object.fromEntries(order.map((s) => [s, { step: "queued", attempts: 0, nextAt: 0, lastError: null, work: {}, result: null, usage: { ...USAGE0 } }])),
       usage: { ...USAGE0 }
@@ -370,11 +377,11 @@ function createBackfill({
       const domains = new Set(found.candidates.map((c) => c.domain));
       const needAi = !found.candidates.length || (kind === "generic" && domains.size < 2);
       const passList = !found.candidates.length ? passes : [passes[passes.length - 1]];
-      // The finder is OFF unless the run was started with it on (Patrick,
-      // Sep 28 2026: the web search is what cost ~$1.50 a part). A part the
-      // fast path can't resolve stops here and waits for Patrick; a generic
+      // Bulk waves never call the finder (Patrick, Sep 28 2026: the web search
+      // is what cost ~$1.50 a part). A part the deterministic lookup can't
+      // resolve becomes "Needs research" and the run moves on; a generic
       // fast-path hit keeps its one source and lands at "To be determined".
-      if (needAi && !finderOn) found.notes.push(found.candidates.length ? "finder off: no second source was searched for" : "finder off: not found on the supplier sites, no web search was made");
+      if (needAi && !finderOn) found.notes.push(found.candidates.length ? "no second source was searched for (bulk waves never call the finder)" : "not found on the supplier sites — no web search was made (bulk waves never call the finder)");
       if (needAi && finderOn) for (const pass of passList) {
         const res = await ai.find(part, pass, usage);
         // A product PAGE is enough: our server reads its images (check step).
@@ -600,7 +607,7 @@ function createBackfill({
     if (it.step === "tier") {
       const cs = (it.work.checked || []).filter((c) => c.hash);
       const scored = cs.map((c) => ({ c, t: ev.tierFor({ kind, hasCandidate: true, partNumber: c.partNumber, vision: c.vision, specMatch: c.specMatch, crossSource: it.work.cross }) }));
-      const order = { confident: 0, tbd: 1, not_confident: 2 };
+      const order = { confident: 0, tbd: 1, not_confident: 2, needs_research: 3 };
       // Among candidates of the same tier the highest-quality clean shot
       // wins: grade (good > ok > low), then the source's longest side, then
       // official pages, then the earlier pass. Low quality can never back
@@ -871,14 +878,15 @@ function createBackfill({
       eligible: Object.values(parts).filter((p) => !isExcluded(p)).length,
       estimate: estimateRows(rows),
       // Dollars, not tokens (Patrick, Sep 28 2026): what this wave can cost
-      // with the finder off (the default) and on, and what is left of the budget.
-      cost: estimateCost(rows, { finder: finderDefault }),
-      finder: finderDefault
+      // (vision + compare calls only — a wave never calls the finder) and
+      // what is left of the budget.
+      cost: estimateCost(rows),
+      finder: "never"
     };
   }
-  // `finder`: the web-search finder for the parts the fast path misses —
-  // OFF unless the admin turns it on for this wave.
-  async function startWave({ by = null, skus = null, size = WAVE_MAX, finder = finderDefault } = {}) {
+  // A wave has no finder switch at all: there is nothing a request could
+  // pass to make it search the web.
+  async function startWave({ by = null, skus = null, size = WAVE_MAX } = {}) {
     await load();
     if (state.run && ["running", "paused"].includes(state.run.status)) throw new Error("A run is already active — pause or finish it first.");
     const plan = wavePlan({ size });
@@ -889,8 +897,8 @@ function createBackfill({
     if (!Array.isArray(skus) || JSON.stringify(skus.map(String)) !== JSON.stringify(plan.skus)) {
       throw new Error("The wave plan has changed since it was shown — reload the plan and confirm the exact list.");
     }
-    await start({ skus: plan.skus, autoApprove: false, finder: finder === true, label: `Wave (${plan.skus.length} parts${finder === true ? ", finder on" : ""})` });
-    state.run.wave = { by, skus: plan.skus, estimate: plan.estimate, cost: estimateCost(plan.rows, { finder: finder === true }), finder: finder === true, at: new Date(now()).toISOString() };
+    await start({ skus: plan.skus, autoApprove: false, label: `Wave (${plan.skus.length} parts)` });
+    state.run.wave = { by, skus: plan.skus, estimate: plan.estimate, cost: estimateCost(plan.rows), at: new Date(now()).toISOString() };
     state.run.options.autoApprove = false;
     await save();
     log({ action: "backfill.wave.start", runId: state.run.id, by, skus: plan.skus });
@@ -998,7 +1006,7 @@ function createBackfill({
 
   // ---- progress -----------------------------------------------------------
   function summary(run) {
-    const c = { total: run.order.length, queued: 0, inProgress: 0, done: 0, error: 0, live: 0, review: 0, noReliable: 0, skipped: 0 };
+    const c = { total: run.order.length, queued: 0, inProgress: 0, done: 0, error: 0, live: 0, review: 0, noReliable: 0, needsResearch: 0, skipped: 0 };
     for (const sku of run.order) {
       const it = run.items[sku];
       if (it.step === "done") {
@@ -1007,6 +1015,7 @@ function createBackfill({
         if (t === "skipped" || (it.result && it.result.skipped)) c.skipped++;
         else if (it.result && it.result.live) c.live++;
         else if (t === "not_confident") c.noReliable++;
+        else if (t === "needs_research") c.needsResearch++;
         else c.review++;
       } else if (it.step === "error") c.error++;
       else if (it.step === "queued") c.queued++;
@@ -1088,12 +1097,13 @@ function createBackfill({
   // Review needed, No reliable photo or Not processed yet.
   function catalogProgress() {
     const parts = getParts() || {};
-    const c = { total: 0, live: 0, review: 0, noReliable: 0, notProcessed: 0 };
+    const c = { total: 0, live: 0, review: 0, noReliable: 0, needsResearch: 0, notProcessed: 0 };
     for (const p of Object.values(parts)) {
       c.total++;
       if (p.photoState === "verified") c.live++;
       else if (p.photoState === "tbd" || p.photoState === "changed") c.review++;
       else if (p.photoState === "not_confident") c.noReliable++;
+      else if (p.photoState === "needs_research") c.needsResearch++;
       else c.notProcessed++;
     }
     return c;

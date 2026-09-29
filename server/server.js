@@ -14217,8 +14217,9 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req).catch(() => ({}));
       // `skus` is the list Patrick confirmed in the dialog; the engine
       // compares it with the plan it would run and refuses any difference.
-      const status = await photoBackfill.startWave({ by, skus: Array.isArray(payload && payload.skus) ? payload.skus.map(String) : null, finder: !!(payload && payload.finder === true) });
-      await settings.recordAudit({ who: by, action: "part-photo.backfill.wave", note: `Started a photo backfill wave (${status.run.counts.total} parts, auto-approve off, finder ${status.run.finder ? "ON" : "off"}, budget ${status.run.budget.spentUsd.toFixed(2)} of ${status.run.budget.usd}): ${status.run.wave.skus.join(", ")}`, after: status.run });
+      // No other field of the payload is read: a wave has no finder switch.
+      const status = await photoBackfill.startWave({ by, skus: Array.isArray(payload && payload.skus) ? payload.skus.map(String) : null });
+      await settings.recordAudit({ who: by, action: "part-photo.backfill.wave", note: `Started a photo backfill wave (${status.run.counts.total} parts, auto-approve off, no web search, budget $${status.run.budget.spentUsd.toFixed(2)} spent of $${status.run.budget.usd}): ${status.run.wave.skus.join(", ")}`, after: status.run });
       return sendJson(res, 200, { ok: true, ...status });
     } catch (err) {
       return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't start the wave."] });

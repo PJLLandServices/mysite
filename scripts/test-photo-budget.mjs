@@ -95,7 +95,7 @@ function harness(dir, over = {}) {
   const fake = {
     passesFor: ai.passesFor, models: { finder: "claude-opus-5", vision: over.visionModel || "claude-opus-5" },
     async find(part, pass, usage) { counts.find[part.sku] = (counts.find[part.sku] || 0) + 1; if (usage) usage({ input_tokens: big, output_tokens: 3000, server_tool_use: { web_search_requests: 6, web_fetch_requests: 2 } }, "claude-opus-5"); if (part.sku === "TEE1" && pass === 3) return { manufacturer: "", manufacturerPartNumber: "", notes: "", candidates: [{ pageUrl: "https://www.plumbing-example.com/tee", imageUrl: "", partNumberAsShown: "" }] }; return { manufacturer: "", manufacturerPartNumber: "", notes: "nothing", candidates: [] }; },
-    async verify(part, bytes, mt, usage) { counts.verify++; if (usage) usage({ input_tokens: 3500, output_tokens: 500 }, fake.models.vision); return V(); },
+    async verify(part, bytes, mt, usage) { counts.verify++; if (usage) usage({ input_tokens: 3500, output_tokens: 500 }, fake.models.vision); return over.visionFail ? { ...V(), type: { result: "fail", reason: "a different fitting" } } : V(); },
     async compare(part, a, b, mt, usage) { counts.compare++; if (usage) usage({ input_tokens: 8000, output_tokens: 200 }, fake.models.vision); return { result: "pass", reason: "" }; }
   };
   const fetchPage = async (u) => { if (!WEB[u]) throw new Error("The page couldn't be read (HTTP 404)."); return { html: WEB[u], finalUrl: u }; };
@@ -118,8 +118,17 @@ function harness(dir, over = {}) {
   const run = h.b._state().run;
   check("finder off: no finder call anywhere", Object.keys(h.counts.find).length === 0 && run.options.finder === false);
   check("finder off: the fast-path hit is verified and Confident (one vision call)", run.items.HIT1.result.tier === "confident" && run.items.HIT1.usage.calls === 1);
-  check("finder off: the generic hit keeps its one source → TBD, with the note", run.items.TEE1.result.tier === "tbd" && run.items.TEE1.work.found.notes.some((n) => /finder off: no second source/.test(n)) && h.counts.compare === 0);
-  check("finder off: the miss ends 'not confident' with the finder-off note and zero Claude calls", run.items.MISS1.result.tier === "not_confident" && run.items.MISS1.usage.calls === 0 && /finder off: not found on the supplier sites/.test(run.items.MISS1.result.reason), run.items.MISS1.result.reason);
+  check("finder off: the generic hit keeps its one source → TBD, with the note", run.items.TEE1.result.tier === "tbd" && run.items.TEE1.work.found.notes.some((n) => /no second source was searched for/.test(n)) && h.counts.compare === 0);
+  check("deterministic miss: zero finder calls, zero web searches, zero Claude calls", run.items.MISS1.usage.calls === 0 && run.items.MISS1.usage.searches === 0 && !h.counts.find.MISS1);
+  check("deterministic miss: becomes Needs research (not 'Not confident'), with the reason", run.items.MISS1.result.tier === "needs_research" && /Needs research/.test(run.items.MISS1.result.reason) && /no web search was made/.test(run.items.MISS1.result.reason), run.items.MISS1.result.reason);
+  check("deterministic miss: the run continued to the next part and finished", run.status === "done" && run.order.every((s) => run.items[s].step === "done") && run.order.indexOf("MISS1") < run.order.length - 1 || run.status === "done");
+  const parts = h.store.mergeInto(structuredClone(CATALOG));
+  check("deterministic miss: the catalog state is needs_research and the part has no photo", parts.MISS1.photoState === "needs_research" && parts.MISS1.photo === null);
+  const s0 = h.store.readStoresSync();
+  const queues = require(path.join(ROOT, "server", "lib", "photo-review.js")).buildReviewQueues({ parts, groups: s0.groups, links: s0.links });
+  check("deterministic miss: it sits in its own Needs research queue, not in Not confident", queues.needsResearch.some((c) => c.sku === "MISS1") && !queues.notConfident.some((c) => c.sku === "MISS1") && !queues.tbd.some((c) => c.sku === "MISS1"));
+  check("deterministic miss: a later wave plan excludes it (it was processed)", !h.b.wavePlan().skus.includes("MISS1"));
+  check("semantics: the fast-path hit with every check passing is Confident", run.items.HIT1.result.tier === "confident");
   const st = h.b.status().run;
   const expected = 2 * (3500 * 5 + 500 * 25) / 1e6; // two vision calls on Opus 5
   check("cost: the run's dollars are the priced vision calls", near(st.costUsd, +expected.toFixed(4), 1e-4) && near(st.budget.spentUsd, st.costUsd, 1e-4), JSON.stringify([st.costUsd, expected]));
@@ -130,20 +139,40 @@ function harness(dir, over = {}) {
   const h2 = harness(dir2);
   await h2.b.load();
   const plan = h2.b.wavePlan();
-  check("plan: dollars, finder off by default, finder-on worst case is far higher", plan.finder === false && plan.cost && plan.cost.finderOff > 0 && plan.cost.finderOff < plan.cost.finderOn && plan.cost.finderOn > 10 * plan.cost.finderOff && plan.cost.budgetUsd === 10 && plan.cost.remainingUsd === 10, JSON.stringify(plan.cost));
-  check("plan: three parts → 9 vision + 1 compare worst case is under a dollar on Opus 5", plan.cost.finderOff < 1);
+  check("plan: dollars — the wave's worst case is vision + compare only; the finder is 'never'", plan.finder === "never" && plan.cost && plan.cost.worstCaseUsd > 0 && plan.cost.finderWouldCostUsd > 10 * plan.cost.worstCaseUsd && plan.cost.budgetUsd === 10 && plan.cost.remainingUsd === 10, JSON.stringify(plan.cost));
+  check("plan: three parts → 9 vision + 1 compare worst case is under a dollar on Opus 5", plan.cost.worstCaseUsd < 1);
   fs.rmSync(dir2, { recursive: true, force: true });
 }
 
-// ---- finder on for one run ----------------------------------------------------------
+// ---- a bulk wave cannot enable the finder ----------------------------------------------
 {
   const dir = tmp();
   const h = harness(dir);
-  await h.b.start({ skus: ["TEE1", "MISS1"], autoApprove: false, finder: true }); await h.b.idle();
+  await h.b.load();
+  const plan = h.b.wavePlan();
+  // A stray `finder: true` on the wave call must change nothing.
+  await h.b.startWave({ by: "p", skus: plan.skus, finder: true }); await h.b.idle();
   const run = h.b._state().run;
-  check("finder on: the generic hit gets its second source and the miss runs both passes", h.counts.find.TEE1 === 1 && h.counts.find.MISS1 === 2 && run.items.TEE1.result.tier === "confident" && run.options.finder === true);
-  const st = h.b.status().run;
-  check("finder on: the dollars include the finder calls and their searches", st.costUsd > 3 * (150000 * 5 / 1e6) && st.budget.byModel["claude-opus-5"] > 2, String(st.costUsd));
+  check("wave: a `finder: true` argument is ignored — the run has no finder and made no finder call", run.options.finder === false && Object.keys(h.counts.find).length === 0 && run.status === "done");
+  check("wave: the miss is Needs research, the hit is Confident, the generic hit is TBD", run.items.MISS1.result.tier === "needs_research" && run.items.HIT1.result.tier === "confident" && run.items.TEE1.result.tier === "tbd");
+  check("wave: zero web searches and zero model fetches in the whole run", run.usage.searches === 0 && run.usage.webFetches === 0);
+  const src = fs.readFileSync(path.join(ROOT, "server", "lib", "photo-backfill.js"), "utf8");
+  check("code: start() and startWave() take no finder option", /async function start\(\{ skus = null, autoApprove = false, label = "", dryRun = false \} = \{\}\)/.test(src) && /async function startWave\(\{ by = null, skus = null, size = WAVE_MAX \} = \{\}\)/.test(src));
+  check("code: the finder runs only behind the harness-only finderDefault", /const finderOn = r\.options\.finder === true;/.test(src) && /finder: finderDefault === true/.test(src) && !/finder: finder === true/.test(src));
+  const server = fs.readFileSync(path.join(ROOT, "server", "server.js"), "utf8");
+  const at = server.indexOf('pathname === "/api/part-photo-backfill/wave"');
+  check("route: the wave route reads only `skus` from the request — no finder field or option anywhere in it", at > 0 && !/payload.finder|finders*:|finders*=/.test(server.slice(at, server.indexOf("backfillActionMatch", at))) && /finderDefault: false/.test(server));
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// ---- semantics of Not confident are unchanged: evidence checked and found wrong ----
+{
+  const dir = tmp();
+  const h = harness(dir, { visionFail: true });
+  await h.b.start({ skus: ["HIT1"], autoApprove: false }); await h.b.idle();
+  const run = h.b._state().run;
+  check("semantics: a candidate whose photo FAILS the vision check is Not confident (evidence was evaluated)", run.items.HIT1.result.tier === "not_confident" && /photo doesn't match/.test(run.items.HIT1.result.reason), run.items.HIT1.result.reason);
+  check("semantics: …and it lands in the Not confident queue, not Needs research", h.store.mergeInto(structuredClone(CATALOG)).HIT1.photoState === "not_confident");
   fs.rmSync(dir, { recursive: true, force: true });
 }
 

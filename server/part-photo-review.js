@@ -21,6 +21,7 @@
   const QUEUES = [
     { key: "tbd", label: "To be determined", empty: "Nothing waiting for review." },
     { key: "notConfident", label: "Not confident", empty: "No parts without a reliable photo." },
+    { key: "needsResearch", label: "Needs research", empty: "Every part the cheap lookup missed has been dealt with." },
     { key: "autoApproved", label: "Recently auto-approved", empty: "Nothing has gone live automatically yet." },
     { key: "fittings", label: "Fittings to confirm", empty: "No same-fitting suggestions to confirm." }
   ];
@@ -108,6 +109,7 @@
       ["live", "Live", p.live || 0, p.live ? `${p.liveAuto || 0} auto · ${(p.live || 0) - (p.liveAuto || 0)} approved by you` : ""],
       ["review", "Review needed", p.review || 0, ""],
       ["noreliable", "No reliable photo", p.noReliable || 0, ""],
+      ["research", "Needs research", p.needsResearch || 0, "the cheap lookup found nothing; no web search was made"],
       ["pending", "Not processed yet", p.notProcessed || 0, ""]
     ];
     const bar = seg.map(([k, , n]) => (n ? `<span class="pr-bar-seg is-${k}" style="flex-grow:${n}"></span>` : "")).join("");
@@ -125,7 +127,7 @@
       const fastLine = (f.hits || f.fastAndAi || f.aiOnly)
         ? `<br><span class="pr-usage">fast path: ${f.hits || 0} resolved without the finder · ${f.fastAndAi || 0} with finder help · ${f.aiOnly || 0} finder only${run.timing && run.timing.avgMs ? ` · ${Math.round(run.timing.avgMs / 1000)} s per part` : ""}</span>` : "";
       const b = run.budget || {};
-      const money = `<br><span class="pr-usage pr-money">this run <b>$${(run.costUsd || 0).toFixed(2)}</b> · budget <b>$${(b.spentUsd || 0).toFixed(2)}</b> spent of <b>$${b.usd != null ? b.usd : "∞"}</b>${b.remainingUsd != null ? ` · $${b.remainingUsd.toFixed(2)} left` : ""} · finder <b>${run.finder ? "ON" : "off"}</b>${run.models ? ` · vision ${esc(run.models.vision)}` : ""}</span>`;
+      const money = `<br><span class="pr-usage pr-money">this run <b>$${(run.costUsd || 0).toFixed(2)}</b> · budget <b>$${(b.spentUsd || 0).toFixed(2)}</b> spent of <b>$${b.usd != null ? b.usd : "∞"}</b>${b.remainingUsd != null ? ` · $${b.remainingUsd.toFixed(2)} left` : ""} · web search <b>${run.finder ? "ON (not a wave)" : "never"}</b>${run.models ? ` · vision ${esc(run.models.vision)}` : ""}</span>`;
       const paused = run.status === "paused" && run.pausedReason === "budget" ? "paused — the photo budget is used up" : run.status === "paused" && run.interruptedAt ? "interrupted by a restart — press Resume" : run.status;
       runLine = `${what} <b>${esc(run.label || run.id)}</b> · <b>${esc(paused)}</b> · ${c.done} of ${c.total} done${c.error ? ` · ${c.error} error${c.error > 1 ? "s" : ""}` : ""}${where} · auto-approve <b>${run.autoApprove ? "ON" : "off"}</b>` + money
         + `<br><span class="pr-usage">${(u.calls || 0)} Claude calls · ${(u.searches || 0)} web searches · ${(u.webFetches || 0)} model fetches · ${(u.fastSearches || 0)} supplier searches + ${(u.pageFetches || 0)} pages + ${(u.imageFetches || 0)} images fetched by our server · ${(u.in || 0).toLocaleString()} in / ${(u.out || 0).toLocaleString()} out tokens</span>`
@@ -151,7 +153,7 @@
         + `<button type="button" class="pp-btn" data-act="benchmark"${d.apiKeySet === false ? " disabled" : ""}>Run the fast-path benchmark (10 parts, dry run — nothing saved)</button>${d.apiKeySet === false ? `<span class="pr-held">ANTHROPIC_API_KEY isn't set on the server.</span>` : ""}`;
     }
     return `<div class="pr-progress-head"><h2>Photos across the catalog</h2><span>${total} parts</span></div>
-      <div class="pr-bar" role="img" aria-label="${p.live || 0} live, ${p.review || 0} review needed, ${p.noReliable || 0} no reliable photo, ${p.notProcessed || 0} not processed">${bar || '<span class="pr-bar-seg is-pending" style="flex-grow:1"></span>'}</div>
+      <div class="pr-bar" role="img" aria-label="${p.live || 0} live, ${p.review || 0} review needed, ${p.noReliable || 0} no reliable photo, ${p.needsResearch || 0} needs research, ${p.notProcessed || 0} not processed">${bar || '<span class="pr-bar-seg is-pending" style="flex-grow:1"></span>'}</div>
       <div class="pr-stats">${stats}</div>
       <p class="pr-run">${runLine}</p>${errors}${bench}
       <div class="pr-controls">${controls}<span class="pp-panel-status" data-status aria-live="polite"></span></div>`;
@@ -220,7 +222,7 @@
     const list = plan.rows.map((r) => `${r.sku} (${r.kind}${r.manufacturer ? ", " + r.manufacturer : ""}) — ${r.description}`).join("\n");
     const cost = plan.cost || {};
     const ok = await window.pjlDialog.confirm(
-      `Start a wave on these ${plan.counts.total} unprocessed parts (${plan.counts.branded} branded, ${plan.counts.generic} generic; categories: ${plan.counts.categories.join(", ")})? Auto-approve is OFF: nothing goes live until you approve it on this tab. The web-search finder is OFF: a part the supplier sites can't resolve waits for you.\n\n${list}\n\nWorst case with the finder off: $${(cost.finderOff || 0).toFixed(2)} (${e.verifyCalls.max} vision + ${e.compareCalls.max} compare calls on ${cost.models ? cost.models.vision : "?"}). Budget: $${(cost.spentUsd || 0).toFixed(2)} spent of $${cost.budgetUsd != null ? cost.budgetUsd : "∞"}${cost.remainingUsd != null ? `, $${cost.remainingUsd.toFixed(2)} left` : ""}. Our server: up to ${e.pagesFetchedByOurServer.max} pages + ${e.imagesFetchedByOurServer.max} images.`,
+      `Start a wave on these ${plan.counts.total} unprocessed parts (${plan.counts.branded} branded, ${plan.counts.generic} generic; categories: ${plan.counts.categories.join(", ")})? Auto-approve is OFF: nothing goes live until you approve it on this tab. No web search is ever made in a wave: a part the supplier sites can't resolve goes to Needs research and the wave moves on.\n\n${list}\n\nWorst case: $${(cost.worstCaseUsd || 0).toFixed(2)} (${e.verifyCalls.max} vision + ${e.compareCalls.max} compare calls on ${cost.models ? cost.models.vision : "?"}). Budget: $${(cost.spentUsd || 0).toFixed(2)} spent of $${cost.budgetUsd != null ? cost.budgetUsd : "∞"}${cost.remainingUsd != null ? `, $${cost.remainingUsd.toFixed(2)} left` : ""}. Our server: up to ${e.pagesFetchedByOurServer.max} pages + ${e.imagesFetchedByOurServer.max} images.`,
       { confirmLabel: "Start this wave", cancelLabel: "Cancel" });
     if (!ok) return;
     if (s) { s.textContent = "Starting…"; s.classList.remove("is-error"); }
@@ -366,7 +368,7 @@
       ${card.queue === "autoApproved" ? "" : `<button type="button" class="pp-btn pp-btn-primary pr-approve" data-act="approve" data-hash="${esc(c.hash)}">Approve this photo</button>`}
     </figure>`;
   }
-  const TIER_LABEL = { tbd: "To be determined", not_confident: "Not confident", confident: "Auto-approved", approved: "Approved" };
+  const TIER_LABEL = { tbd: "To be determined", not_confident: "Not confident", needs_research: "Needs research", confident: "Auto-approved", approved: "Approved" };
 
   // "Pages our server checked": what happened on each product page the
   // finder named — the reason "no reliable photo" is never a mystery.
