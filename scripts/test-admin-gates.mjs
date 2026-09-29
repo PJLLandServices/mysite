@@ -275,3 +275,13 @@ check('the check catches the exact bug it was written for', () => {
 
 console.log(`\nadmin-gates: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
+
+// The benchmark-plan route parses its own query (the handler has no `url`
+// binding in scope — production answered "url is not defined", 2026-09-28).
+{
+  const at = SRC.indexOf('pathname === "/api/part-photo-backfill/benchmark-plan"');
+  const block = SRC.slice(at, at + 900);
+  assert.ok(!/[^.\w]url\.searchParams/.test(block), 'benchmark-plan must not use an out-of-scope `url`');
+  assert.match(block, /new URL\(req\.url, "http:\/\/localhost"\)\.searchParams\.get\("skus"\)/, 'benchmark-plan parses its query from req.url');
+  passed++;
+}
