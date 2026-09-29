@@ -124,7 +124,10 @@
       const f = run.fast || {};
       const fastLine = (f.hits || f.fastAndAi || f.aiOnly)
         ? `<br><span class="pr-usage">fast path: ${f.hits || 0} resolved without the finder · ${f.fastAndAi || 0} with finder help · ${f.aiOnly || 0} finder only${run.timing && run.timing.avgMs ? ` · ${Math.round(run.timing.avgMs / 1000)} s per part` : ""}</span>` : "";
-      runLine = `${what} <b>${esc(run.label || run.id)}</b> · <b>${esc(run.status === "paused" && run.interruptedAt ? "interrupted by a restart — press Resume" : run.status)}</b> · ${c.done} of ${c.total} done${c.error ? ` · ${c.error} error${c.error > 1 ? "s" : ""}` : ""}${where} · auto-approve <b>${run.autoApprove ? "ON" : "off"}</b>`
+      const b = run.budget || {};
+      const money = `<br><span class="pr-usage pr-money">this run <b>$${(run.costUsd || 0).toFixed(2)}</b> · budget <b>$${(b.spentUsd || 0).toFixed(2)}</b> spent of <b>$${b.usd != null ? b.usd : "∞"}</b>${b.remainingUsd != null ? ` · $${b.remainingUsd.toFixed(2)} left` : ""} · finder <b>${run.finder ? "ON" : "off"}</b>${run.models ? ` · vision ${esc(run.models.vision)}` : ""}</span>`;
+      const paused = run.status === "paused" && run.pausedReason === "budget" ? "paused — the photo budget is used up" : run.status === "paused" && run.interruptedAt ? "interrupted by a restart — press Resume" : run.status;
+      runLine = `${what} <b>${esc(run.label || run.id)}</b> · <b>${esc(paused)}</b> · ${c.done} of ${c.total} done${c.error ? ` · ${c.error} error${c.error > 1 ? "s" : ""}` : ""}${where} · auto-approve <b>${run.autoApprove ? "ON" : "off"}</b>` + money
         + `<br><span class="pr-usage">${(u.calls || 0)} Claude calls · ${(u.searches || 0)} web searches · ${(u.webFetches || 0)} model fetches · ${(u.fastSearches || 0)} supplier searches + ${(u.pageFetches || 0)} pages + ${(u.imageFetches || 0)} images fetched by our server · ${(u.in || 0).toLocaleString()} in / ${(u.out || 0).toLocaleString()} out tokens</span>`
         + (run.usageByKind ? `<br><span class="pr-usage">${["branded", "generic"].map((k) => { const b = run.usageByKind[k]; return b && b.parts ? `${k}: ${b.parts} part${b.parts === 1 ? "" : "s"} · ${b.perPart.calls} calls · ${b.perPart.searches} searches · ${b.perPart.in.toLocaleString()} in / ${b.perPart.out.toLocaleString()} out tokens per part` : `${k}: none`; }).join(" — ")}</span>` : "")
         + fastLine;
@@ -215,8 +218,9 @@
     if (!plan.skus.length) { say("Nothing left to process — every eligible part is live, waiting for review, or already run.", true); return; }
     const e = plan.estimate;
     const list = plan.rows.map((r) => `${r.sku} (${r.kind}${r.manufacturer ? ", " + r.manufacturer : ""}) — ${r.description}`).join("\n");
+    const cost = plan.cost || {};
     const ok = await window.pjlDialog.confirm(
-      `Start a wave on these ${plan.counts.total} unprocessed parts (${plan.counts.branded} branded, ${plan.counts.generic} generic; categories: ${plan.counts.categories.join(", ")})? Auto-approve is OFF: nothing goes live until you approve it on this tab.\n\n${list}\n\nWorst case: ${e.apiCalls.max} Claude calls (${e.finderCalls.max} finder, ${e.verifyCalls.max} vision, ${e.compareCalls.max} compare), up to ${e.webSearches.max} web searches, and up to ${e.pagesFetchedByOurServer.max} pages + ${e.imagesFetchedByOurServer.max} images fetched by our server.`,
+      `Start a wave on these ${plan.counts.total} unprocessed parts (${plan.counts.branded} branded, ${plan.counts.generic} generic; categories: ${plan.counts.categories.join(", ")})? Auto-approve is OFF: nothing goes live until you approve it on this tab. The web-search finder is OFF: a part the supplier sites can't resolve waits for you.\n\n${list}\n\nWorst case with the finder off: $${(cost.finderOff || 0).toFixed(2)} (${e.verifyCalls.max} vision + ${e.compareCalls.max} compare calls on ${cost.models ? cost.models.vision : "?"}). Budget: $${(cost.spentUsd || 0).toFixed(2)} spent of $${cost.budgetUsd != null ? cost.budgetUsd : "∞"}${cost.remainingUsd != null ? `, $${cost.remainingUsd.toFixed(2)} left` : ""}. Our server: up to ${e.pagesFetchedByOurServer.max} pages + ${e.imagesFetchedByOurServer.max} images.`,
       { confirmLabel: "Start this wave", cancelLabel: "Cancel" });
     if (!ok) return;
     if (s) { s.textContent = "Starting…"; s.classList.remove("is-error"); }

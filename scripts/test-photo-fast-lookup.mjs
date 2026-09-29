@@ -284,7 +284,8 @@ function harness(dir, over = {}) {
     fetchPage,
     fetchImage: async (u) => { counts.images++; const d = IMAGES[u]; if (!d) throw new Error("The image couldn't be downloaded (HTTP 404)."); return { buffer: await photo(d[0], d[1], u), finalUrl: u }; },
     now: () => clock, sleep: async (ms) => { clock += ms; await new Promise((r) => setImmediate(r)); },
-    afterRun: async () => { counts.afterRun++; }
+    afterRun: async () => { counts.afterRun++; },
+    finderDefault: true // this suite exercises the finder fallback; the engine default is off (Patrick, Sep 28 2026)
   });
   return { b, store, counts, parts: () => store.mergeInto(structuredClone(catalog)), catalog };
 }

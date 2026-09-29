@@ -323,6 +323,7 @@ function harness(dir, over = {}) {
     fetchImage: async (url) => ({ buffer: await pngFor(url), finalUrl: url }),
     now: () => clock, sleep: async (ms) => { clock += ms; await new Promise((r) => setImmediate(r)); },
     concurrency: over.concurrency || 2,
+    finderDefault: true, // these suites exercise the finder path; the engine default is off (Patrick, Sep 28 2026)
     afterRun: over.afterRun || null
   });
   return { b, store, counts, peak, catalog, parts: () => store.mergeInto(structuredClone(catalog)), clock: () => clock };
