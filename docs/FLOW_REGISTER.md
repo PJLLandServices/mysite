@@ -2,6 +2,61 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-09-28 (Financials tab, read-only — step 5 of the Project Workspace; stacked on Fix B #351; no PASS flow touched):**
+The workspace's Financials tab replaces its placeholder. `GET /api/projects/:id/financials`
+(`lib/financials-view.js`) returns every figure and sentence the tab shows, over rules that already
+exist:
+- the job's invoices: `projects.invoicesForProject`;
+- `isLiveInvoice`;
+- the signed agreement;
+- the deposit lifecycle;
+- the billing preview: `billingPreviewFor`, now shared with `GET …/billing-preview`;
+- the completion check's money blockers.
+
+Totals are added up there in cents:
+- **invoiced:** sent live invoices;
+- **received:** the live ledgers;
+- **owed now:** sent live invoices, where held, void and marked-paid invoices owe nothing;
+- **not yet invoiced:** fixed price only.
+
+**The header now agrees with the tab.** Its Billing card and next action read `billingSummary` of
+the same model, instead of classifying one invoice in the browser. That classification called a
+held balance invoice "outstanding" and offered "Collect payment" on an invoice nobody could send.
+
+**Read-only:** payments, sending, revising and voiding stay on the classic invoice pages.
+
+**Payment reconciliation, displayed** (Patrick, 2026-09-28: *"A manually marked-Paid invoice with
+less money recorded must not display 'None owed.'"*). The rule itself is #350's
+(`invoices.reconciliationFor`, derived on every read as `invoice.paymentReconciliation`); the
+tab only shows it. For a $1,260 invoice with $1,000 recorded and marked Paid:
+- **the tab's first card**, red, reads *Received $1,000.00 · Unresolved $260.00 · Status: Payment
+  reconciliation required · Customer amount owed: Not determined until reconciled*, and links to
+  the invoice page;
+- **"Owed now"** reads *Not determined*;
+- **the invoice** carries a red *"$260.00 not recorded"* flag, the status "Payment reconciliation
+  required", and "Unresolved" in place of "Owed";
+- **the header's Billing card** reads *"⚠ Payment reconciliation required · $260.00 unresolved"*,
+  never "None owed";
+- **the next action** is *Reconcile payment*, never "Collect payment";
+- **a deposit in reconciliation** shows as not satisfied, with no balance invoice and the
+  completion hold;
+- **a resolved invoice** says when, by whom and how it was reconciled.
+
+The $260 counts as neither received nor owed.
+
+**Test:** `scripts/test-financials-view.mjs` (in `build:check`). It covers:
+- the route's totals equal the invoices' own sums, worked out independently;
+- part-paid, reconciliation (marked Paid with $1,000 of $2,260) and held deposits;
+- the exact $1,260 / $1,000 / $260 case, in the tab and the header;
+- a void invoice;
+- a T&M job with no rate;
+- the header agreeing with the tab;
+- the screen does no money arithmetic.
+
+`npm run test:financials-tab-screen` adds browser checks: desktop and phone renders showing the
+server's figures, the header agreeing, the red reconciliation card first with its four facts, the
+$260 flag on the invoice, "Owed now" Not determined, no actions and no sideways scroll. Like the other `*-tab` screen tests it is outside `build:check`,
+because the CI runner has no browser.
 **2026-09-28 (Payment reconciliation: the ledger is the source of truth for money received; "Mark paid" never stands in for a payment; FLOW-23 (PASS) touched — re-verified by its suites, awaiting a walked acceptance):**
 Patrick: *"A manually marked-Paid invoice with less money recorded must not display 'None owed.'"*
 The example is a $1,260 invoice with $1,000 recorded and marked Paid: **$1,000 received, $260

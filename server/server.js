@@ -135,6 +135,7 @@ const sessionHours = require("./lib/session-hours");
 const atomicJson = require("./lib/atomic-json");
 const dailyRecords = require("./lib/daily-records");
 const changeOrdersView = require("./lib/change-orders-view");
+const financialsView = require("./lib/financials-view");
 const projectMaterials = require("./lib/project-materials");
 const quotes = require("./lib/quotes");
 const quoteViews = require("./lib/quote-views");
@@ -6992,6 +6993,26 @@ async function serveWarrantyClaimFile(res, claim, rawN) {
     "Cache-Control": "private, no-store"
   });
   return res.end(file.data);
+}
+
+// What a project would bill today — the SAME source its final invoice
+// bills from: the T&M rollup priced from the effective parts catalog, or
+// the fixed-price source (projects.fixedPriceBillingSource). One function
+// for the billing-preview route and the Financials tab (2026-09-28).
+async function billingPreviewFor(proj) {
+  if (proj.billingMode === "time_and_material") {
+    const billing = await projects.computeTAndMBilling(proj.id, { partsCatalog: PARTS });
+    return { billingMode: "time_and_material", ...billing };
+  }
+  const src = await projects.fixedPriceBillingSource(proj);
+  return {
+    billingMode: "fixed_price",
+    lineItems: src.lineItems,
+    subtotal: src.subtotal,
+    hst: src.hst,
+    total: src.total,
+    note: src.note
+  };
 }
 
 async function handleApi(req, res, pathname) {
@@ -17142,7 +17163,18 @@ async function handleApi(req, res, pathname) {
     let agreement = null;
     try { agreement = projects.describeAgreement(await projects.resolveProjectQuote(proj)); }
     catch (err) { /* tolerate — the header shows "—" */ }
-    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote, invoiceSummary, siteBuilderSummary, agreement });
+    // The header's "Billing" card and next action — the SAME model the
+    // Financials tab shows (lib/financials-view.js billingSummary), so the
+    // header can never call a held, unsent balance invoice "outstanding"
+    // (2026-09-28). invoiceSummary above stays for the classic page.
+    let billing = null;
+    try {
+      const depositQuote = proj.sourceQuoteId ? await quotes.get(proj.sourceQuoteId) : null;
+      billing = financialsView.billingSummary(financialsView.describeFinancials({
+        project: proj, agreement, invoices: projInvoices, depositQuote, methodLabels: invoices.PAYMENT_METHOD_LABELS
+      }));
+    } catch (err) { /* tolerate — the header shows "—" */ }
+    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote, invoiceSummary, siteBuilderSummary, agreement, billing });
   }
   if (projectMatch && req.method === "PATCH") {
     try {
@@ -18433,23 +18465,45 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(tandmPreviewMatch[1]);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-      if (proj.billingMode === "time_and_material") {
-        const billing = await projects.computeTAndMBilling(id, { partsCatalog: PARTS });
-        return sendJson(res, 200, { ok: true, billingMode: "time_and_material", ...billing });
-      }
-      // Fixed-price: the same source the final invoice bills.
-      const src = await projects.fixedPriceBillingSource(proj);
-      return sendJson(res, 200, {
-        ok: true,
-        billingMode: "fixed_price",
-        lineItems: src.lineItems,
-        subtotal: src.subtotal,
-        hst: src.hst,
-        total: src.total,
-        note: src.note
-      });
+      return sendJson(res, 200, { ok: true, ...(await billingPreviewFor(proj)) });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't compute billing."] });
+    }
+  }
+
+  // GET /api/projects/:id/financials — the Financials tab (2026-09-28).
+  // Read-only: every figure and sentence the tab shows comes from
+  // lib/financials-view.js over the rules that already exist — the job's
+  // invoices (projects.invoicesForProject), the signed agreement, the
+  // deposit lifecycle, the billing preview and the completion check's own
+  // blockers. Recording payments, sending and revising stay on the classic
+  // invoice pages.
+  const financialsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/financials$/);
+  if (financialsMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(financialsMatch[1]);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      const agreement = projects.describeAgreement(await projects.resolveProjectQuote(proj));
+      const projInvoices = await projects.invoicesForProject(proj);
+      const depositQuote = proj.sourceQuoteId ? await quotes.get(proj.sourceQuoteId) : null;
+      let billing;
+      try { billing = await billingPreviewFor(proj); } catch (err) {
+        billing = { billingMode: proj.billingMode === "time_and_material" ? "time_and_material" : "fixed_price", error: err.message || "Couldn't compute billing.", code: err.code || null };
+      }
+      const preflight = await projects.completionPreflight(id);
+      const model = financialsView.describeFinancials({
+        project: proj,
+        agreement,
+        invoices: projInvoices,
+        depositQuote,
+        billing,
+        blockers: preflight.blockers || [],
+        methodLabels: invoices.PAYMENT_METHOD_LABELS
+      });
+      return sendJson(res, 200, { ok: true, ...model });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the financials."] });
     }
   }
 

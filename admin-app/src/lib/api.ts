@@ -116,6 +116,19 @@ export interface Agreement {
   netChangeTotal: number | null;
 }
 
+/** The job's billing in one line (server: financials-view billingSummary).
+    kind: none — nothing invoiced; owed — money owed on sent invoices;
+    settled — nothing owed now, more still to invoice or send; paid. */
+export interface BillingSummary {
+  kind: "reconcile" | "none" | "owed" | "settled" | "paid";
+  owed: number;
+  received: number;
+  /** Marked Paid with payments short: unresolved, never received or owed. */
+  unresolved: number;
+  hint: string;
+  actionInvoice: InvoiceSummary | null;
+}
+
 export interface ContractTotals {
   /** Sum of the signed agreements of every active project, in dollars. */
   activeContractValue: number;
@@ -132,6 +145,10 @@ export interface InvoiceSummary {
   amountPaid?: number;
   balanceDue?: number;
   paidAt?: string | null;
+  /** Marked Paid with its recorded payments short (server: invoices.
+      reconciliationFor) — nothing to collect until the office reconciles. */
+  reconciliationRequired?: boolean;
+  unresolved?: number;
 }
 
 /* Three different counts, and they are not interchangeable.
@@ -274,6 +291,9 @@ export const projectsApi = {
       agreement?: Agreement | null;
       invoiceSummary?: InvoiceSummary | null;
       siteBuilderSummary?: SiteBuilderSummary | null;
+      /** The header's Billing card (server: financials-view billingSummary)
+          — the same model the Financials tab shows. */
+      billing?: BillingSummary | null;
     }>(`/api/projects/${encodeURIComponent(id)}`)
 };
 
@@ -578,4 +598,97 @@ export interface ProjectChangeOrders {
 export const changeOrdersApi = {
   get: (projectId: string) =>
     api.get<ProjectChangeOrders>(`/api/projects/${encodeURIComponent(projectId)}/change-orders`)
+};
+
+/* The Financials tab (2026-09-28): everything comes from the server
+   (lib/financials-view.js). The screen adds up nothing. */
+export interface FinancialsPayment {
+  id: string;
+  invoiceId: string;
+  amount: number;
+  method: string;
+  methodLabel: string;
+  receivedAt: string | null;
+}
+
+export interface FinancialsInvoice {
+  id: string;
+  role: string;
+  roleLabel: string;
+  status: string;
+  statusLabel: string;
+  live: boolean;
+  issued: boolean;
+  held: boolean;
+  total: number;
+  amountPaid: number;
+  /** What is still owed on it — 0 for a void invoice; null (not
+      determined) while it is in payment reconciliation. */
+  owed: number | null;
+  createdAt: string | null;
+  sentAt: string | null;
+  paidAt: string | null;
+  needsReconciliation: boolean;
+  /** Marked Paid, recorded payments short: payment reconciliation. */
+  reconciliationRequired: boolean;
+  /** The unresolved gap — neither received nor owed. 0 otherwise. */
+  unresolved: number;
+  lastReconciliation: { at: string | null; by: string | null; resolution: string | null } | null;
+  payments: FinancialsPayment[];
+  note: string | null;
+  href: string;
+}
+
+export interface ProjectFinancials {
+  projectId: string;
+  billingMode: "fixed_price" | "time_and_material";
+  billingModeLabel: string;
+  contract: { id: string; version: number; subtotal: number; total: number; href: string } | null;
+  pendingRevision: { id: string; total: number } | null;
+  totals: {
+    invoiced: number;
+    received: number;
+    owed: number;
+    /** Fixed price with a signed contract only; null otherwise. */
+    notYetInvoiced: number | null;
+    drafts: { count: number; total: number };
+    issuedCount: number;
+    voidCount: number;
+    unresolved: number;
+    /** false while any invoice is in reconciliation: what the customer
+        owes is not determined until it is reconciled. */
+    owedDetermined: boolean;
+  };
+  deposit: {
+    amount: number;
+    stage: string;
+    stageLabel: string;
+    counted: boolean;
+    invoiceId: string | null;
+    balanceInvoiceId: string | null;
+    sentence: string;
+  } | null;
+  invoices: FinancialsInvoice[];
+  payments: FinancialsPayment[];
+  reconcile: string[];
+  reconciliation: Array<{ invoiceId: string; total: number; received: number; unresolved: number; status: string; customerOwes: string; sentence: string }>;
+  preview: {
+    billingMode: string | null;
+    subtotal?: number;
+    hst?: number;
+    total?: number;
+    totalHours?: number | null;
+    rate?: number | null;
+    unknownSkus?: string[];
+    lineItems?: Array<{ label: string; qty: number; price: number; lineTotal: number }>;
+    note?: string | null;
+    error?: string;
+  } | null;
+  holds: Array<{ key: string; message: string }>;
+  classicHref: string | null;
+}
+
+export const financialsApi = {
+  get: (projectId: string) =>
+    api.get<ProjectFinancials>(`/api/projects/${encodeURIComponent(projectId)}/financials`)
 };
