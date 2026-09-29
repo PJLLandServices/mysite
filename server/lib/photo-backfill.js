@@ -1003,6 +1003,17 @@ function createBackfill({
         candidates: it.result ? it.result.candidates || 0 : 0,
         chosen: chosen ? { hash: chosen.hash, quality: chosen.quality || null, imageSource: chosen.imageSource || null, width: chosen.width, height: chosen.height, domain: chosen.source && chosen.source.domain, pageUrl: chosen.source && chosen.source.pageUrl, imageVia: chosen.source && chosen.source.imageVia } : null,
         fast: it.work && it.work.fast ? { candidates: it.work.fast.candidates, searches: it.work.fast.searches.length } : null,
+        // Every candidate the tier step weighed, the pages checked and the
+        // finder notes — from the run's own work, so a finished dry run can
+        // be read in full without anything in the photo stores.
+        allCandidates: (it.work && it.work.tier && it.work.tier.candidates || []).map((c) => ({
+          hash: c.hash, domain: c.source && c.source.domain, pageUrl: c.source && c.source.pageUrl, via: c.source && c.source.imageVia, pass: c.source && c.source.pass,
+          tier: c.tier, quality: c.quality ? c.quality.grade : null, qualityReason: c.quality ? c.quality.reason : null, source: c.imageSource || null,
+          checks: { partNumber: c.checks && c.checks.partNumber ? c.checks.partNumber.result : null, specMatch: c.checks && c.checks.specMatch ? c.checks.specMatch.result : null,
+            vision: ev.visionSummary(c.checks && c.checks.vision), crossSource: c.checks && c.checks.crossSource ? c.checks.crossSource.result : null }
+        })),
+        pages: (it.work && it.work.pages || []).map((p) => ({ url: p.url, fetch: p.fetch, status: p.status, partNumber: p.partNumber, images: p.images, skipped: p.skipped || 0, note: p.note })),
+        notes: (it.work && it.work.found && it.work.found.notes) || [],
         usage: { calls: u.calls || 0, in: u.in || 0, out: u.out || 0, searches: u.searches || 0, webFetches: u.webFetches || 0, pageFetches: u.pageFetches || 0, imageFetches: u.imageFetches || 0, fastSearches: u.fastSearches || 0 },
         ms: typeof it.ms === "number" ? it.ms : null,
         livePhoto: p && p.photo ? { width: p.photo.width, height: p.photo.height, domain: p.photo.sourceDomain || null } : null
