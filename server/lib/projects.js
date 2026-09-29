@@ -2092,6 +2092,76 @@ function projectQuoteAnchor(proj) {
   return proj ? (proj.currentQuoteId || proj.sourceQuoteId || null) : null;
 }
 
+// THE rule for which invoices are a project's (Financials Fix B,
+// 2026-09-28). There were three: the workspace looked up deposit/balance
+// invoices on the quote chain, the deposit lifecycle used the quote's own
+// pointers, and the customer portal matched invoice.projectId — which a
+// deposit invoice (made at acceptance, before the project exists) and the
+// held balance invoice never carry. So the portal's project card never
+// showed the deposit, and its "deposit paid" stage could not be reached.
+//
+// An invoice is the project's when:
+//   - it is tagged with the project (projectId) — a tag for ANOTHER
+//     project is final, never overridden;
+//   - it is the project's final invoice (finalInvoiceId); or
+//   - it is a deposit or balance invoice on the project's quote chain
+//     (every version of the quote it was converted from, or — before
+//     acceptance — of its design's linked quote).
+// Void invoices are included — they are the project's history — and every
+// reader that means "owed" excludes them with isLiveInvoice().
+function invoiceBelongsToProject(inv, proj, chainQuoteIds) {
+  if (!inv || !proj) return false;
+  if (inv.projectId) return inv.projectId === proj.id;
+  if (proj.finalInvoiceId && inv.id === proj.finalInvoiceId) return true;
+  return Boolean(
+    inv.quoteId && chainQuoteIds && chainQuoteIds.has(inv.quoteId) &&
+    (inv.invoiceRole === "deposit" || inv.invoiceRole === "balance")
+  );
+}
+
+// A void invoice is dead paper: never owed, never "the" invoice.
+function isLiveInvoice(inv) {
+  return Boolean(inv) && inv.status !== "void";
+}
+
+// The quote ids a project's invoices may hang off: the whole quote chain
+// (back to the original, forward through every revision) of each quote
+// the project names — its billing anchor (currentQuoteId, else
+// sourceQuoteId), and, for a job made in the System Builder before its
+// quote was accepted, the design's linked quote.
+function projectChainQuoteIds(proj, quoteRecords) {
+  const quotes = require("./quotes");
+  const ids = new Set();
+  const named = [projectQuoteAnchor(proj), proj?.sourceQuoteId, proj?.systemDesign?.linkedQuoteId].filter(Boolean);
+  for (const id of new Set(named)) {
+    ids.add(id);
+    for (const q of quotes.chainFromRecords(quoteRecords, id)) ids.add(q.id);
+  }
+  return ids;
+}
+
+// Every project's invoices, oldest first, from ONE read of each store.
+// invoiceRecords may be passed by a caller that already holds them.
+async function invoicesForProjects(projs, { invoiceRecords = null } = {}) {
+  const quotes = require("./quotes");
+  const invoices = require("./invoices");
+  const quoteRecords = await quotes.list({ includeDeleted: true });
+  const allInvoices = invoiceRecords || await invoices.list();
+  const out = new Map();
+  for (const p of projs || []) {
+    const chainIds = projectChainQuoteIds(p, quoteRecords);
+    out.set(p.id, allInvoices
+      .filter((inv) => invoiceBelongsToProject(inv, p, chainIds))
+      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || ""))));
+  }
+  return out;
+}
+
+async function invoicesForProject(proj) {
+  if (!proj) return [];
+  return (await invoicesForProjects([proj])).get(proj.id) || [];
+}
+
 async function resolveProjectQuote(proj) {
   const quotes = require("./quotes");
   if (!proj) return { chain: [], governing: null, pending: null, head: null };
@@ -2510,7 +2580,28 @@ async function completionPreflight(projectId) {
     try {
       const quotesLib = require("./quotes");
       const q = await quotesLib.get(proj.sourceQuoteId);
-      if (q?.deposit?.enabled === true && q.status === "accepted" &&
+      // A deposit invoice marked Paid with its payments short is NOT a
+      // satisfied deposit (payment reconciliation, 2026-09-28): its gap is
+      // neither received nor collectible, and billing the balance on top
+      // of it could charge the customer twice. So completion waits for the
+      // office to reconcile it — record the missing payment or correct the
+      // status — and this blocker is not overridable (HARD_BLOCKERS).
+      let depositRecon = null;
+      if (q?.deposit?.enabled === true && q.deposit.depositInvoiceId) {
+        try {
+          const invoicesLib = require("./invoices");
+          const depInv = await invoicesLib.get(q.deposit.depositInvoiceId);
+          const r = depInv ? invoicesLib.reconciliationFor(depInv) : null;
+          if (r && r.required) depositRecon = { inv: depInv, r };
+        } catch (_) { /* tolerate — read below */ }
+      }
+      const fmt = (n) => "$" + (Number(n) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      if (depositRecon) {
+        checks.blockers.push({
+          key: "payment_reconciliation_required",
+          message: `Deposit invoice ${depositRecon.inv.id} is marked Paid, but only ${fmt(depositRecon.r.recorded)} is recorded against ${fmt(depositRecon.r.total)} — ${fmt(depositRecon.r.unresolved)} unresolved. Record the missing payment or correct its status to Partially paid on the invoice page before completing the job.`
+        });
+      } else if (q?.deposit?.enabled === true && q.status === "accepted" &&
           q.deposit.stage !== "deposit_paid" && q.deposit.stage !== "awaiting_balance_payment" && q.deposit.stage !== "closed") {
         checks.blockers.push({
           key: "deposit_unpaid",
@@ -2530,6 +2621,8 @@ async function completionPreflight(projectId) {
 // record creation is done by completion-cascade.js's
 // runProjectFinalCascade(). This function is responsible for the
 // project-side state machine: stamps + status flip + history.
+const HARD_BLOCKERS = new Set(["payment_reconciliation_required"]);
+
 async function completeProject(projectId, { by = "admin", allowOverride = false, overrideReason = "", attestationNote = "", deps = {} } = {}) {
   const proj = await get(projectId);
   if (!proj) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
@@ -2541,6 +2634,18 @@ async function completeProject(projectId, { by = "admin", allowOverride = false,
 
   // Preflight gates.
   const checks = await completionPreflight(projectId);
+  // Blockers no override can pass: an unreconciled deposit payment
+  // (payment reconciliation, 2026-09-28) — completing would release the
+  // balance invoice against a deposit the ledger doesn't show.
+  const hard = checks.blockers.filter((b) => HARD_BLOCKERS.has(b.key));
+  if (hard.length) {
+    const err = new Error(`Cannot complete project — ${hard.map((b) => b.message).join("; ")}`);
+    err.code = "preflight_blockers";
+    err.blockers = checks.blockers;
+    err.warnings = checks.warnings;
+    err.hardBlockers = hard.map((b) => b.key);
+    throw err;
+  }
   if (checks.blockers.length && !allowOverride) {
     const err = new Error(
       `Cannot complete project — ${checks.blockers.length} blocker${checks.blockers.length === 1 ? "" : "s"}: ` +
@@ -3169,6 +3274,10 @@ module.exports = {
   resolveProjectQuote,
   describeAgreement,
   projectQuoteAnchor,
+  invoiceBelongsToProject,
+  isLiveInvoice,
+  invoicesForProjects,
+  invoicesForProject,
   agreementsForProjects,
   contractTotals,
   fixedPriceBillingSource,

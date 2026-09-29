@@ -277,7 +277,8 @@ const photoAi = (() => {
     passesFor: photoAiLib.passesFor,
     find: (...a) => get().find(...a),
     verify: (...a) => get().verify(...a),
-    compare: (...a) => get().compare(...a)
+    compare: (...a) => get().compare(...a),
+    models: { finder: photoAiLib.MODEL, vision: photoAiLib.MODEL_VISION }
   };
 })();
 // Fast Product Lookup (Patrick, Sep 28 2026): the supplier's own search
@@ -294,6 +295,11 @@ const photoBackfill = require("./lib/photo-backfill").createBackfill({
   manufacturers: () => (PARTS && PARTS.manufacturers) || [],
   ai: photoAi,
   fastLookup: photoFastLookup,
+  // The standing model-spend cap across runs, in dollars (Patrick, Sep 28
+  // 2026: "this should not cost me any more than $10"), and the web-search
+  // finder off unless a wave is started with it on.
+  budgetUsd: Number.isFinite(Number(process.env.PHOTO_BUDGET_USD)) && process.env.PHOTO_BUDGET_USD !== "" ? Number(process.env.PHOTO_BUDGET_USD) : 10,
+  finderDefault: false,
   fetchPage: (url) => partPhotosLib.fetchPageSafely(url),
   fetchImage: (url) => partPhotosLib.fetchImageSafely(url),
   log: (entry) => console.log("[photo-backfill]", JSON.stringify(entry)),
@@ -3722,13 +3728,9 @@ async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "con
         ? `${inv.notes}\n\nPaid via Stripe ${summary.chargeId || summary.paymentIntentId} on ${new Date().toISOString()}.`
         : `Paid via Stripe ${summary.chargeId || summary.paymentIntentId} on ${new Date().toISOString()}.`
     });
-    // Threshold deposit — a paid deposit invoice spawns the held balance
-    // invoice; a paid balance invoice closes the quote's deposit stage.
-    try {
-      await deposits.onInvoicePaid(updated);
-    } catch (depErr) {
-      console.warn(`[stripe] deposit paid-hook failed for ${inv.id}:`, depErr?.message);
-    }
+    // Threshold deposit: the invoice store reports this write's change to
+    // "paid" (only when the payment SETTLED it — never a part payment) to
+    // deposits.onInvoiceStatusChange. Nothing to call here (Fix A).
   }
 
   // The office alert, once: only the call that opened the exception
@@ -4387,6 +4389,27 @@ async function customerPortalSections(lead) {
     });
   } catch (err) { console.warn("[portal] service history build failed:", err?.message); }
 
+  // The customer's projects and each one's invoices — projects.
+  // invoicesForProjects, the ONE rule (Financials Fix B, 2026-09-28). A
+  // deposit or held balance invoice never carries projectId (it is made at
+  // acceptance, before the project exists), so matching projectId alone
+  // listed the deposit as a loose invoice and never on its project card,
+  // whose "deposit paid" stage could not be reached. Archived projects
+  // count for "whose invoice is it", as projectId did; only live ones get
+  // a card.
+  let customerProjects = [];
+  let projectInvoiceMap = new Map();
+  if (customerId) {
+    try {
+      const everyProject = (await projects.list({ includeArchived: true }))
+        .filter((p) => p.customerId === customerId && !p.deletedAt);
+      projectInvoiceMap = await projects.invoicesForProjects(everyProject, { invoiceRecords: allInvoices });
+      const liveIds = new Set((await projects.list({ includeArchived: false })).map((p) => p.id));
+      customerProjects = everyProject.filter((p) => liveIds.has(p.id));
+    } catch (err) { console.warn("[portal] project invoices failed:", err?.message); }
+  }
+  const projectInvoiceIds = new Set([...projectInvoiceMap.values()].flat().map((i) => i.id));
+
   // ---- PJL-21: invoices with no Work Order behind them (a normal,
   // supported creation path — invoices.createDraft accepts woId: null)
   // were otherwise invisible on the portal: Service History was
@@ -4410,7 +4433,7 @@ async function customerPortalSections(lead) {
       .filter(Boolean));
     const orphanInvoices = allInvoices.filter((i) => {
       if (!visibleInvoice(i)) return false;
-      if (i.projectId) return false; // surfaced via Projects instead
+      if (i.projectId || projectInvoiceIds.has(i.id)) return false; // surfaced via Projects instead
       if (i.woId && historyWoIds.has(i.woId)) return false; // already listed above
       if (customerId && i.customerId === customerId) return true;
       if (i.customerId) return false; // belongs to a different customer
@@ -4439,21 +4462,19 @@ async function customerPortalSections(lead) {
   let projectCards = [];
   if (customerId) {
     try {
-      const projs = (await projects.list({ includeArchived: false }))
-        .filter((p) => p.customerId === customerId && !p.deletedAt);
-      projectCards = await Promise.all(projs.map(async (p) => {
+      projectCards = await Promise.all(customerProjects.map(async (p) => {
         let metrics = null;
         try { metrics = await projects.computeProjectMetrics(p.id); } catch (_) { metrics = null; }
-        const projInvoices = allInvoices
-          .filter((i) => i.projectId === p.id && visibleInvoice(i))
-          .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+        const projInvoices = (projectInvoiceMap.get(p.id) || []).filter(visibleInvoice);
         // Customer-facing stage rail. Derived, furthest-reached wins:
         //   accepted  — project exists (converted from an accepted quote)
         //   deposit   — a deposit invoice has been paid
         //   scheduled — build underway or work orders attached
         //   complete  — project status flipped to complete
         //   invoiced  — a non-deposit invoice exists post-completion
-        const depositPaid = projInvoices.some((i) => i.invoiceRole === "deposit" && i.status === "paid");
+        // Paid by the ledger, not by a status (payment reconciliation):
+        // a deposit marked Paid with its payments short has not been paid.
+        const depositPaid = projInvoices.some((i) => i.invoiceRole === "deposit" && invoices.isSettled(i));
         const finalInvoiced = projInvoices.some((i) => i.invoiceRole !== "deposit");
         const stage =
           p.status === "complete" ? (finalInvoiced ? "invoiced" : "complete")
@@ -11829,6 +11850,13 @@ async function handleApi(req, res, pathname) {
       const body = await parseRequestBody(req);
       const inv = await invoices.getByPaymentToken(id, body?.t || "");
       if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found or link expired."] });
+      // Marked Paid with its payments short: nothing is collectible until
+      // the office reconciles it (payment reconciliation, 2026-09-28).
+      if (invoices.payBlockReason(inv) === "reconciliation_required") {
+        return sendJson(res, 409, { ok: false, code: "reconciliation_required", errors: [
+          `Our office is reviewing the payments on this invoice — nothing can be charged online right now. Please call us at ${await paymentSupportPhone()} with any questions.`
+        ] });
+      }
       if (inv.status === "paid") {
         return sendJson(res, 409, { ok: false, errors: ["This invoice has already been paid."] });
       }
@@ -11846,6 +11874,8 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 409, { ok: false, code: invoices.payBlockReason(inv), errors: [
           invoices.payBlockReason(inv) === "price_unconfirmed"
             ? "PJL is still confirming this invoice's price — nothing can be charged yet."
+            : invoices.payBlockReason(inv) === "reconciliation_required"
+              ? `Our office is reviewing the payments on this invoice — nothing can be charged online right now. Please call us at ${await paymentSupportPhone()} with any questions.`
             : ["awaiting_signature", "revision_required"].includes(invoices.payBlockReason(inv))
               ? "This invoice is being updated — nothing can be charged yet."
               : `This invoice is "${inv.status}" and isn't ready for payment.`
@@ -14214,8 +14244,9 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req).catch(() => ({}));
       // `skus` is the list Patrick confirmed in the dialog; the engine
       // compares it with the plan it would run and refuses any difference.
+      // No other field of the payload is read: a wave has no finder switch.
       const status = await photoBackfill.startWave({ by, skus: Array.isArray(payload && payload.skus) ? payload.skus.map(String) : null });
-      await settings.recordAudit({ who: by, action: "part-photo.backfill.wave", note: `Started a photo backfill wave (${status.run.counts.total} parts, auto-approve off): ${status.run.wave.skus.join(", ")}`, after: status.run });
+      await settings.recordAudit({ who: by, action: "part-photo.backfill.wave", note: `Started a photo backfill wave (${status.run.counts.total} parts, auto-approve off, no web search, budget $${status.run.budget.spentUsd.toFixed(2)} spent of $${status.run.budget.usd}): ${status.run.wave.skus.join(", ")}`, after: status.run });
       return sendJson(res, 200, { ok: true, ...status });
     } catch (err) {
       return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't start the wave."] });
@@ -16192,22 +16223,16 @@ async function handleApi(req, res, pathname) {
         const held = invoices.paymentHoldFor(before);
         if (held) return sendJson(res, held.status, { ok: false, code: held.code, errors: held.errors });
       }
-      const updated = await invoices.update(id, payload);
+      // Who changed it — the audit for a status change, and for resolving a
+      // payment reconciliation (never the body's say-so).
+      const patchSession = await requireUser(req);
+      const updated = await invoices.update(id, { ...payload, by: await actorLabel(req, patchSession?.uid || "admin") });
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
       if (before && before.status !== "void" && updated.status === "void") await settleNoChargeOnVoid(before);
 
-      // Threshold deposit — paid/void transitions on deposit invoices
-      // drive the quote's deposit lifecycle. Best-effort.
-      try {
-        if (before && before.status !== "paid" && updated.status === "paid") {
-          await deposits.onInvoicePaid(updated);
-        }
-        if (before && before.status !== "void" && updated.status === "void") {
-          await deposits.onInvoiceVoided(updated);
-        }
-      } catch (depErr) {
-        console.warn(`[invoice-patch] deposit hook failed for ${id}:`, depErr?.message);
-      }
+      // Threshold deposit — paid / un-paid / void transitions drive the
+      // quote's deposit lifecycle; the invoice store reports this write's
+      // change to deposits.onInvoiceStatusChange itself (Fix A).
 
       // PR 3 — status mirror to QuickBooks. When admin sets status to
       // void in PJL, push the same change to QB. Best-effort: a QB
@@ -16228,6 +16253,9 @@ async function handleApi(req, res, pathname) {
 
       return sendJson(res, 200, { ok: true, invoice: updated, warning: qbWarning });
     } catch (err) {
+      // A refused "Mark paid" (record_payment_required) or a Partially paid
+      // the ledger doesn't bear out (status_mismatch) says why, with its code.
+      if (err && err.code && err.status) return sendJson(res, err.status, { ok: false, code: err.code, errors: [err.message] });
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update invoice."] });
     }
   }
@@ -16379,14 +16407,8 @@ async function handleApi(req, res, pathname) {
         }
       }
       // Threshold deposit — voiding a deposit invoice reverts the quote
-      // to awaiting-deposit and withdraws a held balance invoice.
-      if (!result.alreadyVoid) {
-        try {
-          await deposits.onInvoiceVoided(result.invoice);
-        } catch (depErr) {
-          console.warn(`[invoice-void] deposit hook failed for ${id}:`, depErr?.message);
-        }
-      }
+      // to awaiting-deposit and withdraws a held balance invoice; the
+      // invoice store reports the void to deposits.onInvoiceStatusChange.
       return sendJson(res, 200, { ok: true, invoice: result.invoice, warning: qbWarning });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't void invoice."] });
@@ -17032,24 +17054,36 @@ async function handleApi(req, res, pathname) {
             depositInvoiceId: null,
             chain: chain.map((q) => ({ id: q.id, version: q.version || 1, status: q.status }))
           };
-          try {
-            const chainInvoices = await invoices.listByQuote(chain.map((q) => q.id));
-            const byRole = (role) => chainInvoices
-              .filter((inv) => inv.invoiceRole === role)
-              .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
-            const best = byRole("balance") || byRole("deposit");
-            if (best) linkedQuote.depositInvoiceId = best.id;
-          } catch (err) { /* tolerate — Invoice tab just falls back to finalInvoiceId or greys out */ }
         }
       } catch (err) { /* tolerate — panel just doesn't render */ }
+    }
+
+    // The project's invoices — projects.invoicesForProject, the ONE rule
+    // (Financials Fix B, 2026-09-28): tagged with the project, its final
+    // invoice, or a deposit/balance invoice on its quote chain. A VOID
+    // invoice is never "the" invoice here: it used to be picked when it
+    // was the newest, and the Overview then showed it as money owed.
+    let projInvoices = [];
+    try { projInvoices = await projects.invoicesForProject(proj); } catch (err) { /* tolerate — panels just don't render */ }
+    const liveProjInvoices = projInvoices.filter(projects.isLiveInvoice);
+    if (linkedQuote) {
+      // Prefer the balance invoice if the deposit's already been paid and
+      // superseded by one; else the deposit invoice.
+      const byRole = (role) => liveProjInvoices
+        .filter((inv) => inv.invoiceRole === role)
+        .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+      const best = byRole("balance") || byRole("deposit");
+      if (best) linkedQuote.depositInvoiceId = best.id;
     }
 
     // Invoice summary (2026-09-21) — real numbers inline (status, total,
     // amount paid, balance due), not just a link out. Prefers the
     // project's final invoice (set at completion); falls back to the
     // deposit/balance invoice resolved above for a job still in progress.
+    // Never a void one.
     let invoiceSummary = null;
-    const invoiceId = proj.finalInvoiceId || (linkedQuote && linkedQuote.depositInvoiceId) || null;
+    const liveFinal = proj.finalInvoiceId && liveProjInvoices.some((i) => i.id === proj.finalInvoiceId) ? proj.finalInvoiceId : null;
+    const invoiceId = liveFinal || (linkedQuote && linkedQuote.depositInvoiceId) || null;
     if (invoiceId) {
       try {
         const inv = await invoices.get(invoiceId);
@@ -18251,6 +18285,12 @@ async function handleApi(req, res, pathname) {
       // them as part of the cascade. Both are best-effort — the lib
       // catches errors so an email outage doesn't roll back completion.
       const deps = {
+        // The parts catalog the T&M bill is priced from: the SAME effective
+        // catalog (baseline + admin edits + supplier prices) the billing
+        // preview shows (Financials Fix B). The cascade used to re-read raw
+        // parts.json, so an edited price previewed at one figure and billed
+        // at another — or blocked the invoice as an unknown SKU.
+        partsCatalog: PARTS,
         notifyAdmin: async ({ project, invoice, serviceRecord }) => {
           if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) return;
           let nodemailer;

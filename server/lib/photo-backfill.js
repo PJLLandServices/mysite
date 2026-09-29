@@ -34,6 +34,7 @@ const crypto = require("node:crypto");
 const { writeJsonAtomic, serialize } = require("./atomic-json");
 const ev = require("./photo-evidence");
 const pq = require("./photo-quality");
+const aiLib = require("./photo-ai");
 // Fast Product Lookup (Patrick, Sep 28 2026): before the finder, the
 // supplier's own search + product page (photo-fast-lookup). Its pages are
 // candidates like any other; the finder runs only when it falls short.
@@ -72,6 +73,13 @@ function createBackfill({
   store,             // part-photos store (createPartPhotos)
   ai,                // photo-ai (createPhotoAI) — or a fake in tests
   fastLookup = null, // photo-fast-lookup (createFastLookup) — null = finder only
+  budgetUsd = 10,    // the standing cap on model spend across runs (Patrick, Sep 28 2026); null = no cap
+  // The paid web-search finder (Patrick, Sep 28 2026: "bulk waves cannot invoke
+  // the finder"). No server door can turn it on: start() takes no finder
+  // option and the wave route accepts none. It exists only for the test
+  // harnesses of the finder path (finderDefault: true) and, later, a separate
+  // one-part manual research action with its cost shown first (not built).
+  finderDefault = false,
   getParts,          // () => the live merged catalog { sku: part }
   manufacturers = [],// [{ key, label }] or a function returning them
   afterRun = null,   // async (run) => {} — called once when a run finishes (grouping, catalog rebuild)
@@ -129,7 +137,25 @@ function createBackfill({
   // Everything a run costs, counted where it happens: Claude calls and the
   // model's own searches/fetches from each response's usage; page and image
   // downloads where OUR server makes them. Tokens are kept too.
-  const USAGE0 = Object.freeze({ in: 0, out: 0, calls: 0, searches: 0, webFetches: 0, pageFetches: 0, imageFetches: 0, fastSearches: 0 });
+  const USAGE0 = Object.freeze({ in: 0, out: 0, calls: 0, searches: 0, webFetches: 0, pageFetches: 0, imageFetches: 0, fastSearches: 0, usd: 0 });
+  // The standing ledger: dollars every run has spent since it was last
+  // reset (kept in the state file). The gate compares it with budgetUsd.
+  const spent = () => (state && state.spend && state.spend.usd) || 0;
+  const overBudget = () => typeof budgetUsd === "number" && spent() >= budgetUsd;
+  // Worst-case dollars for a plan, from the same price table as the ledger:
+  // a vision call ≈ 4,000 in / 500 out, a compare ≈ 8,000 in / 200 out, a
+  // finder call ≈ 200,000 in / 3,000 out + 6 searches (what the waves measured).
+  function estimateCost(rows) {
+    const models = ai.models || { finder: aiLib.MODEL, vision: aiLib.MODEL_VISION };
+    const pv = aiLib.priceFor(models.vision), pf = aiLib.priceFor(models.finder);
+    let vision = 0, compare = 0, finderCalls = 0;
+    for (const r of rows) { vision += r.calls.verifyMax; compare += r.calls.compareMax; finderCalls += r.calls.finderMax; }
+    const visionUsd = vision * (4000 * pv.in + 500 * pv.out) / 1e6 + compare * (8000 * pv.in + 200 * pv.out) / 1e6;
+    const finderUsd = finderCalls * ((200000 * pf.in + 3000 * pf.out) / 1e6 + 6 * aiLib.SEARCH_USD);
+    // worstCaseUsd is what a wave can cost: vision + compare calls only. The
+    // finder figure is kept for the (future) one-part manual research door.
+    return { worstCaseUsd: +visionUsd.toFixed(2), finderWouldCostUsd: +finderUsd.toFixed(2), models, budgetUsd, spentUsd: +spent().toFixed(2), remainingUsd: typeof budgetUsd === "number" ? +Math.max(0, budgetUsd - spent()).toFixed(2) : null };
+  }
   const MAX_CANDIDATES = 3;      // per part — bounds the vision calls
   const MAX_IMAGES_PER_PAGE = 2; // finder's URL (if any) + extracted ones
   const MAX_IMAGE_TRIES = 4;     // URLs downloaded and measured per page to find MAX_IMAGES_PER_PAGE usable ones
@@ -155,6 +181,7 @@ function createBackfill({
   async function start({ skus = null, autoApprove = false, label = "", dryRun = false } = {}) {
     await load();
     if (state.run && ["running", "paused"].includes(state.run.status)) throw new Error("A backfill run is already in progress — pause or finish it first.");
+    if (overBudget()) throw new Error(`The photo budget is used up ($${spent().toFixed(2)} of $${budgetUsd.toFixed(2)}) — nothing was started.`);
     const parts = getParts() || {};
     const pick = (skus || Object.keys(parts)).filter((s) => parts[s] && (dryRun || !isLive(parts[s])));
     const rank = (p) => { const i = BRAND_ORDER.indexOf(p.manufacturer); return i < 0 ? 99 : i; };
@@ -163,7 +190,7 @@ function createBackfill({
     state.run = {
       id: "BF-" + new Date(now()).toISOString().replace(/[-:T]/g, "").slice(0, 12) + "-" + crypto.randomBytes(2).toString("hex"),
       label, status: "running", createdAt: new Date(now()).toISOString(),
-      options: { autoApprove: !!autoApprove, dryRun: !!dryRun },
+      options: { autoApprove: !!autoApprove, dryRun: !!dryRun, finder: finderDefault === true },
       order,
       items: Object.fromEntries(order.map((s) => [s, { step: "queued", attempts: 0, nextAt: 0, lastError: null, work: {}, result: null, usage: { ...USAGE0 } }])),
       usage: { ...USAGE0 }
@@ -180,7 +207,8 @@ function createBackfill({
   }
   async function resume() {
     await load();
-    if (state.run && state.run.status === "paused") { state.run.status = "running"; await save(); }
+    if (overBudget()) throw new Error(`The photo budget is used up ($${spent().toFixed(2)} of $${budgetUsd.toFixed(2)}) — raise PHOTO_BUDGET_USD to continue.`);
+    if (state.run && state.run.status === "paused") { state.run.status = "running"; delete state.run.pausedReason; await save(); }
     if (state.run && state.run.status === "running") kick();
     return status();
   }
@@ -271,6 +299,13 @@ function createBackfill({
           it.finishedAt = now();
           it.ms = it.startedAt ? it.finishedAt - it.startedAt : null;
         }
+        // The budget gate: the standing ledger reached the cap → the run
+        // pauses itself after this step and says why. Resume refuses until
+        // the cap is raised.
+        if (r.status === "running" && overBudget()) {
+          r.status = "paused"; r.pausedReason = "budget";
+          log({ action: "backfill.budget-pause", runId: r.id, spentUsd: +spent().toFixed(4), budgetUsd });
+        }
         delete it.inFlight;
         await save();
       }
@@ -287,11 +322,21 @@ function createBackfill({
     const kind = kindOf(part);
     const bump = (k, n = 1) => { it.usage[k] = (it.usage[k] || 0) + n; r.usage[k] = (r.usage[k] || 0) + n; };
     // One call of this = one Claude API response (pause_turn resumes count too).
-    const usage = (u) => {
+    // Every response is priced (photo-ai.costOf, from the model that
+    // answered) and added to the run AND to the standing ledger the budget
+    // gate reads (Patrick, Sep 28 2026).
+    const usage = (u, model) => {
       const st = (u && u.server_tool_use) || {};
       bump("calls"); bump("in", u.input_tokens || 0); bump("out", u.output_tokens || 0);
       bump("searches", st.web_search_requests || 0); bump("webFetches", st.web_fetch_requests || 0);
+      const usd = aiLib.costOf(u, model);
+      bump("usd", usd);
+      state.spend = state.spend || { usd: 0, since: new Date(now()).toISOString() };
+      state.spend.usd += usd;
+      if (!state.spend.byModel) state.spend.byModel = {};
+      state.spend.byModel[model || "unknown"] = (state.spend.byModel[model || "unknown"] || 0) + usd;
     };
+    const finderOn = r.options.finder === true;
     const getPage = async (url) => { const res = await fetchPageCached(url); if (!res.cached) bump("pageFetches"); return res; };
     const getImage = async (url) => { bump("imageFetches"); return fetchImage(url); };
 
@@ -332,7 +377,12 @@ function createBackfill({
       const domains = new Set(found.candidates.map((c) => c.domain));
       const needAi = !found.candidates.length || (kind === "generic" && domains.size < 2);
       const passList = !found.candidates.length ? passes : [passes[passes.length - 1]];
-      if (needAi) for (const pass of passList) {
+      // Bulk waves never call the finder (Patrick, Sep 28 2026: the web search
+      // is what cost ~$1.50 a part). A part the deterministic lookup can't
+      // resolve becomes "Needs research" and the run moves on; a generic
+      // fast-path hit keeps its one source and lands at "To be determined".
+      if (needAi && !finderOn) found.notes.push(found.candidates.length ? "no second source was searched for (bulk waves never call the finder)" : "not found on the supplier sites — no web search was made (bulk waves never call the finder)");
+      if (needAi && finderOn) for (const pass of passList) {
         const res = await ai.find(part, pass, usage);
         // A product PAGE is enough: our server reads its images (check step).
         const cands = (res.candidates || []).filter((c) => /^https:\/\//i.test(c.pageUrl || "") && !found.candidates.some((f) => f.pageUrl === c.pageUrl)).slice(0, MAX_CANDIDATES);
@@ -557,7 +607,7 @@ function createBackfill({
     if (it.step === "tier") {
       const cs = (it.work.checked || []).filter((c) => c.hash);
       const scored = cs.map((c) => ({ c, t: ev.tierFor({ kind, hasCandidate: true, partNumber: c.partNumber, vision: c.vision, specMatch: c.specMatch, crossSource: it.work.cross }) }));
-      const order = { confident: 0, tbd: 1, not_confident: 2 };
+      const order = { confident: 0, tbd: 1, not_confident: 2, needs_research: 3 };
       // Among candidates of the same tier the highest-quality clean shot
       // wins: grade (good > ok > low), then the source's longest side, then
       // official pages, then the earlier pass. Low quality can never back
@@ -826,9 +876,16 @@ function createBackfill({
       counts: { total: rows.length, branded: rows.filter((r) => r.kind === "branded").length, generic: rows.filter((r) => r.kind === "generic").length,
         categories: [...new Set(rows.map((r) => r.category))].sort(), manufacturers: [...new Set(rows.map((r) => r.manufacturer).filter(Boolean))].sort() },
       eligible: Object.values(parts).filter((p) => !isExcluded(p)).length,
-      estimate: estimateRows(rows)
+      estimate: estimateRows(rows),
+      // Dollars, not tokens (Patrick, Sep 28 2026): what this wave can cost
+      // (vision + compare calls only — a wave never calls the finder) and
+      // what is left of the budget.
+      cost: estimateCost(rows),
+      finder: "never"
     };
   }
+  // A wave has no finder switch at all: there is nothing a request could
+  // pass to make it search the web.
   async function startWave({ by = null, skus = null, size = WAVE_MAX } = {}) {
     await load();
     if (state.run && ["running", "paused"].includes(state.run.status)) throw new Error("A run is already active — pause or finish it first.");
@@ -841,7 +898,7 @@ function createBackfill({
       throw new Error("The wave plan has changed since it was shown — reload the plan and confirm the exact list.");
     }
     await start({ skus: plan.skus, autoApprove: false, label: `Wave (${plan.skus.length} parts)` });
-    state.run.wave = { by, skus: plan.skus, estimate: plan.estimate, at: new Date(now()).toISOString() };
+    state.run.wave = { by, skus: plan.skus, estimate: plan.estimate, cost: estimateCost(plan.rows), at: new Date(now()).toISOString() };
     state.run.options.autoApprove = false;
     await save();
     log({ action: "backfill.wave.start", runId: state.run.id, by, skus: plan.skus });
@@ -949,7 +1006,7 @@ function createBackfill({
 
   // ---- progress -----------------------------------------------------------
   function summary(run) {
-    const c = { total: run.order.length, queued: 0, inProgress: 0, done: 0, error: 0, live: 0, review: 0, noReliable: 0, skipped: 0 };
+    const c = { total: run.order.length, queued: 0, inProgress: 0, done: 0, error: 0, live: 0, review: 0, noReliable: 0, needsResearch: 0, skipped: 0 };
     for (const sku of run.order) {
       const it = run.items[sku];
       if (it.step === "done") {
@@ -958,6 +1015,7 @@ function createBackfill({
         if (t === "skipped" || (it.result && it.result.skipped)) c.skipped++;
         else if (it.result && it.result.live) c.live++;
         else if (t === "not_confident") c.noReliable++;
+        else if (t === "needs_research") c.needsResearch++;
         else c.review++;
       } else if (it.step === "error") c.error++;
       else if (it.step === "queued") c.queued++;
@@ -1020,8 +1078,11 @@ function createBackfill({
       };
     }) : null;
     return {
-      id: run.id, label: run.label, status: run.status, autoApprove: run.options.autoApprove, dryRun: !!run.options.dryRun, createdAt: run.createdAt, finishedAt: run.finishedAt || null,
-      interruptedAt: run.interruptedAt || null,
+      id: run.id, label: run.label, status: run.status, autoApprove: run.options.autoApprove, dryRun: !!run.options.dryRun, finder: run.options.finder === true, createdAt: run.createdAt, finishedAt: run.finishedAt || null,
+      interruptedAt: run.interruptedAt || null, pausedReason: run.pausedReason || null,
+      costUsd: +((run.usage && run.usage.usd) || 0).toFixed(4),
+      budget: { usd: typeof budgetUsd === "number" ? budgetUsd : null, spentUsd: +spent().toFixed(4), remainingUsd: typeof budgetUsd === "number" ? +Math.max(0, budgetUsd - spent()).toFixed(4) : null, since: state && state.spend ? state.spend.since : null, byModel: (state && state.spend && state.spend.byModel) || {} },
+      models: ai.models || null,
       fast, timing: { avgMs: msN ? Math.round(msSum / msN) : null, parts: msN },
       benchmark: run.benchmark ? { skus: run.benchmark.skus, by: run.benchmark.by, baseline: run.benchmark.baseline || null, rows } : null,
       calibration: run.calibration ? { skus: run.calibration.skus, by: run.calibration.by, rerunOf: run.calibration.rerunOf || null, unresolved: (() => { const parts = getParts() || {}; return run.calibration.skus.filter((s) => parts[s] && !isLive(parts[s])); })() } : null,
@@ -1036,12 +1097,13 @@ function createBackfill({
   // Review needed, No reliable photo or Not processed yet.
   function catalogProgress() {
     const parts = getParts() || {};
-    const c = { total: 0, live: 0, review: 0, noReliable: 0, notProcessed: 0 };
+    const c = { total: 0, live: 0, review: 0, noReliable: 0, needsResearch: 0, notProcessed: 0 };
     for (const p of Object.values(parts)) {
       c.total++;
       if (p.photoState === "verified") c.live++;
       else if (p.photoState === "tbd" || p.photoState === "changed") c.review++;
       else if (p.photoState === "not_confident") c.noReliable++;
+      else if (p.photoState === "needs_research") c.needsResearch++;
       else c.notProcessed++;
     }
     return c;
