@@ -270,3 +270,11 @@
 .pr-bench table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 12px; }
 .pr-bench th, .pr-bench td { padding: 4px 6px; border-bottom: 1px solid #E8E5D7; text-align: left; vertical-align: top; }
 .pr-bench th { font-weight: 700; color: #1F2A22; white-space: nowrap; }
+
+/* Quality upgrade of live photos (Patrick, Sep 28 2026). */
+.pr-quality { margin: 0 0 14px; padding: 12px; border: 1px solid #E8E5D7; border-radius: 10px; background: #FBFAF6; }
+.pr-quality h3 { margin: 0 0 6px; font-size: 15px; }
+.pr-q-status { margin: 0 0 8px; font-size: 13px; color: #4E5A50; }
+.pr-q-table { width: 100%; min-width: 640px; border-collapse: collapse; font-size: 12px; }
+.pr-q-table th, .pr-q-table td { padding: 6px; border-bottom: 1px solid #E8E5D7; text-align: left; vertical-align: top; }
+.pr-q-img img { display: block; width: 120px; height: 120px; object-fit: contain; background: #fff; border: 1px solid #E8E5D7; border-radius: 6px; }

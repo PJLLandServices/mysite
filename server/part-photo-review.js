@@ -22,7 +22,8 @@
     { key: "tbd", label: "To be determined", empty: "Nothing waiting for review." },
     { key: "notConfident", label: "Not confident", empty: "No parts without a reliable photo." },
     { key: "autoApproved", label: "Recently auto-approved", empty: "Nothing has gone live automatically yet." },
-    { key: "fittings", label: "Fittings to confirm", empty: "No same-fitting suggestions to confirm." }
+    { key: "fittings", label: "Fittings to confirm", empty: "No same-fitting suggestions to confirm." },
+    { key: "quality", label: "Quality", empty: "No live photo is waiting for a quality decision." }
   ];
   const state = { data: null, queue: "tbd", cur: 0, pick: {}, busy: false, tab: "parts" };
   const params = new URLSearchParams(location.search);
@@ -442,10 +443,88 @@
     els.queues.innerHTML = queuesHtml(d);
     const items = d[state.queue];
     const q = QUEUES.find((x) => x.key === state.queue);
-    if (!items.length) { els.list.innerHTML = `<p class="pp-empty">${q.empty}</p>`; return; }
-    els.list.innerHTML = `<p class="pr-pos">${state.cur + 1} of ${items.length}</p>` + items.map((it, i) =>
-      state.queue === "fittings" ? fittingCardHtml(it, i) : reviewCardHtml(it, i, state.queue)).join("");
+    const head = state.queue === "quality" ? qualityPanelHtml(d) : "";
+    if (!items.length) { els.list.innerHTML = head + `<p class="pp-empty">${q.empty}</p>`; return; }
+    els.list.innerHTML = head + `<p class="pr-pos">${state.cur + 1} of ${items.length}</p>` + items.map((it, i) =>
+      state.queue === "fittings" ? fittingCardHtml(it, i) : state.queue === "quality" ? qualityCardHtml(it, i) : reviewCardHtml(it, i, state.queue)).join("");
   }
+
+  // ---- Quality upgrade of live photos (Patrick, Sep 28 2026) --------------
+  // The plan: how many live photos under the threshold can be replaced by a
+  // larger copy of the SAME picture from the same page (deterministic), and
+  // how many need a look. Before/after side by side; apply sends back the
+  // exact list shown.
+  function qualityPanelHtml(d) {
+    const qp = d.qualityPlan || {};
+    const plan = qp.plan, c = qp.counts || {};
+    const ups = qp.upgrades || [];
+    const status = !plan ? "No plan built yet."
+      : plan.status === "building" || plan.building ? `Building… ${plan.done} of ${plan.total} photos checked.`
+      : `Plan ${esc(plan.id)} · ${plan.total} live photo${plan.total === 1 ? "" : "s"} under 800 px · <b>${c.applicable || 0}</b> can be upgraded deterministically · <b>${c.openReview || 0}</b> need a look${c.applied ? ` · ${c.applied} already applied` : ""}`;
+    const rows = ups.map((r) => `<tr>
+      <td><span class="pp-mono">${r.skus.map(esc).join(", ")}</span><br><small>${esc(r.label)}</small></td>
+      <td><a class="pr-q-img" href="${img(r.current.hash, 1200)}" target="_blank" rel="noopener"><img src="${img(r.current.hash, 480)}" alt=""></a><br>${r.current.longest}px · ${esc(r.current.domain || "")}</td>
+      <td><a class="pr-q-img" href="${img(r.upgrade.hash, r.upgrade.sizes && r.upgrade.sizes.includes(2000) ? 2000 : 1200)}" target="_blank" rel="noopener"><img src="${img(r.upgrade.hash, 480)}" alt=""></a><br>${r.upgrade.source.width}×${r.upgrade.source.height} · ${esc(r.upgrade.quality.grade)} · match ${r.upgrade.similarity}</td>
+      <td>${esc(r.current.approvedBy || "")}<br><small>kept as is</small></td>
+    </tr>`).join("");
+    const building = plan && (plan.status === "building" || plan.building);
+    return `<section class="pr-quality">
+      <h3>Quality upgrade of live photos</h3>
+      <p class="pr-q-status">${status}</p>
+      <div class="pr-controls">
+        <button type="button" class="pp-btn" data-act="quality-plan"${building ? " disabled" : ""}>${plan ? "Rebuild the plan" : "Build the plan"} (reads each photo's product page)</button>
+        ${ups.length ? `<button type="button" class="pp-btn pp-btn-primary" data-act="quality-apply">Apply the ${ups.length} deterministic upgrade${ups.length === 1 ? "" : "s"}</button>` : ""}
+        <span class="pp-panel-status" data-status aria-live="polite"></span>
+      </div>
+      ${ups.length ? `<div class="pr-bench-scroll"><table class="pr-q-table"><thead><tr><th>Part(s)</th><th>Today (live)</th><th>Same picture, larger</th><th>Approval (unchanged)</th></tr></thead><tbody>${rows}</tbody></table></div>` : ""}
+    </section>`;
+  }
+  function qualityCardHtml(r, idx) {
+    const isCur = idx === state.cur;
+    const tried = (r.tried || []).filter((t) => t.width).map((t) => `${t.width}×${t.height}${t.note ? ` — ${esc(t.note)}` : ""}`).join("; ");
+    const href = safeHref(r.current.pageUrl);
+    return `<article class="pr-card${isCur ? " is-current" : ""}" data-idx="${idx}" data-group="${esc(r.groupId)}" tabindex="-1" aria-label="${esc(r.label)}">
+      <header class="pr-card-head"><div class="pr-part">
+        <div class="pp-desc">${esc(r.label)}</div>
+        <div class="pp-meta"><span class="pp-mono">${r.skus.map(esc).join(", ")}</span> · live photo ${r.current.longest}px${r.current.domain ? ` · ${esc(r.current.domain)}` : ""}${href ? ` · <a href="${href}" target="_blank" rel="noopener noreferrer">Open page ↗</a>` : ""}</div>
+        <div class="pr-reason is-tbd"><b>Needs a look</b> — ${esc(r.reason)}${tried ? `<br><small>Tried: ${tried}</small>` : ""}</div>
+      </div></header>
+      <div class="pr-cands is-single"><figure class="pr-cand"><button type="button" class="pr-cand-img" data-act="zoom" data-hash="${esc(r.current.hash)}" aria-label="Current photo, open full size"><img src="${img(r.current.hash, 480)}" alt="Current live photo for ${esc(r.label)}" loading="lazy"></button><figcaption><p class="pr-quality is-low">! ${r.current.longest}px stored — below the 800 px threshold</p></figcaption></figure></div>
+      <footer class="pr-actions">
+        <button type="button" class="pp-btn" data-act="quality-keep">Keep as is</button>
+        <span class="pp-panel-status" data-status aria-live="polite"></span>
+      </footer>
+    </article>`;
+  }
+  async function qualityAction(kind, card) {
+    const s = (card || els.list).querySelector("[data-status]");
+    const say = (t, bad) => { if (s) { s.textContent = t; s.classList.toggle("is-error", !!bad); } };
+    if (kind === "plan") {
+      const ok = await window.pjlDialog.confirm("Build the quality-upgrade plan? Our server re-reads the product page of every live photo under 800 px and measures any larger copy of the same picture. Nothing is replaced by this step.", { confirmLabel: "Build the plan", cancelLabel: "Cancel" });
+      if (!ok) return;
+      say("Building…");
+      try { await post("/api/part-photo-quality/plan", {}); await load(true); } catch (err) { say(err.message, true); }
+      return;
+    }
+    if (kind === "apply") {
+      const ups = (state.data.qualityPlan && state.data.qualityPlan.upgrades) || [];
+      const list = ups.map((r) => `${r.skus.join(", ")} — ${r.current.longest}px → ${r.upgrade.source.width}×${r.upgrade.source.height} (${r.upgrade.quality.grade})`).join("\n");
+      const ok = await window.pjlDialog.confirm(`Replace ${ups.length} live photo${ups.length === 1 ? "" : "s"} with the larger copy of the same picture? Part match, fitting, approval and confidence stay exactly as they are; the old image is kept in the history.\n\n${list}`, { confirmLabel: "Apply the upgrades", cancelLabel: "Cancel" });
+      if (!ok) return;
+      say("Applying…");
+      try { const out = await post("/api/part-photo-quality/upgrade", { hashes: ups.map((r) => r.upgrade.hash) }); say(`Upgraded ${out.applied.length}${out.skipped.length ? `, skipped ${out.skipped.length}` : ""}.`); await load(true); } catch (err) { say(err.message, true); }
+      return;
+    }
+    if (kind === "keep" && card) {
+      await act(card, () => post(`/api/part-photo-quality/review/${encodeURIComponent(card.dataset.group)}`, { action: "keep" }), "Saving…");
+    }
+  }
+  els.list.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-act^=\"quality-\"]");
+    if (!b || state.busy) return;
+    e.stopPropagation();
+    qualityAction(b.dataset.act.replace("quality-", ""), b.closest(".pr-card"));
+  }, true);
   function currentCardEl() { return els.list.querySelector(".pr-card.is-current"); }
   function go(delta, focus = true) {
     const items = state.data ? state.data[state.queue] : [];
