@@ -2092,6 +2092,76 @@ function projectQuoteAnchor(proj) {
   return proj ? (proj.currentQuoteId || proj.sourceQuoteId || null) : null;
 }
 
+// THE rule for which invoices are a project's (Financials Fix B,
+// 2026-09-28). There were three: the workspace looked up deposit/balance
+// invoices on the quote chain, the deposit lifecycle used the quote's own
+// pointers, and the customer portal matched invoice.projectId — which a
+// deposit invoice (made at acceptance, before the project exists) and the
+// held balance invoice never carry. So the portal's project card never
+// showed the deposit, and its "deposit paid" stage could not be reached.
+//
+// An invoice is the project's when:
+//   - it is tagged with the project (projectId) — a tag for ANOTHER
+//     project is final, never overridden;
+//   - it is the project's final invoice (finalInvoiceId); or
+//   - it is a deposit or balance invoice on the project's quote chain
+//     (every version of the quote it was converted from, or — before
+//     acceptance — of its design's linked quote).
+// Void invoices are included — they are the project's history — and every
+// reader that means "owed" excludes them with isLiveInvoice().
+function invoiceBelongsToProject(inv, proj, chainQuoteIds) {
+  if (!inv || !proj) return false;
+  if (inv.projectId) return inv.projectId === proj.id;
+  if (proj.finalInvoiceId && inv.id === proj.finalInvoiceId) return true;
+  return Boolean(
+    inv.quoteId && chainQuoteIds && chainQuoteIds.has(inv.quoteId) &&
+    (inv.invoiceRole === "deposit" || inv.invoiceRole === "balance")
+  );
+}
+
+// A void invoice is dead paper: never owed, never "the" invoice.
+function isLiveInvoice(inv) {
+  return Boolean(inv) && inv.status !== "void";
+}
+
+// The quote ids a project's invoices may hang off: the whole quote chain
+// (back to the original, forward through every revision) of each quote
+// the project names — its billing anchor (currentQuoteId, else
+// sourceQuoteId), and, for a job made in the System Builder before its
+// quote was accepted, the design's linked quote.
+function projectChainQuoteIds(proj, quoteRecords) {
+  const quotes = require("./quotes");
+  const ids = new Set();
+  const named = [projectQuoteAnchor(proj), proj?.sourceQuoteId, proj?.systemDesign?.linkedQuoteId].filter(Boolean);
+  for (const id of new Set(named)) {
+    ids.add(id);
+    for (const q of quotes.chainFromRecords(quoteRecords, id)) ids.add(q.id);
+  }
+  return ids;
+}
+
+// Every project's invoices, oldest first, from ONE read of each store.
+// invoiceRecords may be passed by a caller that already holds them.
+async function invoicesForProjects(projs, { invoiceRecords = null } = {}) {
+  const quotes = require("./quotes");
+  const invoices = require("./invoices");
+  const quoteRecords = await quotes.list({ includeDeleted: true });
+  const allInvoices = invoiceRecords || await invoices.list();
+  const out = new Map();
+  for (const p of projs || []) {
+    const chainIds = projectChainQuoteIds(p, quoteRecords);
+    out.set(p.id, allInvoices
+      .filter((inv) => invoiceBelongsToProject(inv, p, chainIds))
+      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || ""))));
+  }
+  return out;
+}
+
+async function invoicesForProject(proj) {
+  if (!proj) return [];
+  return (await invoicesForProjects([proj])).get(proj.id) || [];
+}
+
 async function resolveProjectQuote(proj) {
   const quotes = require("./quotes");
   if (!proj) return { chain: [], governing: null, pending: null, head: null };
@@ -3204,6 +3274,10 @@ module.exports = {
   resolveProjectQuote,
   describeAgreement,
   projectQuoteAnchor,
+  invoiceBelongsToProject,
+  isLiveInvoice,
+  invoicesForProjects,
+  invoicesForProject,
   agreementsForProjects,
   contractTotals,
   fixedPriceBillingSource,
