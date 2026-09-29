@@ -36,7 +36,7 @@ function candidateCard(c) {
 }
 
 function buildReviewQueues({ parts, groups, links, fittings = [], photoUrl }) {
-  const out = { tbd: [], notConfident: [], autoApproved: [], fittings: [] };
+  const out = { tbd: [], notConfident: [], needsResearch: [], autoApproved: [], fittings: [] };
   const membersOf = {};
   for (const [sku, l] of Object.entries(links || {})) (membersOf[l.groupId] ||= []).push(sku);
   for (const [groupId, g] of Object.entries(groups || {})) {
@@ -59,10 +59,12 @@ function buildReviewQueues({ parts, groups, links, fittings = [], photoUrl }) {
     if (live && String(g.approvedBy || "").startsWith("auto:")) out.autoApproved.push(card);
     else if (!live && g.tier === "tbd") out.tbd.push(card);
     else if (!live && g.tier === "not_confident") out.notConfident.push(card);
+    else if (!live && g.tier === "needs_research") out.needsResearch.push(card);
   }
   const byAt = (a, b) => String(b.at || "").localeCompare(String(a.at || ""));
   out.tbd.sort((a, b) => (b.candidates.length ? 1 : 0) - (a.candidates.length ? 1 : 0) || a.sku.localeCompare(b.sku));
   out.notConfident.sort((a, b) => a.sku.localeCompare(b.sku));
+  out.needsResearch.sort((a, b) => a.sku.localeCompare(b.sku));
   out.autoApproved.sort((a, b) => String(b.approvedAt || "").localeCompare(String(a.approvedAt || "")));
   out.autoApproved = out.autoApproved.slice(0, AUTO_APPROVED_LIMIT);
   for (const f of fittings) {

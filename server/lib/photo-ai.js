@@ -18,7 +18,30 @@
 
 const { MANUFACTURER_DOMAINS, SUPPLIER_DOMAINS, VISION_KEYS } = require("./photo-evidence");
 
-const MODEL = "claude-opus-5";
+const MODEL = "claude-opus-5";                                   // the finder (web search + fetch)
+// The vision check and the compare call see one or two images and a spec:
+// a much smaller job than the finder. Patrick sets the model by env when
+// he wants it cheaper; the default stays the finder's model.
+const MODEL_VISION = process.env.PHOTO_VISION_MODEL || MODEL;
+// Anthropic first-party list prices, USD per million tokens (cached
+// 2026-09-25), plus web search at $10 per 1,000 searches. Every call's
+// cost is computed from these so a run can show dollars, not tokens, and
+// stop itself at a budget (Patrick, Sep 28 2026: "$10, figure it out").
+const PRICES = Object.freeze({
+  "claude-opus-5": { in: 5, out: 25 },
+  "claude-opus-5-5": { in: 4, out: 20 },
+  "claude-sonnet-5-5": { in: 2, out: 10 },
+  "claude-sonnet-5": { in: 2, out: 10 },
+  "claude-haiku-4-5": { in: 1, out: 5 }
+});
+const SEARCH_USD = 0.01;
+function priceFor(model) { return PRICES[model] || PRICES[MODEL]; }
+function costOf(usage, model) {
+  const u = usage || {}, p = priceFor(model);
+  const st = u.server_tool_use || {};
+  const inTok = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) * 1.25 + (u.cache_read_input_tokens || 0) * 0.1;
+  return (inTok * p.in + (u.output_tokens || 0) * p.out) / 1e6 + (st.web_search_requests || 0) * SEARCH_USD;
+}
 
 const FINDER_SCHEMA = {
   type: "object",
@@ -88,7 +111,7 @@ function passesFor(part) {
   return MANUFACTURER_DOMAINS[part.manufacturer] ? [1, 2] : [2, 3];
 }
 
-function createPhotoAI({ client, model = MODEL, maxPauseResumes = 4, onUsage = () => {} }) {
+function createPhotoAI({ client, model = MODEL, visionModel = MODEL_VISION, maxPauseResumes = 4, onUsage = () => {} }) {
   if (!client || !client.messages || typeof client.messages.create !== "function") throw new Error("createPhotoAI needs an Anthropic client.");
 
   // One request, resuming if a long server-tool turn pauses. A refusal or a
@@ -99,7 +122,7 @@ function createPhotoAI({ client, model = MODEL, maxPauseResumes = 4, onUsage = (
     for (let i = 0; i <= maxPauseResumes; i++) {
       const res = await client.messages.create({ ...params, messages });
       onUsage(res.usage || {});
-      if (onCallUsage) onCallUsage(res.usage || {});
+      if (onCallUsage) onCallUsage(res.usage || {}, params.model);
       if (res.stop_reason === "pause_turn") { messages = [...messages, { role: "assistant", content: res.content }]; continue; }
       if (res.stop_reason === "refusal") { const e = new Error("The model declined this request."); e.permanent = true; throw e; }
       if (res.stop_reason === "max_tokens") { const e = new Error("The model ran out of room before answering."); e.transient = true; throw e; }
@@ -147,7 +170,7 @@ function createPhotoAI({ client, model = MODEL, maxPauseResumes = 4, onUsage = (
       "Be strict: a plausible but different variant is a fail."
     ].join("\n");
     return run({
-      model, max_tokens: 4000,
+      model: visionModel, max_tokens: 4000,
       thinking: { type: "adaptive" },
       output_config: { effort: "high", format: { type: "json_schema", schema: VERIFY_SCHEMA } },
       system,
@@ -160,7 +183,7 @@ function createPhotoAI({ client, model = MODEL, maxPauseResumes = 4, onUsage = (
 
   async function compare(part, imageA, imageB, mediaType = "image/webp", onCallUsage) {
     return run({
-      model, max_tokens: 2000,
+      model: visionModel, max_tokens: 2000,
       thinking: { type: "adaptive" },
       output_config: { effort: "high", format: { type: "json_schema", schema: COMPARE_SCHEMA } },
       system: "Two photos from two different sources. Do they show the same kind of fitting — same type, ends, angle and reducing/straight — for the part described? pass, fail or unknown.",
@@ -172,7 +195,7 @@ function createPhotoAI({ client, model = MODEL, maxPauseResumes = 4, onUsage = (
     }, onCallUsage);
   }
 
-  return { find, verify, compare, passesFor };
+  return { find, verify, compare, passesFor, models: { finder: model, vision: visionModel } };
 }
 
 // One isolated probe: can this organisation/key execute the web-search
@@ -212,4 +235,4 @@ function createAnthropicClient({ apiKey = process.env.ANTHROPIC_API_KEY } = {}) 
   return new Anthropic({ apiKey, maxRetries: 2, timeout: 10 * 60 * 1000 });
 }
 
-module.exports = { createPhotoAI, createAnthropicClient, probeWebSearch, passesFor, passDomains, FINDER_SCHEMA, VERIFY_SCHEMA, COMPARE_SCHEMA, MODEL };
+module.exports = { createPhotoAI, createAnthropicClient, probeWebSearch, passesFor, passDomains, costOf, priceFor, FINDER_SCHEMA, VERIFY_SCHEMA, COMPARE_SCHEMA, MODEL, MODEL_VISION, PRICES, SEARCH_USD };
