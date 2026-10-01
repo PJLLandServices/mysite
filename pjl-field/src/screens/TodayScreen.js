@@ -33,6 +33,7 @@ import {
   removeVisit,
   listPropertyWorkOrders,
   notifyOnRoute,
+  notifyBookingOnRoute,
   openWorkOrder,
 } from '../api';
 import { telHref } from '../format';
@@ -204,15 +205,18 @@ export default function TodayScreen({ onOpenWorkOrder, onAddStop, refreshToken =
           text: 'Send',
           style: 'default',
           onPress: async () => {
-            setBusyId(b.leadId);
+            setBusyId(rowKey(b));
             try {
-              await notifyOnRoute(b.leadId);
+              // A lead booking notifies through its lead; a season-plan
+              // visit (no lead) through its own booking record.
+              if (b.leadId) await notifyOnRoute(b.leadId);
+              else await notifyBookingOnRoute(b.bookingId);
               // Reflect it immediately rather than making them refresh
               // to find out whether it went.
               setPayload((prev) => prev && ({
                 ...prev,
                 bookings: prev.bookings.map((row) =>
-                  row.leadId === b.leadId
+                  rowKey(row) === rowKey(b)
                     ? { ...row, onRouteNotifiedAt: new Date().toISOString() }
                     : row),
               }));
@@ -513,7 +517,7 @@ export default function TodayScreen({ onOpenWorkOrder, onAddStop, refreshToken =
               <Action
                 label={notified ? 'Notified' : 'Notify'}
                 onPress={() => confirmNotify(b)}
-                disabled={notified || busy || !b.leadId}
+                disabled={notified || busy || !(b.leadId || b.bookingId)}
               />
               <Action
                 label={workOrderActionLabel(b)}

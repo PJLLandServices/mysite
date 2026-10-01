@@ -96,6 +96,11 @@ async function postJson(path) {
 export const notifyOnRoute = (leadId) =>
   postJson(`/api/leads/${encodeURIComponent(leadId)}/notify-on-route`);
 
+// The same notice for a visit with no lead behind it — a season-plan
+// booking, which carries its own customer contact. Stamps the booking.
+export const notifyBookingOnRoute = (bookingId) =>
+  postJson(`/api/bookings/${encodeURIComponent(bookingId)}/notify-on-route`);
+
 // Returns the lead's existing work order, or CREATES one when it has
 // none. The caller knows which case it is from the row's `workOrder`
 // field, and confirms before the creating case.
