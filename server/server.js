@@ -25839,7 +25839,8 @@ async function orderDayForDriving(rows) {
   }
 
   // Tech taps "Notify on route" on the today's-schedule view.
-  // Sends SMS + email to the customer with the on_route template,
+  // Texts the customer the on_route template (a text only — no email;
+  // no phone on file → refused, nothing sent, nothing stamped),
   // logs an activity entry, and stamps lead.onRouteNotifiedAt so the
   // UI can show "✓ notified at 9:14 AM" instead of re-firing on
   // accidental double-tap. Body: (none required).
@@ -25851,6 +25852,9 @@ async function orderDayForDriving(rows) {
       const idx = allLeads.findIndex((l) => l.id === leadId);
       if (idx === -1) return sendJson(res, 404, { ok: false, errors: ["Lead not found."] });
       const lead = allLeads[idx];
+      if (!String(lead.contact?.phone || "").trim()) {
+        return sendJson(res, 409, { ok: false, errors: ["No phone number on file, so no text can go — call the customer instead. Nothing was sent."] });
+      }
 
       // Decorate with portalUrl + booking shape so the template fills out
       // {firstName}, {serviceLabel}, {portalUrl} correctly. baseUrl is
@@ -25890,7 +25894,7 @@ async function orderDayForDriving(rows) {
 
   // "Notify on route" for a visit with no lead behind it — a season-plan
   // (assignment) booking, which carries its own customer name, phone and
-  // email. Same on_route text + email as the lead route, sent to the
+  // email. Same on_route text as the lead route (text only), sent to the
   // booking's contact; stamps booking.onRouteNotifiedAt for this visit. A
   // second tap the same day sends nothing more.
   const bookingNotifyMatch = pathname.match(/^\/api\/bookings\/([^/]+)\/notify-on-route$/);
@@ -25907,8 +25911,8 @@ async function orderDayForDriving(rows) {
       const name = String(b.customerName || "").trim();
       const phone = String(b.customerPhone || "").trim();
       const email = String(b.customerEmail || "").trim();
-      if (!phone && !email) {
-        return sendJson(res, 409, { ok: false, errors: ["This visit has no phone or email on file — call the customer instead. Nothing was sent."] });
+      if (!phone) {
+        return sendJson(res, 409, { ok: false, errors: ["No phone number on file, so no text can go — call the customer instead. Nothing was sent."] });
       }
       const recipient = {
         id: b.id,

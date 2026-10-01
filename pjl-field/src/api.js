@@ -90,7 +90,7 @@ async function postJson(path) {
   return data;
 }
 
-// Sends the customer the on-route SMS + email and stamps
+// Sends the customer the on-route text (no email) and stamps
 // lead.onRouteNotifiedAt. A real message to a real customer — the screen
 // confirms first and disables the button once it has fired.
 export const notifyOnRoute = (leadId) =>
