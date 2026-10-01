@@ -49,12 +49,19 @@ export default function CustomerSummary({ visible, workOrderId, onClose }) {
     }
   }, [workOrderId]);
 
+  // Closing resets to 'loading' together with clearing the summary. iOS keeps
+  // drawing a Modal's children while it slides away, so a 'ready' state with
+  // no summary used to render and read `s.source` of null, which took the
+  // whole app down on "Done" (2026-10-01).
   useEffect(() => {
     if (visible) load();
-    else setSummary(null);
+    else { setSummary(null); setState('loading'); }
   }, [visible, load]);
 
   const s = summary;
+  // Only draw the summary when there IS one; anything else is the loading
+  // state, never a crash.
+  const view = state === 'ready' && !s ? 'loading' : state;
   const pending = s?.pricePending === true;
   const paid = !pending && Number(s?.amountPaid) > 0;
 
@@ -81,12 +88,12 @@ export default function CustomerSummary({ visible, workOrderId, onClose }) {
           </Pressable>
         </View>
 
-        {state === 'loading' ? (
+        {view === 'loading' ? (
           <View style={styles.centre}>
             <ActivityIndicator color={colors.brand} />
             <Text style={styles.centreBody}>Getting the details…</Text>
           </View>
-        ) : state !== 'ready' ? (
+        ) : view !== 'ready' ? (
           <View style={styles.centre}>
             <Text style={styles.centreTitle}>{state === 'auth' ? 'Not signed in' : "Couldn't load the details"}</Text>
             <Text style={styles.centreBody}>
