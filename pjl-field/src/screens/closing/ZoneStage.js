@@ -282,7 +282,11 @@ export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, set
   return (
     <>
       <View style={styles.pager}>
-        <Button label="‹" tone="ghost" onPress={() => setZoneIndex(Math.max(0, zoneIndex - 1))} disabled={zoneIndex === 0} />
+        <PagerArrow
+          direction="previous"
+          onPress={() => setZoneIndex(Math.max(0, zoneIndex - 1))}
+          disabled={zoneIndex === 0}
+        />
         <View style={styles.pagerMid}>
           <Text style={styles.pagerText}>Zone {zone.number ?? zoneIndex + 1} of {total}</Text>
           {done ? <Text style={styles.pagerDone}>Done</Text> : null}
@@ -297,7 +301,11 @@ export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, set
         >
           <Text style={[styles.pagerEditText, (busy || saving) && styles.pagerEditOff]}>Edit</Text>
         </Pressable>
-        <Button label="›" tone="ghost" onPress={() => setZoneIndex(Math.min(total - 1, zoneIndex + 1))} disabled={zoneIndex + 1 >= total} />
+        <PagerArrow
+          direction="next"
+          onPress={() => setZoneIndex(Math.min(total - 1, zoneIndex + 1))}
+          disabled={zoneIndex + 1 >= total}
+        />
       </View>
 
       <Section title="Where is it?" footer="Correcting this updates the property record too, so the system gets better described every visit.">
@@ -410,7 +418,39 @@ export default function ZoneStage({ wo, save, saveSystem, saving, zoneIndex, set
   );
 }
 
+// The zone pager's arrows. They were the closing's plain text Button with a
+// one-character label, which gave a target the width of "‹" — barely
+// touchable with a wet thumb (Patrick, 2026-10-01). Now a fixed 64 × 56 pt
+// block with a large chevron: past Apple's 44 pt minimum with room to
+// spare, and the same size at both ends so the label between them never
+// shifts. Greyed rather than hidden at the first and last zone, so the row
+// keeps its shape.
+function PagerArrow({ direction, onPress, disabled }) {
+  const next = direction === 'next';
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      hitSlop={8}
+      style={({ pressed }) => [styles.arrow, disabled && styles.arrowOff, pressed && !disabled && styles.arrowOn]}
+      accessibilityRole="button"
+      accessibilityLabel={next ? 'Next zone' : 'Previous zone'}
+      accessibilityState={{ disabled: Boolean(disabled) }}
+    >
+      <Text style={[styles.arrowGlyph, disabled && styles.arrowGlyphOff]}>{next ? '›' : '‹'}</Text>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
+  arrow: {
+    width: 64, height: 56, borderRadius: radius.card,
+    backgroundColor: colors.brandTint, alignItems: 'center', justifyContent: 'center',
+  },
+  arrowOn: { opacity: 0.6 },
+  arrowOff: { backgroundColor: colors.separator },
+  arrowGlyph: { fontSize: 40, lineHeight: 44, fontWeight: '600', color: colors.brand, marginTop: -4 },
+  arrowGlyphOff: { color: colors.textFaint },
   pagerEdit: { paddingHorizontal: space.sm, paddingVertical: 8 },
   pagerEditOn: { opacity: 0.5 },
   pagerEditText: { ...type.body, color: colors.brand, fontWeight: '600' },
