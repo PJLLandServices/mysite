@@ -2370,6 +2370,10 @@ module.exports = {
   get,
   listByWorkOrder,
   totalsForLines,
+  // The conversion and price-confirm rule createDraft applies, so a preview of
+  // the invoice to come (lib/customer-summary.js) is built the same way.
+  draftLinesFrom,
+  priceConfirmForLines,
   listByQuote,
   listByProperty,
   createDraft: withStoreLock(createDraft),

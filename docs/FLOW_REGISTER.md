@@ -6862,6 +6862,52 @@ See docs/FIELD_OFFLINE_RELEASE.md for release order, limitations, the Mac/Xcode
 procedure, and airplane-mode/restart/signature/bypass checks. This entry does
 not mark FLOW-31 PASS or claim a production/iPhone walkthrough.
 
+## 2026-10-01 — FIELD (FLOW-31): "What am I signing for?" and zone arrows you can hit
+
+From Patrick's first closings of the day:
+1. The zone pager's ‹ › arrows were "barely touchable".
+2. A customer at the card reader said: "I don't even know what I'm signing for." He wants to pull the
+   invoice up the moment someone says that.
+
+**Zone arrows.** The arrows were the closing's text `Button` with a one-character label and no
+width, so the tap target was the width of the glyph. They are now a fixed 64 × 56 pt `PagerArrow`:
+- a 40 pt chevron;
+- VoiceOver labels ("Previous zone" / "Next zone");
+- greyed, not hidden, at the first and last zone.
+
+**The customer's view of the visit.** `GET /api/work-orders/:id/customer-summary`
+(`lib/customer-summary.js`) is the visit as the customer reads it:
+- service, name, property and date;
+- every zone walked, with what was found and any repair noted for next season (not charged today);
+- the charges line by line, with subtotal, HST and total, plus paid and still owing.
+
+**One source of numbers:**
+- *Before Finish*, it previews the invoice from `billing.billingFor`, the call Finish drafts from.
+  The lines are converted by `invoices.draftLinesFrom` and totalled by `totalsForLines`, exactly as
+  `createDraft` does.
+- *After Finish*, it reads the invoice as stored.
+- So the summary shown before signing is the invoice billed after.
+- **A price PJL confirms after the visit (PJL-96) shows no number at all**: no line amount, no
+  subtotal or total, before or after Finish.
+- Tech notes and photos are left out.
+
+**App:** a full-screen `CustomerSummary` sheet, fetched fresh on every open. It opens from:
+- **sign-off**: "Show the customer what they're signing", at the top of the stage;
+- **the invoice screen**: "Show the customer the invoice", above Send / Take payment.
+
+**Walked:**
+| Who / what | Effect |
+|---|---|
+| Customer | Reads what they're signing and paying before they sign or tap |
+| Patrick | One tap from either screen; nothing to type |
+| Capacity, calendar, linked records | Unchanged |
+| Pricing | Unchanged: no new price path; every number is the invoice's own |
+| Audit trail | Unchanged: the summary is read-only |
+
+**Tests:**
+- `scripts/test-customer-summary.mjs`: 23 checks; **the old code fails 20**.
+- `scripts/test-zone-pager-arrows.mjs`: 6 checks; **the old code fails 6**.
+
 ## 2026-10-01 — FIELD: "Notify on route" is a text only (no email)
 
 Patrick, after the first season-plan notice went out: "I don't need an email, just a text message

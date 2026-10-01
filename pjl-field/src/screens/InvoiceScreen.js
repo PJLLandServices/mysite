@@ -21,6 +21,7 @@ import {
   AuthRequiredError, getInvoice, invoicePaymentLink, recordInvoicePayment, resendInvoice, sendInvoice,
 } from '../api';
 import { money as formatMoney } from '../format';
+import CustomerSummary from './CustomerSummary';
 import { colors, radius, space, type } from '../theme';
 
 // DOLLARS. Every money field on an invoice is dollars, end to end:
@@ -49,6 +50,9 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
   const [recording, setRecording] = useState(false);   // the sheet is open
   const [amount, setAmount] = useState('');
   const [method, setMethod] = useState('card_qb');
+  // The invoice as the customer reads it — work done, every charge, HST,
+  // paid and owing — for "what am I paying for?" at the card reader.
+  const [showSummary, setShowSummary] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -233,6 +237,19 @@ export default function InvoiceScreen({ invoiceId, onBack, onSignIn }) {
         />
       </View>
 
+      {invoice?.woId ? (
+        <>
+          <Pressable
+            style={({ pressed }) => [styles.button, styles.buttonGhost, styles.show, pressed && styles.off]}
+            onPress={() => setShowSummary(true)}
+            accessibilityRole="button"
+          >
+            <Text style={styles.buttonGhostText}>Show the customer the invoice</Text>
+          </Pressable>
+          <CustomerSummary visible={showSummary} workOrderId={invoice.woId} onClose={() => setShowSummary(false)} />
+        </>
+      ) : null}
+
       {paid ? (
         <Text style={styles.note}>This one is already paid. Nothing left to do.</Text>
       ) : priceUnconfirmed ? (
@@ -380,6 +397,7 @@ const styles = StyleSheet.create({
   actions: { gap: space.sm },
   button: { backgroundColor: colors.brand, borderRadius: radius.card, paddingVertical: 15, alignItems: 'center' },
   buttonGhost: { backgroundColor: colors.brandTint },
+  show: { minHeight: 52, justifyContent: 'center' },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   buttonGhostText: { color: colors.brand, fontSize: 16, fontWeight: '600' },
   off: { opacity: 0.5 },

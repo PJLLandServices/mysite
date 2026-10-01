@@ -241,6 +241,14 @@ export async function completeWorkOrder(id, { signature = null, arrivedAt = null
 
 // ---- invoices --------------------------------------------------------
 
+// What the customer is signing for: the work done and the charges, line by
+// line, as the invoice bills them. Before Finish the server previews the
+// invoice from the same calculation Finish drafts it from; after Finish it
+// reads the invoice. A price PJL sets after the visit comes back with no
+// numbers (pricePending), and is shown that way.
+export const getCustomerSummary = (workOrderId) =>
+  getJson(`/api/work-orders/${encodeURIComponent(workOrderId)}/customer-summary`).then((d) => d?.summary || null);
+
 export const getInvoice = (id) =>
   getJson(`/api/invoices/${encodeURIComponent(id)}`).then((d) => d.invoice || d);
 

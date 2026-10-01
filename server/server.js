@@ -21556,6 +21556,25 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // GET /api/work-orders/:id/customer-summary — what the customer is
+  // signing for: the work done and the charges, line by line, as the
+  // invoice bills them (lib/customer-summary.js). Before Finish it previews
+  // the invoice from billing.billingFor, the call Finish drafts from; after,
+  // it reads the invoice. A price PJL confirms after the visit carries no
+  // number. Read-only; signed-in staff (the /api/work-orders gate).
+  const customerSummaryMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/customer-summary$/);
+  if (customerSummaryMatch && req.method === "GET") {
+    try {
+      const wo = await workOrders.get(decodeURIComponent(customerSummaryMatch[1]));
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      const summary = await require("./lib/customer-summary").customerSummaryFor(wo);
+      return sendJson(res, 200, { ok: true, summary });
+    } catch (error) {
+      console.error("[customer-summary]", error?.message);
+      return sendJson(res, 500, { ok: false, errors: ["Couldn't build the summary — try again."] });
+    }
+  }
+
   const workOrderMatch = pathname.match(/^\/api\/work-orders\/([^/]+)$/);
   if (workOrderMatch && req.method === "GET") {
     let wo = await workOrders.get(decodeURIComponent(workOrderMatch[1]));
