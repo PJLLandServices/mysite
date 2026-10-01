@@ -21,6 +21,7 @@ import { Alert, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors, radius, space, type } from '../../theme';
 import { Button, ChoiceRow, Section } from './parts';
 import SignaturePad from './SignaturePad';
+import CustomerSummary from '../CustomerSummary';
 
 // The server's BYPASS_REASONS, minus admin_override — that one exists for
 // the desk, not for a driveway.
@@ -43,6 +44,10 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy, onStrok
 
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
+  // The customer's own view of what they're signing for: the work done and
+  // the charges, line by line, as the invoice will bill them. One tap away
+  // for the moment someone asks (2026-10-01).
+  const [showSummary, setShowSummary] = useState(false);
 
   const paid = wo?.paidOnSite;
   const returning = wo?.needsReturnVisit;
@@ -102,6 +107,16 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy, onStrok
           <Button label="Retry recorded sign-off" onPress={() => onFinish(recordedSignoff)} disabled={busy || saving} />
         </Section>
       ) : null}
+      <View style={styles.show}>
+        <Button
+          label="Show the customer what they're signing"
+          tone="ghost"
+          onPress={() => setShowSummary(true)}
+          disabled={!wo?.id}
+        />
+      </View>
+      <CustomerSummary visible={showSummary} workOrderId={wo?.id} onClose={() => setShowSummary(false)} />
+
       <Section title="Who is signing?" footer="Most closings happen with nobody home. Either answer is normal.">
         <View style={styles.who}>
           <Button
@@ -203,6 +218,7 @@ export default function SignOffStage({ wo, save, saving, onFinish, busy, onStrok
 }
 
 const styles = StyleSheet.create({
+  show: { gap: space.sm },
   who: { flexDirection: 'row', gap: space.sm, padding: space.md },
   pad: { padding: space.md, gap: space.md },
   reasons: { gap: space.sm },
