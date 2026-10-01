@@ -746,6 +746,19 @@ async function createDirect(fields, { by = "system", note = "" } = {}) {
 // Update a booking record. Allowed fields are explicit so we don't
 // accept arbitrary patches (e.g., changing leadId would break the
 // back-reference).
+// "Notify on route" sent for this visit (a season-plan booking has no
+// lead to stamp). Kept with a history line.
+async function markOnRouteNotified(id, { at = new Date().toISOString(), forVisit = null, by = "tech" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const next = { ...records[idx], onRouteNotifiedAt: at, onRouteNotifiedFor: forVisit || records[idx].scheduledFor || null };
+  next.history = [...(next.history || []), { ts: at, action: "notified_on_route", by, note: "Customer notified: on the way." }];
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
 async function update(id, patch) {
   const records = await readAll();
   const idx = records.findIndex((b) => b.id === id);
@@ -1202,6 +1215,7 @@ module.exports = {
   setDeclaredZones,
   markReminderSent,
   update,
+  markOnRouteNotified,
   reschedule,
   cancel,
   remove,

@@ -6862,6 +6862,35 @@ See docs/FIELD_OFFLINE_RELEASE.md for release order, limitations, the Mac/Xcode
 procedure, and airplane-mode/restart/signature/bypass checks. This entry does
 not mark FLOW-31 PASS or claim a production/iPhone walkthrough.
 
+## 2026-10-01 — FIELD: "Notify on route" works for a season-plan visit (FLOW-31 touched — re-verified by tests)
+
+Patrick, on route: every card on his fall run had **Notify** greyed out. The Today screen disabled
+Notify on any card without a lead (`!b.leadId`), and the only send route was
+`/api/leads/:id/notify-on-route`. A season-plan (assignment) visit is a booking record with a
+property and the customer's own name, phone and email, but **no lead**, so it could never be
+notified.
+
+**Separately, the on-route stamp lived on the lead forever:** a returning customer's spring notice
+marked every later visit "Notified".
+
+**The rule:**
+- **Two routes, the same message:** a lead booking notifies through its lead. A season-plan visit
+  notifies through its booking: `POST /api/bookings/:id/notify-on-route` sends the same `on_route`
+  text and email to the booking's contact, with the property's portal link. It stamps
+  `onRouteNotifiedAt` / `onRouteNotifiedFor` and a history line.
+- **A stamp counts only for the visit it names** (`onRouteStampForVisit`). An older stamp without
+  that field counts only on the visit's day or the day before.
+- **A second tap for the same visit sends nothing.**
+- **Refusals:** no phone or email, a cancelled visit or an unknown one send nothing.
+
+**App (Field app OTA):** Notify is enabled when a card has a lead *or* a booking, and posts to the
+matching route. Only the tapped card turns "Notified".
+
+**Tests:**
+- `scripts/test-notify-season-plan.mjs` (16 checks; **the old code fails 14**).
+- `test-day-order` stopped using a fixed date. `2026-09-30` went stale on 2026-10-01 and turned
+  main's CI red; it now picks a weekday 3 days out, with the right Toronto offset.
+
 ## 2026-09-23 — FLOW-23/31: one active invoice per work order, enforced by the server
 
 Probe on main and PR #298: two simultaneous "Generate invoice now" taps made two

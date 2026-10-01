@@ -1762,6 +1762,20 @@ function normalizePostalCode(value) {
   return normalizeString(value, 20).toUpperCase();
 }
 
+// An on-route stamp counts only for the visit it was sent for. Leads and
+// season-plan booking records both outlive a visit, so an older stamp must
+// not mark a later visit as notified. A stamp names its visit
+// (onRouteNotifiedFor = that visit's start); one from before that field
+// counts only on the visit's day or the day before (Toronto).
+function onRouteStampForVisit(stamp, visitStart, notifiedFor = null) {
+  if (!stamp || !visitStart) return null;
+  const iso = (v) => { const d = new Date(v); return Number.isNaN(d.getTime()) ? "" : d.toISOString(); };
+  if (notifiedFor) return iso(notifiedFor) === iso(visitStart) ? stamp : null;
+  const day = (v) => new Date(v).toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+  const before = new Date(new Date(visitStart).getTime() - 864e5);
+  return day(stamp) === day(visitStart) || day(stamp) === day(before) ? stamp : null;
+}
+
 function portalTokenForId(id) {
   return crypto.createHash("sha256").update(`pjl-portal:${id}`).digest("base64url").slice(0, 24);
 }
@@ -25508,7 +25522,9 @@ async function orderDayForDriving(rows) {
             status: wo.status,
             zoneCount: (wo.zones || []).length
           } : null,
-          onRouteNotifiedAt: lead.onRouteNotifiedAt || null
+          // Only a notice sent for THIS visit: the stamp lives on the lead,
+          // which outlives the visit (a spring notice is not this fall's).
+          onRouteNotifiedAt: onRouteStampForVisit(lead.onRouteNotifiedAt, lead.booking.start, lead.onRouteNotifiedFor)
         };
       });
 
@@ -25579,7 +25595,10 @@ async function orderDayForDriving(rows) {
               status: linkedWo.status,
               zoneCount: (linkedWo.zones || []).length
             } : null,
-            onRouteNotifiedAt: null
+            // Season-plan visits notify through the booking itself
+            // (POST /api/bookings/:id/notify-on-route); a record reused
+            // across seasons only counts a notice sent for this visit.
+            onRouteNotifiedAt: onRouteStampForVisit(b.onRouteNotifiedAt, b.scheduledFor, b.onRouteNotifiedFor)
           });
         }
         dayBookings.sort((a, b) => new Date(a.start) - new Date(b.start));
@@ -25847,6 +25866,8 @@ async function orderDayForDriving(rows) {
       });
 
       lead.onRouteNotifiedAt = new Date().toISOString();
+      // Which visit it was for, so a later visit isn't shown as notified.
+      lead.onRouteNotifiedFor = lead.booking?.start || null;
       lead.crm = lead.crm || {};
       lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
       lead.crm.activity.unshift({
@@ -25864,6 +25885,45 @@ async function orderDayForDriving(rows) {
       });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't notify customer."] });
+    }
+  }
+
+  // "Notify on route" for a visit with no lead behind it — a season-plan
+  // (assignment) booking, which carries its own customer name, phone and
+  // email. Same on_route text + email as the lead route, sent to the
+  // booking's contact; stamps booking.onRouteNotifiedAt for this visit. A
+  // second tap the same day sends nothing more.
+  const bookingNotifyMatch = pathname.match(/^\/api\/bookings\/([^/]+)\/notify-on-route$/);
+  if (bookingNotifyMatch && req.method === "POST") {
+    try {
+      const session = await requireUser(req);
+      if (!session) return sendJson(res, 401, { ok: false, errors: ["Sign in again."] });
+      const id = decodeURIComponent(bookingNotifyMatch[1]);
+      const b = await bookings.get(id);
+      if (!b) return sendJson(res, 404, { ok: false, errors: ["Visit not found."] });
+      if (!bookingHoldsItsSlot(b.status)) return sendJson(res, 409, { ok: false, errors: ["This visit isn't active, so nothing was sent."] });
+      const already = onRouteStampForVisit(b.onRouteNotifiedAt, b.scheduledFor, b.onRouteNotifiedFor);
+      if (already) return sendJson(res, 200, { ok: true, notifiedAt: already, alreadySent: true });
+      const name = String(b.customerName || "").trim();
+      const phone = String(b.customerPhone || "").trim();
+      const email = String(b.customerEmail || "").trim();
+      if (!phone && !email) {
+        return sendJson(res, 409, { ok: false, errors: ["This visit has no phone or email on file — call the customer instead. Nothing was sent."] });
+      }
+      const recipient = {
+        id: b.id,
+        contact: { name, firstName: name.split(/[\s&]+/)[0] || "", phone, email },
+        booking: { serviceLabel: b.serviceLabel || "", start: b.scheduledFor },
+        portalUrl: welcomePortalUrlFor([])(b)
+      };
+      notifyCustomer("on_route", recipient).catch((err) => {
+        console.error("[notify-on-route:booking]", err);
+      });
+      const notifiedAt = new Date().toISOString();
+      await bookings.markOnRouteNotified(b.id, { at: notifiedAt, forVisit: b.scheduledFor, by: session.uid || "tech" });
+      return sendJson(res, 200, { ok: true, notifiedAt });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't notify the customer."] });
     }
   }
 
