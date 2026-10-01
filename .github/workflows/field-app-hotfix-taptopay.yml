@@ -1,0 +1,106 @@
+name: Field app — hotfix for the hand-built Tap to Pay app
+
+# ONE JOB: put a JavaScript fix on the PJL Field app Patrick built by hand on
+# his Mac from claude/field-taptopay (commit 0c638a8, 2026-09-25). That app
+# is the one in the truck.
+#
+# WHY THE NORMAL PUBLISH CANNOT REACH IT. "Field app — publish OTA update"
+# publishes main's code to main's runtime (fingerprint 4737af92). The Mac
+# build carries the Stripe Terminal library, and its runtime was fingerprinted
+# on the Mac: 41661c6f… on the phone. The same tree fingerprinted on a Linux
+# runner gives a7df9c32, so even a publish from the Tap to Pay branch would
+# compute the wrong runtime and go nowhere.
+#
+# SO THIS DOES NOT COMPUTE THE RUNTIME. It reads the phone's own runtime from
+# pjl-field/HOTFIX_RUNTIME (copied from GET /api/admin/field-clients, which
+# records what each phone reports on every request) and publishes to exactly
+# that. The bundle is the code the app was built from (0c638a8) plus the fix,
+# so the JavaScript matches the native code it runs on.
+#
+# Only a phone on that exact runtime can take this update. Nothing on main's
+# runtime is touched, and main's own publishes do not touch this one.
+#
+# DELETE THIS WORKFLOW when Tap to Pay merges to main or the App Store build
+# replaces the hand-built app — whichever comes first.
+
+on:
+  push:
+    branches: [claude/eas-update-pjl-field-wgmjtt]
+    paths:
+      - 'pjl-field/**'
+      - '.github/workflows/field-app-hotfix-taptopay.yml'
+
+concurrency:
+  group: field-app-hotfix-taptopay
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the Expo token is present
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::EXPO_TOKEN is not set."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: pjl-field/package-lock.json
+
+      - name: Install
+        working-directory: pjl-field
+        run: npm ci
+
+      # The phone's runtime, exactly. A full 40-character hash that starts with
+      # what the phone's Today footer shows (41661c6f), or nothing is published.
+      - name: Pin the update to the phone's runtime
+        working-directory: pjl-field
+        run: |
+          rt=$(tr -d '[:space:]' < HOTFIX_RUNTIME)
+          case "$rt" in
+            41661c6f*) ;;
+            *) echo "::error::HOTFIX_RUNTIME is '$rt', not the phone's runtime (41661c6f…). Nothing was published."; exit 1 ;;
+          esac
+          if ! echo "$rt" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::HOTFIX_RUNTIME must be the full 40-character runtime, got '$rt'. Nothing was published."
+            exit 1
+          fi
+          RT="$rt" node -e '
+            const fs = require("fs");
+            const app = JSON.parse(fs.readFileSync("app.json", "utf8"));
+            app.expo.runtimeVersion = process.env.RT;
+            fs.writeFileSync("app.json", JSON.stringify(app, null, 2) + "\n");
+          '
+          echo "Publishing to runtime $rt"
+
+      - name: Stamp the commit into the app
+        run: |
+          node scripts/stamp-field-build-info.mjs update
+          git -c user.name="PJL field update" -c user.email="field-update@pjllandservices.invalid" \
+            commit -q -m "Hotfix ${GITHUB_SHA::7}: stamp + pinned runtime (not pushed)" -- pjl-field/src/buildInfo.json pjl-field/app.json
+
+      - name: Publish the update (iOS only)
+        working-directory: pjl-field
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          UPDATE_MESSAGE: ${{ github.event.head_commit.message || 'Tap to Pay hotfix' }}
+        run: |
+          npx eas-cli@23.2.0 update \
+            --branch production \
+            --platform ios \
+            --message "$UPDATE_MESSAGE" \
+            --non-interactive
+
+      - name: Show what the phones will receive
+        working-directory: pjl-field
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: npx eas-cli@23.2.0 branch:view production --non-interactive || true
