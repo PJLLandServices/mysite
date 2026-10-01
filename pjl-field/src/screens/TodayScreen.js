@@ -6,7 +6,7 @@
 // happens to be narrow.
 //
 // One line worth being explicit about: the two buttons at the bottom of
-// each card WRITE. "Notify on route" sends a real SMS and email to a
+// each card WRITE. "Notify on route" sends a real text (no email) to a
 // real customer, and "Start work order" creates a work order when the
 // lead hasn't got one. Elsewhere this app reads natively and leaves
 // writing to the web pages. These two earn the exception because a
@@ -198,7 +198,7 @@ export default function TodayScreen({ onOpenWorkOrder, onAddStop, refreshToken =
   const confirmNotify = (b) => {
     Alert.alert(
       'Notify on route?',
-      `Texts and emails ${b.customerName || 'the customer'} to say you're on the way.`,
+      `Texts ${b.customerName || 'the customer'} to say you're on the way.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {

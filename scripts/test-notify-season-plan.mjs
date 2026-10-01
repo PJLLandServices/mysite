@@ -57,6 +57,7 @@ try {
 
   const a = await mk(9);
   const nobody = await mk(11, { customerPhone: "", customerEmail: "" });
+  const emailOnly = await mk(12, { customerPhone: "" });
   const cancelled = await mk(13, { status: "cancelled" });
 
   // ---- 1 the season-plan card has no lead, but a booking ----
@@ -72,7 +73,7 @@ try {
   const mail = sent.find((e) => e.channel === "email");
   ok(r.status === 200 && r.body.ok && r.body.notifiedAt, `2: the booking route answers ok (${r.status} ${j(r.body)})`);
   ok(sms && /9055550123$/.test(sms.to.replace(/\D/g, "")) && /on the way/i.test(sms.body) && /Hi Peter,/.test(sms.body), `2: the customer gets the on-route text, by first name (${j(sms)})`);
-  ok(mail && mail.to === "calandra@example.com" && /on the way/i.test(`${mail.subject} ${mail.text}`), `2: …and the on-route email (${j(mail && { to: mail.to, subject: mail.subject })})`);
+  ok(!mail, `2: …and no email — the on-route notice is a text only (${j(mail && { to: mail.to, subject: mail.subject })})`);
   row = (await today()).find((x) => x.bookingId === a.id);
   ok(row?.onRouteNotifiedAt === r.body.notifiedAt, `2: the card now reads notified (${row?.onRouteNotifiedAt})`);
   ok((bookings.list ? (await bookings.get(a.id)).history : []).some((h) => h.action === "notified_on_route"), "2: the booking's history records it");
@@ -86,10 +87,13 @@ try {
   // ---- 4 refusals send nothing ----
   m0 = srv.outbox().length;
   const none = await notify(nobody.id);
+  const noPhone = await notify(emailOnly.id);
   const dead = await notify(cancelled.id);
   const missing = await notify("B-nope");
   await sleep(300);
-  ok(none.status === 409 && /no phone or email/i.test(none.body.errors?.[0] || ""), `4: no phone or email → refused, call instead (${none.status})`);
+  ok(none.status === 409 && /no phone/i.test(none.body.errors?.[0] || ""), `4: no phone or email → refused, call instead (${none.status})`);
+  ok(noPhone.status === 409 && /no phone/i.test(noPhone.body.errors?.[0] || ""), `4: an email but no phone → refused too, no email sent instead (${noPhone.status} ${j(noPhone.body)})`);
+  ok(!(await bookings.get(emailOnly.id)).onRouteNotifiedAt, "4: …and that visit is not stamped notified");
   ok(dead.status === 409 && missing.status === 404 && msgs(m0).length === 0, `4: a cancelled or unknown visit sends nothing (${dead.status} ${missing.status} ${msgs(m0).length})`);
 
   // ---- 5 an old stamp never marks today's visit ----
@@ -118,6 +122,19 @@ try {
   srv.writeData("leads", [...(Array.isArray(leads) ? leads : []), lead]);
   row = (await today()).find((x) => x.leadId === lead.id);
   ok(row && row.onRouteNotifiedAt === null, `6: a lead notified on an earlier visit isn't shown notified today (${j(row && row.onRouteNotifiedAt)})`);
+
+  // ---- 7 the lead route is text only too ----
+  m0 = srv.outbox().length;
+  const viaLead = await srv.api("POST", `/api/leads/${lead.id}/notify-on-route`, {});
+  await sleep(500);
+  ok(viaLead.status === 200 && msgs(m0).some((e) => e.channel === "sms") && !msgs(m0).some((e) => e.channel === "email"), `7: a lead's on-route notice is a text, no email (${viaLead.status} ${j(msgs(m0).map((e) => e.channel))})`);
+  const noPhoneLead = { ...lead, id: `L-notify-nophone-${Date.now()}`, contact: { ...lead.contact, phone: "" }, onRouteNotifiedAt: null };
+  srv.writeData("leads", [...srv.data("leads"), noPhoneLead]);
+  m0 = srv.outbox().length;
+  const viaLeadNoPhone = await srv.api("POST", `/api/leads/${noPhoneLead.id}/notify-on-route`, {});
+  await sleep(300);
+  const after = srv.data("leads").find((l) => l.id === noPhoneLead.id);
+  ok(viaLeadNoPhone.status === 409 && /no phone/i.test(viaLeadNoPhone.body.errors?.[0] || "") && msgs(m0).length === 0 && !after?.onRouteNotifiedAt, `7: a lead with no phone → refused, nothing sent, not stamped (${viaLeadNoPhone.status} ${msgs(m0).length} ${after?.onRouteNotifiedAt})`);
 } finally {
   await srv.stop();
 }

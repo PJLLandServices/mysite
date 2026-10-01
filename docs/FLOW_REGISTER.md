@@ -6862,6 +6862,27 @@ See docs/FIELD_OFFLINE_RELEASE.md for release order, limitations, the Mac/Xcode
 procedure, and airplane-mode/restart/signature/bypass checks. This entry does
 not mark FLOW-31 PASS or claim a production/iPhone walkthrough.
 
+## 2026-10-01 — FIELD: "Notify on route" is a text only (no email)
+
+Patrick, after the first season-plan notice went out: "I don't need an email, just a text message
+works."
+
+**The rule:** `on_route` is a text-only event (`isTextOnlyEvent` in `lib/notify-customer.js`, the
+one place `notifyCustomer` decides channels). Both routes, lead and season-plan, send the text and
+never the email. **No phone on file → 409**, nothing sent and nothing stamped, so the card stays
+un-notified and says to call instead. An email-only customer is no longer emailed as a fallback.
+Every other customer event still sends email and text as before.
+
+**Walked:**
+- Customer: one text, no email.
+- Patrick: Notify still marks the card; with no phone it says to call.
+- Audit: the stamp and history are unchanged.
+- Untouched: capacity, the calendar and linked records.
+- The app's confirm sheet now reads "Texts …" (main's OTA). The hand-built Tap to Pay app keeps the
+  old wording until its next hotfix, but its behaviour is server-side and already text-only.
+
+**Tests:** `scripts/test-notify-season-plan.mjs` (20 checks; **the old code fails 6**).
+
 ## 2026-10-01 — FIELD: "Notify on route" works for a season-plan visit (FLOW-31 touched — re-verified by tests)
 
 Patrick, on route: every card on his fall run had **Notify** greyed out. The Today screen disabled

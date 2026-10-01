@@ -454,9 +454,17 @@ function eventForTransition(fromStatus, toStatus) {
 
 // Public API — fire-and-forget. The caller doesn't await this; failures are
 // logged but never block the user-facing CRM action.
+//
+// Some events are a text and nothing else. "On the way" is read at the door
+// on a phone, minutes before the truck arrives; an email of it is noise
+// (Patrick, 2026-10-01: "I don't need an email, just a text message works").
+// The routes that send one refuse up front when there's no phone on file.
+const TEXT_ONLY_EVENTS = new Set(["on_route"]);
+const isTextOnlyEvent = (event) => TEXT_ONLY_EVENTS.has(event);
+
 function notifyCustomer(event, lead) {
   return Promise.allSettled([
-    sendCustomerEmail(event, lead),
+    isTextOnlyEvent(event) ? Promise.resolve({ ok: false, skipped: true, reason: "text-only event" }) : sendCustomerEmail(event, lead),
     sendCustomerSms(event, lead)
   ]);
 }
@@ -2746,6 +2754,7 @@ async function sendInvoiceJunkMailWarningSMS({ invoiceId, force, includeSpouse }
 
 module.exports = {
   notifyCustomer,
+  isTextOnlyEvent,
   // Exposed for tests — the customer-facing wording is contract.
   TEMPLATES,
   eventForTransition,
