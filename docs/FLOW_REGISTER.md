@@ -2,6 +2,26 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-02, same hour (The booking page asks before it books the wrong season):** Patrick,
+on the same customer: *"I believe the webpage should prompt the client: 'Oops — it looks like
+you may be looking for a season in the past. We are currently booking for (upcoming season).
+Confirm fall closing is what you are looking for?'"* The catalog already says which seasons
+are open (`season.open` per service, from `seasons.publicBookingStatus`); `js/booking.js` never
+read it. Now, at the tap: a service whose season is not open, when the same band exists in an
+open season (`sameBandInOpenSeason`, the spring_open_ ↔ fall_close_ prefix swap), opens a
+callout under the cards in Patrick's words — *Oops — it looks like you may be looking for a
+season that's already past (or not here yet). We're currently booking fall closings. Is a fall
+closing what you're looking for?* — with **Yes — book a fall closing** (swaps the service, and
+a deep link's family filter, and carries on) and **No, I want a spring opening (first dates
+March 1, 2027)** (keeps the choice). A tap on a service in the open season, or a non-seasonal
+one, asks nothing. A deep link no longer LOCKS a service whose season isn't open when the open
+season has its band — the customer sees the card and gets the question. The open-bucket join
+itself is unchanged: pre-booking next spring stays possible by answering No. NOT touched:
+FLOW-03's engine, hold, reserve. Coverage: `scripts/test-season-switch.mjs` (18 source guards,
+in `build:check`). **Patrick's acceptance test — not yet walked:** on the public booking page
+tap **Spring opening** today; the Oops callout should appear under the cards; **Yes** should
+land you on the zones step with Fall winterization selected; **No** should carry on with
+spring (and show no dates before March).
 **2026-10-02, same hour (A spring opening was booked — and emailed — for October 10):**
 Patrick, holding a customer's confirmation: *"Your PJL service is booked — Spring opening (1-4
 zones residential) on Saturday, October 10"* — *"lol ...wtf."* — *"i believe this may be a issue
