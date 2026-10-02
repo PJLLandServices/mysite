@@ -429,6 +429,83 @@ try {
     ok(missing.status === 404, `access: an unknown project is a 404 (${missing.status})`);
   }
 
+  // ---- Money is office-only (Patrick, 2026-10-02) ----------------------------------------
+  // "Financial amounts and the Financials tab must be office-only. A technician
+  // may see an operational notice that office billing attention is required,
+  // but no contract, invoice, payment, outstanding, or reconciliation amounts."
+  // Every /api/projects/* read, as a technician and as the office.
+  const signIn = async (email, role, password) => {
+    const users = srv.lib("users.js");
+    if (!(await users.getByEmail(email).catch(() => null))) await users.create({ email, name: role === "admin" ? "Odile Office" : "Tobias Tech", role, password });
+    const login = await fetch(`${srv.BASE}/api/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password }) });
+    return ((login.headers.getSetCookie?.() || []).map((c) => c.split(";")[0]).find((c) => c.startsWith("pjl_crm_session=")) || "");
+  };
+  const techCookie = await signIn("ov-tech@pjl.test", "tech", "ov-tech-12345");
+  const officeCookie = await signIn("ov-office@pjl.test", "admin", "ov-office-12345");
+  const as = async (cookie, p) => {
+    const r = await fetch(`${srv.BASE}${p}`, { headers: { cookie, accept: "application/json" } });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  };
+  // Money in a JSON payload: a numeric value under a money key, or a dollar
+  // figure in any text. Not money: quantities, person-hours, and the counts
+  // that happen to be called "total" (tasks.total, the change-order
+  // summary). Material-list costs (\`materialLists[].totals\`, the Materials
+  // tab's per-list planning totals) are supplier costs, not contract,
+  // invoice or payment amounts — outside Patrick's list, left visible and
+  // reported as a decision rather than silently hidden.
+  const MONEY_KEY = /^(total|subtotal|hst|price|unitPrice|lineTotal|amount|amountPaid|balanceDue|owed|invoiced|unresolved|notYetInvoiced|estimatedTotal|netChangeSubtotal|netChangeTotal|grandTotal|labourRateLocked|rate|deposit)$|Cents$/;
+  function moneyIn(value, at = "", out = []) {
+    if (Array.isArray(value)) value.forEach((v, i) => moneyIn(v, `${at}[${i}]`, out));
+    else if (value && typeof value === "object") {
+      for (const [k, v] of Object.entries(value)) {
+        const here = `${at}.${k}`;
+        if (/(^|\.)(tasks|changeOrders|summary)\.total$/.test(here) || /^\.materialLists/.test(here)) continue;
+        if (MONEY_KEY.test(k) && typeof v === "number") out.push(`${here}=${v}`);
+        else moneyIn(v, here, out);
+      }
+    } else if (typeof value === "string" && /\$\s?\d/.test(value)) out.push(`${at}="${value.slice(0, 60)}"`);
+    return out;
+  }
+  {
+    ok(Boolean(techCookie) && Boolean(officeCookie), "money: a technician and the office can both sign in");
+    const base = `/api/projects/${encodeURIComponent(pa)}`;
+    // The Financials tab and the billing preview: refused, not redacted.
+    for (const p of [`${base}/financials`, `${base}/billing-preview`]) {
+      const t = await as(techCookie, p);
+      ok(t.status === 403 && t.body.code === "office_only" && moneyIn(t.body).length === 0, `money: technician is refused ${p.split("/").pop()} (${t.status} ${t.body.code})`);
+      const o = await as(officeCookie, p);
+      ok(o.status === 200 && moneyIn(o.body).length > 0, `money: the office reads ${p.split("/").pop()} with its amounts (${o.status})`);
+    }
+    // Every other read: a technician gets it with no amount anywhere in it.
+    for (const p of [base, `${base}/overview`, `${base}/change-orders`, `${base}/scope-changes`, `${base}/completion-preflight`, "/api/projects"]) {
+      const t = await as(techCookie, p);
+      const found = moneyIn(t.body);
+      ok(t.status === 200 && found.length === 0, `money: technician reads ${p.replace(base, "…") || "/"} with no amounts (${t.status}${found.length ? " — " + found.slice(0, 4).join(", ") : ""})`);
+      const o = await as(officeCookie, p);
+      ok(o.status === 200 && moneyIn(o.body).length > 0, `money: the office reads ${p.replace(base, "…") || "/"} WITH its amounts (${o.status})`);
+    }
+    const tOv = (await as(techCookie, `${base}/overview`)).body;
+    const oOv = (await as(officeCookie, `${base}/overview`)).body;
+    ok(tOv.financials?.restricted === true && tOv.financials.attention === true && /office billing attention required/i.test(tOv.financials.notice || ""),
+      `money: the technician's Overview says the office has billing to deal with — and nothing more (${j(tOv.financials)})`);
+    ok(tOv.viewer?.canSeeMoney === false && oOv.viewer?.canSeeMoney === true, "money: each Overview says who it was built for");
+    ok(/office billing attention/i.test(tOv.status.nextAction.headline) && !/reconcile|collect/i.test(tOv.status.nextAction.headline + tOv.status.nextAction.detail),
+      `money: the technician's next action is the notice, not "Reconcile payment" (${tOv.status.nextAction.headline})`);
+    ok(same(tOv.tasks, oOv.tasks) && same(tOv.dailyRecords, oOv.dailyRecords) && tOv.materials.balanceUnits === oOv.materials.balanceUnits && tOv.changeOrders.open === oOv.changeOrders.open,
+      "money: everything that is not money is the same for both — tasks, days, hours, problems, materials, change-order counts");
+    ok(tOv.changeOrders.agreement.governing?.id === oOv.changeOrders.agreement.governing?.id && tOv.changeOrders.agreement.governing?.total == null,
+      "money: the technician sees WHICH agreement is signed, not its amount");
+    const tHead = (await as(techCookie, base)).body;
+    ok(tHead.billing?.kind === "attention" && tHead.invoiceSummary === null && tHead.agreement?.governing?.total == null && tHead.linkedQuote?.total == null,
+      `money: the technician's header has no contract value and no billing amount (${j(tHead.billing)})`);
+    // A job with nothing for the office to deal with: no notice, still no amounts.
+    const tP = (await as(techCookie, `/api/projects/${encodeURIComponent(newProj.id)}/overview`)).body;
+    ok(tP.financials?.restricted === true && tP.financials.attention === false && tP.financials.notice === null, `money: no notice when the office has nothing to deal with (${j(tP.financials)})`);
+    // The technician still may not reach the money through the list.
+    const tList = (await as(techCookie, "/api/projects")).body;
+    ok(tList.totals === null && (tList.projects || []).every((p) => p.agreement?.governing?.total == null), "money: the projects list and Dashboard totals are office-only");
+  }
+
   // ---- The screen, desktop and phone (--screen) ----------------------------------------
   if (SCREEN) {
     const { chromium } = await import("playwright");
@@ -499,6 +576,44 @@ try {
       if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `overview-new-${name}.png`), fullPage: true });
 
       ok(writes.length === 0, `${name}: read-only — the Overview sent no writes (${j(writes)})`);
+      ok(errors.length === 0, `${name}: no page errors (${j(errors)})`);
+      await ctx.close();
+    }
+
+    // The technician's screens: no amount anywhere, the Financials tab not
+    // offered, the operational notice visible.
+    const techValue = techCookie.slice("pjl_crm_session=".length);
+    for (const [name, viewport] of [["tech desktop", { width: 1280, height: 1000 }], ["tech phone", { width: 390, height: 844 }]]) {
+      const ctx = await browser.newContext({ viewport });
+      await ctx.addCookies([{ name: "pjl_crm_session", value: techValue, domain: "127.0.0.1", path: "/" }]);
+      const page = await ctx.newPage();
+      const errors = [];
+      page.on("pageerror", (e) => errors.push(String(e)));
+      const dollars = async () => ((await page.locator("body").innerText()).match(/\$\s?\d[\d,]*(\.\d\d)?/g) || []);
+      await page.goto(`${srv.BASE}/app/projects/${encodeURIComponent(pa)}`, { waitUntil: "networkidle" });
+      await page.waitForSelector('[data-testid="overview"]', { timeout: 15000 });
+      ok((await dollars()).length === 0, `${name}: the Overview shows no dollar amount (${j(await dollars())})`);
+      const notice = page.locator('[data-testid="ov-billing-attention"]');
+      ok(await notice.isVisible() && /office billing attention required/i.test(await notice.innerText()), `${name}: the office-billing notice is visible`);
+      ok((await page.locator('[data-testid="ov-financials"]').count()) === 0 && (await page.locator('[data-testid="ov-reconciliation"]').count()) === 0,
+        `${name}: no Financials card and no reconciliation amounts`);
+      ok((await page.locator('nav[aria-label="Project sections"] a:has-text("Financials")').count()) === 0, `${name}: the Financials tab is not offered`);
+      ok(/office only/i.test(await page.locator("text=Contract value").first().locator("xpath=..").innerText()), `${name}: the header's contract value reads "Office only"`);
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      ok(overflow <= 1, `${name}: no sideways scroll (${overflow}px)`);
+      if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `overview-${name.replace(" ", "-")}.png`), fullPage: true });
+      // Typed straight in: the Financials tab refuses and says why.
+      await page.goto(`${srv.BASE}/app/projects/${encodeURIComponent(pa)}/financials`, { waitUntil: "networkidle" });
+      await page.waitForTimeout(500);
+      ok((await dollars()).length === 0 && /office-only/i.test(await page.locator("main").innerText()), `${name}: /financials typed in shows "office-only" and no amount`);
+      for (const tab of ["changes", ""]) {
+        await page.goto(`${srv.BASE}/app/${tab ? `projects/${encodeURIComponent(pa)}/${tab}` : "projects"}`, { waitUntil: "networkidle" });
+        await page.waitForTimeout(500);
+        ok((await dollars()).length === 0, `${name}: ${tab || "the projects list"} shows no dollar amount (${j(await dollars())})`);
+      }
+      await page.goto(`${srv.BASE}/app`, { waitUntil: "networkidle" });
+      await page.waitForTimeout(500);
+      ok((await dollars()).length === 0, `${name}: the Dashboard shows no dollar amount (${j(await dollars())})`);
       ok(errors.length === 0, `${name}: no page errors (${j(errors)})`);
       await ctx.close();
     }

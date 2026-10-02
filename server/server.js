@@ -137,6 +137,7 @@ const dailyRecords = require("./lib/daily-records");
 const changeOrdersView = require("./lib/change-orders-view");
 const financialsView = require("./lib/financials-view");
 const projectOverview = require("./lib/project-overview");
+const moneyVisibility = require("./lib/money-visibility");
 const projectMaterials = require("./lib/project-materials");
 const quotes = require("./lib/quotes");
 const quoteViews = require("./lib/quote-views");
@@ -7191,6 +7192,14 @@ function projectSiteBuilderSummary(proj) {
     stations: describeSystemDesign(proj.systemDesign)
   };
 }
+
+// Who may see a job's money — the office only (Patrick, 2026-10-02). Read
+// from the session on every /api/projects/* read; lib/money-visibility.js
+// holds the rule and the redactions.
+async function viewerCanSeeMoney(req) {
+  return moneyVisibility.canSeeMoney(await readSession(req));
+}
+const OFFICE_ONLY_ERROR = { ok: false, code: "office_only", errors: ["Financial figures are office-only."] };
 
 async function handleApi(req, res, pathname) {
   // Identity + access flows — admin user management, password reset,
@@ -17005,11 +17014,15 @@ async function handleApi(req, res, pathname) {
     // Dashboard show these; they never read the frozen proposalSnapshot or
     // add money up in the browser (2026-09-27).
     const agreements = await projects.agreementsForProjects(all);
-    return sendJson(res, 200, {
+    const listPayload = {
       ok: true,
       projects: all.map((p) => ({ ...p, agreement: agreements.get(p.id) || null })),
-      totals: projects.contractTotals(all, agreements)
-    });
+      totals: projects.contractTotals(all, agreements),
+      viewer: { canSeeMoney: true }
+    };
+    // A technician gets the list without contract values or totals.
+    if (!(await viewerCanSeeMoney(req))) return sendJson(res, 200, moneyVisibility.projectListForTech(listPayload));
+    return sendJson(res, 200, listPayload);
   }
 
   if (req.method === "POST" && pathname === "/api/projects") {
@@ -17285,7 +17298,15 @@ async function handleApi(req, res, pathname) {
       const m = await projects.computeProjectMetrics(id);
       progress = { doneTasks: m.doneTasks, totalTasks: m.totalTasks, percentComplete: m.percentComplete };
     } catch (err) { /* tolerate — the header shows "—" */ }
-    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote, invoiceSummary, siteBuilderSummary, agreement, billing, progress });
+    const detailPayload = { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer, linkedQuote, invoiceSummary, siteBuilderSummary, agreement, billing, progress, viewer: { canSeeMoney: true } };
+    // A technician sees no contract, invoice or payment amount — only
+    // whether the office has billing to deal with.
+    if (!(await viewerCanSeeMoney(req))) {
+      let attention = false;
+      try { attention = moneyVisibility.needsOfficeAttention(await projectFinancialsModel(proj)); } catch (err) { /* no notice */ }
+      return sendJson(res, 200, moneyVisibility.projectDetailForTech(detailPayload, { attention }));
+    }
+    return sendJson(res, 200, detailPayload);
   }
   if (projectMatch && req.method === "PATCH") {
     try {
@@ -17703,7 +17724,8 @@ async function handleApi(req, res, pathname) {
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
       const model = await projectChangeOrdersModel(proj);
-      return sendJson(res, 200, { ok: true, ...model });
+      if (!(await viewerCanSeeMoney(req))) return sendJson(res, 200, { ok: true, ...moneyVisibility.changeOrdersForTech(model) });
+      return sendJson(res, 200, { ok: true, ...model, viewer: { canSeeMoney: true } });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the change orders."] });
     }
@@ -18135,7 +18157,8 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(scopeListMatch[1]);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
-      return sendJson(res, 200, { ok: true, scopeChanges: proj.scopeChangeRequests || [] });
+      const scopeChanges = proj.scopeChangeRequests || [];
+      return sendJson(res, 200, { ok: true, scopeChanges: (await viewerCanSeeMoney(req)) ? scopeChanges : moneyVisibility.stripMoney(scopeChanges) });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read scope changes."] });
     }
@@ -18386,6 +18409,9 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(completionPreflightMatch[1]);
       const checks = await projects.completionPreflight(id);
+      if (!(await viewerCanSeeMoney(req))) {
+        return sendJson(res, 200, { ok: true, checks: { ...checks, blockers: moneyVisibility.redactBlockers(checks.blockers), warnings: moneyVisibility.redactBlockers(checks.warnings) } });
+      }
       return sendJson(res, 200, { ok: true, checks });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't run preflight."] });
@@ -18550,6 +18576,7 @@ async function handleApi(req, res, pathname) {
   if (tandmPreviewMatch && req.method === "GET") {
     try {
       const id = decodeURIComponent(tandmPreviewMatch[1]);
+      if (!(await viewerCanSeeMoney(req))) return sendJson(res, 403, OFFICE_ONLY_ERROR);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
       return sendJson(res, 200, { ok: true, ...(await billingPreviewFor(proj)) });
@@ -18569,10 +18596,13 @@ async function handleApi(req, res, pathname) {
   if (financialsMatch && req.method === "GET") {
     try {
       const id = decodeURIComponent(financialsMatch[1]);
+      // Office only (2026-10-02): a technician is refused, not redacted —
+      // there is nothing on this tab but money.
+      if (!(await viewerCanSeeMoney(req))) return sendJson(res, 403, OFFICE_ONLY_ERROR);
       const proj = await projects.get(id);
       if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
       const model = await projectFinancialsModel(proj);
-      return sendJson(res, 200, { ok: true, ...model });
+      return sendJson(res, 200, { ok: true, ...model, viewer: { canSeeMoney: true } });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the financials."] });
     }
@@ -18612,7 +18642,13 @@ async function handleApi(req, res, pathname) {
         linkedQuote,
         design: projectSiteBuilderSummary(proj)
       });
-      return sendJson(res, 200, { ok: true, ...overview });
+      if (!(await viewerCanSeeMoney(req))) {
+        // A technician: the same Overview, with every amount removed and
+        // the Financials card reduced to "does the office have billing to
+        // deal with" (Patrick, 2026-10-02).
+        return sendJson(res, 200, { ok: true, ...moneyVisibility.overviewForTech(overview, { attention: moneyVisibility.needsOfficeAttention(financialsModel) }) });
+      }
+      return sendJson(res, 200, { ok: true, ...overview, viewer: { canSeeMoney: true } });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load the overview."] });
     }

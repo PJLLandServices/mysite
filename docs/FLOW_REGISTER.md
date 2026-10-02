@@ -2,6 +2,27 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-02 (Money is office-only in the project workspace — Patrick: "Financial amounts and the Financials tab must be office-only"):**
+`lib/money-visibility.js` holds the rule (`canSeeMoney`: role `admin`) and the redactions; the
+server applies them to every `/api/projects/*` read before it leaves — a technician's browser
+is never sent the figures.
+- **Refused (403 `office_only`):** `…/financials`, `…/billing-preview`.
+- **Redacted for a technician:** the list and Dashboard (contract values, totals), the project
+  header (`agreement`, `billing`, `invoiceSummary`, `linkedQuote`, the proposal snapshot's prices,
+  the locked labour rate), the Overview (Financials card → "Office billing attention required."
+  yes/no; money next actions and blockers → the notice), Change Orders (agreement amounts,
+  estimates, line prices), `…/scope-changes` and `…/completion-preflight` (amount sentences).
+  Everything that is not money (tasks, days, hours, problems, materials, change-order counts)
+  is unchanged and identical for both.
+- **Not covered, deliberately (decision for Patrick):** `/api/invoices` and the classic invoice
+  pages (the field app reads an invoice's amount to take payment on site), `/api/quotes` and
+  the classic quote pages, material-list costs, and free-text fields the office types amounts
+  into (description, notes — editable, so masking them would let an autosave overwrite them).
+Tests: `test-project-overview.mjs` signs in as both and reads every route; 15 of its checks fail
+on the previous commit (a technician read the Financials tab, every agreement and invoice
+amount). `test-change-orders-view.mjs` reads amounts as the office and checks the technician
+gets none.
+
 **2026-10-02 (Project Overview, read-only — stage 6 of the Project Workspace; FLOW-01/02 portal figure re-verified, unchanged):**
 The workspace's Overview tab becomes a read-only command centre over the five tabs.
 `GET /api/projects/:id/overview` (`lib/project-overview.js`) does no arithmetic: it copies

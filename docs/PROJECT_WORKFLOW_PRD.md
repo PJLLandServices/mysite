@@ -436,3 +436,9 @@ counted clocked visits, the other every visit — now one rule, `session-hours.l
 
 **Not in this step:** the Projects list and Dashboard still mirror the task-progress rule in the
 browser (`format.ts`); moving them to the server is a separate change.
+
+**Money is office-only (2026-10-02).** Contract, invoice, payment, outstanding and
+reconciliation amounts — and the Financials tab — are for the office (role `admin`). A
+technician sees the same Overview without them: the Financials card says only whether the
+office has billing to deal with, the header reads "Office only", and the Financials tab is not
+offered. The server removes the figures (`lib/money-visibility.js`); the screens never decide.

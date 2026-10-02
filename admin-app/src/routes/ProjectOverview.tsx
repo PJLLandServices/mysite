@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { overviewApi, projectsApi, type ProjectStatus } from "../lib/api";
-import { BRANCH_LABELS, PROJECT_STATUS_LABELS, PROJECT_STATUS_TONES, money, shortDate } from "../lib/format";
+import { overviewApi, projectsApi, type OverviewFinancials, type ProjectStatus } from "../lib/api";
+import { BRANCH_LABELS, OFFICE_ONLY, PROJECT_STATUS_LABELS, PROJECT_STATUS_TONES, money, shortDate } from "../lib/format";
 import { PageBody, PageHeader } from "../shell/AppShell";
 import { Button, Card, CardHeader, ErrorNote, LoadingRows, Stat, StatusPill, cx } from "../ui/primitives";
 import { EXCEPTION_LABEL, EXCEPTION_TONE } from "./Materials";
@@ -57,6 +57,11 @@ export function ProjectWorkspace() {
   // describeAgreement, the same answer the Change Orders tab shows. No
   // fallback here: a second source would be a second interpretation.
   const value = data.agreement?.governing?.total;
+  // Contract, invoice and payment amounts are office-only (2026-10-02): the
+  // server sends a technician nulls and canSeeMoney false. The Financials
+  // tab is not offered to them at all.
+  const canSeeMoney = data.viewer?.canSeeMoney !== false;
+  const tabs = canSeeMoney ? TABS : TABS.filter((t) => t.to !== "financials");
   const design = data.siteBuilderSummary;
   const goTab = (tab: string) => navigate(`/app/projects/${encodeURIComponent(p.id)}/${tab}`);
 
@@ -65,7 +70,11 @@ export function ProjectWorkspace() {
   // job, and a held balance invoice nobody has been sent is not owed: the
   // server decides which it is and says so in the hint.
   const b = data.billing;
-  const billing = b && b.kind === "reconcile"
+  const billing = b && b.kind === "attention"
+    ? { value: "Office attention", hint: b.hint, tone: "default" as const, warnHint: true }
+    : b && b.kind === "restricted"
+    ? { value: OFFICE_ONLY, hint: "billing is handled by the office", tone: "muted" as const }
+    : b && b.kind === "reconcile"
     ? { value: "⚠ Reconcile", hint: b.hint, tone: "default" as const, warnHint: true }
     : !b || b.kind === "none"
     ? { value: "—", hint: b?.hint || "not invoiced yet", tone: "muted" as const }
@@ -113,7 +122,7 @@ export function ProjectWorkspace() {
         <div className="border-t border-line">
           <div className="mx-auto max-w-[1180px] px-2 lg:px-6 overflow-x-auto">
             <nav className="flex gap-1 min-w-max" aria-label="Project sections">
-              {TABS.map((t) => (
+              {tabs.map((t) => (
                 <NavLink
                   key={t.label}
                   to={t.to}
@@ -141,9 +150,11 @@ export function ProjectWorkspace() {
               as a signed contract worth nothing. */}
           <Stat
             label="Contract value"
-            value={value !== undefined && value !== null ? money(value) : "Not signed"}
+            value={!canSeeMoney && data.agreement?.governing ? OFFICE_ONLY : value !== undefined && value !== null ? money(value) : "Not signed"}
             tone={value !== undefined && value !== null ? "money" : "muted"}
-            hint={value !== undefined && value !== null
+            hint={!canSeeMoney && data.agreement?.governing
+              ? "signed — the amount is office-only"
+              : value !== undefined && value !== null
               ? (data.agreement?.pending ? `with HST · revision ${data.agreement.pending.id} awaiting signature` : "with HST, signed")
               : (data.agreement?.pending ? `quote ${data.agreement.pending.id} awaiting signature` : "no signed agreement yet")}
             onClick={() => goTab("scope")}
@@ -258,8 +269,11 @@ export function ProjectOverviewTab() {
   const p = project.data?.project;
   const { status, tasks, dailyRecords: dr, materials: mat, changeOrders: co, financials: fin } = ov;
   const action = status.nextAction;
-  const t = fin.totals;
-  const reconciling = fin.reconciliation.length > 0;
+  // A technician's Financials is the restricted shape: no amounts, only
+  // whether the office has billing to deal with (office-only, 2026-10-02).
+  const restricted = "restricted" in fin && fin.restricted === true;
+  const finFull = restricted ? null : (fin as OverviewFinancials);
+  const reconciling = Boolean(finFull && finFull.reconciliation.length > 0);
   const go = (href: string) => (href.startsWith("/app/") ? navigate(href) : (window.location.href = href));
 
   return (
@@ -302,7 +316,9 @@ export function ProjectOverviewTab() {
                 {status.blockers.map((b) => (
                   <li key={b.key} className="text-[13px] text-danger-700 break-words" data-testid="ov-blocker" data-key={b.key}>
                     {b.message}{" "}
-                    <a href={b.href} onClick={(e) => { e.preventDefault(); go(b.href); }} className="font-semibold underline whitespace-nowrap">See why</a>
+                    {b.href ? (
+                      <a href={b.href} onClick={(e) => { e.preventDefault(); go(b.href!); }} className="font-semibold underline whitespace-nowrap">See why</a>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -313,10 +329,10 @@ export function ProjectOverviewTab() {
 
       {/* Payment reconciliation outranks every other card: what the
           customer owes is not determined until the office reconciles it. */}
-      {reconciling ? (
+      {finFull && reconciling ? (
         <div className="rounded-[var(--radius-card)] border border-danger-500/40 bg-danger-50 px-4 py-3" data-testid="ov-reconciliation" role="alert">
-          <p className="font-display text-[15px] font-bold text-danger-700">⚠ Payment reconciliation required · {money(t.unresolved)} unresolved</p>
-          {fin.reconciliation.map((r) => (
+          <p className="font-display text-[15px] font-bold text-danger-700">⚠ Payment reconciliation required · {money(finFull.totals.unresolved)} unresolved</p>
+          {finFull.reconciliation.map((r) => (
             <p key={r.invoiceId} className="mt-1 text-[13px] text-danger-700 break-words">{r.sentence}</p>
           ))}
         </div>
@@ -427,15 +443,17 @@ export function ProjectOverviewTab() {
                    ? `${co.awaitingCustomer} deciding · ${co.awaitingSignature} to sign` : "Nothing waiting"}
                  tone={co.awaitingCustomer + co.awaitingSignature > 0 ? undefined : "muted"} testId="ov-co-customer" />
             <Fig label="Signed agreement" testId="ov-co-signed"
-                 value={co.agreement.governing ? money(co.agreement.governing.total) : "Nothing signed"}
+                 value={!co.agreement.governing ? "Nothing signed" : co.agreement.governing.total == null ? "Signed" : money(co.agreement.governing.total)}
                  tone={co.agreement.governing ? undefined : "muted"}
-                 hint={co.agreement.governing
-                   ? `${co.agreement.governing.id} v${co.agreement.governing.version}, with HST${co.agreement.netChangeTotal ? ` · ${co.agreement.netChangeTotal > 0 ? "+" : "−"}${money(Math.abs(co.agreement.netChangeTotal))} changes` : ""}`
-                   : undefined} />
+                 hint={!co.agreement.governing
+                   ? undefined
+                   : co.agreement.governing.total == null
+                     ? `${co.agreement.governing.id} v${co.agreement.governing.version} · amount office-only`
+                     : `${co.agreement.governing.id} v${co.agreement.governing.version}, with HST${co.agreement.netChangeTotal ? ` · ${co.agreement.netChangeTotal > 0 ? "+" : "−"}${money(Math.abs(co.agreement.netChangeTotal))} changes` : ""}`} />
           </div>
           {co.agreement.pending ? (
             <p className="text-[13px]" data-testid="ov-co-pending">
-              Revised quote <span className="font-semibold">{co.agreement.pending.id} v{co.agreement.pending.version}</span> ({money(co.agreement.pending.total)}) is not signed yet.
+              Revised quote <span className="font-semibold">{co.agreement.pending.id} v{co.agreement.pending.version}</span>{co.agreement.pending.total == null ? "" : ` (${money(co.agreement.pending.total)})`} is not signed yet.
             </p>
           ) : null}
           {co.billingBlocked || co.holds.length ? (
@@ -449,35 +467,52 @@ export function ProjectOverviewTab() {
         </OvCard>
 
         {/* ── Financials ────────────────────────────────────────── */}
-        <OvCard title="Financials" href={fin.href} linkLabel="Open Financials" testId="ov-financials"
-                tone={reconciling || fin.holds.length ? "danger" : undefined}>
+        {finFull ? (
+        <OvCard title="Financials" href={finFull.href} linkLabel="Open Financials" testId="ov-financials"
+                tone={reconciling || finFull.holds.length ? "danger" : undefined}>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <Fig label="Signed contract" testId="ov-fin-contract"
-                 value={fin.contract ? money(fin.contract.total) : "Not signed"} tone={fin.contract ? undefined : "muted"}
-                 hint={fin.contract ? `with HST${fin.billingMode === "time_and_material" ? " · an estimate" : ""}` : "no signed agreement yet"} />
+                 value={finFull.contract ? money(finFull.contract.total) : "Not signed"} tone={finFull.contract ? undefined : "muted"}
+                 hint={finFull.contract ? `with HST${finFull.billingMode === "time_and_material" ? " · an estimate" : ""}` : "no signed agreement yet"} />
             <Fig label="Invoiced" testId="ov-fin-invoiced"
-                 value={t.issuedCount ? money(t.invoiced) : "Nothing invoiced"} tone={t.issuedCount ? undefined : "muted"}
-                 hint={t.drafts.count ? `${t.drafts.count} not sent yet` : undefined} />
+                 value={finFull.totals.issuedCount ? money(finFull.totals.invoiced) : "Nothing invoiced"} tone={finFull.totals.issuedCount ? undefined : "muted"}
+                 hint={finFull.totals.drafts.count ? `${finFull.totals.drafts.count} not sent yet` : undefined} />
             <Fig label="Payments received" testId="ov-fin-received"
-                 value={t.received || t.issuedCount ? money(t.received) : "Nothing received"} tone={t.received || t.issuedCount ? undefined : "muted"}
+                 value={finFull.totals.received || finFull.totals.issuedCount ? money(finFull.totals.received) : "Nothing received"} tone={finFull.totals.received || finFull.totals.issuedCount ? undefined : "muted"}
                  hint="recorded payments only" />
             <Fig label="Outstanding" testId="ov-fin-owed"
-                 value={!t.owedDetermined ? "Not determined" : t.issuedCount ? money(t.owed) : "—"}
-                 tone={!t.owedDetermined ? "danger" : t.issuedCount ? undefined : "muted"}
-                 hint={!t.owedDetermined ? `until ${money(t.unresolved)} is reconciled` : t.issuedCount ? undefined : "nothing sent to the customer"} />
+                 value={!finFull.totals.owedDetermined ? "Not determined" : finFull.totals.issuedCount ? money(finFull.totals.owed) : "—"}
+                 tone={!finFull.totals.owedDetermined ? "danger" : finFull.totals.issuedCount ? undefined : "muted"}
+                 hint={!finFull.totals.owedDetermined ? `until ${money(finFull.totals.unresolved)} is reconciled` : finFull.totals.issuedCount ? undefined : "nothing sent to the customer"} />
             <Fig label="Not yet invoiced" testId="ov-fin-notyet"
-                 value={t.notYetInvoiced !== null ? money(t.notYetInvoiced) : "—"} tone={t.notYetInvoiced !== null ? undefined : "muted"}
-                 hint={t.notYetInvoiced !== null ? undefined : fin.billingMode === "time_and_material" ? "billed from hours and materials" : "no signed contract"} />
+                 value={finFull.totals.notYetInvoiced !== null ? money(finFull.totals.notYetInvoiced) : "—"} tone={finFull.totals.notYetInvoiced !== null ? undefined : "muted"}
+                 hint={finFull.totals.notYetInvoiced !== null ? undefined : finFull.billingMode === "time_and_material" ? "billed from hours and materials" : "no signed contract"} />
             <Fig label="Deposit" testId="ov-fin-deposit"
-                 value={fin.deposit ? fin.deposit.stageLabel : "No deposit"} tone={fin.deposit ? undefined : "muted"}
-                 hint={fin.deposit ? `${money(fin.deposit.amount)} · ${fin.deposit.counted ? "counted" : "not counted yet"}` : undefined} />
+                 value={finFull.deposit ? finFull.deposit.stageLabel : "No deposit"} tone={finFull.deposit ? undefined : "muted"}
+                 hint={finFull.deposit ? `${money(finFull.deposit.amount)} · ${finFull.deposit.counted ? "counted" : "not counted yet"}` : undefined} />
           </div>
-          {fin.holds.length ? (
+          {finFull.holds.length ? (
             <ul className="space-y-1" data-testid="ov-fin-holds">
-              {fin.holds.map((h) => <li key={h.key} className="text-[13px] text-danger-700 break-words">{h.message}</li>)}
+              {finFull.holds.map((h) => <li key={h.key} className="text-[13px] text-danger-700 break-words">{h.message}</li>)}
             </ul>
           ) : null}
         </OvCard>
+        ) : (
+          /* A technician: billing is the office's. The card says whether
+             the office has something to deal with — never an amount. */
+          <Card className={restricted && "attention" in fin && fin.attention ? "border-l-4 border-l-accent-500" : ""}>
+            <div data-testid="ov-financials-restricted">
+              <CardHeader title="Billing" meta={OFFICE_ONLY} />
+              <div className="px-4 py-3.5">
+                {"attention" in fin && fin.attention ? (
+                  <p className="font-semibold text-ink" data-testid="ov-billing-attention">{fin.notice}</p>
+                ) : (
+                  <p className="text-ink-muted">Billing on this job is handled by the office. Nothing for the crew to do here.</p>
+                )}
+              </div>
+            </div>
+          </Card>
+        )}
 
         {/* ── Customer — contact ACTIONS only; no figures. */}
         {p ? (
