@@ -233,20 +233,54 @@ try {
   try { purchasing = srv.lib("purchasing.js"); store = srv.lib("purchasing-store.js"); } catch { /* old code */ }
   ok(Boolean(purchasing && store), "10: there is one commit path for a PO and its list lines");
   if (purchasing && store) {
-    const failOn = (name, { crash = false } = {}) => store._setFaultHookForTests((file) => {
-      if (file === name) { const e = new Error(`injected failure writing ${file}`); if (crash) e.simulatedCrash = true; throw e; }
-    });
+    // Fail the nth write of `name` (1 = the first) from now on.
+    const failOn = (name, { crash = false, nth = 1 } = {}) => {
+      let seen = 0;
+      store._setFaultHookForTests((file) => {
+        if (file !== name || ++seen !== nth) return;
+        const e = new Error(`injected failure writing ${file}`); if (crash) e.simulatedCrash = true; throw e;
+      });
+    };
     const attempt = async (fn) => { try { await fn(); return null; } catch (e) { return e.message; } };
     const listF = await materialLists.create({ name: "Fault list", parentType: "project", parentId: proj.id, lineItems: [{ sku: "61154", qty: 4 }, { sku: "61155", qty: 2 }] });
     const [f1, f2] = (await materialLists.get(listF.id)).lineItems;
     const poF = await poFor(listF, [[f1, 100], [f2, 100]]);
 
+    // Send writes twice: first the PO's sendInFlight mark (before any
+    // email), then the outcome — the PO and its list lines together.
+    const sendF = () => purchasing.sendPurchaseOrder(poF.id, { toEmail: "orders@siteone.test" }, async () => ({}));
+    // (a) The mark itself fails to save: nothing changed, nothing emailed.
+    before = bytes();
+    failOn("purchase-orders.json", { nth: 1 });
+    let e1 = await attempt(sendF);
+    store._setFaultHookForTests(null);
+    ok(e1 && /injected/.test(e1) && S(bytes()) === S(before) && !fs.existsSync(JOURNAL), `10: send — the in-flight mark failing to save leaves both files exactly as before (${e1})`);
+    // (b) The outcome fails to save, on either file, after the email went:
+    // the list and PO are put back to the marked draft — they agree — and
+    // the PO is "delivery uncertain": it can't be emailed again blind.
+    for (const [name, nth] of [["material-lists.json", 1], ["purchase-orders.json", 2]]) {
+      if (name === "purchase-orders.json") await purchasing.resolveUncertainPoSend(poF.id, { outcome: "not_sent" });
+      const mlBefore = read(ML_FILE);
+      failOn(name, { nth });
+      const err = await attempt(sendF);
+      store._setFaultHookForTests(null);
+      const p = rawPo(poF.id);
+      ok(err && /injected/.test(err), `10: send — the outcome's ${name} write failing reports the failure (${err})`);
+      ok(read(ML_FILE) === mlBefore && p.status === "draft" && p.sendInFlight && !fs.existsSync(JOURNAL),
+        `10: …the list is exactly as before and the PO is a draft marked in flight — no half-saved send (${p.status}, ${S(p.sendInFlight)})`);
+      clean(`10 send/${name}`);
+      const retry = await attempt(sendF);
+      ok(/interrupted before its result was saved/.test(retry || ""), `10: …so a retry is refused as delivery uncertain, not emailed again (${retry})`);
+    }
+    // The office checks: it went.
+    await purchasing.resolveUncertainPoSend(poF.id, { outcome: "sent", by: "office@pjl.test" });
+    ok(rawPo(poF.id).status === "sent" && !rawPo(poF.id).sendInFlight && (await lineOf(listF.id, "61154")).poId === poF.id,
+      "10: recording that it went saves the PO sent and its lines ordered, together");
+    clean("10 send settled");
+
     for (const [verb, run] of [
-      ["send", () => purchasing.sendPurchaseOrder(poF.id, { toEmail: "orders@siteone.test" }, async () => ({}))],
-      ["receive", () => purchasing.receivePurchaseOrder(poF.id, {})],
-      ["cancel", null]
+      ["receive", () => purchasing.receivePurchaseOrder(poF.id, {})]
     ]) {
-      if (!run) continue;
       for (const name of ["material-lists.json", "purchase-orders.json"]) {
         before = bytes();
         failOn(name);
@@ -265,6 +299,8 @@ try {
     ok(pf.status === "received" && pf.lineItems.every((l) => l.receivedQty === l.qty), `10: after the retries the PO is received once — ${j(pf.lineItems.map((l) => [l.qty, l.receivedQty]))}`);
     ok(pf.history.filter((h) => h.action === "sent").length === 1 && pf.history.filter((h) => /status:received|receipt_recorded/.test(h.action)).length === 1,
       "10: …with one send and one receipt in its history");
+    ok(S(pf.sendAttempts.map((a) => [a.ok, a.outcome])) === S([[false, "confirmed_not_delivered"], [true, "confirmed_delivered"]]),
+      `10: …and every interrupted attempt kept on record (${S(pf.sendAttempts.map((a) => [a.ok, a.outcome]))})`);
     ok((await lineOf(listF.id, "61154")).status === "have" && (await lineOf(listF.id, "61155")).status === "have", "10: …and both list lines have it");
     ok(await received("61154") === 4, `10: the job counts 4 received, not 8 (${await received("61154")})`);
 
@@ -289,7 +325,7 @@ try {
     const listH = await materialLists.create({ name: "Crash list", parentType: "project", parentId: proj.id, lineItems: [{ sku: "61157", qty: 1 }] });
     const [h1] = (await materialLists.get(listH.id)).lineItems;
     const poH = await poFor(listH, [[h1, 100]]);
-    failOn("purchase-orders.json", { crash: true });
+    failOn("purchase-orders.json", { crash: true, nth: 2 });   // the outcome commit: list written, PO not
     await attempt(() => purchasing.sendPurchaseOrder(poH.id, { toEmail: "orders@siteone.test" }, async () => ({})));
     store._setFaultHookForTests(null);
     ok(fs.existsSync(JOURNAL) && audit().findings.length > 0, "10: a crash between the writes leaves the files disagreeing — with the journal to finish it");
@@ -304,7 +340,7 @@ try {
     before = bytes();
     fs.writeFileSync(JOURNAL, JSON.stringify({ state: "commit", files: [{ name: "purchase-orders.json", before: "[]\n", after: "[]\n" }] }));
     const rec = store.recover();
-    ok(rec.stale && S(bytes()) === S(before) && !fs.existsSync(JOURNAL), `10: a stale journal is set aside without touching the data (${j(rec)})`);
+    ok(rec.problem && rec.problem.kind === "journal_stale" && S(bytes()) === S(before) && !fs.existsSync(JOURNAL), `10: a stale journal is set aside, reported, without touching the data (${j(rec)})`);
   }
   unrelatedUnchanged("end");
   clean("end");

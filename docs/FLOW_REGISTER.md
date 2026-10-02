@@ -7818,4 +7818,28 @@ send, a second PO from a bought-from list, partial and full receipt, cancel befo
 receipt, re-order, repeated send / receive / cancel, two simultaneous sends, a write failing on either
 file, a crash between the two, and unrelated purchased lines and POs byte-for-byte unchanged.
 `scripts/test-po-reorder-link.mjs` (41; 16 fail on the old code) and `scripts/test-purchasing-audit.mjs`
-(27) cover the re-order link and the audit. All three run in `build:check`.
+(29) cover the re-order link and the audit.
+
+**Real crashes (2026-10-02, Patrick: "throwing an exception is not the same as the server dying").**
+`scripts/test-po-crash-recovery.mjs` (69 checks; 32 fail on the old code) runs each request in a real
+server process and SIGKILLs it at an exact point (`scripts/lib/crash-at.cjs`, test-only preload):
+after the first data file changed, mid-way through the second, after both but before the journal is
+removed, and just before / just after the supplier email. A fresh process then boots on what was left.
+Recovery completes the save deterministically (an intact journal is always rolled forward); the PO
+and list agree; unrelated records are byte-for-byte unchanged; a retry counts nothing twice; booting
+again, or replaying the journal, changes nothing. A truncated or corrupt journal is set aside
+unapplied (`purchasing-journal.corrupt-<time>.json`), the data files are left exactly as they were,
+and the problem is reported (server log, `purchasing-recovery-log.json`, GET /api/purchase-orders
+`purchasingRecovery`); a missing journal leaves a split the boot-time read-only check reports
+(`list_ahead_of_po`). On the old code a kill mid-write left material-lists.json unreadable, and a
+retry after a crash emailed the supplier twice.
+
+**Supplier email: at most once, honestly.** Exactly-once delivery can't be guaranteed — the server
+can die after the mail server accepts a message and before anything is saved. So, as for change
+requests (2026-09-27), a send is claimed on disk (`sendInFlight`) before the email goes and cleared
+in the same commit that saves the outcome. If the process dies in between, the next send is refused
+as `delivery_uncertain` (409) and the PO page shows "Delivery uncertain" with two buttons: "It went —
+mark as sent" (saves sent + list lines ordered, no email) or "It didn't go — allow sending again"
+(`POST /api/purchase-orders/:id/send-outcome`). Every attempt stays in `sendAttempts`.
+
+All four suites run in `build:check`.

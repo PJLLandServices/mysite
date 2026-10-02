@@ -30,6 +30,10 @@
     history: document.getElementById("poHistory"),
 
     sendBtn: document.getElementById("poSendButton"),
+    uncertain: document.getElementById("poUncertainSend"),
+    uncertainText: document.getElementById("poUncertainText"),
+    uncertainSent: document.getElementById("poUncertainSent"),
+    uncertainNotSent: document.getElementById("poUncertainNotSent"),
     resendBtn: document.getElementById("poResendButton"),
     receiveBtn: document.getElementById("poReceiveButton"),
     reorderBtn: document.getElementById("poReorderButton"),
@@ -246,7 +250,15 @@
 
   function renderActions() {
     const status = state.po.status;
-    els.sendBtn.hidden = status !== "draft";
+    // An interrupted send (the server stopped between claiming the send and
+    // saving its result): nobody can tell whether the supplier got the
+    // email, so it is never sent again until the office says which.
+    const f = state.po.sendInFlight;
+    els.uncertain.hidden = !f;
+    if (f) {
+      els.uncertainText.textContent = `Delivery uncertain: a send to ${f.to || "the supplier"} started ${f.at ? new Date(f.at).toLocaleString() : "earlier"}${f.by ? ` by ${f.by}` : ""} was interrupted before its result was saved. Check your sent mail or ask the supplier, then record whether it went. It will not be emailed again until you do.`;
+    }
+    els.sendBtn.hidden = status !== "draft" || Boolean(f);
     els.deleteBtn.hidden = status !== "draft";
     els.resendBtn.hidden = status !== "sent" && status !== "partially_received";
     els.receiveBtn.hidden = status !== "sent" && status !== "partially_received";
@@ -549,6 +561,18 @@
     renderAll();
   }
 
+  async function settleUncertainSend(outcome) {
+    const r = await fetch(`/api/purchase-orders/${encodeURIComponent(state.poId)}/send-outcome`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ outcome })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) { await pjlDialog.alert((data.errors && data.errors[0]) || "Couldn't record that.", { title: "Not saved", icon: "warning" }); return; }
+    state.po = data.purchaseOrder;
+    renderAll();
+  }
+
   async function deleteDraft() {
     if (!(await pjlDialog.confirm("Delete this draft PO? This cannot be undone.", {
       title: "Delete draft PO?",
@@ -600,6 +624,8 @@
 
     els.reorderBtn.addEventListener("click", reorderPo);
     els.cancelBtn.addEventListener("click", cancelPo);
+    els.uncertainSent.addEventListener("click", () => settleUncertainSend("sent"));
+    els.uncertainNotSent.addEventListener("click", () => settleUncertainSend("not_sent"));
     els.deleteBtn.addEventListener("click", deleteDraft);
 
     window.addEventListener("beforeunload", () => {

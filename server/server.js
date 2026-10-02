@@ -20346,7 +20346,9 @@ async function handleApi(req, res, pathname) {
     const materialListId = url.searchParams.get("materialListId");
     let all = await purchaseOrders.list({ status, supplierId, materialListId });
     all.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-    return sendJson(res, 200, { ok: true, purchaseOrders: all });
+    // Interrupted purchasing saves recovery could not apply — a person
+    // has to look (purchasing-store.js). Empty when all is well.
+    return sendJson(res, 200, { ok: true, purchaseOrders: all, purchasingRecovery: purchasingStore.recoveryStatus() });
   }
 
   if (req.method === "POST" && pathname === "/api/purchase-orders") {
@@ -20438,7 +20440,9 @@ async function handleApi(req, res, pathname) {
       const poPartsMap = (PARTS && PARTS.parts) || {};
       const subject = String(payload.subject || buildSubject(po)).slice(0, 200);
 
-      const result = await purchasing.sendPurchaseOrder(id, { toEmail, toName: payload.toName, subject }, async (draft) => {
+      const sendSession = await readSession(req);
+      const by = await actorLabel(req, (sendSession && sendSession.uid) || "admin");
+      const result = await purchasing.sendPurchaseOrder(id, { toEmail, toName: payload.toName, subject, by }, async (draft) => {
         const pdfBuffer = await generatePoPdf(draft, poPartsMap);
         const csvBuffer = generatePoCsv(draft, poPartsMap);
         // Write both files to the per-PO snapshot directory. Paths persist
@@ -20480,6 +20484,32 @@ async function handleApi(req, res, pathname) {
       if (err && err.status && err.code) return sendJson(res, err.status, { ok: false, code: err.code, errors: [err.message] });
       console.warn("[po] send failed:", err);
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't send purchase order."] });
+    }
+  }
+
+  // POST /api/purchase-orders/:id/send-outcome — after an interrupted send
+  // (delivery_uncertain), the office records whether the supplier email
+  // actually arrived: { outcome: "sent" | "not_sent" }. Nothing is emailed.
+  // "sent" saves the PO as sent and its list lines as ordered, in one commit.
+  const poSendOutcomeMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)\/send-outcome$/);
+  if (poSendOutcomeMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(poSendOutcomeMatch[1]);
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const outcomeSession = await readSession(req);
+      const by = await actorLabel(req, (outcomeSession && outcomeSession.uid) || "admin");
+      // The documents rendered for the interrupted send, if they were written.
+      const docs = {};
+      for (const [key, ext] of [["pdfPath", "pdf"], ["csvPath", "csv"]]) {
+        const fsPath = path.join(DATA_DIR, "purchase-orders", "files", `${id}.${ext}`);
+        if (fsSync.existsSync(fsPath)) docs[key] = path.relative(SERVER_DIR, fsPath).split(path.sep).join("/");
+      }
+      const result = await purchasing.resolveUncertainPoSend(id, { outcome: payload.outcome, by, docs });
+      if (!result) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      return sendJson(res, 200, { ok: true, purchaseOrder: result.po });
+    } catch (err) {
+      if (err && err.status && err.code) return sendJson(res, err.status, { ok: false, code: err.code, errors: [err.message] });
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't record the send outcome."] });
     }
   }
 
@@ -30185,6 +30215,7 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 // Finish (or undo) a purchase-order commit a crash interrupted, before the
 // first request can read the two files disagreeing.
 try { purchasingStore.recover(); } catch (err) { console.error("[purchasing] recovery at boot failed:", err); }
+try { purchasingStore.checkConsistency(); } catch (err) { console.error("[purchasing] consistency check at boot failed:", err); }
 
 server.listen(PORT, HOST, () => {
   console.log(`PJL site + lead receiver running at http://${HOST}:${PORT}`);

@@ -178,6 +178,14 @@ function blankPo() {
     emailSubject: "",
 
     sentAt: null,
+    // A send that started — marked ON DISK before the supplier email goes
+    // (2026-10-02), cleared in the same save that records the outcome. If
+    // the server dies in between, it survives the restart and the PO is
+    // "delivery uncertain": it will not be emailed again until the office
+    // records whether it went (purchasing.resolveUncertainPoSend). The
+    // same pattern as a change request's sendInFlight (2026-09-27).
+    sendInFlight: null,       // { at, by, to }
+    sendAttempts: [],         // [{ at, by, to, ok, reason, … }] — kept for good
     receivedAt: null,
     cancelledAt: null,
     cancelReason: "",
@@ -216,6 +224,8 @@ function hydrate(rec) {
     sourceMaterialListIds: Array.isArray(rec?.sourceMaterialListIds) ? rec.sourceMaterialListIds.slice() : [],
     lineItems: Array.isArray(rec?.lineItems) ? rec.lineItems.map(hydrateLine) : [],
     history: Array.isArray(rec?.history) ? rec.history.slice(-200) : [],
+    sendInFlight: rec?.sendInFlight && typeof rec.sendInFlight === "object" ? rec.sendInFlight : null,
+    sendAttempts: Array.isArray(rec?.sendAttempts) ? rec.sendAttempts : [],
     deletedAt: typeof rec?.deletedAt === "string" ? rec.deletedAt : null,
     pdfPath: typeof rec?.pdfPath === "string" ? rec.pdfPath : null,
     csvPath: typeof rec?.csvPath === "string" ? rec.csvPath : null,
@@ -350,15 +360,28 @@ async function update(id, patch = {}) {
 // `pdfPath` and `csvPath` are repo-relative paths under server/data/.
 // Once set on a sent PO they are IMMUTABLE — the resend path reads these
 // files verbatim; the supplier always receives the same bytes.
+function uncertainSendError(rec) {
+  const f = rec.sendInFlight || {};
+  return new PurchasingError(
+    `A send of ${rec.id} to ${f.to || "the supplier"} started ${f.at || "earlier"}${f.by ? ` by ${f.by}` : ""} was interrupted before its result was saved, so we can't tell whether the email arrived. Check your sent mail or ask the supplier, then record whether it went — it will not be emailed again until you do.`,
+    { status: 409, code: "delivery_uncertain" }
+  );
+}
+
 function assertSendable(rec) {
+  if (rec.sendInFlight) throw uncertainSendError(rec);
   if (rec.status !== "draft") {
     throw new PurchasingError(`Can only send a draft PO. This one is "${rec.status}".`, { status: 409, code: "not_draft" });
   }
   if (!rec.lineItems.length) throw new PurchasingError("Can't send a PO with no line items.", { status: 422, code: "no_lines" });
 }
 
-function transitionSent(rec, { toEmail, toName, subject, pdfPath, csvPath } = {}) {
-  assertSendable(rec);
+// `inFlight` — the send this PO was marked with before its email went;
+// the outcome is saved in the same write that clears the mark.
+function transitionSent(rec, { toEmail, toName, subject, pdfPath, csvPath, inFlight = null, by = "admin" } = {}) {
+  if (!inFlight || !rec.sendInFlight || rec.sendInFlight.at !== inFlight.at) assertSendable(rec);
+  else if (rec.status !== "draft") throw new PurchasingError(`Can only send a draft PO. This one is "${rec.status}".`, { status: 409, code: "not_draft" });
+  rec.sendInFlight = null;
   rec.status = "sent";
   rec.sentAt = nowIso();
   rec.emailedToEmail = String(toEmail || rec.supplierEmail || "").trim().toLowerCase();
@@ -370,6 +393,7 @@ function transitionSent(rec, { toEmail, toName, subject, pdfPath, csvPath } = {}
   if (pdfPath) rec.pdfPath = String(pdfPath);
   if (csvPath) rec.csvPath = String(csvPath);
   if (pdfPath || csvPath) rec.documentsGeneratedAt = rec.sentAt;
+  rec.sendAttempts = [...(rec.sendAttempts || []), { at: rec.sentAt, by, to: rec.emailedToEmail, ok: true, reason: null }];
   appendHistory(rec, { action: "sent", note: rec.emailedToEmail });
   return { changed: true };
 }
@@ -683,5 +707,5 @@ module.exports = {
   listDeleted,
   purgeDeleted: locked(purgeDeleted),
   // purchasing.js only — it holds the lock and commits the result.
-  _internal: { readRaw, serialize, hydrate, assertSendable, transitionSent, transitionReceived, transitionCancelled }
+  _internal: { readRaw, serialize, hydrate, assertSendable, uncertainSendError, appendHistory, nowIso, transitionSent, transitionReceived, transitionCancelled }
 };

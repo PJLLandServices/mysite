@@ -138,15 +138,86 @@ async function transact(poId, event, apply, beforeCommit = null) {
   });
 }
 
-// deliver(draftPo) renders and emails the PO and returns
-// { pdfPath, csvPath } — it runs after validation and before the commit.
-async function sendPurchaseOrder(poId, { toEmail, toName, subject } = {}, deliver = null) {
-  return transact(poId, "sent", (po) => PO.transitionSent(po, { toEmail, toName, subject }), deliver && (async (stored, po) => {
-    const docs = (await deliver(stored)) || {};
-    if (docs.pdfPath) po.pdfPath = String(docs.pdfPath);
-    if (docs.csvPath) po.csvPath = String(docs.csvPath);
-    if (docs.pdfPath || docs.csvPath) po.documentsGeneratedAt = po.sentAt;
-  }));
+// Sending (2026-10-02). Exactly-once email delivery can't be guaranteed —
+// the server can die after the supplier's mail server accepts the message
+// and before anything is saved, and nothing here can see past that moment.
+// So, as for change requests (2026-09-27), the send is claimed ON DISK
+// before the email goes:
+//   1. validate the transition and every list line it will move;
+//   2. save sendInFlight on the PO (its own commit);
+//   3. deliver(draft) — render + email; returns { pdfPath, csvPath };
+//   4. save the outcome: sent + the list lines (one commit, clearing the
+//      mark), or — if delivery threw — the failed attempt, mark cleared.
+// If the process dies anywhere between 2 and 4, the mark survives and the
+// next send is refused as delivery_uncertain until the office records
+// whether the email went (resolveUncertainPoSend). The supplier can be
+// emailed at most once per send the office starts.
+async function sendPurchaseOrder(poId, { toEmail, toName, subject, by = "admin" } = {}, deliver = null) {
+  return withPurchasingLock(async () => {
+    const posRaw = await PO.readRaw();
+    const idx = posRaw.findIndex((r) => r && r.id === poId);
+    if (idx === -1) return null;
+    const stored = PO.hydrate(posRaw[idx]);
+    const probe = PO.hydrate(clone(posRaw[idx]));
+    PO.transitionSent(probe, { toEmail, toName, subject, by });   // throws if it can't be sent
+    planListMoves(probe, await ML.readRaw(), "sent");              // every list readable, every line resolved
+
+    const inFlight = { at: PO.nowIso(), by, to: probe.emailedToEmail };
+    const marked = clone(posRaw[idx]);
+    marked.sendInFlight = inFlight;
+    marked.updatedAt = inFlight.at;
+    posRaw[idx] = marked;
+    await commitFiles([{ file: purchaseOrders.FILE, after: PO.serialize(posRaw) }]);
+
+    let docs = {};
+    let failure = null;
+    if (deliver) {
+      try { docs = (await deliver(stored)) || {}; } catch (err) { failure = err; }
+    }
+    if (failure) {
+      const reason = `The email did not go: ${String(failure && failure.message || failure).slice(0, 300)}`;
+      await transact(poId, "settle", (po) => {
+        po.sendInFlight = null;
+        po.sendAttempts = [...(po.sendAttempts || []), { at: PO.nowIso(), by, to: inFlight.to, ok: false, reason }];
+        po.updatedAt = PO.nowIso();
+        PO.appendHistory(po, { action: "send_failed", note: reason });
+        return { changed: true };
+      });
+      throw new PurchasingError(reason, { status: 502, code: "delivery_failed" });
+    }
+    return transact(poId, "sent", (po) => PO.transitionSent(po, {
+      toEmail, toName, subject, by, inFlight, pdfPath: docs.pdfPath, csvPath: docs.csvPath
+    }));
+  });
+}
+
+// The office's answer to an interrupted send: "sent" (the email did
+// arrive — the PO becomes sent, dated when the send started, and its list
+// lines are ordered on it, in one commit) or "not_sent" (it did not — the
+// PO stays a draft and can be sent). Either way the interrupted attempt
+// stays on record. Nothing is emailed here.
+async function resolveUncertainPoSend(poId, { outcome, by = "admin", docs = {} } = {}) {
+  if (outcome !== "sent" && outcome !== "not_sent") {
+    throw new PurchasingError("Say whether the email went: sent or not_sent.", { status: 400, code: "bad_outcome" });
+  }
+  return transact(poId, outcome === "sent" ? "sent" : "settle", (po) => {
+    const f = po.sendInFlight;
+    if (!f) throw new PurchasingError("There is no interrupted send to settle.", { status: 409, code: "no_uncertain_send" });
+    const settled = { interrupted: true, settledBy: by, settledAt: PO.nowIso() };
+    if (outcome === "sent") {
+      PO.transitionSent(po, { toEmail: f.to, by: f.by || by, inFlight: f, subject: po.emailSubject || undefined, pdfPath: docs.pdfPath, csvPath: docs.csvPath });
+      po.sentAt = f.at || po.sentAt;
+      const last = po.sendAttempts[po.sendAttempts.length - 1];
+      Object.assign(last, { at: f.at || last.at, reason: `Interrupted send — ${by} confirmed the email arrived`, outcome: "confirmed_delivered", ...settled });
+      PO.appendHistory(po, { action: "send_confirmed", by, note: `interrupted send (started ${f.at || "?"}) confirmed DELIVERED by ${by}` });
+    } else {
+      po.sendInFlight = null;
+      po.sendAttempts = [...(po.sendAttempts || []), { at: f.at, by: f.by || by, to: f.to || null, ok: false, reason: `Interrupted send — ${by} confirmed it did not arrive`, outcome: "confirmed_not_delivered", ...settled }];
+      po.updatedAt = PO.nowIso();
+      PO.appendHistory(po, { action: "send_failed", by, note: `interrupted send (started ${f.at || "?"}) confirmed NOT delivered by ${by}` });
+    }
+    return { changed: true };
+  });
 }
 
 async function receivePurchaseOrder(poId, { lineUpdates = null, note = "" } = {}) {
@@ -159,6 +230,7 @@ async function cancelPurchaseOrder(poId, { reason = "" } = {}) {
 
 module.exports = {
   sendPurchaseOrder,
+  resolveUncertainPoSend,
   receivePurchaseOrder,
   cancelPurchaseOrder,
   lineMove,

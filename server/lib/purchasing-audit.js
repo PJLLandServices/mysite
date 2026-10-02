@@ -20,6 +20,13 @@
 //                                                           (price = PO line's)
 //   received_never_marked   the PO line arrived in full; the list line
 //                           never left "need"            → have (price = PO line's)
+//   list_ahead_of_po        the list recorded this PO's receipt or
+//                           cancellation (its own history says so) but the
+//                           PO is still out with this line outstanding — a
+//                           save whose second half was lost
+//                                                         → no automatic repair;
+//                                                           a person checks
+//                                                           what arrived
 //   po_missing / not_on_po / ordered_on_draft
 //                           the list line names a PO that doesn't exist,
 //                           doesn't carry it, or was never sent
@@ -90,6 +97,15 @@ function auditPurchasingLines({ purchaseOrders = [], materialLists = [] } = {}) 
         continue;
       }
       const status = line.status || "need";
+      const live = po.status === "sent" || po.status === "partially_received";
+      const onThisPo = status === "ordered" && line.poId === po.id;
+      const recorded = (list.history || []).find((h) => (h.action === "po_received" || h.action === "po_cancelled") &&
+        String(h.note || "").startsWith(`${po.id}:`));
+      if (live && !fully(pl) && !onThisPo && recorded) {
+        findings.push(describe(list, line, po, pl, "list_ahead_of_po", null,
+          `The list recorded ${po.id} as ${recorded.action === "po_received" ? "received" : "cancelled"} (${recorded.ts || "?"}), but ${po.id} still has this line outstanding — check what actually arrived; a person decides.`));
+        continue;
+      }
       if (status !== "need" || line.poId) continue;
       if (fully(pl)) {
         findings.push(describe(list, line, po, pl, "received_never_marked", { status: "have", poId: null, frozenPriceCents: Number(pl.unitPriceCents) || 0 },

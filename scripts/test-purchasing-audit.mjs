@@ -34,12 +34,18 @@ const materialLists = [{
     L("not-on", "ordered", "PO-SENT", 250),          // PO-SENT has no line for it
     L("draft", "ordered", "PO-DRAFT", 250)           // ordered on a PO never sent
   ]
+}, {
+  // The list's half of a receipt saved; the PO's half lost.
+  id: "ML-3", name: "Ahead", parentType: "project", parentId: "PRJ-1",
+  history: [{ ts: "2026-10-01T00:00:00Z", action: "po_received", note: "PO-LOST: 1 line" }],
+  lineItems: [L("ahead", "have", null, 250)]
 }, { id: "ML-2", name: "Other", parentType: "work_order", parentId: "WO-1", lineItems: [] }];
 const purchaseOrders = [
   P("PO-SENT", "sent", [["ok-ordered", 4, 0], ["sent-need", 4, 0]]),
   P("PO-RECV", "received", [["recv-stuck", 4, 4], ["recv-need", 4, 4], ["ok-have", 4, 4]]),
   P("PO-CANC", "cancelled", [["canc-stuck", 4, 1], ["canc-got", 4, 4]]),
   P("PO-DRAFT", "draft", [["draft", 4, 0]]),
+  { id: "PO-LOST", status: "sent", lineItems: [{ id: "pl-ahead", sku: "S-ahead", qty: 4, receivedQty: 0, unitPriceCents: 250, sourceListId: "ML-3", sourceLineId: "ahead" }] },
   { id: "PO-GONE", status: "sent", lineItems: [{ id: "x", sku: "S-x", qty: 1, receivedQty: 0, unitPriceCents: 1, sourceListId: "ML-9", sourceLineId: "nope" }] }
 ];
 
@@ -55,7 +61,8 @@ const expect = {
   "recv-need": ["received_never_marked", { status: "have", poId: null, frozenPriceCents: 250 }],
   "ghost": ["po_missing", null],
   "not-on": ["not_on_po", null],
-  "draft": ["ordered_on_draft", null]
+  "draft": ["ordered_on_draft", null],
+  "ahead": ["list_ahead_of_po", null]
 };
 for (const [lineId, [kind, repair]] of Object.entries(expect)) {
   ok(by[lineId] && by[lineId].kind === kind, `${lineId}: found as ${kind} (${by[lineId]?.kind})`);
@@ -64,7 +71,7 @@ for (const [lineId, [kind, repair]] of Object.entries(expect)) {
 ok(!by["ok-ordered"] && !by["ok-have"], "lines that agree with their PO are not reported");
 ok(r.findings.length === Object.keys(expect).length, `exactly the disagreeing lines are reported (${r.findings.length})`);
 ok(r.notes.length === 1 && r.notes[0].poId === "PO-GONE", "a sent PO line whose list line is gone is noted for information, not as a disagreement");
-ok(S(r.totals) === S({ projects: 1, materialLists: 1, purchaseOrders: 5, lines: 8, repairable: 5, needsAPerson: 3 }), `totals (${S(r.totals)})`);
+ok(S(r.totals) === S({ projects: 1, materialLists: 2, purchaseOrders: 6, lines: 9, repairable: 5, needsAPerson: 4 }), `totals (${S(r.totals)})`);
 ok(r.findings.every((f) => f.projectId === "PRJ-1"), "each finding names its project");
 
 // Each repair is exactly what the one-commit rule makes of the same line.
@@ -79,7 +86,7 @@ ok(S(lineMove(purchaseOrders[0], purchaseOrders[0].lineItems[1], materialLists[0
   "sent-need: the audit's repair matches what sending moves");
 
 const text = formatPurchasingAudit(r);
-ok(/read-only — nothing was changed/.test(text) && /Affected: 1 project\(s\), 1 material list\(s\), 5 purchase order\(s\), 8 line\(s\)/.test(text), "the report states the totals and that nothing was changed");
+ok(/read-only — nothing was changed/.test(text) && /Affected: 1 project\(s\), 2 material list\(s\), 6 purchase order\(s\), 9 line\(s\)/.test(text), "the report states the totals and that nothing was changed");
 
 console.log(`\npurchasing audit: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

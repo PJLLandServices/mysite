@@ -35,16 +35,25 @@ const flag = (name) => args.includes(name);
 const after = (name, n = 1) => { const i = args.indexOf(name); return i === -1 ? null : args.slice(i + 1, i + 1 + n); };
 
 if (flag("--browser")) {
+  // Read-only by construction: two same-origin GETs (fetch's default
+  // method), no headers, no body. Nothing is stored in the page or sent
+  // anywhere; the report is printed to this Console and, if the browser
+  // allows it, copied to the clipboard.
   const snippet = `(async () => {
   const auditPurchasingLines = ${auditPurchasingLines.toString()};
   const formatPurchasingAudit = ${formatPurchasingAudit.toString()};
-  const get = async (u) => { const r = await fetch(u, { credentials: "same-origin" }); if (!r.ok) throw new Error(u + " → " + r.status); return r.json(); };
+  const get = async (url) => {
+    const r = await fetch(url, { credentials: "same-origin" });
+    if (!r.ok) throw new Error(url + " answered " + r.status);
+    return r.json();
+  };
   const po = await get("/api/purchase-orders");
   const ml = await get("/api/material-lists?includeArchived=1");
   const result = auditPurchasingLines({ purchaseOrders: po.purchaseOrders || [], materialLists: ml.lists || [] });
-  const text = formatPurchasingAudit(result);
+  let text = formatPurchasingAudit(result);
+  text += "\\nSource: " + location.host + " — " + (po.purchaseOrders || []).length + " purchase orders, " + (ml.lists || []).length + " material lists (Trash not included)";
+  if (po.purchasingRecovery) text += "\\nServer recovery status: " + JSON.stringify(po.purchasingRecovery);
   console.log(text);
-  window.__poListAudit = result;
   try { copy(text); console.log("(The report above is also on your clipboard.)"); } catch (e) {}
 })();`;
   process.stdout.write(snippet + "\n");
