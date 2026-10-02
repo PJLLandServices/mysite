@@ -6862,6 +6862,63 @@ See docs/FIELD_OFFLINE_RELEASE.md for release order, limitations, the Mac/Xcode
 procedure, and airplane-mode/restart/signature/bypass checks. This entry does
 not mark FLOW-31 PASS or claim a production/iPhone walkthrough.
 
+## 2026-10-01 — FIELD (FLOW-31): Customer Summary "Done" crashed the whole app — fixed (#361)
+
+**Regression from #360, found on Patrick's phone within minutes of update 01a0f8f4.** The app
+showed "PJL Field could not start — TypeError: Cannot read property 'source' of null … at
+CustomerSummary".
+
+**Cause:** tapping Done cleared the summary but left the page's state as `ready`. iOS keeps drawing
+a Modal's children while it slides away, so the ready view rendered with no summary and read
+`s.source` of null. The boot guard caught that error, and it took down the whole app.
+
+**Fix** (`pjl-field/src/screens/CustomerSummary.js`): closing resets the state to `loading` along
+with the summary, and the ready view draws only when a summary exists. App code only; the server
+route is unchanged.
+
+**Shipped:**
+- main: #361, merge `aae2936`. The server has been live since 2026-10-01 19:57 UTC; the
+  TestFlight / App Store runtime `4737af92` received it by OTA on merge.
+- Patrick's hand-built Tap to Pay app (runtime `41661c6f…`): hotfix commit `15be412`, update
+  **01a0f8fd**, published 2026-10-01 19:42 UTC.
+
+**Tests:** `scripts/test-customer-summary-close.mjs` (in build:check). It compiles the real
+component with the app's Babel and drives it through open → ready → Done, rendering the way iOS
+does during the dismiss. 7 checks; **the old code fails 4, with this exact error.** The test uses a
+minimal hooks runtime, not a real React Native renderer.
+
+**Status:** not field-verified. Real-device acceptance is open (PJL-106): Done closes without a
+crash; the summary with a paid or part-paid invoice. This entry does not mark FLOW-31 PASS.
+
+## 2026-10-01 — FIELD: which of today's changes are on Patrick's working phone
+
+Patrick's working phone runs the **hand-built Tap to Pay app**:
+- built from `claude/field-taptopay` (#305) at `0c638a8`, runtime
+  `41661c6ff465c4c52451347262fc9fc638271ed6`;
+- it **does not receive main's OTA updates** (runtime `4737af92`).
+
+Today's app changes reached it only as hand-ported hotfix commits, published by
+`field-app-hotfix-taptopay.yml` from branch `claude/eas-update-pjl-field-wgmjtt`:
+
+| Commit | Update | Ports |
+|---|---|---|
+| `3dda94f` | 01a0f7cc | #358's app files |
+| `b390bba` | 01a0f8f4 | #360's app files |
+| `15be412` | 01a0f8fd | #361's app file |
+
+**Not on that phone:**
+- #359's app wording: its confirm sheet still says "Texts and emails"; the sending is server-side,
+  so it does text only;
+- #298's app changes (merged 2026-09-26):
+  - PJL-98: per-field offline merge, zone drafts that no longer block sign-off, zone removal through
+    the outbox;
+  - PJL-100 #3: a timeout on Finish's first read;
+  - the phone side of re-signing on a revised scope.
+
+**Temporary state.** The release-lane design (approved 2026-10-02, not yet implemented) replaces
+hand ports with main merged into #305 and gated publishes. The first lane publish, which would carry
+the #298 changes, is a Field-app release that needs Patrick's approval and field acceptance.
+
 ## 2026-10-01 — FIELD (FLOW-31): "What am I signing for?" and zone arrows you can hit
 
 From Patrick's first closings of the day:
@@ -6908,6 +6965,11 @@ width, so the tap target was the width of the glyph. They are now a fixed 64 × 
 - `scripts/test-customer-summary.mjs`: 23 checks; **the old code fails 20**.
 - `scripts/test-zone-pager-arrows.mjs`: 6 checks; **the old code fails 6**.
 
+**Shipped with a regression:** Done on the summary crashed the app (update 01a0f8f4). It's fixed by
+#361 / hotfix `15be412` (update 01a0f8fd); see that entry. **Not field-verified:** the arrows on a
+real closing, and the summary with a paid or part-paid invoice, are open acceptance checks
+(PJL-106). This entry does not mark FLOW-31 PASS.
+
 ## 2026-10-01 — FIELD: "Notify on route" is a text only (no email)
 
 Patrick, after the first season-plan notice went out: "I don't need an email, just a text message
@@ -6925,7 +6987,9 @@ Every other customer event still sends email and text as before.
 - Audit: the stamp and history are unchanged.
 - Untouched: capacity, the calendar and linked records.
 - The app's confirm sheet now reads "Texts …" (main's OTA). The hand-built Tap to Pay app keeps the
-  old wording until its next hotfix, but its behaviour is server-side and already text-only.
+  old wording, because #359 was not ported to it. Its behaviour is server-side and already
+  text-only.
+- **Not field-verified:** "Notify sends text only" is an open acceptance check (PJL-108).
 
 **Tests:** `scripts/test-notify-season-plan.mjs` (20 checks; **the old code fails 6**).
 
@@ -6950,8 +7014,12 @@ marked every later visit "Notified".
 - **A second tap for the same visit sends nothing.**
 - **Refusals:** no phone or email, a cancelled visit or an unknown one send nothing.
 
-**App (Field app OTA):** Notify is enabled when a card has a lead *or* a booking, and posts to the
-matching route. Only the tapped card turns "Notified".
+**App:** Notify is enabled when a card has a lead *or* a booking, and posts to the matching route.
+Only the tapped card turns "Notified".
+- The main OTA went to runtime `4737af92` only.
+- Patrick's working phone (the hand-built Tap to Pay app) got it from hotfix `3dda94f`, update
+  01a0f7cc, 2026-10-01 14:09 UTC.
+- The behaviour change in #359 (text only) supersedes this entry's "text and email".
 
 **Tests:**
 - `scripts/test-notify-season-plan.mjs` (16 checks; **the old code fails 14**).
