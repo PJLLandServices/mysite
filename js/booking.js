@@ -428,6 +428,7 @@
     // catalog renders with a card still ticked from the page they left.
     state.serviceKey = null;
     state.serviceMeta = null;
+    hideSeasonSwitch();
     // Strip the ?service= param from the URL so refreshing doesn't re-filter.
     const next = new URL(window.location.href);
     next.searchParams.delete("service");
@@ -436,17 +437,88 @@
     renderServiceCards();
   });
 
-  serviceGrid.addEventListener("click", (event) => {
-    const card = event.target.closest("[data-service-key]");
-    if (!card) return;
-    state.serviceKey = card.dataset.serviceKey;
-    state.serviceMeta = state.services[state.serviceKey];
-    serviceGrid.querySelectorAll(".service-card").forEach((c) => c.classList.remove("is-active"));
-    card.classList.add("is-active");
+  // ===== The wrong season =====
+  // A customer in October who taps "Spring opening" almost always means a
+  // fall closing — one did, joined the open bucket for it, and was placed
+  // (2026-10-02). The catalog says which seasons are open (`season.open`);
+  // when the tapped service's season is not and the same band in an OPEN
+  // season exists, ask before moving on, in Patrick's words. A customer who
+  // really does want next spring says no and carries on.
+  const SEASON_PREFIX = { spring_opening: "spring_open_", fall_closing: "fall_close_" };
+  const SEASON_NOUN = { spring_opening: "spring opening", fall_closing: "fall closing" };
+  const seasonSwitchEl = document.getElementById("seasonSwitch");
+
+  function sameBandInOpenSeason(key) {
+    const meta = state.services[key];
+    const prefix = meta && SEASON_PREFIX[meta.family];
+    if (!prefix || !meta.season || meta.season.open !== false) return null;
+    const other = Object.keys(SEASON_PREFIX).find((f) => f !== meta.family);
+    const candidate = key.startsWith(prefix) ? SEASON_PREFIX[other] + key.slice(prefix.length) : null;
+    const target = candidate && state.services[candidate];
+    return target && target.bookable && target.season && target.season.open === true ? candidate : null;
+  }
+
+  function hideSeasonSwitch() {
+    if (seasonSwitchEl) { seasonSwitchEl.hidden = true; seasonSwitchEl.innerHTML = ""; }
+  }
+
+  function prettyStartsOn(ymd) {
+    const [y, m, d] = String(ymd || "").split("-").map(Number);
+    if (!y) return "";
+    return new Date(y, m - 1, d).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" });
+  }
+
+  function advanceFromService() {
     // Seasonal services (spring/fall) route through the zone-confirm step
     // first; everything else jumps straight to address.
     const nextStep = serviceNeedsZones() ? "zones" : "address";
     setTimeout(() => showStep(nextStep), 250);
+  }
+
+  function showSeasonSwitch(originalKey, swapKey) {
+    if (!seasonSwitchEl) { advanceFromService(); return; }
+    const original = state.services[originalKey];
+    const swap = state.services[swapKey];
+    const wanted = SEASON_NOUN[swap.family];
+    const asked = SEASON_NOUN[original.family];
+    const startsOn = original.season && original.season.startsOn ? prettyStartsOn(original.season.startsOn) : "";
+    seasonSwitchEl.innerHTML = `
+      <p><strong>Oops</strong> — it looks like you may be looking for a season that's already past (or not here yet).
+      We're currently booking <strong>${escapeHtml(wanted)}s</strong>. Is a ${escapeHtml(wanted)} what you're looking for?</p>
+      <div class="season-actions">
+        <button type="button" class="season-yes">Yes — book a ${escapeHtml(wanted)}</button>
+        <button type="button" class="season-no">No, I want a ${escapeHtml(asked)}${startsOn ? ` (first dates ${escapeHtml(startsOn)})` : ""}</button>
+      </div>`;
+    seasonSwitchEl.hidden = false;
+    seasonSwitchEl.querySelector(".season-yes").addEventListener("click", () => {
+      state.serviceKey = swapKey;
+      state.serviceMeta = swap;
+      // A deep link filtered the grid to the asked-for family; follow the
+      // customer into the season they actually want.
+      if (state.familyFilter) state.familyFilter = swap.family;
+      state.propertyType = propertyTypeForKey(swapKey);
+      hideSeasonSwitch();
+      renderServiceCards();
+      advanceFromService();
+    });
+    seasonSwitchEl.querySelector(".season-no").addEventListener("click", () => {
+      hideSeasonSwitch();
+      advanceFromService();
+    });
+    seasonSwitchEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  serviceGrid.addEventListener("click", (event) => {
+    const card = event.target.closest("[data-service-key]");
+    if (!card) return;
+    hideSeasonSwitch();
+    state.serviceKey = card.dataset.serviceKey;
+    state.serviceMeta = state.services[state.serviceKey];
+    serviceGrid.querySelectorAll(".service-card").forEach((c) => c.classList.remove("is-active"));
+    card.classList.add("is-active");
+    const swap = sameBandInOpenSeason(state.serviceKey);
+    if (swap) { showSeasonSwitch(state.serviceKey, swap); return; }
+    advanceFromService();
   });
 
   // Populate the zone dropdown once at boot. 1..50 zones plus the existing
@@ -1049,7 +1121,9 @@
 
           // Lock the service in when the AI/admin chose it OR when the
           // family has only one variant (no real choice for the customer).
-          if (fromSessionHandoff || familyMembers.length === 1) {
+          // Never lock in a season that isn't open when the open season has
+          // the same band: the customer taps the card and gets asked.
+          if ((fromSessionHandoff || familyMembers.length === 1) && !sameBandInOpenSeason(preselect)) {
             state.serviceKey = preselect;
             state.serviceMeta = state.services[preselect];
             renderServiceCards();
