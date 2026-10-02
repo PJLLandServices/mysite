@@ -35,6 +35,7 @@ const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { withPurchasingLock, atomicWrite } = require("./purchasing-store");
 
 const FILE = path.join(__dirname, "..", "data", "material-lists.json");
 
@@ -62,9 +63,24 @@ async function readAll() {
   }
 }
 
+function serialize(records) {
+  return JSON.stringify(records, null, 2) + "\n";
+}
+
+// Temp file + rename: a crash mid-write can never leave half a file.
 async function writeAll(records) {
   await ensureFile();
-  await fs.writeFile(FILE, JSON.stringify(records, null, 2) + "\n", "utf8");
+  await atomicWrite(FILE, serialize(records));
+}
+
+// The file exactly as stored — no hydrate, and a parse failure THROWS
+// rather than reading as empty. purchasing.js changes only the lines a
+// purchase order owns; every other record and line goes back byte-for-byte.
+async function readRaw() {
+  await ensureFile();
+  const parsed = JSON.parse((await fs.readFile(FILE, "utf8")) || "[]");
+  if (!Array.isArray(parsed)) throw new Error("material-lists.json is not a list");
+  return parsed;
 }
 
 // ---- Helpers ---------------------------------------------------------
@@ -516,22 +532,29 @@ async function purgeDeleted({ olderThanMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
   return purged;
 }
 
+// Every write verb queues behind the shared purchasing lock, so a list
+// edit can't land between the two halves of a purchase-order commit.
+const locked = (fn) => (...args) => withPurchasingLock(() => fn(...args));
+
 module.exports = {
   STATUSES,
   LINE_STATUSES,
   PARENT_TYPES,
+  FILE,
   list,
   get,
   listByParent,
-  create,
-  update,
-  remove,
+  create: locked(create),
+  update: locked(update),
+  remove: locked(remove),
   computeTotals,
   resolveLineUnitPriceCents,
   lineItemsLockedBy,
   deriveStatus,
-  softDelete,
-  restore,
+  softDelete: locked(softDelete),
+  restore: locked(restore),
   listDeleted,
-  purgeDeleted
+  purgeDeleted: locked(purgeDeleted),
+  // purchasing.js only — it holds the lock and commits the result.
+  _internal: { readRaw, serialize, hydrate, hydrateLine, deriveStatus, appendHistory, nowIso }
 };

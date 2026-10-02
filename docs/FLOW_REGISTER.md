@@ -7780,3 +7780,42 @@ confirm the day list now shows fewer hours, and that the original time is
 still on the record; (4) confirm a technician signed in on the phone
 cannot reach the correction; (5) on a T&M job, confirm the labour line
 bills the corrected hours.
+
+## 2026-10-02 — PO-LIST-01: a purchase order and its material-list lines save together or not at all
+
+**The defect (live since 2026-09-27, 688550c).** Send, receive and cancel saved the PO, then
+replaced the source list's whole line array through `materialLists.update()`. Once a list had been
+bought from, the 2026-09-27 guard (`lineItemsLockedBy`) correctly refused that replacement — after
+the PO had already saved. So: receive-in-full and cancel answered 400 with the PO saved and its list
+lines still "ordered" on it; a second PO from the same list answered 500 after the supplier had been
+emailed, its lines never marked; two clicks on Send emailed the supplier twice. A re-order also
+dropped its material-list link, so whatever arrived on it counted toward no job.
+
+**The rule now.** `server/lib/purchasing.js` is the one path for send / receive / cancel. Under one
+lock shared by every purchase-order and material-list write (`purchasing-store.withPurchasingLock`),
+it validates the PO transition, works out every affected list line from the PO's resulting state
+(`lineMove` — the one rule), emails (send only, still holding the lock), then commits both files in
+one journalled commit (`commitFiles`: journal → temp-file-and-rename each file → drop journal). A
+failed write puts back whatever was written; a crash part-way is finished by `recover()` at boot and
+before every locked operation; a journal overtaken by later writes is set aside, never applied.
+Only a line's `status`, `poId` and `frozenPriceCents` change, only on the line the PO line points at
+(`sourceListId` + `sourceLineId`), and past "sent" only while it points back at this PO. Receipt
+quantities are absolute, so a repeat request changes nothing and writes nothing. The wholesale-
+replacement guard is unchanged. A re-order keeps `sourceMaterialListIds` and each line's source
+pointers, and is written with its `reorder_of` history in one write; a PO saved without a link
+(made before this fix, or by hand) is left as it is — nothing is inferred.
+
+**Deliberately left alone.** The supplier email still goes out before the commit: if the commit then
+fails, nothing is saved and a retry emails again (the lock stops a double-click doing it). Sending a
+PO whose list line is already ordered on another PO, or already received, sends it and leaves that
+line alone, as before; the response lists such lines as `notMoved`. Lines left split by the defect
+are NOT repaired: `node scripts/audit-po-list-lines.mjs` (read-only; `--browser` prints a snippet that
+reads the live site's own GET endpoints) lists each one with the repair the rule would make, for
+Patrick's approval.
+
+**Tests.** `scripts/test-po-list-consistency.mjs` (106 checks; 27 fail on the old code) walks first
+send, a second PO from a bought-from list, partial and full receipt, cancel before and after a partial
+receipt, re-order, repeated send / receive / cancel, two simultaneous sends, a write failing on either
+file, a crash between the two, and unrelated purchased lines and POs byte-for-byte unchanged.
+`scripts/test-po-reorder-link.mjs` (41; 16 fail on the old code) and `scripts/test-purchasing-audit.mjs`
+(27) cover the re-order link and the audit. All three run in `build:check`.

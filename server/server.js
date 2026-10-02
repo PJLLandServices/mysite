@@ -182,6 +182,9 @@ const partSupplierPrices = require("./lib/part-supplier-prices");
 const partsLib = require("./lib/parts");
 const partPhotosLib = require("./lib/part-photos");
 const purchaseOrders = require("./lib/purchase-orders");
+// Send / receive / cancel: the PO and its list lines in one commit.
+const purchasing = require("./lib/purchasing");
+const purchasingStore = require("./lib/purchasing-store");
 const quoteRequests = require("./lib/quote-requests");
 const users = require("./lib/users");
 const magicTokens = require("./lib/magic-tokens");
@@ -20420,8 +20423,12 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 422, { ok: false, errors: ["Supplier email is empty. Add it to the supplier record or this PO."] });
       }
 
-      // Render PDF + CSV. notify-supplier composes the subject from the
-      // PO if no override is given.
+      // Validate → render + email → commit the PO and its list lines, all
+      // in one purchasing.sendPurchaseOrder call holding the purchasing
+      // lock (2026-10-02). Nothing is emailed unless the send has already
+      // validated; nothing is saved unless both the PO and every list line
+      // it moves save together. A second click waits, then finds the PO
+      // sent (409) — the supplier is not emailed twice.
       const { generatePoPdf } = require("./lib/po-pdf");
       const { generatePoCsv } = require("./lib/po-csv");
       const { sendPurchaseOrderEmail, buildSubject } = require("./lib/notify-supplier");
@@ -20429,80 +20436,48 @@ async function handleApi(req, res, pathname) {
       // feeds every render surface so descriptions can't diverge between
       // the PDF/CSV and the email the way they used to (disk vs memory).
       const poPartsMap = (PARTS && PARTS.parts) || {};
-      const pdfBuffer = await generatePoPdf(po, poPartsMap);
-      const csvBuffer = generatePoCsv(po, poPartsMap);
       const subject = String(payload.subject || buildSubject(po)).slice(0, 200);
 
-      // Write both files to the per-PO snapshot directory. Paths persist
-      // on the PO record as repo-relative strings so the resend handler
-      // can find them again. mkdir -p is idempotent.
-      const poFilesDir = path.join(DATA_DIR, "purchase-orders", "files");
-      await fs.mkdir(poFilesDir, { recursive: true });
-      const pdfFsPath = path.join(poFilesDir, `${po.id}.pdf`);
-      const csvFsPath = path.join(poFilesDir, `${po.id}.csv`);
-      await fs.writeFile(pdfFsPath, pdfBuffer);
-      await fs.writeFile(csvFsPath, csvBuffer);
-      // Store paths repo-relative — survives moving the install dir.
-      const pdfPath = path.relative(SERVER_DIR, pdfFsPath).split(path.sep).join("/");
-      const csvPath = path.relative(SERVER_DIR, csvFsPath).split(path.sep).join("/");
-
-      // describeLine is injected so notify-supplier.js stays decoupled from
-      // parts.json. Same resolver + same catalog as the PDF/CSV — honors the
-      // stored line description first, then the catalog (no size prefix).
-      const { resolveLineDescription, resolveSupplierSku } = require("./lib/format");
-      const describeLine = (line) => resolveLineDescription(line, poPartsMap);
-      // The paste block in the email carries THEIR part number, same as the
-      // PDF and CSV — it is pasted straight into the supplier's system.
-      const skuForLine = (line) => resolveSupplierSku(line, poPartsMap, po.supplierId);
-
-      await sendPurchaseOrderEmail({
-        po,
-        toEmail,
-        toName: payload.toName || po.supplierContactName || po.supplierName,
-        subject,
-        bodyText: payload.bodyText || "",
-        pdfBuffer,
-        csvBuffer,
-        describeLine,
-        skuForLine
-      });
-
-      // Flip the PO state — persist the document paths so the resend
-      // path can find the snapshotted files.
-      const sentPo = await purchaseOrders.markSent(id, {
-        toEmail,
-        toName: payload.toName,
-        subject,
-        pdfPath,
-        csvPath
-      });
-
-      // Flip every source material-list line to "ordered" with this PO id,
-      // AND lock its price: stamp the line with the PO line's snapshotted
-      // unitPriceCents so the list stops resolving live from parts.json and
-      // can never disagree with what was actually ordered. Map each source
-      // line id to its PO-line price, grouped by source list so we patch
-      // each list once.
-      const sentPriceByList = new Map();   // listId -> Map(sourceLineId -> unitPriceCents)
-      for (const line of sentPo.lineItems) {
-        if (!line.sourceListId || !line.sourceLineId) continue;
-        if (!sentPriceByList.has(line.sourceListId)) sentPriceByList.set(line.sourceListId, new Map());
-        sentPriceByList.get(line.sourceListId).set(line.sourceLineId, Number(line.unitPriceCents) || 0);
-      }
-      for (const [listId, priceByLineId] of sentPriceByList.entries()) {
-        const list = await materialLists.get(listId);
-        if (!list) continue;
-        const updatedLines = list.lineItems.map((l) => {
-          if (priceByLineId.has(l.id) && l.status === "need") {
-            return { ...l, status: "ordered", poId: sentPo.id, frozenPriceCents: priceByLineId.get(l.id) };
-          }
-          return l;
+      const result = await purchasing.sendPurchaseOrder(id, { toEmail, toName: payload.toName, subject }, async (draft) => {
+        const pdfBuffer = await generatePoPdf(draft, poPartsMap);
+        const csvBuffer = generatePoCsv(draft, poPartsMap);
+        // Write both files to the per-PO snapshot directory. Paths persist
+        // on the PO record as repo-relative strings so the resend handler
+        // can find them again. mkdir -p is idempotent.
+        const poFilesDir = path.join(DATA_DIR, "purchase-orders", "files");
+        await fs.mkdir(poFilesDir, { recursive: true });
+        const pdfFsPath = path.join(poFilesDir, `${draft.id}.pdf`);
+        const csvFsPath = path.join(poFilesDir, `${draft.id}.csv`);
+        await fs.writeFile(pdfFsPath, pdfBuffer);
+        await fs.writeFile(csvFsPath, csvBuffer);
+        // describeLine is injected so notify-supplier.js stays decoupled
+        // from parts.json. Same resolver + same catalog as the PDF/CSV.
+        const { resolveLineDescription, resolveSupplierSku } = require("./lib/format");
+        const describeLine = (line) => resolveLineDescription(line, poPartsMap);
+        // The paste block in the email carries THEIR part number, same as
+        // the PDF and CSV — it is pasted straight into the supplier's system.
+        const skuForLine = (line) => resolveSupplierSku(line, poPartsMap, draft.supplierId);
+        await sendPurchaseOrderEmail({
+          po: draft,
+          toEmail,
+          toName: payload.toName || draft.supplierContactName || draft.supplierName,
+          subject,
+          bodyText: payload.bodyText || "",
+          pdfBuffer,
+          csvBuffer,
+          describeLine,
+          skuForLine
         });
-        await materialLists.update(listId, { lineItems: updatedLines });
-      }
-
-      return sendJson(res, 200, { ok: true, purchaseOrder: sentPo });
+        // Store paths repo-relative — survives moving the install dir.
+        return {
+          pdfPath: path.relative(SERVER_DIR, pdfFsPath).split(path.sep).join("/"),
+          csvPath: path.relative(SERVER_DIR, csvFsPath).split(path.sep).join("/")
+        };
+      });
+      if (!result) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      return sendJson(res, 200, { ok: true, purchaseOrder: result.po, notMoved: result.notMoved });
     } catch (err) {
+      if (err && err.status && err.code) return sendJson(res, err.status, { ok: false, code: err.code, errors: [err.message] });
       console.warn("[po] send failed:", err);
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't send purchase order."] });
     }
@@ -20526,42 +20501,15 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(poReceiveMatch[1]);
       const payload = await parseRequestBody(req).catch(() => ({}));
-      const po = await purchaseOrders.get(id);
-      if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
-      const result = await purchaseOrders.markReceived(id, {
+      // The receipt and the list lines it completes, in one commit
+      // (purchasing.js). Quantities are absolute, so a repeat of the same
+      // request records nothing new.
+      const result = await purchasing.receivePurchaseOrder(id, {
         lineUpdates: payload && payload.lineUpdates,
         note: payload && payload.note || ""
       });
-      const receivedPo = result.po;
-
-      // Flip ONLY the lines that became fully received on this event.
-      // Build lineId -> source pointers from the receivedPo.
-      const sourcePointersById = new Map();
-      for (const line of receivedPo.lineItems) {
-        if (!line.sourceListId || !line.sourceLineId) continue;
-        sourcePointersById.set(line.id, { listId: line.sourceListId, lineId: line.sourceLineId });
-      }
-      const flipsByList = new Map();
-      for (const lineId of result.fullyReceivedLineIds) {
-        const ptr = sourcePointersById.get(lineId);
-        if (!ptr) continue;
-        if (!flipsByList.has(ptr.listId)) flipsByList.set(ptr.listId, []);
-        flipsByList.get(ptr.listId).push(ptr.lineId);
-      }
-      for (const [listId, sourceLineIds] of flipsByList.entries()) {
-        const list = await materialLists.get(listId);
-        if (!list) continue;
-        const updatedLines = list.lineItems.map((l) => {
-          if (sourceLineIds.includes(l.id) && l.status === "ordered" && l.poId === receivedPo.id) {
-            // Keep frozenPriceCents (carried by the spread): a received line
-            // should show the price actually paid, not drift to live catalog.
-            return { ...l, status: "have", poId: null };
-          }
-          return l;
-        });
-        await materialLists.update(listId, { lineItems: updatedLines });
-      }
-      return sendJson(res, 200, { ok: true, purchaseOrder: receivedPo, fullyReceivedLineIds: result.fullyReceivedLineIds });
+      if (!result) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      return sendJson(res, 200, { ok: true, purchaseOrder: result.po, fullyReceivedLineIds: result.fullyReceivedLineIds, changed: result.changed, notMoved: result.notMoved });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record receipt."] });
     }
@@ -20576,38 +20524,11 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(poCancelMatch[1]);
       const payload = await parseRequestBody(req).catch(() => ({}));
-      const po = await purchaseOrders.get(id);
-      if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
-      const result = await purchaseOrders.markCancelled(id, { reason: payload.reason || "" });
-      const cancelledPo = result.po;
-
-      // Build per-line source pointers, then flip ONLY the outstanding ones.
-      const sourcePointersById = new Map();
-      for (const line of cancelledPo.lineItems) {
-        if (!line.sourceListId || !line.sourceLineId) continue;
-        sourcePointersById.set(line.id, { listId: line.sourceListId, lineId: line.sourceLineId });
-      }
-      const flipsByList = new Map();
-      for (const lineId of result.outstandingLineIds) {
-        const ptr = sourcePointersById.get(lineId);
-        if (!ptr) continue;
-        if (!flipsByList.has(ptr.listId)) flipsByList.set(ptr.listId, []);
-        flipsByList.get(ptr.listId).push(ptr.lineId);
-      }
-      for (const [listId, sourceLineIds] of flipsByList.entries()) {
-        const list = await materialLists.get(listId);
-        if (!list) continue;
-        const updatedLines = list.lineItems.map((l) => {
-          if (sourceLineIds.includes(l.id) && l.status === "ordered" && l.poId === cancelledPo.id) {
-            // Back to a live planning line — release the price lock so it
-            // resolves from the current catalog again.
-            return { ...l, status: "need", poId: null, frozenPriceCents: null };
-          }
-          return l;
-        });
-        await materialLists.update(listId, { lineItems: updatedLines });
-      }
-      return sendJson(res, 200, { ok: true, purchaseOrder: cancelledPo });
+      // The cancellation and the list lines it frees, in one commit
+      // (purchasing.js). What already arrived stays received.
+      const result = await purchasing.cancelPurchaseOrder(id, { reason: payload.reason || "" });
+      if (!result) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      return sendJson(res, 200, { ok: true, purchaseOrder: result.po, changed: result.changed, notMoved: result.notMoved });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't cancel."] });
     }
@@ -30260,6 +30181,10 @@ function shutdown(signal) {
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
+// Finish (or undo) a purchase-order commit a crash interrupted, before the
+// first request can read the two files disagreeing.
+try { purchasingStore.recover(); } catch (err) { console.error("[purchasing] recovery at boot failed:", err); }
 
 server.listen(PORT, HOST, () => {
   console.log(`PJL site + lead receiver running at http://${HOST}:${PORT}`);
