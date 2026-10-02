@@ -49,9 +49,7 @@
         "expo-channel-name": "production"
       }
     },
-    "runtimeVersion": {
-      "policy": "fingerprint"
-    },
+    "runtimeVersion": "41661c6ff465c4c52451347262fc9fc638271ed6",
     "plugins": [
       "expo-image-picker",
       "expo-location",
