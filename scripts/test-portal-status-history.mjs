@@ -96,15 +96,32 @@ const PORTAL_TOKEN = "portal-probe-token-xyz";
 const PAST_WO_ID = "WO-PORTAL-PROBE";
 const ORPHAN_INVOICE_ID = "I-PORTAL-PROBE-0001";
 
+// PJL-31: a completed fall-closing season-plan booking — a SEPARATE
+// property/lead/token so this doesn't interfere with the scenario
+// above (which needs its booking to stay upcoming). Independent of
+// `season`/`scheduledFor` above: this specifically needs a PAST date
+// inside the FALL window, regardless of what season is current when
+// the suite runs.
+const CUSTOMER_ID_2 = "cust-portal-probe-fc";
+const PROPERTY_ID_2 = "prop-portal-probe-fc";
+const LEAD_ID_2 = "lead-portal-probe-fc";
+const PORTAL_TOKEN_2 = "portal-probe-token-fc";
+const BOOKING_ID_2 = "BK-PORTAL-PROBE-FC";
+const fallWin = seasons.windowFor("fall", year);
+const fallWindowStart = fallWin ? new Date(Date.UTC(year, fallWin.startMonth - 1, fallWin.startDay, 16, 0, 0)) : null;
+const fallWindowEnd = fallWin ? new Date(Date.UTC(year, fallWin.endMonth - 1, fallWin.endDay, 16, 0, 0)) : null;
+const fallClosingScheduledFor = (fallWindowStart && Date.now() > fallWindowStart.getTime())
+  ? new Date(Math.min(Date.now() - 86400000, fallWindowEnd.getTime())).toISOString()
+  : null;
+
 function writeFixtures() {
-  fs.writeFileSync(path.join(DATA, "properties.json"), JSON.stringify([{
+  const props = [{
     id: PROPERTY_ID,
     customerId: CUSTOMER_ID,
     address: "1 Probe Lane, Newmarket, ON",
     system: { zones: [{ name: "Zone 1" }] }
-  }], null, 2));
-
-  fs.writeFileSync(path.join(DATA, "leads.json"), JSON.stringify([{
+  }];
+  const leads = [{
     id: LEAD_ID,
     customerId: CUSTOMER_ID,
     propertyId: PROPERTY_ID,
@@ -118,9 +135,8 @@ function writeFixtures() {
     portal: { token: PORTAL_TOKEN }
     // Deliberately NO lead.booking — the whole point of PJL-20 is that
     // this customer's upcoming visit is known ONLY via the season plan.
-  }], null, 2));
-
-  fs.writeFileSync(path.join(DATA, "bookings.json"), JSON.stringify([{
+  }];
+  const bookings = [{
     id: "BK-PORTAL-PROBE",
     leadId: null,
     propertyId: PROPERTY_ID,
@@ -133,7 +149,48 @@ function writeFixtures() {
     // a time slot, Morning or Afternoon") and must be surfaced,
     // unlike the exact scheduledFor minute.
     assignment: { bucket: "morning" }
-  }], null, 2));
+  }];
+
+  // PJL-31: a SEPARATE customer whose only history is a COMPLETED
+  // fall-closing season-plan booking, no Work Order at all — the exact
+  // shape Patrick hit live. Only added when a past fall date actually
+  // exists right now (see fallClosingScheduledFor above).
+  if (fallClosingScheduledFor) {
+    props.push({
+      id: PROPERTY_ID_2,
+      customerId: CUSTOMER_ID_2,
+      address: "2 Probe Lane, Newmarket, ON",
+      system: { zones: [{ name: "Zone 1" }] }
+    });
+    leads.push({
+      id: LEAD_ID_2,
+      customerId: CUSTOMER_ID_2,
+      propertyId: PROPERTY_ID_2,
+      createdAt: "2025-01-01T12:00:00Z",
+      status: "won",
+      contact: {
+        firstName: "Probe2", lastName: "Customer",
+        email: "portal-probe-fc@example.test", phone: "+19995550101",
+        address: "2 Probe Lane, Newmarket, ON"
+      },
+      portal: { token: PORTAL_TOKEN_2 }
+    });
+    bookings.push({
+      id: BOOKING_ID_2,
+      leadId: null,
+      propertyId: PROPERTY_ID_2,
+      scheduledFor: fallClosingScheduledFor,
+      serviceKey: `${outreach.SEASONAL_SERVICE_PREFIXES.fall}4z`,
+      serviceLabel: "Fall closing probe visit",
+      status: "completed",
+      source: "assignment",
+      assignment: { bucket: "morning" }
+    });
+  }
+
+  fs.writeFileSync(path.join(DATA, "properties.json"), JSON.stringify(props, null, 2));
+  fs.writeFileSync(path.join(DATA, "leads.json"), JSON.stringify(leads, null, 2));
+  fs.writeFileSync(path.join(DATA, "bookings.json"), JSON.stringify(bookings, null, 2));
 
   fs.writeFileSync(path.join(DATA, "work-orders.json"), JSON.stringify([{
     id: PAST_WO_ID,
@@ -256,6 +313,34 @@ try {
   const icsRes = await fetch(`http://127.0.0.1:${PORT}/api/portal/${propertyToken}/calendar.ics`, { cache: "no-store" });
   ok("the property-token calendar download refuses rather than exposing the internal time",
     icsRes.status === 404, `got ${icsRes.status}`);
+
+  // ---- PJL-31: a completed fall-closing booking must read as DONE, not
+  // stuck on "scheduled" forever within that season's window. Before the
+  // fix, outreach.deriveBookingState excluded only cancelled/no_show —
+  // a completed booking still counted as "upcoming," so a customer whose
+  // only history was a finished fall closing saw "your service is
+  // scheduled" for a visit that already happened (Patrick, live).
+  if (fallClosingScheduledFor) {
+    const res2 = await fetch(`http://127.0.0.1:${PORT}/api/portal/${PORTAL_TOKEN_2}`, { cache: "no-store" });
+    const data2 = await res2.json().catch(() => ({}));
+    ok("fall-closing-probe portal fetch succeeds", res2.ok && data2.ok, `${res2.status} ${JSON.stringify(data2).slice(0, 200)}`);
+    const portal2 = data2.portal || {};
+    ok("a completed fall closing is NOT upcoming",
+      portal2.derived?.upcomingBooking === false,
+      JSON.stringify(portal2.derived));
+    ok("derived state is 'season_complete', not stuck on 'service_scheduled'",
+      portal2.derived?.state === "season_complete",
+      JSON.stringify(portal2.derived));
+    ok("the Next Visit card hides (no upcoming work to show)",
+      portal2.nextVisit === null || portal2.nextVisit === undefined,
+      JSON.stringify(portal2.nextVisit));
+    ok("the 'Book a Service' card does NOT claim the property is still booked",
+      Array.isArray(portal2.bookableProperties)
+        && !portal2.bookableProperties.some((p) => p.propertyId === PROPERTY_ID_2 && p.alreadyBooked === true),
+      JSON.stringify(portal2.bookableProperties));
+  } else {
+    console.log("• test-portal-status-history: no past date in the fall window yet this year — skipping the PJL-31 completed-fall-closing scenario.");
+  }
 } finally {
   child.kill("SIGKILL");
   for (const [f, buf] of backups) {

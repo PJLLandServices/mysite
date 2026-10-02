@@ -195,32 +195,58 @@ function sleep(ms) {
 
 // Query bookings.json for any booking on this property whose
 // serviceKey signals the right season and whose scheduledFor
-// lands in-window for the given year. Status filtering excludes
-// cancelled / no_show — the customer is still effectively
-// unbooked in either case.
+// lands in-window for the given year.
+//
+// "Upcoming" (hasBooking: true) means the booking still holds its slot
+// — bookings.holdsItsSlot(), the same cancelled/completed/no_show
+// terminal-status check every other caller in this codebase uses for
+// "does this still occupy the calendar." This used to be a hand-rolled
+// `status === "cancelled" || status === "no_show"` check that forgot
+// "completed": a completed fall-closing booking still read as
+// "upcoming" here, which kept the customer portal showing "your service
+// is scheduled" forever after the season's only visit had already
+// happened (PJL-31). Falling through to holdsItsSlot() means this can't
+// drift from the canonical definition again.
+//
+// When nothing is upcoming, separately check for a COMPLETED booking in
+// the same window — the portal needs this to say "your season is done"
+// rather than just falling silent. A season-plan booking's completion
+// never produces a Work Order (see bookings.js), so this is the only
+// signal that exists for "this season's service actually happened."
 async function deriveBookingState(propertyId, season, year) {
   if (!propertyId) return null;
   const prefix = SEASONAL_SERVICE_PREFIXES[season];
   if (!prefix) return null;
   const matches = await bookings.listByProperty(propertyId);
-  const candidate = matches.find((b) => {
-    if (!b || typeof b.serviceKey !== "string") return false;
-    if (!b.serviceKey.startsWith(prefix)) return false;
-    if (b.status === "cancelled" || b.status === "no_show") return false;
-    return isInSeasonWindow(b.scheduledFor, season, year);
-  });
-  if (!candidate) return { hasBooking: false, bookingId: null, scheduledDate: null, bucket: null };
-  return {
-    hasBooking: true,
-    bookingId: candidate.id,
-    scheduledDate: candidate.scheduledFor,
-    // Route day-planning assigns "morning" / "afternoon" onto
-    // assignment.bucket once the day is planned; null until then. This
-    // IS a real customer-facing time window (unlike the exact
-    // scheduledFor minute, which is a route-order estimate) — the
-    // customer portal's Next Visit card shows it when present.
-    bucket: candidate.assignment?.bucket || null
-  };
+  const isThisSeason = (b) => b && typeof b.serviceKey === "string"
+    && b.serviceKey.startsWith(prefix)
+    && isInSeasonWindow(b.scheduledFor, season, year);
+  const candidate = matches.find((b) => isThisSeason(b) && bookings.holdsItsSlot(b.status));
+  if (candidate) {
+    return {
+      hasBooking: true,
+      bookingId: candidate.id,
+      scheduledDate: candidate.scheduledFor,
+      // Route day-planning assigns "morning" / "afternoon" onto
+      // assignment.bucket once the day is planned; null until then. This
+      // IS a real customer-facing time window (unlike the exact
+      // scheduledFor minute, which is a route-order estimate) — the
+      // customer portal's Next Visit card shows it when present.
+      bucket: candidate.assignment?.bucket || null,
+      completed: false
+    };
+  }
+  const completedOne = matches.find((b) => isThisSeason(b) && b.status === "completed");
+  if (completedOne) {
+    return {
+      hasBooking: false,
+      bookingId: completedOne.id,
+      scheduledDate: completedOne.scheduledFor,
+      bucket: null,
+      completed: true
+    };
+  }
+  return { hasBooking: false, bookingId: null, scheduledDate: null, bucket: null, completed: false };
 }
 
 // Which seasonal service should a customer be offered right now?
