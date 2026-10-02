@@ -6,6 +6,7 @@ import {
   BRANCH_LABELS,
   PROJECT_STATUS_LABELS,
   PROJECT_STATUS_TONES,
+  OFFICE_ONLY,
   money,
   relativeDay,
   taskProgress,
@@ -88,6 +89,8 @@ function ProjectRow({ project }: { project: ProjectSummary }) {
               it rides alongside progress rather than disappearing. */}
           {total !== undefined && total !== null ? (
             <span className="lg:hidden font-display text-[16px] font-bold text-brand-700" data-testid="contract-value">{money(total)}</span>
+          ) : project.agreement?.governing ? (
+            <span className="lg:hidden text-[13px] text-ink-muted" data-testid="contract-value-office">Signed · {OFFICE_ONLY.toLowerCase()}</span>
           ) : (
             <span className="lg:hidden text-[13px] text-ink-muted" data-testid="contract-value-empty">Not signed</span>
           )}
@@ -97,6 +100,8 @@ function ProjectRow({ project }: { project: ProjectSummary }) {
           {/* Nothing signed says so, rather than "$0" or a bare dash. */}
           {total !== undefined && total !== null ? (
             <span className="font-display text-[17px] font-bold text-brand-700" data-testid="contract-value">{money(total)}</span>
+          ) : project.agreement?.governing ? (
+            <span className="text-[13px] text-ink-muted" data-testid="contract-value-office">Signed · {OFFICE_ONLY.toLowerCase()}</span>
           ) : (
             <span className="text-[13px] text-ink-muted" data-testid="contract-value-empty">Not signed</span>
           )}

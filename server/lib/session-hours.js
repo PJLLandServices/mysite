@@ -130,8 +130,28 @@ function sumPersonHours(workOrders, { openSessions = "skip", now = null } = {}) 
   return roundHours(total);
 }
 
+// The days the crew actually logged: a build visit counts when at least
+// one session was clocked on it. ONE rule for "Days logged" and "Last
+// worked" — the Tasks tab (computeProjectMetrics) and the Daily Records
+// tab (daily-records describeProject) both read it. Before 2026-10-02 the
+// Daily Records tab counted every build visit, clocked or not, so the two
+// tabs could show different "Days logged" for the same job.
+function loggedDays(workOrders) {
+  let count = 0;
+  let lastWorkDate = null;
+  let lastWoId = null;
+  for (const wo of workOrders || []) {
+    if (!sessionsOf(wo).length) continue;
+    count += 1;
+    const d = wo.dailyLog && wo.dailyLog.workDate;
+    if (d && (!lastWorkDate || d > lastWorkDate)) { lastWorkDate = d; lastWoId = wo.id; }
+  }
+  return { count, lastWorkDate, lastWoId };
+}
+
 module.exports = {
   MS_PER_HOUR,
+  loggedDays,
   MAX_SESSION_HOURS,
   roundHours,
   effectiveLabourers,
