@@ -26,11 +26,24 @@ function partCard(part) {
   };
 }
 
+// The candidates a review card shows: the last three stored ones Patrick
+// has not rejected, oldest first. ONE rule — the Review tab renders these
+// and the resolution-restoration plan restores exactly these, so what he
+// reviews is what gets restored.
+function visibleCandidates(g) {
+  const rejected = new Set((g && g.rejectedHashes) || []);
+  return ((g && g.candidates) || []).filter((c) => !rejected.has(c.hash)).slice(-3);
+}
+
 function candidateCard(c) {
   const s = c.source || {};
   return {
     hash: c.hash, width: c.width || null, height: c.height || null, tier: c.tier || null,
-    source: { domain: s.domain || "", pageUrl: s.pageUrl || "", pass: s.pass || null, official: !!s.official },
+    // The picture's own facts, so the card can say what the source measured
+    // and how the gate graded it (and that a thumbnail was restored to its
+    // larger original) instead of "saved before the quality gate".
+    sizes: c.sizes || null, imageSource: c.imageSource || null, quality: c.quality || null,
+    source: { domain: s.domain || "", pageUrl: s.pageUrl || "", pass: s.pass ?? null, official: !!s.official, upgradedFrom: s.upgradedFrom ? true : undefined, restoredFrom: s.restoredFrom ? { width: s.restoredFrom.width || null, height: s.restoredFrom.height || null, at: s.restoredFrom.at || null } : undefined },
     checks: c.checks || {}
   };
 }
@@ -51,7 +64,7 @@ function buildReviewQueues({ parts, groups, links, fittings = [], photoUrl }) {
       tier: g.tier || "none", kind: g.ai.kind || null, aiTier: g.ai.tier || null, proposedBrand: g.ai.proposedBrand || null,
       pages: Array.isArray(g.ai.pages) ? g.ai.pages : [],
       reason: g.reason || g.ai.reason || "", identified: g.ai.identified || null, runId: g.ai.runId || null, at: g.updatedAt || g.ai.at || null,
-      candidates: (g.candidates || []).filter((c) => !rejected.has(c.hash)).slice(-3).reverse().map(candidateCard),
+      candidates: visibleCandidates(g).reverse().map(candidateCard),
       photo: g.photo ? { hash: g.photo.hash, url: photoUrl ? photoUrl(g.photo.hash) : null } : null,
       approvedBy: g.approvedBy || null, approvedAt: g.approvedAt || null
     };
@@ -82,4 +95,4 @@ function buildReviewQueues({ parts, groups, links, fittings = [], photoUrl }) {
   return out;
 }
 
-module.exports = { buildReviewQueues, AUTO_APPROVED_LIMIT };
+module.exports = { buildReviewQueues, visibleCandidates, AUTO_APPROVED_LIMIT };
