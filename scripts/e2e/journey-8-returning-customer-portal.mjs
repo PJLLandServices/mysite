@@ -23,7 +23,7 @@
 //
 // Run: node scripts/e2e/journey-8-returning-customer-portal.mjs
 
-import { bootServer, journey, book, openWorkOrder, walkTheSystem, finish, invoiceFor, dayOut, j, sleep } from "./lib/journey.mjs";
+import { bootServer, journey, book, openWorkOrder, walkTheSystem, finish, invoiceFor, dayOut, springDay, j, sleep } from "./lib/journey.mjs";
 
 process.env.TZ = "America/Toronto";
 const J = journey("journey-8 returning customer · new fall visit · spring preserved · portal reschedule/cancel");
@@ -43,7 +43,9 @@ try {
   const ADDRESS = "100 Davis Dr, Newmarket, ON L3Y 2N1";
 
   J.step("the spring visit");
-  const { lead } = await book(srv, { serviceKey: "spring_open_4z", zoneCount: 4, day: dayOut(2),
+  // On a SPRING day: a spring opening on an October date is refused at
+  // reserve now, the same way it would be for a real customer.
+  const { lead } = await book(srv, { serviceKey: "spring_open_4z", zoneCount: 4, day: springDay(),
     contact: { name: "Rita Returning", email: EMAIL, phone: PHONE, address: ADDRESS } });
   await J.sent(L, "spring booking", [
     { channel: "email", to: EMAIL, subject: /booked/i },

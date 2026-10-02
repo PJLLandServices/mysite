@@ -29,7 +29,11 @@ thing); the mismatch is caught where it did the damage, at placement. Coverage:
 `test-open-bucket-placement.mjs` 24 → 35 — a spring standby placed on a fall day is refused
 with `fall_close_4z` offered back, placed as that band it books as a fall closing, the
 force-booked reserve refuses the same, and the rule's table on the library; `test-place-tray`
-35 → 36. **Raymond's record is still wrong** (booked, priced and work-ordered as a spring
+35 → 36. CI's e2e `journey-8` had the same bug as the fixture it was testing — it booked its
+"last spring's visit" as a spring opening two days from today, in October, through
+`admin_custom` — and the new guard refused it; `journey.mjs` gains `springDay()` (a weekday in
+the next spring's serviceable window) and the journey books there, 39 passed. **Raymond's
+record is still wrong** (booked, priced and work-ordered as a spring
 opening): on his booking page set the status to Cancelled, then book him again from the
 Schedule page as the fall band — he gets a cancellation and a fresh confirmation.
 **2026-10-02 (The open bucket is placed where Patrick says, not where the engine allows):**
