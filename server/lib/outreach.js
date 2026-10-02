@@ -193,6 +193,48 @@ function sleep(ms) {
 
 // ---- Public: booking detection -----------------------------------
 
+// Seasonal visit Work Order type per season — the only discriminator
+// that exists for "which seasonal service was this" (work-orders.js
+// TEMPLATES: spring_opening / fall_closing / service_visit / build).
+const SEASONAL_WO_TYPE = { spring: "spring_opening", fall: "fall_closing" };
+
+// Is this property's seasonal work for {season, year} ALREADY DONE,
+// per a real completed Work Order — independent of any bookings.json
+// record, because for most real visits none exists to check.
+//
+// Corrected 2026-10-02 (PJL-107 follow-up): a season-plan booking's
+// visit normally completes through the field app's property-only
+// "Start WO" route (pjl-field/workorder-routing.js — an assignment
+// booking has no lead, so the WO is created against the property
+// directly, POST /api/work-orders with no bookingId field — work-
+// orders.js has no such field at all). The completion cascade
+// (completion-cascade.js) never writes back to bookings.json either.
+// So a season-plan booking's own `status` field normally stays
+// "confirmed" FOREVER, even long after the visit happened, invoiced,
+// and paid — there is no supported, frequently-used path that ever
+// flips it to "completed". Checking bookings.json for a completed
+// status (the previous version of this function) only ever caught the
+// rare admin-dropdown edge case, not the normal one — confirmed live:
+// a customer's fall closing showed invoiced + paid + "Completed" in
+// Service History while the header still said "your service is
+// scheduled," because the header's booking check and Service History's
+// own Work-Order-sourced check are two disjoint systems of record that
+// nothing reconciles. property.serviceRecords (written once per
+// completion by the same cascade, server/lib/properties.js
+// addServiceRecord) is the one record of "this WO actually finished"
+// that's guaranteed to exist — keyed by woType + completedAt, with no
+// dependency on a booking link.
+async function isSeasonWorkCompleted(propertyId, season, year) {
+  const woType = SEASONAL_WO_TYPE[season];
+  if (!propertyId || !woType) return null;
+  let property;
+  try { property = await properties.get(propertyId); }
+  catch { return null; }
+  const records = Array.isArray(property?.serviceRecords) ? property.serviceRecords : [];
+  const match = records.find((r) => r && r.woType === woType && isInSeasonWindow(r.completedAt, season, year));
+  return match ? { completedAt: match.completedAt, woId: match.woId || null } : null;
+}
+
 // Query bookings.json for any booking on this property whose
 // serviceKey signals the right season and whose scheduledFor
 // lands in-window for the given year.
@@ -200,23 +242,26 @@ function sleep(ms) {
 // "Upcoming" (hasBooking: true) means the booking still holds its slot
 // — bookings.holdsItsSlot(), the same cancelled/completed/no_show
 // terminal-status check every other caller in this codebase uses for
-// "does this still occupy the calendar." This used to be a hand-rolled
-// `status === "cancelled" || status === "no_show"` check that forgot
-// "completed": a completed fall-closing booking still read as
-// "upcoming" here, which kept the customer portal showing "your service
-// is scheduled" forever after the season's only visit had already
-// happened (PJL-31). Falling through to holdsItsSlot() means this can't
-// drift from the canonical definition again.
-//
-// When nothing is upcoming, separately check for a COMPLETED booking in
-// the same window — the portal needs this to say "your season is done"
-// rather than just falling silent. A season-plan booking's completion
-// never produces a Work Order (see bookings.js), so this is the only
-// signal that exists for "this season's service actually happened."
+// "does this still occupy the calendar" — AND the season's work hasn't
+// already been completed via a real Work Order (isSeasonWorkCompleted
+// above; see its comment for why the booking's own status can't be
+// trusted for this). Checked first and wins outright: a completed WO
+// means the visit is over regardless of what the stale booking row
+// still says.
 async function deriveBookingState(propertyId, season, year) {
   if (!propertyId) return null;
   const prefix = SEASONAL_SERVICE_PREFIXES[season];
   if (!prefix) return null;
+  const woCompleted = await isSeasonWorkCompleted(propertyId, season, year);
+  if (woCompleted) {
+    return {
+      hasBooking: false,
+      bookingId: woCompleted.woId,
+      scheduledDate: woCompleted.completedAt,
+      bucket: null,
+      completed: true
+    };
+  }
   const matches = await bookings.listByProperty(propertyId);
   const isThisSeason = (b) => b && typeof b.serviceKey === "string"
     && b.serviceKey.startsWith(prefix)
@@ -866,6 +911,7 @@ module.exports = {
   setOptOutForSeason,
   honorUnsubscribe,
   deriveBookingState,
+  isSeasonWorkCompleted,
   getTemplates,
   saveTemplate,
   // Exposed for the /portal/<token> OG-substitution handler in
