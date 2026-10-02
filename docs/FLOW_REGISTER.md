@@ -2,6 +2,37 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-02 (Project Overview, read-only — stage 6 of the Project Workspace; FLOW-01/02 portal figure re-verified, unchanged):**
+The workspace's Overview tab becomes a read-only command centre over the five tabs.
+`GET /api/projects/:id/overview` (`lib/project-overview.js`) does no arithmetic: it copies
+fields out of the read model each tab's own route returns, built by the SAME builder functions
+(`server.js` `projectMaterialsModel` / `projectChangeOrdersModel` / `projectDailyRecordsModel` /
+`projectFinancialsModel`, which the tab routes now call too), plus `computeProjectMetrics` and the
+completion check.
+- **Next action moved to the server** (`lib/next-action.js`; `admin-app/src/lib/nextAction.ts`
+  deleted). It reads the Tasks tab's metrics, the Financials tab's action invoice and the
+  completion check's blockers. Fixed: a job with every task done used to read "Complete and
+  invoice" even when completion would be refused (unsigned revision, unpaid deposit…); it now
+  reads "Clear what's holding completion" and names the blocker.
+- **"Days logged" / "Last worked" — one rule** (`session-hours.loggedDays`: a visit counts when
+  someone clocked on it). Live defect fixed: the Tasks tab counted clocked visits, the Daily
+  Records tab counted every build visit, so one job could show two different "Days logged".
+  `computeProjectMetrics`' rule is unchanged (it moved, not changed) — so the portal's "N days on
+  site" (FLOW-01/02, PASS) is the same number; the Daily Records tab's now matches it.
+- **`computeProjectMetrics` declared `totalPersonHours`** — it was an undeclared (implicit
+  global) assignment shared by every request. Values were right only because nothing awaited
+  between the write and the read.
+- Metrics gain `openTasks` and `archivedTasks`; the header's Project progress reads them from
+  the server (`GET /api/projects/:id` `progress`) instead of re-deriving it in the browser.
+- **Not shown because not recorded:** tasks carry no due date or "blocked" state (no overdue
+  figure); materials have no "ordered" figure and no project-wide "required" figure (per list).
+Tests: `scripts/test-project-overview.mjs` (in `build:check`; `--screen` for desktop + phone)
+compares every Overview field with its tab's route on new / unsigned / active / held /
+part-then-fully-paid / archived projects, including THE reconciliation case. On the pre-change
+code it fails 10 checks before crashing on the missing route, including "Tasks 1, Daily Records
+2" days logged and the implicit global. `scripts/test-next-action.mjs` now tests the server rule
+and joins `build:check`.
+
 **2026-09-28 (Financials tab, read-only — step 5 of the Project Workspace; stacked on Fix B #351; no PASS flow touched):**
 The workspace's Financials tab replaces its placeholder. `GET /api/projects/:id/financials`
 (`lib/financials-view.js`) returns every figure and sentence the tab shows, over rules that already

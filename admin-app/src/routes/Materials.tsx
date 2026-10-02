@@ -36,14 +36,14 @@ const LIST_TONE: Record<string, "neutral" | "progress" | "good" | "warn"> = {
   archived: "neutral"
 };
 
-const EXCEPTION_LABEL: Record<MaterialExceptionKind, string> = {
+export const EXCEPTION_LABEL: Record<MaterialExceptionKind, string> = {
   unplanned: "Unplanned material",
   over_consumed: "More used than received",
   unknown_sku: "Unknown SKU",
   price_unavailable: "No price available"
 };
 
-const EXCEPTION_TONE: Record<MaterialExceptionKind, "danger" | "warn" | "neutral"> = {
+export const EXCEPTION_TONE: Record<MaterialExceptionKind, "danger" | "warn" | "neutral"> = {
   unplanned: "warn",
   over_consumed: "danger",
   unknown_sku: "warn",

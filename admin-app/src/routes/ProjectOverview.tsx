@@ -1,10 +1,11 @@
 import { NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { projectsApi, type ProjectStatus, type SiteBuilderSummary } from "../lib/api";
-import { BRANCH_LABELS, PROJECT_STATUS_LABELS, PROJECT_STATUS_TONES, money, projectPercentComplete, shortDate, taskProgress } from "../lib/format";
-import { nextAction } from "../lib/nextAction";
+import { overviewApi, projectsApi, type ProjectStatus } from "../lib/api";
+import { BRANCH_LABELS, PROJECT_STATUS_LABELS, PROJECT_STATUS_TONES, money, shortDate } from "../lib/format";
 import { PageBody, PageHeader } from "../shell/AppShell";
 import { Button, Card, CardHeader, ErrorNote, LoadingRows, Stat, StatusPill, cx } from "../ui/primitives";
+import { EXCEPTION_LABEL, EXCEPTION_TONE } from "./Materials";
+import { PROBLEM_LABEL, PROBLEM_TONE } from "./DailyRecords";
 
 /* The project workspace. The old page put every field of every related
    record on one scroll; this is the summary a person needs to answer
@@ -22,18 +23,6 @@ const TABS = [
   { to: "financials", label: "Financials" },
   { to: "closeout", label: "Closeout" }
 ];
-
-/* "12 stations · 16 valves · 19 areas" — Patrick's own wording. Each
-   count is omitted when it is zero rather than printed as "0 valves", so a
-   half-drawn design reads as what it is. */
-function designCounts(sb: SiteBuilderSummary): string {
-  const n = (v: number, one: string, many: string) => `${v} ${v === 1 ? one : many}`;
-  const parts: string[] = [];
-  if (sb.stationCount) parts.push(n(sb.stationCount, "station", "stations"));
-  if (sb.valveCount) parts.push(n(sb.valveCount, "valve", "valves"));
-  if (sb.areaCount) parts.push(n(sb.areaCount, "area", "areas"));
-  return parts.join(" · ");
-}
 
 export function ProjectWorkspace() {
   const { id = "" } = useParams();
@@ -62,7 +51,8 @@ export function ProjectWorkspace() {
 
   const p = data.project;
   const status = (p.status || "planning") as ProjectStatus;
-  const { done, total } = taskProgress(p.tasks);
+  // Progress is computeProjectMetrics' — the Tasks tab's own figures.
+  const prog = data.progress;
   // The contract is what the customer SIGNED — the server's
   // describeAgreement, the same answer the Change Orders tab shows. No
   // fallback here: a second source would be a second interpretation.
@@ -160,9 +150,9 @@ export function ProjectWorkspace() {
           />
           <Stat
             label="Project progress"
-            value={total ? `${done} of ${total} tasks` : "No tasks yet"}
-            tone={total ? "default" : "muted"}
-            progress={total ? projectPercentComplete(p.tasks) / 100 : undefined}
+            value={prog && prog.totalTasks ? `${prog.doneTasks} of ${prog.totalTasks} tasks` : "No tasks yet"}
+            tone={prog && prog.totalTasks ? "default" : "muted"}
+            progress={prog && prog.totalTasks ? prog.percentComplete / 100 : undefined}
             onClick={() => goTab("tasks")}
           />
           {/* Stations lead, because that is what the controller is sized on
@@ -193,212 +183,322 @@ export function ProjectWorkspace() {
   );
 }
 
-/* Overview tab — what this job is, where it stands, what happens next. */
+/* Overview tab — READ-ONLY command centre over the five tabs (stage 6 of
+ * the Project Workspace, 2026-10-02).
+ *
+ * Every figure, label and sentence here comes from GET …/overview
+ * (server/lib/project-overview.js), which copies it out of the read model
+ * of the tab it summarises — computeProjectMetrics, the Daily Records,
+ * Materials, Change Orders and Financials models, the completion check and
+ * the server's next-action rule. Nothing is added up, filtered by status or
+ * decided in this file: a number shown here is the number its tab shows.
+ * Nothing here edits a record either — each card links to the tab that
+ * does. */
+
+function OvCard({ title, href, linkLabel, testId, tone, children }: {
+  title: string; href: string; linkLabel: string; testId: string; tone?: "danger" | "warn"; children: React.ReactNode;
+}) {
+  const navigate = useNavigate();
+  return (
+    <Card className={cx(tone === "danger" ? "border-l-4 border-l-danger-500" : tone === "warn" ? "border-l-4 border-l-accent-500" : "")}>
+      <div data-testid={testId}>
+        <CardHeader
+          title={title}
+          actions={
+            <a
+              href={href}
+              data-testid={`${testId}-link`}
+              onClick={(e) => { e.preventDefault(); navigate(href); }}
+              className="text-[13px] font-semibold text-brand-700 hover:text-brand-800 whitespace-nowrap"
+            >
+              {linkLabel} →
+            </a>
+          }
+        />
+        <div className="px-4 py-3.5 space-y-3">{children}</div>
+      </div>
+    </Card>
+  );
+}
+
+/* One labelled figure. `value` is already the server's figure, formatted —
+   or a sentence saying what is missing, never a stand-in zero. */
+function Fig({ label, value, hint, testId, tone }: { label: string; value: React.ReactNode; hint?: React.ReactNode; testId?: string; tone?: "danger" | "muted" }) {
+  return (
+    <div className="min-w-0">
+      <span className="block text-[12px] text-ink-muted">{label}</span>
+      <span
+        data-testid={testId}
+        className={cx("block font-display text-[17px] font-bold leading-tight break-words",
+          tone === "danger" ? "text-danger-700" : tone === "muted" ? "text-ink-muted" : "text-ink")}
+      >
+        {value}
+      </span>
+      {hint ? <span className="block text-[12px] text-ink-muted break-words">{hint}</span> : null}
+    </div>
+  );
+}
+
+const hours = (n: number) => n.toFixed(2);
+
 export function ProjectOverviewTab() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
-  const { data } = useQuery({ queryKey: ["project", id], queryFn: () => projectsApi.get(id), enabled: !!id });
-  if (!data) return null;
+  const project = useQuery({ queryKey: ["project", id], queryFn: () => projectsApi.get(id), enabled: !!id });
+  const { data: ov, isLoading, error } = useQuery({
+    queryKey: ["project-overview", id],
+    queryFn: () => overviewApi.get(id),
+    enabled: !!id
+  });
 
-  const p = data.project;
-  const quote = data.linkedQuote;
-  const snap = p.proposalSnapshot;
-  const journal = (p.journalEntries || []).slice().sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
-  // The invoice the next step is about — the server's (billingSummary):
-  // a sent one still owing, else an unsent draft to send. Never a held
-  // balance invoice, which nobody can send or pay yet.
-  const action = nextAction(p, quote, data.billing?.actionInvoice ?? null, data.siteBuilderSummary);
+  if (isLoading) return <LoadingRows rows={6} />;
+  if (error) return <ErrorNote>{(error as Error).message}</ErrorNote>;
+  if (!ov) return null;
+
+  const p = project.data?.project;
+  const { status, tasks, dailyRecords: dr, materials: mat, changeOrders: co, financials: fin } = ov;
+  const action = status.nextAction;
+  const t = fin.totals;
+  const reconciling = fin.reconciliation.length > 0;
+  const go = (href: string) => (href.startsWith("/app/") ? navigate(href) : (window.location.href = href));
 
   return (
-    <div className="grid gap-4 lg:grid-cols-3">
-      <div className="lg:col-span-2 space-y-4">
-        {/* ── Next action ───────────────────────────────────────────
-            The single most useful thing on the screen for a live job. */}
-        <Card
-          className={cx(
-            "border-l-4",
-            action.tone === "act" ? "border-l-accent-500" : action.tone === "waiting" ? "border-l-info-600" : "border-l-brand-500"
-          )}
-        >
-          <div className="px-4 py-3.5 flex flex-wrap items-center justify-between gap-3">
+    <div className="space-y-4" data-testid="overview">
+      {/* ── Project status: stage, progress, the one next step, and what
+          blocks completion — all the server's. */}
+      <Card
+        className={cx(
+          "border-l-4",
+          action.tone === "act" ? "border-l-accent-500" : action.tone === "waiting" ? "border-l-info-600" : "border-l-brand-500"
+        )}
+      >
+        <div className="px-4 py-3.5" data-testid="ov-status">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-ink-muted">
+            <span>Stage: <span className="font-semibold text-ink" data-testid="ov-stage">{status.stageLabel}</span></span>
+            <span data-testid="ov-progress">
+              {status.hasTasks ? <>· <span className="font-semibold text-ink">{status.percentComplete}%</span> complete</> : "· No tasks yet"}
+            </span>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <span className="block font-display text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">
                 {action.tone === "waiting" ? "Waiting on" : action.tone === "done" ? "Status" : "Next action"}
               </span>
-              <p className="font-display text-[20px] font-bold leading-tight text-ink">{action.headline}</p>
-              <p className="text-[13px] text-ink-muted mt-0.5">{action.detail}</p>
+              <p className="font-display text-[20px] font-bold leading-tight text-ink" data-testid="ov-next">{action.headline}</p>
+              <p className="text-[13px] text-ink-muted mt-0.5 break-words" data-testid="ov-next-detail">{action.detail}</p>
             </div>
             {action.href ? (
-              <Button
-                variant={action.tone === "act" ? "primary" : "secondary"}
-                onClick={() => {
-                  if (action.href!.startsWith("/app/")) navigate(action.href!);
-                  else window.location.href = action.href!;
-                }}
-              >
+              <Button variant={action.tone === "act" ? "primary" : "secondary"} onClick={() => go(action.href!)}>
                 {action.ctaLabel || "Open"}
               </Button>
             ) : null}
           </div>
-        </Card>
-
-        <Card>
-          <CardHeader
-            title="Scope"
-            actions={
-              <Button size="sm" onClick={() => navigate(`/app/projects/${encodeURIComponent(p.id)}/scope`)}>
-                Open scope
-              </Button>
-            }
-          />
-          <div className="px-4 py-3.5">
-            {p.description ? (
-              <p className="text-[15px] leading-relaxed whitespace-pre-wrap">{p.description}</p>
-            ) : (
-              <p className="text-ink-muted">
-                No scope description recorded yet — add one so the crew and the customer read the same job.
+          {status.blockers.length ? (
+            <div className="mt-3 rounded-[var(--radius-control)] border border-danger-500/30 bg-danger-50 px-3 py-2.5" data-testid="ov-blockers" role="alert">
+              <p className="text-[13px] font-semibold text-danger-700">
+                Completion is blocked — {status.blockers.length} {status.blockers.length === 1 ? "thing" : "things"} to clear
               </p>
-            )}
-            {/* The design and proposal already know the shape of the job;
-                surface that rather than leaving the card thin. */}
-            {/* Stations, valves and areas, named separately. A split zone
-                wired to one terminal is two valves on one station, and a
-                single "N-zone system" could not say which N it meant. */}
-            {data.siteBuilderSummary?.areaCount || quote?.lineItems?.length ? (
-              <p className="mt-2 text-[13px] text-ink-muted">
-                {data.siteBuilderSummary?.areaCount ? designCounts(data.siteBuilderSummary) : null}
-                {data.siteBuilderSummary?.areaCount && quote?.lineItems?.length ? " · " : null}
-                {quote?.lineItems?.length ? `${quote.lineItems.length} line items on the proposal` : null}
-              </p>
-            ) : null}
-          </div>
-        </Card>
-
-        <Card>
-          <CardHeader title="Recent activity" meta={journal.length ? `${journal.length} entries` : undefined} />
-          {journal.length === 0 ? (
-            <div className="px-4 py-8 text-center">
-              <p className="font-display text-[16px] font-semibold text-ink">No project updates have been recorded.</p>
-              <p className="text-sm text-ink-muted mt-1 max-w-prose mx-auto">
-                Log the first site update, note, photo or customer communication.
-              </p>
-              <Button variant="primary" className="mt-4">
-                Log an update
-              </Button>
-            </div>
-          ) : (
-            <>
-              <ul className="divide-y divide-line">
-                {journal.slice(0, 5).map((e) => (
-                  <li key={e.id} className="px-4 py-3">
-                    <div className="flex items-baseline justify-between gap-3">
-                      <span className="text-[13px] font-semibold text-ink">{e.by || "PJL"}</span>
-                      <span className="text-[12px] text-ink-muted">{shortDate(e.ts)}</span>
-                    </div>
-                    <p className="mt-0.5 text-sm text-ink/90 line-clamp-3">{e.note}</p>
+              <ul className="mt-1 space-y-1">
+                {status.blockers.map((b) => (
+                  <li key={b.key} className="text-[13px] text-danger-700 break-words" data-testid="ov-blocker" data-key={b.key}>
+                    {b.message}{" "}
+                    <a href={b.href} onClick={(e) => { e.preventDefault(); go(b.href); }} className="font-semibold underline whitespace-nowrap">See why</a>
                   </li>
                 ))}
               </ul>
-              <div className="px-4 py-3 border-t border-line">
-                <Button size="sm" onClick={() => navigate(`/app/projects/${encodeURIComponent(p.id)}/records`)}>
-                  All daily records
-                </Button>
-              </div>
-            </>
-          )}
-        </Card>
-      </div>
-
-      <div className="space-y-4">
-        {/* ── Approved proposal ─────────────────────────────────────
-            The document, not the money — the value already has its own
-            figure in the summary above. */}
-        <Card>
-          <CardHeader title={snap ? "Approved proposal" : "Proposal"} />
-          <div className="px-4 py-3.5">
-            {quote || snap ? (
-              <>
-                <dl className="space-y-1.5 text-sm">
-                  <div className="flex justify-between gap-3">
-                    <dt className="text-ink-muted">Proposal</dt>
-                    <dd className="font-medium text-right">
-                      {quote?.id || snap?.quoteId}
-                      {quote?.version ? ` · v${quote.version}` : snap?.version ? ` · v${snap.version}` : ""}
-                    </dd>
-                  </div>
-                  <div className="flex justify-between gap-3">
-                    <dt className="text-ink-muted">{snap?.acceptedAt ? "Accepted" : "Status"}</dt>
-                    <dd className="font-medium text-right">
-                      {snap?.acceptedAt ? shortDate(snap.acceptedAt) : quote?.status || "—"}
-                    </dd>
-                  </div>
-                </dl>
-                <Button
-                  size="sm"
-                  className="mt-3 w-full"
-                  onClick={() => {
-                    const qid = quote?.id || snap?.quoteId;
-                    if (qid) {
-                      window.location.href = `/admin/quote/${encodeURIComponent(qid)}/proposal?project=${encodeURIComponent(p.id)}`;
-                    }
-                  }}
-                >
-                  Open proposal
-                </Button>
-              </>
-            ) : (
-              <p className="text-ink-muted">No proposal raised for this job yet.</p>
-            )}
-          </div>
-        </Card>
-
-        {/* ── Customer ──────────────────────────────────────────────
-            Contact ACTIONS. The company name and job address are already
-            in the header above, so repeating them here wastes the card. */}
-        <Card>
-          <CardHeader title="Customer" />
-          <div className="px-4 py-3.5 space-y-2 text-sm">
-            {p.customerName ? (
-              <div>
-                <span className="block font-display text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-muted">
-                  Primary contact
-                </span>
-                <span className="font-semibold">{p.customerName}</span>
-              </div>
-            ) : null}
-            {p.customerPhone ? (
-              <a href={`tel:${p.customerPhone}`} className="flex items-center gap-2 min-h-11 font-medium text-brand-700 hover:text-brand-800">
-                {p.customerPhone}
-              </a>
-            ) : null}
-            {p.customerEmail ? (
-              <a href={`mailto:${p.customerEmail}`} className="flex items-center gap-2 min-h-11 font-medium text-brand-700 hover:text-brand-800 break-all">
-                {p.customerEmail}
-              </a>
-            ) : null}
-            {!p.customerPhone && !p.customerEmail ? (
-              <p className="text-ink-muted">No contact details on this job.</p>
-            ) : null}
-            <div className="pt-1 flex flex-wrap gap-2">
-              {p.customerId ? (
-                <a
-                  href={`/admin/customer/${encodeURIComponent(p.customerId)}`}
-                  className="text-[13px] font-semibold text-brand-700 hover:text-brand-800"
-                >
-                  Customer record →
-                </a>
-              ) : null}
-              {p.propertyId ? (
-                <a
-                  href={`/admin/property/${encodeURIComponent(p.propertyId)}`}
-                  className="text-[13px] font-semibold text-brand-700 hover:text-brand-800"
-                >
-                  Property →
-                </a>
-              ) : null}
             </div>
+          ) : null}
+        </div>
+      </Card>
+
+      {/* Payment reconciliation outranks every other card: what the
+          customer owes is not determined until the office reconciles it. */}
+      {reconciling ? (
+        <div className="rounded-[var(--radius-card)] border border-danger-500/40 bg-danger-50 px-4 py-3" data-testid="ov-reconciliation" role="alert">
+          <p className="font-display text-[15px] font-bold text-danger-700">⚠ Payment reconciliation required · {money(t.unresolved)} unresolved</p>
+          {fin.reconciliation.map((r) => (
+            <p key={r.invoiceId} className="mt-1 text-[13px] text-danger-700 break-words">{r.sentence}</p>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {/* ── Tasks ─────────────────────────────────────────────── */}
+        <OvCard title="Tasks" href={tasks.href} linkLabel="Open Tasks" testId="ov-tasks">
+          {tasks.total || tasks.archived ? (
+            <>
+              <div className="grid grid-cols-3 gap-3">
+                <Fig label="Open" value={tasks.open} testId="ov-tasks-open" />
+                <Fig label="Completed" value={tasks.done} testId="ov-tasks-done" />
+                <Fig label="Archived" value={tasks.archived} testId="ov-tasks-archived" />
+              </div>
+              {tasks.total ? (
+                <div>
+                  <div className="flex justify-between text-[13px]">
+                    <span className="text-ink-muted">Overall progress</span>
+                    <span className="font-semibold" data-testid="ov-tasks-pct">{tasks.percentComplete}%</span>
+                  </div>
+                  <span className="mt-1 block h-1.5 rounded-full bg-canvas overflow-hidden">
+                    <span className={cx("block h-full rounded-full", tasks.percentComplete >= 100 ? "bg-brand-500" : "bg-accent-500")} style={{ width: `${Math.min(100, tasks.percentComplete)}%` }} />
+                  </span>
+                </div>
+              ) : <p className="text-[13px] text-ink-muted">Every task on this job is archived — none are on the list.</p>}
+            </>
+          ) : (
+            <p className="text-ink-muted" data-testid="ov-tasks-empty">No tasks on this job yet.</p>
+          )}
+          {!tasks.tracksDueDates ? (
+            <p className="text-[12px] text-ink-muted">Tasks carry no due dates, so nothing is shown as overdue.</p>
+          ) : null}
+        </OvCard>
+
+        {/* ── Daily Records ─────────────────────────────────────── */}
+        <OvCard title="Daily Records" href={dr.href} linkLabel="Open Daily Records" testId="ov-daily" tone={dr.openProblems ? "warn" : undefined}>
+          {dr.daysLogged ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <Fig label="Latest workday" value={dr.lastWorkDate ? shortDate(dr.lastWorkDate) : "—"} testId="ov-daily-last"
+                   hint={dr.latestDay ? `${hours(dr.latestDay.personHours)} person-hours${dr.latestDay.openSession ? " · crew still clocked in" : ""}` : undefined} />
+              <Fig label="Effective person-hours" value={hours(dr.totalPersonHours)} testId="ov-daily-hours"
+                   hint={`${dr.daysLogged} day${dr.daysLogged === 1 ? "" : "s"} logged${dr.correctedDays ? ` · ${dr.correctedDays} corrected` : ""}`} />
+              <Fig label="Problems to deal with" value={dr.openProblems} testId="ov-daily-problems" tone={dr.openProblems ? "danger" : undefined} />
+            </div>
+          ) : (
+            <p className="text-ink-muted" data-testid="ov-daily-empty">No days logged yet — nobody has clocked in on this job.</p>
+          )}
+          {!dr.daysLogged && dr.openProblems ? (
+            <Fig label="Problems to deal with" value={dr.openProblems} testId="ov-daily-problems" tone="danger" />
+          ) : null}
+          {dr.problems.length ? (
+            <ul className="space-y-1" data-testid="ov-daily-problem-list">
+              {dr.problems.map((pr) => (
+                <li key={pr.id} className="flex flex-wrap items-baseline gap-2 text-[13px]">
+                  <StatusPill tone={PROBLEM_TONE[pr.status]}>{PROBLEM_LABEL[pr.status]}</StatusPill>
+                  <span className="break-words">{pr.title}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {dr.latestDay?.notes ? (
+            <p className="text-[13px] break-words" data-testid="ov-daily-note">
+              <span className="text-ink-muted">Crew note, {dr.latestDay.workDate ? shortDate(dr.latestDay.workDate) : "latest day"}: </span>{dr.latestDay.notes}
+            </p>
+          ) : null}
+          {dr.latestEntry ? (
+            <p className="text-[13px] break-words line-clamp-3" data-testid="ov-daily-entry">
+              <span className="text-ink-muted">Latest update{dr.latestEntry.by ? ` by ${dr.latestEntry.by}` : ""}, {shortDate(dr.latestEntry.ts)}: </span>{dr.latestEntry.note}
+            </p>
+          ) : null}
+        </OvCard>
+
+        {/* ── Materials ─────────────────────────────────────────── */}
+        <OvCard title="Materials" href={mat.href} linkLabel="Open Materials" testId="ov-materials" tone={mat.exceptionCount ? "warn" : undefined}>
+          {mat.listCount || mat.skuCount ? (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <Fig label="Material lists" value={mat.listCount} hint="what's required, per list" testId="ov-mat-lists" />
+              <Fig label="Received" value={mat.receivedUnits} hint="units, all POs" testId="ov-mat-received" />
+              <Fig label="Used on site" value={mat.usedUnits} hint="units, all days" testId="ov-mat-used" />
+              <Fig label="Project balance" value={mat.balanceUnits} hint="received − used" testId="ov-mat-balance" />
+            </div>
+          ) : (
+            <p className="text-ink-muted" data-testid="ov-mat-empty">No material lists, receipts or materials used on this job yet.</p>
+          )}
+          {mat.exceptionCount ? (
+            <div data-testid="ov-mat-exceptions">
+              <p className="text-[13px] font-semibold">{mat.exceptionCount} to look at</p>
+              <ul className="mt-1 space-y-1">
+                {mat.exceptions.map((e, i) => (
+                  <li key={`${e.kind}-${e.sku}-${i}`} className="flex flex-wrap items-baseline gap-2 text-[13px]">
+                    <StatusPill tone={EXCEPTION_TONE[e.kind]}>{EXCEPTION_LABEL[e.kind]}</StatusPill>
+                    <span className="break-words">{e.name || e.sku}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </OvCard>
+
+        {/* ── Change Orders ─────────────────────────────────────── */}
+        <OvCard title="Change Orders" href={co.href} linkLabel="Open Change Orders" testId="ov-changes"
+                tone={co.holds.length || co.billingBlocked ? "danger" : co.open ? "warn" : undefined}>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <Fig label="Open" value={co.total ? co.open : "None"} tone={co.total ? undefined : "muted"} testId="ov-co-open"
+                 hint={co.total ? `${co.total} in all · ${co.signed} signed` : "no change orders on this job"} />
+            <Fig label="With the customer" value={co.awaitingCustomer + co.awaitingSignature > 0
+                   ? `${co.awaitingCustomer} deciding · ${co.awaitingSignature} to sign` : "Nothing waiting"}
+                 tone={co.awaitingCustomer + co.awaitingSignature > 0 ? undefined : "muted"} testId="ov-co-customer" />
+            <Fig label="Signed agreement" testId="ov-co-signed"
+                 value={co.agreement.governing ? money(co.agreement.governing.total) : "Nothing signed"}
+                 tone={co.agreement.governing ? undefined : "muted"}
+                 hint={co.agreement.governing
+                   ? `${co.agreement.governing.id} v${co.agreement.governing.version}, with HST${co.agreement.netChangeTotal ? ` · ${co.agreement.netChangeTotal > 0 ? "+" : "−"}${money(Math.abs(co.agreement.netChangeTotal))} changes` : ""}`
+                   : undefined} />
           </div>
-        </Card>
+          {co.agreement.pending ? (
+            <p className="text-[13px]" data-testid="ov-co-pending">
+              Revised quote <span className="font-semibold">{co.agreement.pending.id} v{co.agreement.pending.version}</span> ({money(co.agreement.pending.total)}) is not signed yet.
+            </p>
+          ) : null}
+          {co.billingBlocked || co.holds.length ? (
+            <ul className="space-y-1" data-testid="ov-co-holds">
+              {co.billingBlocked ? <li className="text-[13px] text-danger-700 break-words">{co.billingBlocked.message}</li> : null}
+              {co.holds.filter((h) => h.key !== co.billingBlocked?.key).map((h) => (
+                <li key={h.key} className="text-[13px] text-danger-700 break-words">{h.message}</li>
+              ))}
+            </ul>
+          ) : null}
+        </OvCard>
+
+        {/* ── Financials ────────────────────────────────────────── */}
+        <OvCard title="Financials" href={fin.href} linkLabel="Open Financials" testId="ov-financials"
+                tone={reconciling || fin.holds.length ? "danger" : undefined}>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <Fig label="Signed contract" testId="ov-fin-contract"
+                 value={fin.contract ? money(fin.contract.total) : "Not signed"} tone={fin.contract ? undefined : "muted"}
+                 hint={fin.contract ? `with HST${fin.billingMode === "time_and_material" ? " · an estimate" : ""}` : "no signed agreement yet"} />
+            <Fig label="Invoiced" testId="ov-fin-invoiced"
+                 value={t.issuedCount ? money(t.invoiced) : "Nothing invoiced"} tone={t.issuedCount ? undefined : "muted"}
+                 hint={t.drafts.count ? `${t.drafts.count} not sent yet` : undefined} />
+            <Fig label="Payments received" testId="ov-fin-received"
+                 value={t.received || t.issuedCount ? money(t.received) : "Nothing received"} tone={t.received || t.issuedCount ? undefined : "muted"}
+                 hint="recorded payments only" />
+            <Fig label="Outstanding" testId="ov-fin-owed"
+                 value={!t.owedDetermined ? "Not determined" : t.issuedCount ? money(t.owed) : "—"}
+                 tone={!t.owedDetermined ? "danger" : t.issuedCount ? undefined : "muted"}
+                 hint={!t.owedDetermined ? `until ${money(t.unresolved)} is reconciled` : t.issuedCount ? undefined : "nothing sent to the customer"} />
+            <Fig label="Not yet invoiced" testId="ov-fin-notyet"
+                 value={t.notYetInvoiced !== null ? money(t.notYetInvoiced) : "—"} tone={t.notYetInvoiced !== null ? undefined : "muted"}
+                 hint={t.notYetInvoiced !== null ? undefined : fin.billingMode === "time_and_material" ? "billed from hours and materials" : "no signed contract"} />
+            <Fig label="Deposit" testId="ov-fin-deposit"
+                 value={fin.deposit ? fin.deposit.stageLabel : "No deposit"} tone={fin.deposit ? undefined : "muted"}
+                 hint={fin.deposit ? `${money(fin.deposit.amount)} · ${fin.deposit.counted ? "counted" : "not counted yet"}` : undefined} />
+          </div>
+          {fin.holds.length ? (
+            <ul className="space-y-1" data-testid="ov-fin-holds">
+              {fin.holds.map((h) => <li key={h.key} className="text-[13px] text-danger-700 break-words">{h.message}</li>)}
+            </ul>
+          ) : null}
+        </OvCard>
+
+        {/* ── Customer — contact ACTIONS only; no figures. */}
+        {p ? (
+          <Card>
+            <CardHeader title="Customer" />
+            <div className="px-4 py-3.5 space-y-2 text-sm">
+              {p.customerName ? <span className="block font-semibold">{p.customerName}</span> : null}
+              {p.customerPhone ? (
+                <a href={`tel:${p.customerPhone}`} className="flex items-center gap-2 min-h-11 font-medium text-brand-700 hover:text-brand-800">{p.customerPhone}</a>
+              ) : null}
+              {p.customerEmail ? (
+                <a href={`mailto:${p.customerEmail}`} className="flex items-center gap-2 min-h-11 font-medium text-brand-700 hover:text-brand-800 break-all">{p.customerEmail}</a>
+              ) : null}
+              {!p.customerPhone && !p.customerEmail ? <p className="text-ink-muted">No contact details on this job.</p> : null}
+              <div className="pt-1 flex flex-wrap gap-3">
+                {p.customerId ? <a href={`/admin/customer/${encodeURIComponent(p.customerId)}`} className="text-[13px] font-semibold text-brand-700 hover:text-brand-800">Customer record →</a> : null}
+                {p.propertyId ? <a href={`/admin/property/${encodeURIComponent(p.propertyId)}`} className="text-[13px] font-semibold text-brand-700 hover:text-brand-800">Property →</a> : null}
+              </div>
+            </div>
+          </Card>
+        ) : null}
       </div>
     </div>
   );

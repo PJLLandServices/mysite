@@ -173,6 +173,7 @@ function describeProject(buildWos, { now = null, project = null } = {}) {
     .map((wo) => describeDay(wo, { now: stamp, problems: byWo.get(wo.id) || [] }))
     .filter(Boolean)
     .sort((a, b) => String(b.workDate || "").localeCompare(String(a.workDate || "")));
+  const logged = sessionHours.loggedDays(buildWos || []);
 
   return {
     days,
@@ -181,7 +182,14 @@ function describeProject(buildWos, { now = null, project = null } = {}) {
     // which would be a fourth copy of the arithmetic this release exists
     // to collapse.
     totalPersonHours: sessionHours.sumPersonHours(buildWos || [], { openSessions: "toNow", now: stamp }),
-    daysLogged: days.length,
+    // Days the crew clocked on — the SAME rule the Tasks tab counts
+    // (session-hours loggedDays). The list above still shows every build
+    // visit; a visit nobody clocked on is not a day logged.
+    daysLogged: logged.count,
+    lastWorkDate: logged.lastWorkDate,
+    // The work order of that last logged day, so a summary can show that
+    // day's row from `days` above rather than pick one of its own.
+    lastWorkWoId: logged.lastWoId,
     correctedDays: days.filter((d) => d.anyCorrection).length,
     // Every problem on the job, newest discovery first, plus the count
     // still needing attention — from the ONE rule in

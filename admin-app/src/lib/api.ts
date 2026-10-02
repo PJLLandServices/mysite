@@ -294,6 +294,9 @@ export const projectsApi = {
       /** The header's Billing card (server: financials-view billingSummary)
           — the same model the Financials tab shows. */
       billing?: BillingSummary | null;
+      /** The header's Project progress — computeProjectMetrics, the
+          Tasks tab's own figures (2026-10-02). */
+      progress?: { doneTasks: number; totalTasks: number; percentComplete: number } | null;
     }>(`/api/projects/${encodeURIComponent(id)}`)
 };
 
@@ -691,4 +694,91 @@ export interface ProjectFinancials {
 export const financialsApi = {
   get: (projectId: string) =>
     api.get<ProjectFinancials>(`/api/projects/${encodeURIComponent(projectId)}/financials`)
+};
+
+/* The Overview (2026-10-02, stage 6). Read-only. Every field is copied
+   on the server from the read model of the tab it summarises
+   (server/lib/project-overview.js) — the screen adds up nothing and
+   decides nothing. */
+export interface OverviewNextAction {
+  headline: string;
+  detail: string;
+  href?: string;
+  ctaLabel?: string;
+  tone: "act" | "waiting" | "done";
+}
+
+export interface ProjectOverview {
+  projectId: string;
+  status: {
+    stage: string;
+    stageLabel: string;
+    percentComplete: number;
+    hasTasks: boolean;
+    nextAction: OverviewNextAction;
+    blockers: Array<{ key: string; message: string; tab: string | null; href: string }>;
+  };
+  tasks: {
+    total: number;
+    done: number;
+    open: number;
+    archived: number;
+    percentComplete: number;
+    tracksDueDates: boolean;
+    href: string;
+  };
+  dailyRecords: {
+    daysLogged: number;
+    lastWorkDate: string | null;
+    totalPersonHours: number;
+    correctedDays: number;
+    latestDay: { woId: string; workDate: string | null; personHours: number; hoursCorrected: boolean; openSession: boolean; notes: string } | null;
+    openProblems: number;
+    problems: Array<{ id: string; title: string; status: ProblemStatus; discoveredWorkDate: string | null }>;
+    latestEntry: { ts: string; by: string | null; note: string } | null;
+    href: string;
+  };
+  materials: {
+    listCount: number;
+    skuCount: number;
+    receivedUnits: number;
+    usedUnits: number;
+    balanceUnits: number;
+    exceptionCount: number;
+    exceptions: Array<{ kind: MaterialExceptionKind; sku: string | null; name: string | null; detail: string }>;
+    href: string;
+  };
+  changeOrders: {
+    total: number;
+    open: number;
+    awaitingOffice: number;
+    awaitingCustomer: number;
+    awaitingSignature: number;
+    signed: number;
+    agreement: {
+      governing: AgreementVersion | null;
+      pending: AgreementVersion | null;
+      netChangeTotal: number | null;
+    };
+    holds: Array<{ key: string; message: string }>;
+    billingBlocked: { key: string; message: string } | null;
+    href: string;
+  };
+  financials: {
+    billingMode: ProjectFinancials["billingMode"];
+    billingModeLabel: string;
+    contract: ProjectFinancials["contract"];
+    pendingRevision: ProjectFinancials["pendingRevision"];
+    totals: ProjectFinancials["totals"];
+    deposit: ProjectFinancials["deposit"];
+    reconciliation: ProjectFinancials["reconciliation"];
+    holds: ProjectFinancials["holds"];
+    billing: { kind: BillingSummary["kind"]; hint: string };
+    href: string;
+  };
+}
+
+export const overviewApi = {
+  get: (projectId: string) =>
+    api.get<ProjectOverview>(`/api/projects/${encodeURIComponent(projectId)}/overview`)
 };
