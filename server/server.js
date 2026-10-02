@@ -16777,8 +16777,8 @@ async function handleApi(req, res, pathname) {
       // all at the dearer branch; the dialog lets Patrick choose.
       const planBody = await parseRequestBody(req).catch(() => ({}));
       const forceSupplierId = planBody && planBody.supplierId ? String(planBody.supplierId) : null;
-      const received = purchaseOrders.receivedByListLine(await purchaseOrders.list({ includeDeleted: true }), list.id);
-      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId, received });
+      const committed = purchaseOrders.commitmentsByListLine(await purchaseOrders.list({ includeDeleted: true }), list.id);
+      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId, committed });
       // Hydrate supplier name into each draft preview so the modal can
       // render "PO for Vermeer Supply" without a follow-up fetch.
       const allSuppliers = await suppliers.list({ includeArchived: true });
@@ -16825,10 +16825,13 @@ async function handleApi(req, res, pathname) {
       // from the preview: the dialog and the write are separate requests.
       const genBody = await parseRequestBody(req).catch(() => ({}));
       const forceSupplierId = genBody && genBody.supplierId ? String(genBody.supplierId) : null;
-      const received = purchaseOrders.receivedByListLine(await purchaseOrders.list({ includeDeleted: true }), list.id);
-      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId, received });
-      if (forceSupplierId && !plan.drafts.length) {
-        return sendJson(res, 422, { ok: false, errors: ["Nothing to order — this list has no need lines."] });
+      // Plan and create under the purchasing lock: a double-click's second
+      // request waits, then sees the first's draft and proposes nothing.
+      return await purchasingStore.withPurchasingLock(async () => {
+      const committed = purchaseOrders.commitmentsByListLine(await purchaseOrders.list({ includeDeleted: true }), list.id);
+      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap, { forceSupplierId, committed });
+      if (!plan.drafts.length && !plan.missingSupplier.length) {
+        return sendJson(res, 422, { ok: false, code: "nothing_to_order", errors: ["Nothing to order — every need line is already received, on order or on a draft purchase order."] });
       }
       if (!forceSupplierId && !plan.ok) {
         return sendJson(res, 422, {
@@ -16857,6 +16860,7 @@ async function handleApi(req, res, pathname) {
         created.push(po);
       }
       return sendJson(res, 201, { ok: true, purchaseOrders: created });
+      });
     } catch (err) {
       if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate purchase orders."] });
@@ -20713,6 +20717,7 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 201, { ok: true, purchaseOrder: newPo });
     } catch (err) {
       if (err && err.code === "recovery_required") return sendRecoveryRequired(res, err);
+      if (err && err.code === "nothing_to_reorder") return sendJson(res, 409, { ok: false, code: err.code, errors: [err.message] });
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't re-order."] });
     }
   }
@@ -20809,7 +20814,8 @@ async function handleApi(req, res, pathname) {
           ? active.map((x) => x.id)
           : active.filter((x) => shopParam.split(",").map((t) => t.trim()).includes(x.id)).map((x) => x.id);
       }
-      const plan = quoteRequests.planFromMaterialList(list, partsMap, shopIds ? { shopSupplierIds: shopIds } : {});
+      const committed = purchaseOrders.commitmentsByListLine(await purchaseOrders.list({ includeDeleted: true }), list.id);
+      const plan = quoteRequests.planFromMaterialList(list, partsMap, shopIds ? { shopSupplierIds: shopIds, committed } : { committed });
       const supplierById = new Map(allSuppliers.map((s) => [s.id, s]));
       // Surface an existing draft per supplier so the modal can say
       // "refreshes RFQ-…" instead of implying a duplicate gets created.
@@ -20820,6 +20826,8 @@ async function handleApi(req, res, pathname) {
         supplierName: supplierById.get(g.supplierId)?.name || "(unknown supplier)",
         supplierEmail: supplierById.get(g.supplierId)?.email || "",
         lineCount: g.lines.length,
+        // What each supplier will be asked for — the still-to-buy quantity.
+        lines: g.lines.map((l) => ({ sku: l.sku, quantity: l.quantity, unit: l.unit })),
         existingDraftId: draftBySupplier.get(g.supplierId) || null
       }));
       return sendJson(res, 200, {
@@ -20876,7 +20884,8 @@ async function handleApi(req, res, pathname) {
           errors: ["Shopping a list needs at least two suppliers to compare — only one is available."]
         });
       }
-      const opts = shopSupplierIds ? { shopSupplierIds } : {};
+      const committed = purchaseOrders.commitmentsByListLine(await purchaseOrders.list({ includeDeleted: true }), list.id);
+      const opts = shopSupplierIds ? { shopSupplierIds, committed } : { committed };
       const plan = quoteRequests.planFromMaterialList(list, partsMap, opts);
       if (!plan.ok) {
         return sendJson(res, 422, {

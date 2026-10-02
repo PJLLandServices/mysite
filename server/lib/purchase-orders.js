@@ -518,28 +518,58 @@ async function remove(id) {
 //     (part.supplierPrices[supplierId], lib/part-supplier-prices.js) and
 //     falls back to the catalog price otherwise. `unpricedForSupplier`
 //     names the fallbacks so the UI can say which lines are a guess.
-// What has already arrived for each line of a list, across every sent,
-// received or cancelled PO that claims it (2026-10-02). A cancelled PO that
-// delivered part of a line leaves the line at "need" for the REST — so
-// what to order is the line's quantity less what arrived, never the whole
-// line again. Same arithmetic as purchasing-audit's "received".
-function receivedByListLine(purchaseOrders, listId) {
+// THE "still to order" calculation (2026-10-02) — one function, used by
+// every path that proposes a quantity for a list line: PO generation
+// (plan + generate, assigned or one supplier), re-order, quote-request
+// planning (plan + generate), and the send gate. For each line of a list,
+// across every PO that claims it:
+//   received — arrived on any non-draft PO, cancelled ones included (the
+//              same arithmetic as purchasing-audit's "received")
+//   onOrder  — still outstanding on a sent / partially received PO
+//   drafted  — on a draft PO not yet sent
+// A cancelled PO that delivered part of a line leaves the line at "need"
+// for the REST: what to order is the line's quantity less what arrived,
+// never the whole line again.
+function commitmentsByListLine(purchaseOrders, listId, { excludePoId = null } = {}) {
   const out = new Map();
+  const slot = (id) => { if (!out.has(id)) out.set(id, { received: 0, onOrder: 0, drafted: 0 }); return out.get(id); };
   for (const po of purchaseOrders || []) {
-    if (!po || po.status === "draft") continue;
+    if (!po || po.deletedAt || (excludePoId && po.id === excludePoId)) continue;
     for (const l of po.lineItems || []) {
       if (!l || l.sourceListId !== listId || !l.sourceLineId) continue;
       const qty = Math.max(0, Number(l.qty) || 0);
       const got = Math.min(qty, Math.max(0, Number(l.receivedQty) || 0));
-      out.set(l.sourceLineId, (out.get(l.sourceLineId) || 0) + got);
+      const c = slot(l.sourceLineId);
+      if (po.status === "draft") { c.drafted += qty; continue; }
+      c.received += got;
+      if (po.status === "sent" || po.status === "partially_received") c.onOrder += qty - got;
     }
   }
   return out;
 }
 
-// `received` — receivedByListLine() for this list. A "need" line orders
-// only what is still to come; one already covered in full is skipped.
-function planDraftsFromMaterialList(list, parts, { forceSupplierId = null, received = null } = {}) {
+// How many of a line are still to be ordered. `includeDrafts`: count a
+// draft PO as already arranged — true for anything that CREATES a PO (so a
+// second Generate, a double-click or a re-order can't draft the same parts
+// twice); false for a quote request, which may ask about parts a draft is
+// waiting on.
+function stillToOrder(line, commitments, { includeDrafts = true } = {}) {
+  const c = (commitments && commitments.get(line.id)) || { received: 0, onOrder: 0, drafted: 0 };
+  const qty = Math.max(0, Math.floor(Number(line.qty) || 0));
+  return Math.max(0, qty - c.received - c.onOrder - (includeDrafts ? c.drafted : 0));
+}
+
+// Back-compat for callers that only want what arrived.
+function receivedByListLine(purchaseOrders, listId) {
+  const out = new Map();
+  for (const [id, c] of commitmentsByListLine(purchaseOrders, listId)) out.set(id, c.received);
+  return out;
+}
+
+// `committed` — commitmentsByListLine() for this list. A "need" line orders
+// only what is still to come (stillToOrder, drafts counted); one already
+// covered in full is skipped. Without it, the whole line quantity.
+function planDraftsFromMaterialList(list, parts, { forceSupplierId = null, committed = null } = {}) {
   if (!list || !Array.isArray(list.lineItems)) {
     return { ok: false, drafts: [], missingSupplier: [], missingSupplierLines: [], unpricedForSupplier: [] };
   }
@@ -550,8 +580,8 @@ function planDraftsFromMaterialList(list, parts, { forceSupplierId = null, recei
   const unpricedForSupplier = [];
   for (const line of list.lineItems) {
     if (line.status !== "need") continue;
-    const stillToOrder = Math.max(0, Math.floor(Number(line.qty) || 1) - ((received && received.get(line.id)) || 0));
-    if (stillToOrder <= 0) continue;
+    const toOrder = committed ? stillToOrder(line, committed) : Math.max(1, Math.floor(Number(line.qty) || 1));
+    if (toOrder <= 0) continue;
     const part = parts && parts[line.sku];
     const supplierIds = (part && Array.isArray(part.supplierIds)) ? part.supplierIds : [];
     if (!forced && !supplierIds.length) {
@@ -574,7 +604,7 @@ function planDraftsFromMaterialList(list, parts, { forceSupplierId = null, recei
       else unpricedForSupplier.push(line.sku);
     }
     const unitCents = Number.isFinite(Number(sourceCents)) ? Math.max(0, Math.floor(Number(sourceCents))) : 0;
-    const qty = stillToOrder;
+    const qty = toOrder;
     draft.lineItems.push({
       sku: line.sku,
       qty,
@@ -637,10 +667,16 @@ async function reorderFrom(sourcePoId, parts) {
   // Snapshot line items, refreshing prices from the catalog at re-order
   // time. If a SKU has been removed from the catalog (rare), keep the
   // original price so the new draft stays usable.
-  const lineItems = source.lineItems.filter((line) => outstanding(line) > 0).map((line) => {
-    const qty = outstanding(line);
+  // A line it claims is also capped at what that list line still needs —
+  // so re-ordering twice, or after a Generate already drafted the rest,
+  // proposes nothing more (stillToOrder, drafts counted).
+  const allPos = await readAll();
+  const capFor = (line, target) => stillToOrder(target, commitmentsByListLine(allPos, line.sourceListId));
+  const lineItems = source.lineItems.map((line) => {
     const target = line.sourceListId && line.sourceLineId ? lineNow(line.sourceListId, line.sourceLineId) : null;
     const claims = Boolean(target && target.status === "need" && !target.poId);
+    return { line, target, claims, qty: claims ? Math.min(outstanding(line), capFor(line, target)) : outstanding(line) };
+  }).filter((x) => x.qty > 0).map(({ line, claims, qty }) => {
     const part = parts && parts[line.sku];
     const unitCents = part && Number.isFinite(Number(part.priceCents))
       ? Math.max(0, Math.floor(Number(part.priceCents)))
@@ -765,6 +801,8 @@ module.exports = {
   remove: locked(remove),
   planDraftsFromMaterialList,
   receivedByListLine,
+  commitmentsByListLine,
+  stillToOrder,
   deriveReceiveStatus,
   softDelete: locked(softDelete),
   restore: locked(restore),

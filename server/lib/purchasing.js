@@ -136,7 +136,16 @@ function assertLinesOrderable(po, posRaw, listsRaw) {
     }
     const other = posRaw.find((p) => p && p.id !== po.id && p.status !== "draft" && p.status !== "cancelled" &&
       (p.lineItems || []).some((l) => l && l.sourceListId === pl.sourceListId && l.sourceLineId === pl.sourceLineId));
-    if (other) problems.push(`${pl.sku} on ${list.id}: ${other.id} (${other.status}) is already the order for it`);
+    if (other) { problems.push(`${pl.sku} on ${list.id}: ${other.id} (${other.status}) is already the order for it`); continue; }
+    // Never re-order what already arrived (2026-10-02): once part of a line
+    // has been delivered (on a cancelled PO), this order may bring the line
+    // up to its quantity and no further. Ordering more than needed with
+    // nothing yet delivered (a pack size) is the office's call and allowed.
+    const c = purchaseOrders.commitmentsByListLine(posRaw, pl.sourceListId, { excludePoId: po.id }).get(pl.sourceLineId);
+    const already = c ? c.received : 0;
+    if (already > 0 && already + (Number(pl.qty) || 0) > line.qty) {
+      problems.push(`${pl.sku} on ${list.id}: ${already} of ${line.qty} already arrived, so ordering ${pl.qty} more would re-order what came — order at most ${Math.max(0, line.qty - already)}`);
+    }
   }
   if (problems.length) {
     throw new PurchasingError(`Can't send ${po.id} — these material-list lines aren't waiting to be ordered: ${problems.join("; ")}. Remove them from this draft, or check the list.`, { status: 409, code: "lines_not_orderable" });

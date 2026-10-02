@@ -7881,9 +7881,33 @@ delivered part of a line is always "needs a person".
 - **Generating POs from a list** orders each need line's quantity less what has already arrived
   (`receivedByListLine`). Before this, cancelling after a partial delivery put the whole line back to
   "need" and the next generation re-ordered the parts that had arrived.
-- Not changed: quote-request (RFQ) quantities still use the full line.
+- **One "still to order" calculation** (`purchase-orders.stillToOrder`). For a line: its quantity
+  minus everything that arrived (cancelled POs included), minus what is still outstanding on a sent
+  PO, minus (when creating a PO) what is on a draft. It is used by: PO plan and generate (assigned
+  or one supplier), re-order (capped at it), quote-request plan and generate (drafts not counted),
+  and the send gate. Generate runs under the purchasing lock, so a double-click's second request
+  finds the first's draft and proposes nothing. The send gate refuses any order that, after part of
+  a line was delivered, would take the line past its quantity (`lines_not_orderable`).
+- **Why "need" after a part-delivered cancel agrees, while "ordered" on the cancelled PO does not.**
+  "need" is what the live cancel produces, and it means "still to order = quantity − arrived". Every
+  path above proposes exactly that, which `scripts/test-po-remainder-paths.mjs` proves (10 needed,
+  6 arrived → 4 everywhere, never 10 again). "ordered" on the cancelled PO contradicts the PO, and
+  what the office intends for the rest can't be read from the records, so it is "needs a person".
+- **Quote requests (RFQs).** An RFQ asks for what is still to buy when it is raised. Its quantity is
+  a question for the supplier and never becomes a PO quantity: comparing quotes ranks unit prices,
+  applying the cheapest writes unit prices to the catalog, and a PO is only ever generated from the
+  list with the quantity recalculated at that moment. An RFQ raised for 10, answered after 6
+  arrived, therefore leads to an order for 4. The plan preview now lists what each supplier will be
+  asked for.
 
 The matrix (8 PO states × 6 list states, plus 16 extra cases) and the old classifier's 47 misses are
 in the PR.
 
-All five suites run in `build:check`.
+`scripts/test-po-remainder-paths.mjs` (63 checks through the real routes; 21 fail on the previous
+commit) covers: PO plan and generate, assigned and one supplier, reopened and repeated;
+double-clicks on Generate and Re-order; RFQ plan and generate, assigned and shopped; an early RFQ
+for 10 answered after the delivery; quote comparison; applying the cheapest; the PO made from the
+quote; the 4 arriving (10 in all, "have"); a hand-made order for 10 refused at send; and
+cancellation and re-order after a quoted purchase.
+
+All six suites run in `build:check`.

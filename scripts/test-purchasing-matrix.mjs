@@ -234,7 +234,7 @@ const cancel = (s, id = "P") => step(s, id, "cancelled", (h) => PO.transitionCan
   ok(L.status === "need", "live rule: after a part-delivered cancel the line is 'need' — for the rest");
   // 5. Generating POs from the list now orders only what is still to come.
   const plan = purchaseOrders.planDraftsFromMaterialList(ML.hydrate(s.materialLists[0]), { 61146: { priceCents: PRICE, supplierIds: ["SUP"] } },
-    { received: purchaseOrders.receivedByListLine(s.purchaseOrders, "ML-1") });
+    { committed: purchaseOrders.commitmentsByListLine(s.purchaseOrders, "ML-1") });
   const ordered = plan.drafts.flatMap((d) => d.lineItems).filter((l) => l.sourceLineId === "L").map((l) => l.qty);
   ok(S(ordered) === S([6]), `no re-order of what arrived: generating from the list orders 6, not 10 (${S(ordered)})`);
   const before = purchaseOrders.planDraftsFromMaterialList(ML.hydrate(s.materialLists[0]), { 61146: { priceCents: PRICE, supplierIds: ["SUP"] } });
