@@ -2,6 +2,40 @@
 
 **Source of truth for customer-facing backend processes.**
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-10-02, same hour (A spring opening was booked — and emailed — for October 10):**
+Patrick, holding a customer's confirmation: *"Your PJL service is booked — Spring opening (1-4
+zones residential) on Saturday, October 10"* — *"lol ...wtf."* — *"i believe this may be a issue
+with out system."* It is. Read live: the public calendar returns **zero** spring-opening slots
+in October (`season_closed` on every day), so a customer cannot do this alone. The route in:
+the public services catalog marks spring as *bookable, dates start 2027-03-01*, and the time
+picker's **First available** card is always on offer — so a customer can join the open bucket
+today for a "Spring opening"; `lead.standby.serviceKey` keeps it; and the placement (above,
+minutes earlier) booked whatever service the standby carried on whatever date was chosen,
+through the `admin_custom` reserve path, which checks physical overlap and nothing about the
+calendar. The Schedule page's custom-time Book is the same door. **Fixed at both doors, by one
+rule:** `openBucket.serviceForDate(serviceKey, dateKey, { services, configFor })` — a seasonal
+family on a date outside its season's SERVICEABLE window is refused, with the same band in the
+date's own season offered back (`spring_open_6z` on an October day → `fall_close_6z`; null in
+January, where no season covers the date). `POST /api/admin/open-bucket/slot` now takes a
+`serviceKey` (the drawer's pick, the standby's own by default), answers `422
+service_out_of_season` + `suggestedServiceKey` on a mismatch, and returns the `serviceKey` /
+`serviceLabel` it resolved so the reserve books the same thing; the `admin_custom` branch of
+`/api/booking/reserve` makes the same check before its overlap test. The drawer row gains a
+service select (this season's services first), defaulting to the same band in the page's
+season and wearing a warn tag — "joined for Spring opening — booking as Fall winterization" —
+when it swapped; a drag-drop books that band too. Deliberately NOT changed: the public page can
+still join the open bucket for a season that has not started (pre-booking next spring is a
+thing); the mismatch is caught where it did the damage, at placement. Coverage:
+`test-open-bucket-placement.mjs` 24 → 35 — a spring standby placed on a fall day is refused
+with `fall_close_4z` offered back, placed as that band it books as a fall closing, the
+force-booked reserve refuses the same, and the rule's table on the library; `test-place-tray`
+35 → 36. CI's e2e `journey-8` had the same bug as the fixture it was testing — it booked its
+"last spring's visit" as a spring opening two days from today, in October, through
+`admin_custom` — and the new guard refused it; `journey.mjs` gains `springDay()` (a weekday in
+the next spring's serviceable window) and the journey books there, 39 passed. **Raymond's
+record is still wrong** (booked, priced and work-ordered as a spring
+opening): on his booking page set the status to Cancelled, then book him again from the
+Schedule page as the fall band — he gets a cancellation and a fresh confirmation.
 **2026-10-02 (The open bucket is placed where Patrick says, not where the engine allows):**
 Patrick: *"right now currently I have someone in an open bucket, but I cannot place them
 wherever I want."* Three walls, all from the 2026-09-09 placement fix: the drawer listed only

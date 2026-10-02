@@ -534,8 +534,13 @@ check('both zone answers are sent, and they are different things', () => {
   assert.match(block, /serviceKey,/, 'the service band is no longer sent');
   assert.match(block, /zoneCount: clean\(zoneCount\) \|\| 'unsure'/, 'the actual zone count is no longer sent');
   // "unsure" is a value the server understands — an empty string is not.
+  // The window is the reserve route's own body; it has grown past 20000
+  // characters (the season guard on the admin custom-time branch,
+  // 2026-10-02), so the bound is the next route, not a character count.
   const rAt = SERVER.indexOf('if (req.method === "POST" && pathname === "/api/booking/reserve")');
-  assert.ok(SERVER.slice(rAt, rAt + 20000).includes('=== "unsure"'),
+  const rEnd = SERVER.indexOf('\n  if (req.method === ', rAt + 1);
+  const reserveBody = SERVER.slice(rAt, rEnd > rAt ? rEnd : rAt + 40000);
+  assert.ok(reserveBody.includes('=== "unsure"'),
     'the server no longer accepts "unsure" as a zone count');
 });
 
