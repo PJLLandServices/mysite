@@ -100,8 +100,11 @@ const dropRefusal = lift("dropRefusal", `
     /annotateRailForDrag\(\)/.test(page) && /badge\.textContent = `\+\$\{c\.addedDriveMinutes\} min`/.test(page) && /badge\.classList\.add\("is-best"\)/.test(page), "no costs on the rail");
   ok("a property drop adds through addToDay, the ONE plan write on this page",
     /await addToDay\(drag\.id, date, bucket \|\| lighterBucketOf\(day\)\)/.test(page) && (page.match(/\$\{base\(\)\}\/add`/g) || []).length === 1, "a second add path");
-  ok("a standby drop books through bookStandby, carrying the half it landed on", /await bookStandby\(drag\.row, date, bucket \|\| "afternoon"\)/.test(page), "drops book some other way");
-  ok("…and the drawer's button uses the SAME function", /const booked = await bookStandby\(row, date, half\.value\)/.test(page), "the drawer books its own way");
+  ok("a standby drop books through bookStandby, carrying the half it landed on and this season's band",
+    /await bookStandby\(drag\.row, date, bucket \|\| "afternoon", sameBandThisSeason\(drag\.row\.serviceKey, services\) \|\| drag\.row\.serviceKey\)/.test(page), "drops book some other way");
+  ok("…and the drawer's button uses the SAME function", /const booked = await bookStandby\(row, date, half\.value, svc\.value\)/.test(page), "the drawer books its own way");
+  ok("the drawer offers the service, defaulting to this season's band of what the customer joined for",
+    /function sameBandThisSeason\(/.test(page) && /joined for \$\{row\.serviceLabel \|\| row\.serviceKey\} — booking as/.test(page), "no service pick on the row");
   ok("the drawer offers every route day and any date, not just the three cheapest",
     /restGroup\.label = "Other route days"/.test(page) && /other\.value = "__other"/.test(page) && /dateInput\.type = "date"/.test(page), "the day list is still the top three");
   ok("…which asks the slot resolver, never a hard-coded minute",

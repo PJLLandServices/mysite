@@ -274,6 +274,60 @@ try {
   // A date past the public booking window (Nov 1–6 is the admin tail the
   // window reserves for exactly this) — the engine emits no slot there;
   // the placement still lands.
+  // ---- 4c. A SPRING OPENING IS NOT PLACED IN OCTOBER --------------------
+  // Patrick, 2026-10-02, holding the email "Your PJL service is booked —
+  // Spring opening (1-4 zones residential) on Saturday, October 10":
+  // "lol ...wtf." The customer had joined the open bucket for a spring
+  // opening (the public page lets a season months away be joined), and
+  // the placement booked that service on a fall day without a word.
+  const springSam = { ...standby("L-SPR") };
+  springSam.standby = { ...springSam.standby, serviceKey: "spring_open_4z", serviceLabel: "Spring opening (1-4 zones residential)" };
+  write("leads", [springSam]);
+  const wrongSeason = await post("/api/admin/open-bucket/slot", { leadId: "L-SPR", date: DAY });
+  ok("a spring service on a fall day is refused, by name",
+    wrongSeason.status === 422 && wrongSeason.body.code === "service_out_of_season",
+    `${wrongSeason.status} ${JSON.stringify(wrongSeason.body).slice(0, 200)}`);
+  ok("…and the same band in the day's season is offered back",
+    wrongSeason.body.suggestedServiceKey === "fall_close_4z", JSON.stringify(wrongSeason.body).slice(0, 200));
+  const rightSeason = await post("/api/admin/open-bucket/slot", { leadId: "L-SPR", date: DAY, serviceKey: "fall_close_4z" });
+  ok("placed as the fall band instead, the slot is found", rightSeason.status === 200 && rightSeason.body.serviceKey === "fall_close_4z",
+    `${rightSeason.status} ${JSON.stringify(rightSeason.body).slice(0, 200)}`);
+  const asFall = await post("/api/booking/reserve", {
+    leadId: "L-SPR", serviceKey: rightSeason.body.serviceKey,
+    slotStart: rightSeason.body.slotStart, source: "admin_custom", zoneCount: 4,
+    contact: { address: "100 Davis Dr, Newmarket, ON L3Y 2N1" }
+  });
+  ok("…and books as a fall closing", (asFall.status === 201 || asFall.body.ok === true)
+    && read("leads").find((l) => l.id === "L-SPR")?.booking?.serviceKey === "fall_close_4z",
+    `${asFall.status} ${JSON.stringify(asFall.body).slice(0, 160)}`);
+  // The admin custom-time path is the other door, and it is shut too.
+  write("leads", [standby("L-SPR2")]);
+  const forcedSpring = await post("/api/booking/reserve", {
+    leadId: "L-SPR2", serviceKey: "spring_open_4z",
+    slotStart: new Date(`${DAY}T13:00:00.000${OFF}`).toISOString(), source: "admin_custom", zoneCount: 4,
+    contact: { address: "100 Davis Dr, Newmarket, ON L3Y 2N1" }
+  });
+  ok("a force-booked spring opening on a fall day is refused at reserve too",
+    forcedSpring.status === 422 && forcedSpring.body.code === "service_out_of_season",
+    `${forcedSpring.status} ${JSON.stringify(forcedSpring.body).slice(0, 200)}`);
+  ok("…leaving that customer waiting", !read("leads").find((l) => l.id === "L-SPR2")?.booking);
+  // The rule itself, on the library.
+  const ob = require2(path.join(ROOT, "server", "lib", "open-bucket.js"));
+  const av = require2(path.join(ROOT, "server", "lib", "availability.js"));
+  const se = require2(path.join(ROOT, "server", "lib", "seasons.js"));
+  const fit = (k, d) => ob.serviceForDate(k, d, { services: av.BOOKABLE_SERVICES, configFor: se.configFor });
+  ok("a repair fits any date", fit("sprinkler_repair", "2026-10-10").ok === true);
+  ok("a fall closing fits a fall date", fit("fall_close_6z", "2026-10-10").ok === true);
+  ok("a spring opening in October maps to the same fall band",
+    JSON.stringify(fit("spring_open_6z", "2026-10-10")) === JSON.stringify({ ok: false, season: "spring", suggestedKey: "fall_close_6z" }),
+    JSON.stringify(fit("spring_open_6z", "2026-10-10")));
+  ok("a fall closing in April maps to the same spring band",
+    fit("fall_close_commercial_8z", "2026-04-10").suggestedKey === "spring_open_commercial_8z",
+    JSON.stringify(fit("fall_close_commercial_8z", "2026-04-10")));
+  ok("a seasonal service in the dead of winter has no band to offer",
+    fit("spring_open_4z", "2026-01-15").ok === false && fit("spring_open_4z", "2026-01-15").suggestedKey === null,
+    JSON.stringify(fit("spring_open_4z", "2026-01-15")));
+
   if (TAIL) {
     write("leads", [standby("L-SB3")]);
     const tail = await post("/api/admin/open-bucket/slot", { leadId: "L-SB3", date: TAIL });

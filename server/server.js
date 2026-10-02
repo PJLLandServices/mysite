@@ -24762,6 +24762,25 @@ Customer signature captured at ${new Date().toISOString()}.`;
       if (isStandby) {
         // No slot to validate — the whole point.
       } else if (useAdminCustom) {
+        // A force-book bypasses the corridor and the hours, not the
+        // calendar: a spring opening on an October day is a mistake the
+        // public gate already makes impossible, and the admin paths must
+        // not be the one door it fits through (2026-10-02 — a customer
+        // was emailed "Spring opening on October 10").
+        const fit = openBucket.serviceForDate(serviceKey, geoFilter.localDateKey(startDate),
+          { services: BOOKABLE_SERVICES, configFor: seasonsLib.configFor });
+        if (!fit.ok) {
+          const suggested = fit.suggestedKey ? BOOKABLE_SERVICES[fit.suggestedKey] : null;
+          return sendJson(res, 422, {
+            ok: false,
+            code: "service_out_of_season",
+            suggestedServiceKey: fit.suggestedKey,
+            message: `${service.label} is a ${fit.season} service and that date isn't in ${fit.season}`
+              + (suggested ? ` — book it as ${suggested.label}.` : "."),
+            errors: [`${service.label} is a ${fit.season} service; pick a date in ${fit.season}`
+              + (suggested ? ` or book it as ${suggested.label}.` : ".")]
+          });
+        }
         // Physical-conflict check. Force-book bypasses corridor +
         // hours, but it must NOT silently double-book — overlapping
         // the same crew with another active booking would create a
@@ -28476,6 +28495,32 @@ async function orderDayForDriving(rows) {
       }
 
       const s = lead.standby || {};
+      // The service to book — the standby's own unless Patrick picked
+      // another in the drawer. A seasonal service on a date outside its
+      // season is refused with the same band in the date's season offered
+      // back: a spring opening placed in October is a fall closing, not a
+      // spring opening in October (2026-10-02).
+      const overrideKey = normalizeString(payload.serviceKey, 60);
+      if (overrideKey && !(BOOKABLE_SERVICES[overrideKey] && BOOKABLE_SERVICES[overrideKey].bookable)) {
+        return sendJson(res, 422, { ok: false, code: "service_unknown", errors: ["Unknown service."] });
+      }
+      const serviceKey = overrideKey || s.serviceKey;
+      const fit = openBucket.serviceForDate(serviceKey, date, { services: BOOKABLE_SERVICES, configFor: seasonsLib.configFor });
+      if (!fit.ok) {
+        const suggested = fit.suggestedKey ? BOOKABLE_SERVICES[fit.suggestedKey] : null;
+        return sendJson(res, 422, {
+          ok: false,
+          code: "service_out_of_season",
+          suggestedServiceKey: fit.suggestedKey,
+          suggestedServiceLabel: suggested ? suggested.label : null,
+          message: suggested
+            ? `${BOOKABLE_SERVICES[serviceKey]?.label || serviceKey} isn't a ${fit.season} service on ${date} — book it as ${suggested.label} instead.`
+            : `${BOOKABLE_SERVICES[serviceKey]?.label || serviceKey} is a ${fit.season} service; ${date} is outside that season.`,
+          errors: [suggested
+            ? `That's a ${fit.season} service and ${date} isn't in ${fit.season}. Switch it to ${suggested.label}.`
+            : `That's a ${fit.season} service and ${date} isn't in ${fit.season}. Pick a date in season or a different service.`]
+        });
+      }
       let coords = s.coords || null;
       if (!coords && lead.contact?.address) {
         const geo = await geocode(lead.contact.address);
@@ -28485,7 +28530,7 @@ async function orderDayForDriving(rows) {
       const [bookingsNow, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
       const endOfDay = new Date(`${date}T23:59:59`);
       const slots = await listAvailableSlots({
-        serviceKey: s.serviceKey,
+        serviceKey,
         customerCoords: coords,
         bookings: bookingsNow,
         blocks: scheduleData.blocks,
@@ -28515,7 +28560,7 @@ async function orderDayForDriving(rows) {
       // still the only time the customer hears.
       if (!pick) {
         const bucket = BOOKING_BUCKETS.find((b) => b.key === bucketKey);
-        const minutes = Number(BOOKABLE_SERVICES[s.serviceKey]?.minutes) || 30;
+        const minutes = Number(BOOKABLE_SERVICES[serviceKey]?.minutes) || 30;
         const [y, mo, d] = date.split("-").map(Number);
         const from = parseHHmmToMinutes(bucket.from);
         const to = parseHHmmToMinutes(bucket.to);
@@ -28545,6 +28590,8 @@ async function orderDayForDriving(rows) {
         slotStart: pick.start,
         bucketKey: pick.bucketKey || bucketKey,
         bucketWindow: pick.bucketWindow || (bucketKey === "morning" ? "8 AM – 12 PM" : "12 PM – 5 PM"),
+        serviceKey,
+        serviceLabel: BOOKABLE_SERVICES[serviceKey]?.label || serviceKey,
         forced
       });
     } catch (err) {
